@@ -1,5 +1,20 @@
 # Worklog
 
+## 2026-08-29 — Yandex-only public beta authentication candidate
+
+- Added an explicit Yandex-only OAuth provider allowlist and a default-off subject-provisioning
+  gate for the Timeweb beta. The gate verifies the signed Keycloak issuer/client/tenant/subject,
+  explicit expiry and Yandex broker-provenance claim, then creates or resolves one PadlHub UUID
+  without using phone or email as an identity key. Published non-`pending` legal versions are
+  mandatory.
+- Kept recovery fail-closed on an existing subject and active session family, removed the VK entry
+  from the Web candidate and extended Timeweb runtime validation for the exact Yandex contour.
+- Recorded the coordinated ingress boundary: removing operator Basic Auth must preserve the
+  read-only command deny, exact Caddy backup and digest-pinned API/Web rollback. Added a separately
+  hashed public Caddy artifact, noncanonical `e6abb48e` rollback floor and a root-only receipt
+  controller that restores Basic before an old API and never pulls or migrates. No provider, secret,
+  host, database, publication or deployment mutation is performed by this source checkpoint.
+
 ## 2026-08-24 — Communities Gate 4 external PostgreSQL clock/ledger checkpoint
 
 - Added source-only V15 adapters for two distinct, non-aliased PostgreSQL clock/ledger clients.

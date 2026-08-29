@@ -1,0 +1,29 @@
+{
+  "schema": "PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_FLOOR_V1",
+  "hostname": "lk2.padlhub.su",
+  "canonicalPublication": false,
+  "authorizesPublication": false,
+  "failedPublicationRunProvenance": "33168712014",
+  "sourceSha": "e6abb48e135f8f28730bab1c07abe408e8c94600",
+  "sourceTree": "04be9a04792b586d867ce6def129ad6bfb22a152",
+  "runtimeEnvRoot": "/etc/phub/timeweb-beta-fast",
+  "images": {
+    "api": {
+      "indexDigest": "sha256:5878ed51206d5a301fb356f7a599ce4a57f870bf3d13e0b7165f079076d8603a",
+      "runtimeDigest": "sha256:cdb81d9479998d64161b80ec6ae4362a4e620f44aac1910df280b90209bfd452"
+    },
+    "web": {
+      "indexDigest": "sha256:61221f1df778d44ccb1bda6ddf222cb6ec36ee0ef893d632134b9b569480a51a",
+      "runtimeDigest": "sha256:4294f686d8bfb19a5b2248db1f7e0d745f10224edbb00ac171eff030b788ab8a"
+    },
+    "realtime": {
+      "indexDigest": "sha256:883f647fcb60329faf9a1e4b711544506618632db0c7e1667bac78a06a65f01e"
+    },
+    "worker": {
+      "indexDigest": "sha256:74439f87c6951c36bb9f60c77816eaaa7c30b344c95c692fbe4f0c7bc203705b"
+    },
+    "migrator": {
+      "indexDigest": "sha256:31c0caa233b84bb8ad936e24e092e072e7bc0775908c499e296b8de581b095e9"
+    }
+  }
+}

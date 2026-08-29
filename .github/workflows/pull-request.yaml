@@ -412,15 +412,20 @@ jobs:
           import { readFileSync } from 'node:fs';
           import { parseStrictJson } from './scripts/strict-json.js';
           const target = parseStrictJson(readFileSync('deploy/timeweb/target.json'));
+          const publicBeta = parseStrictJson(
+            readFileSync('deploy/timeweb/yandex-public-beta-ingress.json'),
+          );
           process.stdout.write(`image=${target.ingress.caddy.repository}@${target.ingress.caddy.indexDigest}\n`);
           process.stdout.write(`config_digest=${target.ingress.caddy.linuxAmd64ConfigDigest}\n`);
           process.stdout.write(`version=${target.ingress.caddy.version}\n`);
           process.stdout.write(`adapted_sha256=${target.ingress.caddy.adaptedJsonSha256}\n`);
+          process.stdout.write(`public_beta_adapted_sha256=${publicBeta.adaptedJsonSha256}\n`);
           NODE
       - name: Validate and adapt Caddy offline
         if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
         env:
           ADAPTED_SHA256: ${{ steps.caddy-identity.outputs.adapted_sha256 }}
+          PUBLIC_BETA_ADAPTED_SHA256: ${{ steps.caddy-identity.outputs.public_beta_adapted_sha256 }}
           CADDY_CONFIG_DIGEST: ${{ steps.caddy-identity.outputs.config_digest }}
           CADDY_IMAGE: ${{ steps.caddy-identity.outputs.image }}
           CADDY_VERSION: ${{ steps.caddy-identity.outputs.version }}
@@ -442,6 +447,18 @@ jobs:
           printf '%s  %s\n' "$ADAPTED_SHA256" "$RUNNER_TEMP/caddy-adapted.json" \
             >"$RUNNER_TEMP/caddy-adapted.sha256"
           sha256sum --check --strict "$RUNNER_TEMP/caddy-adapted.sha256"
+          docker run --rm --network none \
+            --volume "$PWD/deploy/timeweb/Caddyfile.yandex-public-beta:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm --network none \
+            --volume "$PWD/deploy/timeweb/Caddyfile.yandex-public-beta:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --pretty --config /etc/caddy/Caddyfile --adapter caddyfile \
+            >"$RUNNER_TEMP/caddy-yandex-public-beta-adapted.json"
+          printf '%s  %s\n' \
+            "$PUBLIC_BETA_ADAPTED_SHA256" \
+            "$RUNNER_TEMP/caddy-yandex-public-beta-adapted.json" \
+            >"$RUNNER_TEMP/caddy-yandex-public-beta-adapted.sha256"
+          sha256sum --check --strict "$RUNNER_TEMP/caddy-yandex-public-beta-adapted.sha256"
       - name: Validate ingress and application Compose with synthetic non-secret env
         if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
         env:

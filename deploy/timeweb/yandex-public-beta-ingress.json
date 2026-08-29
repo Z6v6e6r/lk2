@@ -1,0 +1,6 @@
+{
+  "schema": "PHUB_TIMEWEB_YANDEX_PUBLIC_INGRESS_V1",
+  "hostname": "lk2.padlhub.su",
+  "caddyfile": "deploy/timeweb/Caddyfile.yandex-public-beta",
+  "adaptedJsonSha256": "72e0d87ae18bb9ae38acb037f74ea08bb97941a73f77462defb529fb7589b984"
+}

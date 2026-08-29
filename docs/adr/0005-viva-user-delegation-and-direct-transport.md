@@ -36,6 +36,17 @@ claims, or accept a Viva profile ID from the browser. An unknown subject fails w
 reconciliation must establish the link first. The resulting short-lived access-token is handed to
 the browser as described below, so the allowlisted profile read can run directly.
 
+A separately reviewed Yandex-only beta contour may enable subject provisioning when the canonical
+End User profile read is unavailable. This mode requires the provider allowlist to be exactly
+`yandex` and verifies the Keycloak signature, issuer, authorized party, tenant key, expiry, subject
+and signed broker provenance. The `identity_provider` (or `identityProvider`) claim must equal
+`yandex`; a missing claim or another provider fails closed before atomically creating or resolving a
+PadlHub UUID by `(tenant_id, issuer, subject)`.
+Phone and email claims are ignored for identity linking. A signed name claim may initialize display
+text only and is never an identity key. This mode is mutually exclusive with existing-subject
+bootstrap, remains disabled by default and does not relax authenticated reauthorization: recovery
+still requires the subject to resolve to the same existing PadlHub user and active session family.
+
 The authenticated reauthorization flow uses the same verified-subject rule without making the
 server-side End User profile request. Its one-time OAuth state is bound to the initiating PadlHub
 tenant, user, active refresh-session family and browser. After token signature, issuer,
@@ -47,7 +58,8 @@ case no delegation or PadlHub refresh session is written. The active family and 
 are rechecked in the same PostgreSQL transaction that replaces the encrypted delegation, closing
 logout and identity-remap races. Successful recovery creates only the user-bound Viva handoff: it
 does not create, rotate or set a PadlHub refresh session/cookie. Initial sign-in continues to use
-the canonical-profile flow (or the separately gated existing-subject bootstrap above).
+the canonical-profile flow, the separately gated existing-subject bootstrap, or the explicitly
+Yandex-only subject-provisioning contour above.
 
 The successful callback may also create or rotate a **Viva user delegation**. It is not a PadlHub
 session and never changes the public PadlHub user UUID.

@@ -2034,23 +2034,13 @@ export function App({
                 <div id="ios-oauth-guidance" className="ios-auth-guidance" role="note">
                   <strong>На iPhone откройте сайт в Safari</strong>
                   <span>
-                    Во встроенном браузере Telegram вход через VK ID или Yandex может потерять
-                    сессию. Нажмите ••• → «Открыть в Safari» и начните вход с исходной страницы.
+                    Во встроенном браузере Telegram вход через Yandex может потерять сессию. Нажмите
+                    ••• → «Открыть в Safari» и начните вход с исходной страницы.
                   </span>
                 </div>
               ) : null}
 
               <div className="viva-login-options" aria-label="Способ входа через Viva">
-                <button
-                  className="viva-login-button"
-                  type="button"
-                  aria-describedby={iosBrowser ? 'ios-oauth-guidance' : undefined}
-                  disabled={isStartingViva}
-                  onClick={() => startVivaOAuth('vkid')}
-                >
-                  <VivaProviderIcon provider="vkid" />
-                  <span>VK ID или Mail.ru</span>
-                </button>
                 <button
                   className="viva-login-button"
                   type="button"
@@ -2075,7 +2065,7 @@ export function App({
                   />
                   <span>
                     Принимаю условия{' '}
-                    <a href="/documents/public-offer" target="_blank" rel="noreferrer">
+                    <a href="https://padlhub.ru/docs" target="_blank" rel="noreferrer">
                       публичной оферты
                     </a>
                   </span>
@@ -2091,7 +2081,7 @@ export function App({
                   />
                   <span>
                     Даю согласие на{' '}
-                    <a href="/documents/personal-data-policy" target="_blank" rel="noreferrer">
+                    <a href="https://padlhub.ru/politica" target="_blank" rel="noreferrer">
                       обработку персональных данных
                     </a>
                   </span>
@@ -2164,7 +2154,7 @@ export function App({
                     />
                     <span>
                       Принимаю условия{' '}
-                      <a href="/documents/public-offer" target="_blank" rel="noreferrer">
+                      <a href="https://padlhub.ru/docs" target="_blank" rel="noreferrer">
                         публичной оферты
                       </a>
                     </span>
@@ -2180,7 +2170,7 @@ export function App({
                     />
                     <span>
                       Даю согласие на{' '}
-                      <a href="/documents/personal-data-policy" target="_blank" rel="noreferrer">
+                      <a href="https://padlhub.ru/politica" target="_blank" rel="noreferrer">
                         обработку персональных данных
                       </a>
                     </span>

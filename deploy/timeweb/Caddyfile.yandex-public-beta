@@ -1,0 +1,65 @@
+{
+	admin off
+	log {
+		output stdout
+		format json
+	}
+}
+
+lk2.padlhub.su {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+
+	@api_read {
+		method GET HEAD
+		path /health/* /public/api/* /user/api/*
+	}
+	handle @api_read {
+		reverse_proxy api:3000
+	}
+
+	@auth_post {
+		method POST
+		path /user/api/v1/*/auth/viva/authorize /user/api/v1/*/auth/viva/reauthorize /user/api/v1/*/auth/viva/access /user/api/v1/*/auth/session/refresh
+	}
+	handle @auth_post {
+		reverse_proxy api:3000
+	}
+
+	@auth_logout {
+		method DELETE
+		path /user/api/v1/*/auth/session
+	}
+	handle @auth_logout {
+		reverse_proxy api:3000
+	}
+
+	@api_denied path /health/* /public/api/* /user/api/*
+	handle @api_denied {
+		respond "Method Not Allowed" 405
+	}
+
+	handle /realtime/health/live {
+		rewrite * /health/live
+		reverse_proxy realtime:3001
+	}
+
+	handle /realtime/health/ready {
+		rewrite * /health/ready
+		reverse_proxy realtime:3001
+	}
+
+	handle /realtime/* {
+		reverse_proxy realtime:3001
+	}
+
+	handle {
+		reverse_proxy web:8080
+	}
+}

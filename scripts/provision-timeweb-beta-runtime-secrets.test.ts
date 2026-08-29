@@ -19,6 +19,7 @@ import { loadConfig, loadRealtimeConfig } from '../packages/config/src/index.js'
 import {
   parseTimewebSecretEnvironment,
   provisionTimewebBetaRuntimeSecrets,
+  validateTimewebRuntimeEnvironments,
 } from './provision-timeweb-beta-runtime-secrets.js';
 import {
   createSecretFixture,
@@ -73,6 +74,18 @@ function installedReleaseId(targetDir: string): string {
 }
 
 describe('Timeweb beta runtime secret provisioner', () => {
+  it.each([
+    ['VIVA_OAUTH_ALLOWED_PROVIDERS', undefined],
+    ['VIVA_OAUTH_ALLOWED_PROVIDERS', 'vkid,yandex'],
+    ['VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED', undefined],
+    ['VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED', 'false'],
+  ])('rejects a Yandex beta environment with %s=%s', (key, value) => {
+    const environments = safeRuntimeEnvironments();
+    if (value === undefined) delete environments.api![key];
+    else environments.api![key] = value;
+    expect(() => validateTimewebRuntimeEnvironments(environments, { host, tenantKey })).toThrow();
+  });
+
   it('rejects a release not bound to the exact local source before creating a target', () => {
     const value = fixture();
     const wrongSource = 'f'.repeat(40);

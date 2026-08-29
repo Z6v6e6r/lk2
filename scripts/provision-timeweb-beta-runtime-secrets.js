@@ -258,6 +258,10 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
     api.CUP_DEV_AUTH_ENABLED !== 'false' ||
     api.VIVA_MODE !== 'production' ||
     api.VIVA_OAUTH_ENABLED !== 'true' ||
+    api.VIVA_OAUTH_ALLOWED_PROVIDERS !== 'yandex' ||
+    api.VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED !== 'true' ||
+    api.PUBLIC_OFFER_VERSION === 'pending' ||
+    api.PERSONAL_DATA_POLICY_VERSION === 'pending' ||
     api.VIVA_OAUTH_REDIRECT_URI !== `https://${host}/user/api/v1/${tenantKey}/auth/viva/callback` ||
     api.VIVA_OAUTH_SUCCESS_REDIRECT_URL !== `https://${host}/`
   )

@@ -40,7 +40,12 @@ function requestBody(value: BodyInit | null | undefined): string {
 async function signedAccessToken(claims: Record<string, unknown>) {
   const { publicKey, privateKey } = await generateKeyPair('RS256');
   const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
-  const accessToken = await new SignJWT({ azp: 'widget', tenant_key: 'iSkq6G', ...claims })
+  const accessToken = await new SignJWT({
+    azp: 'widget',
+    tenant_key: 'iSkq6G',
+    identity_provider: 'yandex',
+    ...claims,
+  })
     .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
     .setIssuer('https://kc.vivacrm.invalid/realms/clients')
     .setSubject('viva-user-42')
@@ -234,6 +239,7 @@ describe('VivaIdentityProvider', () => {
     });
 
     const result = await provider.exchangeAuthorizationCode({
+      provider: 'yandex',
       code: 'authorization-code',
       codeVerifier: 'pkce-verifier',
       providerTenantKey: 'iSkq6G',
@@ -255,6 +261,101 @@ describe('VivaIdentityProvider', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 
+  it('provisions a Yandex-only user from verified issuer and subject claims', async () => {
+    const { accessToken, jwk } = await signedAccessToken({
+      name: '  Анна\u0000   Падел  ',
+      phone_number: '+79990000001',
+      email: 'not-an-identity@example.test',
+    });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowSubjectOAuthProvisioning: true,
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+    });
+
+    const result = await provider.exchangeAuthorizationCode({
+      provider: 'yandex',
+      code: 'authorization-code',
+      codeVerifier: 'pkce-verifier',
+      providerTenantKey: 'iSkq6G',
+      redirectUri: 'https://app.example.test/callback',
+      correlationId: 'oauth-provisioning-correlation-123',
+      identityMode: 'STANDARD',
+    });
+
+    expect(result).toMatchObject({
+      identityResolution: 'SUBJECT_PROVISIONING',
+      identity: {
+        issuer: 'https://kc.vivacrm.invalid/realms/clients',
+        subject: 'viva-user-42',
+        displayName: 'Анна Падел',
+      },
+    });
+    expect(result.identity).not.toHaveProperty('phoneE164');
+    expect(result.identity).not.toHaveProperty('email');
+  });
+
+  it.each([
+    ['a missing provider claim', null],
+    ['a different upstream provider', 'vkid'],
+  ])('rejects Yandex provisioning with %s', async (_label, identityProvider) => {
+    const { accessToken, jwk } = await signedAccessToken({
+      identity_provider: identityProvider,
+      name: 'Untrusted provider subject',
+    });
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowSubjectOAuthProvisioning: true,
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+    });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        provider: 'yandex',
+        code: 'authorization-code',
+        codeVerifier: 'pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-provider-provenance-123',
+        identityMode: 'STANDARD',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+  });
+
+  it('rejects a signed access token without an expiry', async () => {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
+    const accessToken = await new SignJWT({
+      azp: 'widget',
+      tenant_key: 'iSkq6G',
+      identity_provider: 'yandex',
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
+      .setSubject('viva-user-42')
+      .sign(privateKey);
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowSubjectOAuthProvisioning: true,
+      fetchImplementation: tokenAndJwksFetch(accessToken, jwk),
+    });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        provider: 'yandex',
+        code: 'authorization-code',
+        codeVerifier: 'pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-expiry-required-123',
+        identityMode: 'STANDARD',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+  });
+
   it('resolves authenticated recovery from verified token claims', async () => {
     const { accessToken, jwk } = await signedAccessToken({ name: 'Existing Account Name' });
     const provider = new VivaIdentityProvider({
@@ -264,6 +365,7 @@ describe('VivaIdentityProvider', () => {
     });
 
     const result = await provider.exchangeAuthorizationCode({
+      provider: 'yandex',
       code: 'recovery-authorization-code',
       codeVerifier: 'recovery-pkce-verifier',
       providerTenantKey: 'iSkq6G',
@@ -289,6 +391,7 @@ describe('VivaIdentityProvider', () => {
 
     await expect(
       provider.exchangeAuthorizationCode({
+        provider: 'yandex',
         code: 'authorization-code',
         codeVerifier: 'pkce-verifier',
         providerTenantKey: 'iSkq6G',
@@ -312,6 +415,7 @@ describe('VivaIdentityProvider', () => {
 
     await expect(
       provider.exchangeAuthorizationCode({
+        provider: 'yandex',
         code: 'authorization-code',
         codeVerifier: 'pkce-verifier',
         providerTenantKey: 'iSkq6G',

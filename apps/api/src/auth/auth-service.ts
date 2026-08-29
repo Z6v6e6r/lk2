@@ -260,6 +260,10 @@ export class AuthService {
     this.now = options.now ?? (() => new Date());
   }
 
+  private vivaOAuthProviderAllowed(provider: VivaOAuthProvider): boolean {
+    return this.options.config.VIVA_OAUTH_ALLOWED_PROVIDERS.split(',').includes(provider);
+  }
+
   private async binding(tenantKey: string): Promise<TenantAuthBinding> {
     if (!TENANT_KEY_PATTERN.test(tenantKey)) throw new AuthServiceError('TENANT_KEY_INVALID');
     const binding = await this.options.repository.resolveTenantAuthBinding(tenantKey);
@@ -359,7 +363,8 @@ export class AuthService {
     if (
       !this.options.config.VIVA_OAUTH_ENABLED ||
       !this.options.vivaOAuthProvider ||
-      !this.options.vivaOAuthStateStore
+      !this.options.vivaOAuthStateStore ||
+      !this.vivaOAuthProviderAllowed(input.provider)
     ) {
       throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
     }
@@ -427,7 +432,8 @@ export class AuthService {
     if (
       !this.options.config.VIVA_OAUTH_ENABLED ||
       !this.options.vivaOAuthProvider ||
-      !this.options.vivaOAuthStateStore
+      !this.options.vivaOAuthStateStore ||
+      !this.vivaOAuthProviderAllowed(input.provider)
     ) {
       throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
     }
@@ -559,6 +565,9 @@ export class AuthService {
     if (pending.state !== input.state || pending.tenantKey !== input.tenantKey) {
       throw new AuthServiceError('AUTH_CODE_EXPIRED');
     }
+    if (!this.vivaOAuthProviderAllowed(pending.provider)) {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
     const binding = await this.binding(input.tenantKey);
     if (binding.provider !== 'VIVA') throw new AuthServiceError('AUTH_CODE_EXPIRED');
     const recoverySessionFamilyId = pending.recoverySessionFamilyId;
@@ -568,6 +577,7 @@ export class AuthService {
     let result: Awaited<ReturnType<VivaOAuthProviderPort['exchangeAuthorizationCode']>>;
     try {
       result = await this.options.vivaOAuthProvider.exchangeAuthorizationCode({
+        provider: pending.provider,
         code: input.code,
         codeVerifier: pending.codeVerifier,
         providerTenantKey: binding.providerTenantKey,
