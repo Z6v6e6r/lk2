@@ -1236,9 +1236,13 @@
 
 ## 2026-08-29 — Timeweb operator Node bootstrap contract
 
-- Added a machine-readable operator runtime contract for fixed `/usr/bin/node`, Node major 22 and
-  the Ubuntu `nodejs` package from the signed system archive.
-- Replaced the repeated source-revision stop for a missing host Node binary with one bounded,
-  separately authorized apt bootstrap using exact-version simulation and readback.
-- Kept container wrappers and third-party installers forbidden, retained every secret/deploy/ingress
-  gate and required a metadata-only root-owned bootstrap receipt plus an exact package rollback.
+- Added a machine-readable operator runtime contract for fixed `/usr/bin/node`, Node major 22, the
+  exact Ubuntu 26.04 source/keyring identities and the complete 20-package new-install closure.
+- Replaced the long manual procedure and repeated missing-Node source-revision stop with one frozen
+  Python controller exposing `plan`, separately authorized `apply`, `verify`, deterministic
+  `recover` and separately authorized exact `rollback` modes.
+- Bound apply to locally staged and hashed `.deb` payloads with network download disabled, rejected
+  lifecycle-bearing maintainer scripts and apt config hooks, and protected active units/listeners
+  with a temporary lifecycle guard and before/after evidence.
+- Kept container wrappers and third-party installers forbidden, preserved every secret/deploy/ingress
+  gate and required atomic root-only metadata receipts without secret or package payload content.

@@ -11,6 +11,7 @@ const EXPECTED_UID = process.getuid?.() ?? -1;
 const PROTECTED_PATHS = Object.freeze([
   '.github/workflows/pull-request.yaml',
   'scripts/provision-timeweb-beta-runtime-secrets.js',
+  'scripts/control-timeweb-operator-node-bootstrap.py',
   'scripts/control-timeweb-yandex-public-beta.js',
   'scripts/control-timeweb-yandex-public-beta.d.ts',
   'scripts/control-timeweb-yandex-public-beta.test.ts',
@@ -21,6 +22,7 @@ const PROTECTED_PATHS = Object.freeze([
   'scripts/verify-timeweb-deployment-contract.js',
   'scripts/verify-timeweb-frozen-source.js',
   'deploy/timeweb/base-images.lock.json',
+  'deploy/timeweb/operator-node-bootstrap.v1.json',
   'deploy/timeweb/Caddyfile',
   'deploy/timeweb/Caddyfile.yandex-public-beta',
   'deploy/timeweb/compose.beta.yaml',

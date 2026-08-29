@@ -211,48 +211,70 @@ is a STOP. Git-free bundles remain unsupported until a separately authenticated 
 artifact binds their exact bytes.
 
 Never launch these privileged tools through project `npm`, `.npmrc`, a PATH lookup, a container
-wrapper or a preserved caller environment. The only supported launcher is fixed `/usr/bin/node`
-under `env -i`. `deploy/timeweb/target.json` permits the bounded host bootstrap below when that
-binary is absent; once this contract is part of the frozen candidate, the bootstrap does not require
-another source revision. It remains a separately authorized host-package mutation and never
+wrapper or a preserved caller environment. Runtime secret and activation tools use fixed
+`/usr/bin/node` under `env -i`. If that binary is absent, the bounded bootstrap controller below is
+the only supported exception: it uses the Ubuntu-owned `/usr/bin/python3` only to install and prove
+the contracted Node runtime. It remains a separately authorized host-package operation and never
 authorizes secret provisioning, image pull, service restart or ingress activation.
 
 ## Operator Node bootstrap
 
-The only supported bootstrap installs the Ubuntu `nodejs` package for `amd64` from the
-`ubuntu-signed-archive` already configured on the host. The selected package must provide Node
-major 22 at `/usr/bin/node`. Third-party repositories, `curl | sh`, downloaded archives, global npm
-installs and containerized launchers are forbidden.
+Use only `scripts/control-timeweb-operator-node-bootstrap.py` and the adjacent protected
+`deploy/timeweb/operator-node-bootstrap.v1.json`. The contract freezes Ubuntu 26.04, the single
+`ubuntu.sources` file and its SHA-256, the Ubuntu archive keyring and fingerprints, Node major 22,
+and the exact 20-package new-install closure. Third-party or `Trusted=yes` sources, apt lifecycle
+snippets, pre-existing closure packages, upgrades, removals, downgrades, extra packages, global npm,
+downloaded installers and container launchers are all a STOP.
 
-Before installation, record the host identity, Ubuntu release, apt source files and keyring
-metadata, `dpkg --audit`, the absence or current package owner of `/usr/bin/node`, free disk/inodes
-and `apt-cache policy nodejs`. Select the exact candidate version, then run an exact-version
-`apt-get --simulate install --no-install-recommends`. Stop on any package removal, downgrade,
-service restart, reboot requirement, unexpected dependency or repository drift.
-
-After separate authority for that exact version and dependency closure, install only what the
-accepted simulation showed:
+The controller reduces the procedure to five commands. Every live command uses the exact root-owned
+release checkout and clean launcher environment shown here; replace only the two identity values:
 
 ```sh
-sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root \
-  /usr/bin/apt-get install --yes --no-install-recommends \
-  'nodejs=<exact-version-from-the-accepted-simulation>'
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py plan --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
 ```
 
-Read back the installed package/version/architecture through `dpkg-query`; require a root-owned,
-non-group/other-writable `/usr/bin/node`; record its SHA-256; and run it under the exact clean
-launcher environment to require `process.execPath === '/usr/bin/node'`,
-`process.platform === 'linux'`, `process.arch === 'x64'` and major 22. The metadata-only root-owned
-`0600` receipt at
-`/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.txt` records the selected apt source,
-exact package/dependency closure, accepted simulation checksum, before/after dpkg state, Node
-stat/hash/version and whether apt reported a restart or reboot requirement. It contains no token,
-credential, environment value or package-manager cache bytes.
+`plan` does not install a package. It verifies the frozen Git blobs, OS, launcher custody, source,
+keyring, apt lists, empty `dpkg --audit`, absent pre-state and exact simulation; downloads the exact
+`.deb` closure into root-only staging; rejects lifecycle commands in maintainer scripts; and writes
+an atomic `0600` plan containing the plan ID, simulation/source/list checksums and every payload and
+control-metadata SHA-256. Stop for separate authority naming that plan ID before `apply`.
 
-Keep Node installed through the application rollback window because the supported controller and
-rollback path require it. Later removal is a separate host-package rollback: remove only the exact
-recorded bootstrap closure, never broad `autoremove`, then prove `/usr/bin/node` absent and recheck
-services/listeners. A failed bootstrap never grants permission to use another launcher.
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py apply --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py verify --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+`apply` rechecks the plan, trust inputs, apt-list checksum, simulation and every `.deb`, then installs
+only those local payloads with `--no-download`. A temporary exact `policy-rc.d`, disabled apt config
+snippets, noninteractive/list-only `needrestart`, and before/after unit/listener/reboot snapshots
+fail closed around service lifecycle changes. The atomic metadata-only receipt is
+`/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json`; it contains no credential or package
+payload. `verify` independently reads back the complete dpkg closure, `/usr/bin/node` owner, resolved
+file SHA-256, version, executable path, platform and architecture.
+
+If `transaction.json` remains after an interrupted apply or rollback, do not delete it or the
+temporary lifecycle guard. Run only deterministic recovery from the same frozen source and plan:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py recover --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+Keep Node installed through the application rollback window. Removing it is a separate live
+host-package authority. The controller first proves the original receipt and simulates an exact
+purge; any reverse dependency or additional removal is a STOP. It never runs `autoremove`:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 scripts/control-timeweb-operator-node-bootstrap.py rollback --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+A controller STOP never permits an alternate launcher, manual package command, marker deletion,
+service restart, ingress activation or deployment.
 
 The metadata-only dry-run performs the same source and current-release validation without creating
 `/etc/phub` or writing a target:

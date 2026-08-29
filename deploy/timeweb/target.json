@@ -17,11 +17,11 @@
     "node": {
       "path": "/usr/bin/node",
       "major": 22,
-      "packageManager": "apt",
-      "package": "nodejs",
-      "architecture": "amd64",
-      "packageSource": "ubuntu-signed-archive",
-      "receiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.txt"
+      "controllerPath": "scripts/control-timeweb-operator-node-bootstrap.py",
+      "contractPath": "deploy/timeweb/operator-node-bootstrap.v1.json",
+      "launcherPath": "/usr/bin/python3",
+      "launcherPackage": "python3-minimal",
+      "receiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json"
     }
   },
   "provider": {

@@ -1,0 +1,95 @@
+{
+  "schema": "PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_V1",
+  "platform": {
+    "osReleaseId": "ubuntu",
+    "osReleaseVersion": "26.04",
+    "osReleaseCodename": "resolute",
+    "architecture": "amd64",
+    "hostArchitecture": "x86_64"
+  },
+  "launcher": {
+    "path": "/usr/bin/python3",
+    "packageOwner": "python3-minimal",
+    "major": 3
+  },
+  "apt": {
+    "binary": "/usr/bin/apt-get",
+    "cacheBinary": "/usr/bin/apt-cache",
+    "configBinary": "/usr/bin/apt-config",
+    "dpkgBinary": "/usr/bin/dpkg",
+    "dpkgQueryBinary": "/usr/bin/dpkg-query",
+    "dpkgDebBinary": "/usr/bin/dpkg-deb",
+    "sourceList": "/etc/apt/sources.list.d/ubuntu.sources",
+    "sourceListSha256": "18183d5067de450288aea132d12ea3e01d456196a179b6c1184f9d7e7d20ece0",
+    "sourceParts": "-",
+    "keyring": "/usr/share/keyrings/ubuntu-archive-keyring.gpg",
+    "keyringSha256": "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+    "keyFingerprints": [
+      "790BC7277767219C42C86F933B4FE6ACC0B21F32",
+      "843938DF228D22F7B3742BC0D94AA3F0EFE21092",
+      "F6ECB3762474EDA9D21B7022871920D1991BC93C"
+    ],
+    "allowedUris": ["http://archive.ubuntu.com/ubuntu", "http://security.ubuntu.com/ubuntu"],
+    "allowedSuites": ["resolute", "resolute-updates", "resolute-backports", "resolute-security"],
+    "allowedComponents": ["main", "universe", "restricted", "multiverse"],
+    "packages": [
+      { "name": "libsimdutf31", "version": "8.0.0-1", "architecture": "amd64" },
+      { "name": "libada-url0-3", "version": "3.4.3-1", "architecture": "amd64" },
+      { "name": "libcares2", "version": "1.34.6-1", "architecture": "amd64" },
+      {
+        "name": "libllhttp9.3",
+        "version": "9.3.3~really9.3.0+~cs12.11.8-3build1",
+        "architecture": "amd64"
+      },
+      { "name": "libsimdjson29", "version": "4.2.4-1", "architecture": "amd64" },
+      { "name": "node-corepack", "version": "0.24.0-5build1", "architecture": "all" },
+      {
+        "name": "nodejs",
+        "version": "22.22.1+dfsg+~cs22.19.15-1ubuntu1",
+        "architecture": "amd64"
+      },
+      { "name": "node-xtend", "version": "4.0.2-3", "architecture": "all" },
+      { "name": "node-acorn", "version": "8.16.0+ds+~cs25.18.7-4", "architecture": "all" },
+      { "name": "node-cjs-module-lexer", "version": "1.2.3+dfsg-1", "architecture": "all" },
+      { "name": "node-balanced-match", "version": "2.0.0-1", "architecture": "all" },
+      { "name": "node-brace-expansion", "version": "2.0.1+~1.1.0-2", "architecture": "all" },
+      { "name": "node-minimatch", "version": "9.0.3-6", "architecture": "all" },
+      { "name": "node-ms", "version": "2.1.3+~cs0.7.31-3", "architecture": "all" },
+      { "name": "node-debug", "version": "4.4.3+~4.1.13-1", "architecture": "all" },
+      { "name": "node-lru-cache", "version": "10.0.1-3", "architecture": "all" },
+      { "name": "node-semver", "version": "7.6.1+~7.5.8-2", "architecture": "all" },
+      {
+        "name": "node-llhttp",
+        "version": "9.3.3~really9.3.0+~cs12.11.8-3build1",
+        "architecture": "all"
+      },
+      { "name": "node-undici", "version": "7.18.2+dfsg+~cs3.2.0-1build1", "architecture": "all" },
+      {
+        "name": "libnode127",
+        "version": "22.22.1+dfsg+~cs22.19.15-1ubuntu1",
+        "architecture": "amd64"
+      }
+    ]
+  },
+  "lifecycle": {
+    "policyRcPath": "/usr/sbin/policy-rc.d",
+    "protectedUnits": ["docker.service", "ssh.service", "tailscaled.service"],
+    "listenerSnapshotBinary": "/usr/bin/ss",
+    "rebootRequiredPath": "/var/run/reboot-required"
+  },
+  "state": {
+    "root": "/opt/phub/timeweb-beta/operator/node-bootstrap",
+    "planPath": "/opt/phub/timeweb-beta/operator/node-bootstrap/plan.json",
+    "packageDirectory": "/opt/phub/timeweb-beta/operator/node-bootstrap/packages",
+    "transactionPath": "/opt/phub/timeweb-beta/operator/node-bootstrap/transaction.json",
+    "receiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json",
+    "rollbackReceiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-rollback-receipt.json"
+  },
+  "node": {
+    "path": "/usr/bin/node",
+    "package": "nodejs",
+    "major": 22,
+    "platform": "linux",
+    "architecture": "x64"
+  }
+}

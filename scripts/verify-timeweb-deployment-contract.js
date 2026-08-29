@@ -16,6 +16,7 @@ const DEFAULT_PATHS = Object.freeze({
   ingress: resolve(repositoryRoot, 'deploy/timeweb/compose.ingress.yaml'),
   application: resolve(repositoryRoot, 'deploy/timeweb/compose.beta.yaml'),
   runtime: resolve(repositoryRoot, 'deploy/timeweb/runtime-environment.contract.json'),
+  nodeBootstrap: resolve(repositoryRoot, 'deploy/timeweb/operator-node-bootstrap.v1.json'),
   runbook: resolve(repositoryRoot, 'docs/runbooks/timeweb-lk2-beta.md'),
 });
 const SERVICES = Object.freeze(['web', 'api', 'realtime', 'worker', 'migrator']);
@@ -125,18 +126,27 @@ export function validateTargetContract(target) {
   exactKeys(target.operatorRuntime, ['node'], 'target_operator_runtime');
   exactKeys(
     target.operatorRuntime.node,
-    ['path', 'major', 'packageManager', 'package', 'architecture', 'packageSource', 'receiptPath'],
+    [
+      'path',
+      'major',
+      'controllerPath',
+      'contractPath',
+      'launcherPath',
+      'launcherPackage',
+      'receiptPath',
+    ],
     'target_operator_node',
   );
   if (
     target.operatorRuntime.node.path !== '/usr/bin/node' ||
     target.operatorRuntime.node.major !== 22 ||
-    target.operatorRuntime.node.packageManager !== 'apt' ||
-    target.operatorRuntime.node.package !== 'nodejs' ||
-    target.operatorRuntime.node.architecture !== 'amd64' ||
-    target.operatorRuntime.node.packageSource !== 'ubuntu-signed-archive' ||
+    target.operatorRuntime.node.controllerPath !==
+      'scripts/control-timeweb-operator-node-bootstrap.py' ||
+    target.operatorRuntime.node.contractPath !== 'deploy/timeweb/operator-node-bootstrap.v1.json' ||
+    target.operatorRuntime.node.launcherPath !== '/usr/bin/python3' ||
+    target.operatorRuntime.node.launcherPackage !== 'python3-minimal' ||
     target.operatorRuntime.node.receiptPath !==
-      '/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.txt'
+      '/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json'
   )
     reject('target_operator_node');
 
@@ -252,6 +262,187 @@ export function validateTargetContract(target) {
       reject('target_historical_evidence');
   }
   return target;
+}
+
+export function validateOperatorNodeBootstrapContract(contract, target) {
+  const value = object(contract, 'node_bootstrap_contract');
+  exactKeys(
+    value,
+    ['schema', 'platform', 'launcher', 'apt', 'lifecycle', 'state', 'node'],
+    'node_bootstrap_contract_keys',
+  );
+  if (value.schema !== 'PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_V1') reject('node_bootstrap_schema');
+  exactKeys(
+    value.platform,
+    ['osReleaseId', 'osReleaseVersion', 'osReleaseCodename', 'architecture', 'hostArchitecture'],
+    'node_bootstrap_platform',
+  );
+  if (
+    value.platform.osReleaseId !== 'ubuntu' ||
+    value.platform.osReleaseVersion !== '26.04' ||
+    value.platform.osReleaseCodename !== 'resolute' ||
+    value.platform.architecture !== target.platform.architecture ||
+    value.platform.hostArchitecture !== target.platform.hostArchitecture
+  )
+    reject('node_bootstrap_platform');
+  exactKeys(value.launcher, ['path', 'packageOwner', 'major'], 'node_bootstrap_launcher');
+  if (
+    value.launcher.path !== target.operatorRuntime.node.launcherPath ||
+    value.launcher.packageOwner !== target.operatorRuntime.node.launcherPackage ||
+    value.launcher.major !== 3
+  )
+    reject('node_bootstrap_launcher');
+  exactKeys(
+    value.apt,
+    [
+      'binary',
+      'cacheBinary',
+      'configBinary',
+      'dpkgBinary',
+      'dpkgQueryBinary',
+      'dpkgDebBinary',
+      'sourceList',
+      'sourceListSha256',
+      'sourceParts',
+      'keyring',
+      'keyringSha256',
+      'keyFingerprints',
+      'allowedUris',
+      'allowedSuites',
+      'allowedComponents',
+      'packages',
+    ],
+    'node_bootstrap_apt',
+  );
+  const expectedAptPaths = {
+    binary: '/usr/bin/apt-get',
+    cacheBinary: '/usr/bin/apt-cache',
+    configBinary: '/usr/bin/apt-config',
+    dpkgBinary: '/usr/bin/dpkg',
+    dpkgQueryBinary: '/usr/bin/dpkg-query',
+    dpkgDebBinary: '/usr/bin/dpkg-deb',
+    sourceList: '/etc/apt/sources.list.d/ubuntu.sources',
+    sourceParts: '-',
+    keyring: '/usr/share/keyrings/ubuntu-archive-keyring.gpg',
+  };
+  for (const [key, expected] of Object.entries(expectedAptPaths)) {
+    if (value.apt[key] !== expected) reject('node_bootstrap_apt_paths');
+  }
+  if (
+    value.apt.sourceListSha256 !==
+      '18183d5067de450288aea132d12ea3e01d456196a179b6c1184f9d7e7d20ece0' ||
+    value.apt.keyringSha256 !== '80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31'
+  )
+    reject('node_bootstrap_apt_hashes');
+  exactArray(
+    value.apt.keyFingerprints,
+    [
+      '790BC7277767219C42C86F933B4FE6ACC0B21F32',
+      '843938DF228D22F7B3742BC0D94AA3F0EFE21092',
+      'F6ECB3762474EDA9D21B7022871920D1991BC93C',
+    ],
+    'node_bootstrap_apt_fingerprints',
+  );
+  exactArray(
+    value.apt.allowedUris,
+    ['http://archive.ubuntu.com/ubuntu', 'http://security.ubuntu.com/ubuntu'],
+    'node_bootstrap_apt_uris',
+  );
+  exactArray(
+    value.apt.allowedSuites,
+    ['resolute', 'resolute-updates', 'resolute-backports', 'resolute-security'],
+    'node_bootstrap_apt_suites',
+  );
+  exactArray(
+    value.apt.allowedComponents,
+    ['main', 'universe', 'restricted', 'multiverse'],
+    'node_bootstrap_apt_components',
+  );
+  const expectedPackages = [
+    ['libsimdutf31', '8.0.0-1', 'amd64'],
+    ['libada-url0-3', '3.4.3-1', 'amd64'],
+    ['libcares2', '1.34.6-1', 'amd64'],
+    ['libllhttp9.3', '9.3.3~really9.3.0+~cs12.11.8-3build1', 'amd64'],
+    ['libsimdjson29', '4.2.4-1', 'amd64'],
+    ['node-corepack', '0.24.0-5build1', 'all'],
+    ['nodejs', '22.22.1+dfsg+~cs22.19.15-1ubuntu1', 'amd64'],
+    ['node-xtend', '4.0.2-3', 'all'],
+    ['node-acorn', '8.16.0+ds+~cs25.18.7-4', 'all'],
+    ['node-cjs-module-lexer', '1.2.3+dfsg-1', 'all'],
+    ['node-balanced-match', '2.0.0-1', 'all'],
+    ['node-brace-expansion', '2.0.1+~1.1.0-2', 'all'],
+    ['node-minimatch', '9.0.3-6', 'all'],
+    ['node-ms', '2.1.3+~cs0.7.31-3', 'all'],
+    ['node-debug', '4.4.3+~4.1.13-1', 'all'],
+    ['node-lru-cache', '10.0.1-3', 'all'],
+    ['node-semver', '7.6.1+~7.5.8-2', 'all'],
+    ['node-llhttp', '9.3.3~really9.3.0+~cs12.11.8-3build1', 'all'],
+    ['node-undici', '7.18.2+dfsg+~cs3.2.0-1build1', 'all'],
+    ['libnode127', '22.22.1+dfsg+~cs22.19.15-1ubuntu1', 'amd64'],
+  ];
+  if (
+    !Array.isArray(value.apt.packages) ||
+    JSON.stringify(
+      value.apt.packages.map((entry) => {
+        exactKeys(entry, ['name', 'version', 'architecture'], 'node_bootstrap_package');
+        return [entry.name, entry.version, entry.architecture];
+      }),
+    ) !== JSON.stringify(expectedPackages)
+  )
+    reject('node_bootstrap_packages');
+  exactKeys(
+    value.lifecycle,
+    ['policyRcPath', 'protectedUnits', 'listenerSnapshotBinary', 'rebootRequiredPath'],
+    'node_bootstrap_lifecycle',
+  );
+  if (
+    value.lifecycle.policyRcPath !== '/usr/sbin/policy-rc.d' ||
+    value.lifecycle.listenerSnapshotBinary !== '/usr/bin/ss' ||
+    value.lifecycle.rebootRequiredPath !== '/var/run/reboot-required'
+  )
+    reject('node_bootstrap_lifecycle');
+  exactArray(
+    value.lifecycle.protectedUnits,
+    ['docker.service', 'ssh.service', 'tailscaled.service'],
+    'node_bootstrap_lifecycle',
+  );
+  exactKeys(
+    value.state,
+    [
+      'root',
+      'planPath',
+      'packageDirectory',
+      'transactionPath',
+      'receiptPath',
+      'rollbackReceiptPath',
+    ],
+    'node_bootstrap_state',
+  );
+  const stateRoot = '/opt/phub/timeweb-beta/operator/node-bootstrap';
+  if (
+    value.state.root !== stateRoot ||
+    value.state.planPath !== `${stateRoot}/plan.json` ||
+    value.state.packageDirectory !== `${stateRoot}/packages` ||
+    value.state.transactionPath !== `${stateRoot}/transaction.json` ||
+    value.state.receiptPath !== target.operatorRuntime.node.receiptPath ||
+    value.state.rollbackReceiptPath !==
+      '/opt/phub/timeweb-beta/operator/node-bootstrap-rollback-receipt.json'
+  )
+    reject('node_bootstrap_state');
+  exactKeys(
+    value.node,
+    ['path', 'package', 'major', 'platform', 'architecture'],
+    'node_bootstrap_node',
+  );
+  if (
+    value.node.path !== target.operatorRuntime.node.path ||
+    value.node.package !== 'nodejs' ||
+    value.node.major !== target.operatorRuntime.node.major ||
+    value.node.platform !== 'linux' ||
+    value.node.architecture !== 'x64'
+  )
+    reject('node_bootstrap_node');
+  return value;
 }
 
 function isSameOrDescendant(root, candidate) {
@@ -929,6 +1120,12 @@ export function validateRunbook(contents, target) {
     'immutable historical evidence',
     'not an activation input',
     'firewall remains unchanged',
+    'control-timeweb-operator-node-bootstrap.py',
+    ' plan --expected-source-sha',
+    ' apply --expected-source-sha',
+    ' verify --expected-source-sha',
+    ' recover --expected-source-sha',
+    ' rollback --expected-source-sha',
   ]) {
     if (!contents.includes(required)) reject('runbook_preflight_contract');
   }
@@ -965,6 +1162,7 @@ export function validateDeploymentInputPaths(target, runtime, paths) {
   for (const [candidate, roles] of [
     [paths.target, ['activationInput']],
     [paths.runtime, ['secretsSource']],
+    [paths.nodeBootstrap, ['activationInput']],
     [paths.caddyfile, ['mountSource']],
     [dirname(paths.caddyfile), ['caddyWorkingDirectory']],
     [paths.publicBetaCaddyfile, ['mountSource']],
@@ -1007,6 +1205,7 @@ function parseArguments(argv) {
       '--ingress': 'ingress',
       '--application': 'application',
       '--runtime-contract': 'runtime',
+      '--node-bootstrap-contract': 'nodeBootstrap',
       '--runbook': 'runbook',
       '--diagnostic': 'diagnostic',
       '--env-root': 'envRoot',
@@ -1034,6 +1233,10 @@ function writeDiagnostic(path, diagnostic) {
 export function verifyDeploymentContract(paths = DEFAULT_PATHS) {
   const target = validateTargetContract(strictJsonFile(paths.target, 'target_json'));
   const runtime = validateRuntimeContract(strictJsonFile(paths.runtime, 'runtime_json'));
+  const nodeBootstrap = validateOperatorNodeBootstrapContract(
+    strictJsonFile(paths.nodeBootstrap, 'node_bootstrap_json'),
+    target,
+  );
   validateDeploymentInputPaths(target, runtime, paths);
   validateCaddyfile(readFileSync(paths.caddyfile, 'utf8'), target);
   validateYandexPublicBetaCaddyfile(readFileSync(paths.publicBetaCaddyfile, 'utf8'), target);
@@ -1062,6 +1265,7 @@ export function verifyDeploymentContract(paths = DEFAULT_PATHS) {
     network: target.network.name,
     applicationServices: SERVICES,
     historicalEvidenceExcluded: target.release.historicalEvidence.length,
+    operatorNodeBootstrapPackages: nodeBootstrap.apt.packages.length,
   };
 }
 
