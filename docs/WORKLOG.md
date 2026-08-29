@@ -1233,3 +1233,33 @@
   operations.
 - Replaced universal `npm run check` and generic review with changed-file/risk triggers;
   the full gate remains mandatory for critical and shared surfaces.
+
+## 2026-08-29 — Timeweb operator Node bootstrap contract
+
+- Added a machine-readable operator runtime contract for fixed `/usr/bin/node`, Node major 22, the
+  exact Ubuntu 26.04 source/keyring identities and the complete 20-package new-install closure.
+- Replaced the long manual procedure and repeated missing-Node source-revision stop with one frozen
+  Python controller exposing `plan`, separately authorized `apply`, `verify`, deterministic
+  `recover` and separately authorized exact `rollback` modes.
+- Bound apply to locally staged and hashed `.deb` payloads with network download disabled, rejected
+  lifecycle-bearing maintainer scripts and apt config hooks, and protected active units/listeners
+  with a temporary lifecycle guard and before/after evidence.
+- Published the lifecycle guard through a fixed pending path and no-replace hard link, with
+  directory `fsync` and deterministic recovery for both interrupted publication states.
+- Added fresh exact partial-closure simulation before resumed installs, prohibited APT upgrades and
+  removals during install, validated recovery phases, and made purge mutation a fixed dpkg subset.
+- Added an explicit, separately authorized `rollback --recover-failed-apply` state transition that
+  binds the observed exact subset, survives interruption, rejects scope growth and emits a distinct
+  root-only completion receipt before releasing the lifecycle guard.
+- Added removal-specific dpkg state validation, bounded retry evidence with separate authorized and
+  latest subset hashes, and immutable receipt read-back before interrupted cleanup can continue.
+- Applied the same transaction-persisted completion time and exact receipt read-back protocol to
+  normal install and rollback, including separate full-authorization and latest retry evidence.
+- Required every persistent bundle, transaction and receipt marker to be absent during its relevant
+  planning, apply, verify or fresh rollback preflight, so stale or dangling-symlink evidence stops
+  before state-root creation, transaction, guard or package mutation.
+- Isolated Python startup from checkout/site shadowing, required a clean frozen Git tree, populated a
+  root-only authenticated apt index snapshot from the pinned Ubuntu source/keyring, and atomically
+  published that snapshot, the verified package payloads and their accepted plan as one bundle.
+- Kept container wrappers and third-party installers forbidden, preserved every secret/deploy/ingress
+  gate and required atomic root-only metadata receipts without secret or package payload content.

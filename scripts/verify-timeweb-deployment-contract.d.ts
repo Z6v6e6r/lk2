@@ -17,6 +17,17 @@ export interface TimewebTargetContract {
     ttl: number;
   };
   platform: { os: string; architecture: string; hostArchitecture: string };
+  operatorRuntime: {
+    node: {
+      path: string;
+      major: number;
+      controllerPath: string;
+      contractPath: string;
+      launcherPath: string;
+      launcherPackage: string;
+      receiptPath: string;
+    };
+  };
   provider: { name: string; serverName: string; serverId: number; projectId: number };
   management: {
     requiredInterface: string;
@@ -68,6 +79,16 @@ export interface TimewebRuntimeEnvironmentContract {
   services: Record<string, TimewebRuntimeServiceContract>;
 }
 
+export interface TimewebOperatorNodeBootstrapContract {
+  schema: string;
+  apt: {
+    sourceListSha256: string;
+    packages: Array<{ name: string; version: string; architecture: string }>;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 export interface TimewebDeploymentContractPaths {
   target: string;
   caddyfile: string;
@@ -76,6 +97,7 @@ export interface TimewebDeploymentContractPaths {
   ingress: string;
   application: string;
   runtime: string;
+  nodeBootstrap: string;
   runbook: string;
   diagnostic?: string;
   envRoot?: string;
@@ -86,6 +108,10 @@ export class TimewebDeploymentContractError extends Error {
 }
 
 export function validateTargetContract(target: unknown): TimewebTargetContract;
+export function validateOperatorNodeBootstrapContract(
+  contract: unknown,
+  target: TimewebTargetContract,
+): TimewebOperatorNodeBootstrapContract;
 export function validateFutureReleaseDirectory(
   target: TimewebTargetContract,
   candidate: string,
