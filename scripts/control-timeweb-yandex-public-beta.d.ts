@@ -66,10 +66,14 @@ export function validateCandidateReleaseEnvironment(
 ): Record<string, string>;
 export function validateReceipt(input: unknown): TimewebYandexRollbackReceipt;
 export function buildRollbackSteps(receipt: unknown): readonly string[];
-export function buildProspectiveCaddyInvocation(
+export function buildProspectiveCaddyInvocation(command: 'validate' | 'adapt'): {
+  readonly command: string;
+  readonly args: readonly string[];
+};
+export function buildProspectiveCaddyExecution(
   source: string,
   command: 'validate' | 'adapt',
-): { readonly command: string; readonly args: readonly string[] };
+): { readonly command: string; readonly args: readonly string[]; readonly input: Buffer };
 export function buildCaddyRecreateInvocation(receipt: { readonly ingressCompose: string }): {
   readonly command: string;
   readonly args: readonly string[];

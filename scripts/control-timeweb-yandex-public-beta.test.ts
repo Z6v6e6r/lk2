@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -7,6 +9,7 @@ import {
   buildRollbackSteps,
   buildCaddyRecreateInvocation,
   buildIngressSmokeInvocations,
+  buildProspectiveCaddyExecution,
   buildProspectiveCaddyInvocation,
   executeCaddyTransition,
   validateCandidateReleaseEnvironment,
@@ -194,12 +197,13 @@ describe('Timeweb Yandex public-beta controller', () => {
   });
 
   it('uses offline pinned-image validation and force-recreates Caddy with no reload path', () => {
-    const validation = buildProspectiveCaddyInvocation(receipt.publicCaddyfile, 'validate');
+    const validation = buildProspectiveCaddyInvocation('validate');
     expect(validation).toMatchObject({ command: '/usr/bin/docker' });
     expect(validation.args).toEqual(
       expect.arrayContaining([
         '--pull',
         'never',
+        '-i',
         '--network',
         'none',
         '--read-only',
@@ -208,8 +212,11 @@ describe('Timeweb Yandex public-beta controller', () => {
         '--entrypoint',
         '/usr/bin/caddy',
         'validate',
+        '--config',
+        '-',
       ]),
     );
+    expect(validation.args.join(' ')).not.toContain('type=bind');
     const recreate = buildCaddyRecreateInvocation(receipt);
     expect(recreate.args.slice(-7)).toEqual([
       'up',
@@ -221,6 +228,23 @@ describe('Timeweb Yandex public-beta controller', () => {
       'caddy',
     ]);
     expect([...validation.args, ...recreate.args]).not.toContain('reload');
+  });
+
+  it('streams a protected 0600 Basic backup over stdin instead of bind-mounting it', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-caddy-stdin-'));
+    const backup = join(directory, 'Caddyfile.basic');
+    try {
+      writeFileSync(backup, '{\n\tadmin off\n}\n', { mode: 0o600 });
+      chmodSync(backup, 0o600);
+      const execution = buildProspectiveCaddyExecution(backup, 'validate');
+      expect(execution.input.toString('utf8')).toBe('{\n\tadmin off\n}\n');
+      expect(execution.args).toContain('-i');
+      expect(execution.args).toEqual(expect.arrayContaining(['--config', '-']));
+      expect(execution.args.join(' ')).not.toContain(backup);
+      expect(execution.args.join(' ')).not.toContain('type=bind');
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('executes validate-install-recreate in order and stops before install on validation failure', () => {

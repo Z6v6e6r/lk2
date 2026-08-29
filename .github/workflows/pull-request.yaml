@@ -450,6 +450,12 @@ jobs:
           docker run --rm --network none \
             --volume "$PWD/deploy/timeweb/Caddyfile.yandex-public-beta:/etc/caddy/Caddyfile:ro" \
             "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          install -m 0600 deploy/timeweb/Caddyfile.yandex-public-beta \
+            "$RUNNER_TEMP/caddy-yandex-public-beta-0600"
+          docker run --rm -i --pull never --network none --read-only --user 65534:65534 \
+            --entrypoint /usr/bin/caddy "$CADDY_IMAGE" \
+            validate --config - --adapter caddyfile \
+            <"$RUNNER_TEMP/caddy-yandex-public-beta-0600"
           docker run --rm --network none \
             --volume "$PWD/deploy/timeweb/Caddyfile.yandex-public-beta:/etc/caddy/Caddyfile:ro" \
             "$CADDY_IMAGE" caddy adapt --pretty --config /etc/caddy/Caddyfile --adapter caddyfile \

@@ -137,7 +137,9 @@ API/Web container images, runtime release identity and both Caddy hashes. It val
 prospective file offline with the already-local pinned Caddy image, atomically installs it, then
 force-recreates only Caddy so the single-file bind mount receives the new inode. The recreated
 container must use the exact pinned image, be running and adapt the mounted file to the receipt-bound
-hash. A loopback TLS smoke then proves HTTP redirect, Web `200`, API readiness `200` and a denied
+hash. Offline validation streams root-read bytes over stdin to a non-root, read-only, networkless
+container, so the root-only `0600` Basic backup is never exposed through a file bind mount. A
+loopback TLS smoke then proves HTTP redirect, Web `200`, API readiness `200` and a denied
 non-allowlisted POST `405`, without credentials or provider mutation. Any
 validation/recreate/verification/smoke failure restores Basic through that same sequence and proves
 the unauthenticated HTTPS root is again `401` before returning failure. `caddy reload` is

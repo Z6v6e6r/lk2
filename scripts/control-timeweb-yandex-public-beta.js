@@ -701,13 +701,14 @@ function atomicInstall(source, destination) {
   secureRegularFile(destination);
 }
 
-export function buildProspectiveCaddyInvocation(source, command) {
+export function buildProspectiveCaddyInvocation(command) {
   if (command !== 'validate' && command !== 'adapt') fail('caddy_command');
   return Object.freeze({
     command: DOCKER,
     args: Object.freeze([
       'run',
       '--rm',
+      '-i',
       '--pull',
       'never',
       '--network',
@@ -715,18 +716,23 @@ export function buildProspectiveCaddyInvocation(source, command) {
       '--read-only',
       '--user',
       '65534:65534',
-      '--mount',
-      `type=bind,src=${source},dst=/etc/caddy/Caddyfile,readonly`,
       '--entrypoint',
       '/usr/bin/caddy',
       CADDY_IMAGE_REFERENCE,
       command,
       ...(command === 'adapt' ? ['--pretty'] : []),
       '--config',
-      '/etc/caddy/Caddyfile',
+      '-',
       '--adapter',
       'caddyfile',
     ]),
+  });
+}
+
+export function buildProspectiveCaddyExecution(source, command) {
+  return Object.freeze({
+    ...buildProspectiveCaddyInvocation(command),
+    input: readFileSync(source),
   });
 }
 
@@ -811,8 +817,12 @@ function verifyIngressSmoke(mode) {
 
 function runProspectiveCaddy(source, command) {
   assertLocalImage(CADDY_IMAGE_REFERENCE);
-  const invocation = buildProspectiveCaddyInvocation(source, command);
-  return runDocker(invocation.args, { raw: command === 'adapt' });
+  const execution = buildProspectiveCaddyExecution(source, command);
+  return runDocker(execution.args, {
+    raw: command === 'adapt',
+    input: execution.input,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
 }
 
 function prospectiveCaddyAdaptedSha256(source) {
