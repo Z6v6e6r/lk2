@@ -687,6 +687,9 @@ describe('Timeweb deployment contract', () => {
       /docker compose -f deploy\/timeweb\/compose\.beta\.yaml[\s\\]*--profile background --profile migration[\s\\]*config --quiet/u,
     );
     expect(workflow).toContain('SYNTHETIC_NON_SECRET');
+    expect(workflow).toContain(
+      'PHUB_RELEASE_ID: 1111111111111111111111111111111111111111-12345678901-1',
+    );
   });
 
   it('40. contains no Timeweb Compose activation command', () => {
