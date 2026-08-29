@@ -14,11 +14,14 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseStrictJson } from './strict-json.js';
 import {
+  validateApplicationCompose,
+  validateIngressCompose,
+  validateRuntimeContract,
   validateTargetContract,
   validateYandexPublicBetaCaddyfile,
   validateYandexPublicBetaIngressContract,
@@ -43,6 +46,17 @@ const REPOSITORIES = Object.freeze({
   worker: 'ghcr.io/z6v6e6r/phub-worker',
   migrator: 'ghcr.io/z6v6e6r/phub-migrator',
 });
+
+function canonicalRuntimeRoot() {
+  return validateRuntimeContract(
+    parseStrictJson(
+      readFileSync(
+        resolve(REPOSITORY_ROOT, 'deploy/timeweb/runtime-environment.contract.json'),
+        'utf8',
+      ),
+    ),
+  ).rootOnlyDirectory;
+}
 
 export class TimewebYandexPublicBetaControlError extends Error {
   constructor(code) {
@@ -261,7 +275,7 @@ function assertContainerImage(service, expectedReference, project) {
   return id;
 }
 
-function assertHealthyContainer(service, expectedReference) {
+function assertHealthyContainer(service, expectedReference, expectedReleaseId) {
   const id = assertContainerImage(service, expectedReference);
   const health = runDocker([
     'inspect',
@@ -269,8 +283,33 @@ function assertHealthyContainer(service, expectedReference) {
     '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}',
     id,
   ]);
-  if (health !== 'healthy') fail('candidate_health');
+  const releaseId = runDocker([
+    'inspect',
+    '--format',
+    '{{ index .Config.Labels "phub.release-id" }}',
+    id,
+  ]);
+  validateCandidateContainerAttestation(
+    { image: expectedReference, health, releaseId },
+    { image: expectedReference, releaseId: expectedReleaseId },
+  );
   return id;
+}
+
+export function validateCandidateContainerAttestation(actual, expected) {
+  const attestation = object(actual, 'candidate_container_attestation');
+  const authority = object(expected, 'candidate_container_authority');
+  exactKeys(attestation, ['image', 'health', 'releaseId'], 'candidate_container_attestation');
+  exactKeys(authority, ['image', 'releaseId'], 'candidate_container_authority');
+  if (
+    typeof authority.image !== 'string' ||
+    typeof authority.releaseId !== 'string' ||
+    attestation.image !== authority.image ||
+    attestation.health !== 'healthy' ||
+    attestation.releaseId !== authority.releaseId
+  )
+    fail('candidate_container_attestation');
+  return attestation;
 }
 
 function assertLocalImage(reference) {
@@ -313,15 +352,14 @@ export function validateOperationInput(input) {
     'rollbackEnv',
   ])
     safeAbsolutePath(value[key], ['/opt/phub/timeweb-beta/'], 'operation_path');
-  safeAbsolutePath(value.candidateRuntimeEnvRoot, ['/etc/phub/timeweb-beta/'], 'runtime_path');
+  if (value.activeCaddyfile !== join(dirname(value.ingressCompose), 'Caddyfile'))
+    fail('ingress_caddy_mount_identity');
+  if (value.candidateRuntimeEnvRoot !== canonicalRuntimeRoot()) fail('runtime_path');
   if (!SHA.test(value.candidateSourceSha) || !SHA.test(value.candidateSourceTree))
     fail('candidate_source');
   if (
     typeof value.candidateReleaseId !== 'string' ||
-    !new RegExp(`^${value.candidateSourceSha}-[0-9]{11,20}-1$`, 'u').test(
-      value.candidateReleaseId,
-    ) ||
-    value.candidateRuntimeEnvRoot !== `/etc/phub/timeweb-beta/${value.candidateReleaseId}`
+    !new RegExp(`^${value.candidateSourceSha}-[0-9]{11,20}-1$`, 'u').test(value.candidateReleaseId)
   )
     fail('candidate_release_identity');
   if (
@@ -436,6 +474,7 @@ export function validateCandidateReleaseEnvironment(bytes, operation) {
 
 function rollbackEnvironment(floor) {
   return `${[
+    `PHUB_RELEASE_ID=${floor.sourceSha}-ROLLBACK-FLOOR`,
     `TIMEWEB_RUNTIME_ENV_ROOT=${floor.runtimeEnvRoot}`,
     ...Object.keys(REPOSITORIES).map(
       (component) =>
@@ -493,9 +532,10 @@ export function validateReceipt(input) {
     !new RegExp(`^${receipt.candidateSourceSha}-[0-9]{11,20}-1$`, 'u').test(
       receipt.candidateReleaseId,
     ) ||
-    receipt.candidateRuntimeEnvRoot !== `/etc/phub/timeweb-beta/${receipt.candidateReleaseId}` ||
+    receipt.candidateRuntimeEnvRoot !== canonicalRuntimeRoot() ||
     receipt.candidateReleaseEnv !==
       `/opt/phub/timeweb-beta/releases/${receipt.candidateReleaseId}/release.env` ||
+    receipt.activeCaddyfile !== join(dirname(receipt.ingressCompose), 'Caddyfile') ||
     !/^[0-9a-f]{64}$/u.test(receipt.candidateReleaseEnvSha256) ||
     !isImageReference('api', receipt.priorApiReference) ||
     !isImageReference('web', receipt.priorWebReference) ||
@@ -545,6 +585,8 @@ export function prepare(input) {
     operation.ingressCompose,
   ])
     secureRegularFile(path, { maxMode: 0o644 });
+  validateApplicationCompose(readFileSync(operation.applicationCompose, 'utf8'), target);
+  validateIngressCompose(readFileSync(operation.ingressCompose, 'utf8'), target);
   secureDirectory(operation.candidateRuntimeEnvRoot);
   secureRegularFile(operation.candidateReleaseEnv, { expectedMode: 0o600 });
   const candidateReleaseEnvBytes = readFileSync(operation.candidateReleaseEnv);
@@ -776,6 +818,34 @@ export function buildIngressSmokeInvocations(mode) {
         'lk2.padlhub.su:443:127.0.0.1',
         'https://lk2.padlhub.su/',
       ]),
+      Object.freeze([
+        ...common,
+        '--request',
+        'POST',
+        '--resolve',
+        'lk2.padlhub.su:443:127.0.0.1',
+        'https://lk2.padlhub.su/user/api/v1/local-padel/auth/viva/authorize',
+      ]),
+      Object.freeze([
+        ...common,
+        '--resolve',
+        'lk2.padlhub.su:443:127.0.0.1',
+        'https://lk2.padlhub.su/public/api/v1/local-padel/games',
+      ]),
+      Object.freeze([
+        ...common,
+        '--request',
+        'POST',
+        '--resolve',
+        'lk2.padlhub.su:443:127.0.0.1',
+        'https://lk2.padlhub.su/user/api/v1/local-padel/profile',
+      ]),
+      Object.freeze([
+        ...common,
+        '--resolve',
+        'lk2.padlhub.su:443:127.0.0.1',
+        'https://lk2.padlhub.su/realtime/health/ready',
+      ]),
     ]);
   }
   return Object.freeze([
@@ -810,7 +880,8 @@ export function buildIngressSmokeInvocations(mode) {
 }
 
 function verifyIngressSmoke(mode) {
-  const expected = mode === 'basic' ? ['401'] : ['308', '200', '200', '405'];
+  const expected =
+    mode === 'basic' ? ['401', '401', '401', '401', '401'] : ['308', '200', '200', '405'];
   const actual = buildIngressSmokeInvocations(mode).map((args) => runCurl(args));
   if (JSON.stringify(actual) !== JSON.stringify(expected)) fail('ingress_smoke');
 }
@@ -898,8 +969,8 @@ export function activateIngress(receiptPath) {
     fail('active_caddy_drift');
   if (sha256(readFileSync(receipt.publicCaddyfile)) !== receipt.publicCaddySha256)
     fail('public_caddy_drift');
-  assertHealthyContainer('api', receipt.candidateApiReference);
-  assertHealthyContainer('web', receipt.candidateWebReference);
+  assertHealthyContainer('api', receipt.candidateApiReference, receipt.candidateReleaseId);
+  assertHealthyContainer('web', receipt.candidateWebReference, receipt.candidateReleaseId);
   try {
     installAndRecreateCaddy(
       receipt,

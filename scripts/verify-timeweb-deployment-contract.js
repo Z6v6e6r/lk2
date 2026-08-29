@@ -563,12 +563,13 @@ export function validateApplicationCompose(contents, target) {
     )
       reject('application_env_file');
     const expectedKeys = {
-      web: ['restart', 'networks', 'logging', 'image', 'healthcheck'],
+      web: ['restart', 'networks', 'logging', 'image', 'labels', 'healthcheck'],
       api: [
         'restart',
         'networks',
         'logging',
         'image',
+        'labels',
         'env_file',
         'healthcheck',
         'stop_grace_period',
@@ -600,6 +601,13 @@ export function validateApplicationCompose(contents, target) {
       JSON.stringify([...expectedKeys[serviceName]].sort())
     )
       reject('application_escape');
+    if (serviceName === 'api' || serviceName === 'web') {
+      exactKeys(service.labels, ['phub.release-id'], 'application_release_attestation');
+      if (service.labels['phub.release-id'] !== '${PHUB_RELEASE_ID:?PHUB_RELEASE_ID is required}')
+        reject('application_release_attestation');
+    } else if (Object.hasOwn(service, 'labels')) {
+      reject('application_release_attestation');
+    }
     const variable = `${serviceName.toUpperCase()}_IMAGE_DIGEST`;
     const expected = `ghcr.io/z6v6e6r/phub-${serviceName}@\${${variable}:?${variable} is required}`;
     if (service.image !== expected) reject('application_image');

@@ -107,7 +107,8 @@ The noncanonical current fast-beta rollback floor is frozen in
 `deploy/timeweb/yandex-public-beta-rollback-floor.json`. Failed run `33168712014` is provenance only
 and authorizes neither publication nor deployment. After publication and secret provisioning,
 create a root-only operation-input JSON under `/opt/phub/timeweb-beta/` containing the exact
-candidate source SHA/tree, release ID/runtime root, canonical rendered `release.env`, active
+candidate source SHA/tree, release ID, canonical runtime root `/etc/phub/timeweb-beta`, canonical
+rendered `release.env`, active
 Caddyfile, Compose, backup, receipt and rollback-env paths. API/Web digests are read only from that
 root-owned canonical environment and are not accepted as operator-authored input. Then run from the
 exact clean candidate checkout:
@@ -123,8 +124,9 @@ paths/modes, a Caddy preimage without both Basic and `405`, or a mismatched runt
 It writes the Basic preimage backup first and the complete root-only receipt last. It logs no Caddy
 bytes, environment values or credentials.
 
-Start the candidate API behind Basic, prove readiness and exact image/runtime identity, then start
-Web and prove its exact image. Public ingress is last:
+Start the candidate API behind Basic through the exact rendered `release.env` and canonical
+`compose.beta.yaml`, prove readiness, then start Web the same way. Compose stamps both containers
+with the non-secret exact `phub.release-id` label. Public ingress is last:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
@@ -133,7 +135,9 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
 ```
 
 The controller rechecks the frozen source, canonical root-only `release.env`, receipt, candidate
-API/Web container images, runtime release identity and both Caddy hashes. It validates the
+API/Web container images, exact release labels, runtime release identity and both Caddy hashes. The
+active Caddyfile must be exactly the `./Caddyfile` mounted beside the validated ingress Compose; an
+operator-supplied alternate path is rejected. It validates the
 prospective file offline with the already-local pinned Caddy image, atomically installs it, then
 force-recreates only Caddy so the single-file bind mount receives the new inode. The recreated
 container must use the exact pinned image, be running and adapt the mounted file to the receipt-bound
@@ -142,7 +146,8 @@ container, so the root-only `0600` Basic backup is never exposed through a file 
 loopback TLS smoke then proves HTTP redirect, Web `200`, API readiness `200` and a denied
 non-allowlisted POST `405`, without credentials or provider mutation. Any
 validation/recreate/verification/smoke failure restores Basic through that same sequence and proves
-the unauthenticated HTTPS root is again `401` before returning failure. `caddy reload` is
+unauthenticated `401` responses for the HTTPS root, OAuth authorize, public API read, user API write
+and realtime health paths before returning failure. `caddy reload` is
 intentionally forbidden because both artifacts set `admin off`.
 
 Rollback is executable and ordered, never prose-only:

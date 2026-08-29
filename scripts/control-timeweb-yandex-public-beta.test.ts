@@ -12,15 +12,22 @@ import {
   buildProspectiveCaddyExecution,
   buildProspectiveCaddyInvocation,
   executeCaddyTransition,
+  validateCandidateContainerAttestation,
   validateCandidateReleaseEnvironment,
   validateOperationInput,
   validateReceipt,
   validateRollbackFloor,
 } from './control-timeweb-yandex-public-beta.js';
-import { validateTargetContract } from './verify-timeweb-deployment-contract.js';
+import {
+  validateRuntimeContract,
+  validateTargetContract,
+} from './verify-timeweb-deployment-contract.js';
 
 const target = validateTargetContract(
   parseStrictJson(readFileSync('deploy/timeweb/target.json', 'utf8')),
+);
+const runtimeContract = validateRuntimeContract(
+  parseStrictJson(readFileSync('deploy/timeweb/runtime-environment.contract.json', 'utf8')),
 );
 const floor = parseStrictJson<Record<string, unknown>>(
   readFileSync('deploy/timeweb/yandex-public-beta-rollback-floor.json', 'utf8'),
@@ -30,7 +37,7 @@ const candidateSourceSha = '1'.repeat(40);
 const candidateSourceTree = '2'.repeat(40);
 const candidateRunId = '12345678901';
 const candidateReleaseId = `${candidateSourceSha}-${candidateRunId}-1`;
-const candidateRuntimeEnvRoot = `/etc/phub/timeweb-beta/${candidateReleaseId}`;
+const candidateRuntimeEnvRoot = runtimeContract.rootOnlyDirectory;
 const receipt = {
   schema: 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1',
   status: 'PREPARED',
@@ -139,7 +146,7 @@ describe('Timeweb Yandex public-beta controller', () => {
       candidateSourceSha: '1'.repeat(40),
       candidateSourceTree: '2'.repeat(40),
       candidateReleaseId: `${'1'.repeat(40)}-12345678901-1`,
-      candidateRuntimeEnvRoot: `/etc/phub/timeweb-beta/${'1'.repeat(40)}-12345678901-1`,
+      candidateRuntimeEnvRoot,
       candidateReleaseEnv: `/opt/phub/timeweb-beta/releases/${'1'.repeat(40)}-12345678901-1/release.env`,
     };
     expect(validateOperationInput(input)).toMatchObject(input);
@@ -149,9 +156,46 @@ describe('Timeweb Yandex public-beta controller', () => {
     expect(() =>
       validateOperationInput({
         ...input,
+        activeCaddyfile: '/opt/phub/timeweb-beta/operator/not-compose-mounted.Caddyfile',
+      }),
+    ).toThrow('ingress_caddy_mount_identity');
+    expect(() =>
+      validateOperationInput({
+        ...input,
         candidateReleaseEnv: '/opt/phub/timeweb-beta/releases/other/release.env',
       }),
     ).toThrow('candidate_release_env_identity');
+    expect(() =>
+      validateOperationInput({
+        ...input,
+        candidateRuntimeEnvRoot: `${candidateRuntimeEnvRoot}/${candidateReleaseId}`,
+      }),
+    ).toThrow('runtime_path');
+  });
+
+  it('uses one canonical runtime root across provisioner, renderer and controller', () => {
+    expect(candidateRuntimeEnvRoot).toBe('/etc/phub/timeweb-beta');
+    expect(readFileSync('scripts/provision-timeweb-beta-runtime-secrets.js', 'utf8')).toContain(
+      "const TARGET_DIR = '/etc/phub/timeweb-beta';",
+    );
+    expect(readFileSync('scripts/render-timeweb-beta-release-env.js', 'utf8')).toContain(
+      "const RUNTIME_ENV_ROOT = '/etc/phub/timeweb-beta';",
+    );
+    expect(
+      validateOperationInput({
+        activeCaddyfile: '/opt/phub/timeweb-beta/operator/Caddyfile',
+        applicationCompose: '/opt/phub/timeweb-beta/operator/compose.beta.yaml',
+        ingressCompose: '/opt/phub/timeweb-beta/operator/compose.ingress.yaml',
+        backupCaddyfile: '/opt/phub/timeweb-beta/backups/yandex-public/Caddyfile.basic',
+        receipt: '/opt/phub/timeweb-beta/backups/yandex-public/receipt.json',
+        rollbackEnv: '/opt/phub/timeweb-beta/backups/yandex-public/rollback.env',
+        candidateSourceSha,
+        candidateSourceTree,
+        candidateReleaseId,
+        candidateRuntimeEnvRoot,
+        candidateReleaseEnv: `/opt/phub/timeweb-beta/releases/${candidateReleaseId}/release.env`,
+      }),
+    ).toMatchObject({ candidateRuntimeEnvRoot });
   });
 
   it('binds candidate images to the canonical rendered release environment', () => {
@@ -180,6 +224,19 @@ describe('Timeweb Yandex public-beta controller', () => {
         candidateOperation,
       ),
     ).toThrow('release_env_identity');
+  });
+
+  it('requires healthy candidate containers to attest the exact release id', () => {
+    const expected = { image: receipt.candidateApiReference, releaseId: candidateReleaseId };
+    expect(
+      validateCandidateContainerAttestation({ ...expected, health: 'healthy' }, expected),
+    ).toMatchObject(expected);
+    expect(() =>
+      validateCandidateContainerAttestation(
+        { ...expected, health: 'healthy', releaseId: `${candidateReleaseId}-stale` },
+        expected,
+      ),
+    ).toThrow('candidate_container_attestation');
   });
 
   it('binds the receipt hashes and restores Basic before either old container', () => {
@@ -293,8 +350,14 @@ describe('Timeweb Yandex public-beta controller', () => {
       ]),
     );
     const basicSmoke = buildIngressSmokeInvocations('basic');
-    expect(basicSmoke).toHaveLength(1);
+    expect(basicSmoke).toHaveLength(5);
     expect(basicSmoke[0]).toContain('https://lk2.padlhub.su/');
+    expect(basicSmoke[1]).toContain(
+      'https://lk2.padlhub.su/user/api/v1/local-padel/auth/viva/authorize',
+    );
+    expect(basicSmoke[2]).toContain('https://lk2.padlhub.su/public/api/v1/local-padel/games');
+    expect(basicSmoke[3]).toContain('https://lk2.padlhub.su/user/api/v1/local-padel/profile');
+    expect(basicSmoke[4]).toContain('https://lk2.padlhub.su/realtime/health/ready');
     expect(JSON.stringify([...publicSmoke, ...basicSmoke])).not.toMatch(/authorization|password/u);
   });
 
@@ -303,8 +366,8 @@ describe('Timeweb Yandex public-beta controller', () => {
     expect(source).not.toMatch(/['"]pull['"]|db:migrate|\bpsql\b|\bpg_dump\b|rmSync|unlinkSync/u);
     expect(source).not.toMatch(/['"]reload['"]/u);
     expect(source).toContain("'--no-deps'");
-    expect(source).toContain("assertHealthyContainer('api', receipt.candidateApiReference)");
-    expect(source).toContain("assertHealthyContainer('web', receipt.candidateWebReference)");
+    expect(source).toContain("assertHealthyContainer('api', receipt.candidateApiReference,");
+    expect(source).toContain("assertHealthyContainer('web', receipt.candidateWebReference,");
     expect(source).toMatch(/catch \(error\) \{\s*restoreBasicCaddy\(receipt\)/u);
   });
 });

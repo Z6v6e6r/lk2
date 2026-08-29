@@ -81,6 +81,10 @@ export function buildCaddyRecreateInvocation(receipt: { readonly ingressCompose:
 export function buildIngressSmokeInvocations(
   mode: 'public' | 'basic',
 ): readonly (readonly string[])[];
+export function validateCandidateContainerAttestation(
+  actual: { readonly image: string; readonly health: string; readonly releaseId: string },
+  expected: { readonly image: string; readonly releaseId: string },
+): { readonly image: string; readonly health: string; readonly releaseId: string };
 export function executeCaddyTransition(
   source: string,
   destination: string,

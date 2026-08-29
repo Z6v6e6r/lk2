@@ -82,6 +82,7 @@ class FakeRepository implements AuthRepository {
   private refreshSessionCreationCount = 0;
   private vivaDelegationSaveCount = 0;
   private rejectNextActiveSessionSave = false;
+  private rejectIdentityUpsertAsDisabled = false;
   private vivaDelegation:
     | {
         issuer: string;
@@ -148,6 +149,10 @@ class FakeRepository implements AuthRepository {
     this.currentLegalAcceptances = value;
   }
 
+  public rejectNextIdentityUpsertForDisabledUser(): void {
+    this.rejectIdentityUpsertAsDisabled = true;
+  }
+
   public resolveTenantAuthBinding(tenantKey: string): Promise<TenantAuthBinding | undefined> {
     return Promise.resolve(
       tenantKey === this.bindingValue.tenantKey ? this.bindingValue : undefined,
@@ -160,6 +165,10 @@ class FakeRepository implements AuthRepository {
 
   public upsertExternalIdentity(): Promise<AuthUser> {
     this.identityUpsertCount += 1;
+    if (this.rejectIdentityUpsertAsDisabled) {
+      this.rejectIdentityUpsertAsDisabled = false;
+      return Promise.reject(new Error('AUTH_USER_NOT_ACTIVE'));
+    }
     return Promise.resolve(user);
   }
 
@@ -992,6 +1001,77 @@ describe('provider-neutral authentication routes', () => {
     expect(repository.refreshSessionCreations).toBe(1);
     expect(repository.legalAcceptances).toBe(1);
     expect(repository.hasVivaDelegation).toBe(true);
+  });
+
+  it('issues no session or delegation when the Yandex subject maps to a disabled user', async () => {
+    const oauthConfig = loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_ALLOWED_PROVIDERS: 'yandex',
+      VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED: 'true',
+      PUBLIC_OFFER_VERSION: '2026-07-18',
+      PERSONAL_DATA_POLICY_VERSION: '2026-07-18',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+    });
+    const repository = new FakeRepository();
+    repository.rejectNextIdentityUpsertForDisabledUser();
+    const stateStore = new MemoryVivaOAuthStateStore();
+    const subjectProvisioningProvider: VivaOAuthProviderPort = {
+      ...oauthProvider,
+      exchangeAuthorizationCode: () =>
+        Promise.resolve({
+          identity: {
+            issuer: 'https://identity.example.test',
+            subject: 'disabled-yandex-user',
+            displayName: 'Заблокированный игрок',
+          },
+          identityResolution: 'SUBJECT_PROVISIONING',
+          accessToken: 'disabled-yandex-access-token',
+          refreshToken: 'disabled-yandex-refresh-token',
+        }),
+    };
+    const service = new AuthService({
+      config: oauthConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: subjectProvisioningProvider,
+      vivaOAuthStateStore: stateStore,
+    });
+
+    const started = await service.startVivaOAuth({
+      tenantKey: binding.tenantKey,
+      provider: 'yandex',
+      publicOfferAccepted: true,
+      personalDataPolicyAccepted: true,
+      correlationId: 'disabled-subject-provisioning-start',
+    });
+
+    await expect(
+      service.completeVivaOAuth({
+        tenantKey: binding.tenantKey,
+        state: new URL(started.redirectUrl).searchParams.get('state') ?? '',
+        code: 'disabled-subject-authorization-code',
+        correlationId: 'disabled-subject-provisioning-complete',
+        idempotencyKey: 'disabled-subject-provisioning-idempotency',
+        oauthBrowserNonce: started.browserNonce,
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_IDENTITY_CONFLICT' });
+    expect(repository.identityUpserts).toBe(1);
+    expect(repository.legalAcceptances).toBe(0);
+    expect(repository.vivaDelegationSaves).toBe(0);
+    expect(repository.refreshSessionCreations).toBe(0);
   });
 
   it('bootstraps mixed OAuth only through an already-linked issuer and subject', async () => {

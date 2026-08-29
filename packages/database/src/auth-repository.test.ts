@@ -71,6 +71,7 @@ describe('identity auth repository', () => {
             {
               id: userId,
               tenant_id: tenantId,
+              status: 'ACTIVE',
               display_name: 'Алексей',
               phone_last_4: '4567',
             },
@@ -98,6 +99,7 @@ describe('identity auth repository', () => {
             {
               id: userId,
               tenant_id: tenantId,
+              status: 'ACTIVE',
               display_name: 'Алексей',
               phone_last_4: '4567',
             },
@@ -134,6 +136,9 @@ describe('identity auth repository', () => {
       statements.push(text);
       if (text.includes('from integration.external_identity_map e')) return { rows: [] };
       if (text.includes('insert into identity.users')) return { rows: [{ id: userId }] };
+      if (text.includes('insert into integration.external_identity_map')) {
+        return { rows: [{ user_id: userId }], rowCount: 1 };
+      }
       if (text.includes('from identity.users u')) {
         return {
           rows: [
@@ -167,7 +172,8 @@ describe('identity auth repository', () => {
     expect(identityLookup).toContain('e.provider = $2');
     expect(identityLookup).toContain('e.issuer = $3');
     expect(identityLookup).toContain('e.subject = $4');
-    expect(identityLookup).toContain("u.status = 'ACTIVE'");
+    expect(identityLookup).toContain('u.status');
+    expect(identityLookup).not.toContain("u.status = 'ACTIVE'");
     expect(identityLookup).not.toContain('phone_e164 =');
   });
 
@@ -182,6 +188,7 @@ describe('identity auth repository', () => {
             {
               id: userId,
               tenant_id: tenantId,
+              status: 'ACTIVE',
               display_name: 'Алексей',
               phone_last_4: '4567',
             },
@@ -190,6 +197,9 @@ describe('identity auth repository', () => {
       }
       if (text.includes('insert into integration.external_entity_map')) {
         return { rows: [{ internal_id: userId }], rowCount: 1 };
+      }
+      if (text.includes('insert into integration.external_identity_map')) {
+        return { rows: [{ user_id: userId }], rowCount: 1 };
       }
       if (text.includes('from identity.users u')) {
         return {
@@ -224,6 +234,83 @@ describe('identity auth repository', () => {
       text.includes('insert into integration.external_identity_map'),
     );
     expect(linkedIdentity?.values).toContain(userId);
+  });
+
+  it('fails closed for a disabled mapped subject without creating or relinking a user', async () => {
+    const statements: string[] = [];
+    const { repository, query } = repositoryWithClient((text) => {
+      statements.push(text);
+      if (text.includes('from integration.external_identity_map e')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              status: 'DISABLED',
+              display_name: 'Заблокированный игрок',
+              phone_last_4: null,
+            },
+          ],
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(
+      repository.upsertExternalUser({
+        tenantId,
+        provider: 'VIVA',
+        issuer: 'https://kc.vivacrm.ru/realms/clients',
+        subject: 'disabled-viva-subject',
+        displayName: 'Заблокированный игрок',
+        correlationId: 'disabled-subject-correlation',
+      }),
+    ).rejects.toThrow('AUTH_USER_NOT_ACTIVE');
+
+    expect(statements.some((text) => text.includes('insert into identity.users'))).toBe(false);
+    expect(statements.some((text) => text.includes('insert into profile.user_summaries'))).toBe(
+      false,
+    );
+    expect(
+      statements.some((text) => text.includes('insert into integration.external_identity_map')),
+    ).toBe(false);
+    expect(query).toHaveBeenCalledWith('rollback');
+  });
+
+  it('rejects an external identity conflict that remains linked to a different user', async () => {
+    const conflictingUserId = '55555555-5555-4555-8555-555555555555';
+    const { repository } = repositoryWithClient((text) => {
+      if (text.includes('from integration.external_identity_map e')) return { rows: [] };
+      if (text.includes('from integration.external_entity_map e')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              status: 'ACTIVE',
+              display_name: 'Игрок',
+              phone_last_4: null,
+            },
+          ],
+        };
+      }
+      if (text.includes('insert into integration.external_identity_map')) {
+        return { rows: [{ user_id: conflictingUserId }], rowCount: 1 };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(
+      repository.upsertExternalUser({
+        tenantId,
+        provider: 'VIVA',
+        issuer: 'https://kc.vivacrm.ru/realms/clients',
+        subject: 'conflicting-viva-subject',
+        providerUserId: 'viva-profile-42',
+        displayName: 'Игрок',
+        correlationId: 'conflicting-subject-correlation',
+      }),
+    ).rejects.toThrow('AUTH_CANONICAL_IDENTITY_CONFLICT');
   });
 
   it('creates an opaque hashed refresh session with an explicit JWT sid', async () => {

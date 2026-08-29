@@ -9,11 +9,17 @@
   mandatory.
 - Kept recovery fail-closed on an existing subject and active session family, removed the VK entry
   from the Web candidate and extended Timeweb runtime validation for the exact Yandex contour.
+- Made suspension fail closed before any profile, identity, legal, delegation or session write:
+  issuer/subject and canonical-provider lookups now lock mapped users regardless of status, reject
+  `DISABLED`, and verify that an identity conflict still belongs to the exact intended PadlHub UUID.
 - Recorded the coordinated ingress boundary: removing operator Basic Auth must preserve the
   read-only command deny, exact Caddy backup and digest-pinned API/Web rollback. Added a separately
   hashed public Caddy artifact, noncanonical `e6abb48e` rollback floor and a root-only receipt
-  controller that restores Basic before an old API and never pulls or migrates. No provider, secret,
-  host, database, publication or deployment mutation is performed by this source checkpoint.
+  controller that restores Basic before an old API and never pulls or migrates. The controller uses
+  the one canonical `/etc/phub/timeweb-beta` secret root, requires exact API/Web release labels,
+  binds the mutable Caddy path to ingress Compose and proves Basic on representative Web, OAuth,
+  API and realtime routes after restoration. No provider, secret, host, database, publication or
+  deployment mutation is performed by this source checkpoint.
 
 ## 2026-08-24 — Communities Gate 4 external PostgreSQL clock/ledger checkpoint
 

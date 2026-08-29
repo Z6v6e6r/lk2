@@ -297,7 +297,11 @@ export class AuthService {
   }
 
   private mapIdentityRepositoryError(error: unknown): never {
-    if (error instanceof Error && error.message === 'AUTH_CANONICAL_IDENTITY_CONFLICT') {
+    if (
+      error instanceof Error &&
+      (error.message === 'AUTH_CANONICAL_IDENTITY_CONFLICT' ||
+        error.message === 'AUTH_USER_NOT_ACTIVE')
+    ) {
       throw new AuthServiceError('AUTH_IDENTITY_CONFLICT');
     }
     throw error;
