@@ -1248,6 +1248,9 @@
   directory `fsync` and deterministic recovery for both interrupted publication states.
 - Added fresh exact partial-closure simulation before resumed installs, prohibited APT upgrades and
   removals during install, validated recovery phases, and made purge mutation a fixed dpkg subset.
+- Added an explicit, separately authorized `rollback --recover-failed-apply` state transition that
+  binds the observed exact subset, survives interruption, rejects scope growth and emits a distinct
+  root-only completion receipt before releasing the lifecycle guard.
 - Isolated Python startup from checkout/site shadowing, required a clean frozen Git tree, populated a
   root-only authenticated apt index snapshot from the pinned Ubuntu source/keyring, and atomically
   published that snapshot, the verified package payloads and their accepted plan as one bundle.

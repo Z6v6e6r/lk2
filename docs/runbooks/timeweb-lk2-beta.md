@@ -278,8 +278,22 @@ sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
 If the transaction phase is `postcondition_failed`, `recover` stops without repeating apt. That
 state means the exact packages may be present but a Node/service/listener/reboot invariant did not
 pass. Preserve the transaction and lifecycle guard. Package removal from this failed-apply state is
-a destructive rollback boundary and requires separate exact authority before the controller may
-gain such a mode; do not delete the marker or run manual apt commands.
+a destructive rollback boundary. Only after separate exact authority naming the recorded plan ID
+and frozen 20-package rollback closure may the rollback mode be invoked with its explicit recovery
+flag:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' rollback --recover-failed-apply --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+The controller proves the failed transaction and plan, re-simulates only the exact currently
+present closure subset, rejects every expanded removal or configuration action, and changes the
+transaction to a resumable failed-apply rollback before fixed-name `dpkg --purge`. It removes the
+lifecycle guard only after the entire closure is absent and the protected runtime snapshots still
+match. Its metadata-only receipt has status `FAILED_APPLY_ROLLED_BACK`. `recover` resumes this exact
+authorized rollback after interruption. Without that live authority, do not run the flag, delete
+the marker or guard, or execute manual package commands.
 
 Keep Node installed through the application rollback window. Removing it is a separate live
 host-package authority. The controller first proves the original receipt and simulates an exact

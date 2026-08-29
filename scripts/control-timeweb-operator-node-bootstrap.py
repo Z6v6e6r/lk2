@@ -29,6 +29,7 @@ PLAN_SCHEMA = "PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_PLAN_V1"
 TRANSACTION_SCHEMA = "PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_TRANSACTION_V1"
 RECEIPT_SCHEMA = "PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_RECEIPT_V1"
 ROLLBACK_SCHEMA = "PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_ROLLBACK_V1"
+FAILED_APPLY_ROLLBACK_SCHEMA = "PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_FAILED_APPLY_ROLLBACK_V1"
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_PATH = REPOSITORY_ROOT / "deploy/timeweb/operator-node-bootstrap.v1.json"
 PROTECTED_PATHS = (
@@ -373,6 +374,7 @@ def validate_contract(value: Any) -> dict[str, Any]:
 def parse_simulation(contents: str, contract: dict[str, Any], action: str) -> list[dict[str, str]]:
     expected = {item["name"]: item for item in contract["apt"]["packages"]}
     installed: dict[str, str] = {}
+    configured: dict[str, str] = {}
     removed: set[str] = set()
     for line in contents.splitlines():
         install = SIMULATED_INSTALL.match(line)
@@ -381,18 +383,27 @@ def parse_simulation(contents: str, contract: dict[str, Any], action: str) -> li
             if name in installed:
                 stop("simulation_duplicate")
             installed[name] = version
+        configure = SIMULATED_CONFIGURE.match(line)
+        if configure:
+            name, version = configure.groups()
+            if name in configured:
+                stop("simulation_duplicate")
+            configured[name] = version
         removal = SIMULATED_REMOVE.match(line)
         if removal:
             removed.add(removal.group(1))
     if action == "install":
-        if removed or set(installed) != set(expected):
+        if removed or set(installed) != set(expected) or set(configured) != set(expected):
             stop("simulation_closure")
-        if any(installed[name] != expected[name]["version"] for name in installed):
+        if (
+            any(installed[name] != expected[name]["version"] for name in installed)
+            or any(configured[name] != expected[name]["version"] for name in configured)
+        ):
             stop("simulation_version")
         if " upgraded," not in contents or not re.search(r"(?:^|\n)0 upgraded, 20 newly installed, 0 to remove", contents):
             stop("simulation_summary")
         return [expected[name] for name in sorted(expected)]
-    if installed or removed != set(expected):
+    if installed or configured or removed != set(expected):
         stop("rollback_simulation_closure")
     return [expected[name] for name in sorted(expected)]
 
@@ -402,15 +413,19 @@ def parse_removal_subset(
 ) -> None:
     allowed = {item["name"] for item in contract["apt"]["packages"]}
     installed: set[str] = set()
+    configured: set[str] = set()
     removed: set[str] = set()
     for line in contents.splitlines():
         install = SIMULATED_INSTALL.match(line)
         if install:
             installed.add(install.group(1))
+        configure = SIMULATED_CONFIGURE.match(line)
+        if configure:
+            configured.add(configure.group(1))
         removal = SIMULATED_REMOVE.match(line)
         if removal:
             removed.add(removal.group(1))
-    if installed or not removed.issubset(allowed) or removed != expected_removed:
+    if installed or configured or not removed.issubset(allowed) or removed != expected_removed:
         stop("recovery_rollback_simulation")
 
 
@@ -1191,6 +1206,22 @@ def purge_command(contract: dict[str, Any], packages: set[str]) -> None:
         ], extra_environment={"DEBIAN_FRONTEND": "noninteractive", "NEEDRESTART_MODE": "l", "NEEDRESTART_SUSPEND": "1"})
 
 
+def removal_simulation(contract: dict[str, Any], packages: set[str]) -> str:
+    if not packages:
+        return ""
+    output = run([
+        contract["apt"]["binary"], *apt_options(contract),
+        "--simulate", "purge", *sorted(packages),
+    ])
+    parse_removal_subset(output, contract, packages)
+    return output
+
+
+def recoverable_present_packages(contract: dict[str, Any]) -> set[str]:
+    absent, _partial = recoverable_apply_state(contract)
+    return {item["name"] for item in contract["apt"]["packages"]} - absent
+
+
 def finalize_apply(contract: dict[str, Any], plan: dict[str, Any], transaction: dict[str, Any]) -> dict[str, Any]:
     installed = require_installed_closure(contract)
     node = node_observation(contract)
@@ -1294,6 +1325,117 @@ def finalize_rollback(
     return {"status": "ROLLED_BACK", "planId": receipt["planId"], "packageCount": len(packages)}
 
 
+def finalize_failed_apply_rollback(
+    contract: dict[str, Any], transaction: dict[str, Any]
+) -> dict[str, Any]:
+    require_absent_closure(installed_state(contract))
+    node_path = Path(contract["node"]["path"])
+    if node_path.exists() or node_path.is_symlink():
+        stop("node_remains_after_rollback")
+    if (
+        service_snapshot(contract) != transaction["protectedServices"]
+        or reboot_state(contract) != transaction["rebootRequired"]
+    ):
+        stop("rollback_runtime_drift")
+    completed_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    rollback_receipt = {
+        "schema": FAILED_APPLY_ROLLBACK_SCHEMA,
+        "status": "FAILED_APPLY_ROLLED_BACK",
+        "completedAt": completed_at,
+        "planId": transaction["planId"],
+        "sourceSha": transaction["sourceSha"],
+        "sourceTree": transaction["sourceTree"],
+        "originalFailureReason": transaction["originalFailureReason"],
+        "simulationSha256": transaction["rollbackSimulationSha256"],
+        "authorizedPackages": transaction["authorizedPackages"],
+        "removedPackages": transaction["authorizedPackages"],
+        "protectedServices": transaction["protectedServices"],
+        "rebootRequired": transaction["rebootRequired"],
+    }
+    atomic_json(Path(contract["state"]["rollbackReceiptPath"]), rollback_receipt)
+    remove_policy_guard(contract)
+    Path(contract["state"]["transactionPath"]).unlink()
+    return {
+        "status": "FAILED_APPLY_ROLLED_BACK",
+        "planId": transaction["planId"],
+        "packageCount": len(transaction["authorizedPackages"]),
+    }
+
+
+def continue_failed_apply_rollback(
+    contract: dict[str, Any], transaction: dict[str, Any]
+) -> dict[str, Any]:
+    if transaction.get("phase") not in {"prepared", "removing", "removed"}:
+        stop("transaction_phase")
+    allowed = {item["name"] for item in contract["apt"]["packages"]}
+    authorized = transaction.get("authorizedPackages")
+    if (
+        not isinstance(authorized, list)
+        or authorized != sorted(authorized)
+        or len(set(authorized)) != len(authorized)
+        or not set(authorized).issubset(allowed)
+        or not isinstance(transaction.get("originalFailureReason"), str)
+        or not transaction["originalFailureReason"]
+        or not isinstance(transaction.get("protectedServices"), dict)
+        or not isinstance(transaction.get("rebootRequired"), bool)
+        or not HEX64.fullmatch(str(transaction.get("rollbackSimulationSha256", "")))
+    ):
+        stop("failed_apply_rollback_identity")
+    if transaction["phase"] != "removed":
+        present = recoverable_present_packages(contract)
+        if not present.issubset(set(authorized)):
+            stop("failed_apply_rollback_scope_drift")
+        simulated = removal_simulation(contract, present)
+        transaction["rollbackSimulationSha256"] = sha256_bytes(simulated.encode())
+        transaction["phase"] = "removing"
+        transaction_write(contract, transaction)
+        purge_command(contract, present)
+        transaction["phase"] = "removed"
+        transaction_write(contract, transaction)
+    return finalize_failed_apply_rollback(contract, transaction)
+
+
+def failed_apply_rollback_mode(
+    contract: dict[str, Any], source_sha: str, source_tree: str
+) -> dict[str, Any]:
+    transaction = read_json(
+        Path(contract["state"]["transactionPath"]), "transaction_read", secure=True
+    )
+    if (
+        not isinstance(transaction, dict)
+        or transaction.get("schema") != TRANSACTION_SCHEMA
+        or transaction.get("operation") != "apply"
+        or transaction.get("phase") != "postcondition_failed"
+        or transaction.get("sourceSha") != source_sha
+        or transaction.get("sourceTree") != source_tree
+    ):
+        stop("failed_apply_transaction_identity")
+    if (
+        Path(contract["state"]["receiptPath"]).exists()
+        or Path(contract["state"]["rollbackReceiptPath"]).exists()
+    ):
+        stop("failed_apply_receipt_present")
+    recover_policy_guard(contract)
+    plan = load_plan(contract, source_sha, source_tree)
+    if transaction.get("planId") != plan.get("planId"):
+        stop("transaction_plan")
+    verify_artifacts(contract, plan)
+    authorized = recoverable_present_packages(contract)
+    simulated = removal_simulation(contract, authorized)
+    failure_reason = transaction.get("failureReason")
+    if not isinstance(failure_reason, str) or not failure_reason:
+        stop("failed_apply_failure_reason")
+    transaction.update({
+        "operation": "failed_apply_rollback",
+        "phase": "prepared",
+        "originalFailureReason": failure_reason,
+        "authorizedPackages": sorted(authorized),
+        "rollbackSimulationSha256": sha256_bytes(simulated.encode()),
+    })
+    transaction_write(contract, transaction)
+    return continue_failed_apply_rollback(contract, transaction)
+
+
 def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
     transaction = read_json(Path(contract["state"]["transactionPath"]), "transaction_read", secure=True)
     if not isinstance(transaction, dict) or transaction.get("schema") != TRANSACTION_SCHEMA:
@@ -1341,17 +1483,19 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
         if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA or receipt.get("planId") != transaction.get("planId"):
             stop("transaction_receipt")
         packages = [item["name"] for item in contract["apt"]["packages"]]
-        present = {name for name, value in installed_state(contract).items() if value is not None}
-        simulated = run([
-            contract["apt"]["binary"], *apt_options(contract), "--simulate", "purge", *packages
-        ])
-        parse_removal_subset(simulated, contract, present)
+        present = recoverable_present_packages(contract)
+        simulated = removal_simulation(contract, present)
         transaction["rollbackSimulationSha256"] = sha256_bytes(simulated.encode())
         transaction_write(contract, transaction)
         purge_command(contract, present)
         transaction["phase"] = "removed"
         transaction_write(contract, transaction)
         return finalize_rollback(contract, receipt, transaction)
+    if transaction.get("operation") == "failed_apply_rollback":
+        plan = load_plan(contract, source_sha, source_tree)
+        if transaction.get("planId") != plan.get("planId"):
+            stop("transaction_plan")
+        return continue_failed_apply_rollback(contract, transaction)
     stop("transaction_operation")
 
 
@@ -1373,7 +1517,12 @@ def verify_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> 
     return {"status": "VERIFIED", "planId": plan["planId"], "nodeSha256": node["sha256"]}
 
 
-def rollback_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
+def rollback_mode(
+    contract: dict[str, Any], source_sha: str, source_tree: str,
+    *, recover_failed_apply: bool = False,
+) -> dict[str, Any]:
+    if recover_failed_apply:
+        return failed_apply_rollback_mode(contract, source_sha, source_tree)
     if Path(contract["state"]["transactionPath"]).exists():
         stop("transaction_present")
     require_policy_paths_absent(contract)
@@ -1384,10 +1533,7 @@ def rollback_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -
         stop("receipt_source")
     require_installed_closure(contract)
     packages = [item["name"] for item in contract["apt"]["packages"]]
-    simulated = run([
-        contract["apt"]["binary"], *apt_options(contract), "--simulate", "purge", *packages
-    ])
-    parse_simulation(simulated, contract, "remove")
+    simulated = removal_simulation(contract, set(packages))
     transaction = {
         "schema": TRANSACTION_SCHEMA, "operation": "rollback", "phase": "prepared",
         "planId": receipt["planId"], "sourceSha": source_sha, "sourceTree": source_tree,
@@ -1429,6 +1575,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--simulation-action", choices=("install", "remove"), default="install")
     parser.add_argument("--expected-source-sha")
     parser.add_argument("--expected-source-tree")
+    parser.add_argument("--recover-failed-apply", action="store_true")
     return parser.parse_args()
 
 
@@ -1436,6 +1583,8 @@ def main() -> int:
     args = arguments()
     try:
         if args.mode in {"validate-contract", "validate-simulation"}:
+            if args.recover_failed_apply:
+                stop("live_override_forbidden")
             if not args.contract:
                 stop("validation_contract_required")
             contract = validate_contract(read_json(Path(args.contract), "validation_contract_read"))
@@ -1450,12 +1599,20 @@ def main() -> int:
         else:
             if args.contract or args.simulation_file:
                 stop("live_override_forbidden")
+            if args.recover_failed_apply and args.mode != "rollback":
+                stop("failed_apply_rollback_mode_required")
             contract = live_contract(args.expected_source_sha, args.expected_source_tree)
             operation = {
                 "plan": plan_mode, "apply": apply_mode, "verify": verify_mode,
                 "recover": recover_mode, "rollback": rollback_mode,
             }[args.mode]
-            result = operation(contract, args.expected_source_sha, args.expected_source_tree)
+            if args.mode == "rollback":
+                result = rollback_mode(
+                    contract, args.expected_source_sha, args.expected_source_tree,
+                    recover_failed_apply=args.recover_failed_apply,
+                )
+            else:
+                result = operation(contract, args.expected_source_sha, args.expected_source_tree)
         print(json.dumps(result, sort_keys=True, separators=(",", ":")))
         return 0
     except Stop as error:

@@ -38,12 +38,19 @@ function installSimulation(
   packages = contract.apt.packages,
   summary = '0 upgraded, 20 newly installed, 0 to remove and 16 not upgraded.',
 ): string {
-  return `${packages
+  const installs = packages
     .map(
       ({ name, version, architecture }) =>
         `Inst ${name} (${version} Ubuntu:26.04/resolute [${architecture}])`,
     )
-    .join('\n')}\n${summary}\n`;
+    .join('\n');
+  const configurations = packages
+    .map(
+      ({ name, version, architecture }) =>
+        `Conf ${name} (${version} Ubuntu:26.04/resolute [${architecture}])`,
+    )
+    .join('\n');
+  return `${installs}\n${configurations}\n${summary}\n`;
 }
 
 function validateSimulation(contents: string, action = 'install') {
@@ -141,6 +148,10 @@ describe('Timeweb operator Node bootstrap controller', () => {
     const expanded = validateSimulation(`${exact}Purg openssh-server\n`, 'remove');
     expect(expanded.status).toBe(2);
     expect(expanded.stderr).toContain('STOP rollback_simulation_closure');
+
+    const configured = validateSimulation(`${exact}Conf openssh-server (1.0)\n`, 'remove');
+    expect(configured.status).toBe(2);
+    expect(configured.stderr).toContain('STOP rollback_simulation_closure');
   });
 
   it('keeps live package inputs fixed and disables apt lifecycle snippets', () => {
@@ -159,6 +170,9 @@ describe('Timeweb operator Node bootstrap controller', () => {
       '--no-download',
       '--no-remove',
       '--no-upgrade',
+      '--recover-failed-apply',
+      'FAILED_APPLY_ROLLED_BACK',
+      'failed_apply_rollback_scope_drift',
       'transaction_phase',
       'package_lifecycle_script',
       'package_service_payload',
@@ -333,5 +347,79 @@ describe('Timeweb operator Node bootstrap controller', () => {
     );
     expect(rejected.status).not.toBe(0);
     expect(rejected.stderr).toContain('recovery_apply_simulation');
+  });
+
+  it('binds failed-apply rollback to the observed subset and resumable phases', () => {
+    const directory = temporaryDirectory();
+    const contractPath = join(directory, 'contract.json');
+    writeFileSync(contractPath, contractSource);
+    const program = [
+      'import importlib.util, json, pathlib, sys',
+      'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'contract = module.validate_contract(module.read_json(pathlib.Path(sys.argv[2]), "contract"))',
+      'names = [item["name"] for item in contract["apt"]["packages"]]',
+      'source_sha = "a" * 40',
+      'source_tree = "b" * 40',
+      'transaction = {"schema": module.TRANSACTION_SCHEMA, "operation": "apply", "phase": "postcondition_failed", "planId": "plan", "sourceSha": source_sha, "sourceTree": source_tree, "protectedServices": {}, "rebootRequired": False, "failureReason": "node_identity"}',
+      'module.read_json = lambda *args, **kwargs: transaction',
+      'module.recover_policy_guard = lambda *_args: None',
+      'module.load_plan = lambda *_args: {"planId": "plan"}',
+      'module.verify_artifacts = lambda *_args: []',
+      'module.recoverable_present_packages = lambda *_args: set(names[:2])',
+      'module.removal_simulation = lambda _contract, packages: "\\n".join("Purg " + name for name in sorted(packages)) + "\\n"',
+      'writes = []',
+      'purges = []',
+      'module.transaction_write = lambda _contract, value: writes.append(dict(value))',
+      'module.purge_command = lambda _contract, packages: purges.append(sorted(packages))',
+      'module.finalize_failed_apply_rollback = lambda _contract, value: {"status": "FAILED_APPLY_ROLLED_BACK", "phase": value["phase"], "authorized": value["authorizedPackages"]}',
+      'result = module.failed_apply_rollback_mode(contract, source_sha, source_tree)',
+      'assert result == {"status": "FAILED_APPLY_ROLLED_BACK", "phase": "removed", "authorized": sorted(names[:2])}',
+      'assert [value["phase"] for value in writes] == ["prepared", "removing", "removed"]',
+      'assert purges == [sorted(names[:2])]',
+      'drifted = dict(transaction)',
+      'drifted.update({"operation": "failed_apply_rollback", "phase": "removing", "authorizedPackages": [names[0]], "originalFailureReason": "node_identity"})',
+      'module.recoverable_present_packages = lambda *_args: set(names[:2])',
+      'try:',
+      '    module.continue_failed_apply_rollback(contract, drifted)',
+      'except module.Stop as error:',
+      '    assert str(error) == "failed_apply_rollback_scope_drift"',
+      'else:',
+      '    raise AssertionError("expanded rollback scope accepted")',
+      'print(json.dumps({"status": result["status"], "phases": [value["phase"] for value in writes], "purges": purges}))',
+    ].join('\n');
+    const result = spawnSync(
+      'python3',
+      ['-I', '-S', '-B', '-c', program, resolve(controller), contractPath],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      status: 'FAILED_APPLY_ROLLED_BACK',
+      phases: ['prepared', 'removing', 'removed'],
+      purges: [
+        contract.apt.packages
+          .slice(0, 2)
+          .map(({ name }) => name)
+          .sort(),
+      ],
+    });
+  });
+
+  it('rejects the destructive recovery flag outside rollback mode', () => {
+    const directory = temporaryDirectory();
+    const contractPath = join(directory, 'contract.json');
+    writeFileSync(contractPath, contractSource);
+    const result = invoke([
+      'validate-contract',
+      '--contract',
+      contractPath,
+      '--recover-failed-apply',
+    ]);
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('STOP live_override_forbidden');
   });
 });
