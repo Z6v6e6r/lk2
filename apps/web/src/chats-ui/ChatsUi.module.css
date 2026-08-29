@@ -151,7 +151,7 @@
 .filterRail a {
   display: inline-flex;
   min-width: max-content;
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 14px;
   align-items: center;
   justify-content: center;
@@ -390,7 +390,7 @@
 .loadEarlierRow button,
 .newMessagesButton,
 .retryBar button {
-  min-height: 40px;
+  min-height: 44px;
   padding: 0 12px;
   border: 1px solid var(--comms-line);
   border-radius: 12px;

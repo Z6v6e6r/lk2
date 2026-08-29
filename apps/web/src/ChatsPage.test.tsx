@@ -76,6 +76,9 @@ describe('ChatsPage', () => {
       'list',
     );
     expect(history).toHaveTextContent(/Первое.*Второе/s);
+    const messageArticles = within(history).getAllByRole('article');
+    expect(within(messageArticles[0]!).getByText('Отправитель: Борис')).toHaveClass('sr-only');
+    expect(within(messageArticles[1]!).getByText('Отправитель: Вы')).toHaveClass('sr-only');
     fireEvent.change(screen.getByLabelText('Сообщение'), {
       target: { value: '  Новое сообщение  ' },
     });

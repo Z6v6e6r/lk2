@@ -47,6 +47,17 @@ const relativeDateFormatter = new Intl.DateTimeFormat('ru-RU', {
   month: 'short',
 });
 
+const NOTIFICATION_DEEP_LINK_ORIGIN = 'https://notifications.invalid';
+const ENCODED_CONTROL_WHITESPACE_OR_BACKSLASH = /%(?:0[0-9a-f]|1[0-9a-f]|20|5c|7f)/iu;
+
+function hasRawControlOrWhitespace(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x20 || codePoint === 0x7f)) return true;
+  }
+  return false;
+}
+
 export function notificationCategory(category: string): NotificationCategoryPresentation {
   return (
     CATEGORY_PRESENTATION[category] ?? {
@@ -84,9 +95,22 @@ export function notificationMatchesFilter(
 }
 
 export function safeNotificationDeepLink(value: string | undefined): string {
-  return value?.startsWith('/') && !value.startsWith('//') && !value.includes('\\')
-    ? value
-    : '/notifications';
+  if (
+    !value?.startsWith('/') ||
+    value.includes('\\') ||
+    hasRawControlOrWhitespace(value) ||
+    ENCODED_CONTROL_WHITESPACE_OR_BACKSLASH.test(value)
+  ) {
+    return '/notifications';
+  }
+
+  try {
+    const parsed = new URL(value, NOTIFICATION_DEEP_LINK_ORIGIN);
+    if (parsed.origin !== NOTIFICATION_DEEP_LINK_ORIGIN) return '/notifications';
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return '/notifications';
+  }
 }
 
 export function formatNotificationTime(value: string, now = new Date()): string {

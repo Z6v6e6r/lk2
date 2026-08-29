@@ -16,7 +16,10 @@ export function ChatMessageBubble({
   return (
     <li className={`${styles.messageRow} ${own ? styles.ownMessageRow : ''}`}>
       <article className={`${styles.messageBubble} ${own ? styles.ownMessageBubble : ''}`}>
-        {showSender && !own ? <strong>{message.sender.displayName}</strong> : null}
+        <span className="sr-only">Отправитель: {own ? 'Вы' : message.sender.displayName}</span>
+        {showSender && !own ? (
+          <strong aria-hidden="true">{message.sender.displayName}</strong>
+        ) : null}
         <p>{message.body}</p>
         <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
       </article>

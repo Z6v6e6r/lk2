@@ -46,9 +46,19 @@ describe('notification presentation mapping', () => {
 
   it('keeps deep links internal and formats relative time', () => {
     expect(safeNotificationDeepLink('/games/123')).toBe('/games/123');
+    expect(safeNotificationDeepLink('/games/123?tab=chat#message-1')).toBe(
+      '/games/123?tab=chat#message-1',
+    );
     expect(safeNotificationDeepLink('//evil.example/path')).toBe('/notifications');
     expect(safeNotificationDeepLink('https://evil.example/path')).toBe('/notifications');
     expect(safeNotificationDeepLink('/games\\evil')).toBe('/notifications');
+    expect(safeNotificationDeepLink('/\t/evil.example/path')).toBe('/notifications');
+    expect(safeNotificationDeepLink('/\n/evil.example/path')).toBe('/notifications');
+    expect(safeNotificationDeepLink('/\r/evil.example/path')).toBe('/notifications');
+    expect(safeNotificationDeepLink('/%09/evil.example/path')).toBe('/notifications');
+    expect(safeNotificationDeepLink('/%0a/evil.example/path')).toBe('/notifications');
+    expect(safeNotificationDeepLink('/%0d/evil.example/path')).toBe('/notifications');
+    expect(safeNotificationDeepLink('/%5c%5cevil.example/path')).toBe('/notifications');
     expect(
       formatNotificationTime('2026-08-29T10:35:00+03:00', new Date('2026-08-29T10:40:00+03:00')),
     ).toBe('5 мин назад');
