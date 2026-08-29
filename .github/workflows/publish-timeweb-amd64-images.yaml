@@ -20,7 +20,7 @@ on:
         required: true
         type: string
       confirmation:
-        description: Leave empty for validation or type PUBLISH_TIMEWEB_AMD64_595E954
+        description: Leave empty for validation or type PUBLISH_TIMEWEB_AMD64_<FIRST_12_SHA_UPPERCASE>
         required: false
         type: string
 
@@ -36,10 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Validate exact first-attempt main request
+      - name: Validate exact-current-main first-attempt request
         env:
           ACTOR: ${{ github.actor }}
-          APPROVED_SOURCE_SHA: 595e954bb8f53367baf034d7f39b255af0fda5fd
           CONFIRMATION: ${{ inputs.confirmation }}
           EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_workflow_sha }}
@@ -69,8 +68,9 @@ jobs:
             echo '::error::The separately reviewed workflow SHA is required.'
             exit 1
           }
-          test "$EXPECTED_SOURCE_SHA" = "$APPROVED_SOURCE_SHA" || {
-            echo '::error::This single-purpose workflow may publish only source@595e954.'
+          test "$EXPECTED_SOURCE_SHA" = "$REQUEST_SHA"
+          test "$EXPECTED_SOURCE_SHA" = "$EXPECTED_WORKFLOW_SHA" || {
+            echo '::error::Publication source and reviewed workflow must be the exact current main commit.'
             exit 1
           }
           case "$OPERATION" in
@@ -81,7 +81,8 @@ jobs:
               }
               ;;
             publish)
-              test "$CONFIRMATION" = PUBLISH_TIMEWEB_AMD64_595E954 || {
+              confirmation_sha="$(printf '%s' "$EXPECTED_SOURCE_SHA" | cut -c1-12 | tr '[:lower:]' '[:upper:]')"
+              test "$CONFIRMATION" = "PUBLISH_TIMEWEB_AMD64_$confirmation_sha" || {
                 echo '::error::The exact publication confirmation is required.'
                 exit 1
               }
@@ -99,8 +100,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$REQUEST_SHA"
-          test "$(git rev-parse "$EXPECTED_SOURCE_SHA^{tree}")" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
-          git merge-base --is-ancestor "$EXPECTED_SOURCE_SHA" HEAD
+          test "$(git rev-parse "$EXPECTED_SOURCE_SHA^{tree}")" = "$(git rev-parse 'HEAD^{tree}')"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_SOURCE_SHA"
 
   verify-source:
     needs: validate-request
@@ -119,7 +120,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           test -z "$(git status --porcelain)"
-          test "$(git rev-parse 'HEAD^{tree}')" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_SOURCE_SHA"
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
@@ -156,7 +157,30 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
           test -z "$(git status --porcelain)"
-          test "$(git rev-parse 'HEAD^{tree}')" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_SOURCE_SHA"
+      - name: Prepare non-authorizing provenance diagnostics
+        env:
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          mkdir -p publication-evidence
+          jq -n --arg service "$SERVICE" '{
+            schemaVersion: 1,
+            kind: "phub-timeweb-provenance-material-diagnostic",
+            service: $service,
+            reason: "verification_not_completed",
+            verified: false,
+            authorizesPublication: false,
+            authorizesDeploy: false
+          }' > "publication-evidence/$SERVICE-provenance-material-diagnostic.json"
+      - id: base
+        name: Verify the V2 base lock and all production Dockerfiles before registry login
+        run: |
+          set -euo pipefail
+          node scripts/verify-timeweb-base-images.js static \
+            --lock deploy/timeweb/base-images.lock.json \
+            --repo-root . \
+            --github-output "$GITHUB_OUTPUT"
       - id: buildx
         name: Install the checksum-verified Buildx binary and create the pinned builder
         env:
@@ -183,50 +207,25 @@ jobs:
       - name: Verify the pinned Buildx and BuildKit runtime before registry login
         env:
           BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+          BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          BUILDKIT_VERSION: v0.32.2
+          SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
           docker buildx version \
             | grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'
-          docker buildx inspect --bootstrap \
-            | grep -Eq '^BuildKit version:[[:space:]]+v0\.32\.2$'
-          container_id="$(docker ps --filter "name=buildx_buildkit_$BUILDER_NAME" \
-            --format '{{.ID}}')"
-          printf '%s' "$container_id" | grep -Eq '^[0-9a-f]{12,64}$'
-          test "$(docker inspect --format '{{.Config.Image}}' "$container_id")" \
-            = 'moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8'
-      - name: Verify reviewed base-image digests before registry login
-        env:
-          EXPECTED_NGINX_AMD64_DIGEST: sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8
-          EXPECTED_NGINX_INDEX_DIGEST: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
-          EXPECTED_NODE_AMD64_DIGEST: sha256:a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066
-          EXPECTED_NODE_INDEX_DIGEST: sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
-          EXPECTED_SBOM_AMD64_DIGEST: sha256:187e1892a7752c9384c59aba9517dd8e40610b748c72773e87b63720514463c2
-          EXPECTED_SBOM_INDEX_DIGEST: sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
+          bash scripts/timeweb-buildkit-bootstrap-readiness.sh \
+            --builder "$BUILDER_NAME" \
+            --service "$SERVICE" \
+            --expected-version "$BUILDKIT_VERSION" \
+            --expected-image "$BUILDKIT_IMAGE" \
+            --diagnostic-dir "$PWD/publication-evidence/$SERVICE-buildkit-readiness"
+      - name: Verify immutable index, AMD64 child and config custody before registry login
         run: |
           set -euo pipefail
-          verify_base() {
-            image=$1
-            expected_index_digest=$2
-            expected_amd64_digest=$3
-            manifest_file="$RUNNER_TEMP/$(printf '%s' "$image" | tr '/:' '--').manifest.json"
-            docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' > "$manifest_file"
-            observed_index_digest="$(jq -r '.digest // empty' "$manifest_file")"
-            observed_amd64_digest="$(jq -r '
-              [.manifests[] | select(
-                .platform.os == "linux" and
-                .platform.architecture == "amd64" and
-                ((.platform.variant // "") == "")
-              )] | if length == 1 then .[0].digest else empty end
-            ' "$manifest_file")"
-            test "$observed_index_digest" = "$expected_index_digest"
-            test "$observed_amd64_digest" = "$expected_amd64_digest"
-          }
-          verify_base node:22-bookworm-slim \
-            "$EXPECTED_NODE_INDEX_DIGEST" "$EXPECTED_NODE_AMD64_DIGEST"
-          verify_base nginx:1.27-alpine \
-            "$EXPECTED_NGINX_INDEX_DIGEST" "$EXPECTED_NGINX_AMD64_DIGEST"
-          verify_base docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9 \
-            "$EXPECTED_SBOM_INDEX_DIGEST" "$EXPECTED_SBOM_AMD64_DIGEST"
+          node scripts/verify-timeweb-base-images.js registry \
+            --lock deploy/timeweb/base-images.lock.json \
+            --repo-root .
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -257,7 +256,7 @@ jobs:
           build-args: |
             PHUB_RELEASE=${{ inputs.expected_source_sha }}
           provenance: mode=max,version=v1
-          sbom: generator=docker/buildkit-syft-scanner@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
+          sbom: generator=${{ steps.base.outputs.scanner_immutable_reference }}
           cache-from: type=gha,scope=timeweb-amd64-${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=timeweb-amd64-${{ matrix.service }}
       - name: Capture the immediate non-authorizing push receipt
@@ -310,9 +309,6 @@ jobs:
           IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
           IMAGE_REFERENCE: ghcr.io/z6v6e6r/phub-${{ matrix.service }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EXPECTED_NGINX_INDEX_DIGEST: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
-          EXPECTED_NODE_INDEX_DIGEST: sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
-          EXPECTED_SBOM_INDEX_DIGEST: sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
           SERVICE: ${{ matrix.service }}
           SOURCE_SHA: ${{ inputs.expected_source_sha }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -425,33 +421,7 @@ jobs:
               = "$predicate_type"
           done < "publication-evidence/$SERVICE-attestation-layers.tsv"
           unset registry_token
-          jq -s -e --arg runtimeSha "${runtime_digest#sha256:}" --arg sourceSha "$SOURCE_SHA" \
-            --arg service "$SERVICE" \
-            --arg nodeIndexSha "${EXPECTED_NODE_INDEX_DIGEST#sha256:}" \
-            --arg nginxIndexSha "${EXPECTED_NGINX_INDEX_DIGEST#sha256:}" \
-            --arg scannerIndexSha "${EXPECTED_SBOM_INDEX_DIGEST#sha256:}" \
-            --arg builder "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" '
-            def reviewed_base($name; $tag; $sha):
-              (.digest |
-                type == "object" and
-                keys == ["sha256"] and
-                .sha256 == $sha
-              ) and
-              (.uri == "pkg:docker/\($name)@\($tag)?platform=linux%2Famd64" or
-               .uri == "pkg:docker/docker.io/library/\($name)@\($tag)?platform=linux%2Famd64");
-            def reviewed_scanner($sha):
-              (.digest |
-                type == "object" and
-                keys == ["sha256"] and
-                .sha256 == $sha
-              ) and
-              (.uri == "pkg:docker/docker/buildkit-syft-scanner?digest=sha256:\($sha)&platform=linux%2Famd64" or
-               .uri == "pkg:docker/docker.io/docker/buildkit-syft-scanner?digest=sha256:\($sha)&platform=linux%2Famd64");
-            def reviewed_source:
-              .uri == "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
-              (.digest | type == "object" and keys == ["sha1"] and .sha1 == $sourceSha);
-            (map(select(.predicateType == "https://slsa.dev/provenance/v1"))[0].predicate) as $provenance |
-            ($provenance.buildDefinition.resolvedDependencies // []) as $materials |
+          jq -s -e --arg runtimeSha "${runtime_digest#sha256:}" '
             length == 2 and
             ([.[].predicateType] | sort | unique) == [
               "https://slsa.dev/provenance/v1",
@@ -463,32 +433,28 @@ jobs:
               (.subject[0].digest | keys) == ["sha256"] and
               .subject[0].digest.sha256 == $runtimeSha
             ) and
-            $provenance.buildDefinition.buildType ==
-              "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
-            $provenance.runDetails.builder.id == $builder and
-            $provenance.runDetails.metadata.buildkit_completeness.resolvedDependencies == true and
-            $provenance.buildDefinition.externalParameters.configSource.uri ==
-              "https://github.com/Z6v6e6r/lk2.git#\($sourceSha)" and
-            $provenance.buildDefinition.externalParameters.configSource.digest == {"sha1": $sourceSha} and
-            $provenance.buildDefinition.externalParameters.configSource.path ==
-              "apps/\($service)/Dockerfile" and
-            ($materials | type) == "array" and
-            ([$materials[] | select(reviewed_source)] | length) == 1 and
-            ([$materials[] | select(reviewed_base("node"; "22-bookworm-slim"; $nodeIndexSha))] |
-              length) == 1 and
-            ([$materials[] | select(reviewed_scanner($scannerIndexSha))] |
-              length) == 1 and
-            (if $service == "web" then
-              ($materials | length) == 4 and
-              ([$materials[] | select(reviewed_base("nginx"; "1.27-alpine"; $nginxIndexSha))] |
-                length) == 1
-            else
-              ($materials | length) == 3
-            end) and
             (map(select(.predicateType == "https://spdx.dev/Document"))[0].predicate) as $sbom |
             $sbom.SPDXID == "SPDXRef-DOCUMENT" and
             ($sbom.packages | type == "array" and length > 0)
           ' publication-evidence/"$SERVICE"-attestation-statements/*.json >/dev/null
+          mapfile -t provenance_statements < <(
+            for statement in publication-evidence/"$SERVICE"-attestation-statements/*.json; do
+              if jq -e '.predicateType == "https://slsa.dev/provenance/v1"' "$statement" >/dev/null; then
+                printf '%s\n' "$statement"
+              fi
+            done
+          )
+          test "${#provenance_statements[@]}" -eq 1
+          node scripts/verify-timeweb-provenance-materials.js verify \
+            --statement "${provenance_statements[0]}" \
+            --service "$SERVICE" \
+            --source-sha "$SOURCE_SHA" \
+            --builder-id "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            --runtime-digest "$runtime_digest" \
+            --dockerfile-path "apps/$SERVICE/Dockerfile" \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-lock deploy/timeweb/base-images.lock.json \
+            --diagnostic "publication-evidence/$SERVICE-provenance-material-diagnostic.json"
           read_buildx_presentation() {
             template=$1
             destination=$2
@@ -612,6 +578,9 @@ jobs:
             --arg publicationTag "$publication_tag" \
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg provenanceSubject "$runtime_digest" \
+            --arg sbomSubject "$runtime_digest" \
+            --arg sourceMaterialSha "$SOURCE_SHA" \
             '{
               service: $service,
               sourceSha: $sourceSha,
@@ -623,7 +592,10 @@ jobs:
               publicationTag: $publicationTag,
               platform: "linux/amd64",
               provenance: "slsa-v1-max",
+              provenanceSubject: $provenanceSubject,
               sbom: "spdx",
+              sbomSubject: $sbomSubject,
+              sourceMaterialSha: $sourceMaterialSha,
               runId: $runId,
               runAttempt: $runAttempt
             }' > "publication-evidence/$SERVICE-image.json"
@@ -646,6 +618,21 @@ jobs:
       contents: read
       packages: read
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ inputs.expected_source_sha }}
+      - name: Revalidate exact source and immutable base custody before inventory login
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          node scripts/verify-timeweb-base-images.js all \
+            --lock deploy/timeweb/base-images.lock.json \
+            --repo-root .
       - name: Install the checksum-verified Buildx binary
         env:
           BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
@@ -758,6 +745,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
+      - name: Verify exact clean manifest source checkout
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test -z "$(git status --porcelain)"
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: timeweb-amd64-image-*-${{ github.run_id }}-${{ github.run_attempt }}
@@ -771,8 +765,13 @@ jobs:
           set -euo pipefail
           node scripts/verify-timeweb-publication-evidence-checksums.js publication-evidence/images
           test "$(find publication-evidence/images -maxdepth 1 -type f -name '*-image.json' | wc -l | tr -d ' ')" -eq 5
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test -z "$(git status --porcelain --untracked-files=no)"
           source_tree="$(git rev-parse --verify "$SOURCE_SHA^{tree}")"
-          test "$source_tree" = 3f4c1e63dd30eb60251533b95f1970fd96754a08
+          node scripts/verify-timeweb-base-images.js static \
+            --lock deploy/timeweb/base-images.lock.json \
+            --repo-root . \
+            --evidence-json > base-images-evidence.json
           jq -s \
             --arg sourceSha "$SOURCE_SHA" \
             --arg sourceTree "$source_tree" \
@@ -780,6 +779,7 @@ jobs:
             --arg repository "$GITHUB_REPOSITORY" \
             --arg runId "$GITHUB_RUN_ID" \
             --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --slurpfile base base-images-evidence.json \
             '{
               schemaVersion: 1,
               kind: "phub-timeweb-amd64-publication",
@@ -793,6 +793,8 @@ jobs:
               authorizesDeploy: false,
               authorizesVpsProvisioning: false,
               authorizesDatabaseMutation: false,
+              baseLock: $base[0].baseLock,
+              baseImages: $base[0].baseImages,
               images: sort_by(.service)
             }' publication-evidence/images/*-image.json \
             > timeweb-amd64-publication-manifest.json
@@ -806,6 +808,9 @@ jobs:
             .authorizesDeploy == false and
             .authorizesVpsProvisioning == false and
             .authorizesDatabaseMutation == false and
+            .baseLock.schema == "PHUB_TIMEWEB_BASE_IMAGES_V2" and
+            (.baseLock.sha256 | test("^[a-f0-9]{64}$")) and
+            ([.baseImages[].id] | sort) == ["buildkit-syft-scanner", "nginx-web-runtime", "node-runtime-build-base"] and
             ([.images[].service] | sort) == ["api", "migrator", "realtime", "web", "worker"] and
             ([.images[].indexDigest | test("^sha256:[0-9a-f]{64}$")] | all) and
             ([.images[].runtimeDigest | test("^sha256:[0-9a-f]{64}$")] | all) and
@@ -817,7 +822,10 @@ jobs:
               .publicationTag == ("amd64-sha-" + $sourceSha + "-" + $runId + "-" + $runAttempt) and
               .platform == "linux/amd64" and
               .provenance == "slsa-v1-max" and
+              .provenanceSubject == .runtimeDigest and
               .sbom == "spdx" and
+              .sbomSubject == .runtimeDigest and
+              .sourceMaterialSha == $sourceSha and
               .runId == $runId and .runAttempt == $runAttempt
             )
           ' timeweb-amd64-publication-manifest.json >/dev/null
@@ -828,9 +836,11 @@ jobs:
           node scripts/build-timeweb-release-manifest.js \
             timeweb-amd64-publication-manifest.json \
             release-manifest.json \
-            release-manifest.sha256
+            release-manifest.sha256 \
+            deploy/timeweb/base-images.lock.json
           node scripts/verify-timeweb-release-manifest.js \
             release-manifest.json \
+            --expected-base-lock deploy/timeweb/base-images.lock.json \
             --expected-publication-workflow-sha "$WORKFLOW_SHA" \
             --expected-publication-run-id "$GITHUB_RUN_ID" \
             --expected-publication-run-attempt "$GITHUB_RUN_ATTEMPT"

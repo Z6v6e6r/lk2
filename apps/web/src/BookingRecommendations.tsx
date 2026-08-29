@@ -15,6 +15,7 @@ import { EventCalendarIcon, EventLevelIcon, EventLocationIcon } from './Activity
 import { CreateGameButtonIcon } from './CreateGameButtonIcon.js';
 import { GameCard } from './GameCard.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
+import { RecommendationGridCard } from './RecommendationGridCard.js';
 
 type RecommendationItem = BookingRecommendationPage['items'][number];
 type RecommendationReason = RecommendationItem['reasons'][number];
@@ -22,6 +23,7 @@ type RecommendationReasonTone = 'level' | 'place' | 'social' | 'time';
 type CompactActionVariant = 'default' | 'mini-create';
 type CompactMetadataVariant = 'default' | 'station-time';
 type CompactRosterVariant = 'default' | 'host-slots';
+type CompactVisualVariant = 'default' | 'photo-grid';
 
 interface RecommendationReasonPresentation {
   readonly chipLabel: string;
@@ -595,6 +597,7 @@ export function BookingRecommendations({
   compactActionVariant = 'default',
   compactMetadataVariant = 'default',
   compactRosterVariant = 'default',
+  compactVisualVariant = 'default',
   showCompactReasonBadges = true,
   hasMore = false,
   loadingMore = false,
@@ -609,6 +612,7 @@ export function BookingRecommendations({
   readonly compactActionVariant?: CompactActionVariant;
   readonly compactMetadataVariant?: CompactMetadataVariant;
   readonly compactRosterVariant?: CompactRosterVariant;
+  readonly compactVisualVariant?: CompactVisualVariant;
   readonly showCompactReasonBadges?: boolean;
   readonly hasMore?: boolean;
   readonly loadingMore?: boolean;
@@ -637,7 +641,13 @@ export function BookingRecommendations({
 
   return (
     <div
-      className={compact ? 'booking-recommendations is-compact' : 'booking-recommendations'}
+      className={
+        compact
+          ? `booking-recommendations is-compact${
+              compactVisualVariant === 'photo-grid' ? ' is-photo-grid' : ''
+            }`
+          : 'booking-recommendations'
+      }
       onScroll={
         compact && hasMore && onLoadMore
           ? (event) => {
@@ -652,6 +662,7 @@ export function BookingRecommendations({
       {page.items.map((item, index) => {
         const key = recommendationKey(item);
         const background = bookingCardBackground(recommendationBackgroundKind(item), key);
+        const usesPhotoGridCard = compact && compactVisualVariant === 'photo-grid';
         const style: BookingRecommendationStyle = {
           '--booking-card-background-image': `url("${background.image}")`,
         };
@@ -664,24 +675,30 @@ export function BookingRecommendations({
         return (
           <Fragment key={key}>
             <section
-              className="booking-recommendation"
+              className={`booking-recommendation${usesPhotoGridCard ? ' is-photo-grid-card' : ''}`}
               data-booking-card-background-tone={background.tone}
               data-booking-card-background-variant={background.variant + 1}
-              style={style}
+              style={usesPhotoGridCard ? undefined : style}
             >
-              {!compact ? <BookingRecommendationReasonChips reasons={item.reasons} /> : null}
-              <RecommendationCard
-                item={item}
-                compact={compact}
-                compactActionVariant={compactActionVariant}
-                compactMetadataVariant={compactMetadataVariant}
-                compactRosterVariant={compactRosterVariant}
-                footerSupplement={
-                  compact && showCompactReasonBadges ? (
-                    <BookingRecommendationReasonChips iconOnly reasons={item.reasons} compact />
-                  ) : null
-                }
-              />
+              {usesPhotoGridCard ? (
+                <RecommendationGridCard item={item} />
+              ) : (
+                <>
+                  {!compact ? <BookingRecommendationReasonChips reasons={item.reasons} /> : null}
+                  <RecommendationCard
+                    item={item}
+                    compact={compact}
+                    compactActionVariant={compactActionVariant}
+                    compactMetadataVariant={compactMetadataVariant}
+                    compactRosterVariant={compactRosterVariant}
+                    footerSupplement={
+                      compact && showCompactReasonBadges ? (
+                        <BookingRecommendationReasonChips iconOnly reasons={item.reasons} compact />
+                      ) : null
+                    }
+                  />
+                </>
+              )}
             </section>
             {cardItem ? (
               <RecommendationAdvertisingCard

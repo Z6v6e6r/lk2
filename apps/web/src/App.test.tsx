@@ -1522,19 +1522,8 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeBase).toHaveBeenCalledOnce();
   });
 
-  it('opens Home V3 on the primary Home route', async () => {
+  it('keeps the original Home on the primary route', async () => {
     window.history.replaceState({}, '', '/');
-    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
-    const { container } = render(<App gateway={gateway} tenantKey="padlhub" />);
-
-    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
-    expect(container.querySelector('.figma-home-shell')).toHaveClass('is-home-v3');
-    expect(container.querySelector('.fh-hero--v3')).toHaveClass('fh-hero--v2');
-    expect(gateway.getHomeBase).toHaveBeenCalledOnce();
-  });
-
-  it('keeps the former standard Home available on the /home-v3 route', async () => {
-    window.history.replaceState({}, '', '/home-v3');
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
     const { container } = render(<App gateway={gateway} tenantKey="padlhub" />);
 
@@ -1544,11 +1533,23 @@ describe('PadlHub web authentication', () => {
       'is-home-v3-rows',
     );
     expect(container.querySelector('.fh-hero--v3')).not.toBeInTheDocument();
+    expect(gateway.getHomeBase).toHaveBeenCalledOnce();
     expect(gateway.listBookingRecommendations).toHaveBeenCalledWith({ limit: 6 });
   });
 
+  it('keeps the new photo-grid Home V3 available on its own route', async () => {
+    window.history.replaceState({}, '', '/home-v3');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+    const { container } = render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+    expect(container.querySelector('.figma-home-shell')).toHaveClass('is-home-v3');
+    expect(container.querySelector('.fh-hero--v3')).toHaveClass('fh-hero--v2');
+    expect(gateway.listBookingRecommendations).toHaveBeenCalledWith({ limit: 14 });
+  });
+
   it('applies the saved row presentation to Home V3 without changing its data request', async () => {
-    window.history.replaceState({}, '', '/');
+    window.history.replaceState({}, '', '/home-v3');
     const gateway = createGateway({
       restoreSession: vi.fn().mockResolvedValue(session),
       getBookingPreferences: vi.fn().mockResolvedValue({
@@ -1566,7 +1567,7 @@ describe('PadlHub web authentication', () => {
   });
 
   it('waits for saved preferences before opening Home V3', async () => {
-    window.history.replaceState({}, '', '/');
+    window.history.replaceState({}, '', '/home-v3');
     let resolvePreferences: ((settings: BookingPreferences) => void) | undefined;
     const preferencesPromise = new Promise<BookingPreferences>((resolve) => {
       resolvePreferences = resolve;
@@ -2192,7 +2193,7 @@ describe('PadlHub web authentication', () => {
       screen.queryByRole('button', { name: 'Войти по номеру телефона' }),
     ).not.toBeInTheDocument();
     expect(gateway.startVivaOAuth).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'VK ID или Mail.ru' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: 'Yandex' })).toHaveAttribute(
       'aria-describedby',
       'ios-oauth-guidance',
     );
@@ -2203,16 +2204,16 @@ describe('PadlHub web authentication', () => {
     const user = userEvent.setup();
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    const vkButton = await screen.findByRole('button', { name: 'VK ID или Mail.ru' });
-    await user.click(vkButton);
+    const yandexButton = await screen.findByRole('button', { name: 'Yandex' });
+    await user.click(yandexButton);
     expect(await screen.findByRole('alert')).toHaveTextContent('Подтвердите публичную оферту');
     expect(gateway.startVivaOAuth).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole('checkbox', { name: /публичной оферты/i }));
     await user.click(screen.getByRole('checkbox', { name: /обработку персональных данных/i }));
-    await user.click(vkButton);
+    await user.click(yandexButton);
     expect(gateway.startVivaOAuth).toHaveBeenCalledWith({
-      provider: 'vkid',
+      provider: 'yandex',
       acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
     });
   });

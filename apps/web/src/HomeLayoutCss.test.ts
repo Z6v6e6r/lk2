@@ -281,6 +281,68 @@ describe('Home layout scroll contract', () => {
     );
   });
 
+  it('uses compact photo-grid proportions without recommendation-card decoration', () => {
+    const gridRule = ruleBody(
+      '.figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid',
+    );
+    const heroRule = ruleBody('.recommendation-grid-card__hero');
+    const cardRule = ruleBody('.recommendation-grid-card');
+    const bodyRule = ruleBody('.recommendation-grid-card__body');
+    const titleRule = ruleBody('.recommendation-grid-card__title');
+    const socialRule = ruleBody('.recommendation-grid-card__social');
+    const socialAvatarRule = ruleBody(
+      '.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack',
+    );
+    const socialAvatarItemRule = ruleBody(
+      '.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack__item',
+    );
+    const socialAvatarVisualMatch = styles.match(
+      /\.figma-home-shell\.is-home-v3\s+\.recommendation-grid-card__social\s+\.participant-avatar-stack__item\s+>\s+\[data-player-level-avatar\]\s*\{([^}]*)\}/,
+    );
+    expect(socialAvatarVisualMatch).not.toBeNull();
+    const socialAvatarVisualRule = socialAvatarVisualMatch?.[1] ?? '';
+    const socialAvailabilityRule = ruleBody('.recommendation-grid-card__availability');
+    const footerRule = ruleBody('.recommendation-grid-card__footer');
+    const actionRule = ruleBody('.recommendation-grid-card__action');
+    const actionIconRule = ruleBody('.recommendation-grid-card__action svg');
+
+    expect(gridRule).toMatch(/grid-auto-rows:\s*minmax\(242px,\s*auto\)\s*;/);
+    expect(gridRule).toMatch(/align-items:\s*stretch\s*;/);
+    expect(gridRule).toMatch(/padding-right:\s*0\s*;/);
+    expect(gridRule).toMatch(/margin-right:\s*0\s*;/);
+    expect(gridRule).toMatch(/gap:\s*8px\s*;/);
+    expect(heroRule).toMatch(/height:\s*72px\s*;/);
+    expect(heroRule).toMatch(/flex:\s*0 0 72px\s*;/);
+    expect(cardRule).toMatch(/height:\s*100%\s*;/);
+    expect(bodyRule).not.toMatch(/min-height\s*:/);
+    expect(bodyRule).toMatch(/flex:\s*1\s*;/);
+    expect(titleRule).toMatch(/-webkit-line-clamp:\s*2\s*;/);
+    expect(titleRule).not.toMatch(/min-height\s*:/);
+    expect(titleRule).toMatch(/line-height:\s*1\.24\s*;/);
+    expect(titleRule).not.toMatch(/flex-shrink\s*:/);
+    expect(socialRule).toMatch(/margin-top:\s*0\s*;/);
+    expect(socialAvatarRule).toMatch(/order:\s*0\s*;/);
+    expect(socialAvatarRule).toMatch(/height:\s*32px\s*;/);
+    expect(socialAvatarRule).toMatch(/padding:\s*0 6px\s*;/);
+    expect(socialAvatarItemRule).toMatch(/width:\s*32px\s*;/);
+    expect(socialAvatarItemRule).toMatch(/height:\s*32px\s*;/);
+    expect(socialAvatarItemRule).toMatch(/margin:\s*0 -6px\s*;/);
+    expect(socialAvatarVisualRule).toMatch(/transform:\s*scale\(0\.6666667\)\s*;/);
+    expect(socialAvailabilityRule).toMatch(/order:\s*1\s*;/);
+    expect(footerRule).toMatch(/align-items:\s*flex-end\s*;/);
+    expect(footerRule).toMatch(/margin-top:\s*auto\s*;/);
+    expect(footerRule).toMatch(/min-height:\s*40px\s*;/);
+    expect(actionRule).toMatch(/width:\s*47px\s*;/);
+    expect(actionRule).toMatch(/height:\s*40px\s*;/);
+    expect(actionRule).toMatch(/background:\s*transparent\s*;/);
+    expect(actionRule).not.toMatch(/gradient/i);
+    expect(actionIconRule).toMatch(/width:\s*57px\s*;/);
+    expect(actionIconRule).toMatch(/transform:\s*translate\(-5px,\s*-3px\)\s*;/);
+    expect(styles).toMatch(
+      /@media \(min-width: 413px\)[\s\S]*?--sheet-padding-x:\s*16px[\s\S]*?\.booking-recommendations\.is-photo-grid\s*\{[\s\S]*?grid-auto-rows:\s*minmax\(242px,\s*auto\)[\s\S]*?gap:\s*12px[\s\S]*?\.recommendation-grid-card__hero\s*\{[\s\S]*?height:\s*76px/,
+    );
+  });
+
   it('matches training and tournament type typography to game type tags', () => {
     const activityKindRule = ruleBody('.booking-activity-card__kind');
     const trainingKindRule = ruleBody('.booking-activity-card__kind--training');

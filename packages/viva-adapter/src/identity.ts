@@ -27,6 +27,7 @@ export interface VivaIdentityProviderOptions {
   readonly circuitFailureThreshold?: number;
   readonly circuitCooldownMs?: number;
   readonly allowExistingSubjectOAuthBootstrap?: boolean;
+  readonly allowSubjectOAuthProvisioning?: boolean;
   readonly fetchImplementation?: typeof fetch;
   readonly onMetric?: (metric: VivaIdentityMetric) => void;
 }
@@ -50,7 +51,7 @@ export interface VivaIdentityMetric {
 type ResolvedOAuthIdentity =
   | {
       readonly identity: VerifiedExternalIdentity;
-      readonly identityResolution: 'CANONICAL_PROFILE';
+      readonly identityResolution: 'CANONICAL_PROFILE' | 'SUBJECT_PROVISIONING';
     }
   | {
       readonly identity: Pick<VerifiedExternalIdentity, 'issuer' | 'subject'>;
@@ -83,6 +84,30 @@ function stringClaim(payload: JWTPayload, names: readonly string[]): string | un
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+function oauthDisplayName(payload: JWTPayload): string {
+  const compoundName = [stringClaim(payload, ['given_name']), stringClaim(payload, ['family_name'])]
+    .filter(Boolean)
+    .join(' ');
+  for (const candidate of [
+    stringClaim(payload, ['name']),
+    compoundName,
+    stringClaim(payload, ['preferred_username']),
+  ]) {
+    const normalized = candidate
+      ?.replace(/[\p{Cc}\p{Cf}]+/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .slice(0, 120);
+    if (
+      normalized &&
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(normalized) &&
+      !/^\+?[0-9][0-9 ()-]{7,}$/u.test(normalized)
+    )
+      return normalized;
+  }
+  return 'Игрок ПадлхАБ';
 }
 
 function toVivaPhoneNumber(phoneE164: string): string {
@@ -220,6 +245,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
 
   private async resolveOAuthIdentity(
     accessToken: string,
+    provider: VivaOAuthProvider,
     providerTenantKey: string,
     correlationId: string,
     identityMode: VivaOAuthIdentityMode,
@@ -237,18 +263,36 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     }
     if (
       payload.azp !== this.options.clientId ||
+      stringClaim(payload, ['identity_provider', 'identityProvider']) !== provider ||
       stringClaim(payload, ['tenant_key', 'tenantKey']) !== providerTenantKey ||
       typeof payload.sub !== 'string' ||
-      !payload.sub
+      !payload.sub ||
+      typeof payload.exp !== 'number'
     ) {
       this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
       throw new VivaOAuthStageError('access_token');
     }
     this.emit({ operation: 'jwt_verify', outcome: 'success', correlationId }, startedAt);
-    if (
-      identityMode === 'RECOVERY_SUBJECT_ONLY' ||
-      this.options.allowExistingSubjectOAuthBootstrap
-    ) {
+    if (identityMode === 'RECOVERY_SUBJECT_ONLY') {
+      return {
+        identity: {
+          issuer: this.issuer,
+          subject: payload.sub,
+        },
+        identityResolution: 'EXISTING_SUBJECT',
+      };
+    }
+    if (this.options.allowSubjectOAuthProvisioning) {
+      return {
+        identity: {
+          issuer: this.issuer,
+          subject: payload.sub,
+          displayName: oauthDisplayName(payload),
+        },
+        identityResolution: 'SUBJECT_PROVISIONING',
+      };
+    }
+    if (this.options.allowExistingSubjectOAuthBootstrap) {
       return {
         identity: {
           issuer: this.issuer,
@@ -284,6 +328,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
   }
 
   public async exchangeAuthorizationCode(input: {
+    readonly provider: VivaOAuthProvider;
     readonly code: string;
     readonly codeVerifier: string;
     readonly providerTenantKey: string;
@@ -387,6 +432,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     try {
       resolvedIdentity = await this.resolveOAuthIdentity(
         tokens.access_token,
+        input.provider,
         input.providerTenantKey,
         input.correlationId,
         input.identityMode,

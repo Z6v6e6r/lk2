@@ -3,7 +3,9 @@ name: Pull request checks
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - integration/**
 
 permissions:
   contents: read
@@ -13,7 +15,125 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality:
+  ci-plan:
+    name: ci-plan
+    runs-on: ubuntu-latest
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+      profile: ${{ steps.plan.outputs.profile }}
+      full_quality: ${{ steps.plan.outputs.full_quality }}
+      web_quality: ${{ steps.plan.outputs.web_quality }}
+      docs_quality: ${{ steps.plan.outputs.docs_quality }}
+      deployment_contract: ${{ steps.plan.outputs.deployment_contract }}
+      provenance_probe: ${{ steps.plan.outputs.provenance_probe }}
+      policy_validation: ${{ steps.plan.outputs.policy_validation }}
+      services: ${{ steps.plan.outputs.services }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - id: plan
+        name: Select fail-closed CI profile
+        env:
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          plan_file="$RUNNER_TEMP/ci-plan.json"
+          if [[ "$GITHUB_EVENT_NAME" = pull_request ]]; then
+            [[ "$EVENT_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$EVENT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git cat-file -e "$EVENT_BASE_SHA^{commit}"
+            git cat-file -e "$EVENT_HEAD_SHA^{commit}"
+            base_sha="$(git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA")"
+            git diff --no-renames --name-only -z "$base_sha" "$EVENT_HEAD_SHA" \
+              | node scripts/select-pr-ci-profile.js \
+                  --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" >"$plan_file"
+          else
+            printf '' | node scripts/select-pr-ci-profile.js \
+              --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" >"$plan_file"
+          fi
+          node scripts/verify-ci-plan.js plan --file "$plan_file"
+          plan="$(jq -c . "$plan_file")"
+          printf 'plan=%s\n' "$plan" >>"$GITHUB_OUTPUT"
+          printf 'profile=%s\n' "$(jq -r .profile "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'full_quality=%s\n' "$(jq -r .fullQuality "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'web_quality=%s\n' "$(jq -r .webQuality "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'docs_quality=%s\n' "$(jq -r .docsQuality "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'deployment_contract=%s\n' "$(jq -r .deploymentContract "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'provenance_probe=%s\n' "$(jq -r .provenanceProbe "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'policy_validation=%s\n' "$(jq -r .policyValidation "$plan_file")" >>"$GITHUB_OUTPUT"
+          printf 'services=%s\n' "$(jq -c .dockerServices "$plan_file")" >>"$GITHUB_OUTPUT"
+          profile="$(jq -r .profile "$plan_file")"
+          services="$(jq -c .dockerServices "$plan_file")"
+          reason="$(jq -r .reason "$plan_file")"
+          {
+            echo '### CI plan'
+            echo "- profile: \`$profile\`"
+            echo "- Docker services: \`$services\`"
+            echo "- reason: $reason"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+  quality-docs:
+    name: quality-docs
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.docs_quality == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check documentation and policy formatting
+        run: npx prettier --check AGENTS.md .github/PULL_REQUEST_TEMPLATE.md docs/**/*.md
+      - name: Check policy, planner and aggregate contracts
+        run: >-
+          npx vitest run
+          scripts/delivery-policy.test.ts
+          scripts/select-pr-ci-profile.test.ts
+          scripts/verify-ci-plan.test.ts
+      - name: Check exact diff whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          git diff --check "$merge_base" "$HEAD_SHA"
+
+  quality-web:
+    name: quality-web
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.web_quality == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run contracts:generate
+      - name: Web tests, lint and type safety
+        run: |
+          npx vitest run apps/web/src
+          npx eslint apps/web/src packages/api-sdk/src packages/ui/src
+          npx tsc -p tsconfig.web-app.json --noEmit
+      - name: Build Web production artifact
+        run: npm run build -w @phub/web
+
+  quality-full:
+    name: quality-full
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.full_quality == 'true' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -56,10 +176,11 @@ jobs:
       JWT_REFRESH_SECRET: ci-refresh-secret-at-least-32-characters
       VIVA_MODE: mock
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -94,18 +215,49 @@ jobs:
       - name: Validate local Compose model
         run: cp .env.example .env && docker compose config --quiet
 
-  dependency-security:
+  quality:
+    name: quality
+    needs: [ci-plan, quality-docs, quality-web, quality-full]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Require the planned quality closure
+        env:
+          PLAN_JSON: ${{ needs.ci-plan.outputs.plan }}
+          DOCS_RESULT: ${{ needs.quality-docs.result }}
+          WEB_RESULT: ${{ needs.quality-web.result }}
+          FULL_RESULT: ${{ needs.quality-full.result }}
+        run: node scripts/verify-ci-plan.js quality
+
+  dependency-security:
+    name: dependency-security
+    needs: ci-plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ needs.ci-plan.outputs.full_quality == 'true' }}
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: npm audit --omit=dev --audit-level=high
+      - if: ${{ needs.ci-plan.outputs.full_quality == 'true' }}
+        run: npm ci
+      - if: ${{ needs.ci-plan.outputs.full_quality == 'true' }}
+        run: npm audit --omit=dev --audit-level=high
+      - name: Confirm dependency audit is not applicable
+        if: ${{ needs.ci-plan.outputs.full_quality != 'true' }}
+        run: |
+          set -euo pipefail
+          test '${{ needs.ci-plan.outputs.profile }}' = docs -o '${{ needs.ci-plan.outputs.profile }}' = leaf-web
+          echo 'Planner proved that package manifests, lockfiles and shared dependency inputs are unchanged.'
 
   secret-scan:
+    name: secret-scan
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -114,6 +266,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
       - name: Resolve the exact secret-scan range
         id: secret-range
         env:
@@ -141,20 +294,36 @@ jobs:
           esac
           [[ "$base_tip_sha" =~ ^[0-9a-f]{40}$ ]]
           [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
-          git cat-file -e "$base_tip_sha^{commit}"
           git cat-file -e "$head_sha^{commit}"
           if [[ "$range_mode" = exact_push ]]; then
             zero_sha=0000000000000000000000000000000000000000
-            test "$GITHUB_REF" = refs/heads/main
-            test "$base_tip_sha" != "$zero_sha"
+            case "$GITHUB_REF" in
+              refs/heads/main|refs/heads/integration/*) ;;
+              *) echo "Unsupported push ref for exact secret scan: $GITHUB_REF" >&2; exit 1 ;;
+            esac
             test "$head_sha" != "$zero_sha"
-            test "$base_tip_sha" != "$head_sha"
             test "$head_sha" = "$GITHUB_SHA"
-            git merge-base --is-ancestor "$base_tip_sha" "$head_sha"
-            base_sha="$base_tip_sha"
+            if [[ "$base_tip_sha" = "$zero_sha" ]]; then
+              case "$GITHUB_REF" in
+                refs/heads/integration/*) ;;
+                *) echo 'A zero before SHA is allowed only for a new integration branch.' >&2; exit 1 ;;
+              esac
+              git fetch --no-tags origin main:refs/remotes/origin/main
+              main_sha="$(git rev-parse refs/remotes/origin/main)"
+              [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
+              git cat-file -e "$main_sha^{commit}"
+              base_sha="$(git merge-base "$main_sha" "$head_sha")"
+            else
+              git cat-file -e "$base_tip_sha^{commit}"
+              test "$base_tip_sha" != "$head_sha"
+              git merge-base --is-ancestor "$base_tip_sha" "$head_sha"
+              base_sha="$base_tip_sha"
+            fi
+            test "$base_sha" != "$head_sha"
             range_commit_count="$(git rev-list --count "$base_sha..$head_sha")"
             [[ "$range_commit_count" =~ ^[1-9][0-9]*$ ]]
           else
+            git cat-file -e "$base_tip_sha^{commit}"
             base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
             [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
             git merge-base --is-ancestor "$base_sha" "$head_sha"
@@ -204,45 +373,164 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  deployment-contract:
+    name: deployment-contract
+    needs: ci-plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact deployment-contract source
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
+        with:
+          node-version: 22
+          cache: npm
+      - if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
+        run: npm ci
+      - name: Verify deployment target, Caddy, Compose and historical exclusions
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
+        run: |
+          set -euo pipefail
+          node scripts/verify-timeweb-deployment-contract.js \
+            --diagnostic "$RUNNER_TEMP/timeweb-deployment-diagnostic.json"
+          npx vitest run scripts/verify-timeweb-deployment-contract.test.ts
+      - name: Resolve immutable Caddy identity
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
+        id: caddy-identity
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
+          import { readFileSync } from 'node:fs';
+          import { parseStrictJson } from './scripts/strict-json.js';
+          const target = parseStrictJson(readFileSync('deploy/timeweb/target.json'));
+          const publicBeta = parseStrictJson(
+            readFileSync('deploy/timeweb/yandex-public-beta-ingress.json'),
+          );
+          process.stdout.write(`image=${target.ingress.caddy.repository}@${target.ingress.caddy.indexDigest}\n`);
+          process.stdout.write(`config_digest=${target.ingress.caddy.linuxAmd64ConfigDigest}\n`);
+          process.stdout.write(`version=${target.ingress.caddy.version}\n`);
+          process.stdout.write(`adapted_sha256=${target.ingress.caddy.adaptedJsonSha256}\n`);
+          process.stdout.write(`public_beta_adapted_sha256=${publicBeta.adaptedJsonSha256}\n`);
+          NODE
+      - name: Validate and adapt Caddy offline
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
+        env:
+          ADAPTED_SHA256: ${{ steps.caddy-identity.outputs.adapted_sha256 }}
+          PUBLIC_BETA_ADAPTED_SHA256: ${{ steps.caddy-identity.outputs.public_beta_adapted_sha256 }}
+          CADDY_CONFIG_DIGEST: ${{ steps.caddy-identity.outputs.config_digest }}
+          CADDY_IMAGE: ${{ steps.caddy-identity.outputs.image }}
+          CADDY_VERSION: ${{ steps.caddy-identity.outputs.version }}
+          LK2_BETA_HOST: lk2.padlhub.su
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 "$CADDY_IMAGE"
+          test "$(docker image inspect "$CADDY_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/amd64
+          test "$(docker image inspect "$CADDY_IMAGE" --format '{{.Id}}')" = "$CADDY_CONFIG_DIGEST"
+          docker run --rm --network none "$CADDY_IMAGE" caddy version \
+            | grep --quiet "^$CADDY_VERSION "
+          docker run --rm --network none \
+            --volume "$PWD/deploy/timeweb/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm --network none \
+            --volume "$PWD/deploy/timeweb/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --pretty --config /etc/caddy/Caddyfile --adapter caddyfile \
+            >"$RUNNER_TEMP/caddy-adapted.json"
+          printf '%s  %s\n' "$ADAPTED_SHA256" "$RUNNER_TEMP/caddy-adapted.json" \
+            >"$RUNNER_TEMP/caddy-adapted.sha256"
+          sha256sum --check --strict "$RUNNER_TEMP/caddy-adapted.sha256"
+          docker run --rm --network none \
+            --volume "$PWD/deploy/timeweb/Caddyfile.yandex-public-beta:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          install -m 0600 deploy/timeweb/Caddyfile.yandex-public-beta \
+            "$RUNNER_TEMP/caddy-yandex-public-beta-0600"
+          docker run --rm -i --pull never --network none --read-only --user 65534:65534 \
+            --entrypoint /usr/bin/caddy "$CADDY_IMAGE" \
+            validate --config - --adapter caddyfile \
+            <"$RUNNER_TEMP/caddy-yandex-public-beta-0600"
+          docker run --rm --network none \
+            --volume "$PWD/deploy/timeweb/Caddyfile.yandex-public-beta:/etc/caddy/Caddyfile:ro" \
+            "$CADDY_IMAGE" caddy adapt --pretty --config /etc/caddy/Caddyfile --adapter caddyfile \
+            >"$RUNNER_TEMP/caddy-yandex-public-beta-adapted.json"
+          printf '%s  %s\n' \
+            "$PUBLIC_BETA_ADAPTED_SHA256" \
+            "$RUNNER_TEMP/caddy-yandex-public-beta-adapted.json" \
+            >"$RUNNER_TEMP/caddy-yandex-public-beta-adapted.sha256"
+          sha256sum --check --strict "$RUNNER_TEMP/caddy-yandex-public-beta-adapted.sha256"
+      - name: Validate ingress and application Compose with synthetic non-secret env
+        if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
+        env:
+          PHUB_RELEASE_ID: 1111111111111111111111111111111111111111-12345678901-1
+          API_IMAGE_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          MIGRATOR_IMAGE_DIGEST: sha256:2222222222222222222222222222222222222222222222222222222222222222
+          REALTIME_IMAGE_DIGEST: sha256:3333333333333333333333333333333333333333333333333333333333333333
+          WEB_IMAGE_DIGEST: sha256:4444444444444444444444444444444444444444444444444444444444444444
+          WORKER_IMAGE_DIGEST: sha256:5555555555555555555555555555555555555555555555555555555555555555
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/timeweb/compose.ingress.yaml config --quiet
+          missing_root="$RUNNER_TEMP/timeweb-missing-env"
+          if TIMEWEB_RUNTIME_ENV_ROOT="$missing_root" \
+            docker compose -f deploy/timeweb/compose.beta.yaml --profile background --profile migration \
+            config --quiet; then
+            echo 'Compose accepted missing required env files' >&2
+            exit 1
+          fi
+          synthetic_root="$RUNNER_TEMP/timeweb-synthetic-env"
+          install -d -m 0700 "$synthetic_root"
+          for service in api worker realtime migrator; do
+            printf 'SYNTHETIC_NON_SECRET=true\n' >"$synthetic_root/$service.env"
+            chmod 0600 "$synthetic_root/$service.env"
+          done
+          TIMEWEB_RUNTIME_ENV_ROOT="$synthetic_root" \
+            docker compose -f deploy/timeweb/compose.beta.yaml --profile background --profile migration \
+            config --quiet
+      - name: Confirm deployment contract is not applicable
+        if: ${{ needs.ci-plan.outputs.deployment_contract != 'true' }}
+        run: echo 'CI planner marked the Timeweb deployment contract N/A for this exact change.'
+      - name: Upload deployment-contract diagnostics
+        if: ${{ always() && needs.ci-plan.outputs.deployment_contract == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deployment-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/timeweb-deployment-diagnostic.json
+            ${{ runner.temp }}/caddy-adapted.json
+            ${{ runner.temp }}/caddy-adapted.sha256
+          if-no-files-found: error
+          retention-days: 90
+
   docker-selection:
     name: docker-selection
+    needs: ci-plan
     runs-on: ubuntu-latest
     outputs:
       services: ${{ steps.select.outputs.services }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0
-      - name: Select affected Docker services
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Validate planned Docker services
         id: select
         env:
-          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PLANNED_SERVICES: ${{ needs.ci-plan.outputs.services }}
         run: |
           set -euo pipefail
-          all_services='["web","api","worker","realtime","migrator"]'
-
-          if [[ "$GITHUB_EVENT_NAME" = pull_request ]]; then
-            [[ "$EVENT_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-            [[ "$EVENT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
-            git cat-file -e "$EVENT_BASE_SHA^{commit}"
-            git cat-file -e "$EVENT_HEAD_SHA^{commit}"
-            base_sha="$(git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA")"
-            services="$(
-              git diff --no-renames --name-only -z "$base_sha" "$EVENT_HEAD_SHA" \
-                | node scripts/select-pr-docker-services.js
-            )"
-          else
-            services="$all_services"
-          fi
-
           jq -e '
             type == "array"
             and all(.[]; . == "web" or . == "api" or . == "worker" or . == "realtime" or . == "migrator")
             and length == (unique | length)
-          ' <<<"$services" >/dev/null
-          printf 'services=%s\n' "$services" >>"$GITHUB_OUTPUT"
-          printf 'Selected Docker services: `%s`\n' "$services" >>"$GITHUB_STEP_SUMMARY"
+          ' <<<"$PLANNED_SERVICES" >/dev/null
+          printf 'services=%s\n' "$PLANNED_SERVICES" >>"$GITHUB_OUTPUT"
+          printf 'Selected Docker services: `%s`\n' "$PLANNED_SERVICES" >>"$GITHUB_STEP_SUMMARY"
 
   docker-image:
     name: docker-build (${{ matrix.service }})
@@ -255,6 +543,16 @@ jobs:
         service: ${{ fromJSON(needs.docker-selection.outputs.services) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Verify exact Docker build source
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -264,13 +562,13 @@ jobs:
           platforms: linux/amd64
           push: false
           load: true
-          tags: phub-${{ matrix.service }}:pr-${{ github.sha }}
+          tags: phub-${{ matrix.service }}:pr-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           cache-from: type=gha,scope=pr-amd64-${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=pr-amd64-${{ matrix.service }}
       - name: Verify linux/amd64 runtime image
         env:
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE: phub-${{ matrix.service }}:pr-${{ github.sha }}
+          IMAGE: phub-${{ matrix.service }}:pr-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
@@ -383,3 +681,198 @@ jobs:
           else
             test "$BUILD_RESULT" = success
           fi
+
+  timeweb-provenance-probe:
+    name: timeweb-provenance-probe (${{ matrix.service }})
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.provenance_probe == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [web, api]
+    env:
+      DOCKER_BUILD_RECORD_UPLOAD: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - id: source
+        name: Bind the no-push probe to the exact head and base lock
+        env:
+          EXPECTED_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p "$RUNNER_TEMP/timeweb-provenance-probe/artifacts"
+          jq -n --arg service "$SERVICE" --arg head "$EXPECTED_HEAD_SHA" '{
+            schemaVersion: 1,
+            kind: "phub-timeweb-pr-provenance-probe",
+            service: $service,
+            exactHeadSha: $head,
+            reason: "probe_not_completed",
+            verified: false,
+            pushed: false,
+            authorizesPublication: false,
+            authorizesDeploy: false
+          }' > "$RUNNER_TEMP/timeweb-provenance-probe/artifacts/$SERVICE-probe.json"
+          node scripts/verify-timeweb-base-images.js static \
+            --lock deploy/timeweb/base-images.lock.json \
+            --repo-root . \
+            --github-output "$GITHUB_OUTPUT"
+          printf 'expected_head_sha=%s\n' "$EXPECTED_HEAD_SHA" >> "$GITHUB_OUTPUT"
+      - id: buildx
+        name: Install pinned Buildx v0.36.1 and create pinned BuildKit v0.32.2 builder
+        env:
+          BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+          BUILDX_VERSION: v0.36.1
+          BUILDKIT_IMAGE: moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          BUILDKIT_VERSION: v0.32.2
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/docker-buildx"
+          plugin="$HOME/.docker/cli-plugins/docker-buildx"
+          curl --fail --location --proto '=https' --tlsv1.2 --output "$download" \
+            "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$download" | sha256sum --check --strict
+          install -D -m 0755 "$download" "$plugin"
+          printf '%s  %s\n' "$BUILDX_SHA256" "$plugin" | sha256sum --check --strict
+          builder="phub-timeweb-pr-provenance-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-${{ matrix.service }}"
+          docker buildx create --name "$builder" --driver docker-container \
+            --driver-opt "image=$BUILDKIT_IMAGE" --use
+          printf 'name=%s\n' "$builder" >> "$GITHUB_OUTPUT"
+          docker buildx version \
+            | grep -Fx 'github.com/docker/buildx v0.36.1 1d8dde89b8aba914e05e45366770736fea1fd690'
+          node scripts/verify-pinned-buildkit-bootstrap.js \
+            --service "$SERVICE" \
+            --builder "$builder" \
+            --image "$BUILDKIT_IMAGE" \
+            --version "$BUILDKIT_VERSION" \
+            --diagnostic "$RUNNER_TEMP/timeweb-provenance-probe/artifacts/$SERVICE-buildkit-bootstrap.json"
+      - id: build
+        name: Build exact-head OCI provenance without push (${{ matrix.service }})
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: https://github.com/Z6v6e6r/lk2.git#${{ steps.source.outputs.expected_head_sha }}
+          file: apps/${{ matrix.service }}/Dockerfile
+          platforms: linux/amd64
+          push: false
+          outputs: type=oci,dest=${{ runner.temp }}/timeweb-provenance-probe/${{ matrix.service }}.tar
+          tags: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:provenance-probe-${{ steps.source.outputs.expected_head_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.source.outputs.expected_head_sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          build-args: |
+            PHUB_RELEASE=${{ steps.source.outputs.expected_head_sha }}
+          provenance: mode=max,version=v1
+          sbom: generator=${{ steps.source.outputs.scanner_immutable_reference }}
+          cache-from: type=gha,scope=timeweb-provenance-probe-${{ matrix.service }}
+      - id: provenance
+        name: Verify exact emitted canonical BuildKit PURLs
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.source.outputs.expected_head_sha }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/timeweb-provenance-probe/$SERVICE.tar"
+          layout="$RUNNER_TEMP/timeweb-provenance-probe/$SERVICE-layout"
+          statement="$RUNNER_TEMP/timeweb-provenance-probe/$SERVICE-statement.json"
+          test -s "$archive"
+          mkdir -m 0700 "$layout"
+          tar --extract --file "$archive" --directory "$layout" --no-same-owner --no-same-permissions
+          node scripts/extract-timeweb-oci-provenance.js extract \
+            --layout "$layout" \
+            --statement "$statement" \
+            --github-output "$GITHUB_OUTPUT"
+          runtime_digest="$(sed -n 's/^runtime_digest=//p' "$GITHUB_OUTPUT")"
+          [[ "$runtime_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node scripts/verify-timeweb-provenance-materials.js verify \
+            --statement "$statement" \
+            --service "$SERVICE" \
+            --source-sha "$EXPECTED_HEAD_SHA" \
+            --builder-id "https://github.com/Z6v6e6r/lk2/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT" \
+            --runtime-digest "$runtime_digest" \
+            --dockerfile-path "apps/$SERVICE/Dockerfile" \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-lock deploy/timeweb/base-images.lock.json \
+            --diagnostic "$RUNNER_TEMP/timeweb-provenance-probe/artifacts/$SERVICE-material-diagnostic.json"
+          jq --arg service "$SERVICE" --arg head "$EXPECTED_HEAD_SHA" --arg runtime "$runtime_digest" '{
+            schemaVersion: 1,
+            kind: "phub-timeweb-pr-provenance-probe",
+            service: $service,
+            exactHeadSha: $head,
+            runtimeDigest: $runtime,
+            builderId: .predicate.runDetails.builder.id,
+            dockerfilePath: .predicate.buildDefinition.externalParameters.configSource.path,
+            materials: [.predicate.buildDefinition.resolvedDependencies[] | {uri, digest}],
+            buildxVersion: "v0.36.1",
+            buildkitVersion: "v0.32.2",
+            verified: true,
+            pushed: false,
+            authorizesPublication: false,
+            authorizesDeploy: false
+          }' "$statement" > "$RUNNER_TEMP/timeweb-provenance-probe/artifacts/$SERVICE-probe.json"
+      - name: Remove the ephemeral BuildKit builder
+        if: ${{ always() }}
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BUILDER_NAME" ]]; then
+            docker buildx rm "$BUILDER_NAME"
+          fi
+      - name: Upload sanitized no-push provenance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timeweb-provenance-probe-${{ matrix.service }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/timeweb-provenance-probe/artifacts
+          if-no-files-found: error
+          retention-days: 14
+
+  pr-gate:
+    name: pr-gate
+    needs:
+      [
+        ci-plan,
+        quality,
+        dependency-security,
+        secret-scan,
+        deployment-contract,
+        docker-build,
+        timeweb-provenance-probe,
+      ]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Require every exact-head gate
+        env:
+          PLAN_JSON: ${{ needs.ci-plan.outputs.plan }}
+          ACTUAL_RESULT: ${{ needs.timeweb-provenance-probe.result }}
+          GATE_RESULTS: >-
+            {"ci-plan":"${{ needs.ci-plan.result }}",
+            "quality":"${{ needs.quality.result }}",
+            "dependency-security":"${{ needs.dependency-security.result }}",
+            "secret-scan":"${{ needs.secret-scan.result }}",
+            "deployment-contract":"${{ needs.deployment-contract.result }}",
+            "docker-build":"${{ needs.docker-build.result }}"}
+        run: |
+          set -euo pipefail
+          node scripts/verify-ci-plan.js conditional provenanceProbe
+          node scripts/verify-ci-plan.js gate

@@ -14,8 +14,8 @@ function fail(reason) {
   process.exit(1);
 }
 
-const [publicationPath, manifestPath, checksumPath] = process.argv.slice(2);
-if (process.argv.length !== 5) fail('usage');
+const [publicationPath, manifestPath, checksumPath, baseLockPath] = process.argv.slice(2);
+if (process.argv.length !== 6) fail('usage');
 if (basename(publicationPath) !== 'timeweb-amd64-publication-manifest.json') fail('input_path');
 if (
   basename(manifestPath) !== 'release-manifest.json' ||
@@ -32,13 +32,14 @@ try {
 }
 
 try {
-  const manifest = buildCurrentManifest(publication);
+  const manifest = buildCurrentManifest(publication, { expectedBaseLockPath: baseLockPath });
   validateCanonicalManifest(manifest, {
     expectedPublication: {
       workflowSha: publication.workflowSha,
       runId: publication.runId,
       runAttempt: publication.runAttempt,
     },
+    expectedBaseLockPath: baseLockPath,
   });
   const contents = `${JSON.stringify(manifest, null, 2)}\n`;
   const checksum = createHash('sha256').update(contents).digest('hex');
