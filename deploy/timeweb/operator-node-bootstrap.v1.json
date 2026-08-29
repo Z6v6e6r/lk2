@@ -74,6 +74,7 @@
   },
   "lifecycle": {
     "policyRcPath": "/usr/sbin/policy-rc.d",
+    "policyRcPendingPath": "/usr/sbin/.phub-policy-rc.d.pending",
     "protectedUnits": ["docker.service", "ssh.service", "tailscaled.service"],
     "listenerSnapshotBinary": "/usr/bin/ss",
     "rebootRequiredPath": "/var/run/reboot-required"

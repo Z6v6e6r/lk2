@@ -393,11 +393,18 @@ export function validateOperatorNodeBootstrapContract(contract, target) {
     reject('node_bootstrap_packages');
   exactKeys(
     value.lifecycle,
-    ['policyRcPath', 'protectedUnits', 'listenerSnapshotBinary', 'rebootRequiredPath'],
+    [
+      'policyRcPath',
+      'policyRcPendingPath',
+      'protectedUnits',
+      'listenerSnapshotBinary',
+      'rebootRequiredPath',
+    ],
     'node_bootstrap_lifecycle',
   );
   if (
     value.lifecycle.policyRcPath !== '/usr/sbin/policy-rc.d' ||
+    value.lifecycle.policyRcPendingPath !== '/usr/sbin/.phub-policy-rc.d.pending' ||
     value.lifecycle.listenerSnapshotBinary !== '/usr/bin/ss' ||
     value.lifecycle.rebootRequiredPath !== '/var/run/reboot-required'
   )

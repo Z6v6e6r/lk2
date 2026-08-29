@@ -256,7 +256,9 @@ sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
 `apply` rechecks the plan, trust inputs, apt-list checksum, simulation and every `.deb`, then installs
 only those local payloads with `--no-download`. A temporary exact `policy-rc.d`, disabled apt config
 snippets, noninteractive/list-only `needrestart`, and before/after unit/listener/reboot snapshots
-fail closed around service lifecycle changes. The atomic metadata-only receipt is
+fail closed around service lifecycle changes. The controller publishes that guard without replacing
+an existing file and recovers either crash point of the pending-to-final hard-link handoff. The
+atomic metadata-only receipt is
 `/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json`; it contains no credential or package
 payload. `verify` independently reads back the complete dpkg closure, `/usr/bin/node` owner, resolved
 file SHA-256, version, executable path, platform and architecture.

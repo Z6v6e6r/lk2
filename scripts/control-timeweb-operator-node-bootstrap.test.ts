@@ -154,6 +154,8 @@ describe('Timeweb operator Node bootstrap controller', () => {
       'DPkg::Lock::Timeout=30',
       'NEEDRESTART_SUSPEND',
       'POLICY_BYTES',
+      'os.link(pending, path, follow_symlinks=False)',
+      'policyRcPendingPath',
       '--no-download',
       'package_lifecycle_script',
       'package_service_payload',
@@ -180,24 +182,72 @@ describe('Timeweb operator Node bootstrap controller', () => {
   it('creates and verifies the lifecycle guard as 0755 under umask 077', () => {
     const directory = temporaryDirectory();
     const guard = join(directory, 'policy-rc.d');
+    const pending = join(directory, '.policy-rc.d.pending');
     const program = [
       'import importlib.util, os, pathlib, sys',
       'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
       'module = importlib.util.module_from_spec(spec)',
       'spec.loader.exec_module(module)',
       'os.umask(0o077)',
-      'contract = {"lifecycle": {"policyRcPath": sys.argv[2]}}',
+      'module.require_secure_directory = lambda *args: None',
+      'contract = {"lifecycle": {"policyRcPath": sys.argv[2], "policyRcPendingPath": sys.argv[3]}}',
       'module.create_policy_guard(contract)',
-      'print(oct(pathlib.Path(sys.argv[2]).stat().st_mode & 0o777))',
+      'guard = pathlib.Path(sys.argv[2])',
+      'pending = pathlib.Path(sys.argv[3])',
+      'print(oct(guard.stat().st_mode & 0o777), guard.stat().st_nlink, pending.exists(), guard.read_text())',
       'pathlib.Path(sys.argv[2]).unlink()',
-    ].join('; ');
+    ].join('\n');
     const result = spawnSync(
       'python3',
-      ['-I', '-S', '-B', '-c', program, resolve(controller), guard],
+      ['-I', '-S', '-B', '-c', program, resolve(controller), guard, pending],
       { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe('0o755');
+    expect(result.stdout.trim()).toBe('0o755 1 False #!/bin/sh\nexit 101');
+  });
+
+  it('recovers both lifecycle-guard publication crash points', () => {
+    const directory = temporaryDirectory();
+    const guard = join(directory, 'policy-rc.d');
+    const pending = join(directory, '.policy-rc.d.pending');
+    const program = [
+      'import importlib.util, os, pathlib, stat, sys',
+      'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'guard = pathlib.Path(sys.argv[2])',
+      'pending = pathlib.Path(sys.argv[3])',
+      'contract = {"lifecycle": {"policyRcPath": str(guard), "policyRcPendingPath": str(pending)}}',
+      'module.require_secure_directory = lambda *args: None',
+      'def candidate(path, links, code):',
+      '    value = path.lstat()',
+      '    assert stat.S_ISREG(value.st_mode) and value.st_nlink == links and stat.S_IMODE(value.st_mode) == 0o755',
+      '    return value',
+      'def final(_contract):',
+      '    value = guard.lstat()',
+      '    assert value.st_nlink == 1 and stat.S_IMODE(value.st_mode) == 0o755 and guard.read_bytes() == module.POLICY_BYTES',
+      'module.require_policy_candidate = candidate',
+      'module.require_policy_guard = final',
+      'pending.write_bytes(b"partial")',
+      'pending.chmod(0o755)',
+      'module.recover_policy_guard(contract)',
+      'assert guard.read_bytes() == module.POLICY_BYTES and not pending.exists()',
+      'guard.unlink()',
+      'pending.write_bytes(module.POLICY_BYTES)',
+      'pending.chmod(0o755)',
+      'os.link(pending, guard)',
+      'module.recover_policy_guard(contract)',
+      'assert guard.read_bytes() == module.POLICY_BYTES and guard.stat().st_nlink == 1 and not pending.exists()',
+      'print("RECOVERED")',
+    ].join('\n');
+    const result = spawnSync(
+      'python3',
+      ['-I', '-S', '-B', '-c', program, resolve(controller), guard, pending],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe('RECOVERED');
   });
 });

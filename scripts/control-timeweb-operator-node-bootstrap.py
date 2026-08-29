@@ -324,11 +324,15 @@ def validate_contract(value: Any) -> dict[str, Any]:
 
     lifecycle = exact_keys(
         contract["lifecycle"],
-        {"policyRcPath", "protectedUnits", "listenerSnapshotBinary", "rebootRequiredPath"},
+        {
+            "policyRcPath", "policyRcPendingPath", "protectedUnits",
+            "listenerSnapshotBinary", "rebootRequiredPath",
+        },
         "contract_lifecycle",
     )
     if (
         lifecycle["policyRcPath"] != "/usr/sbin/policy-rc.d"
+        or lifecycle["policyRcPendingPath"] != "/usr/sbin/.phub-policy-rc.d.pending"
         or lifecycle["listenerSnapshotBinary"] != "/usr/bin/ss"
         or lifecycle["rebootRequiredPath"] != "/var/run/reboot-required"
         or unique_strings(lifecycle["protectedUnits"], "contract_units")
@@ -954,16 +958,90 @@ def revalidate_plan(contract: dict[str, Any], plan: dict[str, Any], *, require_a
     parse_simulation(local, contract, "install")
 
 
-def create_policy_guard(contract: dict[str, Any]) -> None:
-    path = Path(contract["lifecycle"]["policyRcPath"])
-    if path.exists() or path.is_symlink():
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def policy_paths(contract: dict[str, Any]) -> tuple[Path, Path]:
+    lifecycle = contract["lifecycle"]
+    return Path(lifecycle["policyRcPath"]), Path(lifecycle["policyRcPendingPath"])
+
+
+def require_policy_paths_absent(contract: dict[str, Any]) -> None:
+    path, pending = policy_paths(contract)
+    if path.exists() or path.is_symlink() or pending.exists() or pending.is_symlink():
         stop("policy_rc_preexisting")
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o755)
+
+
+def create_policy_guard(contract: dict[str, Any]) -> None:
+    path, pending = policy_paths(contract)
+    require_policy_paths_absent(contract)
+    if path.parent != pending.parent:
+        stop("policy_rc_parent")
+    require_secure_directory(path.parent, None, "policy_rc_parent_security")
+    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o755)
     with os.fdopen(descriptor, "wb", closefd=True) as handle:
         os.fchmod(handle.fileno(), 0o755)
         handle.write(POLICY_BYTES)
         handle.flush()
         os.fsync(handle.fileno())
+    os.link(pending, path, follow_symlinks=False)
+    fsync_directory(path.parent)
+    pending.unlink()
+    fsync_directory(path.parent)
+
+
+def require_policy_candidate(path: Path, links: int, code: str) -> os.stat_result:
+    try:
+        value = path.lstat()
+    except OSError:
+        stop(code)
+    if (
+        not stat.S_ISREG(value.st_mode)
+        or stat.S_ISLNK(value.st_mode)
+        or value.st_uid != 0
+        or value.st_nlink != links
+        or stat.S_IMODE(value.st_mode) != 0o755
+        or path.resolve() != path
+    ):
+        stop(code)
+    return value
+
+
+def recover_policy_guard(contract: dict[str, Any]) -> None:
+    path, pending = policy_paths(contract)
+    if path.parent != pending.parent:
+        stop("policy_rc_parent")
+    require_secure_directory(path.parent, None, "policy_rc_parent_security")
+    path_present = path.exists() or path.is_symlink()
+    pending_present = pending.exists() or pending.is_symlink()
+    if path_present and not pending_present:
+        require_policy_guard(contract)
+        return
+    if not path_present and not pending_present:
+        create_policy_guard(contract)
+        require_policy_guard(contract)
+        return
+    if not path_present and pending_present:
+        require_policy_candidate(pending, 1, "policy_rc_pending_security")
+        pending.unlink()
+        fsync_directory(pending.parent)
+        create_policy_guard(contract)
+        require_policy_guard(contract)
+        return
+    path_state = require_policy_candidate(path, 2, "policy_rc_security")
+    pending_state = require_policy_candidate(pending, 2, "policy_rc_pending_security")
+    if (path_state.st_dev, path_state.st_ino) != (pending_state.st_dev, pending_state.st_ino):
+        stop("policy_rc_pending_identity")
+    if path.read_bytes() != POLICY_BYTES:
+        stop("policy_rc_identity")
+    pending.unlink()
+    fsync_directory(pending.parent)
+    require_policy_guard(contract)
 
 
 def require_policy_guard(contract: dict[str, Any]) -> None:
@@ -975,7 +1053,11 @@ def require_policy_guard(contract: dict[str, Any]) -> None:
 
 def remove_policy_guard(contract: dict[str, Any]) -> None:
     require_policy_guard(contract)
-    Path(contract["lifecycle"]["policyRcPath"]).unlink()
+    path, pending = policy_paths(contract)
+    if pending.exists() or pending.is_symlink():
+        stop("policy_rc_pending_present")
+    path.unlink()
+    fsync_directory(path.parent)
 
 
 def transaction_write(contract: dict[str, Any], value: dict[str, Any]) -> None:
@@ -1062,6 +1144,7 @@ def apply_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> d
         stop("transaction_present_use_recover")
     if Path(contract["state"]["receiptPath"]).exists():
         stop("receipt_present")
+    require_policy_paths_absent(contract)
     plan = load_plan(contract, source_sha, source_tree)
     revalidate_plan(contract, plan, require_absent=True)
     paths = verify_artifacts(contract, plan)
@@ -1124,11 +1207,7 @@ def recover_mode(contract: dict[str, Any], source_sha: str, source_tree: str) ->
         stop("transaction_identity")
     if transaction.get("sourceSha") != source_sha or transaction.get("sourceTree") != source_tree:
         stop("transaction_source")
-    policy = Path(contract["lifecycle"]["policyRcPath"])
-    if policy.exists() or policy.is_symlink():
-        require_policy_guard(contract)
-    else:
-        create_policy_guard(contract)
+    recover_policy_guard(contract)
     if transaction.get("operation") == "apply":
         if transaction.get("phase") == "postcondition_failed":
             stop("failed_apply_rollback_authority_required")
@@ -1194,6 +1273,7 @@ def verify_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> 
 def rollback_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> dict[str, Any]:
     if Path(contract["state"]["transactionPath"]).exists():
         stop("transaction_present")
+    require_policy_paths_absent(contract)
     receipt = read_json(Path(contract["state"]["receiptPath"]), "receipt_read", secure=True)
     if not isinstance(receipt, dict) or receipt.get("schema") != RECEIPT_SCHEMA or receipt.get("status") != "INSTALLED":
         stop("receipt_identity")

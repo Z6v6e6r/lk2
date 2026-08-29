@@ -1244,6 +1244,8 @@
 - Bound apply to locally staged and hashed `.deb` payloads with network download disabled, rejected
   lifecycle-bearing maintainer scripts and apt config hooks, and protected active units/listeners
   with a temporary lifecycle guard and before/after evidence.
+- Published the lifecycle guard through a fixed pending path and no-replace hard link, with
+  directory `fsync` and deterministic recovery for both interrupted publication states.
 - Isolated Python startup from checkout/site shadowing, required a clean frozen Git tree, populated a
   root-only authenticated apt index snapshot from the pinned Ubuntu source/keyring, and atomically
   published that snapshot, the verified package payloads and their accepted plan as one bundle.
