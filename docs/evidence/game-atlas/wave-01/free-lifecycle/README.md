@@ -7,9 +7,10 @@ Close the source/integration contour for FREE / LOCAL / NO_PROVIDER Games withou
 ## Identity and scope
 
 - Audit source: `docs/audits/game-lifecycle-2026-08-28/process-matrix.csv` (historical frozen main `e6abb48e135f8f28730bab1c07abe408e8c94600`).
-- Integrated origin/main: `be2e080d2a0c3c667a318f1dff73e0fc1d0d63ab`.
-- Carry-forward merge head before this wave: `71ca7e19465bf913421091646dee917ac8daec14`.
-- Final candidate head/tree: PENDING_FINAL_FREEZE.
+- Integrated origin/main: `a2ec37ebc0a0d5c1fb3ac089f8fed0592423b7d7`.
+- Wave implementation checkpoint: `2c67620c286d96b048d12aaf22a77627e0e07a6c`.
+- Post-merge verified implementation head/tree: `d992292a1d304767a42c1f894ee60c4a66670ed9` / `76c8cc6b8b9ed4cd4e65fcb4f4e39ba6e232218f`.
+- Final publication head/tree are recorded in Draft PR #135 and the delivery report; a commit cannot contain its own hash.
 - Branch: `codex/lk2-core-game-journey-closure-20260826`; Draft PR #135.
 - Canonical audit matrix is unchanged. This directory is the current-source overlay.
 
@@ -41,4 +42,4 @@ Paid/provider create, paid leave/cancel compensation, provider reconcile, refund
 
 ## Tests and evidence
 
-See `postgres-evidence.md`, `browser-evidence.md`, `follow-up-findings.md`, and `recovery-runbook.md`. A real local create/projection/cancel and two-tab lost-response recovery run passed. Exact-head automatic CI and the remaining second-user join/waitlist browser flow are pending final freeze.
+See `postgres-evidence.md`, `browser-evidence.md`, `follow-up-findings.md`, and `recovery-runbook.md`. A real local create/projection/cancel and two-tab lost-response recovery run passed. Post-merge focused tests passed 133/133 and the physical PostgreSQL suite passed 7/7. The combined full-suite evidence is 438 passed files, 3505 passed tests and 90 intentional skips: the sandbox run blocked one loopback suite and one Docker-socket test, and the exact two files then passed 41/41 with the required local permissions. Full build, runtime imports and the 92-migration static check passed. Exact-head automatic CI and the remaining second-user join/waitlist browser flow are pending final freeze.
