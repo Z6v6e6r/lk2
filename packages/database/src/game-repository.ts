@@ -73,6 +73,13 @@ export interface GameRecommendationProjectionInputs {
   readonly history: readonly StoredGameCardProjection[];
 }
 
+export interface GameCardProjectionLag {
+  readonly gameId: string;
+  readonly aggregateRevision: number;
+  readonly projectionRevision: number | null;
+  readonly lifecycleState: Exclude<GameLifecycleState, 'DRAFT' | 'PROVISIONING'>;
+}
+
 export interface ClaimedGameScheduledCommand {
   readonly id: string;
   readonly gameId: string;
@@ -223,6 +230,10 @@ export interface GameRepository {
     readonly candidateLimit: number;
     readonly historyLimit: number;
   }): Promise<GameRecommendationProjectionInputs>;
+  listCardProjectionLag(input: {
+    readonly tenantId: string;
+    readonly limit: number;
+  }): Promise<readonly GameCardProjectionLag[]>;
   projectCardEvent(input: {
     readonly tenantId: string;
     readonly eventId: string;
@@ -1296,6 +1307,44 @@ export function createGameRepository(pool: Pool): GameRepository {
       });
     },
 
+    listCardProjectionLag(input) {
+      const limit = Math.max(1, Math.min(input.limit, 500));
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const result = await client.query<{
+          game_id: string;
+          aggregate_revision: string | number;
+          projection_revision: string | number | null;
+          lifecycle_state: Exclude<GameLifecycleState, 'DRAFT' | 'PROVISIONING'>;
+        }>(
+          `select g.id as game_id,
+                  g.revision as aggregate_revision,
+                  projection.projection_revision,
+                  g.lifecycle_state
+             from games.games g
+             left join games.card_projections projection
+               on projection.tenant_id = g.tenant_id and projection.game_id = g.id
+            where g.tenant_id = $1
+              and g.lifecycle_state in ('SCHEDULED', 'IN_PROGRESS', 'FINISHED', 'CANCELLED')
+              and coalesce(projection.projection_revision, 0) < g.revision
+              and not exists (
+                select 1
+                  from integration.legacy_game_merge_redirects redirect
+                 where redirect.tenant_id = g.tenant_id
+                   and redirect.source_game_id = g.id
+              )
+            order by g.updated_at, g.id
+            limit $2`,
+          [input.tenantId, limit],
+        );
+        return result.rows.map((row) => ({
+          gameId: row.game_id,
+          aggregateRevision: positiveInteger(row.aggregate_revision),
+          projectionRevision: nullablePositiveInteger(row.projection_revision),
+          lifecycleState: row.lifecycle_state,
+        }));
+      });
+    },
+
     projectCardEvent(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const consumerName = 'games-card-projector-v1';
@@ -1312,6 +1361,16 @@ export function createGameRepository(pool: Pool): GameRepository {
         >(
           outcome: T,
         ): Promise<T> => {
+          if (outcome === 'dependency_missing') {
+            // The broker will redeliver this event. Do not commit an inbox claim that would turn
+            // the retry into a duplicate after the missing result facts become visible.
+            await client.query(
+              `delete from audit.inbox_events
+                where consumer_name = $1 and event_id = $2 and processed_at is null`,
+              [consumerName, input.eventId],
+            );
+            return outcome;
+          }
           await client.query(
             `update audit.inbox_events set processed_at = now()
               where consumer_name = $1 and event_id = $2`,
@@ -1335,7 +1394,7 @@ export function createGameRepository(pool: Pool): GameRepository {
                  where redirect.tenant_id = g.tenant_id
                    and redirect.source_game_id = g.id
               )
-            for share of g`,
+            for update of g`,
           [input.tenantId, input.gameId],
         );
         if (!source) return finish('game_not_found');

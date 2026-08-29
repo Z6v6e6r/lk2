@@ -624,6 +624,9 @@ export function loadConfig(
       'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
     );
   }
+  if (parsed.data.GAMES_COMMANDS_ENABLED && !parsed.data.GAMES_READ_ENABLED) {
+    throw new Error('GAMES_COMMANDS_ENABLED requires GAMES_READ_ENABLED=true');
+  }
   if (parsed.data.SUBSCRIPTION_RUNTIME_WARN_MODE === 'WARN') {
     if (parsed.data.APP_ENV !== 'local' && parsed.data.APP_ENV !== 'staging') {
       throw new Error('SUBSCRIPTION_RUNTIME_WARN_MODE=WARN is allowed only in local or staging');

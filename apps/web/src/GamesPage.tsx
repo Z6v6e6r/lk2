@@ -10,6 +10,7 @@ import {
 } from './HomeDashboardPage.js';
 import { TournamentSummaryCard } from './TournamentSummaryCard.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
+import { waitForGameRevision } from './game-revision-readback.js';
 import type {
   AuthGateway,
   EventCatalogItem,
@@ -437,10 +438,37 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     let active = true;
 
     if (gameId) {
-      const waitForCreatedProjection =
-        typeof window !== 'undefined' &&
-        new URLSearchParams(window.location.search).get('created') === '1';
+      const search =
+        typeof window === 'undefined'
+          ? new URLSearchParams()
+          : new URLSearchParams(window.location.search);
+      const waitForCreatedProjection = search.get('created') === '1';
+      const expectedCreatedRevision = Number(search.get('revision'));
       const loadDetail = async (): Promise<ViewerGameCard> => {
+        if (
+          waitForCreatedProjection &&
+          Number.isSafeInteger(expectedCreatedRevision) &&
+          expectedCreatedRevision > 0
+        ) {
+          setNotice('Операция выполнена, данные обновляются…');
+          const readback = await waitForGameRevision({
+            load: () => gateway.getGame(gameId),
+            minimumRevision: expectedCreatedRevision,
+          });
+          if (readback.status === 'converged') {
+            setNotice('Создана игра. Бронирование корта не выполняется автоматически.');
+            return readback.game;
+          }
+          if (readback.status === 'updating' && readback.game) {
+            setNotice(
+              'Операция выполнена, данные ещё обновляются. Можно безопасно обновить страницу.',
+            );
+            return readback.game;
+          }
+          throw Object.assign(new Error('Game readback unavailable'), {
+            code: 'GAME_READBACK_UNAVAILABLE',
+          });
+        }
         for (let attempt = 0; ; attempt += 1) {
           try {
             return await gateway.getGame(gameId);
@@ -750,7 +778,7 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
       if (action === 'DISPUTE_RESULT' && !window.confirm('Оспорить этот результат?')) return;
       setBusyGameId(game.id);
       setError(null);
-      setNotice(null);
+      setNotice('Операция выполняется…');
       try {
         const result =
           action === 'CONFIRM_RESULT'
@@ -817,7 +845,29 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
         setReloadToken((current) => current + 1);
         return;
       }
-      if (!result.game && result.operation.gameId) {
+      const minimumRevision = result.operation.aggregateRevision;
+      const readbackGameId = result.operation.gameId ?? game.id;
+      if (minimumRevision !== null) {
+        setNotice('Операция выполнена, данные обновляются…');
+        const readback = await waitForGameRevision({
+          load: () => gateway.getGame(readbackGameId),
+          minimumRevision,
+        });
+        if (readback.status === 'converged') {
+          result = { ...result, game: readback.game } satisfies GameCommandResult;
+        } else if (readback.status === 'updating') {
+          if (readback.game) {
+            result = { ...result, game: readback.game } satisfies GameCommandResult;
+          }
+          setNotice(
+            'Операция выполнена, данные ещё обновляются. Можно безопасно обновить страницу.',
+          );
+        } else {
+          setNotice(
+            'Операция выполнена, но актуальные данные временно недоступны. Повторите обновление позже.',
+          );
+        }
+      } else if (!result.game && result.operation.gameId) {
         result = {
           ...result,
           game: await gateway.getGame(result.operation.gameId),
@@ -836,15 +886,17 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
         window.location.assign(result.operation.nextAction.url);
         return;
       }
-      setNotice(
-        action === 'JOIN'
-          ? 'Вы в игре. Состав и доступные действия обновлены.'
-          : action === 'JOIN_WAITLIST'
-            ? 'Вы добавлены в лист ожидания.'
-            : action === 'CANCEL'
-              ? 'Игра отменена. Статус и состав обновлены.'
-              : 'Участие обновлено.',
-      );
+      if (result.game && result.game.revision >= (minimumRevision ?? 0)) {
+        setNotice(
+          action === 'JOIN'
+            ? 'Вы в игре. Состав и доступные действия обновлены.'
+            : action === 'JOIN_WAITLIST'
+              ? 'Вы добавлены в лист ожидания.'
+              : action === 'CANCEL'
+                ? 'Игра отменена. Статус и состав обновлены.'
+                : 'Участие обновлено.',
+        );
+      }
       if (!gameId && (action === 'JOIN' || action === 'JOIN_WAITLIST')) {
         pendingViewerGame.current = result.game;
         setLoading(true);

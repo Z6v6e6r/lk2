@@ -14,6 +14,7 @@ import {
   createCommunityMediaRepository,
   createDatabasePool,
   createGameRepository,
+  createGameRosterRepository,
   createGameResultProjectionRepository,
   createGiftCertificateIssuanceRepository,
   createLocalCommunityDirectoryRepository,
@@ -36,7 +37,10 @@ import {
 } from './community-media-processing.js';
 import { runCommunityMediaCycle } from './community-media-worker.js';
 import { registerCoreBrokerTopology } from './broker-topology.js';
-import { runGameLifecycleProcessManagerCycle } from './game-lifecycle-process-manager.js';
+import {
+  isGameLifecycleProcessManagerEnabled,
+  runGameLifecycleProcessManagerCycle,
+} from './game-lifecycle-process-manager.js';
 import { registerGamesCardProjectorConsumer } from './games-card-projector-consumer.js';
 import { registerGameResultProjectorConsumer } from './game-result-projector-consumer.js';
 import { registerCupRatingConsumer } from './cup-rating-consumer.js';
@@ -106,6 +110,7 @@ const workerMetrics = createWorkerMetricRecorder({
 });
 const pool = createDatabasePool(config.DATABASE_URL);
 const gameRepository = createGameRepository(pool);
+const gameRosterRepository = createGameRosterRepository(pool);
 const participationCommandRepository = createParticipationCommandRepository(pool);
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS = 60_000;
@@ -512,9 +517,15 @@ const runCycle = async (): Promise<void> => {
       startOffset: tenantCycleStartOffset,
       shouldStop: () => shuttingDown,
       runTenant: async (tenant) => {
-        if (config.GAMES_READ_ENABLED) {
+        if (
+          isGameLifecycleProcessManagerEnabled({
+            gamesReadEnabled: config.GAMES_READ_ENABLED,
+            gamesCommandsEnabled: config.GAMES_COMMANDS_ENABLED,
+          })
+        ) {
           await runGameLifecycleProcessManagerCycle({
             repository: gameRepository,
+            rosterRepository: gameRosterRepository,
             tenantId: tenant.id,
             workerId: gamesProcessManagerWorkerId,
             logger,

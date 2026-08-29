@@ -457,6 +457,41 @@ describe('game repository', () => {
     expect(call?.[1]).toEqual([tenantId, actorUserId, gameRow.starts_at, gameId, 21]);
   });
 
+  it('reports projection lag through a bounded tenant-scoped read-only scan', async () => {
+    const { pool, query } = poolWithHandler((text) =>
+      text.includes('coalesce(projection.projection_revision, 0) < g.revision')
+        ? {
+            rows: [
+              {
+                game_id: gameId,
+                aggregate_revision: '7',
+                projection_revision: '5',
+                lifecycle_state: 'SCHEDULED',
+              },
+            ],
+          }
+        : { rows: [] },
+    );
+
+    await expect(
+      createGameRepository(pool as never).listCardProjectionLag({ tenantId, limit: 5_000 }),
+    ).resolves.toEqual([
+      {
+        gameId,
+        aggregateRevision: 7,
+        projectionRevision: 5,
+        lifecycleState: 'SCHEDULED',
+      },
+    ]);
+    const scan = query.mock.calls.find(([text]) =>
+      text.includes('coalesce(projection.projection_revision, 0) < g.revision'),
+    );
+    expect(scan?.[0]).toContain('g.tenant_id = $1');
+    expect(scan?.[0]).toContain('legacy_game_merge_redirects');
+    expect(scan?.[1]).toEqual([tenantId, 500]);
+    expect(query.mock.calls.some(([text]) => /\b(insert|update|delete)\b/i.test(text))).toBe(false);
+  });
+
   it('atomically projects the current locked aggregate and marks the event inbox', async () => {
     const scheduled = {
       ...gameRow,
@@ -493,6 +528,8 @@ describe('game repository', () => {
     const projectionCall = query.mock.calls.find(([text]) =>
       text.includes('insert into games.card_projections'),
     );
+    const aggregateLock = query.mock.calls.find(([text]) => text.includes('from games.games g'));
+    expect(aggregateLock?.[0]).toContain('for update of g');
     expect(JSON.parse(String(projectionCall?.[1]?.[7]))).toMatchObject({
       participants: [{ userId: actorUserId, level: 'C+', levelValue: 3.43844 }],
     });
@@ -523,6 +560,95 @@ describe('game repository', () => {
       createGameRepository(pool as never).projectCardEvent({ tenantId, eventId, gameId }),
     ).resolves.toBe('duplicate');
     expect(query.mock.calls.some(([text]) => text.includes('from games.games g'))).toBe(false);
+  });
+
+  it('redelivers the same event after a result dependency becomes visible', async () => {
+    const awaitingResult = {
+      ...gameRow,
+      revision: '4',
+      lifecycle_state: 'FINISHED',
+      result_state: 'CONFIRMED',
+      station_name: 'Падел Сколково',
+      station_short_address: 'Новая, 1',
+    };
+    let dependencyVisible = false;
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('insert into audit.inbox_events')) return { rows: [{ event_id: eventId }] };
+      if (text.includes('from games.games g')) return { rows: [awaitingResult] };
+      if (text.includes('from games.participations p')) {
+        return {
+          rows: [actorUserId, levelCId, levelBId, gameId].map((userId, index) => ({
+            user_id: userId,
+            display_name: `Player ${index + 1}`,
+            photo_url: null,
+            level_label: null,
+            level_value: null,
+            role: index === 0 ? 'ORGANIZER' : 'PLAYER',
+            payment_state: 'NOT_REQUIRED',
+          })),
+        };
+      }
+      if (text.includes('from games.result_submission_reviews')) {
+        return {
+          rows: [levelCId, levelBId, gameId].map((userId) => ({
+            reviewer_user_id: userId,
+            decision: 'CONFIRMED',
+          })),
+        };
+      }
+      if (text.includes('from games.result_submissions') && text.includes('limit 1')) {
+        return dependencyVisible
+          ? {
+              rows: [
+                {
+                  id: operationId,
+                  submitted_by_user_id: actorUserId,
+                  submitted_at: '2026-07-20T18:00:00.000Z',
+                  confirmation_quorum: 3,
+                  score_payload: {
+                    sets: [
+                      {
+                        setNumber: 1,
+                        teamAUserIds: [actorUserId, levelCId],
+                        teamBUserIds: [levelBId, gameId],
+                        teamA: 6,
+                        teamB: 4,
+                      },
+                    ],
+                  },
+                  roster_snapshot: {
+                    participantUserIds: [actorUserId, levelCId, levelBId, gameId],
+                  },
+                },
+              ],
+            }
+          : { rows: [] };
+      }
+      if (text.includes('insert into games.card_projections')) return { rowCount: 1 };
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).projectCardEvent({ tenantId, eventId, gameId }),
+    ).resolves.toBe('dependency_missing');
+
+    dependencyVisible = true;
+    await expect(
+      createGameRepository(pool as never).projectCardEvent({ tenantId, eventId, gameId }),
+    ).resolves.toBe('applied');
+
+    expect(
+      query.mock.calls.filter(([text]) => text.includes('delete from audit.inbox_events')),
+    ).toHaveLength(1);
+    expect(
+      query.mock.calls.filter(([text]) =>
+        text.includes('update audit.inbox_events set processed_at'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      query.mock.calls.filter(([text]) => text.includes('insert into games.card_projections')),
+    ).toHaveLength(1);
+    expect(query.mock.calls.filter(([text]) => text === 'commit')).toHaveLength(2);
   });
 
   it('claims due commands with row locking and bounded attempts', async () => {

@@ -149,7 +149,9 @@ describe('CreateGamePage durable create recovery', () => {
     expect(createGame.mock.calls[0]?.[1]?.idempotencyKey).toMatch(/\S+/);
 
     command.resolve(result());
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1`));
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&revision=1`),
+    );
     const ledger = loadCreateGameAttemptLedger(principal, window.localStorage);
     expect(ledger.activeAttempt).toBeUndefined();
     expect(ledger.resolvedAttempts).toMatchObject([
@@ -180,7 +182,7 @@ describe('CreateGamePage durable create recovery', () => {
     await waitFor(() => expect(createGame).toHaveBeenCalledTimes(2));
     expect(createGame.mock.calls[1]?.[1]?.idempotencyKey).toBe(firstKey);
     await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&recovered=1`),
+      expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&revision=1&recovered=1`),
     );
     const ledger = loadCreateGameAttemptLedger(principal, window.localStorage);
     expect(ledger.activeAttempt).toBeUndefined();
@@ -285,6 +287,40 @@ describe('CreateGamePage durable create recovery', () => {
         expect.objectContaining({ gameId: secondGameId, idempotencyKey: secondKey }),
       ]),
     );
+    expect(window.location.pathname + window.location.search).toBe('/games/new');
+  });
+
+  it('consumes the real new-link intent so reload converges to cross-tab resolved K1', async () => {
+    window.history.replaceState({}, '', '/games/new?new=1');
+    const createGame = vi
+      .fn<AuthGateway['createGame']>()
+      .mockRejectedValue(new TypeError('response lost'));
+    const firstNavigate = vi.fn();
+    const user = userEvent.setup();
+    const firstTab = page(createGame, { navigate: firstNavigate });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await waitFor(() =>
+      expect(window.location.pathname + window.location.search).toBe('/games/new'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('результат неизвестен');
+    const pending = loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt;
+    expect(pending).toBeDefined();
+    firstTab.unmount();
+    if (!pending) throw new Error('expected pending attempt');
+
+    await resolveCreateGameAttempt(principal, pending, gameId, window.localStorage, locks());
+    const reloadNavigate = vi.fn();
+    page(createGame, { navigate: reloadNavigate });
+
+    await waitFor(() =>
+      expect(reloadNavigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&recovered=1`),
+    );
+    expect(createGame).toHaveBeenCalledOnce();
+    expect(
+      loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
+    ).toBeUndefined();
   });
 
   it('restores exact fields and key after unmount plus tab-close style reopen', async () => {
@@ -391,7 +427,7 @@ describe('CreateGamePage durable create recovery', () => {
     await waitFor(() => expect(createGame).toHaveBeenCalledTimes(2));
     expect(createGame.mock.calls[1]?.[1]?.idempotencyKey).toBe(firstKey);
     await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&recovered=1`),
+      expect(navigate).toHaveBeenCalledWith(`/games/${gameId}?created=1&revision=1&recovered=1`),
     );
   });
 

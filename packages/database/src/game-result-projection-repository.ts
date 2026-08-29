@@ -239,7 +239,17 @@ export function createGameResultProjectionRepository(pool: Pool): GameResultProj
         );
         if (inbox.rowCount === 0) return 'duplicate';
         const result = await loadWithClient(client, input);
-        if (!result) return 'result_not_found';
+        if (!result) {
+          // A confirmed-result event can arrive before its source rows are visible. Keep the
+          // broker redelivery eligible to claim the same event instead of committing a duplicate
+          // fence that would leave player history permanently stale.
+          await client.query(
+            `delete from audit.inbox_events
+              where consumer_name = $1 and event_id = $2 and processed_at is null`,
+            [consumerName, input.eventId],
+          );
+          return 'result_not_found';
+        }
         await projectPlayerFacts(client, result);
         await projectActivityHistory(client, result);
         await client.query(

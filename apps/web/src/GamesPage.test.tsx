@@ -171,6 +171,19 @@ function gateway(): AuthGateway {
         },
       ],
     }),
+    getGame: vi.fn().mockResolvedValue({
+      ...game,
+      revision: 8,
+      surface: 'MY_UPCOMING',
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      viewerRelation: 'PARTICIPANT',
+      viewerPaymentState: 'NOT_REQUIRED',
+      resultSummary: null,
+      conversation: null,
+    }),
     getGameOperation: vi.fn(),
     joinGame: vi.fn().mockResolvedValue({
       commandId: 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea',

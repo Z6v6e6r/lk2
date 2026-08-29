@@ -149,6 +149,17 @@ export function CreateGamePage({
   );
 
   useEffect(() => {
+    if (!explicitNewIntent || typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('new');
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+  }, [explicitNewIntent]);
+
+  useEffect(() => {
     if (!restoredResolved || explicitNewIntent) return;
     navigate(`/games/${encodeURIComponent(restoredResolved.gameId)}?created=1&recovered=1`);
   }, [explicitNewIntent, navigate, restoredResolved]);
@@ -299,7 +310,10 @@ export function CreateGamePage({
       );
       setActiveAttempt(null);
       const recovered = result.replayed ? '&recovered=1' : '';
-      navigate(`/games/${encodeURIComponent(result.operation.gameId)}?created=1${recovered}`);
+      const revision = result.operation.aggregateRevision ?? 0;
+      navigate(
+        `/games/${encodeURIComponent(result.operation.gameId)}?created=1&revision=${revision}${recovered}`,
+      );
     } catch (cause) {
       if (attempt && isTerminalNoCommitError(cause)) {
         try {
