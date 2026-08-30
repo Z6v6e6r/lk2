@@ -583,6 +583,26 @@ def validate_frozen_source(source_sha: str, source_tree: str) -> None:
             stop("source_git_object")
 
 
+def require_secure_launcher(path: Path) -> Path:
+    try:
+        link = path.lstat()
+        resolved = path.resolve(strict=True)
+        target = resolved.stat()
+    except OSError:
+        stop("launcher_security")
+    link_is_symlink = stat.S_ISLNK(link.st_mode)
+    if (
+        link.st_uid != 0
+        or (not link_is_symlink and not stat.S_ISREG(link.st_mode))
+        or (not link_is_symlink and link.st_mode & 0o022)
+        or target.st_uid != 0
+        or target.st_mode & 0o022
+        or not stat.S_ISREG(target.st_mode)
+    ):
+        stop("launcher_security")
+    return resolved
+
+
 def validate_launcher(contract: dict[str, Any]) -> None:
     launcher = contract["launcher"]
     if Path(sys.executable) != Path(launcher["path"]) or sys.version_info.major != launcher["major"]:
@@ -595,14 +615,7 @@ def validate_launcher(contract: dict[str, Any]) -> None:
     ):
         stop("launcher_flags")
     path = Path(launcher["path"])
-    try:
-        link = path.lstat()
-        resolved = path.resolve(strict=True)
-        target = resolved.stat()
-    except OSError:
-        stop("launcher_security")
-    if link.st_uid != 0 or link.st_mode & 0o022 or target.st_uid != 0 or target.st_mode & 0o022 or not stat.S_ISREG(target.st_mode):
-        stop("launcher_security")
+    require_secure_launcher(path)
     owner = run([contract["apt"]["dpkgQueryBinary"], "-S", launcher["path"]]).split(":", 1)[0]
     if owner != launcher["packageOwner"]:
         stop("launcher_package_owner")

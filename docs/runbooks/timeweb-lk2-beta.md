@@ -229,7 +229,10 @@ downloaded installers and container launchers are all a STOP.
 The controller reduces the procedure to five commands. Every live command uses an absolute path in
 the exact root-owned, unmodified and untracked-file-free release checkout. Python isolated mode,
 disabled `site` loading and disabled bytecode writes prevent sibling or site import shadowing before
-the controller proves that checkout. Replace only the release path and two identity values:
+the controller proves that checkout. The Ubuntu-owned `/usr/bin/python3` entry may be a root-owned
+symlink: its non-authoritative symlink mode bits are ignored, while strict resolution and the
+root-owned, regular, non-group/other-writable canonical target remain mandatory. Replace only the
+release path and two identity values:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
