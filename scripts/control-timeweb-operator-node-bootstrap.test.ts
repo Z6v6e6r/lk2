@@ -11,6 +11,8 @@ interface BootstrapContract {
   apt: {
     sourceListSha256: string;
     keyringSha256: string;
+    configPath: string;
+    configSha256: string;
     packages: Array<{ name: string; version: string; architecture: string }>;
   };
 }
@@ -159,6 +161,8 @@ describe('Timeweb operator Node bootstrap controller', () => {
     for (const required of [
       'Dir::Etc::main=/dev/null',
       'Dir::Etc::parts=-',
+      'APT_CONFIG',
+      'run_apt',
       'Dir::State::lists=',
       'Acquire::AllowInsecureRepositories=false',
       '"--yes", "update"',
@@ -183,6 +187,54 @@ describe('Timeweb operator Node bootstrap controller', () => {
       expect(source).toContain(required);
     }
     expect(source).not.toContain('Debug::NoLocking');
+  });
+
+  it('injects the frozen APT_CONFIG into every apt command and rejects surviving hooks', () => {
+    const program = [
+      'import importlib.util, json, pathlib, sys',
+      'spec = importlib.util.spec_from_file_location("controller", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'contract = module.validate_contract(module.read_json(pathlib.Path(sys.argv[2]), "contract"))',
+      `module.validate_no_apt_lifecycle_hooks('Dir::Etc::parts "-";\\n')`,
+      'try:',
+      `    module.validate_no_apt_lifecycle_hooks('APT::Update::Post-Invoke-Success "touch /tmp/forbidden";\\n')`,
+      'except module.Stop as error:',
+      '    assert str(error) == "apt_lifecycle_hook"',
+      'else:',
+      '    raise AssertionError("surviving lifecycle hook accepted")',
+      'calls = []',
+      'module.apt_environment = lambda _contract: {"APT_CONFIG": "/frozen/operator-node-bootstrap.apt.conf"}',
+      'module.run = lambda command, extra_environment=None: calls.append((command, extra_environment)) or "ok"',
+      'assert module.run_apt(contract, [contract["apt"]["configBinary"], "dump"], extra_environment={"DEBIAN_FRONTEND": "noninteractive"}) == "ok"',
+      'assert calls == [([contract["apt"]["configBinary"], "dump"], {"APT_CONFIG": "/frozen/operator-node-bootstrap.apt.conf", "DEBIAN_FRONTEND": "noninteractive"})]',
+      'try:',
+      '    module.run_apt(contract, [contract["apt"]["binary"], "update"], extra_environment={"APT_CONFIG": "/tmp/override"})',
+      'except module.Stop as error:',
+      '    assert str(error) == "apt_config_override"',
+      'else:',
+      '    raise AssertionError("APT_CONFIG override accepted")',
+      'print(json.dumps({"status": "PASS", "aptConfig": calls[0][1]["APT_CONFIG"]}))',
+    ].join('\n');
+    const result = spawnSync(
+      'python3',
+      [
+        '-I',
+        '-S',
+        '-B',
+        '-c',
+        program,
+        resolve(controller),
+        resolve('deploy/timeweb/operator-node-bootstrap.v1.json'),
+      ],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      status: 'PASS',
+      aptConfig: '/frozen/operator-node-bootstrap.apt.conf',
+    });
   });
 
   it('does not import a shadow standard-library module beside the controller', () => {
