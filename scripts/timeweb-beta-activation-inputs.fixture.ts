@@ -8,7 +8,6 @@ import {
   realpathSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
@@ -124,7 +123,7 @@ export function encodeEnvironment(values: Record<string, string>): string {
 }
 
 export function createSecretFixture() {
-  const root = mkdtempSync(join(realpathSync(tmpdir()), 'phub-timeweb-activation-inputs-'));
+  const root = mkdtempSync(join(realpathSync(process.cwd()), '.phub-timeweb-activation-inputs-'));
   chmodSync(root, 0o700);
   const sourceDir = join(root, 'source');
   const hostEtc = join(root, 'host-etc');
