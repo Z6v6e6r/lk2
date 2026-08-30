@@ -1,7 +1,13 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import {
@@ -117,7 +123,7 @@ export function encodeEnvironment(values: Record<string, string>): string {
 }
 
 export function createSecretFixture() {
-  const root = mkdtempSync(join(tmpdir(), 'phub-timeweb-activation-inputs-'));
+  const root = mkdtempSync(join(realpathSync(process.cwd()), '.phub-timeweb-activation-inputs-'));
   chmodSync(root, 0o700);
   const sourceDir = join(root, 'source');
   const hostEtc = join(root, 'host-etc');
@@ -127,7 +133,7 @@ export function createSecretFixture() {
   const githubTokenFile = join(root, 'github-token');
   mkdirSync(sourceDir, { mode: 0o700 });
   mkdirSync(hostEtc, { mode: 0o700 });
-  writeFileSync(githubTokenFile, `${'synthetic_machine_read_token_'.padEnd(48, 'x')}\n`, {
+  writeFileSync(githubTokenFile, `ghp_${'x'.repeat(36)}\n`, {
     mode: 0o600,
   });
   const files = {
@@ -149,6 +155,40 @@ export function createSecretFixture() {
     backupRoot,
     targetParent,
     githubTokenFile,
+    githubCredentialContract: {
+      schema: 'PHUB_TIMEWEB_GITHUB_RELEASE_READER_V1',
+      file: {
+        path: githubTokenFile,
+        uid: process.getuid?.() ?? 0,
+        gid: process.getgid?.() ?? 0,
+        mode: '0600',
+        linkCount: 1,
+        minimumBytes: 40,
+        maximumBytes: 256,
+      },
+      credential: {
+        type: 'github_personal_access_token_classic',
+        prefix: 'ghp_',
+        requiredScopes: ['read:packages'],
+        scopeAuthority: 'github_x_oauth_scopes_exact',
+      },
+      resources: {
+        repository: 'Z6v6e6r/lk2',
+        packages: [
+          'Z6v6e6r/phub-api',
+          'Z6v6e6r/phub-migrator',
+          'Z6v6e6r/phub-realtime',
+          'Z6v6e6r/phub-web',
+          'Z6v6e6r/phub-worker',
+        ],
+      },
+      lifecycle: {
+        oneShot: true,
+        maximumFileAgeSeconds: 3600,
+        revokeAfterUse: true,
+        rotationOwner: 'Z6v6e6r repository owner',
+      },
+    },
     environments,
   };
 }
@@ -265,11 +305,13 @@ export function githubApiFixture(pair: ReturnType<typeof writeCanonicalPair>) {
   const artifactDigest = `sha256:${createHash('sha256').update(archive).digest('hex')}`;
   const artifactId = 9876543210;
   const artifactName = `timeweb-amd64-canonical-release-${sourceSha}-${runId}-1`;
+  const scopedJson = (value: unknown) =>
+    Response.json(value, { headers: { 'x-oauth-scopes': 'read:packages' } });
   const fetch = (input: string | URL | Request) =>
     Promise.resolve().then(() => {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       if (url.endsWith(`/actions/runs/${runId}/attempts/1`))
-        return Response.json({
+        return scopedJson({
           id: Number(runId),
           run_attempt: 1,
           head_sha: sourceSha,
@@ -280,7 +322,7 @@ export function githubApiFixture(pair: ReturnType<typeof writeCanonicalPair>) {
           updated_at: '2026-08-27T00:00:00.000Z',
         });
       if (url.endsWith(`/actions/runs/${runId}/artifacts?per_page=100`))
-        return Response.json({
+        return scopedJson({
           artifacts: [
             {
               id: artifactId,
@@ -297,7 +339,7 @@ export function githubApiFixture(pair: ReturnType<typeof writeCanonicalPair>) {
         url.includes(`/packages/container/phub-${component}/versions?`),
       );
       if (component)
-        return Response.json([
+        return scopedJson([
           {
             name: component.digest,
             metadata: { package_type: 'container', container: { tags: [] } },

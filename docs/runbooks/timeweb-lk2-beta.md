@@ -367,10 +367,21 @@ are distinct fields and are both recorded. The renderer rejects legacy/
 reconciliation/receipt/inventory shapes, mutable references, incomplete component sets, historical
 paths, ambient `COMPOSE_*` overrides and the failed run `33011023879` explicitly.
 
-The GitHub token is read only from an exact root-owned regular `0600` file, never argv, output or an
+The one-shot GitHub release-reader token contract is machine-readable at
+`deploy/timeweb/github-release-reader.contract.json`. The renderer accepts only
+`/etc/phub/timeweb-beta/github-release-reader.token`: a fresh root-owned/root-group regular `0600`
+single-link file beneath a root-owned, non-group/other-writable parent chain. The credential must be
+a classic PAT with the `ghp_` prefix and GitHub must report its complete actual scope set as exactly
+`read:packages`; missing scope metadata or any additional scope is STOP. The controller can address
+only repository `Z6v6e6r/lk2` and the five enumerated `phub-*` packages. The file is valid for at
+most one hour, is never accepted through an environment override, and must be revoked by the named
+repository owner after the final release lookup. `oneShot` and `revokeAfterUse` are operator gates,
+not claims that the read-only renderer can revoke a GitHub credential: the release operation is not
+complete until GitHub-side revocation and local token-file removal have both been read back. A
+surviving or reused token is STOP. Token bytes never enter argv, output, logs, checksums or an
 environment dump. Caller-authored evidence and caller-authored evidence checksums are not accepted.
-The token requires read-only Actions/artifact and package metadata access. Token compromise remains
-a trust-boundary STOP and does not waive the independent manifest/provenance verification.
+Token compromise remains a trust-boundary STOP and does not waive the independent
+manifest/provenance verification.
 
 The runtime secret set must already exist with `0700`/`0600` ownership and a release marker matching
 the manifest release ID. The future release directory must be the exact single segment
@@ -383,7 +394,7 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   /usr/bin/node '/opt/phub/timeweb-beta/releases/<source-sha>-<successful-run-id>-1/source/scripts/render-timeweb-beta-release-env.js' \
   --manifest '<canonical-artifact-dir>/release-manifest.json' \
   --expected-manifest-sha256 '<release-manifest-json-sha256>' \
-  --github-token-file '<root-owned-read-only-github-token-file>' \
+  --github-token-file '/etc/phub/timeweb-beta/github-release-reader.token' \
   --expected-source-sha '<exact-source-sha>' \
   --expected-source-tree '<exact-source-tree>' \
   --expected-workflow-sha '<exact-workflow-sha>' \
@@ -412,7 +423,7 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   --release-env '<exact-release-dir>/release.env' \
   --manifest '<canonical-artifact-dir>/release-manifest.json' \
   --expected-manifest-sha256 '<release-manifest-json-sha256>' \
-  --github-token-file '<root-owned-read-only-github-token-file>' \
+  --github-token-file '/etc/phub/timeweb-beta/github-release-reader.token' \
   --expected-source-sha '<exact-source-sha>' \
   --expected-source-tree '<exact-source-tree>' \
   --expected-workflow-sha '<exact-workflow-sha>' \

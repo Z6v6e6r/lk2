@@ -63,6 +63,32 @@ export type TimewebVerifiedRenderedEnvironment = {
   readonly __verifiedRenderedEnvironment: unique symbol;
 };
 
+export type TimewebGitHubCredentialContract = {
+  schema: 'PHUB_TIMEWEB_GITHUB_RELEASE_READER_V1';
+  file: {
+    path: string;
+    uid: number;
+    gid: number;
+    mode: '0600';
+    linkCount: 1;
+    minimumBytes: 40;
+    maximumBytes: 256;
+  };
+  credential: {
+    type: 'github_personal_access_token_classic';
+    prefix: 'ghp_';
+    requiredScopes: ['read:packages'];
+    scopeAuthority: 'github_x_oauth_scopes_exact';
+  };
+  resources: { repository: 'Z6v6e6r/lk2'; packages: string[] };
+  lifecycle: {
+    oneShot: true;
+    maximumFileAgeSeconds: 3600;
+    revokeAfterUse: true;
+    rotationOwner: 'Z6v6e6r repository owner';
+  };
+};
+
 export function readCanonicalTimewebReleasePair(
   manifestPath: string,
   expectedChecksum: string,
@@ -84,7 +110,8 @@ export function verifyCanonicalGitHubRunAuthority(options: {
   expectedRunId: string;
   expectedRunAttempt: string;
   githubTokenFile: string;
-  expectedUid?: number;
+  credentialContract?: unknown;
+  nowMs?: number;
 }): Promise<{ evidence: TimewebVerifiedCanonicalRunEvidence; checksum: string }>;
 
 export function validateTimewebRuntimeSecretPaths(
