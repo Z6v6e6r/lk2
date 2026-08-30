@@ -402,7 +402,10 @@ jobs:
           set -euo pipefail
           node scripts/verify-timeweb-deployment-contract.js \
             --diagnostic "$RUNNER_TEMP/timeweb-deployment-diagnostic.json"
-          npx vitest run scripts/verify-timeweb-deployment-contract.test.ts
+          node scripts/verify-timeweb-api-web-observability.js --contract-only
+          npx vitest run \
+            scripts/verify-timeweb-deployment-contract.test.ts \
+            scripts/verify-timeweb-api-web-observability.test.ts
       - name: Resolve immutable Caddy identity
         if: ${{ needs.ci-plan.outputs.deployment_contract == 'true' }}
         id: caddy-identity

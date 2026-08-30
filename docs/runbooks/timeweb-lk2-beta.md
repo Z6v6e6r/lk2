@@ -75,6 +75,78 @@ It also renders both Compose models using synthetic non-secret environment files
 These checks do not start Caddy or an application service, do not bind ports, and do not create a
 Docker network, volume, package, or VPS resource.
 
+## API/Web observability and deterministic abort gate
+
+`deploy/timeweb/api-web-observability.v1.json` is the machine-readable, source-only API/Web
+observability contract. It defines two Timeweb HTTPS monitors: `GET /health/ready` for API and
+`GET /` for Web. Each monitor must be enabled in at least two regions with a 60-second interval,
+10-second timeout, expected status `200`, and a configured Basic `Authorization` header while the
+beta ingress remains protected. The contract and its evidence contain only the boolean fact that
+the header is configured; a credential value, secret reference value, or header value is forbidden.
+Creating, editing or testing either provider monitor is a separately authorized paid Timeweb
+operation and is not performed by source validation.
+
+The initial beta observation window is 900 seconds. Capture at least 60 timestamped API/Web probe
+samples no more than 15 seconds apart and at least 60 requests for each service. HTTP status and
+latency come from direct API/Web probes, restart counters from read-only Docker inspect output, and
+readiness from direct health probes. The verifier derives request/error counts, p95 latency,
+consecutive readiness failures and restart deltas from the individual samples; aggregate operator
+claims are not accepted. Any one of these boundaries is an immediate abort and rollback signal:
+
+- two consecutive readiness failures;
+- any API or Web container restart during the window;
+- API or Web HTTP 5xx rate greater than or equal to 100 basis points (1%);
+- API p95 latency greater than or equal to 1500 ms;
+- Web p95 latency greater than or equal to 1000 ms;
+- any active Timeweb monitor incident.
+
+Before preflight can pass, both monitors must show at least three consecutive successful rounds.
+Their last checks must be no more than 130 seconds old when evidence is frozen. The complete
+observation must end no more than 300 seconds before that explicit observation time. The immutable
+API/Web rollback image mapping and the canonical rollback receipt path must also be read back no
+more than 300 seconds before the observation time. The supplied observation time must be no more
+than 30 seconds behind the verifier's current UTC clock, so an old evidence packet cannot be replayed.
+
+Alert custody is part of the gate, not a follow-up. A bounded provider alert test must prove delivery
+to both `email` and `telegram` within 300 seconds, acknowledgement by the `release-owner` role within
+600 seconds, and recovery delivery to both channels within 300 seconds. The alert test may be no
+more than 24 hours old. Missing delivery, missing acknowledgement, an active incident, stale
+evidence, or a threshold breach is `STOP`; do not continue to ingress activation.
+
+Freeze the read-only results in the exact root-owned `0600` regular file
+`/opt/phub/timeweb-beta/observability/api-web-evidence.json`. Its parent directories must be
+root-owned, canonical and not group/other-writable. The strict evidence shape is exercised by
+`scripts/verify-timeweb-api-web-observability.test.ts`; duplicate or unexpected keys fail closed.
+The evidence must not contain Basic credentials, environment values, tokens or other secret values.
+Validate the source contract without reading live state:
+
+```sh
+node scripts/verify-timeweb-api-web-observability.js --contract-only
+```
+
+After separately authorized provider monitor setup, delivery testing, and read-only evidence
+collection, run the deterministic preflight from the exact frozen release source. Replace only the
+four identity/time placeholders with values read independently from the candidate and evidence:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node scripts/verify-timeweb-api-web-observability.js \
+  --evidence /opt/phub/timeweb-beta/observability/api-web-evidence.json \
+  --expected-source-sha '<source-sha>' \
+  --expected-source-tree '<source-tree>' \
+  --expected-release-id '<source-sha>-<successful-run-id>-1' \
+  --observed-at '<canonical-UTC-timestamp>'
+```
+
+The verifier accepts no ambient identity or operator-supplied current clock, performs no network or Docker call,
+prints no observed values, and returns a pass only when the exact frozen HEAD/tree, current UTC
+clock, source identity, target, monitor freshness, alert delivery/acknowledgement, raw observation
+samples and immutable rollback receipt all match. It securely reads and hashes the canonical
+receipt, then matches its prior API/Web references to the frozen rollback floor; digest-shaped
+operator claims alone are rejected.
+A pass is evidence for the observability gate only; it does not authorize deployment, workflow
+dispatch, monitor mutation, ingress change, migration or rollback execution.
+
 ## Runtime and activation boundary
 
 `deploy/timeweb/runtime-environment.contract.json` names required, allowed, and forbidden keys per

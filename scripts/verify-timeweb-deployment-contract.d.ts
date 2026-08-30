@@ -98,6 +98,7 @@ export interface TimewebDeploymentContractPaths {
   application: string;
   runtime: string;
   nodeBootstrap: string;
+  observability: string;
   runbook: string;
   diagnostic?: string;
   envRoot?: string;

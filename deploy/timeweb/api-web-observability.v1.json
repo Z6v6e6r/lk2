@@ -1,0 +1,78 @@
+{
+  "schema": "PHUB_TIMEWEB_API_WEB_OBSERVABILITY_CONTRACT_V1",
+  "target": {
+    "hostname": "lk2.padlhub.su",
+    "provider": "Timeweb",
+    "serverId": 8886471,
+    "projectId": 262717
+  },
+  "evidence": {
+    "path": "/opt/phub/timeweb-beta/observability/api-web-evidence.json",
+    "requiredOwner": "root",
+    "requiredMode": "0600",
+    "credentialValuesAllowed": false
+  },
+  "monitoring": {
+    "minimumRegions": 2,
+    "intervalSeconds": 60,
+    "timeoutSeconds": 10,
+    "maximumLastCheckAgeSeconds": 130,
+    "authorizationHeaderRequired": true,
+    "authorizationValueForbidden": true,
+    "monitors": [
+      {
+        "name": "lk2-beta-api-ready",
+        "service": "api",
+        "type": "HTTPS",
+        "method": "GET",
+        "url": "https://lk2.padlhub.su/health/ready",
+        "expectedStatus": 200
+      },
+      {
+        "name": "lk2-beta-web-root",
+        "service": "web",
+        "type": "HTTPS",
+        "method": "GET",
+        "url": "https://lk2.padlhub.su/",
+        "expectedStatus": 200
+      }
+    ]
+  },
+  "observation": {
+    "windowSeconds": 900,
+    "sampleIntervalSeconds": 15,
+    "minimumSamples": 60,
+    "minimumRequestsPerService": 60,
+    "maximumEvidenceAgeSeconds": 300,
+    "maximumObservedAtClockSkewSeconds": 30,
+    "requiredSuccessfulMonitorRounds": 3,
+    "sources": {
+      "http": "direct-api-web-probes",
+      "container": "docker-inspect",
+      "readiness": "direct-health-probes"
+    }
+  },
+  "abortThresholds": {
+    "readinessConsecutiveFailures": 2,
+    "restartDelta": 0,
+    "serverErrorRateBasisPoints": 100,
+    "apiP95LatencyMs": 1500,
+    "webP95LatencyMs": 1000,
+    "activeIncidents": 0
+  },
+  "alerting": {
+    "deliveryChannels": ["email", "telegram"],
+    "deliveryDeadlineSeconds": 300,
+    "acknowledgementDeadlineSeconds": 600,
+    "recoveryDeliveryDeadlineSeconds": 300,
+    "maximumAlertTestAgeSeconds": 86400,
+    "acknowledgementRole": "release-owner"
+  },
+  "rollback": {
+    "controllerPath": "scripts/control-timeweb-yandex-public-beta.js",
+    "mode": "rollback",
+    "receiptPath": "/opt/phub/timeweb-beta/backups/yandex-public/receipt.json",
+    "maximumReadBackAgeSeconds": 300,
+    "triggerPolicy": "any-threshold"
+  }
+}
