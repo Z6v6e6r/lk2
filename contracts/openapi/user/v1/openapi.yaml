@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.24.0
+  version: 1.25.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -24,7 +24,7 @@ tags:
   - name: locations
     description: Published PadlHub location cards and detail views.
   - name: messaging
-    description: Tenant-gated direct conversations with ordered HTTP history and recoverable realtime hints.
+    description: Tenant-gated direct and game conversations with ordered HTTP history and recoverable realtime hints.
   - name: communities
     description: Authenticated canonical community membership reads and commands.
   - name: realtime
@@ -101,7 +101,8 @@ paths:
       summary: Issue a one-time session-bound realtime connection ticket
       description: |
         The 30-second ticket is accepted once. Current session, user permission and tenant runtime
-        gates are revalidated before issuance and again by the realtime process. Message bodies are
+        gates are revalidated before issuance and again by the realtime process. Each DIRECT or GAME
+        subscription and fanout rechecks its kind-specific current authorization. Message bodies are
         never included in the ticket or broker event.
       responses:
         '200':
@@ -6063,6 +6064,10 @@ components:
           type: integer
           format: int64
           minimum: 1
+        clientMessageId:
+          type: string
+          pattern: '^[A-Za-z0-9._:-]{16,128}$'
+          description: Client command identifier used to reconcile optimistic, HTTP and realtime views.
         sender:
           $ref: '#/components/schemas/MessagingParticipant'
         messageType:
@@ -6099,6 +6104,9 @@ components:
           minLength: 16
           maxLength: 128
           pattern: '^[A-Za-z0-9._:-]+$'
+          description: |
+            Stable identifier for this authenticated tenant user. An exact retry in the same
+            conversation is idempotent; reuse for another conversation is rejected.
         body:
           type: string
           minLength: 1

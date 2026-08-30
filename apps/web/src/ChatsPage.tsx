@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import type { FormEvent } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
 
 import type { ConversationMessage, ConversationPage } from './auth-gateway.js';
 
@@ -10,6 +10,14 @@ export interface ChatUiError {
   readonly message: string;
 }
 
+export interface PendingChatMessage {
+  readonly clientMessageId: string;
+  readonly body: string;
+  readonly state: 'sending' | 'failed';
+}
+
+export type ChatRealtimeUiState = 'connecting' | 'connected' | 'reconnecting' | 'polling';
+
 interface ChatsPageProps {
   readonly page: ConversationPage | null;
   readonly messages: readonly ConversationMessage[];
@@ -17,13 +25,17 @@ interface ChatsPageProps {
   readonly selectedConversationId?: string;
   readonly hasExplicitRecipient: boolean;
   readonly currentUserId: string;
-  readonly busy: 'create' | 'send' | 'refresh' | null;
+  readonly busy: 'create' | 'send' | 'refresh' | 'load-earlier' | null;
   readonly error: ChatUiError | null;
+  readonly pendingMessage: PendingChatMessage | null;
+  readonly realtimeState: ChatRealtimeUiState | null;
+  readonly hasEarlierMessages: boolean;
   readonly canRetrySend: boolean;
   readonly onCreateDirect: () => void;
   readonly onSendMessage: (body: string) => void;
   readonly onRetrySend: () => void;
   readonly onRefresh: () => void;
+  readonly onLoadEarlier: () => void;
 }
 
 export function ChatsPage({
@@ -35,15 +47,43 @@ export function ChatsPage({
   currentUserId,
   busy,
   error,
+  pendingMessage,
+  realtimeState,
+  hasEarlierMessages,
   canRetrySend,
   onCreateDirect,
   onSendMessage,
   onRetrySend,
   onRefresh,
+  onLoadEarlier,
 }: ChatsPageProps): React.JSX.Element {
   const [draft, setDraft] = useState('');
+  const messageListRef = useRef<HTMLOListElement>(null);
+  const scrollSnapshotRef = useRef<{
+    readonly firstSequence: number;
+    readonly lastSequence: number;
+    readonly scrollHeight: number;
+  } | null>(null);
   const selected = page?.items.find((conversation) => conversation.id === selectedConversationId);
   const orderedMessages = [...messages].sort((left, right) => left.sequence - right.sequence);
+
+  useLayoutEffect(() => {
+    const list = messageListRef.current;
+    if (!list) return;
+    const firstSequence = orderedMessages[0]?.sequence ?? 0;
+    const lastSequence = orderedMessages.at(-1)?.sequence ?? 0;
+    const previous = scrollSnapshotRef.current;
+    if (previous && firstSequence > 0 && firstSequence < previous.firstSequence) {
+      list.scrollTop += list.scrollHeight - previous.scrollHeight;
+    } else if (!previous || lastSequence > previous.lastSequence || pendingMessage) {
+      list.scrollTop = list.scrollHeight;
+    }
+    scrollSnapshotRef.current = {
+      firstSequence,
+      lastSequence,
+      scrollHeight: list.scrollHeight,
+    };
+  }, [orderedMessages, pendingMessage]);
 
   function sendMessage(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -51,6 +91,12 @@ export function ChatsPage({
     if (!normalized) return;
     onSendMessage(normalized);
     setDraft('');
+  }
+
+  function handleMessageKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)) return;
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
   }
 
   return (
@@ -177,25 +223,63 @@ export function ChatsPage({
                     {busy === 'refresh' ? 'Обновляем…' : 'Обновить'}
                   </button>
                 </header>
-                <ol className="chat-messages">
-                  {orderedMessages.length > 0 ? (
-                    orderedMessages.map((message) => (
-                      <li
-                        key={message.id}
-                        className={
-                          message.sender.userId === currentUserId ? 'chat-message-own' : ''
-                        }
-                      >
-                        <strong>{message.sender.displayName}</strong>
-                        <p>{message.body}</p>
-                        <time dateTime={message.createdAt}>
-                          {new Intl.DateTimeFormat('ru-RU', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          }).format(new Date(message.createdAt))}
-                        </time>
-                      </li>
-                    ))
+                <p
+                  className={`chat-connection-state is-${realtimeState ?? 'connected'}`}
+                  {...(realtimeState && realtimeState !== 'connected'
+                    ? { role: 'status' as const }
+                    : { 'aria-hidden': true })}
+                >
+                  {realtimeState === 'connecting'
+                    ? 'Подключаем онлайн-доставку…'
+                    : realtimeState === 'reconnecting'
+                      ? 'Связь восстанавливается. История обновляется через защищённый HTTP.'
+                      : realtimeState === 'polling'
+                        ? 'Онлайн-доставка недоступна. История обновляется автоматически.'
+                        : ''}
+                </p>
+                <ol className="chat-messages" ref={messageListRef}>
+                  {hasEarlierMessages ? (
+                    <li className="chat-history-control">
+                      <button type="button" disabled={busy !== null} onClick={onLoadEarlier}>
+                        {busy === 'load-earlier' ? 'Загружаем…' : 'Показать предыдущие сообщения'}
+                      </button>
+                    </li>
+                  ) : null}
+                  {orderedMessages.length > 0 || pendingMessage ? (
+                    <>
+                      {orderedMessages.map((message) => (
+                        <li
+                          key={message.id}
+                          className={
+                            message.sender.userId === currentUserId ? 'chat-message-own' : ''
+                          }
+                        >
+                          <strong>{message.sender.displayName}</strong>
+                          <p>{message.body}</p>
+                          <time dateTime={message.createdAt}>
+                            {new Intl.DateTimeFormat('ru-RU', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            }).format(new Date(message.createdAt))}
+                          </time>
+                          {message.sender.userId === currentUserId ? (
+                            <span className="chat-message-status">Отправлено</span>
+                          ) : null}
+                        </li>
+                      ))}
+                      {pendingMessage ? (
+                        <li
+                          key={pendingMessage.clientMessageId}
+                          className={`chat-message-own chat-message-pending is-${pendingMessage.state}`}
+                        >
+                          <strong>Вы</strong>
+                          <p>{pendingMessage.body}</p>
+                          <span className="chat-message-status" role="status">
+                            {pendingMessage.state === 'sending' ? 'Отправляется…' : 'Не отправлено'}
+                          </span>
+                        </li>
+                      ) : null}
+                    </>
                   ) : (
                     <li className="chat-empty">Сообщений пока нет.</li>
                   )}
@@ -216,13 +300,18 @@ export function ChatsPage({
                     id="chat-message-body"
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={handleMessageKeyDown}
                     placeholder="Напишите сообщение"
                     maxLength={8000}
+                    aria-describedby="chat-message-hint"
                     disabled={busy !== null || error?.kind === 'FORBIDDEN'}
                   />
                   <button type="submit" disabled={busy !== null || !draft.trim()}>
                     {busy === 'send' ? 'Отправляем…' : 'Отправить'}
                   </button>
+                  <small id="chat-message-hint">
+                    Enter — новая строка, Ctrl/⌘+Enter — отправить
+                  </small>
                 </form>
               </>
             )}

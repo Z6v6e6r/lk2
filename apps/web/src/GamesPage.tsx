@@ -9,6 +9,10 @@ import {
   type HomeUpcomingItem,
 } from './HomeDashboardPage.js';
 import { TournamentSummaryCard } from './TournamentSummaryCard.js';
+import {
+  rememberGameChatNavigation,
+  type GameChatNavigationScope,
+} from './game-chat-navigation.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
 import { waitForGameRevision } from './game-revision-readback.js';
 import type {
@@ -256,9 +260,15 @@ export interface GamesPageProps {
   readonly gateway: AuthGateway;
   readonly gameId?: string;
   readonly eventId?: string;
+  readonly chatNavigationScope?: GameChatNavigationScope;
 }
 
-export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.JSX.Element {
+export function GamesPage({
+  gateway,
+  gameId,
+  eventId,
+  chatNavigationScope,
+}: GamesPageProps): React.JSX.Element {
   const [tab, setTab] = useState<GamesTab>('DISCOVER');
   const [selectedKinds, setSelectedKinds] = useState<readonly GameKindFilter[]>([]);
   const [selectedStationIds, setSelectedStationIds] = useState<readonly string[]>([]);
@@ -1195,6 +1205,9 @@ export function GamesPage({ gateway, gameId, eventId }: GamesPageProps): React.J
     setNotice(null);
     try {
       const result = await gateway.getOrCreateGameConversation(game.id);
+      if (chatNavigationScope) {
+        rememberGameChatNavigation(chatNavigationScope, result.conversation);
+      }
       window.location.assign(`/chats/${encodeURIComponent(result.conversation.id)}`);
     } catch (cause) {
       setError(errorMessage(cause));
