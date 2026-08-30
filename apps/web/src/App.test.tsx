@@ -1420,10 +1420,10 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Оповещения' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Уведомления' })).toBeVisible();
     expect(screen.getByText('Игра уже скоро')).toBeVisible();
     expect(screen.getByText('Push пока не включён для этой организации.')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Включить' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Включить push' })).toBeDisabled();
     expect(gateway.listNotifications).toHaveBeenCalledOnce();
     expect(gateway.getWebPushConfiguration).toHaveBeenCalledOnce();
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
@@ -1476,12 +1476,12 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    expect(await screen.findByRole('heading', { name: 'Оповещения' })).toBeVisible();
+    expect(await screen.findByRole('heading', { name: 'Уведомления' })).toBeVisible();
     expect(screen.getByText('Лента оповещений временно недоступна.')).toBeVisible();
     expect(
       screen.queryByRole('heading', { name: 'Оповещения недоступны' }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Оповещения на устройстве' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Уведомления на устройстве' })).toBeVisible();
   });
 
   it('fails closed for an unknown section route instead of showing a placeholder', async () => {

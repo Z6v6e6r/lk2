@@ -1,4 +1,14 @@
+import { useState } from 'react';
+
+import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type { NotificationInboxPage, WebPushConfiguration } from './auth-gateway.js';
+import { NotificationFilters } from './notifications-ui/NotificationFilters.js';
+import { NotificationList } from './notifications-ui/NotificationList.js';
+import {
+  type NotificationFilter,
+  notificationFilters,
+} from './notifications-ui/notification-format.js';
+import styles from './notifications-ui/NotificationsUi.module.css';
 import type { WebPushBrowserState } from './web-push-client.js';
 
 interface NotificationsPageProps {
@@ -19,14 +29,8 @@ function pushStatus(
   if (!configuration.enabled) return 'Push пока не включён для этой организации.';
   if (browserState === 'unsupported') return 'Этот браузер не поддерживает Web Push.';
   if (browserState === 'denied') return 'Уведомления запрещены в настройках браузера.';
-  if (browserState === 'subscribed') return 'Push-оповещения включены на этом устройстве.';
-  return 'Включите push, чтобы получать оповещения при закрытом кабинете.';
-}
-
-function safeDeepLink(value: string | undefined): string {
-  return value?.startsWith('/') && !value.startsWith('//') && !value.includes('\\')
-    ? value
-    : '/notifications';
+  if (browserState === 'subscribed') return 'Push-уведомления включены на этом устройстве.';
+  return 'Включите push, чтобы получать события при закрытом кабинете.';
 }
 
 export function NotificationsPage({
@@ -39,6 +43,9 @@ export function NotificationsPage({
   onDisableWebPush,
   onMarkAllRead,
 }: NotificationsPageProps): React.JSX.Element {
+  const [filter, setFilter] = useState<NotificationFilter>('ALL');
+  const filters = notificationFilters(page.items);
+  const selectedFilter = filters.some((item) => item.value === filter) ? filter : 'ALL';
   const canEnable =
     webPush.enabled &&
     browserState !== 'unsupported' &&
@@ -46,77 +53,57 @@ export function NotificationsPage({
     browserState !== 'subscribed';
 
   return (
-    <main className="notifications-page">
-      <header className="notifications-toolbar">
-        <a href="/" aria-label="Вернуться на Главную">
-          ‹
-        </a>
-        <h1>Оповещения</h1>
-        <span>{page.unreadCount}</span>
-      </header>
+    <main className={styles.page}>
+      <section className={styles.shell}>
+        <header className={styles.header}>
+          <a href="/chats" aria-label="Назад к чатам">
+            <span aria-hidden="true">←</span>
+          </a>
+          <h1>Уведомления</h1>
+          <span aria-label={`Непрочитанных уведомлений: ${page.unreadCount}`}>
+            {page.unreadCount > 99 ? '99+' : page.unreadCount}
+          </span>
+        </header>
 
-      <section className="notifications-push-card" aria-labelledby="web-push-title">
-        <div>
-          <small>Web Push</small>
-          <h2 id="web-push-title">Оповещения на устройстве</h2>
-          <p>{pushStatus(webPush, browserState)}</p>
-        </div>
-        {browserState === 'subscribed' ? (
-          <button type="button" disabled={busy} onClick={onDisableWebPush}>
-            {busy ? 'Отключаем…' : 'Отключить'}
-          </button>
-        ) : (
-          <button type="button" disabled={busy || !canEnable} onClick={onEnableWebPush}>
-            {busy ? 'Включаем…' : 'Включить'}
-          </button>
-        )}
-      </section>
+        <section className={styles.pushPanel} aria-labelledby="web-push-title">
+          <div>
+            <h2 id="web-push-title">Уведомления на устройстве</h2>
+            <p>{pushStatus(webPush, browserState)}</p>
+          </div>
+          {browserState === 'subscribed' ? (
+            <button type="button" disabled={busy} onClick={onDisableWebPush}>
+              {busy ? 'Отключаем…' : 'Отключить push'}
+            </button>
+          ) : (
+            <button type="button" disabled={busy || !canEnable} onClick={onEnableWebPush}>
+              {busy ? 'Включаем…' : 'Включить push'}
+            </button>
+          )}
+        </section>
 
-      {error ? (
-        <p className="notifications-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+        {error ? (
+          <p className={styles.error} role="alert">
+            {error}
+          </p>
+        ) : null}
 
-      <section className="notifications-list" aria-label="Лента оповещений">
-        <header>
-          <h2>Последние</h2>
+        <NotificationFilters filters={filters} selected={selectedFilter} onChange={setFilter} />
+        <header className={styles.listHeader}>
+          <h2>Последние события</h2>
           {page.unreadCount > 0 && page.items.length > 0 ? (
-            <button type="button" disabled={busy} onClick={onMarkAllRead}>
+            <button
+              type="button"
+              className={styles.markAllButton}
+              disabled={busy}
+              onClick={onMarkAllRead}
+            >
               Прочитать все
             </button>
           ) : null}
         </header>
-        {page.items.length === 0 ? (
-          <div className="notifications-empty">
-            <strong>Пока тихо</strong>
-            <p>Новые события появятся здесь.</p>
-          </div>
-        ) : (
-          page.items.map((item) => (
-            <a
-              className={item.readAt ? 'notification-item is-read' : 'notification-item'}
-              href={safeDeepLink(item.deepLink)}
-              key={item.id}
-            >
-              <span aria-hidden="true" />
-              <div>
-                <small>{item.category}</small>
-                <strong>{item.title}</strong>
-                <p>{item.body}</p>
-                <time dateTime={item.createdAt}>
-                  {new Intl.DateTimeFormat('ru-RU', {
-                    day: 'numeric',
-                    month: 'short',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  }).format(new Date(item.createdAt))}
-                </time>
-              </div>
-            </a>
-          ))
-        )}
+        <NotificationList page={page} filter={selectedFilter} />
       </section>
+      <MainBottomNavigation active="notifications" />
     </main>
   );
 }
