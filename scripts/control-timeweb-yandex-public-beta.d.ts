@@ -20,7 +20,7 @@ export interface TimewebYandexRollbackFloor {
 }
 
 export interface TimewebYandexRollbackReceipt {
-  readonly schema: string;
+  readonly schema: 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V2';
   readonly status: 'PREPARED';
   readonly hostname: string;
   readonly floorSourceSha: string;
@@ -29,6 +29,9 @@ export interface TimewebYandexRollbackReceipt {
   readonly candidateSourceTree: string;
   readonly candidateReleaseId: string;
   readonly candidateRuntimeEnvRoot: string;
+  readonly candidateRuntimeEnvSha256: Readonly<
+    Record<'api' | 'worker' | 'realtime' | 'migrator', string>
+  >;
   readonly candidateReleaseEnv: string;
   readonly candidateReleaseEnvSha256: string;
   readonly priorApiReference: string;
@@ -50,6 +53,16 @@ export interface TimewebYandexRollbackReceipt {
   readonly complete: true;
 }
 
+export type TimewebYandexRecoveryReceipt = Omit<
+  TimewebYandexRollbackReceipt,
+  'schema' | 'candidateRuntimeEnvSha256'
+> & {
+  readonly schema:
+    | 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1'
+    | 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V2';
+  readonly candidateRuntimeEnvSha256?: TimewebYandexRollbackReceipt['candidateRuntimeEnvSha256'];
+};
+
 export function validateRollbackFloor(
   input: unknown,
   target: TimewebTargetContract,
@@ -65,6 +78,7 @@ export function validateCandidateReleaseEnvironment(
   },
 ): Record<string, string>;
 export function validateReceipt(input: unknown): TimewebYandexRollbackReceipt;
+export function validateRecoveryReceipt(input: unknown): TimewebYandexRecoveryReceipt;
 export function buildRollbackSteps(receipt: unknown): readonly string[];
 export function buildProspectiveCaddyInvocation(command: 'validate' | 'adapt'): {
   readonly command: string;
@@ -78,6 +92,11 @@ export function buildCaddyRecreateInvocation(receipt: { readonly ingressCompose:
   readonly command: string;
   readonly args: readonly string[];
 };
+export function buildCaddyContainmentInvocation(receipt: { readonly ingressCompose: string }): {
+  readonly command: string;
+  readonly args: readonly string[];
+};
+export function buildIngressContainmentProbeInvocations(): readonly (readonly string[])[];
 export function buildIngressSmokeInvocations(
   mode: 'public' | 'basic',
 ): readonly (readonly string[])[];
@@ -85,6 +104,16 @@ export function validateCandidateContainerAttestation(
   actual: { readonly image: string; readonly health: string; readonly releaseId: string },
   expected: { readonly image: string; readonly releaseId: string },
 ): { readonly image: string; readonly health: string; readonly releaseId: string };
+export function parseContainerEnvironment(entries: unknown): Record<string, string>;
+export function validateEffectiveApiEnvironment(
+  entries: unknown,
+  expected: Record<string, string>,
+  apiContract: { readonly allowed: string[]; readonly forbidden: string[] },
+): { readonly status: 'attested' };
+export function recoverFailedIngressTransition(operations: {
+  readonly restoreBasic: () => void;
+  readonly containIngress: () => void;
+}): 'basic_restored' | 'ingress_stopped';
 export function executeCaddyTransition(
   source: string,
   destination: string,

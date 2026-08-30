@@ -7,14 +7,20 @@ import { describe, expect, it } from 'vitest';
 import { parseStrictJson } from './strict-json.js';
 import {
   buildRollbackSteps,
+  buildCaddyContainmentInvocation,
   buildCaddyRecreateInvocation,
+  buildIngressContainmentProbeInvocations,
   buildIngressSmokeInvocations,
   buildProspectiveCaddyExecution,
   buildProspectiveCaddyInvocation,
   executeCaddyTransition,
+  parseContainerEnvironment,
+  recoverFailedIngressTransition,
   validateCandidateContainerAttestation,
   validateCandidateReleaseEnvironment,
   validateOperationInput,
+  validateEffectiveApiEnvironment,
+  validateRecoveryReceipt,
   validateReceipt,
   validateRollbackFloor,
 } from './control-timeweb-yandex-public-beta.js';
@@ -39,7 +45,7 @@ const candidateRunId = '12345678901';
 const candidateReleaseId = `${candidateSourceSha}-${candidateRunId}-1`;
 const candidateRuntimeEnvRoot = runtimeContract.rootOnlyDirectory;
 const receipt = {
-  schema: 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1',
+  schema: 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V2',
   status: 'PREPARED',
   hostname: 'lk2.padlhub.su',
   floorSourceSha: 'e6abb48e135f8f28730bab1c07abe408e8c94600',
@@ -48,6 +54,12 @@ const receipt = {
   candidateSourceTree,
   candidateReleaseId,
   candidateRuntimeEnvRoot,
+  candidateRuntimeEnvSha256: {
+    api: '9'.repeat(64),
+    worker: 'a'.repeat(64),
+    realtime: 'b'.repeat(64),
+    migrator: 'c'.repeat(64),
+  },
   candidateReleaseEnv: `/opt/phub/timeweb-beta/releases/${candidateReleaseId}/release.env`,
   candidateReleaseEnvSha256: 'e'.repeat(64),
   priorApiReference:
@@ -70,6 +82,12 @@ const receipt = {
   preparedAt: '2026-08-29T08:00:00.000Z',
   complete: true,
 } as const;
+const v1RecoveryReceipt = {
+  ...Object.fromEntries(
+    Object.entries(receipt).filter(([key]) => key !== 'candidateRuntimeEnvSha256'),
+  ),
+  schema: 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1',
+};
 
 describe('Timeweb Yandex public-beta controller', () => {
   const candidateEnvironment = {
@@ -156,6 +174,12 @@ describe('Timeweb Yandex public-beta controller', () => {
     expect(() =>
       validateOperationInput({
         ...input,
+        receipt: '/opt/phub/timeweb-beta/backups/yandex-public/alternate-receipt.json',
+      }),
+    ).toThrow('receipt_path');
+    expect(() =>
+      validateOperationInput({
+        ...input,
         activeCaddyfile: '/opt/phub/timeweb-beta/operator/not-compose-mounted.Caddyfile',
       }),
     ).toThrow('ingress_caddy_mount_identity');
@@ -239,11 +263,73 @@ describe('Timeweb Yandex public-beta controller', () => {
     ).toThrow('candidate_container_attestation');
   });
 
+  it('attests the effective API environment without exposing secret values', () => {
+    const secret = 'not-for-error-output';
+    const expected = {
+      AUTH_COOKIE_SECURE: 'true',
+      VIVA_OAUTH_ALLOWED_PROVIDERS: 'yandex',
+      JWT_ACCESS_SECRET: secret,
+      GAMES_COMMANDS_ENABLED: 'false',
+    };
+    const contract = {
+      allowed: Object.keys(expected),
+      forbidden: ['AUTH_DEV_OTP_CODE'],
+    };
+    const entries = [
+      ...Object.entries(expected).map(([key, value]) => `${key}=${value}`),
+      'NODE_ENV=production',
+      'PATH=/usr/local/bin:/usr/bin:/bin',
+    ];
+    expect(validateEffectiveApiEnvironment(entries, expected, contract)).toEqual({
+      status: 'attested',
+    });
+    expect(() => parseContainerEnvironment([...entries, 'NODE_ENV=duplicate'])).toThrow(
+      'container_environment',
+    );
+    for (const invalid of [
+      entries.filter((entry) => !entry.startsWith('AUTH_COOKIE_SECURE=')),
+      entries.map((entry) =>
+        entry === 'VIVA_OAUTH_ALLOWED_PROVIDERS=yandex'
+          ? 'VIVA_OAUTH_ALLOWED_PROVIDERS=all'
+          : entry,
+      ),
+      entries.map((entry) => (entry === 'NODE_ENV=production' ? 'NODE_ENV=development' : entry)),
+      [...entries, 'AUTH_DEV_OTP_CODE=123456'],
+      [...entries, 'UNREVIEWED_WRITE_ENABLED=true'],
+      [...entries, 'VIVA_SYSTEM_KEY=unexpected'],
+      [...entries, 'NODE_OPTIONS=--require=/tmp/injected.js'],
+    ]) {
+      let message = '';
+      try {
+        validateEffectiveApiEnvironment(invalid, expected, contract);
+      } catch (error) {
+        message = String(error);
+      }
+      expect(message).toContain('api_environment_attestation');
+      expect(message).not.toContain(secret);
+    }
+  });
+
   it('binds the receipt hashes and restores Basic before either old container', () => {
+    expect(validateRecoveryReceipt(receipt)).toMatchObject({ complete: true, status: 'PREPARED' });
+    expect(validateRecoveryReceipt(v1RecoveryReceipt)).toMatchObject({
+      schema: 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1',
+      complete: true,
+    });
+    expect(() => validateReceipt(v1RecoveryReceipt)).toThrow('receipt_identity');
     expect(validateReceipt(receipt)).toMatchObject({ complete: true, status: 'PREPARED' });
     expect(() => validateReceipt({ ...receipt, backupCaddySha256: 'd'.repeat(64) })).toThrow(
-      'receipt_identity',
+      'receipt_recovery_identity',
     );
+    expect(() =>
+      validateReceipt({
+        ...receipt,
+        candidateRuntimeEnvSha256: {
+          ...receipt.candidateRuntimeEnvSha256,
+          api: 'not-a-hash',
+        },
+      }),
+    ).toThrow('runtime_environment_receipt_mismatch');
     const steps = buildRollbackSteps(receipt);
     expect(steps.slice(0, 3)).toEqual([
       'restore-basic-caddy',
@@ -285,6 +371,44 @@ describe('Timeweb Yandex public-beta controller', () => {
       'caddy',
     ]);
     expect([...validation.args, ...recreate.args]).not.toContain('reload');
+    const containment = buildCaddyContainmentInvocation(receipt);
+    expect(containment.args.slice(-4)).toEqual(['stop', '--timeout', '10', 'caddy']);
+    expect(containment.args).not.toContain('down');
+  });
+
+  it('falls back from Basic restoration to verified ingress containment', () => {
+    const events: string[] = [];
+    expect(
+      recoverFailedIngressTransition({
+        restoreBasic: () => events.push('restore-basic'),
+        containIngress: () => events.push('contain-ingress'),
+      }),
+    ).toBe('basic_restored');
+    expect(events).toEqual(['restore-basic']);
+
+    events.length = 0;
+    expect(
+      recoverFailedIngressTransition({
+        restoreBasic: () => {
+          events.push('restore-basic');
+          throw new Error('restore failed');
+        },
+        containIngress: () => events.push('contain-ingress'),
+      }),
+    ).toBe('ingress_stopped');
+    expect(events).toEqual(['restore-basic', 'contain-ingress']);
+
+    expect(() =>
+      recoverFailedIngressTransition({
+        restoreBasic: () => {
+          throw new Error('restore failed');
+        },
+        containIngress: () => {
+          throw new Error('containment failed');
+        },
+      }),
+    ).toThrow('ingress_state_unknown');
+    expect(buildIngressContainmentProbeInvocations()).toHaveLength(2);
   });
 
   it('streams a protected 0600 Basic backup over stdin instead of bind-mounting it', () => {
@@ -366,8 +490,26 @@ describe('Timeweb Yandex public-beta controller', () => {
     expect(source).not.toMatch(/['"]pull['"]|db:migrate|\bpsql\b|\bpg_dump\b|rmSync|unlinkSync/u);
     expect(source).not.toMatch(/['"]reload['"]/u);
     expect(source).toContain("'--no-deps'");
-    expect(source).toContain("assertHealthyContainer('api', receipt.candidateApiReference,");
+    expect(source).toContain('const apiId = assertHealthyContainer(');
     expect(source).toContain("assertHealthyContainer('web', receipt.candidateWebReference,");
-    expect(source).toMatch(/catch \(error\) \{\s*restoreBasicCaddy\(receipt\)/u);
+    expect(source).toContain('verifyMountedCaddy(receipt, receipt.activeCaddyAdaptedSha256);');
+    expect(source).toContain("verifyIngressSmoke('basic');");
+    expect(source).toContain('verifyTimewebObservabilityEvidenceForActivation({');
+    expect(source).toContain("fail('observability_gate')");
+    expect(source.indexOf('readRecoveryReceipt(receiptPath)')).toBeLessThan(
+      source.indexOf('readActivationReceipt(receiptPath)'),
+    );
+    const rollbackSource = source.slice(
+      source.indexOf('export function rollback(receiptPath)'),
+      source.indexOf('function parseArguments'),
+    );
+    expect(rollbackSource.indexOf('readRecoveryReceipt(receiptPath)')).toBeLessThan(
+      rollbackSource.indexOf('readReceipt(receiptPath)'),
+    );
+    expect(rollbackSource.indexOf('recoverIngress(recoveryReceipt)')).toBeLessThan(
+      rollbackSource.indexOf('readReceipt(receiptPath)'),
+    );
+    expect(source).toContain('const recovery = recoverIngress(receipt);');
+    expect(source).toContain("fail('ingress_state_unknown')");
   });
 });

@@ -18,10 +18,13 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseStrictJson } from './strict-json.js';
+import { verifyTimewebObservabilityEvidenceForActivation } from './verify-timeweb-api-web-observability.js';
 import {
+  parseEnvironment,
   validateApplicationCompose,
   validateIngressCompose,
   validateRuntimeContract,
+  validateRuntimeEnvironments,
   validateTargetContract,
   validateYandexPublicBetaCaddyfile,
   validateYandexPublicBetaIngressContract,
@@ -38,7 +41,45 @@ const CADDY_IMAGE_REFERENCE =
   'caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648';
 const DIGEST = /^sha256:[0-9a-f]{64}$/u;
 const SHA = /^[0-9a-f]{40}$/u;
-const RECEIPT_SCHEMA = 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1';
+const RECEIPT_SCHEMA = 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V2';
+const CANONICAL_RECEIPT_PATH = '/opt/phub/timeweb-beta/backups/yandex-public/receipt.json';
+const RUNTIME_SERVICES = Object.freeze(['api', 'worker', 'realtime', 'migrator']);
+const API_IMAGE_ENVIRONMENT = Object.freeze({ NODE_ENV: 'production' });
+const API_IMAGE_ENVIRONMENT_EXTRAS = Object.freeze(['PATH', 'NODE_VERSION', 'YARN_VERSION']);
+const RECEIPT_KEYS = Object.freeze([
+  'schema',
+  'status',
+  'hostname',
+  'floorSourceSha',
+  'floorSourceTree',
+  'candidateSourceSha',
+  'candidateSourceTree',
+  'candidateReleaseId',
+  'candidateRuntimeEnvRoot',
+  'candidateRuntimeEnvSha256',
+  'candidateReleaseEnv',
+  'candidateReleaseEnvSha256',
+  'priorApiReference',
+  'priorWebReference',
+  'candidateApiReference',
+  'candidateWebReference',
+  'activeCaddyfile',
+  'activeCaddySha256',
+  'activeCaddyAdaptedSha256',
+  'backupCaddyfile',
+  'backupCaddySha256',
+  'publicCaddyfile',
+  'publicCaddySha256',
+  'publicCaddyAdaptedSha256',
+  'applicationCompose',
+  'ingressCompose',
+  'rollbackEnv',
+  'preparedAt',
+  'complete',
+]);
+const V1_RECOVERY_RECEIPT_KEYS = Object.freeze(
+  RECEIPT_KEYS.filter((key) => key !== 'candidateRuntimeEnvSha256'),
+);
 const REPOSITORIES = Object.freeze({
   api: 'ghcr.io/z6v6e6r/phub-api',
   web: 'ghcr.io/z6v6e6r/phub-web',
@@ -249,7 +290,15 @@ function readRepositoryContracts() {
     ),
     target,
   );
-  return { target, publicIngress, publicCaddyPath, publicCaddyBytes, floor };
+  const runtime = validateRuntimeContract(
+    parseStrictJson(
+      readFileSync(
+        resolve(REPOSITORY_ROOT, 'deploy/timeweb/runtime-environment.contract.json'),
+        'utf8',
+      ),
+    ),
+  );
+  return { target, publicIngress, publicCaddyPath, publicCaddyBytes, floor, runtime };
 }
 
 function containerId(service, project = 'phub-timeweb-beta') {
@@ -294,6 +343,52 @@ function assertHealthyContainer(service, expectedReference, expectedReleaseId) {
     { image: expectedReference, releaseId: expectedReleaseId },
   );
   return id;
+}
+
+export function parseContainerEnvironment(entries) {
+  if (!Array.isArray(entries)) fail('container_environment');
+  const environment = Object.create(null);
+  for (const entry of entries) {
+    if (typeof entry !== 'string') fail('container_environment');
+    const separator = entry.indexOf('=');
+    if (separator < 1) fail('container_environment');
+    const key = entry.slice(0, separator);
+    const value = entry.slice(separator + 1);
+    if (!/^[A-Z][A-Z0-9_]*$/u.test(key) || Object.hasOwn(environment, key))
+      fail('container_environment');
+    environment[key] = value;
+  }
+  return environment;
+}
+
+export function validateEffectiveApiEnvironment(entries, expected, apiContract) {
+  const actual = parseContainerEnvironment(entries);
+  const authority = object(expected, 'api_environment_authority');
+  const contract = object(apiContract, 'api_environment_contract');
+  if (!Array.isArray(contract.allowed) || !Array.isArray(contract.forbidden))
+    fail('api_environment_contract');
+  for (const key of Object.keys(authority)) {
+    if (
+      !Object.hasOwn(actual, key) ||
+      sha256(Buffer.from(actual[key], 'utf8')) !== sha256(Buffer.from(authority[key], 'utf8'))
+    )
+      fail('api_environment_attestation');
+  }
+  for (const key of contract.forbidden) {
+    if (Object.hasOwn(actual, key)) fail('api_environment_attestation');
+  }
+  for (const [key, value] of Object.entries(API_IMAGE_ENVIRONMENT)) {
+    if (actual[key] !== value) fail('api_environment_attestation');
+  }
+  const permitted = new Set([
+    ...Object.keys(authority),
+    ...Object.keys(API_IMAGE_ENVIRONMENT),
+    ...API_IMAGE_ENVIRONMENT_EXTRAS,
+  ]);
+  for (const key of Object.keys(actual)) {
+    if (!permitted.has(key)) fail('api_environment_attestation');
+  }
+  return Object.freeze({ status: 'attested' });
 }
 
 export function validateCandidateContainerAttestation(actual, expected) {
@@ -354,6 +449,7 @@ export function validateOperationInput(input) {
     safeAbsolutePath(value[key], ['/opt/phub/timeweb-beta/'], 'operation_path');
   if (value.activeCaddyfile !== join(dirname(value.ingressCompose), 'Caddyfile'))
     fail('ingress_caddy_mount_identity');
+  if (value.receipt !== CANONICAL_RECEIPT_PATH) fail('receipt_path');
   if (value.candidateRuntimeEnvRoot !== canonicalRuntimeRoot()) fail('runtime_path');
   if (!SHA.test(value.candidateSourceSha) || !SHA.test(value.candidateSourceTree))
     fail('candidate_source');
@@ -472,6 +568,46 @@ export function validateCandidateReleaseEnvironment(bytes, operation) {
   return values;
 }
 
+function readCandidateRuntimeEnvironments(root, runtime, target) {
+  secureDirectory(root);
+  const bytes = Object.create(null);
+  const environments = Object.create(null);
+  try {
+    for (const service of RUNTIME_SERVICES) {
+      const path = `${root}/${service}.env`;
+      secureRegularFile(path, { expectedMode: 0o600 });
+      bytes[service] = readFileSync(path);
+      environments[service] = parseEnvironment(bytes[service].toString('utf8'));
+    }
+    validateRuntimeEnvironments(environments, runtime, target);
+  } catch (error) {
+    if (error instanceof TimewebYandexPublicBetaControlError) throw error;
+    fail('runtime_environment_contract');
+  }
+  return {
+    environments,
+    hashes: Object.fromEntries(
+      RUNTIME_SERVICES.map((service) => [service, sha256(bytes[service])]),
+    ),
+  };
+}
+
+function validateRuntimeHashes(actual, expected) {
+  const value = object(actual, 'runtime_environment_hashes');
+  const authority = object(expected, 'runtime_environment_hash_authority');
+  exactKeys(value, RUNTIME_SERVICES, 'runtime_environment_hashes');
+  exactKeys(authority, RUNTIME_SERVICES, 'runtime_environment_hash_authority');
+  for (const service of RUNTIME_SERVICES) {
+    if (
+      !/^[0-9a-f]{64}$/u.test(value[service]) ||
+      !/^[0-9a-f]{64}$/u.test(authority[service]) ||
+      value[service] !== authority[service]
+    )
+      fail('runtime_environment_receipt_mismatch');
+  }
+  return value;
+}
+
 function rollbackEnvironment(floor) {
   return `${[
     `PHUB_RELEASE_ID=${floor.sourceSha}-ROLLBACK-FLOOR`,
@@ -483,47 +619,38 @@ function rollbackEnvironment(floor) {
   ].join('\n')}\n`;
 }
 
-export function validateReceipt(input) {
+export function validateRecoveryReceipt(input) {
   const receipt = object(input, 'receipt');
-  exactKeys(
-    receipt,
-    [
-      'schema',
-      'status',
-      'hostname',
-      'floorSourceSha',
-      'floorSourceTree',
-      'candidateSourceSha',
-      'candidateSourceTree',
-      'candidateReleaseId',
-      'candidateRuntimeEnvRoot',
-      'candidateReleaseEnv',
-      'candidateReleaseEnvSha256',
-      'priorApiReference',
-      'priorWebReference',
-      'candidateApiReference',
-      'candidateWebReference',
-      'activeCaddyfile',
-      'activeCaddySha256',
-      'activeCaddyAdaptedSha256',
-      'backupCaddyfile',
-      'backupCaddySha256',
-      'publicCaddyfile',
-      'publicCaddySha256',
-      'publicCaddyAdaptedSha256',
-      'applicationCompose',
-      'ingressCompose',
-      'rollbackEnv',
-      'preparedAt',
-      'complete',
-    ],
-    'receipt_keys',
-  );
+  const keys =
+    receipt.schema === 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1'
+      ? V1_RECOVERY_RECEIPT_KEYS
+      : RECEIPT_KEYS;
+  exactKeys(receipt, keys, 'receipt_keys');
   if (
-    receipt.schema !== RECEIPT_SCHEMA ||
+    !['PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1', RECEIPT_SCHEMA].includes(receipt.schema) ||
     receipt.status !== 'PREPARED' ||
     receipt.hostname !== 'lk2.padlhub.su' ||
     receipt.complete !== true ||
+    safeAbsolutePath(receipt.activeCaddyfile, ['/opt/phub/timeweb-beta/'], 'receipt_path') !==
+      receipt.activeCaddyfile ||
+    safeAbsolutePath(receipt.backupCaddyfile, ['/opt/phub/timeweb-beta/'], 'receipt_path') !==
+      receipt.backupCaddyfile ||
+    safeAbsolutePath(receipt.ingressCompose, ['/opt/phub/timeweb-beta/'], 'receipt_path') !==
+      receipt.ingressCompose ||
+    receipt.activeCaddyfile !== join(dirname(receipt.ingressCompose), 'Caddyfile') ||
+    !/^[0-9a-f]{64}$/u.test(receipt.activeCaddySha256) ||
+    !/^[0-9a-f]{64}$/u.test(receipt.activeCaddyAdaptedSha256) ||
+    receipt.activeCaddySha256 !== receipt.backupCaddySha256 ||
+    !/^[0-9a-f]{64}$/u.test(receipt.publicCaddySha256)
+  )
+    fail('receipt_recovery_identity');
+  return receipt;
+}
+
+export function validateReceipt(input) {
+  const receipt = validateRecoveryReceipt(input);
+  if (
+    receipt.schema !== RECEIPT_SCHEMA ||
     !SHA.test(receipt.floorSourceSha) ||
     !SHA.test(receipt.floorSourceTree) ||
     !SHA.test(receipt.candidateSourceSha) ||
@@ -533,22 +660,19 @@ export function validateReceipt(input) {
       receipt.candidateReleaseId,
     ) ||
     receipt.candidateRuntimeEnvRoot !== canonicalRuntimeRoot() ||
+    !receipt.candidateRuntimeEnvSha256 ||
     receipt.candidateReleaseEnv !==
       `/opt/phub/timeweb-beta/releases/${receipt.candidateReleaseId}/release.env` ||
-    receipt.activeCaddyfile !== join(dirname(receipt.ingressCompose), 'Caddyfile') ||
     !/^[0-9a-f]{64}$/u.test(receipt.candidateReleaseEnvSha256) ||
     !isImageReference('api', receipt.priorApiReference) ||
     !isImageReference('web', receipt.priorWebReference) ||
     !isImageReference('api', receipt.candidateApiReference) ||
     !isImageReference('web', receipt.candidateWebReference) ||
-    !/^[0-9a-f]{64}$/u.test(receipt.activeCaddySha256) ||
-    !/^[0-9a-f]{64}$/u.test(receipt.activeCaddyAdaptedSha256) ||
-    receipt.activeCaddySha256 !== receipt.backupCaddySha256 ||
-    !/^[0-9a-f]{64}$/u.test(receipt.publicCaddySha256) ||
     !/^[0-9a-f]{64}$/u.test(receipt.publicCaddyAdaptedSha256) ||
     Number.isNaN(Date.parse(receipt.preparedAt))
   )
     fail('receipt_identity');
+  validateRuntimeHashes(receipt.candidateRuntimeEnvSha256, receipt.candidateRuntimeEnvSha256);
   return receipt;
 }
 
@@ -577,7 +701,7 @@ export function prepare(input) {
     sourceSha: operation.candidateSourceSha,
     sourceTree: operation.candidateSourceTree,
   });
-  const { target, publicIngress, publicCaddyPath, publicCaddyBytes, floor } =
+  const { target, publicIngress, publicCaddyPath, publicCaddyBytes, floor, runtime } =
     readRepositoryContracts();
   for (const path of [
     operation.activeCaddyfile,
@@ -593,6 +717,11 @@ export function prepare(input) {
   const candidateReleaseEnv = validateCandidateReleaseEnvironment(
     candidateReleaseEnvBytes,
     operation,
+  );
+  const candidateRuntime = readCandidateRuntimeEnvironments(
+    operation.candidateRuntimeEnvRoot,
+    runtime,
+    target,
   );
   const runtimeIdentityPath = `${operation.candidateRuntimeEnvRoot}/.release-identity.json`;
   secureRegularFile(runtimeIdentityPath);
@@ -644,6 +773,7 @@ export function prepare(input) {
     candidateSourceTree: operation.candidateSourceTree,
     candidateReleaseId: operation.candidateReleaseId,
     candidateRuntimeEnvRoot: operation.candidateRuntimeEnvRoot,
+    candidateRuntimeEnvSha256: candidateRuntime.hashes,
     candidateReleaseEnv: operation.candidateReleaseEnv,
     candidateReleaseEnvSha256: sha256(candidateReleaseEnvBytes),
     priorApiReference,
@@ -680,14 +810,17 @@ function assertReceiptFrozenSource(receipt) {
   });
 }
 
-function readReceipt(path) {
+function readRecoveryReceipt(path) {
   safeAbsolutePath(path, ['/opt/phub/timeweb-beta/'], 'receipt_path');
   secureRegularFile(path, { expectedMode: 0o600 });
-  const receipt = validateReceipt(parseStrictJson(readFileSync(path, 'utf8')));
-  secureRegularFile(receipt.activeCaddyfile, { maxMode: 0o644 });
-  secureRegularFile(receipt.backupCaddyfile);
-  secureRegularFile(receipt.applicationCompose, { maxMode: 0o644 });
+  const receipt = validateRecoveryReceipt(parseStrictJson(readFileSync(path, 'utf8')));
   secureRegularFile(receipt.ingressCompose, { maxMode: 0o644 });
+  return receipt;
+}
+
+function readReceipt(path) {
+  const receipt = validateReceipt(readRecoveryReceipt(path));
+  secureRegularFile(receipt.applicationCompose, { maxMode: 0o644 });
   secureRegularFile(receipt.rollbackEnv, { expectedMode: 0o600 });
   assertReceiptFrozenSource(receipt);
   return receipt;
@@ -695,7 +828,8 @@ function readReceipt(path) {
 
 function readActivationReceipt(path) {
   const receipt = readReceipt(path);
-  const { floor, publicIngress, publicCaddyPath, publicCaddyBytes } = readRepositoryContracts();
+  const { target, floor, runtime, publicIngress, publicCaddyPath, publicCaddyBytes } =
+    readRepositoryContracts();
   if (
     receipt.floorSourceSha !== floor.sourceSha ||
     receipt.floorSourceTree !== floor.sourceTree ||
@@ -732,7 +866,13 @@ function readActivationReceipt(path) {
     JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId: receipt.candidateReleaseId })
   )
     fail('runtime_release_identity');
-  return receipt;
+  const candidateRuntime = readCandidateRuntimeEnvironments(
+    receipt.candidateRuntimeEnvRoot,
+    runtime,
+    target,
+  );
+  validateRuntimeHashes(candidateRuntime.hashes, receipt.candidateRuntimeEnvSha256);
+  return { receipt, candidateRuntime, runtime };
 }
 
 function atomicInstall(source, destination) {
@@ -794,6 +934,48 @@ export function buildCaddyRecreateInvocation(receipt) {
       'caddy',
     ]),
   });
+}
+
+export function buildCaddyContainmentInvocation(receipt) {
+  return Object.freeze({
+    command: DOCKER,
+    args: Object.freeze([
+      'compose',
+      '-f',
+      receipt.ingressCompose,
+      'stop',
+      '--timeout',
+      '10',
+      'caddy',
+    ]),
+  });
+}
+
+export function buildIngressContainmentProbeInvocations() {
+  const common = [
+    '--silent',
+    '--show-error',
+    '--output',
+    '/dev/null',
+    '--max-time',
+    '5',
+    '--noproxy',
+    '*',
+  ];
+  return Object.freeze([
+    Object.freeze([
+      ...common,
+      '--resolve',
+      'lk2.padlhub.su:80:127.0.0.1',
+      'http://lk2.padlhub.su/',
+    ]),
+    Object.freeze([
+      ...common,
+      '--resolve',
+      'lk2.padlhub.su:443:127.0.0.1',
+      'https://lk2.padlhub.su/',
+    ]),
+  ]);
 }
 
 export function buildIngressSmokeInvocations(mode) {
@@ -901,9 +1083,7 @@ function prospectiveCaddyAdaptedSha256(source) {
   return sha256(Buffer.from(runProspectiveCaddy(source, 'adapt'), 'utf8'));
 }
 
-function recreateAndVerifyCaddy(receipt, expectedAdaptedSha256) {
-  const invocation = buildCaddyRecreateInvocation(receipt);
-  runDocker(invocation.args);
+function verifyMountedCaddy(receipt, expectedAdaptedSha256) {
   const id = assertContainerImage('caddy', CADDY_IMAGE_REFERENCE, 'phub-timeweb-beta-ingress');
   const running = runDocker(['inspect', '--format', '{{.State.Running}}', id]);
   if (running !== 'true') fail('caddy_not_running');
@@ -923,6 +1103,12 @@ function recreateAndVerifyCaddy(receipt, expectedAdaptedSha256) {
   );
   if (sha256(Buffer.from(adapted, 'utf8')) !== expectedAdaptedSha256)
     fail('caddy_mounted_config_identity');
+}
+
+function recreateAndVerifyCaddy(receipt, expectedAdaptedSha256) {
+  const invocation = buildCaddyRecreateInvocation(receipt);
+  runDocker(invocation.args);
+  verifyMountedCaddy(receipt, expectedAdaptedSha256);
 }
 
 export function executeCaddyTransition(
@@ -951,6 +1137,7 @@ function installAndRecreateCaddy(receipt, source, sourceSha256, adaptedSha256) {
 }
 
 function restoreBasicCaddy(receipt) {
+  secureRegularFile(receipt.backupCaddyfile, { expectedMode: 0o600 });
   if (sha256(readFileSync(receipt.backupCaddyfile)) !== receipt.backupCaddySha256)
     fail('backup_receipt_mismatch');
   installAndRecreateCaddy(
@@ -962,15 +1149,118 @@ function restoreBasicCaddy(receipt) {
   verifyIngressSmoke('basic');
 }
 
+function containIngress(receipt) {
+  try {
+    runDocker(buildCaddyContainmentInvocation(receipt).args);
+    const runningServices = runDocker([
+      'compose',
+      '-f',
+      receipt.ingressCompose,
+      'ps',
+      '--status',
+      'running',
+      '--services',
+      'caddy',
+    ]);
+    if (runningServices !== '') fail('ingress_state_unknown');
+    for (const args of buildIngressContainmentProbeInvocations()) {
+      try {
+        execFileSync(CURL, args, {
+          env: { PATH: '/usr/bin:/bin', HOME: '/root' },
+          stdio: ['ignore', 'ignore', 'ignore'],
+        });
+        fail('ingress_state_unknown');
+      } catch (error) {
+        if (error instanceof TimewebYandexPublicBetaControlError) throw error;
+        if (!error || typeof error !== 'object' || error.status !== 7)
+          fail('ingress_state_unknown');
+      }
+    }
+  } catch (error) {
+    if (
+      error instanceof TimewebYandexPublicBetaControlError &&
+      error.code === 'ingress_state_unknown'
+    )
+      throw error;
+    fail('ingress_state_unknown');
+  }
+}
+
+export function recoverFailedIngressTransition(operations) {
+  const recovery = object(operations, 'ingress_recovery_operations');
+  if (typeof recovery.restoreBasic !== 'function' || typeof recovery.containIngress !== 'function')
+    fail('ingress_recovery_operations');
+  try {
+    recovery.restoreBasic();
+    return 'basic_restored';
+  } catch {
+    try {
+      recovery.containIngress();
+      return 'ingress_stopped';
+    } catch {
+      fail('ingress_state_unknown');
+    }
+  }
+}
+
+function recoverIngress(receipt) {
+  return recoverFailedIngressTransition({
+    restoreBasic: () => restoreBasicCaddy(receipt),
+    containIngress: () => containIngress(receipt),
+  });
+}
+
+function requireBasicIngressOrRecover(receipt) {
+  try {
+    secureRegularFile(receipt.activeCaddyfile, { maxMode: 0o644 });
+    if (sha256(readFileSync(receipt.activeCaddyfile)) !== receipt.activeCaddySha256)
+      fail('active_caddy_drift');
+    verifyMountedCaddy(receipt, receipt.activeCaddyAdaptedSha256);
+    verifyIngressSmoke('basic');
+  } catch {
+    const recovery = recoverIngress(receipt);
+    fail(recovery === 'basic_restored' ? 'activation_recovered_basic' : 'ingress_stopped');
+  }
+}
+
+function assertEffectiveApiEnvironment(id, candidateRuntime, runtime) {
+  let entries;
+  try {
+    entries = JSON.parse(runDocker(['inspect', '--format', '{{json .Config.Env}}', id]));
+  } catch {
+    fail('api_environment_attestation');
+  }
+  validateEffectiveApiEnvironment(entries, candidateRuntime.environments.api, runtime.services.api);
+}
+
 export function activateIngress(receiptPath) {
   if (process.getuid?.() !== 0) fail('root_required');
-  const receipt = readActivationReceipt(receiptPath);
-  if (sha256(readFileSync(receipt.activeCaddyfile)) !== receipt.activeCaddySha256)
-    fail('active_caddy_drift');
+  if (resolve(receiptPath) !== CANONICAL_RECEIPT_PATH) fail('receipt_path');
+  const recoveryReceipt = readRecoveryReceipt(receiptPath);
+  requireBasicIngressOrRecover(recoveryReceipt);
+  const { receipt, candidateRuntime, runtime } = readActivationReceipt(receiptPath);
+  requireBasicIngressOrRecover(receipt);
   if (sha256(readFileSync(receipt.publicCaddyfile)) !== receipt.publicCaddySha256)
     fail('public_caddy_drift');
-  assertHealthyContainer('api', receipt.candidateApiReference, receipt.candidateReleaseId);
+  const apiId = assertHealthyContainer(
+    'api',
+    receipt.candidateApiReference,
+    receipt.candidateReleaseId,
+  );
+  assertEffectiveApiEnvironment(apiId, candidateRuntime, runtime);
   assertHealthyContainer('web', receipt.candidateWebReference, receipt.candidateReleaseId);
+  try {
+    verifyTimewebObservabilityEvidenceForActivation({
+      sourceSha: receipt.candidateSourceSha,
+      sourceTree: receipt.candidateSourceTree,
+      releaseId: receipt.candidateReleaseId,
+      receiptPath,
+    });
+  } catch {
+    requireBasicIngressOrRecover(receipt);
+    fail('observability_gate');
+  }
+  requireBasicIngressOrRecover(receipt);
   try {
     installAndRecreateCaddy(
       receipt,
@@ -980,7 +1270,8 @@ export function activateIngress(receiptPath) {
     );
     verifyIngressSmoke('public');
   } catch (error) {
-    restoreBasicCaddy(receipt);
+    const recovery = recoverIngress(receipt);
+    if (recovery === 'ingress_stopped') fail('ingress_stopped');
     throw error;
   }
   return { status: 'ingress-activated', receipt: receiptPath };
@@ -1004,9 +1295,12 @@ function waitHealthy(service, expectedReference) {
 
 export function rollback(receiptPath) {
   if (process.getuid?.() !== 0) fail('root_required');
+  if (resolve(receiptPath) !== CANONICAL_RECEIPT_PATH) fail('receipt_path');
+  const recoveryReceipt = readRecoveryReceipt(receiptPath);
+  const ingressRecovery = recoverIngress(recoveryReceipt);
+  if (ingressRecovery === 'ingress_stopped') fail('ingress_stopped');
   const receipt = readReceipt(receiptPath);
   buildRollbackSteps(receipt);
-  restoreBasicCaddy(receipt);
   for (const [service, reference] of [
     ['api', receipt.priorApiReference],
     ['web', receipt.priorWebReference],

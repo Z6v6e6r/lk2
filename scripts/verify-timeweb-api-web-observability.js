@@ -711,6 +711,7 @@ function readRollbackReceipt(contract, expected) {
       'candidateSourceTree',
       'candidateReleaseId',
       'candidateRuntimeEnvRoot',
+      'candidateRuntimeEnvSha256',
       'candidateReleaseEnv',
       'candidateReleaseEnvSha256',
       'priorApiReference',
@@ -765,7 +766,7 @@ function readRollbackReceipt(contract, expected) {
     !SHA.test(floor.sourceTree ?? '') ||
     !DIGEST_REFERENCE.test(priorApiReference) ||
     !DIGEST_REFERENCE.test(priorWebReference) ||
-    receipt.schema !== 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1' ||
+    receipt.schema !== 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V2' ||
     receipt.status !== 'PREPARED' ||
     receipt.complete !== true ||
     receipt.hostname !== contract.target.hostname ||
@@ -774,6 +775,11 @@ function readRollbackReceipt(contract, expected) {
     receipt.candidateSourceSha !== expected.sourceSha ||
     receipt.candidateSourceTree !== expected.sourceTree ||
     receipt.candidateReleaseId !== expected.releaseId ||
+    JSON.stringify(Object.keys(receipt.candidateRuntimeEnvSha256 ?? {}).sort()) !==
+      JSON.stringify(['api', 'migrator', 'realtime', 'worker']) ||
+    Object.values(receipt.candidateRuntimeEnvSha256).some(
+      (value) => !/^[0-9a-f]{64}$/u.test(value),
+    ) ||
     receipt.priorApiReference !== priorApiReference ||
     receipt.priorWebReference !== priorWebReference ||
     !DIGEST_REFERENCE.test(receipt.candidateApiReference ?? '') ||
@@ -786,6 +792,47 @@ function readRollbackReceipt(contract, expected) {
     priorApiReference,
     priorWebReference,
   };
+}
+
+export function verifyTimewebObservabilityEvidenceForActivation(input) {
+  const expected = object(input, 'observability_activation_identity');
+  exactKeys(
+    expected,
+    ['sourceSha', 'sourceTree', 'releaseId', 'receiptPath'],
+    'observability_activation_identity_keys',
+  );
+  if (!SHA.test(expected.sourceSha) || !SHA.test(expected.sourceTree))
+    reject('observability_activation_identity');
+  const contract = validateTimewebObservabilityContract(
+    strictJsonFile(DEFAULT_CONTRACT, 'observability_contract_json'),
+  );
+  if (
+    typeof expected.receiptPath !== 'string' ||
+    resolve(expected.receiptPath) !== contract.rollback.receiptPath
+  )
+    reject('observability_activation_receipt_path');
+  const authority = assertExactTimewebFrozenSource({
+    expectedSourceSha: expected.sourceSha,
+    expectedSourceTree: expected.sourceTree,
+  });
+  requireExactTimewebFrozenSourceAuthority(authority, {
+    sourceSha: expected.sourceSha,
+    sourceTree: expected.sourceTree,
+  });
+  const evidence = object(
+    strictJsonBytes(
+      secureRootOwnedFile(contract.evidence.path, contract.evidence.path, 'observability_evidence'),
+      'observability_evidence_json',
+    ),
+    'observability_evidence',
+  );
+  const rollbackReceipt = readRollbackReceipt(contract, expected);
+  return validateTimewebObservabilityEvidence(evidence, contract, {
+    ...expected,
+    observedAt: evidence.observedAt,
+    evaluatedAt: new Date().toISOString(),
+    rollbackReceipt,
+  });
 }
 
 function main() {

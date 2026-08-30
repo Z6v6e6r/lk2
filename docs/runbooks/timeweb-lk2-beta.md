@@ -193,8 +193,12 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
 
 `prepare` refuses a dirty or different source, wrong running or unavailable local images, unsafe
 paths/modes, a Caddy preimage without both Basic and `405`, or a mismatched runtime release identity.
-It writes the Basic preimage backup first and the complete root-only receipt last. It logs no Caddy
-bytes, environment values or credentials.
+It validates all four canonical runtime env files against the target contract and binds their
+SHA-256 hashes into the V2 receipt before writing the Basic preimage backup and complete root-only
+receipt. It logs no Caddy bytes, environment values or credentials.
+The receipt path is canonical and exact:
+`/opt/phub/timeweb-beta/backups/yandex-public/receipt.json`; alternate receipt paths are rejected by
+prepare, activation and rollback so observability cannot attest different receipt bytes.
 
 Start the candidate API behind Basic through the exact rendered `release.env` and canonical
 `compose.beta.yaml`, prove readiness, then start Web the same way. Compose stamps both containers
@@ -206,10 +210,17 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   --receipt /opt/phub/timeweb-beta/backups/yandex-public/receipt.json
 ```
 
-The controller rechecks the frozen source, canonical root-only `release.env`, receipt, candidate
-API/Web container images, exact release labels, runtime release identity and both Caddy hashes. The
+The controller rechecks the frozen source, canonical root-only `release.env`, receipt, all bound
+runtime-env hashes, candidate API/Web container images, exact release labels, runtime release
+identity and both Caddy hashes. Immediately before public ingress, it also attests the running API
+container's complete expected environment in memory, rejects duplicate or missing values, forbidden
+dev-auth keys and unknown enabled capabilities, and emits only stable error codes. The
 active Caddyfile must be exactly the `./Caddyfile` mounted beside the validated ingress Compose; an
-operator-supplied alternate path is rejected. It validates the
+operator-supplied alternate path is rejected. The controller proves that the currently mounted
+Caddy configuration still has the receipt-bound Basic policy and passes all five Basic `401` probes
+before and after the candidate checks. The activation command itself re-runs the complete root-only
+observability evidence verifier against the exact source/tree/release and V2 receipt; stale evidence,
+monitor or alert drift returns `observability_gate` before any public transition. It validates the
 prospective file offline with the already-local pinned Caddy image, atomically installs it, then
 force-recreates only Caddy so the single-file bind mount receives the new inode. The recreated
 container must use the exact pinned image, be running and adapt the mounted file to the receipt-bound
@@ -219,8 +230,17 @@ loopback TLS smoke then proves HTTP redirect, Web `200`, API readiness `200` and
 non-allowlisted POST `405`, without credentials or provider mutation. Any
 validation/recreate/verification/smoke failure restores Basic through that same sequence and proves
 unauthenticated `401` responses for the HTTPS root, OAuth authorize, public API read, user API write
-and realtime health paths before returning failure. `caddy reload` is
+and realtime health paths before returning failure. If Basic restoration cannot be proven, the
+controller stops only the Caddy service, verifies that it is not running and that loopback ports 80
+and 443 accept no HTTP response, then returns `ingress_stopped`. If containment also cannot be
+proven, it returns `ingress_state_unknown`, which is a manual STOP condition; never interpret either
+outcome as successful activation. Re-entry after an interrupted public Caddy install routes through
+the same recovery path before any candidate source, runtime or observability validation, so drift in
+those inputs cannot strand a previously public ingress. `caddy reload` is
 intentionally forbidden because both artifacts set `admin off`.
+For upgrade recovery only, the minimal reader accepts the predecessor V1 receipt's canonical
+Basic-backup, Caddy and Compose recovery fields. V1 can restore Basic or stop ingress, but it cannot
+pass full candidate validation, observability or public activation; only V2 authorizes those gates.
 
 Rollback is executable and ordered, never prose-only:
 
@@ -230,8 +250,10 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   --receipt /opt/phub/timeweb-beta/backups/yandex-public/receipt.json
 ```
 
-It restores, validates, force-recreates and verifies Basic first; only then does it restore the locally retained prior
-API, wait for health, restore Web and wait for health. It never pulls, migrates, deletes identity rows
+It reads only the minimal root-owned recovery receipt, then restores, validates, force-recreates and
+verifies Basic (or proves Caddy containment) before candidate source, application Compose or rollback
+environment validation. Only then does it restore the locally retained prior API, wait for health,
+restore Web and wait for health. It never pulls, migrates, deletes identity rows
 or touches secrets. Rollback does not depend on the candidate runtime secret directory or its release
 marker. Preserve the receipt and backup after success or partial failure. Users first
 provisioned through Yandex may be unavailable during rollback, but their identity, legal-acceptance

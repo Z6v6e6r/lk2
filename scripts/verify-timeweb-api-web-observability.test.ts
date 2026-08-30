@@ -6,6 +6,7 @@ import { parseStrictJson } from './strict-json.js';
 import {
   validateTimewebObservabilityContract,
   validateTimewebObservabilityEvidence,
+  verifyTimewebObservabilityEvidenceForActivation,
 } from './verify-timeweb-api-web-observability.js';
 
 const contractSource = parseStrictJson<unknown>(
@@ -122,6 +123,21 @@ function evidence() {
 }
 
 describe('Timeweb API/Web observability contract', () => {
+  it('exports the activation gate that binds evidence to source and receipt identity', () => {
+    const source = readFileSync('scripts/verify-timeweb-api-web-observability.js', 'utf8');
+    expect(source).toContain('export function verifyTimewebObservabilityEvidenceForActivation');
+    expect(source).toContain('const rollbackReceipt = readRollbackReceipt(contract, expected);');
+    expect(source).toContain('evaluatedAt: new Date().toISOString()');
+    expect(() =>
+      verifyTimewebObservabilityEvidenceForActivation({
+        sourceSha: expected.sourceSha,
+        sourceTree: expected.sourceTree,
+        releaseId: expected.releaseId,
+        receiptPath: '/opt/phub/timeweb-beta/backups/yandex-public/alternate-receipt.json',
+      }),
+    ).toThrow('observability_activation_receipt_path');
+  });
+
   it('accepts the canonical source contract and complete bounded evidence', () => {
     expect(validateTimewebObservabilityEvidence(evidence(), contract, expected)).toMatchObject({
       status: 'pass',
