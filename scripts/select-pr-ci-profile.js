@@ -56,7 +56,7 @@ function needsDeploymentContract(path) {
       /deploy|publish|reconcile|release|timeweb/i.test(path)) ||
     (path.startsWith('scripts/') &&
       /timeweb/i.test(path) &&
-      /base-image|custody|deploy|publication|provenance|reconcil|release/i.test(path))
+      /base-image|custody|deploy|observability|publication|provenance|reconcil|release/i.test(path))
   );
 }
 

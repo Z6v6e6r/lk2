@@ -592,6 +592,7 @@ describe('Timeweb deployment contract', () => {
       application: resolve('deploy/timeweb/compose.beta.yaml'),
       runtime: resolve('deploy/timeweb/runtime-environment.contract.json'),
       nodeBootstrap: resolve('deploy/timeweb/operator-node-bootstrap.v1.json'),
+      observability: resolve('deploy/timeweb/api-web-observability.v1.json'),
       runbook: resolve('docs/runbooks/timeweb-lk2-beta.md'),
     };
     const historical = target.release.historicalEvidence[0]!.path;
@@ -603,6 +604,7 @@ describe('Timeweb deployment contract', () => {
       'ingress',
       'application',
       'runtime',
+      'observability',
       'runbook',
     ] as const) {
       expect(() =>
@@ -665,6 +667,7 @@ describe('Timeweb deployment contract', () => {
       application: resolve('deploy/timeweb/compose.beta.yaml'),
       runtime: resolve('deploy/timeweb/runtime-environment.contract.json'),
       nodeBootstrap: resolve('deploy/timeweb/operator-node-bootstrap.v1.json'),
+      observability: resolve('deploy/timeweb/api-web-observability.v1.json'),
       runbook: resolve('docs/runbooks/timeweb-lk2-beta.md'),
     };
     try {

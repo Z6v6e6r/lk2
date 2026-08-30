@@ -119,6 +119,18 @@ describe('PR CI profile planner', () => {
     });
   });
 
+  it.each([
+    'scripts/verify-timeweb-api-web-observability.js',
+    'scripts/verify-timeweb-api-web-observability.d.ts',
+    'scripts/verify-timeweb-api-web-observability.test.ts',
+  ])('runs deployment validation without publication provenance for %s', (path) => {
+    expect(select([path])).toMatchObject({
+      profile: 'full',
+      deploymentContract: true,
+      provenanceProbe: false,
+    });
+  });
+
   it('runs the deployment contract for the Timeweb publication custody helper', () => {
     expect(select(['scripts/timeweb-amd64-registry-custody-retry.sh'])).toMatchObject({
       profile: 'full',

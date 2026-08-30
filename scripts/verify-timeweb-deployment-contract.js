@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseDocument } from 'yaml';
 
 import { parseStrictJson } from './strict-json.js';
+import { validateTimewebObservabilityContract } from './verify-timeweb-api-web-observability.js';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const DEFAULT_PATHS = Object.freeze({
@@ -17,6 +18,7 @@ const DEFAULT_PATHS = Object.freeze({
   application: resolve(repositoryRoot, 'deploy/timeweb/compose.beta.yaml'),
   runtime: resolve(repositoryRoot, 'deploy/timeweb/runtime-environment.contract.json'),
   nodeBootstrap: resolve(repositoryRoot, 'deploy/timeweb/operator-node-bootstrap.v1.json'),
+  observability: resolve(repositoryRoot, 'deploy/timeweb/api-web-observability.v1.json'),
   runbook: resolve(repositoryRoot, 'docs/runbooks/timeweb-lk2-beta.md'),
 });
 const SERVICES = Object.freeze(['web', 'api', 'realtime', 'worker', 'migrator']);
@@ -1140,6 +1142,14 @@ export function validateRunbook(contents, target) {
     ' verify --expected-source-sha',
     ' recover --expected-source-sha',
     ' rollback --expected-source-sha',
+    'deploy/timeweb/api-web-observability.v1.json',
+    '900 seconds',
+    '100 basis points (1%)',
+    '`release-owner` role',
+    '600 seconds',
+    'verify-timeweb-api-web-observability.js --contract-only',
+    '--expected-release-id',
+    '--observed-at',
   ]) {
     if (!contents.includes(required)) reject('runbook_preflight_contract');
   }
@@ -1177,6 +1187,7 @@ export function validateDeploymentInputPaths(target, runtime, paths) {
     [paths.target, ['activationInput']],
     [paths.runtime, ['secretsSource']],
     [paths.nodeBootstrap, ['activationInput']],
+    [paths.observability, ['activationInput']],
     [paths.caddyfile, ['mountSource']],
     [dirname(paths.caddyfile), ['caddyWorkingDirectory']],
     [paths.publicBetaCaddyfile, ['mountSource']],
@@ -1220,6 +1231,7 @@ function parseArguments(argv) {
       '--application': 'application',
       '--runtime-contract': 'runtime',
       '--node-bootstrap-contract': 'nodeBootstrap',
+      '--observability-contract': 'observability',
       '--runbook': 'runbook',
       '--diagnostic': 'diagnostic',
       '--env-root': 'envRoot',
@@ -1251,6 +1263,10 @@ export function verifyDeploymentContract(paths = DEFAULT_PATHS) {
     strictJsonFile(paths.nodeBootstrap, 'node_bootstrap_json'),
     target,
   );
+  const observability = validateTimewebObservabilityContract(
+    strictJsonFile(paths.observability, 'observability_json'),
+    target,
+  );
   validateDeploymentInputPaths(target, runtime, paths);
   validateCaddyfile(readFileSync(paths.caddyfile, 'utf8'), target);
   validateYandexPublicBetaCaddyfile(readFileSync(paths.publicBetaCaddyfile, 'utf8'), target);
@@ -1280,6 +1296,8 @@ export function verifyDeploymentContract(paths = DEFAULT_PATHS) {
     applicationServices: SERVICES,
     historicalEvidenceExcluded: target.release.historicalEvidence.length,
     operatorNodeBootstrapPackages: nodeBootstrap.apt.packages.length,
+    observabilityWindowSeconds: observability.observation.windowSeconds,
+    observabilityMonitors: observability.monitoring.monitors.map(({ name }) => name),
   };
 }
 
