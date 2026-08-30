@@ -185,6 +185,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Verify Ubuntu 26.04 Node-bootstrap APT isolation
+        run: npm run timeweb:beta:node-bootstrap:apt-isolation:test
       - name: Generate API contract types
         run: npm run contracts:generate
       - name: Verify immutable import and OpenAPI

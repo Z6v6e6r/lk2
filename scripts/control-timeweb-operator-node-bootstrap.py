@@ -32,11 +32,14 @@ ROLLBACK_SCHEMA = "PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_ROLLBACK_V2"
 FAILED_APPLY_ROLLBACK_SCHEMA = "PHUB_TIMEWEB_OPERATOR_NODE_BOOTSTRAP_FAILED_APPLY_ROLLBACK_V1"
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_PATH = REPOSITORY_ROOT / "deploy/timeweb/operator-node-bootstrap.v1.json"
+APT_CONFIG_RELATIVE_PATH = "deploy/timeweb/operator-node-bootstrap.apt.conf"
+APT_CONFIG_PATH = REPOSITORY_ROOT / APT_CONFIG_RELATIVE_PATH
 PROTECTED_PATHS = (
     "scripts/control-timeweb-operator-node-bootstrap.py",
     "scripts/verify-timeweb-frozen-source.js",
     "scripts/verify-timeweb-deployment-contract.js",
     "deploy/timeweb/operator-node-bootstrap.v1.json",
+    APT_CONFIG_RELATIVE_PATH,
     "deploy/timeweb/target.json",
     "docs/runbooks/timeweb-lk2-beta.md",
 )
@@ -232,6 +235,39 @@ def run(command: list[str], *, extra_environment: dict[str, str] | None = None) 
     return completed.stdout
 
 
+def apt_environment(contract: dict[str, Any]) -> dict[str, str]:
+    apt = contract["apt"]
+    configured = apt.get("configPath")
+    if configured != APT_CONFIG_RELATIVE_PATH:
+        stop("apt_config_path")
+    path = REPOSITORY_ROOT / configured
+    if path != APT_CONFIG_PATH or path.parent != REPOSITORY_ROOT / "deploy/timeweb":
+        stop("apt_config_path")
+    require_secure_file(path, None, "apt_config_security")
+    if sha256_file(path) != apt.get("configSha256"):
+        stop("apt_config_identity")
+    return {"APT_CONFIG": str(path)}
+
+
+def run_apt(
+    contract: dict[str, Any], command: list[str], *,
+    extra_environment: dict[str, str] | None = None,
+) -> str:
+    allowed = {
+        contract["apt"]["binary"],
+        contract["apt"]["cacheBinary"],
+        contract["apt"]["configBinary"],
+    }
+    if not command or command[0] not in allowed:
+        stop("apt_command_binary")
+    environment = apt_environment(contract)
+    if extra_environment:
+        if "APT_CONFIG" in extra_environment:
+            stop("apt_config_override")
+        environment.update(extra_environment)
+    return run(command, extra_environment=environment)
+
+
 def validate_contract(value: Any) -> dict[str, Any]:
     contract = exact_keys(
         value,
@@ -270,7 +306,7 @@ def validate_contract(value: Any) -> dict[str, Any]:
             "binary", "cacheBinary", "configBinary", "dpkgBinary", "dpkgQueryBinary",
             "dpkgDebBinary", "sourceList", "sourceListSha256", "sourceParts", "keyring",
             "keyringSha256", "keyFingerprints", "allowedUris", "allowedSuites",
-            "allowedComponents", "packages",
+            "allowedComponents", "packages", "configPath", "configSha256",
         },
         "contract_apt",
     )
@@ -284,6 +320,7 @@ def validate_contract(value: Any) -> dict[str, Any]:
         "sourceList": "/etc/apt/sources.list.d/ubuntu.sources",
         "sourceParts": "-",
         "keyring": "/usr/share/keyrings/ubuntu-archive-keyring.gpg",
+        "configPath": APT_CONFIG_RELATIVE_PATH,
     }
     if any(apt[key] != expected for key, expected in fixed_binaries.items()):
         stop("contract_apt_paths")
@@ -292,6 +329,7 @@ def validate_contract(value: Any) -> dict[str, Any]:
         or apt["keyringSha256"] != "80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31"
         or not HEX64.fullmatch(apt["sourceListSha256"] or "")
         or not HEX64.fullmatch(apt["keyringSha256"] or "")
+        or not HEX64.fullmatch(apt["configSha256"] or "")
     ):
         stop("contract_apt_hashes")
     if unique_strings(apt["keyFingerprints"], "contract_apt_fingerprints") != [
@@ -668,15 +706,27 @@ def validate_apt_trust(contract: dict[str, Any]) -> dict[str, str]:
             stop("apt_source_content")
     if sha256_file(keyring) != apt["keyringSha256"]:
         stop("apt_keyring_identity")
+    config_path = Path(apt_environment(contract)["APT_CONFIG"])
     fingerprints_output = run(["/usr/bin/gpg", "--batch", "--with-colons", "--show-keys", str(keyring)])
     fingerprints = [line.split(":")[9] for line in fingerprints_output.splitlines() if line.startswith("fpr:")]
     if fingerprints != apt["keyFingerprints"]:
         stop("apt_keyring_fingerprints")
-    config = run([apt["configBinary"], *apt_options(contract), "dump"])
-    forbidden_hooks = re.compile(r"^(?:DPkg|APT)::(?:Pre-Invoke|Post-Invoke|Post-Invoke-Success)", re.MULTILINE)
+    config = run_apt(contract, [apt["configBinary"], *apt_options(contract), "dump"])
+    validate_no_apt_lifecycle_hooks(config)
+    return {
+        "sourceSha256": sha256_file(source),
+        "keyringSha256": sha256_file(keyring),
+        "configSha256": sha256_file(config_path),
+    }
+
+
+def validate_no_apt_lifecycle_hooks(config: str) -> None:
+    forbidden_hooks = re.compile(
+        r"^(?:DPkg|APT)(?:::[^:\n\t ]+)*::(?:Pre-Invoke|Post-Invoke|Post-Invoke-Success)(?:::|[\t ]|$)",
+        re.MULTILINE,
+    )
     if forbidden_hooks.search(config):
         stop("apt_lifecycle_hook")
-    return {"sourceSha256": sha256_file(source), "keyringSha256": sha256_file(keyring)}
 
 
 def apt_lists_snapshot(directory: Path) -> list[dict[str, Any]]:
@@ -810,7 +860,7 @@ def simulation(
         arguments.extend(str(path) for path in package_files(contract, package_directory or Path("/invalid")))
     else:
         arguments.extend(expected_pins(contract))
-    output = run(arguments)
+    output = run_apt(contract, arguments)
     parse_simulation(output, contract, "install")
     return output
 
@@ -974,19 +1024,19 @@ def plan_mode(contract: dict[str, Any], source_sha: str, source_tree: str) -> di
     lists_stage.mkdir(mode=0o700)
     (lists_stage / "partial").mkdir(mode=0o700)
     try:
-        run([
+        run_apt(contract, [
             contract["apt"]["binary"], *apt_options(contract, package_stage, lists_stage),
             "--yes", "update",
         ])
         lists_snapshot = apt_lists_snapshot(lists_stage)
         lists_sha = sha256_bytes(canonical_bytes(lists_snapshot))
         accepted_simulation = simulation(contract, lists_directory=lists_stage)
-        uri_output = run([
+        uri_output = run_apt(contract, [
             contract["apt"]["binary"], *apt_options(contract, package_stage, lists_stage), "--print-uris",
             "--yes", "--download-only", "install", "--no-install-recommends", *expected_pins(contract),
         ])
         validate_uri_plan(uri_output, contract)
-        run([
+        run_apt(contract, [
             contract["apt"]["binary"], *apt_options(contract, package_stage, lists_stage), "--yes",
             "--download-only", "install", "--no-install-recommends", *expected_pins(contract),
         ])
@@ -1227,7 +1277,7 @@ def node_observation(contract: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_command(contract: dict[str, Any], paths: list[Path]) -> None:
-    run([
+    run_apt(contract, [
         contract["apt"]["binary"], *apt_options(contract, Path(contract["state"]["packageDirectory"])),
         "--no-download", "--no-remove", "--no-upgrade", "--yes", "install",
         "--no-install-recommends", *(str(path) for path in paths),
@@ -1243,7 +1293,7 @@ def recovery_apply_simulation(
         stop("apply_state_drift")
     if not absent and not partial:
         return ""
-    output = run([
+    output = run_apt(contract, [
         contract["apt"]["binary"],
         *apt_options(contract, Path(contract["state"]["packageDirectory"])),
         "--simulate", "--no-remove", "--no-upgrade", "install", "--no-install-recommends",
@@ -1263,7 +1313,7 @@ def purge_command(contract: dict[str, Any], packages: set[str]) -> None:
 def removal_simulation(contract: dict[str, Any], packages: set[str]) -> str:
     if not packages:
         return ""
-    output = run([
+    output = run_apt(contract, [
         contract["apt"]["binary"], *apt_options(contract),
         "--simulate", "purge", *sorted(packages),
     ])

@@ -17,6 +17,8 @@
     "binary": "/usr/bin/apt-get",
     "cacheBinary": "/usr/bin/apt-cache",
     "configBinary": "/usr/bin/apt-config",
+    "configPath": "deploy/timeweb/operator-node-bootstrap.apt.conf",
+    "configSha256": "317951c1991b484f3f0ab12caf126caa2c3cfa650705050fdee8b729196832c0",
     "dpkgBinary": "/usr/bin/dpkg",
     "dpkgQueryBinary": "/usr/bin/dpkg-query",
     "dpkgDebBinary": "/usr/bin/dpkg-deb",
