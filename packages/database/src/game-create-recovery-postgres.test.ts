@@ -26,6 +26,12 @@ describePostgres('game create durable recovery on real PostgreSQL', () => {
   const actorUserId = randomUUID();
   const playerUserIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()] as const;
   const stationId = randomUUID();
+  const draftStationId = randomUUID();
+  const courtId = randomUUID();
+  const foreignTenantId = randomUUID();
+  const foreignActorUserId = randomUUID();
+  const foreignStationId = randomUUID();
+  const foreignCourtId = randomUUID();
 
   function input(
     label: string,
@@ -141,6 +147,61 @@ describePostgres('game create durable recovery on real PostgreSQL', () => {
            from unnest($2::uuid[]) as users(user_id)`,
         [tenantId, [actorUserId, ...playerUserIds]],
       );
+      await client.query(
+        `insert into locations.profiles (
+           tenant_id, id, slug, title, publication_status,
+           created_by, updated_by, published_at
+         ) values ($1, $2, $3, $4, 'PUBLISHED', $5, $5, now())`,
+        [tenantId, stationId, `game-recovery-${stationId}`, 'Game recovery station', actorUserId],
+      );
+      await client.query(
+        `insert into locations.profiles (
+           tenant_id, id, slug, title, publication_status, created_by, updated_by
+         ) values ($1, $2, $3, $4, 'DRAFT', $5, $5)`,
+        [
+          tenantId,
+          draftStationId,
+          `game-recovery-${draftStationId}`,
+          'Draft game recovery station',
+          actorUserId,
+        ],
+      );
+      await client.query(
+        `insert into integration.external_entity_map (
+           tenant_id, external_system, entity_type, internal_id, external_id, sync_status
+         ) values ($1, 'TEST', 'game_court', $2, $3, 'synced')`,
+        [tenantId, courtId, `game-recovery-court-${courtId}`],
+      );
+    });
+    await pool.query(
+      `insert into identity.tenants (id, tenant_key, display_name)
+       values ($1, $2, $3)`,
+      [foreignTenantId, `game-recovery-foreign-${foreignTenantId}`, 'Foreign game recovery'],
+    );
+    await withTenantTransaction(pool, foreignTenantId, async (client) => {
+      await client.query(
+        `insert into identity.users (tenant_id, id, status) values ($1, $2, 'ACTIVE')`,
+        [foreignTenantId, foreignActorUserId],
+      );
+      await client.query(
+        `insert into locations.profiles (
+           tenant_id, id, slug, title, publication_status,
+           created_by, updated_by, published_at
+         ) values ($1, $2, $3, $4, 'PUBLISHED', $5, $5, now())`,
+        [
+          foreignTenantId,
+          foreignStationId,
+          `game-recovery-${foreignStationId}`,
+          'Foreign game recovery station',
+          foreignActorUserId,
+        ],
+      );
+      await client.query(
+        `insert into integration.external_entity_map (
+           tenant_id, external_system, entity_type, internal_id, external_id, sync_status
+         ) values ($1, 'TEST', 'game_court', $2, $3, 'synced')`,
+        [foreignTenantId, foreignCourtId, `game-recovery-court-${foreignCourtId}`],
+      );
     });
   });
 
@@ -211,6 +272,77 @@ describePostgres('game create durable recovery on real PostgreSQL', () => {
       idempotency_commands: '0',
       audit_events: '0',
       outbox_events: '0',
+    });
+  });
+
+  it.each([
+    ['missing', randomUUID()],
+    ['foreign', foreignStationId],
+    ['unpublished', draftStationId],
+  ] as const)(
+    'rejects a %s station with zero durable command or side effect',
+    async (label, rejectedStationId) => {
+      const command = input(`station-${label}`, new Date(Date.now() + 60_000), {
+        stationId: rejectedStationId,
+      });
+
+      await expect(repository.create(command)).resolves.toEqual({
+        outcome: 'rejected',
+        code: 'GAME_LOCATION_INVALID',
+      });
+      await expect(sideEffectCounts(command)).resolves.toEqual({
+        games: '0',
+        participations: '0',
+        operations: '0',
+        lifecycle_commands: '0',
+        idempotency_commands: '0',
+        audit_events: '0',
+        outbox_events: '0',
+      });
+    },
+  );
+
+  it.each([
+    ['missing', randomUUID()],
+    ['foreign', foreignCourtId],
+  ] as const)(
+    'rejects a %s court with zero durable command or side effect',
+    async (label, rejectedCourtId) => {
+      const command = input(`court-${label}`, new Date(Date.now() + 60_000), {
+        courtId: rejectedCourtId,
+      });
+
+      await expect(repository.create(command)).resolves.toEqual({
+        outcome: 'rejected',
+        code: 'GAME_LOCATION_INVALID',
+      });
+      await expect(sideEffectCounts(command)).resolves.toEqual({
+        games: '0',
+        participations: '0',
+        operations: '0',
+        lifecycle_commands: '0',
+        idempotency_commands: '0',
+        audit_events: '0',
+        outbox_events: '0',
+      });
+    },
+  );
+
+  it('accepts a same-tenant published station and mapped court', async () => {
+    const command = input('valid-court', new Date(Date.now() + 60_000), { courtId });
+
+    await expect(repository.create(command)).resolves.toMatchObject({
+      outcome: 'applied',
+      replayed: false,
+    });
+    await expect(sideEffectCounts(command)).resolves.toEqual({
+      games: '1',
+      participations: '1',
+      operations: '1',
+      lifecycle_commands: '2',
+      idempotency_commands: '1',
+      audit_events: '1',
+      outbox_events: '3',
     });
   });
 
@@ -372,22 +504,37 @@ describePostgres('game create durable recovery on real PostgreSQL', () => {
   it('enforces forced tenant RLS under a temporary NOSUPERUSER NOBYPASSRLS NOINHERIT role', async () => {
     const otherTenantId = randomUUID();
     const otherActorId = randomUUID();
+    const otherStationId = randomUUID();
     await pool.query(
       `insert into identity.tenants (id, tenant_key, display_name)
        values ($1, $2, 'Game RLS other tenant')`,
       [otherTenantId, `game-rls-${otherTenantId}`],
     );
-    await withTenantTransaction(pool, otherTenantId, (client) =>
-      client.query(`insert into identity.users (tenant_id, id, status) values ($1, $2, 'ACTIVE')`, [
-        otherTenantId,
-        otherActorId,
-      ]),
-    );
+    await withTenantTransaction(pool, otherTenantId, async (client) => {
+      await client.query(
+        `insert into identity.users (tenant_id, id, status) values ($1, $2, 'ACTIVE')`,
+        [otherTenantId, otherActorId],
+      );
+      await client.query(
+        `insert into locations.profiles (
+           tenant_id, id, slug, title, publication_status,
+           created_by, updated_by, published_at
+         ) values ($1, $2, $3, $4, 'PUBLISHED', $5, $5, now())`,
+        [
+          otherTenantId,
+          otherStationId,
+          `game-rls-${otherStationId}`,
+          'Game RLS station',
+          otherActorId,
+        ],
+      );
+    });
     const otherRepository = createGameRepository(pool);
     const otherGame = await otherRepository.create({
       ...input('rls-other', new Date(Date.now() + 60_000)),
       tenantId: otherTenantId,
       actorUserId: otherActorId,
+      stationId: otherStationId,
     });
     if (otherGame.outcome !== 'applied') throw new Error('GAME_RLS_TEST_SETUP_FAILED');
 

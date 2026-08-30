@@ -66,8 +66,22 @@ function poolWithHandler(
     values: readonly unknown[],
   ) => { rows?: readonly unknown[]; rowCount?: number },
   createAdmissible = true,
+  stationAdmissible = true,
+  courtAdmissible = true,
 ) {
   const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+    if (text.includes('from locations.profiles')) {
+      return Promise.resolve({
+        rows: stationAdmissible ? [{ id: values[1] }] : [],
+        rowCount: stationAdmissible ? 1 : 0,
+      });
+    }
+    if (text.includes('from integration.external_entity_map')) {
+      return Promise.resolve({
+        rows: courtAdmissible ? [{ internal_id: values[1] }] : [],
+        rowCount: courtAdmissible ? 1 : 0,
+      });
+    }
     if (text.includes('$1::timestamptz > clock_timestamp() as admissible')) {
       return Promise.resolve({ rows: [{ admissible: createAdmissible }], rowCount: 1 });
     }
@@ -173,6 +187,86 @@ describe('game repository', () => {
       ),
     ).toBe(false);
     expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('rejects a missing or foreign station before admission with zero durable side effects', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }), true, false);
+
+    await expect(createGameRepository(pool as never).create(createInput())).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_LOCATION_INVALID',
+    });
+
+    const sql = query.mock.calls.map(([text]) => String(text));
+    const replayIndex = sql.findIndex((text) => text.includes('from games.command_idempotency'));
+    const stationIndex = sql.findIndex((text) => text.includes('from locations.profiles'));
+    expect(stationIndex).toBeGreaterThan(replayIndex);
+    expect(sql.some((text) => text.includes('clock_timestamp()'))).toBe(false);
+    expect(
+      sql.some((text) =>
+        [
+          'insert into games.games',
+          'insert into games.participations',
+          'insert into games.operations',
+          'insert into games.scheduled_commands',
+          'insert into games.command_idempotency',
+          'insert into audit.audit_log',
+          'insert into audit.outbox_events',
+        ].some((needle) => text.includes(needle)),
+      ),
+    ).toBe(false);
+    expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('rejects an unknown or foreign court after station validation with zero durable writes', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }), true, true, false);
+
+    await expect(
+      createGameRepository(pool as never).create({
+        ...createInput(),
+        courtId: 'b74faf92-2f6e-49eb-b61e-2a049e594a3a',
+      }),
+    ).resolves.toEqual({ outcome: 'rejected', code: 'GAME_LOCATION_INVALID' });
+
+    const sql = query.mock.calls.map(([text]) => String(text));
+    const stationIndex = sql.findIndex((text) => text.includes('from locations.profiles'));
+    const courtIndex = sql.findIndex((text) =>
+      text.includes('from integration.external_entity_map'),
+    );
+    expect(courtIndex).toBeGreaterThan(stationIndex);
+    expect(sql.some((text) => text.includes('insert into games.games'))).toBe(false);
+    expect(sql.some((text) => text.includes('clock_timestamp()'))).toBe(false);
+    expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('accepts a tenant-owned mapped court after validating a published station', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from eligibility.canonical_levels')) {
+        return {
+          rows: [
+            { id: levelCId, code: 'C', rank: 3, scale_version: 1 },
+            { id: levelBId, code: 'B', rank: 5, scale_version: 1 },
+          ],
+        };
+      }
+      if (text.includes('insert into games.games')) {
+        return {
+          rows: [{ ...gameRow, court_id: 'b74faf92-2f6e-49eb-b61e-2a049e594a3a' }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).create({
+        ...createInput(),
+        courtId: 'b74faf92-2f6e-49eb-b61e-2a049e594a3a',
+      }),
+    ).resolves.toMatchObject({ outcome: 'applied', gameId });
+    expect(query.mock.calls.some(([text]) => text.includes('from locations.profiles'))).toBe(true);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('from integration.external_entity_map')),
+    ).toBe(true);
   });
 
   it('schedules a no-payment game without a provider provisioning command', async () => {
@@ -350,6 +444,10 @@ describe('game repository', () => {
     });
     expect(query.mock.calls.some(([text]) => text.includes('insert into games.games'))).toBe(false);
     expect(query.mock.calls.some(([text]) => text.includes('clock_timestamp()'))).toBe(false);
+    expect(query.mock.calls.some(([text]) => text.includes('from locations.profiles'))).toBe(false);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('from integration.external_entity_map')),
+    ).toBe(false);
   });
 
   it('reads an actor-owned create operation by the returned durable operation id', async () => {

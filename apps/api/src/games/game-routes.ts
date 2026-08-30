@@ -475,6 +475,15 @@ export function registerGameRoutes(
         );
       }
       if (result.outcome === 'rejected') {
+        if (result.code === 'GAME_LOCATION_INVALID') {
+          return sendApiError(
+            request,
+            reply,
+            400,
+            'INVALID_REQUEST',
+            'Проверьте параметры и время игры.',
+          );
+        }
         return sendApiError(
           request,
           reply,

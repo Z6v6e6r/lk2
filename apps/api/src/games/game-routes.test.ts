@@ -242,7 +242,7 @@ describe('Games management User API', () => {
     expect(create).toHaveBeenCalledOnce();
   });
 
-  it('maps post-lookup temporal rejection while preserving idempotency conflict precedence', async () => {
+  it('maps post-lookup create rejections without disclosing location ownership', async () => {
     const pastPayload = {
       title: 'Новая прошедшая игра',
       kind: 'FRIENDLY',
@@ -259,6 +259,7 @@ describe('Games management User API', () => {
     const create = vi
       .fn()
       .mockResolvedValueOnce({ outcome: 'rejected', code: 'GAME_START_TIME_PASSED' })
+      .mockResolvedValueOnce({ outcome: 'rejected', code: 'GAME_LOCATION_INVALID' })
       .mockResolvedValueOnce({ outcome: 'idempotency_conflict' });
     const app = await appWith(repository(), managementRepository({ create }));
     const authorization = `Bearer ${await accessToken()}`;
@@ -271,6 +272,18 @@ describe('Games management User API', () => {
     });
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json()).toMatchObject({ code: 'GAME_START_TIME_PASSED' });
+
+    const invalidLocation = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: { authorization, 'idempotency-key': 'games-api-create-location-invalid-0001' },
+      payload: { ...pastPayload, title: 'Игра с неверной локацией' },
+    });
+    expect(invalidLocation.statusCode).toBe(400);
+    expect(invalidLocation.json()).toMatchObject({
+      code: 'INVALID_REQUEST',
+      message: 'Проверьте параметры и время игры.',
+    });
 
     const conflict = await app.inject({
       method: 'POST',

@@ -148,7 +148,10 @@ export type CreateStoredGameResult =
       readonly committedAt: string;
       readonly replayed: boolean;
     }
-  | { readonly outcome: 'rejected'; readonly code: 'GAME_START_TIME_PASSED' }
+  | {
+      readonly outcome: 'rejected';
+      readonly code: 'GAME_START_TIME_PASSED' | 'GAME_LOCATION_INVALID';
+    }
   | { readonly outcome: 'idempotency_conflict' };
 
 export interface CancelStoredGameInput {
@@ -664,6 +667,29 @@ export function createGameRepository(pool: Pool): GameRepository {
         ]);
         const replay = replayCreate(await existingCommand(client, input), input.requestHash);
         if (replay) return replay;
+
+        const station = await queryOne<{ readonly id: string }>(
+          client,
+          `select id
+             from locations.profiles
+            where tenant_id = $1 and id = $2 and publication_status = 'PUBLISHED'
+            for share`,
+          [input.tenantId, input.stationId],
+        );
+        if (!station) return { outcome: 'rejected', code: 'GAME_LOCATION_INVALID' };
+
+        if (input.courtId) {
+          const court = await queryOne<{ readonly internal_id: string }>(
+            client,
+            `select internal_id
+               from integration.external_entity_map
+              where tenant_id = $1 and entity_type = 'game_court' and internal_id = $2
+              limit 1
+              for share`,
+            [input.tenantId, input.courtId],
+          );
+          if (!court) return { outcome: 'rejected', code: 'GAME_LOCATION_INVALID' };
+        }
 
         const admission = await queryOne<{ readonly admissible: boolean }>(
           client,

@@ -17,15 +17,19 @@ where tenant_id = :tenant_id
 group by command_type, state
 order by command_type, state;
 
-select id, game_id, command_type, state, attempts, due_at, locked_by, locked_until, last_error_code
+select id, game_id, command_type, state, attempts, due_at, available_at,
+       locked_by, locked_at, last_error_code
 from games.scheduled_commands
 where tenant_id = :tenant_id
-  and state in ('PENDING', 'PROCESSING', 'ATTENTION')
+  and state in ('PENDING', 'PROCESSING', 'FAILED')
 order by due_at, id
 limit 200;
 ```
 
-Never clear `locked_by`, decrement attempts, delete commands, or force a state with ad-hoc SQL. Lease expiry and retry/attention transitions belong to the repository worker contract.
+Rows in `FAILED` with `attempts >= 20` are exhausted and are no longer claimable; rows below
+that bound remain eligible after `available_at`. Never clear `locked_by`, decrement attempts,
+delete commands, or force a state with ad-hoc SQL. Lease expiry and retry transitions belong to
+the repository worker contract.
 
 ## Projection lag scan
 
