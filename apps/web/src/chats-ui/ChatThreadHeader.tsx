@@ -27,11 +27,11 @@ export function ChatThreadHeader({
       <span className={`${styles.avatar} ${isGame ? styles.gameAvatar : ''}`} aria-hidden="true">
         {isGame ? <ChatIcon /> : initials(title)}
       </span>
-      <span className={styles.threadHeading}>
+      <div className={styles.threadHeading}>
         <h2>{title}</h2>
         <small>{isGame ? 'Чат игры' : 'Личный чат'}</small>
         {connectionStatus ? <span role="status">{connectionStatus}</span> : null}
-      </span>
+      </div>
       <button type="button" className={styles.refreshButton} disabled={busy} onClick={onRefresh}>
         {busy ? 'Обновляем…' : 'Обновить'}
       </button>

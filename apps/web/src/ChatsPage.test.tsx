@@ -311,7 +311,7 @@ describe('ChatsPage', () => {
     expect(context).not.toHaveTextContent(/корт|уровень|оплата/iu);
   });
 
-  it('uses Ctrl+Enter to send, keeps plain Enter for a newline, and ignores IME composition', () => {
+  it('uses Ctrl/Cmd+Enter to send, keeps plain Enter for a newline, and ignores IME composition', () => {
     const onSendMessage = vi.fn();
     render(
       <ChatsPage
@@ -330,6 +330,10 @@ describe('ChatsPage', () => {
     expect(onSendMessage).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
     expect(onSendMessage).toHaveBeenCalledWith('Первая строка');
+    fireEvent.change(input, { target: { value: 'Вторая строка' } });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+    expect(onSendMessage).toHaveBeenLastCalledWith('Вторая строка');
+    expect(onSendMessage).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('button', { name: /микрофон|реакц|влож/iu })).not.toBeInTheDocument();
   });
 
