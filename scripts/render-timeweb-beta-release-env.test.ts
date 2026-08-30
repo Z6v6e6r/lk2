@@ -71,7 +71,7 @@ beforeAll(async () => {
       expectedRunId: runId,
       expectedRunAttempt: '1',
       githubTokenFile: secrets.githubTokenFile,
-      expectedUid: uid,
+      credentialContract: secrets.githubCredentialContract,
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -108,6 +108,15 @@ function fixture() {
   return { secrets, pair, runEvidence, releaseRoot, releaseDir };
 }
 
+function withCredentialContract(
+  value: ReturnType<typeof fixture>,
+  mutate: (contract: typeof value.secrets.githubCredentialContract) => void,
+) {
+  const contract = structuredClone(value.secrets.githubCredentialContract);
+  mutate(contract);
+  return contract;
+}
+
 const expected = (runtimeEnvRoot: string, checksum: string) => {
   return {
     expectedSourceSha: sourceSha,
@@ -126,6 +135,7 @@ const expected = (runtimeEnvRoot: string, checksum: string) => {
 async function verifyFixtureAuthority(
   value: ReturnType<typeof fixture>,
   transform?: (url: string, response: Response) => Promise<Response> | Response,
+  nowMs?: number,
 ) {
   const api = githubApiFixture(value.pair);
   const originalFetch = globalThis.fetch;
@@ -146,7 +156,8 @@ async function verifyFixtureAuthority(
       expectedRunId: runId,
       expectedRunAttempt: '1',
       githubTokenFile: value.secrets.githubTokenFile,
-      expectedUid: uid,
+      credentialContract: value.secrets.githubCredentialContract,
+      ...(nowMs === undefined ? {} : { nowMs }),
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -345,7 +356,10 @@ describe('Timeweb beta release.env renderer', () => {
     await expect(
       verifyFixtureAuthority(value, async (url, response) => {
         if (!url.includes('/attempts/1')) return response;
-        return Response.json({ ...(await response.json()), conclusion: 'failure' });
+        return Response.json(
+          { ...(await response.json()), conclusion: 'failure' },
+          { headers: response.headers },
+        );
       }),
     ).rejects.toThrow('github_run_identity');
   });
@@ -368,7 +382,9 @@ describe('Timeweb beta release.env renderer', () => {
     const value = fixture();
     await expect(
       verifyFixtureAuthority(value, (url, response) =>
-        url.includes('/packages/container/phub-worker/') ? Response.json([]) : response,
+        url.includes('/packages/container/phub-worker/')
+          ? Response.json([], { headers: response.headers })
+          : response,
       ),
     ).rejects.toThrow('registry_inventory_incomplete');
   });
@@ -380,7 +396,7 @@ describe('Timeweb beta release.env renderer', () => {
         if (!url.includes('/artifacts?')) return response;
         const listing = (await response.json()) as { artifacts: Array<Record<string, unknown>> };
         listing.artifacts[0]!.name = 'timeweb-amd64-push-receipt';
-        return Response.json(listing);
+        return Response.json(listing, { headers: response.headers });
       }),
     ).rejects.toThrow('canonical_artifact_custody');
 
@@ -392,6 +408,125 @@ describe('Timeweb beta release.env renderer', () => {
           : response,
       ),
     ).rejects.toThrow('canonical_artifact_digest');
+  });
+
+  it('requires the exact canonical token path, owner group and classic PAT type', async () => {
+    const wrongPath = fixture();
+    await expect(
+      verifyCanonicalGitHubRunAuthority({
+        manifest: canonicalManifest(),
+        manifestBytes: Buffer.from(wrongPath.pair.contents),
+        checksumBytes: Buffer.from(wrongPath.pair.checksumContents),
+        manifestChecksum: wrongPath.pair.checksum,
+        expectedSourceSha: sourceSha,
+        expectedSourceTree: sourceTree,
+        expectedWorkflowSha: sourceSha,
+        expectedRunId: runId,
+        expectedRunAttempt: '1',
+        githubTokenFile: wrongPath.secrets.githubTokenFile,
+        credentialContract: withCredentialContract(wrongPath, (contract) => {
+          contract.file.path = `${wrongPath.secrets.githubTokenFile}.other`;
+        }),
+      }),
+    ).rejects.toThrow('github_token_path');
+
+    const wrongGid = fixture();
+    await expect(
+      verifyCanonicalGitHubRunAuthority({
+        manifest: canonicalManifest(),
+        manifestBytes: Buffer.from(wrongGid.pair.contents),
+        checksumBytes: Buffer.from(wrongGid.pair.checksumContents),
+        manifestChecksum: wrongGid.pair.checksum,
+        expectedSourceSha: sourceSha,
+        expectedSourceTree: sourceTree,
+        expectedWorkflowSha: sourceSha,
+        expectedRunId: runId,
+        expectedRunAttempt: '1',
+        githubTokenFile: wrongGid.secrets.githubTokenFile,
+        credentialContract: withCredentialContract(wrongGid, (contract) => {
+          contract.file.gid += 1;
+        }),
+      }),
+    ).rejects.toThrow('github_token_parent_security');
+
+    const wrongType = fixture();
+    writeFileSync(wrongType.secrets.githubTokenFile, `github_pat_${'x'.repeat(36)}\n`, {
+      mode: 0o600,
+    });
+    await expect(
+      verifyFixtureAuthority(
+        wrongType,
+        undefined,
+        lstatSync(wrongType.secrets.githubTokenFile).mtimeMs,
+      ),
+    ).rejects.toThrow('github_token_format');
+  });
+
+  it('rejects stale credentials and missing or additional issuer-reported scopes', async () => {
+    const stale = fixture();
+    const tokenStat = lstatSync(stale.secrets.githubTokenFile);
+    await expect(
+      verifyCanonicalGitHubRunAuthority({
+        manifest: canonicalManifest(),
+        manifestBytes: Buffer.from(stale.pair.contents),
+        checksumBytes: Buffer.from(stale.pair.checksumContents),
+        manifestChecksum: stale.pair.checksum,
+        expectedSourceSha: sourceSha,
+        expectedSourceTree: sourceTree,
+        expectedWorkflowSha: sourceSha,
+        expectedRunId: runId,
+        expectedRunAttempt: '1',
+        githubTokenFile: stale.secrets.githubTokenFile,
+        credentialContract: stale.secrets.githubCredentialContract,
+        nowMs: tokenStat.mtimeMs + 3_600_001,
+      }),
+    ).rejects.toThrow('github_token_freshness');
+
+    const missing = fixture();
+    await expect(
+      verifyFixtureAuthority(missing, async (url, response) => {
+        if (!url.includes('/attempts/1')) return response;
+        return Response.json(await response.json());
+      }),
+    ).rejects.toThrow('github_token_scope_metadata');
+
+    const additional = fixture();
+    await expect(
+      verifyFixtureAuthority(additional, async (url, response) => {
+        if (!url.includes('/attempts/1')) return response;
+        return Response.json(await response.json(), {
+          headers: { 'x-oauth-scopes': 'read:packages, repo' },
+        });
+      }),
+    ).rejects.toThrow('github_token_scope');
+  });
+
+  it('rejects credential contracts that broaden package resources or lifecycle authority', async () => {
+    for (const mutate of [
+      (contract: ReturnType<typeof fixture>['secrets']['githubCredentialContract']) =>
+        contract.resources.packages.push('Z6v6e6r/other-package'),
+      (contract: ReturnType<typeof fixture>['secrets']['githubCredentialContract']) =>
+        (contract.lifecycle.revokeAfterUse = false),
+      (contract: ReturnType<typeof fixture>['secrets']['githubCredentialContract']) =>
+        contract.credential.requiredScopes.push('repo'),
+    ]) {
+      const value = fixture();
+      await expect(
+        verifyCanonicalGitHubRunAuthority({
+          manifest: canonicalManifest(),
+          manifestBytes: Buffer.from(value.pair.contents),
+          checksumBytes: Buffer.from(value.pair.checksumContents),
+          manifestChecksum: value.pair.checksum,
+          expectedSourceSha: sourceSha,
+          expectedSourceTree: sourceTree,
+          expectedWorkflowSha: sourceSha,
+          expectedRunId: runId,
+          expectedRunAttempt: '1',
+          githubTokenFile: value.secrets.githubTokenFile,
+          credentialContract: withCredentialContract(value, mutate),
+        }),
+      ).rejects.toThrow('github_credential_contract');
+    }
   });
 
   it('rejects checksum drift and malformed canonical sidecars', () => {

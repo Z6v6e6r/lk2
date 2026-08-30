@@ -1,0 +1,34 @@
+{
+  "schema": "PHUB_TIMEWEB_GITHUB_RELEASE_READER_V1",
+  "file": {
+    "path": "/etc/phub/timeweb-beta/github-release-reader.token",
+    "uid": 0,
+    "gid": 0,
+    "mode": "0600",
+    "linkCount": 1,
+    "minimumBytes": 40,
+    "maximumBytes": 256
+  },
+  "credential": {
+    "type": "github_personal_access_token_classic",
+    "prefix": "ghp_",
+    "requiredScopes": ["read:packages"],
+    "scopeAuthority": "github_x_oauth_scopes_exact"
+  },
+  "resources": {
+    "repository": "Z6v6e6r/lk2",
+    "packages": [
+      "Z6v6e6r/phub-api",
+      "Z6v6e6r/phub-migrator",
+      "Z6v6e6r/phub-realtime",
+      "Z6v6e6r/phub-web",
+      "Z6v6e6r/phub-worker"
+    ]
+  },
+  "lifecycle": {
+    "oneShot": true,
+    "maximumFileAgeSeconds": 3600,
+    "revokeAfterUse": true,
+    "rotationOwner": "Z6v6e6r repository owner"
+  }
+}

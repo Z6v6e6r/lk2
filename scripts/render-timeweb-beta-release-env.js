@@ -40,12 +40,22 @@ const TARGET_DOCKER_PATH = '/usr/bin/docker';
 const TARGET_DOCKER_SOCKET = '/var/run/docker.sock';
 const TARGET_DOCKER_CONFIG = '/root/.docker';
 const TARGET_CONTRACT_PATH = new URL('../deploy/timeweb/target.json', import.meta.url);
+const GITHUB_CREDENTIAL_CONTRACT_PATH = new URL(
+  '../deploy/timeweb/github-release-reader.contract.json',
+  import.meta.url,
+);
 const RELEASE_ROOT = '/opt/phub/timeweb-beta/releases';
 const RUNTIME_ENV_ROOT = '/etc/phub/timeweb-beta';
 const RUN_EVIDENCE_NAME = 'canonical-run-evidence.json';
 const GITHUB_API_ROOT = 'https://api.github.com';
 const GITHUB_REPOSITORY = 'Z6v6e6r/lk2';
 const GITHUB_OWNER = 'Z6v6e6r';
+const CANONICAL_GITHUB_TOKEN_PATH = '/etc/phub/timeweb-beta/github-release-reader.token';
+const GITHUB_PACKAGE_RESOURCES = Object.freeze(
+  ['api', 'migrator', 'realtime', 'web', 'worker'].map(
+    (component) => `${GITHUB_OWNER}/phub-${component}`,
+  ),
+);
 const WORKFLOW_PATH = '.github/workflows/publish-timeweb-amd64-images.yaml';
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const CHECKSUM_PATTERN = /^[0-9a-f]{64}$/u;
@@ -82,7 +92,68 @@ function readTargetContract() {
   }
 }
 
+function validateGitHubCredentialContract(contract, { allowTestIdentity = false } = {}) {
+  if (
+    !hasExactKeys(contract, ['schema', 'file', 'credential', 'resources', 'lifecycle']) ||
+    contract.schema !== 'PHUB_TIMEWEB_GITHUB_RELEASE_READER_V1' ||
+    !hasExactKeys(contract.file, [
+      'path',
+      'uid',
+      'gid',
+      'mode',
+      'linkCount',
+      'minimumBytes',
+      'maximumBytes',
+    ]) ||
+    !hasExactKeys(contract.credential, ['type', 'prefix', 'requiredScopes', 'scopeAuthority']) ||
+    !hasExactKeys(contract.resources, ['repository', 'packages']) ||
+    !hasExactKeys(contract.lifecycle, [
+      'oneShot',
+      'maximumFileAgeSeconds',
+      'revokeAfterUse',
+      'rotationOwner',
+    ]) ||
+    !isAbsolute(contract.file.path) ||
+    normalize(contract.file.path) !== contract.file.path ||
+    (!allowTestIdentity && contract.file.path !== CANONICAL_GITHUB_TOKEN_PATH) ||
+    (!allowTestIdentity && contract.file.uid !== 0) ||
+    (!allowTestIdentity && contract.file.gid !== 0) ||
+    (allowTestIdentity && (!Number.isSafeInteger(contract.file.uid) || contract.file.uid < 0)) ||
+    (allowTestIdentity && (!Number.isSafeInteger(contract.file.gid) || contract.file.gid < 0)) ||
+    contract.file.mode !== '0600' ||
+    contract.file.linkCount !== 1 ||
+    contract.file.minimumBytes !== 40 ||
+    contract.file.maximumBytes !== 256 ||
+    contract.credential.type !== 'github_personal_access_token_classic' ||
+    contract.credential.prefix !== 'ghp_' ||
+    !Array.isArray(contract.credential.requiredScopes) ||
+    contract.credential.requiredScopes.join(',') !== 'read:packages' ||
+    contract.credential.scopeAuthority !== 'github_x_oauth_scopes_exact' ||
+    contract.resources.repository !== GITHUB_REPOSITORY ||
+    !Array.isArray(contract.resources.packages) ||
+    contract.resources.packages.join(',') !== GITHUB_PACKAGE_RESOURCES.join(',') ||
+    contract.lifecycle.oneShot !== true ||
+    contract.lifecycle.maximumFileAgeSeconds !== 3600 ||
+    contract.lifecycle.revokeAfterUse !== true ||
+    contract.lifecycle.rotationOwner !== 'Z6v6e6r repository owner'
+  )
+    fail('github_credential_contract');
+  return deepFreeze(contract);
+}
+
+function readGitHubCredentialContract() {
+  try {
+    return validateGitHubCredentialContract(
+      JSON.parse(readFileSync(GITHUB_CREDENTIAL_CONTRACT_PATH, 'utf8')),
+    );
+  } catch (error) {
+    if (error instanceof TimewebReleaseEnvironmentError) throw error;
+    fail('github_credential_contract_unavailable');
+  }
+}
+
 const targetContract = readTargetContract();
+const githubCredentialContract = readGitHubCredentialContract();
 const historicalPaths = new Set(
   targetContract.release.historicalEvidence.map(({ path }) => normalize(path)),
 );
@@ -138,14 +209,19 @@ function decodeUtf8(bytes, reason) {
   }
 }
 
-function readSecureRegularFile(path, { expectedUid, expectedMode, maxBytes, reason }) {
+function readSecureRegularFile(
+  path,
+  { expectedUid, expectedGid, expectedMode, minBytes = 0, maxBytes, reason },
+) {
   const before = lstatSync(path);
   if (
     !before.isFile() ||
     before.isSymbolicLink() ||
     before.nlink !== 1 ||
     (expectedUid !== undefined && before.uid !== expectedUid) ||
+    (expectedGid !== undefined && before.gid !== expectedGid) ||
     (expectedMode !== undefined && (before.mode & 0o777) !== expectedMode) ||
+    before.size < minBytes ||
     before.size > maxBytes
   )
     fail(reason);
@@ -157,6 +233,29 @@ function readSecureRegularFile(path, { expectedUid, expectedMode, maxBytes, reas
     return readFileSync(descriptor);
   } finally {
     closeSync(descriptor);
+  }
+}
+
+function assertRootOwnedParentChain(path, expectedUid, expectedGid, allowTestIdentity) {
+  let current = dirname(path);
+  let directParent = true;
+  while (true) {
+    const metadata = lstatSync(current);
+    if (
+      !metadata.isDirectory() ||
+      metadata.isSymbolicLink() ||
+      (directParent && (metadata.uid !== expectedUid || metadata.gid !== expectedGid)) ||
+      (!directParent &&
+        !allowTestIdentity &&
+        (metadata.uid !== expectedUid || metadata.gid !== expectedGid)) ||
+      (!directParent && allowTestIdentity && ![0, expectedUid].includes(metadata.uid)) ||
+      (metadata.mode & 0o022) !== 0
+    )
+      fail('github_token_parent_security');
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+    directParent = false;
   }
 }
 
@@ -218,22 +317,63 @@ export function readCanonicalTimewebRunEvidence(evidencePath, expectedChecksum) 
   return { evidence, checksum: actualChecksum };
 }
 
-function readGitHubToken(tokenPath, expectedUid) {
+function readGitHubToken(
+  tokenPath,
+  contract,
+  nowMs = Date.now(),
+  { allowTestIdentity = false } = {},
+) {
+  const validatedContract = validateGitHubCredentialContract(contract, { allowTestIdentity });
+  if (tokenPath !== validatedContract.file.path) fail('github_token_path');
   assertSafeAbsolutePath(tokenPath, 'github_token_path');
+  assertRootOwnedParentChain(
+    tokenPath,
+    validatedContract.file.uid,
+    validatedContract.file.gid,
+    allowTestIdentity,
+  );
+  const metadata = lstatSync(tokenPath);
+  const ageMs = nowMs - metadata.mtimeMs;
+  if (
+    !Number.isFinite(nowMs) ||
+    ageMs < 0 ||
+    ageMs > validatedContract.lifecycle.maximumFileAgeSeconds * 1000
+  )
+    fail('github_token_freshness');
   const bytes = readSecureRegularFile(tokenPath, {
-    expectedUid,
+    expectedUid: validatedContract.file.uid,
+    expectedGid: validatedContract.file.gid,
     expectedMode: 0o600,
-    maxBytes: 4096,
+    minBytes: validatedContract.file.minimumBytes,
+    maxBytes: validatedContract.file.maximumBytes,
     reason: 'github_token_file_security',
   });
   const contents = decodeUtf8(bytes, 'github_token_encoding');
   if (contents.includes('\0') || contents.includes('\r')) fail('github_token_format');
   const token = contents.endsWith('\n') ? contents.slice(0, -1) : contents;
-  if (!/^[A-Za-z0-9_]{20,255}$/u.test(token)) fail('github_token_format');
+  if (!/^ghp_[A-Za-z0-9]{36,251}$/u.test(token)) fail('github_token_format');
   return token;
 }
 
-async function githubFetch(path, token, accept = 'application/vnd.github+json') {
+function assertGitHubCredentialScope(response, contract) {
+  const rawScopes = response.headers.get('x-oauth-scopes');
+  if (rawScopes === null) fail('github_token_scope_metadata');
+  const scopes = rawScopes
+    .split(',')
+    .map((scope) => scope.trim())
+    .filter(Boolean)
+    .sort();
+  if (scopes.join(',') !== [...contract.credential.requiredScopes].sort().join(','))
+    fail('github_token_scope');
+}
+
+async function githubFetch(
+  path,
+  token,
+  credentialContract,
+  accept = 'application/vnd.github+json',
+  requireScopeMetadata = true,
+) {
   if (!path.startsWith('/')) fail('github_api_path');
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     let response;
@@ -252,7 +392,10 @@ async function githubFetch(path, token, accept = 'application/vnd.github+json') 
       await new Promise((resolve) => setTimeout(resolve, attempt * 200));
       continue;
     }
-    if (response.ok) return response;
+    if (response.ok) {
+      if (requireScopeMetadata) assertGitHubCredentialScope(response, credentialContract);
+      return response;
+    }
     if (![429, 502, 503, 504].includes(response.status) || attempt === 3)
       fail('github_api_response');
     await new Promise((resolve) => setTimeout(resolve, attempt * 200));
@@ -260,8 +403,8 @@ async function githubFetch(path, token, accept = 'application/vnd.github+json') 
   fail('github_api_unavailable');
 }
 
-async function githubJson(path, token) {
-  const response = await githubFetch(path, token);
+async function githubJson(path, token, credentialContract) {
+  const response = await githubFetch(path, token, credentialContract);
   try {
     return await response.json();
   } catch {
@@ -349,15 +492,18 @@ function extractCanonicalArtifactPair(archiveBytes) {
   return files;
 }
 
-async function assertRegistryInventory(manifest, token) {
+async function assertRegistryInventory(manifest, token, credentialContract) {
   let presentImages = 0;
   for (const image of manifest.images) {
     const packageName = `phub-${image.component}`;
     let found = false;
     for (let page = 1; page <= 10 && !found; page += 1) {
+      if (!credentialContract.resources.packages.includes(`${GITHUB_OWNER}/${packageName}`))
+        fail('github_credential_resource');
       const versions = await githubJson(
         `/users/${GITHUB_OWNER}/packages/container/${packageName}/versions?per_page=100&page=${page}`,
         token,
+        credentialContract,
       );
       if (!Array.isArray(versions)) fail('github_registry_response');
       found = versions.some(
@@ -385,8 +531,14 @@ export async function verifyCanonicalGitHubRunAuthority({
   expectedRunId,
   expectedRunAttempt,
   githubTokenFile,
-  expectedUid = 0,
+  credentialContract = githubCredentialContract,
+  nowMs = Date.now(),
 }) {
+  const allowTestIdentity = credentialContract !== githubCredentialContract;
+  if (allowTestIdentity && process.env.NODE_ENV !== 'test') fail('github_credential_contract');
+  const validatedCredentialContract = validateGitHubCredentialContract(credentialContract, {
+    allowTestIdentity,
+  });
   const expected = {
     sourceSha: expectedSourceSha,
     sourceTree: expectedSourceTree,
@@ -395,10 +547,13 @@ export async function verifyCanonicalGitHubRunAuthority({
     runAttempt: expectedRunAttempt,
   };
   validateExpectedIdentity(manifest, expected, BASE_LOCK_PATH);
-  const token = readGitHubToken(githubTokenFile, expectedUid);
+  const token = readGitHubToken(githubTokenFile, validatedCredentialContract, nowMs, {
+    allowTestIdentity,
+  });
   const run = await githubJson(
     `/repos/${GITHUB_REPOSITORY}/actions/runs/${expectedRunId}/attempts/${expectedRunAttempt}`,
     token,
+    validatedCredentialContract,
   );
   if (
     String(run?.id) !== expectedRunId ||
@@ -417,6 +572,7 @@ export async function verifyCanonicalGitHubRunAuthority({
   const artifactListing = await githubJson(
     `/repos/${GITHUB_REPOSITORY}/actions/runs/${expectedRunId}/artifacts?per_page=100`,
     token,
+    validatedCredentialContract,
   );
   const artifacts = Array.isArray(artifactListing?.artifacts)
     ? artifactListing.artifacts.filter((artifact) => artifact?.name === artifactName)
@@ -436,7 +592,9 @@ export async function verifyCanonicalGitHubRunAuthority({
   const archiveResponse = await githubFetch(
     `/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact.id}/zip`,
     token,
+    validatedCredentialContract,
     'application/vnd.github+json',
+    false,
   );
   let archiveBytes;
   try {
@@ -452,7 +610,11 @@ export async function verifyCanonicalGitHubRunAuthority({
     !files.get('release-manifest.sha256')?.equals(checksumBytes)
   )
     fail('canonical_artifact_pair_mismatch');
-  const registryInventory = await assertRegistryInventory(manifest, token);
+  const registryInventory = await assertRegistryInventory(
+    manifest,
+    token,
+    validatedCredentialContract,
+  );
   let artifactManifest;
   try {
     artifactManifest = JSON.parse(decodeUtf8(manifestBytes, 'manifest_encoding'));

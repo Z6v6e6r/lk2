@@ -27,6 +27,7 @@ const PROTECTED_PATHS = Object.freeze([
   'deploy/timeweb/Caddyfile.yandex-public-beta',
   'deploy/timeweb/compose.beta.yaml',
   'deploy/timeweb/compose.ingress.yaml',
+  'deploy/timeweb/github-release-reader.contract.json',
   'deploy/timeweb/release-manifest.schema.json',
   'deploy/timeweb/release-manifest.v1.schema.json',
   'deploy/timeweb/runtime-environment.contract.json',
