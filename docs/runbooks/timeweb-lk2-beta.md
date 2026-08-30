@@ -312,7 +312,13 @@ sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
 ```
 
 `plan` does not install a package. It verifies the frozen Git blobs, OS, launcher custody, source,
-keyring, empty `dpkg --audit` and absent pre-state. It then runs authenticated `apt-get update` into
+keyring, empty `dpkg --audit` and absent pre-state. Before every `apt-config`, `apt-cache` or
+`apt-get` process it injects the root-owned, frozen
+`deploy/timeweb/operator-node-bootstrap.apt.conf` through `APT_CONFIG`. APT loads that file before
+its normal configuration directories, so the file disables `Dir::Etc::parts` and
+`Dir::Etc::main` before host `apt.conf.d` lifecycle hooks can be read; any surviving
+`DPkg::` or `APT::` pre/post-invoke hook remains a hard stop. It then runs authenticated
+`apt-get update` into
 an isolated root-only lists directory using only the frozen source and keyring, rejects every
 unexpected index target, and uses that same snapshot for exact simulation, URI selection and `.deb`
 download. Lifecycle-bearing maintainer scripts are rejected. The lists, packages and atomic `0600`

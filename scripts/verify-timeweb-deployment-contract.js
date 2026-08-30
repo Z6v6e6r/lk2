@@ -301,6 +301,8 @@ export function validateOperatorNodeBootstrapContract(contract, target) {
       'binary',
       'cacheBinary',
       'configBinary',
+      'configPath',
+      'configSha256',
       'dpkgBinary',
       'dpkgQueryBinary',
       'dpkgDebBinary',
@@ -321,6 +323,7 @@ export function validateOperatorNodeBootstrapContract(contract, target) {
     binary: '/usr/bin/apt-get',
     cacheBinary: '/usr/bin/apt-cache',
     configBinary: '/usr/bin/apt-config',
+    configPath: 'deploy/timeweb/operator-node-bootstrap.apt.conf',
     dpkgBinary: '/usr/bin/dpkg',
     dpkgQueryBinary: '/usr/bin/dpkg-query',
     dpkgDebBinary: '/usr/bin/dpkg-deb',
@@ -334,7 +337,9 @@ export function validateOperatorNodeBootstrapContract(contract, target) {
   if (
     value.apt.sourceListSha256 !==
       '18183d5067de450288aea132d12ea3e01d456196a179b6c1184f9d7e7d20ece0' ||
-    value.apt.keyringSha256 !== '80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31'
+    value.apt.keyringSha256 !==
+      '80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31' ||
+    value.apt.configSha256 !== '317951c1991b484f3f0ab12caf126caa2c3cfa650705050fdee8b729196832c0'
   )
     reject('node_bootstrap_apt_hashes');
   exactArray(

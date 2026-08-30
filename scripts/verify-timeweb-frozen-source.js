@@ -24,6 +24,7 @@ const PROTECTED_PATHS = Object.freeze([
   'scripts/verify-timeweb-frozen-source.js',
   'deploy/timeweb/base-images.lock.json',
   'deploy/timeweb/api-web-observability.v1.json',
+  'deploy/timeweb/operator-node-bootstrap.apt.conf',
   'deploy/timeweb/operator-node-bootstrap.v1.json',
   'deploy/timeweb/Caddyfile',
   'deploy/timeweb/Caddyfile.yandex-public-beta',
