@@ -17,6 +17,7 @@ const ACTION_LABELS: Partial<Record<GameCardAction, string>> = {
   JOIN_WAITLIST: 'В лист ожидания',
   LEAVE_WAITLIST: 'Покинуть лист ожидания',
   LEAVE: 'Выйти из игры',
+  CANCEL: 'Отменить игру',
   PAY: 'Оплатить место',
   RETRY_PAYMENT: 'Повторить оплату',
   SUBMIT_RESULT: 'Внести результат',

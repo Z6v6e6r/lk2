@@ -345,7 +345,7 @@ export function MainBottomNavigation({
       >
         <BottomNavIcon name="games" />
       </a>
-      <a className="fh-create" href="/games/new" aria-label="Создать игру">
+      <a className="fh-create" href="/games/new?new=1" aria-label="Создать игру">
         <span className="fh-create-button">
           <BottomNavIcon name="create" />
         </span>

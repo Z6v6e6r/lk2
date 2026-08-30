@@ -173,6 +173,8 @@ export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpoin
 export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
+export type CreateGameRequest = components['schemas']['CreateGameRequest'];
+export type CancelGameRequest = components['schemas']['CancelGameRequest'];
 export type ManagedSubscriptionWarnQuoteRequest =
   components['schemas']['ManagedSubscriptionWarnQuoteRequest'];
 export type ManagedSubscriptionWarnQuoteResponse =
@@ -1203,6 +1205,24 @@ export class PadlHubApiClient {
     return this.request<{ readonly game: GameCard }>(`/games/${encodeURIComponent(gameId)}`).then(
       ({ game }) => game,
     );
+  }
+
+  public createGame(
+    input: CreateGameRequest,
+    options: { readonly idempotencyKey?: string } = {},
+  ): Promise<GameCommandResult> {
+    const idempotencyKey = options.idempotencyKey ?? createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<GameCommandResult>('/games', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public cancelGame(gameId: string, input: CancelGameRequest): Promise<GameCommandResult> {
+    return this.gameCommand(gameId, '/cancel', 'POST', input);
   }
 
   public joinGame(

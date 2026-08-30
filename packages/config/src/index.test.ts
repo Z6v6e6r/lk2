@@ -577,6 +577,7 @@ describe('loadConfig', () => {
       loadConfig({
         ...validEnvironment,
         APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
         GAMES_COMMANDS_ENABLED: 'true',
         GAMES_RESULTS_WRITE_MODE: 'local_primary',
       }),
@@ -690,10 +691,27 @@ describe('loadConfig', () => {
 
   it('keeps Games commands off by default and rejects them in production', () => {
     expect(
-      loadConfig({ ...validEnvironment, APP_ENV: 'staging', GAMES_COMMANDS_ENABLED: 'true' }),
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'true',
+      }),
     ).toMatchObject({ GAMES_COMMANDS_ENABLED: true });
     expect(() =>
-      loadConfig({ ...validEnvironment, APP_ENV: 'production', GAMES_COMMANDS_ENABLED: 'true' }),
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'false',
+        GAMES_COMMANDS_ENABLED: 'true',
+      }),
+    ).toThrow('GAMES_COMMANDS_ENABLED requires GAMES_READ_ENABLED=true');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        GAMES_COMMANDS_ENABLED: 'true',
+      }),
     ).toThrow('GAMES_COMMANDS_ENABLED is staging-only');
   });
 

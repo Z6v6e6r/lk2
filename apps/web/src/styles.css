@@ -2928,6 +2928,86 @@
   line-height: 1.35;
 }
 
+.games-page--create {
+  padding-bottom: 112px;
+}
+
+.game-create-form {
+  display: grid;
+  padding: 18px 20px 28px;
+  gap: 16px;
+}
+
+.game-create-form label,
+.game-create-form fieldset {
+  display: grid;
+  min-width: 0;
+  padding: 0;
+  gap: 7px;
+  border: 0;
+}
+
+.game-create-form label > span,
+.game-create-form legend {
+  color: var(--games-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.game-create-form input:not([type='checkbox']),
+.game-create-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 46px;
+  padding: 0 12px;
+  border: 1px solid #ded8ea;
+  border-radius: 12px;
+  color: var(--games-ink);
+  background: var(--games-card);
+  font: inherit;
+}
+
+.game-create-form select:focus-visible {
+  outline: 3px solid #255d32;
+  outline-offset: 3px;
+}
+
+.game-create-form__row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.game-create-form__summary {
+  display: grid;
+  padding: 14px;
+  gap: 4px;
+  border-radius: 12px;
+  color: #3f326b;
+  background: #eee9ff;
+}
+
+.game-create-form__summary span {
+  font-size: 11px;
+}
+
+.game-create-form .game-create-form__check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.game-create-form__check input {
+  width: 20px;
+  height: 20px;
+}
+
+@media (max-width: 390px) {
+  .game-create-form__row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .games-filters {
   margin: 18px -20px 0;
   overflow-x: clip;
@@ -6083,7 +6163,7 @@ button:disabled {
 
 .chat-thread {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
 }
 
 .chat-thread > header {
@@ -6122,6 +6202,37 @@ button:disabled {
   padding: 20px;
 }
 
+.chat-connection-state {
+  margin: 0;
+  padding: 9px 16px;
+  color: #5c4a19;
+  background: #fff7d6;
+  font-size: 13px;
+}
+
+.chat-connection-state.is-connected {
+  height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-messages li.chat-history-control {
+  align-self: center;
+  max-width: none;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.chat-history-control button {
+  border: 1px solid #d6cfdf;
+  border-radius: 12px;
+  padding: 8px 12px;
+  color: #5f38a5;
+  background: #fff;
+  font-weight: 700;
+}
+
 .chat-messages li {
   align-self: flex-start;
   max-width: min(78%, 620px);
@@ -6147,6 +6258,21 @@ button:disabled {
   font-size: 12px;
 }
 
+.chat-message-status {
+  margin-left: 8px;
+  color: #756d7f;
+  font-size: 12px;
+}
+
+.chat-messages li.chat-message-pending {
+  opacity: 0.78;
+}
+
+.chat-messages li.chat-message-pending.is-failed {
+  border: 1px solid #dc8e8e;
+  opacity: 1;
+}
+
 .chat-send-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -6165,6 +6291,11 @@ button:disabled {
   border-radius: 12px;
   color: inherit;
   background: #fff;
+}
+
+.chat-send-form > small {
+  grid-column: 1 / -1;
+  color: #756d7f;
 }
 
 .chat-send-retry {
@@ -6250,6 +6381,7 @@ button:disabled {
 
   .chat-send-form {
     grid-template-columns: 1fr;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
   }
 }
 
@@ -13550,7 +13682,8 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 @media (max-width: 374px) {
-  .profile-page .fh-bottom-nav {
+  .profile-page .fh-bottom-nav,
+  .games-page .fh-bottom-nav {
     left: 0;
     width: 100%;
   }

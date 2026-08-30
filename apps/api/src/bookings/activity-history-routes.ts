@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  ActivityHistoryPage,
   ActivityHistoryItem as StoredActivityHistoryItem,
   ActivityHistoryKind,
   ActivityHistoryRepository,
@@ -102,6 +103,18 @@ function readStringDetail(
   return typeof value === 'string' ? value : undefined;
 }
 
+function readGameResultDetail(details: Readonly<Record<string, unknown>>): string | null {
+  if (!Array.isArray(details.sets) || details.sets.length === 0) return null;
+  const scores: string[] = [];
+  for (const value of details.sets) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    const set = value as Readonly<Record<string, unknown>>;
+    if (!Number.isInteger(set.teamA) || !Number.isInteger(set.teamB)) return null;
+    scores.push(`${String(set.teamA)}:${String(set.teamB)}`);
+  }
+  return scores.join(', ');
+}
+
 function activityItem(
   item: StoredActivityHistoryItem,
   tenantId: string,
@@ -120,7 +133,9 @@ function activityItem(
     route: item.route,
     subtitle: readStringDetail(item.details, 'subtitle') ?? null,
     trainerName: readStringDetail(item.details, 'trainerName') ?? null,
-    result: readStringDetail(item.details, 'result') ?? null,
+    result:
+      readStringDetail(item.details, 'result') ??
+      (item.kind === 'GAME' ? readGameResultDetail(item.details) : null),
     ...(item.kind === 'GAME' && typeof game === 'object' && game !== null && !Array.isArray(game)
       ? { game: stabilizeGameCardProfilePhotos(game, tenantId, deliveryIds) }
       : {}),
@@ -478,44 +493,57 @@ export function registerActivityHistoryRoutes(
         tenantId: current.tenantId,
         userId: current.userId,
       });
+      let page: ActivityHistoryPage | undefined;
       if (state.freshness === 'UNSYNCED') {
         if (!options.refresher) {
-          return sendApiError(
-            request,
-            reply,
-            503,
-            'BOOKING_HISTORY_UNAVAILABLE',
-            'История ещё не подготовлена.',
+          const localPage =
+            query.kind && query.kind !== 'GAME'
+              ? { items: [] }
+              : await options.repository.list({ ...current, ...query, kind: 'GAME' });
+          const localGames = localPage.items.filter(
+            (item) => item.kind === 'GAME' && item.gameId !== null,
           );
+          if (localGames.length === 0) {
+            return sendApiError(
+              request,
+              reply,
+              503,
+              'BOOKING_HISTORY_UNAVAILABLE',
+              'История ещё не подготовлена.',
+            );
+          }
+          page = { items: localGames };
         }
-        try {
-          await options.refresher.refresh({
-            ...current,
-            correlationId: request.id,
-            reason: 'UNCOVERED',
+        if (options.refresher) {
+          try {
+            await options.refresher.refresh({
+              ...current,
+              correlationId: request.id,
+              reason: 'UNCOVERED',
+            });
+          } catch {
+            reply.header('Retry-After', '5');
+            return sendApiError(
+              request,
+              reply,
+              503,
+              'BOOKING_HISTORY_UNAVAILABLE',
+              'История обновляется. Попробуйте ещё раз.',
+            );
+          }
+          state = await options.repository.getSyncState({
+            tenantId: current.tenantId,
+            userId: current.userId,
           });
-        } catch {
-          reply.header('Retry-After', '5');
-          return sendApiError(
-            request,
-            reply,
-            503,
-            'BOOKING_HISTORY_UNAVAILABLE',
-            'История обновляется. Попробуйте ещё раз.',
-          );
-        }
-        state = await options.repository.getSyncState({
-          tenantId: current.tenantId,
-          userId: current.userId,
-        });
-        if (state.freshness === 'UNSYNCED') {
-          return sendApiError(
-            request,
-            reply,
-            503,
-            'BOOKING_HISTORY_UNAVAILABLE',
-            'История ещё не подготовлена.',
-          );
+          if (state.freshness === 'UNSYNCED') {
+            return sendApiError(
+              request,
+              reply,
+              503,
+              'BOOKING_HISTORY_UNAVAILABLE',
+              'История ещё не подготовлена.',
+            );
+          }
         }
       } else if (state.freshness === 'STALE' && options.refresher) {
         void options.refresher
@@ -523,7 +551,7 @@ export function registerActivityHistoryRoutes(
           .catch(() => undefined);
       }
 
-      let page = await options.repository.list({ ...current, ...query });
+      page ??= await options.repository.list({ ...current, ...query });
       if (
         state.coverageStatus === 'PARTIAL' &&
         !page.next &&
@@ -570,9 +598,9 @@ export function registerActivityHistoryRoutes(
       return {
         items: page.items.map((item) => activityItem(item, current.tenantId, deliveryIds)),
         nextCursor,
-        freshness: state.freshness === 'STALE' ? 'STALE' : 'FRESH',
+        freshness: state.freshness === 'FRESH' ? 'FRESH' : 'STALE',
         coverage: state.coverageStatus === 'COMPLETE' ? 'COMPLETE' : 'PARTIAL',
-        generatedAt: state.lastSuccessAt ?? new Date().toISOString(),
+        generatedAt: state.lastSuccessAt ?? lastItem?.syncedAt ?? new Date().toISOString(),
       };
     },
   );

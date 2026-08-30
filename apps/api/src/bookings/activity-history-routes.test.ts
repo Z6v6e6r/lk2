@@ -363,6 +363,76 @@ describe('activity history routes', () => {
     expect(response.json()).toMatchObject({ code: 'BOOKING_HISTORY_UNAVAILABLE' });
   });
 
+  it('serves persisted local game history as partial when provider coverage is unsynchronized', async () => {
+    const unsynced = state({
+      coverageStatus: 'UNSYNCED',
+      freshness: 'UNSYNCED',
+      lastSuccessAt: null,
+      staleAt: null,
+      oldestSyncedAt: null,
+      sourceRevision: null,
+      updatedAt: null,
+    });
+    const base = repository(unsynced);
+    const list = vi.fn(() =>
+      Promise.resolve({
+        items: [
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            userId,
+            kind: 'GAME' as const,
+            status: 'COMPLETED' as const,
+            occurredAt: '2026-07-20T10:00:00.000Z',
+            startsAt: '2026-07-20T09:00:00.000Z',
+            endsAt: '2026-07-20T10:00:00.000Z',
+            title: 'Локальная игра',
+            venueName: 'ПадлХАБ',
+            route: '/games/11111111-1111-4111-8111-111111111111',
+            gameId: '11111111-1111-4111-8111-111111111111',
+            tournamentId: null,
+            details: {
+              resultId: '22222222-2222-4222-8222-222222222222',
+              resultRevision: 1,
+              sets: [{ setNumber: 1, teamAUserIds: [], teamBUserIds: [], teamA: 6, teamB: 4 }],
+            },
+            sourceRevision: 'game-result:v1',
+            syncedAt: '2026-07-21T10:00:00.000Z',
+          },
+        ],
+      }),
+    );
+    const app = await buildApp({
+      config,
+      logger: createLogger('activity-history-test', 'silent'),
+      pool: fakePool(),
+      activityHistoryRepository: {
+        ...base,
+        list,
+      },
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/history?status=COMPLETED&limit=20',
+      headers: { authorization: `Bearer ${await token()}` },
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(200);
+    expect(list).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      kind: 'GAME',
+      status: 'COMPLETED',
+      limit: 20,
+    });
+    expect(response.json()).toMatchObject({
+      coverage: 'PARTIAL',
+      freshness: 'STALE',
+      generatedAt: '2026-07-21T10:00:00.000Z',
+      items: [{ kind: 'GAME', title: 'Локальная игра', result: '6:4' }],
+    });
+  });
+
   it('keeps a continuation cursor when the requested filter is empty but coverage is partial', async () => {
     const partial = state({
       coverageStatus: 'PARTIAL',

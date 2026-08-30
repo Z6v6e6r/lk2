@@ -639,6 +639,41 @@ describe('game roster repository', () => {
     ).toEqual(['game.waitlist.left.v1']);
   });
 
+  it('fails closed before releasing capacity when leaving a paid game', async () => {
+    const { pool, query } = poolWithHandler((text) =>
+      baseHandler(text, {
+        paymentMode: 'SPLIT',
+        facts: {
+          active_participant_count: 2,
+          participation_id: participationId,
+          participation_role: 'PLAYER',
+        },
+      }),
+    );
+
+    await expect(
+      createGameRosterRepository(pool as never).leave(
+        input({ idempotencyKey: 'games-paid-leave-command-0001', requestHash: 'f'.repeat(64) }),
+      ),
+    ).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_PAYMENT_REQUIRED',
+      currentRevision: 1,
+      replayed: false,
+    });
+
+    expect(
+      query.mock.calls.some(([text]) =>
+        [
+          'update games.participations',
+          'update games.games set revision',
+          'insert into audit.outbox_events',
+          'insert into games.scheduled_commands',
+        ].some((needle) => text.includes(needle)),
+      ),
+    ).toBe(false);
+  });
+
   it('replays the original command result and rejects cross-request key reuse', async () => {
     const stored = {
       outcome: 'applied',
@@ -801,6 +836,39 @@ describe('game roster repository', () => {
       'game.participation.confirmed.v1',
       'game.roster.completed.v1',
     ]);
+  });
+
+  it('fails closed without touching the waitlist for a paid promotion command', async () => {
+    const commandId = '6c495f29-c3e6-426f-a855-28301b447152';
+    const { pool, query } = poolWithHandler((text) => baseHandler(text, { paymentMode: 'SPLIT' }));
+
+    await expect(
+      createGameRosterRepository(pool as never).promoteWaitlist({
+        tenantId,
+        gameId,
+        commandId,
+        idempotencyKey: 'games-paid-promote-command-0001',
+        requestHash: 'e'.repeat(64),
+        correlationId: 'corr-games-paid-promote-0001',
+        waitlistEntryId,
+      }),
+    ).resolves.toEqual({
+      outcome: 'no_op',
+      commandId,
+      gameId,
+      revision: 1,
+      replayed: false,
+    });
+
+    expect(
+      query.mock.calls.some(([text]) =>
+        [
+          'update games.waitlist_entries',
+          'insert into games.participations',
+          'insert into games.seat_reservations',
+        ].some((needle) => text.includes(needle)),
+      ),
+    ).toBe(false);
   });
 
   it('loads a durable user operation only through tenant and actor ownership', async () => {
