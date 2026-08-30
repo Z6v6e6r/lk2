@@ -65,8 +65,26 @@ function poolWithHandler(
     text: string,
     values: readonly unknown[],
   ) => { rows?: readonly unknown[]; rowCount?: number },
+  createAdmissible = true,
+  stationAdmissible = true,
+  courtAdmissible = true,
 ) {
   const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+    if (text.includes('from locations.profiles')) {
+      return Promise.resolve({
+        rows: stationAdmissible ? [{ id: values[1] }] : [],
+        rowCount: stationAdmissible ? 1 : 0,
+      });
+    }
+    if (text.includes('from integration.external_entity_map')) {
+      return Promise.resolve({
+        rows: courtAdmissible ? [{ internal_id: values[1] }] : [],
+        rowCount: courtAdmissible ? 1 : 0,
+      });
+    }
+    if (text.includes('$1::timestamptz > clock_timestamp() as admissible')) {
+      return Promise.resolve({ rows: [{ admissible: createAdmissible }], rowCount: 1 });
+    }
     const result = handler(text, values);
     return Promise.resolve({
       rows: result.rows ?? [],
@@ -107,6 +125,7 @@ describe('game repository', () => {
     expect(query).toHaveBeenCalledWith('begin');
     expect(query).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [tenantId]);
     expect(query.mock.calls.some(([text]) => text.includes('for update'))).toBe(true);
+    expect(query.mock.calls.some(([text]) => text.includes('clock_timestamp()'))).toBe(true);
     expect(query.mock.calls.some(([text]) => text.includes('games.participations'))).toBe(true);
     expect(query.mock.calls.some(([text]) => text.includes('games.operations'))).toBe(true);
     expect(query.mock.calls.some(([text]) => text.includes('games.scheduled_commands'))).toBe(true);
@@ -118,7 +137,7 @@ describe('game repository', () => {
 
     const gameInsert = query.mock.calls.find(([text]) => text.includes('insert into games.games'));
     expect(gameInsert?.[0]).toContain('min_level_id, max_level_id');
-    expect(gameInsert?.[1]?.slice(-4)).toEqual(['C', 'B', levelCId, levelBId]);
+    expect(gameInsert?.[1]?.slice(-5)).toEqual(['C', 'B', levelCId, levelBId, 'PROVISIONING']);
     const auditInsert = query.mock.calls.find(([text]) => text.includes('audit.audit_log'));
     expect(JSON.parse(String(auditInsert?.[1]?.[4]))).toMatchObject({
       participationEligibility: {
@@ -137,6 +156,235 @@ describe('game repository', () => {
       'game.provisioning.requested.v1',
     ]);
     expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('rejects a new past-start command after replay lookup with zero durable side effects', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }), false);
+
+    await expect(createGameRepository(pool as never).create(createInput())).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_START_TIME_PASSED',
+    });
+
+    const sql = query.mock.calls.map(([text]) => String(text));
+    const lockIndex = sql.findIndex((text) => text.includes('pg_advisory_xact_lock'));
+    const lookupIndex = sql.findIndex((text) => text.includes('from games.command_idempotency'));
+    const admissionIndex = sql.findIndex((text) => text.includes('clock_timestamp()'));
+    expect(lockIndex).toBeGreaterThan(-1);
+    expect(lookupIndex).toBeGreaterThan(lockIndex);
+    expect(admissionIndex).toBeGreaterThan(lookupIndex);
+    expect(
+      sql.some((text) =>
+        [
+          'insert into games.games',
+          'insert into games.participations',
+          'insert into games.operations',
+          'insert into games.scheduled_commands',
+          'insert into games.command_idempotency',
+          'insert into audit.audit_log',
+          'insert into audit.outbox_events',
+        ].some((needle) => text.includes(needle)),
+      ),
+    ).toBe(false);
+    expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('rejects a missing or foreign station before admission with zero durable side effects', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }), true, false);
+
+    await expect(createGameRepository(pool as never).create(createInput())).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_LOCATION_INVALID',
+    });
+
+    const sql = query.mock.calls.map(([text]) => String(text));
+    const replayIndex = sql.findIndex((text) => text.includes('from games.command_idempotency'));
+    const stationIndex = sql.findIndex((text) => text.includes('from locations.profiles'));
+    expect(stationIndex).toBeGreaterThan(replayIndex);
+    expect(sql.some((text) => text.includes('clock_timestamp()'))).toBe(false);
+    expect(
+      sql.some((text) =>
+        [
+          'insert into games.games',
+          'insert into games.participations',
+          'insert into games.operations',
+          'insert into games.scheduled_commands',
+          'insert into games.command_idempotency',
+          'insert into audit.audit_log',
+          'insert into audit.outbox_events',
+        ].some((needle) => text.includes(needle)),
+      ),
+    ).toBe(false);
+    expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('rejects an unknown or foreign court after station validation with zero durable writes', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }), true, true, false);
+
+    await expect(
+      createGameRepository(pool as never).create({
+        ...createInput(),
+        courtId: 'b74faf92-2f6e-49eb-b61e-2a049e594a3a',
+      }),
+    ).resolves.toEqual({ outcome: 'rejected', code: 'GAME_LOCATION_INVALID' });
+
+    const sql = query.mock.calls.map(([text]) => String(text));
+    const stationIndex = sql.findIndex((text) => text.includes('from locations.profiles'));
+    const courtIndex = sql.findIndex((text) =>
+      text.includes('from integration.external_entity_map'),
+    );
+    expect(courtIndex).toBeGreaterThan(stationIndex);
+    expect(sql.some((text) => text.includes('insert into games.games'))).toBe(false);
+    expect(sql.some((text) => text.includes('clock_timestamp()'))).toBe(false);
+    expect(query).toHaveBeenCalledWith('commit');
+  });
+
+  it('accepts a tenant-owned mapped court after validating a published station', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from eligibility.canonical_levels')) {
+        return {
+          rows: [
+            { id: levelCId, code: 'C', rank: 3, scale_version: 1 },
+            { id: levelBId, code: 'B', rank: 5, scale_version: 1 },
+          ],
+        };
+      }
+      if (text.includes('insert into games.games')) {
+        return {
+          rows: [{ ...gameRow, court_id: 'b74faf92-2f6e-49eb-b61e-2a049e594a3a' }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).create({
+        ...createInput(),
+        courtId: 'b74faf92-2f6e-49eb-b61e-2a049e594a3a',
+      }),
+    ).resolves.toMatchObject({ outcome: 'applied', gameId });
+    expect(query.mock.calls.some(([text]) => text.includes('from locations.profiles'))).toBe(true);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('from integration.external_entity_map')),
+    ).toBe(true);
+  });
+
+  it('schedules a no-payment game without a provider provisioning command', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from eligibility.canonical_levels')) {
+        return {
+          rows: [
+            { id: levelCId, code: 'C', rank: 3, scale_version: 1 },
+            { id: levelBId, code: 'B', rank: 5, scale_version: 1 },
+          ],
+        };
+      }
+      if (text.includes('insert into games.games')) {
+        return {
+          rows: [{ ...gameRow, lifecycle_state: 'SCHEDULED', payment_mode: 'NO_PAYMENT' }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).create({ ...createInput(), paymentMode: 'NO_PAYMENT' }),
+    ).resolves.toMatchObject({ outcome: 'applied', gameId, revision: 1 });
+
+    const scheduled = query.mock.calls.find(([text]) => text.includes("'game.lifecycle.start.v1'"));
+    expect(scheduled?.[0]).toContain("'game.lifecycle.finish.v1'");
+    expect(query.mock.calls.some(([text]) => text.includes("'game.provisioning.advance.v1'"))).toBe(
+      false,
+    );
+    const operation = query.mock.calls.find(([text]) =>
+      text.includes('insert into games.operations'),
+    );
+    expect(operation?.[1]).toContain('SUCCEEDED');
+    const idempotency = query.mock.calls.find(([text]) =>
+      text.includes('insert into games.command_idempotency'),
+    );
+    expect(idempotency?.[1]?.[1]).toBe(operation?.[1]?.[1]);
+    expect(
+      query.mock.calls
+        .filter(([text]) => text.includes('insert into audit.outbox_events'))
+        .map((call) => call[1]?.[2]),
+    ).toEqual(['game.created.v1', 'game.scheduled.v1', 'game.published.v1']);
+  });
+
+  it('cancels only the organizer-owned no-payment game and emits one durable event', async () => {
+    const scheduledGame = {
+      ...gameRow,
+      lifecycle_state: 'SCHEDULED',
+      payment_mode: 'NO_PAYMENT',
+    } as const;
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return { rows: [scheduledGame] };
+      }
+      if (text.includes('update games.games') && text.includes("lifecycle_state = 'CANCELLED'")) {
+        return { rows: [{ revision: '2' }] };
+      }
+      if (text.includes('select user_id from games.participations')) {
+        return { rows: [{ user_id: actorUserId }] };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).cancel({
+        tenantId,
+        actorUserId,
+        gameId,
+        idempotencyKey: 'cancel-game-key-0001',
+        requestHash: 'c'.repeat(64),
+        correlationId: 'cancel-game-correlation-0001',
+        reasonCode: 'ORGANIZER_REQUEST',
+      }),
+    ).resolves.toMatchObject({ outcome: 'applied', gameId, revision: 2, replayed: false });
+
+    const outbox = query.mock.calls.find(([text]) =>
+      text.includes('insert into audit.outbox_events'),
+    );
+    expect(outbox?.[1]?.[2]).toBe('game.cancelled.v1');
+    expect(JSON.parse(String(outbox?.[1]?.[5]))).toMatchObject({
+      participantUserIds: [actorUserId],
+      reasonCode: 'ORGANIZER_REQUEST',
+    });
+  });
+
+  it('rejects cancellation by a non-organizer before changing the aggregate', async () => {
+    const { pool, query } = poolWithHandler((text) =>
+      text.includes('from games.games') && text.includes('for update')
+        ? {
+            rows: [
+              {
+                ...gameRow,
+                lifecycle_state: 'SCHEDULED',
+                payment_mode: 'NO_PAYMENT',
+                organizer_user_id: '11111111-1111-4111-8111-111111111111',
+              },
+            ],
+          }
+        : { rows: [] },
+    );
+
+    await expect(
+      createGameRepository(pool as never).cancel({
+        tenantId,
+        actorUserId,
+        gameId,
+        idempotencyKey: 'cancel-game-key-0002',
+        requestHash: 'd'.repeat(64),
+        correlationId: 'cancel-game-correlation-0002',
+        reasonCode: 'ORGANIZER_REQUEST',
+      }),
+    ).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_NOT_CANCELLABLE',
+      currentRevision: 1,
+      replayed: false,
+    });
+    expect(query.mock.calls.some(([text]) => text.includes('update games.games'))).toBe(false);
   });
 
   it('rejects an unmapped or reversed canonical range before creating aggregate state', async () => {
@@ -163,7 +411,7 @@ describe('game repository', () => {
     expect(query).toHaveBeenCalledWith('rollback');
   });
 
-  it('replays the original completed result without writing aggregate state again', async () => {
+  it('replays a completed create after its start has passed without temporal admission', async () => {
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('from games.command_idempotency')) {
         return {
@@ -172,6 +420,7 @@ describe('game repository', () => {
               command_type: 'game.create.v1',
               request_hash: 'a'.repeat(64),
               state: 'COMPLETED',
+              completed_at: '2026-07-17T12:00:00.000Z',
               result_payload: {
                 outcome: 'applied',
                 gameId,
@@ -190,13 +439,62 @@ describe('game repository', () => {
       gameId,
       operationId,
       revision: 1,
+      committedAt: '2026-07-17T12:00:00.000Z',
       replayed: true,
     });
     expect(query.mock.calls.some(([text]) => text.includes('insert into games.games'))).toBe(false);
+    expect(query.mock.calls.some(([text]) => text.includes('clock_timestamp()'))).toBe(false);
+    expect(query.mock.calls.some(([text]) => text.includes('from locations.profiles'))).toBe(false);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('from integration.external_entity_map')),
+    ).toBe(false);
   });
 
-  it('rejects idempotency key reuse with another request hash', async () => {
-    const { pool } = poolWithHandler((text) =>
+  it('reads an actor-owned create operation by the returned durable operation id', async () => {
+    const { pool } = poolWithHandler((text, values) => {
+      if (text.includes("command_type in ('game.create.v1', 'game.cancel.v1')")) {
+        expect(values).toEqual([tenantId, operationId, actorUserId]);
+        return {
+          rows: [
+            {
+              command_type: 'game.create.v1',
+              request_hash: 'a'.repeat(64),
+              state: 'COMPLETED',
+              completed_at: '2026-07-17T12:00:00.000Z',
+              result_payload: {
+                outcome: 'applied',
+                gameId,
+                operationId,
+                revision: 1,
+              },
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).getManagementOperation({
+        tenantId,
+        actorUserId,
+        operationId,
+      }),
+    ).resolves.toEqual({
+      commandType: 'game.create.v1',
+      result: {
+        outcome: 'applied',
+        gameId,
+        operationId,
+        revision: 1,
+        committedAt: '2026-07-17T12:00:00.000Z',
+        replayed: true,
+      },
+    });
+  });
+
+  it('rejects idempotency key reuse with another request hash before temporal admission', async () => {
+    const { pool, query } = poolWithHandler((text) =>
       text.includes('from games.command_idempotency')
         ? {
             rows: [
@@ -214,6 +512,7 @@ describe('game repository', () => {
     await expect(createGameRepository(pool as never).create(createInput())).resolves.toEqual({
       outcome: 'idempotency_conflict',
     });
+    expect(query.mock.calls.some(([text]) => text.includes('clock_timestamp()'))).toBe(false);
   });
 
   it('uses monotonic keyset order for public projections', async () => {
@@ -256,6 +555,41 @@ describe('game repository', () => {
     expect(call?.[1]).toEqual([tenantId, actorUserId, gameRow.starts_at, gameId, 21]);
   });
 
+  it('reports projection lag through a bounded tenant-scoped read-only scan', async () => {
+    const { pool, query } = poolWithHandler((text) =>
+      text.includes('coalesce(projection.projection_revision, 0) < g.revision')
+        ? {
+            rows: [
+              {
+                game_id: gameId,
+                aggregate_revision: '7',
+                projection_revision: '5',
+                lifecycle_state: 'SCHEDULED',
+              },
+            ],
+          }
+        : { rows: [] },
+    );
+
+    await expect(
+      createGameRepository(pool as never).listCardProjectionLag({ tenantId, limit: 5_000 }),
+    ).resolves.toEqual([
+      {
+        gameId,
+        aggregateRevision: 7,
+        projectionRevision: 5,
+        lifecycleState: 'SCHEDULED',
+      },
+    ]);
+    const scan = query.mock.calls.find(([text]) =>
+      text.includes('coalesce(projection.projection_revision, 0) < g.revision'),
+    );
+    expect(scan?.[0]).toContain('g.tenant_id = $1');
+    expect(scan?.[0]).toContain('legacy_game_merge_redirects');
+    expect(scan?.[1]).toEqual([tenantId, 500]);
+    expect(query.mock.calls.some(([text]) => /\b(insert|update|delete)\b/i.test(text))).toBe(false);
+  });
+
   it('atomically projects the current locked aggregate and marks the event inbox', async () => {
     const scheduled = {
       ...gameRow,
@@ -292,6 +626,8 @@ describe('game repository', () => {
     const projectionCall = query.mock.calls.find(([text]) =>
       text.includes('insert into games.card_projections'),
     );
+    const aggregateLock = query.mock.calls.find(([text]) => text.includes('from games.games g'));
+    expect(aggregateLock?.[0]).toContain('for update of g');
     expect(JSON.parse(String(projectionCall?.[1]?.[7]))).toMatchObject({
       participants: [{ userId: actorUserId, level: 'C+', levelValue: 3.43844 }],
     });
@@ -322,6 +658,95 @@ describe('game repository', () => {
       createGameRepository(pool as never).projectCardEvent({ tenantId, eventId, gameId }),
     ).resolves.toBe('duplicate');
     expect(query.mock.calls.some(([text]) => text.includes('from games.games g'))).toBe(false);
+  });
+
+  it('redelivers the same event after a result dependency becomes visible', async () => {
+    const awaitingResult = {
+      ...gameRow,
+      revision: '4',
+      lifecycle_state: 'FINISHED',
+      result_state: 'CONFIRMED',
+      station_name: 'Падел Сколково',
+      station_short_address: 'Новая, 1',
+    };
+    let dependencyVisible = false;
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('insert into audit.inbox_events')) return { rows: [{ event_id: eventId }] };
+      if (text.includes('from games.games g')) return { rows: [awaitingResult] };
+      if (text.includes('from games.participations p')) {
+        return {
+          rows: [actorUserId, levelCId, levelBId, gameId].map((userId, index) => ({
+            user_id: userId,
+            display_name: `Player ${index + 1}`,
+            photo_url: null,
+            level_label: null,
+            level_value: null,
+            role: index === 0 ? 'ORGANIZER' : 'PLAYER',
+            payment_state: 'NOT_REQUIRED',
+          })),
+        };
+      }
+      if (text.includes('from games.result_submission_reviews')) {
+        return {
+          rows: [levelCId, levelBId, gameId].map((userId) => ({
+            reviewer_user_id: userId,
+            decision: 'CONFIRMED',
+          })),
+        };
+      }
+      if (text.includes('from games.result_submissions') && text.includes('limit 1')) {
+        return dependencyVisible
+          ? {
+              rows: [
+                {
+                  id: operationId,
+                  submitted_by_user_id: actorUserId,
+                  submitted_at: '2026-07-20T18:00:00.000Z',
+                  confirmation_quorum: 3,
+                  score_payload: {
+                    sets: [
+                      {
+                        setNumber: 1,
+                        teamAUserIds: [actorUserId, levelCId],
+                        teamBUserIds: [levelBId, gameId],
+                        teamA: 6,
+                        teamB: 4,
+                      },
+                    ],
+                  },
+                  roster_snapshot: {
+                    participantUserIds: [actorUserId, levelCId, levelBId, gameId],
+                  },
+                },
+              ],
+            }
+          : { rows: [] };
+      }
+      if (text.includes('insert into games.card_projections')) return { rowCount: 1 };
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).projectCardEvent({ tenantId, eventId, gameId }),
+    ).resolves.toBe('dependency_missing');
+
+    dependencyVisible = true;
+    await expect(
+      createGameRepository(pool as never).projectCardEvent({ tenantId, eventId, gameId }),
+    ).resolves.toBe('applied');
+
+    expect(
+      query.mock.calls.filter(([text]) => text.includes('delete from audit.inbox_events')),
+    ).toHaveLength(1);
+    expect(
+      query.mock.calls.filter(([text]) =>
+        text.includes('update audit.inbox_events set processed_at'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      query.mock.calls.filter(([text]) => text.includes('insert into games.card_projections')),
+    ).toHaveLength(1);
+    expect(query.mock.calls.filter(([text]) => text === 'commit')).toHaveLength(2);
   });
 
   it('claims due commands with row locking and bounded attempts', async () => {
@@ -501,6 +926,13 @@ describe('game repository', () => {
       expectedRevision: 5,
     });
     expect(query.mock.calls.some(([text]) => text.includes('update games.games'))).toBe(false);
+    const reschedule = query.mock.calls.find(
+      ([text]) =>
+        text.includes('update games.scheduled_commands') &&
+        text.includes("last_error_code = 'GAME_COMMAND_RESCHEDULED'"),
+    );
+    expect(reschedule?.[0]).toContain('expected_revision = $6::bigint');
+    expect(reschedule?.[0]).toContain("'expectedRevision', $6::bigint::text");
     expect(query).toHaveBeenCalledWith('commit');
   });
 });

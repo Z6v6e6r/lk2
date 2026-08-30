@@ -155,7 +155,12 @@ const authService = new AuthService({
 const activityHistoryRepository = config.ACTIVITY_HISTORY_ENABLED
   ? createActivityHistoryRepository(pool)
   : undefined;
-const gameReadRepository = config.GAMES_READ_ENABLED ? createGameRepository(pool) : undefined;
+const gameRepository =
+  config.GAMES_READ_ENABLED || config.GAMES_COMMANDS_ENABLED
+    ? createGameRepository(pool)
+    : undefined;
+const gameReadRepository = config.GAMES_READ_ENABLED ? gameRepository : undefined;
+const gameCommandRepository = config.GAMES_COMMANDS_ENABLED ? gameRepository : undefined;
 const tournamentSummarySource = config.GAMES_READ_ENABLED
   ? new LegacyTournamentSummaryAdapter({
       baseUrl: config.LEGACY_GAMES_PUBLIC_BASE_URL,
@@ -511,6 +516,7 @@ const app = await buildApp({
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),
   ...(activityHistoryProjector ? { activityHistoryProjector } : {}),
   ...(gameReadRepository ? { gameReadRepository } : {}),
+  ...(gameCommandRepository ? { gameCommandRepository } : {}),
   ...(tournamentSummarySource ? { tournamentSummarySource } : {}),
   ...(gameRosterRepository
     ? {

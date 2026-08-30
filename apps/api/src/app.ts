@@ -263,6 +263,10 @@ export interface BuildAppOptions {
   readonly legacyGameRosterBridgeRepository?: LegacyGameRosterBridgeRepository;
   readonly legacyLkIdentityVerifier?: LegacyLkIdentityVerifier;
   readonly gameResultRepository?: Pick<GameResultRepository, 'submit' | 'confirm' | 'dispute'>;
+  readonly gameCommandRepository?: Pick<
+    GameRepository,
+    'create' | 'cancel' | 'getManagementOperation'
+  >;
   readonly gameReadRepository?: Pick<
     GameRepository,
     'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
@@ -930,6 +934,9 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerGameRoutes(app as unknown as FastifyInstance, {
     ...(options.gameRosterRepository ? { repository: options.gameRosterRepository } : {}),
+    ...(options.gameCommandRepository
+      ? { managementRepository: options.gameCommandRepository }
+      : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });

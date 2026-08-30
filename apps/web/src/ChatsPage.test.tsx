@@ -18,11 +18,15 @@ const defaultProps = {
   currentUserId,
   busy: null,
   error: null,
+  pendingMessage: null,
+  realtimeState: null,
+  hasEarlierMessages: false,
   canRetrySend: false,
   onCreateDirect: vi.fn(),
   onSendMessage: vi.fn(),
   onRetrySend: vi.fn(),
   onRefresh: vi.fn(),
+  onLoadEarlier: vi.fn(),
 } as const;
 
 describe('ChatsPage', () => {
@@ -113,6 +117,17 @@ describe('ChatsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Начать диалог' }));
     expect(onCreateDirect).toHaveBeenCalledOnce();
     expect(screen.queryByText('11111111-1111-4111-8111-111111111111')).not.toBeInTheDocument();
+
+    rerender(
+      <ChatsPage
+        {...defaultProps}
+        mode="new"
+        hasExplicitRecipient
+        error={{ kind: 'FEATURE_UNAVAILABLE', message: 'Контур выключен.' }}
+        onCreateDirect={onCreateDirect}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Начать диалог' })).toBeDisabled();
   });
 
   it('keeps feature-unavailable and retryable failures distinct', () => {
@@ -296,7 +311,7 @@ describe('ChatsPage', () => {
     expect(context).not.toHaveTextContent(/корт|уровень|оплата/iu);
   });
 
-  it('sends with Enter, keeps Shift+Enter, and ignores Enter during IME composition', () => {
+  it('uses Ctrl+Enter to send, keeps plain Enter for a newline, and ignores IME composition', () => {
     const onSendMessage = vi.fn();
     render(
       <ChatsPage
@@ -309,13 +324,68 @@ describe('ChatsPage', () => {
     );
     const input = screen.getByLabelText('Сообщение');
     fireEvent.change(input, { target: { value: 'Первая строка' } });
-    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
-    expect(onSendMessage).not.toHaveBeenCalled();
-    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
-    expect(onSendMessage).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSendMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, isComposing: true });
+    expect(onSendMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
     expect(onSendMessage).toHaveBeenCalledWith('Первая строка');
     expect(screen.queryByRole('button', { name: /микрофон|реакц|влож/iu })).not.toBeInTheDocument();
+  });
+
+  it('shows one optimistic item through sending and failed states without rendering HTML', () => {
+    const { rerender } = render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        pendingMessage={{
+          clientMessageId: 'client-message-0001',
+          body: '<script>alert(1)</script>\nдлинная строка',
+          state: 'sending',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('<script>alert(1)</script>', { exact: false })).toBeVisible();
+    expect(document.querySelector('script')).not.toBeInTheDocument();
+    expect(screen.getByText('Отправляется…')).toBeVisible();
+
+    rerender(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        pendingMessage={{
+          clientMessageId: 'client-message-0001',
+          body: '<script>alert(1)</script>\nдлинная строка',
+          state: 'failed',
+        }}
+        canRetrySend
+      />,
+    );
+    expect(screen.getAllByText('<script>alert(1)</script>', { exact: false })).toHaveLength(1);
+    expect(screen.getByText('Не отправлено')).toBeVisible();
+  });
+
+  it('exposes earlier history loading and reconnect fallback status', () => {
+    const onLoadEarlier = vi.fn();
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        hasEarlierMessages
+        realtimeState="reconnecting"
+        onLoadEarlier={onLoadEarlier}
+      />,
+    );
+    expect(screen.getByText('История обновляется', { exact: false })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+    expect(onLoadEarlier).toHaveBeenCalledOnce();
   });
 
   it('distinguishes empty chat pages from no local search results', () => {

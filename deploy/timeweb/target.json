@@ -13,6 +13,17 @@
     "architecture": "amd64",
     "hostArchitecture": "x86_64"
   },
+  "operatorRuntime": {
+    "node": {
+      "path": "/usr/bin/node",
+      "major": 22,
+      "controllerPath": "scripts/control-timeweb-operator-node-bootstrap.py",
+      "contractPath": "deploy/timeweb/operator-node-bootstrap.v1.json",
+      "launcherPath": "/usr/bin/python3",
+      "launcherPackage": "python3-minimal",
+      "receiptPath": "/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json"
+    }
+  },
   "provider": {
     "name": "Timeweb",
     "serverName": "Cute Hoopoe",

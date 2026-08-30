@@ -88,7 +88,7 @@ function GenericHistoryCard({ item }: { readonly item: ActivityHistoryItem }): R
             <dd>{item.trainerName}</dd>
           </div>
         ) : null}
-        {item.kind === 'TOURNAMENT' && item.result ? (
+        {(item.kind === 'TOURNAMENT' || item.kind === 'GAME') && item.result ? (
           <div>
             <dt>Результат</dt>
             <dd>{item.result}</dd>

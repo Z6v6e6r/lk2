@@ -30,6 +30,7 @@ export type GameRosterCommandErrorCode =
   | 'GAME_REVISION_CONFLICT'
   | 'GAME_NOT_CONFIRMABLE'
   | 'GAME_PAYMENT_EVIDENCE_CONFLICT'
+  | 'GAME_PAYMENT_REQUIRED'
   | 'GAME_PAYMENT_MODE_MISMATCH'
   | 'GAME_PAYMENT_SNAPSHOT_MISSING'
   | 'GAME_RESERVATION_EXPIRED'
@@ -1682,6 +1683,17 @@ export function createGameRosterRepository(
         const prepared = await prepareCommand(client, input, commandType);
         if (!prepared.ready) return prepared.result;
         const now = timestamp(prepared.game.database_now);
+        if (prepared.game.payment_mode !== 'NO_PAYMENT') {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            prepared.commandId,
+            'GAME_PAYMENT_REQUIRED',
+            true,
+            positiveInteger(prepared.game.revision),
+          );
+        }
         const rejected = await policyRejection(
           client,
           input,
@@ -1884,6 +1896,17 @@ export function createGameRosterRepository(
         const game = await lockProcessGame(client, input);
         if (!game) throw new Error('GAME_NOT_FOUND');
         const currentRevision = positiveInteger(game.revision);
+        if (game.payment_mode !== 'NO_PAYMENT') {
+          const result = {
+            outcome: 'no_op' as const,
+            commandId: input.commandId,
+            gameId: input.gameId,
+            revision: currentRevision,
+            replayed: false,
+          };
+          await storeProcessResult(client, input, commandType, result);
+          return result;
+        }
         const capacity = await loadCapacity(client, input.tenantId, input.gameId);
         const entry = await queryOne<PromotableWaitlistRow>(
           client,
@@ -1955,50 +1978,17 @@ export function createGameRosterRepository(
           [input.tenantId, input.gameId, entry.id],
         );
         const now = timestamp(game.database_now);
-        let targetRelation: 'SEAT_RESERVED' | 'PARTICIPANT';
-        let targetId: string;
-        let expiresAt: string | undefined;
-        if (game.payment_mode === 'SPLIT' || game.payment_mode === 'SUBSCRIPTION') {
-          const reservation = await queryOne<ReservationRow>(
-            client,
-            `insert into games.seat_reservations (
-               tenant_id, game_id, user_id, state, payment_state, expires_at,
-               eligibility_decision_id
-             ) values ($1, $2, $3, 'ACTIVE', $4, now() + interval '15 minutes', $5)
-             returning id, expires_at::text as expires_at`,
-            [
-              input.tenantId,
-              input.gameId,
-              entry.user_id,
-              game.payment_mode === 'SPLIT' ? 'REQUIRES_ACTION' : 'PROCESSING',
-              eligibility.decisionId ?? null,
-            ],
-          );
-          if (!reservation) throw new Error('GAME_PROMOTION_RESERVATION_WRITE_LOST');
-          await persistPaymentEligibilitySnapshot(client, {
-            tenantId: input.tenantId,
-            operationId: input.commandId,
-            decisionId: eligibility.decisionId,
-            playerId: entry.user_id,
-            gameId: input.gameId,
-            paymentMode: game.payment_mode,
-          });
-          targetRelation = 'SEAT_RESERVED';
-          targetId = reservation.id;
-          expiresAt = timestamp(reservation.expires_at);
-        } else {
-          const participation = await queryOne<IdentifierRow>(
-            client,
-            `insert into games.participations (
-               tenant_id, game_id, user_id, role, state, payment_state, eligibility_decision_id
-             ) values ($1, $2, $3, 'PLAYER', 'ACTIVE', 'NOT_REQUIRED', $4)
-             returning id`,
-            [input.tenantId, input.gameId, entry.user_id, eligibility.decisionId ?? null],
-          );
-          if (!participation) throw new Error('GAME_PROMOTION_PARTICIPATION_WRITE_LOST');
-          targetRelation = 'PARTICIPANT';
-          targetId = participation.id;
-        }
+        const participation = await queryOne<IdentifierRow>(
+          client,
+          `insert into games.participations (
+             tenant_id, game_id, user_id, role, state, payment_state, eligibility_decision_id
+           ) values ($1, $2, $3, 'PLAYER', 'ACTIVE', 'NOT_REQUIRED', $4)
+           returning id`,
+          [input.tenantId, input.gameId, entry.user_id, eligibility.decisionId ?? null],
+        );
+        if (!participation) throw new Error('GAME_PROMOTION_PARTICIPATION_WRITE_LOST');
+        const targetRelation = 'PARTICIPANT' as const;
+        const targetId = participation.id;
         const revision = await bumpRevision(client, input);
         const promoted = processEventBase(input, revision, now);
         await appendEvent(client, {
@@ -2015,48 +2005,23 @@ export function createGameRosterRepository(
         });
         await consumePersonalInvitation(client, input.tenantId, eligibility.validatedInvitationId);
         const participationEvent = processEventBase(input, revision, now);
-        if (targetRelation === 'SEAT_RESERVED' && expiresAt) {
+        await appendEvent(client, {
+          ...participationEvent,
+          type: 'game.participation.confirmed.v1',
+          payload: {
+            ...participationEvent.payload,
+            userId: entry.user_id,
+            participationId: targetId,
+          },
+        });
+        const users = await participantUserIds(client, input);
+        if (users.length === game.capacity) {
+          const completed = processEventBase(input, revision, now);
           await appendEvent(client, {
-            ...participationEvent,
-            type: 'game.participation.reserved.v1',
-            payload: {
-              ...participationEvent.payload,
-              userId: entry.user_id,
-              reservationId: targetId,
-              expiresAt,
-            },
+            ...completed,
+            type: 'game.roster.completed.v1',
+            payload: { ...completed.payload, participantUserIds: users },
           });
-          await client.query(
-            `insert into games.scheduled_commands (
-               tenant_id, game_id, command_type, due_at, expected_revision, payload
-             ) values ($1, $2, 'game.reservation.expire.v1', $3, $4, $5::jsonb)`,
-            [
-              input.tenantId,
-              input.gameId,
-              expiresAt,
-              revision,
-              JSON.stringify({ reservationId: targetId }),
-            ],
-          );
-        } else {
-          await appendEvent(client, {
-            ...participationEvent,
-            type: 'game.participation.confirmed.v1',
-            payload: {
-              ...participationEvent.payload,
-              userId: entry.user_id,
-              participationId: targetId,
-            },
-          });
-          const users = await participantUserIds(client, input);
-          if (users.length === game.capacity) {
-            const completed = processEventBase(input, revision, now);
-            await appendEvent(client, {
-              ...completed,
-              type: 'game.roster.completed.v1',
-              payload: { ...completed.payload, participantUserIds: users },
-            });
-          }
         }
         const result = {
           outcome: 'applied' as const,

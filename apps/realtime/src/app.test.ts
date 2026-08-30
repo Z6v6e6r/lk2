@@ -35,18 +35,26 @@ function rawDataToText(raw: RawData): string {
   return raw.toString('utf8');
 }
 
-async function ticket(): Promise<string> {
+async function ticket(
+  options: {
+    readonly tenantId?: string;
+    readonly tenantKey?: string;
+    readonly userId?: string;
+    readonly sessionId?: string;
+    readonly ticketId?: string;
+  } = {},
+): Promise<string> {
   return new SignJWT({
     scope: 'realtime.connect',
-    tenantId,
-    tenantKey: 'local-padel',
-    sid: sessionId,
+    tenantId: options.tenantId ?? tenantId,
+    tenantKey: options.tenantKey ?? 'local-padel',
+    sid: options.sessionId ?? sessionId,
   })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuer(baseConfig.JWT_ISSUER)
     .setAudience(baseConfig.JWT_REALTIME_AUDIENCE)
-    .setSubject(userId)
-    .setJti(ticketId)
+    .setSubject(options.userId ?? userId)
+    .setJti(options.ticketId ?? ticketId)
     .setExpirationTime('30s')
     .sign(new TextEncoder().encode(baseConfig.JWT_REALTIME_SECRET));
 }
@@ -400,6 +408,103 @@ describe('messaging realtime gateway compatibility', () => {
       correlationId: 'correlation-1234',
       occurredAt: '2026-08-04T13:00:00.000Z',
     });
+  });
+
+  it('rechecks GAME fanout after subscription and isolates removed and foreign-tenant clients', async () => {
+    const removedUserId = '66666666-6666-4666-8666-666666666666';
+    const removedSessionId = '77777777-7777-4777-8777-777777777777';
+    const foreignTenantId = '88888888-8888-4888-8888-888888888888';
+    const foreignUserId = '99999999-9999-4999-8999-999999999999';
+    const foreignSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const listRealtimeRecipientUserIds = vi.fn().mockResolvedValue([userId]);
+    const app = await buildRealtimeApp(
+      dependencies({
+        messagingRepository: {
+          authorizeRealtimeConnection: vi.fn().mockResolvedValue({ outcome: 'ok' }),
+          authorizeRealtimeSubscription: vi.fn().mockResolvedValue({
+            outcome: 'ok',
+            latestSequence: 5,
+          }),
+          listRealtimeRecipientUserIds,
+        },
+      }),
+    );
+    apps.push(app);
+    await app.ready();
+
+    const connectAndSubscribe = async (path: string, signedTicket: string): Promise<WebSocket> => {
+      const socket = await app.injectWS(path);
+      sockets.push(socket);
+      const ready = nextMessage(socket);
+      socket.send(JSON.stringify({ type: 'authenticate', ticket: signedTicket }));
+      await ready;
+      const subscribed = nextMessage(socket);
+      socket.send(
+        JSON.stringify({ type: 'conversation.subscribe', conversationId, afterSequence: 5 }),
+      );
+      await expect(subscribed).resolves.toMatchObject({
+        type: 'conversation.subscribed',
+        conversationId,
+      });
+      return socket;
+    };
+
+    const activeSocket = await connectAndSubscribe(
+      '/realtime/v1/local-padel',
+      await ticket({ ticketId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }),
+    );
+    const removedSocket = await connectAndSubscribe(
+      '/realtime/v1/local-padel',
+      await ticket({
+        userId: removedUserId,
+        sessionId: removedSessionId,
+        ticketId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      }),
+    );
+    const foreignSocket = await connectAndSubscribe(
+      '/realtime/v1/foreign-padel',
+      await ticket({
+        tenantId: foreignTenantId,
+        tenantKey: 'foreign-padel',
+        userId: foreignUserId,
+        sessionId: foreignSessionId,
+        ticketId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      }),
+    );
+    const removedHints: Record<string, unknown>[] = [];
+    const foreignHints: Record<string, unknown>[] = [];
+    removedSocket.on('message', (raw: RawData) =>
+      removedHints.push(JSON.parse(rawDataToText(raw)) as Record<string, unknown>),
+    );
+    foreignSocket.on('message', (raw: RawData) =>
+      foreignHints.push(JSON.parse(rawDataToText(raw)) as Record<string, unknown>),
+    );
+
+    const delivered = nextMessage(activeSocket);
+    await expect(
+      app.publishMessageCreated({
+        tenantId,
+        conversationId,
+        messageId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        sequence: 6,
+        correlationId: 'correlation-game-fanout-0001',
+        occurredAt: '2026-08-27T00:00:00.000Z',
+      }),
+    ).resolves.toBe(1);
+    await expect(delivered).resolves.toMatchObject({
+      type: 'message.created',
+      conversationId,
+      messageId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      sequence: 6,
+    });
+    expect(listRealtimeRecipientUserIds).toHaveBeenCalledWith({
+      tenantId,
+      conversationId,
+      messageId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      sequence: 6,
+    });
+    expect(removedHints).toEqual([]);
+    expect(foreignHints).toEqual([]);
   });
 
   it('conceals a blocked DIRECT subscription with the stable protocol error', async () => {

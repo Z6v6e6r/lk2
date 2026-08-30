@@ -26,7 +26,7 @@ export function ChatComposer({
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
     const composing = event.nativeEvent.isComposing || event.keyCode === 229;
-    if (event.key !== 'Enter' || event.shiftKey || composing) return;
+    if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey) || composing) return;
     event.preventDefault();
     event.currentTarget.form?.requestSubmit();
   }
@@ -49,7 +49,7 @@ export function ChatComposer({
       <button type="submit" disabled={busy || forbidden || !draft.trim()}>
         {busy ? 'Отправляем…' : 'Отправить'}
       </button>
-      <small>Enter — отправить · Shift+Enter — новая строка</small>
+      <small>Enter — новая строка · Ctrl/⌘+Enter — отправить</small>
     </form>
   );
 }

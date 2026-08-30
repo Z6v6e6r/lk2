@@ -31,15 +31,15 @@ interface ChatsPageProps {
   readonly currentUserId: string;
   readonly busy: 'create' | 'send' | 'refresh' | 'load-earlier' | null;
   readonly error: ChatUiError | null;
+  readonly pendingMessage: PendingChatMessage | null;
+  readonly realtimeState: ChatRealtimeUiState | null;
+  readonly hasEarlierMessages: boolean;
   readonly canRetrySend: boolean;
-  readonly pendingMessage?: PendingChatMessage | null;
-  readonly realtimeState?: ChatRealtimeUiState | null;
-  readonly hasEarlierMessages?: boolean;
   readonly onCreateDirect: () => void;
   readonly onSendMessage: (body: string) => void;
   readonly onRetrySend: () => void;
   readonly onRefresh: () => void;
-  readonly onLoadEarlier?: () => void;
+  readonly onLoadEarlier: () => void;
 }
 
 function errorTitle(kind: ChatUiError['kind']): string {
@@ -50,10 +50,12 @@ function errorTitle(kind: ChatUiError['kind']): string {
   return 'Не удалось обновить чаты';
 }
 
-function realtimeLabel(state: ChatRealtimeUiState | null | undefined): string | null {
+function realtimeLabel(state: ChatRealtimeUiState | null): string | null {
   if (state === 'connecting') return 'Подключаем онлайн-доставку…';
-  if (state === 'reconnecting') return 'Связь восстанавливается · HTTP-история доступна';
-  if (state === 'polling') return 'Обновляется через защищённый HTTP';
+  if (state === 'reconnecting') {
+    return 'Связь восстанавливается · История обновляется через защищённый HTTP';
+  }
+  if (state === 'polling') return 'Онлайн-доставка недоступна · История обновляется автоматически';
   return null;
 }
 
@@ -66,10 +68,10 @@ export function ChatsPage({
   currentUserId,
   busy,
   error,
-  canRetrySend,
   pendingMessage,
   realtimeState,
   hasEarlierMessages,
+  canRetrySend,
   onCreateDirect,
   onSendMessage,
   onRetrySend,
@@ -92,7 +94,11 @@ export function ChatsPage({
                 Получатель выбран безопасной ссылкой ПадлХАБ. Контактные идентификаторы остаются
                 скрыты.
               </p>
-              <button type="button" disabled={busy !== null} onClick={onCreateDirect}>
+              <button
+                type="button"
+                disabled={busy !== null || error?.kind === 'FEATURE_UNAVAILABLE'}
+                onClick={onCreateDirect}
+              >
                 {busy === 'create' ? 'Открываем диалог…' : 'Начать диалог'}
               </button>
             </>

@@ -28,7 +28,7 @@ export function ChatThreadHeader({
         {isGame ? <ChatIcon /> : initials(title)}
       </span>
       <span className={styles.threadHeading}>
-        <strong>{title}</strong>
+        <h2>{title}</h2>
         <small>{isGame ? 'Чат игры' : 'Личный чат'}</small>
         {connectionStatus ? <span role="status">{connectionStatus}</span> : null}
       </span>

@@ -1,20 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { GameRosterRepository } from '@phub/database';
 
-import { runGameLifecycleProcessManagerCycle } from './game-lifecycle-process-manager.js';
+import {
+  isGameLifecycleProcessManagerEnabled,
+  runGameLifecycleProcessManagerCycle,
+} from './game-lifecycle-process-manager.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
 const startCommandId = '0ef0247c-cae5-4e38-b4bf-1caf19e66746';
 const finishCommandId = '1ef0247c-cae5-4e38-b4bf-1caf19e66746';
+const promoteCommandId = '2ef0247c-cae5-4e38-b4bf-1caf19e66746';
+const waitlistEntryId = '3ef0247c-cae5-4e38-b4bf-1caf19e66746';
 const eventId = '7d04d95e-cfb9-40a1-a0a7-f8d03c5d385c';
 
-function command(id: string, type: 'game.lifecycle.start.v1' | 'game.lifecycle.finish.v1') {
+function command(
+  id: string,
+  type: 'game.lifecycle.start.v1' | 'game.lifecycle.finish.v1' | 'game.waitlist.promote.v1',
+) {
   return {
     id,
     gameId,
     commandType: type,
     expectedRevision: type === 'game.lifecycle.start.v1' ? 5 : 6,
-    payload: { gameId },
+    payload: type === 'game.waitlist.promote.v1' ? { waitlistEntryId } : { gameId },
     attempts: 1,
   } as const;
 }
@@ -28,6 +37,33 @@ describe('Games lifecycle process manager', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('stays disabled for every read-only or commands-only flag combination', () => {
+    expect(
+      isGameLifecycleProcessManagerEnabled({
+        gamesReadEnabled: false,
+        gamesCommandsEnabled: false,
+      }),
+    ).toBe(false);
+    expect(
+      isGameLifecycleProcessManagerEnabled({
+        gamesReadEnabled: true,
+        gamesCommandsEnabled: false,
+      }),
+    ).toBe(false);
+    expect(
+      isGameLifecycleProcessManagerEnabled({
+        gamesReadEnabled: false,
+        gamesCommandsEnabled: true,
+      }),
+    ).toBe(false);
+    expect(
+      isGameLifecycleProcessManagerEnabled({
+        gamesReadEnabled: true,
+        gamesCommandsEnabled: true,
+      }),
+    ).toBe(true);
   });
 
   it('claims one command at a time so start is committed before finish', async () => {
@@ -58,8 +94,10 @@ describe('Games lifecycle process manager', () => {
         repository: {
           claimScheduledCommands,
           executeLifecycleCommand,
+          completeScheduledCommand: vi.fn(),
           retryScheduledCommand: vi.fn(),
         },
+        rosterRepository: { promoteWaitlist: vi.fn() },
         tenantId,
         workerId: 'games-process-manager-test',
         logger,
@@ -79,7 +117,11 @@ describe('Games lifecycle process manager', () => {
     expect(claimScheduledCommands).toHaveBeenCalledWith(
       expect.objectContaining({
         limit: 1,
-        commandTypes: ['game.lifecycle.start.v1', 'game.lifecycle.finish.v1'],
+        commandTypes: [
+          'game.lifecycle.start.v1',
+          'game.lifecycle.finish.v1',
+          'game.waitlist.promote.v1',
+        ],
       }),
     );
     expect(executeLifecycleCommand).toHaveBeenNthCalledWith(
@@ -103,8 +145,10 @@ describe('Games lifecycle process manager', () => {
             .mockResolvedValueOnce([command(startCommandId, 'game.lifecycle.start.v1')])
             .mockResolvedValueOnce([]),
           executeLifecycleCommand: vi.fn().mockRejectedValue(new Error('database unavailable')),
+          completeScheduledCommand: vi.fn(),
           retryScheduledCommand,
         },
+        rosterRepository: { promoteWaitlist: vi.fn() },
         tenantId,
         workerId: 'games-process-manager-test',
         logger,
@@ -124,5 +168,84 @@ describe('Games lifecycle process manager', () => {
       expect.objectContaining({ commandId: startCommandId }),
       'Games lifecycle command deferred for retry',
     );
+  });
+
+  it('promotes a free waitlist entry and completes the leased scheduled command', async () => {
+    const completeScheduledCommand = vi.fn().mockResolvedValue(true);
+    const promoteWaitlist = vi.fn<GameRosterRepository['promoteWaitlist']>().mockResolvedValue({
+      outcome: 'applied',
+      commandId: promoteCommandId,
+      gameId,
+      revision: 7,
+      replayed: false,
+    });
+
+    await expect(
+      runGameLifecycleProcessManagerCycle({
+        repository: {
+          claimScheduledCommands: vi
+            .fn()
+            .mockResolvedValueOnce([command(promoteCommandId, 'game.waitlist.promote.v1')])
+            .mockResolvedValueOnce([]),
+          executeLifecycleCommand: vi.fn(),
+          completeScheduledCommand,
+          retryScheduledCommand: vi.fn(),
+        },
+        rosterRepository: { promoteWaitlist },
+        tenantId,
+        workerId: 'games-process-manager-test',
+        logger,
+        batchSize: 10,
+      }),
+    ).resolves.toMatchObject({ claimed: 1, applied: 1, alreadyApplied: 0 });
+
+    expect(promoteWaitlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        gameId,
+        commandId: promoteCommandId,
+        waitlistEntryId,
+        idempotencyKey: `scheduled:${promoteCommandId}`,
+      }),
+    );
+    expect(promoteWaitlist.mock.calls[0]?.[0].requestHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(completeScheduledCommand).toHaveBeenCalledWith({
+      tenantId,
+      workerId: 'games-process-manager-test',
+      commandId: promoteCommandId,
+    });
+  });
+
+  it('completes a replayed promotion after a crash between business commit and command completion', async () => {
+    const completeScheduledCommand = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      runGameLifecycleProcessManagerCycle({
+        repository: {
+          claimScheduledCommands: vi
+            .fn()
+            .mockResolvedValueOnce([command(promoteCommandId, 'game.waitlist.promote.v1')])
+            .mockResolvedValueOnce([]),
+          executeLifecycleCommand: vi.fn(),
+          completeScheduledCommand,
+          retryScheduledCommand: vi.fn(),
+        },
+        rosterRepository: {
+          promoteWaitlist: vi.fn().mockResolvedValue({
+            outcome: 'applied',
+            commandId: promoteCommandId,
+            gameId,
+            revision: 7,
+            replayed: true,
+          }),
+        },
+        tenantId,
+        workerId: 'games-process-manager-test',
+        logger,
+        batchSize: 10,
+      }),
+    ).resolves.toMatchObject({ claimed: 1, applied: 0, alreadyApplied: 1 });
+
+    expect(completeScheduledCommand).toHaveBeenCalledOnce();
   });
 });

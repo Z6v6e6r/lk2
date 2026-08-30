@@ -71,4 +71,66 @@ describe('confirmed game result projections', () => {
     expect(queries.some(({ sql }) => sql === 'commit')).toBe(true);
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it('releases an incomplete inbox claim so the same event can be redelivered', async () => {
+    const queries: string[] = [];
+    let dependencyVisible = false;
+    const client = {
+      query: vi.fn((sql: string) => {
+        queries.push(sql);
+        if (sql.includes('insert into audit.inbox_events')) {
+          return Promise.resolve({ rowCount: 1, rows: [{}] });
+        }
+        if (sql.includes('from games.results r') && dependencyVisible) {
+          return Promise.resolve({
+            rowCount: 4,
+            rows: IDS.players.map((userId, index) => ({
+              tenant_id: IDS.tenant,
+              game_id: IDS.game,
+              result_id: IDS.result,
+              result_revision: 1,
+              kind: 'RATING',
+              title: 'Игра',
+              starts_at: '2026-07-22T08:00:00.000Z',
+              ends_at: '2026-07-22T09:30:00.000Z',
+              venue_name: 'Селигерская',
+              set_number: 1,
+              team_a_score: 6,
+              team_b_score: 4,
+              user_id: userId,
+              team: index < 2 ? 'A' : 'B',
+              slot: (index % 2) + 1,
+            })),
+          });
+        }
+        return Promise.resolve({ rowCount: 0, rows: [] });
+      }),
+      release: vi.fn(),
+    } as unknown as PoolClient;
+    const pool = { connect: vi.fn().mockResolvedValue(client) } as unknown as Pool;
+
+    await expect(
+      createGameResultProjectionRepository(pool).projectConfirmedResultEvent({
+        tenantId: IDS.tenant,
+        eventId: IDS.event,
+        resultId: IDS.result,
+      }),
+    ).resolves.toBe('result_not_found');
+
+    dependencyVisible = true;
+    await expect(
+      createGameResultProjectionRepository(pool).projectConfirmedResultEvent({
+        tenantId: IDS.tenant,
+        eventId: IDS.event,
+        resultId: IDS.result,
+      }),
+    ).resolves.toBe('applied');
+
+    expect(queries.filter((sql) => sql.includes('delete from audit.inbox_events'))).toHaveLength(1);
+    expect(queries.filter((sql) => sql.includes('set processed_at = now()'))).toHaveLength(1);
+    expect(queries.filter((sql) => sql === 'commit')).toHaveLength(2);
+    expect(
+      queries.filter((sql) => sql.includes('insert into games.player_set_facts')),
+    ).toHaveLength(4);
+  });
 });

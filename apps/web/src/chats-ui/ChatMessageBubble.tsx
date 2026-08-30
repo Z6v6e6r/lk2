@@ -22,6 +22,7 @@ export function ChatMessageBubble({
         ) : null}
         <p>{message.body}</p>
         <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
+        {own ? <span>Отправлено</span> : null}
       </article>
     </li>
   );

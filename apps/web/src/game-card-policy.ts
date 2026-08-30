@@ -30,6 +30,7 @@ const actionPriority: readonly GameCardAction[] = [
   'VIEW_RESULT',
   'LEAVE_WAITLIST',
   'LEAVE',
+  'CANCEL',
 ];
 
 export function gameStateLabel(state: GameCardModel['displayState']): string {

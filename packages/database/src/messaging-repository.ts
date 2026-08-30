@@ -47,6 +47,7 @@ export interface ConversationMessage {
   readonly id: string;
   readonly conversationId: string;
   readonly sequence: number;
+  readonly clientMessageId?: string;
   readonly sender: MessagingParticipant;
   readonly messageType: 'TEXT';
   readonly body: string;
@@ -328,6 +329,7 @@ function mapMessage(row: MessageRow): ConversationMessage {
     id: row.id,
     conversationId: row.conversation_id,
     sequence: sequence(row.sequence),
+    ...(row.client_message_id ? { clientMessageId: row.client_message_id } : {}),
     sender: {
       userId: row.sender_user_id,
       displayName: row.sender_display_name,
@@ -1023,7 +1025,8 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           `select message.id, message.conversation_id, message.sequence,
                   sender.user_id as sender_user_id,
                   coalesce(summary.display_name, 'Участник') as sender_display_name,
-                  message.message_type, message.body, message.created_at::text as created_at
+                  message.client_message_id, message.message_type, message.body,
+                  message.created_at::text as created_at
              from messaging.messages message
              join messaging.conversation_members sender
                on sender.tenant_id = message.tenant_id
@@ -1055,9 +1058,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
 
     sendMessage(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const locked = await queryOne<{ next_sequence: number | string; kind: 'DIRECT' | 'GAME' }>(
+        const locked = await queryOne<{
+          next_sequence: number | string;
+          kind: 'DIRECT' | 'GAME';
+          context_id: string | null;
+        }>(
           client,
-          `select next_sequence, kind
+          `select next_sequence, kind, context_id
              from messaging.conversations
             where tenant_id = $1
               and id = $2
@@ -1081,6 +1088,31 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           ]);
         }
 
+        if (locked.kind === 'GAME') {
+          if (!locked.context_id) return { outcome: 'not_found' };
+          const game = await queryOne<{ id: string }>(
+            client,
+            `select id
+               from games.games
+              where tenant_id = $1 and id = $2
+              for key share`,
+            [input.tenantId, locked.context_id],
+          );
+          if (!game) return { outcome: 'not_found' };
+          const participation = await queryOne<{ id: string }>(
+            client,
+            `select id
+               from games.participations
+              where tenant_id = $1
+                and game_id = $2
+                and user_id = $3
+                and state = 'ACTIVE'
+              for share`,
+            [input.tenantId, locked.context_id, input.userId],
+          );
+          if (!participation) return { outcome: 'not_found' };
+        }
+
         // Re-evaluate the authoritative access source after serializing on the conversation.
         // GAME access is never inferred from the possibly stale messaging member row.
         const member = await getAuthorizedMember(
@@ -1091,6 +1123,12 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         );
         if (!member) return { outcome: 'not_found' };
 
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:MESSAGE_COMMAND:${input.userId}:${input.idempotencyKey}`,
+        ]);
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:MESSAGE_CLIENT:${input.userId}:${input.clientMessageId}`,
+        ]);
         const previous = await queryOne<MessageRow>(
           client,
           `select message.id, message.conversation_id, message.sequence,
@@ -1107,12 +1145,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                on summary.tenant_id = sender.tenant_id
               and summary.user_id = sender.user_id
             where message.tenant_id = $1
-              and message.conversation_id = $2
+              and sender.user_id = $2
               and (message.idempotency_key = $3 or message.client_message_id = $4)`,
-          [input.tenantId, input.conversationId, input.idempotencyKey, input.clientMessageId],
+          [input.tenantId, input.userId, input.idempotencyKey, input.clientMessageId],
         );
         if (previous) {
           if (
+            previous.conversation_id !== input.conversationId ||
             previous.sender_user_id !== input.userId ||
             previous.idempotency_key !== input.idempotencyKey ||
             previous.client_message_id !== input.clientMessageId ||
@@ -1405,7 +1444,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             where tenant_id = $1`,
           [input.tenantId],
         );
-        if (!settings?.http_enabled || !settings.direct_enabled || !settings.realtime_enabled) {
+        if (
+          !settings?.http_enabled ||
+          !settings.realtime_enabled ||
+          (!settings.direct_enabled && !settings.contextual_enabled)
+        ) {
           return { outcome: 'disabled' };
         }
         const authorized = await queryOne<{ authorized: boolean }>(
@@ -1419,7 +1462,20 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              join identity.user_access_profiles current_access
                on current_access.tenant_id = viewer_user.tenant_id
               and current_access.user_id = viewer_user.id
-              and 'chat.direct.create' = any(current_access.permissions)
+              and (
+                ($4::boolean and 'chat.direct.create' = any(current_access.permissions))
+                or (
+                  $5::boolean
+                  and 'games.play' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from games.participations participation
+                     where participation.tenant_id = viewer_user.tenant_id
+                       and participation.user_id = viewer_user.id
+                       and participation.state = 'ACTIVE'
+                  )
+                )
+              )
             where presented.tenant_id = $1
               and presented.id = $2
               and presented.user_id = $3
@@ -1432,7 +1488,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                    and active_session.rotated_at is null
                    and active_session.expires_at > now()
               )`,
-          [input.tenantId, input.sessionId, input.userId],
+          [
+            input.tenantId,
+            input.sessionId,
+            input.userId,
+            settings.direct_enabled,
+            settings.contextual_enabled,
+          ],
         );
         return authorized ? { outcome: 'ok' } : { outcome: 'revoked' };
       });
@@ -1447,56 +1509,21 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             where tenant_id = $1`,
           [input.tenantId],
         );
-        if (!settings?.http_enabled || !settings.direct_enabled || !settings.realtime_enabled) {
+        if (
+          !settings?.http_enabled ||
+          !settings.realtime_enabled ||
+          (!settings.direct_enabled && !settings.contextual_enabled)
+        ) {
           return { outcome: 'disabled' };
         }
-        const row = await queryOne<{ latest_sequence: number | string }>(
+        const member = await getAuthorizedMember(
           client,
-          `select conversation.next_sequence - 1 as latest_sequence
-             from messaging.conversations conversation
-             join messaging.conversation_members member
-               on member.tenant_id = conversation.tenant_id
-              and member.conversation_id = conversation.id
-              and member.user_id = $2
-              and member.state = 'ACTIVE'
-             join identity.users viewer_user
-               on viewer_user.tenant_id = member.tenant_id
-              and viewer_user.id = member.user_id
-              and viewer_user.status = 'ACTIVE'
-             join identity.user_access_profiles current_access
-               on current_access.tenant_id = viewer_user.tenant_id
-              and current_access.user_id = viewer_user.id
-              and 'chat.direct.create' = any(current_access.permissions)
-             join messaging.conversation_members other_member
-               on other_member.tenant_id = conversation.tenant_id
-              and other_member.conversation_id = conversation.id
-              and other_member.member_type = 'USER'
-              and other_member.user_id is not null
-              and other_member.user_id <> member.user_id
-              and other_member.state = 'ACTIVE'
-             join identity.users other_user
-               on other_user.tenant_id = other_member.tenant_id
-              and other_user.id = other_member.user_id
-              and other_user.status = 'ACTIVE'
-             left join profile.privacy_settings target_privacy
-               on target_privacy.tenant_id = other_user.tenant_id
-              and target_privacy.user_id = other_user.id
-            where conversation.tenant_id = $1
-              and conversation.id = $3
-              and conversation.kind = 'DIRECT'
-              and conversation.state = 'OPEN'
-              and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
-              and not exists (
-                select 1
-                  from messaging.user_blocks block
-                 where block.tenant_id = conversation.tenant_id
-                   and ((block.blocker_user_id = member.user_id and block.blocked_user_id = other_member.user_id)
-                     or (block.blocker_user_id = other_member.user_id and block.blocked_user_id = member.user_id))
-              )`,
-          [input.tenantId, input.userId, input.conversationId],
+          input.tenantId,
+          input.userId,
+          input.conversationId,
         );
-        return row
-          ? { outcome: 'ok', latestSequence: sequence(row.latest_sequence) }
+        return member
+          ? { outcome: 'ok', latestSequence: sequence(member.last_sequence) }
           : { outcome: 'not_found' };
       });
     },
@@ -1509,7 +1536,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              join messaging.conversations conversation
                on conversation.tenant_id = settings.tenant_id
               and conversation.id = $2
-              and conversation.kind = 'DIRECT'
+              and conversation.kind in ('DIRECT', 'GAME')
               and conversation.state = 'OPEN'
              join messaging.messages message
                on message.tenant_id = conversation.tenant_id
@@ -1530,34 +1557,57 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              join identity.user_access_profiles current_access
                on current_access.tenant_id = viewer_user.tenant_id
               and current_access.user_id = viewer_user.id
-              and 'chat.direct.create' = any(current_access.permissions)
-             join messaging.conversation_members other_member
-               on other_member.tenant_id = conversation.tenant_id
-              and other_member.conversation_id = conversation.id
-              and other_member.member_type = 'USER'
-              and other_member.user_id is not null
-              and other_member.user_id <> member.user_id
-              and other_member.state = 'ACTIVE'
-             join identity.users other_user
-               on other_user.tenant_id = other_member.tenant_id
-              and other_user.id = other_member.user_id
-              and other_user.status = 'ACTIVE'
-             left join profile.privacy_settings target_privacy
-               on target_privacy.tenant_id = other_user.tenant_id
-              and target_privacy.user_id = other_user.id
             where settings.tenant_id = $1
               and settings.http_enabled = true
-              and settings.direct_enabled = true
               and settings.realtime_enabled = true
-              and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
-              and not exists (
-                select 1
-                  from messaging.direct_conversations pair
-                  join messaging.user_blocks block
-                    on block.tenant_id = pair.tenant_id
-                   and pair.conversation_id = conversation.id
-                   and ((block.blocker_user_id = pair.left_user_id and block.blocked_user_id = pair.right_user_id)
-                     or (block.blocker_user_id = pair.right_user_id and block.blocked_user_id = pair.left_user_id))
+              and (
+                (
+                  conversation.kind = 'DIRECT'
+                  and settings.direct_enabled = true
+                  and 'chat.direct.create' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from messaging.conversation_members other_member
+                      join identity.users other_user
+                        on other_user.tenant_id = other_member.tenant_id
+                       and other_user.id = other_member.user_id
+                       and other_user.status = 'ACTIVE'
+                      left join profile.privacy_settings target_privacy
+                        on target_privacy.tenant_id = other_user.tenant_id
+                       and target_privacy.user_id = other_user.id
+                     where other_member.tenant_id = conversation.tenant_id
+                       and other_member.conversation_id = conversation.id
+                       and other_member.member_type = 'USER'
+                       and other_member.user_id is not null
+                       and other_member.user_id <> member.user_id
+                       and other_member.state = 'ACTIVE'
+                       and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
+                  )
+                  and not exists (
+                    select 1
+                      from messaging.direct_conversations pair
+                      join messaging.user_blocks block
+                        on block.tenant_id = pair.tenant_id
+                       and pair.conversation_id = conversation.id
+                       and ((block.blocker_user_id = pair.left_user_id and block.blocked_user_id = pair.right_user_id)
+                         or (block.blocker_user_id = pair.right_user_id and block.blocked_user_id = pair.left_user_id))
+                  )
+                )
+                or
+                (
+                  conversation.kind = 'GAME'
+                  and conversation.context_type = 'GAME'
+                  and settings.contextual_enabled = true
+                  and 'games.play' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from games.participations participation
+                     where participation.tenant_id = conversation.tenant_id
+                       and participation.game_id = conversation.context_id
+                       and participation.user_id = member.user_id
+                       and participation.state = 'ACTIVE'
+                  )
+                )
               )`,
           [input.tenantId, input.conversationId, input.messageId, input.sequence],
         );

@@ -370,9 +370,11 @@
   gap: 2px;
 }
 
-.threadHeading strong {
+.threadHeading h2 {
+  margin: 0;
   overflow: hidden;
   font-size: 15px;
+  line-height: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

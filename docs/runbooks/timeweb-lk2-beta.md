@@ -210,10 +210,116 @@ protected source, unsafe Git metadata, missing `.git`, git-free archive or calle
 is a STOP. Git-free bundles remain unsupported until a separately authenticated same-run controller
 artifact binds their exact bytes.
 
-Never launch these privileged tools through project `npm`, `.npmrc`, a PATH lookup or a preserved
-caller environment. The only supported launcher is fixed `/usr/bin/node` under `env -i`; if that
-binary is unavailable or unsuitable, activation remains STOP until the source contract is revised
-and reviewed.
+Never launch these privileged tools through project `npm`, `.npmrc`, a PATH lookup, a container
+wrapper or a preserved caller environment. Runtime secret and activation tools use fixed
+`/usr/bin/node` under `env -i`. If that binary is absent, the bounded bootstrap controller below is
+the only supported exception: it uses the Ubuntu-owned `/usr/bin/python3` only to install and prove
+the contracted Node runtime. It remains a separately authorized host-package operation and never
+authorizes secret provisioning, image pull, service restart or ingress activation.
+
+## Operator Node bootstrap
+
+Use only `scripts/control-timeweb-operator-node-bootstrap.py` and the adjacent protected
+`deploy/timeweb/operator-node-bootstrap.v1.json`. The contract freezes Ubuntu 26.04, the single
+`ubuntu.sources` file and its SHA-256, the Ubuntu archive keyring and fingerprints, Node major 22,
+and the exact 20-package new-install closure. Third-party or `Trusted=yes` sources, apt lifecycle
+snippets, pre-existing closure packages, upgrades, removals, downgrades, extra packages, global npm,
+downloaded installers and container launchers are all a STOP.
+
+The controller reduces the procedure to five commands. Every live command uses an absolute path in
+the exact root-owned, unmodified and untracked-file-free release checkout. Python isolated mode,
+disabled `site` loading and disabled bytecode writes prevent sibling or site import shadowing before
+the controller proves that checkout. The Ubuntu-owned `/usr/bin/python3` entry may be a root-owned
+symlink: its non-authoritative symlink mode bits are ignored, while strict resolution and the
+root-owned, regular, non-group/other-writable canonical target remain mandatory. Replace only the
+release path and two identity values:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' plan --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+`plan` does not install a package. It verifies the frozen Git blobs, OS, launcher custody, source,
+keyring, empty `dpkg --audit` and absent pre-state. It then runs authenticated `apt-get update` into
+an isolated root-only lists directory using only the frozen source and keyring, rejects every
+unexpected index target, and uses that same snapshot for exact simulation, URI selection and `.deb`
+download. Lifecycle-bearing maintainer scripts are rejected. The lists, packages and atomic `0600`
+plan are published as one directory rename; the plan binds the plan ID, source/list/simulation
+checksums and every payload and control-metadata SHA-256. Stop for separate authority naming that
+plan ID before `apply`. Any existing or dangling-symlink bundle, transaction, install receipt or
+rollback receipt blocks planning before the state root can be created. Apply rechecks the persistent
+markers before package work; historical evidence must never be overwritten or discovered only
+after package mutation.
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' apply --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' verify --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+`apply` rechecks the plan, trust inputs, apt-list checksum, simulation and every `.deb`, then installs
+only those local payloads with `--no-download`, `--no-remove` and `--no-upgrade`. A temporary exact `policy-rc.d`, disabled apt config
+snippets, noninteractive/list-only `needrestart`, and before/after unit/listener/reboot snapshots
+fail closed around service lifecycle changes. The controller publishes that guard without replacing
+an existing file and recovers either crash point of the pending-to-final hard-link handoff. The
+atomic metadata-only receipt is
+`/opt/phub/timeweb-beta/operator/node-bootstrap-receipt.json`; it contains no credential or package
+payload. `verify` independently reads back the complete dpkg closure, `/usr/bin/node` owner, resolved
+file SHA-256, version, executable path, platform and architecture. Apply and rollback completion
+timestamps are first persisted in `transaction.json`; recovery accepts an existing receipt only when
+it exactly matches that deterministic transaction evidence.
+
+If `transaction.json` remains after an interrupted apply or rollback, do not delete it or the
+temporary lifecycle guard. Run only deterministic recovery from the same frozen source and plan.
+It completes an interrupted exact install/removal or receipt cleanup, re-simulates partial rollback
+and rejects any newly expanded removal set. Resumed apply also re-simulates the observed exact
+partial closure and rejects every extra install, configure, upgrade, downgrade or removal before
+APT is allowed to continue:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' recover --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+If the transaction phase is `postcondition_failed`, `recover` stops without repeating apt. That
+state means the exact packages may be present but a Node/service/listener/reboot invariant did not
+pass. Preserve the transaction and lifecycle guard. Package removal from this failed-apply state is
+a destructive rollback boundary. Only after separate exact authority naming the recorded plan ID
+and frozen 20-package rollback closure may the rollback mode be invoked with its explicit recovery
+flag:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' rollback --recover-failed-apply --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+The controller proves the failed transaction and plan, re-simulates only the exact currently
+present closure subset, rejects every expanded removal or configuration action, and changes the
+transaction to a resumable failed-apply rollback before fixed-name `dpkg --purge`. It removes the
+lifecycle guard only after the entire closure is absent and the protected runtime snapshots still
+match. Its metadata-only receipt has status `FAILED_APPLY_ROLLED_BACK`. `recover` resumes this exact
+authorized rollback after interruption, accepts only enumerated error-free dpkg removal states, and
+records the immutable authorized simulation separately from the latest remaining-subset simulation.
+An existing completion receipt must match byte-for-byte before guard cleanup. Without that live
+authority, do not run the flag, delete the marker or guard, or execute manual package commands.
+
+Keep Node installed through the application rollback window. Removing it is a separate live
+host-package authority. The controller first proves the original receipt and simulates an exact
+purge; any reverse dependency or additional removal is a STOP. The actual removal uses fixed
+`dpkg --purge` package names so a resolver cannot expand it. Its receipt records the immutable
+authorized full-closure simulation separately from the latest remaining-subset retry. It never runs
+`autoremove`. A fresh rollback also requires its fixed rollback-receipt path to be absent before the
+transaction, lifecycle guard, or purge can begin; an existing file or symlink is a fail-closed STOP:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' rollback --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
+```
+
+A controller STOP never permits an alternate launcher, manual package command, marker deletion,
+service restart, ingress activation or deployment.
 
 The metadata-only dry-run performs the same source and current-release validation without creating
 `/etc/phub` or writing a target:
