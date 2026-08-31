@@ -70,7 +70,9 @@ describe('Timeweb registry inventory verifier', () => {
         );
       expect(run().status).toBe(0);
 
-      inventory.images[3].indexDigest = `sha256:${'f'.repeat(64)}`;
+      const webInventory = inventory.images[3];
+      if (!webInventory) throw new Error('web inventory fixture missing');
+      webInventory.indexDigest = `sha256:${'f'.repeat(64)}`;
       await writeFile(inventoryPath, JSON.stringify(inventory));
       const mismatch = run();
       expect(mismatch.status).not.toBe(0);

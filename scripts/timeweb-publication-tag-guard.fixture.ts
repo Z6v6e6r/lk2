@@ -145,7 +145,7 @@ try {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('server port missing');
   const results: Record<string, { status: number | null; leaked: boolean; stderr: string }> = {};
-  for (scenario of [
+  const scenarios: readonly Scenario[] = [
     'absent',
     'existing',
     'wrong-404',
@@ -156,7 +156,9 @@ try {
     'manifest-500',
     'manifest-redirect',
     'transport-reset',
-  ]) {
+  ];
+  for (const nextScenario of scenarios) {
+    scenario = nextScenario;
     const result = await new Promise<{ status: number | null; stderr: string; stdout: string }>(
       (resolve, reject) => {
         activeChild = spawn(
