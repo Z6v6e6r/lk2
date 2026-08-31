@@ -233,13 +233,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Refuse to overwrite the unique publication tag
         env:
-          IMAGE_TAG: ghcr.io/z6v6e6r/phub-${{ matrix.service }}:amd64-sha-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLICATION_TAG: amd64-sha-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
-          if docker buildx imagetools inspect "$IMAGE_TAG" >/dev/null 2>&1; then
-            echo '::error::The unique publication tag already exists.'
-            exit 1
-          fi
+          node scripts/assert-timeweb-publication-tag-absent.js \
+            --service "$SERVICE" \
+            --tag "$PUBLICATION_TAG"
       - id: image
         name: Build and publish immutable linux/amd64 image
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -757,6 +758,10 @@ jobs:
           pattern: timeweb-amd64-image-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: publication-evidence/images
           merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: timeweb-amd64-registry-inventory-${{ github.run_id }}-${{ github.run_attempt }}
+          path: publication-evidence/inventory
       - name: Create and validate internal and canonical publication manifests
         env:
           SOURCE_SHA: ${{ inputs.expected_source_sha }}
@@ -765,6 +770,10 @@ jobs:
           set -euo pipefail
           node scripts/verify-timeweb-publication-evidence-checksums.js publication-evidence/images
           test "$(find publication-evidence/images -maxdepth 1 -type f -name '*-image.json' | wc -l | tr -d ' ')" -eq 5
+          node scripts/verify-timeweb-registry-inventory.js \
+            publication-evidence/inventory/timeweb-amd64-registry-inventory.json \
+            publication-evidence/images \
+            "$SOURCE_SHA" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"
           source_tree="$(git rev-parse --verify "$SOURCE_SHA^{tree}")"
