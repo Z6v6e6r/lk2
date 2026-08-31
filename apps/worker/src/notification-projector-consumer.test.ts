@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GAME_DOMAIN_EVENT_TYPES, consumersForGameEvent, gameDomainEventSchema } from '@phub/games';
 import { GAME_NOTIFICATION_EVENT_TYPES, notificationSourceEventSchema } from '@phub/notifications';
 
@@ -15,6 +15,10 @@ import {
 } from './notification-projector-consumer.js';
 
 describe('notification projector topology', () => {
+  beforeEach(() => {
+    projector.applyNotificationSourceEvent.mockReset();
+  });
+
   it('keeps every notification GAME contract compatible with the Core Game event catalog', () => {
     const gameId = '22222222-2222-4222-8222-222222222222';
     const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';

@@ -130,6 +130,24 @@ jobs:
       - name: Build Web production artifact
         run: npm run build -w @phub/web
 
+  source-quality:
+    name: source-quality
+    needs: ci-plan
+    if: ${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.full_quality == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Run canonical publication source quality
+        run: npm run source:quality
+
   quality-full:
     name: quality-full
     needs: ci-plan
@@ -189,16 +207,12 @@ jobs:
         run: npm run timeweb:beta:node-bootstrap:apt-isolation:test
       - name: Generate API contract types
         run: npm run contracts:generate
-      - name: Verify immutable import and OpenAPI
-        run: npm run contracts:lint
       - name: Check migration safety
         run: npm run db:migrate:check
       - name: Apply migrations to an empty database
         env:
           CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK: CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1
         run: npm run db:migrate
-      - name: Formatting, lint and type safety
-        run: npm run format:check && npm run lint && npm run typecheck
       - name: Unit and integration tests
         timeout-minutes: 10
         run: scripts/run-ci-tests-with-diagnostics.sh
@@ -212,14 +226,12 @@ jobs:
             coverage
           if-no-files-found: error
           retention-days: 14
-      - name: Build all artifacts
-        run: npm run build
       - name: Validate local Compose model
         run: cp .env.example .env && docker compose config --quiet
 
   quality:
     name: quality
-    needs: [ci-plan, quality-docs, quality-web, quality-full]
+    needs: [ci-plan, quality-docs, quality-web, source-quality, quality-full]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -231,6 +243,7 @@ jobs:
           PLAN_JSON: ${{ needs.ci-plan.outputs.plan }}
           DOCS_RESULT: ${{ needs.quality-docs.result }}
           WEB_RESULT: ${{ needs.quality-web.result }}
+          SOURCE_RESULT: ${{ needs.source-quality.result }}
           FULL_RESULT: ${{ needs.quality-full.result }}
         run: node scripts/verify-ci-plan.js quality
 

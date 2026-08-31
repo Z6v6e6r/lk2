@@ -32,6 +32,7 @@ describe('pull request CI profiles and stable gates', () => {
   it('always defines the stable aggregate contract', () => {
     for (const job of [
       'ci-plan',
+      'source-quality',
       'quality',
       'dependency-security',
       'secret-scan',
@@ -48,11 +49,13 @@ describe('pull request CI profiles and stable gates', () => {
 
   it('keeps databases and brokers exclusive to full quality', () => {
     expect(workflow.jobs['quality-full']?.services).toBeTruthy();
+    expect(workflow.jobs['source-quality']?.services).toBeUndefined();
     expect(workflow.jobs['quality-docs']?.services).toBeUndefined();
     expect(workflow.jobs['quality-web']?.services).toBeUndefined();
     expect(workflow.jobs['quality-docs']?.if).toContain("docs_quality == 'true'");
     expect(workflow.jobs['quality-web']?.if).toContain("web_quality == 'true'");
     expect(workflow.jobs['quality-full']?.if).toContain("full_quality == 'true'");
+    expect(workflow.jobs['source-quality']?.if).toContain("full_quality == 'true'");
   });
 
   it('uses the planner for Docker and never publishes CI images', () => {

@@ -81,6 +81,7 @@ export function verifyQualityResults(plan, results) {
   parseAndValidateCiPlan(JSON.stringify(plan));
   verifyConditionalResult(plan.docsQuality, results.docs, 'docs quality');
   verifyConditionalResult(plan.webQuality, results.web, 'Web quality');
+  verifyConditionalResult(plan.fullQuality, results.source, 'source quality');
   verifyConditionalResult(plan.fullQuality, results.full, 'full quality');
 }
 
@@ -98,6 +99,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     verifyQualityResults(planFromEnvironment(), {
       docs: process.env.DOCS_RESULT,
       web: process.env.WEB_RESULT,
+      source: process.env.SOURCE_RESULT,
       full: process.env.FULL_RESULT,
     });
   } else if (command === 'conditional') {
