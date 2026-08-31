@@ -1,4 +1,4 @@
-import { StrictMode, Suspense } from 'react';
+import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { App } from './App.js';
@@ -26,6 +26,14 @@ const gateway = createBrowserAuthGateway({
   appVersion: bootstrap?.release ?? 'development',
 });
 
+const SubscriptionStorefrontPreview = lazy(() =>
+  import('./features/subscription-storefront/preview/SubscriptionStorefrontPreview.js').then(
+    (module) => ({ default: module.SubscriptionStorefrontPreview }),
+  ),
+);
+const isSubscriptionStorefrontPreview =
+  import.meta.env.DEV && window.location.pathname === '/__preview/subscriptions';
+
 createRoot(mount).render(
   <StrictMode>
     <Suspense
@@ -39,12 +47,16 @@ createRoot(mount).render(
         </main>
       }
     >
-      <App
-        gateway={gateway}
-        tenantKey={tenantKey}
-        realtimeBaseUrl={apiBaseUrl}
-        {...(realtimeUrl ? { realtimeUrl } : {})}
-      />
+      {isSubscriptionStorefrontPreview ? (
+        <SubscriptionStorefrontPreview />
+      ) : (
+        <App
+          gateway={gateway}
+          tenantKey={tenantKey}
+          realtimeBaseUrl={apiBaseUrl}
+          {...(realtimeUrl ? { realtimeUrl } : {})}
+        />
+      )}
     </Suspense>
   </StrictMode>,
 );

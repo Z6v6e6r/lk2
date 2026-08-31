@@ -56,6 +56,55 @@
 
 final result: passed
 
+---
+
+# Subscription storefront scaffold QA (2026-08-31)
+
+**Comparison target**
+
+- User-supplied visual reference: 1280 × 720 px, embedded on the left side of `design-qa/subscription-storefront/desktop-comparison.png`.
+- Browser-rendered implementation: DEV route `/__preview/subscriptions`, deterministic local fixture, no API or purchase mutation.
+- Desktop implementation: `design-qa/subscription-storefront/desktop-1280x720-final.png` (1280 × 720 px).
+- Same-input full comparison: `design-qa/subscription-storefront/desktop-comparison.png`.
+- Same-input featured-card comparison: `design-qa/subscription-storefront/featured-card-comparison.png`.
+- Mobile evidence: `mobile-375x812.png`, `mobile-375x812-scrolled.png`, and `mobile-multi-375x812.png` in the same evidence directory.
+- Browser density: 1 captured pixel per CSS px. State: light theme, default monthly period unless stated otherwise.
+
+**Findings**
+
+- No actionable P0, P1, or P2 mismatch remains for the reusable scaffold scope.
+- The 1280 px layout preserves the reference's 994 px three-card rail, featured center card, compact heading hierarchy, price row, CTA rhythm, and benefit groups.
+- [P3] The supplied reference uses a tiny stylized decorative mark. The scaffold uses a generated transparent padel mark sized for the same slot; the employee may replace it with the final delivered brand asset without touching component behavior.
+- [P3] The reference subtitle is placeholder copy. The preview intentionally uses meaningful local fixture copy; production page copy remains a page-level configuration value.
+
+**Responsive and interaction evidence**
+
+- At 375 × 812, the document reports `clientWidth = scrollWidth = 375`; the rail reports `clientWidth = 375` and `scrollWidth = 944`.
+- A horizontal rail movement changed `scrollLeft` from `0` to `306` with a maximum of `569`, confirming independent sideways scrolling rather than clipped document overflow.
+- The multi-section scenario reports two sections, page `scrollHeight = 1374` against `innerHeight = 812`, and two independent rails (`375/944` and `375/638` client/scroll widths).
+- Switching `Дружба` from `месячная` to `годовая` changes the visible price from `9 800 ₽` to `98 000 ₽` and updates `aria-pressed` correctly.
+- The CTA produces the local message `Это preview без покупки` and leaves the URL unchanged; it performs no booking, provider, payment, or backend request.
+- The `ab_leto` scenario renders from the same component contract with a separate title, theme, section copy, and catalog fixture.
+- The Vite preview server log contains HMR updates only and no application error output during the verified states.
+
+**Comparison history**
+
+1. The first desktop pass used undersized cards and did not align the featured card with the source. The rail width, card height, progress strip, and price-row rhythm were corrected against the 1280 × 720 reference.
+2. The second pass exposed title/mark vertical drift. Hero and section spacing were decoupled so the header aligns without moving the card rail.
+3. The first mobile pass exposed a P1 interaction defect: the grid item expanded to its 944 px min-content width, leaving the document clipped instead of the rail scrollable. Adding a zero minimum width to the offer section restored a 375 px rail viewport with 944 px scrollable content.
+4. Post-fix desktop and focused-card comparisons were opened together with the source at native density; the remaining differences are the documented P3 asset and copy ownership points.
+
+**Implementation checklist**
+
+- [x] Data-driven storefront, sections, plans, billing options, and themes.
+- [x] Desktop three-column layout matching the supplied reference.
+- [x] Mobile vertical page with independent horizontal snap rails.
+- [x] Reusable `ab_leto` and multi-section preview configurations.
+- [x] Safe local CTA with no purchase behavior.
+- [x] Focused component, CSS-contract, App regression, typecheck, lint, and web build evidence.
+
+final result: passed
+
 # Design QA — recommendation cards (2026-08-26)
 
 **Comparison target**
