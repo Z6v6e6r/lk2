@@ -9,9 +9,18 @@ import {
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required');
-const databaseName = new URL(connectionString).pathname.replace(/^\//, '');
-if (!databaseName.endsWith('_verify')) {
-  throw new Error('Games concurrency verification requires an isolated *_verify database');
+const parsedConnectionString = new URL(connectionString);
+const databaseName = decodeURIComponent(parsedConnectionString.pathname.slice(1));
+if (
+  !['postgresql:', 'postgres:'].includes(parsedConnectionString.protocol) ||
+  parsedConnectionString.search !== '' ||
+  parsedConnectionString.hash !== '' ||
+  !['localhost', '127.0.0.1', '[::1]'].includes(parsedConnectionString.hostname) ||
+  !databaseName.endsWith('_verify')
+) {
+  throw new Error(
+    'Games concurrency verification requires a query-free loopback *_verify database',
+  );
 }
 
 const pool = createDatabasePool(connectionString);
@@ -169,10 +178,12 @@ try {
     throw new Error(`Waitlist promotion failed: ${JSON.stringify({ promotion, promotionReplay })}`);
   }
 
-  const splitResults = await Promise.all([
-    repository.join(commandInput(playerA, splitGameId, 'split-a')),
-    repository.join(commandInput(playerC, splitGameId, 'split-c')),
-  ]);
+  const splitActors = [playerA, playerC] as const;
+  const splitResults = await Promise.all(
+    splitActors.map((playerId, index) =>
+      repository.join(commandInput(playerId, splitGameId, `split-${index}`)),
+    ),
+  );
   const splitApplied = splitResults.filter((result) => result.outcome === 'applied');
   const splitRejected = splitResults.filter((result) => result.outcome === 'rejected');
   if (
@@ -186,6 +197,33 @@ try {
   const splitReservation = splitApplied[0];
   if (splitReservation?.outcome !== 'applied' || !splitReservation.reservationId) {
     throw new Error('Split reservation identifier missing');
+  }
+  const splitWinnerIndex = splitResults.findIndex((result) => result.outcome === 'applied');
+  const splitWinnerId = splitActors[splitWinnerIndex];
+  if (!splitWinnerId) throw new Error('Split reservation winner missing');
+  const splitSnapshot = await withTenantTransaction(pool, tenantId, async (client) => {
+    const result = await client.query<{
+      decision_id: string | null;
+      payment_mode: string | null;
+      player_id: string;
+    }>(
+      `select player_id, decision_id, snapshot ->> 'paymentMode' as payment_mode
+         from eligibility.payment_snapshots
+        where tenant_id = $1
+          and operation_id = $2
+          and activity_type = 'GAME'
+          and activity_id = $3`,
+      [tenantId, splitReservation.commandId, splitGameId],
+    );
+    return result.rows;
+  });
+  if (
+    splitSnapshot.length !== 1 ||
+    splitSnapshot[0]?.player_id !== splitWinnerId ||
+    splitSnapshot[0]?.payment_mode !== 'SPLIT' ||
+    !splitSnapshot[0].decision_id
+  ) {
+    throw new Error(`Split payment snapshot mismatch: ${JSON.stringify(splitSnapshot)}`);
   }
   await withTenantTransaction(pool, tenantId, async (client) => {
     await client.query(
@@ -298,6 +336,7 @@ try {
       promotion,
       promotionReplay,
       splitResults,
+      splitSnapshot,
       expiry,
       projection,
       projectionReplay,

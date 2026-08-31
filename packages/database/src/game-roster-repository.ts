@@ -842,7 +842,7 @@ async function persistPaymentEligibilitySnapshot(
               'invitationId', decision.invitation_id,
               'details', decision.details,
               'evaluatedAt', decision.evaluated_at,
-              'paymentMode', $6
+              'paymentMode', $6::text
             )
        from eligibility.decisions decision
       where decision.tenant_id = $1 and decision.id = $3

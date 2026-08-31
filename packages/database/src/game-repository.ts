@@ -937,10 +937,12 @@ export function createGameRepository(pool: Pool): GameRepository {
           [input.tenantId, input.gameId],
         );
         const game = gameRow ? mapGame(gameRow) : undefined;
+        const decisionAt = new Date().toISOString();
         const rejectionCode = !game
           ? ('GAME_NOT_FOUND' as const)
           : game.organizerUserId !== input.actorUserId ||
-              !['PROVISIONING', 'SCHEDULED'].includes(game.lifecycleState)
+              !['PROVISIONING', 'SCHEDULED'].includes(game.lifecycleState) ||
+              Date.parse(game.startsAt) <= Date.parse(decisionAt)
             ? ('GAME_NOT_CANCELLABLE' as const)
             : game.paymentMode !== 'NO_PAYMENT'
               ? ('GAME_PAYMENT_REQUIRED' as const)
@@ -972,7 +974,7 @@ export function createGameRepository(pool: Pool): GameRepository {
         }
         if (!game) throw new Error('GAME_CANCEL_STATE_INVALID');
 
-        const committedAt = new Date().toISOString();
+        const committedAt = decisionAt;
         const updated = await queryOne<{ revision: string | number } & QueryResultRow>(
           client,
           `update games.games set
@@ -986,6 +988,7 @@ export function createGameRepository(pool: Pool): GameRepository {
              and organizer_user_id = $3
              and lifecycle_state in ('PROVISIONING', 'SCHEDULED')
              and payment_mode = 'NO_PAYMENT'
+             and starts_at > $5::timestamptz
            returning revision`,
           [input.tenantId, game.id, input.actorUserId, input.reasonCode, committedAt],
         );
