@@ -352,6 +352,13 @@ rollback receipt blocks planning before the state root can be created. Apply rec
 markers before package work; historical evidence must never be overwritten or discovered only
 after package mutation.
 
+Ubuntu 26.04 APT changes the empty isolated-list helper directories after `update`: `partial` is
+`_apt:root 0700` and `auxfiles` is `_apt:root 0755` (`_apt` is the frozen platform UID 42). The
+controller accepts that exact sandbox-owned state, or the previously supported root-owned empty
+directories, only beneath the already verified root-owned `0700` lists parent. Both directories
+must remain real, canonical, non-group/world-writable and empty. Every other non-root owner, mode,
+name, type, symlink, populated auxiliary directory or unexpected list target remains a hard stop.
+
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
   /usr/bin/python3 -I -S -B '<release-source>/scripts/control-timeweb-operator-node-bootstrap.py' apply --expected-source-sha '<source-sha>' --expected-source-tree '<source-tree>'
