@@ -11,7 +11,7 @@
 
 ## Classification
 
-The executable classification is in `scripts/game-lifecycle-critical-classification.test.ts`. It reads the unchanged canonical matrix, validates all 344 rows and 101 columns, requires unique scenario IDs, applies one non-overlapping class to every row and pins every Critical ID to executable assertion groups:
+The executable classification is in `scripts/game-lifecycle-critical-classification.test.ts`. It reads the unchanged canonical matrix, validates all 344 rows and 101 columns, requires unique scenario IDs, applies one non-overlapping class to every row and pins every Critical ID to one explicit expected executable result:
 
 | Class       | Rows | Scope                                                                                                             |
 | ----------- | ---: | ----------------------------------------------------------------------------------------------------------------- |
@@ -20,6 +20,8 @@ The executable classification is in `scripts/game-lifecycle-critical-classificat
 | `EDGE`      |  255 | all remaining provider/payment, legacy ownership, communications, result/rating, runtime and noncritical variants |
 
 `EDGE` is an explicit default only after the complete CRITICAL and IMPORTANT ID sets are matched. Therefore no Atlas row remains unclassified.
+
+The mapping test proves identity and traceability, not runtime execution. `CRITICAL_PASS=58` additionally requires the focused assertion files and the opt-in `HTTP_POSTGRES` / `POSTGRES_RLS` suites to pass against the guarded disposable database; the exact commands and counts are frozen in `RESULT.md`.
 
 ## Closure boundary
 
