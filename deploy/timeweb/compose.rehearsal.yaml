@@ -1,0 +1,188 @@
+name: ${TIMEWEB_REHEARSAL_PROJECT:?TIMEWEB_REHEARSAL_PROJECT is required}
+
+x-candidate-build: &candidate-build
+  context: ../..
+  dockerfile: deploy/timeweb/Dockerfile.rehearsal
+  args:
+    PHUB_RELEASE: ${TIMEWEB_REHEARSAL_RELEASE_ID:?TIMEWEB_REHEARSAL_RELEASE_ID is required}
+    PHUB_SOURCE_SHA: ${TIMEWEB_REHEARSAL_SOURCE_SHA:?TIMEWEB_REHEARSAL_SOURCE_SHA is required}
+    PHUB_SOURCE_TREE: ${TIMEWEB_REHEARSAL_SOURCE_TREE:?TIMEWEB_REHEARSAL_SOURCE_TREE is required}
+
+x-candidate-labels: &candidate-labels
+  phub.release-id: ${TIMEWEB_REHEARSAL_RELEASE_ID:?TIMEWEB_REHEARSAL_RELEASE_ID is required}
+  phub.source-sha: ${TIMEWEB_REHEARSAL_SOURCE_SHA:?TIMEWEB_REHEARSAL_SOURCE_SHA is required}
+  phub.source-tree: ${TIMEWEB_REHEARSAL_SOURCE_TREE:?TIMEWEB_REHEARSAL_SOURCE_TREE is required}
+  phub.rehearsal-only: 'true'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: phub
+      POSTGRES_USER: phub
+      POSTGRES_PASSWORD: synthetic-rehearsal-postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./rehearsal-create-databases.sql:/docker-entrypoint-initdb.d/10-create-rehearsal-databases.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U phub -d phub']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: phub
+      RABBITMQ_DEFAULT_PASS: synthetic-rehearsal-rabbitmq
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  migrator:
+    image: ${TIMEWEB_REHEARSAL_MIGRATOR_IMAGE:?TIMEWEB_REHEARSAL_MIGRATOR_IMAGE is required}
+    platform: linux/amd64
+    build:
+      <<: *candidate-build
+      target: runtime
+    command: ['node', 'apps/migrator/dist/main.js']
+    env_file:
+      - path: ${TIMEWEB_REHEARSAL_ENV_ROOT:?TIMEWEB_REHEARSAL_ENV_ROOT is required}/migrator.env
+        required: true
+    profiles: [migration]
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels: *candidate-labels
+
+  api:
+    image: ${TIMEWEB_REHEARSAL_API_IMAGE:?TIMEWEB_REHEARSAL_API_IMAGE is required}
+    platform: linux/amd64
+    build:
+      <<: *candidate-build
+      target: runtime
+    command: ['node', 'apps/api/dist/main.js']
+    env_file:
+      - path: ${TIMEWEB_REHEARSAL_ENV_ROOT:?TIMEWEB_REHEARSAL_ENV_ROOT is required}/api.env
+        required: true
+    environment:
+      RELEASE: ${TIMEWEB_REHEARSAL_RELEASE_ID:?TIMEWEB_REHEARSAL_RELEASE_ID is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    stop_grace_period: 30s
+    restart: unless-stopped
+    labels: *candidate-labels
+
+  worker:
+    image: ${TIMEWEB_REHEARSAL_WORKER_IMAGE:?TIMEWEB_REHEARSAL_WORKER_IMAGE is required}
+    platform: linux/amd64
+    build:
+      <<: *candidate-build
+      target: runtime
+    command: ['node', 'apps/worker/dist/main.js']
+    env_file:
+      - path: ${TIMEWEB_REHEARSAL_ENV_ROOT:?TIMEWEB_REHEARSAL_ENV_ROOT is required}/worker.env
+        required: true
+    environment:
+      RELEASE: ${TIMEWEB_REHEARSAL_RELEASE_ID:?TIMEWEB_REHEARSAL_RELEASE_ID is required}
+    profiles: [background]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    stop_grace_period: 60s
+    restart: unless-stopped
+    labels: *candidate-labels
+
+  web:
+    image: ${TIMEWEB_REHEARSAL_WEB_IMAGE:?TIMEWEB_REHEARSAL_WEB_IMAGE is required}
+    platform: linux/amd64
+    build:
+      <<: *candidate-build
+      target: web
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/healthz']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+    labels: *candidate-labels
+
+  proxy:
+    image: ${TIMEWEB_REHEARSAL_PROXY_IMAGE:?TIMEWEB_REHEARSAL_PROXY_IMAGE is required}
+    platform: linux/amd64
+    build:
+      <<: *candidate-build
+      target: proxy
+    ports:
+      - '127.0.0.1::8080'
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8080/__rehearsal/health']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+    labels: *candidate-labels
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
