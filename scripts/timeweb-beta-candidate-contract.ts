@@ -12,6 +12,7 @@ import {
 
 export const TIMEWEB_COMPONENTS = ['web', 'api', 'worker', 'realtime', 'migrator'] as const;
 export type TimewebComponent = (typeof TIMEWEB_COMPONENTS)[number];
+export const TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK = 'CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1';
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;

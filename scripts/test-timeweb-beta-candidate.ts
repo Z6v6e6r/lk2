@@ -13,6 +13,7 @@ import {
   loadTimewebRuntimeContracts,
   readCandidateArtifact,
   serializeEnvironment,
+  TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK,
   type CandidateIdentity,
   type RuntimeComponentSnapshot,
 } from './timeweb-beta-candidate-contract.js';
@@ -355,10 +356,19 @@ async function main(): Promise<void> {
       },
     );
 
-    const emptyMigration = run('docker', [...compose, 'run', '--rm', '-T', 'migrator'], {
-      environment,
-      capture: true,
-    });
+    const emptyMigration = run(
+      'docker',
+      [
+        ...compose,
+        'run',
+        '--rm',
+        '-T',
+        '-e',
+        `CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=${TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK}`,
+        'migrator',
+      ],
+      { environment, capture: true },
+    );
     if (!emptyMigration.includes('Applied '))
       throw new Error('empty database migration applied nothing');
     const emptyNoOp = run('docker', [...compose, 'run', '--rm', '-T', 'migrator'], {

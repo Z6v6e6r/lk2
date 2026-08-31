@@ -50,7 +50,9 @@ The command performs these stages and stops on the first mismatch:
 2. Render the dedicated rehearsal Compose file and build local application images, or pull the
    exact manifest digests. A deliberate API-before-dependencies start must remain unready.
 3. Start PostgreSQL, Redis, and RabbitMQ; migrate an empty database to HEAD; repeat the migration as
-   a no-op; prepare a previous-schema fixture and advance it to HEAD.
+   a no-op; prepare a previous-schema fixture and advance it to HEAD. Only the empty synthetic
+   database receives the repository's exact empty-catalog acknowledgement; it is never persisted in
+   an env file or passed to the no-op/previous-schema paths.
 4. Start API and Web through the local reverse proxy. Prove Worker is absent until explicitly named,
    then start it with every write-capable runtime flag disabled.
 5. Verify running Web/API/Worker image identity, source SHA/tree, release labels, health, Web root,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_ACK } from '@phub/database';
 
 import {
   assertCandidateIdentity,
@@ -9,6 +10,7 @@ import {
   classifyWriteAttempt,
   loadTimewebRuntimeContracts,
   serializeEnvironment,
+  TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK,
   TIMEWEB_COMPONENTS,
 } from './timeweb-beta-candidate-contract.js';
 import { validateRuntimeEnvironments } from './verify-timeweb-deployment-contract.js';
@@ -37,6 +39,10 @@ function candidateManifest(): Record<string, unknown> {
 }
 
 describe('Timeweb beta candidate contract', () => {
+  it('uses the canonical empty-database-only migration acknowledgement', () => {
+    expect(TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK).toBe(CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_ACK);
+  });
+
   it('accepts an exact five-component candidate identity', () => {
     const identity = assertCandidateIdentity(candidateManifest(), { sourceSha, sourceTree });
     expect(identity.sourceSha).toBe(sourceSha);
