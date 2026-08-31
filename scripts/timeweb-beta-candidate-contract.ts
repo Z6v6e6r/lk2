@@ -64,6 +64,18 @@ export interface ExpectedCandidateIdentity {
   readonly manifestSha256: string;
 }
 
+export function assertDistinctCandidatePair(
+  candidate: CandidateIdentity,
+  previous: CandidateIdentity,
+): void {
+  if (candidate.sourceSha === previous.sourceSha || candidate.sourceTree === previous.sourceTree)
+    reject('previous_candidate_source_not_distinct');
+  for (const component of ['web', 'api', 'worker', 'migrator'] as const) {
+    if (candidate.images[component] === previous.images[component])
+      reject(`previous_candidate_${component}_image_not_distinct`);
+  }
+}
+
 export function assertCandidateIdentity(
   manifestValue: unknown,
   expected: Pick<ExpectedCandidateIdentity, 'sourceSha' | 'sourceTree' | 'publicationRunId'>,

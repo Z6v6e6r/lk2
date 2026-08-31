@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import {
+  assertDistinctCandidatePair,
   assertForwardOnlyRollback,
   assertRehearsalProjectName,
   assertRuntimeSnapshot,
@@ -409,6 +410,7 @@ async function main(): Promise<void> {
         manifestSha256: options.expectedPreviousManifestChecksum!,
       })
     : undefined;
+  if (candidate && previousCandidate) assertDistinctCandidatePair(candidate, previousCandidate);
   const releaseId = candidate
     ? `${candidate.sourceSha}-${candidate.runId}-${candidate.runAttempt}`
     : `${sourceSha}-local-1`;

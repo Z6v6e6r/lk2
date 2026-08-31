@@ -3,6 +3,7 @@ import { CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_ACK } from '@phub/database';
 
 import {
   assertCandidateIdentity,
+  assertDistinctCandidatePair,
   assertForwardOnlyRollback,
   assertRehearsalProjectName,
   assertRuntimeSnapshot,
@@ -54,6 +55,26 @@ describe('Timeweb beta candidate contract', () => {
     expect(identity.sourceTree).toBe(sourceTree);
     expect(identity.images.web).toBe(`ghcr.io/z6v6e6r/phub-web@sha256:${'1'.repeat(64)}`);
     expect(Object.keys(identity.images).sort()).toEqual([...TIMEWEB_COMPONENTS].sort());
+  });
+
+  it('rejects a previous publication that would exercise the same source or binaries', () => {
+    const candidate = {
+      ...assertCandidateIdentity(candidateManifest(), { sourceSha, sourceTree, publicationRunId }),
+      manifestSha256: 'a'.repeat(64),
+    };
+    expect(() =>
+      assertDistinctCandidatePair(candidate, { ...candidate, runId: '33357774309' }),
+    ).toThrow('previous_candidate_source_not_distinct');
+
+    const previous = {
+      ...candidate,
+      sourceSha: '3'.repeat(40),
+      sourceTree: '4'.repeat(40),
+      images: { ...candidate.images },
+    };
+    expect(() => assertDistinctCandidatePair(candidate, previous)).toThrow(
+      'previous_candidate_web_image_not_distinct',
+    );
   });
 
   it.each([
