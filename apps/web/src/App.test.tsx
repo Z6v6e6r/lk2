@@ -1536,7 +1536,9 @@ describe('PadlHub web authentication', () => {
     );
     expect(container.querySelector('.fh-hero--v3')).not.toBeInTheDocument();
     expect(gateway.getHomeBase).toHaveBeenCalledOnce();
-    expect(gateway.listBookingRecommendations).toHaveBeenCalledWith({ limit: 6 });
+    await waitFor(() =>
+      expect(gateway.listBookingRecommendations).toHaveBeenCalledWith({ limit: 6 }),
+    );
   });
 
   it('keeps the new photo-grid Home V3 available on its own route', async () => {

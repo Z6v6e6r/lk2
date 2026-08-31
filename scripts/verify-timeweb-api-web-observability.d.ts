@@ -52,3 +52,10 @@ export function validateTimewebObservabilityEvidence(
   contract: TimewebObservabilityContract,
   expected: TimewebObservabilityExpectedIdentity,
 ): Record<string, unknown>;
+
+export function verifyTimewebObservabilityEvidenceForActivation(input: {
+  sourceSha: string;
+  sourceTree: string;
+  releaseId: string;
+  receiptPath: string;
+}): Record<string, unknown>;
