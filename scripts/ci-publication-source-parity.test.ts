@@ -6,14 +6,18 @@ type WorkflowStep = {
   readonly env?: Readonly<Record<string, string>>;
   readonly name?: string;
   readonly run?: string;
+  readonly uses?: string;
+  readonly with?: Readonly<Record<string, boolean | number | string>>;
 };
 
 type WorkflowJob = {
   readonly env?: Readonly<Record<string, string>>;
   readonly if?: string;
   readonly needs?: string | readonly string[];
+  readonly ['runs-on']?: string;
   readonly services?: unknown;
   readonly steps?: readonly WorkflowStep[];
+  readonly ['timeout-minutes']?: number;
 };
 
 type Workflow = {
@@ -61,8 +65,15 @@ describe('exact-main CI and publication source-quality parity', () => {
     expect(ciJob?.if).toContain("full_quality == 'true'");
     expect(ciJob?.services).toBeUndefined();
     expect(ciJob?.env).toBeUndefined();
-    expect(ciCommands).toContain('npm ci --ignore-scripts');
-    expect(publicationCommands).toContain('npm ci --ignore-scripts');
+    expect(publicationJob?.services).toBeUndefined();
+    expect(publicationJob?.env).toBeUndefined();
+    expect(ciJob?.['runs-on']).toBe(publicationJob?.['runs-on']);
+    expect(ciJob?.['timeout-minutes']).toBe(45);
+    expect(ciJob?.['timeout-minutes']).toBe(publicationJob?.['timeout-minutes']);
+    expect(ciCommands).toEqual(['npm ci --ignore-scripts', canonicalCommand]);
+    expect(publicationCommands).toHaveLength(3);
+    expect(publicationCommands[0]).toContain('git rev-parse HEAD');
+    expect(publicationCommands.slice(-2)).toEqual(ciCommands);
     expect(ciCommands.filter((command) => command === canonicalCommand)).toEqual([
       canonicalCommand,
     ]);
@@ -75,6 +86,28 @@ describe('exact-main CI and publication source-quality parity', () => {
     expect(publicationCommands.indexOf('npm ci --ignore-scripts')).toBeLessThan(
       publicationCommands.indexOf(canonicalCommand),
     );
+
+    const ciCheckout = ciJob?.steps?.find(({ uses }) => uses?.startsWith('actions/checkout@'));
+    const publicationCheckout = publicationJob?.steps?.find(({ uses }) =>
+      uses?.startsWith('actions/checkout@'),
+    );
+    const ciNode = ciJob?.steps?.find(({ uses }) => uses?.startsWith('actions/setup-node@'));
+    const publicationNode = publicationJob?.steps?.find(({ uses }) =>
+      uses?.startsWith('actions/setup-node@'),
+    );
+
+    expect(ciCheckout?.uses).toBe(publicationCheckout?.uses);
+    expect(ciCheckout?.with).toMatchObject({
+      'fetch-depth': 0,
+      'persist-credentials': false,
+    });
+    expect(publicationCheckout?.with).toMatchObject({
+      'fetch-depth': 0,
+      'persist-credentials': false,
+    });
+    expect(ciNode).toEqual(publicationNode);
+    expect(ciJob?.steps?.slice(-2).every(({ env }) => env === undefined)).toBe(true);
+    expect(publicationJob?.steps?.slice(-2).every(({ env }) => env === undefined)).toBe(true);
   });
 
   it('makes the publication-equivalent source result part of the stable quality gate', () => {
