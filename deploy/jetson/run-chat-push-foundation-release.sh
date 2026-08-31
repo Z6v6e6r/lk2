@@ -396,7 +396,7 @@ verify_rabbit_inventory() {
     *) fail 'Rabbit inventory mode is invalid' ;;
   esac
   queue_json="$(infrastructure exec -T rabbitmq rabbitmqctl -q list_queues \
-    name durable type arguments messages_ready messages_unacknowledged \
+    name durable type arguments messages_ready messages_unacknowledged consumers \
     --formatter=json --silent)"
   binding_json="$(infrastructure exec -T rabbitmq rabbitmqctl -q list_bindings \
     source_name destination_name destination_kind routing_key \

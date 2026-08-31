@@ -1087,7 +1087,7 @@ describe('messaging repository', () => {
       }
       if (text.includes('from games.games')) {
         queryOrder.push('lock-game');
-        expect(text).toContain('for key share');
+        expect(text).toContain('for share');
         expect(values).toEqual([tenantId, gameId]);
         return Promise.resolve({ rows: [{ id: gameId }], rowCount: 1 });
       }
