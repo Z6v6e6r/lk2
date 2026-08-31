@@ -15,7 +15,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { loadConfig, loadRealtimeConfig } from '../packages/config/src/index.js';
+import { loadConfig, loadRealtimeConfig, loadWorkerConfig } from '../packages/config/src/index.js';
 import {
   parseTimewebSecretEnvironment,
   provisionTimewebBetaRuntimeSecrets,
@@ -350,11 +350,11 @@ describe('Timeweb beta runtime secret provisioner', () => {
     expect(() => provisionTimewebBetaRuntimeSecrets(options(value))).toThrow('missing_key');
   });
 
-  it('matches startup config invariants for the initially startable API and Realtime', () => {
+  it('matches startup config invariants for API, Realtime and the isolated Worker', () => {
     const environments = safeRuntimeEnvironments();
     expect(() => loadConfig(environments.api)).not.toThrow();
     expect(() => loadRealtimeConfig(environments.realtime)).not.toThrow();
-    expect(() => loadConfig(environments.worker)).toThrow('JWT_ACCESS_SECRET');
+    expect(() => loadWorkerConfig(environments.worker)).not.toThrow();
   });
 
   it.each([

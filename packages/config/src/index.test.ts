@@ -4,7 +4,12 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { loadConfig, loadRealtimeConfig, runtimeContourTargetFingerprint } from './index.js';
+import {
+  loadConfig,
+  loadRealtimeConfig,
+  loadWorkerConfig,
+  runtimeContourTargetFingerprint,
+} from './index.js';
 
 const validEnvironment = {
   APP_ENV: 'ci',
@@ -408,6 +413,41 @@ describe('loadConfig', () => {
         COMMUNITIES_REALTIME_ENABLED: 'false',
       }),
     ).toThrow('Realtime runtime requires JWT_REALTIME_SECRET');
+  });
+
+  it('loads a deployed worker without exposing API signing secrets', () => {
+    const deployedWorkerEnvironment = {
+      ...validEnvironment,
+      APP_ENV: 'staging',
+      JWT_ACCESS_SECRET: undefined,
+      JWT_REFRESH_SECRET: undefined,
+      WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: 'true',
+      OUTBOX_PUBLISH_MODE: 'leased',
+    };
+    const config = loadWorkerConfig(deployedWorkerEnvironment);
+
+    expect(config).toMatchObject({ APP_ENV: 'staging', OUTBOX_PUBLISH_MODE: 'leased' });
+    expect(config).not.toHaveProperty('JWT_ACCESS_SECRET');
+    expect(config).not.toHaveProperty('JWT_REFRESH_SECRET');
+  });
+
+  it('fails closed when a deployed worker receives signing secrets or loses isolation', () => {
+    expect(() =>
+      loadWorkerConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: 'true',
+      }),
+    ).toThrow('Worker runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
+
+    expect(() =>
+      loadWorkerConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        JWT_ACCESS_SECRET: undefined,
+        JWT_REFRESH_SECRET: undefined,
+      }),
+    ).toThrow('Worker runtime requires WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED=true');
   });
 
   it('requires versioned media dependencies and a real scanner outside local/ci', () => {

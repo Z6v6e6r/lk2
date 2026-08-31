@@ -1,4 +1,4 @@
-import type { AppConfig } from '@phub/config';
+import type { WorkerConfig } from '@phub/config';
 import type {
   LegacyGameSourceSnapshot,
   LegacyParticipantPhotoSource,
@@ -44,7 +44,7 @@ export async function synchronizeLegacyParticipantPhotos(
     readonly tenantId: string;
     readonly snapshots: readonly LegacyGameSourceSnapshot[];
     readonly participants?: readonly LegacyParticipantPhotoSource[];
-    readonly config: AppConfig;
+    readonly config: WorkerConfig;
     readonly store: ProfilePhotoObjectStore;
     readonly logger: Logger;
     readonly correlationId: string;

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AppConfig } from '@phub/config';
+import type { WorkerConfig } from '@phub/config';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
 
@@ -22,7 +22,7 @@ function failureCode(error: unknown): string {
 
 export async function runPlatformHomeSyncCycle(input: {
   readonly pool: Pool;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly logger: Logger;
   readonly now?: Date;
 }): Promise<PlatformHomeSyncCycleResult> {

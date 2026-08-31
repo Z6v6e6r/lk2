@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AppConfig } from '@phub/config';
+import type { WorkerConfig } from '@phub/config';
 import { createLegacyGameImportRepository } from '@phub/database';
 import type { LegacyGamesMongoAdapter } from '@phub/legacy-games-adapter';
 import type { Logger } from 'pino';
@@ -33,7 +33,7 @@ function isoAtOffset(now: Date, days: number): string {
  */
 export async function runLegacyGamesRosterSyncCycle(input: {
   readonly pool: Pool;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly logger: Logger;
   readonly source: Pick<LegacyGamesMongoAdapter, 'read'> &
     Partial<Pick<LegacyGamesMongoAdapter, 'readParticipantPhotos'>>;

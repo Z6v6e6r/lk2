@@ -265,10 +265,11 @@ gate even while Worker is disabled. Worker-disabled operation is safe only for a
 read-only/auth/Games-read beta: API messaging commands can enqueue outbox records that will not be
 published while Worker is stopped. General LK2 beta compatibility is a STOP until this boundary and
 the live outbox are proven.
-The isolated Worker environment also cannot currently satisfy the shared application loader without
-the API access/refresh signing secrets that the Timeweb contract correctly forbids. This source
-incompatibility is another explicit reason Worker activation remains STOP; do not weaken secret
-isolation to make it start.
+Worker uses its dedicated config loader, which requires the isolated runtime marker and rejects API
+access/refresh signing secrets outside local/CI. Internal non-signing sentinels satisfy the shared
+parser shape and are removed from the process-specific Worker config before it is returned. Worker
+activation remains a separate STOP until the RabbitMQ topology, leased outbox and forward-progress
+gates are explicitly approved and proven; do not add API signing secrets to `worker.env`.
 
 `REALTIME_EXPECTED_REPLICAS=1` is mandatory for the initial contour. The runtime contract requires
 it because staging/production Realtime configuration fails closed when replica monitoring has no

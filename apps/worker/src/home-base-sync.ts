@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AppConfig } from '@phub/config';
+import type { WorkerConfig } from '@phub/config';
 import { listDueHomeBaseUsers, projectHomeBaseUser } from '@phub/database';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
@@ -14,7 +14,7 @@ export interface HomeBaseSyncCycleResult {
 
 export async function runHomeBaseSyncCycle(input: {
   readonly pool: Pool;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly logger: Logger;
   readonly now?: Date;
 }): Promise<HomeBaseSyncCycleResult> {
