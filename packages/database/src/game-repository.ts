@@ -937,20 +937,20 @@ export function createGameRepository(pool: Pool): GameRepository {
           [input.tenantId, input.gameId],
         );
         const game = gameRow ? mapGame(gameRow) : undefined;
-        const decisionAt = new Date().toISOString();
         const rejectionCode = !game
           ? ('GAME_NOT_FOUND' as const)
           : game.organizerUserId !== input.actorUserId ||
-              !['PROVISIONING', 'SCHEDULED'].includes(game.lifecycleState) ||
-              Date.parse(game.startsAt) <= Date.parse(decisionAt)
+              !['PROVISIONING', 'SCHEDULED'].includes(game.lifecycleState)
             ? ('GAME_NOT_CANCELLABLE' as const)
             : game.paymentMode !== 'NO_PAYMENT'
               ? ('GAME_PAYMENT_REQUIRED' as const)
               : undefined;
-        if (rejectionCode) {
+        const reject = async (
+          code: Extract<CancelStoredGameResult, { outcome: 'rejected' }>['code'],
+        ): Promise<CancelStoredGameResult> => {
           const rejected = {
             outcome: 'rejected' as const,
-            code: rejectionCode,
+            code,
             ...(game ? { currentRevision: game.revision } : {}),
           };
           await client.query(
@@ -970,30 +970,52 @@ export function createGameRepository(pool: Pool): GameRepository {
               JSON.stringify(rejected),
             ],
           );
+          await client.query(
+            `insert into audit.audit_log (
+               tenant_id, actor_id, action, resource_type, resource_id,
+               result, reason, correlation_id, new_value
+             ) values ($1, $2, 'GAME_CANCEL_REJECTED', 'GAME', $3,
+               'REJECTED', $4, $5, $6::jsonb)`,
+            [
+              input.tenantId,
+              input.actorUserId,
+              game?.id ?? null,
+              code,
+              input.correlationId,
+              JSON.stringify(game ? { currentRevision: game.revision } : {}),
+            ],
+          );
           return { ...rejected, replayed: false };
-        }
+        };
+        if (rejectionCode) return reject(rejectionCode);
         if (!game) throw new Error('GAME_CANCEL_STATE_INVALID');
 
-        const committedAt = decisionAt;
-        const updated = await queryOne<{ revision: string | number } & QueryResultRow>(
+        const updated = await queryOne<
+          { revision: string | number; committed_at: Date | string } & QueryResultRow
+        >(
           client,
-          `update games.games set
+          `with decision as materialized (
+             select clock_timestamp() as committed_at
+           )
+           update games.games set
              revision = revision + 1,
              lifecycle_state = 'CANCELLED',
              cancellation_reason_code = $4,
              cancelled_by_user_id = $3,
-             cancelled_at = $5,
-             updated_at = $5
+             cancelled_at = decision.committed_at,
+             updated_at = decision.committed_at
+           from decision
            where tenant_id = $1 and id = $2
              and organizer_user_id = $3
              and lifecycle_state in ('PROVISIONING', 'SCHEDULED')
              and payment_mode = 'NO_PAYMENT'
-             and starts_at > $5::timestamptz
-           returning revision`,
-          [input.tenantId, game.id, input.actorUserId, input.reasonCode, committedAt],
+             and starts_at > decision.committed_at
+           returning revision, decision.committed_at`,
+          [input.tenantId, game.id, input.actorUserId, input.reasonCode],
         );
-        if (!updated) throw new Error('GAME_CANCEL_WRITE_LOST');
+        if (!updated) return reject('GAME_NOT_CANCELLABLE');
         const revision = positiveInteger(updated.revision);
+        const committedAt = timestamp(updated.committed_at);
         const participants = await client.query<{ user_id: string } & QueryResultRow>(
           `select user_id from games.participations
             where tenant_id = $1 and game_id = $2 and state = 'ACTIVE'

@@ -3,7 +3,7 @@
 ## GL-BLOCK-RESERVATION-EXPIRY
 
 - ID: `GL-BLOCK-RESERVATION-EXPIRY`
-- SEVERITY: `BLOCKED_CRITICAL` for Important expiry only
+- SEVERITY: `P1 / BLOCKED_IMPORTANT`
 - SCENARIO: `E-028`, `K-013`, reservation expiry and worker recovery
 - REPRO: an ACTIVE paid reservation can outlive its nominal expiry because the process manager deliberately does not claim `game.reservation.expire.v1`.
 - EXPECTED: generation-fenced expiry competes safely with payment confirmation; exactly one transition wins and emits one audit/outbox result.
@@ -12,11 +12,11 @@
 ## GL-FU-CANCEL-COMMS
 
 - ID: `GL-FU-CANCEL-COMMS`
-- SEVERITY: `P2 / PRODUCT_POLICY`
+- SEVERITY: `P1 / EXISTING_CURRENT_MAIN_ACCESS_CONVERGENCE`
 - SCENARIO: `F-017`, `H-026..H-028`, `J-013`, promotion/cancel notification, chat and realtime policy
 - REPRO: perform a free promotion or cancel and inspect downstream notification/chat/realtime consumers.
-- EXPECTED: an approved product policy drives a durable, idempotent notification/revocation trigger.
-- ACTUAL: core outbox events exist, but no Game-owned notification consumer or complete cancellation communications policy is claimed by this branch.
+- EXPECTED: strict Game events drive downstream notification and messaging membership convergence without any consumer writing Game state.
+- ACTUAL: current main has a revision-fenced notification projector for participation confirmed/left and Game cancelled events. The event catalog declares the separate `messaging-membership` consumer route, but no registered worker consumer was found; an existing Game conversation can therefore retain an ACTIVE membership after leave/cancel. This branch does not claim chat lifecycle synchronization or change notification semantics.
 
 ## GL-FU-LOCK-TIMEOUT
 
@@ -27,14 +27,14 @@
 - EXPECTED: bounded wait, stable retryable API result and observable metric without durable partial state.
 - ACTUAL: lock order is consistent and corruption has not been reproduced; stable HTTP timeout/deadlock mapping lacks physical API evidence.
 
-## GL-FU-CANCEL-JOIN-RACE
+## GL-FU-CANCEL-WAITLIST-TERMINALIZATION
 
-- ID: `GL-FU-CANCEL-JOIN-RACE`
-- SEVERITY: `P1 / IMPORTANT`
-- SCENARIO: `H-021`, cancel and join issued concurrently for the same scheduled free game
-- REPRO: hold neither command lock, then issue owner cancel and player join at the same instant through two API sessions.
-- EXPECTED: one serial order is durable; a join that loses to cancel returns a stable conflict, while a join that wins is included in the cancellation readback and no partial state remains.
-- ACTUAL: join/join last-seat serialization and cancel-with-joined-players are physically proven, but the cancel/join race itself is classified Important and not claimed by this Critical wave.
+- ID: `GL-FU-CANCEL-WAITLIST-TERMINALIZATION`
+- SEVERITY: `P2 / PRODUCT_POLICY`
+- SCENARIO: promotion and cancel race when cancel wins the Game row lock
+- REPRO: fill a free game, enqueue a waitlist promotion, then issue promotion and owner cancel concurrently.
+- EXPECTED: promotion is serialized before cancel or becomes an idempotent no-op after cancel; product policy decides whether the historical waitlist row must also become terminal.
+- ACTUAL: the physical race proves the promotion is either applied before cancel or stored as a replayable `no_op` after cancel. In the second order the cancelled aggregate can retain an ACTIVE waitlist row that cannot be promoted; explicit terminalization semantics are not defined by this Critical closure.
 
 ## GL-EDGE-CANCEL-ACTIVITY-HISTORY
 
