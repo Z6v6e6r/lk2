@@ -7,7 +7,7 @@ import {
   encryptVivaDelegationToken,
   vivaRefreshLockRedisKey,
 } from '@phub/auth/viva-delegation';
-import type { AppConfig } from '@phub/config';
+import type { WorkerConfig } from '@phub/config';
 import { createLegacyGameImportRepository } from '@phub/database';
 import {
   localVivaProfileAssociationId,
@@ -57,7 +57,7 @@ export interface VivaHomeLegacyGameRosterBridge {
 
 export async function runProfilePhotoMaintenanceCycle(input: {
   readonly pool: Pool;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly logger: Logger;
   readonly profilePhotoStore: ProfilePhotoObjectStore;
 }): Promise<ProfilePhotoMaintenanceCycleResult> {
@@ -110,7 +110,7 @@ async function synchronizeLegacyGameRostersForHome(input: {
   readonly viewerUserId: string;
   readonly bridge: VivaHomeLegacyGameRosterBridge;
   readonly snapshot: Awaited<ReturnType<VivaHomeSourceAdapter['read']>>;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly profilePhotoStore: ProfilePhotoObjectStore;
   readonly logger: Logger;
   readonly correlationId: string;
@@ -250,7 +250,7 @@ async function releaseRefreshLock(redis: Redis, key: string, claimId: string): P
 async function refreshDelegation(input: {
   readonly pool: Pool;
   readonly redis: Redis;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly provider: VivaOAuthProviderPort;
   readonly delegation: VivaHomeDelegation;
   readonly correlationId: string;
@@ -299,7 +299,7 @@ async function refreshDelegation(input: {
 export async function runVivaHomeSyncCycle(input: {
   readonly pool: Pool;
   readonly redis: Redis;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly logger: Logger;
   readonly provider: VivaOAuthProviderPort;
   readonly getAdapter: (providerTenantKey: string) => VivaHomeSourceAdapter;

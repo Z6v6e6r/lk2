@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { AppConfig } from '@phub/config';
+import type { WorkerConfig } from '@phub/config';
 import {
   homePromotionDeckSchema,
   homePromotionSlotsSchema,
@@ -61,7 +61,7 @@ function failureCode(error: unknown): string {
 
 export async function runPromotionHomeSyncCycle(input: {
   readonly pool: Pool;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly logger: Logger;
   readonly source: {
     readonly hero: PromotionSource;

@@ -6,7 +6,7 @@ import {
   type CommunityDirectoryPosition,
   type CommunityDirectoryRepository,
 } from '@phub/communities';
-import type { AppConfig } from '@phub/config';
+import type { WorkerConfig } from '@phub/config';
 import { HOME_COMMUNITY_SUMMARY_LIMIT } from '@phub/home-projection';
 import type { Logger } from 'pino';
 import type { Pool } from 'pg';
@@ -72,7 +72,7 @@ function failureCode(error: unknown): string {
   return 'COMMUNITY_HOME_SYNC_FAILED';
 }
 
-function publicApplicationOrigin(config: AppConfig): string {
+function publicApplicationOrigin(config: WorkerConfig): string {
   const candidate =
     config.VIVA_OAUTH_SUCCESS_REDIRECT_URL || config.CORS_ORIGINS.split(',')[0]?.trim();
   if (!candidate) throw new Error('COMMUNITY_MEDIA_PUBLIC_ORIGIN_MISSING');
@@ -81,7 +81,7 @@ function publicApplicationOrigin(config: AppConfig): string {
 
 export async function runCommunityLogoCompatibilityBackfill(input: {
   readonly pool: Pool;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly logger: Logger;
   readonly store: ProfilePhotoObjectStore;
   readonly now?: Date;
@@ -179,7 +179,7 @@ export async function runCommunityLogoCompatibilityBackfill(input: {
 
 export async function runCommunityHomeSyncCycle(input: {
   readonly pool: Pool;
-  readonly config: AppConfig;
+  readonly config: WorkerConfig;
   readonly logger: Logger;
   readonly repository: CommunityDirectoryRepository;
   readonly sourceMode: 'LEGACY' | 'LOCAL';
