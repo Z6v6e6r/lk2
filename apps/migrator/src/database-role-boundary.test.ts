@@ -175,6 +175,18 @@ const projectionFence: PostMigrationRuntimeTableSnapshot = {
   ],
 };
 
+const gameProjectionFence: PostMigrationRuntimeTableSnapshot = {
+  ...reminderSchedule,
+  relationName: 'game_notification_projection_fences',
+  policyName: 'game_notification_projection_fences_tenant_isolation',
+  policies: [
+    {
+      ...reminderSchedule.policies[0]!,
+      name: 'game_notification_projection_fences_tenant_isolation',
+    },
+  ],
+};
+
 const userBlocks: PostMigrationRuntimeTableSnapshot = {
   ...reminderSchedule,
   schemaName: 'messaging',
@@ -202,6 +214,7 @@ const userBlockCommands: PostMigrationRuntimeTableSnapshot = {
 
 const runtimeTables: readonly PostMigrationRuntimeTableSnapshot[] = [
   projectionFence,
+  gameProjectionFence,
   reminderSchedule,
   reminderRecipients,
   userBlocks,
@@ -709,7 +722,7 @@ describe('database role boundary', () => {
     [
       'POST_MIGRATION_RUNTIME_TABLE_RLS_INVALID',
       runtimeTables.map((table) =>
-        table.relationName === 'booking_notification_projection_fences'
+        table.relationName === 'game_notification_projection_fences'
           ? { ...table, forceRls: false }
           : table,
       ),

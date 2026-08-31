@@ -1,5 +1,6 @@
 import {
   BOOKING_NOTIFICATION_EVENT_TYPES,
+  GAME_NOTIFICATION_EVENT_TYPES,
   notificationSourceEventSchema,
 } from '@phub/notifications';
 import type { Channel, ConsumeMessage } from 'amqplib';
@@ -9,7 +10,9 @@ import type { Pool } from 'pg';
 import { applyNotificationSourceEvent } from './notification-projector.js';
 
 export const NOTIFICATION_PROJECTOR_QUEUE = 'phub.notification-intent-projector.v1';
+export const GAME_NOTIFICATION_PROJECTOR_QUEUE = 'phub.game-notification-intent-projector.v1';
 export const NOTIFICATION_SOURCE_ROUTING_KEYS = BOOKING_NOTIFICATION_EVENT_TYPES;
+export const GAME_NOTIFICATION_SOURCE_ROUTING_KEYS = GAME_NOTIFICATION_EVENT_TYPES;
 
 async function handleMessage(options: {
   readonly channel: Channel;
@@ -62,7 +65,7 @@ async function handleMessage(options: {
           eventType: parsed.data.type,
           tenantId: parsed.data.tenantId,
         },
-        'booking notification revision conflict sent to dead letter',
+        'notification source revision conflict sent to dead letter',
       );
       options.channel.nack(options.message, false, false);
       return;
@@ -100,28 +103,41 @@ export async function registerNotificationProjectorConsumer(options: {
     readonly environment: 'SANDBOX' | 'PRODUCTION';
   };
 }): Promise<string> {
-  await options.channel.assertQueue(NOTIFICATION_PROJECTOR_QUEUE, {
+  const queueOptions = {
     durable: true,
     arguments: {
       'x-queue-type': 'quorum',
       'x-delivery-limit': 5,
       'x-dead-letter-exchange': 'phub.dead-letter',
     },
-  });
-  // Bind the current explicit source contracts before removing the legacy wildcard so an
-  // in-place rollout cannot create a routing gap. RabbitMQ routes a message once per queue even
-  // when more than one binding matches it.
+  } as const;
+  await options.channel.assertQueue(NOTIFICATION_PROJECTOR_QUEUE, queueOptions);
+  // Preserve the legacy booking queue for mixed-version workers. GAME events use a new queue so
+  // an older worker can never consume a contract or selector it does not understand.
   for (const routingKey of NOTIFICATION_SOURCE_ROUTING_KEYS) {
     await options.channel.bindQueue(NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', routingKey);
   }
+  await options.channel.assertQueue(GAME_NOTIFICATION_PROJECTOR_QUEUE, queueOptions);
+  for (const routingKey of GAME_NOTIFICATION_SOURCE_ROUTING_KEYS) {
+    await options.channel.bindQueue(GAME_NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', routingKey);
+  }
+  // Establish a complete route for every GAME event before removing the legacy wildcard. RabbitMQ
+  // publisher confirms do not reject unroutable messages, so the opposite order creates a loss gap.
   await options.channel.unbindQueue(NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', '#');
   await options.channel.prefetch(10);
-  const consumer = await options.channel.consume(
+  const bookingConsumer = await options.channel.consume(
     NOTIFICATION_PROJECTOR_QUEUE,
     (message) => {
       if (message) void handleMessage({ ...options, message });
     },
     { noAck: false },
   );
-  return consumer.consumerTag;
+  await options.channel.consume(
+    GAME_NOTIFICATION_PROJECTOR_QUEUE,
+    (message) => {
+      if (message) void handleMessage({ ...options, message });
+    },
+    { noAck: false },
+  );
+  return bookingConsumer.consumerTag;
 }

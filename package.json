@@ -56,6 +56,7 @@
     "notifications:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-notification-runtime.ts",
     "messaging:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-messaging-runtime.ts",
     "notifications:booking:provision": "node --env-file-if-exists=.env --import tsx scripts/provision-booking-notifications.ts",
+    "notifications:game:provision": "node --env-file-if-exists=.env --import tsx scripts/provision-game-notifications.ts",
     "notifications:web-push:provider:set": "node --env-file-if-exists=.env --import tsx scripts/configure-web-push-provider.ts",
     "notifications:web-push:secrets:provision": "node --import tsx scripts/provision-local-web-push-secrets.ts",
     "timeweb:beta:secrets:provision": "node scripts/provision-timeweb-beta-runtime-secrets.js",

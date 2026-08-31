@@ -43,9 +43,12 @@ const defaultProps = {
   browserState: 'ready' as const,
   busy: false,
   error: null,
+  inboxUnavailable: false,
   onEnableWebPush: vi.fn(),
   onDisableWebPush: vi.fn(),
   onMarkAllRead: vi.fn(),
+  onRetryInbox: vi.fn(),
+  onOpenNotification: vi.fn(),
 };
 
 describe('NotificationsPage', () => {
@@ -63,7 +66,14 @@ describe('NotificationsPage', () => {
 
   it('preserves safe links, unread semantics, and mark-all-read', () => {
     const onMarkAllRead = vi.fn();
-    render(<NotificationsPage {...defaultProps} onMarkAllRead={onMarkAllRead} />);
+    const onOpenNotification = vi.fn();
+    render(
+      <NotificationsPage
+        {...defaultProps}
+        onMarkAllRead={onMarkAllRead}
+        onOpenNotification={onOpenNotification}
+      />,
+    );
     expect(screen.getByRole('link', { name: /Новое сообщение в игре/u })).toHaveAttribute(
       'href',
       '/chats/22222222-2222-4222-8222-222222222222',
@@ -73,6 +83,12 @@ describe('NotificationsPage', () => {
       '/notifications',
     );
     expect(screen.getAllByLabelText('Непрочитанное уведомление')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('link', { name: /Новое сообщение в игре/u }));
+    expect(onOpenNotification).toHaveBeenCalledWith(
+      items[0],
+      '/chats/22222222-2222-4222-8222-222222222222',
+      true,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Прочитать все' }));
     expect(onMarkAllRead).toHaveBeenCalledOnce();
   });
@@ -114,5 +130,22 @@ describe('NotificationsPage', () => {
     expect(screen.getByText('Пока тихо')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Включить push' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: 'Прочитать все' })).not.toBeInTheDocument();
+  });
+
+  it('keeps an unavailable inbox distinct from a successful empty state and exposes retry', () => {
+    const onRetryInbox = vi.fn();
+    render(
+      <NotificationsPage
+        {...defaultProps}
+        page={{ unreadCount: 0, items: [] }}
+        error="Лента оповещений временно недоступна."
+        inboxUnavailable
+        onRetryInbox={onRetryInbox}
+      />,
+    );
+    expect(screen.getByText('Лента недоступна')).toBeVisible();
+    expect(screen.queryByText('Пока тихо')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    expect(onRetryInbox).toHaveBeenCalledOnce();
   });
 });

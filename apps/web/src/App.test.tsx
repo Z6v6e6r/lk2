@@ -1429,6 +1429,75 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 
+  it('marks an unread GAME notification before following its deep link', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    const markNotificationsRead = vi.fn().mockResolvedValue({
+      outcome: 'updated',
+      readThrough: {
+        id: notificationInbox.items[0]?.id,
+        createdAt: notificationInbox.items[0]?.createdAt,
+      },
+      changedCount: 1,
+      replayed: false,
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      markNotificationsRead,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    fireEvent.click(await screen.findByRole('link', { name: /Игра уже скоро/u }));
+    await waitFor(() =>
+      expect(window.location.pathname).toBe('/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191'),
+    );
+    expect(markNotificationsRead).toHaveBeenCalledWith('3e0ea679-e151-41ab-8c82-4b5da38a0fd4');
+  });
+
+  it('reacts to browser history navigation after following a notification', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    fireEvent.click(await screen.findByRole('link', { name: /Игра уже скоро/u }));
+    await waitFor(() => expect(window.location.pathname).toMatch(/^\/games\//u));
+    window.history.replaceState({}, '', '/notifications');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    expect(await screen.findByRole('heading', { name: 'Уведомления' })).toBeVisible();
+  });
+
+  it('acknowledges a modified-click notification without navigating the current tab', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    const markNotificationsRead = vi.fn().mockResolvedValue({ outcome: 'updated' });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      markNotificationsRead,
+    });
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    const link = await screen.findByRole('link', { name: /Игра уже скоро/u });
+    link.addEventListener('click', (clickEvent) => clickEvent.preventDefault(), { once: true });
+    fireEvent.click(link, { metaKey: true });
+    await waitFor(() => expect(markNotificationsRead).toHaveBeenCalledOnce());
+    expect(window.location.pathname).toBe('/notifications');
+  });
+
+  it('keeps the notification visible when read persistence fails', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      markNotificationsRead: vi.fn().mockRejectedValue(new Error('read failed')),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    fireEvent.click(await screen.findByRole('link', { name: /Игра уже скоро/u }));
+    expect(
+      await screen.findByText('Не удалось отметить оповещение прочитанным. Повторите переход.'),
+    ).toBeVisible();
+    expect(window.location.pathname).toBe('/notifications');
+  });
+
   it('refreshes the notification inbox when the browser regains focus', async () => {
     window.history.replaceState({}, '', '/notifications');
     const updatedInbox: NotificationInboxPage = {
@@ -1478,9 +1547,8 @@ describe('PadlHub web authentication', () => {
 
     expect(await screen.findByRole('heading', { name: 'Уведомления' })).toBeVisible();
     expect(screen.getByText('Лента оповещений временно недоступна.')).toBeVisible();
-    expect(
-      screen.queryByRole('heading', { name: 'Оповещения недоступны' }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText('Лента недоступна')).toBeVisible();
+    expect(screen.queryByText('Пока тихо')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Уведомления на устройстве' })).toBeVisible();
   });
 

@@ -56,6 +56,7 @@ export type PostMigrationRuntimeTableSnapshot = {
   readonly schemaName: 'notifications' | 'messaging' | 'integration';
   readonly relationName:
     | 'booking_notification_projection_fences'
+    | 'game_notification_projection_fences'
     | 'booking_reminder_schedules'
     | 'booking_reminder_recipients'
     | 'user_blocks'
@@ -68,6 +69,7 @@ export type PostMigrationRuntimeTableSnapshot = {
     | 'media_cutover_state';
   readonly policyName:
     | 'booking_notification_projection_fences_tenant_isolation'
+    | 'game_notification_projection_fences_tenant_isolation'
     | 'booking_reminder_schedules_tenant_isolation'
     | 'booking_reminder_recipients_tenant_isolation'
     | 'messaging_user_blocks_tenant_isolation'
@@ -280,6 +282,12 @@ const expectedCorePostMigrationTables = [
     schemaName: 'notifications',
     relationName: 'booking_notification_projection_fences',
     policyName: 'booking_notification_projection_fences_tenant_isolation',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'notifications',
+    relationName: 'game_notification_projection_fences',
+    policyName: 'game_notification_projection_fences_tenant_isolation',
     requiresTenantRls: true,
   },
   {
@@ -1076,6 +1084,12 @@ async function inspectPostMigrationRuntimeTables(
              'notifications'::text,
              'booking_notification_projection_fences'::text,
              'booking_notification_projection_fences_tenant_isolation'::text,
+             true
+           ),
+           (
+             'notifications'::text,
+             'game_notification_projection_fences'::text,
+             'game_notification_projection_fences_tenant_isolation'::text,
              true
            ),
            (

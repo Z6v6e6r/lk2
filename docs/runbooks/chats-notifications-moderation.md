@@ -561,9 +561,10 @@ both runtime-written schemas. The migrator's notifications and messaging table d
 each give the exact runtime role, directly, all four bounded DML privileges
 `SELECT/INSERT/UPDATE/DELETE`; no grant options, other runtime privilege, `PUBLIC` grant or third
 grantee is accepted. The same immutable verifier runs again immediately after migration and
-requires all five runtime-written tables—the booking projection fence, both reminder tables and both
-messaging block tables—to have the exact migrator owner, enabled and forced RLS, the exact tenant
-policy, usable runtime DML and no dangerous runtime privilege. Exact means one and only one policy
+requires all six runtime-written tables—the booking and GAME projection fences, both reminder
+tables and both messaging block tables—to have the exact migrator owner, enabled and forced RLS,
+the exact tenant policy, usable runtime DML and no dangerous runtime privilege. Exact means one and
+only one policy
 per table, the canonical name, `FOR ALL`, `PUBLIC`, `PERMISSIVE`, and normalized equality expressions
 for both `USING` and `WITH CHECK`; any missing/extra policy, `OR true`, changed operator, role,
 command or permissiveness blocks rollout.
@@ -624,7 +625,7 @@ runtime DML, any runtime grant option,
 or any runtime privilege outside `SELECT/INSERT/UPDATE/DELETE`. The post-verifier additionally
 explodes each actual relation and non-dropped user-column ACL and rejects every effective PUBLIC
 privilege, unrelated grantee, runtime grant option, runtime column grant or other non-DML runtime
-privilege on all five tables;
+privilege on all six tables;
 a runtime DML check satisfied only through PUBLIC is never accepted.
 
 This core check intentionally provisions only `notifications` and `messaging`. A media rollout sets
@@ -739,6 +740,7 @@ select namespace.nspname, relation.relname,
   join pg_namespace namespace on namespace.oid = relation.relnamespace
  where (namespace.nspname, relation.relname) in (
    ('notifications', 'booking_notification_projection_fences'),
+   ('notifications', 'game_notification_projection_fences'),
    ('notifications', 'booking_reminder_schedules'),
    ('notifications', 'booking_reminder_recipients'),
    ('messaging', 'user_blocks'),
@@ -749,6 +751,7 @@ select schemaname, tablename, policyname, qual, with_check
   from pg_policies
  where (schemaname, tablename) in (
    ('notifications', 'booking_notification_projection_fences'),
+   ('notifications', 'game_notification_projection_fences'),
    ('notifications', 'booking_reminder_schedules'),
    ('notifications', 'booking_reminder_recipients'),
    ('messaging', 'user_blocks'),
@@ -1010,6 +1013,54 @@ channel before stopping the delivery worker during an incident.
 
 ## Required smoke tests
 
+### GAME notification vertical slice
+
+Ruleset `game.ru-ru.v1` consumes the existing authoritative
+`game.participation.confirmed.v1`, `game.participation.left.v1` and `game.cancelled.v1` outbox
+events. It creates only in-app notifications with a canonical `/games/{gameId}` deep link; it does
+not modify the Core Game state machine, create a conversation, send push, or change any runtime
+gate. Preview and apply both require a current active `admin` with `notifications.manage`:
+
+```bash
+npm run notifications:game:provision -- \
+  --tenant-key=local-padel \
+  --actor-id=<active-padlhub-user-uuid> \
+  --idempotency-key=game-ruleset-v1-local-20260831
+
+npm run notifications:game:provision -- \
+  --tenant-key=local-padel \
+  --actor-id=<active-padlhub-user-uuid> \
+  --idempotency-key=game-ruleset-v1-local-20260831 \
+  --confirm=APPLY_GAME_NOTIFICATION_RULESET
+```
+
+Provisioning leaves `notifications.tenant_runtime_settings.in_app_enabled` unchanged and therefore
+default-off. For an isolated local synthetic MVP only, enable the existing notification and
+messaging tenant gates through their separately audited runtime commands. The expected readback is:
+
+1. confirm or cancel a local `NO_PAYMENT` game command and retain its correlation/event ID;
+2. wait for the explicit notification projector queue to acknowledge that GAME routing key;
+3. read `/notifications` as the intended recipient and verify category `GAME`, unread count and the
+   `/games/{gameId}` target;
+4. open the notification, verify the read cursor advances, open the server-authorized GAME chat,
+   send a message and read the same canonical message back over HTTP;
+5. verify an outsider receives `CHAT_PARTICIPANT_NOT_FOUND` for history, send and read without any
+   message/read-cursor mutation.
+
+Production/shared provisioning, runtime enablement, migration, deployment and provider operations
+remain separate approval boundaries.
+
+Do not apply the GAME ruleset or enable its tenant runtime until migration `0089` is verified and at
+least one new worker is consuming the dedicated `phub.game-notification-intent-projector.v1` queue.
+Older workers may coexist because they consume only the legacy booking queue and can never receive
+GAME contracts. For rollback, deactivate the GAME trigger rules first, drain the dedicated GAME
+queue, verify its DLQ is empty, then remove the three `phub.events` GAME bindings and verify both
+their absence and a zero queue backlog before removing the last new worker. Unbinding is a separate,
+explicitly authorized broker mutation; while rolled back, no GAME notifications are produced.
+Keeping a compatible consumer instead requires a separately approved, bounded rollback window and
+continuous queue-depth observation. A database rollback is not required: the expand-only recipient
+fence table is inert for older workers.
+
 ### Booking notification ruleset M1
 
 Provisioning is an explicit, tenant-scoped operation. Ruleset `booking.ru-ru.v3` installs immutable
@@ -1210,18 +1261,20 @@ Worker startup must declare `phub.dead-letter.v1` as a durable quorum queue and 
 `phub.dead-letter` topic exchange with routing key `#`. This is shared retention for rejected
 events; it does not change the routing keys or delivery policy of existing consumers.
 
-The notification projector queue is intentionally different: it binds only the four explicit
-booking source contracts listed in the domain event catalog. During an in-place upgrade the worker
-creates those exact bindings first and then removes the legacy `phub.events` / `#` binding. Verify
-that `phub.notification-intent-projector.v1` has no wildcard binding before enabling booking rules.
-Every future notification-producing vertical must add its versioned routing key to the code-owned
-topology manifest and topology test; a database rule alone must not broaden broker consumption.
+Notification projectors use two explicit queues. `phub.notification-intent-projector.v1` retains
+only the four booking contracts so old workers remain safe during a rolling upgrade;
+`phub.game-notification-intent-projector.v1` binds only the three GAME contracts and is consumed
+only by workers that understand their schemas and recipient fence. The worker removes the legacy
+`phub.events` / `#` binding from the booking queue. Verify that neither projector queue has a
+wildcard binding before enabling rules. Every future notification-producing vertical must add its
+versioned routing key to a code-owned topology manifest and test; a database rule alone must not
+broaden broker consumption.
 
 Before enabling a new tenant or transport, verify the queue and binding in the target environment:
 
 ```bash
 docker compose exec rabbitmq rabbitmqctl list_queues \
-  name durable arguments messages_ready messages_unacknowledged
+  name durable arguments messages messages_ready messages_unacknowledged consumers
 docker compose exec rabbitmq rabbitmqctl list_bindings \
   source_name destination_name destination_kind routing_key
 ```
@@ -1231,6 +1284,18 @@ The queue must be durable, have `x-queue-type=quorum`, and have an exchange-to-q
 expansion until the cause is identified. Inspect metadata and `x-death` headers without copying
 message bodies or endpoint data into logs or incident tickets. Replay only through a reviewed,
 idempotent repair after the failing consumer or contract is fixed.
+
+Projector retries are immediate and bounded by the quorum queue delivery limit; there is no delayed
+retry tier in this MVP. A database outage or lock-timeout can therefore exhaust five deliveries and
+move a valid event to the DLQ quickly. Restore the dependency first, verify the strict contract and
+recipient fence, then use the reviewed idempotent replay procedure. Never purge or blind-requeue the
+GAME queue.
+
+The current automated worker snapshot alerts on the shared DLQ but does not yet publish a dedicated
+GAME queue depth/consumer-count metric. Until that metric exists, every activation and observation
+window must record `messages_ready`, `messages_unacknowledged` and `consumers` for
+`phub.game-notification-intent-projector.v1`; any non-zero sustained depth or zero consumers blocks
+expansion. This manual gate is an MVP residual, not evidence that GAME delivery is healthy.
 
 ### Automated worker reliability alerts
 

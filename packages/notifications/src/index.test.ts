@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  GAME_NOTIFICATION_EVENT_TYPES,
+  GAME_NOTIFICATION_REQUEST_HASH,
   MAX_NOTIFICATION_EVENT_RECIPIENTS,
   bookingNotificationSourceEventSchema,
   canonicalWebPushEndpoint,
   canonicalWebPushSubscription,
   createNotificationEndpointCipher,
+  gameNotificationSourceEventSchema,
   isWebPushEndpointOriginAllowed,
   notificationAudienceSelectorSchema,
   notificationSourceEventSchema,
@@ -234,6 +237,82 @@ describe('notification domain contracts', () => {
       notificationSourceEventSchema.parse({
         ...parsed,
         payload: { ...parsed.payload, revision: '0' },
+      }),
+    ).toThrow();
+  });
+
+  it('validates the bounded GAME notification source events and recipients', () => {
+    const gameId = '66666666-6666-4666-8666-666666666666';
+    const userId = '77777777-7777-4777-8777-777777777777';
+    const confirmed = gameNotificationSourceEventSchema.parse({
+      id: '88888888-8888-4888-8888-888888888888',
+      type: 'game.participation.confirmed.v1',
+      aggregateId: gameId,
+      tenantId: event.tenantId,
+      occurredAt: event.occurredAt,
+      correlationId: 'game-notification-test',
+      payload: {
+        gameId,
+        aggregateRevision: '3',
+        causationId: '99999999-9999-4999-8999-999999999999',
+        actorUserId: userId,
+        userId,
+        participationId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    });
+    expect(
+      resolveNotificationRecipients(confirmed, { type: 'EVENT_USER', field: 'userId' }),
+    ).toEqual([userId]);
+
+    const left = gameNotificationSourceEventSchema.parse({
+      ...confirmed,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      type: 'game.participation.left.v1',
+      payload: {
+        ...confirmed.payload,
+        aggregateRevision: '4',
+      },
+    });
+    expect(resolveNotificationRecipients(left, { type: 'EVENT_USER', field: 'userId' })).toEqual([
+      userId,
+    ]);
+
+    const cancelled = gameNotificationSourceEventSchema.parse({
+      ...confirmed,
+      id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      type: 'game.cancelled.v1',
+      payload: {
+        gameId,
+        aggregateRevision: '5',
+        causationId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        actorUserId: userId,
+        participantUserIds: [userId],
+        reasonCode: 'ORGANIZER_REQUEST',
+      },
+    });
+    expect(
+      resolveNotificationRecipients(cancelled, {
+        type: 'EVENT_USERS',
+        field: 'participantUserIds',
+      }),
+    ).toEqual([userId]);
+    expect(GAME_NOTIFICATION_EVENT_TYPES).toEqual([
+      'game.participation.confirmed.v1',
+      'game.participation.left.v1',
+      'game.cancelled.v1',
+    ]);
+    expect(GAME_NOTIFICATION_REQUEST_HASH).toMatch(/^[0-9a-f]{64}$/u);
+
+    expect(() =>
+      notificationSourceEventSchema.parse({
+        ...confirmed,
+        aggregateId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      }),
+    ).toThrow();
+    expect(() =>
+      notificationSourceEventSchema.parse({
+        ...confirmed,
+        payload: { ...confirmed.payload, aggregateRevision: '0' },
       }),
     ).toThrow();
   });

@@ -59,13 +59,19 @@ export function assertFoundationRabbitInventory(
   const inventory = record(input);
   const queues = rows(inventory.queues);
   const bindings = rows(inventory.bindings);
-  const expectedQueueNames = [
+  const legacyQueueNames = [
     'phub.dead-letter.v1',
     'phub.notification-intent-projector.v1',
   ] as const;
-  const selectedQueues = queues.filter((queue) =>
-    expectedQueueNames.includes(String(queue.name) as (typeof expectedQueueNames)[number]),
-  );
+  const gameQueueName = 'phub.game-notification-intent-projector.v1' as const;
+  const gameQueuePresent = queues.some((queue) => queue.name === gameQueueName);
+  if (!options.requireQueues && gameQueuePresent) {
+    fail('CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH');
+  }
+  const expectedQueueNames: readonly string[] = options.requireQueues
+    ? [...legacyQueueNames, gameQueueName]
+    : legacyQueueNames;
+  const selectedQueues = queues.filter((queue) => expectedQueueNames.includes(String(queue.name)));
   if (selectedQueues.length === 0 && !options.requireQueues) {
     return { queueCount: 0, bindingCount: 0 };
   }
@@ -82,7 +88,7 @@ export function assertFoundationRabbitInventory(
       fail('CHAT_PUSH_FOUNDATION_RABBIT_BACKLOG_PRESENT');
     }
     const expectedArgumentKeys =
-      name === 'phub.notification-intent-projector.v1'
+      name !== 'phub.dead-letter.v1'
         ? ['x-dead-letter-exchange', 'x-delivery-limit', 'x-queue-type']
         : ['x-queue-type'];
     if (!sameStrings(argumentKeys(queue.arguments), expectedArgumentKeys)) {
@@ -92,7 +98,7 @@ export function assertFoundationRabbitInventory(
       fail('CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_ARGUMENT_MISMATCH');
     }
     if (
-      name === 'phub.notification-intent-projector.v1' &&
+      name !== 'phub.dead-letter.v1' &&
       (Number(argumentValue(queue.arguments, 'x-delivery-limit')) !== 5 ||
         argumentValue(queue.arguments, 'x-dead-letter-exchange') !== 'phub.dead-letter')
     ) {
@@ -101,9 +107,7 @@ export function assertFoundationRabbitInventory(
   }
 
   const selectedBindings = bindings.filter((binding) =>
-    expectedQueueNames.includes(
-      String(binding.destination_name) as (typeof expectedQueueNames)[number],
-    ),
+    expectedQueueNames.includes(String(binding.destination_name)),
   );
   const bindingKeys = selectedBindings
     .map(
@@ -118,6 +122,15 @@ export function assertFoundationRabbitInventory(
     'phub.events\u0000phub.notification-intent-projector.v1\u0000queue\u0000booking.cancelled.v1',
     'phub.events\u0000phub.notification-intent-projector.v1\u0000queue\u0000booking.changed.v1',
     'phub.events\u0000phub.notification-intent-projector.v1\u0000queue\u0000booking.confirmed.v1',
+    'phub.events\u0000phub.notification-intent-projector.v1\u0000queue\u0000booking.reminder.due.v1',
+    ...(options.requireQueues
+      ? [
+          '\u0000phub.game-notification-intent-projector.v1\u0000queue\u0000phub.game-notification-intent-projector.v1',
+          'phub.events\u0000phub.game-notification-intent-projector.v1\u0000queue\u0000game.cancelled.v1',
+          'phub.events\u0000phub.game-notification-intent-projector.v1\u0000queue\u0000game.participation.confirmed.v1',
+          'phub.events\u0000phub.game-notification-intent-projector.v1\u0000queue\u0000game.participation.left.v1',
+        ]
+      : []),
   ].sort();
   if (!sameStrings(bindingKeys, expectedBindingKeys)) {
     fail('CHAT_PUSH_FOUNDATION_RABBIT_BINDING_MISMATCH');
