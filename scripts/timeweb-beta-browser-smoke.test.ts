@@ -34,6 +34,12 @@ describe('Timeweb beta browser smoke', () => {
     }
     expect(source).toContain('window.fetch = async');
     expect(source).toContain('window.WebSocket = class RehearsalWebSocket');
+    expect(source).toContain('booking-screen-read-jobs');
+    expect(source).toContain('commands: []');
+    expect(source).toContain('notification-endpoints\\/web\\/config');
+    expect(source.indexOf('booking-screen-read-jobs')).toBeLessThan(
+      source.indexOf("method !== 'GET'"),
+    );
   });
 
   it('counts every write class while allowing only reads and session refresh', () => {

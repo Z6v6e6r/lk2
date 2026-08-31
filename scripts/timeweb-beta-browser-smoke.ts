@@ -244,6 +244,7 @@ export function buildBrowserFixturePrelude(): string {
     const counters = ${JSON.stringify(emptyBrowserWriteCounters())};
     const originalFetch = window.fetch.bind(window);
     window.__PHUB_BROWSER_SMOKE__ = counters;
+    window.__PHUB_BROWSER_SMOKE_UNKNOWN_READS__ = [];
     window.WebSocket = class RehearsalWebSocket {
       static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
       readyState = 3;
@@ -303,7 +304,7 @@ export function buildBrowserFixturePrelude(): string {
           title: 'Игра уже скоро', body: 'Начало завтра в 18:00.', deepLink: '/games/${GAME_ID}',
           createdAt: '2026-09-01T00:00:00.000Z' }],
       };
-      if (/\\/web-push\\/configuration$/.test(pathname)) return {
+      if (/\\/(?:web-push\\/configuration|notification-endpoints\\/web\\/config)$/.test(pathname)) return {
         enabled: false, reason: 'GLOBAL_GATE_DISABLED',
       };
       if (/\\/communities\\/mine/.test(pathname)) return { items: [] };
@@ -322,6 +323,16 @@ export function buildBrowserFixturePrelude(): string {
         }
         return json(fixtures.session);
       }
+      if (/\\/booking-screen-read-jobs$/.test(url.pathname) && method === 'POST') {
+        return json({
+          jobId: '41000000-0000-4000-8000-000000000001', screen: 'EVENT_CATALOG',
+          expiresAt: '2099-09-01T00:02:00.000Z', commands: [], concurrency: 1,
+        });
+      }
+      if (/\\/booking-screen-read-jobs\\/41000000-0000-4000-8000-000000000001\\/complete$/.test(url.pathname) && method === 'POST') {
+        return json({ screen: 'EVENT_CATALOG', state: 'READY', completedCommands: 0,
+          totalCommands: 0, catalog: fixtures.eventCatalog });
+      }
       if (method !== 'GET' && method !== 'HEAD') {
         const path = url.pathname;
         if (/\\/games\\/?$/.test(path) && method === 'POST') counters.CREATE_ATTEMPTS += 1;
@@ -335,6 +346,7 @@ export function buildBrowserFixturePrelude(): string {
       const body = apiBody(url.pathname + url.search);
       if (body !== undefined) return json(body);
       counters.UNKNOWN_READS += 1;
+      window.__PHUB_BROWSER_SMOKE_UNKNOWN_READS__.push(url.pathname + url.search);
       return json({ code: 'REHEARSAL_FIXTURE_MISSING', message: 'Read fixture missing', correlationId: 'browser-smoke' }, 404);
     };
   })();`;
@@ -440,8 +452,13 @@ async function waitForMarker(client: CdpClient, marker: string): Promise<void> {
     if (found) return;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  const text = await evaluate<string>(client, 'document.body?.innerText ?? ""').catch(() => '');
-  throw new Error(`browser marker missing: ${marker}; body=${text.slice(0, 500)}`);
+  const debug = await evaluate<{ text: string; counters: unknown; unknownReads: unknown }>(
+    client,
+    `({ text: document.body?.innerText ?? '', counters: window.__PHUB_BROWSER_SMOKE__, unknownReads: window.__PHUB_BROWSER_SMOKE_UNKNOWN_READS__ })`,
+  ).catch(() => ({ text: '', counters: null, unknownReads: null }));
+  throw new Error(
+    `browser marker missing: ${marker}; state=${JSON.stringify({ ...debug, text: debug.text.slice(0, 500) })}`,
+  );
 }
 
 function chromeExecutable(): string {
@@ -498,6 +515,7 @@ export async function runTimewebBrowserSmoke(baseUrl: string): Promise<BrowserWr
     });
 
     const totals = emptyBrowserWriteCounters();
+    const unknownReadPaths: string[] = [];
     for (const viewport of [
       { name: 'mobile-375', width: 375, height: 812, deviceScaleFactor: 1, mobile: true },
       { name: 'desktop-1440', width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false },
@@ -515,6 +533,7 @@ export async function runTimewebBrowserSmoke(baseUrl: string): Promise<BrowserWr
           busy: number;
           errors: string[];
           loadingText: boolean;
+          unknownReads: string[];
         }>(
           client,
           `(() => ({
@@ -522,6 +541,7 @@ export async function runTimewebBrowserSmoke(baseUrl: string): Promise<BrowserWr
             busy: document.querySelectorAll('[aria-busy="true"]').length,
             errors: [...document.querySelectorAll('[data-error-boundary], .error-boundary')].map(node => node.textContent || ''),
             loadingText: /(?:Проверяем сессию|Загружаем нужный раздел|Открываем личный кабинет)/u.test(document.body?.innerText || ''),
+            unknownReads: window.__PHUB_BROWSER_SMOKE_UNKNOWN_READS__,
           }))()`,
         );
         if (pageState.busy !== 0 || pageState.loadingText)
@@ -533,6 +553,7 @@ export async function runTimewebBrowserSmoke(baseUrl: string): Promise<BrowserWr
         for (const key of Object.keys(totals) as (keyof BrowserWriteCounters)[]) {
           totals[key] += pageState.counters[key];
         }
+        unknownReadPaths.push(...pageState.unknownReads);
 
         if (route.name === 'game-detail') {
           await client.command('Page.reload', { ignoreCache: true });
@@ -547,7 +568,10 @@ export async function runTimewebBrowserSmoke(baseUrl: string): Promise<BrowserWr
       }
     }
     for (const [key, value] of Object.entries(totals)) {
-      if (value !== 0) throw new Error(`${key}=${value}`);
+      if (value !== 0)
+        throw new Error(
+          `${key}=${value}${key === 'UNKNOWN_READS' ? `|paths=${[...new Set(unknownReadPaths)].join(',')}` : ''}`,
+        );
     }
     return totals;
   } finally {
