@@ -1549,7 +1549,9 @@ describe('PadlHub web authentication', () => {
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(container.querySelector('.figma-home-shell')).toHaveClass('is-home-v3');
     expect(container.querySelector('.fh-hero--v3')).toHaveClass('fh-hero--v2');
-    expect(gateway.listBookingRecommendations).toHaveBeenCalledWith({ limit: 14 });
+    await waitFor(() =>
+      expect(gateway.listBookingRecommendations).toHaveBeenCalledWith({ limit: 14 }),
+    );
   });
 
   it('applies the saved row presentation to Home V3 without changing its data request', async () => {
@@ -1567,7 +1569,9 @@ describe('PadlHub web authentication', () => {
     await waitFor(() =>
       expect(container.querySelector('.figma-home-shell')).toHaveClass('is-home-v3-rows'),
     );
-    expect(gateway.listBookingRecommendations).toHaveBeenCalledWith({ limit: 14 });
+    await waitFor(() =>
+      expect(gateway.listBookingRecommendations).toHaveBeenCalledWith({ limit: 14 }),
+    );
   });
 
   it('waits for saved preferences before opening Home V3', async () => {
