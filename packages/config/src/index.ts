@@ -443,6 +443,7 @@ const environmentSchema = z.object({
 });
 
 export type AppConfig = z.infer<typeof environmentSchema>;
+export type WorkerConfig = Omit<AppConfig, 'JWT_ACCESS_SECRET' | 'JWT_REFRESH_SECRET'>;
 
 export interface ConfigRequirements {
   readonly profilePhotoStorage?: boolean;
@@ -1354,6 +1355,8 @@ export function loadConfig(
 
 const REALTIME_ACCESS_SECRET_SENTINEL = 'x'.repeat(32);
 const REALTIME_REFRESH_SECRET_SENTINEL = 'y'.repeat(32);
+const WORKER_ACCESS_SECRET_SENTINEL = 'w'.repeat(32);
+const WORKER_REFRESH_SECRET_SENTINEL = 'v'.repeat(32);
 
 /**
  * Realtime validates tickets with its dedicated key and must not receive API or refresh signing
@@ -1379,4 +1382,34 @@ export function loadRealtimeConfig(environment: NodeJS.ProcessEnv = process.env)
     },
     { realtimeReplicaMonitoring: true },
   );
+}
+
+/**
+ * Worker publishes outbox events but does not issue or refresh API sessions. Deployed workers must
+ * use the isolated runtime contract and must never receive API signing secrets. Distinct internal
+ * sentinels satisfy the shared config shape without widening the worker secret surface.
+ */
+export function loadWorkerConfig(environment: NodeJS.ProcessEnv = process.env): WorkerConfig {
+  const deployed = environment.APP_ENV !== 'local' && environment.APP_ENV !== 'ci';
+  if (
+    deployed &&
+    (environment.JWT_ACCESS_SECRET !== undefined || environment.JWT_REFRESH_SECRET !== undefined)
+  ) {
+    throw new Error('Worker runtime must not receive JWT_ACCESS_SECRET or JWT_REFRESH_SECRET');
+  }
+  if (deployed && environment.WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED !== 'true') {
+    throw new Error('Worker runtime requires WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED=true');
+  }
+  const config = loadConfig(
+    {
+      ...environment,
+      JWT_ACCESS_SECRET: WORKER_ACCESS_SECRET_SENTINEL,
+      JWT_REFRESH_SECRET: WORKER_REFRESH_SECRET_SENTINEL,
+    },
+    { profilePhotoStorage: true },
+  );
+  const { JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, ...workerConfig } = config;
+  void JWT_ACCESS_SECRET;
+  void JWT_REFRESH_SECRET;
+  return workerConfig;
 }
