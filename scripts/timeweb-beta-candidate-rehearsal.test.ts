@@ -69,4 +69,17 @@ describe('Timeweb beta candidate rehearsal wiring', () => {
     expect(runbook).toContain('PROVIDER_WRITES=0');
     expect(runbook).toContain('UNVERIFIED_LOCAL_SOURCE');
   });
+
+  it('fails closed on remote Docker contexts, network writes, and incomplete evidence', () => {
+    const candidateHarness = read('scripts/test-timeweb-beta-candidate.ts');
+    const browserHarness = read('scripts/timeweb-beta-browser-smoke.ts');
+    expect(candidateHarness).toContain("endpoint.startsWith('unix://')");
+    expect(candidateHarness).toContain("key.startsWith('DOCKER_')");
+    expect(candidateHarness).toContain('--expected-publication-run-id');
+    expect(candidateHarness).toContain('--expected-manifest-checksum');
+    expect(candidateHarness).toContain('UNVERIFIED_PREVIOUS_BINARIES');
+    expect(browserHarness).toContain("client.command('Fetch.enable'");
+    expect(browserHarness).toContain("client.command('Network.enable'");
+    expect(browserHarness).toContain("errorReason: 'BlockedByClient'");
+  });
 });

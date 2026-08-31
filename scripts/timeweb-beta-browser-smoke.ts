@@ -316,7 +316,20 @@ export function buildBrowserFixturePrelude(): string {
       const url = new URL(request ? request.url : String(input), window.location.href);
       const method = String(init.method || request?.method || 'GET').toUpperCase();
       const isApi = /^\\/(?:user|public|admin)\\/api\\//.test(url.pathname) || /^\\/health\\//.test(url.pathname);
-      if (!isApi || url.origin !== window.location.origin) return originalFetch(input, init);
+      if (url.origin !== window.location.origin) {
+        if (method === 'GET' || method === 'HEAD') {
+          counters.UNKNOWN_READS += 1;
+          window.__PHUB_BROWSER_SMOKE_UNKNOWN_READS__.push('EXTERNAL:' + method + ':' + url.origin + url.pathname);
+        } else {
+          counters.PROVIDER_WRITES += 1;
+        }
+        return json({ code: 'REHEARSAL_EXTERNAL_REQUEST_BLOCKED', message: 'External request blocked', correlationId: 'browser-smoke' }, 451);
+      }
+      if (!isApi) {
+        if (method === 'GET' || method === 'HEAD') return originalFetch(input, init);
+        counters.OTHER_WRITE_ATTEMPTS += 1;
+        return json({ code: 'REHEARSAL_WRITE_BLOCKED', message: 'Write blocked', correlationId: 'browser-smoke' }, 405);
+      }
       if (/\\/auth\\/session\\/refresh$/.test(url.pathname) && method === 'POST') {
         if (new URLSearchParams(window.location.search).get('smokeAuth') === 'none') {
           return json({ code: 'AUTH_REQUIRED', message: 'Synthetic unauthenticated view', correlationId: 'browser-smoke' }, 401);
@@ -367,10 +380,20 @@ class CdpClient {
     { resolve(value: unknown): void; reject(error: Error): void }
   >();
   public readonly exceptions: string[] = [];
+  public readonly networkFailures: string[] = [];
+  public readonly httpServerErrors: string[] = [];
+  public readonly blockedRequests: string[] = [];
 
-  public constructor(private readonly socket: WebSocket) {
+  public constructor(
+    private readonly socket: WebSocket,
+    private readonly allowedOrigin: string,
+  ) {
     socket.on('message', (data) => {
-      const bytes = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+      const bytes = Buffer.isBuffer(data)
+        ? data
+        : Array.isArray(data)
+          ? Buffer.concat(data)
+          : Buffer.from(data);
       const message = JSON.parse(bytes.toString('utf8')) as CdpMessage;
       if (message.id !== undefined) {
         const pending = this.pending.get(message.id);
@@ -386,6 +409,45 @@ class CdpClient {
       if (message.method === 'Log.entryAdded') {
         const entry = (message.params as { entry?: { level?: string; text?: string } })?.entry;
         if (entry?.level === 'error') this.exceptions.push(entry.text ?? 'browser log error');
+      }
+      if (message.method === 'Network.loadingFailed') {
+        const failure = message.params as {
+          errorText?: string;
+          canceled?: boolean;
+          blockedReason?: string;
+        };
+        if (!failure.canceled && failure.blockedReason !== 'inspector')
+          this.networkFailures.push(failure.errorText ?? 'network request failed');
+      }
+      if (message.method === 'Network.responseReceived') {
+        const response = (message.params as { response?: { status?: number; url?: string } })
+          ?.response;
+        if ((response?.status ?? 0) >= 500)
+          this.httpServerErrors.push(`${response?.status ?? 0}:${response?.url ?? 'unknown'}`);
+      }
+      if (message.method === 'Fetch.requestPaused') {
+        const paused = message.params as {
+          requestId: string;
+          request: { url: string; method: string };
+        };
+        let allowed: boolean;
+        try {
+          const requestUrl = new URL(paused.request.url);
+          allowed =
+            (requestUrl.origin === this.allowedOrigin &&
+              ['GET', 'HEAD'].includes(paused.request.method.toUpperCase())) ||
+            ['data:', 'blob:'].includes(requestUrl.protocol);
+        } catch {
+          allowed = false;
+        }
+        if (!allowed)
+          this.blockedRequests.push(`${paused.request.method.toUpperCase()}:${paused.request.url}`);
+        void this.command(allowed ? 'Fetch.continueRequest' : 'Fetch.failRequest', {
+          requestId: paused.requestId,
+          ...(allowed ? {} : { errorReason: 'BlockedByClient' }),
+        }).catch((error: unknown) =>
+          this.exceptions.push(`request guard failed: ${String(error)}`),
+        );
       }
     });
   }
@@ -461,6 +523,48 @@ async function waitForMarker(client: CdpClient, marker: string): Promise<void> {
   );
 }
 
+interface BrowserPageState {
+  counters: BrowserWriteCounters;
+  busy: number;
+  errors: string[];
+  loadingText: boolean;
+  unknownReads: string[];
+}
+
+async function assertSettledPage(
+  client: CdpClient,
+  label: string,
+  exceptionOffset: number,
+  networkFailureOffset: number,
+  httpServerErrorOffset: number,
+  blockedRequestOffset: number,
+): Promise<BrowserPageState> {
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const pageState = await evaluate<BrowserPageState>(
+    client,
+    `(() => ({
+      counters: window.__PHUB_BROWSER_SMOKE__,
+      busy: document.querySelectorAll('[aria-busy="true"]').length,
+      errors: [...document.querySelectorAll('[data-error-boundary], .error-boundary')].map(node => node.textContent || ''),
+      loadingText: /(?:Проверяем сессию|Загружаем нужный раздел|Открываем личный кабинет)/u.test(document.body?.innerText || ''),
+      unknownReads: window.__PHUB_BROWSER_SMOKE_UNKNOWN_READS__,
+    }))()`,
+  );
+  if (pageState.busy !== 0 || pageState.loadingText)
+    throw new Error(`${label}: infinite spinner or busy state`);
+  if (pageState.errors.length > 0) throw new Error(`${label}: error boundary rendered`);
+  if (client.exceptions.length !== exceptionOffset) throw new Error(`${label}: browser exception`);
+  if (client.networkFailures.length !== networkFailureOffset)
+    throw new Error(`${label}: network request failed`);
+  if (client.httpServerErrors.length !== httpServerErrorOffset)
+    throw new Error(`${label}: HTTP server error`);
+  if (client.blockedRequests.length !== blockedRequestOffset)
+    throw new Error(
+      `${label}: unexpected request blocked: ${client.blockedRequests[blockedRequestOffset]}`,
+    );
+  return pageState;
+}
+
 function chromeExecutable(): string {
   const configured = process.env.TIMEWEB_REHEARSAL_CHROME_PATH?.trim();
   if (configured) return configured;
@@ -506,10 +610,12 @@ export async function runTimewebBrowserSmoke(baseUrl: string): Promise<BrowserWr
     const port = Number(portLine);
     if (!Number.isSafeInteger(port) || port <= 0) throw new Error('invalid Chrome DevTools port');
     socket = await connectWebSocket(await waitForTarget(port, 10_000));
-    const client = new CdpClient(socket);
+    const client = new CdpClient(socket, normalizedBaseUrl.origin);
     await client.command('Page.enable');
     await client.command('Runtime.enable');
     await client.command('Log.enable');
+    await client.command('Network.enable');
+    await client.command('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
     await client.command('Page.addScriptToEvaluateOnNewDocument', {
       source: buildBrowserFixturePrelude(),
     });
@@ -524,46 +630,45 @@ export async function runTimewebBrowserSmoke(baseUrl: string): Promise<BrowserWr
       await client.command('Emulation.setDeviceMetricsOverride', deviceMetrics);
       for (const route of TIMEWEB_BROWSER_SMOKE_ROUTES) {
         const exceptionOffset = client.exceptions.length;
+        const networkFailureOffset = client.networkFailures.length;
+        const httpServerErrorOffset = client.httpServerErrors.length;
+        const blockedRequestOffset = client.blockedRequests.length;
         await client.command('Page.navigate', {
           url: new URL(route.path, normalizedBaseUrl).toString(),
         });
         await waitForMarker(client, route.marker);
-        const pageState = await evaluate<{
-          counters: BrowserWriteCounters;
-          busy: number;
-          errors: string[];
-          loadingText: boolean;
-          unknownReads: string[];
-        }>(
+        const pageState = await assertSettledPage(
           client,
-          `(() => ({
-            counters: window.__PHUB_BROWSER_SMOKE__,
-            busy: document.querySelectorAll('[aria-busy="true"]').length,
-            errors: [...document.querySelectorAll('[data-error-boundary], .error-boundary')].map(node => node.textContent || ''),
-            loadingText: /(?:Проверяем сессию|Загружаем нужный раздел|Открываем личный кабинет)/u.test(document.body?.innerText || ''),
-            unknownReads: window.__PHUB_BROWSER_SMOKE_UNKNOWN_READS__,
-          }))()`,
+          `${viewportName}/${route.name}`,
+          exceptionOffset,
+          networkFailureOffset,
+          httpServerErrorOffset,
+          blockedRequestOffset,
         );
-        if (pageState.busy !== 0 || pageState.loadingText)
-          throw new Error(`${viewportName}/${route.name}: infinite spinner or busy state`);
-        if (pageState.errors.length > 0)
-          throw new Error(`${viewportName}/${route.name}: error boundary rendered`);
-        if (client.exceptions.length !== exceptionOffset)
-          throw new Error(`${viewportName}/${route.name}: browser exception`);
         for (const key of Object.keys(totals) as (keyof BrowserWriteCounters)[]) {
           totals[key] += pageState.counters[key];
         }
         unknownReadPaths.push(...pageState.unknownReads);
 
         if (route.name === 'game-detail') {
+          const refreshExceptionOffset = client.exceptions.length;
+          const refreshNetworkFailureOffset = client.networkFailures.length;
+          const refreshHttpServerErrorOffset = client.httpServerErrors.length;
+          const refreshBlockedRequestOffset = client.blockedRequests.length;
           await client.command('Page.reload', { ignoreCache: true });
           await waitForMarker(client, route.marker);
-          const refreshedBusy = await evaluate<number>(
+          const refreshedState = await assertSettledPage(
             client,
-            `document.querySelectorAll('[aria-busy="true"]').length`,
+            `${viewportName}/${route.name}/direct-refresh`,
+            refreshExceptionOffset,
+            refreshNetworkFailureOffset,
+            refreshHttpServerErrorOffset,
+            refreshBlockedRequestOffset,
           );
-          if (refreshedBusy !== 0)
-            throw new Error(`${viewportName}/${route.name}: direct refresh did not settle`);
+          for (const key of Object.keys(totals) as (keyof BrowserWriteCounters)[]) {
+            totals[key] += refreshedState.counters[key];
+          }
+          unknownReadPaths.push(...refreshedState.unknownReads);
         }
       }
     }

@@ -17,6 +17,7 @@ import { validateRuntimeEnvironments } from './verify-timeweb-deployment-contrac
 
 const sourceSha = '1'.repeat(40);
 const sourceTree = '2'.repeat(40);
+const publicationRunId = '33357774310';
 
 function candidateManifest(): Record<string, unknown> {
   return {
@@ -25,7 +26,7 @@ function candidateManifest(): Record<string, unknown> {
     gitTree: sourceTree,
     publication: {
       workflowSha: sourceSha,
-      runId: '33357774310',
+      runId: publicationRunId,
       runAttempt: 1,
     },
     images: TIMEWEB_COMPONENTS.map((component, index) => ({
@@ -44,7 +45,11 @@ describe('Timeweb beta candidate contract', () => {
   });
 
   it('accepts an exact five-component candidate identity', () => {
-    const identity = assertCandidateIdentity(candidateManifest(), { sourceSha, sourceTree });
+    const identity = assertCandidateIdentity(candidateManifest(), {
+      sourceSha,
+      sourceTree,
+      publicationRunId,
+    });
     expect(identity.sourceSha).toBe(sourceSha);
     expect(identity.sourceTree).toBe(sourceTree);
     expect(identity.images.web).toBe(`ghcr.io/z6v6e6r/phub-web@sha256:${'1'.repeat(64)}`);
@@ -58,6 +63,11 @@ describe('Timeweb beta candidate contract', () => {
       'wrong workflow SHA',
       (value: Record<string, unknown>) =>
         ((value.publication as Record<string, unknown>).workflowSha = '3'.repeat(40)),
+    ],
+    [
+      'wrong publication run',
+      (value: Record<string, unknown>) =>
+        ((value.publication as Record<string, unknown>).runId = '33357774311'),
     ],
     [
       'wrong image digest',
@@ -80,7 +90,9 @@ describe('Timeweb beta candidate contract', () => {
   ])('fails closed on %s', (_label, mutate) => {
     const value = candidateManifest();
     mutate(value);
-    expect(() => assertCandidateIdentity(value, { sourceSha, sourceTree })).toThrow();
+    expect(() =>
+      assertCandidateIdentity(value, { sourceSha, sourceTree, publicationRunId }),
+    ).toThrow();
   });
 
   it('builds a complete synthetic environment with every write capability off', () => {

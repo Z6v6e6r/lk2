@@ -23,6 +23,8 @@ const filenames = (await readdir(migrationsDirectory))
   .filter((filename) => /^\d+.*\.sql$/u.test(filename))
   .sort();
 if (filenames.length < 2) throw new Error('at least two migrations are required');
+// This is a local failure-mode fixture only. It is deliberately not described as a supported
+// previous release; exact previous-release rehearsal uses that release's immutable migrator image.
 const previousFilenames = filenames.slice(0, -1);
 const latestFilename = filenames.at(-1);
 const migrations = await Promise.all(
@@ -72,7 +74,7 @@ try {
     'select count(*)::integer as count from public.schema_migrations',
   );
   process.stdout.write(
-    `TIMEWEB_PREVIOUS_SCHEMA_PREPARED|ledger=${ledger.rows[0]?.count ?? 0}|next=${latestFilename}\n`,
+    `TIMEWEB_SYNTHETIC_HEAD_MINUS_ONE_PREPARED|ledger=${ledger.rows[0]?.count ?? 0}|next=${latestFilename}\n`,
   );
 } finally {
   client.release();

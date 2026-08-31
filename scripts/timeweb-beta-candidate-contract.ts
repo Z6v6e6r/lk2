@@ -57,11 +57,22 @@ export interface CandidateIdentity {
   readonly images: Readonly<Record<TimewebComponent, string>>;
 }
 
+export interface ExpectedCandidateIdentity {
+  readonly sourceSha: string;
+  readonly sourceTree: string;
+  readonly publicationRunId: string;
+  readonly manifestSha256: string;
+}
+
 export function assertCandidateIdentity(
   manifestValue: unknown,
-  expected: { readonly sourceSha: string; readonly sourceTree: string },
+  expected: Pick<ExpectedCandidateIdentity, 'sourceSha' | 'sourceTree' | 'publicationRunId'>,
 ): Omit<CandidateIdentity, 'manifestSha256'> {
-  if (!SHA_PATTERN.test(expected.sourceSha) || !SHA_PATTERN.test(expected.sourceTree))
+  if (
+    !SHA_PATTERN.test(expected.sourceSha) ||
+    !SHA_PATTERN.test(expected.sourceTree) ||
+    !/^[1-9][0-9]*$/u.test(expected.publicationRunId)
+  )
     reject('expected_source_identity');
   const manifest = record(manifestValue, 'manifest_shape');
   if (manifest.schemaVersion !== 'PHUB_TIMEWEB_RELEASE_MANIFEST_V2') reject('manifest_schema');
@@ -71,6 +82,7 @@ export function assertCandidateIdentity(
   if (publication.workflowSha !== expected.sourceSha) reject('manifest_workflow_sha');
   if (typeof publication.runId !== 'string' || !/^[1-9][0-9]*$/u.test(publication.runId))
     reject('manifest_run_id');
+  if (publication.runId !== expected.publicationRunId) reject('manifest_publication_run_id');
   if (publication.runAttempt !== 1) reject('manifest_run_attempt');
   if (!Array.isArray(manifest.images) || manifest.images.length !== TIMEWEB_COMPONENTS.length)
     reject('manifest_component_set');
@@ -109,8 +121,10 @@ export function assertCandidateIdentity(
 
 export function readCandidateArtifact(
   manifestPath: string,
-  expected: { readonly sourceSha: string; readonly sourceTree: string },
+  expected: ExpectedCandidateIdentity,
 ): CandidateIdentity {
+  if (!DIGEST_PATTERN.test(`sha256:${expected.manifestSha256}`))
+    reject('expected_manifest_checksum');
   const absoluteManifest = resolve(manifestPath);
   const checksumPath = join(dirname(absoluteManifest), 'release-manifest.sha256');
   const manifestBytes = exactFile(absoluteManifest, 'release-manifest.json', 'manifest');
@@ -120,6 +134,7 @@ export function readCandidateArtifact(
   if (!match) reject('manifest_checksum_format');
   const actualChecksum = createHash('sha256').update(manifestBytes).digest('hex');
   if (actualChecksum !== match[1]) reject('manifest_checksum_mismatch');
+  if (actualChecksum !== expected.manifestSha256) reject('manifest_expected_checksum_mismatch');
 
   let manifest: unknown;
   try {
@@ -131,10 +146,7 @@ export function readCandidateArtifact(
     validateCanonicalManifest(manifest, {
       expectedPublication: {
         workflowSha: expected.sourceSha,
-        runId: record(manifest, 'manifest_shape').publication
-          ? (record(record(manifest, 'manifest_shape').publication, 'manifest_publication')
-              .runId as string)
-          : '',
+        runId: expected.publicationRunId,
         runAttempt: 1,
       },
       expectedBaseLockPath: resolve('deploy/timeweb/base-images.lock.json'),

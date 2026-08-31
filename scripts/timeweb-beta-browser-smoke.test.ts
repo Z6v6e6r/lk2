@@ -37,6 +37,11 @@ describe('Timeweb beta browser smoke', () => {
     expect(source).toContain('booking-screen-read-jobs');
     expect(source).toContain('commands: []');
     expect(source).toContain('notification-endpoints\\/web\\/config');
+    expect(source).toContain('REHEARSAL_EXTERNAL_REQUEST_BLOCKED');
+    expect(source).toContain('url.origin !== window.location.origin');
+    expect(source.indexOf('url.origin !== window.location.origin')).toBeLessThan(
+      source.indexOf('if (!isApi)'),
+    );
     expect(source.indexOf('booking-screen-read-jobs')).toBeLessThan(
       source.indexOf("method !== 'GET'"),
     );

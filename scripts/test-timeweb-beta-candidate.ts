@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -26,6 +27,13 @@ interface Options {
   readonly manifestDirectory?: string;
   readonly expectedSourceSha?: string;
   readonly expectedSourceTree?: string;
+  readonly expectedPublicationRunId?: string;
+  readonly expectedManifestChecksum?: string;
+  readonly previousManifestDirectory?: string;
+  readonly expectedPreviousSourceSha?: string;
+  readonly expectedPreviousSourceTree?: string;
+  readonly expectedPreviousPublicationRunId?: string;
+  readonly expectedPreviousManifestChecksum?: string;
 }
 
 function parseArguments(argv: readonly string[]): Options {
@@ -34,6 +42,13 @@ function parseArguments(argv: readonly string[]): Options {
   let manifestDirectory: string | undefined;
   let expectedSourceSha: string | undefined;
   let expectedSourceTree: string | undefined;
+  let expectedPublicationRunId: string | undefined;
+  let expectedManifestChecksum: string | undefined;
+  let previousManifestDirectory: string | undefined;
+  let expectedPreviousSourceSha: string | undefined;
+  let expectedPreviousSourceTree: string | undefined;
+  let expectedPreviousPublicationRunId: string | undefined;
+  let expectedPreviousManifestChecksum: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--contract-only') contractOnly = true;
@@ -41,33 +56,113 @@ function parseArguments(argv: readonly string[]): Options {
     else if (
       argument === '--manifest-dir' ||
       argument === '--expected-source-sha' ||
-      argument === '--expected-source-tree'
+      argument === '--expected-source-tree' ||
+      argument === '--expected-publication-run-id' ||
+      argument === '--expected-manifest-checksum' ||
+      argument === '--previous-manifest-dir' ||
+      argument === '--expected-previous-source-sha' ||
+      argument === '--expected-previous-source-tree' ||
+      argument === '--expected-previous-publication-run-id' ||
+      argument === '--expected-previous-manifest-checksum'
     ) {
       const value = argv[index + 1];
       if (!value) throw new Error(`missing value for ${argument}`);
       if (argument === '--manifest-dir') manifestDirectory = resolve(value);
       else if (argument === '--expected-source-sha') expectedSourceSha = value;
-      else expectedSourceTree = value;
+      else if (argument === '--expected-source-tree') expectedSourceTree = value;
+      else if (argument === '--expected-publication-run-id') expectedPublicationRunId = value;
+      else if (argument === '--expected-manifest-checksum') expectedManifestChecksum = value;
+      else if (argument === '--previous-manifest-dir') previousManifestDirectory = resolve(value);
+      else if (argument === '--expected-previous-source-sha') expectedPreviousSourceSha = value;
+      else if (argument === '--expected-previous-source-tree') expectedPreviousSourceTree = value;
+      else if (argument === '--expected-previous-publication-run-id')
+        expectedPreviousPublicationRunId = value;
+      else expectedPreviousManifestChecksum = value;
       index += 1;
     } else throw new Error(`unknown argument: ${argument}`);
   }
-  if (manifestDirectory && (!expectedSourceSha || !expectedSourceTree)) {
-    throw new Error('--manifest-dir requires --expected-source-sha and --expected-source-tree');
+  const candidateValues = [
+    manifestDirectory,
+    expectedSourceSha,
+    expectedSourceTree,
+    expectedPublicationRunId,
+    expectedManifestChecksum,
+  ];
+  if (candidateValues.some(Boolean) && !candidateValues.every(Boolean)) {
+    throw new Error(
+      '--manifest-dir requires source SHA/tree, publication run ID and manifest checksum',
+    );
   }
-  if (!manifestDirectory && (expectedSourceSha || expectedSourceTree)) {
-    throw new Error('expected source identity is valid only with --manifest-dir');
+  const previousValues = [
+    previousManifestDirectory,
+    expectedPreviousSourceSha,
+    expectedPreviousSourceTree,
+    expectedPreviousPublicationRunId,
+    expectedPreviousManifestChecksum,
+  ];
+  if (previousValues.some(Boolean) && !previousValues.every(Boolean)) {
+    throw new Error(
+      '--previous-manifest-dir requires previous source SHA/tree, publication run ID and manifest checksum',
+    );
   }
+  if (previousManifestDirectory && !manifestDirectory)
+    throw new Error('--previous-manifest-dir requires an exact candidate manifest');
   return {
     contractOnly,
     skipBrowser,
     ...(manifestDirectory ? { manifestDirectory } : {}),
     ...(expectedSourceSha ? { expectedSourceSha } : {}),
     ...(expectedSourceTree ? { expectedSourceTree } : {}),
+    ...(expectedPublicationRunId ? { expectedPublicationRunId } : {}),
+    ...(expectedManifestChecksum ? { expectedManifestChecksum } : {}),
+    ...(previousManifestDirectory ? { previousManifestDirectory } : {}),
+    ...(expectedPreviousSourceSha ? { expectedPreviousSourceSha } : {}),
+    ...(expectedPreviousSourceTree ? { expectedPreviousSourceTree } : {}),
+    ...(expectedPreviousPublicationRunId ? { expectedPreviousPublicationRunId } : {}),
+    ...(expectedPreviousManifestChecksum ? { expectedPreviousManifestChecksum } : {}),
   };
 }
 
 function git(...args: string[]): string {
   return execFileSync('git', args, { encoding: 'utf8' }).trim();
+}
+
+function sanitizedHostEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {};
+  for (const key of [
+    'HOME',
+    'LANG',
+    'LC_ALL',
+    'LOGNAME',
+    'PATH',
+    'SHELL',
+    'TMPDIR',
+    'USER',
+    'XDG_RUNTIME_DIR',
+  ]) {
+    if (process.env[key] !== undefined) environment[key] = process.env[key];
+  }
+  return environment;
+}
+
+const HOST_ENVIRONMENT = sanitizedHostEnvironment();
+
+function assertLocalDockerEndpoint(): void {
+  const overrides = Object.keys(process.env).filter(
+    (key) => key.startsWith('DOCKER_') || key.startsWith('COMPOSE_'),
+  );
+  if (overrides.length > 0)
+    throw new Error(
+      `ambient Docker/Compose overrides are forbidden: ${overrides.sort().join(',')}`,
+    );
+  const endpoint = run(
+    'docker',
+    ['context', 'inspect', '--format', '{{ (index .Endpoints "docker").Host }}'],
+    { capture: true },
+  );
+  if (!endpoint.startsWith('unix://'))
+    throw new Error(`rehearsal requires a local Unix-socket Docker endpoint, got ${endpoint}`);
+  run('docker', ['info', '--format', '{{.ID}}'], { capture: true });
 }
 
 function run(
@@ -77,7 +172,7 @@ function run(
 ): string {
   const result = spawnSync(command, [...args], {
     encoding: 'utf8',
-    env: options.environment ?? process.env,
+    env: options.environment ?? HOST_ENVIRONMENT,
     stdio: options.capture ? 'pipe' : 'inherit',
   });
   if (result.error) throw result.error;
@@ -142,7 +237,7 @@ function composeEnvironment(input: {
   images: Readonly<Record<string, string>>;
 }): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...HOST_ENVIRONMENT,
     TIMEWEB_REHEARSAL_PROJECT: input.project,
     TIMEWEB_REHEARSAL_ENV_ROOT: input.envRoot,
     TIMEWEB_REHEARSAL_SOURCE_SHA: input.sourceSha,
@@ -216,7 +311,17 @@ function runtimeSnapshots(
   });
 }
 
-function ledgerCount(compose: readonly string[], environment: NodeJS.ProcessEnv): number {
+interface LedgerSnapshot {
+  readonly count: number;
+  readonly sha256: string;
+  readonly rows: string;
+}
+
+function ledgerSnapshot(
+  compose: readonly string[],
+  environment: NodeJS.ProcessEnv,
+  database = 'phub',
+): LedgerSnapshot {
   const output = run(
     'docker',
     [
@@ -228,15 +333,33 @@ function ledgerCount(compose: readonly string[], environment: NodeJS.ProcessEnv)
       '-U',
       'phub',
       '-d',
-      'phub',
+      database,
       '-Atc',
-      'select count(*) from public.schema_migrations',
+      `select filename || '|' || checksum from public.schema_migrations order by filename`,
     ],
     { environment, capture: true },
   );
-  const count = Number(output);
-  if (!Number.isSafeInteger(count) || count <= 0) throw new Error('migration ledger count invalid');
-  return count;
+  const rows = output.trim();
+  const entries = rows.split('\n').filter(Boolean);
+  if (
+    entries.length === 0 ||
+    entries.some((entry) => !/^\d+[^|]*\.sql\|[0-9a-f]{64}$/u.test(entry))
+  )
+    throw new Error(`migration ledger invalid for ${database}`);
+  return {
+    count: entries.length,
+    sha256: createHash('sha256').update(`${rows}\n`).digest('hex'),
+    rows,
+  };
+}
+
+function assertSameLedger(
+  actual: LedgerSnapshot,
+  expected: LedgerSnapshot,
+  description: string,
+): void {
+  if (actual.sha256 !== expected.sha256 || actual.rows !== expected.rows)
+    throw new Error(`${description}: exact filename/checksum ledger changed`);
 }
 
 async function verifyHttp(baseUrl: string): Promise<void> {
@@ -262,6 +385,7 @@ async function main(): Promise<void> {
     return;
   }
 
+  assertLocalDockerEndpoint();
   if (git('status', '--porcelain') !== '') {
     throw new Error('full rehearsal requires a clean candidate worktree');
   }
@@ -273,12 +397,24 @@ async function main(): Promise<void> {
     ? readCandidateArtifact(join(options.manifestDirectory, 'release-manifest.json'), {
         sourceSha,
         sourceTree,
+        publicationRunId: options.expectedPublicationRunId!,
+        manifestSha256: options.expectedManifestChecksum!,
+      })
+    : undefined;
+  const previousCandidate = options.previousManifestDirectory
+    ? readCandidateArtifact(join(options.previousManifestDirectory, 'release-manifest.json'), {
+        sourceSha: options.expectedPreviousSourceSha!,
+        sourceTree: options.expectedPreviousSourceTree!,
+        publicationRunId: options.expectedPreviousPublicationRunId!,
+        manifestSha256: options.expectedPreviousManifestChecksum!,
       })
     : undefined;
   const releaseId = candidate
     ? `${candidate.sourceSha}-${candidate.runId}-${candidate.runAttempt}`
     : `${sourceSha}-local-1`;
-  const previousReleaseId = `${git('rev-parse', `${sourceSha}^`)}-rollback-fixture`;
+  const previousReleaseId = previousCandidate
+    ? `${previousCandidate.sourceSha}-${previousCandidate.runId}-${previousCandidate.runAttempt}`
+    : `${git('rev-parse', `${sourceSha}^`)}-control-plane-fixture`;
   assertForwardOnlyRollback({
     candidateReleaseId: releaseId,
     previousReleaseId,
@@ -288,52 +424,75 @@ async function main(): Promise<void> {
   const temporaryRoot = mkdtempSync(
     join(realpathSync(tmpdir()), 'phub-timeweb-candidate-rehearsal-'),
   );
-  const envRoot = join(temporaryRoot, 'runtime-env');
-  const project = assertRehearsalProjectName(
-    `phub-tw-rehearsal-${process.pid.toString(36)}-${Date.now().toString(36)}`,
-  );
-  const images = imageNames(sourceSha, candidate);
-  const composeFile = resolve('deploy/timeweb/compose.rehearsal.yaml');
-  const compose = [
-    'compose',
-    '-f',
-    composeFile,
-    '--project-name',
-    project,
-    '--profile',
-    'background',
-    '--profile',
-    'migration',
-  ] as const;
-  writeSyntheticEnvironments(envRoot);
-  const environment = composeEnvironment({
-    project,
-    envRoot,
-    sourceSha,
-    sourceTree,
-    releaseId,
-    images,
-  });
-  process.env.RUNNER_TEMP = temporaryRoot;
-  verifyDeploymentContract({
-    target: resolve('deploy/timeweb/target.json'),
-    caddyfile: resolve('deploy/timeweb/Caddyfile'),
-    publicBetaCaddyfile: resolve('deploy/timeweb/Caddyfile.yandex-public-beta'),
-    publicBetaIngress: resolve('deploy/timeweb/yandex-public-beta-ingress.json'),
-    ingress: resolve('deploy/timeweb/compose.ingress.yaml'),
-    application: resolve('deploy/timeweb/compose.beta.yaml'),
-    runtime: resolve('deploy/timeweb/runtime-environment.contract.json'),
-    nodeBootstrap: resolve('deploy/timeweb/operator-node-bootstrap.v1.json'),
-    observability: resolve('deploy/timeweb/api-web-observability.v1.json'),
-    runbook: resolve('docs/runbooks/timeweb-lk2-beta.md'),
-    envRoot,
-  });
-
+  const previousRunnerTemp = process.env.RUNNER_TEMP;
+  let cleanupCompose: readonly string[] | undefined;
+  let cleanupEnvironment: NodeJS.ProcessEnv | undefined;
+  let primaryFailure: unknown;
+  let cleanupFailure: Error | undefined;
   try {
+    const envRoot = join(temporaryRoot, 'runtime-env');
+    const project = assertRehearsalProjectName(
+      `phub-tw-rehearsal-${process.pid.toString(36)}-${Date.now().toString(36)}`,
+    );
+    const images = imageNames(sourceSha, candidate);
+    const previousImages = previousCandidate
+      ? { ...imageNames(previousCandidate.sourceSha, previousCandidate), proxy: images.proxy! }
+      : images;
+    const composeFile = resolve('deploy/timeweb/compose.rehearsal.yaml');
+    const compose = [
+      'compose',
+      '-f',
+      composeFile,
+      '--project-name',
+      project,
+      '--profile',
+      'background',
+      '--profile',
+      'migration',
+    ] as const;
+    cleanupCompose = compose;
+    writeSyntheticEnvironments(envRoot);
+    const environment = composeEnvironment({
+      project,
+      envRoot,
+      sourceSha,
+      sourceTree,
+      releaseId,
+      images,
+    });
+    cleanupEnvironment = environment;
+    process.env.RUNNER_TEMP = temporaryRoot;
+    verifyDeploymentContract({
+      target: resolve('deploy/timeweb/target.json'),
+      caddyfile: resolve('deploy/timeweb/Caddyfile'),
+      publicBetaCaddyfile: resolve('deploy/timeweb/Caddyfile.yandex-public-beta'),
+      publicBetaIngress: resolve('deploy/timeweb/yandex-public-beta-ingress.json'),
+      ingress: resolve('deploy/timeweb/compose.ingress.yaml'),
+      application: resolve('deploy/timeweb/compose.beta.yaml'),
+      runtime: resolve('deploy/timeweb/runtime-environment.contract.json'),
+      nodeBootstrap: resolve('deploy/timeweb/operator-node-bootstrap.v1.json'),
+      observability: resolve('deploy/timeweb/api-web-observability.v1.json'),
+      runbook: resolve('docs/runbooks/timeweb-lk2-beta.md'),
+      envRoot,
+    });
+
     run('docker', [...compose, 'config', '--quiet'], { environment });
     if (candidate) {
       run('docker', [...compose, 'build', 'proxy'], { environment });
       run('docker', [...compose, 'pull', 'api', 'worker', 'web', 'migrator'], { environment });
+      if (previousCandidate) {
+        const previousPullEnvironment = composeEnvironment({
+          project,
+          envRoot,
+          sourceSha: previousCandidate.sourceSha,
+          sourceTree: previousCandidate.sourceTree,
+          releaseId: previousReleaseId,
+          images: previousImages,
+        });
+        run('docker', [...compose, 'pull', 'api', 'worker', 'web', 'migrator'], {
+          environment: previousPullEnvironment,
+        });
+      }
     } else {
       run('docker', [...compose, 'build', 'api', 'worker', 'web', 'migrator', 'proxy'], {
         environment,
@@ -376,31 +535,79 @@ async function main(): Promise<void> {
       capture: true,
     });
     if (emptyNoOp.includes('Applied ')) throw new Error('second migration run was not a no-op');
+    const candidateLedger = ledgerSnapshot(compose, environment);
+    assertSameLedger(
+      ledgerSnapshot(compose, environment),
+      candidateLedger,
+      'empty database second no-op',
+    );
 
     const previousDatabaseUrl =
       'postgresql://phub:synthetic-rehearsal-postgres@postgres:5432/phub_previous';
-    run(
-      'docker',
-      [
-        ...compose,
-        'run',
-        '--rm',
-        '-T',
-        '-e',
-        `DATABASE_URL=${previousDatabaseUrl}`,
-        'migrator',
-        'node',
-        'scripts/timeweb-beta-prepare-previous-schema.js',
-      ],
-      { environment },
-    );
+    if (previousCandidate) {
+      const previousEnvironment = composeEnvironment({
+        project,
+        envRoot,
+        sourceSha: previousCandidate.sourceSha,
+        sourceTree: previousCandidate.sourceTree,
+        releaseId: previousReleaseId,
+        images: previousImages,
+      });
+      const previousMigration = run(
+        'docker',
+        [
+          ...compose,
+          'run',
+          '--rm',
+          '-T',
+          '-e',
+          `DATABASE_URL=${previousDatabaseUrl}`,
+          '-e',
+          `CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=${TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK}`,
+          'migrator',
+        ],
+        { environment: previousEnvironment, capture: true },
+      );
+      if (!previousMigration.includes('Applied '))
+        throw new Error('exact previous migrator applied nothing to the isolated empty database');
+    } else {
+      run(
+        'docker',
+        [
+          ...compose,
+          'run',
+          '--rm',
+          '-T',
+          '-e',
+          `DATABASE_URL=${previousDatabaseUrl}`,
+          'migrator',
+          'node',
+          'scripts/timeweb-beta-prepare-previous-schema.js',
+        ],
+        { environment },
+      );
+    }
     const previousUpgrade = run(
       'docker',
       [...compose, 'run', '--rm', '-T', '-e', `DATABASE_URL=${previousDatabaseUrl}`, 'migrator'],
       { environment, capture: true },
     );
-    if (!previousUpgrade.includes('Applied '))
-      throw new Error('previous supported schema did not advance to HEAD');
+    if (!previousCandidate && !previousUpgrade.includes('Applied '))
+      throw new Error('synthetic HEAD-minus-one schema did not advance to HEAD');
+    const upgradedPreviousLedger = ledgerSnapshot(compose, environment, 'phub_previous');
+    assertSameLedger(upgradedPreviousLedger, candidateLedger, 'previous-to-candidate upgrade');
+    const upgradedPreviousNoOp = run(
+      'docker',
+      [...compose, 'run', '--rm', '-T', '-e', `DATABASE_URL=${previousDatabaseUrl}`, 'migrator'],
+      { environment, capture: true },
+    );
+    if (upgradedPreviousNoOp.includes('Applied '))
+      throw new Error('upgraded previous database second migration was not a no-op');
+    assertSameLedger(
+      ledgerSnapshot(compose, environment, 'phub_previous'),
+      candidateLedger,
+      'upgraded previous database second no-op',
+    );
 
     run('docker', [...compose, 'up', '-d', '--wait', '--wait-timeout', '180', 'api'], {
       environment,
@@ -494,36 +701,43 @@ async function main(): Promise<void> {
       environment,
     });
 
-    const ledgerBeforeRollback = ledgerCount(compose, environment);
+    const ledgerBeforeRollback = ledgerSnapshot(compose, environment);
     run('docker', [...compose, 'stop', '-t', '60', 'worker'], { environment });
     const rollbackEnvironment = composeEnvironment({
       project,
       envRoot,
-      sourceSha,
-      sourceTree,
+      sourceSha: previousCandidate?.sourceSha ?? sourceSha,
+      sourceTree: previousCandidate?.sourceTree ?? sourceTree,
       releaseId: previousReleaseId,
-      images,
+      images: previousImages,
     });
     run(
       'docker',
-      [...compose, 'up', '-d', '--force-recreate', '--no-deps', 'api', 'web', 'proxy'],
+      [...compose, 'up', '-d', '--force-recreate', '--no-deps', 'api', 'worker', 'web', 'proxy'],
       {
         environment: rollbackEnvironment,
       },
     );
     await Promise.all(
-      ['api', 'web', 'proxy'].map((service) =>
+      ['api', 'worker', 'web', 'proxy'].map((service) =>
         waitForHealthy(containerId(compose, rollbackEnvironment, service)),
       ),
     );
-    const rollbackApi = inspectContainer(containerId(compose, rollbackEnvironment, 'api'));
-    const rollbackWeb = inspectContainer(containerId(compose, rollbackEnvironment, 'web'));
-    for (const inspection of [rollbackApi, rollbackWeb]) {
-      if (inspection.Config.Labels?.['phub.release-id'] !== previousReleaseId)
-        throw new Error('previous release identity was not restored');
-    }
-    if (ledgerCount(compose, rollbackEnvironment) !== ledgerBeforeRollback)
-      throw new Error('rollback attempted a database change');
+    assertRuntimeSnapshot(runtimeSnapshots(compose, rollbackEnvironment), {
+      releaseId: previousReleaseId,
+      sourceSha: previousCandidate?.sourceSha ?? sourceSha,
+      sourceTree: previousCandidate?.sourceTree ?? sourceTree,
+      images: {
+        web: previousImages.web!,
+        api: previousImages.api!,
+        worker: previousImages.worker!,
+      },
+    });
+    assertSameLedger(
+      ledgerSnapshot(compose, rollbackEnvironment),
+      ledgerBeforeRollback,
+      'forward-only application rollback',
+    );
     const rollbackPort = run('docker', [...compose, 'port', 'proxy', '8080'], {
       environment: rollbackEnvironment,
       capture: true,
@@ -535,25 +749,55 @@ async function main(): Promise<void> {
     process.stdout.write(`CANDIDATE_SOURCE_SHA=${sourceSha}\n`);
     process.stdout.write(`CANDIDATE_SOURCE_TREE=${sourceTree}\n`);
     process.stdout.write(
-      `IMMUTABLE_CANDIDATE=${candidate ? 'VERIFIED' : 'UNVERIFIED_LOCAL_SOURCE'}\n`,
+      `IMMUTABLE_CANDIDATE=${candidate ? 'VERIFIED_WITH_CALLER_FROZEN_PUBLICATION_EVIDENCE' : 'UNVERIFIED_LOCAL_SOURCE'}\n`,
     );
-    if (candidate) process.stdout.write(`MANIFEST_SHA256=${candidate.manifestSha256}\n`);
+    if (candidate) {
+      process.stdout.write(`PUBLICATION_RUN_ID=${candidate.runId}\n`);
+      process.stdout.write(`MANIFEST_SHA256=${candidate.manifestSha256}\n`);
+    }
     process.stdout.write('LOCAL_RELEASE_REHEARSAL=PASS\n');
-    process.stdout.write('MIGRATION_REHEARSAL=PASS\n');
+    process.stdout.write(
+      `MIGRATION_REHEARSAL=${previousCandidate ? 'PASS_EXACT_PREVIOUS_MIGRATOR' : 'PASS_SYNTHETIC_HEAD_MINUS_ONE'}\n`,
+    );
     process.stdout.write('RESTART_REHEARSAL=PASS\n');
     process.stdout.write('SECOND_START_IDEMPOTENCY=PASS\n');
     process.stdout.write('GRACEFUL_STOP=PASS\n');
-    process.stdout.write('ROLLBACK_REHEARSAL=PASS\n');
+    process.stdout.write(
+      `ROLLBACK_REHEARSAL=${previousCandidate ? 'PASS_EXACT_PREVIOUS_BINARIES' : 'UNVERIFIED_PREVIOUS_BINARIES'}\n`,
+    );
     process.stdout.write('ROLLBACK_DATABASE_MODE=FORWARD_ONLY\n');
-    process.stdout.write('ROLLBACK_FIXTURE_BINARIES=SAME_AS_CANDIDATE\n');
+    process.stdout.write(
+      `ROLLBACK_CONTROL_PLANE_FIXTURE=${previousCandidate ? 'NOT_APPLICABLE' : 'PASS_SAME_BINARIES_DIFFERENT_IDENTITY'}\n`,
+    );
     process.stdout.write('ONE_COMMAND_SMOKE=PASS\n');
     process.stdout.write('BROWSER_SMOKE_AUTOMATION=READY\n');
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
   } finally {
-    run('docker', [...compose, 'down', '--volumes', '--remove-orphans', '--timeout', '60'], {
-      environment,
-    });
-    rmSync(temporaryRoot, { recursive: true, force: true });
+    try {
+      if (cleanupCompose && cleanupEnvironment) {
+        run(
+          'docker',
+          [...cleanupCompose, 'down', '--volumes', '--remove-orphans', '--timeout', '60'],
+          { environment: cleanupEnvironment },
+        );
+      }
+    } catch (error) {
+      const normalizedError =
+        error instanceof Error ? error : new Error('unknown rehearsal cleanup failure');
+      if (primaryFailure) {
+        process.stderr.write(`TIMEWEB_REHEARSAL_CLEANUP_WARNING=${normalizedError.message}\n`);
+      } else {
+        cleanupFailure = normalizedError;
+      }
+    } finally {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+      if (previousRunnerTemp === undefined) delete process.env.RUNNER_TEMP;
+      else process.env.RUNNER_TEMP = previousRunnerTemp;
+    }
   }
+  if (cleanupFailure) throw cleanupFailure;
 }
 
 main().catch((error: unknown) => {
