@@ -1057,6 +1057,10 @@ GAME contracts. For rollback, deactivate the GAME trigger rules first, drain the
 queue, verify its DLQ is empty, then remove the three `phub.events` GAME bindings and verify both
 their absence and a zero queue backlog before removing the last new worker. Unbinding is a separate,
 explicitly authorized broker mutation; while rolled back, no GAME notifications are produced.
+The foundation preflight/recovery helper accepts that exact drained topology only through its
+`rabbit-inert` verifier: the durable GAME queue and default queue binding remain, all three GAME
+event bindings are absent, and every foundation queue has zero backlog. Active candidate checks
+still require `rabbit-required`; the inert mode cannot satisfy a live-runtime verification.
 Keeping a compatible consumer instead requires a separately approved, bounded rollback window and
 continuous queue-depth observation. A database rollback is not required: the expand-only recipient
 fence table is inert for older workers.

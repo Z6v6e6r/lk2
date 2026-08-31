@@ -76,7 +76,7 @@ function rabbitInventory() {
 
 describe('chat/push foundation operational inventory', () => {
   it('accepts only the exact queue arguments and explicit booking/GAME bindings', () => {
-    expect(assertFoundationRabbitInventory(rabbitInventory(), { requireQueues: true })).toEqual({
+    expect(assertFoundationRabbitInventory(rabbitInventory(), { mode: 'required' })).toEqual({
       queueCount: 3,
       bindingCount: 11,
     });
@@ -88,23 +88,23 @@ describe('chat/push foundation operational inventory', () => {
       destination_kind: 'queue',
       routing_key: '#',
     });
-    expect(() => assertFoundationRabbitInventory(wildcard, { requireQueues: true })).toThrow(
+    expect(() => assertFoundationRabbitInventory(wildcard, { mode: 'required' })).toThrow(
       'CHAT_PUSH_FOUNDATION_RABBIT_BINDING_MISMATCH',
     );
 
     const wrongDeliveryLimit = rabbitInventory();
     wrongDeliveryLimit.queues[0]!.arguments['x-delivery-limit'] = 50;
-    expect(() =>
-      assertFoundationRabbitInventory(wrongDeliveryLimit, { requireQueues: true }),
-    ).toThrow('CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_ARGUMENT_MISMATCH');
+    expect(() => assertFoundationRabbitInventory(wrongDeliveryLimit, { mode: 'required' })).toThrow(
+      'CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_ARGUMENT_MISMATCH',
+    );
 
     const missingGameQueue = rabbitInventory();
     missingGameQueue.queues = missingGameQueue.queues.filter(
       (queue) => queue.name !== 'phub.game-notification-intent-projector.v1',
     );
-    expect(() =>
-      assertFoundationRabbitInventory(missingGameQueue, { requireQueues: true }),
-    ).toThrow('CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH');
+    expect(() => assertFoundationRabbitInventory(missingGameQueue, { mode: 'required' })).toThrow(
+      'CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH',
+    );
 
     const gameWildcard = rabbitInventory();
     gameWildcard.bindings.push({
@@ -113,17 +113,17 @@ describe('chat/push foundation operational inventory', () => {
       destination_kind: 'queue',
       routing_key: '#',
     });
-    expect(() => assertFoundationRabbitInventory(gameWildcard, { requireQueues: true })).toThrow(
+    expect(() => assertFoundationRabbitInventory(gameWildcard, { mode: 'required' })).toThrow(
       'CHAT_PUSH_FOUNDATION_RABBIT_BINDING_MISMATCH',
     );
   });
 
   it('allows all queues to be absent only before the candidate worker starts', () => {
     expect(
-      assertFoundationRabbitInventory({ queues: [], bindings: [] }, { requireQueues: false }),
+      assertFoundationRabbitInventory({ queues: [], bindings: [] }, { mode: 'optional' }),
     ).toEqual({ queueCount: 0, bindingCount: 0 });
     expect(() =>
-      assertFoundationRabbitInventory({ queues: [], bindings: [] }, { requireQueues: true }),
+      assertFoundationRabbitInventory({ queues: [], bindings: [] }, { mode: 'required' }),
     ).toThrow('CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH');
   });
 
@@ -135,16 +135,50 @@ describe('chat/push foundation operational inventory', () => {
     legacy.bindings = legacy.bindings.filter(
       (binding) => binding.destination_name !== 'phub.game-notification-intent-projector.v1',
     );
-    expect(assertFoundationRabbitInventory(legacy, { requireQueues: false })).toEqual({
+    expect(assertFoundationRabbitInventory(legacy, { mode: 'optional' })).toEqual({
       queueCount: 2,
       bindingCount: 7,
     });
-    expect(() => assertFoundationRabbitInventory(legacy, { requireQueues: true })).toThrow(
+    expect(() => assertFoundationRabbitInventory(legacy, { mode: 'required' })).toThrow(
       'CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH',
     );
-    expect(() =>
-      assertFoundationRabbitInventory(rabbitInventory(), { requireQueues: false }),
-    ).toThrow('CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH');
+    expect(() => assertFoundationRabbitInventory(rabbitInventory(), { mode: 'optional' })).toThrow(
+      'CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH',
+    );
+  });
+
+  it('accepts only the exact inert rollback topology', () => {
+    const inert = rabbitInventory();
+    inert.bindings = inert.bindings.filter(
+      (binding) =>
+        binding.destination_name !== 'phub.game-notification-intent-projector.v1' ||
+        binding.source_name === '',
+    );
+
+    expect(assertFoundationRabbitInventory(inert, { mode: 'inert' })).toEqual({
+      queueCount: 3,
+      bindingCount: 8,
+    });
+    expect(() => assertFoundationRabbitInventory(inert, { mode: 'optional' })).toThrow(
+      'CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH',
+    );
+    expect(() => assertFoundationRabbitInventory(inert, { mode: 'required' })).toThrow(
+      'CHAT_PUSH_FOUNDATION_RABBIT_BINDING_MISMATCH',
+    );
+    expect(() => assertFoundationRabbitInventory(rabbitInventory(), { mode: 'inert' })).toThrow(
+      'CHAT_PUSH_FOUNDATION_RABBIT_BINDING_MISMATCH',
+    );
+
+    const legacy = rabbitInventory();
+    legacy.queues = legacy.queues.filter(
+      (queue) => queue.name !== 'phub.game-notification-intent-projector.v1',
+    );
+    legacy.bindings = legacy.bindings.filter(
+      (binding) => binding.destination_name !== 'phub.game-notification-intent-projector.v1',
+    );
+    expect(() => assertFoundationRabbitInventory(legacy, { mode: 'inert' })).toThrow(
+      'CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH',
+    );
   });
 
   it('requires healthy, freshly evaluated alert rules', () => {
