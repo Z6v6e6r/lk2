@@ -260,6 +260,11 @@ describe('Timeweb amd64 publication workflow', () => {
     const evidenceDownload = publicationSteps.find(
       ({ uses }) => uses === 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
     );
+    const inventoryDownload = publicationSteps.find(
+      ({ with: inputs }) =>
+        inputs?.name ===
+        'timeweb-amd64-registry-inventory-${{ github.run_id }}-${{ github.run_attempt }}',
+    );
     expect(cleanSourceIndex).toBeGreaterThan(-1);
     expect(evidenceDownloadIndex).toBeGreaterThan(cleanSourceIndex);
     expect(cleanSourceStep?.env).toEqual({
@@ -273,6 +278,10 @@ describe('Timeweb amd64 publication workflow', () => {
     });
     expect(evidenceDownload?.with).not.toHaveProperty('run-id');
     expect(evidenceDownload?.with).not.toHaveProperty('github-token');
+    expect(inventoryDownload?.with).toEqual({
+      name: 'timeweb-amd64-registry-inventory-${{ github.run_id }}-${{ github.run_attempt }}',
+      path: 'publication-evidence/inventory',
+    });
 
     const generationIndex = publicationSteps.findIndex(
       ({ name }) => name === 'Create and validate internal and canonical publication manifests',
@@ -359,6 +368,9 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(workflow).toContain(
       'node scripts/verify-timeweb-publication-evidence-checksums.js publication-evidence/images',
     );
+    expect(workflow).toContain('node scripts/assert-timeweb-publication-tag-absent.js');
+    expect(workflow).toContain('node scripts/verify-timeweb-registry-inventory.js');
+    expect(workflow).not.toContain('if docker buildx imagetools inspect "$IMAGE_TAG"');
     expect(workflow).toContain(
       'name: timeweb-amd64-canonical-release-${{ inputs.expected_source_sha }}-${{ github.run_id }}-${{ github.run_attempt }}',
     );
