@@ -83,6 +83,12 @@ if pathlib.Path("/tmp/phub-apt-hook-executed").exists():
     raise AssertionError("APT download executed a host lifecycle hook")
 PY
 
+/usr/bin/python3 -I -S -B \
+  /workspace/scripts/test-timeweb-operator-node-bootstrap-apt-lists.py \
+  /opt/phub/test/source/scripts/control-timeweb-operator-node-bootstrap.py \
+  /opt/phub/test/source/deploy/timeweb/operator-node-bootstrap.v1.json \
+  /tmp/phub-lists
+
 test -n "$(find /tmp/phub-lists -type f -print -quit)"
 test -n "$(find /tmp/phub-archives -maxdepth 1 -type f -name "hello_*.deb" -print -quit)"
 test -z "$(find /var/cache/apt/archives -maxdepth 1 -type f -name "hello_*.deb" -print -quit)"

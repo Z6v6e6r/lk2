@@ -61,6 +61,11 @@ SAFE_LIVE_ENVIRONMENT = {
     "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
     "LC_ALL": "C",
 }
+APT_SANDBOX_UID = 42
+APT_AUXILIARY_DIRECTORY_MODES = {
+    "partial": 0o700,
+    "auxfiles": 0o755,
+}
 EXPECTED_PACKAGES = (
     ("libsimdutf31", "8.0.0-1", "amd64"),
     ("libada-url0-3", "3.4.3-1", "amd64"),
@@ -185,6 +190,30 @@ def require_secure_file(path: Path, mode: int | None, code: str) -> os.stat_resu
         or path.resolve() != path
     ):
         stop(code)
+    return value
+
+
+def require_secure_apt_auxiliary_directory(path: Path) -> os.stat_result:
+    try:
+        value = path.lstat()
+    except OSError:
+        stop("apt_lists_auxiliary")
+    mode = stat.S_IMODE(value.st_mode)
+    if (
+        not stat.S_ISDIR(value.st_mode)
+        or stat.S_ISLNK(value.st_mode)
+        or value.st_mode & 0o022
+        or path.resolve() != path
+    ):
+        stop("apt_lists_auxiliary")
+    if value.st_uid == 0:
+        return value
+    if (
+        value.st_uid != APT_SANDBOX_UID
+        or value.st_gid != 0
+        or mode != APT_AUXILIARY_DIRECTORY_MODES.get(path.name)
+    ):
+        stop("apt_lists_auxiliary")
     return value
 
 
@@ -740,8 +769,12 @@ def apt_lists_snapshot(directory: Path) -> list[dict[str, Any]]:
     packages = 0
     for path in sorted(directory.iterdir()):
         if path.name in {"partial", "auxfiles"}:
-            require_secure_directory(path, None, "apt_lists_auxiliary")
-            if any(path.iterdir()):
+            require_secure_apt_auxiliary_directory(path)
+            try:
+                populated = any(path.iterdir())
+            except OSError:
+                stop("apt_lists_auxiliary")
+            if populated:
                 stop("apt_lists_auxiliary")
             continue
         if path.name == "lock":
