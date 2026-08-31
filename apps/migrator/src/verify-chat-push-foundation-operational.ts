@@ -35,9 +35,10 @@ async function readInput(): Promise<unknown> {
 async function main(): Promise<void> {
   const mode = process.argv[2];
   const input = await readInput();
-  if (mode === 'rabbit-optional' || mode === 'rabbit-required') {
+  if (mode === 'rabbit-optional' || mode === 'rabbit-required' || mode === 'rabbit-inert') {
     const result = assertFoundationRabbitInventory(input, {
-      requireQueues: mode === 'rabbit-required',
+      mode:
+        mode === 'rabbit-required' ? 'required' : mode === 'rabbit-inert' ? 'inert' : 'optional',
     });
     process.stdout.write(`${JSON.stringify({ status: 'verified', kind: 'rabbit', ...result })}\n`);
     return;

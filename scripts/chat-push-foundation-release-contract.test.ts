@@ -105,7 +105,7 @@ describe('chat/push staging foundation release contract', () => {
       clone,
     );
     const finalContour = releaseHelper.indexOf('contour_verify', finalRuntimeDrain);
-    const finalRabbit = releaseHelper.indexOf('verify_rabbit_inventory false', finalContour);
+    const finalRabbit = releaseHelper.indexOf('verify_rabbit_preflight_inventory', finalContour);
     const applyCall = releaseHelper.indexOf('apply_foundation_migrations', finalRolePre);
     const applyFunctionStart = releaseHelper.indexOf('apply_foundation_migrations()');
     const phaseMarker = releaseHelper.indexOf('MIGRATION_STARTED', applyFunctionStart);
@@ -231,6 +231,11 @@ describe('chat/push staging foundation release contract', () => {
     expect(releaseHelper).toContain('verify-chat-push-foundation-contour.js');
     expect(releaseHelper).toContain('CHAT_PUSH_FOUNDATION_EXPECTED_CATALOG_DIGEST');
     expect(releaseHelper).toContain('verify-chat-push-foundation-operational.js "$rabbit_mode"');
+    expect(releaseHelper).toContain('optional) rabbit_mode=rabbit-optional');
+    expect(releaseHelper).toContain('required) rabbit_mode=rabbit-required');
+    expect(releaseHelper).toContain('inert) rabbit_mode=rabbit-inert');
+    expect(releaseHelper).toContain('verify_rabbit_preflight_inventory');
+    expect(releaseHelper).toContain('verify_rabbit_inventory inert');
     expect(releaseHelper).toContain('verify-chat-push-foundation-operational.js prometheus');
     expect(releaseHelper).toContain(
       'verify-chat-push-foundation-operational.js prometheus-targets',

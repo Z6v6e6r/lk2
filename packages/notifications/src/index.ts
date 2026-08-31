@@ -58,6 +58,58 @@ export const BOOKING_NOTIFICATION_CANONICAL_CONTRACT = {
   ],
 } as const;
 
+export const GAME_NOTIFICATION_CANONICAL_CONTRACT = {
+  rulesetVersion: 'game.ru-ru.v1',
+  template: {
+    version: 1,
+    locale: 'ru-RU',
+    category: 'GAME',
+    deepLink: '/games/{{gameId}}',
+    channels: ['IN_APP'],
+    active: true,
+  },
+  rule: {
+    keySuffix: 'default',
+    channelOverride: ['IN_APP'],
+    active: true,
+  },
+  definitions: [
+    {
+      key: 'game.participation.confirmed',
+      sourceEventType: 'game.participation.confirmed.v1',
+      title: 'Вы в игре',
+      body: 'Место подтверждено. Откройте карточку игры и чат участников.',
+      audienceSelector: {
+        type: 'EVENT_USER',
+        field: 'userId',
+      },
+      mandatory: true,
+    },
+    {
+      key: 'game.cancelled',
+      sourceEventType: 'game.cancelled.v1',
+      title: 'Игра отменена',
+      body: 'Откройте карточку игры, чтобы проверить детали.',
+      audienceSelector: {
+        type: 'EVENT_USERS',
+        field: 'participantUserIds',
+      },
+      mandatory: true,
+    },
+    {
+      key: 'game.participation.left',
+      sourceEventType: 'game.participation.left.v1',
+      title: 'Вы вышли из игры',
+      body: 'Участие завершено. Откройте карточку игры, чтобы проверить детали.',
+      audienceSelector: {
+        type: 'EVENT_USER',
+        field: 'userId',
+      },
+      mandatory: true,
+    },
+  ],
+} as const;
+
 export const BOOKING_NOTIFICATION_RULESET_VERSION =
   BOOKING_NOTIFICATION_CANONICAL_CONTRACT.rulesetVersion;
 export const BOOKING_NOTIFICATION_TEMPLATE_VERSION =
@@ -82,6 +134,27 @@ export const BOOKING_NOTIFICATION_DEFINITIONS = BOOKING_NOTIFICATION_CANONICAL_C
 
 export type BookingNotificationDefinition = (typeof BOOKING_NOTIFICATION_DEFINITIONS)[number];
 
+export const GAME_NOTIFICATION_RULESET_VERSION =
+  GAME_NOTIFICATION_CANONICAL_CONTRACT.rulesetVersion;
+export const GAME_NOTIFICATION_TEMPLATE_VERSION =
+  GAME_NOTIFICATION_CANONICAL_CONTRACT.template.version;
+export const GAME_NOTIFICATION_LOCALE = GAME_NOTIFICATION_CANONICAL_CONTRACT.template.locale;
+export const GAME_NOTIFICATION_TEMPLATE_CATEGORY =
+  GAME_NOTIFICATION_CANONICAL_CONTRACT.template.category;
+export const GAME_NOTIFICATION_TEMPLATE_DEEP_LINK =
+  GAME_NOTIFICATION_CANONICAL_CONTRACT.template.deepLink;
+export const GAME_NOTIFICATION_TEMPLATE_CHANNELS =
+  GAME_NOTIFICATION_CANONICAL_CONTRACT.template.channels;
+export const GAME_NOTIFICATION_TEMPLATE_ACTIVE =
+  GAME_NOTIFICATION_CANONICAL_CONTRACT.template.active;
+export const GAME_NOTIFICATION_RULE_KEY_SUFFIX =
+  GAME_NOTIFICATION_CANONICAL_CONTRACT.rule.keySuffix;
+export const GAME_NOTIFICATION_RULE_CHANNEL_OVERRIDE =
+  GAME_NOTIFICATION_CANONICAL_CONTRACT.rule.channelOverride;
+export const GAME_NOTIFICATION_RULE_ACTIVE = GAME_NOTIFICATION_CANONICAL_CONTRACT.rule.active;
+export const GAME_NOTIFICATION_DEFINITIONS = GAME_NOTIFICATION_CANONICAL_CONTRACT.definitions;
+export type GameNotificationDefinition = (typeof GAME_NOTIFICATION_DEFINITIONS)[number];
+
 export function bookingNotificationContractHash(contract: object): string {
   const serialized = JSON.stringify(contract);
   if (!serialized) throw new Error('BOOKING_NOTIFICATION_CONTRACT_NOT_SERIALIZABLE');
@@ -91,12 +164,21 @@ export function bookingNotificationContractHash(contract: object): string {
 export const BOOKING_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
   BOOKING_NOTIFICATION_CANONICAL_CONTRACT,
 );
+export const GAME_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
+  GAME_NOTIFICATION_CANONICAL_CONTRACT,
+);
 
 export const BOOKING_NOTIFICATION_EVENT_TYPES = [
   'booking.confirmed.v1',
   'booking.changed.v1',
   'booking.cancelled.v1',
   'booking.reminder.due.v1',
+] as const;
+
+export const GAME_NOTIFICATION_EVENT_TYPES = [
+  'game.participation.confirmed.v1',
+  'game.participation.left.v1',
+  'game.cancelled.v1',
 ] as const;
 
 export const MAX_NOTIFICATION_EVENT_RECIPIENTS = 50;
@@ -170,6 +252,77 @@ export const bookingNotificationSourceEventSchema = z
 
 export type BookingNotificationSourceEvent = z.infer<typeof bookingNotificationSourceEventSchema>;
 
+const gameNotificationEventPayloadBase = {
+  gameId: uuid,
+  aggregateRevision: positiveRevision,
+  causationId: uuid,
+  actorUserId: uuid.nullable(),
+};
+const gameParticipantUserIdsSchema = z
+  .array(uuid)
+  .max(4)
+  .refine((items) => new Set(items).size === items.length, {
+    message: 'Participant user identifiers must be unique',
+  });
+
+export const gameNotificationSourceEventSchema = z
+  .discriminatedUnion('type', [
+    bookingEventEnvelopeBase
+      .extend({
+        type: z.literal('game.participation.confirmed.v1'),
+        payload: z
+          .object({
+            ...gameNotificationEventPayloadBase,
+            userId: uuid,
+            participationId: uuid,
+          })
+          .strict(),
+      })
+      .strict(),
+    bookingEventEnvelopeBase
+      .extend({
+        type: z.literal('game.participation.left.v1'),
+        payload: z
+          .object({
+            ...gameNotificationEventPayloadBase,
+            userId: uuid,
+            participationId: uuid,
+          })
+          .strict(),
+      })
+      .strict(),
+    bookingEventEnvelopeBase
+      .extend({
+        type: z.literal('game.cancelled.v1'),
+        payload: z
+          .object({
+            ...gameNotificationEventPayloadBase,
+            participantUserIds: gameParticipantUserIdsSchema,
+            reasonCode: z.enum([
+              'ORGANIZER_REQUEST',
+              'VENUE_UNAVAILABLE',
+              'WEATHER',
+              'SAFETY',
+              'PROVISIONING_FAILED',
+              'OTHER',
+            ]),
+          })
+          .strict(),
+      })
+      .strict(),
+  ])
+  .superRefine((event, context) => {
+    if (event.aggregateId !== event.payload.gameId) {
+      context.addIssue({
+        code: 'custom',
+        path: ['aggregateId'],
+        message: 'aggregateId must match payload.gameId',
+      });
+    }
+  });
+
+export type GameNotificationSourceEvent = z.infer<typeof gameNotificationSourceEventSchema>;
+
 const genericNotificationSourceEventSchema = z
   .object({
     id: uuid,
@@ -185,12 +338,16 @@ const genericNotificationSourceEventSchema = z
     (event) =>
       !BOOKING_NOTIFICATION_EVENT_TYPES.includes(
         event.type as (typeof BOOKING_NOTIFICATION_EVENT_TYPES)[number],
+      ) &&
+      !GAME_NOTIFICATION_EVENT_TYPES.includes(
+        event.type as (typeof GAME_NOTIFICATION_EVENT_TYPES)[number],
       ),
-    { message: 'Canonical booking events must use the booking notification event contract' },
+    { message: 'Canonical events must use their notification event contract' },
   );
 
 export const notificationSourceEventSchema = z.union([
   bookingNotificationSourceEventSchema,
+  gameNotificationSourceEventSchema,
   genericNotificationSourceEventSchema,
 ]);
 
@@ -206,7 +363,7 @@ export const notificationAudienceSelectorSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('EVENT_USERS'),
-      field: z.literal('recipientUserIds'),
+      field: z.enum(['recipientUserIds', 'participantUserIds']),
     })
     .strict(),
 ]);

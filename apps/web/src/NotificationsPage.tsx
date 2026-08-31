@@ -5,6 +5,7 @@ import type { NotificationInboxPage, WebPushConfiguration } from './auth-gateway
 import { NotificationFilters } from './notifications-ui/NotificationFilters.js';
 import { NotificationList } from './notifications-ui/NotificationList.js';
 import {
+  type NotificationItem,
   type NotificationFilter,
   notificationFilters,
 } from './notifications-ui/notification-format.js';
@@ -17,9 +18,12 @@ interface NotificationsPageProps {
   readonly browserState: WebPushBrowserState;
   readonly busy: boolean;
   readonly error?: string | null;
+  readonly inboxUnavailable: boolean;
   readonly onEnableWebPush: () => void;
   readonly onDisableWebPush: () => void;
   readonly onMarkAllRead: () => void;
+  readonly onRetryInbox: () => void;
+  readonly onOpenNotification: (item: NotificationItem, href: string, navigate: boolean) => void;
 }
 
 function pushStatus(
@@ -39,9 +43,12 @@ export function NotificationsPage({
   browserState,
   busy,
   error,
+  inboxUnavailable,
   onEnableWebPush,
   onDisableWebPush,
   onMarkAllRead,
+  onRetryInbox,
+  onOpenNotification,
 }: NotificationsPageProps): React.JSX.Element {
   const [filter, setFilter] = useState<NotificationFilter>('ALL');
   const filters = notificationFilters(page.items);
@@ -87,21 +94,38 @@ export function NotificationsPage({
           </p>
         ) : null}
 
-        <NotificationFilters filters={filters} selected={selectedFilter} onChange={setFilter} />
-        <header className={styles.listHeader}>
-          <h2>Последние события</h2>
-          {page.unreadCount > 0 && page.items.length > 0 ? (
+        {inboxUnavailable ? (
+          <div className={styles.emptyState} role="status">
+            <strong>Лента недоступна</strong>
+            <p>Не удалось получить события. Проверьте соединение и повторите загрузку.</p>
             <button
               type="button"
               className={styles.markAllButton}
               disabled={busy}
-              onClick={onMarkAllRead}
+              onClick={onRetryInbox}
             >
-              Прочитать все
+              {busy ? 'Повторяем…' : 'Повторить'}
             </button>
-          ) : null}
-        </header>
-        <NotificationList page={page} filter={selectedFilter} />
+          </div>
+        ) : (
+          <>
+            <NotificationFilters filters={filters} selected={selectedFilter} onChange={setFilter} />
+            <header className={styles.listHeader}>
+              <h2>Последние события</h2>
+              {page.unreadCount > 0 && page.items.length > 0 ? (
+                <button
+                  type="button"
+                  className={styles.markAllButton}
+                  disabled={busy}
+                  onClick={onMarkAllRead}
+                >
+                  Прочитать все
+                </button>
+              ) : null}
+            </header>
+            <NotificationList page={page} filter={selectedFilter} onOpen={onOpenNotification} />
+          </>
+        )}
       </section>
       <MainBottomNavigation active="notifications" />
     </main>

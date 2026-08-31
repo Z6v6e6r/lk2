@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 
-import type { BookingNotificationSourceEvent, NotificationSourceEvent } from '@phub/notifications';
+import type {
+  BookingNotificationSourceEvent,
+  GameNotificationSourceEvent,
+  NotificationSourceEvent,
+} from '@phub/notifications';
 import { describe, expect, it, vi } from 'vitest';
 
 import { applyNotificationSourceEvent } from './notification-projector.js';
@@ -9,18 +13,25 @@ const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const event: NotificationSourceEvent = {
   id: '11111111-1111-4111-8111-111111111111',
-  type: 'game.starting-soon.v1',
+  type: 'game.participation.confirmed.v1',
   aggregateId: '22222222-2222-4222-8222-222222222222',
   tenantId,
   occurredAt: '2026-07-16T12:00:00.000Z',
   correlationId: 'notification-worker-test-123',
-  payload: { recipientUserId: userId, startsAt: '19:00' },
+  payload: {
+    gameId: '22222222-2222-4222-8222-222222222222',
+    aggregateRevision: '2',
+    causationId: '12111111-1111-4111-8111-111111111111',
+    actorUserId: userId,
+    userId,
+    participationId: '13111111-1111-4111-8111-111111111111',
+  },
 };
 
 describe('notification intent projector', () => {
   it('commits a duplicate source event without evaluating runtime or rules again', async () => {
     const query = vi.fn((text: string) => {
-      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       if (text.includes('insert into audit.inbox_events')) {
@@ -42,11 +53,18 @@ describe('notification intent projector', () => {
 
   it('consumes but does not project while the tenant gate is disabled', async () => {
     const query = vi.fn((text: string) => {
-      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       if (text.includes('insert into audit.inbox_events')) {
         return Promise.resolve({ rows: [{ event_id: event.id }], rowCount: 1 });
+      }
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [], rowCount: 1 });
+      if (text.includes('from notifications.game_notification_projection_fences')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into notifications.game_notification_projection_fences')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
       }
       if (text.includes('from notifications.tenant_runtime_settings')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
@@ -73,11 +91,18 @@ describe('notification intent projector', () => {
     const deliveryId = '44444444-4444-4444-8444-444444444444';
     const inboxItemId = '55555555-5555-4555-8555-555555555555';
     const query = vi.fn((text: string) => {
-      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       if (text.includes('insert into audit.inbox_events')) {
         return Promise.resolve({ rows: [{ event_id: event.id }], rowCount: 1 });
+      }
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [], rowCount: 1 });
+      if (text.includes('from notifications.game_notification_projection_fences')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into notifications.game_notification_projection_fences')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
       }
       if (text.includes('from notifications.tenant_runtime_settings')) {
         return Promise.resolve({ rows: [{ in_app_enabled: true }], rowCount: 1 });
@@ -88,13 +113,13 @@ describe('notification intent projector', () => {
             {
               rule_id: '66666666-6666-4666-8666-666666666666',
               template_id: '77777777-7777-4777-8777-777777777777',
-              audience_selector: { type: 'EVENT_USER', field: 'recipientUserId' },
-              mandatory: false,
+              audience_selector: { type: 'EVENT_USER', field: 'userId' },
+              mandatory: true,
               effective_channels: ['IN_APP'],
               category: 'GAME',
-              title_template: 'Игра скоро начнётся',
-              body_template: 'Начало в {{startsAt}}',
-              deep_link_template: '/games/{{aggregateId}}',
+              title_template: 'Вы в игре',
+              body_template: 'Место подтверждено. Откройте карточку игры и чат участников.',
+              deep_link_template: '/games/{{gameId}}',
             },
           ],
           rowCount: 1,
@@ -143,6 +168,125 @@ describe('notification intent projector', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it('projects GAME cancellation only for recipients accepted by their own revision fence', async () => {
+    const staleUserId = userId;
+    const acceptedUserId = '59d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const cancellationEvent: GameNotificationSourceEvent = {
+      id: '71111111-1111-4111-8111-111111111111',
+      type: 'game.cancelled.v1',
+      aggregateId: event.aggregateId,
+      tenantId,
+      occurredAt: '2026-08-31T12:00:00.000Z',
+      correlationId: 'game-cancelled-worker-test',
+      payload: {
+        gameId: event.aggregateId,
+        aggregateRevision: '4',
+        causationId: '72111111-1111-4111-8111-111111111111',
+        actorUserId: staleUserId,
+        participantUserIds: [staleUserId, acceptedUserId],
+        reasonCode: 'ORGANIZER_REQUEST',
+      },
+    };
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into audit.inbox_events')) {
+        return Promise.resolve({ rows: [{ event_id: cancellationEvent.id }], rowCount: 1 });
+      }
+      if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [], rowCount: 1 });
+      if (text.includes('from notifications.game_notification_projection_fences')) {
+        return values?.[2] === staleUserId
+          ? Promise.resolve({
+              rows: [
+                {
+                  game_revision: '5',
+                  game_event_type: 'game.cancelled.v1',
+                  game_fingerprint: 'a'.repeat(64),
+                },
+              ],
+              rowCount: 1,
+            })
+          : Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into notifications.game_notification_projection_fences')) {
+        expect(values?.[2]).toBe(acceptedUserId);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('from notifications.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [{ in_app_enabled: true, web_push_enabled: false }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from notifications.trigger_rules')) {
+        return Promise.resolve({
+          rows: [
+            {
+              rule_id: '76666666-6666-4666-8666-666666666666',
+              template_id: '77777777-7777-4777-8777-777777777777',
+              audience_selector: { type: 'EVENT_USERS', field: 'participantUserIds' },
+              mandatory: true,
+              effective_channels: ['IN_APP'],
+              category: 'GAME',
+              title_template: 'Игра отменена',
+              body_template: 'Откройте карточку игры, чтобы проверить детали.',
+              deep_link_template: '/games/{{gameId}}',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from identity.users')) {
+        expect(values?.[1]).toBe(acceptedUserId);
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.user_preferences')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into notifications.intents')) {
+        return Promise.resolve({
+          rows: [{ id: '73333333-3333-4333-8333-333333333333' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.deliveries')) {
+        return Promise.resolve({
+          rows: [{ id: '74444444-4444-4444-8444-444444444444' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.inbox_items')) {
+        return Promise.resolve({
+          rows: [{ id: '75555555-5555-4555-8555-555555555555' }],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('update audit.inbox_events')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      applyNotificationSourceEvent({ pool: pool as never, event: cancellationEvent }),
+    ).resolves.toEqual({
+      outcome: 'processed',
+      created: 1,
+      suppressed: 0,
+      pushQueued: 0,
+      skippedRules: 0,
+    });
+    expect(
+      query.mock.calls.filter(([text]) => String(text).includes('from identity.users')),
+    ).toHaveLength(1);
+  });
+
   it('projects one cancellation notification for every unique recipient', async () => {
     const secondUserId = '59d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
     const cancellationEvent: NotificationSourceEvent = {
@@ -167,7 +311,7 @@ describe('notification intent projector', () => {
     let deliveryNumber = 0;
     let inboxNumber = 0;
     const query = vi.fn((text: string) => {
-      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       if (text.includes('insert into audit.inbox_events')) {
@@ -261,6 +405,149 @@ describe('notification intent projector', () => {
       ),
     ).toHaveLength(2);
     expect(release).toHaveBeenCalledOnce();
+  });
+});
+
+function gameFingerprint(source: GameNotificationSourceEvent): string {
+  const payload = source.payload as Readonly<Record<string, unknown>>;
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        type: source.type,
+        payload: Object.fromEntries(
+          Object.entries(payload)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, value]) => [
+              key,
+              Array.isArray(value) && key === 'participantUserIds'
+                ? [...(value as readonly string[])].sort()
+                : value,
+            ]),
+        ),
+      }),
+    )
+    .digest('hex');
+}
+
+function gameFencePool(options: {
+  readonly event: GameNotificationSourceEvent;
+  readonly fence?: Record<string, string>;
+}) {
+  const query = vi.fn((text: string) => {
+    if (
+      text === 'begin' ||
+      text === 'commit' ||
+      text === 'rollback' ||
+      text.includes('set_config')
+    ) {
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    }
+    if (text.includes('insert into audit.inbox_events')) {
+      return Promise.resolve({ rows: [{ event_id: options.event.id }], rowCount: 1 });
+    }
+    if (text.includes('pg_advisory_xact_lock')) return Promise.resolve({ rows: [], rowCount: 1 });
+    if (text.includes('from notifications.game_notification_projection_fences')) {
+      return Promise.resolve({
+        rows: options.fence ? [options.fence] : [],
+        rowCount: options.fence ? 1 : 0,
+      });
+    }
+    if (
+      text.includes('insert into notifications.game_notification_projection_fences') ||
+      text.includes('update notifications.game_notification_projection_fences') ||
+      text.includes('update audit.inbox_events')
+    ) {
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    }
+    if (text.includes('from notifications.tenant_runtime_settings')) {
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    }
+    throw new Error(`Unexpected query: ${text}`);
+  });
+  return { pool: { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) }, query };
+}
+
+describe('GAME notification projection fence', () => {
+  it('suppresses a delayed joined event after a newer cancellation for the same user', async () => {
+    const source = event as GameNotificationSourceEvent;
+    const fixture = gameFencePool({
+      event: source,
+      fence: {
+        game_revision: '3',
+        game_event_type: 'game.cancelled.v1',
+        game_fingerprint: 'a'.repeat(64),
+      },
+    });
+    await expect(
+      applyNotificationSourceEvent({ pool: fixture.pool as never, event: source }),
+    ).resolves.toEqual({ outcome: 'stale' });
+    expect(
+      fixture.query.mock.calls.some(([text]) => String(text).includes('notifications.intents')),
+    ).toBe(false);
+  });
+
+  it('keeps different participants on independent revision fences', async () => {
+    type ConfirmedGameEvent = Extract<
+      GameNotificationSourceEvent,
+      { readonly type: 'game.participation.confirmed.v1' }
+    >;
+    const firstUserEvent = event as ConfirmedGameEvent;
+    const secondUserId = '59d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const secondUserEvent = {
+      ...firstUserEvent,
+      id: '21111111-1111-4111-8111-111111111111',
+      payload: {
+        ...firstUserEvent.payload,
+        aggregateRevision: '3',
+        userId: secondUserId,
+        participationId: '23111111-1111-4111-8111-111111111111',
+      },
+    } satisfies ConfirmedGameEvent;
+
+    const second = gameFencePool({ event: secondUserEvent });
+    await expect(
+      applyNotificationSourceEvent({ pool: second.pool as never, event: secondUserEvent }),
+    ).resolves.toEqual({ outcome: 'disabled' });
+    const first = gameFencePool({ event: firstUserEvent });
+    await expect(
+      applyNotificationSourceEvent({ pool: first.pool as never, event: firstUserEvent }),
+    ).resolves.toEqual({ outcome: 'disabled' });
+
+    const selectedSecond = second.query.mock.calls.find(([text]) =>
+      String(text).includes('from notifications.game_notification_projection_fences'),
+    ) as unknown as readonly [string, readonly string[]];
+    const selectedFirst = first.query.mock.calls.find(([text]) =>
+      String(text).includes('from notifications.game_notification_projection_fences'),
+    ) as unknown as readonly [string, readonly string[]];
+    expect(selectedSecond[1][2]).toBe(secondUserId);
+    expect(selectedFirst[1][2]).toBe(userId);
+  });
+
+  it('detects equal-revision conflicts and persists a new fence while runtime is disabled', async () => {
+    const source = event as GameNotificationSourceEvent;
+    const conflict = gameFencePool({
+      event: source,
+      fence: {
+        game_revision: source.payload.aggregateRevision,
+        game_event_type: 'game.participation.left.v1',
+        game_fingerprint: 'a'.repeat(64),
+      },
+    });
+    await expect(
+      applyNotificationSourceEvent({ pool: conflict.pool as never, event: source }),
+    ).resolves.toEqual({ outcome: 'revision_conflict' });
+    expect(conflict.query).toHaveBeenCalledWith('rollback');
+
+    const accepted = gameFencePool({ event: source });
+    await expect(
+      applyNotificationSourceEvent({ pool: accepted.pool as never, event: source }),
+    ).resolves.toEqual({ outcome: 'disabled' });
+    expect(
+      accepted.query.mock.calls.some(([text]) =>
+        String(text).includes('insert into notifications.game_notification_projection_fences'),
+      ),
+    ).toBe(true);
+    expect(gameFingerprint(source)).toMatch(/^[0-9a-f]{64}$/u);
   });
 });
 

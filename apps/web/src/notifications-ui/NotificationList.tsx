@@ -1,15 +1,20 @@
 import type { NotificationInboxPage } from '../auth-gateway.js';
 import { NotificationListItem } from './NotificationListItem.js';
 import type { NotificationFilter } from './notification-format.js';
-import { notificationMatchesFilter } from './notification-format.js';
+import { notificationMatchesFilter, type NotificationItem } from './notification-format.js';
 import styles from './NotificationsUi.module.css';
 
 interface NotificationListProps {
   readonly page: NotificationInboxPage;
   readonly filter: NotificationFilter;
+  readonly onOpen: (item: NotificationItem, href: string, navigate: boolean) => void;
 }
 
-export function NotificationList({ page, filter }: NotificationListProps): React.JSX.Element {
+export function NotificationList({
+  page,
+  filter,
+  onOpen,
+}: NotificationListProps): React.JSX.Element {
   const items = page.items.filter((item) => notificationMatchesFilter(item, filter));
 
   if (page.items.length === 0) {
@@ -33,7 +38,7 @@ export function NotificationList({ page, filter }: NotificationListProps): React
   return (
     <ul className={styles.list} aria-label="Лента уведомлений">
       {items.map((item) => (
-        <NotificationListItem key={item.id} item={item} />
+        <NotificationListItem key={item.id} item={item} onOpen={onOpen} />
       ))}
     </ul>
   );

@@ -2,10 +2,12 @@ import { createHash } from 'node:crypto';
 
 import {
   BOOKING_NOTIFICATION_EVENT_TYPES,
+  GAME_NOTIFICATION_EVENT_TYPES,
   notificationAudienceSelectorSchema,
   renderNotificationTemplate,
   resolveNotificationRecipients,
   type BookingNotificationSourceEvent,
+  type GameNotificationSourceEvent,
   type NotificationSourceEvent,
 } from '@phub/notifications';
 import { queryOne } from '@phub/database';
@@ -49,12 +51,23 @@ interface BookingNotificationFenceRow extends QueryResultRow {
   readonly reminder_hours_2_fingerprint: string | null;
 }
 
+interface GameNotificationFenceRow extends QueryResultRow {
+  readonly game_revision: string;
+  readonly game_event_type: GameNotificationEventType;
+  readonly game_fingerprint: string;
+}
+
 type LifecycleBookingNotificationEventType =
   'booking.confirmed.v1' | 'booking.changed.v1' | 'booking.cancelled.v1';
 
 type BookingFenceOutcome = 'accepted' | 'duplicate' | 'stale' | 'suppressed' | 'revision_conflict';
+type GameNotificationEventType = (typeof GAME_NOTIFICATION_EVENT_TYPES)[number];
+type GameFenceOutcome =
+  | { readonly outcome: 'accepted'; readonly recipientUserIds: readonly string[] }
+  | { readonly outcome: 'duplicate' | 'stale' | 'revision_conflict' };
 
 const bookingProjectionTails = new Map<string, Promise<void>>();
+const gameProjectionTails = new Map<string, Promise<void>>();
 
 export type NotificationProjectionResult =
   | { readonly outcome: 'duplicate' }
@@ -82,6 +95,12 @@ function isBookingNotificationEvent(
   );
 }
 
+function isGameNotificationEvent(
+  event: NotificationSourceEvent,
+): event is GameNotificationSourceEvent {
+  return GAME_NOTIFICATION_EVENT_TYPES.includes(event.type as GameNotificationEventType);
+}
+
 function isLifecycleBookingNotificationEvent(
   event: BookingNotificationSourceEvent,
 ): event is BookingNotificationSourceEvent & {
@@ -98,6 +117,23 @@ function bookingNotificationFingerprint(event: BookingNotificationSourceEvent): 
       .map(([key, value]) => [
         key,
         Array.isArray(value) && (key === 'recipientUserIds' || key === 'changedFields')
+          ? [...(value as readonly string[])].sort()
+          : value,
+      ]),
+  );
+  return createHash('sha256')
+    .update(JSON.stringify({ type: event.type, payload: normalizedPayload }))
+    .digest('hex');
+}
+
+function gameNotificationFingerprint(event: GameNotificationSourceEvent): string {
+  const payload = event.payload as Readonly<Record<string, unknown>>;
+  const normalizedPayload = Object.fromEntries(
+    Object.entries(payload)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [
+        key,
+        Array.isArray(value) && key === 'participantUserIds'
           ? [...(value as readonly string[])].sort()
           : value,
       ]),
@@ -125,6 +161,27 @@ async function serializeBookingProjection<T>(
   } finally {
     release();
     if (bookingProjectionTails.get(key) === current) bookingProjectionTails.delete(key);
+  }
+}
+
+async function serializeGameProjection<T>(
+  tenantId: string,
+  gameId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const key = `${tenantId}:${gameId}`;
+  const prior = gameProjectionTails.get(key);
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  gameProjectionTails.set(key, current);
+  try {
+    await prior;
+    return await operation();
+  } finally {
+    release();
+    if (gameProjectionTails.get(key) === current) gameProjectionTails.delete(key);
   }
 }
 
@@ -203,6 +260,83 @@ async function applyBookingNotificationFence(options: {
   return 'accepted';
 }
 
+async function applyGameNotificationFence(options: {
+  readonly client: { query: Pool['query'] };
+  readonly event: GameNotificationSourceEvent;
+}): Promise<GameFenceOutcome> {
+  const { client, event } = options;
+  const fingerprint = gameNotificationFingerprint(event);
+  const revision = BigInt(event.payload.aggregateRevision);
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `${event.tenantId}:${event.aggregateId}`,
+  ]);
+  const recipientUserIds =
+    event.type === 'game.cancelled.v1' ? event.payload.participantUserIds : [event.payload.userId];
+  const acceptedRecipientUserIds: string[] = [];
+  let sawStale = false;
+
+  for (const recipientUserId of [...recipientUserIds].sort()) {
+    const existing = await client.query<GameNotificationFenceRow>(
+      `select game_revision::text as game_revision, game_event_type, game_fingerprint
+         from notifications.game_notification_projection_fences
+        where tenant_id = $1 and game_id = $2 and recipient_user_id = $3
+        for update`,
+      [event.tenantId, event.aggregateId, recipientUserId],
+    );
+    const fence = existing.rows[0];
+    if (!fence) {
+      await client.query(
+        `insert into notifications.game_notification_projection_fences (
+           tenant_id, game_id, recipient_user_id, game_revision, game_event_type, game_fingerprint
+         ) values ($1, $2, $3, $4::numeric, $5, $6)`,
+        [
+          event.tenantId,
+          event.aggregateId,
+          recipientUserId,
+          event.payload.aggregateRevision,
+          event.type,
+          fingerprint,
+        ],
+      );
+      acceptedRecipientUserIds.push(recipientUserId);
+      continue;
+    }
+    const currentRevision = BigInt(fence.game_revision);
+    if (revision < currentRevision) {
+      sawStale = true;
+      continue;
+    }
+    if (revision === currentRevision) {
+      if (fence.game_event_type !== event.type || fence.game_fingerprint !== fingerprint) {
+        return { outcome: 'revision_conflict' };
+      }
+      continue;
+    }
+    await client.query(
+      `update notifications.game_notification_projection_fences
+          set game_revision = $4::numeric,
+              game_event_type = $5,
+              game_fingerprint = $6,
+              updated_at = now()
+        where tenant_id = $1 and game_id = $2 and recipient_user_id = $3`,
+      [
+        event.tenantId,
+        event.aggregateId,
+        recipientUserId,
+        event.payload.aggregateRevision,
+        event.type,
+        fingerprint,
+      ],
+    );
+    acceptedRecipientUserIds.push(recipientUserId);
+  }
+
+  if (acceptedRecipientUserIds.length > 0) {
+    return { outcome: 'accepted', recipientUserIds: acceptedRecipientUserIds };
+  }
+  return { outcome: sawStale ? 'stale' : 'duplicate' };
+}
+
 export async function applyNotificationSourceEvent(options: {
   readonly pool: Pool;
   readonly event: NotificationSourceEvent;
@@ -213,6 +347,11 @@ export async function applyNotificationSourceEvent(options: {
 }): Promise<NotificationProjectionResult> {
   if (isBookingNotificationEvent(options.event)) {
     return serializeBookingProjection(options.event.tenantId, options.event.aggregateId, () =>
+      applyNotificationSourceEventInTransaction(options),
+    );
+  }
+  if (isGameNotificationEvent(options.event)) {
+    return serializeGameProjection(options.event.tenantId, options.event.aggregateId, () =>
       applyNotificationSourceEventInTransaction(options),
     );
   }
@@ -228,9 +367,12 @@ async function applyNotificationSourceEventInTransaction(options: {
   };
 }): Promise<NotificationProjectionResult> {
   const { event } = options;
+  let gameFenceRecipientUserIds: ReadonlySet<string> | undefined;
   const client = await options.pool.connect();
   try {
     await client.query('begin');
+    await client.query("select set_config('lock_timeout', '5s', true)");
+    await client.query("select set_config('statement_timeout', '30s', true)");
     await client.query("select set_config('app.tenant_id', $1, true)", [event.tenantId]);
     const inbox = await client.query(
       `insert into audit.inbox_events (consumer_name, event_id, tenant_id)
@@ -265,6 +407,25 @@ async function applyNotificationSourceEventInTransaction(options: {
       if (isLifecycleBookingNotificationEvent(event)) {
         await reconcileBookingReminderSchedules({ client, event });
       }
+    }
+
+    if (isGameNotificationEvent(event)) {
+      const fenceResult = await applyGameNotificationFence({ client, event });
+      if (fenceResult.outcome !== 'accepted') {
+        if (fenceResult.outcome === 'revision_conflict') {
+          await client.query('rollback');
+          return { outcome: fenceResult.outcome };
+        }
+        await client.query(
+          `update audit.inbox_events
+              set processed_at = now()
+            where consumer_name = $1 and event_id = $2`,
+          [CONSUMER_NAME, event.id],
+        );
+        await client.query('commit');
+        return { outcome: fenceResult.outcome };
+      }
+      gameFenceRecipientUserIds = new Set(fenceResult.recipientUserIds);
     }
 
     const runtime = await client.query<RuntimeRow>(
@@ -320,7 +481,10 @@ async function applyNotificationSourceEventInTransaction(options: {
         continue;
       }
       const selector = notificationAudienceSelectorSchema.parse(rule.audience_selector);
-      const recipients = resolveNotificationRecipients(event, selector);
+      const recipients = resolveNotificationRecipients(event, selector).filter(
+        (recipientUserId) =>
+          !gameFenceRecipientUserIds || gameFenceRecipientUserIds.has(recipientUserId),
+      );
       if (recipients.length === 0) {
         skippedRules += 1;
         continue;

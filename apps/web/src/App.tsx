@@ -613,6 +613,13 @@ export function App({
     useState<WebPushBrowserState>('unsupported');
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
+  const [notificationsInboxUnavailable, setNotificationsInboxUnavailable] = useState(false);
+  const [, refreshLocation] = useReducer((revision: number) => revision + 1, 0);
+  useEffect(() => {
+    const handlePopState = (): void => refreshLocation();
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
   const protectedRoute = resolveProtectedRoute(
     typeof window === 'undefined' ? '/' : window.location.pathname,
   );
@@ -1153,6 +1160,7 @@ export function App({
           (page) => {
             if (!active) return;
             setNotifications(page);
+            setNotificationsInboxUnavailable(false);
             setNotificationsError((current) => {
               const next = current?.replace('Лента оповещений временно недоступна.', '').trim();
               return next || null;
@@ -1173,8 +1181,10 @@ export function App({
         const errors: string[] = [];
         if (pageResult.status === 'fulfilled') {
           setNotifications(pageResult.value);
+          setNotificationsInboxUnavailable(false);
         } else {
           setNotifications({ items: [], unreadCount: 0 });
+          setNotificationsInboxUnavailable(true);
           errors.push('Лента оповещений временно недоступна.');
         }
         if (pushConfigurationResult.status === 'fulfilled') {
@@ -1672,6 +1682,52 @@ export function App({
       );
   }
 
+  function navigateToNotificationTarget(href: string): void {
+    window.history.pushState({}, '', href);
+    refreshLocation();
+  }
+
+  function handleOpenNotification(
+    item: NotificationInboxPage['items'][number],
+    href: string,
+    navigate: boolean,
+  ): void {
+    if (item.readAt) {
+      if (navigate) navigateToNotificationTarget(href);
+      return;
+    }
+    setNotificationsBusy(true);
+    setNotificationsError(null);
+    void gateway.markNotificationsRead(item.id).then(
+      () => {
+        if (navigate) navigateToNotificationTarget(href);
+        setNotificationsBusy(false);
+      },
+      () => {
+        setNotificationsError('Не удалось отметить оповещение прочитанным. Повторите переход.');
+        setNotificationsBusy(false);
+      },
+    );
+  }
+
+  function handleRetryNotificationInbox(): void {
+    if (notificationsBusy) return;
+    setNotificationsBusy(true);
+    void gateway.listNotifications().then(
+      (page) => {
+        setNotifications(page);
+        setNotificationsInboxUnavailable(false);
+        setNotificationsError(null);
+        setNotificationsBusy(false);
+      },
+      () => {
+        setNotificationsInboxUnavailable(true);
+        setNotificationsError('Лента оповещений временно недоступна.');
+        setNotificationsBusy(false);
+      },
+    );
+  }
+
   function handleSaveProfilePrivacy(input: ProfilePrivacyUpdateRequest): void {
     setProfilePrivacyBusy(true);
     setProfilePrivacyError(null);
@@ -1899,9 +1955,12 @@ export function App({
           browserState={webPushBrowserState}
           busy={notificationsBusy}
           error={notificationsError}
+          inboxUnavailable={notificationsInboxUnavailable}
           onEnableWebPush={handleEnableWebPush}
           onDisableWebPush={handleDisableWebPush}
           onMarkAllRead={handleMarkAllNotificationsRead}
+          onRetryInbox={handleRetryNotificationInbox}
+          onOpenNotification={handleOpenNotification}
         />
       );
     }

@@ -388,10 +388,11 @@ verify_service_image() {
 }
 
 verify_rabbit_inventory() {
-  require_queues="$1"
-  case "$require_queues" in
-    true) rabbit_mode=rabbit-required ;;
-    false) rabbit_mode=rabbit-optional ;;
+  inventory_mode="$1"
+  case "$inventory_mode" in
+    required) rabbit_mode=rabbit-required ;;
+    optional) rabbit_mode=rabbit-optional ;;
+    inert) rabbit_mode=rabbit-inert ;;
     *) fail 'Rabbit inventory mode is invalid' ;;
   esac
   queue_json="$(infrastructure exec -T rabbitmq rabbitmqctl -q list_queues \
@@ -404,6 +405,15 @@ verify_rabbit_inventory() {
     compose --profile migration run --rm --no-deps -T \
       --entrypoint node migrator \
       apps/migrator/dist/verify-chat-push-foundation-operational.js "$rabbit_mode"
+}
+
+verify_rabbit_preflight_inventory() {
+  optional_inventory=''
+  if optional_inventory="$(verify_rabbit_inventory optional 2>/dev/null)"; then
+    printf '%s\n' "$optional_inventory"
+    return 0
+  fi
+  verify_rabbit_inventory inert
 }
 
 verify_monitoring_ready() {
@@ -489,7 +499,7 @@ verify_booking_quiet_window() {
   while :; do
     foundation_verify live >/dev/null
     foundation_admin_verify
-    verify_rabbit_inventory true >/dev/null
+    verify_rabbit_inventory required >/dev/null
     quiet_now="$(cut -d. -f 1 /proc/uptime)"
     printf '%s' "$quiet_now" | grep -Eq '^[0-9]+$' ||
       fail 'monotonic clock is unavailable'
@@ -501,13 +511,13 @@ verify_booking_quiet_window() {
 wait_for_rabbit_inventory() {
   rabbit_attempt=0
   while test "$rabbit_attempt" -lt 36; do
-    if verify_rabbit_inventory true >/dev/null 2>&1; then
+    if verify_rabbit_inventory required >/dev/null 2>&1; then
       return 0
     fi
     rabbit_attempt="$((rabbit_attempt + 1))"
     sleep 5
   done
-  verify_rabbit_inventory true
+  verify_rabbit_inventory required
   fail 'Rabbit foundation topology did not become ready'
 }
 
@@ -690,7 +700,7 @@ start_candidate_runtime() {
 
   foundation_verify live
   foundation_admin_verify
-  verify_rabbit_inventory true
+  verify_rabbit_inventory required
   verify_monitoring_digest
   verify_monitoring_ready
   for preserved in staging.auth.env staging.override.env staging.communities.env staging.games.env; do
@@ -735,7 +745,7 @@ if test "$operation" = start; then
   sh "$app_root/verify-chat-push-foundation-runtime.sh" preflight
   contour_verify
   foundation_admin_verify
-  verify_rabbit_inventory false
+  verify_rabbit_preflight_inventory
   verify_monitoring_digest
   role_verify pre
   pre_result="$(foundation_verify pre)"
@@ -764,7 +774,7 @@ if test "$operation" = start; then
   contour_verify
   foundation_verify drained
   foundation_admin_verify
-  verify_rabbit_inventory false
+  verify_rabbit_preflight_inventory
 
   backup_tmp="$(mktemp "$backup_dir/.postgres-pre-$candidate_sha-$backup_timestamp.XXXXXX.dump")"
   infrastructure exec -T postgres sh -ec \
@@ -786,7 +796,7 @@ if test "$operation" = start; then
   contour_verify
   foundation_verify drained
   foundation_admin_verify
-  verify_rabbit_inventory false
+  verify_rabbit_preflight_inventory
   clone_result="$(
     PHUB_CANDIDATE_RELEASE_ENV="$candidate_release_env" \
     RUNTIME_DATABASE_URL="$runtime_database_url" \
@@ -811,7 +821,7 @@ if test "$operation" = start; then
   test "$(pending_foundation_count "$final_pre_result")" -eq 5 ||
     fail 'foundation pending set changed during clone rehearsal'
   foundation_admin_verify
-  verify_rabbit_inventory false
+  verify_rabbit_preflight_inventory
   verify_monitoring_digest
   role_verify pre
   apply_foundation_migrations
@@ -826,7 +836,7 @@ else
   recovery_pending="$(pending_foundation_count "$recovery_pre_result")"
   test "$recovery_pending" -le 5 || fail 'recovery pending migration count is invalid'
   foundation_admin_verify
-  verify_rabbit_inventory false
+  verify_rabbit_preflight_inventory
   write_phase_marker RECOVERY_WRITERS_DRAINED
   if test "$recovery_pending" -gt 0; then
     sh "$app_root/verify-chat-push-foundation-runtime.sh" drained
@@ -835,7 +845,7 @@ else
     test "$(pending_foundation_count "$recovery_final_pre")" -eq "$recovery_pending" ||
       fail 'foundation pending set changed during recovery preflight'
     foundation_admin_verify
-    verify_rabbit_inventory false
+    verify_rabbit_preflight_inventory
     verify_monitoring_digest
     role_verify pre
     apply_foundation_migrations
