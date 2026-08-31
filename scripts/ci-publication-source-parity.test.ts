@@ -41,7 +41,7 @@ const canonicalComponents = [
   'npm run lint',
   'npm run typecheck',
   'npm run contracts:lint',
-  'npm test',
+  'npm run test:source',
   'npm run build',
   'npm run runtime:imports',
 ] as const;
@@ -53,6 +53,7 @@ function commandSteps(job: WorkflowJob | undefined): readonly string[] {
 describe('exact-main CI and publication source-quality parity', () => {
   it('keeps the canonical source-quality components ordered and complete', () => {
     expect(packageJson.scripts['source:quality']).toBe(canonicalComponents.join(' && '));
+    expect(packageJson.scripts['test:source']).toBe('vitest run --maxWorkers=2');
     expect(packageJson.scripts.check).toBe(canonicalCommand);
   });
 
