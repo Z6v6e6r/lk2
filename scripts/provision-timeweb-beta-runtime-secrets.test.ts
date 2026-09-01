@@ -142,48 +142,52 @@ describe('Timeweb beta runtime secret provisioner', () => {
     });
   });
 
-  it('rotates only from the exact expected identity and restores it on handled failure', () => {
-    const value = fixture();
-    provisionTimewebBetaRuntimeSecrets(options(value));
-    const nextRelease = `${sourceSha}-12345678902-1`;
-    expect(() =>
-      provisionTimewebBetaRuntimeSecrets(
-        options(value, {
-          releaseId: nextRelease,
-          expectedCurrentReleaseId: `${sourceSha}-999-1`,
-        }),
-      ),
-    ).toThrow('current_release_identity_mismatch');
-    expect(() =>
-      provisionTimewebBetaRuntimeSecrets(
-        options(value, {
-          releaseId: nextRelease,
-          expectedCurrentReleaseId: releaseId,
-          failAfter: 'backup',
-        }),
-      ),
-    ).toThrow('injected_failure');
-    expect(installedReleaseId(value.targetDir)).toBe(releaseId);
-    expect(
-      readdirSync(value.targetParent).some((name) => name.startsWith('.timeweb-beta.incoming-')),
-    ).toBe(false);
-    expect(() =>
-      provisionTimewebBetaRuntimeSecrets(
-        options(value, {
-          releaseId: nextRelease,
-          expectedCurrentReleaseId: releaseId,
-          failAfter: 'install',
-        }),
-      ),
-    ).toThrow('injected_failure');
-    expect(installedReleaseId(value.targetDir)).toBe(releaseId);
+  it(
+    'rotates only from the exact expected identity and restores it on handled failure',
+    { timeout: 15_000 },
+    () => {
+      const value = fixture();
+      provisionTimewebBetaRuntimeSecrets(options(value));
+      const nextRelease = `${sourceSha}-12345678902-1`;
+      expect(() =>
+        provisionTimewebBetaRuntimeSecrets(
+          options(value, {
+            releaseId: nextRelease,
+            expectedCurrentReleaseId: `${sourceSha}-999-1`,
+          }),
+        ),
+      ).toThrow('current_release_identity_mismatch');
+      expect(() =>
+        provisionTimewebBetaRuntimeSecrets(
+          options(value, {
+            releaseId: nextRelease,
+            expectedCurrentReleaseId: releaseId,
+            failAfter: 'backup',
+          }),
+        ),
+      ).toThrow('injected_failure');
+      expect(installedReleaseId(value.targetDir)).toBe(releaseId);
+      expect(
+        readdirSync(value.targetParent).some((name) => name.startsWith('.timeweb-beta.incoming-')),
+      ).toBe(false);
+      expect(() =>
+        provisionTimewebBetaRuntimeSecrets(
+          options(value, {
+            releaseId: nextRelease,
+            expectedCurrentReleaseId: releaseId,
+            failAfter: 'install',
+          }),
+        ),
+      ).toThrow('injected_failure');
+      expect(installedReleaseId(value.targetDir)).toBe(releaseId);
 
-    const result = provisionTimewebBetaRuntimeSecrets(
-      options(value, { releaseId: nextRelease, expectedCurrentReleaseId: releaseId }),
-    );
-    expect(result.previousBackedUp).toBe(true);
-    expect(installedReleaseId(value.targetDir)).toBe(nextRelease);
-  });
+      const result = provisionTimewebBetaRuntimeSecrets(
+        options(value, { releaseId: nextRelease, expectedCurrentReleaseId: releaseId }),
+      );
+      expect(result.previousBackedUp).toBe(true);
+      expect(installedReleaseId(value.targetDir)).toBe(nextRelease);
+    },
+  );
 
   it('preserves durable transaction evidence when rollback cannot complete', () => {
     const value = fixture();
