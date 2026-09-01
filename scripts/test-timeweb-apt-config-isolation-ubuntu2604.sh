@@ -10,7 +10,16 @@ docker run --rm --platform linux/amd64 \
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=l
 apt-get update
-apt-get install --yes --no-install-recommends packagekit needrestart update-notifier-common python3-minimal
+# Match the already-installed system dependency baseline from the observed host
+# without installing any package from the frozen Node bootstrap closure.
+apt-get install --yes --no-install-recommends \
+  gpg \
+  libicu78 \
+  libuv1t64 \
+  packagekit \
+  needrestart \
+  update-notifier-common \
+  python3-minimal
 
 for hook in \
   /etc/apt/apt.conf.d/20packagekit \
@@ -83,11 +92,13 @@ if pathlib.Path("/tmp/phub-apt-hook-executed").exists():
     raise AssertionError("APT download executed a host lifecycle hook")
 PY
 
-/usr/bin/python3 -I -S -B \
+/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
+  /usr/bin/python3 -I -S -B \
   /workspace/scripts/test-timeweb-operator-node-bootstrap-apt-lists.py \
   /opt/phub/test/source/scripts/control-timeweb-operator-node-bootstrap.py \
   /opt/phub/test/source/deploy/timeweb/operator-node-bootstrap.v1.json \
-  /tmp/phub-lists
+  /tmp/phub-lists \
+  /tmp/phub-archives/partial
 
 test -n "$(find /tmp/phub-lists -type f -print -quit)"
 test -n "$(find /tmp/phub-archives -maxdepth 1 -type f -name "hello_*.deb" -print -quit)"
