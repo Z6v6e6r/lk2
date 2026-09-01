@@ -380,11 +380,12 @@ async function verifyHttpOnce(baseUrl: string): Promise<void> {
     throw new Error('critical read-only API boundary failed');
 }
 
-async function waitForHttp(baseUrl: string): Promise<void> {
+async function waitForHttp(resolveBaseUrl: () => string): Promise<void> {
   let lastFailure = 'HTTP verification was not attempted';
   try {
     await waitFor('rehearsal HTTP readiness', async () => {
       try {
+        const baseUrl = resolveBaseUrl();
         await verifyHttpOnce(baseUrl);
         return true;
       } catch (error) {
@@ -646,9 +647,8 @@ async function main(): Promise<void> {
       },
     });
 
+    await waitForHttp(() => proxyBaseUrl(compose, environment));
     const baseUrl = proxyBaseUrl(compose, environment);
-    const restartedBaseUrl = proxyBaseUrl(compose, environment);
-    await waitForHttp(restartedBaseUrl);
     if (!options.skipBrowser) {
       const counters = await runTimewebBrowserSmoke(baseUrl);
       for (const [key, value] of Object.entries(counters)) {
@@ -675,7 +675,7 @@ async function main(): Promise<void> {
       if (inspectContainer(runtimeIds[service]).State.StartedAt === startsBeforeRestart[service])
         throw new Error(`restart timestamp did not advance for ${service}`);
     }
-    await waitForHttp(baseUrl);
+    await waitForHttp(() => proxyBaseUrl(compose, environment));
 
     const idsBeforeSecondStart = {
       postgres: containerId(compose, environment, 'postgres'),
@@ -770,7 +770,7 @@ async function main(): Promise<void> {
       ledgerBeforeRollback,
       'forward-only application rollback',
     );
-    await waitForHttp(proxyBaseUrl(compose, rollbackEnvironment));
+    await waitForHttp(() => proxyBaseUrl(compose, rollbackEnvironment));
 
     process.stdout.write(`CANDIDATE_SOURCE_SHA=${sourceSha}\n`);
     process.stdout.write(`CANDIDATE_SOURCE_TREE=${sourceTree}\n`);
