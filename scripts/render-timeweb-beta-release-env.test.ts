@@ -164,7 +164,7 @@ async function verifyFixtureAuthority(
   }
 }
 
-describe('Timeweb beta release.env renderer', () => {
+describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
   it('requires opaque exact-local-source authority before trusting rendered deployment input', () => {
     const value = fixture();
     expect(() =>

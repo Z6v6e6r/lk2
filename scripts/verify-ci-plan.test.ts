@@ -30,9 +30,32 @@ describe('CI plan and aggregate verifier', () => {
         PLAN_JSON: JSON.stringify(basePlan),
         DOCS_RESULT: 'success',
         WEB_RESULT: 'skipped',
+        SOURCE_RESULT: 'skipped',
         FULL_RESULT: 'skipped',
       }).status,
     ).toBe(0);
+  });
+
+  it('requires both source and integration quality for the full profile', () => {
+    const fullPlan = {
+      ...basePlan,
+      profile: 'full',
+      docsQuality: false,
+      fullQuality: true,
+      policyValidation: false,
+      dockerServices: ['web', 'api', 'worker', 'realtime', 'migrator'],
+    };
+    const environment = {
+      PLAN_JSON: JSON.stringify(fullPlan),
+      DOCS_RESULT: 'skipped',
+      WEB_RESULT: 'skipped',
+      SOURCE_RESULT: 'success',
+      FULL_RESULT: 'success',
+    };
+
+    expect(run(['quality'], environment).status).toBe(0);
+    expect(run(['quality'], { ...environment, SOURCE_RESULT: 'failure' }).status).not.toBe(0);
+    expect(run(['quality'], { ...environment, FULL_RESULT: 'failure' }).status).not.toBe(0);
   });
 
   it.each(['failure', 'cancelled', 'skipped', ''])(
@@ -43,6 +66,7 @@ describe('CI plan and aggregate verifier', () => {
           PLAN_JSON: JSON.stringify(basePlan),
           DOCS_RESULT: result,
           WEB_RESULT: 'skipped',
+          SOURCE_RESULT: 'skipped',
           FULL_RESULT: 'skipped',
         }).status,
       ).not.toBe(0);
@@ -55,6 +79,7 @@ describe('CI plan and aggregate verifier', () => {
         PLAN_JSON: JSON.stringify(basePlan),
         DOCS_RESULT: 'success',
         WEB_RESULT: 'success',
+        SOURCE_RESULT: 'skipped',
         FULL_RESULT: 'skipped',
       }).status,
     ).not.toBe(0);
@@ -68,6 +93,7 @@ describe('CI plan and aggregate verifier', () => {
           PLAN_JSON: plan,
           DOCS_RESULT: 'success',
           WEB_RESULT: 'skipped',
+          SOURCE_RESULT: 'skipped',
           FULL_RESULT: 'skipped',
         }).status,
       ).not.toBe(0);
