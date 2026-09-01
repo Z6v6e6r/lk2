@@ -117,4 +117,11 @@ describe('Timeweb beta candidate rehearsal wiring', () => {
     expect(browserHarness).toContain("client.command('Network.enable'");
     expect(browserHarness).toContain("errorReason: 'BlockedByClient'");
   });
+
+  it('uses bounded HTTP readiness retries around start, restart, and rollback', () => {
+    const candidateHarness = read('scripts/test-timeweb-beta-candidate.ts');
+    expect(candidateHarness).toContain("await waitFor('rehearsal HTTP readiness'");
+    expect(candidateHarness.match(/await waitForHttp\(/gu)).toHaveLength(3);
+    expect(candidateHarness).not.toContain('await verifyHttp(');
+  });
 });

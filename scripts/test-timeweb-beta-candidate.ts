@@ -361,7 +361,7 @@ function assertSameLedger(
     throw new Error(`${description}: exact filename/checksum ledger changed`);
 }
 
-async function verifyHttp(baseUrl: string): Promise<void> {
+async function verifyHttpOnce(baseUrl: string): Promise<void> {
   const ready = await fetch(new URL('/health/ready', baseUrl));
   if (ready.status !== 200 || ((await ready.json()) as { status?: string }).status !== 'ready')
     throw new Error('API readiness through rehearsal proxy failed');
@@ -378,6 +378,23 @@ async function verifyHttp(baseUrl: string): Promise<void> {
   const body = (await boundary.json()) as { code?: string };
   if (boundary.status !== 400 || body.code !== 'TENANT_KEY_INVALID')
     throw new Error('critical read-only API boundary failed');
+}
+
+async function waitForHttp(baseUrl: string): Promise<void> {
+  let lastFailure = 'HTTP verification was not attempted';
+  try {
+    await waitFor('rehearsal HTTP readiness', async () => {
+      try {
+        await verifyHttpOnce(baseUrl);
+        return true;
+      } catch (error) {
+        lastFailure = error instanceof Error ? error.message : 'unknown HTTP verification failure';
+        return false;
+      }
+    });
+  } catch {
+    throw new Error(`rehearsal HTTP readiness timed out: ${lastFailure}`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -626,7 +643,7 @@ async function main(): Promise<void> {
     if (!/^127\.0\.0\.1:[1-9][0-9]*$/u.test(proxyPort))
       throw new Error(`invalid dynamic proxy port: ${proxyPort}`);
     const baseUrl = `http://${proxyPort}`;
-    await verifyHttp(baseUrl);
+    await waitForHttp(baseUrl);
     if (!options.skipBrowser) {
       const counters = await runTimewebBrowserSmoke(baseUrl);
       for (const [key, value] of Object.entries(counters)) {
@@ -653,7 +670,7 @@ async function main(): Promise<void> {
       if (inspectContainer(runtimeIds[service]).State.StartedAt === startsBeforeRestart[service])
         throw new Error(`restart timestamp did not advance for ${service}`);
     }
-    await verifyHttp(baseUrl);
+    await waitForHttp(baseUrl);
 
     const idsBeforeSecondStart = {
       postgres: containerId(compose, environment, 'postgres'),
@@ -754,7 +771,7 @@ async function main(): Promise<void> {
     });
     if (!/^127\.0\.0\.1:[1-9][0-9]*$/u.test(rollbackPort))
       throw new Error(`invalid rollback proxy port: ${rollbackPort}`);
-    await verifyHttp(`http://${rollbackPort}`);
+    await waitForHttp(`http://${rollbackPort}`);
 
     process.stdout.write(`CANDIDATE_SOURCE_SHA=${sourceSha}\n`);
     process.stdout.write(`CANDIDATE_SOURCE_TREE=${sourceTree}\n`);
