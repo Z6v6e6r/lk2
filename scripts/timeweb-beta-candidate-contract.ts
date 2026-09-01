@@ -52,7 +52,7 @@ export interface CandidateIdentity {
   readonly sourceTree: string;
   readonly workflowSha: string;
   readonly runId: string;
-  readonly runAttempt: number;
+  readonly runAttempt: string;
   readonly manifestSha256: string;
   readonly images: Readonly<Record<TimewebComponent, string>>;
 }
@@ -95,7 +95,7 @@ export function assertCandidateIdentity(
   if (typeof publication.runId !== 'string' || !/^[1-9][0-9]*$/u.test(publication.runId))
     reject('manifest_run_id');
   if (publication.runId !== expected.publicationRunId) reject('manifest_publication_run_id');
-  if (publication.runAttempt !== 1) reject('manifest_run_attempt');
+  if (publication.runAttempt !== '1') reject('manifest_run_attempt');
   if (!Array.isArray(manifest.images) || manifest.images.length !== TIMEWEB_COMPONENTS.length)
     reject('manifest_component_set');
 
@@ -126,7 +126,7 @@ export function assertCandidateIdentity(
     sourceTree: expected.sourceTree,
     workflowSha: publication.workflowSha,
     runId: publication.runId,
-    runAttempt: 1,
+    runAttempt: '1',
     images,
   };
 }
@@ -159,7 +159,7 @@ export function readCandidateArtifact(
       expectedPublication: {
         workflowSha: expected.sourceSha,
         runId: expected.publicationRunId,
-        runAttempt: 1,
+        runAttempt: '1',
       },
       expectedBaseLockPath: resolve('deploy/timeweb/base-images.lock.json'),
     });

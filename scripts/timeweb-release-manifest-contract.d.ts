@@ -1,7 +1,7 @@
 export interface ExpectedTimewebPublication {
   readonly workflowSha: string;
   readonly runId: string;
-  readonly runAttempt: number;
+  readonly runAttempt: string;
 }
 
 export function validateCanonicalManifest(

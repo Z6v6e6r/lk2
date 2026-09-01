@@ -40,7 +40,7 @@ function candidateManifest(): Record<string, unknown> {
     publication: {
       workflowSha: sourceSha,
       runId: publicationRunId,
-      runAttempt: 1,
+      runAttempt: '1',
     },
     images: TIMEWEB_COMPONENTS.map((component, index) => ({
       component,
@@ -149,6 +149,14 @@ describe('Timeweb beta candidate contract', () => {
     const root = mkdtempSync(join(tmpdir(), 'timeweb-candidate-contract-'));
     try {
       const frozen = writeCanonicalPair(join(root, 'frozen'));
+      expect(
+        readCandidateArtifact(frozen.manifestPath, {
+          sourceSha: fixtureSourceSha,
+          sourceTree: fixtureSourceTree,
+          publicationRunId: fixtureRunId,
+          manifestSha256: frozen.checksum,
+        }).runAttempt,
+      ).toBe('1');
       const changed = canonicalManifest();
       changed.images[0]!.digest = `sha256:${'f'.repeat(64)}`;
       const changedPair = writeCanonicalPair(join(root, 'changed'), changed);
