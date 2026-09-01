@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
 type WorkflowStep = {
+  readonly ['continue-on-error']?: boolean | string;
   readonly env?: Readonly<Record<string, string>>;
+  readonly if?: string;
   readonly name?: string;
   readonly run?: string;
   readonly uses?: string;
@@ -11,6 +13,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  readonly ['continue-on-error']?: boolean | string;
   readonly env?: Readonly<Record<string, string>>;
   readonly if?: string;
   readonly needs?: string | readonly string[];
@@ -69,9 +72,14 @@ describe('exact-main CI and publication source-quality parity', () => {
     const ciCommands = commandSteps(ciJob);
     const publicationCommands = commandSteps(publicationJob);
 
-    expect(ciJob?.if).toContain("full_quality == 'true'");
+    expect(ciJob?.if).toBe(
+      "${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.full_quality == 'true' }}",
+    );
+    expect(ciJob?.['continue-on-error']).toBeUndefined();
     expect(ciJob?.services).toBeUndefined();
     expect(ciJob?.env).toBeUndefined();
+    expect(publicationJob?.if).toBeUndefined();
+    expect(publicationJob?.['continue-on-error']).toBeUndefined();
     expect(publicationJob?.services).toBeUndefined();
     expect(publicationJob?.env).toBeUndefined();
     expect(ciJob?.['runs-on']).toBe(publicationJob?.['runs-on']);
@@ -113,8 +121,14 @@ describe('exact-main CI and publication source-quality parity', () => {
       'persist-credentials': false,
     });
     expect(ciNode).toEqual(publicationNode);
-    expect(ciJob?.steps?.slice(-2).every(({ env }) => env === undefined)).toBe(true);
-    expect(publicationJob?.steps?.slice(-2).every(({ env }) => env === undefined)).toBe(true);
+    for (const step of [
+      ...(ciJob?.steps?.slice(-2) ?? []),
+      ...(publicationJob?.steps?.slice(-2) ?? []),
+    ]) {
+      expect(step.env).toBeUndefined();
+      expect(step.if).toBeUndefined();
+      expect(step['continue-on-error']).toBeUndefined();
+    }
   });
 
   it('makes publication side effects depend on the canonical source gate', () => {
@@ -122,6 +136,8 @@ describe('exact-main CI and publication source-quality parity', () => {
     const needs = Array.isArray(publishJob?.needs) ? publishJob.needs : [publishJob?.needs];
 
     expect(needs).toEqual(['validate-request', 'verify-source']);
+    expect(publishJob?.if).toBe("${{ inputs.operation == 'publish' }}");
+    expect(publishJob?.['continue-on-error']).toBeUndefined();
   });
 
   it('makes the publication-equivalent source result part of the stable quality gate', () => {
