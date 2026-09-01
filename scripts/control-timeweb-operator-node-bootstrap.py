@@ -193,28 +193,50 @@ def require_secure_file(path: Path, mode: int | None, code: str) -> os.stat_resu
     return value
 
 
-def require_secure_apt_auxiliary_directory(path: Path) -> os.stat_result:
+def require_secure_apt_owned_empty_directory(
+    path: Path, apt_mode: int | None, code: str
+) -> os.stat_result:
     try:
         value = path.lstat()
     except OSError:
-        stop("apt_lists_auxiliary")
+        stop(code)
     mode = stat.S_IMODE(value.st_mode)
     if (
         not stat.S_ISDIR(value.st_mode)
         or stat.S_ISLNK(value.st_mode)
+        or value.st_nlink != 2
         or value.st_mode & 0o022
         or path.resolve() != path
     ):
-        stop("apt_lists_auxiliary")
+        stop(code)
     if value.st_uid == 0:
-        return value
-    if (
+        if value.st_gid != 0:
+            stop(code)
+    elif (
         value.st_uid != APT_SANDBOX_UID
         or value.st_gid != 0
-        or mode != APT_AUXILIARY_DIRECTORY_MODES.get(path.name)
+        or apt_mode is None
+        or mode != apt_mode
     ):
-        stop("apt_lists_auxiliary")
+        stop(code)
+    try:
+        if any(path.iterdir()):
+            stop(code)
+    except OSError:
+        stop(code)
     return value
+
+
+def require_secure_apt_auxiliary_directory(path: Path) -> os.stat_result:
+    return require_secure_apt_owned_empty_directory(
+        path,
+        APT_AUXILIARY_DIRECTORY_MODES.get(path.name),
+        "apt_lists_auxiliary",
+    )
+
+
+def require_secure_apt_package_partial_directory(path: Path) -> os.stat_result:
+    return require_secure_apt_owned_empty_directory(path, 0o700, "package_partial_security")
 
 
 def atomic_json(path: Path, value: Any, mode: int = 0o600) -> None:
@@ -931,9 +953,7 @@ def package_files(contract: dict[str, Any], directory: Path) -> list[Path]:
             if value.st_size != 0:
                 stop("package_lock_security")
         elif path.name == "partial":
-            require_secure_directory(path, None, "package_partial_security")
-            if any(path.iterdir()):
-                stop("package_partial_security")
+            require_secure_apt_package_partial_directory(path)
         else:
             stop("package_artifact_unexpected")
     if len(paths) != len(contract["apt"]["packages"]):
@@ -946,11 +966,14 @@ def inspect_artifacts(contract: dict[str, Any], directory: Path) -> list[dict[st
     artifacts: dict[str, dict[str, str]] = {}
     for path in package_files(contract, directory):
         require_secure_file(path, 0o600, "package_artifact_security")
-        metadata = run([
-            contract["apt"]["dpkgDebBinary"], "--field", str(path), "Package", "Version", "Architecture"
-        ]).splitlines()
-        if len(metadata) != 3:
-            stop("package_artifact_metadata")
+        metadata: list[str] = []
+        for field in ("Package", "Version", "Architecture"):
+            lines = run(
+                [contract["apt"]["dpkgDebBinary"], "--field", str(path), field]
+            ).splitlines()
+            if len(lines) != 1 or not lines[0] or lines[0] != lines[0].strip():
+                stop("package_artifact_metadata")
+            metadata.append(lines[0])
         name, version, architecture = metadata
         if name not in expected or name in artifacts or expected[name] != {
             "name": name, "version": version, "architecture": architecture
