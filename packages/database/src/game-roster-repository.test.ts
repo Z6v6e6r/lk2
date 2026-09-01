@@ -203,6 +203,13 @@ describe('game roster repository', () => {
       ),
     ).toBe(true);
     expect(
+      query.mock.calls.some(
+        ([text]) =>
+          text.includes('insert into eligibility.payment_snapshots') &&
+          text.includes("'paymentMode', $6::text"),
+      ),
+    ).toBe(true);
+    expect(
       query.mock.calls
         .filter(([text]) => text.includes('insert into audit.outbox_events'))
         .map((call) => call[1]?.[2]),
