@@ -45,6 +45,12 @@ const canonicalComponents = [
   'npm run build',
   'npm run runtime:imports',
 ] as const;
+const publicationIdentityCommand = [
+  'set -euo pipefail',
+  'test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"',
+  'test -z "$(git status --porcelain)"',
+  'test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_SOURCE_SHA"',
+].join('\n');
 
 function commandSteps(job: WorkflowJob | undefined): readonly string[] {
   return (job?.steps ?? []).flatMap(({ run }) => (run === undefined ? [] : [run]));
@@ -73,7 +79,7 @@ describe('exact-main CI and publication source-quality parity', () => {
     expect(ciJob?.['timeout-minutes']).toBe(publicationJob?.['timeout-minutes']);
     expect(ciCommands).toEqual(['npm ci --ignore-scripts', canonicalCommand]);
     expect(publicationCommands).toHaveLength(3);
-    expect(publicationCommands[0]).toContain('git rev-parse HEAD');
+    expect(publicationCommands[0]?.trimEnd()).toBe(publicationIdentityCommand);
     expect(publicationCommands.slice(-2)).toEqual(ciCommands);
     expect(ciCommands.filter((command) => command === canonicalCommand)).toEqual([
       canonicalCommand,
@@ -109,6 +115,13 @@ describe('exact-main CI and publication source-quality parity', () => {
     expect(ciNode).toEqual(publicationNode);
     expect(ciJob?.steps?.slice(-2).every(({ env }) => env === undefined)).toBe(true);
     expect(publicationJob?.steps?.slice(-2).every(({ env }) => env === undefined)).toBe(true);
+  });
+
+  it('makes publication side effects depend on the canonical source gate', () => {
+    const publishJob = publicationWorkflow.jobs['build-and-publish'];
+    const needs = Array.isArray(publishJob?.needs) ? publishJob.needs : [publishJob?.needs];
+
+    expect(needs).toEqual(['validate-request', 'verify-source']);
   });
 
   it('makes the publication-equivalent source result part of the stable quality gate', () => {
