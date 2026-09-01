@@ -354,10 +354,12 @@ after package mutation.
 
 Ubuntu 26.04 APT changes the empty isolated-list helper directories after `update`: `partial` is
 `_apt:root 0700` and `auxfiles` is `_apt:root 0755` (`_apt` is the frozen platform UID 42). The
-controller accepts that exact sandbox-owned state, or the previously supported root-owned empty
+controller accepts that exact sandbox-owned state, or the previously supported `root:root` empty
 directories, only beneath the already verified root-owned `0700` lists parent. Both directories
 must remain real, canonical, non-group/world-writable and empty. Every other non-root owner, mode,
 name, type, symlink, populated auxiliary directory or unexpected list target remains a hard stop.
+The empty package-archive `partial` directory follows the same custody rule, with the only
+sandbox-owned form fixed to `_apt:root 0700`; its root-owned baseline must be `root:root`.
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root LC_ALL=C \
