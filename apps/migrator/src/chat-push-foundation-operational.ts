@@ -86,6 +86,13 @@ export function assertFoundationRabbitInventory(
     if (Number(queue.messages_ready) !== 0 || Number(queue.messages_unacknowledged) !== 0) {
       fail('CHAT_PUSH_FOUNDATION_RABBIT_BACKLOG_PRESENT');
     }
+    if (
+      options.mode === 'required' &&
+      name === gameQueueName &&
+      (!Number.isInteger(Number(queue.consumers)) || Number(queue.consumers) < 1)
+    ) {
+      fail('CHAT_PUSH_FOUNDATION_RABBIT_CONSUMER_MISSING');
+    }
     const expectedArgumentKeys =
       name !== 'phub.dead-letter.v1'
         ? ['x-dead-letter-exchange', 'x-delivery-limit', 'x-queue-type']

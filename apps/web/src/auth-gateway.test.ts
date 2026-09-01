@@ -11,6 +11,11 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
   return input.url;
 }
 
+function requestAbortError(signal: AbortSignal | null | undefined): Error {
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error ? reason : new DOMException('aborted', 'AbortError');
+}
+
 describe('browser auth gateway', () => {
   beforeEach(() => window.sessionStorage.clear());
 
@@ -2708,5 +2713,171 @@ describe('browser auth gateway', () => {
     );
     expect(readInit?.method).toBe('PUT');
     expect(new Headers(readInit?.headers).get('Idempotency-Key')).toBe(clientMessageId);
+  });
+
+  it.each(['game-create', 'message-send'] as const)(
+    'bounds a hung %s request and retries with the same idempotency identity',
+    async (command) => {
+      const userId = '00000000-0000-4000-8000-000000000001';
+      const gameId = '55555555-5555-4555-8555-555555555555';
+      const conversationId = '66666666-6666-4666-8666-666666666666';
+      const clientMessageId = '77777777-7777-4777-8777-777777777777';
+      const session = {
+        accessToken: 'short-lived-padlhub-token',
+        tokenType: 'Bearer',
+        expiresAt: '2099-07-11T12:10:00.000Z',
+        user: { id: userId, displayName: 'Анна' },
+        context: {
+          userId,
+          tenantId: '00000000-0000-4000-8000-000000000002',
+          displayName: 'Анна',
+          phoneLast4: '0001',
+          roles: ['client'],
+          permissions: ['games.play'],
+        },
+      };
+      const conversation = {
+        id: conversationId,
+        kind: 'GAME',
+        contextId: gameId,
+        title: 'Игра',
+        unreadCount: 0,
+        updatedAt: '2026-09-01T00:00:00.000Z',
+      };
+      const sentMessage = {
+        id: '88888888-8888-4888-8888-888888888888',
+        conversationId,
+        sequence: 1,
+        sender: { userId, displayName: 'Анна' },
+        messageType: 'TEXT',
+        body: 'Привет',
+        createdAt: '2026-09-01T00:00:00.000Z',
+      };
+      let attempts = 0;
+      const commandCalls: RequestInit[] = [];
+      const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+        const isTarget =
+          command === 'game-create'
+            ? url.endsWith('/conversations/game')
+            : url.endsWith(`/conversations/${conversationId}/messages`);
+        if (!isTarget) return Promise.resolve(new Response(null, { status: 404 }));
+        attempts += 1;
+        commandCalls.push(init ?? {});
+        if (attempts === 1) {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(requestAbortError(init.signal)), {
+              once: true,
+            });
+          });
+        }
+        return Promise.resolve(
+          command === 'game-create'
+            ? Response.json({ outcome: 'ok', conversation, created: true, replayed: true })
+            : Response.json({ outcome: 'ok', message: sentMessage, replayed: true }),
+        );
+      });
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.padlhub.test/',
+        tenantKey: 'padlhub',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+      await gateway.restoreSession();
+
+      vi.useFakeTimers();
+      try {
+        const result =
+          command === 'game-create'
+            ? gateway.getOrCreateGameConversation(gameId)
+            : gateway.sendConversationMessage(conversationId, {
+                clientMessageId,
+                body: 'Привет',
+              });
+        await vi.advanceTimersByTimeAsync(15_000);
+        await expect(result).resolves.toMatchObject({ outcome: 'ok', replayed: true });
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(commandCalls).toHaveLength(2);
+      const idempotencyKeys = commandCalls.map((init) =>
+        new Headers(init.headers).get('Idempotency-Key'),
+      );
+      expect(new Set(idempotencyKeys).size).toBe(1);
+      expect(idempotencyKeys[0]).toMatch(/^[0-9a-f-]{36}$/);
+      expect(commandCalls[0]?.signal?.aborted).toBe(true);
+      expect(commandCalls[1]?.signal?.aborted).toBe(false);
+      if (command === 'message-send') expect(idempotencyKeys[0]).toBe(clientMessageId);
+    },
+  );
+
+  it('stops after two hung GAME send attempts and preserves the command identity', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const conversationId = '66666666-6666-4666-8666-666666666666';
+    const clientMessageId = '77777777-7777-4777-8777-777777777777';
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['games.play'],
+      },
+    };
+    const attempts: RequestInit[] = [];
+    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (!url.endsWith(`/conversations/${conversationId}/messages`)) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      attempts.push(init ?? {});
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(requestAbortError(init.signal)), {
+          once: true,
+        });
+      });
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+    await gateway.restoreSession();
+
+    vi.useFakeTimers();
+    try {
+      const result = gateway.sendConversationMessage(conversationId, {
+        clientMessageId,
+        body: 'Привет',
+      });
+      const failurePromise = result.then(
+        () => {
+          throw new Error('Expected the hung command to fail');
+        },
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      const failure = await failurePromise;
+      expect(failure).toBeInstanceOf(DOMException);
+      if (!(failure instanceof DOMException)) throw new Error('Expected an abort DOMException');
+      expect(['AbortError', 'TimeoutError']).toContain(failure.name);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(attempts).toHaveLength(2);
+    for (const attempt of attempts) {
+      expect(new Headers(attempt.headers).get('Idempotency-Key')).toBe(clientMessageId);
+      expect(attempt.signal?.aborted).toBe(true);
+    }
   });
 });

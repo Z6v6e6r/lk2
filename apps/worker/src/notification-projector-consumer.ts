@@ -90,7 +90,9 @@ async function handleMessage(options: {
       },
       'notification source event failed and will be retried',
     );
-    options.channel.nack(options.message, false, true);
+    // RabbitMQ 4.3+ does not increment a quorum queue's delivery-count for basic.nack.
+    // basic.reject marks the attempt as failed, so x-delivery-limit can bound retries into DLQ.
+    options.channel.reject(options.message, true);
   }
 }
 

@@ -23,6 +23,7 @@ function rabbitInventory() {
         },
         messages_ready: 0,
         messages_unacknowledged: 0,
+        consumers: 1,
       },
       {
         name: 'phub.notification-intent-projector.v1',
@@ -35,6 +36,7 @@ function rabbitInventory() {
         },
         messages_ready: 0,
         messages_unacknowledged: 0,
+        consumers: 1,
       },
       {
         name: 'phub.dead-letter.v1',
@@ -43,6 +45,7 @@ function rabbitInventory() {
         arguments: { 'x-queue-type': 'quorum' },
         messages_ready: 0,
         messages_unacknowledged: 0,
+        consumers: 0,
       },
     ],
     bindings: [
@@ -116,6 +119,12 @@ describe('chat/push foundation operational inventory', () => {
     expect(() => assertFoundationRabbitInventory(gameWildcard, { mode: 'required' })).toThrow(
       'CHAT_PUSH_FOUNDATION_RABBIT_BINDING_MISMATCH',
     );
+
+    const stoppedGameConsumer = rabbitInventory();
+    stoppedGameConsumer.queues[0]!.consumers = 0;
+    expect(() =>
+      assertFoundationRabbitInventory(stoppedGameConsumer, { mode: 'required' }),
+    ).toThrow('CHAT_PUSH_FOUNDATION_RABBIT_CONSUMER_MISSING');
   });
 
   it('allows all queues to be absent only before the candidate worker starts', () => {

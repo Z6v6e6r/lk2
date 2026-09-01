@@ -1475,14 +1475,38 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     }
   }
 
+  const messagingCommandTimeoutMs = 15_000;
+
+  async function runMessagingCommandAttempt<TResult>(
+    operation: (signal: AbortSignal) => Promise<TResult>,
+  ): Promise<TResult> {
+    const controller = new AbortController();
+    const timeout = globalThis.setTimeout(() => {
+      controller.abort(new DOMException('Messaging command timed out', 'TimeoutError'));
+    }, messagingCommandTimeoutMs);
+    try {
+      return await operation(controller.signal);
+    } finally {
+      globalThis.clearTimeout(timeout);
+    }
+  }
+
+  function isRetryableMessagingFailure(error: unknown): boolean {
+    return (
+      error instanceof TypeError ||
+      (error instanceof DOMException &&
+        (error.name === 'AbortError' || error.name === 'TimeoutError'))
+    );
+  }
+
   async function retryMessagingCommand<TResult>(
-    operation: () => Promise<TResult>,
+    operation: (signal: AbortSignal) => Promise<TResult>,
   ): Promise<TResult> {
     try {
-      return await operation();
+      return await runMessagingCommandAttempt(operation);
     } catch (error) {
-      if (!(error instanceof TypeError)) throw error;
-      return operation();
+      if (!isRetryableMessagingFailure(error)) throw error;
+      return runMessagingCommandAttempt(operation);
     }
   }
 
@@ -2050,17 +2074,26 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     createDirectConversation(otherUserId, idempotencyKey) {
-      return retryMessagingCommand(() =>
+      return retryMessagingCommand((signal) =>
         client.request<CreateDirectConversationResult>('/conversations/direct', {
           method: 'POST',
           idempotencyKey,
           body: JSON.stringify({ otherUserId }),
+          signal,
         }),
       );
     },
 
     getOrCreateGameConversation(gameId) {
-      return client.getOrCreateGameConversation(gameId);
+      const idempotencyKey = createMessagingCommandId();
+      return retryMessagingCommand((signal) =>
+        client.request<GetOrCreateGameConversationResult>('/conversations/game', {
+          method: 'POST',
+          idempotencyKey,
+          body: JSON.stringify({ gameId }),
+          signal,
+        }),
+      );
     },
 
     listConversationMessages(conversationId, afterSequence = 0) {
@@ -2074,26 +2107,28 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     sendConversationMessage(conversationId, command) {
-      return retryMessagingCommand(() =>
+      return retryMessagingCommand((signal) =>
         client.request<SendConversationMessageResult>(
           `/conversations/${encodeURIComponent(conversationId)}/messages`,
           {
             method: 'POST',
             idempotencyKey: command.clientMessageId,
             body: JSON.stringify(command),
+            signal,
           },
         ),
       );
     },
 
     markConversationRead(conversationId, throughSequence, idempotencyKey) {
-      return retryMessagingCommand(() =>
+      return retryMessagingCommand((signal) =>
         client.request<ConversationReadCursorResult>(
           `/conversations/${encodeURIComponent(conversationId)}/read-cursor`,
           {
             method: 'PUT',
             idempotencyKey,
             body: JSON.stringify({ throughSequence }),
+            signal,
           },
         ),
       );

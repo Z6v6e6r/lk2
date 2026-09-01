@@ -718,6 +718,35 @@ describe('messaging User API', () => {
     });
   });
 
+  it.each([
+    { label: 'empty', body: '   ' },
+    { label: 'overlong', body: 'x'.repeat(8_001) },
+    { label: 'PostgreSQL NUL', body: 'before\0after' },
+  ])('rejects $label message bodies before repository access', async ({ body }) => {
+    const sendMessage = vi.fn();
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ sendMessage }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/messages`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'invalid-message-command-0001',
+      },
+      payload: { clientMessageId: 'invalid-client-message-0001', body },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'MESSAGE_INVALID' });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it('maps membership denial and idempotency conflict to stable errors', async () => {
     const app = await buildApp({
       config,

@@ -435,6 +435,7 @@ const GAME_CONVERSATION_SELECT = `
     join games.games game
       on game.tenant_id = conversation.tenant_id
      and game.id = conversation.context_id
+     and game.lifecycle_state <> 'CANCELLED'
     join games.participations participation
       on participation.tenant_id = game.tenant_id
      and participation.game_id = game.id
@@ -504,6 +505,7 @@ async function getGameConversation(
        join games.games game
          on game.tenant_id = conversation.tenant_id
         and game.id = conversation.context_id
+        and game.lifecycle_state <> 'CANCELLED'
        join games.participations participation
          on participation.tenant_id = game.tenant_id
         and participation.game_id = game.id
@@ -589,6 +591,13 @@ async function getAuthorizedMember(
             and conversation.context_type = 'GAME'
             and runtime.contextual_enabled
             and 'games.play' = any(current_access.permissions)
+            and exists (
+              select 1
+                from games.games game
+               where game.tenant_id = conversation.tenant_id
+                 and game.id = conversation.context_id
+                 and game.lifecycle_state <> 'CANCELLED'
+            )
             and exists (
               select 1
                 from games.participations participation
@@ -852,7 +861,9 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                on runtime.tenant_id = game.tenant_id
               and runtime.http_enabled
               and runtime.contextual_enabled
-            where game.tenant_id = $1 and game.id = $3`,
+            where game.tenant_id = $1
+              and game.id = $3
+              and game.lifecycle_state <> 'CANCELLED'`,
           [input.tenantId, input.actorUserId, input.gameId],
         );
         if (!game) return { outcome: 'not_found' };
@@ -1094,8 +1105,10 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             client,
             `select id
                from games.games
-              where tenant_id = $1 and id = $2
-              for key share`,
+              where tenant_id = $1
+                and id = $2
+                and lifecycle_state <> 'CANCELLED'
+              for share`,
             [input.tenantId, locked.context_id],
           );
           if (!game) return { outcome: 'not_found' };
@@ -1470,6 +1483,10 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                   and exists (
                     select 1
                       from games.participations participation
+                      join games.games game
+                        on game.tenant_id = participation.tenant_id
+                       and game.id = participation.game_id
+                       and game.lifecycle_state <> 'CANCELLED'
                      where participation.tenant_id = viewer_user.tenant_id
                        and participation.user_id = viewer_user.id
                        and participation.state = 'ACTIVE'
@@ -1599,6 +1616,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                   and conversation.context_type = 'GAME'
                   and settings.contextual_enabled = true
                   and 'games.play' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from games.games game
+                     where game.tenant_id = conversation.tenant_id
+                       and game.id = conversation.context_id
+                       and game.lifecycle_state <> 'CANCELLED'
+                  )
                   and exists (
                     select 1
                       from games.participations participation

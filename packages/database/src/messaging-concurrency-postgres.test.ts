@@ -96,8 +96,8 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
       );
       await client.query(
         `insert into messaging.tenant_runtime_settings (
-           tenant_id, http_enabled, contextual_enabled
-         ) values ($1, true, true)`,
+           tenant_id, http_enabled, realtime_enabled, contextual_enabled
+         ) values ($1, true, true, true)`,
         [seedTenantId],
       );
     });
@@ -222,7 +222,8 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
         grant select on profile.user_summaries, profile.privacy_settings
           to ${disposableRuntimeRole};
         grant select, insert on messaging.tenant_runtime_settings to ${disposableRuntimeRole};
-        grant select on messaging.user_blocks to ${disposableRuntimeRole};
+        grant select on messaging.user_blocks, messaging.direct_conversations
+          to ${disposableRuntimeRole};
         grant select, insert, update on
           messaging.conversations, messaging.conversation_members, messaging.messages
           to ${disposableRuntimeRole};
@@ -292,6 +293,26 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
       await settle(first, second);
       observer.release();
     }
+  });
+
+  it('A2: allocates distinct monotonic sequences for two concurrent GAME sends', async () => {
+    const { conversationId } = await seedGameConversation('distinct-concurrent');
+    const results = await deadline(
+      Promise.all([
+        repository.sendMessage(sendInput(conversationId, 'distinct-concurrent-left')),
+        repository.sendMessage(sendInput(conversationId, 'distinct-concurrent-right')),
+      ]),
+      'A2:distinct-concurrent-sends',
+    );
+    expect(results).toEqual([
+      expect.objectContaining({ outcome: 'ok', replayed: false }),
+      expect.objectContaining({ outcome: 'ok', replayed: false }),
+    ]);
+    const sequences = results.flatMap((result) =>
+      result.outcome === 'ok' ? [result.message.sequence] : [],
+    );
+    expect(sequences.sort((left, right) => left - right)).toEqual([1, 2]);
+    await expect(countMessages([conversationId])).resolves.toBe(2);
   });
 
   it.each([
@@ -372,10 +393,9 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
         true,
       );
       await releaseAdvisoryLock(observer, barrierKey);
-      await expect(deadline(send, 'C:send-completion')).resolves.toMatchObject({
-        outcome: 'ok',
-        replayed: false,
-      });
+      const sent = await deadline(send, 'C:send-completion');
+      expect(sent).toMatchObject({ outcome: 'ok', replayed: false });
+      if (sent.outcome !== 'ok') throw new Error('Revoke-race seed message failed');
       const revoked = await deadline(revoke, 'C:revoke-completion');
       expect(revoked.rowCount).toBe(1);
       await revoker.query('commit');
@@ -387,6 +407,36 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
           'C:post-revoke-send',
         ),
       ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.listMessages({
+          tenantId,
+          userId,
+          conversationId,
+          afterSequence: 0,
+          limit: 100,
+        }),
+      ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.markRead({
+          tenantId,
+          userId,
+          conversationId,
+          throughSequence: 1,
+          idempotencyKey: 'revoked-game-read-command-0001',
+          correlationId: 'revoked-game-read-correlation-0001',
+        }),
+      ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.authorizeRealtimeSubscription({ tenantId, userId, conversationId }),
+      ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.listRealtimeRecipientUserIds({
+          tenantId,
+          conversationId,
+          messageId: sent.message.id,
+          sequence: sent.message.sequence,
+        }),
+      ).resolves.toEqual([]);
       await expect(countMessages([conversationId])).resolves.toBe(1);
     } finally {
       await releaseAdvisoryLock(observer, barrierKey).catch(() => undefined);
@@ -396,6 +446,109 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
       observer.release();
     }
   });
+
+  it('C2: fences cancellation behind an in-flight send and revokes every GAME chat surface', async () => {
+    const { conversationId, gameId } = await seedGameConversation('cancel-race');
+    const input = sendInput(conversationId, 'cancel-race');
+    const observer = await pool.connect();
+    const canceller = await pool.connect();
+    const barrierKey = commandLockKey(input.idempotencyKey);
+    let cancellerInTransaction = false;
+    let send: Promise<SendConversationMessageResult> | undefined;
+    let cancel: Promise<QueryResult> | undefined;
+    try {
+      await holdAdvisoryLock(observer, barrierKey);
+      send = repository.sendMessage(input);
+      const sendWaiters = await waitForLockWaiters(observer, 1, 'C2:send-holds-game');
+      await canceller.query('begin');
+      cancellerInTransaction = true;
+      await canceller.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
+      const cancellerPid = (
+        await canceller.query<{ pid: number }>('select pg_backend_pid() as pid')
+      ).rows[0]?.pid;
+      expect(cancellerPid).toBeTypeOf('number');
+      cancel = canceller.query(
+        `update games.games
+            set lifecycle_state = 'CANCELLED',
+                revision = revision + 1,
+                cancellation_reason_code = 'ORGANIZER_REQUEST',
+                cancelled_by_user_id = $3,
+                cancelled_at = now(),
+                updated_at = now()
+          where tenant_id = $1 and id = $2 and lifecycle_state <> 'CANCELLED'`,
+        [tenantId, gameId, userId],
+      );
+      const waiters = await waitForLockWaiters(observer, 2, 'C2:cancel-blocked-behind-send');
+      expect(waiters.some((row) => row.pid === cancellerPid)).toBe(true);
+      expect(waiters.some((row) => sendWaiters.some((sendRow) => sendRow.pid === row.pid))).toBe(
+        true,
+      );
+
+      await releaseAdvisoryLock(observer, barrierKey);
+      const sent = await deadline(send, 'C2:send-completion');
+      expect(sent).toMatchObject({ outcome: 'ok', replayed: false });
+      if (sent.outcome !== 'ok') throw new Error('Cancel-race seed message failed');
+      const cancelled = await deadline(cancel, 'C2:cancel-completion');
+      expect(cancelled.rowCount).toBe(1);
+      await canceller.query('commit');
+      cancellerInTransaction = false;
+
+      await expect(
+        repository.listConversations({ tenantId, userId, limit: 50 }),
+      ).resolves.not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: conversationId })]),
+      );
+      await expect(
+        repository.getOrCreateGameConversation({
+          tenantId,
+          actorUserId: userId,
+          gameId,
+          idempotencyKey: 'cancelled-game-conversation-command-0001',
+          correlationId: 'cancelled-game-conversation-correlation-0001',
+        }),
+      ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.listMessages({
+          tenantId,
+          userId,
+          conversationId,
+          afterSequence: 0,
+          limit: 100,
+        }),
+      ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.sendMessage(sendInput(conversationId, 'after-canonical-cancel')),
+      ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.markRead({
+          tenantId,
+          userId,
+          conversationId,
+          throughSequence: 1,
+          idempotencyKey: 'cancelled-game-read-command-0001',
+          correlationId: 'cancelled-game-read-correlation-0001',
+        }),
+      ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.authorizeRealtimeSubscription({ tenantId, userId, conversationId }),
+      ).resolves.toEqual({ outcome: 'not_found' });
+      await expect(
+        repository.listRealtimeRecipientUserIds({
+          tenantId,
+          conversationId,
+          messageId: sent.message.id,
+          sequence: sent.message.sequence,
+        }),
+      ).resolves.toEqual([]);
+      await expect(countMessages([conversationId])).resolves.toBe(1);
+    } finally {
+      await releaseAdvisoryLock(observer, barrierKey).catch(() => undefined);
+      await settle(send, cancel);
+      if (cancellerInTransaction) await canceller.query('rollback').catch(() => undefined);
+      canceller.release();
+      observer.release();
+    }
+  }, 15_000);
 
   it('D: enforces forced RLS under a non-owner, non-superuser, non-bypass runtime role', async () => {
     const { conversationId } = await seedGameConversation('forced-rls');

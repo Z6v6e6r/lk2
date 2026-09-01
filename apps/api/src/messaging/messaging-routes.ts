@@ -452,7 +452,8 @@ export function registerMessagingRoutes(
         typeof clientMessageId !== 'string' ||
         !CLIENT_MESSAGE_ID_PATTERN.test(clientMessageId) ||
         normalizedBody.length < 1 ||
-        normalizedBody.length > 8_000
+        normalizedBody.length > 8_000 ||
+        normalizedBody.includes('\0')
       ) {
         return sendApiError(
           request,
