@@ -1,0 +1,153 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
+
+type WorkflowStep = {
+  readonly ['continue-on-error']?: boolean | string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly if?: string;
+  readonly name?: string;
+  readonly run?: string;
+  readonly uses?: string;
+  readonly with?: Readonly<Record<string, boolean | number | string>>;
+};
+
+type WorkflowJob = {
+  readonly ['continue-on-error']?: boolean | string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly if?: string;
+  readonly needs?: string | readonly string[];
+  readonly ['runs-on']?: string;
+  readonly services?: unknown;
+  readonly steps?: readonly WorkflowStep[];
+  readonly ['timeout-minutes']?: number;
+};
+
+type Workflow = {
+  readonly jobs: Readonly<Record<string, WorkflowJob>>;
+};
+
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as {
+  readonly scripts: Readonly<Record<string, string>>;
+};
+const pullRequestWorkflow = parse(
+  readFileSync('.github/workflows/pull-request.yaml', 'utf8'),
+) as Workflow;
+const publicationWorkflow = parse(
+  readFileSync('.github/workflows/publish-timeweb-amd64-images.yaml', 'utf8'),
+) as Workflow;
+
+const canonicalCommand = 'npm run source:quality';
+const canonicalComponents = [
+  'npm run contracts:generate',
+  'npm run format:check',
+  'npm run lint',
+  'npm run typecheck',
+  'npm run contracts:lint',
+  'npm run test:source',
+  'npm run build',
+  'npm run runtime:imports',
+] as const;
+const publicationIdentityCommand = [
+  'set -euo pipefail',
+  'test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"',
+  'test -z "$(git status --porcelain)"',
+  'test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$EXPECTED_SOURCE_SHA"',
+].join('\n');
+
+function commandSteps(job: WorkflowJob | undefined): readonly string[] {
+  return (job?.steps ?? []).flatMap(({ run }) => (run === undefined ? [] : [run]));
+}
+
+describe('exact-main CI and publication source-quality parity', () => {
+  it('keeps the canonical source-quality components ordered and complete', () => {
+    expect(packageJson.scripts['source:quality']).toBe(canonicalComponents.join(' && '));
+    expect(packageJson.scripts['test:source']).toBe('vitest run --maxWorkers=2');
+    expect(packageJson.scripts.check).toBe(canonicalCommand);
+  });
+
+  it('runs the same clean source command in exact-main CI and publication', () => {
+    const ciJob = pullRequestWorkflow.jobs['source-quality'];
+    const publicationJob = publicationWorkflow.jobs['verify-source'];
+    const ciCommands = commandSteps(ciJob);
+    const publicationCommands = commandSteps(publicationJob);
+
+    expect(ciJob?.if).toBe(
+      "${{ needs.ci-plan.result == 'success' && needs.ci-plan.outputs.full_quality == 'true' }}",
+    );
+    expect(ciJob?.['continue-on-error']).toBeUndefined();
+    expect(ciJob?.services).toBeUndefined();
+    expect(ciJob?.env).toBeUndefined();
+    expect(publicationJob?.if).toBeUndefined();
+    expect(publicationJob?.['continue-on-error']).toBeUndefined();
+    expect(publicationJob?.services).toBeUndefined();
+    expect(publicationJob?.env).toBeUndefined();
+    expect(ciJob?.['runs-on']).toBe(publicationJob?.['runs-on']);
+    expect(ciJob?.['timeout-minutes']).toBe(45);
+    expect(ciJob?.['timeout-minutes']).toBe(publicationJob?.['timeout-minutes']);
+    expect(ciCommands).toEqual(['npm ci --ignore-scripts', canonicalCommand]);
+    expect(publicationCommands).toHaveLength(3);
+    expect(publicationCommands[0]?.trimEnd()).toBe(publicationIdentityCommand);
+    expect(publicationCommands.slice(-2)).toEqual(ciCommands);
+    expect(ciCommands.filter((command) => command === canonicalCommand)).toEqual([
+      canonicalCommand,
+    ]);
+    expect(publicationCommands.filter((command) => command === canonicalCommand)).toEqual([
+      canonicalCommand,
+    ]);
+    expect(ciCommands.indexOf('npm ci --ignore-scripts')).toBeLessThan(
+      ciCommands.indexOf(canonicalCommand),
+    );
+    expect(publicationCommands.indexOf('npm ci --ignore-scripts')).toBeLessThan(
+      publicationCommands.indexOf(canonicalCommand),
+    );
+
+    const ciCheckout = ciJob?.steps?.find(({ uses }) => uses?.startsWith('actions/checkout@'));
+    const publicationCheckout = publicationJob?.steps?.find(({ uses }) =>
+      uses?.startsWith('actions/checkout@'),
+    );
+    const ciNode = ciJob?.steps?.find(({ uses }) => uses?.startsWith('actions/setup-node@'));
+    const publicationNode = publicationJob?.steps?.find(({ uses }) =>
+      uses?.startsWith('actions/setup-node@'),
+    );
+
+    expect(ciCheckout?.uses).toBe(publicationCheckout?.uses);
+    expect(ciCheckout?.with).toMatchObject({
+      'fetch-depth': 0,
+      'persist-credentials': false,
+    });
+    expect(publicationCheckout?.with).toMatchObject({
+      'fetch-depth': 0,
+      'persist-credentials': false,
+    });
+    expect(ciNode).toEqual(publicationNode);
+    for (const step of [
+      ...(ciJob?.steps?.slice(-2) ?? []),
+      ...(publicationJob?.steps?.slice(-2) ?? []),
+    ]) {
+      expect(step.env).toBeUndefined();
+      expect(step.if).toBeUndefined();
+      expect(step['continue-on-error']).toBeUndefined();
+    }
+  });
+
+  it('makes publication side effects depend on the canonical source gate', () => {
+    const publishJob = publicationWorkflow.jobs['build-and-publish'];
+    const needs = Array.isArray(publishJob?.needs) ? publishJob.needs : [publishJob?.needs];
+
+    expect(needs).toEqual(['validate-request', 'verify-source']);
+    expect(publishJob?.if).toBe("${{ inputs.operation == 'publish' }}");
+    expect(publishJob?.['continue-on-error']).toBeUndefined();
+  });
+
+  it('makes the publication-equivalent source result part of the stable quality gate', () => {
+    const qualityJob = pullRequestWorkflow.jobs.quality;
+    const needs = Array.isArray(qualityJob?.needs) ? qualityJob.needs : [qualityJob?.needs];
+    const aggregateStep = qualityJob?.steps?.find(
+      ({ name }) => name === 'Require the planned quality closure',
+    );
+
+    expect(needs).toContain('source-quality');
+    expect(aggregateStep?.env?.SOURCE_RESULT).toBe('${{ needs.source-quality.result }}');
+  });
+});
