@@ -22,7 +22,7 @@ import {
 import { runTimewebBrowserSmoke } from './timeweb-beta-browser-smoke.js';
 import { verifyDeploymentContract } from './verify-timeweb-deployment-contract.js';
 
-interface Options {
+export interface Options {
   readonly contractOnly: boolean;
   readonly skipBrowser: boolean;
   readonly manifestDirectory?: string;
@@ -37,7 +37,7 @@ interface Options {
   readonly expectedPreviousManifestChecksum?: string;
 }
 
-function parseArguments(argv: readonly string[]): Options {
+export function parseTimewebBetaCandidateArguments(argv: readonly string[]): Options {
   let contractOnly = false;
   let skipBrowser = false;
   let manifestDirectory: string | undefined;
@@ -108,6 +108,10 @@ function parseArguments(argv: readonly string[]): Options {
   }
   if (previousManifestDirectory && !manifestDirectory)
     throw new Error('--previous-manifest-dir requires an exact candidate manifest');
+  if (!contractOnly && !manifestDirectory)
+    throw new Error('full rehearsal requires an exact verified candidate manifest');
+  if (!contractOnly && !previousManifestDirectory)
+    throw new Error('full rehearsal requires a distinct verified previous candidate manifest');
   return {
     contractOnly,
     skipBrowser,
@@ -211,22 +215,15 @@ function writeSyntheticEnvironments(root: string): void {
   }
 }
 
-function imageNames(sourceSha: string, candidate?: CandidateIdentity): Record<string, string> {
-  if (candidate) {
-    return {
-      web: candidate.images.web,
-      api: candidate.images.api,
-      worker: candidate.images.worker,
-      migrator: candidate.images.migrator,
-      proxy: `phub-timeweb-rehearsal-proxy:${sourceSha.slice(0, 12)}`,
-    };
-  }
-  return Object.fromEntries(
-    ['web', 'api', 'worker', 'migrator', 'proxy'].map((component) => [
-      component,
-      `phub-timeweb-rehearsal-${component}:${sourceSha.slice(0, 12)}`,
-    ]),
-  );
+function imageNames(sourceSha: string, candidate: CandidateIdentity): Record<string, string> {
+  return {
+    web: candidate.images.web,
+    api: candidate.images.api,
+    realtime: candidate.images.realtime,
+    worker: candidate.images.worker,
+    migrator: candidate.images.migrator,
+    proxy: `phub-timeweb-rehearsal-proxy:${sourceSha.slice(0, 12)}`,
+  };
 }
 
 function composeEnvironment(input: {
@@ -246,6 +243,7 @@ function composeEnvironment(input: {
     TIMEWEB_REHEARSAL_RELEASE_ID: input.releaseId,
     TIMEWEB_REHEARSAL_WEB_IMAGE: input.images.web,
     TIMEWEB_REHEARSAL_API_IMAGE: input.images.api,
+    TIMEWEB_REHEARSAL_REALTIME_IMAGE: input.images.realtime,
     TIMEWEB_REHEARSAL_WORKER_IMAGE: input.images.worker,
     TIMEWEB_REHEARSAL_MIGRATOR_IMAGE: input.images.migrator,
     TIMEWEB_REHEARSAL_PROXY_IMAGE: input.images.proxy,
@@ -301,7 +299,7 @@ function runtimeSnapshots(
   compose: readonly string[],
   environment: NodeJS.ProcessEnv,
 ): RuntimeComponentSnapshot[] {
-  return (['web', 'api', 'worker'] as const).map((component) => {
+  return (['web', 'api', 'realtime', 'worker'] as const).map((component) => {
     const inspection = inspectContainer(containerId(compose, environment, component));
     return {
       component,
@@ -370,6 +368,12 @@ async function verifyHttp(baseUrl: string): Promise<void> {
   const web = await fetch(new URL('/', baseUrl));
   if (web.status !== 200 || !(await web.text()).includes('phub-app'))
     throw new Error('Web root through rehearsal proxy failed');
+  const realtime = await fetch(new URL('/realtime/health/ready', baseUrl));
+  if (
+    realtime.status !== 200 ||
+    ((await realtime.json()) as { status?: string }).status !== 'ready'
+  )
+    throw new Error('Realtime readiness through rehearsal proxy failed');
   const boundary = await fetch(new URL('/public/api/v1/__smoke_invalid__/games', baseUrl));
   const body = (await boundary.json()) as { code?: string };
   if (boundary.status !== 400 || body.code !== 'TENANT_KEY_INVALID')
@@ -377,7 +381,7 @@ async function verifyHttp(baseUrl: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const options = parseArguments(process.argv.slice(2));
+  const options = parseTimewebBetaCandidateArguments(process.argv.slice(2));
   const contracts = loadTimewebRuntimeContracts();
   buildSyntheticRuntimeEnvironments(contracts);
   verifyDeploymentContract();
@@ -386,37 +390,32 @@ async function main(): Promise<void> {
     return;
   }
 
+  const manifestDirectory = options.manifestDirectory!;
+  const previousManifestDirectory = options.previousManifestDirectory!;
   assertLocalDockerEndpoint();
   if (git('status', '--porcelain') !== '') {
     throw new Error('full rehearsal requires a clean candidate worktree');
   }
-  const headSha = git('rev-parse', 'HEAD');
-  const headTree = git('rev-parse', 'HEAD^{tree}');
-  const sourceSha = options.expectedSourceSha ?? headSha;
-  const sourceTree = options.expectedSourceTree ?? headTree;
-  const candidate = options.manifestDirectory
-    ? readCandidateArtifact(join(options.manifestDirectory, 'release-manifest.json'), {
-        sourceSha,
-        sourceTree,
-        publicationRunId: options.expectedPublicationRunId!,
-        manifestSha256: options.expectedManifestChecksum!,
-      })
-    : undefined;
-  const previousCandidate = options.previousManifestDirectory
-    ? readCandidateArtifact(join(options.previousManifestDirectory, 'release-manifest.json'), {
-        sourceSha: options.expectedPreviousSourceSha!,
-        sourceTree: options.expectedPreviousSourceTree!,
-        publicationRunId: options.expectedPreviousPublicationRunId!,
-        manifestSha256: options.expectedPreviousManifestChecksum!,
-      })
-    : undefined;
-  if (candidate && previousCandidate) assertDistinctCandidatePair(candidate, previousCandidate);
-  const releaseId = candidate
-    ? `${candidate.sourceSha}-${candidate.runId}-${candidate.runAttempt}`
-    : `${sourceSha}-local-1`;
-  const previousReleaseId = previousCandidate
-    ? `${previousCandidate.sourceSha}-${previousCandidate.runId}-${previousCandidate.runAttempt}`
-    : `${git('rev-parse', `${sourceSha}^`)}-control-plane-fixture`;
+  const sourceSha = options.expectedSourceSha!;
+  const sourceTree = options.expectedSourceTree!;
+  const candidate = readCandidateArtifact(join(manifestDirectory, 'release-manifest.json'), {
+    sourceSha,
+    sourceTree,
+    publicationRunId: options.expectedPublicationRunId!,
+    manifestSha256: options.expectedManifestChecksum!,
+  });
+  const previousCandidate = readCandidateArtifact(
+    join(previousManifestDirectory, 'release-manifest.json'),
+    {
+      sourceSha: options.expectedPreviousSourceSha!,
+      sourceTree: options.expectedPreviousSourceTree!,
+      publicationRunId: options.expectedPreviousPublicationRunId!,
+      manifestSha256: options.expectedPreviousManifestChecksum!,
+    },
+  );
+  assertDistinctCandidatePair(candidate, previousCandidate);
+  const releaseId = `${candidate.sourceSha}-${candidate.runId}-${candidate.runAttempt}`;
+  const previousReleaseId = `${previousCandidate.sourceSha}-${previousCandidate.runId}-${previousCandidate.runAttempt}`;
   assertForwardOnlyRollback({
     candidateReleaseId: releaseId,
     previousReleaseId,
@@ -437,9 +436,10 @@ async function main(): Promise<void> {
       `phub-tw-rehearsal-${process.pid.toString(36)}-${Date.now().toString(36)}`,
     );
     const images = imageNames(sourceSha, candidate);
-    const previousImages = previousCandidate
-      ? { ...imageNames(previousCandidate.sourceSha, previousCandidate), proxy: images.proxy! }
-      : images;
+    const previousImages: Record<string, string> = {
+      ...imageNames(previousCandidate.sourceSha, previousCandidate),
+      proxy: images.proxy!,
+    };
     const composeFile = resolve('deploy/timeweb/compose.rehearsal.yaml');
     const compose = [
       'compose',
@@ -479,27 +479,21 @@ async function main(): Promise<void> {
     });
 
     run('docker', [...compose, 'config', '--quiet'], { environment });
-    if (candidate) {
-      run('docker', [...compose, 'build', 'proxy'], { environment });
-      run('docker', [...compose, 'pull', 'api', 'worker', 'web', 'migrator'], { environment });
-      if (previousCandidate) {
-        const previousPullEnvironment = composeEnvironment({
-          project,
-          envRoot,
-          sourceSha: previousCandidate.sourceSha,
-          sourceTree: previousCandidate.sourceTree,
-          releaseId: previousReleaseId,
-          images: previousImages,
-        });
-        run('docker', [...compose, 'pull', 'api', 'worker', 'web', 'migrator'], {
-          environment: previousPullEnvironment,
-        });
-      }
-    } else {
-      run('docker', [...compose, 'build', 'api', 'worker', 'web', 'migrator', 'proxy'], {
-        environment,
-      });
-    }
+    run('docker', [...compose, 'build', 'proxy'], { environment });
+    run('docker', [...compose, 'pull', 'api', 'realtime', 'worker', 'web', 'migrator'], {
+      environment,
+    });
+    const previousPullEnvironment = composeEnvironment({
+      project,
+      envRoot,
+      sourceSha: previousCandidate.sourceSha,
+      sourceTree: previousCandidate.sourceTree,
+      releaseId: previousReleaseId,
+      images: previousImages,
+    });
+    run('docker', [...compose, 'pull', 'api', 'realtime', 'worker', 'web', 'migrator'], {
+      environment: previousPullEnvironment,
+    });
 
     run('docker', [...compose, 'up', '-d', '--no-deps', 'api'], { environment });
     await new Promise((resolve) => setTimeout(resolve, 5_000));
@@ -546,56 +540,36 @@ async function main(): Promise<void> {
 
     const previousDatabaseUrl =
       'postgresql://phub:synthetic-rehearsal-postgres@postgres:5432/phub_previous';
-    if (previousCandidate) {
-      const previousEnvironment = composeEnvironment({
-        project,
-        envRoot,
-        sourceSha: previousCandidate.sourceSha,
-        sourceTree: previousCandidate.sourceTree,
-        releaseId: previousReleaseId,
-        images: previousImages,
-      });
-      const previousMigration = run(
-        'docker',
-        [
-          ...compose,
-          'run',
-          '--rm',
-          '-T',
-          '-e',
-          `DATABASE_URL=${previousDatabaseUrl}`,
-          '-e',
-          `CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=${TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK}`,
-          'migrator',
-        ],
-        { environment: previousEnvironment, capture: true },
-      );
-      if (!previousMigration.includes('Applied '))
-        throw new Error('exact previous migrator applied nothing to the isolated empty database');
-    } else {
-      run(
-        'docker',
-        [
-          ...compose,
-          'run',
-          '--rm',
-          '-T',
-          '-e',
-          `DATABASE_URL=${previousDatabaseUrl}`,
-          'migrator',
-          'node',
-          'scripts/timeweb-beta-prepare-previous-schema.js',
-        ],
-        { environment },
-      );
-    }
-    const previousUpgrade = run(
+    const previousEnvironment = composeEnvironment({
+      project,
+      envRoot,
+      sourceSha: previousCandidate.sourceSha,
+      sourceTree: previousCandidate.sourceTree,
+      releaseId: previousReleaseId,
+      images: previousImages,
+    });
+    const previousMigration = run(
+      'docker',
+      [
+        ...compose,
+        'run',
+        '--rm',
+        '-T',
+        '-e',
+        `DATABASE_URL=${previousDatabaseUrl}`,
+        '-e',
+        `CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=${TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK}`,
+        'migrator',
+      ],
+      { environment: previousEnvironment, capture: true },
+    );
+    if (!previousMigration.includes('Applied '))
+      throw new Error('exact previous migrator applied nothing to the isolated empty database');
+    run(
       'docker',
       [...compose, 'run', '--rm', '-T', '-e', `DATABASE_URL=${previousDatabaseUrl}`, 'migrator'],
       { environment, capture: true },
     );
-    if (!previousCandidate && !previousUpgrade.includes('Applied '))
-      throw new Error('synthetic HEAD-minus-one schema did not advance to HEAD');
     const upgradedPreviousLedger = ledgerSnapshot(compose, environment, 'phub_previous');
     assertSameLedger(upgradedPreviousLedger, candidateLedger, 'previous-to-candidate upgrade');
     const upgradedPreviousNoOp = run(
@@ -611,7 +585,7 @@ async function main(): Promise<void> {
       'upgraded previous database second no-op',
     );
 
-    run('docker', [...compose, 'up', '-d', '--wait', '--wait-timeout', '180', 'api'], {
+    run('docker', [...compose, 'up', '-d', '--wait', '--wait-timeout', '180', 'api', 'realtime'], {
       environment,
     });
     const runningBeforeWorker = run(
@@ -637,7 +611,12 @@ async function main(): Promise<void> {
       releaseId,
       sourceSha,
       sourceTree,
-      images: { web: images.web!, api: images.api!, worker: images.worker! },
+      images: {
+        web: images.web!,
+        api: images.api!,
+        realtime: images.realtime!,
+        worker: images.worker!,
+      },
     });
 
     const proxyPort = run('docker', [...compose, 'port', 'proxy', '8080'], {
@@ -658,19 +637,22 @@ async function main(): Promise<void> {
       process.stdout.write('BROWSER_SMOKE=SKIPPED\n');
     }
 
-    const apiId = containerId(compose, environment, 'api');
-    const workerId = containerId(compose, environment, 'worker');
-    const startsBeforeRestart = {
-      api: inspectContainer(apiId).State.StartedAt,
-      worker: inspectContainer(workerId).State.StartedAt,
-    };
-    run('docker', [...compose, 'restart', 'api', 'worker'], { environment });
-    await Promise.all([waitForHealthy(apiId), waitForHealthy(workerId)]);
-    if (
-      inspectContainer(apiId).State.StartedAt === startsBeforeRestart.api ||
-      inspectContainer(workerId).State.StartedAt === startsBeforeRestart.worker
-    )
-      throw new Error('restart timestamps did not advance');
+    const runtimeServices = ['api', 'realtime', 'worker', 'web', 'proxy'] as const;
+    const runtimeIds = Object.fromEntries(
+      runtimeServices.map((service) => [service, containerId(compose, environment, service)]),
+    ) as Record<(typeof runtimeServices)[number], string>;
+    const startsBeforeRestart = Object.fromEntries(
+      runtimeServices.map((service) => [
+        service,
+        inspectContainer(runtimeIds[service]).State.StartedAt,
+      ]),
+    ) as Record<(typeof runtimeServices)[number], string>;
+    run('docker', [...compose, 'restart', ...runtimeServices], { environment });
+    await Promise.all(runtimeServices.map((service) => waitForHealthy(runtimeIds[service])));
+    for (const service of runtimeServices) {
+      if (inspectContainer(runtimeIds[service]).State.StartedAt === startsBeforeRestart[service])
+        throw new Error(`restart timestamp did not advance for ${service}`);
+    }
     await verifyHttp(baseUrl);
 
     const idsBeforeSecondStart = {
@@ -678,13 +660,26 @@ async function main(): Promise<void> {
       redis: containerId(compose, environment, 'redis'),
       rabbitmq: containerId(compose, environment, 'rabbitmq'),
       api: containerId(compose, environment, 'api'),
+      realtime: containerId(compose, environment, 'realtime'),
       worker: containerId(compose, environment, 'worker'),
       web: containerId(compose, environment, 'web'),
       proxy: containerId(compose, environment, 'proxy'),
     };
     run(
       'docker',
-      [...compose, 'up', '-d', '--wait', '--wait-timeout', '180', 'api', 'worker', 'web', 'proxy'],
+      [
+        ...compose,
+        'up',
+        '-d',
+        '--wait',
+        '--wait-timeout',
+        '180',
+        'api',
+        'realtime',
+        'worker',
+        'web',
+        'proxy',
+      ],
       {
         environment,
       },
@@ -694,44 +689,57 @@ async function main(): Promise<void> {
         throw new Error(`second start recreated ${service}`);
     }
 
-    run('docker', [...compose, 'stop', '-t', '60', 'worker', 'api'], { environment });
-    for (const id of [workerId, apiId]) {
-      const state = inspectContainer(id).State;
-      if (state.Running || state.ExitCode !== 0) throw new Error('graceful stop failed');
+    run('docker', [...compose, 'stop', '-t', '60', ...runtimeServices], { environment });
+    for (const service of runtimeServices) {
+      const state = inspectContainer(runtimeIds[service]).State;
+      if (state.Running || state.ExitCode !== 0)
+        throw new Error(`graceful stop failed for ${service}`);
     }
-    run('docker', [...compose, 'up', '-d', '--wait', '--wait-timeout', '180', 'api', 'worker'], {
+    run('docker', [...compose, 'up', '-d', '--wait', '--wait-timeout', '180', ...runtimeServices], {
       environment,
     });
 
     const ledgerBeforeRollback = ledgerSnapshot(compose, environment);
-    run('docker', [...compose, 'stop', '-t', '60', 'worker'], { environment });
+    run('docker', [...compose, 'stop', '-t', '60', 'worker', 'realtime'], { environment });
     const rollbackEnvironment = composeEnvironment({
       project,
       envRoot,
-      sourceSha: previousCandidate?.sourceSha ?? sourceSha,
-      sourceTree: previousCandidate?.sourceTree ?? sourceTree,
+      sourceSha: previousCandidate.sourceSha,
+      sourceTree: previousCandidate.sourceTree,
       releaseId: previousReleaseId,
       images: previousImages,
     });
     run(
       'docker',
-      [...compose, 'up', '-d', '--force-recreate', '--no-deps', 'api', 'worker', 'web', 'proxy'],
+      [
+        ...compose,
+        'up',
+        '-d',
+        '--force-recreate',
+        '--no-deps',
+        'api',
+        'realtime',
+        'worker',
+        'web',
+        'proxy',
+      ],
       {
         environment: rollbackEnvironment,
       },
     );
     await Promise.all(
-      ['api', 'worker', 'web', 'proxy'].map((service) =>
+      ['api', 'realtime', 'worker', 'web', 'proxy'].map((service) =>
         waitForHealthy(containerId(compose, rollbackEnvironment, service)),
       ),
     );
     assertRuntimeSnapshot(runtimeSnapshots(compose, rollbackEnvironment), {
       releaseId: previousReleaseId,
-      sourceSha: previousCandidate?.sourceSha ?? sourceSha,
-      sourceTree: previousCandidate?.sourceTree ?? sourceTree,
+      sourceSha: previousCandidate.sourceSha,
+      sourceTree: previousCandidate.sourceTree,
       images: {
         web: previousImages.web!,
         api: previousImages.api!,
+        realtime: previousImages.realtime!,
         worker: previousImages.worker!,
       },
     });
@@ -750,28 +758,29 @@ async function main(): Promise<void> {
 
     process.stdout.write(`CANDIDATE_SOURCE_SHA=${sourceSha}\n`);
     process.stdout.write(`CANDIDATE_SOURCE_TREE=${sourceTree}\n`);
-    process.stdout.write(
-      `IMMUTABLE_CANDIDATE=${candidate ? 'VERIFIED_WITH_CALLER_FROZEN_PUBLICATION_EVIDENCE' : 'UNVERIFIED_LOCAL_SOURCE'}\n`,
-    );
-    if (candidate) {
-      process.stdout.write(`PUBLICATION_RUN_ID=${candidate.runId}\n`);
-      process.stdout.write(`MANIFEST_SHA256=${candidate.manifestSha256}\n`);
-    }
+    process.stdout.write('IMMUTABLE_CANDIDATE=VERIFIED_WITH_CALLER_FROZEN_PUBLICATION_EVIDENCE\n');
+    process.stdout.write(`PUBLICATION_RUN_ID=${candidate.runId}\n`);
+    process.stdout.write(`MANIFEST_SHA256=${candidate.manifestSha256}\n`);
+    process.stdout.write(`PREVIOUS_PUBLICATION_RUN_ID=${previousCandidate.runId}\n`);
+    process.stdout.write(`PREVIOUS_MANIFEST_SHA256=${previousCandidate.manifestSha256}\n`);
     process.stdout.write('LOCAL_RELEASE_REHEARSAL=PASS\n');
-    process.stdout.write(
-      `MIGRATION_REHEARSAL=${previousCandidate ? 'PASS_EXACT_PREVIOUS_MIGRATOR' : 'PASS_SYNTHETIC_HEAD_MINUS_ONE'}\n`,
-    );
+    process.stdout.write('RELEASE_REHEARSAL=PASS\n');
+    process.stdout.write('EMPTY_DB=PASS\n');
+    process.stdout.write('PREVIOUS_SCHEMA=PASS\n');
+    process.stdout.write('SECOND_MIGRATION_NOOP=PASS\n');
+    process.stdout.write('MIGRATION_REHEARSAL=PASS_EXACT_PREVIOUS_MIGRATOR\n');
     process.stdout.write('RESTART_REHEARSAL=PASS\n');
+    process.stdout.write('RESTART=PASS\n');
     process.stdout.write('SECOND_START_IDEMPOTENCY=PASS\n');
     process.stdout.write('GRACEFUL_STOP=PASS\n');
-    process.stdout.write(
-      `ROLLBACK_REHEARSAL=${previousCandidate ? 'PASS_EXACT_PREVIOUS_BINARIES' : 'UNVERIFIED_PREVIOUS_BINARIES'}\n`,
-    );
+    process.stdout.write('ROLLBACK_REHEARSAL=PASS\n');
+    process.stdout.write('ROLLBACK_BINARIES=PASS_EXACT_PREVIOUS_BINARIES\n');
     process.stdout.write('ROLLBACK_DATABASE_MODE=FORWARD_ONLY\n');
-    process.stdout.write(
-      `ROLLBACK_CONTROL_PLANE_FIXTURE=${previousCandidate ? 'NOT_APPLICABLE' : 'PASS_SAME_BINARIES_DIFFERENT_IDENTITY'}\n`,
-    );
+    process.stdout.write(`READ_ONLY_BROWSER_SMOKE=${options.skipBrowser ? 'SKIPPED' : 'PASS'}\n`);
     process.stdout.write('ONE_COMMAND_SMOKE=PASS\n');
+    process.stdout.write(
+      `ONE_COMMAND_GATE=${options.skipBrowser ? 'INCOMPLETE_BROWSER_SKIPPED' : 'READY'}\n`,
+    );
     process.stdout.write('BROWSER_SMOKE_AUTOMATION=READY\n');
   } catch (error) {
     primaryFailure = error;
@@ -802,8 +811,10 @@ async function main(): Promise<void> {
   if (cleanupFailure) throw cleanupFailure;
 }
 
-main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`TIMEWEB_BETA_CANDIDATE=FAIL|reason=${message.replaceAll('\n', ' ')}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1]?.endsWith('/test-timeweb-beta-candidate.ts')) {
+  main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`TIMEWEB_BETA_CANDIDATE=FAIL|reason=${message.replaceAll('\n', ' ')}\n`);
+    process.exitCode = 1;
+  });
+}

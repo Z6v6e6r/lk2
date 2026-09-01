@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 import { CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_ACK } from '@phub/database';
 
@@ -10,10 +14,18 @@ import {
   buildSyntheticRuntimeEnvironments,
   classifyWriteAttempt,
   loadTimewebRuntimeContracts,
+  readCandidateArtifact,
   serializeEnvironment,
   TIMEWEB_EMPTY_DATABASE_MIGRATION_ACK,
   TIMEWEB_COMPONENTS,
 } from './timeweb-beta-candidate-contract.js';
+import {
+  canonicalManifest,
+  runId as fixtureRunId,
+  sourceSha as fixtureSourceSha,
+  sourceTree as fixtureSourceTree,
+  writeCanonicalPair,
+} from './timeweb-beta-activation-inputs.fixture.js';
 import { validateRuntimeEnvironments } from './verify-timeweb-deployment-contract.js';
 
 const sourceSha = '1'.repeat(40);
@@ -75,6 +87,19 @@ describe('Timeweb beta candidate contract', () => {
     expect(() => assertDistinctCandidatePair(candidate, previous)).toThrow(
       'previous_candidate_web_image_not_distinct',
     );
+
+    const distinctImages = Object.fromEntries(
+      TIMEWEB_COMPONENTS.map((component, index) => [
+        component,
+        `ghcr.io/z6v6e6r/phub-${component}@sha256:${String((index + 6) % 10).repeat(64)}`,
+      ]),
+    ) as Record<(typeof TIMEWEB_COMPONENTS)[number], string>;
+    expect(() =>
+      assertDistinctCandidatePair(candidate, {
+        ...previous,
+        images: { ...distinctImages, realtime: candidate.images.realtime },
+      }),
+    ).toThrow('previous_candidate_realtime_image_not_distinct');
   });
 
   it.each([
@@ -97,6 +122,10 @@ describe('Timeweb beta candidate contract', () => {
           'sha256:not-a-digest'),
     ],
     [
+      'missing component',
+      (value: Record<string, unknown>) => (value.images as Record<string, unknown>[]).pop(),
+    ],
+    [
       'wrong image source',
       (value: Record<string, unknown>) =>
         (((value.images as Record<string, unknown>[])[0] as Record<string, unknown>).revision =
@@ -114,6 +143,26 @@ describe('Timeweb beta candidate contract', () => {
     expect(() =>
       assertCandidateIdentity(value, { sourceSha, sourceTree, publicationRunId }),
     ).toThrow();
+  });
+
+  it('rejects a different valid digest against the caller-frozen manifest checksum', () => {
+    const root = mkdtempSync(join(tmpdir(), 'timeweb-candidate-contract-'));
+    try {
+      const frozen = writeCanonicalPair(join(root, 'frozen'));
+      const changed = canonicalManifest();
+      changed.images[0]!.digest = `sha256:${'f'.repeat(64)}`;
+      const changedPair = writeCanonicalPair(join(root, 'changed'), changed);
+      expect(() =>
+        readCandidateArtifact(changedPair.manifestPath, {
+          sourceSha: fixtureSourceSha,
+          sourceTree: fixtureSourceTree,
+          publicationRunId: fixtureRunId,
+          manifestSha256: frozen.checksum,
+        }),
+      ).toThrow('manifest_expected_checksum_mismatch');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('builds a complete synthetic environment with every write capability off', () => {
@@ -169,7 +218,7 @@ describe('Timeweb beta candidate contract', () => {
   });
 
   it('binds every running component to exact image, source, tree and release labels', () => {
-    const snapshots = (['web', 'api', 'worker'] as const).map((component) => ({
+    const snapshots = (['web', 'api', 'realtime', 'worker'] as const).map((component) => ({
       component,
       configuredImage: `local/${component}:candidate`,
       healthy: true,

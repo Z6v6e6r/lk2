@@ -109,6 +109,41 @@ services:
     restart: unless-stopped
     labels: *candidate-labels
 
+  realtime:
+    image: ${TIMEWEB_REHEARSAL_REALTIME_IMAGE:?TIMEWEB_REHEARSAL_REALTIME_IMAGE is required}
+    platform: linux/amd64
+    build:
+      <<: *candidate-build
+      target: runtime
+    command: ['node', 'apps/realtime/dist/main.js']
+    env_file:
+      - path: ${TIMEWEB_REHEARSAL_ENV_ROOT:?TIMEWEB_REHEARSAL_ENV_ROOT is required}/realtime.env
+        required: true
+    environment:
+      RELEASE: ${TIMEWEB_REHEARSAL_RELEASE_ID:?TIMEWEB_REHEARSAL_RELEASE_ID is required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    stop_grace_period: 60s
+    restart: unless-stopped
+    labels: *candidate-labels
+
   worker:
     image: ${TIMEWEB_REHEARSAL_WORKER_IMAGE:?TIMEWEB_REHEARSAL_WORKER_IMAGE is required}
     platform: linux/amd64
@@ -170,6 +205,8 @@ services:
       - '127.0.0.1::8080'
     depends_on:
       api:
+        condition: service_healthy
+      realtime:
         condition: service_healthy
       web:
         condition: service_healthy

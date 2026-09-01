@@ -38,7 +38,6 @@ COPY --from=build /workspace/apps ./apps
 COPY --from=build /workspace/packages ./packages
 COPY --from=build /workspace/node_modules ./node_modules
 COPY --from=build /workspace/packages/database/migrations ./migrations
-COPY --from=build /workspace/scripts/timeweb-beta-prepare-previous-schema.js ./scripts/timeweb-beta-prepare-previous-schema.js
 
 RUN npm prune --omit=dev --workspaces
 

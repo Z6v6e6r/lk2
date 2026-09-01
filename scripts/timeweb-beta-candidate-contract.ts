@@ -70,7 +70,7 @@ export function assertDistinctCandidatePair(
 ): void {
   if (candidate.sourceSha === previous.sourceSha || candidate.sourceTree === previous.sourceTree)
     reject('previous_candidate_source_not_distinct');
-  for (const component of ['web', 'api', 'worker', 'migrator'] as const) {
+  for (const component of TIMEWEB_COMPONENTS) {
     if (candidate.images[component] === previous.images[component])
       reject(`previous_candidate_${component}_image_not_distinct`);
   }
@@ -285,7 +285,7 @@ export function assertRehearsalProjectName(value: string): string {
 }
 
 export interface RuntimeComponentSnapshot {
-  readonly component: 'web' | 'api' | 'worker';
+  readonly component: 'web' | 'api' | 'realtime' | 'worker';
   readonly configuredImage: string;
   readonly labels: Readonly<Record<string, string>>;
   readonly healthy: boolean;
@@ -297,10 +297,10 @@ export function assertRuntimeSnapshot(
     readonly releaseId: string;
     readonly sourceSha: string;
     readonly sourceTree: string;
-    readonly images: Readonly<Partial<Record<'web' | 'api' | 'worker', string>>>;
+    readonly images: Readonly<Partial<Record<'web' | 'api' | 'realtime' | 'worker', string>>>;
   },
 ): void {
-  const expectedComponents = ['web', 'api', 'worker'] as const;
+  const expectedComponents = ['web', 'api', 'realtime', 'worker'] as const;
   if (
     snapshots.length !== expectedComponents.length ||
     new Set(snapshots.map(({ component }) => component)).size !== expectedComponents.length
