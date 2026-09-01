@@ -123,5 +123,8 @@ describe('Timeweb beta candidate rehearsal wiring', () => {
     expect(candidateHarness).toContain("await waitFor('rehearsal HTTP readiness'");
     expect(candidateHarness.match(/await waitForHttp\(/gu)).toHaveLength(3);
     expect(candidateHarness).not.toContain('await verifyHttp(');
+    expect(candidateHarness).toContain(
+      'const restartedBaseUrl = proxyBaseUrl(compose, environment)',
+    );
   });
 });

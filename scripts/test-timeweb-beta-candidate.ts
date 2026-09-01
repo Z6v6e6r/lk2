@@ -397,6 +397,16 @@ async function waitForHttp(baseUrl: string): Promise<void> {
   }
 }
 
+function proxyBaseUrl(compose: readonly string[], environment: NodeJS.ProcessEnv): string {
+  const proxyPort = run('docker', [...compose, 'port', 'proxy', '8080'], {
+    environment,
+    capture: true,
+  });
+  if (!/^127\.0\.0\.1:[1-9][0-9]*$/u.test(proxyPort))
+    throw new Error(`invalid dynamic proxy port: ${proxyPort}`);
+  return `http://${proxyPort}`;
+}
+
 async function main(): Promise<void> {
   const options = parseTimewebBetaCandidateArguments(process.argv.slice(2));
   const contracts = loadTimewebRuntimeContracts();
@@ -636,14 +646,9 @@ async function main(): Promise<void> {
       },
     });
 
-    const proxyPort = run('docker', [...compose, 'port', 'proxy', '8080'], {
-      environment,
-      capture: true,
-    });
-    if (!/^127\.0\.0\.1:[1-9][0-9]*$/u.test(proxyPort))
-      throw new Error(`invalid dynamic proxy port: ${proxyPort}`);
-    const baseUrl = `http://${proxyPort}`;
-    await waitForHttp(baseUrl);
+    const baseUrl = proxyBaseUrl(compose, environment);
+    const restartedBaseUrl = proxyBaseUrl(compose, environment);
+    await waitForHttp(restartedBaseUrl);
     if (!options.skipBrowser) {
       const counters = await runTimewebBrowserSmoke(baseUrl);
       for (const [key, value] of Object.entries(counters)) {
@@ -765,13 +770,7 @@ async function main(): Promise<void> {
       ledgerBeforeRollback,
       'forward-only application rollback',
     );
-    const rollbackPort = run('docker', [...compose, 'port', 'proxy', '8080'], {
-      environment: rollbackEnvironment,
-      capture: true,
-    });
-    if (!/^127\.0\.0\.1:[1-9][0-9]*$/u.test(rollbackPort))
-      throw new Error(`invalid rollback proxy port: ${rollbackPort}`);
-    await waitForHttp(`http://${rollbackPort}`);
+    await waitForHttp(proxyBaseUrl(compose, rollbackEnvironment));
 
     process.stdout.write(`CANDIDATE_SOURCE_SHA=${sourceSha}\n`);
     process.stdout.write(`CANDIDATE_SOURCE_TREE=${sourceTree}\n`);
