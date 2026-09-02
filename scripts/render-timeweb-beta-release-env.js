@@ -47,6 +47,7 @@ const GITHUB_CREDENTIAL_CONTRACT_PATH = new URL(
 const RELEASE_ROOT = '/opt/phub/timeweb-beta/releases';
 const RUNTIME_ENV_ROOT = '/etc/phub/timeweb-beta';
 const RUN_EVIDENCE_NAME = 'canonical-run-evidence.json';
+const CANONICAL_ARTIFACT_ARCHIVE_NAME = 'canonical-artifact.zip';
 const GITHUB_API_ROOT = 'https://api.github.com';
 const GITHUB_REPOSITORY = 'Z6v6e6r/lk2';
 const GITHUB_OWNER = 'Z6v6e6r';
@@ -236,7 +237,13 @@ function readSecureRegularFile(
   }
 }
 
-function assertRootOwnedParentChain(path, expectedUid, expectedGid, allowTestIdentity) {
+function assertRootOwnedParentChain(
+  path,
+  expectedUid,
+  expectedGid,
+  allowTestIdentity,
+  reason = 'github_token_parent_security',
+) {
   let current = dirname(path);
   let directParent = true;
   while (true) {
@@ -251,7 +258,7 @@ function assertRootOwnedParentChain(path, expectedUid, expectedGid, allowTestIde
       (!directParent && allowTestIdentity && ![0, expectedUid].includes(metadata.uid)) ||
       (metadata.mode & 0o022) !== 0
     )
-      fail('github_token_parent_security');
+      fail(reason);
     const parent = dirname(current);
     if (parent === current) return;
     current = parent;
@@ -372,7 +379,6 @@ async function githubFetch(
   token,
   credentialContract,
   accept = 'application/vnd.github+json',
-  requireScopeMetadata = true,
 ) {
   if (!path.startsWith('/')) fail('github_api_path');
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -393,7 +399,7 @@ async function githubFetch(
       continue;
     }
     if (response.ok) {
-      if (requireScopeMetadata) assertGitHubCredentialScope(response, credentialContract);
+      assertGitHubCredentialScope(response, credentialContract);
       return response;
     }
     if (![429, 502, 503, 504].includes(response.status) || attempt === 3)
@@ -531,6 +537,7 @@ export async function verifyCanonicalGitHubRunAuthority({
   expectedRunId,
   expectedRunAttempt,
   githubTokenFile,
+  artifactArchivePath,
   credentialContract = githubCredentialContract,
   nowMs = Date.now(),
 }) {
@@ -550,6 +557,23 @@ export async function verifyCanonicalGitHubRunAuthority({
   const token = readGitHubToken(githubTokenFile, validatedCredentialContract, nowMs, {
     allowTestIdentity,
   });
+  assertSafeAbsolutePath(artifactArchivePath, 'canonical_artifact_archive_path');
+  if (basename(artifactArchivePath) !== CANONICAL_ARTIFACT_ARCHIVE_NAME)
+    fail('canonical_artifact_archive_path');
+  const releaseId = `${expectedSourceSha}-${expectedRunId}-${expectedRunAttempt}`;
+  if (
+    !allowTestIdentity &&
+    artifactArchivePath !==
+      join(RELEASE_ROOT, releaseId, 'artifact', CANONICAL_ARTIFACT_ARCHIVE_NAME)
+  )
+    fail('canonical_artifact_archive_path');
+  assertRootOwnedParentChain(
+    artifactArchivePath,
+    validatedCredentialContract.file.uid,
+    validatedCredentialContract.file.gid,
+    allowTestIdentity,
+    'canonical_artifact_archive_parent_security',
+  );
   const run = await githubJson(
     `/repos/${GITHUB_REPOSITORY}/actions/runs/${expectedRunId}/attempts/${expectedRunAttempt}`,
     token,
@@ -589,19 +613,14 @@ export async function verifyCanonicalGitHubRunAuthority({
       `${GITHUB_API_ROOT}/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact.id}/zip`
   )
     fail('canonical_artifact_custody');
-  const archiveResponse = await githubFetch(
-    `/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact.id}/zip`,
-    token,
-    validatedCredentialContract,
-    'application/vnd.github+json',
-    false,
-  );
-  let archiveBytes;
-  try {
-    archiveBytes = Buffer.from(await archiveResponse.arrayBuffer());
-  } catch {
-    fail('canonical_artifact_download');
-  }
+  const archiveBytes = readSecureRegularFile(artifactArchivePath, {
+    expectedUid: validatedCredentialContract.file.uid,
+    expectedGid: validatedCredentialContract.file.gid,
+    expectedMode: 0o600,
+    minBytes: 22,
+    maxBytes: 4_194_304,
+    reason: 'canonical_artifact_archive_file_security',
+  });
   if (createHash('sha256').update(archiveBytes).digest('hex') !== artifact.digest.slice(7))
     fail('canonical_artifact_digest');
   const files = extractCanonicalArtifactPair(archiveBytes);
@@ -636,7 +655,7 @@ export async function verifyCanonicalGitHubRunAuthority({
     status: run.status,
     conclusion: run.conclusion,
     event: run.event,
-    authenticatedSource: 'github-actions-api+artifact-download+ghcr-api',
+    authenticatedSource: 'github-actions-api+artifact-digest-bound-local-archive+ghcr-api',
     observedAt: run.updated_at,
     canonicalArtifact: {
       id: String(artifact.id),
@@ -706,7 +725,8 @@ function validateCanonicalRunEvidence(
     evidence.status !== 'completed' ||
     evidence.conclusion !== 'success' ||
     evidence.event !== 'workflow_dispatch' ||
-    evidence.authenticatedSource !== 'github-actions-api+artifact-download+ghcr-api' ||
+    evidence.authenticatedSource !==
+      'github-actions-api+artifact-digest-bound-local-archive+ghcr-api' ||
     typeof evidence.observedAt !== 'string' ||
     Number.isNaN(Date.parse(evidence.observedAt)) ||
     evidence.releaseManifestSha256 !== manifestChecksum ||
@@ -1157,6 +1177,7 @@ function parseArguments(argv) {
     '--manifest',
     '--expected-manifest-sha256',
     '--github-token-file',
+    '--artifact-archive',
     '--expected-source-sha',
     '--expected-source-tree',
     '--expected-workflow-sha',
@@ -1175,6 +1196,7 @@ function parseComposeArguments(argv) {
     '--manifest',
     '--expected-manifest-sha256',
     '--github-token-file',
+    '--artifact-archive',
     '--expected-source-sha',
     '--expected-source-tree',
     '--expected-workflow-sha',
@@ -1203,6 +1225,7 @@ async function readVerifiedReleaseInputs(values) {
     expectedRunId: values['--expected-run-id'],
     expectedRunAttempt: values['--expected-run-attempt'],
     githubTokenFile: values['--github-token-file'],
+    artifactArchivePath: values['--artifact-archive'],
   });
   return { pair, runEvidence, sourceAuthority };
 }

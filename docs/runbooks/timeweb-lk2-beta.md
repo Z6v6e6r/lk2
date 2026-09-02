@@ -510,10 +510,16 @@ The renderer accepts only the canonical same-run pair `release-manifest.json` an
 `PHUB_TIMEWEB_CANONICAL_RUN_EVIDENCE_V1` itself through the authenticated GitHub Actions and GHCR
 APIs after the run is complete. The evidence binds `status=completed`, `conclusion=success`, exact
 source/tree/workflow/run/attempt, canonical artifact ID/name/GitHub artifact digest, its exact
-two-file inventory and complete live registry inventory `5/5`. The renderer downloads the exact
-artifact archive, verifies its GitHub SHA-256, extracts exactly the two canonical files, and compares
-their bytes with the supplied pair. A local manifest checksum and the GitHub artifact custody digest
-are distinct fields and are both recorded. The renderer rejects legacy/
+two-file inventory and complete live registry inventory `5/5`. GitHub requires an Actions-capable
+credential to download the archive, so that download is performed off-host through the authenticated
+operator workstation or browser. Transfer the resulting archive without modification to the exact
+future-release path `<release-dir>/artifact/canonical-artifact.zip`, owned by `root:root`, mode
+`0600`, with one link beneath a root-owned, non-group/other-writable parent chain. The renderer never
+accepts an Actions credential: it queries the exact artifact metadata using the narrow
+`read:packages` token, requires the local archive SHA-256 to equal GitHub `artifact.digest`, extracts
+exactly the two canonical files, and compares their bytes with the supplied pair. A local manifest
+checksum and the GitHub artifact custody digest are distinct fields and are both recorded. The
+renderer rejects legacy/
 reconciliation/receipt/inventory shapes, mutable references, incomplete component sets, historical
 paths, ambient `COMPOSE_*` overrides and the failed run `33011023879` explicitly.
 
@@ -545,6 +551,7 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   --manifest '<canonical-artifact-dir>/release-manifest.json' \
   --expected-manifest-sha256 '<release-manifest-json-sha256>' \
   --github-token-file '/etc/phub/timeweb-beta/github-release-reader.token' \
+  --artifact-archive '<exact-release-dir>/artifact/canonical-artifact.zip' \
   --expected-source-sha '<exact-source-sha>' \
   --expected-source-tree '<exact-source-tree>' \
   --expected-workflow-sha '<exact-workflow-sha>' \
@@ -574,6 +581,7 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   --manifest '<canonical-artifact-dir>/release-manifest.json' \
   --expected-manifest-sha256 '<release-manifest-json-sha256>' \
   --github-token-file '/etc/phub/timeweb-beta/github-release-reader.token' \
+  --artifact-archive '<exact-release-dir>/artifact/canonical-artifact.zip' \
   --expected-source-sha '<exact-source-sha>' \
   --expected-source-tree '<exact-source-tree>' \
   --expected-workflow-sha '<exact-workflow-sha>' \
@@ -622,10 +630,12 @@ pair. Five tags or inventory from failed run `33011023879` are never release inp
 
 1. Fresh-fetch `main`; freeze exact source SHA/tree and publication workflow SHA. Through the
    authenticated GitHub Actions API, verify `status=completed`, `conclusion=success`, attempt `1`,
-   exact canonical artifact ID/name/digest and registry inventory `5/5`. Let the renderer repeat this
-   authenticated lookup and download the same artifact's canonical V2 pair; verify the manifest
-   checksum, exact two-file inventory, five component records and immutable index/runtime digests.
-   STOP on any drift, failed/partial run, caller-authored evidence or missing pair.
+   exact canonical artifact ID/name/digest and registry inventory `5/5`. Download the exact artifact
+   only off-host through the authenticated operator workstation or browser and transfer it to the
+   fixed root-only archive path. Let the renderer repeat the authenticated metadata lookup, bind the
+   local ZIP SHA-256 to GitHub `artifact.digest`, and verify the supplied manifest checksum, exact
+   two-file inventory and pair bytes, five component records and immutable index/runtime digests.
+   STOP on any drift, failed/partial run, caller-authored evidence or missing pair/archive.
 2. Repeat authoritative, `1.1.1.1`, `8.8.8.8` and `9.9.9.9` A/AAAA/CNAME checks. Through the approved
    Tailscale path, re-read the pinned ED25519 fingerprint, provider/host identity, OS/architecture,
    Docker/Compose, resources, listeners, UFW, routes/networks, active ingress and immutable historical
