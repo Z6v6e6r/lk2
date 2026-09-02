@@ -630,10 +630,12 @@ pair. Five tags or inventory from failed run `33011023879` are never release inp
 
 1. Fresh-fetch `main`; freeze exact source SHA/tree and publication workflow SHA. Through the
    authenticated GitHub Actions API, verify `status=completed`, `conclusion=success`, attempt `1`,
-   exact canonical artifact ID/name/digest and registry inventory `5/5`. Let the renderer repeat this
-   authenticated lookup and download the same artifact's canonical V2 pair; verify the manifest
-   checksum, exact two-file inventory, five component records and immutable index/runtime digests.
-   STOP on any drift, failed/partial run, caller-authored evidence or missing pair.
+   exact canonical artifact ID/name/digest and registry inventory `5/5`. Download the exact artifact
+   only off-host through the authenticated operator workstation or browser and transfer it to the
+   fixed root-only archive path. Let the renderer repeat the authenticated metadata lookup, bind the
+   local ZIP SHA-256 to GitHub `artifact.digest`, and verify the supplied manifest checksum, exact
+   two-file inventory and pair bytes, five component records and immutable index/runtime digests.
+   STOP on any drift, failed/partial run, caller-authored evidence or missing pair/archive.
 2. Repeat authoritative, `1.1.1.1`, `8.8.8.8` and `9.9.9.9` A/AAAA/CNAME checks. Through the approved
    Tailscale path, re-read the pinned ED25519 fingerprint, provider/host identity, OS/architecture,
    Docker/Compose, resources, listeners, UFW, routes/networks, active ingress and immutable historical
