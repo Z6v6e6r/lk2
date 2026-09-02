@@ -258,10 +258,15 @@ function fixtureCrc32(bytes: Buffer): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-export function canonicalArtifactArchive(manifestContents: string, checksumContents: string) {
+export function canonicalArtifactArchive(
+  manifestContents: string,
+  checksumContents: string,
+  extraEntries: ReadonlyArray<readonly [string, Buffer]> = [],
+) {
   const entries = [
     ['release-manifest.json', Buffer.from(manifestContents)],
     ['release-manifest.sha256', Buffer.from(checksumContents)],
+    ...extraEntries,
   ] as const;
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
@@ -334,7 +339,11 @@ export function githubApiFixture(pair: ReturnType<typeof writeCanonicalPair>) {
             },
           ],
         });
-      if (url.endsWith(`/actions/artifacts/${artifactId}/zip`)) return new Response(archive);
+      if (url.endsWith(`/actions/artifacts/${artifactId}/zip`))
+        return Response.json(
+          { message: 'You must have the actions scope to download artifacts.' },
+          { status: 403, headers: { 'x-oauth-scopes': 'read:packages' } },
+        );
       const component = manifest.images.find(({ component }) =>
         url.includes(`/packages/container/phub-${component}/versions?`),
       );

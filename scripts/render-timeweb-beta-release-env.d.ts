@@ -110,6 +110,7 @@ export function verifyCanonicalGitHubRunAuthority(options: {
   expectedRunId: string;
   expectedRunAttempt: string;
   githubTokenFile: string;
+  artifactArchivePath: string;
   credentialContract?: unknown;
   nowMs?: number;
 }): Promise<{ evidence: TimewebVerifiedCanonicalRunEvidence; checksum: string }>;
