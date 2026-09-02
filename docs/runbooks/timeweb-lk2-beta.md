@@ -118,6 +118,46 @@ Freeze the read-only results in the exact root-owned `0600` regular file
 root-owned, canonical and not group/other-writable. The strict evidence shape is exercised by
 `scripts/verify-timeweb-api-web-observability.test.ts`; duplicate or unexpected keys fail closed.
 The evidence must not contain Basic credentials, environment values, tokens or other secret values.
+The canonical producer is `npm run timeweb:beta:observability:collect -- --release-id
+'<source-sha>-<successful-run-id>-1'`. It accepts no output-path override and writes only
+`/opt/phub/timeweb-beta/observability/api-web-evidence.json`. Run it as root from the exact release
+checkout with the Basic `Authorization` header supplied on inherited file descriptor 3 by approved
+secret custody; the header value is never accepted through argv or the environment and is never
+printed or persisted by the producer. Before the final minute of its observation window, approved
+read-only tooling must refresh these root-owned, single-link, non-symlink `0600` inputs:
+
+- `/opt/phub/timeweb-beta/observability/timeweb-monitor-readback.json` with schema
+  `PHUB_TIMEWEB_MONITOR_READBACK_V1`, source `timeweb-approved-read-only-readback`, project `262717`,
+  and the exact current API/Web monitor IDs and effective configuration;
+- `/opt/phub/timeweb-beta/observability/alert-test-readback.json` with schema
+  `PHUB_TIMEWEB_ALERT_READBACK_V1`, source `approved-delivery-and-provider-readback`, delivery and
+  recovery timestamps, `release-owner-observed-active-incident` acknowledgement semantics, and
+  `provider-closed-after-all-regions-healthy` recovery semantics.
+
+These files are approved readbacks, not operator PASS declarations. Unknown keys, credential
+material, stale provider capture, monitor/project substitution, missing delivery or recovery, and
+late acknowledgement fail closed. Timeweb has no native ACK state: `acknowledgedAt` records when the
+release owner observed the active incident, while `recoveredAt` records the provider transition to
+closed after all configured regions were healthy. If approved tooling cannot produce a required
+provider fact, stop; do not synthesize it. The producer performs 66 direct API/Web GET probes over
+at least 900 seconds, reads Docker restart counters without container environment output, rejects
+container replacement, reads the canonical rollback receipt, validates the complete evidence with
+the existing verifier logic, and atomically replaces the canonical file with a root-owned `0600`
+single-link regular file.
+
+Supply descriptor 3 from approved custody without putting the header value in argv, shell variables
+or the environment. For file-backed custody, the operator-side shape is:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  sh -c 'exec 3<"$1"; shift; exec /usr/bin/npm run timeweb:beta:observability:collect -- "$@"' sh \
+  '<approved-custody-header-file>' \
+  --release-id '<source-sha>-<successful-run-id>-1'
+```
+
+The custody path is an operator placeholder, not a repository default. Do not put the header value
+in the command, either readback, or the canonical evidence.
+
 Validate the source contract without reading live state:
 
 ```sh

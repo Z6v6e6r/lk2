@@ -64,6 +64,7 @@
     "timeweb:beta:secrets:provision": "node scripts/provision-timeweb-beta-runtime-secrets.js",
     "timeweb:beta:release-env:render": "node scripts/render-timeweb-beta-release-env.js",
     "timeweb:beta:activation-inputs:test": "vitest run scripts/verify-timeweb-frozen-source.test.ts scripts/provision-timeweb-beta-runtime-secrets.test.ts scripts/render-timeweb-beta-release-env.test.ts",
+    "timeweb:beta:observability:collect": "node scripts/produce-timeweb-api-web-observability-evidence.js",
     "timeweb:beta:observability:verify": "node scripts/verify-timeweb-api-web-observability.js --contract-only",
     "timeweb:beta:node-bootstrap:apt-isolation:test": "sh scripts/test-timeweb-apt-config-isolation-ubuntu2604.sh",
     "notifications:web-push:live-smoke": "node --env-file-if-exists=.env --import tsx scripts/verify-live-web-push-sandbox.ts",
