@@ -2880,4 +2880,192 @@ describe('browser auth gateway', () => {
       expect(attempt.signal?.aborted).toBe(true);
     }
   });
+
+  it('bounds both messaging attempts while they wait for one hung shared session refresh', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const conversationId = '66666666-6666-4666-8666-666666666666';
+    const clientMessageId = '77777777-7777-4777-8777-777777777777';
+    const session = {
+      accessToken: 'expired-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['games.play'],
+      },
+    };
+    let resolveSharedRefresh!: (response: Response) => void;
+    const sharedRefresh = new Promise<Response>((resolve) => {
+      resolveSharedRefresh = resolve;
+    });
+    let refreshCalls = 0;
+    let sharedRefreshSignal: AbortSignal | null | undefined;
+    const commandCalls: RequestInit[] = [];
+    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) {
+        refreshCalls += 1;
+        if (refreshCalls === 1) return Promise.resolve(Response.json(session));
+        sharedRefreshSignal = init?.signal;
+        return sharedRefresh;
+      }
+      if (!url.endsWith(`/conversations/${conversationId}/messages`)) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      commandCalls.push(init ?? {});
+      return Promise.resolve(new Response(null, { status: 401 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+    await gateway.restoreSession();
+    const restoreRefreshCalls = refreshCalls;
+
+    vi.useFakeTimers();
+    try {
+      const result = gateway.sendConversationMessage(conversationId, {
+        clientMessageId,
+        body: 'Привет',
+      });
+      const failurePromise = result.then(
+        () => {
+          throw new Error('Expected the bounded command to fail');
+        },
+        (error: unknown) => error,
+      );
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(commandCalls).toHaveLength(2);
+      expect(commandCalls[1]?.signal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const failure = await failurePromise;
+      expect(failure).toBeInstanceOf(DOMException);
+      if (!(failure instanceof DOMException)) throw new Error('Expected an abort DOMException');
+      expect(['AbortError', 'TimeoutError']).toContain(failure.name);
+      expect(commandCalls).toHaveLength(2);
+      expect(refreshCalls - restoreRefreshCalls).toBe(1);
+      expect(sharedRefreshSignal?.aborted ?? false).toBe(false);
+      expect(new Set(commandCalls.map((call) => call.signal)).size).toBe(2);
+      expect(
+        new Set(commandCalls.map((call) => new Headers(call.headers).get('Idempotency-Key'))).size,
+      ).toBe(1);
+      expect(new Headers(commandCalls[0]?.headers).get('Idempotency-Key')).toBe(clientMessageId);
+    } finally {
+      resolveSharedRefresh(Response.json({ ...session, accessToken: 'late-padlhub-token' }));
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
+
+    expect(commandCalls).toHaveLength(2);
+    expect(sharedRefreshSignal?.aborted ?? false).toBe(false);
+  });
+
+  it('lets the second messaging attempt recover through the first late shared refresh', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const conversationId = '66666666-6666-4666-8666-666666666666';
+    const clientMessageId = '77777777-7777-4777-8777-777777777777';
+    const session = {
+      accessToken: 'expired-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['games.play'],
+      },
+    };
+    const refreshedSession = { ...session, accessToken: 'refreshed-padlhub-token' };
+    const sentMessage = {
+      id: '88888888-8888-4888-8888-888888888888',
+      conversationId,
+      sequence: 1,
+      sender: { userId, displayName: 'Анна' },
+      messageType: 'TEXT',
+      body: 'Привет',
+      createdAt: '2026-09-01T00:00:00.000Z',
+    };
+    let resolveSharedRefresh!: (response: Response) => void;
+    const sharedRefresh = new Promise<Response>((resolve) => {
+      resolveSharedRefresh = resolve;
+    });
+    let refreshCalls = 0;
+    let sharedRefreshSignal: AbortSignal | null | undefined;
+    const commandCalls: RequestInit[] = [];
+    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) {
+        refreshCalls += 1;
+        if (refreshCalls === 1) return Promise.resolve(Response.json(session));
+        sharedRefreshSignal = init?.signal;
+        return sharedRefresh;
+      }
+      if (!url.endsWith(`/conversations/${conversationId}/messages`)) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      commandCalls.push(init ?? {});
+      if (commandCalls.length < 3) return Promise.resolve(new Response(null, { status: 401 }));
+      return Promise.resolve(
+        Response.json({ outcome: 'ok', message: sentMessage, replayed: true }),
+      );
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+    await gateway.restoreSession();
+    const restoreRefreshCalls = refreshCalls;
+
+    vi.useFakeTimers();
+    try {
+      const result = gateway.sendConversationMessage(conversationId, {
+        clientMessageId,
+        body: 'Привет',
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(commandCalls).toHaveLength(2);
+      expect(commandCalls[1]?.signal?.aborted).toBe(false);
+      resolveSharedRefresh(Response.json(refreshedSession));
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(result).resolves.toEqual({
+        outcome: 'ok',
+        message: sentMessage,
+        replayed: true,
+      });
+    } finally {
+      resolveSharedRefresh(Response.json(refreshedSession));
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
+
+    expect(commandCalls).toHaveLength(3);
+    expect(refreshCalls - restoreRefreshCalls).toBe(1);
+    expect(sharedRefreshSignal?.aborted ?? false).toBe(false);
+    expect(new Set(commandCalls.map((call) => call.signal)).size).toBe(2);
+    expect(
+      new Set(commandCalls.map((call) => new Headers(call.headers).get('Idempotency-Key'))).size,
+    ).toBe(1);
+    expect(new Headers(commandCalls[0]?.headers).get('Idempotency-Key')).toBe(clientMessageId);
+    expect(commandCalls.map((call) => new Headers(call.headers).get('Authorization'))).toEqual([
+      'Bearer expired-padlhub-token',
+      'Bearer expired-padlhub-token',
+      'Bearer refreshed-padlhub-token',
+    ]);
+  });
 });
