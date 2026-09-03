@@ -126,8 +126,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm run contracts:generate
-      - run: npm run check
+      - run: npm run source:quality
 
   build-and-publish:
     needs: [validate-request, verify-source]
