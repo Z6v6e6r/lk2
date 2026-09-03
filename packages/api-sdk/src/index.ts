@@ -486,6 +486,13 @@ function jsonRequestBody(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function abortReason(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error
+    ? reason
+    : new DOMException('The operation was aborted.', 'AbortError');
+}
+
 export class PadlHubApiClient {
   private readonly fetchImplementation: typeof fetch;
   private readonly apiRoot: string;
@@ -614,6 +621,25 @@ export class PadlHubApiClient {
     });
     this.refreshInFlight = refresh;
     return refresh;
+  }
+
+  private waitForSessionRefresh(
+    signal: AbortSignal | null | undefined,
+  ): Promise<AuthenticatedSession> {
+    if (!signal) return this.refreshSession();
+    if (signal.aborted) return Promise.reject(abortReason(signal));
+
+    const refresh = this.refreshSession();
+    let onAbort = (): void => undefined;
+    const callerAbort = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(abortReason(signal));
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+
+    return Promise.race([refresh, callerAbort]).finally(() => {
+      signal.removeEventListener('abort', onAbort);
+    });
   }
 
   public async revokeSession(): Promise<void> {
@@ -2058,7 +2084,9 @@ export class PadlHubApiClient {
       policy.retryOnUnauthorized &&
       allowRefresh
     ) {
-      await this.refreshSession();
+      const signal = policy.requestInit.signal;
+      await this.waitForSessionRefresh(signal);
+      if (signal?.aborted) throw abortReason(signal);
       return this.requestWithPolicy<TResponse>(path, policy, correlationId, false, apiRoot);
     }
 
