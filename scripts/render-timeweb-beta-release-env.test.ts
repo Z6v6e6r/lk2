@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -29,6 +30,7 @@ import { assertExactTimewebFrozenSource } from './verify-timeweb-frozen-source.j
 import {
   canonicalManifest,
   canonicalRunEvidence,
+  canonicalArtifactArchive,
   createSecretFixture,
   githubApiFixture,
   host,
@@ -57,6 +59,8 @@ beforeAll(async () => {
   const artifactDir = join(secrets.root, 'trusted-artifact');
   const pair = writeCanonicalPair(artifactDir);
   const api = githubApiFixture(pair);
+  const artifactArchivePath = join(artifactDir, 'canonical-artifact.zip');
+  writeFileSync(artifactArchivePath, api.archive, { mode: 0o600 });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = api.fetch;
   try {
@@ -71,6 +75,7 @@ beforeAll(async () => {
       expectedRunId: runId,
       expectedRunAttempt: '1',
       githubTokenFile: secrets.githubTokenFile,
+      artifactArchivePath,
       credentialContract: secrets.githubCredentialContract,
     });
   } finally {
@@ -99,13 +104,16 @@ function fixture() {
   });
   const artifactDir = join(secrets.root, 'artifact');
   const pair = writeCanonicalPair(artifactDir);
+  const api = githubApiFixture(pair);
+  const artifactArchivePath = join(artifactDir, 'canonical-artifact.zip');
+  writeFileSync(artifactArchivePath, api.archive, { mode: 0o600 });
   const runEvidence = writeCanonicalRunEvidence(artifactDir, pair.checksum);
   const releaseRoot = join(secrets.root, 'releases');
   const releaseDir = join(releaseRoot, releaseId);
   mkdirSync(releaseDir, { recursive: true, mode: 0o700 });
   chmodSync(releaseRoot, 0o700);
   chmodSync(releaseDir, 0o700);
-  return { secrets, pair, runEvidence, releaseRoot, releaseDir };
+  return { secrets, pair, artifactArchivePath, runEvidence, releaseRoot, releaseDir };
 }
 
 function withCredentialContract(
@@ -136,6 +144,7 @@ async function verifyFixtureAuthority(
   value: ReturnType<typeof fixture>,
   transform?: (url: string, response: Response) => Promise<Response> | Response,
   nowMs?: number,
+  artifactArchivePath = value.artifactArchivePath,
 ) {
   const api = githubApiFixture(value.pair);
   const originalFetch = globalThis.fetch;
@@ -156,6 +165,7 @@ async function verifyFixtureAuthority(
       expectedRunId: runId,
       expectedRunAttempt: '1',
       githubTokenFile: value.secrets.githubTokenFile,
+      artifactArchivePath,
       credentialContract: value.secrets.githubCredentialContract,
       ...(nowMs === undefined ? {} : { nowMs }),
     });
@@ -389,7 +399,17 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
     ).rejects.toThrow('registry_inventory_incomplete');
   });
 
-  it('rejects canonical artifact metadata or downloaded digest drift', async () => {
+  it('uses the digest-bound local archive without calling the Actions download endpoint', async () => {
+    const value = fixture();
+    let artifactDownloadRequested = false;
+    await verifyFixtureAuthority(value, (url, response) => {
+      if (url.endsWith('/zip')) artifactDownloadRequested = true;
+      return response;
+    });
+    expect(artifactDownloadRequested).toBe(false);
+  });
+
+  it('rejects canonical artifact metadata or local archive digest drift', async () => {
     const metadata = fixture();
     await expect(
       verifyFixtureAuthority(metadata, async (url, response) => {
@@ -401,13 +421,68 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
     ).rejects.toThrow('canonical_artifact_custody');
 
     const digest = fixture();
+    writeFileSync(digest.artifactArchivePath, Buffer.from('not-the-canonical-archive'), {
+      mode: 0o600,
+    });
+    await expect(verifyFixtureAuthority(digest)).rejects.toThrow('canonical_artifact_digest');
+  });
+
+  it('rejects unsafe artifact archive path, mode, link count and parent custody', async () => {
+    const wrongName = fixture();
+    const wrongNamePath = join(wrongName.secrets.root, 'artifact', 'other.zip');
+    writeFileSync(wrongNamePath, readFileSync(wrongName.artifactArchivePath), { mode: 0o600 });
     await expect(
-      verifyFixtureAuthority(digest, (url, response) =>
-        url.endsWith('/zip')
-          ? new Response(Buffer.from('not-the-authenticated-archive'))
-          : response,
-      ),
-    ).rejects.toThrow('canonical_artifact_digest');
+      verifyFixtureAuthority(wrongName, undefined, undefined, wrongNamePath),
+    ).rejects.toThrow('canonical_artifact_archive_path');
+
+    const wrongMode = fixture();
+    chmodSync(wrongMode.artifactArchivePath, 0o644);
+    await expect(verifyFixtureAuthority(wrongMode)).rejects.toThrow(
+      'canonical_artifact_archive_file_security',
+    );
+
+    const hardLinked = fixture();
+    const secondLink = join(hardLinked.secrets.root, 'artifact-link');
+    linkSync(hardLinked.artifactArchivePath, secondLink);
+    await expect(verifyFixtureAuthority(hardLinked)).rejects.toThrow(
+      'canonical_artifact_archive_file_security',
+    );
+
+    const unsafeParent = fixture();
+    chmodSync(join(unsafeParent.secrets.root, 'artifact'), 0o770);
+    await expect(verifyFixtureAuthority(unsafeParent)).rejects.toThrow(
+      'canonical_artifact_archive_parent_security',
+    );
+  });
+
+  it('rejects a digest-bound archive whose canonical pair bytes do not match', async () => {
+    const value = fixture();
+    const archive = canonicalArtifactArchive('different-manifest\n', value.pair.checksumContents);
+    writeFileSync(value.artifactArchivePath, archive, { mode: 0o600 });
+    await expect(
+      verifyFixtureAuthority(value, async (url, response) => {
+        if (!url.includes('/artifacts?')) return response;
+        const listing = (await response.json()) as { artifacts: Array<Record<string, unknown>> };
+        listing.artifacts[0]!.digest = `sha256:${createHash('sha256').update(archive).digest('hex')}`;
+        return Response.json(listing, { headers: response.headers });
+      }),
+    ).rejects.toThrow('canonical_artifact_pair_mismatch');
+  });
+
+  it('rejects a digest-bound archive with an extra entry', async () => {
+    const value = fixture();
+    const archive = canonicalArtifactArchive(value.pair.contents, value.pair.checksumContents, [
+      ['unexpected.txt', Buffer.from('unexpected')],
+    ]);
+    writeFileSync(value.artifactArchivePath, archive, { mode: 0o600 });
+    await expect(
+      verifyFixtureAuthority(value, async (url, response) => {
+        if (!url.includes('/artifacts?')) return response;
+        const listing = (await response.json()) as { artifacts: Array<Record<string, unknown>> };
+        listing.artifacts[0]!.digest = `sha256:${createHash('sha256').update(archive).digest('hex')}`;
+        return Response.json(listing, { headers: response.headers });
+      }),
+    ).rejects.toThrow('canonical_artifact_inventory');
   });
 
   it('requires the exact canonical token path, owner group and classic PAT type', async () => {
@@ -424,6 +499,7 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
         expectedRunId: runId,
         expectedRunAttempt: '1',
         githubTokenFile: wrongPath.secrets.githubTokenFile,
+        artifactArchivePath: wrongPath.artifactArchivePath,
         credentialContract: withCredentialContract(wrongPath, (contract) => {
           contract.file.path = `${wrongPath.secrets.githubTokenFile}.other`;
         }),
@@ -443,6 +519,7 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
         expectedRunId: runId,
         expectedRunAttempt: '1',
         githubTokenFile: wrongGid.secrets.githubTokenFile,
+        artifactArchivePath: wrongGid.artifactArchivePath,
         credentialContract: withCredentialContract(wrongGid, (contract) => {
           contract.file.gid += 1;
         }),
@@ -477,6 +554,7 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
         expectedRunId: runId,
         expectedRunAttempt: '1',
         githubTokenFile: stale.secrets.githubTokenFile,
+        artifactArchivePath: stale.artifactArchivePath,
         credentialContract: stale.secrets.githubCredentialContract,
         nowMs: tokenStat.mtimeMs + 3_600_001,
       }),
@@ -523,6 +601,7 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
           expectedRunId: runId,
           expectedRunAttempt: '1',
           githubTokenFile: value.secrets.githubTokenFile,
+          artifactArchivePath: value.artifactArchivePath,
           credentialContract: withCredentialContract(value, mutate),
         }),
       ).rejects.toThrow('github_credential_contract');

@@ -118,6 +118,46 @@ Freeze the read-only results in the exact root-owned `0600` regular file
 root-owned, canonical and not group/other-writable. The strict evidence shape is exercised by
 `scripts/verify-timeweb-api-web-observability.test.ts`; duplicate or unexpected keys fail closed.
 The evidence must not contain Basic credentials, environment values, tokens or other secret values.
+The canonical producer is `npm run timeweb:beta:observability:collect -- --release-id
+'<source-sha>-<successful-run-id>-1'`. It accepts no output-path override and writes only
+`/opt/phub/timeweb-beta/observability/api-web-evidence.json`. Run it as root from the exact release
+checkout with the Basic `Authorization` header supplied on inherited file descriptor 3 by approved
+secret custody; the header value is never accepted through argv or the environment and is never
+printed or persisted by the producer. Before the final minute of its observation window, approved
+read-only tooling must refresh these root-owned, single-link, non-symlink `0600` inputs:
+
+- `/opt/phub/timeweb-beta/observability/timeweb-monitor-readback.json` with schema
+  `PHUB_TIMEWEB_MONITOR_READBACK_V1`, source `timeweb-approved-read-only-readback`, project `262717`,
+  and the exact current API/Web monitor IDs and effective configuration;
+- `/opt/phub/timeweb-beta/observability/alert-test-readback.json` with schema
+  `PHUB_TIMEWEB_ALERT_READBACK_V1`, source `approved-delivery-and-provider-readback`, delivery and
+  recovery timestamps, `release-owner-observed-active-incident` acknowledgement semantics, and
+  `provider-closed-after-all-regions-healthy` recovery semantics.
+
+These files are approved readbacks, not operator PASS declarations. Unknown keys, credential
+material, stale provider capture, monitor/project substitution, missing delivery or recovery, and
+late acknowledgement fail closed. Timeweb has no native ACK state: `acknowledgedAt` records when the
+release owner observed the active incident, while `recoveredAt` records the provider transition to
+closed after all configured regions were healthy. If approved tooling cannot produce a required
+provider fact, stop; do not synthesize it. The producer performs 66 direct API/Web GET probes over
+at least 900 seconds, reads Docker restart counters without container environment output, rejects
+container replacement, reads the canonical rollback receipt, validates the complete evidence with
+the existing verifier logic, and atomically replaces the canonical file with a root-owned `0600`
+single-link regular file.
+
+Supply descriptor 3 from approved custody without putting the header value in argv, shell variables
+or the environment. For file-backed custody, the operator-side shape is:
+
+```sh
+sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  sh -c 'exec 3<"$1"; shift; exec /usr/bin/npm run timeweb:beta:observability:collect -- "$@"' sh \
+  '<approved-custody-header-file>' \
+  --release-id '<source-sha>-<successful-run-id>-1'
+```
+
+The custody path is an operator placeholder, not a repository default. Do not put the header value
+in the command, either readback, or the canonical evidence.
+
 Validate the source contract without reading live state:
 
 ```sh
@@ -470,10 +510,16 @@ The renderer accepts only the canonical same-run pair `release-manifest.json` an
 `PHUB_TIMEWEB_CANONICAL_RUN_EVIDENCE_V1` itself through the authenticated GitHub Actions and GHCR
 APIs after the run is complete. The evidence binds `status=completed`, `conclusion=success`, exact
 source/tree/workflow/run/attempt, canonical artifact ID/name/GitHub artifact digest, its exact
-two-file inventory and complete live registry inventory `5/5`. The renderer downloads the exact
-artifact archive, verifies its GitHub SHA-256, extracts exactly the two canonical files, and compares
-their bytes with the supplied pair. A local manifest checksum and the GitHub artifact custody digest
-are distinct fields and are both recorded. The renderer rejects legacy/
+two-file inventory and complete live registry inventory `5/5`. GitHub requires an Actions-capable
+credential to download the archive, so that download is performed off-host through the authenticated
+operator workstation or browser. Transfer the resulting archive without modification to the exact
+future-release path `<release-dir>/artifact/canonical-artifact.zip`, owned by `root:root`, mode
+`0600`, with one link beneath a root-owned, non-group/other-writable parent chain. The renderer never
+accepts an Actions credential: it queries the exact artifact metadata using the narrow
+`read:packages` token, requires the local archive SHA-256 to equal GitHub `artifact.digest`, extracts
+exactly the two canonical files, and compares their bytes with the supplied pair. A local manifest
+checksum and the GitHub artifact custody digest are distinct fields and are both recorded. The
+renderer rejects legacy/
 reconciliation/receipt/inventory shapes, mutable references, incomplete component sets, historical
 paths, ambient `COMPOSE_*` overrides and the failed run `33011023879` explicitly.
 
@@ -505,6 +551,7 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   --manifest '<canonical-artifact-dir>/release-manifest.json' \
   --expected-manifest-sha256 '<release-manifest-json-sha256>' \
   --github-token-file '/etc/phub/timeweb-beta/github-release-reader.token' \
+  --artifact-archive '<exact-release-dir>/artifact/canonical-artifact.zip' \
   --expected-source-sha '<exact-source-sha>' \
   --expected-source-tree '<exact-source-tree>' \
   --expected-workflow-sha '<exact-workflow-sha>' \
@@ -534,6 +581,7 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   --manifest '<canonical-artifact-dir>/release-manifest.json' \
   --expected-manifest-sha256 '<release-manifest-json-sha256>' \
   --github-token-file '/etc/phub/timeweb-beta/github-release-reader.token' \
+  --artifact-archive '<exact-release-dir>/artifact/canonical-artifact.zip' \
   --expected-source-sha '<exact-source-sha>' \
   --expected-source-tree '<exact-source-tree>' \
   --expected-workflow-sha '<exact-workflow-sha>' \
@@ -582,10 +630,12 @@ pair. Five tags or inventory from failed run `33011023879` are never release inp
 
 1. Fresh-fetch `main`; freeze exact source SHA/tree and publication workflow SHA. Through the
    authenticated GitHub Actions API, verify `status=completed`, `conclusion=success`, attempt `1`,
-   exact canonical artifact ID/name/digest and registry inventory `5/5`. Let the renderer repeat this
-   authenticated lookup and download the same artifact's canonical V2 pair; verify the manifest
-   checksum, exact two-file inventory, five component records and immutable index/runtime digests.
-   STOP on any drift, failed/partial run, caller-authored evidence or missing pair.
+   exact canonical artifact ID/name/digest and registry inventory `5/5`. Download the exact artifact
+   only off-host through the authenticated operator workstation or browser and transfer it to the
+   fixed root-only archive path. Let the renderer repeat the authenticated metadata lookup, bind the
+   local ZIP SHA-256 to GitHub `artifact.digest`, and verify the supplied manifest checksum, exact
+   two-file inventory and pair bytes, five component records and immutable index/runtime digests.
+   STOP on any drift, failed/partial run, caller-authored evidence or missing pair/archive.
 2. Repeat authoritative, `1.1.1.1`, `8.8.8.8` and `9.9.9.9` A/AAAA/CNAME checks. Through the approved
    Tailscale path, re-read the pinned ED25519 fingerprint, provider/host identity, OS/architecture,
    Docker/Compose, resources, listeners, UFW, routes/networks, active ingress and immutable historical

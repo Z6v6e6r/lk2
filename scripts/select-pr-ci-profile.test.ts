@@ -123,6 +123,9 @@ describe('PR CI profile planner', () => {
     'scripts/verify-timeweb-api-web-observability.js',
     'scripts/verify-timeweb-api-web-observability.d.ts',
     'scripts/verify-timeweb-api-web-observability.test.ts',
+    'scripts/produce-timeweb-api-web-observability-evidence.js',
+    'scripts/produce-timeweb-api-web-observability-evidence.d.ts',
+    'scripts/produce-timeweb-api-web-observability-evidence.test.ts',
   ])('runs deployment validation without publication provenance for %s', (path) => {
     expect(select([path])).toMatchObject({
       profile: 'full',
