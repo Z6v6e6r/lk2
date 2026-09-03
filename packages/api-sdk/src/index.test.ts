@@ -792,14 +792,14 @@ describe('PadlHubApiClient authentication boundary', () => {
     });
     let refreshCalls = 0;
     let contextCalls = 0;
-    const observedRefreshHeaders: Headers[] = [];
+    const observedRefreshInits: RequestInit[] = [];
 
     const fetchImplementation: typeof fetch = async (input, init) => {
       const url = requestUrl(input);
       const headers = new Headers(init?.headers);
       if (url.endsWith('/auth/session/refresh')) {
         refreshCalls += 1;
-        observedRefreshHeaders.push(headers);
+        observedRefreshInits.push(init ?? {});
         await refreshGate;
         return jsonResponse(authenticatedSession);
       }
@@ -831,9 +831,281 @@ describe('PadlHubApiClient authentication boundary', () => {
     await expect(Promise.all([first, second])).resolves.toEqual([userContext, userContext]);
     expect(refreshCalls).toBe(1);
     expect(contextCalls).toBe(4);
-    expect(observedRefreshHeaders[0]?.get('Authorization')).toBeNull();
-    expect(observedRefreshHeaders[0]?.get('X-Session-Intent')).toBe('refresh');
+    const refreshInit = observedRefreshInits[0];
+    const refreshHeaders = new Headers(refreshInit?.headers);
+    expect(refreshInit?.method).toBe('POST');
+    expect(refreshInit?.credentials).toBe('include');
+    expect(refreshInit?.signal).toBeUndefined();
+    expect(refreshHeaders.get('Authorization')).toBeNull();
+    expect(refreshHeaders.get('X-Session-Intent')).toBe('refresh');
+    expect(refreshHeaders.get('Idempotency-Key')).toBeTruthy();
     expect(client.getAccessToken()).toBe(authenticatedSession.accessToken);
+  });
+
+  it('stops an aborted caller while its shared session refresh remains active', async () => {
+    let resolveRefresh: ((session: AuthenticatedSession) => void) | undefined;
+    const refreshResponse = new Promise<AuthenticatedSession>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    let refreshCalls = 0;
+    let protectedCalls = 0;
+    let refreshSignal: AbortSignal | null | undefined;
+    const fetchImplementation: typeof fetch = (input, init) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) {
+        refreshCalls += 1;
+        refreshSignal = init?.signal;
+        return refreshResponse.then(jsonResponse);
+      }
+      if (url.endsWith('/context')) {
+        protectedCalls += 1;
+        return Promise.resolve(
+          protectedCalls === 1
+            ? jsonResponse(
+                {
+                  code: 'AUTH_TOKEN_INVALID',
+                  message: 'Сессия недействительна.',
+                  correlationId: 'server-correlation-1',
+                },
+                401,
+              )
+            : jsonResponse(userContext),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'expired-access-token',
+    });
+    const controller = new AbortController();
+    const addListener = vi.spyOn(controller.signal, 'addEventListener');
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+    const request = client.request<UserContext>('/context', { signal: controller.signal });
+
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+    const timeout = new DOMException('Messaging request timed out.', 'TimeoutError');
+    controller.abort(timeout);
+
+    await expect(request).rejects.toBe(timeout);
+    expect(protectedCalls).toBe(1);
+    expect(refreshSignal).toBeUndefined();
+    const abortListener = addListener.mock.calls.find(([type]) => type === 'abort')?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListener).toHaveBeenCalledWith('abort', abortListener);
+
+    resolveRefresh?.(authenticatedSession);
+    await vi.waitFor(() => expect(client.getAccessToken()).toBe(authenticatedSession.accessToken));
+    expect(protectedCalls).toBe(1);
+  });
+
+  it('lets one caller time out without cancelling a coalesced refresh for another caller', async () => {
+    let resolveRefresh: ((session: AuthenticatedSession) => void) | undefined;
+    const refreshResponse = new Promise<AuthenticatedSession>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    let refreshCalls = 0;
+    const protectedCalls = new Map<string, string[]>();
+    const fetchImplementation: typeof fetch = (input, init) => {
+      const url = requestUrl(input);
+      const authorization = new Headers(init?.headers).get('Authorization') ?? '';
+      if (url.endsWith('/auth/session/refresh')) {
+        refreshCalls += 1;
+        return refreshResponse.then(jsonResponse);
+      }
+      if (url.endsWith('/protected/first') || url.endsWith('/protected/second')) {
+        const calls = protectedCalls.get(url) ?? [];
+        calls.push(authorization);
+        protectedCalls.set(url, calls);
+        if (authorization === 'Bearer expired-access-token') {
+          return Promise.resolve(
+            jsonResponse(
+              {
+                code: 'AUTH_TOKEN_INVALID',
+                message: 'Сессия недействительна.',
+                correlationId: 'server-correlation-1',
+              },
+              401,
+            ),
+          );
+        }
+        return Promise.resolve(
+          jsonResponse({ caller: url.endsWith('/first') ? 'first' : 'second' }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'expired-access-token',
+    });
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+
+    const first = client.request<{ caller: string }>('/protected/first', {
+      signal: firstController.signal,
+    });
+    const second = client.request<{ caller: string }>('/protected/second', {
+      signal: secondController.signal,
+    });
+    const secondSettled = vi.fn();
+    void second.then(secondSettled, secondSettled);
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+
+    const timeout = new DOMException('First caller timed out.', 'TimeoutError');
+    firstController.abort(timeout);
+    await expect(first).rejects.toBe(timeout);
+    expect(secondSettled).not.toHaveBeenCalled();
+
+    resolveRefresh?.(authenticatedSession);
+    await expect(second).resolves.toEqual({ caller: 'second' });
+
+    expect(refreshCalls).toBe(1);
+    expect(
+      protectedCalls.get('https://api.padlhub.test/user/api/v1/local-padel/protected/first'),
+    ).toEqual(['Bearer expired-access-token']);
+    expect(
+      protectedCalls.get('https://api.padlhub.test/user/api/v1/local-padel/protected/second'),
+    ).toEqual(['Bearer expired-access-token', `Bearer ${authenticatedSession.accessToken}`]);
+  });
+
+  it('keeps a late shared refresh result for the next protected request', async () => {
+    let resolveRefresh: ((session: AuthenticatedSession) => void) | undefined;
+    const refreshResponse = new Promise<AuthenticatedSession>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    let refreshCalls = 0;
+    const observedProtectedTokens: string[] = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      const url = requestUrl(input);
+      const authorization = new Headers(init?.headers).get('Authorization') ?? '';
+      if (url.endsWith('/auth/session/refresh')) {
+        refreshCalls += 1;
+        return refreshResponse.then(jsonResponse);
+      }
+      if (url.endsWith('/context')) {
+        observedProtectedTokens.push(authorization);
+        return Promise.resolve(
+          authorization === 'Bearer expired-access-token'
+            ? jsonResponse(
+                {
+                  code: 'AUTH_TOKEN_INVALID',
+                  message: 'Сессия недействительна.',
+                  correlationId: 'server-correlation-1',
+                },
+                401,
+              )
+            : jsonResponse(userContext),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'expired-access-token',
+    });
+    const controller = new AbortController();
+    const first = client.request<UserContext>('/context', { signal: controller.signal });
+
+    await vi.waitFor(() => expect(refreshCalls).toBe(1));
+    const timeout = new DOMException('First caller timed out.', 'TimeoutError');
+    controller.abort(timeout);
+    await expect(first).rejects.toBe(timeout);
+
+    resolveRefresh?.(authenticatedSession);
+    await vi.waitFor(() => expect(client.getAccessToken()).toBe(authenticatedSession.accessToken));
+    await expect(client.getUserContext()).resolves.toEqual(userContext);
+
+    expect(refreshCalls).toBe(1);
+    expect(observedProtectedTokens).toEqual([
+      'Bearer expired-access-token',
+      `Bearer ${authenticatedSession.accessToken}`,
+    ]);
+  });
+
+  it('removes the caller abort listener after a successful refresh wait', async () => {
+    let contextCalls = 0;
+    const fetchImplementation: typeof fetch = (input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) {
+        return Promise.resolve(jsonResponse(authenticatedSession));
+      }
+      if (url.endsWith('/context')) {
+        contextCalls += 1;
+        return Promise.resolve(
+          contextCalls === 1
+            ? jsonResponse(
+                {
+                  code: 'AUTH_TOKEN_INVALID',
+                  message: 'Сессия недействительна.',
+                  correlationId: 'server-correlation-1',
+                },
+                401,
+              )
+            : jsonResponse(userContext),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'expired-access-token',
+    });
+    const controller = new AbortController();
+    const addListener = vi.spyOn(controller.signal, 'addEventListener');
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+
+    await expect(
+      client.request<UserContext>('/context', { signal: controller.signal }),
+    ).resolves.toEqual(userContext);
+
+    const abortListener = addListener.mock.calls.find(([type]) => type === 'abort')?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListener).toHaveBeenCalledWith('abort', abortListener);
+  });
+
+  it('clears an invalid access token when the shared refresh fails', async () => {
+    let contextCalls = 0;
+    const fetchImplementation: typeof fetch = (input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/context')) {
+        contextCalls += 1;
+        return Promise.resolve(
+          jsonResponse(
+            {
+              code: 'AUTH_TOKEN_INVALID',
+              message: 'Сессия недействительна.',
+              correlationId: 'server-correlation-1',
+            },
+            401,
+          ),
+        );
+      }
+      if (url.endsWith('/auth/session/refresh')) {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              code: 'AUTH_SESSION_REVOKED',
+              message: 'Сессия отозвана.',
+              correlationId: 'server-correlation-2',
+            },
+            401,
+          ),
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: 'expired-access-token',
+    });
+    const controller = new AbortController();
+    const addListener = vi.spyOn(controller.signal, 'addEventListener');
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+
+    await expect(
+      client.request<UserContext>('/context', { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: 'AUTH_SESSION_REVOKED' });
+    expect(contextCalls).toBe(1);
+    expect(client.getAccessToken()).toBeUndefined();
+    const abortListener = addListener.mock.calls.find(([type]) => type === 'abort')?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListener).toHaveBeenCalledWith('abort', abortListener);
   });
 
   it('retries a recent cross-tab refresh race with the same idempotency key', async () => {
