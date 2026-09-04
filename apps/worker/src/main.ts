@@ -18,6 +18,7 @@ import {
   createGameResultProjectionRepository,
   createGiftCertificateIssuanceRepository,
   createLocalCommunityDirectoryRepository,
+  createMessagingRepository,
   createParticipationCommandRepository,
 } from '@phub/database';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
@@ -43,6 +44,7 @@ import {
 } from './game-lifecycle-process-manager.js';
 import { registerGamesCardProjectorConsumer } from './games-card-projector-consumer.js';
 import { registerGameResultProjectorConsumer } from './game-result-projector-consumer.js';
+import { registerGameMessagingMembershipConsumer } from './game-messaging-membership-consumer.js';
 import { registerCupRatingConsumer } from './cup-rating-consumer.js';
 import { CupRatingClient } from './cup-rating-client.js';
 import { S3GiftCertificateArtifactStore } from './gift-certificate-artifact-store.js';
@@ -111,6 +113,7 @@ const workerMetrics = createWorkerMetricRecorder({
 const pool = createDatabasePool(config.DATABASE_URL);
 const gameRepository = createGameRepository(pool);
 const gameRosterRepository = createGameRosterRepository(pool);
+const messagingRepository = createMessagingRepository(pool);
 const participationCommandRepository = createParticipationCommandRepository(pool);
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS = 60_000;
@@ -316,6 +319,11 @@ const gameResultProjectionRepository = createGameResultProjectionRepository(pool
 await registerGameResultProjectorConsumer({
   channel: consumerChannel,
   repository: gameResultProjectionRepository,
+  logger,
+});
+await registerGameMessagingMembershipConsumer({
+  channel: consumerChannel,
+  repository: messagingRepository,
   logger,
 });
 if (config.CUP_RATING_CONSUMER_ENABLED) {

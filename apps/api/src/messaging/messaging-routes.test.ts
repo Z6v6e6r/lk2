@@ -82,6 +82,7 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
       replayed: false,
     }),
     getOrCreateGameConversation: vi.fn().mockResolvedValue({ outcome: 'not_found' }),
+    reconcileGameConversationMembership: vi.fn().mockResolvedValue({ outcome: 'no_op' }),
     listMessages: vi.fn().mockResolvedValue({
       outcome: 'ok',
       page: {

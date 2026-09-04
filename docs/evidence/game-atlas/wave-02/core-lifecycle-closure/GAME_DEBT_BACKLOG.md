@@ -14,11 +14,12 @@
 ## GL-FU-CANCEL-COMMS
 
 - ID: `GL-FU-CANCEL-COMMS`
-- SEVERITY: `P1 / EXISTING_CURRENT_MAIN_ACCESS_CONVERGENCE`
+- STATUS: `CLOSED`
+- SEVERITY: `RESOLVED_P1 / PHYSICAL_MEMBERSHIP_CONVERGENCE`
 - SCENARIO: `F-017`, `H-026..H-028`, `J-013`, promotion/cancel notification, chat and realtime policy
-- REPRO: perform a free promotion or cancel and inspect downstream notification/chat/realtime consumers.
+- REPRO (historical): perform a free promotion or cancel and inspect downstream notification/chat/realtime consumers.
 - EXPECTED: strict Game events drive downstream notification and messaging membership convergence without any consumer writing Game state.
-- ACTUAL: current main has a revision-fenced notification projector for participation confirmed/left and Game cancelled events. The event catalog declares the separate `messaging-membership` consumer route, but no registered worker consumer was found; an existing Game conversation can therefore retain an ACTIVE membership after leave/cancel. This branch does not claim chat lifecycle synchronization or change notification semantics.
+- ACTUAL: the worker registers the durable `phub.game-messaging-membership.v1` quorum consumer for the complete exact `messaging-membership` catalog route. Each event triggers reconciliation from the current locked GAME snapshot: confirmed/rejoined participants become ACTIVE, departed participants become LEFT, and cancellation closes the existing conversation and leaves every active USER member. The projector never creates a conversation, writes GAME state, deletes messages or reopens CLOSED/ARCHIVED conversations. Physical PostgreSQL evidence covers LEAVE/CANCEL, stale LEAVE after rejoin, both SEND race orders, message preservation and duplicate audit-free replay; physical RabbitMQ evidence covers exact routes, bounded retry, poison DLQ and crash redelivery.
 
 ## GL-FU-LOCK-TIMEOUT
 

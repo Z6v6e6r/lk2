@@ -13,6 +13,19 @@ function rabbitInventory() {
   return {
     queues: [
       {
+        name: 'phub.game-messaging-membership.v1',
+        durable: true,
+        type: 'quorum',
+        arguments: {
+          'x-queue-type': 'quorum',
+          'x-delivery-limit': 5,
+          'x-dead-letter-exchange': 'phub.dead-letter',
+        },
+        messages_ready: 0,
+        messages_unacknowledged: 0,
+        consumers: 1,
+      },
+      {
         name: 'phub.game-notification-intent-projector.v1',
         durable: true,
         type: 'quorum',
@@ -55,6 +68,7 @@ function rabbitInventory() {
         'phub.game-notification-intent-projector.v1',
         'phub.game-notification-intent-projector.v1',
       ],
+      ['', 'phub.game-messaging-membership.v1', 'phub.game-messaging-membership.v1'],
       ['', 'phub.dead-letter.v1', 'phub.dead-letter.v1'],
       ['phub.events', 'phub.notification-intent-projector.v1', 'booking.confirmed.v1'],
       ['phub.events', 'phub.notification-intent-projector.v1', 'booking.changed.v1'],
@@ -67,6 +81,10 @@ function rabbitInventory() {
       ],
       ['phub.events', 'phub.game-notification-intent-projector.v1', 'game.participation.left.v1'],
       ['phub.events', 'phub.game-notification-intent-projector.v1', 'game.cancelled.v1'],
+      ['phub.events', 'phub.game-messaging-membership.v1', 'game.scheduled.v1'],
+      ['phub.events', 'phub.game-messaging-membership.v1', 'game.participation.confirmed.v1'],
+      ['phub.events', 'phub.game-messaging-membership.v1', 'game.participation.left.v1'],
+      ['phub.events', 'phub.game-messaging-membership.v1', 'game.cancelled.v1'],
       ['phub.dead-letter', 'phub.dead-letter.v1', '#'],
     ].map(([source_name, destination_name, routing_key]) => ({
       source_name,
@@ -80,8 +98,8 @@ function rabbitInventory() {
 describe('chat/push foundation operational inventory', () => {
   it('accepts only the exact queue arguments and explicit booking/GAME bindings', () => {
     expect(assertFoundationRabbitInventory(rabbitInventory(), { mode: 'required' })).toEqual({
-      queueCount: 3,
-      bindingCount: 11,
+      queueCount: 4,
+      bindingCount: 16,
     });
 
     const wildcard = rabbitInventory();
@@ -139,10 +157,14 @@ describe('chat/push foundation operational inventory', () => {
   it('accepts the exact legacy topology only before the candidate worker starts', () => {
     const legacy = rabbitInventory();
     legacy.queues = legacy.queues.filter(
-      (queue) => queue.name !== 'phub.game-notification-intent-projector.v1',
+      (queue) =>
+        queue.name !== 'phub.game-notification-intent-projector.v1' &&
+        queue.name !== 'phub.game-messaging-membership.v1',
     );
     legacy.bindings = legacy.bindings.filter(
-      (binding) => binding.destination_name !== 'phub.game-notification-intent-projector.v1',
+      (binding) =>
+        binding.destination_name !== 'phub.game-notification-intent-projector.v1' &&
+        binding.destination_name !== 'phub.game-messaging-membership.v1',
     );
     expect(assertFoundationRabbitInventory(legacy, { mode: 'optional' })).toEqual({
       queueCount: 2,
@@ -160,13 +182,15 @@ describe('chat/push foundation operational inventory', () => {
     const inert = rabbitInventory();
     inert.bindings = inert.bindings.filter(
       (binding) =>
-        binding.destination_name !== 'phub.game-notification-intent-projector.v1' ||
-        binding.source_name === '',
+        ![
+          'phub.game-notification-intent-projector.v1',
+          'phub.game-messaging-membership.v1',
+        ].includes(String(binding.destination_name)) || binding.source_name === '',
     );
 
     expect(assertFoundationRabbitInventory(inert, { mode: 'inert' })).toEqual({
-      queueCount: 3,
-      bindingCount: 8,
+      queueCount: 4,
+      bindingCount: 9,
     });
     expect(() => assertFoundationRabbitInventory(inert, { mode: 'optional' })).toThrow(
       'CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH',
@@ -180,10 +204,14 @@ describe('chat/push foundation operational inventory', () => {
 
     const legacy = rabbitInventory();
     legacy.queues = legacy.queues.filter(
-      (queue) => queue.name !== 'phub.game-notification-intent-projector.v1',
+      (queue) =>
+        queue.name !== 'phub.game-notification-intent-projector.v1' &&
+        queue.name !== 'phub.game-messaging-membership.v1',
     );
     legacy.bindings = legacy.bindings.filter(
-      (binding) => binding.destination_name !== 'phub.game-notification-intent-projector.v1',
+      (binding) =>
+        binding.destination_name !== 'phub.game-notification-intent-projector.v1' &&
+        binding.destination_name !== 'phub.game-messaging-membership.v1',
     );
     expect(() => assertFoundationRabbitInventory(legacy, { mode: 'inert' })).toThrow(
       'CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH',

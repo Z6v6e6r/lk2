@@ -1053,15 +1053,18 @@ remain separate approval boundaries.
 Do not apply the GAME ruleset or enable its tenant runtime until migration `0089` is verified and at
 least one new worker is consuming the dedicated `phub.game-notification-intent-projector.v1` queue.
 Older workers may coexist because they consume only the legacy booking queue and can never receive
-GAME contracts. For rollback, deactivate the GAME trigger rules first, drain the dedicated GAME
-queue, verify its DLQ is empty, then remove the three `phub.events` GAME bindings and verify both
-their absence and a zero queue backlog before removing the last new worker. Unbinding is a separate,
-explicitly authorized broker mutation; while rolled back, no GAME notifications are produced.
+GAME contracts. For rollback, deactivate the GAME notification trigger rules first, then drain both
+dedicated GAME queues: `phub.game-notification-intent-projector.v1` and
+`phub.game-messaging-membership.v1`. Verify that both DLQs are empty, remove the three notification
+bindings and all four messaging-membership bindings from `phub.events`, and verify the seven
+bindings are absent and both queues have zero ready and unacknowledged messages before removing the
+last new worker. Unbinding is a separate, explicitly authorized broker mutation; while rolled back,
+no GAME notifications are produced and no GAME membership events are routed to an unconsumed queue.
 The foundation preflight/recovery helper accepts that exact drained topology only through its
-`rabbit-inert` verifier: the durable GAME queue and default queue binding remain, all three GAME
-event bindings are absent, and every foundation queue has zero backlog. Active candidate checks
-still require `rabbit-required`; the inert mode cannot satisfy a live-runtime verification.
-Keeping a compatible consumer instead requires a separately approved, bounded rollback window and
+`rabbit-inert` verifier: both durable GAME queues and their default queue bindings remain, all seven
+GAME event bindings are absent, and every foundation queue has zero backlog. Active candidate checks
+still require `rabbit-required`; the inert mode cannot satisfy a live-runtime verification. Keeping
+a compatible consumer instead requires a separately approved, bounded rollback window and
 continuous queue-depth observation. A database rollback is not required: the expand-only recipient
 fence table is inert for older workers.
 
@@ -1274,6 +1277,14 @@ wildcard binding before enabling rules. Every future notification-producing vert
 versioned routing key to a code-owned topology manifest and test; a database rule alone must not
 broaden broker consumption.
 
+GAME chat membership uses the separate durable quorum queue
+`phub.game-messaging-membership.v1`. It binds exactly the catalog routes `game.scheduled.v1`,
+`game.participation.confirmed.v1`, `game.participation.left.v1` and `game.cancelled.v1`. The event is
+only a trigger: the consumer locks an existing GAME conversation and reconciles it from the current
+GAME row and ACTIVE participations. It never creates a conversation or writes GAME state. Invalid
+contracts and event revisions ahead of the current GAME revision go to the DLQ; transient database
+failures use the same five-delivery quorum bound.
+
 Before enabling a new tenant or transport, verify the queue and binding in the target environment:
 
 ```bash
@@ -1297,9 +1308,10 @@ GAME queue.
 
 The current automated worker snapshot alerts on the shared DLQ but does not yet publish a dedicated
 GAME queue depth/consumer-count metric. Until that metric exists, every activation and observation
-window must record `messages_ready`, `messages_unacknowledged` and `consumers` for
-`phub.game-notification-intent-projector.v1`; any non-zero sustained depth or zero consumers blocks
-expansion. This manual gate is an MVP residual, not evidence that GAME delivery is healthy.
+window must record `messages_ready`, `messages_unacknowledged` and `consumers` for both
+`phub.game-notification-intent-projector.v1` and `phub.game-messaging-membership.v1`; any non-zero
+sustained depth or zero consumers blocks expansion. This manual gate is an MVP residual, not
+evidence that GAME delivery is healthy.
 
 ### Automated worker reliability alerts
 

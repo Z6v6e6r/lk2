@@ -120,6 +120,22 @@ export type RealtimeSubscriptionResult =
   | { readonly outcome: 'not_found' }
   | { readonly outcome: 'ok'; readonly latestSequence: number };
 
+export type GameMessagingMembershipSourceEventType =
+  | 'game.scheduled.v1'
+  | 'game.participation.confirmed.v1'
+  | 'game.participation.left.v1'
+  | 'game.cancelled.v1';
+
+export type ReconcileGameConversationMembershipResult =
+  | { readonly outcome: 'no_op' }
+  | { readonly outcome: 'revision_conflict' }
+  | {
+      readonly outcome: 'applied';
+      readonly conversationClosed: boolean;
+      readonly activatedUserIds: readonly string[];
+      readonly leftUserIds: readonly string[];
+    };
+
 export interface MessagingRepository {
   getRuntimeSettings(tenantId: string): Promise<MessagingRuntimeSettings>;
   listConversations(input: {
@@ -141,6 +157,15 @@ export interface MessagingRepository {
     readonly idempotencyKey: string;
     readonly correlationId: string;
   }): Promise<GetOrCreateGameConversationResult>;
+  reconcileGameConversationMembership(input: {
+    readonly tenantId: string;
+    readonly gameId: string;
+    readonly sourceEventId: string;
+    readonly sourceEventType: GameMessagingMembershipSourceEventType;
+    readonly sourceAggregateRevision: string;
+    readonly correlationId: string;
+    readonly occurredAt: string;
+  }): Promise<ReconcileGameConversationMembershipResult>;
   listMessages(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -1020,6 +1045,153 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         );
         if (!conversation) throw new Error('MESSAGING_GAME_CONVERSATION_READBACK_FAILED');
         return { outcome: 'ok', conversation, created, replayed: false };
+      });
+    },
+
+    reconcileGameConversationMembership(input) {
+      if (!/^[1-9]\d*$/.test(input.sourceAggregateRevision)) {
+        throw new Error('GAME_MESSAGING_MEMBERSHIP_REVISION_INVALID');
+      }
+      const sourceRevision = BigInt(input.sourceAggregateRevision);
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const conversation = await queryOne<{ id: string; state: 'OPEN' | 'CLOSED' | 'ARCHIVED' }>(
+          client,
+          `select id, state
+             from messaging.conversations
+            where tenant_id = $1
+              and kind = 'GAME'
+              and context_type = 'GAME'
+              and context_id = $2
+            for update`,
+          [input.tenantId, input.gameId],
+        );
+        if (!conversation) return { outcome: 'no_op' };
+
+        const game = await queryOne<{ revision: string; lifecycle_state: string }>(
+          client,
+          `select revision::text as revision, lifecycle_state
+             from games.games
+            where tenant_id = $1
+              and id = $2
+            for share`,
+          [input.tenantId, input.gameId],
+        );
+        if (!game) return { outcome: 'no_op' };
+        if (sourceRevision > BigInt(game.revision)) return { outcome: 'revision_conflict' };
+
+        await client.query(
+          `select user_id, role
+             from games.participations
+            where tenant_id = $1
+              and game_id = $2
+              and state = 'ACTIVE'
+            order by user_id
+            for share`,
+          [input.tenantId, input.gameId],
+        );
+
+        let conversationClosed = false;
+        let activatedUserIds: readonly string[] = [];
+        let leftUserIds: readonly string[] = [];
+        if (game.lifecycle_state === 'CANCELLED') {
+          const closed = await client.query<{ id: string }>(
+            `update messaging.conversations
+                set state = 'CLOSED', updated_at = now()
+              where tenant_id = $1
+                and id = $2
+                and state = 'OPEN'
+              returning id`,
+            [input.tenantId, conversation.id],
+          );
+          conversationClosed = (closed.rowCount ?? 0) > 0;
+          const left = await client.query<{ user_id: string }>(
+            `update messaging.conversation_members
+                set state = 'LEFT', left_at = now()
+              where tenant_id = $1
+                and conversation_id = $2
+                and member_type = 'USER'
+                and state = 'ACTIVE'
+              returning user_id`,
+            [input.tenantId, conversation.id],
+          );
+          leftUserIds = left.rows.flatMap((row) => (row.user_id ? [row.user_id] : []));
+        } else if (conversation.state === 'OPEN') {
+          const activated = await client.query<{ user_id: string }>(
+            `insert into messaging.conversation_members (
+               tenant_id, conversation_id, member_type, user_id, role, state, left_at
+             )
+             select $1, $2, 'USER', participation.user_id,
+                    case when participation.role = 'ORGANIZER' then 'OWNER' else 'MEMBER' end,
+                    'ACTIVE', null
+               from games.participations participation
+              where participation.tenant_id = $1
+                and participation.game_id = $3
+                and participation.state = 'ACTIVE'
+             on conflict (tenant_id, conversation_id, user_id) where user_id is not null
+             do update set
+               role = excluded.role,
+               state = 'ACTIVE',
+               left_at = null
+             where messaging.conversation_members.role <> excluded.role
+                or messaging.conversation_members.state <> 'ACTIVE'
+                or messaging.conversation_members.left_at is not null
+             returning user_id`,
+            [input.tenantId, conversation.id, input.gameId],
+          );
+          activatedUserIds = activated.rows.flatMap((row) => (row.user_id ? [row.user_id] : []));
+          const left = await client.query<{ user_id: string }>(
+            `update messaging.conversation_members member
+                set state = 'LEFT', left_at = now()
+              where member.tenant_id = $1
+                and member.conversation_id = $2
+                and member.member_type = 'USER'
+                and member.state = 'ACTIVE'
+                and not exists (
+                  select 1
+                    from games.participations participation
+                   where participation.tenant_id = member.tenant_id
+                     and participation.game_id = $3
+                     and participation.user_id = member.user_id
+                     and participation.state = 'ACTIVE'
+                )
+              returning member.user_id`,
+            [input.tenantId, conversation.id, input.gameId],
+          );
+          leftUserIds = left.rows.flatMap((row) => (row.user_id ? [row.user_id] : []));
+        }
+
+        if (!conversationClosed && activatedUserIds.length === 0 && leftUserIds.length === 0) {
+          return { outcome: 'no_op' };
+        }
+        await client.query(
+          `insert into audit.audit_log (
+             tenant_id, actor_id, action, resource_type, resource_id,
+             result, correlation_id, new_value
+           ) values ($1, null, 'GAME_CONVERSATION_MEMBERSHIP_RECONCILED', 'CONVERSATION', $2,
+                     'SUCCESS', $3, $4::jsonb)`,
+          [
+            input.tenantId,
+            conversation.id,
+            input.correlationId,
+            JSON.stringify({
+              contextId: input.gameId,
+              sourceEventId: input.sourceEventId,
+              sourceEventType: input.sourceEventType,
+              sourceAggregateRevision: input.sourceAggregateRevision,
+              currentAggregateRevision: game.revision,
+              occurredAt: input.occurredAt,
+              conversationClosed,
+              activatedUserIds,
+              leftUserIds,
+            }),
+          ],
+        );
+        return {
+          outcome: 'applied',
+          conversationClosed,
+          activatedUserIds,
+          leftUserIds,
+        };
       });
     },
 
