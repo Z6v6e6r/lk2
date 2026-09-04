@@ -143,6 +143,43 @@ describePostgres('FREE/LOCAL game lifecycle through HTTP and PostgreSQL', () => 
     }>();
   }
 
+  async function seedPaidGame(paymentMode: 'SPLIT' | 'SUBSCRIPTION') {
+    const paidGameId = randomUUID();
+    const startsAt = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+    const endsAt = new Date(Date.now() + 25 * 60 * 60_000).toISOString();
+    const joinCutoffAt = new Date(Date.now() + 23 * 60 * 60_000).toISOString();
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      await client.query(
+        `insert into games.games (
+           tenant_id, id, organizer_user_id, title, kind, visibility, lifecycle_state,
+           station_id, starts_at, ends_at, timezone, capacity, waitlist_enabled,
+           join_cutoff_at, payment_mode
+         ) values (
+           $1, $2, $3, $4, 'FRIENDLY', 'PUBLIC', 'SCHEDULED', $5, $6, $7,
+           'Europe/Moscow', 2, true, $8, $9
+         )`,
+        [
+          tenantId,
+          paidGameId,
+          ownerId,
+          `HTTP fail-closed ${paymentMode} ${randomUUID()}`,
+          stationId,
+          startsAt,
+          endsAt,
+          joinCutoffAt,
+          paymentMode,
+        ],
+      );
+      await client.query(
+        `insert into games.participations (
+           tenant_id, game_id, user_id, role, state, payment_state
+         ) values ($1, $2, $3, 'ORGANIZER', 'ACTIVE', 'NOT_REQUIRED')`,
+        [tenantId, paidGameId, ownerId],
+      );
+    });
+    return paidGameId;
+  }
+
   async function prepareWaitlistPromotion(label: string) {
     const game = await createGame(label, 2);
     const joined = await app.inject({
@@ -568,6 +605,103 @@ describePostgres('FREE/LOCAL game lifecycle through HTTP and PostgreSQL', () => 
       reservations: { active: '0' },
     });
   });
+
+  it.each(['SPLIT', 'SUBSCRIPTION'] as const)(
+    'fails closed concurrent %s joins before every paid reservation side effect',
+    async (paymentMode) => {
+      const paidGameId = await seedPaidGame(paymentMode);
+      const headers = [
+        commandHeaders(await token(playerAId), `${paymentMode.toLowerCase()}-a-${randomUUID()}`),
+        commandHeaders(await token(playerBId), `${paymentMode.toLowerCase()}-b-${randomUUID()}`),
+      ] as const;
+      const responses = await Promise.race([
+        Promise.all(
+          headers.map((currentHeaders) =>
+            app.inject({
+              method: 'POST',
+              url: `/user/api/v1/${tenantKey}/games/${paidGameId}/join`,
+              headers: currentHeaders,
+              payload: { expectedRevision: 1 },
+            }),
+          ),
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`GAME_HTTP_${paymentMode}_JOIN_TIMEOUT`)), 5_000),
+        ),
+      ]);
+
+      expect(responses.map((response) => response.statusCode)).toEqual([409, 409]);
+      for (const response of responses) {
+        expect(response.json()).toMatchObject({
+          code: 'GAME_PAYMENT_REQUIRED',
+          message: 'Платёжный контур этой игры пока недоступен.',
+        });
+      }
+      const replay = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/${tenantKey}/games/${paidGameId}/join`,
+        headers: headers[0],
+        payload: { expectedRevision: 1 },
+      });
+      expect(replay.statusCode).toBe(409);
+      expect(replay.json()).toMatchObject({ code: 'GAME_PAYMENT_REQUIRED' });
+
+      await expect(
+        withTenantTransaction(pool, tenantId, async (client) => {
+          const result = await client.query<{
+            revision: string;
+            paid_participants: string;
+            reservations: string;
+            eligibility_decisions: string;
+            payment_snapshots: string;
+            expiry_commands: string;
+            reserved_events: string;
+            failed_commands: string;
+            rejected_audits: string;
+          }>(
+            `select
+               (select revision::text from games.games
+                 where tenant_id = $1 and id = $2) as revision,
+               (select count(*)::text from games.participations
+                 where tenant_id = $1 and game_id = $2 and role = 'PLAYER') as paid_participants,
+               (select count(*)::text from games.seat_reservations
+                 where tenant_id = $1 and game_id = $2) as reservations,
+               (select count(*)::text from eligibility.decisions
+                 where tenant_id = $1 and activity_type = 'GAME' and activity_id = $2)
+                 as eligibility_decisions,
+               (select count(*)::text from eligibility.payment_snapshots
+                 where tenant_id = $1 and activity_type = 'GAME' and activity_id = $2)
+                 as payment_snapshots,
+               (select count(*)::text from games.scheduled_commands
+                 where tenant_id = $1 and game_id = $2
+                   and command_type = 'game.reservation.expire.v1') as expiry_commands,
+               (select count(*)::text from audit.outbox_events
+                 where tenant_id = $1 and aggregate_id = $2
+                   and event_type = 'game.participation.reserved.v1') as reserved_events,
+               (select count(*)::text from games.command_idempotency
+                 where tenant_id = $1 and aggregate_id = $2 and state = 'FAILED'
+                   and error_code = 'GAME_PAYMENT_REQUIRED') as failed_commands,
+               (select count(*)::text from audit.audit_log
+                 where tenant_id = $1 and resource_id = $2 and result = 'REJECTED'
+                   and reason = 'GAME_PAYMENT_REQUIRED') as rejected_audits`,
+            [tenantId, paidGameId],
+          );
+          return result.rows[0];
+        }),
+      ).resolves.toEqual({
+        revision: '1',
+        paid_participants: '0',
+        reservations: '0',
+        eligibility_decisions: '0',
+        payment_snapshots: '0',
+        expiry_commands: '0',
+        reserved_events: '0',
+        failed_commands: '2',
+        rejected_audits: '2',
+      });
+    },
+    10_000,
+  );
 
   it('serializes two HTTP joins for the final free seat without overflow or duplicates', async () => {
     const game = await createGame('last-seat', 2);

@@ -539,6 +539,11 @@ boundary:
 - `game.lifecycle.finish.v1`;
 - `game.integration.reconcile.v1`.
 
+`game.reservation.expire.v1` remains a recovery/domain contract only. SPLIT and SUBSCRIPTION joins
+fail closed with `GAME_PAYMENT_REQUIRED` before creating a reservation or scheduled command until
+generation/payment-fenced expiry and ambiguous provider-result recovery are implemented and reviewed
+as a separate R3 release change.
+
 Commands carry only PadlHub UUIDs, expected revision and safe resource type. The service-only
 Internal API accepts them with `Idempotency-Key`; it also exposes read-only event inspection for
 correlation-based operations. It does not provide an HTTP event-ingestion route.

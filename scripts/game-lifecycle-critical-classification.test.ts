@@ -558,6 +558,25 @@ export function classifyGameScenario(scenarioId: string): Classification {
 }
 
 describe('Game Lifecycle Atlas critical classification', () => {
+  it('keeps paid join fail-closed until the expiry and payment recovery contour exists', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'packages/database/src/game-roster-repository.ts'),
+      'utf8',
+    );
+    const joinStart = source.indexOf('    join(input) {');
+    const confirmPaymentStart = source.indexOf('    confirmPayment(input) {', joinStart);
+    expect(joinStart).toBeGreaterThan(-1);
+    expect(confirmPaymentStart).toBeGreaterThan(joinStart);
+    const joinSource = source.slice(joinStart, confirmPaymentStart);
+    expect(joinSource).toContain("prepared.game.payment_mode === 'SPLIT'");
+    expect(joinSource).toContain("prepared.game.payment_mode === 'SUBSCRIPTION'");
+    expect(joinSource).toContain("'GAME_PAYMENT_REQUIRED'");
+    expect(joinSource).not.toContain('insert into games.seat_reservations');
+    expect(joinSource).not.toContain('insert into eligibility.payment_snapshots');
+    expect(joinSource).not.toContain('game.reservation.expire.v1');
+    expect(joinSource).not.toContain('game.participation.reserved.v1');
+  });
+
   it('classifies every one of the 344 canonical scenarios exactly once', () => {
     const [header, ...rows] = parseCsv(readFileSync(matrixPath, 'utf8'));
     if (!header) throw new Error('GAME_LIFECYCLE_MATRIX_HEADER_MISSING');

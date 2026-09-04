@@ -49,7 +49,7 @@ const ERROR_MESSAGES: Partial<Record<GameRosterCommandErrorCode, string>> = {
   GAME_WAITLIST_DISABLED: 'Очередь для этой игры отключена.',
   GAME_WAITLIST_NOT_AVAILABLE: 'Сейчас нельзя встать в очередь.',
   GAME_NOT_LEAVABLE: 'Сейчас нельзя выйти из игры.',
-  GAME_PAYMENT_REQUIRED: 'Выход из платной игры требует завершённого платёжного контура.',
+  GAME_PAYMENT_REQUIRED: 'Платёжный контур этой игры пока недоступен.',
   GAME_ORGANIZER_MUST_CANCEL: 'Организатор должен отменить игру.',
   GAME_NOT_WAITLISTED: 'Вы не состоите в очереди на эту игру.',
   PLAYER_LEVEL_REQUIRED: 'Укажите уровень, чтобы присоединиться.',

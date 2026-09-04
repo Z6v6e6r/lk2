@@ -587,35 +587,35 @@ describe('Games roster User API', () => {
     expect(leaveWaitlist).toHaveBeenCalledOnce();
   });
 
-  it('returns a processable 202 for a durable paid-seat reservation without inventing a URL', async () => {
-    const reservationId = '238df6f5-fec4-44dd-ad8c-39e98ade8366';
-    const app = await appWith(
-      repository({
-        join: vi.fn().mockResolvedValue(
-          applied({
-            viewerRelation: 'SEAT_RESERVED',
-            omitParticipation: true,
-            reservationId,
-            expiresAt: '2026-08-01T10:15:00.000Z',
-          }),
-        ),
-      }),
-    );
-    const response = await app.inject({
-      method: 'POST',
-      url: `/user/api/v1/local-padel/games/${gameId}/join`,
-      headers: {
+  it.each(['SPLIT', 'SUBSCRIPTION'])(
+    'maps a fail-closed %s join to the stable public payment error',
+    async () => {
+      const join = vi.fn().mockResolvedValue({
+        outcome: 'rejected',
+        code: 'GAME_PAYMENT_REQUIRED',
+        currentRevision: 7,
+        replayed: false,
+      });
+      const app = await appWith(repository({ join }));
+      const headers = {
         authorization: `Bearer ${await accessToken()}`,
         'idempotency-key': 'games-api-paid-command-0001',
-      },
-    });
+      };
+      const response = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/games/${gameId}/join`,
+        headers,
+        payload: { expectedRevision: 7 },
+      });
 
-    expect(response.statusCode).toBe(202);
-    expect(response.json()).toMatchObject({
-      operation: { status: 'PROCESSING', nextAction: { type: 'NONE' } },
-    });
-    expect(JSON.stringify(response.json())).not.toContain('http');
-  });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({
+        code: 'GAME_PAYMENT_REQUIRED',
+        message: 'Платёжный контур этой игры пока недоступен.',
+      });
+      expect(join).toHaveBeenCalledWith(expect.objectContaining({ expectedRevision: 7 }));
+    },
+  );
 
   it('maps stable domain and idempotency conflicts without leaking repository details', async () => {
     const full = await appWith(
