@@ -23,7 +23,9 @@ function input(overrides: Readonly<Record<string, unknown>> = {}) {
   };
 }
 
-function lockedGame(paymentMode: 'NO_PAYMENT' | 'SPLIT' = 'NO_PAYMENT') {
+function lockedGame(
+  paymentMode: 'NO_PAYMENT' | 'ORGANIZER_PAYS' | 'SPLIT' | 'SUBSCRIPTION' = 'NO_PAYMENT',
+) {
   return {
     id: gameId,
     revision: '1',
@@ -101,7 +103,7 @@ function poolWithHandler(
 function baseHandler(
   text: string,
   options: {
-    readonly paymentMode?: 'NO_PAYMENT' | 'SPLIT';
+    readonly paymentMode?: 'NO_PAYMENT' | 'ORGANIZER_PAYS' | 'SPLIT' | 'SUBSCRIPTION';
     readonly facts?: Readonly<Record<string, unknown>>;
   } = {},
 ) {
@@ -179,41 +181,131 @@ describe('game roster repository', () => {
     expect(query.mock.calls.some(([text]) => text.includes('audit.audit_log'))).toBe(true);
   });
 
-  it('creates a capacity-holding split reservation and expiry command', async () => {
-    const expiresAt = '2026-08-01T10:15:00.000Z';
+  it.each(['SPLIT', 'SUBSCRIPTION'] as const)(
+    'fails closed a %s join before eligibility, payment, reservation or event writes',
+    async (paymentMode) => {
+      const { pool, query } = poolWithHandler((text) => baseHandler(text, { paymentMode }));
+
+      await expect(createGameRosterRepository(pool as never).join(input())).resolves.toEqual({
+        outcome: 'rejected',
+        code: 'GAME_PAYMENT_REQUIRED',
+        currentRevision: 1,
+        replayed: false,
+      });
+
+      const forbiddenWrites = [
+        'insert into eligibility.decisions',
+        'insert into eligibility.payment_snapshots',
+        'insert into games.seat_reservations',
+        'insert into games.scheduled_commands',
+        'insert into games.participations',
+        'insert into audit.outbox_events',
+        'update eligibility.personal_invitations',
+        'update games.games set revision',
+      ];
+      expect(
+        query.mock.calls.filter(([text]) =>
+          forbiddenWrites.some((needle) => text.includes(needle)),
+        ),
+      ).toEqual([]);
+      expect(
+        query.mock.calls.some(
+          ([text, values]) =>
+            text.includes("'FAILED'") && (values?.includes('GAME_PAYMENT_REQUIRED') ?? false),
+        ),
+      ).toBe(true);
+      expect(
+        query.mock.calls.some(
+          ([text, values]) =>
+            text.includes('insert into audit.audit_log') &&
+            (values?.includes('GAME_PAYMENT_REQUIRED') ?? false),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each(['SPLIT', 'SUBSCRIPTION'] as const)(
+    'replays a fail-closed %s join without additional writes',
+    async (paymentMode) => {
+      let stored = false;
+      const { pool, query } = poolWithHandler((text) => {
+        if (text.includes('from games.command_idempotency') && stored) {
+          return {
+            rows: [
+              {
+                id: 'd39e4287-e65c-4e75-88e4-4447e4c91ddb',
+                command_type: 'game.join.v1',
+                request_hash: 'a'.repeat(64),
+                state: 'FAILED',
+                result_payload: null,
+                error_code: 'GAME_PAYMENT_REQUIRED',
+              },
+            ],
+          };
+        }
+        if (text.includes('insert into games.command_idempotency')) stored = true;
+        return baseHandler(text, { paymentMode });
+      });
+      const repository = createGameRosterRepository(pool as never);
+      const forbiddenWrites = [
+        'insert into eligibility.decisions',
+        'insert into eligibility.payment_snapshots',
+        'insert into games.seat_reservations',
+        'insert into games.scheduled_commands',
+        'insert into games.participations',
+        'insert into audit.outbox_events',
+        'update eligibility.personal_invitations',
+        'update games.games set revision',
+      ];
+
+      await expect(repository.join(input())).resolves.toMatchObject({
+        outcome: 'rejected',
+        code: 'GAME_PAYMENT_REQUIRED',
+        replayed: false,
+      });
+      const forbiddenWritesAfterFirstAttempt = query.mock.calls.filter(([text]) =>
+        forbiddenWrites.some((needle) => text.includes(needle)),
+      ).length;
+      await expect(repository.join(input())).resolves.toEqual({
+        outcome: 'rejected',
+        code: 'GAME_PAYMENT_REQUIRED',
+        replayed: true,
+      });
+      expect(
+        query.mock.calls.filter(([text]) =>
+          forbiddenWrites.some((needle) => text.includes(needle)),
+        ),
+      ).toHaveLength(forbiddenWritesAfterFirstAttempt);
+    },
+  );
+
+  it('keeps organizer-pays joins on the existing direct participation path', async () => {
     const { pool, query } = poolWithHandler((text) => {
-      if (text.includes('insert into games.seat_reservations')) {
-        return { rows: [{ id: reservationId, expires_at: expiresAt }] };
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
       }
-      return baseHandler(text, { paymentMode: 'SPLIT' });
+      if (text.includes('array_agg(user_id')) {
+        return { rows: [{ user_ids: [organizerId, playerId] }] };
+      }
+      return baseHandler(text, { paymentMode: 'ORGANIZER_PAYS' });
     });
 
     await expect(createGameRosterRepository(pool as never).join(input())).resolves.toMatchObject({
       outcome: 'applied',
-      revision: 2,
-      viewerRelation: 'SEAT_RESERVED',
-      reservationId,
-      expiresAt,
+      viewerRelation: 'PARTICIPANT',
+      participationId,
+      replayed: false,
     });
     expect(
-      query.mock.calls.some(
-        ([text, values]) =>
-          text.includes('game.reservation.expire.v1') &&
-          (values?.some((value) => String(value).includes(reservationId)) ?? false),
-      ),
+      query.mock.calls.some(([text]) => text.includes('insert into games.participations')),
     ).toBe(true);
     expect(
-      query.mock.calls.some(
-        ([text]) =>
-          text.includes('insert into eligibility.payment_snapshots') &&
-          text.includes("'paymentMode', $6::text"),
+      query.mock.calls.some(([text]) =>
+        ['insert into games.seat_reservations', 'game.reservation.expire.v1'].some((needle) =>
+          text.includes(needle),
+        ),
       ),
-    ).toBe(true);
-    expect(
-      query.mock.calls
-        .filter(([text]) => text.includes('insert into audit.outbox_events'))
-        .map((call) => call[1]?.[2]),
-    ).toEqual(['game.participation.reserved.v1']);
+    ).toBe(false);
   });
 
   it('atomically confirms a reserved split seat from trusted evidence and reuses its eligibility snapshot', async () => {
@@ -431,7 +523,7 @@ describe('game roster repository', () => {
     ).toBe(false);
   });
 
-  it('blocks a join with no canonical player level before any roster or payment write', async () => {
+  it('fails closed a paid join before evaluating a missing canonical player level', async () => {
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('eligibility.level_policies')) {
         return { rows: [eligibilityFacts()] };
@@ -452,13 +544,13 @@ describe('game roster repository', () => {
 
     await expect(createGameRosterRepository(pool as never).join(input())).resolves.toEqual({
       outcome: 'rejected',
-      code: 'PLAYER_LEVEL_REQUIRED',
+      code: 'GAME_PAYMENT_REQUIRED',
       currentRevision: 1,
       replayed: false,
     });
     expect(
       query.mock.calls.some(([text]) => text.includes('insert into eligibility.decisions')),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       query.mock.calls.some(([text]) => text.includes('insert into games.seat_reservations')),
     ).toBe(false);

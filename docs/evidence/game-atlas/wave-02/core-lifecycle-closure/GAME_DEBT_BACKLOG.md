@@ -3,11 +3,13 @@
 ## GL-BLOCK-RESERVATION-EXPIRY
 
 - ID: `GL-BLOCK-RESERVATION-EXPIRY`
-- SEVERITY: `P1 / BLOCKED_IMPORTANT`
+- STATUS: `GL-P1-03=CLOSED_BY_FAIL_CLOSED_PAID_JOIN`
+- SEVERITY: `P2 / PRODUCT_DEBT`; automatically returns to `P1` if paid join is enabled without the complete expiry/recovery contour.
 - SCENARIO: `E-028`, `K-013`, reservation expiry and worker recovery
-- REPRO: an ACTIVE paid reservation can outlive its nominal expiry because the process manager deliberately does not claim `game.reservation.expire.v1`.
+- RELEASE BOUNDARY: `SPLIT` and `SUBSCRIPTION` joins are rejected with `GAME_PAYMENT_REQUIRED` at the authoritative repository boundary before eligibility, payment snapshot, reservation, scheduled command, outbox or invitation writes. Re-enabling either mode is an R3 release change.
+- REPRO (historical): before `GL-P1-03` closure, an ACTIVE paid reservation could outlive its nominal expiry because the process manager deliberately did not claim `game.reservation.expire.v1`.
 - EXPECTED: generation-fenced expiry competes safely with payment confirmation; exactly one transition wins and emits one audit/outbox result.
-- ACTUAL: generation and authoritative unpaid predicates are not available, so automatic release remains disabled to avoid corrupting capacity.
+- ACTUAL: the expiry worker is not implemented and paid joins remain disabled. Before paid join can be enabled, implement generation/payment-fenced expiry, worker recovery, a physical expiry-vs-payment race and ambiguous provider-result reconciliation.
 
 ## GL-FU-CANCEL-COMMS
 
