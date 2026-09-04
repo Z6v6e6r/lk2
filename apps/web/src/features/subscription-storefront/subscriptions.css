@@ -1,42 +1,85 @@
 @font-face {
-  font-family: 'Subscription Inter Display';
-  src: url('../../assets/home/InterDisplay-Regular.woff2') format('woff2');
+  font-family: 'Subscription Inter';
+  src: url('./assets/fonts/Inter_18pt-Regular.ttf') format('truetype');
   font-display: swap;
   font-style: normal;
   font-weight: 400;
 }
 
 @font-face {
-  font-family: 'Subscription Inter Display';
-  src: url('../../assets/home/InterDisplay-Medium.woff2') format('woff2');
+  font-family: 'Subscription Inter';
+  src: url('./assets/fonts/Inter_24pt-Regular.ttf') format('truetype');
   font-display: swap;
   font-style: normal;
-  font-weight: 500 800;
+  font-weight: 400;
+  font-optical-sizing: auto;
 }
 
 @font-face {
   font-family: 'Subscription RF Dewi';
-  src: url('../../assets/home/rf-dewi-ultrabold.woff2') format('woff2');
+  src: url('./assets/fonts/RFDewi-Regular.woff') format('woff');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: 'Subscription RF Dewi';
+  src: url('./assets/fonts/RFDewi-Semibold.woff') format('woff');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: 'Subscription RF Dewi';
+  src: url('./assets/fonts/RFDewi-Bold.woff') format('woff');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: 'Subscription RF Dewi';
+  src: url('./assets/fonts/RFDewi-Ultrabold.ttf') format('truetype');
   font-display: swap;
   font-style: normal;
   font-weight: 800;
 }
 
+@font-face {
+  font-family: 'Subscription RF Dewi Expanded';
+  src: url('./assets/fonts/RFDewiExpanded-Bold.ttf') format('truetype');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
 .subscription-storefront {
-  --subscription-accent: #8d63eb;
-  --subscription-accent-strong: #7550d6;
+  --subscription-accent: #8766eb;
+  --subscription-accent-strong: #6142c2;
   --subscription-page-background: #fafafa;
   --subscription-surface: #fff;
-  --subscription-text: #19191b;
+  --subscription-text: #1f1e20;
+  --subscription-text-secondary: #353436;
+  --subscription-text-muted: #b4b4b4;
+  --subscription-border: #ededed;
+  --subscription-badge-bg: #eff8fc;
+  --subscription-badge-text: #2f9dd4;
+  --subscription-card-width: min(480px, calc(100vw - clamp(56px, 10vw, 96px)));
+  --subscription-content-max: 1496px;
+  --subscription-hero-gap: clamp(24px, 5vw, 72px);
+  --subscription-canvas-pad: clamp(16px, 2vw, 32px);
+  --subscription-page-pad: 8px;
 
   box-sizing: border-box;
   width: 100%;
   min-height: 100dvh;
-  padding: 18px 0 64px;
+  padding: var(--subscription-page-pad);
   overflow-x: clip;
   color: var(--subscription-text);
   background: var(--subscription-page-background);
-  font-family: 'Subscription Inter Display', Inter, sans-serif;
+  font-family: 'Subscription Inter', Inter, sans-serif;
 }
 
 .subscription-storefront *,
@@ -50,32 +93,51 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+.subscription-storefront__canvas {
+  display: flex;
+  min-height: calc(100dvh - 2 * var(--subscription-page-pad));
+  padding: var(--subscription-canvas-pad);
+  flex-direction: column;
+  gap: clamp(24px, 2vw, 36px);
+}
+
 .subscription-storefront__navigation {
   display: flex;
   width: 100%;
-  padding: 0 18px;
   align-items: center;
   justify-content: space-between;
 }
 
-.subscription-storefront__navigation button,
-.subscription-storefront__navigation a {
+.subscription-storefront__content {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: var(--subscription-hero-gap);
+}
+
+.subscription-storefront__content:has(.subscription-offer-section__header) {
+  gap: clamp(36px, 5vw, 48px);
+}
+
+.subscription-storefront__nav-button {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: clamp(40px, 4vw, 48px);
+  height: clamp(40px, 4vw, 48px);
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 50%;
-  color: #858587;
-  background: rgb(255 255 255 / 78%);
-  box-shadow: 0 8px 24px rgb(31 31 36 / 5%);
+  background: transparent;
   cursor: pointer;
   text-decoration: none;
 }
 
-.subscription-storefront__navigation button:focus-visible,
-.subscription-storefront__navigation a:focus-visible,
+.subscription-storefront__nav-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.subscription-storefront__nav-button:focus-visible,
 .subscription-card button:focus-visible,
 .subscription-plan-rail:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--subscription-accent) 42%, transparent);
@@ -83,43 +145,52 @@
 }
 
 .subscription-storefront__hero {
+  position: relative;
   display: flex;
-  max-width: 720px;
-  padding: 8px 24px 0;
+  max-width: 626px;
+  padding: 0;
   margin: 0 auto;
   flex-direction: column;
   align-items: center;
   text-align: center;
+  gap: clamp(16px, 1.5vw, 32px);
+  font-size: clamp(28px, 7vw, 40px);
 }
 
 .subscription-storefront__mark {
-  width: 58px;
-  height: 58px;
-  margin-bottom: -2px;
+  position: absolute;
+  z-index: 1;
+  right: 1.2em;
+  top: -0.65em;
+  width: 1.4em;
+  height: auto;
   object-fit: contain;
 }
 
 .subscription-storefront__hero h1 {
   margin: 0;
-  font-family: 'Subscription RF Dewi', 'Subscription Inter Display', sans-serif;
-  font-size: clamp(28px, 7.8vw, 38px);
-  font-weight: 800;
-  line-height: 1.08;
-  letter-spacing: -0.035em;
+  color: var(--subscription-text);
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: clamp(28px, 7vw, 40px);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
 }
 
 .subscription-storefront__hero p {
-  max-width: 580px;
-  margin: 12px 0 0;
-  color: #4f4f54;
-  font-size: 14px;
-  line-height: 1.45;
+  max-width: 499px;
+  margin: 0;
+  color: var(--subscription-text-secondary);
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: clamp(14px, 3.8vw, 16px);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
 }
 
 .subscription-storefront__sections {
   display: grid;
-  gap: 42px;
-  padding-top: 42px;
+  gap: clamp(24px, 4vw, 48px);
 }
 
 .subscription-offer-section {
@@ -127,37 +198,61 @@
 }
 
 .subscription-offer-section__header {
-  max-width: 1060px;
-  padding: 0 20px;
+  max-width: var(--subscription-content-max);
+  padding: 0 clamp(4px, 1.5vw, 16px);
   margin: 0 auto 16px;
 }
 
 .subscription-offer-section__header h2 {
   margin: 0;
-  font-family: 'Subscription RF Dewi', 'Subscription Inter Display', sans-serif;
-  font-size: 22px;
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: clamp(18px, 2.5vw, 24px);
   line-height: 1.15;
 }
 
 .subscription-offer-section__header p {
   margin: 7px 0 0;
   color: #66666b;
-  font-size: 14px;
+  font-size: clamp(13px, 2vw, 16px);
   line-height: 1.45;
 }
 
 .subscription-plan-rail {
-  display: grid;
-  width: 100%;
-  padding: 4px 20px 12px;
+  --subscription-rail-inset: max(16px, var(--subscription-page-pad) + var(--subscription-canvas-pad));
+  --subscription-rail-gap: clamp(12px, 1.25vw, 24px);
+  /* Mobile: pad enough to center-snap a card. Tablet/desktop override to inset only. */
+  --subscription-rail-snap-pad: max(
+    var(--subscription-rail-inset),
+    calc((100vw - var(--subscription-card-width)) / 2)
+  );
+
+  display: flex;
+  width: 100vw;
+  max-width: none;
+  margin-inline: 0;
+  margin-left: calc(50% - 50vw);
+  padding-inline: var(--subscription-rail-inset);
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-  grid-auto-columns: minmax(292px, calc(100vw - 54px));
-  grid-auto-flow: column;
-  gap: 14px;
-  scroll-padding-inline: 20px;
+  align-items: stretch;
+  justify-content: center;
+  gap: var(--subscription-rail-gap);
   scroll-snap-type: inline mandatory;
   scrollbar-width: none;
+}
+
+/* Real flex spacers (not padding): end-padding on overflow containers often
+   cannot be scrolled into view, so the last card never fully centers. */
+.subscription-plan-rail[data-overflow='true'] {
+  justify-content: flex-start;
+  padding-inline: 0;
+}
+
+.subscription-plan-rail[data-overflow='true']::before,
+.subscription-plan-rail[data-overflow='true']::after {
+  content: '';
+  flex: 0 0 max(0px, calc(var(--subscription-rail-snap-pad) - var(--subscription-rail-gap)));
+  pointer-events: none;
 }
 
 .subscription-plan-rail::-webkit-scrollbar {
@@ -165,89 +260,165 @@
 }
 
 .subscription-plan-rail__item {
+  display: flex;
+  width: var(--subscription-card-width);
   min-width: 0;
-  scroll-snap-align: start;
+  padding: clamp(2px, 0.25vw, 4px) clamp(2px, 0.25vw, 4px) 0;
+  flex: 0 0 var(--subscription-card-width);
+  align-items: stretch;
+  scroll-snap-align: center;
 }
 
 .subscription-card {
   position: relative;
   display: flex;
+  width: 100%;
+  height: 100%;
   min-height: 430px;
-  padding: 24px 20px 22px;
+  padding-top: clamp(9px, 0.7vw, 13px);
+  padding-right: clamp(2px, 0.25vw, 4px);
+  padding-bottom: clamp(2px, 0.25vw, 4px);
+  padding-left: clamp(2px, 0.25vw, 4px);
   overflow: hidden;
   flex-direction: column;
-  border: 1px solid #f1f1f2;
-  border-radius: 22px;
-  background: var(--subscription-surface);
-  box-shadow: 0 14px 42px rgb(31 31 38 / 4%);
+  gap: clamp(8px, 0.63vw, 12px);
+  border-radius: clamp(24px, 1.7vw, 32px);
+  background: linear-gradient(180deg, #9c80f2 0%, #fafafa 100%);
 }
 
-.subscription-card--featured {
-  padding-top: 39px;
-  border: 2px solid var(--subscription-accent);
-  box-shadow: 0 18px 48px color-mix(in srgb, var(--subscription-accent) 12%, transparent);
+.subscription-card--no-progress {
+  background: transparent;
 }
 
 .subscription-card__progress {
-  position: absolute;
-  top: 0;
-  right: 0;
-  left: 0;
-  display: grid;
-  min-height: 30px;
-  padding: 0 14px;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
+  min-height: 14px;
+  padding: 0 clamp(16px, 1.3vw, 24px);
   align-items: center;
-  gap: 6px;
-  color: #fff;
-  background: var(--subscription-accent);
-  font-size: 10px;
+  justify-content: space-between;
+  gap: 10px;
+  color: #fafafa;
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .subscription-card__progress span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  flex: 1;
+  text-align: right;
 }
 
-.subscription-card__progress b {
-  font-size: 10px;
-  font-weight: 600;
+.subscription-card__panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  gap: clamp(18px, 1.7vw, 32px);
+  padding: clamp(20px, 1.9vw, 36px) clamp(18px, 1.7vw, 32px) clamp(28px, 2.72vw, 52px);
+  border: 0.5px solid #ededed;
+  border-radius: clamp(18px, 1.3vw, 24px);
+  background: var(--subscription-surface);
+  box-shadow: -4px 4px 8px 0 #1f1e2005;
+}
+
+.subscription-card__header,
+.subscription-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(20px, 1.7vw, 32px);
+}
+
+.subscription-card__lightning {
+  display: block;
+  width: 10px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .subscription-card__tag {
   display: inline-flex;
-  width: fit-content;
-  min-height: 22px;
-  padding: 2px 9px 2px 7px;
+  min-height: var(--subscription-badge-height, 28px);
   align-items: center;
-  gap: 4px;
-  border-radius: 999px;
+}
+
+.subscription-card__tag--label {
+  padding: 0;
   color: #fff;
+  background: transparent;
+}
+
+.subscription-card__tag--art {
+  background: transparent;
+  clip-path: none;
+}
+
+.subscription-card__badge {
+  --subscription-badge-height: 22px;
+
+  display: inline-flex;
+  height: var(--subscription-badge-height);
+  align-items: stretch;
+}
+
+.subscription-card__badge > svg {
+  display: block;
+  height: 100%;
+  width: auto;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 0;
+}
+
+/* Cap ends tuck under the text by 50% of each SVG width (aspect from viewBox). */
+.subscription-card__badge > svg:first-of-type {
+  margin-inline-end: calc(var(--subscription-badge-height) * -32 / 22 * 0.3);
+}
+
+.subscription-card__badge > svg:last-of-type {
+  margin-inline-start: calc(var(--subscription-badge-height) * -29 / 22 * 0.64);
+}
+
+.subscription-card__badge-text {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  padding: 0 4px;
+  align-items: center;
+  justify-content: center;
+  background: var(--subscription-tag-tone, var(--subscription-accent));
+  color: #fff;
+  font-family: 'Subscription RF Dewi Expanded', 'Subscription RF Dewi', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.subscription-card__art {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: 22px;
+  object-fit: contain;
+}
+
+.subscription-card__tag--label > span {
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
   font-size: 12px;
   font-weight: 700;
   line-height: 1;
-  letter-spacing: 0.035em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-}
-
-.subscription-card__tag--mint {
-  background: #49d8a1;
-}
-.subscription-card__tag--violet {
-  background: #9a74ef;
-}
-.subscription-card__tag--lime {
-  background: #91dd1c;
-}
-.subscription-card__tag--blue {
-  background: #66bceb;
 }
 
 .subscription-card__price-row {
   display: flex;
-  min-height: 65px;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
 }
@@ -255,64 +426,75 @@
 .subscription-card__price {
   display: flex;
   margin: 0;
-  align-items: baseline;
-  gap: 5px;
+  padding: 8px 0;
+  align-items: flex-end;
+  gap: 8px;
   white-space: nowrap;
 }
 
 .subscription-card__price strong {
-  font-family: 'Subscription RF Dewi', 'Subscription Inter Display', sans-serif;
-  font-size: 24px;
-  font-weight: 800;
+  color: var(--subscription-text);
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: clamp(28px, 6vw, 36px);
+  font-weight: 700;
   line-height: 1;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.01em;
 }
 
 .subscription-card__price span {
-  color: #b0b0b4;
-  font-size: 10px;
+  color: var(--subscription-text-muted);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .subscription-card__billing-options {
   display: inline-flex;
-  padding: 3px;
+  min-height: 42px;
+  padding: 4px;
   align-items: center;
-  border: 1px solid #f0f0f2;
-  border-radius: 999px;
+  gap: 4px;
+  border-radius: 58px;
   background: #fafafa;
 }
 
 .subscription-card__billing-options button {
-  min-height: 28px;
-  padding: 0 10px;
+  min-height: 34px;
+  padding: 9px 16px 11px;
   border: 0;
-  border-radius: 999px;
-  color: #b1b1b4;
+  border-radius: 40px;
+  color: rgb(53 52 54 / 40%);
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 10px;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
 }
 
-.subscription-card__billing-options button[aria-pressed='true'] {
-  color: #2d2d31;
+.subscription-card__billing-options button[aria-checked='true'] {
+  color: var(--subscription-text-secondary);
   background: #fff;
-  box-shadow: 0 2px 8px rgb(35 35 39 / 8%);
+  border: 0.5px solid var(--subscription-border);
 }
 
 .subscription-card__cta {
   width: 100%;
-  min-height: 42px;
-  padding: 0 16px;
+  min-height: 51px;
+  padding: 16px 24px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 14px;
   color: #fff;
   background: var(--subscription-accent);
   cursor: pointer;
-  font: inherit;
-  font-size: 12px;
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: 16px;
   font-weight: 700;
-  margin-top: 4px;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
   transition:
     background 160ms ease,
     transform 160ms ease;
@@ -321,22 +503,35 @@
 .subscription-card__cta:hover {
   background: var(--subscription-accent-strong);
 }
+
 .subscription-card__cta:active {
   transform: translateY(1px);
 }
 
+.subscription-card__cta:disabled {
+  color: #fff;
+  background: #e8e8e9;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.subscription-card__cta:disabled:hover {
+  background: #e8e8e9;
+}
+
 .subscription-card__benefits {
   display: grid;
-  padding-top: 20px;
-  gap: 22px;
+  gap: clamp(20px, 1.7vw, 32px);
 }
 
 .subscription-card__benefit-group h3 {
-  margin: 0 0 10px;
-  font-size: 10px;
+  margin: 0 0 18px;
+  color: var(--subscription-text);
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: 12px;
   font-weight: 800;
-  line-height: 1.2;
-  letter-spacing: 0.035em;
+  line-height: 1;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -344,7 +539,7 @@
   display: grid;
   padding: 0;
   margin: 0;
-  gap: 10px;
+  gap: clamp(10px, 0.8vw, 14px);
   list-style: none;
 }
 
@@ -352,23 +547,42 @@
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  line-height: 1.3;
+  gap: 12px;
+  color: var(--subscription-text-secondary);
+  font-family: 'Subscription RF Dewi', 'Subscription Inter', sans-serif;
+  font-size: clamp(14px, 0.85vw, 16px);
+  font-weight: 600;
+  line-height: 1.32;
+  letter-spacing: 0.01em;
 }
 
 .subscription-card__benefit-group li:has(> b) {
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
 }
 
-.subscription-card__benefit-group li > svg {
-  color: #242429;
+.subscription-card__benefit-icon {
+  display: block;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
 }
 
 .subscription-card__benefit-group li > b {
-  color: #61c9e8;
-  font-size: 10px;
-  font-weight: 800;
+  display: inline-flex;
+  min-width: 37px;
+  min-height: 18px;
+  padding: 5px 6px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 23px;
+  color: var(--subscription-badge-text);
+  background: var(--subscription-badge-bg);
+  font-family: 'Inter Display', Inter, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
 }
 
 .subscription-visually-hidden {
@@ -402,49 +616,86 @@
   text-align: center;
 }
 
-@media (min-width: 720px) {
-  .subscription-storefront {
-    padding-top: 26px;
-  }
-  .subscription-storefront__navigation {
-    padding: 0 30px;
-  }
-  .subscription-storefront__hero {
-    position: relative;
-    padding-top: 22px;
-  }
+.subscription-preview-selection--error {
+  background: #5a1f24;
+}
+
+.subscription-storefront--loading,
+.subscription-storefront--error {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+}
+
+.subscription-storefront--error {
+  color: #8d1f2d;
+}
+
+@media (max-width: 969px) {
   .subscription-storefront__mark {
-    position: absolute;
-    top: -8px;
+    right: 2em;
+    top: -0.52em;
+    width: 1.2em;
   }
-  .subscription-storefront__sections {
-    padding-top: 36px;
+}
+
+@media (max-width: 499px) {
+  .subscription-card__price-row {
+    flex-wrap: wrap;
   }
+
+  .subscription-card__billing-options {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (min-width: 970px) and (max-width: 1279px) {
+  .subscription-storefront__mark {
+    right: 1.6em;
+    top: -0.5em;
+    width: 1.3em;
+  }
+}
+
+@media (min-width: 720px) {
+  .subscription-storefront__hero h1 {
+    font-size: clamp(40px, 5vw, 48px);
+  }
+
+  .subscription-storefront__hero p {
+    font-size: 18px;
+  }
+
+  .subscription-plan-rail {
+    --subscription-card-width: min(460px, calc(100vw - 64px));
+    /* Free scroll: small edge insets only, no center-snap carousel. */
+    --subscription-rail-snap-pad: var(--subscription-rail-inset);
+    scroll-snap-type: none;
+  }
+
+  .subscription-plan-rail__item {
+    scroll-snap-align: none;
+  }
+}
+
+@media (min-width: 1280px) {
+  .subscription-storefront__hero {
+    font-size: 56px;
+  }
+
+  .subscription-storefront__hero h1 {
+    font-size: 56px;
+  }
+
   .subscription-offer-section__header {
     padding: 0;
   }
 
   .subscription-plan-rail {
-    max-width: 994px;
-    padding: 4px 0 18px;
-    margin: 0 auto;
-    overflow: visible;
-    align-items: end;
-    grid-auto-flow: row;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px;
-    scroll-snap-type: none;
-  }
-
-  .subscription-card {
-    min-height: 395px;
-    padding: 25px 20px 22px;
-    border-radius: 20px;
-  }
-
-  .subscription-card--featured {
-    min-height: 421px;
-    padding-top: 50px;
+    --subscription-card-width: 480px;
   }
 }
 

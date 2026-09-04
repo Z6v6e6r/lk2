@@ -1,10 +1,22 @@
-export type SubscriptionBenefitIcon = 'game' | 'training' | 'group' | 'tournament';
+export type SubscriptionBenefitIcon =
+  | 'game'
+  | 'training'
+  | 'group'
+  | 'friends-time'
+  | 'tournament';
+
+export interface SubscriptionBillingProgress {
+  readonly current: number;
+  readonly total: number;
+  readonly label: string;
+}
 
 export interface SubscriptionBillingOption {
   readonly id: string;
   readonly label: string;
   readonly priceMinor: number;
   readonly priceSuffix?: string;
+  readonly progress?: SubscriptionBillingProgress;
 }
 
 export interface SubscriptionBenefit {
@@ -23,16 +35,14 @@ export interface SubscriptionBenefitGroup {
 export interface SubscriptionPlanView {
   readonly id: string;
   readonly label: string;
-  readonly tagTone?: 'mint' | 'violet' | 'lime' | 'blue';
+  readonly tagTone?: string;
+  readonly artUrl?: string;
   readonly featured?: boolean;
-  readonly progress?: {
-    readonly current: number;
-    readonly total: number;
-    readonly label: string;
-  };
   readonly billingOptions: readonly SubscriptionBillingOption[];
   readonly initialBillingOptionId?: string;
   readonly ctaLabel?: string;
+  /** When true, CTA is non-interactive (e.g. sold out). */
+  readonly ctaDisabled?: boolean;
   readonly benefitGroups: readonly SubscriptionBenefitGroup[];
 }
 

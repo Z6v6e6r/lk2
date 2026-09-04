@@ -1,6 +1,8 @@
 export { SubscriptionStorefront } from './SubscriptionStorefront.js';
 export type {
+  SubscriptionBenefitIcon,
   SubscriptionBillingOption,
+  SubscriptionBillingProgress,
   SubscriptionBenefit,
   SubscriptionBenefitGroup,
   SubscriptionOfferSectionView,
@@ -8,4 +10,4 @@ export type {
   SubscriptionPlanView,
   SubscriptionStorefrontTheme,
   SubscriptionStorefrontView,
-} from './model.js';
+} from './model.ts';

@@ -1,77 +1,44 @@
-import markUrl from '../assets/subscription-mark-compact.png';
-import type { SubscriptionBenefitGroup, SubscriptionStorefrontView } from '../model.js';
+import markUrl from '../assets/brand/подписка.svg';
+import type { SubscriptionStorefrontView } from '../model.js';
+import {
+  academyBenefits,
+  friendshipBenefits,
+  summerPlanPresentation,
+} from './plan-presentation.js';
 
-const discounts: SubscriptionBenefitGroup = {
-  id: 'discounts',
-  title: 'Сверх 1 часа:',
-  items: [
-    { id: 'game-discount', badge: '30%', label: 'Скидка на создание / участие в игре' },
-    { id: 'other-discount', badge: '50%', label: 'Скидка на все остальные форматы' },
-  ],
-};
-
-const friendshipBenefits: readonly SubscriptionBenefitGroup[] = [
-  {
-    id: 'daily',
-    title: '1 час в день:',
-    items: [{ id: 'game', icon: 'game', label: 'Создание / участие в игре' }],
-  },
-  discounts,
-];
-
-const fullBenefits: readonly SubscriptionBenefitGroup[] = [
-  {
-    id: 'daily',
-    title: '1 час в день:',
-    items: [
-      { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
-      { id: 'training', icon: 'training', label: 'Игра + тренер' },
-      { id: 'group', icon: 'group', label: 'Групповые тренировки' },
-      { id: 'tournament', icon: 'tournament', label: 'Турниры «Время на друзей»' },
-    ],
-  },
-  discounts,
-];
-
-const academyBenefits: readonly SubscriptionBenefitGroup[] = [
-  {
-    id: 'daily',
-    title: '1 час в день:',
-    items: [
-      { id: 'game', icon: 'game', label: 'Создание / участие в игре' },
-      { id: 'training', icon: 'training', label: 'Игра + тренер' },
-      { id: 'group', icon: 'group', label: 'Групповые тренировки' },
-    ],
-  },
-  discounts,
-];
-
+/** Default desktop mock aligned with the Figma/storefront card trio. */
 const primaryPlans = [
   {
     id: 'friendship',
-    label: 'Дружба',
-    tagTone: 'mint' as const,
+    ...summerPlanPresentation.friendship,
     billingOptions: [
-      { id: 'monthly', label: 'месячная', priceMinor: 980_000 },
-      { id: 'annual', label: 'годовая', priceMinor: 9_800_000, priceSuffix: '/ год' },
+      { id: 'monthly', label: 'мес.', priceMinor: 980_000 },
+      { id: 'x2', label: 'X2', priceMinor: 1_960_000, priceSuffix: '/ 2 мес.' },
+      {
+        id: 'annual',
+        label: 'год',
+        priceMinor: 9_800_000,
+        priceSuffix: '/ год',
+        progress: { current: 45, total: 200, label: 'Осталось мест' },
+      },
     ],
-    benefitGroups: friendshipBenefits,
   },
   {
     id: 'ra',
-    label: 'РА',
-    tagTone: 'violet' as const,
-    featured: true,
-    progress: { current: 12, total: 100, label: 'Осталось мест' },
-    billingOptions: [{ id: 'monthly', label: 'месячная', priceMinor: 2_380_000 }],
-    benefitGroups: fullBenefits,
+    ...summerPlanPresentation.ra,
+    billingOptions: [
+      {
+        id: 'monthly',
+        label: 'мес.',
+        priceMinor: 2_380_000,
+        progress: { current: 12, total: 100, label: 'Осталось мест' },
+      },
+    ],
   },
   {
     id: 'academy',
-    label: 'Академия',
-    tagTone: 'lime' as const,
-    billingOptions: [{ id: 'monthly', label: 'месячная', priceMinor: 2_380_000 }],
-    benefitGroups: academyBenefits,
+    ...summerPlanPresentation.academy,
+    billingOptions: [{ id: 'monthly', label: 'мес.', priceMinor: 2_380_000 }],
   },
 ] as const;
 
@@ -105,8 +72,8 @@ export const abLetoSubscriptionStorefront: SubscriptionStorefrontView = {
         {
           id: 'energy-five',
           label: 'Энергия-5',
-          tagTone: 'blue',
-          billingOptions: [{ id: 'monthly', label: 'месячная', priceMinor: 1_580_000 }],
+          tagTone: '#66bceb',
+          billingOptions: [{ id: 'monthly', label: 'мес.', priceMinor: 1_580_000 }],
           benefitGroups: friendshipBenefits,
         },
       ],
@@ -127,7 +94,7 @@ export const multiSectionSubscriptionStorefront: SubscriptionStorefrontView = {
         {
           id: 'summer-training',
           label: 'Лето',
-          tagTone: 'lime',
+          tagTone: '#91dd1c',
           featured: true,
           billingOptions: [
             { id: 'season', label: 'сезон', priceMinor: 1_490_000, priceSuffix: '/ сезон' },
@@ -137,11 +104,14 @@ export const multiSectionSubscriptionStorefront: SubscriptionStorefrontView = {
         {
           id: 'weekend',
           label: 'Выходные',
-          tagTone: 'blue',
-          billingOptions: [{ id: 'monthly', label: 'месячная', priceMinor: 890_000 }],
+          tagTone: '#66bceb',
+          billingOptions: [{ id: 'monthly', label: 'мес.', priceMinor: 890_000 }],
           benefitGroups: friendshipBenefits,
         },
       ],
     },
   ],
 };
+
+// Re-export for tests and static previews.
+export { fullBenefits, friendshipBenefits, academyBenefits } from './plan-presentation.js';

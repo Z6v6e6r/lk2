@@ -1,7 +1,8 @@
-import { ArrowLeft, DotsThree } from '@phosphor-icons/react';
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
+import backIconUrl from './assets/icons/back.svg';
+import moreIconUrl from './assets/icons/more.svg';
 import { SubscriptionOfferSection } from './SubscriptionOfferSection.js';
 import type {
   SubscriptionPlanSelection,
@@ -59,43 +60,76 @@ export function SubscriptionStorefront(props: {
       style={themeStyle(props.view.theme)}
       data-storefront-id={props.view.id}
     >
-      <nav className="subscription-storefront__navigation" aria-label="Навигация по витрине">
-        {props.onBack ? (
-          <button type="button" aria-label="Назад" onClick={props.onBack}>
-            <ArrowLeft aria-hidden size={20} weight="bold" />
+      <div className="subscription-storefront__canvas">
+        <nav className="subscription-storefront__navigation" aria-label="Навигация по витрине">
+          {props.onBack ? (
+            <button
+              type="button"
+              className="subscription-storefront__nav-button"
+              aria-label="Назад"
+              onClick={props.onBack}
+            >
+              <img
+                className="subscription-storefront__nav-icon"
+                src={backIconUrl}
+                alt=""
+                aria-hidden
+              />
+            </button>
+          ) : (
+            <a
+              className="subscription-storefront__nav-button"
+              href="/"
+              aria-label="Вернуться на главную"
+            >
+              <img
+                className="subscription-storefront__nav-icon"
+                src={backIconUrl}
+                alt=""
+                aria-hidden
+              />
+            </a>
+          )}
+          <button
+            type="button"
+            className="subscription-storefront__nav-button"
+            aria-label="Другие действия"
+            onClick={props.onMore}
+          >
+            <img
+              className="subscription-storefront__nav-icon"
+              src={moreIconUrl}
+              alt=""
+              aria-hidden
+            />
           </button>
-        ) : (
-          <a href="/" aria-label="Вернуться на главную">
-            <ArrowLeft aria-hidden size={20} weight="bold" />
-          </a>
-        )}
-        <button type="button" aria-label="Другие действия" onClick={props.onMore}>
-          <DotsThree aria-hidden size={24} weight="bold" />
-        </button>
-      </nav>
+        </nav>
 
-      <header className="subscription-storefront__hero">
-        {props.view.markUrl ? (
-          <img
-            className="subscription-storefront__mark"
-            src={props.view.markUrl}
-            alt={props.view.markAlt ?? ''}
-          />
-        ) : null}
-        <h1>{props.view.title}</h1>
-        <p>{props.view.description}</p>
-      </header>
+        <div className="subscription-storefront__content">
+          <header className="subscription-storefront__hero">
+            {props.view.markUrl ? (
+              <img
+                className="subscription-storefront__mark"
+                src={props.view.markUrl}
+                alt={props.view.markAlt ?? ''}
+              />
+            ) : null}
+            <h1>{props.view.title}</h1>
+            <p>{props.view.description}</p>
+          </header>
 
-      <div className="subscription-storefront__sections">
-        {props.view.sections.map((section) => (
-          <SubscriptionOfferSection
-            key={section.id}
-            section={section}
-            selectedBillingOptions={selectedBillingOptions}
-            onBillingOptionChange={selectBillingOption}
-            onChoose={props.onChoose}
-          />
-        ))}
+          <div className="subscription-storefront__sections">
+            {props.view.sections.map((section) => (
+              <SubscriptionOfferSection
+                key={section.id}
+                section={section}
+                selectedBillingOptions={selectedBillingOptions}
+                onBillingOptionChange={selectBillingOption}
+                onChoose={props.onChoose}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     </main>
   );
