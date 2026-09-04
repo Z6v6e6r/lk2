@@ -1,5 +1,8 @@
+import { useRef } from 'react';
+
 import { SubscriptionPlanCard } from './SubscriptionPlanCard.js';
 import type { SubscriptionOfferSectionView, SubscriptionPlanSelection } from './model.js';
+import { useRailAutoscroll } from './useRailAutoscroll.js';
 
 export function SubscriptionOfferSection(props: {
   readonly section: SubscriptionOfferSectionView;
@@ -7,6 +10,19 @@ export function SubscriptionOfferSection(props: {
   readonly onBillingOptionChange: (planId: string, optionId: string) => void;
   readonly onChoose: (selection: SubscriptionPlanSelection) => void;
 }): React.JSX.Element {
+  const railRef = useRef<HTMLDivElement | null>(null);
+  useRailAutoscroll(railRef, { itemCount: props.section.plans.length });
+
+  const hasRealProgress = props.section.plans.some((plan) => {
+    const selectedBillingOptionId =
+      props.selectedBillingOptions[plan.id] ?? plan.initialBillingOptionId ?? plan.billingOptions[0]?.id;
+    return Boolean(
+      plan.billingOptions.find(
+        (option) => option.id === selectedBillingOptionId,
+      )?.progress,
+    );
+  });
+
   return (
     <section className="subscription-offer-section" aria-labelledby={`${props.section.id}-title`}>
       {props.section.title ? (
@@ -21,6 +37,7 @@ export function SubscriptionOfferSection(props: {
       )}
 
       <div
+        ref={railRef}
         className="subscription-plan-rail"
         role="list"
         aria-label={props.section.title ?? 'Варианты абонементов'}
@@ -35,9 +52,16 @@ export function SubscriptionOfferSection(props: {
             throw new Error(`Subscription plan ${plan.id} has no selected billing option`);
           }
           return (
-            <div key={plan.id} className="subscription-plan-rail__item" role="listitem">
+            <div
+              key={plan.id}
+              className={`subscription-plan-rail__item${
+                plan.featured ? ' subscription-plan-rail__item--featured' : ''
+              }`}
+              role="listitem"
+            >
               <SubscriptionPlanCard
                 plan={plan}
+                bare={!hasRealProgress}
                 selectedBillingOptionId={selectedBillingOptionId}
                 onBillingOptionChange={(optionId) => props.onBillingOptionChange(plan.id, optionId)}
                 onChoose={() =>

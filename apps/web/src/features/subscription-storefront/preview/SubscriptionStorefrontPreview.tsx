@@ -7,6 +7,7 @@ import {
   defaultSubscriptionStorefront,
   multiSectionSubscriptionStorefront,
 } from './catalogs.js';
+import { SubscriptionStorefrontTestPreview } from './SubscriptionStorefrontTestPreview.js';
 
 function previewView(): SubscriptionStorefrontView {
   const scenario = new URL(window.location.href).searchParams.get('scenario');
@@ -16,8 +17,16 @@ function previewView(): SubscriptionStorefrontView {
 }
 
 export function SubscriptionStorefrontPreview(): React.JSX.Element {
-  const view = useMemo(() => previewView(), []);
+  const scenario = useMemo(
+    () => new URL(window.location.href).searchParams.get('scenario'),
+    [],
+  );
   const [selection, setSelection] = useState<SubscriptionPlanSelection | null>(null);
+  const view = useMemo(() => previewView(), []);
+
+  if (scenario === 'test') {
+    return <SubscriptionStorefrontTestPreview />;
+  }
 
   return (
     <>
