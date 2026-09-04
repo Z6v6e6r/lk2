@@ -158,6 +158,7 @@ describe('notification projector topology', () => {
       }),
       ack: vi.fn(),
       nack: vi.fn(),
+      reject: vi.fn(),
     };
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     await registerNotificationProjectorConsumer({
@@ -222,6 +223,7 @@ describe('notification projector topology', () => {
       }),
       ack: vi.fn(),
       nack: vi.fn(),
+      reject: vi.fn(),
     };
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     await registerNotificationProjectorConsumer({
@@ -259,7 +261,7 @@ describe('notification projector topology', () => {
       new Error('BOOKING_REMINDER_AHEAD_OF_LIFECYCLE'),
     );
     handlers[0]?.(message);
-    await vi.waitFor(() => expect(channel.nack).toHaveBeenCalledWith(message, false, true));
+    await vi.waitFor(() => expect(channel.reject).toHaveBeenCalledWith(message, true));
     expect(channel.ack).not.toHaveBeenCalled();
   });
 });

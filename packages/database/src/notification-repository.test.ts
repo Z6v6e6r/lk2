@@ -78,7 +78,7 @@ describe('notification inbox repository', () => {
   });
 
   it('advances the read cursor, audits the command and emits one identifier-only event', async () => {
-    const query = vi.fn((text: string) => {
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
@@ -93,6 +93,10 @@ describe('notification inbox repository', () => {
           rows: [{ idempotency_key: 'read-command-test-0001' }],
           rowCount: 1,
         });
+      }
+      if (text.includes('pg_advisory_xact_lock')) {
+        expect(values).toEqual([`${tenantId}:NOTIFICATION_READ:${userId}`]);
+        return Promise.resolve({ rows: [], rowCount: 1 });
       }
       if (text.includes('from notifications.user_read_state')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
@@ -132,5 +136,13 @@ describe('notification inbox repository', () => {
     expect(
       query.mock.calls.some(([text]) => String(text).includes('insert into audit.audit_log')),
     ).toBe(true);
+    const advisoryIndex = query.mock.calls.findIndex(([text]) =>
+      String(text).includes('pg_advisory_xact_lock'),
+    );
+    const cursorReadIndex = query.mock.calls.findIndex(([text]) =>
+      String(text).includes('from notifications.user_read_state'),
+    );
+    expect(advisoryIndex).toBeGreaterThan(-1);
+    expect(cursorReadIndex).toBeGreaterThan(advisoryIndex);
   });
 });

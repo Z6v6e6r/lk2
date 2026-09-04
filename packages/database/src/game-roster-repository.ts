@@ -814,51 +814,6 @@ async function evaluateGameParticipationEligibility(
   };
 }
 
-async function persistPaymentEligibilitySnapshot(
-  client: PoolClient,
-  input: {
-    readonly tenantId: string;
-    readonly operationId: string;
-    readonly decisionId: string;
-    readonly playerId: string;
-    readonly gameId: string;
-    readonly paymentMode: 'SPLIT' | 'SUBSCRIPTION';
-  },
-): Promise<void> {
-  const result = await client.query(
-    `insert into eligibility.payment_snapshots (
-       tenant_id, operation_id, decision_id, player_id, activity_type, activity_id, snapshot
-     )
-     select $1, $2, decision.id, $4, 'GAME', $5,
-            jsonb_build_object(
-              'decisionId', decision.id,
-              'status', decision.status,
-              'ruleCode', decision.rule_code,
-              'outcome', decision.outcome,
-              'reasonCode', decision.reason_code,
-              'policyVersion', decision.policy_version,
-              'levelScaleVersion', decision.level_scale_version,
-              'constraintSource', decision.constraint_source,
-              'invitationId', decision.invitation_id,
-              'details', decision.details,
-              'evaluatedAt', decision.evaluated_at,
-              'paymentMode', $6
-            )
-       from eligibility.decisions decision
-      where decision.tenant_id = $1 and decision.id = $3
-     on conflict (tenant_id, operation_id) do nothing`,
-    [
-      input.tenantId,
-      input.operationId,
-      input.decisionId,
-      input.playerId,
-      input.gameId,
-      input.paymentMode,
-    ],
-  );
-  if (result.rowCount !== 1) throw new Error('GAME_PAYMENT_ELIGIBILITY_SNAPSHOT_WRITE_LOST');
-}
-
 async function consumePersonalInvitation(
   client: PoolClient,
   tenantId: string,
@@ -1170,6 +1125,20 @@ export function createGameRosterRepository(
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const prepared = await prepareCommand(client, input, commandType);
         if (!prepared.ready) return prepared.result;
+        if (
+          prepared.game.payment_mode === 'SPLIT' ||
+          prepared.game.payment_mode === 'SUBSCRIPTION'
+        ) {
+          return storeRejected(
+            client,
+            input,
+            commandType,
+            prepared.commandId,
+            'GAME_PAYMENT_REQUIRED',
+            true,
+            positiveInteger(prepared.game.revision),
+          );
+        }
         const now = timestamp(prepared.game.database_now);
         const rejected = await policyRejection(
           client,
@@ -1204,78 +1173,6 @@ export function createGameRosterRepository(
             true,
             positiveInteger(prepared.game.revision),
           );
-        }
-
-        if (
-          prepared.game.payment_mode === 'SPLIT' ||
-          prepared.game.payment_mode === 'SUBSCRIPTION'
-        ) {
-          const reservation = await queryOne<ReservationRow>(
-            client,
-            `insert into games.seat_reservations (
-               tenant_id, game_id, user_id, state, payment_state, expires_at,
-               eligibility_decision_id
-             ) values ($1, $2, $3, 'ACTIVE', $4, now() + interval '15 minutes', $5)
-             returning id, expires_at::text as expires_at`,
-            [
-              input.tenantId,
-              input.gameId,
-              input.actorUserId,
-              prepared.game.payment_mode === 'SPLIT' ? 'REQUIRES_ACTION' : 'PROCESSING',
-              eligibility.decisionId ?? null,
-            ],
-          );
-          if (!reservation) throw new Error('GAME_RESERVATION_WRITE_LOST');
-          await persistPaymentEligibilitySnapshot(client, {
-            tenantId: input.tenantId,
-            operationId: prepared.commandId,
-            decisionId: eligibility.decisionId,
-            playerId: input.actorUserId,
-            gameId: input.gameId,
-            paymentMode: prepared.game.payment_mode,
-          });
-          const revision = await bumpRevision(client, input);
-          const expiresAt = timestamp(reservation.expires_at);
-          const result = {
-            outcome: 'applied' as const,
-            commandId: prepared.commandId,
-            gameId: input.gameId,
-            revision,
-            viewerRelation: 'SEAT_RESERVED' as const,
-            reservationId: reservation.id,
-            expiresAt,
-            committedAt: now,
-            replayed: false,
-          };
-          await client.query(
-            `insert into games.scheduled_commands (
-               tenant_id, game_id, command_type, due_at, expected_revision, payload
-             ) values ($1, $2, 'game.reservation.expire.v1', $3, $4, $5::jsonb)`,
-            [
-              input.tenantId,
-              input.gameId,
-              expiresAt,
-              revision,
-              JSON.stringify({ reservationId: reservation.id }),
-            ],
-          );
-          await appendEvent(client, {
-            ...eventBase(input, prepared.commandId, revision, now),
-            type: 'game.participation.reserved.v1',
-            payload: {
-              ...eventBase(input, prepared.commandId, revision, now).payload,
-              userId: input.actorUserId,
-              reservationId: reservation.id,
-              expiresAt,
-            },
-          });
-          await consumePersonalInvitation(
-            client,
-            input.tenantId,
-            eligibility.validatedInvitationId,
-          );
-          await recordSuccess(client, input, commandType, result);
-          return result;
         }
 
         const participation = await queryOne<IdentifierRow>(

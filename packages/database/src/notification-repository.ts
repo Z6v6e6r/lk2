@@ -230,6 +230,9 @@ export function createNotificationInboxRepository(pool: Pool): NotificationInbox
           };
         }
 
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:NOTIFICATION_READ:${input.userId}`,
+        ]);
         const currentRow = await queryOne<PositionRow>(
           client,
           `select read_through_item_id as id, read_through_created_at::text as created_at

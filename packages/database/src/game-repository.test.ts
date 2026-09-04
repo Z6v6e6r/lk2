@@ -316,13 +316,14 @@ describe('game repository', () => {
       ...gameRow,
       lifecycle_state: 'SCHEDULED',
       payment_mode: 'NO_PAYMENT',
+      starts_at: '2099-07-20T16:00:00.000Z',
     } as const;
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('from games.games') && text.includes('for update')) {
         return { rows: [scheduledGame] };
       }
       if (text.includes('update games.games') && text.includes("lifecycle_state = 'CANCELLED'")) {
-        return { rows: [{ revision: '2' }] };
+        return { rows: [{ revision: '2', committed_at: '2026-07-19T12:00:00.000Z' }] };
       }
       if (text.includes('select user_id from games.participations')) {
         return { rows: [{ user_id: actorUserId }] };
@@ -350,6 +351,52 @@ describe('game repository', () => {
       participantUserIds: [actorUserId],
       reasonCode: 'ORGANIZER_REQUEST',
     });
+  });
+
+  it('rejects cancellation once the scheduled start time has passed', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              ...gameRow,
+              lifecycle_state: 'SCHEDULED',
+              payment_mode: 'NO_PAYMENT',
+              starts_at: '2020-07-20T16:00:00.000Z',
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRepository(pool as never).cancel({
+        tenantId,
+        actorUserId,
+        gameId,
+        idempotencyKey: 'cancel-game-key-after-start-0001',
+        requestHash: 'e'.repeat(64),
+        correlationId: 'cancel-game-after-start-correlation-0001',
+        reasonCode: 'ORGANIZER_REQUEST',
+      }),
+    ).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_NOT_CANCELLABLE',
+      currentRevision: 1,
+      replayed: false,
+    });
+    const guardedUpdate = query.mock.calls.find(([text]) => text.includes('update games.games'));
+    expect(guardedUpdate?.[0]).toContain('clock_timestamp()');
+    expect(guardedUpdate?.[0]).toContain('starts_at > decision.committed_at');
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes("'GAME_CANCEL_REJECTED'") &&
+          values?.includes('GAME_NOT_CANCELLABLE') === true,
+      ),
+    ).toBe(true);
+    expect(query.mock.calls.some(([text]) => text === 'commit')).toBe(true);
   });
 
   it('rejects cancellation by a non-organizer before changing the aggregate', async () => {
@@ -385,6 +432,10 @@ describe('game repository', () => {
       replayed: false,
     });
     expect(query.mock.calls.some(([text]) => text.includes('update games.games'))).toBe(false);
+    const rejectionAudit = query.mock.calls.find(([text]) =>
+      text.includes("'GAME_CANCEL_REJECTED'"),
+    );
+    expect(rejectionAudit?.[1]).toContain('GAME_NOT_CANCELLABLE');
   });
 
   it('rejects an unmapped or reversed canonical range before creating aggregate state', async () => {

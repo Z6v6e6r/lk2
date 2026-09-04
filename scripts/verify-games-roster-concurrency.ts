@@ -9,9 +9,18 @@ import {
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) throw new Error('DATABASE_URL is required');
-const databaseName = new URL(connectionString).pathname.replace(/^\//, '');
-if (!databaseName.endsWith('_verify')) {
-  throw new Error('Games concurrency verification requires an isolated *_verify database');
+const parsedConnectionString = new URL(connectionString);
+const databaseName = decodeURIComponent(parsedConnectionString.pathname.slice(1));
+if (
+  !['postgresql:', 'postgres:'].includes(parsedConnectionString.protocol) ||
+  parsedConnectionString.search !== '' ||
+  parsedConnectionString.hash !== '' ||
+  !['localhost', '127.0.0.1', '[::1]'].includes(parsedConnectionString.hostname) ||
+  !databaseName.endsWith('_verify')
+) {
+  throw new Error(
+    'Games concurrency verification requires a query-free loopback *_verify database',
+  );
 }
 
 const pool = createDatabasePool(connectionString);
@@ -24,6 +33,7 @@ const playerB = randomUUID();
 const playerC = randomUUID();
 const noPaymentGameId = randomUUID();
 const splitGameId = randomUUID();
+const subscriptionGameId = randomUUID();
 const stationId = randomUUID();
 const startsAt = new Date(Date.now() + 86_400_000).toISOString();
 const endsAt = new Date(Date.now() + 91_800_000).toISOString();
@@ -83,16 +93,29 @@ try {
        ($1, $2, $4, 'No-payment concurrency', 'FRIENDLY', 'PUBLIC', 'SCHEDULED',
         $5, $6, $7, 'Europe/Moscow', 2, true, $8, 'NO_PAYMENT'),
        ($1, $3, $4, 'Split reservation concurrency', 'FRIENDLY', 'PUBLIC', 'SCHEDULED',
-        $5, $6, $7, 'Europe/Moscow', 2, true, $8, 'SPLIT')`,
-      [tenantId, noPaymentGameId, splitGameId, organizerId, stationId, startsAt, endsAt, cutoffAt],
+        $5, $6, $7, 'Europe/Moscow', 2, true, $8, 'SPLIT'),
+       ($1, $9, $4, 'Subscription reservation concurrency', 'FRIENDLY', 'PUBLIC', 'SCHEDULED',
+        $5, $6, $7, 'Europe/Moscow', 2, true, $8, 'SUBSCRIPTION')`,
+      [
+        tenantId,
+        noPaymentGameId,
+        splitGameId,
+        organizerId,
+        stationId,
+        startsAt,
+        endsAt,
+        cutoffAt,
+        subscriptionGameId,
+      ],
     );
     await client.query(
       `insert into games.participations (
          tenant_id, game_id, user_id, role, state, payment_state
        ) values
        ($1, $2, $4, 'ORGANIZER', 'ACTIVE', 'NOT_REQUIRED'),
-       ($1, $3, $4, 'ORGANIZER', 'ACTIVE', 'NOT_REQUIRED')`,
-      [tenantId, noPaymentGameId, splitGameId, organizerId],
+       ($1, $3, $4, 'ORGANIZER', 'ACTIVE', 'NOT_REQUIRED'),
+       ($1, $5, $4, 'ORGANIZER', 'ACTIVE', 'NOT_REQUIRED')`,
+      [tenantId, noPaymentGameId, splitGameId, organizerId, subscriptionGameId],
     );
   });
 
@@ -169,48 +192,28 @@ try {
     throw new Error(`Waitlist promotion failed: ${JSON.stringify({ promotion, promotionReplay })}`);
   }
 
-  const splitResults = await Promise.all([
-    repository.join(commandInput(playerA, splitGameId, 'split-a')),
-    repository.join(commandInput(playerC, splitGameId, 'split-c')),
-  ]);
-  const splitApplied = splitResults.filter((result) => result.outcome === 'applied');
-  const splitRejected = splitResults.filter((result) => result.outcome === 'rejected');
-  if (
-    splitApplied.length !== 1 ||
-    splitApplied[0]?.viewerRelation !== 'SEAT_RESERVED' ||
-    splitRejected.length !== 1 ||
-    splitRejected[0]?.code !== 'GAME_FULL'
-  ) {
-    throw new Error(`Split reservation race failed: ${JSON.stringify(splitResults)}`);
-  }
-  const splitReservation = splitApplied[0];
-  if (splitReservation?.outcome !== 'applied' || !splitReservation.reservationId) {
-    throw new Error('Split reservation identifier missing');
-  }
-  await withTenantTransaction(pool, tenantId, async (client) => {
-    await client.query(
-      `update games.seat_reservations
-          set created_at = now() - interval '2 seconds',
-              expires_at = now() - interval '1 second'
-        where tenant_id = $1 and game_id = $2 and id = $3`,
-      [tenantId, splitGameId, splitReservation.reservationId],
-    );
-  });
-  const expiryInput = {
-    tenantId,
-    gameId: splitGameId,
-    commandId: randomUUID(),
-    idempotencyKey: 'games-verify-expiry-0001',
-    requestHash: requestHash({
-      gameId: splitGameId,
-      reservationId: splitReservation.reservationId,
-    }),
-    correlationId: 'corr-games-verify-expiry-0001',
-    reservationId: splitReservation.reservationId,
-  };
-  const expiry = await repository.expireReservation(expiryInput);
-  if (expiry.outcome !== 'applied') {
-    throw new Error(`Reservation expiry failed: ${JSON.stringify(expiry)}`);
+  const splitActors = [playerA, playerC] as const;
+  const splitResults = await Promise.all(
+    splitActors.map((playerId, index) =>
+      repository.join(commandInput(playerId, splitGameId, `split-${index}`)),
+    ),
+  );
+  const subscriptionResults = await Promise.all(
+    [playerA, playerC].map((playerId, index) =>
+      repository.join(commandInput(playerId, subscriptionGameId, `subscription-${index}`)),
+    ),
+  );
+  for (const [mode, results] of [
+    ['SPLIT', splitResults],
+    ['SUBSCRIPTION', subscriptionResults],
+  ] as const) {
+    if (
+      results.some(
+        (result) => result.outcome !== 'rejected' || result.code !== 'GAME_PAYMENT_REQUIRED',
+      )
+    ) {
+      throw new Error(`${mode} paid join was not fail-closed: ${JSON.stringify(results)}`);
+    }
   }
 
   const projectionEventId = randomUUID();
@@ -257,6 +260,12 @@ try {
       promotion_commands: number;
       audit_rows: number;
       outbox_rows: number;
+      paid_participants: number;
+      paid_reservations: number;
+      paid_eligibility_decisions: number;
+      paid_payment_snapshots: number;
+      paid_expiry_commands: number;
+      paid_reserved_events: number;
     }>(
       `select
        (select count(*)::integer from games.participations
@@ -271,8 +280,24 @@ try {
        (select count(*)::integer from audit.audit_log
          where tenant_id = $1 and resource_id in ($2, $3)) as audit_rows,
        (select count(*)::integer from audit.outbox_events
-         where tenant_id = $1 and aggregate_id in ($2, $3)) as outbox_rows`,
-      [tenantId, noPaymentGameId, splitGameId],
+         where tenant_id = $1 and aggregate_id in ($2, $3, $4)) as outbox_rows,
+       (select count(*)::integer from games.participations
+         where tenant_id = $1 and game_id in ($3, $4) and role = 'PLAYER') as paid_participants,
+       (select count(*)::integer from games.seat_reservations
+         where tenant_id = $1 and game_id in ($3, $4)) as paid_reservations,
+       (select count(*)::integer from eligibility.decisions
+         where tenant_id = $1 and activity_type = 'GAME' and activity_id in ($3, $4))
+         as paid_eligibility_decisions,
+       (select count(*)::integer from eligibility.payment_snapshots
+         where tenant_id = $1 and activity_type = 'GAME' and activity_id in ($3, $4))
+         as paid_payment_snapshots,
+       (select count(*)::integer from games.scheduled_commands
+         where tenant_id = $1 and game_id in ($3, $4)
+           and command_type = 'game.reservation.expire.v1') as paid_expiry_commands,
+       (select count(*)::integer from audit.outbox_events
+         where tenant_id = $1 and aggregate_id in ($3, $4)
+           and event_type = 'game.participation.reserved.v1') as paid_reserved_events`,
+      [tenantId, noPaymentGameId, splitGameId, subscriptionGameId],
     );
     return counts.rows[0];
   });
@@ -282,8 +307,12 @@ try {
     state.active_reservations !== 0 ||
     state.active_waitlist !== 0 ||
     state.promotion_commands !== 1 ||
-    state.audit_rows !== 8 ||
-    state.outbox_rows !== 11
+    state.paid_participants !== 0 ||
+    state.paid_reservations !== 0 ||
+    state.paid_eligibility_decisions !== 0 ||
+    state.paid_payment_snapshots !== 0 ||
+    state.paid_expiry_commands !== 0 ||
+    state.paid_reserved_events !== 0
   ) {
     throw new Error(`Stored roster state mismatch: ${JSON.stringify(state)}`);
   }
@@ -298,7 +327,7 @@ try {
       promotion,
       promotionReplay,
       splitResults,
-      expiry,
+      subscriptionResults,
       projection,
       projectionReplay,
       storedProjection,
