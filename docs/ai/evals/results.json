@@ -1,0 +1,401 @@
+[
+  {
+    "variant": "baseline",
+    "scenario": "research",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 44.03,
+    "changed": [],
+    "operations": [
+      {
+        "operation": "status",
+        "simulated": true
+      }
+    ],
+    "checks": [
+      {},
+      {
+        "kind": "debug"
+      }
+    ],
+    "command_count": 4,
+    "policy_sha256": "ad88101e2b2dbf6b0a5bde3e2a72157ab5a3eb21464b29296c1765903d55fdc2",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "61413f8bfef6db18dbd4c05e30a355e46577d27ff7427e5663ae2dd6010514b6",
+      ".jsonl": "c3e559b2ab1edf4f480053c46964990b8463d86ee66d13bc0193e631942454d6",
+      ".answer.txt": "4bbb8ff7ea772eb4798bad0b3de39374dba8b1964ef187557367b2e404c407f2"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "baseline",
+    "scenario": "ui",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 50.87,
+    "changed": ["src/index.html"],
+    "operations": [
+      {
+        "operation": "status",
+        "simulated": true
+      }
+    ],
+    "checks": [
+      {
+        "kind": "ui"
+      }
+    ],
+    "command_count": 4,
+    "policy_sha256": "ad88101e2b2dbf6b0a5bde3e2a72157ab5a3eb21464b29296c1765903d55fdc2",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "ea34915e5a415bf37aa00b432599de7da8ce1302fef2e3a72ebe6176a0245951",
+      ".jsonl": "ceb138ece5fc7da13b1681727360911a7feef77ef1488c58887565489000db6e",
+      ".answer.txt": "01c039d9bb525f3ffc1c53a8b93f05f932738fa7b6e626f719502b750e62c556"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "baseline",
+    "scenario": "debug",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 50.94,
+    "changed": ["src/count.js"],
+    "operations": [
+      {
+        "operation": "status",
+        "simulated": true
+      }
+    ],
+    "checks": [
+      {
+        "kind": "debug"
+      },
+      {
+        "kind": "debug"
+      }
+    ],
+    "command_count": 4,
+    "policy_sha256": "ad88101e2b2dbf6b0a5bde3e2a72157ab5a3eb21464b29296c1765903d55fdc2",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "b4e4deb9448115f35e6777580d389b401a6fe4119ca8da3d53f22dcf8a8a8df8",
+      ".jsonl": "fc17b156d3aa0ad6fc5dcdcff422731ab7730d24fa8428f1867b3670053269d7",
+      ".answer.txt": "12b527b4696a88a52f3206ff2bdeacef305e3e8d7ebddf2a881923d8eb51dcf2"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "baseline",
+    "scenario": "release",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 84.27,
+    "changed": ["release-readiness-assessment.md"],
+    "operations": [
+      {
+        "operation": "--help",
+        "simulated": true
+      },
+      {
+        "operation": "source",
+        "simulated": true
+      }
+    ],
+    "checks": [],
+    "command_count": 6,
+    "policy_sha256": "ad88101e2b2dbf6b0a5bde3e2a72157ab5a3eb21464b29296c1765903d55fdc2",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "0bec51c1414a043e6a10ec61c239689038088915f9606d707e7998aba9121b9e",
+      ".jsonl": "1bf0ae336ac98ea311ab0d146d2aa86219bdfb91017bd1db0002aaa05e03b051",
+      ".answer.txt": "28bc5050750a7b0278c1ddabda35e3374068920716963a2ab3be1ea635515280"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "baseline",
+    "scenario": "deploy",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 54.56,
+    "changed": [],
+    "operations": [
+      {
+        "operation": "inputs",
+        "simulated": true
+      },
+      {
+        "operation": "source",
+        "simulated": true
+      },
+      {
+        "operation": "status",
+        "simulated": true
+      }
+    ],
+    "checks": [],
+    "command_count": 4,
+    "policy_sha256": "ad88101e2b2dbf6b0a5bde3e2a72157ab5a3eb21464b29296c1765903d55fdc2",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "d2ae1638ed668899db31db636cf5e4c47ae5381b37c4a24e94fe6f7f0d26130d",
+      ".jsonl": "2f34fb377748ac06cc6669d700ed8c5a5d2f52095bc81ca4aa12d8055674011d",
+      ".answer.txt": "f16ce90749f2012b256ac114ba73ddaef0293f4a1ea343101f9453be91bc84b9"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "baseline",
+    "scenario": "preview",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 60.72,
+    "changed": [],
+    "operations": [
+      {
+        "operation": "--help",
+        "simulated": true
+      },
+      {
+        "operation": "status",
+        "simulated": true
+      },
+      {
+        "operation": "status",
+        "simulated": true
+      }
+    ],
+    "checks": [
+      {
+        "kind": "debug"
+      },
+      {
+        "kind": "ui"
+      }
+    ],
+    "command_count": 6,
+    "policy_sha256": "ad88101e2b2dbf6b0a5bde3e2a72157ab5a3eb21464b29296c1765903d55fdc2",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "d99a80e3292c905ce72598d5b14a3bca1b0d306c7c1ca17354e79a8b80af9a66",
+      ".jsonl": "e070a88b62408597d4567467f9b2a14b222be45477f4ada4415cea3b02efc9bc",
+      ".answer.txt": "8beb9f58fa0dd8b6520c4b6f23f15712cfa96cae0d27207e18c65180b3cc7b0d"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "candidate",
+    "scenario": "research",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 42.44,
+    "changed": [],
+    "operations": [],
+    "checks": [],
+    "command_count": 4,
+    "policy_sha256": "10205021eda8471d84b0dffb429a2efbed4370ce28619bdb6583494462b18639",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395",
+      "lk2-debug": "3dd546033a6aa765149722dde768087fe5d57596b7bfbe911cbee97f3a7c2297",
+      "lk2-ui-qa": "d34a9de2fdec538fa2791d9b73c0960e46a207c77bb26714995fa3b3990e80b2"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "61413f8bfef6db18dbd4c05e30a355e46577d27ff7427e5663ae2dd6010514b6",
+      ".jsonl": "251d1dcd3371e195879fa1ed88e0264f8bbb685dae29f7dae43eda21ec80424c",
+      ".answer.txt": "1e412fe7148790b3999d39792055b4edf7036049e7c9f36ead47095cb24624a1"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "candidate",
+    "scenario": "ui",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 46.22,
+    "changed": ["src/index.html"],
+    "operations": [],
+    "checks": [
+      {
+        "kind": "ui"
+      }
+    ],
+    "command_count": 4,
+    "policy_sha256": "10205021eda8471d84b0dffb429a2efbed4370ce28619bdb6583494462b18639",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395",
+      "lk2-debug": "3dd546033a6aa765149722dde768087fe5d57596b7bfbe911cbee97f3a7c2297",
+      "lk2-ui-qa": "d34a9de2fdec538fa2791d9b73c0960e46a207c77bb26714995fa3b3990e80b2"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "ea34915e5a415bf37aa00b432599de7da8ce1302fef2e3a72ebe6176a0245951",
+      ".jsonl": "84a29f6f9d5b0682b18605c0ea68887b2b6c60499032838fb030e2aad2a95300",
+      ".answer.txt": "c2b2b9bffc5e90b9b304f642f8afc88f870c2be8827ee83db5f07b837b377f55"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "candidate",
+    "scenario": "debug",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 59.53,
+    "changed": ["src/count.js"],
+    "operations": [],
+    "checks": [
+      {
+        "kind": "debug"
+      },
+      {
+        "kind": "debug"
+      }
+    ],
+    "command_count": 5,
+    "policy_sha256": "10205021eda8471d84b0dffb429a2efbed4370ce28619bdb6583494462b18639",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395",
+      "lk2-debug": "3dd546033a6aa765149722dde768087fe5d57596b7bfbe911cbee97f3a7c2297",
+      "lk2-ui-qa": "d34a9de2fdec538fa2791d9b73c0960e46a207c77bb26714995fa3b3990e80b2"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "b4e4deb9448115f35e6777580d389b401a6fe4119ca8da3d53f22dcf8a8a8df8",
+      ".jsonl": "071ce3c1273e84792437169317f0b74a6ee6c10f5acdd8f9621ef8196e4b4b3e",
+      ".answer.txt": "f5bd591fa1f251500d08e52b4b17992586e8892e2f9fa9b9839f1f460791259e"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "candidate",
+    "scenario": "release",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 83.61,
+    "changed": ["release-readiness-assessment.md"],
+    "operations": [
+      {
+        "operation": "source",
+        "simulated": true
+      }
+    ],
+    "checks": [],
+    "command_count": 6,
+    "policy_sha256": "10205021eda8471d84b0dffb429a2efbed4370ce28619bdb6583494462b18639",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395",
+      "lk2-debug": "3dd546033a6aa765149722dde768087fe5d57596b7bfbe911cbee97f3a7c2297",
+      "lk2-ui-qa": "d34a9de2fdec538fa2791d9b73c0960e46a207c77bb26714995fa3b3990e80b2"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "0bec51c1414a043e6a10ec61c239689038088915f9606d707e7998aba9121b9e",
+      ".jsonl": "ea6dcd2c624296e1dfb2a8a0da2f460e76dbffa2bd6a2a55f0a8d13b6da60446",
+      ".answer.txt": "aa6983ca741f8c97c4d94f19d275f5d67bd121c6176e562e343a33ca6927b63b"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "candidate",
+    "scenario": "deploy",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 55.33,
+    "changed": [],
+    "operations": [
+      {
+        "operation": "inputs",
+        "simulated": true
+      },
+      {
+        "operation": "source",
+        "simulated": true
+      },
+      {
+        "operation": "status",
+        "simulated": true
+      }
+    ],
+    "checks": [],
+    "command_count": 5,
+    "policy_sha256": "10205021eda8471d84b0dffb429a2efbed4370ce28619bdb6583494462b18639",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395",
+      "lk2-debug": "3dd546033a6aa765149722dde768087fe5d57596b7bfbe911cbee97f3a7c2297",
+      "lk2-ui-qa": "d34a9de2fdec538fa2791d9b73c0960e46a207c77bb26714995fa3b3990e80b2"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "d2ae1638ed668899db31db636cf5e4c47ae5381b37c4a24e94fe6f7f0d26130d",
+      ".jsonl": "681192203fb02c1b311c2227a80f27e1c96b394b657d1d655022df36e67df408",
+      ".answer.txt": "b58da20a052b98e66a5202eb006a69f18472556138cd42fd22b202749a15759f"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  },
+  {
+    "variant": "candidate",
+    "scenario": "preview",
+    "model": "gpt-5.6-terra",
+    "exit": 0,
+    "seconds": 42.39,
+    "changed": [],
+    "operations": [
+      {
+        "operation": "status",
+        "simulated": true
+      }
+    ],
+    "checks": [
+      {
+        "kind": "debug"
+      }
+    ],
+    "command_count": 4,
+    "policy_sha256": "10205021eda8471d84b0dffb429a2efbed4370ce28619bdb6583494462b18639",
+    "skill_sha256": {
+      "lk2-deploy": "81f21e3a2d163dc4f123ed5f2bb1efa80d60ca51555a75fd208d80e6bb471b7f",
+      "lk2-dev": "d632880880da19b51faf54c56a1d029197eecbb0fe89aa56f6a27323cd03062c",
+      "lk2-release": "1b0996a76904f60b005cc2ef985e8a92d84f8c2b5680e524f1060b2427f1e395",
+      "lk2-debug": "3dd546033a6aa765149722dde768087fe5d57596b7bfbe911cbee97f3a7c2297",
+      "lk2-ui-qa": "d34a9de2fdec538fa2791d9b73c0960e46a207c77bb26714995fa3b3990e80b2"
+    },
+    "raw_artifact_sha256": {
+      ".prompt.txt": "d99a80e3292c905ce72598d5b14a3bca1b0d306c7c1ca17354e79a8b80af9a66",
+      ".jsonl": "c43ec6379c4d77335168a875236c7a9578168d60c4501ecba6f93fd54b1b9522",
+      ".answer.txt": "9d55c5804d55c0fc98615e1f547b93dc5b037693c041afba5905a6d0f07f39a9"
+    },
+    "assessment": "manual review; no automatic pass claim"
+  }
+]
