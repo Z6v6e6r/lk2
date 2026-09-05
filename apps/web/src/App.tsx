@@ -544,7 +544,8 @@ export function App({
   );
   const browserNavigator = typeof navigator === 'undefined' ? undefined : navigator;
   const iosBrowser = isIOSBrowser(browserNavigator);
-  const entryView = preferredAuthEntryView(browserNavigator);
+  const localPreview = import.meta.env.DEV && import.meta.env.VITE_LK2_LOCAL_PREVIEW === '1';
+  const entryView = localPreview ? 'phone' : preferredAuthEntryView(browserNavigator);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [homeBase, setHomeBase] = useState<HomeBase | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
@@ -2333,9 +2334,13 @@ export function App({
             <>
               <span className="step-label">Шаг 1 из 2</span>
               <h1 id="auth-title">Вход по номеру</h1>
-              <p className="form-lead">Мы отправим короткий код для подтверждения.</p>
+              <p className="form-lead">
+                {localPreview
+                  ? 'Локальный тестовый вход. СМС не отправляется.'
+                  : 'Мы отправим короткий код для подтверждения.'}
+              </p>
 
-              {iosBrowser ? (
+              {iosBrowser && !localPreview ? (
                 <div className="ios-auth-guidance ios-auth-guidance--phone" role="note">
                   <strong>Для iPhone выбран надёжный способ входа</strong>
                   <span>
@@ -2426,24 +2431,28 @@ export function App({
               {import.meta.env.DEV ? (
                 <p className="dev-hint">Тестовый вход: +79990000001 / 0000</p>
               ) : null}
-              <button
-                className="text-button auth-alternative"
-                type="button"
-                onClick={() => dispatch({ type: 'oauth-view' })}
-              >
-                ← Войти через Viva
-              </button>
+              {!localPreview ? (
+                <button
+                  className="text-button auth-alternative"
+                  type="button"
+                  onClick={() => dispatch({ type: 'oauth-view' })}
+                >
+                  ← Войти через Viva
+                </button>
+              ) : null}
             </>
           ) : (
             <>
               <span className="step-label">Шаг 2 из 2</span>
               <h1 id="auth-title">Введите код</h1>
               <p className="form-lead">
-                Код из четырёх цифр отправлен на {state.challenge?.maskedPhone}.
+                {localPreview
+                  ? 'Введите тестовый код 0000. СМС не отправляется.'
+                  : `Код из четырёх цифр отправлен на ${state.challenge?.maskedPhone}.`}
               </p>
 
               <form onSubmit={handleCodeSubmit} noValidate aria-busy={isVerifying || isRequesting}>
-                <label htmlFor="otp">Код из СМС</label>
+                <label htmlFor="otp">{localPreview ? 'Тестовый код' : 'Код из СМС'}</label>
                 <input
                   ref={codeInput}
                   id="otp"
@@ -2472,7 +2481,7 @@ export function App({
                 ) : null}
                 {state.notice ? (
                   <p className="notice-message" role="status" aria-live="polite">
-                    {state.notice}
+                    {localPreview ? 'Тестовый код готов.' : state.notice}
                   </p>
                 ) : null}
 

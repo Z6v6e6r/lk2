@@ -90,7 +90,11 @@
     "gift-certificates:sale:verify": "node --env-file-if-exists=.env --import tsx scripts/verify-gift-certificate-sale.ts",
     "runtime:imports": "node scripts/verify-runtime-imports.js",
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke-test.ts",
-    "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts"
+    "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts",
+    "local:up": "node scripts/lk2-local.js up",
+    "local:status": "node scripts/lk2-local.js status",
+    "local:stop": "node scripts/lk2-local.js stop",
+    "local:config": "node scripts/lk2-local.js config"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

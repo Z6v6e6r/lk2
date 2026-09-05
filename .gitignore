@@ -35,3 +35,6 @@ apps/mobile/ios/
 *.jks
 *.p12
 *.mobileprovision
+
+# Per-worktree disposable local preview state
+.lk2-local/
