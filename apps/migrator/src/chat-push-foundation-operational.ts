@@ -63,13 +63,18 @@ export function assertFoundationRabbitInventory(
     'phub.dead-letter.v1',
     'phub.notification-intent-projector.v1',
   ] as const;
-  const gameQueueName = 'phub.game-notification-intent-projector.v1' as const;
-  const gameQueuePresent = queues.some((queue) => queue.name === gameQueueName);
+  const gameQueueNames = [
+    'phub.game-notification-intent-projector.v1',
+    'phub.game-messaging-membership.v1',
+  ] as const;
+  const gameQueuePresent = queues.some((queue) =>
+    gameQueueNames.includes(queue.name as (typeof gameQueueNames)[number]),
+  );
   if (options.mode === 'optional' && gameQueuePresent) {
     fail('CHAT_PUSH_FOUNDATION_RABBIT_QUEUE_INVENTORY_MISMATCH');
   }
   const expectedQueueNames: readonly string[] =
-    options.mode === 'optional' ? legacyQueueNames : [...legacyQueueNames, gameQueueName];
+    options.mode === 'optional' ? legacyQueueNames : [...legacyQueueNames, ...gameQueueNames];
   const selectedQueues = queues.filter((queue) => expectedQueueNames.includes(String(queue.name)));
   if (selectedQueues.length === 0 && options.mode === 'optional') {
     return { queueCount: 0, bindingCount: 0 };
@@ -88,7 +93,7 @@ export function assertFoundationRabbitInventory(
     }
     if (
       options.mode === 'required' &&
-      name === gameQueueName &&
+      gameQueueNames.includes(name as (typeof gameQueueNames)[number]) &&
       (!Number.isInteger(Number(queue.consumers)) || Number(queue.consumers) < 1)
     ) {
       fail('CHAT_PUSH_FOUNDATION_RABBIT_CONSUMER_MISSING');
@@ -132,11 +137,16 @@ export function assertFoundationRabbitInventory(
     ...(options.mode !== 'optional'
       ? [
           '\u0000phub.game-notification-intent-projector.v1\u0000queue\u0000phub.game-notification-intent-projector.v1',
+          '\u0000phub.game-messaging-membership.v1\u0000queue\u0000phub.game-messaging-membership.v1',
           ...(options.mode === 'required'
             ? [
                 'phub.events\u0000phub.game-notification-intent-projector.v1\u0000queue\u0000game.cancelled.v1',
                 'phub.events\u0000phub.game-notification-intent-projector.v1\u0000queue\u0000game.participation.confirmed.v1',
                 'phub.events\u0000phub.game-notification-intent-projector.v1\u0000queue\u0000game.participation.left.v1',
+                'phub.events\u0000phub.game-messaging-membership.v1\u0000queue\u0000game.cancelled.v1',
+                'phub.events\u0000phub.game-messaging-membership.v1\u0000queue\u0000game.participation.confirmed.v1',
+                'phub.events\u0000phub.game-messaging-membership.v1\u0000queue\u0000game.participation.left.v1',
+                'phub.events\u0000phub.game-messaging-membership.v1\u0000queue\u0000game.scheduled.v1',
               ]
             : []),
         ]

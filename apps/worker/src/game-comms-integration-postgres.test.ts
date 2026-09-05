@@ -4,6 +4,7 @@ import {
   createGameRepository,
   createGameRosterRepository,
   createMessagingRepository,
+  type GameMessagingMembershipSourceEventType,
   withTenantTransaction,
 } from '@phub/database';
 import { notificationSourceEventSchema, type NotificationSourceEvent } from '@phub/notifications';
@@ -16,6 +17,7 @@ const connectionString = process.env.GAME_COMMS_INTEGRATION_TEST_DATABASE_URL;
 const describePostgres = connectionString ? describe : describe.skip;
 const applicationName = 'game-comms-integration-postgres-test';
 const deadlineMs = 12_000;
+const transitionBarrierPrefix = 'game-comms-transition-first-barrier:';
 
 function requestHash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -165,6 +167,94 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
     });
   }
 
+  function reconcile(source: NotificationSourceEvent) {
+    if (
+      !('aggregateRevision' in source.payload) ||
+      typeof source.payload.aggregateRevision !== 'string'
+    ) {
+      throw new Error('GAME_COMMS_EVENT_REVISION_MISSING');
+    }
+    return messaging().reconcileGameConversationMembership({
+      tenantId: source.tenantId,
+      gameId: source.aggregateId,
+      sourceEventId: source.id,
+      sourceEventType: source.type as GameMessagingMembershipSourceEventType,
+      sourceAggregateRevision: source.payload.aggregateRevision,
+      correlationId: source.correlationId,
+      occurredAt: source.occurredAt,
+    });
+  }
+
+  async function storedConversationState(gameId: string) {
+    return withTenantTransaction(pool, tenantId, async (client) => {
+      const conversation = await client.query<{ id: string; state: string }>(
+        `select id, state from messaging.conversations
+          where tenant_id = $1 and kind = 'GAME' and context_id = $2`,
+        [tenantId, gameId],
+      );
+      const members = await client.query<{
+        user_id: string;
+        state: string;
+        left_at: string | null;
+      }>(
+        `select user_id, state, left_at::text as left_at
+           from messaging.conversation_members
+          where tenant_id = $1 and conversation_id = $2 and member_type = 'USER'
+          order by user_id`,
+        [tenantId, conversation.rows[0]?.id],
+      );
+      return { conversation: conversation.rows[0], members: members.rows };
+    });
+  }
+
+  async function gameSnapshot(gameId: string) {
+    return withTenantTransaction(pool, tenantId, async (client) => {
+      const result = await client.query<{
+        revision: string;
+        lifecycle_state: string;
+        updated_at: string;
+        participations: unknown;
+      }>(
+        `select game.revision::text as revision,
+                game.lifecycle_state,
+                game.updated_at::text as updated_at,
+                coalesce((
+                  select jsonb_agg(
+                    jsonb_build_object(
+                      'id', participation.id,
+                      'userId', participation.user_id,
+                      'role', participation.role,
+                      'state', participation.state,
+                      'leftAt', participation.left_at,
+                      'updatedAt', participation.updated_at
+                    ) order by participation.id
+                  )
+                    from games.participations participation
+                   where participation.tenant_id = game.tenant_id
+                     and participation.game_id = game.id
+                ), '[]'::jsonb) as participations
+           from games.games game
+          where game.tenant_id = $1 and game.id = $2`,
+        [tenantId, gameId],
+      );
+      return result.rows[0];
+    });
+  }
+
+  async function reconciliationAuditCount(sourceEventId: string) {
+    return withTenantTransaction(pool, tenantId, async (client) => {
+      const result = await client.query<{ count: string }>(
+        `select count(*)::text as count
+           from audit.audit_log
+          where tenant_id = $1
+            and action = 'GAME_CONVERSATION_MEMBERSHIP_RECONCILED'
+            and new_value ->> 'sourceEventId' = $2`,
+        [tenantId, sourceEventId],
+      );
+      return Number(result.rows[0]?.count ?? '0');
+    });
+  }
+
   async function effectiveMembershipCount(gameId: string, userId: string): Promise<number> {
     return withTenantTransaction(pool, tenantId, async (client) => {
       const result = await client.query<{ count: string }>(
@@ -252,6 +342,27 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
       options: '-c statement_timeout=12000 -c lock_timeout=12000',
     });
     await pool.query(
+      'drop trigger if exists game_comms_transition_barrier_verify on audit.outbox_events',
+    );
+    await pool.query(`
+      create or replace function audit.game_comms_transition_barrier_verify()
+      returns trigger
+      language plpgsql
+      as $barrier$
+      begin
+        if new.correlation_id like '${transitionBarrierPrefix}%' then
+          perform pg_advisory_xact_lock(hashtextextended(new.correlation_id, 0));
+        end if;
+        return new;
+      end;
+      $barrier$
+    `);
+    await pool.query(
+      `create trigger game_comms_transition_barrier_verify
+         before insert on audit.outbox_events
+         for each row execute function audit.game_comms_transition_barrier_verify()`,
+    );
+    await pool.query(
       `insert into identity.tenants (id, tenant_key, display_name)
        values ($1, $2, 'GAME communications'), ($3, $4, 'Foreign GAME communications')`,
       [
@@ -321,6 +432,10 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
   });
 
   afterAll(async () => {
+    await pool?.query(
+      'drop trigger if exists game_comms_transition_barrier_verify on audit.outbox_events',
+    );
+    await pool?.query('drop function if exists audit.game_comms_transition_barrier_verify()');
     await pool?.end();
   });
 
@@ -385,6 +500,9 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
       replayed: true,
     });
     const source = await event(gameId, 'game.participation.left.v1');
+    const authoritativeBefore = await gameSnapshot(gameId);
+    // Authorization is already revoked before materialized membership converges.
+    await assertClosed(gameId, chat.conversation.id);
     await expect(applyNotificationSourceEvent({ pool, event: source })).resolves.toMatchObject({
       outcome: 'processed',
     });
@@ -392,6 +510,19 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
       outcome: 'duplicate',
     });
     await expect(notificationCount(source.id)).resolves.toBe(1);
+    await expect(reconcile(source)).resolves.toMatchObject({
+      outcome: 'applied',
+      conversationClosed: false,
+      leftUserIds: [playerId],
+    });
+    await expect(reconcile(source)).resolves.toEqual({ outcome: 'no_op' });
+    await expect(gameSnapshot(gameId)).resolves.toEqual(authoritativeBefore);
+    await expect(reconciliationAuditCount(source.id)).resolves.toBe(1);
+    const stored = await storedConversationState(gameId);
+    expect(stored.conversation?.state).toBe('OPEN');
+    const storedPlayer = stored.members.find((member) => member.user_id === playerId);
+    expect(storedPlayer?.state).toBe('LEFT');
+    expect(typeof storedPlayer?.left_at).toBe('string');
     await assertClosed(gameId, chat.conversation.id);
   });
 
@@ -408,6 +539,10 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
       correlationId: `game-comms-cancel-chat-${randomUUID()}`,
     });
     if (chat.outcome !== 'ok') throw new Error('GAME_COMMS_CANCEL_CHAT_MISSING');
+    await expect(send(chat.conversation.id, 'cancel-before')).resolves.toMatchObject({
+      outcome: 'ok',
+    });
+    const messageCountBefore = await countRows('messaging.messages', gameId);
     const cancellation = command('cancel', gameId, organizerId);
     const cancelled = await games().cancel({ ...cancellation, reasonCode: 'ORGANIZER_REQUEST' });
     expect(cancelled).toMatchObject({ outcome: 'applied', replayed: false });
@@ -415,6 +550,7 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
       games().cancel({ ...cancellation, reasonCode: 'ORGANIZER_REQUEST' }),
     ).resolves.toMatchObject({ outcome: 'applied', replayed: true });
     const source = await event(gameId, 'game.cancelled.v1');
+    const authoritativeBefore = await gameSnapshot(gameId);
     await expect(applyNotificationSourceEvent({ pool, event: source })).resolves.toMatchObject({
       outcome: 'processed',
     });
@@ -424,6 +560,20 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
     // Cancellation targets both active participants: organizer and joined player.
     // Replay must keep exactly one intent per recipient, not one intent total.
     await expect(notificationCount(source.id)).resolves.toBe(2);
+    await expect(reconcile(source)).resolves.toMatchObject({
+      outcome: 'applied',
+      conversationClosed: true,
+    });
+    await expect(reconcile(source)).resolves.toEqual({ outcome: 'no_op' });
+    await expect(gameSnapshot(gameId)).resolves.toEqual(authoritativeBefore);
+    await expect(reconciliationAuditCount(source.id)).resolves.toBe(1);
+    const stored = await storedConversationState(gameId);
+    expect(stored.conversation?.state).toBe('CLOSED');
+    expect(stored.members.filter((member) => member.state === 'ACTIVE')).toHaveLength(0);
+    expect(
+      stored.members.filter((member) => member.state === 'LEFT').map((member) => member.user_id),
+    ).toEqual(expect.arrayContaining([organizerId, playerId]));
+    await expect(countRows('messaging.messages', gameId)).resolves.toBe(messageCountBefore);
     await assertClosed(gameId, chat.conversation.id);
     await expect(
       messaging().getOrCreateGameConversation({
@@ -434,6 +584,31 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
         correlationId: `game-comms-cancel-new-${randomUUID()}`,
       }),
     ).resolves.toEqual({ outcome: 'not_found' });
+  });
+
+  it('projects the current rejoined roster when an older leave event arrives late', async () => {
+    const gameId = await createGame('rejoin-stale-leave');
+    await roster().join(command('rejoin-first', gameId));
+    const chat = await messaging().getOrCreateGameConversation({
+      tenantId,
+      actorUserId: playerId,
+      gameId,
+      idempotencyKey: `game-comms-rejoin-chat-${randomUUID()}`,
+      correlationId: `game-comms-rejoin-chat-${randomUUID()}`,
+    });
+    if (chat.outcome !== 'ok') throw new Error('GAME_COMMS_REJOIN_CHAT_MISSING');
+    await roster().leave(command('rejoin-leave', gameId));
+    const staleLeave = await event(gameId, 'game.participation.left.v1');
+    await roster().join(command('rejoin-second', gameId));
+    await expect(reconcile(staleLeave)).resolves.toMatchObject({
+      outcome: 'no_op',
+    });
+    const stored = await storedConversationState(gameId);
+    expect(stored.conversation?.state).toBe('OPEN');
+    expect(stored.members.find((member) => member.user_id === playerId)).toMatchObject({
+      state: 'ACTIVE',
+      left_at: null,
+    });
   });
 
   it.each(['leave', 'cancel'] as const)(
@@ -481,6 +656,11 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
         );
         expect(changed).toMatchObject({ outcome: 'applied' });
         expect(sent.outcome === 'ok' || sent.outcome === 'not_found').toBe(true);
+        const source = await event(
+          gameId,
+          transition === 'leave' ? 'game.participation.left.v1' : 'game.cancelled.v1',
+        );
+        await expect(reconcile(source)).resolves.toMatchObject({ outcome: 'applied' });
         await assertClosed(gameId, chat.conversation.id);
         await expect(countRows('messaging.messages', gameId)).resolves.toBeLessThanOrEqual(1);
         await expect(send(chat.conversation.id, `race-${transition}-after`)).resolves.toEqual({
@@ -495,6 +675,105 @@ describePostgres('GAME lifecycle -> notification -> chat real PostgreSQL integra
         );
         observer.release();
       }
+    },
+    20_000,
+  );
+
+  it.each(['leave', 'cancel'] as const)(
+    'serializes a real %s that already changed GAME before a waiting send',
+    async (transition) => {
+      const gameId = await createGame(`transition-first-${transition}`);
+      await roster().join(command(`transition-first-${transition}-join`, gameId));
+      const chat = await messaging().getOrCreateGameConversation({
+        tenantId,
+        actorUserId: playerId,
+        gameId,
+        idempotencyKey: `game-comms-transition-first-chat-${randomUUID()}`,
+        correlationId: `game-comms-transition-first-chat-${randomUUID()}`,
+      });
+      if (chat.outcome !== 'ok') throw new Error('GAME_COMMS_TRANSITION_FIRST_CHAT_MISSING');
+
+      const observer = await pool.connect();
+      const barrierKey = `${transitionBarrierPrefix}${randomUUID()}`;
+      let transitionPromise: Promise<unknown> | undefined;
+      let sendPromise: ReturnType<ReturnType<typeof messaging>['sendMessage']> | undefined;
+      try {
+        await observer.query('select pg_advisory_lock(hashtextextended($1, 0))', [barrierKey]);
+        const transitionInput = {
+          ...command(`transition-first-${transition}`, gameId, organizerId),
+          correlationId: barrierKey,
+        };
+        transitionPromise =
+          transition === 'leave'
+            ? roster().leave({ ...transitionInput, actorUserId: playerId })
+            : games().cancel({ ...transitionInput, reasonCode: 'ORGANIZER_REQUEST' });
+
+        // The transition reaches its outbox trigger only after changing the authoritative
+        // GAME rows. It remains uncommitted while retaining those row locks here.
+        await waitForLockWaiters(observer, 1, `${transition}:transition-at-outbox-barrier`);
+        sendPromise = send(chat.conversation.id, `transition-first-${transition}`);
+        await waitForLockWaiters(observer, 2, `${transition}:send-waits-for-game-transition`);
+        await observer.query('select pg_advisory_unlock(hashtextextended($1, 0))', [barrierKey]);
+
+        const [changed, sent] = await deadline(
+          Promise.all([transitionPromise, sendPromise]),
+          `${transition}:transition-first-completion`,
+        );
+        expect(changed).toMatchObject({ outcome: 'applied' });
+        expect(sent).toEqual({ outcome: 'not_found' });
+        await expect(countRows('messaging.messages', gameId)).resolves.toBe(0);
+
+        const source = await event(
+          gameId,
+          transition === 'leave' ? 'game.participation.left.v1' : 'game.cancelled.v1',
+        );
+        await expect(reconcile(source)).resolves.toMatchObject({ outcome: 'applied' });
+        await assertClosed(gameId, chat.conversation.id);
+        await expect(countRows('messaging.messages', gameId)).resolves.toBe(0);
+      } finally {
+        await observer
+          .query('select pg_advisory_unlock(hashtextextended($1, 0))', [barrierKey])
+          .catch(() => undefined);
+        await Promise.allSettled(
+          [transitionPromise, sendPromise].filter(Boolean) as Promise<unknown>[],
+        );
+        observer.release();
+      }
+    },
+    20_000,
+  );
+
+  it.each(['leave', 'cancel'] as const)(
+    'preserves a send committed before %s and converges all later access',
+    async (transition) => {
+      const gameId = await createGame(`send-first-${transition}`);
+      await roster().join(command(`send-first-${transition}-join`, gameId));
+      const chat = await messaging().getOrCreateGameConversation({
+        tenantId,
+        actorUserId: playerId,
+        gameId,
+        idempotencyKey: `game-comms-send-first-chat-${randomUUID()}`,
+        correlationId: `game-comms-send-first-chat-${randomUUID()}`,
+      });
+      if (chat.outcome !== 'ok') throw new Error('GAME_COMMS_SEND_FIRST_CHAT_MISSING');
+      await expect(send(chat.conversation.id, `send-first-${transition}`)).resolves.toMatchObject({
+        outcome: 'ok',
+      });
+      if (transition === 'leave') {
+        await roster().leave(command(`send-first-${transition}-leave`, gameId));
+      } else {
+        await games().cancel({
+          ...command(`send-first-${transition}-cancel`, gameId, organizerId),
+          reasonCode: 'ORGANIZER_REQUEST',
+        });
+      }
+      const source = await event(
+        gameId,
+        transition === 'leave' ? 'game.participation.left.v1' : 'game.cancelled.v1',
+      );
+      await expect(reconcile(source)).resolves.toMatchObject({ outcome: 'applied' });
+      await expect(countRows('messaging.messages', gameId)).resolves.toBe(1);
+      await assertClosed(gameId, chat.conversation.id);
     },
     20_000,
   );
