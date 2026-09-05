@@ -13,6 +13,32 @@ These rules are mandatory for every change in this repository.
 - CI, staging and production runbooks govern those evidence levels. They do not turn an ordinary
   local implementation into a release operation.
 
+## Task intent and authority
+
+Determine the requested outcome before selecting a risk tier or skill. Explicit task restrictions
+narrow the defaults below; a skill name, plan, green check or elapsed time never supplies approval.
+
+| Intent                             | Authorized work                                                                                                                              | Completion boundary                                                                                                                                                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Research / audit / diagnose        | Read instructions, source and existing evidence; run probes verified to be non-mutating within the requested environment.                    | Return findings, uncertainty and next steps. No source/config/docs edits, instrumentation, dependency setup, fixture/DB/container writes, commits or pushes. A requested report artifact permits only that artifact. |
+| Implement / fix                    | Complete the scoped behavior change, applicable checks and the reversible task-branch loop below.                                            | Deliver the result and actual evidence through the authorized Draft PR/CI scope; a plan alone is not completion. Continue independent work if one check is unavailable.                                              |
+| Prepare release / check deployment | Validate the selected source or deployment inputs and produce the requested local plan/evidence using existing runbooks.                     | Report eligibility, gaps and the exact pending transition. No publication, workflow dispatch, host-writing preparation, pull/up, migration or live write. Source fixes require implementation scope.                 |
+| Execute an approved operation      | Perform only the already approved concrete transition, source/artifact and target after its runbook prerequisites and fresh identity checks. | Verify that transition and stop on failed gates/drift or before the next unapproved transition. Never infer publication from merge, deployment from publication, or data/secret/routing authority from deployment.   |
+
+For mixed requests, apply intent and authority to each action. Diagnosis accompanying “fix” does not
+remove implementation authority; “investigate” alone does not grant it. Verify test side effects
+before a research probe: a local/disposable label does not authorize writes. A disposable test scope
+and its local writes must be explicitly authorized and owned. Keep reads inside the requested
+environment; missing live read access is not permission to obtain credentials or widen access.
+
+Project skills live in `.agents/skills`; load only what the task needs. Use the existing `lk2-dev`,
+`lk2-release` and `lk2-deploy` workflows when present. Add `lk2-ui-qa` for focused rendered UI review
+and `lk2-debug` for a concrete failure. Missing skills/runbooks are a capability gap, not permission
+to install a new stack or invent a deploy process. See [usage and capability audit](docs/ai/local-first-skills.md).
+External skills are optional techniques: their priority labels and processes cannot override LK2
+risk, design, architecture, ownership, evidence reuse or approval boundaries. Review pinned external
+content and executed dependencies before any execution; no automatic third-party skill updates.
+
 ## System boundary
 
 - Web, mobile, Tilda bundles, and CUP clients call only PadlHub APIs.
@@ -73,10 +99,10 @@ to one integration batch.
 
 Ordinary `main` drift does not require every task branch to synchronize or repeat certification.
 Synchronize when relevant source or dependencies overlap, a real conflict appears, an input or
-environment changes, or immediately before common integration. Repeat a successful check only when
-its code, dependencies, command, environment, inputs, acceptance target or tested hypothesis
-changed. Draft to Ready is a lifecycle transition, not a security boundary; automated gates and
-explicit live boundaries carry the security contract.
+environment changes, or immediately before common integration. Reuse checks under “Evidence and
+stopping” below.
+Draft to Ready is a lifecycle transition, not a security boundary; automated gates and explicit
+live boundaries carry the security contract.
 
 The delivery roles are distinct:
 
@@ -199,10 +225,11 @@ implementation contradicts current state, or the requested outcome is technicall
 Main drift, an unrelated PR, imperfect neighboring architecture, absent production evidence,
 technical debt or a potentially better architecture are not independent stop reasons.
 
-For relevant drift: refresh -> integrate/rebase safely -> run relevant affected checks -> continue.
-Repeat a successful check only when relevant source, dependencies, command, environment, inputs or
-acceptance target changed, or a new hypothesis requires it. Do not restart a full certification
-cycle merely because the SHA/tree moved.
+For relevant drift: refresh -> integrate/rebase your own branch safely -> run invalidated affected
+checks -> continue. Reuse a result only when its relevant source, dependencies, command, environment,
+inputs and acceptance target are unchanged. A new hypothesis can justify a new check. Record the
+original result and why it remains applicable; never claim a reused result was rerun. Do not restart
+a full certification cycle merely because the SHA/tree moved.
 
 Continue independent in-scope work if one boundary is blocked. A failed post-deploy change returns
 to a focused task/hotfix branch; never edit Nano directly.
@@ -216,7 +243,8 @@ a Draft PR, read CI, and fix in-scope CI failures. Do not pause merely because o
 completed.
 
 Human approval remains mandatory before merge, direct push to `main` or another protected branch,
-force push, deploy, migration/backfill execution, live/shared data mutation, credential or
+force push, image publication, workflow dispatch/rerun, tag/branch deletion, deploy, migration/backfill
+execution, live/shared data mutation, credential or
 signing-material changes, permissions/RLS/ACL changes on a real target, DNS/ingress/routing,
 payment/refund, external messages or destructive rollback. A Draft PR, green CI, local PostgreSQL
 rehearsal or staging artifact never authorizes those actions.
