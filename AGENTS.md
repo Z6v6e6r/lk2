@@ -100,8 +100,9 @@ to one integration batch.
 Ordinary `main` drift does not require every task branch to synchronize or repeat certification.
 Synchronize when relevant source or dependencies overlap, a real conflict appears, an input or
 environment changes, or immediately before common integration. Reuse checks under “Evidence and
-stopping” below. Draft to Ready is a lifecycle transition,
-not a security boundary; automated gates and explicit live boundaries carry the security contract.
+stopping” below.
+Draft to Ready is a lifecycle transition, not a security boundary; automated gates and explicit
+live boundaries carry the security contract.
 
 The delivery roles are distinct:
 

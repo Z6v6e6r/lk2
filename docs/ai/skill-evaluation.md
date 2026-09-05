@@ -85,6 +85,9 @@ Actually executed in this task:
 - Both skills passed the bundled `quick_validate.py` with PyYAML 6.0.2 in a temporary venv. Initial
   attempts without PyYAML failed; no global Python installation or project dependency was changed.
 - `prepare.py --help` and a full generation of 12 fixtures; no external operation is in its code.
+- Existing `scripts/delivery-policy.test.ts`: 4 tests passed locally after CI exposed a literal-text
+  regression from reflowing the Draft-to-Ready sentence. Restored compatible wording without changing
+  the test or workflow. This is formatting-only; prior behavioral fixture evidence is reused.
 - Focused Markdown formatting, Python syntax, local-reference checks, source/license hash checks,
   policy-invariant comparisons and `git diff --check`.
 - Independent security/trust review; its disposable-write/read-scope findings were fixed. Its
