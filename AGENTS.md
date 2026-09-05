@@ -44,6 +44,19 @@ These rules are mandatory for every change in this repository.
 - Build an immutable image once and promote the same digest through staging and production. Never deploy `latest` and never build on a production server.
 - Production rollouts require health/readiness checks, smoke tests, approval, a verified backup, sequential nodes, and a tested rollback path.
 
+## Local product loop
+
+Product development defaults to a task branch/worktree -> local implementation -> current-task
+preview -> boundary-based checks -> Draft PR and CI. Use [lk2-dev](.agents/skills/lk2-dev/SKILL.md)
+and the [local runbook](docs/runbooks/local-development.md). The FAST/SAFE/CRITICAL policy below
+selects checks by the touched boundary; ordinary UI work needs no full release audit.
+Development readiness grants no merge, image publication or deploy authority. LOCAL, CI, STAGING,
+PROVIDER and PRODUCTION remain distinct evidence levels. Explicit
+[lk2-release](.agents/skills/lk2-release/SKILL.md) and
+[lk2-deploy](.agents/skills/lk2-deploy/SKILL.md) requests default to preparation; their invocation
+is not authorization for publication or live writes. Detailed procedures stay in those skills and
+the existing delivery/Timeweb runbooks.
+
 ## Parallel development and delivery ownership
 
 Up to four independent task branches may be active in this repository at once. This repository
