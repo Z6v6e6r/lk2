@@ -606,6 +606,11 @@ that is an authority violation, not a supported activation path.
 
 ## Offline activation-input rehearsal
 
+The disposable candidate-level rehearsal is documented separately in
+`docs/runbooks/timeweb-beta-candidate-rehearsal.md`. Its single entrypoint is
+`npm run test:timeweb-beta-candidate`; it uses only synthetic local state and cannot replace the
+authenticated publication and host-custody checks below.
+
 The focused suite provisions and rotates synthetic secrets, rehearses handled rollback, validates
 file modes/identity, renders a synthetic canonical V2 release environment, and rejects the required
 negative cases:
