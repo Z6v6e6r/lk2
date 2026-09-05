@@ -111,6 +111,7 @@ const localEnv = {
   NODE_ENV: 'development',
   VIVA_MODE: 'mock',
   HOME_READ_MODE: 'mock',
+  HOME_BASE_SYNC_ENABLED: 'true',
   COMMUNITIES_READ_MODE: 'mock',
   PROMOTIONS_READ_MODE: 'mock',
   LOG_LEVEL: 'info',
@@ -183,6 +184,7 @@ export function makeModel(base, root, nodeImage, lock, environment = localEnv) {
   const web = nodeService('web');
   web.environment = {
     NODE_ENV: 'development',
+    VITE_LK2_LOCAL_PREVIEW: '1',
     PHUB_DEV_API_PROXY_TARGET: 'http://api:3000',
     PHUB_DEV_REALTIME_PROXY_TARGET: 'ws://127.0.0.1:3001',
   };

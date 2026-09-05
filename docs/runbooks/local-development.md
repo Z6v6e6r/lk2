@@ -50,7 +50,11 @@ egress network. No infrastructure or API port is exposed;
 Web's proxy reaches API internally. Browser preview is `http://127.0.0.1:5173`. Startup waits for
 PostgreSQL/Redis, applies the existing migrator only on first authorized initialization, and waits
 for API readiness and Web HTTP health. Vite reflects edits from this worktree. Use the synthetic
-phone/code documented in README for mock authentication. Mock application responses and existing
+phone `+79990000001` and code `0000` for mock authentication. The launcher sets the dev-only
+`VITE_LK2_LOCAL_PREVIEW=1` UI flag: the preview opens phone login and hides unavailable Viva OAuth.
+No SMS is sent; the normal API challenge, verification and session checks still run. Production
+builds ignore this UI flag. `HOME_BASE_SYNC_ENABLED=true` allows the API to build the initial
+HomeBase from this disposable database on demand; it does not enable Viva synchronization or a worker. Mock application responses and existing
 migration fixtures provide synthetic data; no legacy import or shared seed is run.
 
 Worker, Realtime, RabbitMQ, MinIO, monitoring, provider calls and release processes are not part of

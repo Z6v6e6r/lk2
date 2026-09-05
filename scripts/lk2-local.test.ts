@@ -84,8 +84,16 @@ describe('local preview isolation boundary', () => {
     expect(model.services.api.volumes).toContain(`${root}/.lk2-local/local.env:/workspace/.env:ro`);
     expect(model.services.api).not.toHaveProperty('env_file');
     expect(model.services.api).not.toHaveProperty('build');
-    expect(model.services.api.environment).toMatchObject({ APP_ENV: 'local', VIVA_MODE: 'mock' });
+    expect(model.services.api.environment).toMatchObject({
+      APP_ENV: 'local',
+      VIVA_MODE: 'mock',
+      HOME_BASE_SYNC_ENABLED: 'true',
+    });
     expect(model.services.api.environment).not.toHaveProperty('VIVA_API_KEY');
+    expect(model.services.web.environment).toHaveProperty('VITE_LK2_LOCAL_PREVIEW', '1');
+    for (const service of ['api', 'setup', 'migrator'] as const) {
+      expect(model.services[service].environment).not.toHaveProperty('VITE_LK2_LOCAL_PREVIEW');
+    }
     for (const service of ['web', 'setup', 'migrator'] as const) {
       expect(model.services[service].environment).not.toHaveProperty('JWT_ACCESS_SECRET');
       expect(model.services[service].environment).not.toHaveProperty('JWT_REFRESH_SECRET');
