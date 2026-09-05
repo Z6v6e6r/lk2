@@ -3,7 +3,8 @@
 The root `AGENTS.md` owns intent, FAST/SAFE/CRITICAL, architecture and approval policy. Skills add
 small task techniques; they do not grant permissions. The local-first delivery work owns
 `lk2-dev`, `lk2-release`, `lk2-deploy`, `scripts/lk2-local.js` and the local development runbook.
-This change adds only `lk2-ui-qa` and `lk2-debug`. Integrate it after the local-first delivery PR;
+This change adds only `lk2-ui-qa` and `lk2-debug`. Its base is [Draft PR #175](https://github.com/Z6v6e6r/lk2/pull/175),
+checkpoint `ca18eda2cb04c6d3e8d747c54972f53895e5949f`. Integrate it after that local-first delivery PR;
 do not recreate its launcher, environment configuration or three workflow skills.
 
 ## Usage
