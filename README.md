@@ -6,27 +6,27 @@ API-first platform for PadlHub web bundles, iOS/Android applications and the CUP
 
 Requirements: Node.js 22+, npm 10.9+, Docker Desktop with Compose.
 
-```bash
-cp .env.example .env
-npm install
-docker compose up -d postgres redis rabbitmq minio otel-collector
-# A fresh disposable/local database includes the maintenance-only chat/push foundation.
-CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1 npm run db:migrate
-npm run dev:api
-```
-
-Or run the server processes in Compose:
+Use the [isolated local development loop](docs/runbooks/local-development.md) in your task worktree:
 
 ```bash
-docker compose up --build
+npm ci
+npm run local:config
+# Only with authority to initialize this worktree's new disposable local database:
+npm run local:up -- --fresh-db
+npm run local:status
+npm run local:stop
+# Later starts preserve the initialized database and do not apply migrations:
+npm run local:up
 ```
 
-Optional client and monitoring profiles:
+Preview: `http://127.0.0.1:5173`. The launcher reuses the development Compose and commands, binds
+this worktree's sources, uses mock data, checks local Docker/resource ownership and preserves data
+on stop. The default contour is API/Web plus PostgreSQL/Redis; Realtime, Worker, media and monitoring
+are not started. See the runbook before extending it for a task that needs those dependencies.
+Existing `.env` is never overwritten or used by this launcher.
 
-```bash
-docker compose --profile clients up --build
-docker compose --profile monitoring up -d
-```
+The raw Compose commands below are for deliberate manually isolated optional contours, not the
+safe multi-worktree launcher. Check daemon, names, networks, volumes, ports and configuration first.
 
 To browse the canonical OpenAPI contracts locally, start the documentation profile:
 

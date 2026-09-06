@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
+  readonly VITE_LK2_LOCAL_PREVIEW?: string;
   readonly VITE_PHUB_API_BASE_URL?: string;
 }
 
