@@ -191,6 +191,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      TIMEWEB_STANDARD_DOCKER_VERIFY: '1'
       APP_ENV: ci
       DATABASE_URL: postgresql://phub:ci-password@localhost:5432/phub
       REDIS_URL: redis://localhost:6379

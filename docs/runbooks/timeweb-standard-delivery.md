@@ -129,3 +129,14 @@ verify-source 467s, builds 175–234s, manifest 14s. These are observed Actions 
 estimate of personal work or a claimed speedup. Source reuse removes that repeated verifier only
 when the new exact main-run verifier accepts its full inputs. Final PR CI and local scenario
 results are reported with the PR; production latency remains unmeasured until activation.
+
+The local disposable Compose rehearsal is executable (no shared endpoints, ports or volumes):
+
+```sh
+TIMEWEB_STANDARD_DOCKER_VERIFY=1 node scripts/rehearse-timeweb-standard-compose.js
+```
+
+It uses the pinned nginx base, verifies a successful Web transition, injects observation failure,
+restores the previous release label even when the digest is identical, and proves the unrelated API
+container ID stayed unchanged. The full CI integration job opts into this rehearsal. This is LOCAL
+Compose/rollback evidence, not canonical publication or production evidence.

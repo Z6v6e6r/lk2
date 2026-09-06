@@ -59,3 +59,22 @@ export async function runWebTransition(operations) {
     throw error;
   }
 }
+
+export function standardWebComposeArgs(composeFile, baselineEnv, overlayEnv, operation) {
+  const stages = {
+    pull: ['pull', 'web'],
+    up: ['up', '-d', '--no-deps', 'web'],
+    config: ['config', '--format', 'json'],
+  };
+  if (!Object.hasOwn(stages, operation)) throw new Error('Unsupported standard Web stage');
+  return [
+    'compose',
+    '--env-file',
+    baselineEnv,
+    '--env-file',
+    overlayEnv,
+    '-f',
+    composeFile,
+    ...stages[operation],
+  ];
+}

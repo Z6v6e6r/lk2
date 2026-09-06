@@ -18,7 +18,11 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
-import { runWebTransition, standardRange } from './timeweb-standard-policy.js';
+import {
+  runWebTransition,
+  standardRange,
+  standardWebComposeArgs,
+} from './timeweb-standard-policy.js';
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
@@ -354,14 +358,15 @@ async function main(ciRunId) {
       `PHUB_RELEASE_ID=${previousWebId}\nWEB_IMAGE_DIGEST=${web.image.split('@')[1]}\n`,
       { mode: 0o600, flag: 'wx' },
     );
-    const compose = (file, args) =>
-      docker(['compose', '--env-file', baselineEnv, '--env-file', file, '-f', COMPOSE, ...args]);
+    const compose = (file, operation) =>
+      docker(standardWebComposeArgs(COMPOSE, baselineEnv, file, operation));
     let activatedWeb;
     const attestWeb = (ref, identity) => {
       const actual = inspect('web');
       if (
         activatedWeb &&
         ref === candidateRef &&
+        identity === id &&
         JSON.stringify(actual) !== JSON.stringify(activatedWeb)
       )
         fail('Web restarted or changed during observation');
@@ -388,12 +393,12 @@ async function main(ciRunId) {
           )[0] !== sha
         )
           fail('Main changed before deployment');
-        const rendered = JSON.parse(compose(overlay, ['config', '--format', 'json']));
+        const rendered = JSON.parse(compose(overlay, 'config'));
         if (rendered.services.web.image !== candidateRef) fail('Web Compose reference mismatch');
         await probe('http://172.30.26.12:3000/health/ready');
       },
       pull: async () => {
-        compose(overlay, ['pull', 'web']);
+        compose(overlay, 'pull');
       },
       artifactSmoke: async () => {
         docker([
@@ -439,9 +444,10 @@ async function main(ciRunId) {
           ) + '\n',
         ),
       activate: async () => {
-        compose(overlay, ['up', '-d', '--no-deps', 'web']);
+        compose(overlay, 'up');
         await waitWeb(candidateRef, id);
         activatedWeb = inspect('web');
+        if (activatedWeb.restarts !== 0) fail('Web restarted during initial readiness');
       },
       observe: async () => {
         const apiTimes = [],
@@ -454,13 +460,14 @@ async function main(ciRunId) {
           await delay(1000);
         }
         const p95 = (times) => times.sort((a, b) => a - b)[Math.ceil(times.length * 0.95) - 1];
+        attestWeb(candidateRef, id);
         if (p95(apiTimes) > 1500 || p95(webTimes) > 1000) fail('Web release latency threshold');
       },
       attestBackend: async () => {
         assertBackend();
       },
       rollback: async () => {
-        compose(rollback, ['up', '-d', '--no-deps', 'web']);
+        compose(rollback, 'up');
         await waitWeb(web.image, previousWebId);
       },
     });
