@@ -1,5 +1,6 @@
 interface LocalService {
   command?: string;
+  healthcheck?: { test: string[] };
   image?: string;
   environment?: Record<string, string>;
   volumes?: string[];

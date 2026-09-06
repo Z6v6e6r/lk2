@@ -10,6 +10,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
@@ -270,4 +272,34 @@ describe('real Viva preview custody', () => {
     });
     expect(real.services.web.environment).not.toHaveProperty('VITE_LK2_LOCAL_PREVIEW');
   });
+});
+
+it('executes the real Web health command with the cookie-isolated Host header', async () => {
+  const model = makeModel(base, root, 'node:22-bookworm-slim', lock, {}, true);
+  const server = createServer((request, response) => {
+    response.statusCode = request.headers.host === 'localhost:5174' ? 200 : 421;
+    response.end();
+  });
+  await new Promise<void>((done, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', done);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing test port');
+    const healthScript = model.services.web.healthcheck!.test[3]!.replace(
+      '127.0.0.1:5173',
+      `127.0.0.1:${address.port}`,
+    );
+    const exit = await new Promise<number | null>((done, reject) => {
+      const child = spawn(process.execPath, ['-e', healthScript], { stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('exit', done);
+    });
+    expect(exit).toBe(0);
+  } finally {
+    await new Promise<void>((done, reject) =>
+      server.close((error) => (error ? reject(error) : done())),
+    );
+  }
 });

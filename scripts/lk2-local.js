@@ -237,7 +237,7 @@ export function makeModel(
       'CMD',
       'node',
       '-e',
-      `fetch('http://127.0.0.1:5173', {headers: {host: '${realAccount ? 'localhost:5174' : '127.0.0.1:5173'}'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))`,
+      `require('node:http').get('http://127.0.0.1:5173', {headers: {host: '${realAccount ? 'localhost:5174' : '127.0.0.1:5173'}'}}, r=>{r.resume();process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))`,
     ],
     interval: '5s',
     timeout: '3s',
