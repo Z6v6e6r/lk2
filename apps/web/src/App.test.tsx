@@ -566,6 +566,79 @@ describe('PadlHub web authentication', () => {
     },
   );
 
+  it('uses real SMS login in the explicit dev account preview without OAuth or mock guidance', async () => {
+    vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('iPhone');
+    vi.stubEnv('DEV', true);
+    vi.stubEnv('VITE_LK2_REAL_ACCOUNT', '1');
+    const gateway = createGateway();
+    const user = userEvent.setup();
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    const phone = await screen.findByRole('textbox', { name: 'Номер телефона' });
+    expect(screen.queryByRole('button', { name: /Viva|Yandex/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Войти через Viva/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Тестовый вход|СМС не отправляется|0000/)).not.toBeInTheDocument();
+
+    await user.clear(phone);
+    await user.type(phone, '+79990000001');
+    await user.click(screen.getByRole('checkbox', { name: /публичной оферты/i }));
+    await user.click(screen.getByRole('checkbox', { name: /обработку персональных данных/i }));
+    await user.click(screen.getByRole('button', { name: 'Получить код' }));
+
+    expect(gateway.requestCode).toHaveBeenCalledWith('+79990000001');
+    const code = await screen.findByRole('textbox', { name: 'Код из СМС' });
+    await user.type(code, '1234');
+    await user.click(screen.getByRole('button', { name: 'Войти' }));
+    expect(gateway.verifyCode).toHaveBeenCalledWith({
+      challengeId: 'challenge-1',
+      code: '1234',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    });
+  });
+
+  it('ignores the real account flag outside development', async () => {
+    vi.stubEnv('DEV', false);
+    vi.stubEnv('VITE_LK2_REAL_ACCOUNT', '1');
+    render(<App gateway={createGateway()} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('button', { name: 'Yandex' })).toBeVisible();
+    expect(screen.queryByRole('textbox', { name: 'Номер телефона' })).not.toBeInTheDocument();
+  });
+
+  it('does not render the create game command in the real account preview', async () => {
+    window.history.replaceState({}, '', '/games/new');
+    vi.stubEnv('DEV', true);
+    vi.stubEnv('VITE_LK2_REAL_ACCOUNT', '1');
+    render(
+      <App
+        gateway={createGateway({ restoreSession: vi.fn().mockResolvedValue(session) })}
+        tenantKey="padlhub"
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Создание игр недоступно' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'К играм' })).toHaveAttribute('href', '/games');
+  });
+
+  it('disables profile save commands in the real account preview', async () => {
+    window.history.replaceState({}, '', '/profile');
+    vi.stubEnv('DEV', true);
+    vi.stubEnv('VITE_LK2_REAL_ACCOUNT', '1');
+    const updateProfilePrivacy = vi.fn<AuthGateway['updateProfilePrivacy']>();
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      updateProfilePrivacy,
+    });
+    const user = userEvent.setup();
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await user.click(await screen.findByRole('button', { name: /^Видимость профиля/ }));
+    const privacyRegion = await screen.findByRole('region', { name: 'Кто может связаться' });
+    expect(within(privacyRegion).getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+    expect(updateProfilePrivacy).not.toHaveBeenCalled();
+  });
+
   it('captures a DIRECT invite from the fragment and immediately removes it from the URL', () => {
     const replaceState = vi.fn();
     const token = 'z'.repeat(43);

@@ -13,6 +13,7 @@ interface LocalModel {
   networks: {
     data: { internal: boolean; labels: Record<string, string> };
     install: { labels: Record<string, string> };
+    provider?: { labels: Record<string, string> };
   };
   volumes: Record<string, { labels: Record<string, string> }>;
 }
@@ -24,6 +25,8 @@ export function makeModel(
   root: string,
   nodeImage: string,
   lock: unknown,
+  environment?: Record<string, string>,
+  realAccount?: boolean,
 ): LocalModel;
 export function main(args?: string[]): Promise<void>;
 export function atomicJson(path: string, value: unknown): void;
@@ -37,3 +40,7 @@ export function uncertainCompletion(result: {
   status?: number | null;
   error?: { code?: string };
 }): boolean;
+
+export function realAccountEnvironment(delegationKey: string): Record<string, string>;
+
+export function realAccountMode(state: { mode?: string } | null, requested: boolean): boolean;

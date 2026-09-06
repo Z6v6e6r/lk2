@@ -6415,6 +6415,21 @@ button:disabled {
   background: #f7f9f5;
 }
 
+.real-account-read-only-notice {
+  position: sticky;
+  z-index: 40;
+  top: 0;
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(88, 96, 79, 0.24);
+  background: rgba(249, 248, 247, 0.96);
+  box-shadow: 0 8px 24px rgba(19, 19, 19, 0.1);
+  color: #4b5444;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .auth-intro {
   position: relative;
   isolation: isolate;
