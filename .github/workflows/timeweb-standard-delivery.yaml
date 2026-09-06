@@ -1,0 +1,37 @@
+name: Standard Timeweb Web delivery
+on:
+  workflow_run:
+    workflows: [Pull request checks]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: timeweb-standard-delivery
+  cancel-in-progress: false
+jobs:
+  standard-web:
+    if: >-
+      ${{ vars.LK2_STANDARD_DELIVERY_ENABLED == 'true' &&
+          github.repository == 'Z6v6e6r/lk2' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.run_attempt == 1 }}
+    environment: timeweb-standard-delivery
+    runs-on: [self-hosted, linux, x64, lk2-standard-operator]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+      packages: read
+    steps:
+      # No checkout or PR code runs on this privileged surface. The root-owned enrolled
+      # launcher/controller is independently installed after review, outside the workflow.
+      - name: Deliver the eligible integrated source through the enrolled controller
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_CI_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          sudo --preserve-env=GH_TOKEN /usr/local/sbin/phub-standard-delivery "$SOURCE_CI_RUN_ID"

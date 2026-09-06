@@ -32,7 +32,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
       - id: plan
         name: Select fail-closed CI profile
         env:
@@ -49,7 +55,7 @@ jobs:
             base_sha="$(git merge-base "$EVENT_BASE_SHA" "$EVENT_HEAD_SHA")"
             git diff --no-renames --name-only -z "$base_sha" "$EVENT_HEAD_SHA" \
               | node scripts/select-pr-ci-profile.js \
-                  --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" >"$plan_file"
+                  --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" --base "$base_sha" --head "$EVENT_HEAD_SHA" >"$plan_file"
           else
             printf '' | node scripts/select-pr-ci-profile.js \
               --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" >"$plan_file"
@@ -147,8 +153,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - name: Run canonical publication source quality
-        run: npm run source:quality
+      - name: Static source checks (tests run once with integration coverage)
+        run: npm run source:static
 
   quality-full:
     name: quality-full
@@ -239,7 +245,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
       - name: Require the planned quality closure
         env:
           PLAN_JSON: ${{ needs.ci-plan.outputs.plan }}
@@ -880,7 +886,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
       - name: Require every exact-head gate
         env:
           PLAN_JSON: ${{ needs.ci-plan.outputs.plan }}

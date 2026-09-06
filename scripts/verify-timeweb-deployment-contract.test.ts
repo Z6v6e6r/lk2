@@ -811,8 +811,15 @@ describe('Timeweb deployment contract', () => {
     const document = parse(workflow) as unknown as PullRequestWorkflow;
     const expectedRef =
       "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}";
+    for (const jobName of ['ci-plan', 'quality', 'pr-gate']) {
+      const checkout = document.jobs[jobName]?.steps?.find(({ uses }) =>
+        uses?.startsWith('actions/checkout@'),
+      );
+      expect(checkout?.with?.ref).toBe(
+        "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}",
+      );
+    }
     for (const jobName of [
-      'quality',
       'dependency-security',
       'secret-scan',
       'deployment-contract',

@@ -149,7 +149,7 @@ describe('Timeweb amd64 publication workflow', () => {
     };
 
     expect(Object.keys(document.on)).toEqual(['workflow_dispatch']);
-    expect(document.permissions).toEqual({ contents: 'read' });
+    expect(document.permissions).toEqual({ contents: 'read', actions: 'read' });
     expect(Object.keys(document.jobs)).toEqual([
       'validate-request',
       'verify-source',
