@@ -37,3 +37,11 @@ Report input validity and missing prerequisites separately from actual execution
 execution, record exact targets/digests, transitions, readbacks, smoke/observability and recovery
 outcome. Keep `LOCAL`, `CI`, `STAGING`, `PROVIDER` and `PRODUCTION` evidence separate. No implied merge,
 publication, deployment, migration, rollback or permission widening follows from this skill.
+
+## Enrolled standard route
+
+An owner-enabled [standard Timeweb route](../../../docs/runbooks/timeweb-standard-delivery.md)
+may carry bounded standing authority for ordinary eligible Web changes. Use only its protected
+workflow and installed controller; do not translate that authority into arbitrary manual stages.
+Before enrollment, and for critical/mechanism changes, the explicit boundaries above still apply.
+This skill or AGENTS.md never grants current-session production authority.

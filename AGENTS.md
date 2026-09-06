@@ -73,7 +73,7 @@ content and executed dependencies before any execution; no automatic third-party
 ## Local product loop
 
 Product development defaults to a task branch/worktree -> local implementation -> current-task
-preview -> boundary-based checks -> Draft PR and CI. Use [lk2-dev](.agents/skills/lk2-dev/SKILL.md)
+preview -> boundary-based checks -> PR and CI -> main -> standard release. Draft marks unfinished work. Use [lk2-dev](.agents/skills/lk2-dev/SKILL.md)
 and the [local runbook](docs/runbooks/local-development.md). The FAST/SAFE/CRITICAL policy below
 selects checks by the touched boundary; ordinary UI work needs no full release audit.
 Development readiness grants no merge, image publication or deploy authority. LOCAL, CI, STAGING,
@@ -104,20 +104,16 @@ stopping” below.
 Draft to Ready is a lifecycle transition, not a security boundary; automated gates and explicit
 live boundaries carry the security contract.
 
-The delivery roles are distinct:
+A task owner owns the outcome through user feedback, including integration, release and deploy
+responsibilities within the enabled authority. These are responsibilities, not queues between
+people or agents. One ready independent feature goes task branch -> PR -> main -> release;
+it never waits for unrelated PRs. Draft is for unfinished work.
 
-- A task owner produces one focused task head and proportionate evidence.
-- An integration owner appears only for a batch of two to four ready task heads, owns one temporary
-  `integration/**` branch and resolves cross-PR conflicts there once. The integration owner runs the
-  full integration contour but does not publish or deploy.
-- A release owner freezes one green integration source and, only with separate authority, publishes
-  one immutable set of images and one canonical manifest. Publication is never a PR Docker build.
-- A deploy owner accepts only the immutable manifest, pulls by digest and separately executes
-  backup, readiness, smoke and rollback gates. Timeweb never rebuilds release images.
-
-Exclusive ownership applies to the temporary integration branch, release publication and live
-boundary being executed. It does not make one merge owner responsible for synchronizing every task
-branch. See [temporary integration batches](docs/runbooks/delivery-batches.md).
+An integration owner and temporary `integration/**` branch are needed only when multiple tasks
+have an actual dependency or cross-task conflict. A release owner checks the integrated source and
+publishes the immutable manifest; a deploy owner promotes the same digests and observes the result.
+The same person/agent may fulfill all roles. This does not make one merge owner responsible for
+synchronizing every task branch. See [delivery](docs/runbooks/delivery-batches.md).
 
 ## Risk-based delivery policy
 
@@ -174,14 +170,14 @@ The following boundaries are automatically CRITICAL:
 - booking, capacity, roster or tournament-signup mutation;
 - authentication, session, OAuth, authorization, RBAC, ACL, RLS, tenant isolation, PII or identity;
 - durable rating/result mutation or destructive data operation;
-- public API/event compatibility, database schema/migration, secrets, deploy/release/routing;
+- public API/event compatibility, database schema/migration, secrets, changes to deploy/release/routing mechanisms;
 - any irreversible external side effect.
 
 CRITICAL keeps the existing strict gates for idempotency, ambiguous-write recovery, provider
 identity, authorization, privacy, capacity/roster integrity, migration/backup, immutable artifacts,
 rollback and secret protection. It requires relevant negative/compatibility/partial-failure tests,
 the full applicable dependency closure, recovery/observability evidence and an independent
-specialist review. Live or external actions remain separate approval boundaries.
+specialist review. Live or external actions require explicit authority; the owner may grant bounded standing authority through the protected standard release route. Editing this policy never enables that authority.
 
 ### Mixed-change examples
 
@@ -242,7 +238,7 @@ outcome, run proportionate checks, create focused commits, push only that task b
 a Draft PR, read CI, and fix in-scope CI failures. Do not pause merely because one reversible step
 completed.
 
-Human approval remains mandatory before merge, direct push to `main` or another protected branch,
+Outside an owner-enabled standard route, human approval remains mandatory before merge, direct push to `main` or another protected branch,
 force push, image publication, workflow dispatch/rerun, tag/branch deletion, deploy, migration/backfill
 execution, live/shared data mutation, credential or
 signing-material changes, permissions/RLS/ACL changes on a real target, DNS/ingress/routing,
@@ -276,4 +272,32 @@ that boundary's tier and gates.
 | Viva payment POST        | CRITICAL                                                                                               | durable attempt, deduplication, ambiguous recovery, reconciliation, specialist review |
 | Auth/session change      | CRITICAL                                                                                               | default-deny, expiry/revocation/negative tests, security review                       |
 | Database migration       | CRITICAL                                                                                               | expand/contract, disposable apply/reapply, compatibility/rollback review              |
-| Production deploy        | CRITICAL                                                                                               | R4 immutable digest, backup, readiness/smoke, rollback, exact live approval           |
+| Deploy mechanism change  | CRITICAL                                                                                               | R4 immutable digest, backup, readiness/smoke, rollback, exact live approval           |
+
+## Standard release and iteration
+
+Routine use of an independently reviewed, owner-enabled deployment mechanism is an operational
+step under its standing authority, not a new R4 project. Changes to that mechanism, payments,
+authorization, data ownership or migrations retain the critical route. This infrastructure PR must
+pass the pre-existing full checks and independent security/release review before first activation.
+Production authority comes from protected GitHub settings and an enrolled trusted operator, never
+from AGENTS.md or a PR label alone. Current-session restrictions always take precedence.
+
+FAST uses self-review plus affected checks. SAFE adds a reviewer only for a concrete changed risk.
+A blocking review finding states the consequence of this diff and the smallest acceptance condition;
+unrelated improvement ideas are `Follow-up finding`, not blockers.
+
+A useful minimal scenario can ship independently of future scenarios. Subscription explanation is a
+valid presentation release; payment/entitlement enforcement is a separate critical end-to-end
+outcome. Mock, WARN or a disabled writer is never working enforcement. Unconfirmed payments remain
+fail-closed. Existing flags/cohorts, when needed, record owner, audience, expansion criterion,
+disable condition and review date. Observe target operations and user results, not only quiet logs:
+zero traffic is not successful acceptance. Code rollback never reverses payments, migrations or
+external writes and must remain compatible with persisted data.
+
+CI presentation boundaries cover existing subscription display, tournament/game cards and participant
+empty states. Literal JSX copy/style changes are checked against the base syntax; command handlers,
+price/entitlement expressions, links, imports and mixed critical changes take full checks. The
+`leaf-web` machine profile is presentation: Web tests, lint/typecheck/build, no PR Docker rebuild.
+Unknown/shared/critical inputs retain the expanded contour. Integrated main is checked before
+publication; identical successful exact-source CI can be reused by publication.

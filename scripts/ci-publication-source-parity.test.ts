@@ -44,7 +44,6 @@ const canonicalComponents = [
   'npm run lint',
   'npm run typecheck',
   'npm run contracts:lint',
-  'npm run test:source',
   'npm run build',
   'npm run runtime:imports',
 ] as const;
@@ -61,7 +60,10 @@ function commandSteps(job: WorkflowJob | undefined): readonly string[] {
 
 describe('exact-main CI and publication source-quality parity', () => {
   it('keeps the canonical source-quality components ordered and complete', () => {
-    expect(packageJson.scripts['source:quality']).toBe(canonicalComponents.join(' && '));
+    expect(packageJson.scripts['source:static']).toBe(canonicalComponents.join(' && '));
+    expect(packageJson.scripts['source:quality']).toBe(
+      'npm run source:static && npm run test:source',
+    );
     expect(packageJson.scripts['test:source']).toBe('vitest run --maxWorkers=2');
     expect(packageJson.scripts.check).toBe(canonicalCommand);
   });
@@ -85,21 +87,18 @@ describe('exact-main CI and publication source-quality parity', () => {
     expect(ciJob?.['runs-on']).toBe(publicationJob?.['runs-on']);
     expect(ciJob?.['timeout-minutes']).toBe(45);
     expect(ciJob?.['timeout-minutes']).toBe(publicationJob?.['timeout-minutes']);
-    expect(ciCommands).toEqual(['npm ci --ignore-scripts', canonicalCommand]);
-    expect(publicationCommands).toHaveLength(3);
+    expect(ciCommands).toEqual(['npm ci --ignore-scripts', 'npm run source:static']);
     expect(publicationCommands[0]?.trimEnd()).toBe(publicationIdentityCommand);
-    expect(publicationCommands.slice(-2)).toEqual(ciCommands);
-    expect(ciCommands.filter((command) => command === canonicalCommand)).toEqual([
-      canonicalCommand,
-    ]);
-    expect(publicationCommands.filter((command) => command === canonicalCommand)).toEqual([
-      canonicalCommand,
-    ]);
-    expect(ciCommands.indexOf('npm ci --ignore-scripts')).toBeLessThan(
-      ciCommands.indexOf(canonicalCommand),
+    expect(publicationCommands).toContain('node scripts/verify-source-ci.js');
+    expect(publicationCommands).toContain(canonicalCommand);
+    const reuse = publicationJob?.steps?.find(
+      ({ run }) => run === 'node scripts/verify-source-ci.js',
     );
-    expect(publicationCommands.indexOf('npm ci --ignore-scripts')).toBeLessThan(
-      publicationCommands.indexOf(canonicalCommand),
+    const fallback = publicationJob?.steps?.find(({ run }) => run === canonicalCommand);
+    expect(reuse?.if).toBe("${{ inputs.source_ci_run_id != '' }}");
+    expect(fallback?.if).toBe("${{ inputs.source_ci_run_id == '' }}");
+    expect(commandSteps(pullRequestWorkflow.jobs['quality-full'])).toContain(
+      'scripts/run-ci-tests-with-diagnostics.sh',
     );
 
     const ciCheckout = ciJob?.steps?.find(({ uses }) => uses?.startsWith('actions/checkout@'));
@@ -121,10 +120,7 @@ describe('exact-main CI and publication source-quality parity', () => {
       'persist-credentials': false,
     });
     expect(ciNode).toEqual(publicationNode);
-    for (const step of [
-      ...(ciJob?.steps?.slice(-2) ?? []),
-      ...(publicationJob?.steps?.slice(-2) ?? []),
-    ]) {
+    for (const step of [...(ciJob?.steps?.slice(-2) ?? [])]) {
       expect(step.env).toBeUndefined();
       expect(step.if).toBeUndefined();
       expect(step['continue-on-error']).toBeUndefined();
