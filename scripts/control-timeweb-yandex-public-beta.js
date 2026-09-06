@@ -230,6 +230,7 @@ export function validateRollbackFloor(input, target) {
       'sourceSha',
       'sourceTree',
       'runtimeEnvRoot',
+      'applicationComposeProject',
       'images',
     ],
     'rollback_floor_keys',
@@ -242,7 +243,8 @@ export function validateRollbackFloor(input, target) {
     floor.failedPublicationRunProvenance !== '33168712014' ||
     !SHA.test(floor.sourceSha) ||
     !SHA.test(floor.sourceTree) ||
-    floor.runtimeEnvRoot !== '/etc/phub/timeweb-beta-fast'
+    floor.runtimeEnvRoot !== '/etc/phub/timeweb-beta-fast' ||
+    floor.applicationComposeProject !== 'phub-timeweb-beta-apps'
   )
     fail('rollback_floor_identity');
   const images = object(floor.images, 'rollback_floor_images');
@@ -744,8 +746,8 @@ export function prepare(input) {
   const priorWebReference = imageReference('web', floor.images.web.indexDigest);
   const candidateApiReference = imageReference('api', candidateReleaseEnv.API_IMAGE_DIGEST);
   const candidateWebReference = imageReference('web', candidateReleaseEnv.WEB_IMAGE_DIGEST);
-  assertContainerImage('api', priorApiReference);
-  assertContainerImage('web', priorWebReference);
+  assertContainerImage('api', priorApiReference, floor.applicationComposeProject);
+  assertContainerImage('web', priorWebReference, floor.applicationComposeProject);
   for (const reference of [
     priorApiReference,
     priorWebReference,

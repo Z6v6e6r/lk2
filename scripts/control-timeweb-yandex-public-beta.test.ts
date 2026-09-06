@@ -1,7 +1,16 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 
+import {
+  createSourceFile,
+  isCallExpression,
+  isExpressionStatement,
+  isFunctionDeclaration,
+  isIdentifier,
+  ScriptTarget,
+} from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import { parseStrictJson } from './strict-json.js';
@@ -89,6 +98,71 @@ const v1RecoveryReceipt = {
   schema: 'PHUB_TIMEWEB_YANDEX_PUBLIC_ROLLBACK_RECEIPT_V1',
 };
 
+// Execute the actual lookup functions and prepare's lookup statements, without running prepare
+// or exposing filesystem/process/network APIs to the synthetic inventory.
+function lookupFixture(
+  inventory: readonly { id: string; project: string; service: string; image: string }[],
+) {
+  const text = readFileSync('scripts/control-timeweb-yandex-public-beta.js', 'utf8');
+  const source = createSourceFile('controller.js', text, ScriptTarget.Latest, true);
+  const functions = source.statements.filter(isFunctionDeclaration);
+  const lookups = functions.filter((node) =>
+    ['containerId', 'assertContainerImage'].includes(node.name?.text ?? ''),
+  );
+  expect(lookups).toHaveLength(2);
+  const prepare = functions.find((node) => node.name?.text === 'prepare');
+  const priorChecks = prepare?.body?.statements.filter(
+    (node) =>
+      isExpressionStatement(node) &&
+      isCallExpression(node.expression) &&
+      isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'assertContainerImage',
+  );
+  expect(priorChecks).toHaveLength(2);
+  const calls: string[][] = [];
+  const context = {
+    floor,
+    priorApiReference: receipt.priorApiReference,
+    priorWebReference: receipt.priorWebReference,
+    candidateApiReference: receipt.candidateApiReference,
+    candidateWebReference: receipt.candidateWebReference,
+    fail: (code: string) => {
+      throw new Error(code);
+    },
+    runDocker: (args: string[]) => {
+      calls.push([...args]);
+      if (args[0] === 'ps') {
+        return inventory
+          .filter(
+            (item) =>
+              args.includes(`label=com.docker.compose.project=${item.project}`) &&
+              args.includes(`label=com.docker.compose.service=${item.service}`),
+          )
+          .map((item) => item.id)
+          .join('\n');
+      }
+      if (args[0] === 'inspect' && args[1] === '--format' && args[2] === '{{.Config.Image}}') {
+        return inventory.find((item) => item.id === args[3])?.image ?? '';
+      }
+      throw new Error('unexpected_synthetic_command');
+    },
+  };
+  const declarations = lookups.map((node) => node.getText(source)).join('\n');
+  return {
+    calls,
+    prepareLookups: () =>
+      runInNewContext(
+        `${declarations}\n${priorChecks?.map((node) => node.getText(source)).join('\n')}`,
+        context,
+      ) as unknown,
+    canonicalLookups: () =>
+      runInNewContext(
+        `${declarations}\n[assertContainerImage('api', candidateApiReference), assertContainerImage('web', candidateWebReference)]`,
+        context,
+      ) as unknown,
+  };
+}
+
 describe('Timeweb Yandex public-beta controller', () => {
   const candidateEnvironment = {
     PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_RELEASE_ENV_V1',
@@ -144,6 +218,7 @@ describe('Timeweb Yandex public-beta controller', () => {
       canonicalPublication: false,
       authorizesPublication: false,
       failedPublicationRunProvenance: '33168712014',
+      applicationComposeProject: 'phub-timeweb-beta-apps',
     });
     expect(() => validateRollbackFloor({ ...floor, authorizesPublication: true }, target)).toThrow(
       'rollback_floor_identity',
@@ -151,6 +226,108 @@ describe('Timeweb Yandex public-beta controller', () => {
     expect(() => validateRollbackFloor({ ...floor, hostname: 'lk.padlhub.su' }, target)).toThrow(
       'rollback_floor_identity',
     );
+  });
+
+  it.each(['phub-timeweb-beta', 'foreign-project', '', null, false])(
+    'rejects a substituted predecessor project: %s',
+    (applicationComposeProject) => {
+      expect(() => validateRollbackFloor({ ...floor, applicationComposeProject }, target)).toThrow(
+        'rollback_floor_identity',
+      );
+    },
+  );
+
+  it('requires the source-owned project field without accepting operator overrides', () => {
+    const missing = { ...floor };
+    delete missing.applicationComposeProject;
+    expect(() => validateRollbackFloor(missing, target)).toThrow('rollback_floor_keys');
+    expect(() => validateRollbackFloor({ ...floor, project: 'foreign-project' }, target)).toThrow(
+      'rollback_floor_keys',
+    );
+    for (const key of ['sourceSha', 'sourceTree']) {
+      expect(() => validateRollbackFloor({ ...floor, [key]: 'unbound' }, target)).toThrow(
+        'rollback_floor_identity',
+      );
+    }
+    const source = readFileSync('scripts/control-timeweb-yandex-public-beta.js', 'utf8');
+    const prepare = source.slice(source.indexOf('export function prepare(input)'));
+    const contractsRead = prepare.indexOf('readRepositoryContracts()');
+    expect(contractsRead).toBeGreaterThanOrEqual(0);
+    for (const check of [
+      'assertExactTimewebFrozenSource(',
+      'requireExactTimewebFrozenSourceAuthority(',
+    ]) {
+      const authorityCheck = prepare.indexOf(check);
+      expect(authorityCheck).toBeGreaterThanOrEqual(0);
+      expect(authorityCheck).toBeLessThan(contractsRead);
+    }
+    const frozen = readFileSync('scripts/verify-timeweb-frozen-source.js', 'utf8');
+    expect(frozen).toContain("'deploy/timeweb/yandex-public-beta-rollback-floor.json'");
+  });
+
+  const legacyPair = [
+    {
+      id: 'legacy-api',
+      project: 'phub-timeweb-beta-apps',
+      service: 'api',
+      image: receipt.priorApiReference,
+    },
+    {
+      id: 'legacy-web',
+      project: 'phub-timeweb-beta-apps',
+      service: 'web',
+      image: receipt.priorWebReference,
+    },
+  ];
+  const canonicalPair = [
+    {
+      id: 'candidate-api',
+      project: 'phub-timeweb-beta',
+      service: 'api',
+      image: receipt.candidateApiReference,
+    },
+    {
+      id: 'candidate-web',
+      project: 'phub-timeweb-beta',
+      service: 'web',
+      image: receipt.candidateWebReference,
+    },
+  ];
+
+  it.each([{ canonical: [] }, { canonical: canonicalPair }])(
+    'prepare finds the legacy pair with canonical inventory $canonical',
+    ({ canonical }) => {
+      const fixture = lookupFixture([...legacyPair, ...canonical]);
+      fixture.prepareLookups();
+      expect(fixture.calls.filter((args) => args[0] === 'inspect').map((args) => args[3])).toEqual([
+        'legacy-api',
+        'legacy-web',
+      ]);
+    },
+  );
+
+  it('keeps candidate lookups on the canonical project when legacy containers also exist', () => {
+    const fixture = lookupFixture([...legacyPair, ...canonicalPair]);
+    expect(fixture.canonicalLookups()).toEqual(['candidate-api', 'candidate-web']);
+  });
+
+  it('does not adopt matching image tags from the canonical project as the predecessor', () => {
+    const fixture = lookupFixture(
+      legacyPair.map((item) => ({ ...item, project: 'phub-timeweb-beta' })),
+    );
+    expect(() => fixture.prepareLookups()).toThrow('container_identity');
+    expect(fixture.calls.some((args) => args[0] === 'inspect')).toBe(false);
+  });
+
+  it('rejects ambiguous predecessor IDs and wrong predecessor images', () => {
+    expect(() =>
+      lookupFixture([...legacyPair, { ...legacyPair[0]!, id: 'duplicate-api' }]).prepareLookups(),
+    ).toThrow('container_identity');
+    expect(() =>
+      lookupFixture(
+        legacyPair.map((item) => ({ ...item, image: receipt.candidateApiReference })),
+      ).prepareLookups(),
+    ).toThrow('container_image_identity');
   });
 
   it('rejects unsafe operation paths and mutable candidate image identities', () => {
