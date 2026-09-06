@@ -151,6 +151,7 @@ export function realAccountEnvironment(delegationKey) {
     VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'http://localhost:5174/',
     VIVA_DELEGATION_ENCRYPTION_KEY: delegationKey,
     CORS_ORIGINS: 'http://localhost:5174',
+    GAMES_READ_ENABLED: 'true',
     GAMES_COMMANDS_ENABLED: 'false',
   };
 }

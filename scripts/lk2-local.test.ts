@@ -249,11 +249,16 @@ describe('real Viva preview custody', () => {
     const config = loadConfig(environment);
     expect(config.VIVA_MODE).toBe('production');
     expect(config.HOME_READ_MODE).toBe('projection');
+    expect(config.GAMES_READ_ENABLED).toBe(true);
     expect(config.GAMES_COMMANDS_ENABLED).toBe(false);
     expect(new URL(config.CORS_ORIGINS).hostname).not.toBe('127.0.0.1');
     const real = makeModel(base, root, 'node:22-bookworm-slim', lock, environment, true);
     expect(real.services.web.ports).toEqual(['127.0.0.1:5174:5173']);
     expect(real.services.api.networks).toEqual(['data', 'provider']);
+    expect(real.services.api.environment).toMatchObject({
+      GAMES_READ_ENABLED: 'true',
+      GAMES_COMMANDS_ENABLED: 'false',
+    });
     expect(real.networks.provider).toBeDefined();
     expect(mock.networks.provider).toBeUndefined();
     expect(real.services.api).not.toHaveProperty('ports');
@@ -263,6 +268,8 @@ describe('real Viva preview custody', () => {
         'VIVA_DELEGATION_ENCRYPTION_KEY',
         'JWT_ACCESS_SECRET',
         'JWT_REFRESH_SECRET',
+        'GAMES_READ_ENABLED',
+        'GAMES_COMMANDS_ENABLED',
       ])
         expect(real.services[service].environment).not.toHaveProperty(key);
     }

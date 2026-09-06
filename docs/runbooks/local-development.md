@@ -97,8 +97,21 @@ contain generated local secrets, not production system credentials. Ordinary sto
 
 API gets provider egress for the existing Viva end-user authentication/access broker. Web receives
 only dev mode flags. API/PostgreSQL/Redis have no published ports; Web is the sole API ingress.
-The launcher enables real phone auth, direct `profile.read` and existing booking-screen read-job
-relay. It initializes the profile routing plan with the canonical operator's dry-run and apply
+The launcher enables real phone auth, direct `profile.read`, `GAMES_READ_ENABLED` and existing
+booking-screen read-job relay. This also enables local game reads and public legacy tournament reads.
+Game reads supply the repository required to complete recommendations;
+`GAMES_COMMANDS_ENABLED` remains false. The authenticated local account needs `games.play` in
+addition to `profile.read` for authenticated recommendation and tournament reads.
+After explicit account-specific authorization,
+use the audited `user:access:set` operator (dry-run before apply) against this local database,
+preserving role `client` and using the verified active user as both actor and target. Never grant
+admin rights or change the default profile for all users. Refresh the browser session after a grant.
+The same operator restores the exact previous profile for rollback; existing access tokens remain
+valid until expiry, so stopping the private API immediately contains an unwanted grant.
+To roll back the read capability, set `GAMES_READ_ENABLED` back to false in the real-account
+environment, keep commands false, and run `local:stop` then `local:up` with the same initialized
+receipt. This preserves the database and requires no migration or reset.
+The launcher initializes the profile routing plan with the canonical operator's dry-run and apply
 against this new local database only, recording completion for idempotent resume. Home reads use
 local projections; communities use local storage. Promotions use the legacy configuration with
 no worker/importer, so absent projections remain absent. No mock Home/profile fallback is enabled.
