@@ -94,7 +94,8 @@
     "local:up": "node scripts/lk2-local.js up",
     "local:status": "node scripts/lk2-local.js status",
     "local:stop": "node scripts/lk2-local.js stop",
-    "local:config": "node scripts/lk2-local.js config"
+    "local:config": "node scripts/lk2-local.js config",
+    "source:static": "npm run contracts:generate && npm run format:check && npm run lint && npm run typecheck && npm run contracts:lint && npm run build && npm run runtime:imports"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
