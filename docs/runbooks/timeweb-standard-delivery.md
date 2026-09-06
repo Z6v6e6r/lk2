@@ -33,7 +33,7 @@ feature owner's work. No product UI is changed by this infrastructure task.
   independently checks exact current main before building. PR-head CI is never reusable main proof.
 - Target: existing Timeweb beta Compose project and network from target.json. The enrolled operator
   runs on that host, with fixed local Docker socket; no arbitrary SSH host, shell command or target
-  is accepted by the launcher. API and Realtime must already be healthy; Worker/Migrator stay off.
+  is accepted by the launcher. API must already be healthy; Realtime may remain absent, or must retain its existing healthy identity. Worker/Migrator stay off.
 - Pilot component: only Web presentation (FAST, or a SAFE feature whose deployed portion is entirely
   within the same presentation boundary). General SAFE backend business logic retains its relevant
   full tests and the critical/manual component release route until separately enrolled. A tier or

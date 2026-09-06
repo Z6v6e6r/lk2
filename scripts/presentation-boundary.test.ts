@@ -64,37 +64,35 @@ describe('existing presentation module boundaries', () => {
       false,
     );
   });
-  it('classifier control and mixed auth changes use actual full jobs', () => {
+  it.each([
+    'scripts/select-pr-ci-profile.js',
+    'scripts/verify-ci-plan.js',
+    '.github/workflows/pull-request.yaml',
+    'scripts/presentation-boundary.js',
+    'apps/api/src/auth/auth-routes.ts',
+    'packages/database/migrations/new.sql',
+  ])('classifier control or mixed critical change uses full jobs: %s', (path) => {
     const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    for (const path of [
-      'scripts/select-pr-ci-profile.js',
-      'scripts/verify-ci-plan.js',
-      '.github/workflows/pull-request.yaml',
-      'scripts/presentation-boundary.js',
-      'apps/api/src/auth/auth-routes.ts',
-      'packages/database/migrations/new.sql',
-    ]) {
-      const result = spawnSync(
-        process.execPath,
-        [
-          'scripts/select-pr-ci-profile.js',
-          '--event',
-          'pull_request',
-          '--ref',
-          'refs/pull/1/merge',
-          '--base',
-          sha,
-          '--head',
-          sha,
-        ],
-        {
-          input: `${tournament}\0${path}\0`,
-          encoding: 'utf8',
-        },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({ fullQuality: true, webQuality: false });
-    }
+    const result = spawnSync(
+      process.execPath,
+      [
+        'scripts/select-pr-ci-profile.js',
+        '--event',
+        'pull_request',
+        '--ref',
+        'refs/pull/1/merge',
+        '--base',
+        sha,
+        '--head',
+        sha,
+      ],
+      {
+        input: `${tournament}\0${path}\0`,
+        encoding: 'utf8',
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ fullQuality: true, webQuality: false });
   });
 });
 

@@ -130,6 +130,21 @@ function assertInactiveWriters() {
   }
 }
 
+export function inspectOptionalRealtime(
+  readRunningIds = () =>
+    docker([
+      'ps',
+      '-q',
+      '--filter',
+      'label=com.docker.compose.project=phub-timeweb-beta',
+      '--filter',
+      'label=com.docker.compose.service=realtime',
+    ]),
+  inspectRunning = inspect,
+) {
+  return readRunningIds().trim() ? inspectRunning('realtime') : null;
+}
+
 function inspect(service) {
   const ids = docker([
     'ps',
@@ -309,7 +324,7 @@ async function main(ciRunId) {
   assertInactiveWriters();
   const api = inspect('api');
   const web = inspect('web');
-  const realtime = inspect('realtime');
+  const realtime = inspectOptionalRealtime();
   const baselineId = releaseId(api.releaseId);
   const previousWebId = releaseId(web.releaseId);
   if (previousWebId.startsWith(`${sha}-`))
@@ -324,7 +339,8 @@ async function main(ciRunId) {
   if (
     values.PHUB_RELEASE_ID !== baselineId ||
     api.image !== `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}` ||
-    realtime.image !== `ghcr.io/z6v6e6r/phub-realtime@${values.REALTIME_IMAGE_DIGEST}` ||
+    (realtime &&
+      realtime.image !== `ghcr.io/z6v6e6r/phub-realtime@${values.REALTIME_IMAGE_DIGEST}`) ||
     values.PHUB_WORKER_ENABLED !== 'false' ||
     values.PHUB_MIGRATOR_ENABLED !== 'false'
   )
@@ -333,7 +349,7 @@ async function main(ciRunId) {
     assertInactiveWriters();
     if (
       JSON.stringify(inspect('api')) !== JSON.stringify(api) ||
-      JSON.stringify(inspect('realtime')) !== JSON.stringify(realtime) ||
+      JSON.stringify(inspectOptionalRealtime()) !== JSON.stringify(realtime) ||
       !readSecure(baselineEnv).equals(baselineBytes)
     )
       fail('Backend/configuration changed');
