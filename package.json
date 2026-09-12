@@ -15,6 +15,10 @@
   "overrides": {
     "esbuild": "0.28.1"
   },
+  "dependencies": {
+    "fastify": "5.12.4",
+    "sharp": "0.35.4"
+  },
   "scripts": {
     "build": "npm run contracts:generate && npm run build:packages && npm run build:apps",
     "build:packages": "npm run build -w @phub/domain && npm run build -w @phub/games && npm run build -w @phub/gift-certificates && npm run build -w @phub/config && npm run build -w @phub/communities && npm run build -w @phub/locations && npm run build -w @phub/notifications && npm run build -w @phub/database && npm run build -w @phub/home-projection && npm run build -w @phub/api-contracts && npm run build -w @phub/api-sdk && npm run build -w @phub/auth && npm run build -w @phub/observability && npm run build -w @phub/subscription-runtime-adapter && npm run build -w @phub/viva-adapter && npm run build -w @phub/viva-client-adapter && npm run build -w @phub/legacy-games-adapter && npm run build -w @phub/ui && npm run build -w @phub/testing",
