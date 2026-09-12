@@ -55,11 +55,8 @@ export function parseAndValidateCiPlan(text) {
   if (plan.profile === 'docs' && plan.dockerServices.length !== 0) {
     throw new Error('Docs profile cannot select Docker services');
   }
-  if (
-    plan.profile === 'leaf-web' &&
-    JSON.stringify(plan.dockerServices) !== JSON.stringify(['web'])
-  ) {
-    throw new Error('Leaf Web profile must select only Web Docker');
+  if (plan.profile === 'leaf-web' && plan.dockerServices.length !== 0) {
+    throw new Error('Presentation profile does not rebuild the release image in PR CI');
   }
   if (plan.provenanceProbe && !plan.deploymentContract) {
     throw new Error('Provenance probe requires deployment contract');
@@ -111,6 +108,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     verifyConditionalResult(plan[field], process.env.ACTUAL_RESULT, field);
   } else if (command === 'gate') {
     const results = JSON.parse(process.env.GATE_RESULTS ?? '{}');
+    const expected = [
+      'ci-plan',
+      'quality',
+      'dependency-security',
+      'secret-scan',
+      'deployment-contract',
+      'docker-build',
+    ];
+    if (JSON.stringify(Object.keys(results).sort()) !== JSON.stringify(expected.sort())) {
+      throw new Error('Final gate requires the exact stable job set');
+    }
     for (const [label, result] of Object.entries(results)) {
       requireResult(result, label);
       if (result !== 'success') throw new Error(`${label} result ${result}; expected success`);

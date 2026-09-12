@@ -1,0 +1,20 @@
+version = 1
+name = "LK2 local development"
+
+[setup]
+script = "npm ci && npm run contracts:generate"
+
+[[actions]]
+name = "Start local preview"
+icon = "run"
+command = "npm run local:up"
+
+[[actions]]
+name = "Local status"
+icon = "debug"
+command = "npm run local:status"
+
+[[actions]]
+name = "Stop local preview"
+icon = "tool"
+command = "npm run local:stop"

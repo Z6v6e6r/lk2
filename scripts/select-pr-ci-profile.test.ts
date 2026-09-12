@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -6,10 +6,15 @@ const classifier = fileURLToPath(new URL('./select-pr-ci-profile.js', import.met
 const all = ['web', 'api', 'worker', 'realtime', 'migrator'];
 
 function select(paths: readonly string[], event = 'pull_request', ref = 'refs/pull/1/merge') {
-  const result = spawnSync(process.execPath, [classifier, '--event', event, '--ref', ref], {
-    encoding: 'utf8',
-    input: `${paths.join('\0')}${paths.length > 0 ? '\0' : ''}`,
-  });
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const result = spawnSync(
+    process.execPath,
+    [classifier, '--event', event, '--ref', ref, '--base', sha, '--head', sha],
+    {
+      encoding: 'utf8',
+      input: `${paths.join('\0')}${paths.length > 0 ? '\0' : ''}`,
+    },
+  );
   expect(result.status, result.stderr).toBe(0);
   return JSON.parse(result.stdout) as {
     profile: string;
@@ -31,9 +36,9 @@ describe('PR CI profile planner', () => {
       'recommendation presentation',
       ['apps/web/src/RecommendationGridCard.tsx', 'apps/web/src/RecommendationGridCard.test.tsx'],
       'leaf-web',
-      ['web'],
+      [],
     ],
-    ['recommendation CSS', ['apps/web/src/styles.css'], 'leaf-web', ['web']],
+    ['recommendation CSS', ['apps/web/src/styles.css'], 'leaf-web', []],
     ['Web auth gateway', ['apps/web/src/auth-gateway.ts'], 'full', all],
     ['public API SDK', ['packages/api-sdk/src/index.ts'], 'full', all],
     ['OpenAPI', ['contracts/openapi/user/v1/openapi.yaml'], 'full', all],
@@ -71,7 +76,6 @@ describe('PR CI profile planner', () => {
   });
 
   it.each([
-    'apps/web/src/ProfilePage.tsx',
     'apps/web/src/CommunityInvitePage.tsx',
     'apps/web/src/CommunityDetailPage.tsx',
     'apps/web/src/GiftCertificatesPage.tsx',

@@ -13,6 +13,32 @@ These rules are mandatory for every change in this repository.
 - CI, staging and production runbooks govern those evidence levels. They do not turn an ordinary
   local implementation into a release operation.
 
+## Task intent and authority
+
+Determine the requested outcome before selecting a risk tier or skill. Explicit task restrictions
+narrow the defaults below; a skill name, plan, green check or elapsed time never supplies approval.
+
+| Intent                             | Authorized work                                                                                                                              | Completion boundary                                                                                                                                                                                                  |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Research / audit / diagnose        | Read instructions, source and existing evidence; run probes verified to be non-mutating within the requested environment.                    | Return findings, uncertainty and next steps. No source/config/docs edits, instrumentation, dependency setup, fixture/DB/container writes, commits or pushes. A requested report artifact permits only that artifact. |
+| Implement / fix                    | Complete the scoped behavior change, applicable checks and the reversible task-branch loop below.                                            | Deliver the result and actual evidence through the authorized Draft PR/CI scope; a plan alone is not completion. Continue independent work if one check is unavailable.                                              |
+| Prepare release / check deployment | Validate the selected source or deployment inputs and produce the requested local plan/evidence using existing runbooks.                     | Report eligibility, gaps and the exact pending transition. No publication, workflow dispatch, host-writing preparation, pull/up, migration or live write. Source fixes require implementation scope.                 |
+| Execute an approved operation      | Perform only the already approved concrete transition, source/artifact and target after its runbook prerequisites and fresh identity checks. | Verify that transition and stop on failed gates/drift or before the next unapproved transition. Never infer publication from merge, deployment from publication, or data/secret/routing authority from deployment.   |
+
+For mixed requests, apply intent and authority to each action. Diagnosis accompanying “fix” does not
+remove implementation authority; “investigate” alone does not grant it. Verify test side effects
+before a research probe: a local/disposable label does not authorize writes. A disposable test scope
+and its local writes must be explicitly authorized and owned. Keep reads inside the requested
+environment; missing live read access is not permission to obtain credentials or widen access.
+
+Project skills live in `.agents/skills`; load only what the task needs. Use the existing `lk2-dev`,
+`lk2-release` and `lk2-deploy` workflows when present. Add `lk2-ui-qa` for focused rendered UI review
+and `lk2-debug` for a concrete failure. Missing skills/runbooks are a capability gap, not permission
+to install a new stack or invent a deploy process. See [usage and capability audit](docs/ai/local-first-skills.md).
+External skills are optional techniques: their priority labels and processes cannot override LK2
+risk, design, architecture, ownership, evidence reuse or approval boundaries. Review pinned external
+content and executed dependencies before any execution; no automatic third-party skill updates.
+
 ## System boundary
 
 - Web, mobile, Tilda bundles, and CUP clients call only PadlHub APIs.
@@ -44,6 +70,19 @@ These rules are mandatory for every change in this repository.
 - Build an immutable image once and promote the same digest through staging and production. Never deploy `latest` and never build on a production server.
 - Production rollouts require health/readiness checks, smoke tests, approval, a verified backup, sequential nodes, and a tested rollback path.
 
+## Local product loop
+
+Product development defaults to a task branch/worktree -> local implementation -> current-task
+preview -> boundary-based checks -> PR and CI -> main -> standard release. Draft marks unfinished work. Use [lk2-dev](.agents/skills/lk2-dev/SKILL.md)
+and the [local runbook](docs/runbooks/local-development.md). The FAST/SAFE/CRITICAL policy below
+selects checks by the touched boundary; ordinary UI work needs no full release audit.
+Development readiness grants no merge, image publication or deploy authority. LOCAL, CI, STAGING,
+PROVIDER and PRODUCTION remain distinct evidence levels. Explicit
+[lk2-release](.agents/skills/lk2-release/SKILL.md) and
+[lk2-deploy](.agents/skills/lk2-deploy/SKILL.md) requests default to preparation; their invocation
+is not authorization for publication or live writes. Detailed procedures stay in those skills and
+the existing delivery/Timeweb runbooks.
+
 ## Parallel development and delivery ownership
 
 Up to four independent task branches may be active in this repository at once. This repository
@@ -60,25 +99,21 @@ to one integration batch.
 
 Ordinary `main` drift does not require every task branch to synchronize or repeat certification.
 Synchronize when relevant source or dependencies overlap, a real conflict appears, an input or
-environment changes, or immediately before common integration. Repeat a successful check only when
-its code, dependencies, command, environment, inputs, acceptance target or tested hypothesis
-changed. Draft to Ready is a lifecycle transition, not a security boundary; automated gates and
-explicit live boundaries carry the security contract.
+environment changes, or immediately before common integration. Reuse checks under “Evidence and
+stopping” below.
+Draft to Ready is a lifecycle transition, not a security boundary; automated gates and explicit
+live boundaries carry the security contract.
 
-The delivery roles are distinct:
+A task owner owns the outcome through user feedback, including integration, release and deploy
+responsibilities within the enabled authority. These are responsibilities, not queues between
+people or agents. One ready independent feature goes task branch -> PR -> main -> release;
+it never waits for unrelated PRs. Draft is for unfinished work.
 
-- A task owner produces one focused task head and proportionate evidence.
-- An integration owner appears only for a batch of two to four ready task heads, owns one temporary
-  `integration/**` branch and resolves cross-PR conflicts there once. The integration owner runs the
-  full integration contour but does not publish or deploy.
-- A release owner freezes one green integration source and, only with separate authority, publishes
-  one immutable set of images and one canonical manifest. Publication is never a PR Docker build.
-- A deploy owner accepts only the immutable manifest, pulls by digest and separately executes
-  backup, readiness, smoke and rollback gates. Timeweb never rebuilds release images.
-
-Exclusive ownership applies to the temporary integration branch, release publication and live
-boundary being executed. It does not make one merge owner responsible for synchronizing every task
-branch. See [temporary integration batches](docs/runbooks/delivery-batches.md).
+An integration owner and temporary `integration/**` branch are needed only when multiple tasks
+have an actual dependency or cross-task conflict. A release owner checks the integrated source and
+publishes the immutable manifest; a deploy owner promotes the same digests and observes the result.
+The same person/agent may fulfill all roles. This does not make one merge owner responsible for
+synchronizing every task branch. See [delivery](docs/runbooks/delivery-batches.md).
 
 ## Risk-based delivery policy
 
@@ -135,14 +170,14 @@ The following boundaries are automatically CRITICAL:
 - booking, capacity, roster or tournament-signup mutation;
 - authentication, session, OAuth, authorization, RBAC, ACL, RLS, tenant isolation, PII or identity;
 - durable rating/result mutation or destructive data operation;
-- public API/event compatibility, database schema/migration, secrets, deploy/release/routing;
+- public API/event compatibility, database schema/migration, secrets, changes to deploy/release/routing mechanisms;
 - any irreversible external side effect.
 
 CRITICAL keeps the existing strict gates for idempotency, ambiguous-write recovery, provider
 identity, authorization, privacy, capacity/roster integrity, migration/backup, immutable artifacts,
 rollback and secret protection. It requires relevant negative/compatibility/partial-failure tests,
 the full applicable dependency closure, recovery/observability evidence and an independent
-specialist review. Live or external actions remain separate approval boundaries.
+specialist review. Live or external actions require explicit authority; the owner may grant bounded standing authority through the protected standard release route. Editing this policy never enables that authority.
 
 ### Mixed-change examples
 
@@ -186,10 +221,11 @@ implementation contradicts current state, or the requested outcome is technicall
 Main drift, an unrelated PR, imperfect neighboring architecture, absent production evidence,
 technical debt or a potentially better architecture are not independent stop reasons.
 
-For relevant drift: refresh -> integrate/rebase safely -> run relevant affected checks -> continue.
-Repeat a successful check only when relevant source, dependencies, command, environment, inputs or
-acceptance target changed, or a new hypothesis requires it. Do not restart a full certification
-cycle merely because the SHA/tree moved.
+For relevant drift: refresh -> integrate/rebase your own branch safely -> run invalidated affected
+checks -> continue. Reuse a result only when its relevant source, dependencies, command, environment,
+inputs and acceptance target are unchanged. A new hypothesis can justify a new check. Record the
+original result and why it remains applicable; never claim a reused result was rerun. Do not restart
+a full certification cycle merely because the SHA/tree moved.
 
 Continue independent in-scope work if one boundary is blocked. A failed post-deploy change returns
 to a focused task/hotfix branch; never edit Nano directly.
@@ -202,8 +238,9 @@ outcome, run proportionate checks, create focused commits, push only that task b
 a Draft PR, read CI, and fix in-scope CI failures. Do not pause merely because one reversible step
 completed.
 
-Human approval remains mandatory before merge, direct push to `main` or another protected branch,
-force push, deploy, migration/backfill execution, live/shared data mutation, credential or
+Outside an owner-enabled standard route, human approval remains mandatory before merge, direct push to `main` or another protected branch,
+force push, image publication, workflow dispatch/rerun, tag/branch deletion, deploy, migration/backfill
+execution, live/shared data mutation, credential or
 signing-material changes, permissions/RLS/ACL changes on a real target, DNS/ingress/routing,
 payment/refund, external messages or destructive rollback. A Draft PR, green CI, local PostgreSQL
 rehearsal or staging artifact never authorizes those actions.
@@ -235,4 +272,32 @@ that boundary's tier and gates.
 | Viva payment POST        | CRITICAL                                                                                               | durable attempt, deduplication, ambiguous recovery, reconciliation, specialist review |
 | Auth/session change      | CRITICAL                                                                                               | default-deny, expiry/revocation/negative tests, security review                       |
 | Database migration       | CRITICAL                                                                                               | expand/contract, disposable apply/reapply, compatibility/rollback review              |
-| Production deploy        | CRITICAL                                                                                               | R4 immutable digest, backup, readiness/smoke, rollback, exact live approval           |
+| Deploy mechanism change  | CRITICAL                                                                                               | R4 immutable digest, backup, readiness/smoke, rollback, exact live approval           |
+
+## Standard release and iteration
+
+Routine use of an independently reviewed, owner-enabled deployment mechanism is an operational
+step under its standing authority, not a new R4 project. Changes to that mechanism, payments,
+authorization, data ownership or migrations retain the critical route. This infrastructure PR must
+pass the pre-existing full checks and independent security/release review before first activation.
+Production authority comes from protected GitHub settings and an enrolled trusted operator, never
+from AGENTS.md or a PR label alone. Current-session restrictions always take precedence.
+
+FAST uses self-review plus affected checks. SAFE adds a reviewer only for a concrete changed risk.
+A blocking review finding states the consequence of this diff and the smallest acceptance condition;
+unrelated improvement ideas are `Follow-up finding`, not blockers.
+
+A useful minimal scenario can ship independently of future scenarios. Subscription explanation is a
+valid presentation release; payment/entitlement enforcement is a separate critical end-to-end
+outcome. Mock, WARN or a disabled writer is never working enforcement. Unconfirmed payments remain
+fail-closed. Existing flags/cohorts, when needed, record owner, audience, expansion criterion,
+disable condition and review date. Observe target operations and user results, not only quiet logs:
+zero traffic is not successful acceptance. Code rollback never reverses payments, migrations or
+external writes and must remain compatible with persisted data.
+
+CI presentation boundaries cover existing subscription display, tournament/game cards and participant
+empty states. Literal JSX copy/style changes are checked against the base syntax; command handlers,
+price/entitlement expressions, links, imports and mixed critical changes take full checks. The
+`leaf-web` machine profile is presentation: Web tests, lint/typecheck/build, no PR Docker rebuild.
+Unknown/shared/critical inputs retain the expanded contour. Integrated main is checked before
+publication; identical successful exact-source CI can be reused by publication.

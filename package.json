@@ -37,7 +37,7 @@
     "test:source": "vitest run --maxWorkers=2",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "source:quality": "npm run contracts:generate && npm run format:check && npm run lint && npm run typecheck && npm run contracts:lint && npm run test:source && npm run build && npm run runtime:imports",
+    "source:quality": "npm run source:static && npm run test:source",
     "check": "npm run source:quality",
     "contracts:lint": "node --import tsx scripts/verify-imported-contract.ts && redocly lint openapi.yaml contracts/openapi/public/v1/openapi.yaml contracts/openapi/user/v1/openapi.yaml contracts/openapi/user/v2/openapi.yaml contracts/openapi/admin/v1/openapi.yaml contracts/openapi/internal/v1/openapi.yaml",
     "contracts:generate": "openapi-typescript contracts/openapi/public/v1/openapi.yaml -o packages/api-contracts/src/generated-public.ts && openapi-typescript contracts/openapi/user/v1/openapi.yaml -o packages/api-contracts/src/generated-user.ts && openapi-typescript contracts/openapi/user/v2/openapi.yaml -o packages/api-contracts/src/generated-user-v2.ts && openapi-typescript contracts/openapi/internal/v1/openapi.yaml -o packages/api-contracts/src/generated-internal.ts",
@@ -90,7 +90,12 @@
     "gift-certificates:sale:verify": "node --env-file-if-exists=.env --import tsx scripts/verify-gift-certificate-sale.ts",
     "runtime:imports": "node scripts/verify-runtime-imports.js",
     "smoke": "node --env-file-if-exists=.env --import tsx scripts/smoke-test.ts",
-    "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts"
+    "smoke:auth": "node --env-file-if-exists=.env --import tsx scripts/auth-smoke.ts",
+    "local:up": "node scripts/lk2-local.js up",
+    "local:status": "node scripts/lk2-local.js status",
+    "local:stop": "node scripts/lk2-local.js stop",
+    "local:config": "node scripts/lk2-local.js config",
+    "source:static": "npm run contracts:generate && npm run format:check && npm run lint && npm run typecheck && npm run contracts:lint && npm run build && npm run runtime:imports"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

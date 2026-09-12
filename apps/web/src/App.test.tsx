@@ -502,6 +502,7 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   realtimeMocks.connect.mockClear();
   vi.useRealTimers();
   window.localStorage.clear();
@@ -516,6 +517,55 @@ async function openPhoneLogin(user: ReturnType<typeof userEvent.setup>): Promise
 }
 
 describe('PadlHub web authentication', () => {
+  it.each([false, true])(
+    'uses phone verification in local preview without OAuth (iPhone=%s)',
+    async (iphone) => {
+      if (iphone) vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('iPhone');
+      vi.stubEnv('DEV', true);
+      vi.stubEnv('VITE_LK2_LOCAL_PREVIEW', '1');
+      const gateway = createGateway();
+      const user = userEvent.setup();
+      render(<App gateway={gateway} tenantKey="padlhub" />);
+
+      const phone = await screen.findByRole('textbox', { name: 'Номер телефона' });
+      expect(screen.queryByRole('button', { name: /Viva|Yandex/ })).not.toBeInTheDocument();
+      expect(screen.getByText('Локальный тестовый вход. СМС не отправляется.')).toBeVisible();
+      expect(screen.queryByRole('note')).not.toBeInTheDocument();
+      await user.clear(phone);
+      await user.type(phone, '+79990000001');
+      await user.click(screen.getByRole('checkbox', { name: /публичной оферты/i }));
+      await user.click(screen.getByRole('checkbox', { name: /обработку персональных данных/i }));
+      await user.click(screen.getByRole('button', { name: 'Получить код' }));
+      expect(gateway.requestCode).toHaveBeenCalledWith('+79990000001');
+      await user.type(await screen.findByRole('textbox', { name: 'Тестовый код' }), '0000');
+      expect(screen.queryByText(/Код отправлен на номер/)).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Войти' }));
+      expect(gateway.verifyCode).toHaveBeenCalledWith({
+        challengeId: 'challenge-1',
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      });
+      expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
+    },
+  );
+
+  it.each([
+    [false, '1'],
+    [true, '0'],
+    [true, undefined],
+  ])(
+    'preserves OAuth entry outside the explicit dev preview (DEV=%s, flag=%s)',
+    async (dev, flag) => {
+      vi.stubEnv('DEV', dev);
+      vi.stubEnv('VITE_LK2_LOCAL_PREVIEW', flag);
+      render(<App gateway={createGateway()} tenantKey="padlhub" />);
+      expect(await screen.findByRole('button', { name: 'Yandex' })).toBeVisible();
+      expect(
+        screen.queryByText('Локальный тестовый вход. СМС не отправляется.'),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it('captures a DIRECT invite from the fragment and immediately removes it from the URL', () => {
     const replaceState = vi.fn();
     const token = 'z'.repeat(43);
