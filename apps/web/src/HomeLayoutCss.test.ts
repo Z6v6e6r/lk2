@@ -162,7 +162,7 @@ describe('Home layout scroll contract', () => {
     expect(bookingPresenceDotRule).toMatch(/width:\s*4px\s*;/);
     expect(bookingPresenceDotRule).toMatch(/height:\s*4px\s*;/);
     expect(bookingPresenceDotRule).toMatch(/background:\s*#f0705f\s*;/);
-    expect(tabBookingPresenceDotRule).toMatch(/right:\s*-8px\s*;/);
+    expect(tabBookingPresenceDotRule).toMatch(/right:\s*-10px\s*;/);
     expect(calendarBookingPresenceDotRule).toMatch(/left:\s*21px\s*;/);
     expect(tabIndicatorRule).toMatch(/background:\s*transparent\s*;/);
     expect(mainBoxRule).toMatch(

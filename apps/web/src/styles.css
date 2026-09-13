@@ -10113,8 +10113,10 @@ label {
 
 .fh-tab-label .fh-booking-presence-dot {
   position: absolute;
-  top: -2px;
-  right: -8px;
+  top: -4px;
+  right: -10px;
+  width: 8px;
+  height: 8px;
 }
 
 .fh-main-box {
