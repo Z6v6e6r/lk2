@@ -1618,7 +1618,7 @@ export function HomeDashboardPage({
             </section>
           ) : null}
 
-          {layoutVariant === 'v3' ? null : (
+          {layoutVariant === 'v3' || bookingTab === 'FOR_ME' ? null : (
             <>
               <HomeStandardPromotionSection promotions={dashboard.promotions} />
 

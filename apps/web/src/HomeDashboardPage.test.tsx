@@ -153,6 +153,8 @@ describe('Home promotion carousel', () => {
     expect(
       within(heroPromotion).getByRole('link', { name: 'Акция: Первая акция' }),
     ).toHaveAttribute('href', '/promotions/first');
+    expect(screen.queryByRole('region', { name: 'Акции' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const lowerPromotions = screen.getByRole('region', { name: 'Акции' });
     const first = within(lowerPromotions).getByRole('link', { name: 'Первая акция' });
     expect(first).toHaveAttribute('href', '/promotions/first');
@@ -205,6 +207,9 @@ describe('Home progressive navigation', () => {
       'width',
       '670',
     );
+    expect(screen.queryByText('Акции временно недоступны.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Локации/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     expect(screen.getAllByText('Акции временно недоступны.')).toHaveLength(1);
     expect(screen.getByRole('heading', { name: /Локации/ })).toBeVisible();
   });
@@ -295,6 +300,11 @@ describe('Home progressive navigation', () => {
       />,
     );
 
+    expect(screen.queryByRole('region', { name: /локации/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('navigation', { name: 'Дополнительные разделы' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const locations = screen.getByRole('region', { name: /локации/i });
     const additional = screen.getByRole('navigation', { name: 'Дополнительные разделы' });
     expect(locations.nextElementSibling).toBe(additional);
@@ -309,6 +319,12 @@ describe('Home progressive navigation', () => {
       'href',
       '/offers',
     );
+    fireEvent.click(screen.getByRole('tab', { name: 'Для меня' }));
+    expect(screen.queryByRole('region', { name: 'Акции' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /локации/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('navigation', { name: 'Дополнительные разделы' }),
+    ).not.toBeInTheDocument();
   });
 
   it('shows the booking recommendations GIF while the personalized feed loads', () => {
