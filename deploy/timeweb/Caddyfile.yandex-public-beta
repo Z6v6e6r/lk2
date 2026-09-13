@@ -26,7 +26,7 @@ lk2.padlhub.su {
 
 	@auth_post {
 		method POST
-		path /user/api/v1/*/auth/viva/authorize /user/api/v1/*/auth/viva/reauthorize /user/api/v1/*/auth/viva/access /user/api/v1/*/auth/session/refresh
+		path /user/api/v1/*/auth/challenges /user/api/v1/*/auth/challenges/*/verify /user/api/v1/*/auth/viva/authorize /user/api/v1/*/auth/viva/reauthorize /user/api/v1/*/auth/viva/access /user/api/v1/*/auth/session/refresh
 	}
 	handle @auth_post {
 		reverse_proxy api:3000

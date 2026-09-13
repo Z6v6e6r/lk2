@@ -91,6 +91,10 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     VIVA_OAUTH_SUCCESS_REDIRECT_URL: `https://${host}/`,
     VIVA_DELEGATION_ENCRYPTION_KEY: exact32ByteValue('delegation'),
     OTEL_SERVICE_INSTANCE_ID: 'timeweb-beta-api-1',
+    // Local-only mock Home is not an acceptable beta state: the published legacy Home
+    // endpoints must fail closed rather than serve fabricated data.
+    HOME_READ_MODE: 'projection',
+    HOME_BASE_SYNC_ENABLED: 'true',
   };
   const worker = {
     ...baseEnvironment('worker'),
