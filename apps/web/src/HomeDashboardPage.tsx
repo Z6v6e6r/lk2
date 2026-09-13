@@ -970,11 +970,10 @@ function localDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function bookingCalendarDays(now: Date, dayOffset: number): readonly Date[] {
+function bookingCalendarDays(now: Date): readonly Date[] {
   const firstDay = new Date(now);
   firstDay.setHours(0, 0, 0, 0);
-  firstDay.setDate(firstDay.getDate() + dayOffset);
-  return Array.from({ length: 7 }, (_, index) => {
+  return Array.from({ length: 15 }, (_, index) => {
     const day = new Date(firstDay);
     day.setDate(firstDay.getDate() + index);
     return day;
@@ -1188,8 +1187,6 @@ export function HomeDashboardPage({
   const [selectedBookingKind, setSelectedBookingKind] = useState<'all' | HomeUpcomingItem['kind']>(
     'all',
   );
-  const [calendarDayOffset, setCalendarDayOffset] = useState(0);
-  const calendarSwipeStartX = useRef<number | null>(null);
   const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('FOR_ME');
   const [bookingRecommendations, setBookingRecommendations] =
     useState<BookingRecommendationPage | null>(null);
@@ -1204,7 +1201,7 @@ export function HomeDashboardPage({
   const bookingRecommendationsLoadMoreStarted = useRef(false);
   const bookingRecommendationsExpansionStarted = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const calendarDays = bookingCalendarDays(new Date(), calendarDayOffset);
+  const calendarDays = bookingCalendarDays(new Date());
   const upcomingItems =
     upcoming && upcoming.state !== 'UNAVAILABLE' ? upcoming.value.items : ([] as const);
   const datesWithBookings = new Set(
@@ -1458,25 +1455,7 @@ export function HomeDashboardPage({
                     </p>
                   ) : null}
                   <div className="fh-filters" aria-label="Фильтр записей по дате">
-                    <div
-                      className="fh-calendar"
-                      onPointerDown={(event) => {
-                        calendarSwipeStartX.current = event.clientX;
-                      }}
-                      onPointerUp={(event) => {
-                        const startX = calendarSwipeStartX.current;
-                        calendarSwipeStartX.current = null;
-                        if (startX === null || Math.abs(event.clientX - startX) < 40) return;
-                        setCalendarDayOffset((currentOffset) =>
-                          event.clientX < startX
-                            ? Math.min(14, currentOffset + 1)
-                            : Math.max(0, currentOffset - 1),
-                        );
-                      }}
-                      onPointerCancel={() => {
-                        calendarSwipeStartX.current = null;
-                      }}
-                    >
+                    <div className="fh-calendar">
                       <button
                         className={
                           selectedDateKey === null

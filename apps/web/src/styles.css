@@ -10158,14 +10158,24 @@ label {
   height: 55px;
   padding: 0;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 1px;
-  touch-action: pan-y;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
   user-select: none;
+}
+
+.fh-calendar::-webkit-scrollbar {
+  display: none;
 }
 
 .fh-calendar button {
   position: relative;
+  scroll-snap-align: start;
   display: flex;
   width: 46px;
   height: 55px;

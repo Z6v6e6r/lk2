@@ -866,7 +866,7 @@ describe('Home upcoming bookings', () => {
     expect(container.querySelectorAll('.fh-bookings-list > .fh-booking-entry')).toHaveLength(3);
   });
 
-  it('filters real upcoming bookings and swipes the calendar one day up to two weeks ahead', () => {
+  it('filters real upcoming bookings across a two-week date rail', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-18T09:00:00.000Z'));
     const upcoming: HomeDashboard['upcoming'] = [
@@ -929,33 +929,18 @@ describe('Home upcoming bookings', () => {
 
     const calendar = filter.querySelector('.fh-calendar');
     expect(calendar).not.toBeNull();
-    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
-    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
+    expect(within(calendar as HTMLDivElement).getAllByRole('button')).toHaveLength(16);
+    const lastDay = within(filter).getByRole('button', { name: /суббота, 1 августа/i });
+    expect(lastDay).toBeInTheDocument();
     expect(
-      within(filter).queryByRole('button', { name: /суббота, 18 июля/i }),
+      within(filter).queryByRole('button', { name: /воскресенье, 2 августа/i }),
     ).not.toBeInTheDocument();
-    expect(within(filter).getByRole('button', { name: /суббота, 25 июля/i })).toBeVisible();
-
-    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
-    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
-    expect(
-      within(filter).queryByRole('button', { name: /воскресенье, 19 июля/i }),
-    ).not.toBeInTheDocument();
-    expect(within(filter).getByRole('button', { name: /воскресенье, 26 июля/i })).toBeVisible();
-
-    for (let index = 0; index < 12; index += 1) {
-      fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
-      fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
-    }
-    expect(within(filter).getByRole('button', { name: /суббота, 1 августа/i })).toBeVisible();
-
-    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
-    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
-    expect(within(filter).getByRole('button', { name: /суббота, 1 августа/i })).toBeVisible();
-
-    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 100 });
-    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 280 });
-    expect(within(filter).getByRole('button', { name: /пятница, 31 июля/i })).toBeVisible();
+    fireEvent.click(lastDay);
+    expect(lastDay).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('По выбранным фильтрам записей нет');
+    fireEvent.click(allDates);
+    expect(allDates).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('article', { name: 'Воскресный турнир' })).toBeVisible();
   });
 
   it('renders only roster data supplied by the Home projection', () => {
