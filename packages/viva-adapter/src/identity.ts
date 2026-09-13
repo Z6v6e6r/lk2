@@ -43,7 +43,13 @@ export interface VivaIdentityMetric {
   readonly outcome: 'success' | 'invalid' | 'rate_limited' | 'unavailable';
   readonly status?: number;
   readonly correlationId?: string;
-  readonly failureStage?: 'token_request' | 'token_payload' | 'refresh_token' | 'access_token';
+  readonly failureStage?:
+    | 'token_request'
+    | 'token_payload'
+    | 'refresh_token'
+    | 'access_token'
+    | 'access_token_claims'
+    | 'id_token';
   readonly durationMs: number;
   readonly circuitState: 'closed' | 'open';
 }
@@ -72,6 +78,7 @@ class VivaOAuthStageError extends IdentityProviderError {
 
 const tokenResponseSchema = z.object({
   access_token: z.string().min(1),
+  id_token: z.string().min(1).optional(),
   refresh_token: z.string().optional(),
   expires_in: z.number().optional(),
   refresh_expires_in: z.number().optional(),
@@ -245,6 +252,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
 
   private async resolveOAuthIdentity(
     accessToken: string,
+    idToken: string | undefined,
     provider: VivaOAuthProvider,
     providerTenantKey: string,
     correlationId: string,
@@ -261,16 +269,42 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
       throw new VivaOAuthStageError('access_token');
     }
+    // Keycloak emits signed broker provenance in the ID token for a brokered login; the access
+    // token carries it only when a dedicated protocol mapper is configured. Both are signed by the
+    // same realm key, so the verified ID token is an equally trusted source when it is present.
+    let idPayload: JWTPayload | undefined;
+    if (idToken) {
+      try {
+        ({ payload: idPayload } = await jwtVerify(idToken, this.jwks, {
+          issuer: this.issuer,
+          algorithms: ['RS256'],
+        }));
+      } catch {
+        this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
+        throw new VivaOAuthStageError('id_token');
+      }
+      if (typeof idPayload.sub !== 'string' || idPayload.sub !== payload.sub) {
+        this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
+        throw new VivaOAuthStageError('id_token');
+      }
+    }
+    const accessProvenance = stringClaim(payload, ['identity_provider', 'identityProvider']);
+    const idProvenance = idPayload
+      ? stringClaim(idPayload, ['identity_provider', 'identityProvider'])
+      : undefined;
     if (
       payload.azp !== this.options.clientId ||
-      stringClaim(payload, ['identity_provider', 'identityProvider']) !== provider ||
+      (idProvenance !== undefined &&
+        accessProvenance !== undefined &&
+        idProvenance !== accessProvenance) ||
+      (idProvenance ?? accessProvenance) !== provider ||
       stringClaim(payload, ['tenant_key', 'tenantKey']) !== providerTenantKey ||
       typeof payload.sub !== 'string' ||
       !payload.sub ||
       typeof payload.exp !== 'number'
     ) {
       this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
-      throw new VivaOAuthStageError('access_token');
+      throw new VivaOAuthStageError('access_token_claims');
     }
     this.emit({ operation: 'jwt_verify', outcome: 'success', correlationId }, startedAt);
     if (identityMode === 'RECOVERY_SUBJECT_ONLY') {
@@ -432,6 +466,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
     try {
       resolvedIdentity = await this.resolveOAuthIdentity(
         tokens.access_token,
+        tokens.id_token,
         input.provider,
         input.providerTenantKey,
         input.correlationId,
