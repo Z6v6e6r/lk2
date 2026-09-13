@@ -204,9 +204,14 @@ For the authorized public Yandex beta, the API runtime must additionally contain
 `VIVA_OAUTH_SUBJECT_PROVISIONING_ENABLED=true`. The latter remains a required true flag in the
 Timeweb runtime contract and cannot be combined with existing-subject bootstrap. The runtime must
 also supply non-`pending` `PUBLIC_OFFER_VERSION` and `PERSONAL_DATA_POLICY_VERSION` values that map
-to the published documents linked by Web. Keycloak must emit signed broker provenance
-`identity_provider=yandex` or `identityProvider=yandex`; do not remove Basic Auth if that claim is
-absent or user-editable.
+to the published documents linked by Web. Keycloak may emit signed broker provenance
+`identity_provider=yandex` or `identityProvider=yandex` in the signed ID token or, with a dedicated
+protocol mapper, in the access token. When a verified token presents the claim it must match, and two
+verified tokens that disagree must fail closed. The public-beta client emits the claim in neither
+token and PadlHub has no protocol-mapper access to the vendor realm, so an absent claim is recorded as
+`provenance=absent` on the `jwt_verify` metric and is not a STOP condition: provider and tenant are
+already bound by `kc_idp_hint` plus `tenant_key` on the authorization request this adapter builds, and
+the authorization code is bound to that request by the PKCE `code_verifier` and the one-time state.
 
 Removing the operator Basic Auth gate is a controlled ingress activation after the new API/Web pair
 is ready. Use only `deploy/timeweb/Caddyfile.yandex-public-beta`, whose adapted JSON hash is frozen in

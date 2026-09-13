@@ -39,14 +39,25 @@ the browser as described below, so the allowlisted profile read can run directly
 A separately reviewed Yandex-only beta contour may enable subject provisioning when the canonical
 End User profile read is unavailable. This mode requires the provider allowlist to be exactly
 `yandex` and verifies the Keycloak signature, issuer, authorized party, tenant key, expiry, subject
-and signed broker provenance. The `identity_provider` (or `identityProvider`) claim must equal
-`yandex`; a missing claim or another provider fails closed before atomically creating or resolving a
-PadlHub UUID by `(tenant_id, issuer, subject)`.
-Keycloak emits this provenance in the signed ID token for a brokered login, while the access token
-carries it only when a dedicated protocol mapper is configured. Both tokens are verified with the
-same realm issuer, key set and `RS256` algorithm and their `sub` values must agree, so either
-verified token is an accepted source; a mismatch between the two also fails closed. Provenance stays
-mandatory: when neither verified token carries it, the callback fails before any identity write.
+and signed broker provenance, before atomically creating or resolving a PadlHub UUID by
+`(tenant_id, issuer, subject)`.
+Keycloak emits broker provenance as `identity_provider` (or `identityProvider`) in the signed ID
+token for a brokered login, while the access token carries it only when a dedicated protocol mapper
+is configured. Both tokens are verified with the same realm issuer, key set and `RS256` algorithm
+and their `sub` values must agree, so either verified token is an accepted source. When a verified
+token presents the claim it must equal `yandex`, and two verified tokens that present different
+values fail closed.
+
+The claim is verified when present but is not required. The vendor realm does not emit it for the
+public Yandex beta client in either token, and PadlHub has no protocol-mapper access to add it, so
+requiring it made brokered login permanently unusable rather than measurably safer. Provider and
+tenant are already bound by the authorization request this adapter builds (`kc_idp_hint` plus
+`tenant_key`), and the returned authorization code is bound to that request by the PKCE
+`code_verifier` and the one-time state, so an absent claim is recorded as `provenance=absent` on the
+`jwt_verify` metric instead of failing the callback. A present claim that contradicts the request, a
+wrong authorized party, a wrong tenant key, a missing expiry or a missing subject still fail closed
+before any identity write, and the `access_token_claims` stage now names the rejected claim in
+`claimFailure`.
 Phone and email claims are ignored for identity linking. A signed name claim may initialize display
 text only and is never an identity key. This mode is mutually exclusive with existing-subject
 bootstrap, remains disabled by default and does not relax authenticated reauthorization: recovery
