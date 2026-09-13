@@ -1001,7 +1001,14 @@ function EventParticipants({
     item.roster?.state === 'UNAVAILABLE' ||
     (!item.participants && item.openSlots === undefined)
   ) {
-    return <span className="fh-event__roster-status">Состав временно недоступен</span>;
+    return (
+      <span className="fh-event__roster-placeholder">
+        <span className="sr-only">Состав временно недоступен</span>
+        <span aria-hidden="true">
+          <ParticipantAvatarStack participants={[]} capacity={4} />
+        </span>
+      </span>
+    );
   }
   return (
     <span>
