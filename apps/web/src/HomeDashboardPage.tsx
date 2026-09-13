@@ -997,21 +997,32 @@ function EventParticipants({
 }: {
   readonly item: HomeUpcomingItem;
 }): React.JSX.Element | null {
+  if (
+    item.roster?.state === 'UNAVAILABLE' ||
+    (!item.participants && item.openSlots === undefined)
+  ) {
+    return <span className="fh-event__roster-status">Состав временно недоступен</span>;
+  }
   return (
-    <ParticipantAvatarStack
-      ariaLabel="Участники записи"
-      capacity={4}
-      participants={(item.participants ?? []).map((participant, index) => {
-        const label = participantLabel(participant);
-        return {
-          key: participant.profileId ?? `${label}-${index}`,
-          displayName: label,
-          avatarUrl: participant.avatarUrl ?? null,
-          level: participant.level ?? null,
-          levelValue: participant.levelValue ?? null,
-        };
-      })}
-    />
+    <span>
+      {item.roster?.state === 'STALE' ? (
+        <span className="fh-event__roster-status">Состав требует обновления</span>
+      ) : null}
+      <ParticipantAvatarStack
+        ariaLabel="Участники записи"
+        capacity={Math.min(4, (item.participants?.length ?? 0) + (item.openSlots ?? 0))}
+        participants={(item.participants ?? []).map((participant, index) => {
+          const label = participantLabel(participant);
+          return {
+            key: participant.profileId ?? `${label}-${index}`,
+            displayName: label,
+            avatarUrl: participant.avatarUrl ?? null,
+            level: participant.level ?? null,
+            levelValue: participant.levelValue ?? null,
+          };
+        })}
+      />
+    </span>
   );
 }
 

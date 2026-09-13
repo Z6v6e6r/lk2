@@ -1106,6 +1106,7 @@ describe('client-assisted booking screen read routes', () => {
         items: [
           {
             id: canonicalBookingId,
+            gameId: canonicalGameId,
             kind: 'game',
             title: 'Игра на рейтинг',
             route: `/games/${canonicalGameId}`,

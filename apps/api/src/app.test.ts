@@ -1099,6 +1099,54 @@ describe('health endpoints', () => {
     expect(get).toHaveBeenCalledWith(tenantId, userId);
   });
 
+  it('keeps bookings available without roster identities when the roster read fails', async () => {
+    const generatedAt = new Date().toISOString();
+    const item = {
+      id: '11111111-1111-4111-8111-111111111111',
+      gameId: '22222222-2222-4222-8222-222222222222',
+      kind: 'game' as const,
+      title: 'Игра',
+      startsAt: generatedAt,
+      venue: 'Корт',
+      status: 'confirmed' as const,
+      route: '/games/22222222-2222-4222-8222-222222222222',
+    };
+    const app = await buildApp({
+      config: { ...config, HOME_READ_MODE: 'projection' },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      upcomingBookingsRepository: {
+        get: vi.fn().mockResolvedValue({
+          tenantId,
+          userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+          version: 'test',
+          generatedAt,
+          staleAt: new Date(Date.now() + 60000).toISOString(),
+          updatedAt: generatedAt,
+          items: [item],
+        }),
+        replace: vi.fn(),
+      },
+      gameReadRepository: {
+        getCardProjection: vi.fn(),
+        listPublicCardProjections: vi.fn(),
+        listViewerCardProjections: vi.fn(),
+        getCardProjections: vi.fn().mockRejectedValue(new Error('read unavailable')),
+      },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/upcoming',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('private, no-store');
+    expect(response.json<{ items: unknown[] }>().items).toEqual([
+      { ...item, roster: { state: 'UNAVAILABLE' } },
+    ]);
+  });
+
   it('returns the complete home dashboard as one protected snapshot', async () => {
     const app = await buildApp({
       config,

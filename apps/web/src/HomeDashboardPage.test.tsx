@@ -11,7 +11,7 @@ import type {
   HomeDashboard,
   UserUpcomingBookings,
 } from './auth-gateway.js';
-import { HomeDashboardPage } from './HomeDashboardPage.js';
+import { HomeDashboardPage, UpcomingBookingCard } from './HomeDashboardPage.js';
 
 const dashboard: HomeDashboard = {
   snapshot: {
@@ -941,6 +941,40 @@ describe('Home upcoming bookings', () => {
     fireEvent.click(allDates);
     expect(allDates).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('article', { name: 'Воскресный турнир' })).toBeVisible();
+  });
+
+  it('does not invent free seats when the roster is missing or unavailable', () => {
+    const item = {
+      id: '55555555-5555-4555-8555-555555555555',
+      kind: 'game' as const,
+      title: 'Игра',
+      startsAt: '2026-07-20T09:00:00.000Z',
+      venue: 'Корт',
+      status: 'confirmed' as const,
+      route: '/games/55555555-5555-4555-8555-555555555555',
+    };
+    const { container, rerender } = render(<UpcomingBookingCard item={item} />);
+    expect(screen.getByText('Состав временно недоступен')).toBeVisible();
+    expect(container.querySelector('.participant-avatar-stack__open-slot')).not.toBeInTheDocument();
+    rerender(
+      <UpcomingBookingCard
+        item={{ ...item, participants: [], openSlots: 2, roster: { state: 'UNAVAILABLE' } }}
+      />,
+    );
+    expect(container.querySelector('.participant-avatar-stack__open-slot')).not.toBeInTheDocument();
+    rerender(
+      <UpcomingBookingCard
+        item={{
+          ...item,
+          participants: [{ displayName: 'Игрок' }],
+          openSlots: 1,
+          roster: { state: 'STALE' },
+        }}
+      />,
+    );
+    expect(screen.getByText('Состав требует обновления')).toBeVisible();
+    expect(container.querySelectorAll('.participant-avatar-stack__item')).toHaveLength(1);
+    expect(container.querySelectorAll('.participant-avatar-stack__open-slot')).toHaveLength(1);
   });
 
   it('renders only roster data supplied by the Home projection', () => {

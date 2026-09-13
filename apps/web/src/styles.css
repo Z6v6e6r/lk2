@@ -14085,3 +14085,11 @@ button.participant-avatar-stack__open-slot:focus-visible {
     font-size: 10px;
   }
 }
+
+.fh-event__roster-status {
+  display: block;
+  max-width: 155px;
+  color: #747276;
+  font-size: 11px;
+  line-height: 1.3;
+}

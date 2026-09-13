@@ -115,3 +115,19 @@ Recommendation ranking remains exclusive to `FOR_ME` and must not be used as a c
 - materialized recommendation feed and cursor pagination;
 - training and tournament candidate adapters;
 - remote staging browser proof and real post-join recommendation refresh.
+
+### Upcoming roster read snapshots
+
+My Bookings stores an optional canonical `gameId` resolved by the trusted booking mapping;
+legacy items without it stay unavailable until the existing booking read refresh runs.
+The upcoming GET reads at most 50 unique game projections in one tenant-scoped batch and
+reuses the game-detail visibility policy. It additionally requires a viewer relationship;
+an unrelated public-game viewer does not receive participant identities through this endpoint.
+Participants, open seats, capacity, revision and projection timestamp describe one game snapshot.
+`roster.state` is READY for a projection no older than 60 seconds, STALE for at most the configured HOME_PROJECTION_MAX_STALE_SECONDS beyond that, or
+UNAVAILABLE when expired, unlinked, denied or missing. READY measures local projection age, not confirmed
+Viva freshness. No provider refresh or roster mutation is initiated by enrichment.
+The enriched response is private/no-store and its version includes roster content. A roster read
+failure is logged as `upcoming_roster_read_failed` and leaves bookings usable without roster data.
+The UI never infers four free places from missing participants; it only renders explicitly supplied
+open seats and labels stale/unavailable rosters. Existing mock and legacy fields remain compatible.

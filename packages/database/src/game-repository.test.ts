@@ -100,6 +100,25 @@ function poolWithHandler(
 }
 
 describe('game repository', () => {
+  it('bounds and deduplicates tenant-scoped roster batch reads', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }));
+    const ids = Array.from(
+      { length: 60 },
+      (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    );
+    const result = await createGameRepository(pool as never).getCardProjections!(tenantId, [
+      ...ids,
+      ...ids,
+    ]);
+    expect(result.size).toBe(0);
+    expect(query).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [tenantId]);
+    const read = query.mock.calls.find(([text]) => text.includes('from unnest'));
+    expect(read?.[1]).toEqual([tenantId, ids.slice(0, 50)]);
+    expect(read?.[0]).toContain('r.tenant_id = $1');
+    expect(read?.[0]).toContain('p.tenant_id = $1');
+    expect(read?.[0]).toContain('coalesce(r.target_game_id, requested.id)');
+  });
+
   it('creates canonical state, command result, audit and two outbox facts atomically', async () => {
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('from eligibility.canonical_levels')) {
