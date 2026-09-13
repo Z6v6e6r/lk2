@@ -261,6 +261,12 @@ describe('Timeweb deployment contract', () => {
 
   it.each([
     ['read method fence', 'method GET HEAD', 'method GET HEAD POST'],
+    ['phone challenge route', '/auth/challenges ', '/auth/challenges-disabled '],
+    [
+      'phone challenge verify route',
+      '/auth/challenges/*/verify',
+      '/auth/challenges/*/verify-disabled',
+    ],
     ['Yandex authorize route', '/auth/viva/authorize', '/auth/viva/authorize-disabled'],
     ['session refresh route', '/auth/session/refresh', '/auth/session/refresh-disabled'],
     ['logout method fence', 'method DELETE', 'method POST'],
