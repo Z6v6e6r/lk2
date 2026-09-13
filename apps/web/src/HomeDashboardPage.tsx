@@ -1210,6 +1210,8 @@ export function HomeDashboardPage({
   const initialBookingRecommendationLimit = useRef(layoutVariant === 'v3' ? 14 : 6);
   const bookingRecommendationsRequestStarted = useRef(true);
   const bookingRecommendationsLoadMoreStarted = useRef(false);
+  const bookingRecommendationsLoadMoreFailed = useRef(false);
+  const [bookingRecommendationsMoreError, setBookingRecommendationsMoreError] = useState(false);
   const bookingRecommendationsExpansionStarted = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const calendarDays = bookingCalendarDays(new Date());
@@ -1285,27 +1287,37 @@ export function HomeDashboardPage({
     );
   }, [bookingRecommendations, layoutVariant, loadBookingRecommendations]);
 
-  const loadMoreBookingRecommendations = useCallback((): void => {
-    const cursor = bookingRecommendations?.nextCursor;
-    if (!cursor || bookingRecommendationsLoadMoreStarted.current) return;
-    bookingRecommendationsLoadMoreStarted.current = true;
-    setBookingRecommendationsLoadingMore(true);
-    setBookingRecommendationsError(null);
-    void loadBookingRecommendations({ limit: 12, cursor }).then(
-      (page) => {
-        setBookingRecommendations((current) =>
-          current ? appendRecommendationPage(current, page) : page,
-        );
-        bookingRecommendationsLoadMoreStarted.current = false;
-        setBookingRecommendationsLoadingMore(false);
-      },
-      () => {
-        bookingRecommendationsLoadMoreStarted.current = false;
-        setBookingRecommendationsLoadingMore(false);
-        setBookingRecommendationsError('Не удалось загрузить следующие рекомендации.');
-      },
-    );
-  }, [bookingRecommendations?.nextCursor, loadBookingRecommendations]);
+  const loadMoreBookingRecommendations = useCallback(
+    (retry = false): void => {
+      const cursor = bookingRecommendations?.nextCursor;
+      if (
+        !cursor ||
+        bookingRecommendationsLoadMoreStarted.current ||
+        (bookingRecommendationsLoadMoreFailed.current && !retry)
+      )
+        return;
+      bookingRecommendationsLoadMoreStarted.current = true;
+      bookingRecommendationsLoadMoreFailed.current = false;
+      setBookingRecommendationsLoadingMore(true);
+      setBookingRecommendationsMoreError(false);
+      void loadBookingRecommendations({ limit: 12, cursor }).then(
+        (page) => {
+          setBookingRecommendations((current) =>
+            current ? appendRecommendationPage(current, page) : page,
+          );
+          bookingRecommendationsLoadMoreStarted.current = false;
+          setBookingRecommendationsLoadingMore(false);
+        },
+        () => {
+          bookingRecommendationsLoadMoreStarted.current = false;
+          setBookingRecommendationsLoadingMore(false);
+          bookingRecommendationsLoadMoreFailed.current = true;
+          setBookingRecommendationsMoreError(true);
+        },
+      );
+    },
+    [bookingRecommendations?.nextCursor, loadBookingRecommendations],
+  );
 
   useEffect(() => {
     let active = true;
@@ -1589,6 +1601,8 @@ export function HomeDashboardPage({
                     hasMore={Boolean(bookingRecommendations.nextCursor)}
                     loadingMore={bookingRecommendationsLoadingMore}
                     onLoadMore={loadMoreBookingRecommendations}
+                    loadMoreError={bookingRecommendationsMoreError}
+                    onRetryLoadMore={() => loadMoreBookingRecommendations(true)}
                     recommendationStripAdvertising={promotionSlots?.recommendationStrip ?? null}
                     recommendationCardAdvertising={promotionSlots?.recommendationCard ?? null}
                     advertisingLayout={usesRecommendationCards ? 'compact' : 'vertical'}

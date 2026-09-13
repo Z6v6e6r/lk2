@@ -658,6 +658,71 @@ describe('Home progressive navigation', () => {
     expect(screen.queryByRole('region', { name: 'Сервисы клуба' })).not.toBeInTheDocument();
   });
 
+  it('stops scroll retries after pagination failure and resumes only on explicit retry', async () => {
+    const page: BookingRecommendationPage = {
+      version: 'display-test',
+      generatedAt: '2026-07-18T09:00:00.000Z',
+      staleAt: '2026-07-18T09:05:00.000Z',
+      personalization: 'BASIC',
+      items: [
+        {
+          kind: 'TRAINING',
+          reasons: [],
+          activity: {
+            id: '55555555-5555-4555-8555-555555555555',
+            kind: 'TRAINING',
+            title: 'Тренировка для проверки отображения',
+            startsAt: '2026-07-20T09:00:00.000Z',
+            endsAt: '2026-07-20T10:00:00.000Z',
+            timezone: 'Europe/Moscow',
+            station: {
+              id: '60000000-0000-4000-8000-000000000001',
+              name: 'Тестовая станция',
+              shortAddress: null,
+            },
+            levelRange: null,
+            capacity: { total: 4, open: 2 },
+            host: null,
+            route: '/trainings/55555555-5555-4555-8555-555555555555',
+          },
+        },
+      ],
+      nextCursor: 'next-page',
+    };
+    const loadBookingRecommendations = vi
+      .fn()
+      .mockImplementation((request: { cursor?: string }) =>
+        request.cursor ? Promise.reject(new Error('offline')) : Promise.resolve(page),
+      );
+    const { container } = render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={homeBase}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadBookingRecommendations={loadBookingRecommendations}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+    await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledTimes(2));
+    const feed = container.querySelector('.booking-recommendations') as HTMLElement;
+    fireEvent.scroll(feed);
+    await screen.findByRole('button', { name: 'Повторить загрузку' });
+    expect(feed).toContainElement(screen.getByRole('alert'));
+    for (let i = 0; i < 10; i += 1) fireEvent.scroll(feed);
+    expect(loadBookingRecommendations).toHaveBeenCalledTimes(3);
+    fireEvent.click(screen.getByRole('tab', { name: 'Для меня' }));
+    fireEvent.scroll(feed);
+    expect(loadBookingRecommendations).toHaveBeenCalledTimes(3);
+    loadBookingRecommendations.mockResolvedValueOnce({ ...page, nextCursor: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить загрузку' }));
+    await vi.waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(loadBookingRecommendations).toHaveBeenCalledTimes(4);
+    expect(loadBookingRecommendations).toHaveBeenLastCalledWith({ limit: 12, cursor: 'next-page' });
+    fireEvent.scroll(feed);
+    expect(loadBookingRecommendations).toHaveBeenCalledTimes(4);
+  });
   it('expands a sparse initial recommendation slice once and does not reload on the active tab', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
       version: 'a'.repeat(64),

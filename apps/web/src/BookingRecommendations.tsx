@@ -601,6 +601,8 @@ export function BookingRecommendations({
   showCompactReasonBadges = true,
   hasMore = false,
   loadingMore = false,
+  loadMoreError = false,
+  onRetryLoadMore,
   onLoadMore,
   recommendationStripAdvertising,
   recommendationCardAdvertising,
@@ -616,6 +618,8 @@ export function BookingRecommendations({
   readonly showCompactReasonBadges?: boolean;
   readonly hasMore?: boolean;
   readonly loadingMore?: boolean;
+  readonly loadMoreError?: boolean;
+  readonly onRetryLoadMore?: () => void;
   readonly onLoadMore?: () => void;
   readonly recommendationStripAdvertising?: HomeRecommendationPromotionDeck | null;
   readonly recommendationCardAdvertising?: HomeRecommendationPromotionDeck | null;
@@ -649,7 +653,7 @@ export function BookingRecommendations({
           : 'booking-recommendations'
       }
       onScroll={
-        compact && hasMore && onLoadMore
+        compact && hasMore && !loadingMore && !loadMoreError && onLoadMore
           ? (event) => {
               const container = event.currentTarget;
               if (container.scrollHeight - container.scrollTop - container.clientHeight <= 240) {
@@ -719,6 +723,14 @@ export function BookingRecommendations({
           </Fragment>
         );
       })}
+      {loadMoreError ? (
+        <div className="booking-recommendations__loading-more">
+          <p role="alert">Не удалось загрузить следующие рекомендации.</p>
+          <button type="button" onClick={onRetryLoadMore}>
+            Повторить загрузку
+          </button>
+        </div>
+      ) : null}
       {loadingMore ? (
         <p className="booking-recommendations__loading-more" role="status">
           Загружаем рекомендации…
