@@ -110,7 +110,7 @@ describe('Home V3 recommendation photo grid', () => {
     expect(card.getAllByLabelText('Свободное место')).toHaveLength(3);
     expect(section?.querySelector('.recommendation-grid-card__hero img')).toHaveAttribute(
       'src',
-      expect.stringMatching(/game-hero\.webp$/),
+      expect.stringMatching(/skolkovo\/game-\d\.webp$/),
     );
     expect(section?.querySelector('.recommendation-grid-card__hero img')).toHaveAttribute(
       'alt',

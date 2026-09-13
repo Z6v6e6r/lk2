@@ -1,3 +1,4 @@
+import { recommendationCover } from './recommendation-cover.js';
 import gameHeroUrl from './assets/recommendation-cards/game-hero.webp';
 import tournamentHeroUrl from './assets/recommendation-cards/tournament-hero.webp';
 import trainingHeroUrl from './assets/recommendation-cards/training-hero.webp';
@@ -184,7 +185,12 @@ function gamePresentation(
     schedule: formatSchedule(game.startsAt, game.endsAt, game.timezone),
     kindLabel: game.kind === 'COACH_GAME' ? 'Игра с тренером' : 'Игра',
     kindTone: 'game',
-    heroUrl: gameHeroUrl,
+    heroUrl: recommendationCover(
+      game.station.name,
+      game.kind === 'COACH_GAME' ? 'COACH_GAME' : 'GAME',
+      game.id,
+      gameHeroUrl,
+    ),
     stationCourtLabel: `${game.station.name}${game.court?.name ? ` · ${game.court.name}` : ''}`,
     ...(level ? { levelHostLabel: level } : {}),
     participants,
@@ -227,7 +233,12 @@ function activityPresentation(
     schedule: formatSchedule(activity.startsAt, activity.endsAt, activity.timezone),
     kindLabel,
     kindTone: activity.kind === 'TOURNAMENT' ? 'tournament' : 'training',
-    heroUrl: activity.kind === 'TOURNAMENT' ? tournamentHeroUrl : trainingHeroUrl,
+    heroUrl: recommendationCover(
+      activity.station.name,
+      activity.kind,
+      activity.id,
+      activity.kind === 'TOURNAMENT' ? tournamentHeroUrl : trainingHeroUrl,
+    ),
     stationCourtLabel: `${activity.station.name}${activity.court?.name ? ` · ${activity.court.name}` : ''}`,
     ...(levelHostLabel ? { levelHostLabel } : {}),
     // The recommendation contract exposes an activity host, not its participant roster.
