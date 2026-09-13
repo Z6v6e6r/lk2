@@ -14026,7 +14026,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   max-width: none;
   height: 47px;
   flex: 0 0 57px;
-  transform: translate(-5px, -3px);
+  transform: translate(5px, 4px);
 }
 
 .recommendation-grid-card__action.is-disabled {

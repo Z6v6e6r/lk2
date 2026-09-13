@@ -337,7 +337,7 @@ describe('Home layout scroll contract', () => {
     expect(actionRule).toMatch(/background:\s*transparent\s*;/);
     expect(actionRule).not.toMatch(/gradient/i);
     expect(actionIconRule).toMatch(/width:\s*57px\s*;/);
-    expect(actionIconRule).toMatch(/transform:\s*translate\(-5px,\s*-3px\)\s*;/);
+    expect(actionIconRule).toMatch(/transform:\s*translate\(5px,\s*4px\)\s*;/);
     expect(styles).toMatch(
       /@media \(min-width: 413px\)[\s\S]*?--sheet-padding-x:\s*16px[\s\S]*?\.booking-recommendations\.is-photo-grid\s*\{[\s\S]*?grid-auto-rows:\s*minmax\(242px,\s*auto\)[\s\S]*?gap:\s*12px[\s\S]*?\.recommendation-grid-card__hero\s*\{[\s\S]*?height:\s*76px/,
     );
