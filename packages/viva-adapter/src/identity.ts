@@ -50,6 +50,24 @@ export interface VivaIdentityMetric {
     | 'access_token'
     | 'access_token_claims'
     | 'id_token';
+  /**
+   * Which verified claim the `access_token_claims` stage rejected. Recorded so a provider-side
+   * claim change can be identified from a single production line instead of a redeploy.
+   */
+  readonly claimFailure?:
+    | 'authorized_party'
+    | 'provenance_conflict'
+    | 'provenance_mismatch'
+    | 'tenant_key'
+    | 'subject'
+    | 'expiry';
+  /**
+   * Where the verified broker provenance was found, or why it was not usable as an assertion:
+   * `absent` when the realm emits it in neither token, `present_non_string` when a token carries
+   * the key but not as a non-empty string. Not a failure by itself: tenant and client are bound by
+   * our authorization request and by PKCE. Kept distinct so a mapper regression stays visible.
+   */
+  readonly provenance?: 'access_token' | 'id_token' | 'both' | 'absent' | 'present_non_string';
   readonly durationMs: number;
   readonly circuitState: 'closed' | 'open';
 }
@@ -70,6 +88,7 @@ class VivaOAuthStageError extends IdentityProviderError {
   public constructor(
     public readonly failureStage: NonNullable<VivaIdentityMetric['failureStage']>,
     public readonly status?: number,
+    public readonly claimFailure?: VivaIdentityMetric['claimFailure'],
   ) {
     super('AUTH_PROVIDER_UNAVAILABLE');
     this.name = 'VivaOAuthStageError';
@@ -85,12 +104,20 @@ const tokenResponseSchema = z.object({
   token_type: z.string().optional(),
 });
 
+const PROVENANCE_CLAIMS = ['identity_provider', 'identityProvider'] as const;
+
 function stringClaim(payload: JWTPayload, names: readonly string[]): string | undefined {
   for (const name of names) {
     const value = payload[name];
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+/** True when a token carries the key at all, even with a value `stringClaim` cannot use. */
+function claimPresent(payload: JWTPayload | undefined, names: readonly string[]): boolean {
+  if (!payload) return false;
+  return names.some((name) => payload[name] !== undefined);
 }
 
 function oauthDisplayName(payload: JWTPayload): string {
@@ -288,30 +315,71 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         throw new VivaOAuthStageError('id_token');
       }
     }
-    const accessProvenance = stringClaim(payload, ['identity_provider', 'identityProvider']);
-    const idProvenance = idPayload
-      ? stringClaim(idPayload, ['identity_provider', 'identityProvider'])
-      : undefined;
-    if (
-      payload.azp !== this.options.clientId ||
-      (idProvenance !== undefined &&
+    const accessProvenance = stringClaim(payload, PROVENANCE_CLAIMS);
+    const idProvenance = idPayload ? stringClaim(idPayload, PROVENANCE_CLAIMS) : undefined;
+    // The vendor realm does not guarantee this claim. For the public Yandex beta client it is absent
+    // from both the access token and the ID token, and this product has no protocol-mapper access to
+    // add it, so requiring it makes brokered login permanently unusable. Provider and tenant are
+    // already bound by the authorization request this adapter built (`kc_idp_hint` plus
+    // `tenant_key`) and by the PKCE code verifier, so absence is recorded rather than failed closed.
+    // A claim that is present but wrong, or two present claims that disagree, still fails closed.
+    const provenanceSource: NonNullable<VivaIdentityMetric['provenance']> =
+      accessProvenance !== undefined && idProvenance !== undefined
+        ? 'both'
+        : idProvenance !== undefined
+          ? 'id_token'
+          : accessProvenance !== undefined
+            ? 'access_token'
+            : claimPresent(payload, PROVENANCE_CLAIMS) || claimPresent(idPayload, PROVENANCE_CLAIMS)
+              ? 'present_non_string'
+              : 'absent';
+    const effectiveProvenance = idProvenance ?? accessProvenance;
+    const claimFailure: VivaIdentityMetric['claimFailure'] = (() => {
+      if (payload.azp !== this.options.clientId) return 'authorized_party';
+      if (
         accessProvenance !== undefined &&
-        idProvenance !== accessProvenance) ||
-      (idProvenance ?? accessProvenance) !== provider ||
-      stringClaim(payload, ['tenant_key', 'tenantKey']) !== providerTenantKey ||
-      typeof payload.sub !== 'string' ||
-      !payload.sub ||
-      typeof payload.exp !== 'number'
-    ) {
-      this.emit({ operation: 'jwt_verify', outcome: 'unavailable', correlationId }, startedAt);
-      throw new VivaOAuthStageError('access_token_claims');
+        idProvenance !== undefined &&
+        accessProvenance !== idProvenance
+      ) {
+        return 'provenance_conflict';
+      }
+      if (effectiveProvenance !== undefined && effectiveProvenance !== provider) {
+        return 'provenance_mismatch';
+      }
+      if (stringClaim(payload, ['tenant_key', 'tenantKey']) !== providerTenantKey) {
+        return 'tenant_key';
+      }
+      if (typeof payload.sub !== 'string' || !payload.sub) return 'subject';
+      if (typeof payload.exp !== 'number') return 'expiry';
+      return undefined;
+    })();
+    if (claimFailure) {
+      this.emit(
+        { operation: 'jwt_verify', outcome: 'unavailable', correlationId, claimFailure },
+        startedAt,
+      );
+      throw new VivaOAuthStageError('access_token_claims', undefined, claimFailure);
     }
-    this.emit({ operation: 'jwt_verify', outcome: 'success', correlationId }, startedAt);
+    this.emit(
+      {
+        operation: 'jwt_verify',
+        outcome: 'success',
+        correlationId,
+        provenance: provenanceSource,
+      },
+      startedAt,
+    );
+    // `claimFailure` above already rejects a missing subject. Re-read it here because the claim
+    // check now lives inside a closure, which does not narrow `payload.sub` for the return sites.
+    const subject = payload.sub;
+    if (typeof subject !== 'string' || !subject) {
+      throw new VivaOAuthStageError('access_token_claims', undefined, 'subject');
+    }
     if (identityMode === 'RECOVERY_SUBJECT_ONLY') {
       return {
         identity: {
           issuer: this.issuer,
-          subject: payload.sub,
+          subject,
         },
         identityResolution: 'EXISTING_SUBJECT',
       };
@@ -320,7 +388,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       return {
         identity: {
           issuer: this.issuer,
-          subject: payload.sub,
+          subject,
           displayName: oauthDisplayName(payload),
         },
         identityResolution: 'SUBJECT_PROVISIONING',
@@ -330,7 +398,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
       return {
         identity: {
           issuer: this.issuer,
-          subject: payload.sub,
+          subject,
         },
         identityResolution: 'EXISTING_SUBJECT',
       };
@@ -480,6 +548,7 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
           outcome: 'unavailable',
           correlationId: input.correlationId,
           failureStage: stageError?.failureStage ?? 'access_token',
+          ...(stageError?.claimFailure ? { claimFailure: stageError.claimFailure } : {}),
           ...(stageError?.status ? { status: stageError.status } : {}),
         },
         startedAt,

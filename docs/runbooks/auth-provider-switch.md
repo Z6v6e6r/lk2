@@ -47,13 +47,24 @@ the audited routing-plan procedure in
    one PadlHub UUID, replay resolves the same UUID, concurrent callbacks cannot create duplicates,
    and phone/email claims never select an account. Do not enable this mode for multiple social
    providers without restoring the canonical Viva profile reconciliation contract.
-   Before activation, prove from a staging token that Keycloak emits signed broker provenance as
-   `identity_provider=yandex` or `identityProvider=yandex`, sourced from the broker session rather
-   than a user-editable profile attribute. Keycloak emits it in the signed ID token for a brokered
-   login; the access token carries it only when a dedicated protocol mapper is configured, so
-   establish which of the two tokens actually holds the claim for the client in use. Missing
-   provenance, `vkid`, missing expiry, wrong issuer, wrong client or wrong tenant must all fail
-   before identity upsert.
+   Establish from a staging token which of the two tokens actually holds broker provenance for the
+   client in use: Keycloak emits it in the signed ID token for a brokered login, and the access
+   token carries it only when a dedicated protocol mapper is configured. When a verified token
+   presents `identity_provider=yandex` (or `identityProvider=yandex`) it must match, and two tokens
+   that disagree must fail. PadlHub has no protocol-mapper access to the vendor realm, and the
+   client used by the public beta emits the claim in neither token, so a missing claim is recorded
+   as `provenance=absent` (or `present_non_string` when the key exists but is unusable) on the
+   `jwt_verify` metric instead of failing the callback: tenant, authorized party and subject stay
+   cryptographically bound by `tenant_key`/`azp` in the signed token and by the PKCE `code_verifier`
+   and the one-time state.
+   Because the upstream broker is then asserted only when a signed token presents the claim, this
+   contour additionally REQUIRES one recorded staging observation that the realm exposes exactly one
+   usable broker or direct-grant path for this client and does not auto-link further brokers onto the
+   same local user. Without that recorded observation the relaxation admits a login brokered by a
+   different identity provider, so treat an unknown or multi-broker realm as a STOP condition.
+   `vkid`, a wrong authorized party, a wrong tenant key, a missing expiry and a missing subject must
+   still fail before identity upsert; read `claimFailure` on the `access_token_claims` stage to
+   identify which one was rejected.
 3. Inspect browser storage, response bodies, logs, traces and metrics. The only permitted Viva
    credential in the browser is a current access-token held in memory. It must not appear in cookies,
    LocalStorage, SessionStorage, URLs, error reports or analytics.
