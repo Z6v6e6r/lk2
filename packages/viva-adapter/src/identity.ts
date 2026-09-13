@@ -62,10 +62,12 @@ export interface VivaIdentityMetric {
     | 'subject'
     | 'expiry';
   /**
-   * Where the verified broker provenance was found, or `absent` when the realm emits it in neither
-   * token. Not a failure by itself: tenant and provider are bound by our authorization request.
+   * Where the verified broker provenance was found, or why it was not usable as an assertion:
+   * `absent` when the realm emits it in neither token, `present_non_string` when a token carries
+   * the key but not as a non-empty string. Not a failure by itself: tenant and client are bound by
+   * our authorization request and by PKCE. Kept distinct so a mapper regression stays visible.
    */
-  readonly provenance?: 'access_token' | 'id_token' | 'both' | 'absent';
+  readonly provenance?: 'access_token' | 'id_token' | 'both' | 'absent' | 'present_non_string';
   readonly durationMs: number;
   readonly circuitState: 'closed' | 'open';
 }
@@ -102,12 +104,20 @@ const tokenResponseSchema = z.object({
   token_type: z.string().optional(),
 });
 
+const PROVENANCE_CLAIMS = ['identity_provider', 'identityProvider'] as const;
+
 function stringClaim(payload: JWTPayload, names: readonly string[]): string | undefined {
   for (const name of names) {
     const value = payload[name];
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+/** True when a token carries the key at all, even with a value `stringClaim` cannot use. */
+function claimPresent(payload: JWTPayload | undefined, names: readonly string[]): boolean {
+  if (!payload) return false;
+  return names.some((name) => payload[name] !== undefined);
 }
 
 function oauthDisplayName(payload: JWTPayload): string {
@@ -305,10 +315,8 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
         throw new VivaOAuthStageError('id_token');
       }
     }
-    const accessProvenance = stringClaim(payload, ['identity_provider', 'identityProvider']);
-    const idProvenance = idPayload
-      ? stringClaim(idPayload, ['identity_provider', 'identityProvider'])
-      : undefined;
+    const accessProvenance = stringClaim(payload, PROVENANCE_CLAIMS);
+    const idProvenance = idPayload ? stringClaim(idPayload, PROVENANCE_CLAIMS) : undefined;
     // The vendor realm does not guarantee this claim. For the public Yandex beta client it is absent
     // from both the access token and the ID token, and this product has no protocol-mapper access to
     // add it, so requiring it makes brokered login permanently unusable. Provider and tenant are
@@ -322,7 +330,9 @@ export class VivaIdentityProvider implements IdentityProviderPort, VivaOAuthProv
           ? 'id_token'
           : accessProvenance !== undefined
             ? 'access_token'
-            : 'absent';
+            : claimPresent(payload, PROVENANCE_CLAIMS) || claimPresent(idPayload, PROVENANCE_CLAIMS)
+              ? 'present_non_string'
+              : 'absent';
     const effectiveProvenance = idProvenance ?? accessProvenance;
     const claimFailure: VivaIdentityMetric['claimFailure'] = (() => {
       if (payload.azp !== this.options.clientId) return 'authorized_party';

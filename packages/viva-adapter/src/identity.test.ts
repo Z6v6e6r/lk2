@@ -711,7 +711,7 @@ describe('VivaIdentityProvider', () => {
       expect.objectContaining({
         operation: 'jwt_verify',
         outcome: 'success',
-        provenance: 'absent',
+        provenance: 'present_non_string',
       }),
     );
   });
