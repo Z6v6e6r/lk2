@@ -2632,6 +2632,13 @@
   order: 0;
 }
 
+.figma-home .booking-activity-card__kind--tournament,
+.games-page .booking-activity-card__kind--tournament {
+  justify-content: flex-start;
+  margin: 0 auto 0 0;
+  background: #fff0e6;
+}
+
 .booking-activity-card__kind--tournament .booking-activity-card__kind-icon {
   width: 8px;
   height: 8px;
@@ -10357,18 +10364,21 @@ label {
   flex: 0 0 auto;
 }
 
+.fh-event__tag.is-friendly,
 .fh-event__tag.is-rating {
   width: 123px;
   background: rgba(159, 207, 2, 0.1);
   color: #9bbd05;
 }
 
+.fh-event__tag.is-friendly svg,
 .fh-event__tag.is-rating svg {
   width: 8px;
   height: 10px;
   flex: 0 0 8px;
 }
 
+.fh-event__tag.is-friendly .fh-event__tag-label,
 .fh-event__tag.is-rating .fh-event__tag-label {
   width: 99px;
   height: 8px;
@@ -11556,6 +11566,27 @@ button.participant-avatar-stack__open-slot:focus-visible {
   justify-content: center;
   border-top: 0.5px solid #ededed;
   background: #fafafa;
+}
+
+/* For Me ends at its recommendations; no space is reserved for hidden sections. */
+.figma-home-shell.has-recommendations-scroll-peek {
+  min-height: 0;
+}
+
+.figma-home-shell.has-recommendations-scroll-peek .figma-home {
+  height: auto;
+  min-height: 0;
+}
+
+.figma-home-shell.has-recommendations-scroll-peek .fh-main-box {
+  height: auto;
+  flex: 0 0 auto;
+}
+
+.figma-home-shell.has-recommendations-scroll-peek .fh-bottom-nav {
+  position: sticky;
+  left: auto;
+  flex: 0 0 88px;
 }
 
 .fh-bottom-nav > a {
