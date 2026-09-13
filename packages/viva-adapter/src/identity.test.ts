@@ -69,6 +69,50 @@ function tokenAndJwksFetch(accessToken: string, jwk: Record<string, unknown>) {
   });
 }
 
+async function signedTokenPair(
+  accessClaims: Record<string, unknown>,
+  idClaims: Record<string, unknown>,
+  subjects: { readonly access?: string; readonly id?: string } = {},
+) {
+  const { publicKey, privateKey } = await generateKeyPair('RS256');
+  const jwk = { ...(await exportJWK(publicKey)), kid: 'test-key', use: 'sig', alg: 'RS256' };
+  const sign = (claims: Record<string, unknown>, subject: string) =>
+    new SignJWT({
+      azp: 'widget',
+      tenant_key: 'iSkq6G',
+      ...claims,
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+      .setIssuer('https://kc.vivacrm.invalid/realms/clients')
+      .setSubject(subject)
+      .setExpirationTime('5m')
+      .sign(privateKey);
+  return {
+    accessToken: await sign(accessClaims, subjects.access ?? 'viva-user-42'),
+    idToken: await sign(idClaims, subjects.id ?? 'viva-user-42'),
+    jwk,
+  };
+}
+
+function tokenPairAndJwksFetch(accessToken: string, idToken: string, jwk: Record<string, unknown>) {
+  return vi.fn<typeof fetch>((request) => {
+    const url = fetchUrl(request);
+    if (url.pathname.endsWith('/protocol/openid-connect/token')) {
+      return Promise.resolve(
+        Response.json({
+          access_token: accessToken,
+          id_token: idToken,
+          refresh_token: 'external-refresh',
+        }),
+      );
+    }
+    if (url.pathname.endsWith('/protocol/openid-connect/certs')) {
+      return Promise.resolve(Response.json({ keys: [jwk] }));
+    }
+    return Promise.resolve(new Response(null, { status: 404 }));
+  });
+}
+
 describe('VivaIdentityProvider', () => {
   it('pins the redacted claim shape observed in a successful LK1 SMS login HAR', () => {
     const evidence = JSON.parse(
@@ -259,6 +303,130 @@ describe('VivaIdentityProvider', () => {
       'oauth_exchange',
     ]);
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts broker provenance from the signed ID token when the access token omits it', async () => {
+    const { accessToken, idToken, jwk } = await signedTokenPair(
+      {},
+      { identity_provider: 'yandex' },
+    );
+    const metrics: VivaIdentityMetric[] = [];
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowExistingSubjectOAuthBootstrap: true,
+      fetchImplementation: tokenPairAndJwksFetch(accessToken, idToken, jwk),
+      onMetric: (metric) => metrics.push(metric),
+    });
+
+    const result = await provider.exchangeAuthorizationCode({
+      provider: 'yandex',
+      code: 'authorization-code',
+      codeVerifier: 'pkce-verifier',
+      providerTenantKey: 'iSkq6G',
+      redirectUri: 'https://app.example.test/callback',
+      correlationId: 'oauth-id-token-provenance-123',
+      identityMode: 'STANDARD',
+    });
+
+    expect(result.identityResolution).toBe('EXISTING_SUBJECT');
+    expect(metrics).toContainEqual(
+      expect.objectContaining({ operation: 'jwt_verify', outcome: 'success' }),
+    );
+  });
+
+  it('rejects a broker provenance mismatch between the access token and the ID token', async () => {
+    const { accessToken, idToken, jwk } = await signedTokenPair(
+      { identity_provider: 'vkid' },
+      { identity_provider: 'yandex' },
+    );
+    const metrics: VivaIdentityMetric[] = [];
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowExistingSubjectOAuthBootstrap: true,
+      fetchImplementation: tokenPairAndJwksFetch(accessToken, idToken, jwk),
+      onMetric: (metric) => metrics.push(metric),
+    });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        provider: 'yandex',
+        code: 'authorization-code',
+        codeVerifier: 'pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-provenance-mismatch-123',
+        identityMode: 'STANDARD',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+    expect(metrics).toContainEqual(
+      expect.objectContaining({
+        operation: 'oauth_exchange',
+        failureStage: 'access_token_claims',
+      }),
+    );
+  });
+
+  it('fails closed with a claims stage when neither token carries signed provenance', async () => {
+    const { accessToken, idToken, jwk } = await signedTokenPair({}, {});
+    const metrics: VivaIdentityMetric[] = [];
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowExistingSubjectOAuthBootstrap: true,
+      fetchImplementation: tokenPairAndJwksFetch(accessToken, idToken, jwk),
+      onMetric: (metric) => metrics.push(metric),
+    });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        provider: 'yandex',
+        code: 'authorization-code',
+        codeVerifier: 'pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-missing-provenance-123',
+        identityMode: 'STANDARD',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+    expect(metrics).toContainEqual(
+      expect.objectContaining({
+        operation: 'oauth_exchange',
+        failureStage: 'access_token_claims',
+      }),
+    );
+  });
+
+  it('rejects an ID token whose subject differs from the access token', async () => {
+    const { accessToken, idToken, jwk } = await signedTokenPair(
+      { identity_provider: 'yandex' },
+      { identity_provider: 'yandex' },
+      { id: 'other-subject' },
+    );
+    const metrics: VivaIdentityMetric[] = [];
+    const provider = new VivaIdentityProvider({
+      ...options(),
+      mode: 'sandbox',
+      allowExistingSubjectOAuthBootstrap: true,
+      fetchImplementation: tokenPairAndJwksFetch(accessToken, idToken, jwk),
+      onMetric: (metric) => metrics.push(metric),
+    });
+
+    await expect(
+      provider.exchangeAuthorizationCode({
+        provider: 'yandex',
+        code: 'authorization-code',
+        codeVerifier: 'pkce-verifier',
+        providerTenantKey: 'iSkq6G',
+        redirectUri: 'https://app.example.test/callback',
+        correlationId: 'oauth-id-token-subject-123',
+        identityMode: 'STANDARD',
+      }),
+    ).rejects.toMatchObject({ code: 'AUTH_PROVIDER_UNAVAILABLE' });
+    expect(metrics).toContainEqual(
+      expect.objectContaining({ operation: 'oauth_exchange', failureStage: 'id_token' }),
+    );
   });
 
   it('provisions a Yandex-only user from verified issuer and subject claims', async () => {

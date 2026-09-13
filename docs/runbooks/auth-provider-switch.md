@@ -49,8 +49,11 @@ the audited routing-plan procedure in
    providers without restoring the canonical Viva profile reconciliation contract.
    Before activation, prove from a staging token that Keycloak emits signed broker provenance as
    `identity_provider=yandex` or `identityProvider=yandex`, sourced from the broker session rather
-   than a user-editable profile attribute. Missing provenance, `vkid`, missing expiry, wrong issuer,
-   wrong client or wrong tenant must all fail before identity upsert.
+   than a user-editable profile attribute. Keycloak emits it in the signed ID token for a brokered
+   login; the access token carries it only when a dedicated protocol mapper is configured, so
+   establish which of the two tokens actually holds the claim for the client in use. Missing
+   provenance, `vkid`, missing expiry, wrong issuer, wrong client or wrong tenant must all fail
+   before identity upsert.
 3. Inspect browser storage, response bodies, logs, traces and metrics. The only permitted Viva
    credential in the browser is a current access-token held in memory. It must not appear in cookies,
    LocalStorage, SessionStorage, URLs, error reports or analytics.
