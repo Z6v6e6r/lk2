@@ -11595,6 +11595,11 @@ button.participant-avatar-stack__open-slot:focus-visible {
   flex: 0 0 auto;
 }
 
+.figma-home-shell.has-recommendations-scroll-peek .fh-bookings,
+.figma-home-shell.has-recommendations-scroll-peek .fh-for-me .booking-recommendations {
+  padding-bottom: 0;
+}
+
 .figma-home-shell.has-recommendations-scroll-peek .fh-bottom-nav {
   position: sticky;
   left: auto;

@@ -415,7 +415,7 @@ describe('Home progressive navigation', () => {
       screen.getByRole('tab', { name: 'Мои записи' }).querySelector('.fh-booking-presence-dot'),
     ).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('link', { name: 'Настроить предпочтения' })).toHaveAttribute(
+    expect(document.querySelector('.fh-preferences-edit')).toHaveAttribute(
       'href',
       '/profile#booking-preferences-title',
     );
@@ -425,11 +425,9 @@ describe('Home progressive navigation', () => {
     await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledOnce());
     expect(loadBookingRecommendations).toHaveBeenCalledWith({ limit: 6 });
     expect(screen.queryByText('Подходящие игры')).not.toBeInTheDocument();
-    const configure = screen.getByRole('link', { name: 'Настроить' });
-    expect(configure).toHaveAttribute('href', '/profile#booking-preferences-title');
+    expect(screen.queryByRole('link', { name: 'Настроить' })).not.toBeInTheDocument();
     expect(container.querySelector('.fh-for-me > header')).not.toBeInTheDocument();
-    expect(configure.parentElement).toHaveClass('fh-bookings-footer-action', 'is-split');
-    expect(configure.previousElementSibling).toHaveTextContent('Все рекомендации');
+    expect(container.querySelector('.fh-for-me .fh-bookings-footer')).not.toBeInTheDocument();
   });
 
   it('keeps the second Home variant independent and puts promotion before communities', () => {
@@ -556,9 +554,7 @@ describe('Home progressive navigation', () => {
       heroChildClasses.indexOf('fh-hero-promotion'),
     );
     expect(screen.queryByRole('link', { name: 'Все рекомендации' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Настроить' }).parentElement).not.toHaveClass(
-      'is-split',
-    );
+    expect(screen.queryByRole('link', { name: 'Настроить' })).not.toBeInTheDocument();
     expect(container.querySelector('.fh-main-box > .fh-promotions')).not.toBeInTheDocument();
     expect(container.querySelector('.fh-main-box > .fh-lower')).not.toBeInTheDocument();
     expect(container.querySelector('.fh-v3-my-extras')).not.toBeInTheDocument();
@@ -593,8 +589,8 @@ describe('Home progressive navigation', () => {
       'has-recommendations-scroll-peek',
     );
     expect(container.querySelector('.figma-home-shell')).not.toHaveClass('is-home-v3');
-    expect(screen.getByRole('link', { name: 'Все рекомендации' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Настроить' }).parentElement).toHaveClass('is-split');
+    expect(screen.queryByRole('link', { name: 'Все рекомендации' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Настроить' })).not.toBeInTheDocument();
   });
 
   it('places promotion, stations, and three links below History in the V3 My bookings tab', () => {
@@ -694,10 +690,11 @@ describe('Home progressive navigation', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих событий'),
     );
     expect(screen.queryByText('Персональная подборка')).not.toBeInTheDocument();
-    const allRecommendations = screen.getByRole('link', { name: 'Все рекомендации' });
-    expect(allRecommendations).toHaveAttribute('href', '/bookings?view=for-me');
-    expect(allRecommendations.parentElement).toHaveClass('fh-bookings-footer-action', 'is-split');
-    expect(allRecommendations.nextElementSibling).toHaveTextContent('Настроить');
+    expect(screen.queryByRole('link', { name: 'Все рекомендации' })).not.toBeInTheDocument();
+    expect(document.querySelector('.fh-preferences-edit')).toHaveAttribute(
+      'href',
+      '/profile#booking-preferences-title',
+    );
   });
 });
 

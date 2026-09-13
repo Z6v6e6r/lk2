@@ -1597,19 +1597,6 @@ export function HomeDashboardPage({
                       : {})}
                   />
                 ) : null}
-                <div className="fh-bookings-footer">
-                  <div className="fh-divider" />
-                  <div
-                    className={`fh-bookings-footer-action${
-                      usesV3RecommendationCards ? '' : ' is-split'
-                    }`}
-                  >
-                    {usesV3RecommendationCards ? null : (
-                      <a href="/bookings?view=for-me">Все рекомендации</a>
-                    )}
-                    <a href="/profile#booking-preferences-title">Настроить</a>
-                  </div>
-                </div>
               </div>
             )}
           </section>
