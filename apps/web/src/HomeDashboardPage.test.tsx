@@ -456,6 +456,69 @@ describe('Home progressive navigation', () => {
     );
   });
 
+  it.each(['default', 'v2', 'v3'] as const)(
+    'applies cards and rows to the same recommendations in the %s layout',
+    async (layoutVariant) => {
+      const page: BookingRecommendationPage = {
+        version: 'display-test',
+        generatedAt: '2026-07-18T09:00:00.000Z',
+        staleAt: '2026-07-18T09:05:00.000Z',
+        personalization: 'BASIC',
+        items: [
+          {
+            kind: 'TRAINING',
+            reasons: [],
+            activity: {
+              id: '55555555-5555-4555-8555-555555555555',
+              kind: 'TRAINING',
+              title: 'Тренировка для проверки отображения',
+              startsAt: '2026-07-20T09:00:00.000Z',
+              endsAt: '2026-07-20T10:00:00.000Z',
+              timezone: 'Europe/Moscow',
+              station: {
+                id: '60000000-0000-4000-8000-000000000001',
+                name: 'Тестовая станция',
+                shortAddress: null,
+              },
+              levelRange: null,
+              capacity: { total: 4, open: 2 },
+              host: null,
+              route: '/trainings/55555555-5555-4555-8555-555555555555',
+            },
+          },
+        ],
+        nextCursor: null,
+      };
+      const loadBookingRecommendations = vi.fn().mockResolvedValue(page);
+      const props = {
+        ...independentSectionProps,
+        dashboard: homeBase,
+        tenantName: 'ПадлХАБ',
+        layoutVariant,
+        notificationUnreadCount: 0,
+        loadBookingRecommendations,
+        logoutBusy: false,
+        onLogout: vi.fn(),
+      };
+      const { container, rerender } = render(
+        <HomeDashboardPage {...props} recommendationDisplay="CARDS" />,
+      );
+      await screen.findByText('Тренировка для проверки отображения');
+      expect(container.querySelector('.booking-recommendations')).toHaveClass('is-photo-grid');
+      expect(container.querySelector('.recommendation-grid-card')).toBeInTheDocument();
+      expect(container.querySelector('.booking-activity-card')).not.toBeInTheDocument();
+
+      const requestsBeforeDisplayChange = loadBookingRecommendations.mock.calls.length;
+      rerender(<HomeDashboardPage {...props} recommendationDisplay="ROWS" />);
+      expect(container.querySelector('.booking-recommendations')).not.toHaveClass('is-photo-grid');
+      expect(container.querySelector('.recommendation-grid-card')).not.toBeInTheDocument();
+      expect(container.querySelector('.booking-activity-card')).toHaveTextContent(
+        'Тренировка для проверки отображения',
+      );
+      expect(loadBookingRecommendations).toHaveBeenCalledTimes(requestsBeforeDisplayChange);
+    },
+  );
+
   it('marks the third Home variant and requests its first 14 recommendations', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
       version: 'a'.repeat(64),

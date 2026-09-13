@@ -283,7 +283,7 @@ describe('Home layout scroll contract', () => {
 
   it('uses compact photo-grid proportions without recommendation-card decoration', () => {
     const gridRule = ruleBody(
-      '.figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid',
+      '.figma-home-shell .figma-home .fh-for-me .booking-recommendations.is-photo-grid',
     );
     const heroRule = ruleBody('.recommendation-grid-card__hero');
     const cardRule = ruleBody('.recommendation-grid-card');
@@ -291,13 +291,13 @@ describe('Home layout scroll contract', () => {
     const titleRule = ruleBody('.recommendation-grid-card__title');
     const socialRule = ruleBody('.recommendation-grid-card__social');
     const socialAvatarRule = ruleBody(
-      '.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack',
+      '.figma-home-shell .figma-home .recommendation-grid-card__social .participant-avatar-stack',
     );
     const socialAvatarItemRule = ruleBody(
-      '.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack__item',
+      '.figma-home-shell .figma-home .recommendation-grid-card__social .participant-avatar-stack__item',
     );
     const socialAvatarVisualMatch = styles.match(
-      /\.figma-home-shell\.is-home-v3\s+\.recommendation-grid-card__social\s+\.participant-avatar-stack__item\s+>\s+\[data-player-level-avatar\]\s*\{([^}]*)\}/,
+      /\.figma-home-shell\s+\.figma-home\s+\.recommendation-grid-card__social\s+\.participant-avatar-stack__item\s+>\s+\[data-player-level-avatar\]\s*\{([^}]*)\}/,
     );
     expect(socialAvatarVisualMatch).not.toBeNull();
     const socialAvatarVisualRule = socialAvatarVisualMatch?.[1] ?? '';

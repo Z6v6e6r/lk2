@@ -1202,7 +1202,8 @@ export function HomeDashboardPage({
   const showBookingsScrollPeek = bookingTab === 'MY' && visibleUpcoming.length > 2;
   const showRecommendationsScrollPeek = bookingTab === 'FOR_ME';
   const usesCompactHero = layoutVariant !== 'default';
-  const usesV3RecommendationCards = layoutVariant === 'v3' && recommendationDisplay === 'CARDS';
+  const usesRecommendationCards = recommendationDisplay === 'CARDS';
+  const usesV3RecommendationCards = layoutVariant === 'v3' && usesRecommendationCards;
   const shellClassName = [
     'figma-home-shell',
     layoutVariant === 'v3' ? (usesV3RecommendationCards ? 'is-home-v3' : 'is-home-v3-rows') : null,
@@ -1574,17 +1575,17 @@ export function HomeDashboardPage({
                   <BookingRecommendations
                     page={bookingRecommendations}
                     compact
-                    compactActionVariant={usesV3RecommendationCards ? 'mini-create' : 'default'}
-                    compactMetadataVariant={usesV3RecommendationCards ? 'station-time' : 'default'}
-                    compactRosterVariant={usesV3RecommendationCards ? 'host-slots' : 'default'}
-                    compactVisualVariant={usesV3RecommendationCards ? 'photo-grid' : 'default'}
-                    showCompactReasonBadges={!usesV3RecommendationCards}
+                    compactActionVariant={usesRecommendationCards ? 'mini-create' : 'default'}
+                    compactMetadataVariant={usesRecommendationCards ? 'station-time' : 'default'}
+                    compactRosterVariant={usesRecommendationCards ? 'host-slots' : 'default'}
+                    compactVisualVariant={usesRecommendationCards ? 'photo-grid' : 'default'}
+                    showCompactReasonBadges={!usesRecommendationCards}
                     hasMore={Boolean(bookingRecommendations.nextCursor)}
                     loadingMore={bookingRecommendationsLoadingMore}
                     onLoadMore={loadMoreBookingRecommendations}
                     recommendationStripAdvertising={promotionSlots?.recommendationStrip ?? null}
                     recommendationCardAdvertising={promotionSlots?.recommendationCard ?? null}
-                    advertisingLayout={usesV3RecommendationCards ? 'compact' : 'vertical'}
+                    advertisingLayout={usesRecommendationCards ? 'compact' : 'vertical'}
                     {...(recordPromotionEngagement
                       ? { onAdvertisingEngagement: recordPromotionEngagement }
                       : {})}
