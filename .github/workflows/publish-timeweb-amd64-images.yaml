@@ -19,6 +19,10 @@ on:
         description: Exact reviewed main SHA containing this publication workflow
         required: true
         type: string
+      source_ci_run_id:
+        description: Optional successful first-attempt main push CI for this exact source (reuse)
+        required: false
+        type: string
       confirmation:
         description: Leave empty for validation or type PUBLISH_TIMEWEB_AMD64_<FIRST_12_SHA_UPPERCASE>
         required: false
@@ -26,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: timeweb-amd64-image-publication
@@ -126,7 +131,15 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm run source:quality
+      - name: Reuse exact integrated source checks
+        if: ${{ inputs.source_ci_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_CI_RUN_ID: ${{ inputs.source_ci_run_id }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        run: node scripts/verify-source-ci.js
+      - if: ${{ inputs.source_ci_run_id == '' }}
+        run: npm run source:quality
 
   build-and-publish:
     needs: [validate-request, verify-source]

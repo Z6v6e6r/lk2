@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isPresentationPath, verifyPresentationRange } from './presentation-boundary.js';
 import { selectPrDockerServices } from './select-pr-docker-services.js';
 
 const ALL_SERVICES = ['web', 'api', 'worker', 'realtime', 'migrator'];
@@ -7,12 +8,6 @@ const PROFILES = new Set(['docs', 'leaf-web', 'full']);
 
 const SENSITIVE_FRAGMENT =
   /acl|auth|booking|capacity|contract|deploy|discount|identity|migrat|oauth|openapi|payment|permission|pii|provider|rating|rbac|refund|release|rls|roster|schema|security|secret|session|signup|subscription|tenant|tournament|viva/i;
-
-const LEAF_WEB_ALLOWLIST = new Set([
-  'apps/web/src/RecommendationGridCard.tsx',
-  'apps/web/src/RecommendationGridCard.test.tsx',
-  'apps/web/src/styles.css',
-]);
 
 function validPath(path) {
   return (
@@ -43,7 +38,7 @@ function isSafeDocumentationPath(path) {
 }
 
 function isLeafWebPath(path) {
-  return LEAF_WEB_ALLOWLIST.has(path) && !SENSITIVE_FRAGMENT.test(path);
+  return isPresentationPath(path);
 }
 
 function needsDeploymentContract(path) {
@@ -89,13 +84,15 @@ function makePlan({
     provenanceProbe,
     policyValidation,
     dockerServices:
-      dockerServices ??
-      (profile === 'docs' ? [] : profile === 'leaf-web' ? ['web'] : [...ALL_SERVICES]),
+      dockerServices ?? (profile === 'docs' ? [] : profile === 'leaf-web' ? [] : [...ALL_SERVICES]),
     reason,
   };
 }
 
-export function selectPrCiProfile(paths, { eventName = 'pull_request', ref = '' } = {}) {
+export function selectPrCiProfile(
+  paths,
+  { eventName = 'pull_request', ref = '', presentationVerified = false } = {},
+) {
   if (eventName === 'push') {
     if (ref !== 'refs/heads/main' && !ref.startsWith('refs/heads/integration/')) {
       throw new Error(`Unsupported push ref: ${ref}`);
@@ -130,8 +127,13 @@ export function selectPrCiProfile(paths, { eventName = 'pull_request', ref = '' 
   }
 
   const uniquePaths = [...new Set(paths)].sort();
-  const deploymentContract = uniquePaths.some(needsDeploymentContract);
-  const provenanceProbe = uniquePaths.some(needsProvenanceProbe);
+  const ciControl = uniquePaths.some(
+    (path) =>
+      path.startsWith('.github/workflows/') ||
+      /^scripts\/(?:select-pr-|verify-ci-plan|verify-source-ci|presentation-boundary)/.test(path),
+  );
+  const deploymentContract = ciControl || uniquePaths.some(needsDeploymentContract);
+  const provenanceProbe = ciControl || uniquePaths.some(needsProvenanceProbe);
   const policyValidation = uniquePaths.some(isPolicyPath);
 
   if (uniquePaths.every(isSafeDocumentationPath)) {
@@ -153,7 +155,10 @@ export function selectPrCiProfile(paths, { eventName = 'pull_request', ref = '' 
       reason: 'policy mixed with non-documentation changes requires full closure',
     });
   }
-  if (uniquePaths.every((path) => isLeafWebPath(path) || isSafeDocumentationPath(path))) {
+  if (
+    presentationVerified &&
+    uniquePaths.every((path) => isLeafWebPath(path) || isSafeDocumentationPath(path))
+  ) {
     return makePlan({
       profile: 'leaf-web',
       deploymentContract,
@@ -179,9 +184,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (eventIndex < 0 || !process.argv[eventIndex + 1] || refIndex < 0) {
     throw new Error('Usage: select-pr-ci-profile.js --event <event> --ref <ref>');
   }
+  const base = process.argv[process.argv.indexOf('--base') + 1];
+  const head = process.argv[process.argv.indexOf('--head') + 1];
   const paths = readFileSync(0).toString('utf8').split('\0').filter(Boolean);
   const plan = selectPrCiProfile(paths, {
     eventName: process.argv[eventIndex + 1],
+    presentationVerified: verifyPresentationRange(paths, base, head),
     ref: process.argv[refIndex + 1] ?? '',
   });
   process.stdout.write(`${JSON.stringify(plan)}\n`);

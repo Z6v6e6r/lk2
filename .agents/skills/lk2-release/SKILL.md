@@ -34,3 +34,11 @@ actual authorized publication, return the existing canonical `release-manifest.j
 five verified image digests. Follow the runbook if its canonical contract changes. Publication is
 neither host installation nor STAGING/PROVIDER/PRODUCTION proof. Never automatically deploy, SSH,
 provision secrets, migrate, enable background services or widen access.
+
+## Enrolled standard route
+
+An owner-enabled [standard Timeweb route](../../../docs/runbooks/timeweb-standard-delivery.md)
+may carry bounded standing authority for ordinary eligible Web changes. Use only its protected
+workflow and installed controller; do not translate that authority into arbitrary manual stages.
+Before enrollment, and for critical/mechanism changes, the explicit boundaries above still apply.
+This skill or AGENTS.md never grants current-session production authority.

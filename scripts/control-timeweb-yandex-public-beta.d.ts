@@ -13,6 +13,7 @@ export interface TimewebYandexRollbackFloor {
   readonly sourceSha: string;
   readonly sourceTree: string;
   readonly runtimeEnvRoot: string;
+  readonly applicationComposeProject: 'phub-timeweb-beta-apps';
   readonly images: Record<
     string,
     { readonly indexDigest: string; readonly runtimeDigest?: string }

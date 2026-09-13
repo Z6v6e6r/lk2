@@ -1,53 +1,57 @@
-# Task, integration, release and deploy batches
+# Feature delivery and optional integration batches
 
-This runbook separates ordinary task development from common integration, image publication and
-live deployment. It does not authorize a merge, publication, deploy or live mutation.
+One independent feature follows task branch -> PR -> main -> release -> feedback. One task owner
+owns that user result; integration, release and deploy are responsibilities, not mandatory queues.
+Draft marks unfinished work. Never wait for an unrelated batch of PRs.
 
-## Task branches
+## Checks and review
 
-- Up to four independent task branches may be developed in parallel from a recorded base.
-- Each task owner changes only its branch/worktree and Draft PR. A task branch does not chase every
-  movement of `main`; it synchronizes for a relevant dependency, real conflict or common batch.
-- At most one platform/release task changes workflows, deploy files, root dependencies or release
-  scripts. Public contracts, migration chains and auth boundaries have one write owner.
-- Overlapping UI entry points are allowed when the PRs record their integration order. The task
-  branches are not repeatedly merged into one another.
+| Change                                                | PR checks                                                                                                          | Release                                                                              |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| Documentation/policy                                  | formatting, policy scenarios, planner/gate regressions, secret scan                                                | merge; no runtime rollout for docs alone                                             |
+| Presentation copy/style in registered render surfaces | Web tests, affected lint/types/build, secret scan                                                                  | standard Web pilot after green integrated source                                     |
+| SAFE recoverable business logic                       | relevant positive/negative tests and dependency closure; full source contour until a narrower module is registered | standard only within enrolled component scope; other components use reviewed release |
+| Payment/auth/tenant/write/schema/shared/unknown       | full source, integration coverage, contracts, security, relevant Docker/deployment checks and specialist review    | critical route                                                                       |
+| CI classifier, gates, release mechanism               | full pre-existing checks, independent security/release review                                                      | explicit owner activation                                                            |
 
-## Temporary integration batch
+`source-quality` does static checks/build; `quality-full` runs unit and integration coverage once.
+The stable `pr-gate` requires every selected job. Failure, cancellation, missing result or unexpected
+skip rejects the gate. PR `push: false` builds are diagnostics, never published artifacts.
+Main push verifies integrated source with full checks. Publication may reuse a successful
+first-attempt main push run for the exact SHA, workflow and required job set; otherwise it runs
+source quality. A different merge result needs current checks. Never reuse a PR-head run as main
+source proof. No production activation occurs before source checks succeed.
 
-Use a temporary branch such as `integration/lk2-beta-20260827-01`; do not create a permanent
-`develop` branch.
+## Optional temporary integration
 
-1. Start from fresh `main` and record the exact task heads and intended order.
-2. Add two to four exact task heads sequentially without rewriting the task branches.
-3. Resolve cross-task conflicts once in the integration branch.
-4. Every new `integration/**` head automatically runs the full quality contour, exact-range secret
-   scan, dependency security, Timeweb deployment contract, all five no-push Docker builds and the
-   stable `pr-gate`.
-5. If one task changes, certify only the new combined integration head. Do not make every source PR
-   repeat full certification solely because the batch head moved.
-6. After a green head, open one batch PR. Merge still needs separate authority.
-7. Delete the temporary integration branch only after its release train is complete and deletion is
-   separately authorized.
+Use `integration/**` only for actual dependencies/conflicts between two to four tasks. Record the
+heads/order, resolve conflicts once, check the integrated source, then use one PR. There is no
+permanent develop branch or mandatory integration train for a single feature.
 
-## Authorized merge boundary
+Immediately before an authorized merge, refresh current `main`, exact
+batch head, merge-base (or the independent feature head), mergeability and required checks.
+Drift stops that merge boundary until affected inputs are rechecked; it does not freeze all tasks.
+Ordinary main movement repeats checks only for changed source, dependencies, environment or inputs.
 
-Immediately before a separately authorized batch merge, refresh and bind the current `main`, exact
-batch head, merge-base, mergeability and exact-head `pr-gate` result. Use a guarded ordinary merge
-that refuses a changed head. Drift stops that merge boundary and requires a fresh read; it does not
-freeze unrelated task branches. After merge, read back the merge commit/tree and automatic
-post-merge CI. A successful merge still does not authorize publication or deploy.
+## Publication and deployment
 
-## Publication and deploy
+The current route is Timeweb amd64 publication and the Timeweb host controller. The older
+`deploy-production.yaml` requires retired `FULL_LIVE_HOME` and is not the standard route.
+FULL_LIVE_HOME covered provider/Home/routing and shared runtime activation. A presentation-only
+Web update does not change these properties: preserve running API/config/flags, prove unchanged
+backend/API contracts from installed source, check Web runtime/readiness and observe real requests.
+Do not delete the old gate to make an unrelated workflow green.
 
-PR and integration Docker jobs build with `push: false`; they are not published release artifacts.
-After an authorized batch merge, a release owner freezes one exact source and may perform one
-separately authorized publication of all five images plus one canonical immutable manifest. A
-deploy owner consumes that manifest by digest and never rebuilds on Timeweb. Backup, readiness,
-smoke, rollback and live approval remain deploy gates independent of source, CI and publication.
+The pilot keeps the existing five-component canonical V2 manifest. It never rebuilds on Timeweb,
+never substitutes a PR Docker build, and never calls a migration or backend restart for Web.
+See [standard Timeweb route](timeweb-standard-delivery.md) for enrollment, cumulative risk,
+component provenance, source reuse, stopping and compatible Web rollback.
 
-## Handoff evidence
+## Outcome and follow-up
 
-Git and GitHub Actions retain commit, tree, merge-base and run identities. PR descriptions should
-record outcome, scope, changed ownership, checks, dependencies/order and recovery without copying a
-universal SHA ledger or production checklist into every FAST or SAFE change.
+Ship the useful minimum. Subscription explanation and real enforcement are separate outcomes;
+mock/WARN/disabled writer does not enforce and ambiguous money operations stay fail-closed.
+For a bounded audience use existing flags only when needed, with owner/audience, expansion/disable
+criteria and review date. Observe target requests, errors and user outcome; no traffic is not PASS.
+Record unrelated findings as `Follow-up finding`. Blocking review states a concrete consequence
+and the minimum fix. Do not broaden the feature into platform or architecture work.

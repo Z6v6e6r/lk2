@@ -17,3 +17,12 @@ Preserve FAST/SAFE/CRITICAL, all ownership/live gates and the architecture freez
 techniques have pinned source/license records and no updater or executable import. Behavioral
 fixture results, limitations and semantic changes are recorded in `local-first-skills.md`,
 `skill-evaluation.md` and `third-party-skills.md`. No product or deploy architecture changes.
+
+## 2026-09-06 — executable feature delivery
+
+Independent features use task -> PR -> main -> release, with one outcome owner and optional
+integration only for real dependencies. Existing FAST/SAFE/CRITICAL boundaries remain; routine
+owner-enrolled deployment is distinct from changes to its mechanism. CI presentation syntax,
+required-result verification, exact main source reuse and the disabled standard Timeweb Web route
+are covered by scenario tests. Blocking review names a concrete consequence and minimum fix;
+unrelated improvements are follow-up findings. No current-session production authority changes.

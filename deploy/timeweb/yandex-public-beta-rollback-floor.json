@@ -7,6 +7,7 @@
   "sourceSha": "e6abb48e135f8f28730bab1c07abe408e8c94600",
   "sourceTree": "04be9a04792b586d867ce6def129ad6bfb22a152",
   "runtimeEnvRoot": "/etc/phub/timeweb-beta-fast",
+  "applicationComposeProject": "phub-timeweb-beta-apps",
   "images": {
     "api": {
       "indexDigest": "sha256:5878ed51206d5a301fb356f7a599ce4a57f870bf3d13e0b7165f079076d8603a",

@@ -216,8 +216,21 @@ method. Do not replace it with the broader canonical Caddyfile and do not edit e
 host.
 
 The noncanonical current fast-beta rollback floor is frozen in
-`deploy/timeweb/yandex-public-beta-rollback-floor.json`. Failed run `33168712014` is provenance only
-and authorizes neither publication nor deployment. After publication and secret provisioning,
+`deploy/timeweb/yandex-public-beta-rollback-floor.json`. Its required
+`applicationComposeProject=phub-timeweb-beta-apps` binds prepare's prior API/Web image checks to the
+legacy Compose project. Missing or different project values fail closed; operation input and
+environment variables cannot override this source-owned binding. The frozen-source check protects
+the floor file before it is read. Candidate checks retain the canonical `phub-timeweb-beta` project.
+The V2 receipt schema and candidate/floor source identities remain unchanged.
+
+This binding only identifies the predecessor; it does not stop containers or transfer their network
+addresses. Before stopping the legacy pair, complete prepare's local image and backup prerequisites
+and separately prove the address handoff and chosen recovery path. Retaining stopped legacy IDs for
+recovery needs an explicitly approved transition plan: the existing `rollback` command recreates
+floor images in the canonical project and does not restart those preserved legacy containers.
+
+Failed run `33168712014` is provenance only and authorizes neither publication nor deployment.
+After publication and secret provisioning,
 create a root-only operation-input JSON under `/opt/phub/timeweb-beta/` containing the exact
 candidate source SHA/tree, release ID, canonical runtime root `/etc/phub/timeweb-beta`, canonical
 rendered `release.env`, active

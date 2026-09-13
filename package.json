@@ -15,6 +15,10 @@
   "overrides": {
     "esbuild": "0.28.1"
   },
+  "dependencies": {
+    "fastify": "5.12.4",
+    "sharp": "0.35.4"
+  },
   "scripts": {
     "build": "npm run contracts:generate && npm run build:packages && npm run build:apps",
     "build:packages": "npm run build -w @phub/domain && npm run build -w @phub/games && npm run build -w @phub/gift-certificates && npm run build -w @phub/config && npm run build -w @phub/communities && npm run build -w @phub/locations && npm run build -w @phub/notifications && npm run build -w @phub/database && npm run build -w @phub/home-projection && npm run build -w @phub/api-contracts && npm run build -w @phub/api-sdk && npm run build -w @phub/auth && npm run build -w @phub/observability && npm run build -w @phub/subscription-runtime-adapter && npm run build -w @phub/viva-adapter && npm run build -w @phub/viva-client-adapter && npm run build -w @phub/legacy-games-adapter && npm run build -w @phub/ui && npm run build -w @phub/testing",
@@ -37,7 +41,7 @@
     "test:source": "vitest run --maxWorkers=2",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "source:quality": "npm run contracts:generate && npm run format:check && npm run lint && npm run typecheck && npm run contracts:lint && npm run test:source && npm run build && npm run runtime:imports",
+    "source:quality": "npm run source:static && npm run test:source",
     "check": "npm run source:quality",
     "contracts:lint": "node --import tsx scripts/verify-imported-contract.ts && redocly lint openapi.yaml contracts/openapi/public/v1/openapi.yaml contracts/openapi/user/v1/openapi.yaml contracts/openapi/user/v2/openapi.yaml contracts/openapi/admin/v1/openapi.yaml contracts/openapi/internal/v1/openapi.yaml",
     "contracts:generate": "openapi-typescript contracts/openapi/public/v1/openapi.yaml -o packages/api-contracts/src/generated-public.ts && openapi-typescript contracts/openapi/user/v1/openapi.yaml -o packages/api-contracts/src/generated-user.ts && openapi-typescript contracts/openapi/user/v2/openapi.yaml -o packages/api-contracts/src/generated-user-v2.ts && openapi-typescript contracts/openapi/internal/v1/openapi.yaml -o packages/api-contracts/src/generated-internal.ts",

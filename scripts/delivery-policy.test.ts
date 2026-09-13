@@ -28,7 +28,9 @@ describe('delivery ownership policy', () => {
     expect(runbook).toContain('current `main`, exact');
     expect(runbook).toContain('batch head, merge-base');
     expect(runbook).toContain('Drift stops that merge boundary');
-    expect(runbook).not.toContain('workflow_dispatch');
+    expect(runbook).toContain(
+      'One independent feature follows task branch -> PR -> main -> release -> feedback',
+    );
   });
 
   it('keeps the PR template outcome-focused', () => {
