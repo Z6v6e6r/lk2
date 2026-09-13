@@ -163,15 +163,31 @@ function HomeActionIcon({ name }: { readonly name: HomeActionIconName }): React.
 
 function HomePreferencesEditIcon(): React.JSX.Element {
   return (
-    <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M10.89 2.11a1.52 1.52 0 0 1 2.15 0l.85.85a1.52 1.52 0 0 1 0 2.15l-7.8 7.8-3.43.43.43-3.43 7.8-7.8Z"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="m9.75 3.25 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <g opacity="0.92">
+        <path
+          d="M12 9A3 3 0 1 0 12 15A3 3 0 1 0 12 9Z"
+          stroke="white"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M12 4.7C12.5 4.7 12.9 5.1 12.9 5.6V6.3C13.5 6.5 14 6.7 14.5 7L15 6.5C15.4 6.1 16 6.1 16.4 6.5L17.5 7.6C17.9 8 17.9 8.6 17.5 9L17 9.5C17.3 10 17.5 10.5 17.7 11.1H18.4C18.9 11.1 19.3 11.5 19.3 12C19.3 12.5 18.9 12.9 18.4 12.9H17.7C17.5 13.5 17.3 14 17 14.5L17.5 15C17.9 15.4 17.9 16 17.5 16.4L16.4 17.5C16 17.9 15.4 17.9 15 17.5L14.5 17C14 17.3 13.5 17.5 12.9 17.7V18.4C12.9 18.9 12.5 19.3 12 19.3C11.5 19.3 11.1 18.9 11.1 18.4V17.7C10.5 17.5 10 17.3 9.5 17L9 17.5C8.6 17.9 8 17.9 7.6 17.5L6.5 16.4C6.1 16 6.1 15.4 6.5 15L7 14.5C6.7 14 6.5 13.5 6.3 12.9H5.6C5.1 12.9 4.7 12.5 4.7 12C4.7 11.5 5.1 11.1 5.6 11.1H6.3C6.5 10.5 6.7 10 7 9.5L6.5 9C6.1 8.6 6.1 8 6.5 7.6L7.6 6.5C8 6.1 8.6 6.1 9 6.5L9.5 7C10 6.7 10.5 6.5 11.1 6.3V5.6C11.1 5.1 11.5 4.7 12 4.7Z"
+          stroke="white"
+          strokeWidth="1.35"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from="0 12 12"
+          to="360 12 12"
+          dur="14s"
+          repeatCount="indefinite"
+        />
+      </g>
     </svg>
   );
 }

@@ -190,15 +190,15 @@ describe('Home layout scroll contract', () => {
     expect(ruleBody('.fh-hero--v3 .fh-actions')).toMatch(/margin-top:\s*11px\s*;/);
   });
 
-  it('keeps the preferences edit icon white and half-sized beside the tab label', () => {
+  it('keeps the preferences gear white and 18px beside the tab label', () => {
     const editRule = ruleBody('.figma-home .fh-preferences-edit');
     const iconRule = ruleBody('.figma-home .fh-preferences-edit svg');
 
-    expect(editRule).toMatch(/width:\s*12px\s*;/);
-    expect(editRule).toMatch(/height:\s*12px\s*;/);
+    expect(editRule).toMatch(/width:\s*24px\s*;/);
+    expect(editRule).toMatch(/height:\s*24px\s*;/);
     expect(editRule).toMatch(/color:\s*#fff\s*;/);
-    expect(iconRule).toMatch(/width:\s*8px\s*;/);
-    expect(iconRule).toMatch(/height:\s*8px\s*;/);
+    expect(iconRule).toMatch(/width:\s*18px\s*;/);
+    expect(iconRule).toMatch(/height:\s*18px\s*;/);
   });
 
   it('does not retain the removed recommendation explanation styles', () => {

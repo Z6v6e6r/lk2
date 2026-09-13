@@ -10041,19 +10041,19 @@ label {
 .figma-home .fh-preferences-edit {
   position: absolute;
   z-index: 2;
-  top: 19px;
-  left: calc(50% - 32px);
+  top: 13px;
+  left: calc(50% - 38px);
   display: grid;
-  width: 12px;
-  height: 12px;
+  width: 24px;
+  height: 24px;
   place-items: center;
   border-radius: 50%;
   color: #fff;
 }
 
 .figma-home .fh-preferences-edit svg {
-  width: 8px;
-  height: 8px;
+  width: 18px;
+  height: 18px;
 }
 
 .figma-home .fh-preferences-edit:hover,
