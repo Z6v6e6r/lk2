@@ -183,6 +183,44 @@ describe('Home promotion carousel', () => {
 });
 
 describe('Home progressive navigation', () => {
+  it('provides a keyboard-accessible link to each community detail page', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+        dashboard={{
+          ...homeBase,
+          capabilities: { ...homeBase.capabilities, canViewCommunities: true },
+          communities: {
+            ...homeBase.communities,
+            status: 'READY',
+            revision: '1',
+            observedAt: dashboard.snapshot.generatedAt,
+            staleAt: dashboard.snapshot.staleAt,
+            value: [
+              {
+                id,
+                title: 'Мой клуб',
+                logoUrl: null,
+                isVerified: false,
+                unreadChatCount: 0,
+                route: `/communities/${id}`,
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(screen.getByRole('link', { name: 'Открыть сообщество «Мой клуб»' })).toHaveAttribute(
+      'href',
+      `/communities/${id}`,
+    );
+  });
+
   it('keeps local navigation and locations when optional Base sections are unavailable', () => {
     render(
       <HomeDashboardPage

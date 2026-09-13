@@ -721,7 +721,9 @@ function HomeCommunityCarousel({
               : ''
           }`}
         >
-          <CommunityLogo community={community} />
+          <a href={community.route} aria-label={`Открыть сообщество «${community.title}»`}>
+            <CommunityLogo community={community} />
+          </a>
         </div>
       ))}
     </div>
