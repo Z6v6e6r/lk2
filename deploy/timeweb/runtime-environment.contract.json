@@ -49,7 +49,8 @@
         "ACTIVITY_HISTORY_SYNC_ENABLED",
         "ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED",
         "PROFILE_PHOTO_MAINTENANCE_ENABLED",
-        "HOME_BASE_SYNC_ENABLED"
+        "HOME_BASE_SYNC_ENABLED",
+        "HOME_READ_MODE"
       ],
       "allowed": [
         "APP_ENV",
@@ -95,7 +96,8 @@
         "ACTIVITY_HISTORY_SYNC_ENABLED",
         "ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED",
         "PROFILE_PHOTO_MAINTENANCE_ENABLED",
-        "HOME_BASE_SYNC_ENABLED"
+        "HOME_BASE_SYNC_ENABLED",
+        "HOME_READ_MODE"
       ],
       "forbidden": ["AUTH_DEV_PHONE_E164", "AUTH_DEV_OTP_CODE"],
       "requiredTrueFlags": [
