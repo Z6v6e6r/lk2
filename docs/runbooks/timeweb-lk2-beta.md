@@ -211,7 +211,8 @@ absent or user-editable.
 Removing the operator Basic Auth gate is a controlled ingress activation after the new API/Web pair
 is ready. Use only `deploy/timeweb/Caddyfile.yandex-public-beta`, whose adapted JSON hash is frozen in
 `deploy/timeweb/yandex-public-beta-ingress.json`. The policy allows read-only GET/HEAD routes, the
-four required OAuth/session POST routes and logout DELETE, then returns `405` for every other API
+six required auth POST routes (phone challenge create and verify, Yandex authorize, reauthorize,
+access and session refresh) and logout DELETE, then returns `405` for every other API
 method. Do not replace it with the broader canonical Caddyfile and do not edit either artifact on the
 host.
 
