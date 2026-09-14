@@ -87,6 +87,7 @@
     "outbox:lease:load": "node --import tsx scripts/verify-outbox-lease-load.ts",
     "outbox:lease:soak": "node --import tsx scripts/verify-outbox-lease-soak.ts",
     "games:legacy:import-local": "node --env-file-if-exists=.env --import tsx scripts/import-legacy-games-local.ts",
+    "games:legacy:import-beta": "node --env-file-if-exists=.env --import tsx scripts/import-legacy-games-beta.ts",
     "games:legacy:import-server": "node --env-file-if-exists=.env --import tsx scripts/import-legacy-games-server.ts",
     "games:legacy:reconcile-server": "node --env-file-if-exists=.env --import tsx scripts/reconcile-legacy-games-server.ts",
     "communities:legacy:inventory:verify": "node --import tsx scripts/verify-communities-legacy-preservation.ts",
