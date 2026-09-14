@@ -260,21 +260,23 @@ describe('Timeweb deployment contract', () => {
   });
 
   it.each([
-    ['read method fence', 'method GET HEAD', 'method GET HEAD POST'],
-    ['phone challenge route', '/auth/challenges ', '/auth/challenges-disabled '],
-    [
-      'phone challenge verify route',
-      '/auth/challenges/*/verify',
-      '/auth/challenges/*/verify-disabled',
-    ],
-    ['Yandex authorize route', '/auth/viva/authorize', '/auth/viva/authorize-disabled'],
-    ['session refresh route', '/auth/session/refresh', '/auth/session/refresh-disabled'],
-    ['logout method fence', 'method DELETE', 'method POST'],
-    ['API deny response', 'respond "Method Not Allowed" 405', 'respond "OK" 200'],
-  ])('rejects a Caddyfile with a widened or missing %s', (_label, current, replacement) => {
+    ['API path matcher', '/admin/api/*', '/admin/api-disabled/*'],
+    ['client API path matcher', '/user/api/*', '/user/api-disabled/*'],
+    ['API proxy target', 'reverse_proxy api:3000', 'reverse_proxy api:3001'],
+  ])('rejects a Caddyfile with a drifted %s', (_label, current, replacement) => {
     expect(() =>
       validateYandexPublicBetaCaddyfile(publicBetaCaddyfile.replace(current, replacement), target),
     ).toThrow();
+  });
+
+  it.each([
+    ['the service-only internal API', '/admin/api/*', ' /internal/api/*'],
+    ['an embedded authorization header', '-Server', 'Authorization'],
+    ['an embedded basic-auth gate', '-Server', 'basic_auth'],
+  ])('rejects a public-beta Caddyfile that exposes %s', (_label, current, replacement) => {
+    expect(() =>
+      validateYandexPublicBetaCaddyfile(publicBetaCaddyfile.replace(current, replacement), target),
+    ).toThrow(/public_caddy_exposure_or_secret/u);
   });
 
   it('accepts the source-controlled Yandex public-beta Caddy policy', () => {

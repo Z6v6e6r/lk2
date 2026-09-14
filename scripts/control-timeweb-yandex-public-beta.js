@@ -1064,8 +1064,11 @@ export function buildIngressSmokeInvocations(mode) {
 }
 
 function verifyIngressSmoke(mode) {
+  // The public policy proxies every method to the API, so the POST probe must now prove the
+  // request reached the application: the API answers 404 ROUTE_NOT_FOUND for a POST to the
+  // GET-only profile path instead of the previous Caddy 405.
   const expected =
-    mode === 'basic' ? ['401', '401', '401', '401', '401'] : ['308', '200', '200', '405'];
+    mode === 'basic' ? ['401', '401', '401', '401', '401'] : ['308', '200', '200', '404'];
   const actual = buildIngressSmokeInvocations(mode).map((args) => runCurl(args));
   if (JSON.stringify(actual) !== JSON.stringify(expected)) fail('ingress_smoke');
 }

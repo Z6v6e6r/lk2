@@ -219,11 +219,12 @@ brokers onto the same local user, so record that realm property once before rely
 
 Removing the operator Basic Auth gate is a controlled ingress activation after the new API/Web pair
 is ready. Use only `deploy/timeweb/Caddyfile.yandex-public-beta`, whose adapted JSON hash is frozen in
-`deploy/timeweb/yandex-public-beta-ingress.json`. The policy allows read-only GET/HEAD routes, the
-six required auth POST routes (phone challenge create and verify, Yandex authorize, reauthorize,
-access and session refresh) and logout DELETE, then returns `405` for every other API
-method. Do not replace it with the broader canonical Caddyfile and do not edit either artifact on the
-host.
+`deploy/timeweb/yandex-public-beta-ingress.json`. During beta testing the policy proxies every method
+of the client and admin API (`/health/*`, `/public/api/*`, `/user/api/*`, `/admin/api/*`) to the API,
+so authorization, tenant resolution, idempotency and audit stay with the API. The service-only
+`/internal/api` namespace is deliberately not routed and remains reachable only from inside the Docker
+network, and the contract still rejects an embedded `Authorization`, `Cookie` or `basic_auth` gate and
+any `/internal/api` exposure. Do not edit either artifact on the host.
 
 Allowing the phone challenge routes also makes the first outbound OTP send reachable from the public
 internet. The application bounds it per phone number (resend cooldown) and at 5 requests per minute
