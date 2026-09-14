@@ -862,13 +862,34 @@ export function buildTimewebInitialBetaComposeInvocation(stage, releaseEnvPath) 
     'up-web': ['up', '-d', '--no-deps', 'web'],
     'pull-realtime': ['pull', 'realtime'],
     'up-realtime': ['up', '-d', '--no-deps', 'realtime'],
+    'pull-worker': ['pull', 'worker'],
+    'up-worker': ['up', '-d', '--no-deps', 'worker'],
+    'pull-migrator': ['pull', 'migrator'],
+    'up-migrator': ['up', '-d', '--no-deps', 'migrator'],
+  };
+  // Worker and migrator stay profile-gated so they never start as a dependency of the default
+  // api/web/realtime set, but the operator can now promote them through the same frozen release.
+  const profiles = {
+    'pull-worker': 'background',
+    'up-worker': 'background',
+    'pull-migrator': 'migration',
+    'up-migrator': 'migration',
   };
   if (!Object.hasOwn(stages, stage)) fail('compose_stage');
   assertSafeAbsolutePath(releaseEnvPath, 'release_env_path');
   if (basename(releaseEnvPath) !== 'release.env') fail('release_env_path');
+  const profile = profiles[stage];
   return {
     command: TARGET_DOCKER_PATH,
-    args: ['compose', '--env-file', releaseEnvPath, '-f', COMPOSE_PATH, ...stages[stage]],
+    args: [
+      'compose',
+      '--env-file',
+      releaseEnvPath,
+      '-f',
+      COMPOSE_PATH,
+      ...(profile ? ['--profile', profile] : []),
+      ...stages[stage],
+    ],
   };
 }
 
@@ -1011,7 +1032,7 @@ export function renderTimewebBetaReleaseEnvironment(
     PHUB_WORKER_RUNTIME_ENV_FILE: join(runtimeEnvRoot, 'worker.env'),
     PHUB_REALTIME_RUNTIME_ENV_FILE: join(runtimeEnvRoot, 'realtime.env'),
     PHUB_MIGRATOR_RUNTIME_ENV_FILE: join(runtimeEnvRoot, 'migrator.env'),
-    PHUB_WORKER_ENABLED: 'false',
+    PHUB_WORKER_ENABLED: 'true',
     PHUB_MIGRATOR_ENABLED: 'false',
     COMPOSE_PROFILES: '',
     PHUB_ROLLBACK_PREVIOUS_RELEASE_ID: previousReleaseId,

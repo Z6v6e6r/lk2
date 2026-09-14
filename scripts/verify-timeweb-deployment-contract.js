@@ -566,9 +566,7 @@ export function validateYandexPublicBetaCaddyfile(contents, target) {
   if (!contents.includes(`\n${target.hostname} {`)) reject('public_caddy_hostname');
   if (/\{\$LK2_BETA_HOST\}|https?:\/\/|\badmin\s+(?:localhost|0\.0\.0\.0|:)/u.test(contents))
     reject('public_caddy_host_or_admin');
-  if (
-    /\/(?:internal|admin)\/api|Authorization|Cookie|X-Api-Key|basic_auth|basicauth/iu.test(contents)
-  )
+  if (/\/internal\/api|Authorization|Cookie|X-Api-Key|basic_auth|basicauth/iu.test(contents))
     reject('public_caddy_exposure_or_secret');
 
   exactArray(
@@ -593,30 +591,9 @@ export function validateYandexPublicBetaCaddyfile(contents, target) {
       'Referrer-Policy "same-origin"',
       '-Server',
       '}',
-      '@api_read {',
-      'method GET HEAD',
-      'path /health/* /public/api/* /user/api/*',
-      '}',
-      'handle @api_read {',
+      '@api path /health/* /public/api/* /user/api/* /admin/api/*',
+      'handle @api {',
       'reverse_proxy api:3000',
-      '}',
-      '@auth_post {',
-      'method POST',
-      'path /user/api/v1/*/auth/challenges /user/api/v1/*/auth/challenges/*/verify /user/api/v1/*/auth/viva/authorize /user/api/v1/*/auth/viva/reauthorize /user/api/v1/*/auth/viva/access /user/api/v1/*/auth/session/refresh',
-      '}',
-      'handle @auth_post {',
-      'reverse_proxy api:3000',
-      '}',
-      '@auth_logout {',
-      'method DELETE',
-      'path /user/api/v1/*/auth/session',
-      '}',
-      'handle @auth_logout {',
-      'reverse_proxy api:3000',
-      '}',
-      '@api_denied path /health/* /public/api/* /user/api/*',
-      'handle @api_denied {',
-      'respond "Method Not Allowed" 405',
       '}',
       'handle /realtime/health/live {',
       'rewrite * /health/live',
@@ -639,14 +616,9 @@ export function validateYandexPublicBetaCaddyfile(contents, target) {
 
   const exactLines = new Set(contents.split('\n').map((line) => line.trim()));
   for (const requiredLine of [
-    'method GET HEAD',
-    'path /health/* /public/api/* /user/api/*',
-    'method POST',
-    'path /user/api/v1/*/auth/challenges /user/api/v1/*/auth/challenges/*/verify /user/api/v1/*/auth/viva/authorize /user/api/v1/*/auth/viva/reauthorize /user/api/v1/*/auth/viva/access /user/api/v1/*/auth/session/refresh',
-    'method DELETE',
-    'path /user/api/v1/*/auth/session',
-    '@api_denied path /health/* /public/api/* /user/api/*',
-    'respond "Method Not Allowed" 405',
+    '@api path /health/* /public/api/* /user/api/* /admin/api/*',
+    'handle @api {',
+    'reverse_proxy api:3000',
   ]) {
     if (!exactLines.has(requiredLine)) reject('public_caddy_required_contract');
   }
@@ -662,12 +634,7 @@ export function validateYandexPublicBetaCaddyfile(contents, target) {
     .map((line) => line.replace(/\s+\{$/u, ''));
   exactArray(
     namedMatchers,
-    [
-      '@api_read',
-      '@auth_post',
-      '@auth_logout',
-      '@api_denied path /health/* /public/api/* /user/api/*',
-    ],
+    ['@api path /health/* /public/api/* /user/api/* /admin/api/*'],
     'public_caddy_matchers',
   );
   const selectors = [...contents.matchAll(/^\s*handle(?:\s+([^\s{]+))?\s*\{/gmu)].map(
@@ -675,16 +642,7 @@ export function validateYandexPublicBetaCaddyfile(contents, target) {
   );
   exactArray(
     selectors,
-    [
-      '@api_read',
-      '@auth_post',
-      '@auth_logout',
-      '@api_denied',
-      '/realtime/health/live',
-      '/realtime/health/ready',
-      '/realtime/*',
-      '<default>',
-    ],
+    ['@api', '/realtime/health/live', '/realtime/health/ready', '/realtime/*', '<default>'],
     'public_caddy_unexpected_route',
   );
 }

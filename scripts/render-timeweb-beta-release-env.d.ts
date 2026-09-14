@@ -125,7 +125,17 @@ export function assertNoAmbientComposeOverrides(environment?: NodeJS.ProcessEnv)
 export function assertNoAmbientDockerOverrides(environment?: NodeJS.ProcessEnv): void;
 
 export type TimewebInitialBetaComposeStage =
-  'preflight' | 'pull-api' | 'up-api' | 'pull-web' | 'up-web' | 'pull-realtime' | 'up-realtime';
+  | 'preflight'
+  | 'pull-api'
+  | 'up-api'
+  | 'pull-web'
+  | 'up-web'
+  | 'pull-realtime'
+  | 'up-realtime'
+  | 'pull-worker'
+  | 'up-worker'
+  | 'pull-migrator'
+  | 'up-migrator';
 
 export function buildTimewebInitialBetaComposeInvocation(
   stage: TimewebInitialBetaComposeStage,

@@ -95,6 +95,16 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // endpoints must fail closed rather than serve fabricated data.
     HOME_READ_MODE: 'projection',
     HOME_BASE_SYNC_ENABLED: 'true',
+    // Game commands are open for beta testing; participation commands stay off until the shared
+    // gateway token, tenant key and principal key exist and are shared with the calling side.
+    GAMES_COMMANDS_ENABLED: 'true',
+    PARTICIPATION_COMMANDS_ENABLED: 'true',
+    // The participation command gateway needs its own shared token and principal identity; the
+    // token must be handed to whichever service posts commands before that integration is used.
+    PARTICIPATION_COMMAND_TOKEN: 'synthetic-participation-command-token-0123456789',
+    PARTICIPATION_COMMAND_TENANT_KEY: tenantKey,
+    PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'timeweb-beta.operator:1',
+    PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS: '300',
   };
   const worker = {
     ...baseEnvironment('worker'),
