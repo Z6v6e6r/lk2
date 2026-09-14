@@ -566,9 +566,7 @@ export function validateYandexPublicBetaCaddyfile(contents, target) {
   if (!contents.includes(`\n${target.hostname} {`)) reject('public_caddy_hostname');
   if (/\{\$LK2_BETA_HOST\}|https?:\/\/|\badmin\s+(?:localhost|0\.0\.0\.0|:)/u.test(contents))
     reject('public_caddy_host_or_admin');
-  if (
-    /\/internal\/api|Authorization|Cookie|X-Api-Key|basic_auth|basicauth/iu.test(contents)
-  )
+  if (/\/internal\/api|Authorization|Cookie|X-Api-Key|basic_auth|basicauth/iu.test(contents))
     reject('public_caddy_exposure_or_secret');
 
   exactArray(
