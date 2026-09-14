@@ -55,6 +55,7 @@ export async function attachUpcomingRosters(
     };
   });
   return {
+    state: 'READY',
     version: createHash('sha256')
       .update(JSON.stringify([projection.version, items]))
       .digest('hex'),

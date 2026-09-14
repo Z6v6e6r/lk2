@@ -8,6 +8,7 @@ import type { BookingRecommendationPage, UserUpcomingBookings } from './auth-gat
 import { BookingsPage } from './BookingsPage.js';
 
 const bookings: UserUpcomingBookings = {
+  state: 'READY',
   version: 'bookings-1',
   generatedAt: '2026-07-18T09:00:00.000Z',
   staleAt: '2026-07-18T09:05:00.000Z',
@@ -66,6 +67,35 @@ describe('BookingsPage', () => {
     await vi.waitFor(() =>
       expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих событий'),
     );
+  });
+
+  it('shows an unavailable treatment instead of the empty state when the projection is missing', () => {
+    render(
+      <BookingsPage
+        bookings={{ ...bookings, state: 'UNAVAILABLE', items: [] }}
+        tenantName="ПадлХАБ"
+        loadHistory={vi.fn().mockResolvedValue({ items: [], nextCursor: null })}
+        loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Не удалось загрузить предстоящие записи');
+    // The honest "could not load" state must not claim there are no bookings.
+    expect(screen.queryByText('Пока нет предстоящих записей')).not.toBeInTheDocument();
+  });
+
+  it('keeps the empty state for a ready projection with no items', () => {
+    render(
+      <BookingsPage
+        bookings={{ ...bookings, state: 'READY', items: [] }}
+        tenantName="ПадлХАБ"
+        loadHistory={vi.fn().mockResolvedValue({ items: [], nextCursor: null })}
+        loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
+      />,
+    );
+
+    expect(screen.getByText('Пока нет предстоящих записей')).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('opens history directly from the history booking link', async () => {

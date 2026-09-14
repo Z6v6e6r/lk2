@@ -61,17 +61,32 @@ export const homeProfileSchema = z
       .string()
       .regex(/^\d{4}$/)
       .optional(),
-    balanceMinor: z.number().int(),
-    currency: z.string().regex(/^[A-Z]{3}$/),
+    /**
+     * Provider-owned money fields. Optional so a section-scoped local read can
+     * omit them instead of claiming a fabricated `0` / `RUB`; when present the
+     * original type and range still apply.
+     */
+    balanceMinor: z.number().int().optional(),
+    currency: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
+    /**
+     * Optional for the same reason: with no local assessment the field is
+     * omitted rather than promoted to a synthetic `D`/`0` level.
+     */
     level: z
       .object({
         label: z.string().min(1).max(20),
         value: z.number().min(0).max(10),
         assessmentRequired: z.boolean(),
       })
-      .strict(),
+      .strict()
+      .optional(),
   })
   .strict();
+
+export type HomeProfile = z.infer<typeof homeProfileSchema>;
 
 export const homeCountersSchema = z
   .object({

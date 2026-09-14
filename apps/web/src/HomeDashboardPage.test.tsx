@@ -103,6 +103,7 @@ const homeBase: HomeBase = {
 };
 
 const defaultUpcoming: UserUpcomingBookings = {
+  state: 'READY',
   version: dashboard.snapshot.version,
   generatedAt: dashboard.snapshot.generatedAt,
   staleAt: dashboard.snapshot.staleAt,
@@ -798,6 +799,62 @@ describe('Home progressive navigation', () => {
       'href',
       '/profile#booking-preferences-title',
     );
+  });
+});
+
+describe('Home viewer profile honesty', () => {
+  it('renders a placeholder instead of 0 ₽ when the local profile omits the balance', () => {
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        viewer={{
+          state: 'READY',
+          value: {
+            userId: dashboard.profile.userId,
+            displayName: dashboard.profile.displayName,
+            avatarUrl: null,
+          },
+        }}
+        dashboard={homeBase}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const profileLink = screen
+      .getByRole('heading', { level: 1, name: 'Анна Петрова' })
+      .closest('a');
+    expect(profileLink).not.toBeNull();
+    const balanceLine = (profileLink as HTMLElement).querySelector('.fh-profile-copy small');
+    expect(balanceLine).not.toBeNull();
+    expect(balanceLine).toHaveTextContent('—');
+    expect(balanceLine).not.toHaveTextContent('₽');
+    expect(within(profileLink as HTMLElement).queryByText(/₽/)).not.toBeInTheDocument();
+  });
+
+  it('marks an omitted level as unknown instead of claiming level D', () => {
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        viewer={{
+          state: 'READY',
+          value: {
+            userId: dashboard.profile.userId,
+            displayName: dashboard.profile.displayName,
+            avatarUrl: null,
+          },
+        }}
+        dashboard={homeBase}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('img', { name: 'Анна Петрова, уровень —, прогресс 0%' })).toBeVisible();
   });
 });
 

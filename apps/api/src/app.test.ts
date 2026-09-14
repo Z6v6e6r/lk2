@@ -1091,6 +1091,7 @@ describe('health endpoints', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
+      state: 'READY',
       version: 'b'.repeat(64),
       generatedAt,
       staleAt,
@@ -1444,6 +1445,175 @@ describe('health endpoints', () => {
     });
   });
 
+  it('serves the profile from the local summary when no Home projection exists', async () => {
+    const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const get = vi.fn().mockResolvedValue({
+      userId,
+      displayName: 'Сергеев Алексей',
+      avatarUrl: null,
+      levelLabel: null,
+      levelValue: null,
+    });
+    const app = await buildApp({
+      config: { ...config, HOME_READ_MODE: 'projection' as const, VIVA_MODE: 'sandbox' as const },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeDashboardRepository: { get: () => Promise.resolve(undefined) },
+      profileSummaryRepository: { get },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toContain('private');
+    const body = response.json<Record<string, unknown>>();
+    expect(body).toMatchObject({ userId, displayName: 'Сергеев Алексей' });
+    // Provider-owned values are unknown locally and must not be fabricated.
+    expect(body).not.toHaveProperty('balanceMinor');
+    expect(body).not.toHaveProperty('currency');
+    expect(body).not.toHaveProperty('level');
+    expect(body).not.toHaveProperty('phoneLast4');
+    expect(JSON.stringify(body)).not.toContain('PROFILE_PROJECTION_NOT_READY');
+    expect(get).toHaveBeenCalledWith(tenantId, userId);
+  });
+
+  it('falls back to the auth user context name when the local summary is missing', async () => {
+    const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const app = await buildApp({
+      config: { ...config, HOME_READ_MODE: 'projection' as const, VIVA_MODE: 'sandbox' as const },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeDashboardRepository: { get: () => Promise.resolve(undefined) },
+      profileSummaryRepository: { get: vi.fn().mockResolvedValue(undefined) },
+      authService: {
+        getUserContext: () =>
+          Promise.resolve({ id: userId, tenantId, displayName: 'Алексей Сергеев' }),
+      } as never,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ userId, displayName: 'Алексей Сергеев' });
+    expect(response.json()).not.toHaveProperty('balanceMinor');
+  });
+
+  it('keeps the persisted Home profile unchanged when the projection exists', async () => {
+    const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const generatedAt = new Date();
+    const dashboard = buildMockHomeDashboard({
+      tenantId,
+      userId,
+      displayName: 'Алексей',
+      phoneLast4: '3190',
+      roles: ['client'],
+      permissions: ['profile.read'],
+      now: generatedAt,
+    });
+    const payload = {
+      ...dashboard,
+      snapshot: { ...dashboard.snapshot, source: 'LOCAL_PROJECTION' as const },
+    };
+    const app = await buildApp({
+      config: { ...config, HOME_READ_MODE: 'projection' as const, VIVA_MODE: 'sandbox' as const },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeDashboardRepository: {
+        get: () =>
+          Promise.resolve({
+            tenantId,
+            userId,
+            sourceRevision: '1',
+            sourceEventId: '55555555-5555-4555-8555-555555555555',
+            producer: 'HOME_IMPORT',
+            snapshotVersion: payload.snapshot.version,
+            payload,
+            payloadChecksum: 'a'.repeat(64),
+            generatedAt: payload.snapshot.generatedAt,
+            staleAt: payload.snapshot.staleAt,
+            updatedAt: payload.snapshot.generatedAt,
+          }),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(payload.profile);
+    expect(response.json()).toHaveProperty('balanceMinor');
+    expect(response.json()).toHaveProperty('currency');
+    expect(response.json()).toHaveProperty('level');
+  });
+
+  it('answers an explicit unavailable state when no bookings projection exists', async () => {
+    const app = await buildApp({
+      config: { ...config, HOME_READ_MODE: 'projection' as const, VIVA_MODE: 'sandbox' as const },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      homeDashboardRepository: { get: () => Promise.resolve(undefined) },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/upcoming',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('private, no-store');
+    const body = response.json<{
+      state: string;
+      version: string;
+      generatedAt: string;
+      staleAt: string;
+      items: unknown[];
+    }>();
+    expect(body.state).toBe('UNAVAILABLE');
+    expect(body.version).toBe('UNAVAILABLE');
+    expect(Number.isFinite(Date.parse(body.generatedAt))).toBe(true);
+    expect(body.items).toEqual([]);
+    expect(JSON.stringify(body)).not.toContain('BOOKINGS_PROJECTION_NOT_READY');
+  });
+
+  it('answers the unavailable state when the dedicated bookings projection is absent', async () => {
+    const app = await buildApp({
+      config: { ...config, HOME_READ_MODE: 'projection' as const, VIVA_MODE: 'sandbox' as const },
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      upcomingBookingsRepository: {
+        get: vi.fn().mockResolvedValue(undefined),
+        replace: vi.fn(),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/bookings/upcoming',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ state: 'UNAVAILABLE', items: [] });
+    expect(response.headers['cache-control']).toBe('private, no-store');
+  });
+
   it('rejects a token that does not contain the resolved tenant', async () => {
     const app = await buildApp({
       config,
@@ -1460,7 +1630,6 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(403);
     expect(response.json()).toMatchObject({ code: 'TENANT_ACCESS_DENIED' });
   });
-
   it('rejects a malformed tenant key before database resolution', async () => {
     const app = await buildApp({
       config,

@@ -758,6 +758,15 @@ export function App({
     void gateway.getUpcomingBookings().then(
       (bookings) => {
         if (!active) return;
+        // The API answers 200 with an explicit UNAVAILABLE state when the
+        // bookings section has no local projection; that is not "no bookings".
+        if (bookings.state === 'UNAVAILABLE') {
+          setHomeUpcoming({
+            state: 'UNAVAILABLE',
+            message: 'Не удалось загрузить мои записи. Остальные разделы продолжают работать.',
+          });
+          return;
+        }
         setHomeUpcoming({
           state: Date.parse(bookings.staleAt) <= Date.now() ? 'STALE' : 'READY',
           value: bookings,

@@ -116,6 +116,45 @@ describe('ProfilePage', () => {
     ).toBeVisible();
   });
 
+  it('renders a placeholder for a balance the local read did not observe', () => {
+    const profile = selfProfile('D+');
+    render(
+      <ProfilePage
+        profile={{ ...profile, privateAccount: { phoneLast4: '5826' } }}
+        logoutBusy={false}
+        communities={{ items: [] }}
+        onLogout={() => undefined}
+      />,
+    );
+
+    const stats = screen.getByLabelText('Данные профиля');
+    expect(within(stats).getByText('—')).toBeVisible();
+    expect(within(stats).queryByText(/0\s*₽/)).not.toBeInTheDocument();
+  });
+
+  it('renders a placeholder instead of claiming level D when no assessment exists', () => {
+    const profile = selfProfile('D+');
+    render(
+      <ProfilePage
+        profile={{
+          ...profile,
+          profile: {
+            userId: profile.profile.userId,
+            displayName: profile.profile.displayName,
+            avatarUrl: null,
+          },
+        }}
+        logoutBusy={false}
+        communities={{ items: [] }}
+        onLogout={() => undefined}
+      />,
+    );
+
+    const stats = screen.getByLabelText('Данные профиля');
+    expect(within(stats).getByText('—')).toBeVisible();
+    expect(within(stats).queryByText('D')).not.toBeInTheDocument();
+  });
+
   it('switches to an isolated squash profile without showing padel memberships or communities', () => {
     render(
       <ProfilePage

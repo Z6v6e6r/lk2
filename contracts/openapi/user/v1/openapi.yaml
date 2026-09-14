@@ -1468,6 +1468,8 @@ paths:
       description: |
         Returns one bookings aggregate containing PadlHub UUIDs only. Provider
         identifiers remain in integration storage and never cross this boundary.
+        When the bookings projection does not exist, the endpoint answers 200
+        with `state: UNAVAILABLE` instead of failing the whole section.
       responses:
         '200':
           description: Upcoming bookings from one PadlHub-owned projection version.
@@ -4468,7 +4470,10 @@ components:
     PlayerProfile:
       type: object
       additionalProperties: false
-      required: [userId, displayName, level]
+      required: [userId, displayName]
+      description: |
+        `level` is omitted when no stored assessment exists; clients must render
+        an explicit placeholder rather than assuming an unassessed `D` level.
       properties:
         userId:
           type: string
@@ -4507,18 +4512,24 @@ components:
     PlayerPrivateAccount:
       type: object
       additionalProperties: false
-      required: [balanceMinor, currency]
-      description: Self-only fields; the property is omitted for every other viewer.
+      description: |
+        Self-only fields; the property is omitted for every other viewer.
+        `balanceMinor` and `currency` are provider-owned and omitted when the
+        section-scoped local read cannot observe them.
       properties:
         phoneLast4:
           type: string
           pattern: '^[0-9]{4}$'
         balanceMinor:
           type: integer
-          description: Signed balance in minor currency units.
+          description: |
+            Signed balance in minor currency units. Omitted when the local read
+            cannot observe the provider balance; absence must never be rendered
+            as zero.
         currency:
           type: string
           pattern: '^[A-Z]{3}$'
+          description: Omitted together with an unobserved `balanceMinor`.
     PlayerProfileAccess:
       type: object
       additionalProperties: false
@@ -5286,7 +5297,12 @@ components:
     HomeProfile:
       type: object
       additionalProperties: false
-      required: [userId, displayName, balanceMinor, currency, level]
+      required: [userId, displayName]
+      description: |
+        Profile aggregate. `balanceMinor`, `currency` and `level` are provider-owned
+        and optional: they are omitted when the section-scoped local read cannot
+        observe them, and clients must render a placeholder instead of assuming
+        zero balance, RUB or an unassessed level.
       properties:
         userId:
           type: string
@@ -5306,10 +5322,14 @@ components:
           pattern: '^[0-9]{4}$'
         balanceMinor:
           type: integer
-          description: Signed balance in minor currency units; a negative value represents debt.
+          description: |
+            Signed balance in minor currency units; a negative value represents debt.
+            Omitted when the local read cannot observe the provider balance; absence
+            must never be rendered as zero.
         currency:
           type: string
           pattern: '^[A-Z]{3}$'
+          description: Omitted together with an unobserved `balanceMinor`.
         level:
           $ref: '#/components/schemas/HomePlayerLevel'
     HomePlayerLevel:
@@ -5493,8 +5513,19 @@ components:
     UserUpcomingBookings:
       type: object
       additionalProperties: false
-      required: [version, generatedAt, staleAt, items]
+      required: [state, version, generatedAt, staleAt, items]
+      description: |
+        `state` is the authoritative discriminator. `READY` carries a real
+        PadlHub-owned projection version and its items. `UNAVAILABLE` means the
+        bookings section could not be produced from a local source: clients must
+        render a "could not load" treatment and must not present the empty
+        `items` array as "you have no bookings". On `UNAVAILABLE`, `version` is
+        the sentinel `UNAVAILABLE` and `generatedAt`/`staleAt` are the honest
+        observation timestamps of the failed read.
       properties:
+        state:
+          type: string
+          enum: [READY, UNAVAILABLE]
         version:
           type: string
           minLength: 1

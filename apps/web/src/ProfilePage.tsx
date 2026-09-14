@@ -16,6 +16,7 @@ import type { CSSProperties } from 'react';
 import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
+import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 import levelABackground from './assets/profile-levels/level-a.jpg';
 import levelBBackground from './assets/profile-levels/level-b.jpg';
 import levelBPlusBackground from './assets/profile-levels/level-b-plus.jpg';
@@ -1199,20 +1200,24 @@ export function ProfilePage({
         ? 'BadmintonHub Player'
         : 'PadelHub Player';
   const balance = privateAccount
-    ? new Intl.NumberFormat('ru-RU', {
-        style: 'currency',
-        currency: privateAccount.currency,
-        maximumFractionDigits: 0,
-      }).format(privateAccount.balanceMinor / 100)
+    ? formatBalance(privateAccount.balanceMinor, privateAccount.currency, 'currency')
     : null;
-  const rating = isIndependentSport ? undefined : profile.level.value;
-  const levelKey = isIndependentSport
+  // A locally served profile may omit the level until a stored assessment
+  // exists; render an explicit placeholder instead of claiming level D.
+  const hasLevel = !isIndependentSport && profile.level !== undefined;
+  const rating = hasLevel ? profile.level?.value : undefined;
+  const levelKey = !hasLevel
     ? 'A'
-    : levelBackgrounds[profile.level.label]
+    : profile.level && levelBackgrounds[profile.level.label]
       ? profile.level.label
       : 'A';
-  const displayLevel =
-    isIndependentSport || profile.level.assessmentRequired ? '?' : profile.level.label;
+  const displayLevel = isIndependentSport
+    ? '?'
+    : profile.level
+      ? profile.level.assessmentRequired
+        ? '?'
+        : profile.level.label
+      : UNKNOWN_VALUE_PLACEHOLDER;
   const background =
     activeSport === 'SQUASH'
       ? (squashLevelBackgrounds[levelKey] ?? squashLevelABackground)
@@ -1296,7 +1301,7 @@ export function ProfilePage({
               alt={profile.displayName}
               fallbackSeed={profile.userId}
               level={displayLevel}
-              progress={levelProgress(rating, profile.level.assessmentRequired)}
+              progress={levelProgress(rating, profile.level?.assessmentRequired ?? true)}
               size={150}
               src={profile.avatarUrl ?? null}
             />
@@ -1313,7 +1318,7 @@ export function ProfilePage({
                 {isIndependentSport
                   ? 'отдельный'
                   : privateAccount
-                    ? balance
+                    ? (balance ?? UNKNOWN_VALUE_PLACEHOLDER)
                     : accessTierLabel(access.tier)}
               </strong>
             </div>
