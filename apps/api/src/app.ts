@@ -149,6 +149,7 @@ import { registerPromotionEngagementRoutes } from './promotions/promotion-engage
 import type { PromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
 import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
+import { buildLocalHomeProfile } from './profile/local-home-profile.js';
 import {
   homeProfilePhotoUserIds,
   stabilizeHomeProfilePhotos,
@@ -188,33 +189,6 @@ const directVivaOutcomeSchema = z
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CORRELATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
-
-function profileLevel(label: string | null): {
-  readonly label: string;
-  readonly value: number;
-  readonly assessmentRequired: boolean;
-} {
-  const values: Record<string, number> = {
-    D: 0,
-    'D+': 2.5,
-    C: 3,
-    'C+': 3.5,
-    B: 4.5,
-    'B+': 5,
-    A: 6,
-  };
-  const value = label ? values[label] : undefined;
-  if (!label || value === undefined) return { label: 'D', value: 0, assessmentRequired: true };
-  return { label, value, assessmentRequired: false };
-}
-
-function profileNameParts(displayName: string): {
-  readonly firstName: string;
-  readonly lastName: string | null;
-} {
-  const [firstName, ...lastName] = displayName.trim().split(/\s+/);
-  return { firstName: firstName || displayName, lastName: lastName.join(' ') || null };
-}
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -363,10 +337,27 @@ function clientPlatform(request: FastifyRequest): ClientPlatform {
 
 function upcomingBookingsResponse(dashboard: HomeDashboard) {
   return {
+    state: 'READY' as const,
     version: dashboard.snapshot.version,
     generatedAt: dashboard.snapshot.generatedAt,
     staleAt: dashboard.snapshot.staleAt,
     items: dashboard.upcoming,
+  };
+}
+
+/**
+ * Honest "section could not be produced" answer for the bookings read. The
+ * `state` discriminator carries the meaning, so the version is an explicit
+ * sentinel and the timestamps are the real observation time of the failed read
+ * rather than a fabricated projection revision.
+ */
+function unavailableUpcomingBookingsResponse(observedAt = new Date().toISOString()) {
+  return {
+    state: 'UNAVAILABLE' as const,
+    version: 'UNAVAILABLE',
+    generatedAt: observedAt,
+    staleAt: observedAt,
+    items: [] as const,
   };
 }
 
@@ -1377,13 +1368,30 @@ export async function buildApp(options: BuildAppOptions) {
 
       const projection = await options.homeDashboardRepository?.get(tenantId, userId);
       if (!projection) {
-        return sendApiError(
-          request,
-          reply,
-          503,
-          'PROFILE_PROJECTION_NOT_READY',
-          'Профиль ещё не подготовлен.',
-        );
+        // The complete Home dashboard is an all-or-nothing aggregate. Serve the
+        // honest local slice instead of failing the whole profile section.
+        const summary = await options.profileSummaryRepository?.get(tenantId, userId);
+        const deliveryIds =
+          summary && options.profilePhotoMediaRepository
+            ? await options.profilePhotoMediaRepository.getPhotoDeliveryIds(tenantId, [userId])
+            : new Map<string, string>();
+        reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
+        return buildLocalHomeProfile({
+          userId,
+          displayName: summary?.displayName?.trim() || user?.displayName || 'Игрок ПадлХАБ',
+          ...(summary
+            ? {
+                avatarUrl: stableProfilePhotoUrl({
+                  tenantId,
+                  userId,
+                  currentUrl: summary.avatarUrl,
+                  deliveryIds,
+                }),
+                levelLabel: summary.levelLabel,
+                levelValue: summary.levelValue,
+              }
+            : {}),
+        });
       }
       const parsedDashboard = homeDashboardSchema.safeParse(
         await normalizeProjectedHomeDashboard({
@@ -1503,7 +1511,6 @@ export async function buildApp(options: BuildAppOptions) {
             ? undefined
             : await options.profileSummaryRepository?.get(tenantId, targetUserId);
         if (summary) {
-          const names = profileNameParts(summary.displayName);
           const deliveryIds = options.profilePhotoMediaRepository
             ? await options.profilePhotoMediaRepository.getPhotoDeliveryIds(tenantId, [
                 summary.userId,
@@ -1511,21 +1518,18 @@ export async function buildApp(options: BuildAppOptions) {
             : new Map<string, string>();
           reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
           return buildPlayerProfileView({
-            profile: {
+            profile: buildLocalHomeProfile({
               userId: summary.userId,
               displayName: summary.displayName,
-              firstName: names.firstName,
-              lastName: names.lastName,
               avatarUrl: stableProfilePhotoUrl({
                 tenantId,
                 userId: summary.userId,
                 currentUrl: summary.avatarUrl,
                 deliveryIds,
-              }) as string | null,
-              balanceMinor: 0,
-              currency: 'RUB',
-              level: profileLevel(summary.levelLabel),
-            },
+              }),
+              levelLabel: summary.levelLabel,
+              levelValue: summary.levelValue,
+            }),
             viewerUserId,
             permissions,
             directChatEnabled,
@@ -1616,13 +1620,10 @@ export async function buildApp(options: BuildAppOptions) {
       if (options.upcomingBookingsRepository) {
         const projection = await options.upcomingBookingsRepository.get(tenantId, userId);
         if (!projection) {
-          return sendApiError(
-            request,
-            reply,
-            503,
-            'BOOKINGS_PROJECTION_NOT_READY',
-            'Записи ещё не подготовлены.',
-          );
+          // No bookings projection exists in this contour. Answer with an
+          // explicit unavailable state instead of failing the whole endpoint.
+          reply.header('Cache-Control', 'private, no-store');
+          return unavailableUpcomingBookingsResponse();
         }
         const staleAt = Date.parse(projection.staleAt);
         if (Date.now() > staleAt + options.config.HOME_PROJECTION_MAX_STALE_SECONDS * 1_000) {
@@ -1657,6 +1658,7 @@ export async function buildApp(options: BuildAppOptions) {
               'Upcoming roster unavailable',
             );
             return {
+              state: 'READY' as const,
               version: projection.version,
               generatedAt: projection.generatedAt,
               staleAt: projection.staleAt,
@@ -1668,6 +1670,7 @@ export async function buildApp(options: BuildAppOptions) {
           }
         }
         return {
+          state: 'READY' as const,
           version: projection.version,
           generatedAt: projection.generatedAt,
           staleAt: projection.staleAt,
@@ -1677,13 +1680,11 @@ export async function buildApp(options: BuildAppOptions) {
 
       const projection = await options.homeDashboardRepository?.get(tenantId, userId);
       if (!projection) {
-        return sendApiError(
-          request,
-          reply,
-          503,
-          'BOOKINGS_PROJECTION_NOT_READY',
-          'Записи ещё не подготовлены.',
-        );
+        // Same section-scoped fallback as the dedicated repository above: the
+        // complete dashboard aggregate is absent, so bookings are unavailable
+        // rather than assumed empty.
+        reply.header('Cache-Control', 'private, no-store');
+        return unavailableUpcomingBookingsResponse();
       }
       const parsedDashboard = homeDashboardSchema.safeParse(
         await normalizeProjectedHomeDashboard({

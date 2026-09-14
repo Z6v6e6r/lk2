@@ -36,7 +36,8 @@ describe('player profile view policy', () => {
         chat: { status: 'HIDDEN', reason: 'SELF_PROFILE' },
       },
     });
-    expect(view.profile.level.value).toBe(3.8);
+    expect(view.profile.level).toBeDefined();
+    expect(view.profile.level?.value).toBe(3.8);
     expect(view.profile.lastName).toBe('Петрова');
   });
 
@@ -72,7 +73,7 @@ describe('player profile view policy', () => {
       ],
     });
 
-    expect(view.profile.level.value).toBe(3.8);
+    expect(view.profile.level?.value).toBe(3.8);
     expect(view.access.tier).toBe('INTERACTION');
     expect(view.access.contact).toEqual({
       status: 'LOCKED',

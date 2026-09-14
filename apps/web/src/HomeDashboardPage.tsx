@@ -23,6 +23,7 @@ import { locationCourtLabel } from './location-court-label.js';
 import promoUrl from './assets/home/promo.png';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
+import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 
 interface HomeDashboardPageProps {
   readonly dashboard: HomeBase;
@@ -506,7 +507,7 @@ function Chevron(): React.JSX.Element {
 }
 
 function levelAvatarProgress(level: UserProfile['level']): number {
-  if (level.assessmentRequired) return 0;
+  if (!level || level.assessmentRequired || level.value === undefined) return 0;
   const fractionalProgress = level.value - Math.floor(level.value);
   return Math.round(fractionalProgress * 100);
 }
@@ -1114,9 +1115,14 @@ function HomeViewerHeader({
   const profile = viewer && viewer.state !== 'UNAVAILABLE' ? viewer.value : null;
   const displayName = profile?.displayName ?? fallback.displayName;
   const userId = profile?.userId ?? fallback.id;
-  const balance = profile
-    ? new Intl.NumberFormat('ru-RU').format(profile.balanceMinor / 100)
-    : null;
+  const balance = profile ? formatBalance(profile.balanceMinor, profile.currency) : null;
+  const levelLabel = profile
+    ? profile.level
+      ? profile.level.assessmentRequired
+        ? '?'
+        : profile.level.label
+      : UNKNOWN_VALUE_PLACEHOLDER
+    : 'не загружен';
 
   return (
     <header className="fh-profile-row">
@@ -1124,11 +1130,9 @@ function HomeViewerHeader({
         <PlayerLevelAvatar
           alt={displayName}
           fallbackSeed={userId}
-          level={
-            profile ? (profile.level.assessmentRequired ? '?' : profile.level.label) : 'не загружен'
-          }
+          level={levelLabel}
           progress={profile ? levelAvatarProgress(profile.level) : 0}
-          showLevelRing={Boolean(profile)}
+          showLevelRing={Boolean(profile?.level)}
           src={profile?.avatarUrl ?? null}
         />
         <span className="fh-profile-copy">
@@ -1136,7 +1140,7 @@ function HomeViewerHeader({
           {profile ? (
             <small>
               <WalletIcon />
-              {balance} ₽
+              {balance === null ? UNKNOWN_VALUE_PLACEHOLDER : `${balance} ₽`}
             </small>
           ) : (
             <small role={viewer?.state === 'UNAVAILABLE' ? 'alert' : 'status'}>

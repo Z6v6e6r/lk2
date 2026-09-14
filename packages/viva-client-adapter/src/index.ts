@@ -222,17 +222,22 @@ const normalizedProfileSchema = z.object({
     .string()
     .regex(/^\d{4}$/)
     .optional(),
-  balanceMinor: z.number().int(),
-  currency: z.literal('RUB'),
-  level: z.object({
-    label: z.string().min(1).max(20),
-    value: z.number().min(0).max(10),
-    assessmentRequired: z.boolean(),
-  }),
+  // Provider-owned fields stay optional so a section-scoped local PadlHub read
+  // can omit them; the UI must render a placeholder instead of assuming zero.
+  balanceMinor: z.number().int().optional(),
+  currency: z.literal('RUB').optional(),
+  level: z
+    .object({
+      label: z.string().min(1).max(20),
+      value: z.number().min(0).max(10),
+      assessmentRequired: z.boolean(),
+    })
+    .optional(),
 });
 
 const normalizedUpcomingBookingsSchema = z
   .object({
+    state: z.enum(['READY', 'UNAVAILABLE']),
     version: z.string().min(1).max(100),
     generatedAt: z.string().datetime({ offset: true }),
     staleAt: z.string().datetime({ offset: true }),

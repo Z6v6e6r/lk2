@@ -21809,13 +21809,22 @@ var homeProfileSchema = external_exports.object({
   lastName: external_exports.string().max(100).nullable().optional(),
   avatarUrl: nullableAvatarUrl.optional(),
   phoneLast4: external_exports.string().regex(/^\d{4}$/).optional(),
-  balanceMinor: external_exports.number().int(),
-  currency: external_exports.string().regex(/^[A-Z]{3}$/),
+  /**
+   * Provider-owned money fields. Optional so a section-scoped local read can
+   * omit them instead of claiming a fabricated `0` / `RUB`; when present the
+   * original type and range still apply.
+   */
+  balanceMinor: external_exports.number().int().optional(),
+  currency: external_exports.string().regex(/^[A-Z]{3}$/).optional(),
+  /**
+   * Optional for the same reason: with no local assessment the field is
+   * omitted rather than promoted to a synthetic `D`/`0` level.
+   */
   level: external_exports.object({
     label: external_exports.string().min(1).max(20),
     value: external_exports.number().min(0).max(10),
     assessmentRequired: external_exports.boolean()
-  }).strict()
+  }).strict().optional()
 }).strict();
 var homeCountersSchema = external_exports.object({
   unreadChats: external_exports.number().int().nonnegative(),

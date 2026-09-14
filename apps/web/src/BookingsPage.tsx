@@ -139,7 +139,12 @@ export function BookingsPage({
 
           {scope === 'UPCOMING' ? (
             <section className="bookings-list" aria-label="Предстоящие записи">
-              {bookings.items.length === 0 ? (
+              {bookings.state === 'UNAVAILABLE' ? (
+                <div className="bookings-empty bookings-unavailable" role="alert">
+                  <strong>Не удалось загрузить предстоящие записи</strong>
+                  <p>Раздел временно недоступен — это не значит, что записей нет.</p>
+                </div>
+              ) : bookings.items.length === 0 ? (
                 <div className="bookings-empty">
                   <strong>Пока нет предстоящих записей</strong>
                   <p>Новая игра или тренировка появится здесь после записи.</p>

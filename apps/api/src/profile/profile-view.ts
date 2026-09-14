@@ -29,7 +29,8 @@ export interface PlayerProfileView {
     readonly firstName?: string | null;
     readonly lastName?: string | null;
     readonly avatarUrl?: string | null;
-    readonly level: {
+    /** Omitted when no stored assessment exists; the client renders a placeholder. */
+    readonly level?: {
       readonly label: string;
       readonly assessmentRequired: boolean;
       readonly value?: number;
@@ -37,8 +38,9 @@ export interface PlayerProfileView {
   };
   readonly privateAccount?: {
     readonly phoneLast4?: string;
-    readonly balanceMinor: number;
-    readonly currency: string;
+    /** Omitted when the local read cannot observe the provider balance. */
+    readonly balanceMinor?: number;
+    readonly currency?: string;
   };
   readonly access: {
     readonly audience: 'SELF' | 'OTHER';
@@ -112,11 +114,15 @@ export function buildPlayerProfileView(input: PlayerProfileViewInput): PlayerPro
     ...(input.profile.firstName !== undefined ? { firstName: input.profile.firstName } : {}),
     ...(input.profile.lastName !== undefined ? { lastName: input.profile.lastName } : {}),
     ...(input.profile.avatarUrl !== undefined ? { avatarUrl: input.profile.avatarUrl } : {}),
-    level: {
-      label: input.profile.level.label,
-      assessmentRequired: input.profile.level.assessmentRequired,
-      ...(canReadExtended ? { value: input.profile.level.value } : {}),
-    },
+    ...(input.profile.level !== undefined
+      ? {
+          level: {
+            label: input.profile.level.label,
+            assessmentRequired: input.profile.level.assessmentRequired,
+            ...(canReadExtended ? { value: input.profile.level.value } : {}),
+          },
+        }
+      : {}),
   };
 
   return {
@@ -125,8 +131,10 @@ export function buildPlayerProfileView(input: PlayerProfileViewInput): PlayerPro
       ? {
           privateAccount: {
             ...(input.profile.phoneLast4 ? { phoneLast4: input.profile.phoneLast4 } : {}),
-            balanceMinor: input.profile.balanceMinor,
-            currency: input.profile.currency,
+            ...(input.profile.balanceMinor === undefined
+              ? {}
+              : { balanceMinor: input.profile.balanceMinor }),
+            ...(input.profile.currency === undefined ? {} : { currency: input.profile.currency }),
           },
         }
       : {}),

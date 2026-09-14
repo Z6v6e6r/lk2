@@ -214,6 +214,7 @@ describe('GamesPage discovery', () => {
     const eventId = '8a830ad0-a8c7-479b-a239-5b434c42148f';
     const api = gateway();
     vi.mocked(api.getUpcomingBookings).mockResolvedValue({
+      state: 'READY',
       version: 'b'.repeat(64),
       generatedAt: '2026-08-01T10:00:00.000Z',
       staleAt: '2026-08-01T10:01:00.000Z',

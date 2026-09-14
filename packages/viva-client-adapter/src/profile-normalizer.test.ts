@@ -175,8 +175,21 @@ describe('profile normalization', () => {
     ).toMatchObject({ userId: padlHubUserId, avatarUrl });
   });
 
+  it('accepts a section-scoped profile that omits provider-owned fields', () => {
+    const normalized = normalizePadlHubUserProfile({
+      userId: padlHubUserId,
+      displayName: 'Сергеев Алексей',
+    });
+
+    expect(normalized).toMatchObject({ userId: padlHubUserId, displayName: 'Сергеев Алексей' });
+    expect(normalized.balanceMinor).toBeUndefined();
+    expect(normalized.currency).toBeUndefined();
+    expect(normalized.level).toBeUndefined();
+  });
+
   it('accepts bookings only when every item has a PadlHub UUID', () => {
     const payload = {
+      state: 'READY' as const,
       version: 'home-17',
       generatedAt: '2026-07-15T18:00:00.000Z',
       staleAt: '2026-07-15T18:05:00.000Z',

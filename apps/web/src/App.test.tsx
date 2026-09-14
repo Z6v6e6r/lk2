@@ -187,12 +187,16 @@ const userProfile: PlayerProfileView = {
     displayName: homeDashboard.profile.displayName,
     firstName: 'Анна',
     avatarUrl: null,
-    level: homeDashboard.profile.level,
+    ...(homeDashboard.profile.level ? { level: homeDashboard.profile.level } : {}),
   },
   privateAccount: {
     phoneLast4: '0001',
-    balanceMinor: homeDashboard.profile.balanceMinor,
-    currency: homeDashboard.profile.currency,
+    ...(homeDashboard.profile.balanceMinor === undefined
+      ? {}
+      : { balanceMinor: homeDashboard.profile.balanceMinor }),
+    ...(homeDashboard.profile.currency === undefined
+      ? {}
+      : { currency: homeDashboard.profile.currency }),
   },
   access: {
     audience: 'SELF',
@@ -209,6 +213,7 @@ const profilePrivacy = {
   updatedAt: '2026-07-17T12:00:00.000Z',
 };
 const upcomingBookings: UserUpcomingBookings = {
+  state: 'READY',
   version: homeDashboard.snapshot.version,
   generatedAt: homeDashboard.snapshot.generatedAt,
   staleAt: homeDashboard.snapshot.staleAt,
@@ -888,6 +893,42 @@ describe('PadlHub web authentication', () => {
     );
     await vi.waitFor(() => expect(getUpcomingBookings).toHaveBeenCalledTimes(2));
     expect(gateway.getHomeBase).toHaveBeenCalledOnce();
+  });
+
+  it('treats an explicit UNAVAILABLE bookings answer as a load failure, not an empty list', async () => {
+    const getUpcomingBookings = vi
+      .fn<AuthGateway['getUpcomingBookings']>()
+      .mockResolvedValue({ ...upcomingBookings, state: 'UNAVAILABLE', items: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getUpcomingBookings,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await screen.findByRole('heading', { name: session.context.user.displayName });
+    await user.click(screen.getByRole('tab', { name: 'Мои записи' }));
+    await vi.waitFor(() =>
+      expect(screen.getByText('Мои записи временно недоступны')).toBeVisible(),
+    );
+    expect(screen.queryByText('Ближайших записей нет')).not.toBeInTheDocument();
+  });
+
+  it('shows the distinct unavailable treatment on the bookings route', async () => {
+    window.history.replaceState({}, '', '/bookings');
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getUpcomingBookings: vi
+        .fn()
+        .mockResolvedValue({ ...upcomingBookings, state: 'UNAVAILABLE', items: [] }),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Записи' })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent('Не удалось загрузить предстоящие записи');
+    expect(screen.queryByText('Пока нет предстоящих записей')).not.toBeInTheDocument();
   });
 
   it('opens unified activity history over Home without navigating to the fallback route', async () => {

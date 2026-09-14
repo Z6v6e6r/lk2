@@ -620,16 +620,20 @@ function buildSelfPlayerProfileView(profile: UserProfile): PlayerProfileView {
       displayName: profile.displayName,
       ...(profile.firstName !== undefined ? { firstName: profile.firstName } : {}),
       ...(profile.avatarUrl !== undefined ? { avatarUrl: profile.avatarUrl } : {}),
-      level: {
-        label: profile.level.label,
-        value: profile.level.value,
-        assessmentRequired: profile.level.assessmentRequired,
-      },
+      ...(profile.level === undefined
+        ? {}
+        : {
+            level: {
+              label: profile.level.label,
+              value: profile.level.value,
+              assessmentRequired: profile.level.assessmentRequired,
+            },
+          }),
     },
     privateAccount: {
       ...(profile.phoneLast4 ? { phoneLast4: profile.phoneLast4 } : {}),
-      balanceMinor: profile.balanceMinor,
-      currency: profile.currency,
+      ...(profile.balanceMinor === undefined ? {} : { balanceMinor: profile.balanceMinor }),
+      ...(profile.currency === undefined ? {} : { currency: profile.currency }),
     },
     access: {
       audience: 'SELF',

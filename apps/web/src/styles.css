@@ -5993,6 +5993,19 @@
   font-weight: 700;
 }
 
+/* "Could not load" must not read as the positive "no bookings" empty state. */
+.bookings-unavailable {
+  width: min(100% - 32px, 680px);
+  margin: 12px auto 0;
+  border-radius: 12px;
+  background: #fff0f0;
+}
+
+.bookings-unavailable strong,
+.bookings-unavailable p {
+  color: #9b3030;
+}
+
 * {
   box-sizing: border-box;
 }
