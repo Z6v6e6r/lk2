@@ -39,9 +39,32 @@ the browser as described below, so the allowlisted profile read can run directly
 A separately reviewed Yandex-only beta contour may enable subject provisioning when the canonical
 End User profile read is unavailable. This mode requires the provider allowlist to be exactly
 `yandex` and verifies the Keycloak signature, issuer, authorized party, tenant key, expiry, subject
-and signed broker provenance. The `identity_provider` (or `identityProvider`) claim must equal
-`yandex`; a missing claim or another provider fails closed before atomically creating or resolving a
-PadlHub UUID by `(tenant_id, issuer, subject)`.
+and signed broker provenance, before atomically creating or resolving a PadlHub UUID by
+`(tenant_id, issuer, subject)`.
+Keycloak emits broker provenance as `identity_provider` (or `identityProvider`) in the signed ID
+token for a brokered login, while the access token carries it only when a dedicated protocol mapper
+is configured. Both tokens are verified with the same realm issuer, key set and `RS256` algorithm
+and their `sub` values must agree, so either verified token is an accepted source. When a verified
+token presents the claim it must equal `yandex`, and two verified tokens that present different
+values fail closed.
+
+The claim is verified when present but is not required. The vendor realm does not emit it for the
+public Yandex beta client in either token, and PadlHub has no protocol-mapper access to add it, so
+requiring it made brokered login permanently unusable rather than measurably safer. The tenant, the
+authorized party and the subject stay cryptographically bound: `tenant_key` and `azp` are checked in
+the signed token, and the authorization code is bound to this adapter's own request by the PKCE
+`code_verifier` and the one-time state, both generated and stored server-side. The upstream broker
+is not equivalent: it is requested with `kc_idp_hint`, which is only a hint and is replaceable by
+anyone who re-issues the authorization request with an obtainable state, so the broker is asserted
+only when a signed token presents the claim. An absent claim is therefore recorded as
+`provenance=absent`, or as `present_non_string` when a token carries the key with a value that is not
+a non-empty string, instead of failing the callback. The residual exposure is that a login brokered
+by a different identity provider in the same realm is accepted, and it is bounded only while that
+realm offers one usable broker or direct-grant path for this client and does not auto-link brokers
+onto the same local user; it cannot reach another PadlHub account, because the identity row is keyed
+by `(tenant_id, provider, issuer, subject)`. A present claim that contradicts the request, a wrong
+authorized party, a wrong tenant key, a missing expiry or a missing subject still fail closed before
+any identity write, and the `access_token_claims` stage names the rejected claim in `claimFailure`.
 Phone and email claims are ignored for identity linking. A signed name claim may initialize display
 text only and is never an identity key. This mode is mutually exclusive with existing-subject
 bootstrap, remains disabled by default and does not relax authenticated reauthorization: recovery
