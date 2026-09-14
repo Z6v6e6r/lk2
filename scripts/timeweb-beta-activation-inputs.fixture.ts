@@ -105,6 +105,12 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     PARTICIPATION_COMMAND_TENANT_KEY: tenantKey,
     PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'timeweb-beta.operator:1',
     PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS: '300',
+    // Communities are LOCAL_ONLY in this tenant and the legacy inventory verifier only validates
+    // externally produced artifacts, so the contour reads its own data instead of the mock mode.
+    COMMUNITIES_READ_MODE: 'local',
+    COMMUNITIES_REALTIME_ENABLED: 'true',
+    COMMUNITY_HOME_SYNC_ENABLED: 'false',
+    PLATFORM_HOME_SYNC_ENABLED: 'false',
   };
   const worker = {
     ...baseEnvironment('worker'),
