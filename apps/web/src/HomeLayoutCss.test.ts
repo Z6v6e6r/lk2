@@ -162,7 +162,7 @@ describe('Home layout scroll contract', () => {
     expect(bookingPresenceDotRule).toMatch(/width:\s*4px\s*;/);
     expect(bookingPresenceDotRule).toMatch(/height:\s*4px\s*;/);
     expect(bookingPresenceDotRule).toMatch(/background:\s*#f0705f\s*;/);
-    expect(tabBookingPresenceDotRule).toMatch(/right:\s*-8px\s*;/);
+    expect(tabBookingPresenceDotRule).toMatch(/right:\s*-10px\s*;/);
     expect(calendarBookingPresenceDotRule).toMatch(/left:\s*21px\s*;/);
     expect(tabIndicatorRule).toMatch(/background:\s*transparent\s*;/);
     expect(mainBoxRule).toMatch(
@@ -190,15 +190,15 @@ describe('Home layout scroll contract', () => {
     expect(ruleBody('.fh-hero--v3 .fh-actions')).toMatch(/margin-top:\s*11px\s*;/);
   });
 
-  it('keeps the preferences edit icon white and half-sized beside the tab label', () => {
+  it('keeps the preferences gear white and 18px beside the tab label', () => {
     const editRule = ruleBody('.figma-home .fh-preferences-edit');
     const iconRule = ruleBody('.figma-home .fh-preferences-edit svg');
 
-    expect(editRule).toMatch(/width:\s*12px\s*;/);
-    expect(editRule).toMatch(/height:\s*12px\s*;/);
+    expect(editRule).toMatch(/width:\s*24px\s*;/);
+    expect(editRule).toMatch(/height:\s*24px\s*;/);
     expect(editRule).toMatch(/color:\s*#fff\s*;/);
-    expect(iconRule).toMatch(/width:\s*8px\s*;/);
-    expect(iconRule).toMatch(/height:\s*8px\s*;/);
+    expect(iconRule).toMatch(/width:\s*18px\s*;/);
+    expect(iconRule).toMatch(/height:\s*18px\s*;/);
   });
 
   it('does not retain the removed recommendation explanation styles', () => {
@@ -283,7 +283,7 @@ describe('Home layout scroll contract', () => {
 
   it('uses compact photo-grid proportions without recommendation-card decoration', () => {
     const gridRule = ruleBody(
-      '.figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid',
+      '.figma-home-shell .figma-home .fh-for-me .booking-recommendations.is-photo-grid',
     );
     const heroRule = ruleBody('.recommendation-grid-card__hero');
     const cardRule = ruleBody('.recommendation-grid-card');
@@ -291,13 +291,13 @@ describe('Home layout scroll contract', () => {
     const titleRule = ruleBody('.recommendation-grid-card__title');
     const socialRule = ruleBody('.recommendation-grid-card__social');
     const socialAvatarRule = ruleBody(
-      '.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack',
+      '.figma-home-shell .figma-home .recommendation-grid-card__social .participant-avatar-stack',
     );
     const socialAvatarItemRule = ruleBody(
-      '.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack__item',
+      '.figma-home-shell .figma-home .recommendation-grid-card__social .participant-avatar-stack__item',
     );
     const socialAvatarVisualMatch = styles.match(
-      /\.figma-home-shell\.is-home-v3\s+\.recommendation-grid-card__social\s+\.participant-avatar-stack__item\s+>\s+\[data-player-level-avatar\]\s*\{([^}]*)\}/,
+      /\.figma-home-shell\s+\.figma-home\s+\.recommendation-grid-card__social\s+\.participant-avatar-stack__item\s+>\s+\[data-player-level-avatar\]\s*\{([^}]*)\}/,
     );
     expect(socialAvatarVisualMatch).not.toBeNull();
     const socialAvatarVisualRule = socialAvatarVisualMatch?.[1] ?? '';
@@ -337,7 +337,7 @@ describe('Home layout scroll contract', () => {
     expect(actionRule).toMatch(/background:\s*transparent\s*;/);
     expect(actionRule).not.toMatch(/gradient/i);
     expect(actionIconRule).toMatch(/width:\s*57px\s*;/);
-    expect(actionIconRule).toMatch(/transform:\s*translate\(-5px,\s*-3px\)\s*;/);
+    expect(actionIconRule).toMatch(/transform:\s*translate\(5px,\s*4px\)\s*;/);
     expect(styles).toMatch(
       /@media \(min-width: 413px\)[\s\S]*?--sheet-padding-x:\s*16px[\s\S]*?\.booking-recommendations\.is-photo-grid\s*\{[\s\S]*?grid-auto-rows:\s*minmax\(242px,\s*auto\)[\s\S]*?gap:\s*12px[\s\S]*?\.recommendation-grid-card__hero\s*\{[\s\S]*?height:\s*76px/,
     );

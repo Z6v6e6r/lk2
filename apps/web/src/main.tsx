@@ -12,6 +12,7 @@ if (!mount) throw new Error('PadlHub mount element #phub-app was not found');
 const bootstrap = window.__PHUB_BOOTSTRAP__;
 const tenantKey = bootstrap?.tenantKey ?? 'local-padel';
 const apiBaseUrl = (bootstrap?.apiBaseUrl ?? window.location.origin).replace(/\/$/, '');
+const realAccountPreview = import.meta.env.DEV && import.meta.env.VITE_LK2_REAL_ACCOUNT === '1';
 let realtimeUrl: string | undefined;
 try {
   // Realtime shares the already trusted PadlHub API origin. Invalid deployment configuration
@@ -28,6 +29,11 @@ const gateway = createBrowserAuthGateway({
 
 createRoot(mount).render(
   <StrictMode>
+    {realAccountPreview ? (
+      <p className="real-account-read-only-notice" role="status">
+        Реальный аккаунт Viva · только чтение. Бронирования, оплаты и изменения недоступны.
+      </p>
+    ) : null}
     <Suspense
       fallback={
         <main className="app-shell app-shell-loading" aria-labelledby="chunk-loading-title">

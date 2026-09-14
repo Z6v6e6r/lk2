@@ -4,6 +4,7 @@ import { queryOne, withTenantTransaction } from './connection.js';
 
 export interface UpcomingBookingProjectionItem {
   readonly id: string;
+  readonly gameId?: string;
   readonly kind: 'game' | 'training' | 'tournament';
   readonly title: string;
   readonly startsAt: string;

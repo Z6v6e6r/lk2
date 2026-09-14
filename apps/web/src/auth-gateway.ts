@@ -1510,13 +1510,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     }
   }
 
-  // React StrictMode may subscribe twice during development. Coalescing keeps a
-  // rotating refresh cookie from being exchanged twice at startup.
+  // React StrictMode may subscribe twice during development. Coalesce only pending
+  // exchanges: a settled startup result must not pin an error or an obsolete session.
   let restorePromise: Promise<AuthenticatedSession | null> | undefined;
 
   return {
     restoreSession() {
-      restorePromise ??= restore();
+      if (!restorePromise) {
+        const pending = restore().finally(() => {
+          if (restorePromise === pending) restorePromise = undefined;
+        });
+        restorePromise = pending;
+      }
       return restorePromise;
     },
 

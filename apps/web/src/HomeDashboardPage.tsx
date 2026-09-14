@@ -163,15 +163,31 @@ function HomeActionIcon({ name }: { readonly name: HomeActionIconName }): React.
 
 function HomePreferencesEditIcon(): React.JSX.Element {
   return (
-    <svg width="8" height="8" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M10.89 2.11a1.52 1.52 0 0 1 2.15 0l.85.85a1.52 1.52 0 0 1 0 2.15l-7.8 7.8-3.43.43.43-3.43 7.8-7.8Z"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="m9.75 3.25 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <g opacity="0.92">
+        <path
+          d="M12 9A3 3 0 1 0 12 15A3 3 0 1 0 12 9Z"
+          stroke="white"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M12 4.7C12.5 4.7 12.9 5.1 12.9 5.6V6.3C13.5 6.5 14 6.7 14.5 7L15 6.5C15.4 6.1 16 6.1 16.4 6.5L17.5 7.6C17.9 8 17.9 8.6 17.5 9L17 9.5C17.3 10 17.5 10.5 17.7 11.1H18.4C18.9 11.1 19.3 11.5 19.3 12C19.3 12.5 18.9 12.9 18.4 12.9H17.7C17.5 13.5 17.3 14 17 14.5L17.5 15C17.9 15.4 17.9 16 17.5 16.4L16.4 17.5C16 17.9 15.4 17.9 15 17.5L14.5 17C14 17.3 13.5 17.5 12.9 17.7V18.4C12.9 18.9 12.5 19.3 12 19.3C11.5 19.3 11.1 18.9 11.1 18.4V17.7C10.5 17.5 10 17.3 9.5 17L9 17.5C8.6 17.9 8 17.9 7.6 17.5L6.5 16.4C6.1 16 6.1 15.4 6.5 15L7 14.5C6.7 14 6.5 13.5 6.3 12.9H5.6C5.1 12.9 4.7 12.5 4.7 12C4.7 11.5 5.1 11.1 5.6 11.1H6.3C6.5 10.5 6.7 10 7 9.5L6.5 9C6.1 8.6 6.1 8 6.5 7.6L7.6 6.5C8 6.1 8.6 6.1 9 6.5L9.5 7C10 6.7 10.5 6.5 11.1 6.3V5.6C11.1 5.1 11.5 4.7 12 4.7Z"
+          stroke="white"
+          strokeWidth="1.35"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from="0 12 12"
+          to="360 12 12"
+          dur="14s"
+          repeatCount="indefinite"
+        />
+      </g>
     </svg>
   );
 }
@@ -705,7 +721,9 @@ function HomeCommunityCarousel({
               : ''
           }`}
         >
-          <CommunityLogo community={community} />
+          <a href={community.route} aria-label={`Открыть сообщество «${community.title}»`}>
+            <CommunityLogo community={community} />
+          </a>
         </div>
       ))}
     </div>
@@ -954,11 +972,10 @@ function localDateKey(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function bookingCalendarDays(now: Date, dayOffset: number): readonly Date[] {
+function bookingCalendarDays(now: Date): readonly Date[] {
   const firstDay = new Date(now);
   firstDay.setHours(0, 0, 0, 0);
-  firstDay.setDate(firstDay.getDate() + dayOffset);
-  return Array.from({ length: 7 }, (_, index) => {
+  return Array.from({ length: 15 }, (_, index) => {
     const day = new Date(firstDay);
     day.setDate(firstDay.getDate() + index);
     return day;
@@ -982,21 +999,39 @@ function EventParticipants({
 }: {
   readonly item: HomeUpcomingItem;
 }): React.JSX.Element | null {
+  if (
+    item.roster?.state === 'UNAVAILABLE' ||
+    (!item.participants && item.openSlots === undefined)
+  ) {
+    return (
+      <span className="fh-event__roster-placeholder">
+        <span className="sr-only">Состав временно недоступен</span>
+        <span aria-hidden="true">
+          <ParticipantAvatarStack participants={[]} capacity={4} />
+        </span>
+      </span>
+    );
+  }
   return (
-    <ParticipantAvatarStack
-      ariaLabel="Участники записи"
-      capacity={4}
-      participants={(item.participants ?? []).map((participant, index) => {
-        const label = participantLabel(participant);
-        return {
-          key: participant.profileId ?? `${label}-${index}`,
-          displayName: label,
-          avatarUrl: participant.avatarUrl ?? null,
-          level: participant.level ?? null,
-          levelValue: participant.levelValue ?? null,
-        };
-      })}
-    />
+    <span>
+      {item.roster?.state === 'STALE' ? (
+        <span className="fh-event__roster-status">Состав требует обновления</span>
+      ) : null}
+      <ParticipantAvatarStack
+        ariaLabel="Участники записи"
+        capacity={Math.min(4, (item.participants?.length ?? 0) + (item.openSlots ?? 0))}
+        participants={(item.participants ?? []).map((participant, index) => {
+          const label = participantLabel(participant);
+          return {
+            key: participant.profileId ?? `${label}-${index}`,
+            displayName: label,
+            avatarUrl: participant.avatarUrl ?? null,
+            level: participant.level ?? null,
+            levelValue: participant.levelValue ?? null,
+          };
+        })}
+      />
+    </span>
   );
 }
 
@@ -1172,8 +1207,6 @@ export function HomeDashboardPage({
   const [selectedBookingKind, setSelectedBookingKind] = useState<'all' | HomeUpcomingItem['kind']>(
     'all',
   );
-  const [calendarDayOffset, setCalendarDayOffset] = useState(0);
-  const calendarSwipeStartX = useRef<number | null>(null);
   const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('FOR_ME');
   const [bookingRecommendations, setBookingRecommendations] =
     useState<BookingRecommendationPage | null>(null);
@@ -1186,9 +1219,11 @@ export function HomeDashboardPage({
   const initialBookingRecommendationLimit = useRef(layoutVariant === 'v3' ? 14 : 6);
   const bookingRecommendationsRequestStarted = useRef(true);
   const bookingRecommendationsLoadMoreStarted = useRef(false);
+  const bookingRecommendationsLoadMoreFailed = useRef(false);
+  const [bookingRecommendationsMoreError, setBookingRecommendationsMoreError] = useState(false);
   const bookingRecommendationsExpansionStarted = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const calendarDays = bookingCalendarDays(new Date(), calendarDayOffset);
+  const calendarDays = bookingCalendarDays(new Date());
   const upcomingItems =
     upcoming && upcoming.state !== 'UNAVAILABLE' ? upcoming.value.items : ([] as const);
   const datesWithBookings = new Set(
@@ -1202,7 +1237,8 @@ export function HomeDashboardPage({
   const showBookingsScrollPeek = bookingTab === 'MY' && visibleUpcoming.length > 2;
   const showRecommendationsScrollPeek = bookingTab === 'FOR_ME';
   const usesCompactHero = layoutVariant !== 'default';
-  const usesV3RecommendationCards = layoutVariant === 'v3' && recommendationDisplay === 'CARDS';
+  const usesRecommendationCards = recommendationDisplay === 'CARDS';
+  const usesV3RecommendationCards = layoutVariant === 'v3' && usesRecommendationCards;
   const shellClassName = [
     'figma-home-shell',
     layoutVariant === 'v3' ? (usesV3RecommendationCards ? 'is-home-v3' : 'is-home-v3-rows') : null,
@@ -1260,27 +1296,37 @@ export function HomeDashboardPage({
     );
   }, [bookingRecommendations, layoutVariant, loadBookingRecommendations]);
 
-  const loadMoreBookingRecommendations = useCallback((): void => {
-    const cursor = bookingRecommendations?.nextCursor;
-    if (!cursor || bookingRecommendationsLoadMoreStarted.current) return;
-    bookingRecommendationsLoadMoreStarted.current = true;
-    setBookingRecommendationsLoadingMore(true);
-    setBookingRecommendationsError(null);
-    void loadBookingRecommendations({ limit: 12, cursor }).then(
-      (page) => {
-        setBookingRecommendations((current) =>
-          current ? appendRecommendationPage(current, page) : page,
-        );
-        bookingRecommendationsLoadMoreStarted.current = false;
-        setBookingRecommendationsLoadingMore(false);
-      },
-      () => {
-        bookingRecommendationsLoadMoreStarted.current = false;
-        setBookingRecommendationsLoadingMore(false);
-        setBookingRecommendationsError('Не удалось загрузить следующие рекомендации.');
-      },
-    );
-  }, [bookingRecommendations?.nextCursor, loadBookingRecommendations]);
+  const loadMoreBookingRecommendations = useCallback(
+    (retry = false): void => {
+      const cursor = bookingRecommendations?.nextCursor;
+      if (
+        !cursor ||
+        bookingRecommendationsLoadMoreStarted.current ||
+        (bookingRecommendationsLoadMoreFailed.current && !retry)
+      )
+        return;
+      bookingRecommendationsLoadMoreStarted.current = true;
+      bookingRecommendationsLoadMoreFailed.current = false;
+      setBookingRecommendationsLoadingMore(true);
+      setBookingRecommendationsMoreError(false);
+      void loadBookingRecommendations({ limit: 12, cursor }).then(
+        (page) => {
+          setBookingRecommendations((current) =>
+            current ? appendRecommendationPage(current, page) : page,
+          );
+          bookingRecommendationsLoadMoreStarted.current = false;
+          setBookingRecommendationsLoadingMore(false);
+        },
+        () => {
+          bookingRecommendationsLoadMoreStarted.current = false;
+          setBookingRecommendationsLoadingMore(false);
+          bookingRecommendationsLoadMoreFailed.current = true;
+          setBookingRecommendationsMoreError(true);
+        },
+      );
+    },
+    [bookingRecommendations?.nextCursor, loadBookingRecommendations],
+  );
 
   useEffect(() => {
     let active = true;
@@ -1441,25 +1487,7 @@ export function HomeDashboardPage({
                     </p>
                   ) : null}
                   <div className="fh-filters" aria-label="Фильтр записей по дате">
-                    <div
-                      className="fh-calendar"
-                      onPointerDown={(event) => {
-                        calendarSwipeStartX.current = event.clientX;
-                      }}
-                      onPointerUp={(event) => {
-                        const startX = calendarSwipeStartX.current;
-                        calendarSwipeStartX.current = null;
-                        if (startX === null || Math.abs(event.clientX - startX) < 40) return;
-                        setCalendarDayOffset((currentOffset) =>
-                          event.clientX < startX
-                            ? Math.min(14, currentOffset + 1)
-                            : Math.max(0, currentOffset - 1),
-                        );
-                      }}
-                      onPointerCancel={() => {
-                        calendarSwipeStartX.current = null;
-                      }}
-                    >
+                    <div className="fh-calendar">
                       <button
                         className={
                           selectedDateKey === null
@@ -1574,35 +1602,24 @@ export function HomeDashboardPage({
                   <BookingRecommendations
                     page={bookingRecommendations}
                     compact
-                    compactActionVariant={usesV3RecommendationCards ? 'mini-create' : 'default'}
-                    compactMetadataVariant={usesV3RecommendationCards ? 'station-time' : 'default'}
-                    compactRosterVariant={usesV3RecommendationCards ? 'host-slots' : 'default'}
-                    compactVisualVariant={usesV3RecommendationCards ? 'photo-grid' : 'default'}
-                    showCompactReasonBadges={!usesV3RecommendationCards}
+                    compactActionVariant={usesRecommendationCards ? 'mini-create' : 'default'}
+                    compactMetadataVariant={usesRecommendationCards ? 'station-time' : 'default'}
+                    compactRosterVariant={usesRecommendationCards ? 'host-slots' : 'default'}
+                    compactVisualVariant={usesRecommendationCards ? 'photo-grid' : 'default'}
+                    showCompactReasonBadges={!usesRecommendationCards}
                     hasMore={Boolean(bookingRecommendations.nextCursor)}
                     loadingMore={bookingRecommendationsLoadingMore}
                     onLoadMore={loadMoreBookingRecommendations}
+                    loadMoreError={bookingRecommendationsMoreError}
+                    onRetryLoadMore={() => loadMoreBookingRecommendations(true)}
                     recommendationStripAdvertising={promotionSlots?.recommendationStrip ?? null}
                     recommendationCardAdvertising={promotionSlots?.recommendationCard ?? null}
-                    advertisingLayout={usesV3RecommendationCards ? 'compact' : 'vertical'}
+                    advertisingLayout={usesRecommendationCards ? 'compact' : 'vertical'}
                     {...(recordPromotionEngagement
                       ? { onAdvertisingEngagement: recordPromotionEngagement }
                       : {})}
                   />
                 ) : null}
-                <div className="fh-bookings-footer">
-                  <div className="fh-divider" />
-                  <div
-                    className={`fh-bookings-footer-action${
-                      usesV3RecommendationCards ? '' : ' is-split'
-                    }`}
-                  >
-                    {usesV3RecommendationCards ? null : (
-                      <a href="/bookings?view=for-me">Все рекомендации</a>
-                    )}
-                    <a href="/profile#booking-preferences-title">Настроить</a>
-                  </div>
-                </div>
               </div>
             )}
           </section>
@@ -1618,7 +1635,7 @@ export function HomeDashboardPage({
             </section>
           ) : null}
 
-          {layoutVariant === 'v3' ? null : (
+          {layoutVariant === 'v3' || bookingTab === 'FOR_ME' ? null : (
             <>
               <HomeStandardPromotionSection promotions={dashboard.promotions} />
 

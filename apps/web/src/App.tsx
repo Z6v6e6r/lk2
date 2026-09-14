@@ -545,7 +545,9 @@ export function App({
   const browserNavigator = typeof navigator === 'undefined' ? undefined : navigator;
   const iosBrowser = isIOSBrowser(browserNavigator);
   const localPreview = import.meta.env.DEV && import.meta.env.VITE_LK2_LOCAL_PREVIEW === '1';
-  const entryView = localPreview ? 'phone' : preferredAuthEntryView(browserNavigator);
+  const realAccountPreview = import.meta.env.DEV && import.meta.env.VITE_LK2_REAL_ACCOUNT === '1';
+  const entryView =
+    localPreview || realAccountPreview ? 'phone' : preferredAuthEntryView(browserNavigator);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [homeBase, setHomeBase] = useState<HomeBase | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
@@ -1730,6 +1732,7 @@ export function App({
   }
 
   function handleSaveProfilePrivacy(input: ProfilePrivacyUpdateRequest): void {
+    if (realAccountPreview) return;
     setProfilePrivacyBusy(true);
     setProfilePrivacyError(null);
     setProfilePrivacyNotice(null);
@@ -1747,6 +1750,7 @@ export function App({
   }
 
   function handleSaveBookingPreferences(input: BookingPreferencesUpdateRequest): void {
+    if (realAccountPreview) return;
     setBookingPreferencesBusy(true);
     setBookingPreferencesError(null);
     setBookingPreferencesNotice(null);
@@ -1858,8 +1862,10 @@ export function App({
           friendsBusy={profileFriendsBusy}
           friendsError={profileFriendsError}
           error={state.error}
-          onSavePrivacy={handleSaveProfilePrivacy}
-          onSaveBookingPreferences={handleSaveBookingPreferences}
+          {...(!realAccountPreview ? { onSavePrivacy: handleSaveProfilePrivacy } : {})}
+          {...(!realAccountPreview
+            ? { onSaveBookingPreferences: handleSaveBookingPreferences }
+            : {})}
           onAddFriend={handleAddProfileFriend}
           onLogout={handleLogout}
         />
@@ -2102,6 +2108,19 @@ export function App({
       );
     }
     if (protectedRoute.kind === 'game-create') {
+      if (realAccountPreview) {
+        return (
+          <main className="app-shell" aria-labelledby="create-game-read-only-title">
+            <section className="fh-section-state">
+              <h1 id="create-game-read-only-title">Создание игр недоступно</h1>
+              <p>В режиме реального аккаунта доступно только чтение.</p>
+              <a className="secondary-button" href="/games">
+                К играм
+              </a>
+            </section>
+          </main>
+        );
+      }
       const createGamePrincipal = {
         tenantId: state.session.context.tenant.id,
         userId: state.session.context.user.id,
@@ -2340,7 +2359,7 @@ export function App({
                   : 'Мы отправим короткий код для подтверждения.'}
               </p>
 
-              {iosBrowser && !localPreview ? (
+              {iosBrowser && !localPreview && !realAccountPreview ? (
                 <div className="ios-auth-guidance ios-auth-guidance--phone" role="note">
                   <strong>Для iPhone выбран надёжный способ входа</strong>
                   <span>
@@ -2428,10 +2447,10 @@ export function App({
                 </PrimaryButton>
               </form>
 
-              {import.meta.env.DEV ? (
+              {import.meta.env.DEV && !realAccountPreview ? (
                 <p className="dev-hint">Тестовый вход: +79990000001 / 0000</p>
               ) : null}
-              {!localPreview ? (
+              {!localPreview && !realAccountPreview ? (
                 <button
                   className="text-button auth-alternative"
                   type="button"

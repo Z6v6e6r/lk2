@@ -334,3 +334,59 @@ export async function getViewerGameCard(input: {
   });
   return { ...card, conversation: null };
 }
+
+/** Reuse detail visibility decisions over one bounded batch of roster snapshots. */
+export async function getViewerGameCardBatch(input: {
+  readonly repository: CardReadRepository & Pick<GameRepository, 'getCardProjections'>;
+  readonly photoRepository?: CardProfileRepository;
+  readonly tenantId: string;
+  readonly viewerUserId: string;
+  readonly gameIds: readonly string[];
+  readonly now: string;
+}): Promise<ReadonlyMap<string, { card: ViewerGameCard; generatedAt: string }>> {
+  const ids = [...new Set(input.gameIds)].slice(0, 50);
+  if (ids.length === 0) return new Map();
+  const projections = input.repository.getCardProjections
+    ? await input.repository.getCardProjections(input.tenantId, ids)
+    : new Map(
+        await Promise.all(
+          ids.map(
+            async (id) =>
+              [id, await input.repository.getCardProjection(input.tenantId, id)] as const,
+          ),
+        ),
+      );
+  const profileData = await profileDataForProjections({
+    ...(input.photoRepository ? { repository: input.photoRepository } : {}),
+    tenantId: input.tenantId,
+    projections: [...projections.values()].filter((p): p is StoredGameCardProjection => Boolean(p)),
+  });
+  const repository = {
+    ...input.repository,
+    getCardProjection: (tenantId: string, id: string) => {
+      if (tenantId !== input.tenantId) return Promise.resolve(undefined);
+      const projection = projections.get(id);
+      return Promise.resolve(
+        projection
+          ? {
+              ...projection,
+              basePayload: enrichGameCardProfiles(projection, tenantId, profileData),
+            }
+          : undefined,
+      );
+    },
+  };
+  const result = new Map<string, { card: ViewerGameCard; generatedAt: string }>();
+  for (const id of ids) {
+    const card = await getViewerGameCard({
+      repository,
+      tenantId: input.tenantId,
+      viewerUserId: input.viewerUserId,
+      gameId: id,
+      now: input.now,
+    });
+    const projection = projections.get(id);
+    if (card && projection) result.set(id, { card, generatedAt: projection.projectedAt });
+  }
+  return result;
+}

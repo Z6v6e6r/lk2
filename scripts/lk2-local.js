@@ -126,8 +126,45 @@ const localEnv = {
   PHUB_DEV_REALTIME_PROXY_TARGET: 'ws://127.0.0.1:3001',
 };
 
+// Explicit opt-in, owned by this launcher. Not a deploy profile or a provider write mode.
+export function realAccountMode(state, requested) {
+  if (state?.mode && !['mock', 'real-account'].includes(state.mode))
+    fail('Unknown local mode receipt.');
+  if (requested && state && state.mode !== 'real-account')
+    fail('This worktree database belongs to mock mode; use a dedicated real-account worktree.');
+  return requested || state?.mode === 'real-account';
+}
+export function realAccountEnvironment(delegationKey) {
+  if (typeof delegationKey !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(delegationKey))
+    fail('Real-account preview requires its own private delegation encryption key.');
+  return {
+    VIVA_MODE: 'production',
+    HOME_READ_MODE: 'projection',
+    COMMUNITIES_READ_MODE: 'local',
+    PROMOTIONS_READ_MODE: 'legacy',
+    VIVA_DIRECT_READ_ENABLED: 'true',
+    VIVA_OAUTH_ENABLED: 'true',
+    VIVA_AUTH_BASE_URL: 'https://kc.vivacrm.ru',
+    VIVA_AUTH_TENANT_KEY: 'iSkq6G',
+    VIVA_END_USER_API_URL: 'https://api.vivacrm.ru/end-user/api',
+    VIVA_OAUTH_REDIRECT_URI: 'http://localhost:5174/user/api/v1/local-padel/auth/viva/callback',
+    VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'http://localhost:5174/',
+    VIVA_DELEGATION_ENCRYPTION_KEY: delegationKey,
+    CORS_ORIGINS: 'http://localhost:5174',
+    GAMES_READ_ENABLED: 'true',
+    GAMES_COMMANDS_ENABLED: 'false',
+  };
+}
+
 // Derive the minimal API/Web contour from the canonical development Compose, not deploy files.
-export function makeModel(base, root, nodeImage, lock, environment = localEnv) {
+export function makeModel(
+  base,
+  root,
+  nodeImage,
+  lock,
+  environment = localEnv,
+  realAccount = false,
+) {
   const project = projectFor(root);
   const labels = { [label]: root };
   const volumes = {
@@ -188,14 +225,20 @@ export function makeModel(base, root, nodeImage, lock, environment = localEnv) {
     PHUB_DEV_API_PROXY_TARGET: 'http://api:3000',
     PHUB_DEV_REALTIME_PROXY_TARGET: 'ws://127.0.0.1:3001',
   };
-  web.ports = ['127.0.0.1:5173:5173'];
+  if (realAccount) {
+    api.networks.push('provider');
+    delete web.environment.VITE_LK2_LOCAL_PREVIEW;
+    web.environment.VITE_LK2_REAL_ACCOUNT = '1';
+    web.environment.PHUB_LOCAL_REAL_ACCOUNT = '1';
+  }
+  web.ports = [`127.0.0.1:${realAccount ? 5174 : 5173}:5173`];
   web.networks = ['data', 'edge'];
   web.healthcheck = {
     test: [
       'CMD',
       'node',
       '-e',
-      "fetch('http://127.0.0.1:5173').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+      `require('node:http').get('http://127.0.0.1:5173', {headers: {host: '${realAccount ? 'localhost:5174' : '127.0.0.1:5173'}'}}, r=>{r.resume();process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))`,
     ],
     interval: '5s',
     timeout: '3s',
@@ -215,14 +258,19 @@ export function makeModel(base, root, nodeImage, lock, environment = localEnv) {
   return {
     name: project,
     services: { postgres, redis, api, web, setup, migrator },
-    networks: { data: { internal: true, labels }, install: { labels }, edge: { labels } },
+    networks: {
+      data: { internal: true, labels },
+      install: { labels },
+      edge: { labels },
+      ...(realAccount ? { provider: { labels } } : {}),
+    },
     volumes,
   };
 }
 
-async function previewResponds() {
+async function previewResponds(port, host) {
   try {
-    return (await fetch('http://127.0.0.1:5173', { signal: AbortSignal.timeout(5000) })).ok;
+    return (await fetch(`http://${host}:${port}`, { signal: AbortSignal.timeout(5000) })).ok;
   } catch {
     return false;
   }
@@ -242,14 +290,17 @@ async function portFree(port) {
 }
 
 export async function main(args = process.argv.slice(2)) {
-  const [action, flag] = args;
+  const [action, ...flags] = args;
+  const freshRequested = flags.includes('--fresh-db');
+  const realRequested = flags.includes('--real-account');
   if (
     !['up', 'status', 'stop', 'config'].includes(action) ||
-    args.length > 2 ||
-    (flag && (action !== 'up' || flag !== '--fresh-db'))
+    new Set(flags).size !== flags.length ||
+    flags.some((flag) => !['--fresh-db', '--real-account'].includes(flag)) ||
+    (freshRequested && action !== 'up')
   ) {
     fail(
-      'Usage: npm run local:{up,status,stop,config}; first start: npm run local:up -- --fresh-db',
+      'Usage: npm run local:{up,status,stop,config}; first start: npm run local:up -- --fresh-db [--real-account]',
     );
   }
   const root = realpathSync(resolve(fileURLToPath(new URL('..', import.meta.url))));
@@ -320,6 +371,10 @@ export async function main(args = process.argv.slice(2)) {
     ...inspect('network', ids('network', `label=com.docker.compose.project=${project}`)),
   ];
   assertOwned(resources, root, project, 'project resource');
+  const realAccount = realAccountMode(state, realRequested);
+  const port = realAccount ? 5174 : 5173;
+  const previewHost = realAccount ? 'localhost' : '127.0.0.1';
+  const modeLabel = realAccount ? 'LOCAL real Viva account, READ ONLY' : 'LOCAL mock';
   if (!state && resources.length)
     fail('Resources exist without a local ownership receipt; refusing adoption.');
   if (action === 'status') {
@@ -331,8 +386,8 @@ export async function main(args = process.argv.slice(2)) {
     for (const item of containers)
       console.log(`${item.Name}: ${item.State.Status} ${item.State.Health?.Status ?? ''}`);
     console.log(
-      previewReady(containers, state?.initialized) && (await previewResponds())
-        ? 'Preview: http://127.0.0.1:5173 (LOCAL mock)'
+      previewReady(containers, state?.initialized) && (await previewResponds(port, previewHost))
+        ? `Preview: http://${previewHost}:${port} (${modeLabel})`
         : 'Preview is not ready.',
     );
     return;
@@ -379,6 +434,7 @@ export async function main(args = process.argv.slice(2)) {
       atomicJson(credentialsPath, {
         access: randomBytes(32).toString('hex'),
         refresh: randomBytes(32).toString('hex'),
+        ...(realAccount ? { delegation: randomBytes(32).toString('base64url') } : {}),
       });
     assertPrivatePath(credentialsPath);
     const credentials = JSON.parse(readFileSync(credentialsPath, 'utf8'));
@@ -390,11 +446,16 @@ export async function main(args = process.argv.slice(2)) {
       fail('Invalid local credentials.');
     const environment = {
       ...localEnv,
+      ...(realAccount ? realAccountEnvironment(credentials.delegation) : {}),
       JWT_ISSUER: project,
       JWT_ACCESS_SECRET: credentials.access,
       JWT_REFRESH_SECRET: credentials.refresh,
     };
-    const model = makeModel(base, root, nodeImage, lock, environment);
+    if (realAccount) {
+      delete environment.AUTH_DEV_PHONE_E164;
+      delete environment.AUTH_DEV_OTP_CODE;
+    }
+    const model = makeModel(base, root, nodeImage, lock, environment, realAccount);
     if (state?.initialized) assertResumeVolumes(state.volumes, resources);
     for (const kind of ['volume', 'network']) {
       for (const name of Object.keys(model[`${kind}s`])) {
@@ -457,28 +518,29 @@ export async function main(args = process.argv.slice(2)) {
         item.Name === `${project}_postgres_data` ||
         item.Config?.Labels?.['com.docker.compose.service'] === 'postgres',
     );
-    if (fresh && flag !== '--fresh-db')
+    if (fresh && !freshRequested)
       fail('First start requires explicit --fresh-db for a new disposable local database.');
-    if (flag && (!fresh || databaseExists))
+    if (freshRequested && (!fresh || databaseExists))
       fail('--fresh-db cannot migrate or reset an existing database.');
     if (state && ((!state.initialized && databaseExists) || state.migrationHash !== migrationHash))
       fail(
         'Database initialization is incomplete or migrations changed; preserve this DB and use a new task worktree for an explicitly approved fresh rehearsal.',
       );
-    // No infrastructure ports are published. All worktrees deliberately share one preview port.
+    // No infrastructure ports are published. Each mode has one exclusive preview port.
     const published = docker(['ps', '--format', '{{json .}}'])
       .split('\n')
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-    if (published.some((item) => /(?:^|[, :])5173->/.test(item.Ports)))
-      fail('Preview port 5173 belongs to an existing Docker container; no resources changed.');
-    await portFree(5173);
+    if (published.some((item) => new RegExp(`(?:^|[, :])${port}->`).test(item.Ports)))
+      fail(`Preview port ${port} belongs to an existing Docker container; no resources changed.`);
+    await portFree(port);
     const receipt = state ?? {
       root,
       project,
       endpoint,
       daemon: info.ID,
       initialized: false,
+      mode: realAccount ? 'real-account' : 'mock',
       migrationHash,
     };
     receipt.branch = branch;
@@ -525,15 +587,47 @@ export async function main(args = process.argv.slice(2)) {
       receipt.initialized = true;
       atomicJson(statePath, receipt);
     }
+    if (realAccount && !receipt.routingReady) {
+      const routingArgs = [
+        'run',
+        '--rm',
+        '--no-deps',
+        'migrator',
+        'npm',
+        'run',
+        'routing:plan:set',
+        '--',
+        '--tenant',
+        'local-padel',
+        '--mode',
+        'MIXED_END_USER_READS',
+        '--operations',
+        'profile.read',
+        '--actor',
+        '00000000-0000-4000-8000-000000000001',
+        '--idempotency-key',
+        'local-real-profile-v1',
+        '--correlation-id',
+        'local-real-profile-v1',
+        '--reason',
+        'LOCAL_REAL_ACCOUNT_READ_PREVIEW',
+      ];
+      compose(routingArgs);
+      compose([...routingArgs, '--apply']);
+      receipt.routingReady = true;
+      atomicJson(statePath, receipt);
+    }
     console.log('LOCAL: starting current-task API/Web and waiting for readiness.');
     compose(['up', '-d', '--wait', '--wait-timeout', '120', 'api', 'web'], { timeout: 150_000 });
-    if (!(await previewResponds()))
+    if (!(await previewResponds(port, previewHost)))
       fail('Services are healthy internally but the host preview is unreachable.');
     console.log(
-      `Preview: http://127.0.0.1:5173 (LOCAL mock, source ${branch}@${run('git', ['rev-parse', 'HEAD'])}).`,
+      `Preview: http://${previewHost}:${port} (${modeLabel}, source ${branch}@${run('git', ['rev-parse', 'HEAD'])}).`,
     );
     console.log(
-      'Only API/Web, PostgreSQL and Redis run. Worker, Realtime, provider calls and release operations are outside this contour.',
+      realAccount
+        ? 'Phone login and browser-assisted Viva reads only. No business writes, Worker or Realtime. Enter your own phone/code in the browser.'
+        : 'Only API/Web, PostgreSQL and Redis run. Worker, Realtime, provider calls and release operations are outside this contour.',
     );
   } finally {
     finishOperation(guard, operationUncertain);
