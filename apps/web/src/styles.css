@@ -8120,6 +8120,7 @@ label {
 }
 
 .figma-home-shell {
+  --fh-page-width: min(100vw, 375px);
   --fh-bookings-extra-height: 0px;
   --fh-my-extras-height: 0px;
   min-height: calc(1700px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
@@ -8156,7 +8157,7 @@ label {
   position: relative;
   isolation: isolate;
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: calc(1700px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
   min-height: 100dvh;
   flex-direction: column;
@@ -8227,7 +8228,7 @@ label {
   isolation: isolate;
   z-index: 2;
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 419px;
   padding: 16px 20px 0;
   flex: 0 0 419px;
@@ -8394,7 +8395,7 @@ label {
 .fh-v3-my-extras {
   box-sizing: border-box;
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   min-height: 722px;
   padding: 24px 0 32px;
   flex: 0 0 auto;
@@ -8799,7 +8800,7 @@ label {
 
 .fh-profile-row {
   display: flex;
-  width: 335px;
+  width: calc(var(--fh-page-width) - 40px);
   height: 57px;
   padding-bottom: 6px;
   align-items: center;
@@ -9080,7 +9081,7 @@ label {
 
 .fh-hero-communities {
   display: flex;
-  width: 335px;
+  width: calc(var(--fh-page-width) - 40px);
   height: 73px;
   flex: 0 0 73px;
   flex-direction: column;
@@ -9091,7 +9092,7 @@ label {
 
 .fh-hero-promotion {
   position: relative;
-  width: 335px;
+  width: calc(var(--fh-page-width) - 40px);
   height: 120px;
   flex: 0 0 120px;
   margin-top: 0;
@@ -9104,7 +9105,7 @@ label {
 .fh-hero-promo {
   position: relative;
   display: block;
-  width: 335px;
+  width: calc(var(--fh-page-width) - 40px);
   height: 120px;
 }
 
@@ -9186,7 +9187,7 @@ label {
 .fh-community-track {
   box-sizing: border-box;
   display: flex;
-  width: 335px;
+  width: calc(var(--fh-page-width) - 40px);
   height: 73px;
   padding: 1px 2px;
   gap: 12px;
@@ -9963,7 +9964,7 @@ label {
 
 .fh-actions {
   display: flex;
-  width: 335px;
+  width: calc(var(--fh-page-width) - 40px);
   height: 64px;
   flex-direction: row;
   gap: 8px;
@@ -10029,7 +10030,7 @@ label {
   position: relative;
   box-sizing: border-box;
   display: flex;
-  width: 335px;
+  width: calc(var(--fh-page-width) - 40px);
   height: 50px;
   flex: 0 0 50px;
   margin-top: auto;
@@ -10122,7 +10123,7 @@ label {
 .fh-main-box {
   z-index: 1;
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: calc(1316px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
   flex: 0 0 calc(1316px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
   flex-direction: column;
@@ -10130,7 +10131,7 @@ label {
 
 .fh-bookings {
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: calc(522px + var(--fh-bookings-extra-height));
   padding: 12px 0 32px;
   flex: 0 0 calc(522px + var(--fh-bookings-extra-height));
@@ -10145,7 +10146,7 @@ label {
 
 .fh-filters {
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 89px;
   flex: 0 0 89px;
   flex-direction: column;
@@ -10154,7 +10155,7 @@ label {
 
 .fh-calendar {
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 55px;
   padding: 0;
   align-items: center;
@@ -10242,7 +10243,7 @@ label {
 .fh-filter-pills {
   box-sizing: border-box;
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 24px;
   padding: 0 24px;
   flex: none;
@@ -10305,7 +10306,7 @@ label {
 
 .fh-bookings-list {
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   min-height: 0;
   flex: 1;
   flex-direction: column;
@@ -10319,13 +10320,13 @@ label {
 
 .fh-booking-entry {
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   flex-direction: column;
   padding: 0 16px 16px;
 }
 
 .fh-divider {
-  width: 375px;
+  width: var(--fh-page-width);
   height: 0;
   flex: 0 0 0;
   border-top: 1.5px dashed #ededed;
@@ -10594,7 +10595,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-bookings-empty {
   display: flex;
-  width: 327px;
+  width: calc(var(--fh-page-width) - 48px);
   min-height: 0;
   flex: 1;
   align-items: center;
@@ -10665,7 +10666,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-bookings-footer {
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 45px;
   flex: 0 0 45px;
   flex-direction: column;
@@ -10675,7 +10676,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-bookings-footer-action {
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 33px;
   padding: 0 24px;
   flex-direction: column;
@@ -10692,7 +10693,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 .fh-bookings-footer-action > a,
 .fh-bookings-footer-action > button {
   display: flex;
-  width: 327px;
+  width: calc(var(--fh-page-width) - 48px);
   height: 33px;
   box-sizing: border-box;
   padding: 12px;
@@ -10725,7 +10726,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-promotions {
   position: relative;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 240px;
   flex: 0 0 240px;
   overflow: hidden;
@@ -10734,7 +10735,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-promo {
   display: block;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 240px;
   animation: fh-promotion-enter 240ms ease-out;
 }
@@ -10806,7 +10807,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 .fh-lower {
   box-sizing: border-box;
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 554px;
   padding: 32px 24px;
   flex: 0 0 554px;
@@ -10821,7 +10822,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-locations {
   display: flex;
-  width: 327px;
+  width: calc(var(--fh-page-width) - 48px);
   height: 230px;
   flex: 0 0 230px;
   flex-direction: column;
@@ -10831,7 +10832,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-section-head {
   display: flex;
-  width: 327px;
+  width: calc(var(--fh-page-width) - 48px);
   height: 13px;
   align-items: flex-end;
   justify-content: space-between;
@@ -10902,7 +10903,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 .fh-location-card {
   position: relative;
   display: flex;
-  width: 327px;
+  width: calc(var(--fh-page-width) - 48px);
   height: 200px;
   flex: 0 0 327px;
   padding: 6px;
@@ -11530,7 +11531,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-additional {
   display: flex;
-  width: 327px;
+  width: calc(var(--fh-page-width) - 48px);
   height: 148px;
   flex: 0 0 148px;
   flex-direction: column;
@@ -11539,7 +11540,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .fh-additional > a {
   display: flex;
-  width: 327px;
+  width: calc(var(--fh-page-width) - 48px);
   height: 44px;
   padding-bottom: 16px;
   box-sizing: border-box;
@@ -11569,9 +11570,9 @@ button.participant-avatar-stack__open-slot:focus-visible {
   z-index: 4;
   right: auto;
   bottom: 0;
-  left: calc(50% - 187.5px);
+  left: calc((100% - var(--fh-page-width)) / 2);
   display: flex;
-  width: 375px;
+  width: var(--fh-page-width);
   height: 88px;
   padding: 4px 12px 32px;
   align-items: center;
@@ -11712,12 +11713,6 @@ button.participant-avatar-stack__open-slot:focus-visible {
   background: #fff1ef;
   color: #8c2f27;
   font-size: 12px;
-}
-
-@media (max-width: 374px) {
-  .figma-home-shell {
-    width: 375px;
-  }
 }
 
 @media (min-width: 501px) {
@@ -13763,6 +13758,10 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 /* Home V3 recommendation cards: compact, image-led and isolated from shared GameCard. */
+.figma-home-shell.is-home-v3 {
+  --fh-page-width: min(100vw, 430px);
+}
+
 .figma-home-shell.is-home-v3 .figma-home,
 .figma-home-shell.is-home-v3 .fh-main-box,
 .figma-home-shell.is-home-v3 .fh-bookings,
@@ -13770,7 +13769,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 .figma-home-shell.is-home-v3 .fh-bookings-footer,
 .figma-home-shell.is-home-v3 .fh-bookings-footer-action,
 .figma-home-shell.is-home-v3 .fh-divider {
-  width: min(100vw, 430px);
+  width: var(--fh-page-width);
 }
 
 .figma-home-shell.is-home-v3 .figma-home {
@@ -14097,4 +14096,18 @@ button.participant-avatar-stack__open-slot:focus-visible {
   color: #747276;
   font-size: 11px;
   line-height: 1.3;
+}
+
+/* Phone layouts fill the viewport; wider screens retain the centered Home canvas. */
+@media (max-width: 600px) {
+  .figma-home-shell,
+  .figma-home-shell.is-home-v3 {
+    --fh-page-width: 100vw;
+  }
+
+  .fh-bottom-nav > a {
+    width: auto;
+    min-width: 0;
+    flex: 1 1 0;
+  }
 }
