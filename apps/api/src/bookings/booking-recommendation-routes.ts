@@ -644,6 +644,7 @@ export function registerBookingRecommendationRoutes(
                     : ('training' as const);
               return {
                 id: bookingId,
+                ...(gameId ? { gameId } : {}),
                 kind,
                 title: item.title,
                 startsAt: item.startsAt,

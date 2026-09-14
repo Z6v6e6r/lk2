@@ -216,6 +216,10 @@ export interface GameRepository {
     readonly limit: number;
     readonly after?: { readonly startsAt: string; readonly gameId: string };
   }): Promise<StoredGameCardProjectionPage>;
+  getCardProjections?(
+    tenantId: string,
+    gameIds: readonly string[],
+  ): Promise<ReadonlyMap<string, StoredGameCardProjection>>;
   getCardProjection(
     tenantId: string,
     gameId: string,
@@ -1218,6 +1222,22 @@ export function createGameRepository(pool: Pool): GameRepository {
             ? { next: { startsAt: last.startsAt, gameId: last.gameId } }
             : {}),
         };
+      });
+    },
+
+    getCardProjections(tenantId, gameIds) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const result = await client.query<ProjectionRow & { requested_id: string }>(
+          `select requested.id as requested_id, p.game_id, p.aggregate_revision, p.projection_revision, p.lifecycle_state,
+                  p.visibility, p.starts_at, p.ends_at, p.base_payload, p.projected_at
+             from unnest($2::uuid[]) as requested(id)
+             left join integration.legacy_game_merge_redirects r
+               on r.tenant_id = $1 and r.source_game_id = requested.id
+             join games.card_projections p
+               on p.tenant_id = $1 and p.game_id = coalesce(r.target_game_id, requested.id)`,
+          [tenantId, [...new Set(gameIds)].slice(0, 50)],
+        );
+        return new Map(result.rows.map((row) => [row.requested_id, mapProjection(row)]));
       });
     },
 

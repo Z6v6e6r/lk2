@@ -11,7 +11,7 @@ import type {
   HomeDashboard,
   UserUpcomingBookings,
 } from './auth-gateway.js';
-import { HomeDashboardPage } from './HomeDashboardPage.js';
+import { HomeDashboardPage, UpcomingBookingCard } from './HomeDashboardPage.js';
 
 const dashboard: HomeDashboard = {
   snapshot: {
@@ -153,6 +153,8 @@ describe('Home promotion carousel', () => {
     expect(
       within(heroPromotion).getByRole('link', { name: 'Акция: Первая акция' }),
     ).toHaveAttribute('href', '/promotions/first');
+    expect(screen.queryByRole('region', { name: 'Акции' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const lowerPromotions = screen.getByRole('region', { name: 'Акции' });
     const first = within(lowerPromotions).getByRole('link', { name: 'Первая акция' });
     expect(first).toHaveAttribute('href', '/promotions/first');
@@ -181,6 +183,44 @@ describe('Home promotion carousel', () => {
 });
 
 describe('Home progressive navigation', () => {
+  it('provides a keyboard-accessible link to each community detail page', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+        dashboard={{
+          ...homeBase,
+          capabilities: { ...homeBase.capabilities, canViewCommunities: true },
+          communities: {
+            ...homeBase.communities,
+            status: 'READY',
+            revision: '1',
+            observedAt: dashboard.snapshot.generatedAt,
+            staleAt: dashboard.snapshot.staleAt,
+            value: [
+              {
+                id,
+                title: 'Мой клуб',
+                logoUrl: null,
+                isVerified: false,
+                unreadChatCount: 0,
+                route: `/communities/${id}`,
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(screen.getByRole('link', { name: 'Открыть сообщество «Мой клуб»' })).toHaveAttribute(
+      'href',
+      `/communities/${id}`,
+    );
+  });
+
   it('keeps local navigation and locations when optional Base sections are unavailable', () => {
     render(
       <HomeDashboardPage
@@ -205,6 +245,9 @@ describe('Home progressive navigation', () => {
       'width',
       '670',
     );
+    expect(screen.queryByText('Акции временно недоступны.')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Локации/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     expect(screen.getAllByText('Акции временно недоступны.')).toHaveLength(1);
     expect(screen.getByRole('heading', { name: /Локации/ })).toBeVisible();
   });
@@ -295,6 +338,11 @@ describe('Home progressive navigation', () => {
       />,
     );
 
+    expect(screen.queryByRole('region', { name: /локации/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('navigation', { name: 'Дополнительные разделы' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
     const locations = screen.getByRole('region', { name: /локации/i });
     const additional = screen.getByRole('navigation', { name: 'Дополнительные разделы' });
     expect(locations.nextElementSibling).toBe(additional);
@@ -309,6 +357,12 @@ describe('Home progressive navigation', () => {
       'href',
       '/offers',
     );
+    fireEvent.click(screen.getByRole('tab', { name: 'Для меня' }));
+    expect(screen.queryByRole('region', { name: 'Акции' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: /локации/i })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('navigation', { name: 'Дополнительные разделы' }),
+    ).not.toBeInTheDocument();
   });
 
   it('shows the booking recommendations GIF while the personalized feed loads', () => {
@@ -399,7 +453,7 @@ describe('Home progressive navigation', () => {
       screen.getByRole('tab', { name: 'Мои записи' }).querySelector('.fh-booking-presence-dot'),
     ).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('link', { name: 'Настроить предпочтения' })).toHaveAttribute(
+    expect(document.querySelector('.fh-preferences-edit')).toHaveAttribute(
       'href',
       '/profile#booking-preferences-title',
     );
@@ -409,11 +463,9 @@ describe('Home progressive navigation', () => {
     await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledOnce());
     expect(loadBookingRecommendations).toHaveBeenCalledWith({ limit: 6 });
     expect(screen.queryByText('Подходящие игры')).not.toBeInTheDocument();
-    const configure = screen.getByRole('link', { name: 'Настроить' });
-    expect(configure).toHaveAttribute('href', '/profile#booking-preferences-title');
+    expect(screen.queryByRole('link', { name: 'Настроить' })).not.toBeInTheDocument();
     expect(container.querySelector('.fh-for-me > header')).not.toBeInTheDocument();
-    expect(configure.parentElement).toHaveClass('fh-bookings-footer-action', 'is-split');
-    expect(configure.previousElementSibling).toHaveTextContent('Все рекомендации');
+    expect(container.querySelector('.fh-for-me .fh-bookings-footer')).not.toBeInTheDocument();
   });
 
   it('keeps the second Home variant independent and puts promotion before communities', () => {
@@ -439,6 +491,69 @@ describe('Home progressive navigation', () => {
       heroChildClasses.indexOf('fh-hero-communities'),
     );
   });
+
+  it.each(['default', 'v2', 'v3'] as const)(
+    'applies cards and rows to the same recommendations in the %s layout',
+    async (layoutVariant) => {
+      const page: BookingRecommendationPage = {
+        version: 'display-test',
+        generatedAt: '2026-07-18T09:00:00.000Z',
+        staleAt: '2026-07-18T09:05:00.000Z',
+        personalization: 'BASIC',
+        items: [
+          {
+            kind: 'TRAINING',
+            reasons: [],
+            activity: {
+              id: '55555555-5555-4555-8555-555555555555',
+              kind: 'TRAINING',
+              title: 'Тренировка для проверки отображения',
+              startsAt: '2026-07-20T09:00:00.000Z',
+              endsAt: '2026-07-20T10:00:00.000Z',
+              timezone: 'Europe/Moscow',
+              station: {
+                id: '60000000-0000-4000-8000-000000000001',
+                name: 'Тестовая станция',
+                shortAddress: null,
+              },
+              levelRange: null,
+              capacity: { total: 4, open: 2 },
+              host: null,
+              route: '/trainings/55555555-5555-4555-8555-555555555555',
+            },
+          },
+        ],
+        nextCursor: null,
+      };
+      const loadBookingRecommendations = vi.fn().mockResolvedValue(page);
+      const props = {
+        ...independentSectionProps,
+        dashboard: homeBase,
+        tenantName: 'ПадлХАБ',
+        layoutVariant,
+        notificationUnreadCount: 0,
+        loadBookingRecommendations,
+        logoutBusy: false,
+        onLogout: vi.fn(),
+      };
+      const { container, rerender } = render(
+        <HomeDashboardPage {...props} recommendationDisplay="CARDS" />,
+      );
+      await screen.findByText('Тренировка для проверки отображения');
+      expect(container.querySelector('.booking-recommendations')).toHaveClass('is-photo-grid');
+      expect(container.querySelector('.recommendation-grid-card')).toBeInTheDocument();
+      expect(container.querySelector('.booking-activity-card')).not.toBeInTheDocument();
+
+      const requestsBeforeDisplayChange = loadBookingRecommendations.mock.calls.length;
+      rerender(<HomeDashboardPage {...props} recommendationDisplay="ROWS" />);
+      expect(container.querySelector('.booking-recommendations')).not.toHaveClass('is-photo-grid');
+      expect(container.querySelector('.recommendation-grid-card')).not.toBeInTheDocument();
+      expect(container.querySelector('.booking-activity-card')).toHaveTextContent(
+        'Тренировка для проверки отображения',
+      );
+      expect(loadBookingRecommendations).toHaveBeenCalledTimes(requestsBeforeDisplayChange);
+    },
+  );
 
   it('marks the third Home variant and requests its first 14 recommendations', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
@@ -477,9 +592,7 @@ describe('Home progressive navigation', () => {
       heroChildClasses.indexOf('fh-hero-promotion'),
     );
     expect(screen.queryByRole('link', { name: 'Все рекомендации' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Настроить' }).parentElement).not.toHaveClass(
-      'is-split',
-    );
+    expect(screen.queryByRole('link', { name: 'Настроить' })).not.toBeInTheDocument();
     expect(container.querySelector('.fh-main-box > .fh-promotions')).not.toBeInTheDocument();
     expect(container.querySelector('.fh-main-box > .fh-lower')).not.toBeInTheDocument();
     expect(container.querySelector('.fh-v3-my-extras')).not.toBeInTheDocument();
@@ -514,8 +627,8 @@ describe('Home progressive navigation', () => {
       'has-recommendations-scroll-peek',
     );
     expect(container.querySelector('.figma-home-shell')).not.toHaveClass('is-home-v3');
-    expect(screen.getByRole('link', { name: 'Все рекомендации' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Настроить' }).parentElement).toHaveClass('is-split');
+    expect(screen.queryByRole('link', { name: 'Все рекомендации' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Настроить' })).not.toBeInTheDocument();
   });
 
   it('places promotion, stations, and three links below History in the V3 My bookings tab', () => {
@@ -583,6 +696,71 @@ describe('Home progressive navigation', () => {
     expect(screen.queryByRole('region', { name: 'Сервисы клуба' })).not.toBeInTheDocument();
   });
 
+  it('stops scroll retries after pagination failure and resumes only on explicit retry', async () => {
+    const page: BookingRecommendationPage = {
+      version: 'display-test',
+      generatedAt: '2026-07-18T09:00:00.000Z',
+      staleAt: '2026-07-18T09:05:00.000Z',
+      personalization: 'BASIC',
+      items: [
+        {
+          kind: 'TRAINING',
+          reasons: [],
+          activity: {
+            id: '55555555-5555-4555-8555-555555555555',
+            kind: 'TRAINING',
+            title: 'Тренировка для проверки отображения',
+            startsAt: '2026-07-20T09:00:00.000Z',
+            endsAt: '2026-07-20T10:00:00.000Z',
+            timezone: 'Europe/Moscow',
+            station: {
+              id: '60000000-0000-4000-8000-000000000001',
+              name: 'Тестовая станция',
+              shortAddress: null,
+            },
+            levelRange: null,
+            capacity: { total: 4, open: 2 },
+            host: null,
+            route: '/trainings/55555555-5555-4555-8555-555555555555',
+          },
+        },
+      ],
+      nextCursor: 'next-page',
+    };
+    const loadBookingRecommendations = vi
+      .fn()
+      .mockImplementation((request: { cursor?: string }) =>
+        request.cursor ? Promise.reject(new Error('offline')) : Promise.resolve(page),
+      );
+    const { container } = render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={homeBase}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        loadBookingRecommendations={loadBookingRecommendations}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+    await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledTimes(2));
+    const feed = container.querySelector('.booking-recommendations') as HTMLElement;
+    fireEvent.scroll(feed);
+    await screen.findByRole('button', { name: 'Повторить загрузку' });
+    expect(feed).toContainElement(screen.getByRole('alert'));
+    for (let i = 0; i < 10; i += 1) fireEvent.scroll(feed);
+    expect(loadBookingRecommendations).toHaveBeenCalledTimes(3);
+    fireEvent.click(screen.getByRole('tab', { name: 'Для меня' }));
+    fireEvent.scroll(feed);
+    expect(loadBookingRecommendations).toHaveBeenCalledTimes(3);
+    loadBookingRecommendations.mockResolvedValueOnce({ ...page, nextCursor: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить загрузку' }));
+    await vi.waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(loadBookingRecommendations).toHaveBeenCalledTimes(4);
+    expect(loadBookingRecommendations).toHaveBeenLastCalledWith({ limit: 12, cursor: 'next-page' });
+    fireEvent.scroll(feed);
+    expect(loadBookingRecommendations).toHaveBeenCalledTimes(4);
+  });
   it('expands a sparse initial recommendation slice once and does not reload on the active tab', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
       version: 'a'.repeat(64),
@@ -615,10 +793,11 @@ describe('Home progressive navigation', () => {
       expect(screen.getByRole('status')).toHaveTextContent('Пока нет подходящих событий'),
     );
     expect(screen.queryByText('Персональная подборка')).not.toBeInTheDocument();
-    const allRecommendations = screen.getByRole('link', { name: 'Все рекомендации' });
-    expect(allRecommendations).toHaveAttribute('href', '/bookings?view=for-me');
-    expect(allRecommendations.parentElement).toHaveClass('fh-bookings-footer-action', 'is-split');
-    expect(allRecommendations.nextElementSibling).toHaveTextContent('Настроить');
+    expect(screen.queryByRole('link', { name: 'Все рекомендации' })).not.toBeInTheDocument();
+    expect(document.querySelector('.fh-preferences-edit')).toHaveAttribute(
+      'href',
+      '/profile#booking-preferences-title',
+    );
   });
 });
 
@@ -787,7 +966,7 @@ describe('Home upcoming bookings', () => {
     expect(container.querySelectorAll('.fh-bookings-list > .fh-booking-entry')).toHaveLength(3);
   });
 
-  it('filters real upcoming bookings and swipes the calendar one day up to two weeks ahead', () => {
+  it('filters real upcoming bookings across a two-week date rail', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-18T09:00:00.000Z'));
     const upcoming: HomeDashboard['upcoming'] = [
@@ -850,33 +1029,66 @@ describe('Home upcoming bookings', () => {
 
     const calendar = filter.querySelector('.fh-calendar');
     expect(calendar).not.toBeNull();
-    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
-    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
+    expect(within(calendar as HTMLDivElement).getAllByRole('button')).toHaveLength(16);
+    const lastDay = within(filter).getByRole('button', { name: /суббота, 1 августа/i });
+    expect(lastDay).toBeInTheDocument();
     expect(
-      within(filter).queryByRole('button', { name: /суббота, 18 июля/i }),
+      within(filter).queryByRole('button', { name: /воскресенье, 2 августа/i }),
     ).not.toBeInTheDocument();
-    expect(within(filter).getByRole('button', { name: /суббота, 25 июля/i })).toBeVisible();
+    fireEvent.click(lastDay);
+    expect(lastDay).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('status')).toHaveTextContent('По выбранным фильтрам записей нет');
+    fireEvent.click(allDates);
+    expect(allDates).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('article', { name: 'Воскресный турнир' })).toBeVisible();
+  });
 
-    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
-    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
+  it('shows decorative roster placeholders without announcing free seats when unavailable', () => {
+    const item = {
+      id: '55555555-5555-4555-8555-555555555555',
+      kind: 'game' as const,
+      title: 'Игра',
+      startsAt: '2026-07-20T09:00:00.000Z',
+      venue: 'Корт',
+      status: 'confirmed' as const,
+      route: '/games/55555555-5555-4555-8555-555555555555',
+    };
+    const { container, rerender } = render(<UpcomingBookingCard item={item} />);
+    expect(screen.getByText('Состав временно недоступен')).toBeVisible();
     expect(
-      within(filter).queryByRole('button', { name: /воскресенье, 19 июля/i }),
-    ).not.toBeInTheDocument();
-    expect(within(filter).getByRole('button', { name: /воскресенье, 26 июля/i })).toBeVisible();
-
-    for (let index = 0; index < 12; index += 1) {
-      fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
-      fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
-    }
-    expect(within(filter).getByRole('button', { name: /суббота, 1 августа/i })).toBeVisible();
-
-    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 280 });
-    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 100 });
-    expect(within(filter).getByRole('button', { name: /суббота, 1 августа/i })).toBeVisible();
-
-    fireEvent.pointerDown(calendar as HTMLDivElement, { clientX: 100 });
-    fireEvent.pointerUp(calendar as HTMLDivElement, { clientX: 280 });
-    expect(within(filter).getByRole('button', { name: /пятница, 31 июля/i })).toBeVisible();
+      container.querySelectorAll(
+        '.fh-event__roster-placeholder .participant-avatar-stack__open-slot',
+      ),
+    ).toHaveLength(4);
+    expect(
+      container.querySelector('.fh-event__roster-placeholder [aria-hidden="true"]'),
+    ).toContainElement(container.querySelector('.participant-avatar-stack'));
+    rerender(
+      <UpcomingBookingCard
+        item={{ ...item, participants: [], openSlots: 2, roster: { state: 'UNAVAILABLE' } }}
+      />,
+    );
+    expect(
+      container.querySelectorAll(
+        '.fh-event__roster-placeholder .participant-avatar-stack__open-slot',
+      ),
+    ).toHaveLength(4);
+    expect(
+      container.querySelector('.fh-event__roster-placeholder [aria-hidden="true"]'),
+    ).toContainElement(container.querySelector('.participant-avatar-stack'));
+    rerender(
+      <UpcomingBookingCard
+        item={{
+          ...item,
+          participants: [{ displayName: 'Игрок' }],
+          openSlots: 1,
+          roster: { state: 'STALE' },
+        }}
+      />,
+    );
+    expect(screen.getByText('Состав требует обновления')).toBeVisible();
+    expect(container.querySelectorAll('.participant-avatar-stack__item')).toHaveLength(1);
+    expect(container.querySelectorAll('.participant-avatar-stack__open-slot')).toHaveLength(1);
   });
 
   it('renders only roster data supplied by the Home projection', () => {

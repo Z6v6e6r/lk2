@@ -1,3 +1,4 @@
+import { attachUpcomingRosters } from './bookings/upcoming-rosters.js';
 import { createHash, randomUUID } from 'node:crypto';
 
 import cors from '@fastify/cors';
@@ -271,7 +272,7 @@ export interface BuildAppOptions {
     GameRepository,
     'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
   > &
-    Partial<Pick<GameRepository, 'listRecommendationCardProjections'>>;
+    Partial<Pick<GameRepository, 'listRecommendationCardProjections' | 'getCardProjections'>>;
   readonly clientRoutingPlanRepository?: Pick<ClientRoutingPlanRepository, 'get'>;
   readonly notificationRepository?: NotificationInboxRepository;
   readonly notificationEndpointRepository?: NotificationEndpointRepository;
@@ -1639,6 +1640,33 @@ export async function buildApp(options: BuildAppOptions) {
             ? 'private, max-age=0, stale-while-revalidate=45'
             : 'private, max-age=15, stale-while-revalidate=45',
         );
+        if (options.gameReadRepository) {
+          reply.header('Cache-Control', 'private, no-store');
+          try {
+            return await attachUpcomingRosters(projection, {
+              maxStaleSeconds: options.config.HOME_PROJECTION_MAX_STALE_SECONDS,
+              repository: options.gameReadRepository,
+              ...(options.profilePhotoMediaRepository
+                ? { photoRepository: options.profilePhotoMediaRepository }
+                : {}),
+              now: new Date().toISOString(),
+            });
+          } catch {
+            request.log.warn(
+              { event: 'upcoming_roster_read_failed' },
+              'Upcoming roster unavailable',
+            );
+            return {
+              version: projection.version,
+              generatedAt: projection.generatedAt,
+              staleAt: projection.staleAt,
+              items: projection.items.map((item) => ({
+                ...item,
+                roster: { state: 'UNAVAILABLE' },
+              })),
+            };
+          }
+        }
         return {
           version: projection.version,
           generatedAt: projection.generatedAt,

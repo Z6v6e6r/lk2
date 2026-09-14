@@ -139,6 +139,129 @@ describe('browser auth gateway', () => {
     expect(new Headers(refreshInit?.headers).has('Authorization')).toBe(false);
   });
 
+  it('refreshes again after phone verification succeeds following a failed startup restore', async () => {
+    const session = {
+      accessToken: 'phone-verified-access-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        userId: '00000000-0000-4000-8000-000000000001',
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ code: 'SERVICE_UNAVAILABLE' }, { status: 503 }))
+      .mockResolvedValueOnce(Response.json(session))
+      .mockResolvedValueOnce(Response.json(session));
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await expect(gateway.restoreSession()).rejects.toMatchObject({ status: 503 });
+    await expect(
+      gateway.verifyCode({
+        challengeId: '11111111-1111-4111-8111-111111111111',
+        code: '1234',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      }),
+    ).resolves.toMatchObject({ context: { user: { displayName: 'Анна' } } });
+    await expect(gateway.restoreSession()).resolves.toMatchObject({
+      context: { user: { displayName: 'Анна' } },
+    });
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    expect(requestUrl(fetchImplementation.mock.calls[0]?.[0] ?? '')).toContain(
+      '/auth/session/refresh',
+    );
+    expect(requestUrl(fetchImplementation.mock.calls[1]?.[0] ?? '')).toContain(
+      '/auth/challenges/11111111-1111-4111-8111-111111111111/verify',
+    );
+    expect(requestUrl(fetchImplementation.mock.calls[2]?.[0] ?? '')).toContain(
+      '/auth/session/refresh',
+    );
+  });
+
+  it('coalesces concurrent startup restore calls while the refresh is in flight', async () => {
+    const session = {
+      accessToken: 'in-flight-access-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        userId: '00000000-0000-4000-8000-000000000001',
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    let resolveRefresh: ((response: Response) => void) | undefined;
+    const fetchImplementation = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    const first = gateway.restoreSession();
+    const second = gateway.restoreSession();
+    expect(first).toBe(second);
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+
+    resolveRefresh?.(Response.json(session));
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+  });
+
+  it('retries a sequential restore after the prior restore failed', async () => {
+    const session = {
+      accessToken: 'retry-access-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Анна' },
+      context: {
+        userId: '00000000-0000-4000-8000-000000000001',
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ code: 'SERVICE_UNAVAILABLE' }, { status: 503 }))
+      .mockResolvedValueOnce(Response.json(session));
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await expect(gateway.restoreSession()).rejects.toMatchObject({ status: 503 });
+    await expect(gateway.restoreSession()).resolves.toMatchObject({
+      context: { user: { displayName: 'Анна' } },
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+
   it('issues a no-store realtime ticket through the authenticated PadlHub client', async () => {
     const session = {
       accessToken: 'short-lived-padlhub-token',

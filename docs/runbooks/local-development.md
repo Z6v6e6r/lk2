@@ -65,6 +65,81 @@ the existing physical non-owner role/negative tests required by their CRITICAL b
 
 ## Isolation and recovery
 
+### Optional real-account read preview
+
+Use this mode only for an explicitly requested connection to the user's real Viva account.
+Create a separate task worktree; an existing mock database cannot be converted. Inspect the new
+project name printed by `local:config`, and obtain authority for initialization of that new
+disposable database before its first start:
+
+```sh
+npm run local:config -- --real-account
+# Only after authority for this new local database:
+npm run local:up -- --fresh-db --real-account
+npm run local:status
+npm run local:stop
+npm run local:up
+```
+
+Open **http://localhost:5174**. Mock remains **http://127.0.0.1:5173** in its original worktree.
+The different hostnames isolate browser cookies; ports alone do not. Real-mode Vite rejects
+other Host headers, including access through `127.0.0.1:5174`. Each mode still has one exclusive
+port. The retained receipt remembers real mode on status/stop/resume; never delete the receipt
+or reuse its database for a different mode.
+
+The user enters their phone, real SMS code and legal consents in the browser. Do not automate
+consent, copy an existing account token/cookie or expose authentication responses in logs.
+There is no `0000` shortcut in real mode. Authentication issues local PadlHub sessions and may
+retain a Viva refresh delegation encrypted with a randomly generated private local key.
+The database can contain real profile/read projections: treat both its volume and the private
+`.lk2-local/` files as sensitive, excluded from Git, exports and diagnostic dumps. These files
+contain generated local secrets, not production system credentials. Ordinary stop preserves them.
+
+API gets provider egress for the existing Viva end-user authentication/access broker. Web receives
+only dev mode flags. API/PostgreSQL/Redis have no published ports; Web is the sole API ingress.
+The launcher enables real phone auth, direct `profile.read`, `GAMES_READ_ENABLED` and existing
+booking-screen read-job relay. This also enables local game reads and public legacy tournament reads.
+Game reads supply the repository required to complete recommendations;
+`GAMES_COMMANDS_ENABLED` remains false. The authenticated local account needs `games.play` in
+addition to `profile.read` for authenticated recommendation and tournament reads.
+After explicit account-specific authorization,
+use the audited `user:access:set` operator (dry-run before apply) against this local database,
+preserving role `client` and using the verified active user as both actor and target. Never grant
+admin rights or change the default profile for all users. Refresh the browser session after a grant.
+The same operator restores the exact previous profile for rollback; existing access tokens remain
+valid until expiry, so stopping the private API immediately contains an unwanted grant.
+To roll back the read capability, set `GAMES_READ_ENABLED` back to false in the real-account
+environment, keep commands false, and run `local:stop` then `local:up` with the same initialized
+receipt. This preserves the database and requires no migration or reset.
+The launcher initializes the profile routing plan with the canonical operator's dry-run and apply
+against this new local database only, recording completion for idempotent resume. Home reads use
+local projections; communities use local storage. Promotions use the legacy configuration with
+no worker/importer, so absent projections remain absent. No mock Home/profile fallback is enabled.
+
+Vite allows selected-tenant GET/HEAD reads, precise public media paths, phone/session authentication,
+logout and booking-screen read-result relay. It rejects other writes, OAuth callbacks, other
+tenants, malformed/encoded API paths and API WebSocket upgrades before proxying. This is a local
+development ingress policy, not a production authorization mechanism. Do not expose API directly,
+alter proxy mode flags independently or reuse this profile for deployment. Browser-assisted Viva
+reads still use the existing short-lived user delegation and SDK operation restrictions.
+The provider bearer token is held briefly by the trusted browser code; Vite cannot restrict a
+modified page making direct calls to Viva. Keep authentication testing on reviewed source and
+log out before unreviewed changes. A provider-enforced read-only token is not proven by this mode.
+
+The UI labels this mode as read-only and disables create-game and profile-setting saves. Some
+other command controls may remain visible; their requests are rejected by the ingress. Bookings,
+payments, messages, friend/profile changes, Worker and Realtime are outside this preview. The
+real account's own profile, schedule and upcoming bookings need manual authenticated validation;
+successful synthetic tests, CORS preflight or an empty projection are not provider evidence.
+
+Recovery is `local:stop`, inspection, then `local:up` on the same branch. Migration drift and
+incomplete initialization use the same stop conditions below; never reset or migrate retained
+real-account data automatically. Returning to mock means opening its original worktree/address,
+not changing the mode of the real-account database.
+Log out before final abandonment to revoke the active local delegation and clear its cookie.
+Stopping containers alone does not log out or erase the sensitive database/WAL/volume contents;
+deleting these remains a separately authorized cleanup.
+
 Project/network/volume names derive from the canonical worktree path. Stop before switching branches
 in a worktree: a running dev process reads live source edits. The retained database is bound to its
 task branch, and resume/status reject branch or recorded volume identity drift. The launcher checks Compose

@@ -2540,12 +2540,14 @@
   color: #8766eb;
 }
 
+.figma-home .booking-activity-card__kind--training,
 .games-page .booking-activity-card__kind--training {
   justify-content: flex-start;
   margin: 0 auto 0 0;
   background: #e1ecff;
 }
 
+.figma-home .booking-activity-card__kind--coach-game,
 .games-page .booking-activity-card__kind--coach-game {
   background: #f2edff;
 }
@@ -2628,6 +2630,13 @@
   background: transparent;
   color: #e4681f;
   order: 0;
+}
+
+.figma-home .booking-activity-card__kind--tournament,
+.games-page .booking-activity-card__kind--tournament {
+  justify-content: flex-start;
+  margin: 0 auto 0 0;
+  background: #fff0e6;
 }
 
 .booking-activity-card__kind--tournament .booking-activity-card__kind-icon {
@@ -6415,6 +6424,21 @@ button:disabled {
   background: #f7f9f5;
 }
 
+.real-account-read-only-notice {
+  position: sticky;
+  z-index: 40;
+  top: 0;
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(88, 96, 79, 0.24);
+  background: rgba(249, 248, 247, 0.96);
+  box-shadow: 0 8px 24px rgba(19, 19, 19, 0.1);
+  color: #4b5444;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .auth-intro {
   position: relative;
   isolation: isolate;
@@ -10017,19 +10041,19 @@ label {
 .figma-home .fh-preferences-edit {
   position: absolute;
   z-index: 2;
-  top: 19px;
-  left: calc(50% - 32px);
+  top: 13px;
+  left: calc(50% - 38px);
   display: grid;
-  width: 12px;
-  height: 12px;
+  width: 24px;
+  height: 24px;
   place-items: center;
   border-radius: 50%;
   color: #fff;
 }
 
 .figma-home .fh-preferences-edit svg {
-  width: 8px;
-  height: 8px;
+  width: 18px;
+  height: 18px;
 }
 
 .figma-home .fh-preferences-edit:hover,
@@ -10089,8 +10113,10 @@ label {
 
 .fh-tab-label .fh-booking-presence-dot {
   position: absolute;
-  top: -2px;
-  right: -8px;
+  top: -4px;
+  right: -10px;
+  width: 8px;
+  height: 8px;
 }
 
 .fh-main-box {
@@ -10132,14 +10158,24 @@ label {
   height: 55px;
   padding: 0;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 1px;
-  touch-action: pan-y;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
   user-select: none;
+}
+
+.fh-calendar::-webkit-scrollbar {
+  display: none;
 }
 
 .fh-calendar button {
   position: relative;
+  scroll-snap-align: start;
   display: flex;
   width: 46px;
   height: 55px;
@@ -10340,18 +10376,21 @@ label {
   flex: 0 0 auto;
 }
 
+.fh-event__tag.is-friendly,
 .fh-event__tag.is-rating {
   width: 123px;
   background: rgba(159, 207, 2, 0.1);
   color: #9bbd05;
 }
 
+.fh-event__tag.is-friendly svg,
 .fh-event__tag.is-rating svg {
   width: 8px;
   height: 10px;
   flex: 0 0 8px;
 }
 
+.fh-event__tag.is-friendly .fh-event__tag-label,
 .fh-event__tag.is-rating .fh-event__tag-label {
   width: 99px;
   height: 8px;
@@ -11539,6 +11578,32 @@ button.participant-avatar-stack__open-slot:focus-visible {
   justify-content: center;
   border-top: 0.5px solid #ededed;
   background: #fafafa;
+}
+
+/* For Me ends at its recommendations; no space is reserved for hidden sections. */
+.figma-home-shell.has-recommendations-scroll-peek {
+  min-height: 0;
+}
+
+.figma-home-shell.has-recommendations-scroll-peek .figma-home {
+  height: auto;
+  min-height: 0;
+}
+
+.figma-home-shell.has-recommendations-scroll-peek .fh-main-box {
+  height: auto;
+  flex: 0 0 auto;
+}
+
+.figma-home-shell.has-recommendations-scroll-peek .fh-bookings,
+.figma-home-shell.has-recommendations-scroll-peek .fh-for-me .booking-recommendations {
+  padding-bottom: 0;
+}
+
+.figma-home-shell.has-recommendations-scroll-peek .fh-bottom-nav {
+  position: sticky;
+  left: auto;
+  flex: 0 0 88px;
 }
 
 .fh-bottom-nav > a {
@@ -13712,7 +13777,8 @@ button.participant-avatar-stack__open-slot:focus-visible {
   --sheet-padding-x: 12px;
 }
 
-.figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
+.figma-home-shell .figma-home .fh-for-me .booking-recommendations.is-photo-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: minmax(242px, auto);
   align-items: stretch;
   padding-right: 0;
@@ -13720,7 +13786,11 @@ button.participant-avatar-stack__open-slot:focus-visible {
   gap: 8px;
 }
 
-.figma-home-shell.is-home-v3 .fh-for-me .booking-recommendation.is-photo-grid-card {
+.fh-hero:not(.fh-hero--v2) + .fh-main-box .booking-recommendations.is-photo-grid {
+  margin-right: 20px;
+}
+
+.figma-home-shell .figma-home .fh-for-me .booking-recommendation.is-photo-grid-card {
   min-width: 0;
   padding: 0;
   overflow: hidden;
@@ -13875,7 +13945,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   flex: 1 1 auto;
 }
 
-.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack {
+.figma-home-shell .figma-home .recommendation-grid-card__social .participant-avatar-stack {
   width: auto;
   height: 32px;
   min-width: 0;
@@ -13884,14 +13954,38 @@ button.participant-avatar-stack__open-slot:focus-visible {
   padding: 0 6px;
 }
 
-.figma-home-shell.is-home-v3 .recommendation-grid-card__social .participant-avatar-stack__item {
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card__social
+  .participant-avatar-stack__open-slot,
+.figma-home-shell .figma-home .recommendation-grid-card__social .participant-avatar-stack__item {
   width: 32px;
   height: 32px;
   flex-basis: 32px;
   margin: 0 -6px;
 }
 
-.figma-home-shell.is-home-v3
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card__social
+  .participant-avatar-stack__open-slot
+  svg {
+  width: 32px;
+  height: 32px;
+  flex-basis: 32px;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card__social
+  .booking-activity-card__host-roster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.figma-home-shell
+  .figma-home
   .recommendation-grid-card__social
   .participant-avatar-stack__item
   > [data-player-level-avatar] {
@@ -13932,7 +14026,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   max-width: none;
   height: 47px;
   flex: 0 0 57px;
-  transform: translate(-5px, -3px);
+  transform: translate(5px, 4px);
 }
 
 .recommendation-grid-card__action.is-disabled {
@@ -13941,7 +14035,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 @media (min-width: 390px) and (max-width: 412px) {
-  .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
+  .figma-home-shell .figma-home .fh-for-me .booking-recommendations.is-photo-grid {
     gap: 10px;
   }
 }
@@ -13951,7 +14045,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
     --sheet-padding-x: 16px;
   }
 
-  .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
+  .figma-home-shell .figma-home .fh-for-me .booking-recommendations.is-photo-grid {
     grid-auto-rows: minmax(242px, auto);
     gap: 12px;
   }
@@ -13980,7 +14074,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
     padding-left: 8px;
   }
 
-  .figma-home-shell.is-home-v3 .fh-for-me .booking-recommendations.is-photo-grid {
+  .figma-home-shell .figma-home .fh-for-me .booking-recommendations.is-photo-grid {
     grid-auto-rows: minmax(238px, auto);
   }
 
@@ -13995,4 +14089,12 @@ button.participant-avatar-stack__open-slot:focus-visible {
   .recommendation-grid-card__action {
     font-size: 10px;
   }
+}
+
+.fh-event__roster-status {
+  display: block;
+  max-width: 155px;
+  color: #747276;
+  font-size: 11px;
+  line-height: 1.3;
 }

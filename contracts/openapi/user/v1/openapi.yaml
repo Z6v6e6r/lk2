@@ -5370,6 +5370,28 @@ components:
         id:
           type: string
           format: uuid
+        gameId:
+          type: string
+          format: uuid
+          description: Explicit canonical game association; never inferred from the route.
+        roster:
+          type: object
+          additionalProperties: false
+          required: [state]
+          description: Freshness of participants and openSlots from the same authorized game snapshot. Unlinked records are UNAVAILABLE; legacy responses may omit this metadata.
+          properties:
+            state:
+              type: string
+              enum: [READY, STALE, UNAVAILABLE]
+            revision:
+              type: integer
+              minimum: 0
+            generatedAt:
+              type: string
+              format: date-time
+            capacity:
+              type: integer
+              enum: [2, 4]
         kind:
           type: string
           enum: [game, training, tournament]

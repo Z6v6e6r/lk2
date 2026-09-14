@@ -10,9 +10,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
+import { loadConfig } from '../packages/config/src/index.js';
 import {
   assertOwned,
   makeModel,
@@ -25,6 +28,8 @@ import {
   assertResumeVolumes,
   assertPrivatePath,
   uncertainCompletion,
+  realAccountEnvironment,
+  realAccountMode,
 } from './lk2-local.js';
 
 const root = resolve(import.meta.dirname, '..');
@@ -218,4 +223,90 @@ describe('preexisting state custody', () => {
     expect(uncertainCompletion({ error: { code: 'ETIMEDOUT' } })).toBe(true);
     expect(uncertainCompletion({ status: null })).toBe(true);
   });
+});
+
+describe('real Viva preview custody', () => {
+  it('never converts a retained mock DB, including legacy receipts, and retains real mode', () => {
+    expect(realAccountMode(null, false)).toBe(false);
+    expect(realAccountMode(null, true)).toBe(true);
+    expect(realAccountMode({ mode: 'real-account' }, false)).toBe(true);
+    for (const receipt of [{}, { mode: 'mock' }]) {
+      expect(() => realAccountMode(receipt, true)).toThrow(/dedicated/);
+    }
+    expect(() => realAccountMode({ mode: 'unknown' }, false)).toThrow(/Unknown/);
+  });
+  it('requires a private encryption key and validates actual API configuration', () => {
+    for (const key of ['', 'short', 'a'.repeat(42), '!'.repeat(43)])
+      expect(() => realAccountEnvironment(key)).toThrow(/encryption key/);
+    const mock = makeModel(base, root, 'node:22-bookworm-slim', lock);
+    const environment = {
+      ...mock.services.api.environment,
+      ...realAccountEnvironment('a'.repeat(43)),
+      JWT_ISSUER: 'local-test',
+      JWT_ACCESS_SECRET: 'b'.repeat(64),
+      JWT_REFRESH_SECRET: 'c'.repeat(64),
+    };
+    const config = loadConfig(environment);
+    expect(config.VIVA_MODE).toBe('production');
+    expect(config.HOME_READ_MODE).toBe('projection');
+    expect(config.GAMES_READ_ENABLED).toBe(true);
+    expect(config.GAMES_COMMANDS_ENABLED).toBe(false);
+    expect(new URL(config.CORS_ORIGINS).hostname).not.toBe('127.0.0.1');
+    const real = makeModel(base, root, 'node:22-bookworm-slim', lock, environment, true);
+    expect(real.services.web.ports).toEqual(['127.0.0.1:5174:5173']);
+    expect(real.services.api.networks).toEqual(['data', 'provider']);
+    expect(real.services.api.environment).toMatchObject({
+      GAMES_READ_ENABLED: 'true',
+      GAMES_COMMANDS_ENABLED: 'false',
+    });
+    expect(real.networks.provider).toBeDefined();
+    expect(mock.networks.provider).toBeUndefined();
+    expect(real.services.api).not.toHaveProperty('ports');
+    for (const service of ['web', 'setup', 'migrator'] as const) {
+      expect(real.services[service].networks).not.toContain('provider');
+      for (const key of [
+        'VIVA_DELEGATION_ENCRYPTION_KEY',
+        'JWT_ACCESS_SECRET',
+        'JWT_REFRESH_SECRET',
+        'GAMES_READ_ENABLED',
+        'GAMES_COMMANDS_ENABLED',
+      ])
+        expect(real.services[service].environment).not.toHaveProperty(key);
+    }
+    expect(real.services.web.environment).toMatchObject({
+      VITE_LK2_REAL_ACCOUNT: '1',
+      PHUB_LOCAL_REAL_ACCOUNT: '1',
+    });
+    expect(real.services.web.environment).not.toHaveProperty('VITE_LK2_LOCAL_PREVIEW');
+  });
+});
+
+it('executes the real Web health command with the cookie-isolated Host header', async () => {
+  const model = makeModel(base, root, 'node:22-bookworm-slim', lock, {}, true);
+  const server = createServer((request, response) => {
+    response.statusCode = request.headers.host === 'localhost:5174' ? 200 : 421;
+    response.end();
+  });
+  await new Promise<void>((done, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', done);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing test port');
+    const healthScript = model.services.web.healthcheck!.test[3]!.replace(
+      '127.0.0.1:5173',
+      `127.0.0.1:${address.port}`,
+    );
+    const exit = await new Promise<number | null>((done, reject) => {
+      const child = spawn(process.execPath, ['-e', healthScript], { stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('exit', done);
+    });
+    expect(exit).toBe(0);
+  } finally {
+    await new Promise<void>((done, reject) =>
+      server.close((error) => (error ? reject(error) : done())),
+    );
+  }
 });
