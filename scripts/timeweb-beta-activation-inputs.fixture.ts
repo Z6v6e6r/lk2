@@ -95,6 +95,10 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // endpoints must fail closed rather than serve fabricated data.
     HOME_READ_MODE: 'projection',
     HOME_BASE_SYNC_ENABLED: 'true',
+    // Game commands are open for beta testing; participation commands stay off until the shared
+    // gateway token, tenant key and principal key exist and are shared with the calling side.
+    GAMES_COMMANDS_ENABLED: 'true',
+    PARTICIPATION_COMMANDS_ENABLED: 'false',
   };
   const worker = {
     ...baseEnvironment('worker'),
