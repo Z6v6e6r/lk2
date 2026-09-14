@@ -22,6 +22,7 @@ import bookingRecommendationsLoaderUrl from './assets/loaders/booking-recommenda
 import { locationCourtLabel } from './location-court-label.js';
 import promoUrl from './assets/home/promo.png';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
+import { useHomeHeaderSnap } from './useHomeHeaderSnap.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 
@@ -1212,6 +1213,9 @@ export function HomeDashboardPage({
     'all',
   );
   const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('FOR_ME');
+  const { homeRef, recommendationsRef } = useHomeHeaderSnap(
+    layoutVariant === 'v3' && bookingTab === 'FOR_ME',
+  );
   const [bookingRecommendations, setBookingRecommendations] =
     useState<BookingRecommendationPage | null>(null);
   const [bookingRecommendationsLoading, setBookingRecommendationsLoading] = useState(true);
@@ -1390,7 +1394,7 @@ export function HomeDashboardPage({
 
   return (
     <div className={shellClassName}>
-      <main className="figma-home" aria-label="Главная">
+      <main className="figma-home" aria-label="Главная" ref={homeRef}>
         <section
           className={`fh-hero${usesCompactHero ? ' fh-hero--v2' : ''}${
             layoutVariant === 'v3' ? ' fh-hero--v3' : ''
@@ -1427,7 +1431,12 @@ export function HomeDashboardPage({
             ))}
           </nav>
 
-          <div className="fh-tabs" role="tablist" aria-label="Раздел записей">
+          <div
+            className="fh-tabs"
+            role="tablist"
+            aria-label="Раздел записей"
+            ref={recommendationsRef}
+          >
             <button
               type="button"
               role="tab"
