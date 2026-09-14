@@ -533,7 +533,7 @@ export function validateCandidateReleaseEnvironment(bytes, operation) {
     values.PHUB_CANONICAL_ARTIFACT_NAME !==
       `timeweb-amd64-canonical-release-${operation.candidateSourceSha}-${runId}-1` ||
     values.TIMEWEB_RUNTIME_ENV_ROOT !== operation.candidateRuntimeEnvRoot ||
-    values.PHUB_WORKER_ENABLED !== 'false' ||
+    values.PHUB_WORKER_ENABLED !== 'true' ||
     values.PHUB_MIGRATOR_ENABLED !== 'false' ||
     values.COMPOSE_PROFILES !== '' ||
     values.PHUB_ROLLBACK_PREVIOUS_RELEASE_ID !== 'NONE' ||

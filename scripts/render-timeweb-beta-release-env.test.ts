@@ -215,7 +215,7 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
       `PHUB_CANONICAL_ARTIFACT_DIGEST=${trustedAuthority.evidence.canonicalArtifact.digest}\n`,
     );
     expect(contents).toContain(`TIMEWEB_RUNTIME_ENV_ROOT=${value.secrets.targetDir}\n`);
-    expect(contents).toContain('PHUB_WORKER_ENABLED=false\n');
+    expect(contents).toContain('PHUB_WORKER_ENABLED=true\n');
     expect(contents).toContain('PHUB_MIGRATOR_ENABLED=false\n');
     expect(contents).toContain('PHUB_ROLLBACK_MODE=stop-candidate-no-previous-release\n');
     expect(contents).toContain(`WEB_IMAGE_DIGEST=sha256:${'1'.repeat(64)}\n`);
@@ -663,7 +663,7 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
     }
   });
 
-  it('builds only the source-controlled initial-beta service stages without profiles', () => {
+  it('builds the source-controlled initial-beta service stages with profile-gated background work', () => {
     const releaseEnv = '/opt/phub/timeweb-beta/releases/example/release.env';
     const upApi = buildTimewebInitialBetaComposeInvocation('up-api', releaseEnv);
     expect(upApi.command).toBe('/usr/bin/docker');
@@ -674,13 +674,18 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
     expect(buildTimewebInitialBetaComposeInvocation('up-realtime', releaseEnv).args).not.toContain(
       'worker',
     );
+    expect(
+      buildTimewebInitialBetaComposeInvocation('up-worker', releaseEnv).args.slice(-6),
+    ).toEqual(['--profile', 'background', 'up', '-d', '--no-deps', 'worker']);
+    expect(
+      buildTimewebInitialBetaComposeInvocation('pull-worker', releaseEnv).args.slice(-4),
+    ).toEqual(['--profile', 'background', 'pull', 'worker']);
+    expect(
+      buildTimewebInitialBetaComposeInvocation('up-migrator', releaseEnv).args.slice(-6),
+    ).toEqual(['--profile', 'migration', 'up', '-d', '--no-deps', 'migrator']);
     expect(() =>
-      // @ts-expect-error Worker is intentionally absent from the supported stage type.
-      buildTimewebInitialBetaComposeInvocation('up-worker', releaseEnv),
-    ).toThrow('compose_stage');
-    expect(() =>
-      // @ts-expect-error Migrator is intentionally absent from the supported stage type.
-      buildTimewebInitialBetaComposeInvocation('up-migrator', releaseEnv),
+      // @ts-expect-error Unknown stages stay rejected.
+      buildTimewebInitialBetaComposeInvocation('up-unknown', releaseEnv),
     ).toThrow('compose_stage');
     expect(() =>
       runTimewebInitialBetaComposeStage(
@@ -734,7 +739,7 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
       ),
     );
     expect(rendered.contents).toContain('COMPOSE_PROFILES=\n');
-    expect(rendered.contents).toContain('PHUB_WORKER_ENABLED=false');
+    expect(rendered.contents).toContain('PHUB_WORKER_ENABLED=true');
     expect(rendered.contents).toContain('PHUB_MIGRATOR_ENABLED=false');
     expect(() =>
       writeTimewebBetaReleaseEnvironment({

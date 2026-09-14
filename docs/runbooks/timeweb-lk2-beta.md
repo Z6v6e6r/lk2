@@ -594,15 +594,17 @@ sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
 The first-beta renderer supports only `PHUB_ROLLBACK_PREVIOUS_RELEASE_ID=NONE` and stop-candidate
 rollback. It cannot claim an unverified previous release. The output references
 `/etc/phub/timeweb-beta/*.env`, includes immutable image digests, both custody checksums and release/
-rollback identity, and records `PHUB_WORKER_ENABLED=false` and `PHUB_MIGRATOR_ENABLED=false`. It sets
+rollback identity, and records `PHUB_WORKER_ENABLED=true` and `PHUB_MIGRATOR_ENABLED=false`. It sets
 `COMPOSE_PROFILES` to the empty value and contains no credential values. The authorized morning
-path must also scrub ambient `COMPOSE_*`, must never pass `--profile`, and must name only the allowed
-service at each step. Offline validation asserts that default rendered services are exactly API,
-Realtime and Web; an explicit Worker or Migrator target remains a separately prohibited live action.
+path must also scrub ambient `COMPOSE_*` and must name only the allowed service at each step. Offline
+validation asserts that default rendered services are exactly API, Realtime and Web; Worker and
+Migrator are promoted deliberately through their own profile-gated stages.
 
 After separate deployment authority, use only the renderer's source-controlled stage controller. It
-scrubs ambient `COMPOSE_*`, performs a default-service preflight before every stage, passes no shell
-or `--profile`, and has no Worker/Migrator stage:
+scrubs ambient `COMPOSE_*`, performs a default-service preflight before every stage, passes no shell,
+and exposes `pull-worker`/`up-worker` (profile `background`) and `pull-migrator`/`up-migrator`
+(profile `migration`) alongside the api, web and realtime stages. Migrator stays
+`PHUB_MIGRATOR_ENABLED=false` and must be run only under its own migration gate:
 
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
@@ -689,14 +691,14 @@ pair. Five tags or inventory from failed run `33011023879` are never release inp
    metadata-only provisioner dry-run, inspect its plan, provision the exact release secret set and
    read back only marker/path/owner/mode metadata.
 8. From that same frozen checkout through fixed `/usr/bin/node` under `env -i`, render `release.env`,
-   render Compose with no ambient overrides, and verify all five immutable digests. Worker and
-   Migrator stay disabled.
+   render Compose with no ambient overrides, and verify all five immutable digests. Migrator stays
+   disabled.
 9. Keep Migrator disabled until a separate migration gate proves pending expand-compatible changes,
    lock budget, old/new coexistence, backup and rollback. Apply nothing during readiness review.
-10. Under deployment authority, scrub every ambient `COMPOSE_*`, pass no `--profile`, and install/start
-    the minimal explicitly approved services in this order: API, then Web, then optionally Realtime
-    only after its separate Rabbit topology gate. Never target Worker or Migrator. Read back running
-    digests, health, logs/metrics and dependency identity after every service.
+10. Under deployment authority, scrub every ambient `COMPOSE_*` and install/start services in this
+    order: API, then Web, then Realtime, then Worker through its `background` profile. Read back
+    running digests, health, logs/metrics and dependency identity after every service. Run the
+    Migrator only through its `migration` profile under step 9's gate.
 11. Under separate ingress/TLS authority, start Caddy and verify DNS/TLS, health, browser/auth/OAuth,
     API read journeys and—only if separately approved—Realtime. Use provider/store read-back; HTTP 200
     alone is insufficient.

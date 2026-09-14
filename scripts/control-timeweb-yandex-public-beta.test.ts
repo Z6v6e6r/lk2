@@ -183,7 +183,7 @@ describe('Timeweb Yandex public-beta controller', () => {
     PHUB_WORKER_RUNTIME_ENV_FILE: `${candidateRuntimeEnvRoot}/worker.env`,
     PHUB_REALTIME_RUNTIME_ENV_FILE: `${candidateRuntimeEnvRoot}/realtime.env`,
     PHUB_MIGRATOR_RUNTIME_ENV_FILE: `${candidateRuntimeEnvRoot}/migrator.env`,
-    PHUB_WORKER_ENABLED: 'false',
+    PHUB_WORKER_ENABLED: 'true',
     PHUB_MIGRATOR_ENABLED: 'false',
     COMPOSE_PROFILES: '',
     PHUB_ROLLBACK_PREVIOUS_RELEASE_ID: 'NONE',
@@ -415,7 +415,7 @@ describe('Timeweb Yandex public-beta controller', () => {
     ).toThrow('release_env_image_identity');
     expect(() =>
       validateCandidateReleaseEnvironment(
-        encodeCandidateEnvironment({ PHUB_WORKER_ENABLED: 'true' }),
+        encodeCandidateEnvironment({ PHUB_WORKER_ENABLED: 'false' }),
         candidateOperation,
       ),
     ).toThrow('release_env_identity');
