@@ -32,7 +32,7 @@ describe('Home layout scroll contract', () => {
     expect(homeRule).not.toMatch(/overflow-x:\s*hidden\s*;/);
   });
 
-  it('keeps the compact hero and exact lower-box Figma geometry', () => {
+  it('keeps compact hero spacing and lower sections aligned to the Home width', () => {
     const homeRule = ruleBody('.figma-home');
     const heroRule = ruleBody('.fh-hero');
     const heroV2Rule = ruleBody('.fh-hero--v2');
@@ -149,7 +149,7 @@ describe('Home layout scroll contract', () => {
     expect(actionsRule).toMatch(/gap:\s*8px\s*;/);
     expect(ruleBody('.fh-actions > a:first-child')).toMatch(/flex:\s*0 0 128px\s*;/);
     expect(ruleBody('.fh-actions > a:last-child')).toMatch(/flex:\s*1 1 0\s*;/);
-    expect(tabsRule).toMatch(/width:\s*335px\s*;/);
+    expect(tabsRule).toMatch(/width:\s*calc\(var\(--fh-page-width\) - 40px\)\s*;/);
     expect(tabsRule).toMatch(/height:\s*50px\s*;/);
     expect(tabsRule).toMatch(/margin-top:\s*auto\s*;/);
     expect(tabsRule).toMatch(/gap:\s*12px\s*;/);
@@ -175,11 +175,11 @@ describe('Home layout scroll contract', () => {
     expect(splitFooterRule).toMatch(
       /grid-template-columns:\s*minmax\(0, 3fr\) minmax\(0, 2fr\)\s*;/,
     );
-    expect(lowerRule).toMatch(/width:\s*375px\s*;/);
+    expect(lowerRule).toMatch(/width:\s*var\(--fh-page-width\)\s*;/);
     expect(lowerRule).toMatch(/height:\s*554px\s*;/);
     expect(lowerRule).toMatch(/padding:\s*32px 24px\s*;/);
     expect(lowerRule).toMatch(/gap:\s*48px\s*;/);
-    expect(locationsRule).toMatch(/width:\s*327px\s*;/);
+    expect(locationsRule).toMatch(/width:\s*calc\(var\(--fh-page-width\) - 48px\)\s*;/);
     expect(locationsRule).toMatch(/height:\s*230px\s*;/);
     expect(additionalRule).toMatch(/height:\s*148px\s*;/);
     expect(additionalRule).not.toMatch(/margin-top\s*:/);
