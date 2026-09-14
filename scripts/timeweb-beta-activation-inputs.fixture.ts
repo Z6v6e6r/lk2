@@ -111,6 +111,9 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     COMMUNITIES_REALTIME_ENABLED: 'true',
     COMMUNITY_HOME_SYNC_ENABLED: 'false',
     PLATFORM_HOME_SYNC_ENABLED: 'false',
+    // The Viva End User profile read is the only operation certified for the direct browser
+    // transport, so the web client fetches the profile from Viva itself.
+    VIVA_DIRECT_READ_ENABLED: 'true',
   };
   const worker = {
     ...baseEnvironment('worker'),
