@@ -10,6 +10,7 @@ import {
   BookingRecommendationReasonChips,
 } from './BookingRecommendations.js';
 import type { BookingRecommendationPage } from './auth-gateway.js';
+import { stubIntersectionObserver } from './intersection-observer.test-helper.js';
 
 afterEach(cleanup);
 
@@ -361,7 +362,8 @@ describe('booking recommendation markers', () => {
     expect(within(tournamentOpenSlots).getAllByLabelText('Свободное место')).toHaveLength(1);
   });
 
-  it('requests the next page when the compact feed approaches its scroll boundary', () => {
+  it('requests the next page when the compact feed end reaches the viewport', () => {
+    const observer = stubIntersectionObserver();
     const onLoadMore = vi.fn();
     const page: BookingRecommendationPage = {
       version: 'b'.repeat(64),
@@ -398,15 +400,14 @@ describe('booking recommendation markers', () => {
     );
     const feed = container.querySelector('.booking-recommendations');
     expect(feed).toBeInstanceOf(HTMLElement);
-    Object.defineProperties(feed, {
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 800 },
-      scrollTop: { configurable: true, value: 200 },
-    });
+    // The feed is not its own scroller — the page is — so the sentinel at the end of the
+    // list is what asks for the next page.
+    expect(feed?.querySelector('.booking-recommendations__sentinel')).toBeInstanceOf(HTMLElement);
 
-    fireEvent.scroll(feed as HTMLElement);
+    observer.triggerLoadMoreSentinel();
 
     expect(onLoadMore).toHaveBeenCalledOnce();
+    observer.restore();
   });
 
   it('repeats ads without leaving an empty compact-grid cell before a strip', () => {

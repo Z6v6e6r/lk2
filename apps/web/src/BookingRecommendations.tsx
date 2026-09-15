@@ -626,6 +626,23 @@ export function BookingRecommendations({
   readonly advertisingLayout?: RecommendationAdvertisingLayout;
   readonly onAdvertisingEngagement?: (promotionId: string, kind: 'IMPRESSION' | 'CLICK') => unknown;
 }): React.JSX.Element {
+  // Home scrolls as one page now, so the feed itself never scrolls: watch the end of the
+  // list against the viewport instead of listening to this container's own scroll events.
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+  const autoLoadMore = compact && hasMore && !loadingMore && !loadMoreError && Boolean(onLoadMore);
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!autoLoadMore || !sentinel || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) onLoadMore?.();
+      },
+      { rootMargin: '240px 0px' },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [autoLoadMore, onLoadMore]);
+
   if (page.items.length === 0) {
     return (
       <div className="booking-recommendations-empty" role="status">
@@ -651,16 +668,6 @@ export function BookingRecommendations({
               compactVisualVariant === 'photo-grid' ? ' is-photo-grid' : ''
             }`
           : 'booking-recommendations'
-      }
-      onScroll={
-        compact && hasMore && !loadingMore && !loadMoreError && onLoadMore
-          ? (event) => {
-              const container = event.currentTarget;
-              if (container.scrollHeight - container.scrollTop - container.clientHeight <= 240) {
-                onLoadMore();
-              }
-            }
-          : undefined
       }
     >
       {page.items.map((item, index) => {
@@ -723,6 +730,9 @@ export function BookingRecommendations({
           </Fragment>
         );
       })}
+      {autoLoadMore ? (
+        <div ref={loadMoreSentinelRef} className="booking-recommendations__sentinel" aria-hidden />
+      ) : null}
       {loadMoreError ? (
         <div className="booking-recommendations__loading-more">
           <p role="alert">Не удалось загрузить следующие рекомендации.</p>

@@ -2363,14 +2363,11 @@
   flex: 1;
   align-content: start;
   gap: 12px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
   scrollbar-width: none;
   contain: layout paint;
   isolation: isolate;
   backface-visibility: hidden;
   transform: translateZ(0);
-  -webkit-overflow-scrolling: touch;
 }
 
 .fh-for-me .booking-recommendation {
@@ -8777,6 +8774,11 @@ label {
   outline-offset: -10px;
 }
 
+.booking-recommendations__sentinel {
+  height: 1px;
+  min-height: 1px;
+}
+
 .booking-recommendations__loading-more {
   grid-column: 1 / -1;
   margin: 4px 0 0;
@@ -13813,7 +13815,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   gap: 8px;
 }
 
-.fh-hero:not(.fh-hero--v2) + .fh-main-box .booking-recommendations.is-photo-grid {
+.fh-hero:not(.fh-hero--v2) ~ .fh-main-box .booking-recommendations.is-photo-grid {
   margin-right: 20px;
 }
 

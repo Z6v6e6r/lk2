@@ -140,7 +140,10 @@ describe('Home layout scroll contract', () => {
     expect(recommendationScrollerRule).toMatch(/contain:\s*layout paint\s*;/);
     expect(recommendationScrollerRule).toMatch(/isolation:\s*isolate\s*;/);
     expect(recommendationScrollerRule).toMatch(/transform:\s*translateZ\(0\)\s*;/);
-    expect(recommendationScrollerRule).toMatch(/-webkit-overflow-scrolling:\s*touch\s*;/);
+    // Home scrolls as one page: the feed must not become a nested scroller that
+    // swallows wheel/touch gestures (that is what a contained scroller used to do).
+    expect(recommendationScrollerRule).not.toMatch(/overflow-y:\s*(?:auto|scroll)\s*;/);
+    expect(recommendationScrollerRule).not.toMatch(/overscroll-behavior:\s*contain\s*;/);
     expect(recommendationItemRule).toMatch(/contain:\s*layout style\s*;/);
     expect(recommendationHeaderRule).toMatch(/min-height:\s*35px\s*;/);
     expect(actionsRule).toMatch(/height:\s*64px\s*;/);
