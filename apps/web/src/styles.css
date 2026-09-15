@@ -2283,7 +2283,8 @@
   box-sizing: border-box;
   flex: 1;
   flex-direction: column;
-  overflow: hidden;
+  /* The page owns vertical scrolling, so the feed must not clip its own cards. */
+  overflow: visible;
 }
 
 .fh-for-me > p,
@@ -10144,23 +10145,23 @@ label {
   z-index: 1;
   display: flex;
   width: var(--fh-page-width);
-  /* Pinned tab bar keeps the two headings visible; the sheet scrolls under it. */
-  height: calc(100dvh - var(--fh-tabs-height, 50px));
-  flex: 0 0 calc(100dvh - var(--fh-tabs-height, 50px));
+  /* One scroller: the hero scrolls away first, then the cards flow in the page itself. */
+  height: auto;
+  min-height: calc(100dvh - var(--fh-tabs-height, 50px));
+  flex: 0 0 auto;
   flex-direction: column;
-  overflow-y: auto;
-  overscroll-behavior-y: auto;
+  overflow: visible;
   /* The bottom nav floats over the sheet, so its height stays inside the scroll range. */
   padding-bottom: 88px;
-  -webkit-overflow-scrolling: touch;
 }
 
 .fh-bookings {
   display: flex;
   width: var(--fh-page-width);
-  height: calc(522px + var(--fh-bookings-extra-height));
+  height: auto;
+  min-height: calc(522px + var(--fh-bookings-extra-height));
   padding: 12px 0 32px;
-  flex: 0 0 calc(522px + var(--fh-bookings-extra-height));
+  flex: 1 1 auto;
   flex-direction: column;
   align-items: center;
   gap: 18px;
@@ -10336,7 +10337,7 @@ label {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  overflow-y: auto;
+  overflow-y: visible;
   scrollbar-width: none;
 }
 
@@ -11617,10 +11618,11 @@ button.participant-avatar-stack__open-slot:focus-visible {
   min-height: 0;
 }
 
-/* The sheet is the scroller below the pinned tab bar, so it keeps the viewport height. */
+/* The sheet fills the viewport under the pinned bar and still grows with the card list. */
 .figma-home-shell.has-recommendations-scroll-peek .fh-main-box {
-  height: calc(100dvh - var(--fh-tabs-height, 50px));
-  flex: 0 0 calc(100dvh - var(--fh-tabs-height, 50px));
+  height: auto;
+  min-height: calc(100dvh - var(--fh-tabs-height, 50px));
+  flex: 0 0 auto;
 }
 
 .figma-home-shell.has-recommendations-scroll-peek .fh-bookings,

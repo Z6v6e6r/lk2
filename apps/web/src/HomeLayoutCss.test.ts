@@ -166,12 +166,18 @@ describe('Home layout scroll contract', () => {
     expect(tabBookingPresenceDotRule).toMatch(/right:\s*-10px\s*;/);
     expect(calendarBookingPresenceDotRule).toMatch(/left:\s*21px\s*;/);
     expect(tabIndicatorRule).toMatch(/background:\s*transparent\s*;/);
-    expect(mainBoxRule).toMatch(/height:\s*calc\(100dvh - var\(--fh-tabs-height,\s*50px\)\)\s*;/);
-    expect(mainBoxRule).toMatch(/overflow-y:\s*auto\s*;/);
-    expect(mainBoxRule).toMatch(/padding-bottom:\s*88px\s*;/);
-    expect(bookingsRule).toMatch(
-      /height:\s*calc\(522px \+ var\(--fh-bookings-extra-height\)\)\s*;/,
+    // One scroller: the page scrolls the hero away, then the cards flow under the pinned bar.
+    expect(mainBoxRule).toMatch(/height:\s*auto\s*;/);
+    expect(mainBoxRule).toMatch(
+      /min-height:\s*calc\(100dvh - var\(--fh-tabs-height,\s*50px\)\)\s*;/,
     );
+    expect(mainBoxRule).toMatch(/overflow:\s*visible\s*;/);
+    expect(mainBoxRule).toMatch(/padding-bottom:\s*88px\s*;/);
+    expect(bookingsRule).toMatch(/height:\s*auto\s*;/);
+    expect(bookingsRule).toMatch(
+      /min-height:\s*calc\(522px \+ var\(--fh-bookings-extra-height\)\)\s*;/,
+    );
+    expect(bookingsRule).toMatch(/flex:\s*1 1 auto\s*;/);
     expect(recommendationsPeekRule).toMatch(/--fh-bookings-extra-height:\s*148px\s*;/);
     expect(splitFooterRule).toMatch(
       /grid-template-columns:\s*minmax\(0, 3fr\) minmax\(0, 2fr\)\s*;/,
