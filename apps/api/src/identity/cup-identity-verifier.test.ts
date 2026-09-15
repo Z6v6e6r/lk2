@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  CupLegacyLkIdentityVerifier,
-  LegacyLkIdentityVerificationError,
-} from './legacy-lk-identity-verifier.js';
+import { CupHttpIdentityVerifier, CupIdentityVerificationError } from './cup-identity-verifier.js';
 
 const integrationToken = 'cup-identity-token-at-least-32-characters';
 
@@ -29,7 +26,7 @@ describe('CUP legacy LK identity verifier adapter', () => {
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       ),
     );
-    const verifier = new CupLegacyLkIdentityVerifier({
+    const verifier = new CupHttpIdentityVerifier({
       url: 'https://cup.example.test/api/internal/lk/identity/verify',
       integrationToken,
       timeoutMs: 1_000,
@@ -59,7 +56,7 @@ describe('CUP legacy LK identity verifier adapter', () => {
   });
 
   it('distinguishes rejected tokens from verifier outages and malformed success responses', async () => {
-    const rejected = new CupLegacyLkIdentityVerifier({
+    const rejected = new CupHttpIdentityVerifier({
       url: 'https://cup.example.test/verify',
       integrationToken,
       timeoutMs: 1_000,
@@ -67,20 +64,20 @@ describe('CUP legacy LK identity verifier adapter', () => {
     });
     await expect(rejected.verify('Bearer bad')).rejects.toMatchObject({ outcome: 'rejected' });
 
-    const unavailable = new CupLegacyLkIdentityVerifier({
+    const unavailable = new CupHttpIdentityVerifier({
       url: 'https://cup.example.test/verify',
       integrationToken,
       timeoutMs: 1_000,
       fetchImplementation: vi.fn().mockRejectedValue(new Error('network')),
     });
     await expect(unavailable.verify('Bearer token')).rejects.toBeInstanceOf(
-      LegacyLkIdentityVerificationError,
+      CupIdentityVerificationError,
     );
     await expect(unavailable.verify('Bearer token')).rejects.toMatchObject({
       outcome: 'unavailable',
     });
 
-    const malformed = new CupLegacyLkIdentityVerifier({
+    const malformed = new CupHttpIdentityVerifier({
       url: 'https://cup.example.test/verify',
       integrationToken,
       timeoutMs: 1_000,

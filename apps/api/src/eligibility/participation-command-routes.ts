@@ -11,13 +11,21 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
+import {
+  CupIdentityVerificationError,
+  type VerifiedCupIdentity,
+} from '../identity/cup-identity-verifier.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{2,127}$/;
+const AUTHORIZATION_PATTERN = /^Bearer\s+\S+$/i;
+
+export interface ParticipationIdentityVerifier {
+  verify(authorization: string): Promise<VerifiedCupIdentity>;
+}
 
 const authorizeSchema = z
   .object({
-    actor: z.object({ userId: z.string().uuid() }).strict(),
     activity: z
       .object({
         type: z.enum(PARTICIPATION_ACTIVITY_TYPES),
@@ -66,6 +74,19 @@ function idempotencyKey(request: FastifyRequest): string {
   return value;
 }
 
+/**
+ * Digest of the originating caller credential, recorded on the command so that a later
+ * acknowledgement can be bound to the caller that authorized it.
+ *
+ * Without this, every holder of the tenant-wide integration token is interchangeable and any of
+ * them can acknowledge another caller's command as APPLIED or FAILED.
+ */
+function callerKey(request: FastifyRequest): string | undefined {
+  const value = request.headers['x-phub-participation-caller-token'];
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return createHash('sha256').update(value.trim()).digest('hex');
+}
+
 function commandResponse(
   reply: Parameters<typeof sendApiError>[1],
   view: ParticipationCommandView,
@@ -83,6 +104,12 @@ export function registerParticipationCommandRoutes(
     readonly principalKey?: string;
     readonly authorizationTtlSeconds: number;
     readonly repository?: ParticipationCommandRepository;
+    /**
+     * Verifies the end user's forwarded bearer assertion and returns the external identity
+     * (issuer, subject). The canonical actor is then resolved from that verified identity, so a
+     * caller can never nominate an arbitrary end user in the request body.
+     */
+    readonly identityVerifier?: ParticipationIdentityVerifier;
     readonly commandHandlers: readonly preHandlerHookHandler[];
     readonly readHandlers: readonly preHandlerHookHandler[];
   },
@@ -97,7 +124,8 @@ export function registerParticipationCommandRoutes(
       !options.integrationToken ||
       !options.authorizedTenantKey ||
       !options.principalKey ||
-      !options.repository
+      !options.repository ||
+      !options.identityVerifier
     ) {
       sendApiError(
         request,
@@ -151,12 +179,77 @@ export function registerParticipationCommandRoutes(
           'Некорректная команда допуска.',
         );
       }
+      // The end user is never named by the caller. The caller forwards the user's own bearer
+      // assertion; we verify it and resolve the canonical PadlHub actor from the verified
+      // external identity, scoped to the tenant.
+      const authorization = request.headers.authorization;
+      if (!authorization || !AUTHORIZATION_PATTERN.test(authorization)) {
+        return sendApiError(
+          request,
+          reply,
+          401,
+          'PARTICIPATION_USER_ASSERTION_REQUIRED',
+          'Требуется подтверждение пользователя.',
+        );
+      }
+      let identity: VerifiedCupIdentity;
+      try {
+        identity = await options.identityVerifier!.verify(authorization);
+      } catch (error) {
+        if (error instanceof CupIdentityVerificationError) {
+          return sendApiError(
+            request,
+            reply,
+            error.outcome === 'rejected' ? 401 : 503,
+            error.outcome === 'rejected'
+              ? 'PARTICIPATION_USER_ASSERTION_INVALID'
+              : 'PARTICIPATION_IDENTITY_VERIFIER_UNAVAILABLE',
+            error.outcome === 'rejected'
+              ? 'Подтверждение пользователя недействительно.'
+              : 'Проверка пользователя временно недоступна.',
+          );
+        }
+        throw error;
+      }
+      const tenantKey = (request.params as { readonly tenantKey?: string }).tenantKey;
+      if (!tenantKey || identity.tenantKey !== tenantKey) {
+        return sendApiError(
+          request,
+          reply,
+          403,
+          'PARTICIPATION_USER_TENANT_MISMATCH',
+          'Подтверждение относится к другой организации.',
+        );
+      }
+      const resolvedActor = await options.repository!.resolveActor({
+        tenantId: request.tenantId!,
+        issuer: identity.issuer,
+        subject: identity.subject,
+      });
+      if (resolvedActor.outcome === 'actor_not_linked') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'PARTICIPATION_ACTOR_NOT_LINKED',
+          'Профиль ещё не связан с PadlHub. Обновите авторизацию.',
+        );
+      }
+      const originatingCaller = callerKey(request);
       const result = await options.repository!.authorize({
         tenantId: request.tenantId!,
         principalKey: options.principalKey!,
+        ...(originatingCaller ? { callerKey: originatingCaller } : {}),
         idempotencyKey: idempotencyKey(request),
-        requestHash: requestHash(parsed.data),
-        actorUserId: parsed.data.actor.userId,
+        // The hash covers the resolved actor, so the same Idempotency-Key replayed by a
+        // different user is a conflict rather than a replay of someone else's decision.
+        requestHash: requestHash({
+          actorUserId: resolvedActor.userId,
+          activity: parsed.data.activity,
+          action: parsed.data.action,
+          ...(parsed.data.payment ? { payment: parsed.data.payment } : {}),
+        }),
+        actorUserId: resolvedActor.userId,
         activityType: parsed.data.activity.type,
         activityId: parsed.data.activity.id,
         action: parsed.data.action,
@@ -205,9 +298,11 @@ export function registerParticipationCommandRoutes(
           'Некорректное подтверждение записи.',
         );
       }
+      const acknowledgingCaller = callerKey(request);
       const result = await options.repository!.acknowledge({
         tenantId: request.tenantId!,
         principalKey: options.principalKey!,
+        ...(acknowledgingCaller ? { callerKey: acknowledgingCaller } : {}),
         commandId,
         idempotencyKey: idempotencyKey(request),
         requestHash: requestHash(parsed.data),
@@ -257,9 +352,11 @@ export function registerParticipationCommandRoutes(
           'Некорректный идентификатор команды.',
         );
       }
+      const readingCaller = callerKey(request);
       const view = await options.repository!.get({
         tenantId: request.tenantId!,
         principalKey: options.principalKey!,
+        ...(readingCaller ? { callerKey: readingCaller } : {}),
         commandId,
       });
       if (!view) {

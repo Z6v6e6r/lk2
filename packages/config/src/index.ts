@@ -170,6 +170,17 @@ const environmentSchema = z.object({
     .string()
     .regex(/^[a-z0-9][a-z0-9._:-]{2,127}$/)
     .optional(),
+  // Identity verification for the participation gateway. The gateway never accepts an end-user
+  // identifier from the request body; the caller forwards the user's bearer assertion and the
+  // canonical actor is resolved from the verified external identity.
+  PARTICIPATION_IDENTITY_VERIFY_URL: z.string().url().optional(),
+  PARTICIPATION_IDENTITY_VERIFY_TOKEN: z.string().min(32).optional(),
+  PARTICIPATION_IDENTITY_VERIFY_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(500)
+    .max(30_000)
+    .default(5_000),
   PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS: z.coerce
     .number()
     .int()
@@ -723,6 +734,16 @@ export function loadConfig(
         'PARTICIPATION_COMMANDS_ENABLED requires token, tenant key, and principal key',
       );
     }
+    // Without a verifier the gateway cannot bind the end user, so it must refuse to start
+    // rather than fall back to a caller-supplied actor.
+    if (
+      !parsed.data.PARTICIPATION_IDENTITY_VERIFY_URL ||
+      !parsed.data.PARTICIPATION_IDENTITY_VERIFY_TOKEN
+    ) {
+      throw new Error(
+        'PARTICIPATION_COMMANDS_ENABLED requires the participation identity verifier configuration',
+      );
+    }
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.ACTIVITY_HISTORY_ENABLED) {
     throw new Error(
@@ -1198,6 +1219,13 @@ export function loadConfig(
       /replace|change|local|test|example|ci-/i.test(parsed.data.JWT_REFRESH_SECRET))
   ) {
     throw new Error('Production JWT secrets must be distinct non-placeholder values');
+  }
+  // The admin boundary is enforced by verifying the `aud` claim against JWT_ADMIN_AUDIENCE while
+  // client tokens carry JWT_AUDIENCE. Both are signed with the same JWT_ACCESS_SECRET, so if the
+  // two audiences are equal the audience check silently collapses and the admin/user boundary
+  // rests only on the role and permission claims. Keep them distinct everywhere.
+  if (parsed.data.JWT_AUDIENCE === parsed.data.JWT_ADMIN_AUDIENCE) {
+    throw new Error('JWT_ADMIN_AUDIENCE must differ from JWT_AUDIENCE');
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.HOME_READ_MODE !== 'projection') {
     throw new Error('HOME_READ_MODE=projection is required in production');

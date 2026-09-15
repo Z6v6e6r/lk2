@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { registerLegacyGameRosterBridgeRoutes } from './legacy-game-roster-bridge-routes.js';
-import type { LegacyLkIdentityVerifier } from './legacy-lk-identity-verifier.js';
+import type { CupIdentityVerifier } from '../identity/cup-identity-verifier.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -20,7 +20,7 @@ const verifyIdentity = vi.fn().mockResolvedValue({
   tenantKey: 'local-padel',
   authorizedParty: 'widget',
 });
-const identityVerifier: LegacyLkIdentityVerifier = {
+const identityVerifier: CupIdentityVerifier = {
   verify: verifyIdentity,
 };
 

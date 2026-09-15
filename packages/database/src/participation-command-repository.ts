@@ -75,6 +75,7 @@ export type AcknowledgeParticipationCommandResult =
 export interface AuthorizeParticipationCommandInput {
   readonly tenantId: string;
   readonly principalKey: string;
+  readonly callerKey?: string;
   readonly idempotencyKey: string;
   readonly requestHash: string;
   readonly actorUserId: string;
@@ -93,6 +94,7 @@ export interface AuthorizeParticipationCommandInput {
 export interface AcknowledgeParticipationCommandInput {
   readonly tenantId: string;
   readonly principalKey: string;
+  readonly callerKey?: string;
   readonly commandId: string;
   readonly idempotencyKey: string;
   readonly requestHash: string;
@@ -119,6 +121,23 @@ export interface ParticipationCommandTelemetry {
 }
 
 export interface ParticipationCommandRepository {
+  /**
+   * Resolves the canonical PadlHub actor from an already-verified external identity assertion.
+   *
+   * The participation gateway must never accept an end-user identifier from the request body:
+   * that would let any holder of the tenant integration credential act as an arbitrary user of
+   * that tenant, with the audit trail attributing the action to the victim. The caller forwards
+   * the end user's bearer assertion; the actor is derived here from the verified (issuer, subject)
+   * pair, scoped to the tenant.
+   */
+  resolveActor(input: {
+    readonly tenantId: string;
+    readonly issuer: string;
+    readonly subject: string;
+  }): Promise<
+    | { readonly outcome: 'resolved'; readonly userId: string }
+    | { readonly outcome: 'actor_not_linked' }
+  >;
   authorize(
     input: AuthorizeParticipationCommandInput,
   ): Promise<AuthorizeParticipationCommandResult>;
@@ -128,6 +147,7 @@ export interface ParticipationCommandRepository {
   get(input: {
     readonly tenantId: string;
     readonly principalKey: string;
+    readonly callerKey?: string;
     readonly commandId: string;
   }): Promise<ParticipationCommandView | undefined>;
   expireAuthorizedBatch(input: {
@@ -340,15 +360,21 @@ async function appendAuditAndOutbox(
 
 async function loadStoredCommand(
   client: PoolClient,
-  input: { readonly tenantId: string; readonly principalKey: string; readonly commandId: string },
+  input: {
+    readonly tenantId: string;
+    readonly principalKey: string;
+    readonly callerKey?: string;
+    readonly commandId: string;
+  },
 ): Promise<StoredCommandRow | undefined> {
   return queryOne<StoredCommandRow>(
     client,
     `select id, request_hash, state, result_payload, authorization_expires_at,
             acknowledgement_idempotency_key, acknowledgement_request_hash, writer_operation_id
        from eligibility.participation_commands
-      where tenant_id = $1 and principal_key = $2 and id = $3`,
-    [input.tenantId, input.principalKey, input.commandId],
+      where tenant_id = $1 and principal_key = $2 and id = $3
+        and caller_key is not distinct from $4`,
+    [input.tenantId, input.principalKey, input.commandId, input.callerKey ?? null],
   );
 }
 
@@ -357,6 +383,28 @@ export function createParticipationCommandRepository(
   options: { readonly onDecision?: (event: ParticipationCommandTelemetry) => void } = {},
 ): ParticipationCommandRepository {
   return {
+    resolveActor(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<{ readonly user_id: string } & QueryResultRow>(
+          client,
+          `select identity_map.user_id
+             from integration.external_identity_map identity_map
+             join identity.users actor
+               on actor.tenant_id = identity_map.tenant_id
+              and actor.id = identity_map.user_id
+              and actor.status = 'ACTIVE'
+            where identity_map.tenant_id = $1
+              and identity_map.issuer = $2
+              and identity_map.subject = $3
+            limit 1`,
+          [input.tenantId, input.issuer, input.subject],
+        );
+        return row?.user_id
+          ? { outcome: 'resolved' as const, userId: row.user_id }
+          : { outcome: 'actor_not_linked' as const };
+      });
+    },
+
     authorize(input) {
       let pendingTelemetry: ParticipationCommandTelemetry | undefined;
       return withTenantTransaction(pool, input.tenantId, async (client) => {
@@ -575,19 +623,21 @@ export function createParticipationCommandRepository(
         };
         await client.query(
           `insert into eligibility.participation_commands (
-             tenant_id, id, principal_key, idempotency_key, request_hash, actor_user_id,
+             tenant_id, id, principal_key, caller_key, idempotency_key, request_hash,
+             actor_user_id,
              activity_type, activity_id, action, activity_source_revision, decision_id,
              payment_snapshot_operation_id, state, error_code, result_payload,
              authorization_expires_at, completed_at
            ) values (
-             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-             $15::jsonb, $16::timestamptz,
-             case when $13 = 'REJECTED' then now() else null end
+             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+             $16::jsonb, $17::timestamptz,
+             case when $14 = 'REJECTED' then now() else null end
            )`,
           [
             input.tenantId,
             commandId,
             input.principalKey,
+            input.callerKey ?? null,
             input.idempotencyKey,
             input.requestHash,
             input.actorUserId,
@@ -672,8 +722,9 @@ export function createParticipationCommandRepository(
                   authorization_expires_at <= now() as authorization_expired
              from eligibility.participation_commands
             where tenant_id = $1 and principal_key = $2 and id = $3
+              and caller_key is not distinct from $4
             for update`,
-          [input.tenantId, input.principalKey, input.commandId],
+          [input.tenantId, input.principalKey, input.commandId, input.callerKey ?? null],
         );
         if (!row) return { outcome: 'command_not_found' as const };
         if (row.acknowledgement_idempotency_key !== null) {
