@@ -386,14 +386,16 @@ export function RecommendationGridCard({
               <MoreIcon />
             </a>
           ) : null}
-          <a
-            className="recommendation-grid-card__title"
-            href={presentation.route}
-            id={titleId}
-            title={presentation.title}
-          >
-            {presentation.title}
-          </a>
+          <div className="recommendation-grid-card__title-slot">
+            <a
+              className="recommendation-grid-card__title"
+              href={presentation.route}
+              id={titleId}
+              title={presentation.title}
+            >
+              {presentation.title}
+            </a>
+          </div>
         </div>
         <div className="recommendation-grid-card__metadata">
           <time className="recommendation-grid-card__time" dateTime={presentation.startsAt}>

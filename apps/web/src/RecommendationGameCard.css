@@ -54,7 +54,7 @@
   min-width: 0;
   flex-direction: column;
   align-items: flex-start;
-  min-height: 38px;
+  min-height: 56px;
   flex: none;
   gap: 6px;
 }
@@ -107,8 +107,8 @@
   width: 100%;
   margin: 0;
   line-height: 18px;
-  padding-bottom: 2px;
-  -webkit-line-clamp: 1;
+  padding-bottom: 0;
+  -webkit-line-clamp: 2;
 }
 
 .recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__metadata {
@@ -332,4 +332,29 @@
   display: block;
   width: 12px;
   height: 15px;
+}
+
+/* Reserve two title lines so short names share the same metadata baseline. */
+.recommendation-grid-card .recommendation-grid-card__header {
+  display: flex;
+  min-height: 56px;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.recommendation-grid-card__title-slot {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+}
+
+.recommendation-grid-card__title-slot .recommendation-grid-card__title {
+  width: 100%;
+  margin: 0;
+  line-height: 18px;
 }
