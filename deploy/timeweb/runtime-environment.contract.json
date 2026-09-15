@@ -57,8 +57,7 @@
         "S3_SECRET_KEY",
         "HOME_BASE_SYNC_ENABLED",
         "HOME_READ_MODE",
-        "ACTIVITY_HISTORY_ENABLED",
-        "ACTIVITY_HISTORY_SYNC_ENABLED"
+        "ACTIVITY_HISTORY_ENABLED"
       ],
       "allowed": [
         "APP_ENV",

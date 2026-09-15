@@ -130,6 +130,14 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     OTEL_SERVICE_INSTANCE_ID: 'timeweb-beta-worker-1',
     OUTBOX_PUBLISH_MODE: 'leased',
     WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: 'true',
+    // The Worker's profile-photo maintenance is a required-true flag, so its config insists on the
+    // same media-storage binding the API carries.
+    S3_ENDPOINT: 'https://s3.twcstorage.ru',
+    S3_PUBLIC_ENDPOINT: 'https://s3.twcstorage.ru',
+    S3_REGION: 'ru-1',
+    S3_BUCKET: 'synthetic-profile-photo-bucket',
+    S3_ACCESS_KEY: 'synthetic-media-access-key',
+    S3_SECRET_KEY: 'synthetic-media-secret-key',
   };
   const realtime = {
     ...baseEnvironment('realtime'),
