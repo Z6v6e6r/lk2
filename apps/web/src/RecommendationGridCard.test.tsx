@@ -120,19 +120,11 @@ describe('Home V3 recommendation photo grid', () => {
     expect(card.getByText('Сколково · Корт №6')).toBeInTheDocument();
     expect(card.getByText('от D+ до C')).toBeInTheDocument();
     expect(card.getByText('1 из 4 мест')).toHaveClass('sr-only');
-    const action = card.getByRole('link', { name: /Вступить · 800\s₽/ });
-    expect(action).toHaveAttribute('href', `/games/${game.id}`);
-    expect(action).toHaveTextContent('');
-    expect(action.closest('.recommendation-grid-card__footer')).not.toBeNull();
-    expect(action.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
-    expect(card.getByRole('link', { name: 'Подробнее: Открытая игра' })).toHaveAttribute(
-      'href',
-      `/games/${game.id}`,
-    );
-    expect(card.getByRole('link', { name: `Открыть: ${game.title}` })).toHaveAttribute(
-      'href',
-      `/games/${game.id}`,
-    );
+    expect(section?.querySelector('.recommendation-grid-card__action')).toBeNull();
+    expect(section?.querySelector('.recommendation-grid-card__more')).toBeNull();
+    expect(
+      card.getAllByRole('link').filter((link) => link.getAttribute('href') === game.deepLink),
+    ).toHaveLength(1);
     expect(card.getByRole('img', { name: /Анна Петрова/ })).toBeInTheDocument();
     expect(card.getAllByLabelText('Свободное место')).toHaveLength(3);
     expect(section?.querySelector('.recommendation-grid-card__hero img')).toHaveAttribute(
@@ -173,7 +165,7 @@ describe('Home V3 recommendation photo grid', () => {
       container.querySelector(
         '.recommendation-grid-card__footer .recommendation-grid-card__action',
       ),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
   it('keeps long content bounded with the maximum participant list', () => {
@@ -212,9 +204,6 @@ describe('Home V3 recommendation photo grid', () => {
     expect(within(card).getAllByRole('img', { name: /\u0418грок/ })).toHaveLength(4);
     expect(within(card).getByText('Осталось 1 место')).toHaveClass('sr-only');
     expect(within(card).queryByLabelText('Свободное место')).not.toBeInTheDocument();
-    const action = within(card).getByRole('link', { name: 'Вступить · Бесплатно' });
-    expect(action).toHaveTextContent('');
-    expect(action.closest('.recommendation-grid-card__footer')).not.toBeNull();
   });
 
   it('uses the supplied coach-game badge for coach games', () => {
@@ -280,20 +269,70 @@ describe('Home V3 recommendation photo grid', () => {
     expect(within(roster).getByRole('img', { name: 'Александр' })).toBeInTheDocument();
     expect(within(roster).getAllByLabelText('Свободное место')).toHaveLength(2);
     expect(within(card).queryByLabelText('Участники события')).not.toBeInTheDocument();
-    const action = within(card).getByRole('link', { name: 'Записаться' });
-    expect(action).toHaveAttribute(
-      'href',
-      page.items[0]?.kind === 'TRAINING' ? page.items[0].activity.route : '',
-    );
-    expect(action).toHaveTextContent('');
-    expect(action.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
     expect(card.querySelector('.recommendation-grid-card__hero img')).toHaveAttribute(
       'src',
       expect.stringMatching(/training-hero\.webp$/),
     );
   });
 
-  it('keeps sold-out tournament details reachable while disabling the CTA', () => {
+  it.each([
+    ['Вечерний Американо', 'Американо', false],
+    ['МЕКСИКАНО D+', 'Мексикано', false],
+    ['Американо ВРЕМЯ  НА ДРУЗЕЙ', 'Время на друзей', true],
+  ])('uses the event badge and real capacity for %s', (title, badge, friends) => {
+    const activity = {
+      id: '50000000-0000-4000-8000-000000000002',
+      kind: 'TOURNAMENT' as const,
+      title,
+      startsAt: '2026-08-31T17:00:00.000Z',
+      endsAt: '2026-08-31T19:00:00.000Z',
+      timezone: 'Europe/Moscow',
+      station: { id: '60000000-0000-4000-8000-000000000003', name: 'Терехово', shortAddress: null },
+      levelRange: { from: 'D' as const, to: 'D+' as const },
+      host: null,
+      capacity: { total: 16, open: 11 },
+      route: '/tournaments?event=50000000-0000-4000-8000-000000000002',
+    };
+    const { container, rerender } = render(
+      <BookingRecommendations
+        compact
+        compactVisualVariant="photo-grid"
+        page={recommendationPage([{ kind: 'TOURNAMENT', activity, reasons: [] }])}
+      />,
+    );
+    expect(container.querySelector('.recommendation-grid-card__event-badge')).toHaveTextContent(
+      badge,
+    );
+    expect(
+      container.querySelector('.recommendation-grid-card')?.hasAttribute('data-friends-event'),
+    ).toBe(friends);
+    expect(
+      within(container).getByLabelText('Занято 5 из 16 мест. Свободных мест: 11'),
+    ).toBeInTheDocument();
+    expect(container.querySelector('.recommendation-grid-card__capacity-count')).toHaveTextContent(
+      '5/16',
+    );
+    expect(within(container).getByText('(+11 мест)')).toBeVisible();
+    rerender(
+      <BookingRecommendations
+        compact
+        compactVisualVariant="photo-grid"
+        page={recommendationPage([
+          {
+            kind: 'TOURNAMENT',
+            activity: { ...activity, capacity: { total: null, open: null } },
+            reasons: [],
+          },
+        ])}
+      />,
+    );
+    expect(within(container).getByText('Места уточняются')).toBeVisible();
+    expect(container.querySelector('.recommendation-grid-card__capacity-count')).toHaveTextContent(
+      '—/—',
+    );
+  });
+
+  it('keeps sold-out tournament details reachable without a separate CTA', () => {
     const route = '/tournaments?event=50000000-0000-4000-8000-000000000002';
     const { container } = render(
       <BookingRecommendations
@@ -330,18 +369,13 @@ describe('Home V3 recommendation photo grid', () => {
     );
     const card = container.querySelector('.recommendation-grid-card') as HTMLElement;
 
-    expect(within(card).getByText('Мест нет')).toHaveClass('sr-only');
-    const disabledAction = within(card).getByRole('button', { name: 'Мест нет' });
-    expect(disabledAction).toBeDisabled();
-    expect(disabledAction).toHaveClass('recommendation-grid-card__action', 'is-disabled');
-    expect(disabledAction.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
-    expect(within(card).queryByRole('link', { name: 'Мест нет' })).not.toBeInTheDocument();
+    expect(within(card).getByText('Мест нет')).toBeVisible();
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
     expect(within(card).getByRole('link', { name: 'Вечерний турнир' })).toHaveAttribute(
       'href',
       route,
     );
-    const roster = within(card).getByLabelText('Организатор и свободные места');
-    expect(within(roster).getByLabelText('Организатор')).toBeInTheDocument();
+    const roster = within(card).getByLabelText('Занято 16 из 16 мест. Мест нет');
     expect(within(roster).getByRole('img', { name: 'Илья Соколов' })).toBeInTheDocument();
     expect(within(roster).queryByLabelText('Свободное место')).not.toBeInTheDocument();
     expect(within(card).queryByLabelText('Участники события')).not.toBeInTheDocument();

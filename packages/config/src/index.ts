@@ -321,6 +321,7 @@ const environmentSchema = z.object({
   PROMOTIONS_ENGAGEMENT_SECRET: z.string().min(32).optional(),
   PROMOTIONS_SYNC_INTERVAL_MS: z.coerce.number().int().min(30_000).max(3_600_000).default(120_000),
   PROMOTIONS_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(20),
+  PROMOTIONS_RECOMMENDATION_TIMER_PAYLOAD_ENABLED: booleanFromEnvironment,
   PROMOTION_ROTATION_INTERVAL_SECONDS: z.coerce.number().int().min(3).max(30).default(6),
   PROMOTION_IMAGE_ALLOWED_HOSTS: z.string().min(1).default('padlhub.su'),
   PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS: z.string().default(''),
