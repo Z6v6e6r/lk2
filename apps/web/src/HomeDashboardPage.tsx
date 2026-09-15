@@ -22,7 +22,6 @@ import bookingRecommendationsLoaderUrl from './assets/loaders/booking-recommenda
 import { locationCourtLabel } from './location-court-label.js';
 import promoUrl from './assets/home/promo.png';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
-import { useHomeHeaderSnap } from './useHomeHeaderSnap.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 
@@ -1213,9 +1212,6 @@ export function HomeDashboardPage({
     'all',
   );
   const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('FOR_ME');
-  const { homeRef, recommendationsRef } = useHomeHeaderSnap(
-    layoutVariant === 'v3' && bookingTab === 'FOR_ME',
-  );
   const [bookingRecommendations, setBookingRecommendations] =
     useState<BookingRecommendationPage | null>(null);
   const [bookingRecommendationsLoading, setBookingRecommendationsLoading] = useState(true);
@@ -1394,7 +1390,7 @@ export function HomeDashboardPage({
 
   return (
     <div className={shellClassName}>
-      <main className="figma-home" aria-label="Главная" ref={homeRef}>
+      <main className="figma-home" aria-label="Главная">
         <section
           className={`fh-hero${usesCompactHero ? ' fh-hero--v2' : ''}${
             layoutVariant === 'v3' ? ' fh-hero--v3' : ''
@@ -1430,48 +1426,47 @@ export function HomeDashboardPage({
               </a>
             ))}
           </nav>
-
-          <div
-            className="fh-tabs"
-            role="tablist"
-            aria-label="Раздел записей"
-            ref={recommendationsRef}
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={bookingTab === 'FOR_ME'}
-              onClick={showBookingRecommendations}
-            >
-              Для меня
-            </button>
-            <a
-              className="fh-preferences-edit"
-              href="/profile#booking-preferences-title"
-              aria-label="Настроить предпочтения"
-              title="Настроить предпочтения"
-            >
-              <HomePreferencesEditIcon />
-            </a>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={bookingTab === 'MY'}
-              onClick={() => {
-                setBookingTab('MY');
-                setBookingRecommendationsError(null);
-                onActivateUpcoming();
-              }}
-            >
-              <span className="fh-tab-label">
-                Мои записи
-                {upcomingItems.length > 0 ? (
-                  <i className="fh-booking-presence-dot" aria-hidden="true" />
-                ) : null}
-              </span>
-            </button>
-          </div>
         </section>
+
+        <div
+          className={`fh-tabs${usesCompactHero ? ' fh-tabs--compact' : ''}`}
+          role="tablist"
+          aria-label="Раздел записей"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={bookingTab === 'FOR_ME'}
+            onClick={showBookingRecommendations}
+          >
+            Для меня
+          </button>
+          <a
+            className="fh-preferences-edit"
+            href="/profile#booking-preferences-title"
+            aria-label="Настроить предпочтения"
+            title="Настроить предпочтения"
+          >
+            <HomePreferencesEditIcon />
+          </a>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={bookingTab === 'MY'}
+            onClick={() => {
+              setBookingTab('MY');
+              setBookingRecommendationsError(null);
+              onActivateUpcoming();
+            }}
+          >
+            <span className="fh-tab-label">
+              Мои записи
+              {upcomingItems.length > 0 ? (
+                <i className="fh-booking-presence-dot" aria-hidden="true" />
+              ) : null}
+            </span>
+          </button>
+        </div>
 
         <section className="fh-main-box">
           <section

@@ -8136,7 +8136,7 @@ label {
   --fh-page-width: min(100vw, 375px);
   --fh-bookings-extra-height: 0px;
   --fh-my-extras-height: 0px;
-  min-height: calc(1700px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
+  min-height: auto;
   background: #222124;
 }
 
@@ -8155,6 +8155,7 @@ label {
 }
 
 .figma-home {
+  --fh-tabs-height: 50px;
   --page-padding-x: 20px;
   --gap-profile-banner: 11px;
   --gap-banner-communities: 11px;
@@ -8242,9 +8243,10 @@ label {
   z-index: 2;
   display: flex;
   width: var(--fh-page-width);
-  height: 419px;
+  /* Content height: the two-heading tab bar now lives outside the hero so it can stick. */
+  height: auto;
   padding: 16px 20px 0;
-  flex: 0 0 419px;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 12px;
   overflow: hidden;
@@ -8252,13 +8254,13 @@ label {
 }
 
 .fh-hero--v2 {
-  height: calc(410px + env(safe-area-inset-top, 0px));
+  height: auto;
   padding: calc(10px + env(safe-area-inset-top, 0px)) 0 0;
-  flex-basis: calc(410px + env(safe-area-inset-top, 0px));
+  flex-basis: auto;
   gap: 0;
 }
 
-.fh-hero--v2 :is(.fh-profile-row, .fh-hero-promotion, .fh-actions, .fh-tabs) {
+.fh-hero--v2 :is(.fh-profile-row, .fh-hero-promotion, .fh-actions) {
   width: calc(100% - var(--page-padding-x) - var(--page-padding-x));
   margin-right: auto;
   margin-left: auto;
@@ -8324,49 +8326,45 @@ label {
   white-space: nowrap;
 }
 
-.fh-hero--v2 .fh-tabs {
-  margin-top: var(--gap-actions-tabs);
-}
-
-.fh-hero--v2 .fh-tabs button {
+.fh-tabs--compact button {
   justify-content: flex-end;
   gap: 10px;
 }
 
-.fh-hero--v2 + .fh-main-box {
+.fh-hero--v2 ~ .fh-main-box {
   margin-top: var(--gap-tabs-sheet);
 }
 
-.fh-hero--v2 + .fh-main-box .fh-bookings {
+.fh-hero--v2 ~ .fh-main-box .fh-bookings {
   padding: var(--sheet-padding-top) 0 var(--sheet-padding-bottom);
   border-top: 0;
 }
 
-.fh-hero--v2 + .fh-main-box .fh-for-me {
+.fh-hero--v2 ~ .fh-main-box .fh-for-me {
   width: 100%;
   padding: 0 var(--sheet-padding-x);
 }
 
-.fh-hero--v2 + .fh-main-box .fh-for-me > p,
-.fh-hero--v2 + .fh-main-box .fh-for-me > .booking-recommendations {
+.fh-hero--v2 ~ .fh-main-box .fh-for-me > p,
+.fh-hero--v2 ~ .fh-main-box .fh-for-me > .booking-recommendations {
   margin-right: 0;
   margin-left: 0;
 }
 
-.fh-hero--v2 + .fh-main-box .fh-for-me > .booking-recommendations.booking-recommendations {
+.fh-hero--v2 ~ .fh-main-box .fh-for-me > .booking-recommendations.booking-recommendations {
   margin-top: 0;
 }
 
-.fh-hero--v2 + .fh-main-box .fh-for-me-loader {
+.fh-hero--v2 ~ .fh-main-box .fh-for-me-loader {
   width: 100%;
   box-sizing: border-box;
 }
 
-.fh-hero--v2 + .fh-main-box .fh-for-me :is(.fh-bookings-footer, .fh-bookings-footer-action) {
+.fh-hero--v2 ~ .fh-main-box .fh-for-me :is(.fh-bookings-footer, .fh-bookings-footer-action) {
   width: 100%;
 }
 
-.fh-hero--v2 + .fh-main-box .fh-for-me .fh-bookings-footer-action {
+.fh-hero--v2 ~ .fh-main-box .fh-for-me .fh-bookings-footer-action {
   padding-right: 0;
   padding-left: 0;
 }
@@ -10040,16 +10038,25 @@ label {
 }
 
 .fh-tabs {
-  position: relative;
+  /* Sticks to the top once the hero has scrolled away, then hands scrolling to the sheet. */
+  position: sticky;
+  z-index: 3;
+  top: 0;
   box-sizing: border-box;
   display: flex;
   width: calc(var(--fh-page-width) - 40px);
   height: 50px;
   flex: 0 0 50px;
-  margin-top: auto;
+  margin: 12px auto 0;
   align-items: center;
   justify-content: center;
   gap: 12px;
+  /* Matches the hero gradient behind the bar so the pinned state stays seamless. */
+  background: #9474ff;
+}
+
+.fh-tabs--compact {
+  margin-top: var(--gap-actions-tabs);
 }
 
 .figma-home .fh-preferences-edit {
@@ -10137,9 +10144,15 @@ label {
   z-index: 1;
   display: flex;
   width: var(--fh-page-width);
-  height: calc(1316px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
-  flex: 0 0 calc(1316px + var(--fh-bookings-extra-height) + var(--fh-my-extras-height));
+  /* Pinned tab bar keeps the two headings visible; the sheet scrolls under it. */
+  height: calc(100dvh - var(--fh-tabs-height, 50px));
+  flex: 0 0 calc(100dvh - var(--fh-tabs-height, 50px));
   flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+  /* The bottom nav floats over the sheet, so its height stays inside the scroll range. */
+  padding-bottom: 88px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .fh-bookings {
@@ -11604,9 +11617,10 @@ button.participant-avatar-stack__open-slot:focus-visible {
   min-height: 0;
 }
 
+/* The sheet is the scroller below the pinned tab bar, so it keeps the viewport height. */
 .figma-home-shell.has-recommendations-scroll-peek .fh-main-box {
-  height: auto;
-  flex: 0 0 auto;
+  height: calc(100dvh - var(--fh-tabs-height, 50px));
+  flex: 0 0 calc(100dvh - var(--fh-tabs-height, 50px));
 }
 
 .figma-home-shell.has-recommendations-scroll-peek .fh-bookings,
@@ -11614,10 +11628,9 @@ button.participant-avatar-stack__open-slot:focus-visible {
   padding-bottom: 0;
 }
 
+/* The nav stays fixed over the sheet, so it must not add page height. */
 .figma-home-shell.has-recommendations-scroll-peek .fh-bottom-nav {
-  position: sticky;
-  left: auto;
-  flex: 0 0 88px;
+  position: fixed;
 }
 
 .fh-bottom-nav > a {
