@@ -15,9 +15,17 @@ describe.each([
     const first = recommendationCover(station, kind, 'event-123', 'fallback.webp');
     expect(first).toMatch(new RegExp(`/${folder}/${file}-\\d\\.webp$`));
     expect(recommendationCover(station, kind, 'event-123', 'fallback.webp')).toBe(first);
-    expect(recommendationCover('Нагатинская', kind, 'event-123', 'fallback.webp')).toBe(
-      'fallback.webp',
-    );
     expect(recommendationCover('Питер', kind, 'event-123', 'fallback.webp')).toBe('fallback.webp');
   });
 });
+
+it.each(['GAME', 'COACH_GAME', 'TRAINING', 'TOURNAMENT'] as const)(
+  'uses the supplied Nagatinskaya cover for %s without matching Premium',
+  (kind) => {
+    const cover = recommendationCover('  НАГАТИНСКАЯ  ', kind, 'event-123', 'fallback.webp');
+    expect(cover).toMatch(/\/nagatinskaya\/default\.webp$/);
+    expect(recommendationCover('Нагатинская Премиум', kind, 'event-123', 'fallback.webp')).not.toBe(
+      cover,
+    );
+  },
+);
