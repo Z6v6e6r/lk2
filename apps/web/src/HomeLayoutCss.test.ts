@@ -66,7 +66,8 @@ describe('Home layout scroll contract', () => {
     const recommendationsPeekRule = ruleBody('.figma-home-shell.has-recommendations-scroll-peek');
     const splitFooterRule = ruleBody('.fh-bookings-footer-action.is-split');
 
-    expect(heroRule).toMatch(/height:\s*419px\s*;/);
+    // The hero hugs its content so the tab bar below it can stick to the viewport top.
+    expect(heroRule).toMatch(/height:\s*auto\s*;/);
     expect(heroRule).toMatch(/gap:\s*12px\s*;/);
     expect(profileRowRule).toMatch(/height:\s*57px\s*;/);
     expect(profileRule).toMatch(/height:\s*51px\s*;/);
@@ -78,13 +79,12 @@ describe('Home layout scroll contract', () => {
     expect(homeRule).toMatch(/--gap-communities-actions:\s*8px\s*;/);
     expect(homeRule).toMatch(/--gap-actions-tabs:\s*6px\s*;/);
     expect(homeRule).toMatch(/--gap-tabs-sheet:\s*5px\s*;/);
-    expect(heroV2Rule).toMatch(/height:\s*calc\(410px \+ env\(safe-area-inset-top,\s*0px\)\)\s*;/);
+    expect(homeRule).toMatch(/--fh-tabs-height:\s*50px\s*;/);
+    expect(heroV2Rule).toMatch(/height:\s*auto\s*;/);
     expect(heroV2Rule).toMatch(
       /padding:\s*calc\(10px \+ env\(safe-area-inset-top,\s*0px\)\) 0 0\s*;/,
     );
-    expect(heroV2Rule).toMatch(
-      /flex-basis:\s*calc\(410px \+ env\(safe-area-inset-top,\s*0px\)\)\s*;/,
-    );
+    expect(heroV2Rule).toMatch(/flex-basis:\s*auto\s*;/);
     expect(heroV2Rule).toMatch(/gap:\s*0\s*;/);
     expect(ruleBody('.fh-hero--v2 .fh-hero-promotion')).toMatch(
       /margin-top:\s*var\(--gap-profile-banner\)\s*;/,
@@ -108,27 +108,25 @@ describe('Home layout scroll contract', () => {
     expect(actionLabelRule).toMatch(/letter-spacing:\s*0\.02em\s*;/);
     expect(actionLabelRule).toMatch(/line-height:\s*100%\s*;/);
     expect(actionLabelRule).toMatch(/text-align:\s*center\s*;/);
-    expect(ruleBody('.fh-hero--v2 .fh-tabs')).toMatch(
-      /margin-top:\s*var\(--gap-actions-tabs\)\s*;/,
-    );
-    expect(ruleBody('.fh-hero--v2 .fh-tabs')).not.toMatch(
+    expect(ruleBody('.fh-tabs--compact')).toMatch(/margin-top:\s*var\(--gap-actions-tabs\)\s*;/);
+    expect(ruleBody('.fh-tabs--compact')).not.toMatch(
       /(?:display|height|grid-template-columns|flex-basis|gap)\s*:/,
     );
-    expect(ruleBody('.fh-hero--v2 .fh-tabs button')).toMatch(/justify-content:\s*flex-end\s*;/);
-    expect(ruleBody('.fh-hero--v2 .fh-tabs button')).toMatch(/gap:\s*10px\s*;/);
-    expect(ruleBody('.fh-hero--v2 + .fh-main-box')).toMatch(
+    expect(ruleBody('.fh-tabs--compact button')).toMatch(/justify-content:\s*flex-end\s*;/);
+    expect(ruleBody('.fh-tabs--compact button')).toMatch(/gap:\s*10px\s*;/);
+    expect(ruleBody('.fh-hero--v2 ~ .fh-main-box')).toMatch(
       /margin-top:\s*var\(--gap-tabs-sheet\)\s*;/,
     );
-    expect(ruleBody('.fh-hero--v2 + .fh-main-box .fh-bookings')).toMatch(
+    expect(ruleBody('.fh-hero--v2 ~ .fh-main-box .fh-bookings')).toMatch(
       /padding:\s*var\(--sheet-padding-top\) 0 var\(--sheet-padding-bottom\)\s*;/,
     );
-    expect(ruleBody('.fh-hero--v2 + .fh-main-box .fh-bookings')).toMatch(/border-top:\s*0\s*;/);
+    expect(ruleBody('.fh-hero--v2 ~ .fh-main-box .fh-bookings')).toMatch(/border-top:\s*0\s*;/);
     expect(
       ruleBody(
-        '.fh-hero--v2 + .fh-main-box .fh-for-me > .booking-recommendations.booking-recommendations',
+        '.fh-hero--v2 ~ .fh-main-box .fh-for-me > .booking-recommendations.booking-recommendations',
       ),
     ).toMatch(/margin-top:\s*0\s*;/);
-    expect(ruleBody('.fh-hero--v2 + .fh-main-box .fh-for-me')).toMatch(
+    expect(ruleBody('.fh-hero--v2 ~ .fh-main-box .fh-for-me')).toMatch(
       /padding:\s*0 var\(--sheet-padding-x\)\s*;/,
     );
     expect(communitiesRule).toMatch(/height:\s*73px\s*;/);
@@ -151,8 +149,11 @@ describe('Home layout scroll contract', () => {
     expect(ruleBody('.fh-actions > a:last-child')).toMatch(/flex:\s*1 1 0\s*;/);
     expect(tabsRule).toMatch(/width:\s*calc\(var\(--fh-page-width\) - 40px\)\s*;/);
     expect(tabsRule).toMatch(/height:\s*50px\s*;/);
-    expect(tabsRule).toMatch(/margin-top:\s*auto\s*;/);
+    expect(tabsRule).toMatch(/position:\s*sticky\s*;/);
+    expect(tabsRule).toMatch(/top:\s*0\s*;/);
+    expect(tabsRule).toMatch(/margin:\s*12px auto 0\s*;/);
     expect(tabsRule).toMatch(/gap:\s*12px\s*;/);
+    expect(ruleBody('.fh-tabs--compact')).toMatch(/margin-top:\s*var\(--gap-actions-tabs\)\s*;/);
     expect(tabRule).toMatch(/width:\s*148px\s*;/);
     expect(tabRule).toMatch(/height:\s*50px\s*;/);
     expect(tabRule).toMatch(/padding:\s*16px 0 0\s*;/);
@@ -165,9 +166,9 @@ describe('Home layout scroll contract', () => {
     expect(tabBookingPresenceDotRule).toMatch(/right:\s*-10px\s*;/);
     expect(calendarBookingPresenceDotRule).toMatch(/left:\s*21px\s*;/);
     expect(tabIndicatorRule).toMatch(/background:\s*transparent\s*;/);
-    expect(mainBoxRule).toMatch(
-      /height:\s*calc\(1316px \+ var\(--fh-bookings-extra-height\) \+ var\(--fh-my-extras-height\)\)\s*;/,
-    );
+    expect(mainBoxRule).toMatch(/height:\s*calc\(100dvh - var\(--fh-tabs-height,\s*50px\)\)\s*;/);
+    expect(mainBoxRule).toMatch(/overflow-y:\s*auto\s*;/);
+    expect(mainBoxRule).toMatch(/padding-bottom:\s*88px\s*;/);
     expect(bookingsRule).toMatch(
       /height:\s*calc\(522px \+ var\(--fh-bookings-extra-height\)\)\s*;/,
     );
