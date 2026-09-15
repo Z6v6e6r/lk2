@@ -8324,7 +8324,7 @@ label {
   white-space: nowrap;
 }
 
-.fh-tabs--compact button {
+.fh-tabs-bar--compact .fh-tabs button {
   justify-content: flex-end;
   gap: 10px;
 }
@@ -10040,26 +10040,33 @@ label {
   transform: rotate(45deg);
 }
 
-.fh-tabs {
-  /* Sticks to the top once the hero has scrolled away, then hands scrolling to the sheet. */
+/* Full-bleed sticky bar: the violet fill has to reach the screen edges, so the background
+   lives on this wrapper while only the tab row keeps the 40px inset. */
+.fh-tabs-bar {
   position: sticky;
   z-index: 3;
   top: 0;
+  width: var(--fh-page-width);
+  flex: 0 0 auto;
+  margin-top: 12px;
+  /* Matches the hero gradient behind the bar so the pinned state stays seamless. */
+  background: #9474ff;
+}
+
+.fh-tabs-bar--compact {
+  margin-top: var(--gap-actions-tabs);
+}
+
+.fh-tabs {
   box-sizing: border-box;
   display: flex;
   width: calc(var(--fh-page-width) - 40px);
   height: 50px;
   flex: 0 0 50px;
-  margin: 12px auto 0;
+  margin: 0 auto;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  /* Matches the hero gradient behind the bar so the pinned state stays seamless. */
-  background: #9474ff;
-}
-
-.fh-tabs--compact {
-  margin-top: var(--gap-actions-tabs);
 }
 
 .figma-home .fh-preferences-edit {
