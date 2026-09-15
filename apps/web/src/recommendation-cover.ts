@@ -1,4 +1,5 @@
 import nagatinskayaCover from './assets/recommendation-cards/nagatinskaya/default.webp';
+import nagatinskayaTournamentCover from './assets/recommendation-cards/nagatinskaya/tournament.webp';
 import np_game_1 from './assets/recommendation-cards/nagatinskaya-premium/game-1.webp';
 import np_game_2 from './assets/recommendation-cards/nagatinskaya-premium/game-2.webp';
 import np_game_3 from './assets/recommendation-cards/nagatinskaya-premium/game-3.webp';
@@ -42,7 +43,9 @@ export function recommendationCover(
 ): string {
   // Temporary presentation mapping until station cover settings expose media IDs.
   const station = stationName.trim().toLocaleLowerCase('ru-RU');
-  if (station === 'нагатинская') return nagatinskayaCover;
+  if (station === 'нагатинская') {
+    return kind === 'TOURNAMENT' ? nagatinskayaTournamentCover : nagatinskayaCover;
+  }
   const stationCovers =
     station === 'нагатинская премиум'
       ? nagatinskayaPremiumCovers
