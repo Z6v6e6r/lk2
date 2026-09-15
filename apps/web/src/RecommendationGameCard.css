@@ -298,3 +298,38 @@
     margin-left: auto;
   }
 }
+
+.recommendation-grid-card[data-recommendation-kind='training'] {
+  --recommendation-event-color: #2f9dd4;
+}
+
+.recommendation-grid-card[data-recommendation-kind='training'] .recommendation-grid-card__kind {
+  color: var(--recommendation-event-color);
+}
+
+.recommendation-grid-card .booking-activity-card__host-avatar {
+  position: relative;
+  isolation: isolate;
+}
+
+.recommendation-grid-card__trainer-mark {
+  position: absolute;
+  z-index: 5;
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--recommendation-event-color);
+  pointer-events: none;
+}
+
+.recommendation-grid-card__trainer-mark svg {
+  display: block;
+  width: 12px;
+  height: 15px;
+}
