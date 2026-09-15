@@ -546,6 +546,10 @@ describe('Home progressive navigation', () => {
       expect(container.querySelector('.recommendation-grid-card')).toBeInTheDocument();
       expect(container.querySelector('.booking-activity-card')).not.toBeInTheDocument();
 
+      // This slice is sparse, so the app also issues its expansion request. Wait for both requests
+      // to settle before taking the baseline: a late expansion response would otherwise land after
+      // the rerender and look like a fresh request.
+      await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledTimes(2));
       const requestsBeforeDisplayChange = loadBookingRecommendations.mock.calls.length;
       rerender(<HomeDashboardPage {...props} recommendationDisplay="ROWS" />);
       expect(container.querySelector('.booking-recommendations')).not.toHaveClass('is-photo-grid');
