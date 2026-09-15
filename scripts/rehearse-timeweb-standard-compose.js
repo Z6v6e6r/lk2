@@ -47,6 +47,27 @@ const inspect = (service) => {
   ]).trim();
   return JSON.parse(docker(['inspect', id]))[0];
 };
+// `activate` proves only that the container exists with the expected label; it does not prove
+// nginx is serving yet. Probing once therefore raced container startup and made this rehearsal the
+// only observed flaky failure on main. Retry within a fixed budget so a slow start is tolerated
+// while a genuinely broken release still fails.
+const READINESS_ATTEMPTS = 30;
+const READINESS_DELAY_MS = 1000;
+const probeWeb = async () => {
+  let lastError;
+  for (let attempt = 1; attempt <= READINESS_ATTEMPTS; attempt += 1) {
+    try {
+      docker(['exec', inspect('web').Id, 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/']);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < READINESS_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, READINESS_DELAY_MS));
+      }
+    }
+  }
+  throw lastError;
+};
 const journal = [];
 try {
   docker(['compose', '--env-file', baseline, '-f', composeFile, 'up', '-d']);
@@ -76,7 +97,7 @@ try {
     },
     activate,
     observe: async () => {
-      docker(['exec', inspect('web').Id, 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/']);
+      await probeWeb();
     },
     attestBackend,
     rollback,

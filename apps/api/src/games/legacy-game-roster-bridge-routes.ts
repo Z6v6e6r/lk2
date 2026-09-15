@@ -10,9 +10,9 @@ import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
 import {
-  LegacyLkIdentityVerificationError,
-  type LegacyLkIdentityVerifier,
-} from './legacy-lk-identity-verifier.js';
+  CupIdentityVerificationError,
+  type CupIdentityVerifier,
+} from '../identity/cup-identity-verifier.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const EXTERNAL_GAME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
@@ -105,7 +105,7 @@ export function registerLegacyGameRosterBridgeRoutes(
   options: {
     readonly enabled: boolean;
     readonly integrationToken?: string;
-    readonly identityVerifier?: LegacyLkIdentityVerifier;
+    readonly identityVerifier?: CupIdentityVerifier;
     readonly contextRepository?: LegacyGameRosterBridgeRepository;
     readonly rosterRepository?: Pick<
       GameRosterRepository,
@@ -192,7 +192,7 @@ export function registerLegacyGameRosterBridgeRoutes(
       try {
         actor = await options.identityVerifier.verify(authorization);
       } catch (error) {
-        if (error instanceof LegacyLkIdentityVerificationError) {
+        if (error instanceof CupIdentityVerificationError) {
           return sendApiError(
             request,
             reply,

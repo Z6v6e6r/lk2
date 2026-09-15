@@ -183,7 +183,9 @@ describe('loadConfig', () => {
         PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
       }),
     ).toThrow('principal key');
-    expect(
+    // The end user is bound through a forwarded assertion, so the verifier is mandatory:
+    // without it the gateway could only fall back to a caller-supplied actor.
+    expect(() =>
       loadConfig({
         ...validEnvironment,
         APP_ENV: 'staging',
@@ -192,10 +194,24 @@ describe('loadConfig', () => {
         PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
         PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'legacy-lk-writer',
       }),
+    ).toThrow('requires the participation identity verifier configuration');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        PARTICIPATION_COMMANDS_ENABLED: 'true',
+        PARTICIPATION_COMMAND_TOKEN: 'x'.repeat(32),
+        PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
+        PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'legacy-lk-writer',
+        PARTICIPATION_IDENTITY_VERIFY_URL:
+          'https://cup.example.test/api/internal/lk/identity/verify',
+        PARTICIPATION_IDENTITY_VERIFY_TOKEN: 'y'.repeat(32),
+      }),
     ).toMatchObject({
       PARTICIPATION_COMMANDS_ENABLED: true,
       PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
       PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'legacy-lk-writer',
+      PARTICIPATION_IDENTITY_VERIFY_TIMEOUT_MS: 5_000,
     });
     expect(() =>
       loadConfig({
@@ -205,8 +221,23 @@ describe('loadConfig', () => {
         PARTICIPATION_COMMAND_TOKEN: 'x'.repeat(32),
         PARTICIPATION_COMMAND_TENANT_KEY: 'local-padel',
         PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'legacy-lk-writer',
+        PARTICIPATION_IDENTITY_VERIFY_URL:
+          'https://cup.example.test/api/internal/lk/identity/verify',
+        PARTICIPATION_IDENTITY_VERIFY_TOKEN: 'y'.repeat(32),
       }),
     ).toThrow('allowed only in local or staging');
+  });
+
+  it('refuses to collapse the admin audience into the client audience', () => {
+    // Both audiences are signed with JWT_ACCESS_SECRET, so an equal pair would remove the only
+    // cryptographic separation between a client token and an admin token.
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        JWT_AUDIENCE: 'phub-admin',
+        JWT_ADMIN_AUDIENCE: 'phub-admin',
+      }),
+    ).toThrow('JWT_ADMIN_AUDIENCE must differ from JWT_AUDIENCE');
   });
 
   it('provides a credential-free target fingerprint and keeps attestation local-only', () => {

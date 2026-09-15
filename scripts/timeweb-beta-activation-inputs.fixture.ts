@@ -105,6 +105,10 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     PARTICIPATION_COMMAND_TENANT_KEY: tenantKey,
     PARTICIPATION_COMMAND_PRINCIPAL_KEY: 'timeweb-beta.operator:1',
     PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS: '300',
+    // The gateway binds the end user through a forwarded assertion, so the identity verifier is
+    // required whenever the contour is enabled; the token must be shared with the calling side.
+    PARTICIPATION_IDENTITY_VERIFY_URL: 'https://cup.example.test/api/internal/lk/identity/verify',
+    PARTICIPATION_IDENTITY_VERIFY_TOKEN: 'synthetic-participation-identity-token-0123456789',
     // Communities are LOCAL_ONLY in this tenant and the legacy inventory verifier only validates
     // externally produced artifacts, so the contour reads its own data instead of the mock mode.
     COMMUNITIES_READ_MODE: 'local',
