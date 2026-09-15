@@ -1,0 +1,233 @@
+/* Keep two reference cards (170.5 px) in a 375 px canvas. */
+.figma-home-shell
+  .figma-home
+  .fh-for-me:has(.recommendation-grid-card[data-recommendation-kind='game']) {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.figma-home-shell
+  .figma-home
+  .fh-for-me
+  .booking-recommendations.is-photo-grid:has([data-recommendation-kind='game']) {
+  width: calc(100% - 24px);
+  margin-right: 12px;
+  margin-left: 12px;
+  grid-auto-rows: minmax(266px, auto);
+  gap: 10px;
+}
+
+/* Game photo cards: Figma 1792:3534, 170.5 × 266 at the reference width. */
+.figma-home-shell
+  .figma-home
+  .fh-for-me
+  .booking-recommendation.is-photo-grid-card:has([data-recommendation-kind='game']) {
+  border: 0;
+  border-radius: 16px;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] {
+  min-height: 266px;
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 0.5px #ededed;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__hero {
+  box-sizing: border-box;
+  height: 100px;
+  flex-basis: 100px;
+  border: 0;
+  border-radius: 16px 16px 0 0;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__body {
+  padding: 12px;
+  gap: 14px;
+  justify-content: center;
+  border: 0;
+  border-radius: 0 0 16px 16px;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__header {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  height: 31px;
+  flex: 0 0 31px;
+  gap: 6px;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game']
+  :is(.fh-event__tag, .recommendation-grid-card__kind) {
+  display: flex;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: calc(100% - 20px);
+  height: 14px;
+  min-height: 14px;
+  padding: 2px 6px;
+  align-items: center;
+  gap: 4px;
+  border-radius: 24px;
+  color: #4db368;
+  background: rgb(77 179 105 / 8%);
+  font-family: 'Recommendation RF Dewi', 'RF Dewi', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .fh-event__tag.is-rating {
+  color: #829e04;
+  background: rgb(155 189 5 / 8%);
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .fh-event__tag-label {
+  width: auto;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  font: inherit;
+  letter-spacing: inherit;
+  text-overflow: ellipsis;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .fh-event__tag svg {
+  width: 8px;
+  height: 10px;
+  flex: 0 0 8px;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__title {
+  width: 100%;
+  margin: 0;
+  text-box: trim-both cap alphabetic;
+  -webkit-line-clamp: 1;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__metadata {
+  margin: 0;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__footer {
+  min-height: 34px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__action {
+  position: absolute;
+  top: -8px;
+  right: -6px;
+  width: 24px;
+  height: 24px;
+  overflow: visible;
+  border-radius: 6px;
+  color: #c5c5c6;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__action svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  transform: none;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack {
+  height: 34px;
+  padding: 0 4px;
+  flex-direction: row;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  :is(.participant-avatar-stack__item, .participant-avatar-stack__open-slot) {
+  display: block;
+  width: 34px;
+  height: 34px;
+  margin: 0 -4px;
+  flex: 0 0 34px;
+  box-sizing: border-box;
+  isolation: isolate;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #f6f6f6;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack__item
+  > [data-player-level-avatar] {
+  transform: scale(0.625);
+  transform-origin: top left;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] [data-player-level-badge] {
+  display: none;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack__open-slot
+  svg {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack__open-slot
+  svg
+  rect {
+  fill: #f6f6f6;
+  stroke: none;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack
+  > :nth-child(1) {
+  z-index: 4;
+}
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack
+  > :nth-child(2) {
+  z-index: 3;
+}
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack
+  > :nth-child(3) {
+  z-index: 2;
+}
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack
+  > :nth-child(4) {
+  z-index: 1;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game']
+  [data-player-level-avatar]
+  > span:first-child {
+  border: 0;
+}

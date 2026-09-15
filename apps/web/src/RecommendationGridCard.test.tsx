@@ -88,7 +88,7 @@ describe('Home V3 recommendation photo grid', () => {
     expect(badge?.querySelector('.recommendation-grid-card__day')).toHaveTextContent('30');
     expect(badge?.querySelector('.recommendation-grid-card__weekday')).toHaveTextContent('вс');
     expect(container.querySelector('.recommendation-grid-card__time')).toHaveTextContent(
-      '30 авг, 01:00–02:00',
+      '30 авг, 01:00—02:00',
     );
     expect(container.querySelectorAll('.recommendation-grid-card__metadata img')).toHaveLength(3);
   });
@@ -110,20 +110,20 @@ describe('Home V3 recommendation photo grid', () => {
     expect(section).toHaveClass('is-photo-grid-card');
     expect(section).not.toHaveAttribute('style');
     const card = within(section as HTMLElement);
-    expect(card.getByText('Игра')).toBeInTheDocument();
-    expect(card.getByText('18:00–19:30')).toBeInTheDocument();
+    expect(card.getByText('Игра на рейтинг')).toBeInTheDocument();
+    expect(card.getByText('18:00—19:30')).toBeInTheDocument();
     expect(card.getByRole('link', { name: 'Открытая игра' })).toHaveAttribute(
       'href',
       `/games/${game.id}`,
     );
     expect(card.getByText('Сколково · Корт №6')).toBeInTheDocument();
-    expect(card.getByText('D+–C')).toBeInTheDocument();
+    expect(card.getByText('от D+ до C')).toBeInTheDocument();
     expect(card.getByText('1 из 4 мест')).toHaveClass('sr-only');
     const action = card.getByRole('link', { name: /Вступить · 800\s₽/ });
     expect(action).toHaveAttribute('href', `/games/${game.id}`);
     expect(action).toHaveTextContent('');
-    expect(action.querySelector('svg')).toHaveAttribute('viewBox', '0 0 88 72');
-    expect(action.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
+    expect(action.closest('.recommendation-grid-card__header')).not.toBeNull();
+    expect(action.querySelector('svg')).toHaveAttribute('viewBox', '0 0 24 24');
     expect(card.getByRole('link', { name: `Открыть: ${game.title}` })).toHaveAttribute(
       'href',
       `/games/${game.id}`,
@@ -141,6 +141,34 @@ describe('Home V3 recommendation photo grid', () => {
     expect(card.queryByLabelText('Почему игра подходит')).not.toBeInTheDocument();
     expect(card.queryByText('Часто играете здесь')).not.toBeInTheDocument();
     expect(card.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('shows the friendly badge, station address and level fallback from the game model', () => {
+    const game = recommendationGame({
+      kind: 'FRIENDLY',
+      station: {
+        id: '60000000-0000-4000-8000-000000000001',
+        name: 'Селигерская',
+        shortAddress: 'адрес',
+      },
+      levelRange: null,
+    });
+    const { container } = render(
+      <BookingRecommendations
+        compact
+        compactVisualVariant="photo-grid"
+        page={recommendationPage([{ kind: 'GAME', game, reasons: [] }])}
+      />,
+    );
+    const card = within(container);
+    expect(card.getByText('Френдли игра')).toBeInTheDocument();
+    expect(card.getByText('Селигерская, адрес')).toBeInTheDocument();
+    expect(card.getByText('Любой уровень')).toBeInTheDocument();
+    expect(
+      container.querySelector(
+        '.recommendation-grid-card__footer .recommendation-grid-card__action',
+      ),
+    ).toBeNull();
   });
 
   it('keeps long content bounded with the maximum participant list', () => {
@@ -181,7 +209,7 @@ describe('Home V3 recommendation photo grid', () => {
     expect(within(card).queryByLabelText('Свободное место')).not.toBeInTheDocument();
     const action = within(card).getByRole('link', { name: 'Вступить · Бесплатно' });
     expect(action).toHaveTextContent('');
-    expect(action.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
+    expect(action.closest('.recommendation-grid-card__header')).not.toBeNull();
   });
 
   it('separates a training host from the free participant slots', () => {

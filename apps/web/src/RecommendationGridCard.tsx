@@ -1,3 +1,6 @@
+import './RecommendationGameCard.css';
+import { GameTypeBadge } from './GameTypeBadge.js';
+import { MoreIcon } from './MoreIcon.js';
 import dateIconUrl from './assets/recommendation-cards/date.svg';
 import locationIconUrl from './assets/recommendation-cards/location.svg';
 import levelIconUrl from './assets/recommendation-cards/level.svg';
@@ -202,8 +205,13 @@ function gamePresentation(
       game.id,
       gameHeroUrl,
     ),
-    stationCourtLabel: `${game.station.name}${game.court?.name ? ` · ${game.court.name}` : ''}`,
-    ...(level ? { levelHostLabel: level } : {}),
+    stationCourtLabel: `${game.station.name}${game.station.shortAddress ? `, ${game.station.shortAddress}` : game.court?.name ? ` · ${game.court.name}` : ''}`,
+    levelHostLabel:
+      game.levelRange?.from && game.levelRange?.to && game.levelRange.from !== game.levelRange.to
+        ? `от ${game.levelRange.from} до ${game.levelRange.to}`
+        : level
+          ? `Уровень ${level}`
+          : 'Любой уровень',
     participants,
     participantCapacity,
     activityOpenSlotCount: 0,
@@ -282,6 +290,26 @@ export function RecommendationGridCard({
   readonly item: RecommendationItem;
 }): React.JSX.Element {
   const presentation = item.kind === 'GAME' ? gamePresentation(item) : activityPresentation(item);
+  const isGame = item.kind === 'GAME';
+  const actionIcon = isGame ? <MoreIcon /> : <CreateGameButtonIcon fill="#6A5AF9" />;
+  const action = presentation.actionDisabled ? (
+    <button
+      className="recommendation-grid-card__action is-disabled"
+      type="button"
+      aria-label={presentation.actionLabel}
+      disabled
+    >
+      {actionIcon}
+    </button>
+  ) : (
+    <a
+      className="recommendation-grid-card__action"
+      href={presentation.route}
+      aria-label={presentation.actionLabel}
+    >
+      {actionIcon}
+    </a>
+  );
   const titleId = `recommendation-card-title-${presentation.id}`;
   const hasActivityRoster =
     presentation.activityHost !== undefined || presentation.activityOpenSlotCount > 0;
@@ -310,15 +338,37 @@ export function RecommendationGridCard({
         </time>
       </a>
       <div className="recommendation-grid-card__body">
-        <span className="recommendation-grid-card__kind">{presentation.kindLabel}</span>
-        <a className="recommendation-grid-card__title" href={presentation.route} id={titleId}>
-          {presentation.title}
-        </a>
+        <div className="recommendation-grid-card__header">
+          {item.kind === 'GAME' &&
+          (item.game.kind === 'FRIENDLY' || item.game.kind === 'RATING') ? (
+            <GameTypeBadge type={item.game.kind === 'RATING' ? 'rating' : 'friendly'} />
+          ) : (
+            <span className="recommendation-grid-card__kind">
+              {item.kind === 'GAME' && item.game.kind === 'PRIVATE'
+                ? 'Закрытая игра'
+                : presentation.kindLabel}
+            </span>
+          )}
+          {isGame ? action : null}
+          <a
+            className="recommendation-grid-card__title"
+            href={presentation.route}
+            id={titleId}
+            title={presentation.title}
+          >
+            {presentation.title}
+          </a>
+        </div>
         <div className="recommendation-grid-card__metadata">
           <time className="recommendation-grid-card__time" dateTime={presentation.startsAt}>
             <img src={dateIconUrl} width="11" height="11" alt="" />
             <span>
-              {presentation.schedule.dateLabel}, <span>{presentation.schedule.timeLabel}</span>
+              {presentation.schedule.dateLabel},{' '}
+              <span>
+                {isGame
+                  ? presentation.schedule.timeLabel.replace('–', '—')
+                  : presentation.schedule.timeLabel}
+              </span>
             </span>
           </time>
           <span
@@ -385,24 +435,7 @@ export function RecommendationGridCard({
               {presentation.availabilityLabel}
             </span>
           </div>
-          {presentation.actionDisabled ? (
-            <button
-              className="recommendation-grid-card__action is-disabled"
-              type="button"
-              aria-label={presentation.actionLabel}
-              disabled
-            >
-              <CreateGameButtonIcon fill="#6A5AF9" />
-            </button>
-          ) : (
-            <a
-              className="recommendation-grid-card__action"
-              href={presentation.route}
-              aria-label={presentation.actionLabel}
-            >
-              <CreateGameButtonIcon fill="#6A5AF9" />
-            </a>
-          )}
+          {!isGame ? action : null}
         </div>
       </div>
     </article>
