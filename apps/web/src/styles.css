@@ -10072,7 +10072,7 @@ label {
 .figma-home .fh-preferences-edit {
   position: absolute;
   z-index: 2;
-  top: 13px;
+  top: 15px;
   left: calc(50% - 38px);
   display: grid;
   width: 24px;
@@ -10080,6 +10080,10 @@ label {
   place-items: center;
   border-radius: 50%;
   color: #fff;
+}
+
+.figma-home .fh-tabs-bar--compact .fh-preferences-edit {
+  top: 18px;
 }
 
 .figma-home .fh-preferences-edit svg {
