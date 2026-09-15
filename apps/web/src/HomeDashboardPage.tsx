@@ -1428,44 +1428,42 @@ export function HomeDashboardPage({
           </nav>
         </section>
 
-        <div
-          className={`fh-tabs${usesCompactHero ? ' fh-tabs--compact' : ''}`}
-          role="tablist"
-          aria-label="Раздел записей"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={bookingTab === 'FOR_ME'}
-            onClick={showBookingRecommendations}
-          >
-            Для меня
-          </button>
-          <a
-            className="fh-preferences-edit"
-            href="/profile#booking-preferences-title"
-            aria-label="Настроить предпочтения"
-            title="Настроить предпочтения"
-          >
-            <HomePreferencesEditIcon />
-          </a>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={bookingTab === 'MY'}
-            onClick={() => {
-              setBookingTab('MY');
-              setBookingRecommendationsError(null);
-              onActivateUpcoming();
-            }}
-          >
-            <span className="fh-tab-label">
-              Мои записи
-              {upcomingItems.length > 0 ? (
-                <i className="fh-booking-presence-dot" aria-hidden="true" />
-              ) : null}
-            </span>
-          </button>
+        <div className={`fh-tabs-bar${usesCompactHero ? ' fh-tabs-bar--compact' : ''}`}>
+          <div className="fh-tabs" role="tablist" aria-label="Раздел записей">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bookingTab === 'FOR_ME'}
+              onClick={showBookingRecommendations}
+            >
+              Для меня
+            </button>
+            <a
+              className="fh-preferences-edit"
+              href="/profile#booking-preferences-title"
+              aria-label="Настроить предпочтения"
+              title="Настроить предпочтения"
+            >
+              <HomePreferencesEditIcon />
+            </a>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={bookingTab === 'MY'}
+              onClick={() => {
+                setBookingTab('MY');
+                setBookingRecommendationsError(null);
+                onActivateUpcoming();
+              }}
+            >
+              <span className="fh-tab-label">
+                Мои записи
+                {upcomingItems.length > 0 ? (
+                  <i className="fh-booking-presence-dot" aria-hidden="true" />
+                ) : null}
+              </span>
+            </button>
+          </div>
         </div>
 
         <section className="fh-main-box">
