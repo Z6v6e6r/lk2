@@ -1658,9 +1658,6 @@ export function HomeDashboardPage({
                     onSelect={setRecommendationDateKey}
                   />
                 </div>
-                {recommendationDateKey && dateSearchLoading ? (
-                  <p role="status">Ищем события на выбранную дату…</p>
-                ) : null}
                 {recommendationDateKey && dateSearchError ? (
                   <p role="alert">
                     Не удалось загрузить события.{' '}
@@ -1679,11 +1676,16 @@ export function HomeDashboardPage({
                   </p>
                 ) : null}
 
-                {bookingRecommendationsLoading && !bookingRecommendations ? (
+                {(recommendationDateKey && dateSearchLoading) ||
+                (bookingRecommendationsLoading && !bookingRecommendations) ? (
                   <div
                     className={`fh-for-me-loader${layoutVariant === 'v3' ? ' fh-for-me-loader--pulse' : ''}`}
                     role="status"
-                    aria-label="Подбираем игры"
+                    aria-label={
+                      recommendationDateKey && dateSearchLoading
+                        ? 'Загружаем события на выбранную дату'
+                        : 'Подбираем игры'
+                    }
                   >
                     {layoutVariant === 'v3' ? (
                       <span className="fh-loader-pulse" aria-hidden="true">

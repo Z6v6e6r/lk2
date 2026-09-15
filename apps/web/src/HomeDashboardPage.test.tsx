@@ -624,12 +624,18 @@ describe('Home progressive navigation', () => {
       expect(calendar.getAllByRole('button')).toHaveLength(16);
       const lastDay = calendar.getByRole('button', { name: /пятница, 31 июля/i });
       fireEvent.click(lastDay);
+      expect(
+        screen.getByRole('status', { name: 'Загружаем события на выбранную дату' }),
+      ).toHaveClass('fh-for-me-loader--pulse');
       if (failOnce) {
         await screen.findByRole('button', { name: 'Повторить поиск' });
         expect(loader.mock.calls.filter(([input]) => input?.cursor)).toHaveLength(1);
         fireEvent.click(screen.getByRole('button', { name: 'Повторить поиск' }));
       }
       await screen.findByRole('link', { name: 'Групповая тренировка D' });
+      expect(
+        screen.queryByRole('status', { name: 'Загружаем события на выбранную дату' }),
+      ).not.toBeInTheDocument();
       expect(loader).toHaveBeenCalledWith({ limit: 12, cursor: 'next-date-page' });
       expect(lastDay).toHaveAttribute('aria-pressed', 'true');
       fireEvent.click(calendar.getByRole('button', { name: /суббота, 18 июля/i }));
