@@ -108,12 +108,13 @@ describe('Home layout scroll contract', () => {
     expect(actionLabelRule).toMatch(/letter-spacing:\s*0\.02em\s*;/);
     expect(actionLabelRule).toMatch(/line-height:\s*100%\s*;/);
     expect(actionLabelRule).toMatch(/text-align:\s*center\s*;/);
-    expect(ruleBody('.fh-tabs--compact')).toMatch(/margin-top:\s*var\(--gap-actions-tabs\)\s*;/);
-    expect(ruleBody('.fh-tabs--compact')).not.toMatch(
-      /(?:display|height|grid-template-columns|flex-basis|gap)\s*:/,
+    expect(ruleBody('.fh-tabs-bar--compact')).toMatch(
+      /margin-top:\s*var\(--gap-actions-tabs\)\s*;/,
     );
-    expect(ruleBody('.fh-tabs--compact button')).toMatch(/justify-content:\s*flex-end\s*;/);
-    expect(ruleBody('.fh-tabs--compact button')).toMatch(/gap:\s*10px\s*;/);
+    expect(ruleBody('.fh-tabs-bar--compact .fh-tabs button')).toMatch(
+      /justify-content:\s*flex-end\s*;/,
+    );
+    expect(ruleBody('.fh-tabs-bar--compact .fh-tabs button')).toMatch(/gap:\s*10px\s*;/);
     expect(ruleBody('.fh-hero--v2 ~ .fh-main-box')).toMatch(
       /margin-top:\s*var\(--gap-tabs-sheet\)\s*;/,
     );
@@ -140,7 +141,10 @@ describe('Home layout scroll contract', () => {
     expect(recommendationScrollerRule).toMatch(/contain:\s*layout paint\s*;/);
     expect(recommendationScrollerRule).toMatch(/isolation:\s*isolate\s*;/);
     expect(recommendationScrollerRule).toMatch(/transform:\s*translateZ\(0\)\s*;/);
-    expect(recommendationScrollerRule).toMatch(/-webkit-overflow-scrolling:\s*touch\s*;/);
+    // Home scrolls as one page: the feed must not become a nested scroller that
+    // swallows wheel/touch gestures (that is what a contained scroller used to do).
+    expect(recommendationScrollerRule).not.toMatch(/overflow-y:\s*(?:auto|scroll)\s*;/);
+    expect(recommendationScrollerRule).not.toMatch(/overscroll-behavior:\s*contain\s*;/);
     expect(recommendationItemRule).toMatch(/contain:\s*layout style\s*;/);
     expect(recommendationHeaderRule).toMatch(/min-height:\s*35px\s*;/);
     expect(actionsRule).toMatch(/height:\s*64px\s*;/);
@@ -149,11 +153,17 @@ describe('Home layout scroll contract', () => {
     expect(ruleBody('.fh-actions > a:last-child')).toMatch(/flex:\s*1 1 0\s*;/);
     expect(tabsRule).toMatch(/width:\s*calc\(var\(--fh-page-width\) - 40px\)\s*;/);
     expect(tabsRule).toMatch(/height:\s*50px\s*;/);
-    expect(tabsRule).toMatch(/position:\s*sticky\s*;/);
-    expect(tabsRule).toMatch(/top:\s*0\s*;/);
-    expect(tabsRule).toMatch(/margin:\s*12px auto 0\s*;/);
+    expect(tabsRule).toMatch(/margin:\s*0 auto\s*;/);
     expect(tabsRule).toMatch(/gap:\s*12px\s*;/);
-    expect(ruleBody('.fh-tabs--compact')).toMatch(/margin-top:\s*var\(--gap-actions-tabs\)\s*;/);
+    // The sticky wrapper carries the full-bleed background, so the pinned bar has no side gaps.
+    const tabsBarRule = ruleBody('.fh-tabs-bar');
+    expect(tabsBarRule).toMatch(/position:\s*sticky\s*;/);
+    expect(tabsBarRule).toMatch(/top:\s*0\s*;/);
+    expect(tabsBarRule).toMatch(/width:\s*var\(--fh-page-width\)\s*;/);
+    expect(tabsBarRule).toMatch(/background:\s*#9474ff\s*;/);
+    expect(ruleBody('.fh-tabs-bar--compact')).toMatch(
+      /margin-top:\s*var\(--gap-actions-tabs\)\s*;/,
+    );
     expect(tabRule).toMatch(/width:\s*148px\s*;/);
     expect(tabRule).toMatch(/height:\s*50px\s*;/);
     expect(tabRule).toMatch(/padding:\s*16px 0 0\s*;/);

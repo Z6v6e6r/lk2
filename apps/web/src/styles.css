@@ -2363,14 +2363,11 @@
   flex: 1;
   align-content: start;
   gap: 12px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
   scrollbar-width: none;
   contain: layout paint;
   isolation: isolate;
   backface-visibility: hidden;
   transform: translateZ(0);
-  -webkit-overflow-scrolling: touch;
 }
 
 .fh-for-me .booking-recommendation {
@@ -8327,7 +8324,7 @@ label {
   white-space: nowrap;
 }
 
-.fh-tabs--compact button {
+.fh-tabs-bar--compact .fh-tabs button {
   justify-content: flex-end;
   gap: 10px;
 }
@@ -8775,6 +8772,11 @@ label {
 .game-card__button--mini-create:focus-visible {
   outline: 2px solid #6c49dd;
   outline-offset: -10px;
+}
+
+.booking-recommendations__sentinel {
+  height: 1px;
+  min-height: 1px;
 }
 
 .booking-recommendations__loading-more {
@@ -10038,26 +10040,33 @@ label {
   transform: rotate(45deg);
 }
 
-.fh-tabs {
-  /* Sticks to the top once the hero has scrolled away, then hands scrolling to the sheet. */
+/* Full-bleed sticky bar: the violet fill has to reach the screen edges, so the background
+   lives on this wrapper while only the tab row keeps the 40px inset. */
+.fh-tabs-bar {
   position: sticky;
   z-index: 3;
   top: 0;
+  width: var(--fh-page-width);
+  flex: 0 0 auto;
+  margin-top: 12px;
+  /* Matches the hero gradient behind the bar so the pinned state stays seamless. */
+  background: #9474ff;
+}
+
+.fh-tabs-bar--compact {
+  margin-top: var(--gap-actions-tabs);
+}
+
+.fh-tabs {
   box-sizing: border-box;
   display: flex;
   width: calc(var(--fh-page-width) - 40px);
   height: 50px;
   flex: 0 0 50px;
-  margin: 12px auto 0;
+  margin: 0 auto;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  /* Matches the hero gradient behind the bar so the pinned state stays seamless. */
-  background: #9474ff;
-}
-
-.fh-tabs--compact {
-  margin-top: var(--gap-actions-tabs);
 }
 
 .figma-home .fh-preferences-edit {
@@ -13813,7 +13822,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   gap: 8px;
 }
 
-.fh-hero:not(.fh-hero--v2) + .fh-main-box .booking-recommendations.is-photo-grid {
+.fh-hero:not(.fh-hero--v2) ~ .fh-main-box .booking-recommendations.is-photo-grid {
   margin-right: 20px;
 }
 
