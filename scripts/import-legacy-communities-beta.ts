@@ -100,7 +100,10 @@ const DEFAULT_READ_URL_TTL_SECONDS = 3_600;
 const DEFAULT_MAX_BYTES = 8 * 1_024 * 1_024;
 const DEFAULT_MAX_DIMENSION = 1_024;
 const DEFAULT_WEBP_QUALITY = 82;
-const LEGACY_LOGO_ALLOWED_HOSTS = ['padlhub.su'] as const;
+// Mirrors the product default for COMMUNITY_LOGO_ALLOWED_HOSTS: 28 of the 67 catalog logos answer
+// with a redirect from padlhub.su to the reserve host, and the logo fetcher validates the redirect
+// target against this list, so omitting the reserve host silently drops those logos.
+const LEGACY_LOGO_ALLOWED_HOSTS = ['padlhub.su', 'lk-reserve.89-108-64-209.sslip.io'] as const;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const LEGACY_COMMUNITIES_IMPORT_SCHEMA = 'PHUB_LEGACY_COMMUNITIES_IMPORT_V1';
