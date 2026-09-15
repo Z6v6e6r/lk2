@@ -101,7 +101,7 @@ describe('gating and environment validation', () => {
     expect(config.media?.maxBytes).toBe(8_388_608);
     expect(config.media?.maxDimension).toBe(1_024);
     expect(config.media?.webpQuality).toBe(82);
-    expect(config.media?.allowedHosts).toEqual(['padlhub.su']);
+    expect(config.media?.allowedHosts).toEqual(['padlhub.su', 'lk-reserve.89-108-64-209.sslip.io']);
   });
 
   it('rejects a non-staging APP_ENV', () => {
