@@ -1,10 +1,20 @@
+import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
+import { isCoachGameActivity } from './booking-activity-kind.js';
+import trainingStarUrl from './assets/recommendation-cards/training-star.svg';
+import coachGameBadgeUrl from './assets/recommendation-cards/coach-game-badge.svg';
+import './RecommendationGameCard.css';
+import { GameTypeBadge } from './GameTypeBadge.js';
+import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
+import { FriendsBadgeIcon } from './FriendsBadgeIcon.js';
+import tournamentBadgeUrl from './assets/recommendation-cards/tournament-badge.svg';
+import dateIconUrl from './assets/recommendation-cards/date.svg';
+import locationIconUrl from './assets/recommendation-cards/location.svg';
+import levelIconUrl from './assets/recommendation-cards/level.svg';
 import { recommendationCover } from './recommendation-cover.js';
 import gameHeroUrl from './assets/recommendation-cards/game-hero.webp';
 import tournamentHeroUrl from './assets/recommendation-cards/tournament-hero.webp';
 import trainingHeroUrl from './assets/recommendation-cards/training-hero.webp';
 import type { BookingRecommendationPage } from './auth-gateway.js';
-import { CreateGameButtonIcon } from './CreateGameButtonIcon.js';
-import { gamePrimaryAction } from './game-card-policy.js';
 import {
   ParticipantAvatarStack,
   type ParticipantAvatarStackItem,
@@ -14,6 +24,8 @@ type RecommendationItem = BookingRecommendationPage['items'][number];
 
 interface RecommendationSchedule {
   readonly dateLabel: string;
+  readonly dayLabel: string;
+  readonly weekdayLabel: string;
   readonly dateAccessibleLabel: string;
   readonly timeLabel: string;
 }
@@ -36,8 +48,6 @@ interface RecommendationGridPresentation {
   readonly activityOpenSlotCount: number;
   readonly activityOpenSlotLabel?: string;
   readonly availabilityLabel: string;
-  readonly actionLabel: string;
-  readonly actionDisabled: boolean;
 }
 
 function formatSchedule(
@@ -54,6 +64,10 @@ function formatSchedule(
       minute: '2-digit',
     });
     return {
+      dayLabel: new Intl.DateTimeFormat('ru-RU', { timeZone, day: 'numeric' }).format(startsAt),
+      weekdayLabel: new Intl.DateTimeFormat('ru-RU', { timeZone, weekday: 'short' }).format(
+        startsAt,
+      ),
       dateLabel: new Intl.DateTimeFormat('ru-RU', {
         timeZone,
         day: 'numeric',
@@ -72,6 +86,8 @@ function formatSchedule(
   } catch {
     const timeOptions = { hour: '2-digit', minute: '2-digit' } as const;
     return {
+      dayLabel: new Intl.DateTimeFormat('ru-RU', { day: 'numeric' }).format(startsAt),
+      weekdayLabel: new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(startsAt),
       dateLabel: new Intl.DateTimeFormat('ru-RU', {
         day: 'numeric',
         month: 'short',
@@ -98,18 +114,6 @@ function levelRangeLabel(
   return `${from}–${to}`;
 }
 
-function formatPrice(
-  priceSummary: { readonly amountMinor: number; readonly currency: string } | null | undefined,
-): string | undefined {
-  if (!priceSummary) return undefined;
-  if (priceSummary.amountMinor === 0) return 'Бесплатно';
-  return new Intl.NumberFormat('ru-RU', {
-    style: 'currency',
-    currency: priceSummary.currency,
-    maximumFractionDigits: 0,
-  }).format(priceSummary.amountMinor / 100);
-}
-
 function occupancyLabel(input: {
   readonly total: number | null;
   readonly open: number | null;
@@ -125,38 +129,10 @@ function occupancyLabel(input: {
   return 'Места уточняются';
 }
 
-function gameActionPresentation(item: Extract<RecommendationItem, { kind: 'GAME' }>): {
-  readonly label: string;
-  readonly disabled: boolean;
-} {
-  const action = gamePrimaryAction(item.game);
-  const open = item.game.capacity.open;
-  const soldOutWithoutWaitlist =
-    open === 0 && action !== 'JOIN_WAITLIST' && action !== 'LEAVE_WAITLIST';
-  if (soldOutWithoutWaitlist) return { label: 'Мест нет', disabled: true };
-
-  const label =
-    action === 'JOIN'
-      ? 'Вступить'
-      : action === 'JOIN_WAITLIST'
-        ? 'В лист ожидания'
-        : action === 'PAY'
-          ? 'Оплатить'
-          : action === 'RETRY_PAYMENT'
-            ? 'Повторить оплату'
-            : 'Открыть';
-  const price =
-    action === 'JOIN' || action === 'JOIN_WAITLIST' || action === 'PAY'
-      ? formatPrice(item.game.priceSummary)
-      : undefined;
-  return { label: price ? `${label} · ${price}` : label, disabled: false };
-}
-
 function gamePresentation(
   item: Extract<RecommendationItem, { kind: 'GAME' }>,
 ): RecommendationGridPresentation {
   const game = item.game;
-  const action = gameActionPresentation(item);
   const level = levelRangeLabel(game.levelRange);
   const participants = game.participants.slice(0, 4).map((participant, index) => ({
     key:
@@ -191,8 +167,13 @@ function gamePresentation(
       game.id,
       gameHeroUrl,
     ),
-    stationCourtLabel: `${game.station.name}${game.court?.name ? ` · ${game.court.name}` : ''}`,
-    ...(level ? { levelHostLabel: level } : {}),
+    stationCourtLabel: `${game.station.name}${game.station.shortAddress ? `, ${game.station.shortAddress}` : game.court?.name ? ` · ${game.court.name}` : ''}`,
+    levelHostLabel:
+      game.levelRange?.from && game.levelRange?.to && game.levelRange.from !== game.levelRange.to
+        ? `от ${game.levelRange.from} до ${game.levelRange.to}`
+        : level
+          ? `Уровень ${level}`
+          : 'Любой уровень',
     participants,
     participantCapacity,
     activityOpenSlotCount: 0,
@@ -201,8 +182,6 @@ function gamePresentation(
       open: game.capacity.open,
       occupied: game.capacity.occupied,
     }),
-    actionLabel: action.label,
-    actionDisabled: action.disabled,
   };
 }
 
@@ -210,11 +189,15 @@ function activityPresentation(
   item: Exclude<RecommendationItem, { kind: 'GAME' }>,
 ): RecommendationGridPresentation {
   const activity = item.activity;
-  const level = levelRangeLabel(activity.levelRange);
-  const host =
-    activity.host?.role === 'TRAINER' ? `Тренер ${activity.host.displayName}` : undefined;
-  const levelHostLabel = [level, host].filter(Boolean).join(' · ') || undefined;
-  const isSoldOut = activity.capacity.open === 0;
+  const levelHostLabel =
+    activity.kind === 'TRAINING'
+      ? activity.host?.displayName
+      : [
+          levelRangeLabel(activity.levelRange),
+          activity.host?.role === 'TRAINER' ? `Тренер ${activity.host.displayName}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(' · ') || undefined;
   const kindLabel = activity.kind === 'TOURNAMENT' ? 'Турнир' : 'Тренировка';
   const activityHostLabel =
     activity.host?.role === 'TRAINER' ? 'Тренер' : activity.host ? 'Организатор' : undefined;
@@ -227,7 +210,13 @@ function activityPresentation(
     : undefined;
   return {
     id: `${activity.kind.toLowerCase()}-${activity.id}`,
-    title: activity.title,
+    title:
+      activity.kind === 'TRAINING'
+        ? activity.title
+            .replace(/(?<!\p{L})уровень(?!\p{L})\s*/giu, '')
+            .replace(/\s+/gu, ' ')
+            .trim()
+        : activity.title,
     route: activity.route,
     startsAt: activity.startsAt,
     schedule: formatSchedule(activity.startsAt, activity.endsAt, activity.timezone),
@@ -256,12 +245,6 @@ function activityPresentation(
       total: activity.capacity.total,
       open: activity.capacity.open,
     }),
-    actionLabel: isSoldOut
-      ? 'Мест нет'
-      : activity.capacity.open === null
-        ? 'Открыть'
-        : 'Записаться',
-    actionDisabled: isSoldOut,
   };
 }
 
@@ -271,6 +254,23 @@ export function RecommendationGridCard({
   readonly item: RecommendationItem;
 }): React.JSX.Element {
   const presentation = item.kind === 'GAME' ? gamePresentation(item) : activityPresentation(item);
+  const isFriends = /время\s+на\s+друзей/iu.test(presentation.title);
+  const hasCapacityStrip = item.kind === 'TOURNAMENT' || isFriends;
+  const capacity = item.kind === 'GAME' ? item.game.capacity : item.activity.capacity;
+  const occupied =
+    item.kind === 'GAME'
+      ? item.game.capacity.occupied
+      : capacity.total !== null && capacity.open !== null
+        ? Math.max(0, capacity.total - capacity.open)
+        : null;
+  const tournamentLabel = /мексикано/iu.test(presentation.title)
+    ? 'Мексикано'
+    : /американо/iu.test(presentation.title)
+      ? 'Американо'
+      : 'Турнир';
+  const isGame = item.kind === 'GAME';
+  const isCoachGame =
+    item.kind === 'GAME' ? item.game.kind === 'COACH_GAME' : isCoachGameActivity(item.activity);
   const titleId = `recommendation-card-title-${presentation.id}`;
   const hasActivityRoster =
     presentation.activityHost !== undefined || presentation.activityOpenSlotCount > 0;
@@ -280,99 +280,187 @@ export function RecommendationGridCard({
     <article
       className="recommendation-grid-card"
       data-recommendation-kind={presentation.kindTone}
+      data-friends-event={isFriends || undefined}
       aria-labelledby={titleId}
     >
-      <a
-        className="recommendation-grid-card__hero"
-        href={presentation.route}
-        aria-label={`Открыть: ${presentation.title}`}
-      >
+      <div className="recommendation-grid-card__hero">
         <img src={presentation.heroUrl} alt="" />
         <time
           dateTime={presentation.startsAt}
           aria-label={`Дата события: ${presentation.schedule.dateAccessibleLabel}`}
         >
-          {presentation.schedule.dateLabel}
+          <span className="recommendation-grid-card__day">{presentation.schedule.dayLabel}</span>
+          <span className="recommendation-grid-card__weekday">
+            {presentation.schedule.weekdayLabel}
+          </span>
         </time>
-      </a>
+      </div>
       <div className="recommendation-grid-card__body">
-        <span className="recommendation-grid-card__kind">{presentation.kindLabel}</span>
-        <time className="recommendation-grid-card__time" dateTime={presentation.startsAt}>
-          {presentation.schedule.timeLabel}
-        </time>
-        <a className="recommendation-grid-card__title" href={presentation.route} id={titleId}>
-          {presentation.title}
-        </a>
+        <div className="recommendation-grid-card__header">
+          {isFriends || item.kind === 'TOURNAMENT' ? (
+            <span className="recommendation-grid-card__event-badge">
+              {isFriends ? (
+                <FriendsBadgeIcon />
+              ) : (
+                <img src={tournamentBadgeUrl} width="8" height="8" alt="" />
+              )}
+              {isFriends ? 'Время на друзей' : tournamentLabel}
+            </span>
+          ) : isCoachGame ? (
+            <img
+              className="recommendation-grid-card__coach-badge"
+              src={coachGameBadgeUrl}
+              width="96"
+              height="14"
+              alt="Игра + тренер"
+            />
+          ) : item.kind === 'GAME' &&
+            (item.game.kind === 'FRIENDLY' || item.game.kind === 'RATING') ? (
+            <GameTypeBadge type={item.game.kind === 'RATING' ? 'rating' : 'friendly'} />
+          ) : (
+            <span className="recommendation-grid-card__kind">
+              {item.kind === 'TRAINING' ? (
+                <img src={trainingStarUrl} width="8" height="8" alt="" />
+              ) : null}
+              {item.kind === 'GAME' && item.game.kind === 'PRIVATE'
+                ? 'Закрытая игра'
+                : presentation.kindLabel}
+            </span>
+          )}
+          <div className="recommendation-grid-card__title-slot">
+            <a
+              className="recommendation-grid-card__title"
+              href={presentation.route}
+              id={titleId}
+              title={presentation.title}
+            >
+              {presentation.title}
+            </a>
+          </div>
+        </div>
         <div className="recommendation-grid-card__metadata">
-          <span title={presentation.stationCourtLabel}>{presentation.stationCourtLabel}</span>
+          <time className="recommendation-grid-card__time" dateTime={presentation.startsAt}>
+            <img src={dateIconUrl} width="11" height="11" alt="" />
+            <span>
+              {presentation.schedule.dateLabel},{' '}
+              <span>
+                {isGame
+                  ? presentation.schedule.timeLabel.replace('–', '—')
+                  : presentation.schedule.timeLabel}
+              </span>
+            </span>
+          </time>
+          <span
+            className="recommendation-grid-card__info-row"
+            title={presentation.stationCourtLabel}
+          >
+            <img src={locationIconUrl} width="11" height="11" alt="" />
+            <span title={presentation.stationCourtLabel}>{presentation.stationCourtLabel}</span>
+          </span>
           {presentation.levelHostLabel ? (
-            <span title={presentation.levelHostLabel}>{presentation.levelHostLabel}</span>
+            <span
+              className="recommendation-grid-card__info-row"
+              title={presentation.levelHostLabel}
+            >
+              {item.kind === 'TRAINING' ? (
+                <TrainingPeopleIcon />
+              ) : (
+                <img src={levelIconUrl} width="11" height="11" alt="" />
+              )}
+              <span>{presentation.levelHostLabel}</span>
+            </span>
           ) : null}
         </div>
         <div className="recommendation-grid-card__footer">
-          <div className="recommendation-grid-card__social">
-            {hasActivityRoster ? (
-              <span
-                className="booking-activity-card__host-roster"
-                aria-label={`${presentation.activityHostLabel ?? 'Организатор'} и свободные места`}
-              >
-                {presentation.activityHost ? (
-                  <span className="booking-activity-card__host-avatar">
-                    <ParticipantAvatarStack
-                      ariaLabel={presentation.activityHostLabel ?? 'Организатор'}
-                      capacity={1}
-                      participants={[presentation.activityHost]}
-                      showLevelRing={false}
-                    />
-                  </span>
-                ) : null}
-                {presentation.activityOpenSlotCount > 0 ? (
-                  <span
-                    className="booking-activity-card__open-slots"
-                    aria-label={presentation.activityOpenSlotLabel}
-                  >
-                    <ParticipantAvatarStack
-                      ariaLabel="Свободные места"
-                      capacity={presentation.activityOpenSlotCount}
-                      participants={[]}
-                      showLevelRing={false}
-                    />
-                  </span>
-                ) : null}
-              </span>
-            ) : presentation.participantCapacity > 0 ? (
-              <ParticipantAvatarStack
-                ariaLabel="Участники события"
-                capacity={presentation.participantCapacity}
-                participants={presentation.participants}
-                showLevelRing={false}
-              />
-            ) : null}
-            <span
-              className={
-                hasVisualAvailability ? 'sr-only' : 'recommendation-grid-card__availability'
+          {hasCapacityStrip ? (
+            <div
+              className="recommendation-grid-card__capacity"
+              aria-label={
+                occupied !== null && capacity.total !== null
+                  ? `Занято ${occupied} из ${capacity.total} мест. ${capacity.open === 0 ? 'Мест нет' : `Свободных мест: ${capacity.open}`}`
+                  : 'Количество мест уточняется'
               }
             >
-              {presentation.availabilityLabel}
-            </span>
-          </div>
-          {presentation.actionDisabled ? (
-            <button
-              className="recommendation-grid-card__action is-disabled"
-              type="button"
-              aria-label={presentation.actionLabel}
-              disabled
-            >
-              <CreateGameButtonIcon fill="#6A5AF9" />
-            </button>
+              <span className="recommendation-grid-card__capacity-avatar">
+                {presentation.activityHost ? (
+                  <PlayerLevelAvatar
+                    alt={presentation.activityHost.displayName}
+                    accessibleLabel={presentation.activityHost.displayName}
+                    src={presentation.activityHost.avatarUrl ?? null}
+                    fallbackSeed={presentation.activityHost.key}
+                    size={34}
+                    showLevelRing={false}
+                  />
+                ) : (
+                  <span aria-label="Организатор">
+                    <img src={tournamentBadgeUrl} width="16" height="16" alt="" />
+                  </span>
+                )}
+              </span>
+              <span className="recommendation-grid-card__capacity-count" aria-hidden="true">
+                {occupied ?? '—'}
+                <span>/{capacity.total ?? '—'}</span>
+              </span>
+              <span className="recommendation-grid-card__capacity-open">
+                {capacity.open === null
+                  ? 'Места уточняются'
+                  : capacity.open === 0
+                    ? 'Мест нет'
+                    : `(+${capacity.open} ${capacity.open % 10 === 1 && capacity.open % 100 !== 11 ? 'место' : capacity.open % 10 >= 2 && capacity.open % 10 <= 4 && !(capacity.open % 100 >= 12 && capacity.open % 100 <= 14) ? 'места' : 'мест'})`}
+              </span>
+            </div>
           ) : (
-            <a
-              className="recommendation-grid-card__action"
-              href={presentation.route}
-              aria-label={presentation.actionLabel}
-            >
-              <CreateGameButtonIcon fill="#6A5AF9" />
-            </a>
+            <div className="recommendation-grid-card__social">
+              {hasActivityRoster ? (
+                <span
+                  className="booking-activity-card__host-roster"
+                  aria-label={`${presentation.activityHostLabel ?? 'Организатор'} и свободные места`}
+                >
+                  {presentation.activityHost ? (
+                    <span className="booking-activity-card__host-avatar">
+                      <ParticipantAvatarStack
+                        ariaLabel={presentation.activityHostLabel ?? 'Организатор'}
+                        capacity={1}
+                        participants={[presentation.activityHost]}
+                        showLevelRing={false}
+                      />
+                      {item.kind === 'TRAINING' && item.activity.host?.role === 'TRAINER' ? (
+                        <span className="recommendation-grid-card__trainer-mark" aria-hidden="true">
+                          <FriendsBadgeIcon />
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : null}
+                  {presentation.activityOpenSlotCount > 0 ? (
+                    <span
+                      className="booking-activity-card__open-slots"
+                      aria-label={presentation.activityOpenSlotLabel}
+                    >
+                      <ParticipantAvatarStack
+                        ariaLabel="Свободные места"
+                        capacity={presentation.activityOpenSlotCount}
+                        participants={[]}
+                        showLevelRing={false}
+                      />
+                    </span>
+                  ) : null}
+                </span>
+              ) : presentation.participantCapacity > 0 ? (
+                <ParticipantAvatarStack
+                  ariaLabel="Участники события"
+                  capacity={presentation.participantCapacity}
+                  participants={presentation.participants}
+                  showLevelRing={false}
+                />
+              ) : null}
+              <span
+                className={
+                  hasVisualAvailability ? 'sr-only' : 'recommendation-grid-card__availability'
+                }
+              >
+                {presentation.availabilityLabel}
+              </span>
+            </div>
           )}
         </div>
       </div>

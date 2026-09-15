@@ -206,6 +206,13 @@ export async function runPromotionHomeSyncCycle(input: {
       ) =>
         homeRecommendationPromotionDeckSchema.parse({
           repeatEveryCards: snapshot.repeatEveryCards ?? defaultRepeatEveryCards,
+          ...(input.config.PROMOTIONS_RECOMMENDATION_TIMER_PAYLOAD_ENABLED
+            ? {
+                rotationEnabled: snapshot.rotationEnabled && snapshot.items.length > 1,
+                intervalSeconds:
+                  snapshot.intervalSeconds ?? input.config.PROMOTION_ROTATION_INTERVAL_SECONDS,
+              }
+            : {}),
           items: snapshot.items.map((item) => {
             const promotionId = ids.get(`${sourcePrefix}:${item.externalId}`);
             const asset = promotionId ? mediaByPromotionId.get(promotionId) : undefined;

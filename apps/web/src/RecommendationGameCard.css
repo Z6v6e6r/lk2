@@ -1,0 +1,449 @@
+/* Keep two reference cards (170.5 px) in a 375 px canvas. */
+.figma-home-shell .figma-home .fh-for-me:has(.recommendation-grid-card) {
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.figma-home-shell .figma-home .fh-for-me .booking-recommendations.is-photo-grid {
+  width: calc(100% - 24px);
+  margin-right: 12px;
+  margin-left: 12px;
+  grid-auto-rows: auto;
+  gap: 10px;
+}
+
+/* Game photo cards: Figma 1792:3534, 170.5 × 266 at the reference width. */
+.figma-home-shell .figma-home .fh-for-me .booking-recommendation.is-photo-grid-card {
+  border: 0;
+  border-radius: 16px;
+}
+
+.recommendation-grid-card {
+  min-height: 266px;
+  border-radius: 16px;
+  box-shadow: inset 0 0 0 0.5px #ededed;
+}
+
+.recommendation-grid-card .recommendation-grid-card__hero {
+  box-sizing: border-box;
+  height: 100px;
+  flex-basis: 100px;
+  border: 0;
+  border-radius: 16px 16px 0 0;
+}
+
+.recommendation-grid-card .recommendation-grid-card__body {
+  padding: 12px;
+  gap: 14px;
+  justify-content: flex-start;
+  border: 0;
+  border-radius: 0 0 16px 16px;
+}
+
+.recommendation-grid-card .recommendation-grid-card__header {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  min-height: 56px;
+  flex: none;
+  gap: 6px;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game']
+  :is(.fh-event__tag, .recommendation-grid-card__kind) {
+  display: flex;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  height: 14px;
+  min-height: 14px;
+  padding: 2px 6px;
+  align-items: center;
+  gap: 4px;
+  border-radius: 24px;
+  color: #4db368;
+  background: rgb(77 179 105 / 8%);
+  font-family: 'Recommendation RF Dewi', 'RF Dewi', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .fh-event__tag.is-rating {
+  color: #829e04;
+  background: rgb(155 189 5 / 8%);
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .fh-event__tag-label {
+  width: auto;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  font: inherit;
+  letter-spacing: inherit;
+  text-overflow: ellipsis;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] .fh-event__tag svg {
+  width: 8px;
+  height: 10px;
+  flex: 0 0 8px;
+}
+
+.recommendation-grid-card .recommendation-grid-card__title {
+  width: 100%;
+  margin: 0;
+  line-height: 18px;
+  padding-bottom: 0;
+  -webkit-line-clamp: 2;
+}
+
+.recommendation-grid-card .recommendation-grid-card__metadata {
+  margin: 0;
+}
+
+.recommendation-grid-card .recommendation-grid-card__footer {
+  min-height: 34px;
+  margin-top: auto;
+  padding: 0;
+  align-items: center;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack {
+  height: 34px;
+  padding: 0 7px;
+  flex-direction: row;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  :is(.participant-avatar-stack__item, .participant-avatar-stack__open-slot) {
+  display: block;
+  width: 34px;
+  height: 34px;
+  margin: 0 -7px;
+  flex: 0 0 34px;
+  box-sizing: border-box;
+  isolation: isolate;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #f6f6f6;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack__item
+  > [data-player-level-avatar] {
+  transform: scale(0.625);
+  transform-origin: top left;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game'] [data-player-level-badge] {
+  display: none;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack__open-slot
+  svg {
+  width: 30px;
+  height: 30px;
+  flex-basis: 30px;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack__open-slot
+  svg
+  rect {
+  fill: #f6f6f6;
+  stroke: none;
+}
+
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack
+  > :nth-child(1) {
+  z-index: 4;
+}
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack
+  > :nth-child(2) {
+  z-index: 3;
+}
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack
+  > :nth-child(3) {
+  z-index: 2;
+}
+.figma-home-shell
+  .figma-home
+  .recommendation-grid-card[data-recommendation-kind='game']
+  .participant-avatar-stack
+  > :nth-child(4) {
+  z-index: 1;
+}
+
+.recommendation-grid-card[data-recommendation-kind='game']
+  [data-player-level-avatar]
+  > span:first-child {
+  border: 0;
+}
+
+.recommendation-grid-card__coach-badge {
+  display: block;
+  flex: none;
+}
+.recommendation-grid-card[data-recommendation-kind='training'] .recommendation-grid-card__kind {
+  display: inline-flex;
+  width: 96px;
+  justify-content: center;
+  height: 14px;
+  box-sizing: border-box;
+  align-items: center;
+  padding: 3px 6px;
+  gap: 4px;
+  border-radius: 24px;
+  color: #2f9dd4;
+  background: rgb(47 157 212 / 8%);
+  font-family: 'Recommendation RF Dewi', 'RF Dewi', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.recommendation-grid-card__info-row > svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
+  color: #929292;
+}
+.recommendation-grid-card .recommendation-grid-card__footer {
+  gap: 5px;
+}
+.recommendation-grid-card .recommendation-grid-card__title {
+  line-height: 18px;
+}
+
+/* Keep the date strip and card grid within the Home canvas on narrow phones. */
+.figma-home-shell .figma-home .fh-for-me {
+  width: var(--fh-page-width);
+}
+
+@media (max-width: 374px) {
+  .recommendation-grid-card .recommendation-grid-card__footer {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .recommendation-grid-card .recommendation-grid-card__social {
+    flex: 0 0 auto;
+    max-width: 100%;
+  }
+}
+
+.recommendation-grid-card[data-recommendation-kind='training'] {
+  --recommendation-event-color: #2f9dd4;
+}
+
+.recommendation-grid-card[data-recommendation-kind='training'] .recommendation-grid-card__kind {
+  color: var(--recommendation-event-color);
+}
+
+.recommendation-grid-card .booking-activity-card__host-avatar {
+  position: relative;
+  isolation: isolate;
+}
+
+.recommendation-grid-card__trainer-mark {
+  position: absolute;
+  z-index: 5;
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--recommendation-event-color);
+  pointer-events: none;
+}
+
+.recommendation-grid-card__trainer-mark svg {
+  display: block;
+  width: 12px;
+  height: 15px;
+}
+
+/* Reserve two title lines so short names share the same metadata baseline. */
+.recommendation-grid-card .recommendation-grid-card__header {
+  display: flex;
+  min-height: 56px;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.recommendation-grid-card__title-slot {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+}
+
+.recommendation-grid-card__title-slot .recommendation-grid-card__title {
+  width: 100%;
+  margin: 0;
+  line-height: 18px;
+}
+
+/* One native details link covers the card; participant profile links stay independent. */
+.recommendation-grid-card {
+  position: relative;
+}
+.recommendation-grid-card__title::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: 16px;
+}
+.recommendation-grid-card__title:focus-visible::after {
+  outline: 2px solid #8766eb;
+  outline-offset: -2px;
+}
+.recommendation-grid-card .participant-avatar-stack a {
+  position: relative;
+  z-index: 2;
+}
+
+.recommendation-grid-card {
+  --recommendation-event-color: #2f9dd4;
+  --recommendation-event-tint: #e5f5fc;
+}
+.recommendation-grid-card[data-friends-event] {
+  --recommendation-event-color: #8766eb;
+  --recommendation-event-tint: #f0ecfc;
+}
+.recommendation-grid-card .recommendation-grid-card__event-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 14px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border-radius: 24px;
+  background: rgb(47 157 212 / 8%);
+  color: var(--recommendation-event-color);
+  font-family: 'Recommendation RF Dewi', 'RF Dewi', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+.recommendation-grid-card[data-friends-event] .recommendation-grid-card__event-badge {
+  background: #f0ecfc;
+}
+.recommendation-grid-card__event-badge svg,
+.recommendation-grid-card__event-badge img {
+  flex: none;
+}
+.recommendation-grid-card__capacity {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 34px;
+  min-width: 0;
+  font-family: 'Recommendation Inter Display', 'Inter Display', sans-serif;
+  font-size: 9px;
+  font-weight: 600;
+}
+.recommendation-grid-card__capacity::before {
+  content: '';
+  position: absolute;
+  inset: 2px 0 2px 19px;
+  border: 0.5px solid #ededed;
+  border-radius: 0 16px 16px 0;
+  z-index: -1;
+}
+.recommendation-grid-card__capacity-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--recommendation-event-tint);
+  box-shadow: inset 0 0 0 2px white;
+  color: var(--recommendation-event-color);
+  z-index: 1;
+}
+.recommendation-grid-card__capacity-avatar svg {
+  width: 16px;
+  height: 20px;
+}
+.recommendation-grid-card__capacity-count {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 8px 0 19px;
+  margin-left: -15px;
+  min-width: 50px;
+  background: var(--recommendation-event-tint);
+  color: #353436;
+}
+.recommendation-grid-card__capacity-count > span {
+  color: rgb(53 52 54 / 32%);
+}
+.recommendation-grid-card__capacity-open {
+  flex: 1;
+  min-width: 0;
+  padding: 0 3px;
+  text-align: center;
+  color: var(--recommendation-event-color);
+  font-family: 'Recommendation RF Dewi', 'RF Dewi', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.recommendation-grid-card .recommendation-grid-card__event-badge svg {
+  width: 8px;
+  height: 10px;
+}
+.recommendation-grid-card .recommendation-grid-card__capacity-avatar {
+  overflow: hidden;
+}

@@ -1,0 +1,125 @@
+.booking-recommendation-ad[data-photo-grid-ad] {
+  border-radius: 16px;
+  box-shadow: none;
+  background: #83b5fd;
+}
+.booking-recommendation-ad[data-photo-grid-ad].is-card {
+  min-height: 266px;
+}
+.booking-recommendation-ad[data-photo-grid-ad].is-strip {
+  min-height: 120px;
+  height: 120px;
+}
+.booking-recommendation-ad[data-photo-grid-ad] picture::after {
+  content: none;
+}
+.recommendation-ad-artwork {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: inherit;
+  box-sizing: border-box;
+  padding: 16px 20px 44px;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.recommendation-ad-artwork__badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-height: 14px;
+  padding: 2px 6px;
+  gap: 4px;
+  border-radius: 24px;
+  background: rgb(255 255 255 / 16%);
+  color: #fafafa;
+  font-family: 'Recommendation RF Dewi', 'RF Dewi', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.booking-recommendation-ad .recommendation-ad-artwork__badge svg {
+  flex: none;
+  width: 7px;
+  height: 10px;
+}
+.recommendation-ad-artwork > strong {
+  margin: auto 0;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.recommendation-ad-artwork__footer {
+  margin-top: auto;
+  font-size: 10px;
+}
+.is-strip .recommendation-ad-artwork {
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding-bottom: 16px;
+}
+.is-strip .recommendation-ad-artwork__badge {
+  max-width: 50%;
+}
+.is-strip .recommendation-ad-artwork__footer {
+  max-width: 50%;
+  margin: 0;
+}
+.recommendation-ad-controls {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.is-strip .recommendation-ad-controls {
+  left: 50%;
+  right: 16px;
+  bottom: 10px;
+  justify-content: flex-end;
+}
+.recommendation-ad-controls__dots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.recommendation-ad-controls button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: #fff;
+  background: transparent;
+  cursor: pointer;
+}
+.recommendation-ad-controls__dots button {
+  width: 16px;
+}
+.recommendation-ad-controls__dots span {
+  width: 12px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 32%);
+}
+.recommendation-ad-controls__dots [aria-pressed='true'] span {
+  background: white;
+}
+.recommendation-ad-controls button:focus-visible,
+.booking-recommendation-ad > a:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -3px;
+}

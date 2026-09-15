@@ -5857,6 +5857,14 @@ components:
       additionalProperties: false
       required: [repeatEveryCards, items]
       properties:
+        rotationEnabled:
+          type: boolean
+          description: Optional automatic rotation; omitted on older snapshots (disabled).
+        intervalSeconds:
+          type: integer
+          minimum: 3
+          maximum: 30
+          description: CUP-controlled rotation interval, independent of feed insertion frequency.
         repeatEveryCards:
           type: integer
           minimum: 1

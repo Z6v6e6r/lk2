@@ -1,13 +1,15 @@
+import nagatinskayaCover from './assets/recommendation-cards/nagatinskaya/default.webp';
+import nagatinskayaTournamentCover from './assets/recommendation-cards/nagatinskaya/tournament.webp';
 import np_game_1 from './assets/recommendation-cards/nagatinskaya-premium/game-1.webp';
 import np_game_2 from './assets/recommendation-cards/nagatinskaya-premium/game-2.webp';
 import np_game_3 from './assets/recommendation-cards/nagatinskaya-premium/game-3.webp';
 import np_game_4 from './assets/recommendation-cards/nagatinskaya-premium/game-4.webp';
+import np_game_5 from './assets/recommendation-cards/nagatinskaya-premium/game-5.webp';
+import np_game_6 from './assets/recommendation-cards/nagatinskaya-premium/game-6.webp';
 import np_training_1 from './assets/recommendation-cards/nagatinskaya-premium/training-1.webp';
 import np_training_2 from './assets/recommendation-cards/nagatinskaya-premium/training-2.webp';
 import np_tournament_1 from './assets/recommendation-cards/nagatinskaya-premium/tournament-1.webp';
-import np_tournament_2 from './assets/recommendation-cards/nagatinskaya-premium/tournament-2.webp';
 import np_coach_game_1 from './assets/recommendation-cards/nagatinskaya-premium/coach-game-1.webp';
-import np_coach_game_2 from './assets/recommendation-cards/nagatinskaya-premium/coach-game-2.webp';
 import game_1 from './assets/recommendation-cards/skolkovo/game-1.webp';
 import game_2 from './assets/recommendation-cards/skolkovo/game-2.webp';
 import game_3 from './assets/recommendation-cards/skolkovo/game-3.webp';
@@ -27,10 +29,10 @@ const covers = {
 } as const;
 
 const nagatinskayaPremiumCovers = {
-  GAME: [np_game_1, np_game_2, np_game_3, np_game_4],
-  COACH_GAME: [np_coach_game_1, np_coach_game_2],
+  GAME: [np_game_1, np_game_2, np_game_3, np_game_4, np_game_5, np_game_6],
+  COACH_GAME: [np_coach_game_1],
   TRAINING: [np_training_1, np_training_2],
-  TOURNAMENT: [np_tournament_1, np_tournament_2],
+  TOURNAMENT: [np_tournament_1],
 } as const;
 
 export function recommendationCover(
@@ -41,6 +43,9 @@ export function recommendationCover(
 ): string {
   // Temporary presentation mapping until station cover settings expose media IDs.
   const station = stationName.trim().toLocaleLowerCase('ru-RU');
+  if (station === 'нагатинская') {
+    return kind === 'TOURNAMENT' ? nagatinskayaTournamentCover : nagatinskayaCover;
+  }
   const stationCovers =
     station === 'нагатинская премиум'
       ? nagatinskayaPremiumCovers

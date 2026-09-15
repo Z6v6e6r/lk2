@@ -238,6 +238,8 @@ export const homeRecommendationPromotionSchema = z
 export const homeRecommendationPromotionDeckSchema = z
   .object({
     repeatEveryCards: z.number().int().min(1).max(20),
+    rotationEnabled: z.boolean().optional(),
+    intervalSeconds: z.number().int().min(3).max(30).optional(),
     items: z.array(homeRecommendationPromotionSchema).max(20),
   })
   .strict();

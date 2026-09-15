@@ -21913,6 +21913,8 @@ var homeRecommendationPromotionSchema = external_exports.object({
 }).strict();
 var homeRecommendationPromotionDeckSchema = external_exports.object({
   repeatEveryCards: external_exports.number().int().min(1).max(20),
+  rotationEnabled: external_exports.boolean().optional(),
+  intervalSeconds: external_exports.number().int().min(3).max(30).optional(),
   items: external_exports.array(homeRecommendationPromotionSchema).max(20)
 }).strict();
 var homePromotionSlotsSchema = external_exports.object({

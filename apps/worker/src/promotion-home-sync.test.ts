@@ -1,3 +1,4 @@
+import { homeRecommendationPromotionDeckSchema } from '@phub/home-projection';
 import { loadConfig } from '@phub/config';
 import type { Logger } from 'pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,11 +48,13 @@ function snapshot(
   options: {
     readonly rotationEnabled?: boolean;
     readonly repeatEveryCards?: number;
+    readonly intervalSeconds?: number;
     readonly cardImages?: boolean;
   } = {},
 ): LegacyPromotionSourceSnapshot {
   return {
     rotationEnabled: options.rotationEnabled ?? false,
+    ...(options.intervalSeconds ? { intervalSeconds: options.intervalSeconds } : {}),
     ...(options.repeatEveryCards ? { repeatEveryCards: options.repeatEveryCards } : {}),
     items: [
       {
@@ -135,77 +138,108 @@ describe('promotion Home source slots', () => {
     expect(getSnapshot).toHaveBeenCalledWith('promotion-block-2-test');
   });
 
-  it('publishes all promotion slots and completes best-effort media garbage collection', async () => {
-    const hero = snapshot('hero', { rotationEnabled: true });
-    const standard = snapshot('standard');
-    const strip = snapshot('strip', { repeatEveryCards: 3 });
-    const card = snapshot('card', { cardImages: true });
-    const promotionIds = new Map([
-      ['top:hero', '11111111-1111-4111-8111-111111111111'],
-      ['standard', '22222222-2222-4222-8222-222222222222'],
-      ['strip:strip', '33333333-3333-4333-8333-333333333333'],
-      ['card:card', '44444444-4444-4444-8444-444444444444'],
-      ['card-square:card', '55555555-5555-4555-8555-555555555555'],
-    ]);
-    repositoryMocks.listDuePromotionHomeUsers.mockResolvedValue([userId]);
-    repositoryMocks.resolvePromotionIds.mockResolvedValue(promotionIds);
-    mediaMocks.synchronizePromotionMedia.mockResolvedValue(
-      [...promotionIds.values()].map(mediaResult),
-    );
-    repositoryMocks.listDuePromotionMediaObjects.mockResolvedValue([
-      'promotion/stale-ok.webp',
-      'promotion/stale-failed.webp',
-    ]);
-    repositoryMocks.recordPromotionMediaObjectGcFailure.mockRejectedValue(
-      new Error('gc ledger unavailable'),
-    );
+  it.each([false, true])(
+    'publishes compatible slots with timer payload enabled=%s',
+    async (timerPayloadEnabled) => {
+      const hero = snapshot('hero', { rotationEnabled: true });
+      const standard = snapshot('standard');
+      const strip = snapshot('strip', {
+        repeatEveryCards: 3,
+        intervalSeconds: 9,
+        rotationEnabled: true,
+      });
+      const card = snapshot('card', { cardImages: true });
+      const promotionIds = new Map([
+        ['top:hero', '11111111-1111-4111-8111-111111111111'],
+        ['standard', '22222222-2222-4222-8222-222222222222'],
+        ['strip:strip', '33333333-3333-4333-8333-333333333333'],
+        ['card:card', '44444444-4444-4444-8444-444444444444'],
+        ['card-square:card', '55555555-5555-4555-8555-555555555555'],
+      ]);
+      repositoryMocks.listDuePromotionHomeUsers.mockResolvedValue([userId]);
+      repositoryMocks.resolvePromotionIds.mockResolvedValue(promotionIds);
+      mediaMocks.synchronizePromotionMedia.mockResolvedValue(
+        [...promotionIds.values()].map(mediaResult),
+      );
+      repositoryMocks.listDuePromotionMediaObjects.mockResolvedValue([
+        'promotion/stale-ok.webp',
+        'promotion/stale-failed.webp',
+      ]);
+      repositoryMocks.recordPromotionMediaObjectGcFailure.mockRejectedValue(
+        new Error('gc ledger unavailable'),
+      );
 
-    const pool = {
-      query: vi.fn().mockResolvedValue({ rows: [{ id: tenantId }], rowCount: 1 }),
-    } as never;
-    const logger = { info: vi.fn(), warn: vi.fn() } as unknown as Logger;
-    const store: ProfilePhotoObjectStore = {
-      put: vi.fn().mockResolvedValue(undefined),
-      createReadUrl: vi.fn(),
-      exists: vi.fn().mockResolvedValue(true),
-      delete: vi.fn((key: string) =>
-        key.endsWith('stale-failed.webp')
-          ? Promise.reject(new Error('object storage unavailable'))
-          : Promise.resolve(),
-      ),
-    };
-    const source = {
-      hero: { getSnapshot: vi.fn().mockResolvedValue(hero) },
-      standard: { getSnapshot: vi.fn().mockResolvedValue(standard) },
-      recommendationStrip: { getSnapshot: vi.fn().mockResolvedValue(strip) },
-      recommendationCard: { getSnapshot: vi.fn().mockResolvedValue(card) },
-    };
+      const pool = {
+        query: vi.fn().mockResolvedValue({ rows: [{ id: tenantId }], rowCount: 1 }),
+      } as never;
+      const logger = { info: vi.fn(), warn: vi.fn() } as unknown as Logger;
+      const store: ProfilePhotoObjectStore = {
+        put: vi.fn().mockResolvedValue(undefined),
+        createReadUrl: vi.fn(),
+        exists: vi.fn().mockResolvedValue(true),
+        delete: vi.fn((key: string) =>
+          key.endsWith('stale-failed.webp')
+            ? Promise.reject(new Error('object storage unavailable'))
+            : Promise.resolve(),
+        ),
+      };
+      const source = {
+        hero: { getSnapshot: vi.fn().mockResolvedValue(hero) },
+        standard: { getSnapshot: vi.fn().mockResolvedValue(standard) },
+        recommendationStrip: { getSnapshot: vi.fn().mockResolvedValue(strip) },
+        recommendationCard: { getSnapshot: vi.fn().mockResolvedValue(card) },
+      };
 
-    await expect(
-      runPromotionHomeSyncCycle({
-        pool,
-        config: config(),
-        logger,
-        source,
-        store,
-        now: new Date('2026-07-30T12:00:00.000Z'),
-      }),
-    ).resolves.toEqual({ attempted: 1, synced: 1, failed: 0 });
-    const persisted: unknown = repositoryMocks.persistPromotionHomeSource.mock.calls[0]?.[0];
-    expect(persisted).toMatchObject({
-      tenantId,
-      userId,
-      promotions: {
-        hero: { rotationEnabled: false },
-        standard: {},
-        recommendationStrip: { repeatEveryCards: 3 },
-        recommendationCard: { repeatEveryCards: 6 },
-      },
-    });
-    expect(repositoryMocks.completePromotionMediaObjectGc).toHaveBeenCalledOnce();
-    expect(repositoryMocks.recordPromotionMediaObjectGcFailure).toHaveBeenCalledOnce();
-    expect(logger.info).toHaveBeenCalledOnce();
-  });
+      await expect(
+        runPromotionHomeSyncCycle({
+          pool,
+          config: {
+            ...config(),
+            PROMOTIONS_RECOMMENDATION_TIMER_PAYLOAD_ENABLED: timerPayloadEnabled,
+          },
+          logger,
+          source,
+          store,
+          now: new Date('2026-07-30T12:00:00.000Z'),
+        }),
+      ).resolves.toEqual({ attempted: 1, synced: 1, failed: 0 });
+      const persisted: unknown = repositoryMocks.persistPromotionHomeSource.mock.calls[0]?.[0];
+      expect(persisted).toMatchObject({
+        tenantId,
+        userId,
+        promotions: {
+          hero: { rotationEnabled: false },
+          standard: {},
+          recommendationStrip: { repeatEveryCards: 3 },
+          recommendationCard: { repeatEveryCards: 6 },
+        },
+      });
+      const published = repositoryMocks.persistPromotionHomeSource.mock.calls[0]?.[0] as {
+        promotions: { recommendationStrip: unknown; recommendationCard: unknown };
+      };
+      const oldReader = homeRecommendationPromotionDeckSchema.omit({
+        rotationEnabled: true,
+        intervalSeconds: true,
+      });
+      if (timerPayloadEnabled) {
+        expect(published.promotions.recommendationStrip).toMatchObject({
+          intervalSeconds: 9,
+          rotationEnabled: false,
+        });
+        expect(published.promotions.recommendationCard).toMatchObject({
+          intervalSeconds: 6,
+          rotationEnabled: false,
+        });
+        expect(oldReader.safeParse(published.promotions.recommendationStrip).success).toBe(false);
+      } else {
+        expect(oldReader.safeParse(published.promotions.recommendationStrip).success).toBe(true);
+        expect(oldReader.safeParse(published.promotions.recommendationCard).success).toBe(true);
+      }
+      expect(repositoryMocks.completePromotionMediaObjectGc).toHaveBeenCalledOnce();
+      expect(repositoryMocks.recordPromotionMediaObjectGcFailure).toHaveBeenCalledOnce();
+      expect(logger.info).toHaveBeenCalledOnce();
+    },
+  );
 
   it('defers every due user when a provider read fails with a stable code', async () => {
     repositoryMocks.listDuePromotionHomeUsers.mockResolvedValue([userId, userId]);

@@ -6,6 +6,7 @@ import {
   HOME_COMMUNITY_SUMMARY_LIMIT,
   HOME_PROJECTION_COMPONENT_EVENT,
   homeBaseSchema,
+  homeRecommendationPromotionDeckSchema,
   homeDashboardSchema,
   homeProjectionEventSchema,
   homeProjectionComponentPayloadSchema,
@@ -389,5 +390,31 @@ describe('Home projection contract and builder', () => {
         level: 'C+',
       },
     ]);
+  });
+});
+
+describe('recommendation promotion timer compatibility', () => {
+  it('accepts old snapshots without timer fields unchanged', () => {
+    const old = { repeatEveryCards: 4, items: [] };
+    expect(homeRecommendationPromotionDeckSchema.parse(old)).toEqual(old);
+  });
+  it.each([3, 30])('accepts bounded interval %i', (intervalSeconds) => {
+    expect(
+      homeRecommendationPromotionDeckSchema.parse({
+        repeatEveryCards: 4,
+        items: [],
+        rotationEnabled: true,
+        intervalSeconds,
+      }).intervalSeconds,
+    ).toBe(intervalSeconds);
+  });
+  it.each([2, 31, 3.5, '6', null])('rejects invalid interval %s', (intervalSeconds) => {
+    expect(
+      homeRecommendationPromotionDeckSchema.safeParse({
+        repeatEveryCards: 4,
+        items: [],
+        intervalSeconds,
+      }).success,
+    ).toBe(false);
   });
 });
