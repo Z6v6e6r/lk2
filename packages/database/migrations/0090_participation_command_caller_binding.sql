@@ -1,3 +1,12 @@
+-- phub:reviewed-new-table-index
+--
+-- The transactional index below is reviewed as low-risk rather than blocking:
+--   * eligibility.participation_commands is empty in every deployed environment, because the
+--     participation contour (PARTICIPATION_COMMANDS_ENABLED) is disabled by default and the audit
+--     found no writer routed through it, so the build cannot block live writes;
+--   * add column of a nullable column with no default does not rewrite the table;
+--   * an index is reversible (drop index), unlike a destructive schema change.
+
 -- Expand-only: bind a participation command to the caller credential that created it.
 --
 -- Before this migration every caller for a tenant shared one `principal_key`, so the
