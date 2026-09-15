@@ -54,8 +54,8 @@
   min-width: 0;
   flex-direction: column;
   align-items: flex-start;
-  height: 31px;
-  flex: 0 0 31px;
+  min-height: 38px;
+  flex: none;
   gap: 6px;
 }
 
@@ -106,7 +106,8 @@
 .recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__title {
   width: 100%;
   margin: 0;
-  text-box: trim-both cap alphabetic;
+  line-height: 18px;
+  padding-bottom: 2px;
   -webkit-line-clamp: 1;
 }
 
@@ -121,7 +122,10 @@
   align-items: center;
 }
 
-.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__action {
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   position: absolute;
   top: -8px;
   right: -6px;
@@ -132,7 +136,7 @@
   color: #c5c5c6;
 }
 
-.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__action svg {
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__more svg {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
@@ -144,7 +148,7 @@
   .recommendation-grid-card[data-recommendation-kind='game']
   .participant-avatar-stack {
   height: 34px;
-  padding: 0 4px;
+  padding: 0 7px;
   flex-direction: row;
 }
 
@@ -155,7 +159,7 @@
   display: block;
   width: 34px;
   height: 34px;
-  margin: 0 -4px;
+  margin: 0 -7px;
   flex: 0 0 34px;
   box-sizing: border-box;
   isolation: isolate;
@@ -230,4 +234,67 @@
   [data-player-level-avatar]
   > span:first-child {
   border: 0;
+}
+
+.recommendation-grid-card__coach-badge {
+  display: block;
+  flex: none;
+}
+.recommendation-grid-card[data-recommendation-kind='training'] .recommendation-grid-card__kind {
+  display: inline-flex;
+  width: 96px;
+  justify-content: center;
+  height: 14px;
+  box-sizing: border-box;
+  align-items: center;
+  padding: 3px 6px;
+  gap: 4px;
+  border-radius: 24px;
+  color: #2f9dd4;
+  background: rgb(47 157 212 / 8%);
+  font-family: 'Recommendation RF Dewi', 'RF Dewi', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.recommendation-grid-card__info-row > svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
+  color: #929292;
+}
+.recommendation-grid-card[data-recommendation-kind='game'] .recommendation-grid-card__footer {
+  gap: 5px;
+}
+.recommendation-grid-card[data-recommendation-kind='game']
+  .recommendation-grid-card__footer
+  .recommendation-grid-card__action {
+  width: 46px;
+  flex-basis: 46px;
+}
+.recommendation-grid-card .recommendation-grid-card__title {
+  line-height: 18px;
+}
+
+/* Keep the date strip and card grid within the Home canvas on narrow phones. */
+.figma-home-shell .figma-home .fh-for-me {
+  width: var(--fh-page-width);
+}
+
+@media (max-width: 374px) {
+  .recommendation-grid-card .recommendation-grid-card__footer {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .recommendation-grid-card .recommendation-grid-card__social {
+    flex: 0 0 auto;
+    max-width: 100%;
+  }
+
+  .recommendation-grid-card .recommendation-grid-card__footer .recommendation-grid-card__action {
+    margin-left: auto;
+  }
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, UIEvent } from 'react';
+import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
 
 import type {
   ActivityHistoryPage,
@@ -139,26 +140,7 @@ function HomeActionIcon({ name }: { readonly name: HomeActionIconName }): React.
         </svg>
       );
     case 'trainings':
-      return (
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path
-            d="M5.99967 1.33337C4.25301 1.33337 2.83301 2.75337 2.83301 4.50004C2.83301 6.21337 4.17301 7.60004 5.91967 7.66004C5.97301 7.65337 6.02634 7.65337 6.06634 7.66004C6.07967 7.66004 6.08634 7.66004 6.09967 7.66004C6.10634 7.66004 6.10634 7.66004 6.11301 7.66004C7.81967 7.60004 9.15967 6.21337 9.16634 4.50004C9.16634 2.75337 7.74634 1.33337 5.99967 1.33337Z"
-            fill="#FAFAFA"
-          />
-          <path
-            d="M9.38664 9.4333C7.52664 8.1933 4.49331 8.1933 2.61997 9.4333C1.77331 9.99996 1.30664 10.7666 1.30664 11.5866C1.30664 12.4066 1.77331 13.1666 2.61331 13.7266C3.54664 14.3533 4.77331 14.6666 5.99997 14.6666C7.22664 14.6666 8.45331 14.3533 9.38664 13.7266C10.2266 13.16 10.6933 12.4 10.6933 11.5733C10.6866 10.7533 10.2266 9.9933 9.38664 9.4333Z"
-            fill="#FAFAFA"
-          />
-          <path
-            d="M13.3272 4.89344C13.4339 6.18677 12.5139 7.32011 11.2406 7.47344C11.2339 7.47344 11.2339 7.47344 11.2272 7.47344H11.2072C11.1672 7.47344 11.1272 7.47344 11.0939 7.48677C10.4472 7.52011 9.85389 7.31344 9.40723 6.93344C10.0939 6.32011 10.4872 5.40011 10.4072 4.40011C10.3606 3.86011 10.1739 3.36677 9.89389 2.94677C10.1472 2.82011 10.4406 2.74011 10.7406 2.71344C12.0472 2.60011 13.2139 3.57344 13.3272 4.89344Z"
-            fill="#FAFAFA"
-          />
-          <path
-            d="M14.6605 11.0599C14.6071 11.7066 14.1938 12.2666 13.5005 12.6466C12.8338 13.0133 11.9938 13.1866 11.1605 13.1666C11.6405 12.7333 11.9205 12.1933 11.9738 11.6199C12.0405 10.7933 11.6471 9.99994 10.8605 9.36661C10.4138 9.01327 9.89382 8.73327 9.32715 8.52661C10.8005 8.09994 12.6538 8.38661 13.7938 9.30661C14.4071 9.79994 14.7205 10.4199 14.6605 11.0599Z"
-            fill="#FAFAFA"
-          />
-        </svg>
-      );
+      return <TrainingPeopleIcon />;
   }
 }
 
@@ -1167,6 +1149,51 @@ function HomeViewerHeader({
   );
 }
 
+function HomeDateCalendar({
+  selectedKey,
+  onSelect,
+  markedDates,
+}: {
+  readonly selectedKey: string | null;
+  readonly onSelect: (key: string | null) => void;
+  readonly markedDates?: ReadonlySet<string>;
+}): React.JSX.Element {
+  const calendarDays = bookingCalendarDays(new Date());
+  return (
+    <div className="fh-calendar">
+      <button
+        className={selectedKey === null ? 'fh-calendar-reset is-selected' : 'fh-calendar-reset'}
+        type="button"
+        aria-label="Все даты"
+        aria-pressed={selectedKey === null}
+        onClick={() => onSelect(null)}
+      >
+        <span>Все даты</span>
+      </button>
+      {calendarDays.map((day) => {
+        const dateKey = localDateKey(day);
+        const selected = selectedKey === dateKey;
+        return (
+          <button
+            className={selected ? 'is-selected' : ''}
+            type="button"
+            key={dateKey}
+            aria-label={calendarDayLabelFormatter.format(day)}
+            aria-pressed={selected}
+            onClick={() => onSelect(selected ? null : dateKey)}
+          >
+            <strong>{day.getDate()}</strong>
+            <small>{calendarDayFormatter.format(day).replace('.', '')}</small>
+            {markedDates?.has(dateKey) ? (
+              <i className="fh-booking-presence-dot" aria-hidden="true" />
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function HomeDashboardPage({
   dashboard,
   viewerFallback,
@@ -1208,12 +1235,81 @@ export function HomeDashboardPage({
     },
   ] as const;
   const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
+  const [recommendationDateKey, setRecommendationDateKey] = useState<string | null>(null);
+  const [datedRecommendations, setDatedRecommendations] =
+    useState<BookingRecommendationPage | null>(null);
+  const [dateSearchLoading, setDateSearchLoading] = useState(false);
+  const [dateSearchError, setDateSearchError] = useState(false);
+  const dateSearchStarted = useRef(false);
+  const loadDateRecommendations = useCallback((): void => {
+    if (dateSearchStarted.current) return;
+    dateSearchStarted.current = true;
+    setDateSearchLoading(true);
+    setDateSearchError(false);
+    const input: HomeBookingRecommendationFilters = datedRecommendations?.nextCursor
+      ? { limit: 12, cursor: datedRecommendations.nextCursor }
+      : { limit: 14, phase: 'EXPANDED' };
+    void loadBookingRecommendations(input).then(
+      (page) => {
+        if (input.cursor && page.nextCursor === input.cursor) {
+          dateSearchStarted.current = false;
+          setDateSearchLoading(false);
+          setDateSearchError(true);
+          return;
+        }
+        setDatedRecommendations((current) =>
+          current && input.cursor ? appendRecommendationPage(current, page) : page,
+        );
+        dateSearchStarted.current = false;
+        setDateSearchLoading(false);
+      },
+      () => {
+        dateSearchStarted.current = false;
+        setDateSearchLoading(false);
+        setDateSearchError(true);
+      },
+    );
+  }, [datedRecommendations, loadBookingRecommendations]);
+  useEffect(() => {
+    if (recommendationDateKey && !datedRecommendations && !dateSearchError)
+      loadDateRecommendations();
+  }, [recommendationDateKey, datedRecommendations, dateSearchError, loadDateRecommendations]);
+
   const [selectedBookingKind, setSelectedBookingKind] = useState<'all' | HomeUpcomingItem['kind']>(
     'all',
   );
   const [bookingTab, setBookingTab] = useState<'MY' | 'FOR_ME'>('FOR_ME');
   const [bookingRecommendations, setBookingRecommendations] =
     useState<BookingRecommendationPage | null>(null);
+  const visibleRecommendations = recommendationDateKey
+    ? datedRecommendations && {
+        ...datedRecommendations,
+        items: datedRecommendations.items.filter(
+          (item) =>
+            localDateKey(
+              new Date(item.kind === 'GAME' ? item.game.startsAt : item.activity.startsAt),
+            ) === recommendationDateKey,
+        ),
+      }
+    : bookingRecommendations;
+  useEffect(() => {
+    if (
+      recommendationDateKey &&
+      datedRecommendations?.nextCursor &&
+      visibleRecommendations?.items.length === 0 &&
+      !dateSearchLoading &&
+      !dateSearchError
+    ) {
+      loadDateRecommendations();
+    }
+  }, [
+    recommendationDateKey,
+    datedRecommendations?.nextCursor,
+    visibleRecommendations?.items.length,
+    dateSearchLoading,
+    dateSearchError,
+    loadDateRecommendations,
+  ]);
   const [bookingRecommendationsLoading, setBookingRecommendationsLoading] = useState(true);
   const [bookingRecommendationsLoadingMore, setBookingRecommendationsLoadingMore] = useState(false);
   const [bookingRecommendationsError, setBookingRecommendationsError] = useState<string | null>(
@@ -1227,7 +1323,6 @@ export function HomeDashboardPage({
   const [bookingRecommendationsMoreError, setBookingRecommendationsMoreError] = useState(false);
   const bookingRecommendationsExpansionStarted = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const calendarDays = bookingCalendarDays(new Date());
   const upcomingItems =
     upcoming && upcoming.state !== 'UNAVAILABLE' ? upcoming.value.items : ([] as const);
   const datesWithBookings = new Set(
@@ -1493,41 +1588,11 @@ export function HomeDashboardPage({
                     </p>
                   ) : null}
                   <div className="fh-filters" aria-label="Фильтр записей по дате">
-                    <div className="fh-calendar">
-                      <button
-                        className={
-                          selectedDateKey === null
-                            ? 'fh-calendar-reset is-selected'
-                            : 'fh-calendar-reset'
-                        }
-                        type="button"
-                        aria-label="Все даты"
-                        aria-pressed={selectedDateKey === null}
-                        onClick={() => setSelectedDateKey(null)}
-                      >
-                        <span>Все даты</span>
-                      </button>
-                      {calendarDays.map((day) => {
-                        const dateKey = localDateKey(day);
-                        const selected = selectedDateKey === dateKey;
-                        return (
-                          <button
-                            className={selected ? 'is-selected' : ''}
-                            type="button"
-                            key={dateKey}
-                            aria-label={calendarDayLabelFormatter.format(day)}
-                            aria-pressed={selected}
-                            onClick={() => setSelectedDateKey(selected ? null : dateKey)}
-                          >
-                            <strong>{day.getDate()}</strong>
-                            <small>{calendarDayFormatter.format(day).replace('.', '')}</small>
-                            {datesWithBookings.has(dateKey) ? (
-                              <i className="fh-booking-presence-dot" aria-hidden="true" />
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <HomeDateCalendar
+                      selectedKey={selectedDateKey}
+                      onSelect={setSelectedDateKey}
+                      markedDates={datesWithBookings}
+                    />
                     <div className="fh-filter-pills" aria-label="Фильтр записей по типу">
                       {(
                         [
@@ -1584,6 +1649,36 @@ export function HomeDashboardPage({
               )
             ) : (
               <div className="fh-for-me">
+                <div
+                  className="fh-recommendation-calendar"
+                  aria-label="Фильтр рекомендаций по дате"
+                >
+                  <HomeDateCalendar
+                    selectedKey={recommendationDateKey}
+                    onSelect={setRecommendationDateKey}
+                  />
+                </div>
+                {recommendationDateKey && dateSearchLoading ? (
+                  <p role="status">Ищем события на выбранную дату…</p>
+                ) : null}
+                {recommendationDateKey && dateSearchError ? (
+                  <p role="alert">
+                    Не удалось загрузить события.{' '}
+                    <button type="button" onClick={loadDateRecommendations}>
+                      Повторить поиск
+                    </button>
+                  </p>
+                ) : null}
+                {recommendationDateKey &&
+                visibleRecommendations?.items.length === 0 &&
+                !dateSearchLoading ? (
+                  <p role="status">
+                    {datedRecommendations?.nextCursor
+                      ? 'В загруженных событиях этой даты пока нет.'
+                      : 'На выбранную дату подходящих событий нет.'}
+                  </p>
+                ) : null}
+
                 {bookingRecommendationsLoading && !bookingRecommendations ? (
                   <div
                     className={`fh-for-me-loader${layoutVariant === 'v3' ? ' fh-for-me-loader--pulse' : ''}`}
@@ -1604,20 +1699,33 @@ export function HomeDashboardPage({
                 {bookingRecommendationsError ? (
                   <p role="alert">{bookingRecommendationsError}</p>
                 ) : null}
-                {bookingRecommendations ? (
+                {visibleRecommendations &&
+                (!recommendationDateKey || visibleRecommendations.items.length > 0) ? (
                   <BookingRecommendations
-                    page={bookingRecommendations}
+                    page={visibleRecommendations}
                     compact
                     compactActionVariant={usesRecommendationCards ? 'mini-create' : 'default'}
                     compactMetadataVariant={usesRecommendationCards ? 'station-time' : 'default'}
                     compactRosterVariant={usesRecommendationCards ? 'host-slots' : 'default'}
                     compactVisualVariant={usesRecommendationCards ? 'photo-grid' : 'default'}
                     showCompactReasonBadges={!usesRecommendationCards}
-                    hasMore={Boolean(bookingRecommendations.nextCursor)}
-                    loadingMore={bookingRecommendationsLoadingMore}
-                    onLoadMore={loadMoreBookingRecommendations}
-                    loadMoreError={bookingRecommendationsMoreError}
-                    onRetryLoadMore={() => loadMoreBookingRecommendations(true)}
+                    hasMore={Boolean(visibleRecommendations.nextCursor)}
+                    loadingMore={
+                      recommendationDateKey ? dateSearchLoading : bookingRecommendationsLoadingMore
+                    }
+                    onLoadMore={
+                      recommendationDateKey
+                        ? loadDateRecommendations
+                        : loadMoreBookingRecommendations
+                    }
+                    loadMoreError={
+                      recommendationDateKey ? dateSearchError : bookingRecommendationsMoreError
+                    }
+                    onRetryLoadMore={
+                      recommendationDateKey
+                        ? loadDateRecommendations
+                        : () => loadMoreBookingRecommendations(true)
+                    }
                     recommendationStripAdvertising={promotionSlots?.recommendationStrip ?? null}
                     recommendationCardAdvertising={promotionSlots?.recommendationCard ?? null}
                     advertisingLayout={usesRecommendationCards ? 'compact' : 'vertical'}
@@ -1625,6 +1733,16 @@ export function HomeDashboardPage({
                       ? { onAdvertisingEngagement: recordPromotionEngagement }
                       : {})}
                   />
+                ) : null}
+                {recommendationDateKey && datedRecommendations?.nextCursor && !dateSearchError ? (
+                  <button
+                    className="fh-date-load-more"
+                    type="button"
+                    disabled={dateSearchLoading}
+                    onClick={loadDateRecommendations}
+                  >
+                    Показать ещё события
+                  </button>
                 ) : null}
               </div>
             )}

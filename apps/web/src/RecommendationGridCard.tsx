@@ -1,3 +1,7 @@
+import { TrainingPeopleIcon } from './TrainingPeopleIcon.js';
+import { isCoachGameActivity } from './booking-activity-kind.js';
+import trainingStarUrl from './assets/recommendation-cards/training-star.svg';
+import coachGameBadgeUrl from './assets/recommendation-cards/coach-game-badge.svg';
 import './RecommendationGameCard.css';
 import { GameTypeBadge } from './GameTypeBadge.js';
 import { MoreIcon } from './MoreIcon.js';
@@ -229,10 +233,15 @@ function activityPresentation(
   item: Exclude<RecommendationItem, { kind: 'GAME' }>,
 ): RecommendationGridPresentation {
   const activity = item.activity;
-  const level = levelRangeLabel(activity.levelRange);
-  const host =
-    activity.host?.role === 'TRAINER' ? `Тренер ${activity.host.displayName}` : undefined;
-  const levelHostLabel = [level, host].filter(Boolean).join(' · ') || undefined;
+  const levelHostLabel =
+    activity.kind === 'TRAINING'
+      ? activity.host?.displayName
+      : [
+          levelRangeLabel(activity.levelRange),
+          activity.host?.role === 'TRAINER' ? `Тренер ${activity.host.displayName}` : undefined,
+        ]
+          .filter(Boolean)
+          .join(' · ') || undefined;
   const isSoldOut = activity.capacity.open === 0;
   const kindLabel = activity.kind === 'TOURNAMENT' ? 'Турнир' : 'Тренировка';
   const activityHostLabel =
@@ -246,7 +255,13 @@ function activityPresentation(
     : undefined;
   return {
     id: `${activity.kind.toLowerCase()}-${activity.id}`,
-    title: activity.title,
+    title:
+      activity.kind === 'TRAINING'
+        ? activity.title
+            .replace(/(?<!\p{L})уровень(?!\p{L})\s*/giu, '')
+            .replace(/\s+/gu, ' ')
+            .trim()
+        : activity.title,
     route: activity.route,
     startsAt: activity.startsAt,
     schedule: formatSchedule(activity.startsAt, activity.endsAt, activity.timezone),
@@ -291,7 +306,9 @@ export function RecommendationGridCard({
 }): React.JSX.Element {
   const presentation = item.kind === 'GAME' ? gamePresentation(item) : activityPresentation(item);
   const isGame = item.kind === 'GAME';
-  const actionIcon = isGame ? <MoreIcon /> : <CreateGameButtonIcon fill="#6A5AF9" />;
+  const isCoachGame =
+    item.kind === 'GAME' ? item.game.kind === 'COACH_GAME' : isCoachGameActivity(item.activity);
+  const actionIcon = <CreateGameButtonIcon fill="#6A5AF9" />;
   const action = presentation.actionDisabled ? (
     <button
       className="recommendation-grid-card__action is-disabled"
@@ -339,17 +356,36 @@ export function RecommendationGridCard({
       </a>
       <div className="recommendation-grid-card__body">
         <div className="recommendation-grid-card__header">
-          {item.kind === 'GAME' &&
-          (item.game.kind === 'FRIENDLY' || item.game.kind === 'RATING') ? (
+          {isCoachGame ? (
+            <img
+              className="recommendation-grid-card__coach-badge"
+              src={coachGameBadgeUrl}
+              width="96"
+              height="14"
+              alt="Игра + тренер"
+            />
+          ) : item.kind === 'GAME' &&
+            (item.game.kind === 'FRIENDLY' || item.game.kind === 'RATING') ? (
             <GameTypeBadge type={item.game.kind === 'RATING' ? 'rating' : 'friendly'} />
           ) : (
             <span className="recommendation-grid-card__kind">
+              {item.kind === 'TRAINING' ? (
+                <img src={trainingStarUrl} width="8" height="8" alt="" />
+              ) : null}
               {item.kind === 'GAME' && item.game.kind === 'PRIVATE'
                 ? 'Закрытая игра'
                 : presentation.kindLabel}
             </span>
           )}
-          {isGame ? action : null}
+          {isGame ? (
+            <a
+              className="recommendation-grid-card__more"
+              href={presentation.route}
+              aria-label={`Подробнее: ${presentation.title}`}
+            >
+              <MoreIcon />
+            </a>
+          ) : null}
           <a
             className="recommendation-grid-card__title"
             href={presentation.route}
@@ -383,7 +419,11 @@ export function RecommendationGridCard({
               className="recommendation-grid-card__info-row"
               title={presentation.levelHostLabel}
             >
-              <img src={levelIconUrl} width="11" height="11" alt="" />
+              {item.kind === 'TRAINING' ? (
+                <TrainingPeopleIcon />
+              ) : (
+                <img src={levelIconUrl} width="11" height="11" alt="" />
+              )}
               <span>{presentation.levelHostLabel}</span>
             </span>
           ) : null}
@@ -435,7 +475,7 @@ export function RecommendationGridCard({
               {presentation.availabilityLabel}
             </span>
           </div>
-          {!isGame ? action : null}
+          {action}
         </div>
       </div>
     </article>

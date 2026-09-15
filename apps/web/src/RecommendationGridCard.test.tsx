@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
+import coachGameBadgeUrl from './assets/recommendation-cards/coach-game-badge.svg';
 
 import { cleanup, render, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -122,8 +123,12 @@ describe('Home V3 recommendation photo grid', () => {
     const action = card.getByRole('link', { name: /Вступить · 800\s₽/ });
     expect(action).toHaveAttribute('href', `/games/${game.id}`);
     expect(action).toHaveTextContent('');
-    expect(action.closest('.recommendation-grid-card__header')).not.toBeNull();
-    expect(action.querySelector('svg')).toHaveAttribute('viewBox', '0 0 24 24');
+    expect(action.closest('.recommendation-grid-card__footer')).not.toBeNull();
+    expect(action.querySelector('rect')).toHaveAttribute('fill', '#6A5AF9');
+    expect(card.getByRole('link', { name: 'Подробнее: Открытая игра' })).toHaveAttribute(
+      'href',
+      `/games/${game.id}`,
+    );
     expect(card.getByRole('link', { name: `Открыть: ${game.title}` })).toHaveAttribute(
       'href',
       `/games/${game.id}`,
@@ -168,7 +173,7 @@ describe('Home V3 recommendation photo grid', () => {
       container.querySelector(
         '.recommendation-grid-card__footer .recommendation-grid-card__action',
       ),
-    ).toBeNull();
+    ).not.toBeNull();
   });
 
   it('keeps long content bounded with the maximum participant list', () => {
@@ -209,7 +214,22 @@ describe('Home V3 recommendation photo grid', () => {
     expect(within(card).queryByLabelText('Свободное место')).not.toBeInTheDocument();
     const action = within(card).getByRole('link', { name: 'Вступить · Бесплатно' });
     expect(action).toHaveTextContent('');
-    expect(action.closest('.recommendation-grid-card__header')).not.toBeNull();
+    expect(action.closest('.recommendation-grid-card__footer')).not.toBeNull();
+  });
+
+  it('uses the supplied coach-game badge for coach games', () => {
+    const game = recommendationGame({ kind: 'COACH_GAME' });
+    const { container } = render(
+      <BookingRecommendations
+        compact
+        compactVisualVariant="photo-grid"
+        page={recommendationPage([{ kind: 'GAME', game, reasons: [] }])}
+      />,
+    );
+    expect(within(container).getByRole('img', { name: 'Игра + тренер' })).toHaveAttribute(
+      'src',
+      coachGameBadgeUrl,
+    );
   });
 
   it('separates a training host from the free participant slots', () => {
@@ -219,7 +239,7 @@ describe('Home V3 recommendation photo grid', () => {
         activity: {
           id: '50000000-0000-4000-8000-000000000001',
           kind: 'TRAINING',
-          title: 'Утренняя тренировка',
+          title: 'Групповая тренировка уровень D',
           startsAt: '2026-08-30T08:00:00.000Z',
           endsAt: '2026-08-30T09:00:00.000Z',
           timezone: 'Europe/Moscow',
@@ -229,7 +249,7 @@ describe('Home V3 recommendation photo grid', () => {
             shortAddress: null,
           },
           court: null,
-          levelRange: null,
+          levelRange: { from: 'D', to: 'D' },
           capacity: { total: 3, open: 2 },
           host: {
             displayName: 'Александр',
@@ -247,8 +267,12 @@ describe('Home V3 recommendation photo grid', () => {
     const card = container.querySelector('.recommendation-grid-card') as HTMLElement;
 
     expect(within(card).getByText('Тренировка')).toBeInTheDocument();
+    expect(within(card).getByRole('link', { name: 'Групповая тренировка D' })).toBeInTheDocument();
+    expect(
+      card.querySelector('.recommendation-grid-card__info-row[title="Александр"] svg'),
+    ).toHaveAttribute('viewBox', '0 0 16 16');
     expect(within(card).getByText('1 из 3 мест')).toHaveClass('sr-only');
-    expect(within(card).getByText('Тренер Александр')).toBeInTheDocument();
+    expect(within(card).getByText('Александр')).toBeInTheDocument();
     expect(within(card).queryByText(/\u0423ровень/)).not.toBeInTheDocument();
     const roster = within(card).getByLabelText('Тренер и свободные места');
     expect(within(roster).getByLabelText('Тренер')).toBeInTheDocument();
