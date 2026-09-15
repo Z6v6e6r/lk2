@@ -1,3 +1,6 @@
+import dateIconUrl from './assets/recommendation-cards/date.svg';
+import locationIconUrl from './assets/recommendation-cards/location.svg';
+import levelIconUrl from './assets/recommendation-cards/level.svg';
 import { recommendationCover } from './recommendation-cover.js';
 import gameHeroUrl from './assets/recommendation-cards/game-hero.webp';
 import tournamentHeroUrl from './assets/recommendation-cards/tournament-hero.webp';
@@ -14,6 +17,8 @@ type RecommendationItem = BookingRecommendationPage['items'][number];
 
 interface RecommendationSchedule {
   readonly dateLabel: string;
+  readonly dayLabel: string;
+  readonly weekdayLabel: string;
   readonly dateAccessibleLabel: string;
   readonly timeLabel: string;
 }
@@ -54,6 +59,10 @@ function formatSchedule(
       minute: '2-digit',
     });
     return {
+      dayLabel: new Intl.DateTimeFormat('ru-RU', { timeZone, day: 'numeric' }).format(startsAt),
+      weekdayLabel: new Intl.DateTimeFormat('ru-RU', { timeZone, weekday: 'short' }).format(
+        startsAt,
+      ),
       dateLabel: new Intl.DateTimeFormat('ru-RU', {
         timeZone,
         day: 'numeric',
@@ -72,6 +81,8 @@ function formatSchedule(
   } catch {
     const timeOptions = { hour: '2-digit', minute: '2-digit' } as const;
     return {
+      dayLabel: new Intl.DateTimeFormat('ru-RU', { day: 'numeric' }).format(startsAt),
+      weekdayLabel: new Intl.DateTimeFormat('ru-RU', { weekday: 'short' }).format(startsAt),
       dateLabel: new Intl.DateTimeFormat('ru-RU', {
         day: 'numeric',
         month: 'short',
@@ -292,21 +303,39 @@ export function RecommendationGridCard({
           dateTime={presentation.startsAt}
           aria-label={`Дата события: ${presentation.schedule.dateAccessibleLabel}`}
         >
-          {presentation.schedule.dateLabel}
+          <span className="recommendation-grid-card__day">{presentation.schedule.dayLabel}</span>
+          <span className="recommendation-grid-card__weekday">
+            {presentation.schedule.weekdayLabel}
+          </span>
         </time>
       </a>
       <div className="recommendation-grid-card__body">
         <span className="recommendation-grid-card__kind">{presentation.kindLabel}</span>
-        <time className="recommendation-grid-card__time" dateTime={presentation.startsAt}>
-          {presentation.schedule.timeLabel}
-        </time>
         <a className="recommendation-grid-card__title" href={presentation.route} id={titleId}>
           {presentation.title}
         </a>
         <div className="recommendation-grid-card__metadata">
-          <span title={presentation.stationCourtLabel}>{presentation.stationCourtLabel}</span>
+          <time className="recommendation-grid-card__time" dateTime={presentation.startsAt}>
+            <img src={dateIconUrl} width="11" height="11" alt="" />
+            <span>
+              {presentation.schedule.dateLabel}, <span>{presentation.schedule.timeLabel}</span>
+            </span>
+          </time>
+          <span
+            className="recommendation-grid-card__info-row"
+            title={presentation.stationCourtLabel}
+          >
+            <img src={locationIconUrl} width="11" height="11" alt="" />
+            <span title={presentation.stationCourtLabel}>{presentation.stationCourtLabel}</span>
+          </span>
           {presentation.levelHostLabel ? (
-            <span title={presentation.levelHostLabel}>{presentation.levelHostLabel}</span>
+            <span
+              className="recommendation-grid-card__info-row"
+              title={presentation.levelHostLabel}
+            >
+              <img src={levelIconUrl} width="11" height="11" alt="" />
+              <span>{presentation.levelHostLabel}</span>
+            </span>
           ) : null}
         </div>
         <div className="recommendation-grid-card__footer">

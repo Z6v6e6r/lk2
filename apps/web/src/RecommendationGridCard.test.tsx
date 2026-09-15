@@ -71,6 +71,28 @@ function recommendationPage(items: BookingRecommendationPage['items']): BookingR
 }
 
 describe('Home V3 recommendation photo grid', () => {
+  it('keeps the badge day and weekday in the event timezone across midnight', () => {
+    const game = recommendationGame({
+      startsAt: '2026-08-29T22:00:00.000Z',
+      endsAt: '2026-08-29T23:00:00.000Z',
+    });
+    const { container } = render(
+      <BookingRecommendations
+        compact
+        compactVisualVariant="photo-grid"
+        page={recommendationPage([{ kind: 'GAME', game, reasons: [] }])}
+      />,
+    );
+    const badge = container.querySelector('.recommendation-grid-card__hero time');
+    expect(badge).toHaveAttribute('aria-label', 'Дата события: воскресенье, 30 августа');
+    expect(badge?.querySelector('.recommendation-grid-card__day')).toHaveTextContent('30');
+    expect(badge?.querySelector('.recommendation-grid-card__weekday')).toHaveTextContent('вс');
+    expect(container.querySelector('.recommendation-grid-card__time')).toHaveTextContent(
+      '30 авг, 01:00–02:00',
+    );
+    expect(container.querySelectorAll('.recommendation-grid-card__metadata img')).toHaveLength(3);
+  });
+
   it('renders a paid game from the existing model without recommendation badges', () => {
     const game = recommendationGame();
     const { container } = render(
