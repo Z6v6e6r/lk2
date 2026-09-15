@@ -12,6 +12,7 @@ import type {
   UserUpcomingBookings,
 } from './auth-gateway.js';
 import { HomeDashboardPage, UpcomingBookingCard } from './HomeDashboardPage.js';
+import { stubIntersectionObserver } from './intersection-observer.test-helper.js';
 
 const dashboard: HomeDashboard = {
   snapshot: {
@@ -698,6 +699,7 @@ describe('Home progressive navigation', () => {
   });
 
   it('stops scroll retries after pagination failure and resumes only on explicit retry', async () => {
+    const observer = stubIntersectionObserver();
     const page: BookingRecommendationPage = {
       version: 'display-test',
       generatedAt: '2026-07-18T09:00:00.000Z',
@@ -746,21 +748,22 @@ describe('Home progressive navigation', () => {
     );
     await vi.waitFor(() => expect(loadBookingRecommendations).toHaveBeenCalledTimes(2));
     const feed = container.querySelector('.booking-recommendations') as HTMLElement;
-    fireEvent.scroll(feed);
+    observer.triggerLoadMoreSentinel();
     await screen.findByRole('button', { name: 'Повторить загрузку' });
     expect(feed).toContainElement(screen.getByRole('alert'));
-    for (let i = 0; i < 10; i += 1) fireEvent.scroll(feed);
+    for (let i = 0; i < 10; i += 1) observer.triggerLoadMoreSentinel();
     expect(loadBookingRecommendations).toHaveBeenCalledTimes(3);
     fireEvent.click(screen.getByRole('tab', { name: 'Для меня' }));
-    fireEvent.scroll(feed);
+    observer.triggerLoadMoreSentinel();
     expect(loadBookingRecommendations).toHaveBeenCalledTimes(3);
     loadBookingRecommendations.mockResolvedValueOnce({ ...page, nextCursor: null });
     fireEvent.click(screen.getByRole('button', { name: 'Повторить загрузку' }));
     await vi.waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     expect(loadBookingRecommendations).toHaveBeenCalledTimes(4);
     expect(loadBookingRecommendations).toHaveBeenLastCalledWith({ limit: 12, cursor: 'next-page' });
-    fireEvent.scroll(feed);
+    observer.triggerLoadMoreSentinel();
     expect(loadBookingRecommendations).toHaveBeenCalledTimes(4);
+    observer.restore();
   });
   it('expands a sparse initial recommendation slice once and does not reload on the active tab', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
