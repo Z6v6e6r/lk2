@@ -383,6 +383,13 @@ the only supported exception: it uses the Ubuntu-owned `/usr/bin/python3` only t
 the contracted Node runtime. It remains a separately authorized host-package operation and never
 authorizes secret provisioning, image pull, service restart or ingress activation.
 
+The beta API runtime additionally requires a complete tenant media-storage binding
+(`S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`) because
+client-assisted avatar sync is a required-true flag: the browser reads the observed provider photo
+and the API stores the re-encoded image in that bucket. Delivery stays presigned against
+`S3_PUBLIC_ENDPOINT`, so the bucket itself does not need public read and raw provider photo URLs are
+never handed to clients.
+
 ## Operator Node bootstrap
 
 Use only `scripts/control-timeweb-operator-node-bootstrap.py` and the adjacent protected
