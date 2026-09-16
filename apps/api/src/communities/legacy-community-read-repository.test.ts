@@ -217,31 +217,26 @@ describe('legacy community read repository', () => {
   });
 
   it('accepts a large rating snapshot instead of treating it as invalid', async () => {
-    // Large communities return ranking rows for every member: real responses reach ~1.5 MB, and a
-    // 512 KB bound used to discard them as COMMUNITY_LEGACY_RESPONSE_INVALID.
+    // Large communities return ranking rows for every member: live responses reach ~7 MB, so both
+    // the original 512 KB bound and the later 4 MB bound discarded them as
+    // COMMUNITY_LEGACY_RESPONSE_INVALID. This snapshot is deliberately larger than 4 MB.
     const source = payload({ embeddedRank: false });
-    const filler = Array.from({ length: 4_000 }, (_value, index) => ({
+    const filler = Array.from({ length: 24_000 }, (_value, index) => ({
       rank: index + 100,
       playerId: `legacy-filler-${index}`,
       playerName: 'Заполнитель',
       note: 'x'.repeat(120),
     }));
+    const ratingSnapshot = JSON.stringify({
+      communityId: 'community_legacy_mine',
+      calculationVersion: 'community-rating-v1.3.0',
+      items: [{ rank: 12, playerId: 'legacy-client-1', playerName: 'Скрытое имя' }, ...filler],
+    });
+    expect(ratingSnapshot.length).toBeGreaterThan(4 * 1024 * 1024);
     const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((input) => {
       const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
       if (url.pathname.endsWith('/rating')) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              communityId: 'community_legacy_mine',
-              calculationVersion: 'community-rating-v1.3.0',
-              items: [
-                { rank: 12, playerId: 'legacy-client-1', playerName: 'Скрытое имя' },
-                ...filler,
-              ],
-            }),
-            { status: 200 },
-          ),
-        );
+        return Promise.resolve(new Response(ratingSnapshot, { status: 200 }));
       }
       return Promise.resolve(new Response(JSON.stringify(source), { status: 200 }));
     });

@@ -8,9 +8,11 @@ import {
 } from './index.js';
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-// Rating payloads for large communities are legitimately big: the CUP returns ranking rows for
-// every member, and real responses reach ~1.5 MB (a 512 KB bound rejected them as invalid).
-const MAX_RANK_RESPONSE_BYTES = 4 * 1024 * 1024;
+// Rating payloads for large communities are legitimately big: the CUP returns a ranking row for
+// every member and offers no viewer-scoped or limit-filtered variant. Live reads on 2026-09-16
+// returned up to 7_278_637 bytes (хАБ Нагатинская); the 512 KB and 4 MB bounds both discarded such
+// real snapshots as COMMUNITY_LEGACY_RESPONSE_INVALID. The bound remains a hard cap on the read.
+const MAX_RANK_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_SOURCE_COMMUNITIES = 1_000;
 const MAX_RANK_ENRICHMENTS = 8;
 const RANK_ENRICHMENT_RESPONSE_BUDGET_MS = 150;
