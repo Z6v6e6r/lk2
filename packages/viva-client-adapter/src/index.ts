@@ -150,6 +150,20 @@ export function vivaProfilePhotoObservation(input: unknown): VivaProfilePhotoObs
   }
 }
 
+/**
+ * Extracts the provider-asserted phone from a raw end-user profile payload. The provider certifies only
+ * the browser transport for this API, so the client hands the value to the server, which re-normalizes
+ * and validates it again before linking it in integration custody. The client keeps no copy.
+ */
+export function vivaProfileViewerPhone(input: unknown): string | undefined {
+  const value = vivaProfileSchema.parse(input).phone;
+  if (!value) return undefined;
+  const digits = value.replace(/\D/gu, '');
+  if (/^[78]\d{10}$/u.test(digits)) return `+7${digits.slice(1)}`;
+  if (/^9\d{9}$/u.test(digits)) return `+7${digits}`;
+  return undefined;
+}
+
 export async function fetchClientAssistedVivaProfilePhoto(input: {
   readonly sourceUrl: string;
   readonly allowedHosts: readonly string[];
@@ -345,6 +359,9 @@ const routingPlanSchema = z
         accessTokenPath: z.literal('/auth/viva/access'),
         allowedRequestHeaders: z.tuple([z.literal('Authorization')]),
         allowedMediaHosts: z.array(z.string().min(1).max(253)).max(32).optional(),
+        // The server decides whether the client should hand the provider profile phone back; clients
+        // never choose data sources themselves.
+        providerPhoneSync: z.boolean().optional(),
       })
       .optional(),
   })

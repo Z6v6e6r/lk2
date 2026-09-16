@@ -735,6 +735,25 @@ export class PadlHubApiClient {
     });
   }
 
+  /**
+   * Hands the provider-asserted viewer phone from the certified client transport to the server, which
+   * links it in integration custody. Repeating the call is safe: an existing link short-circuits.
+   */
+  public linkProviderPhone(input: {
+    readonly phoneE164: string;
+  }): Promise<{ readonly outcome: 'linked' | 'unchanged' | 'conflict' | 'absent' }> {
+    return this.request<{ readonly outcome: 'linked' | 'unchanged' | 'conflict' | 'absent' }>(
+      '/profile/provider-phone',
+      {
+        method: 'POST',
+        idempotencyKey: createCorrelationId(),
+        retryOnUnauthorized: false,
+        body: JSON.stringify({ phoneE164: input.phoneE164 }),
+        headers: { 'Content-Type': 'application/json' },
+      },
+    );
+  }
+
   public getPlayerProfile(userId: string): Promise<PlayerProfileView> {
     return this.request<PlayerProfileView>(`/profiles/${encodeURIComponent(userId)}`);
   }

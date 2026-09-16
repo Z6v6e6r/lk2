@@ -115,6 +115,12 @@ const environmentSchema = z.object({
    * proof for payment, participation or activity-history guards.
    */
   CUP_IDENTITY_PROFILE_LINK_ENABLED: booleanFromEnvironment,
+  /**
+   * Accepts the provider-asserted viewer phone from our own client, which reads the provider profile
+   * over the only transport the provider certifies for end users. The value is linked in integration
+   * custody and never becomes a PadlHub login key.
+   */
+  CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED: booleanFromEnvironment,
   CUP_DEV_AUTH_ENABLED: booleanFromEnvironment,
   CUP_DEV_AUTH_PHONE_E164: z
     .string()
@@ -898,6 +904,16 @@ export function loadConfig(
   ) {
     throw new Error(
       'CUP_IDENTITY_PROFILE_LINK_ENABLED requires Viva OAuth and VIVA_MODE=sandbox or production',
+    );
+  }
+  if (
+    parsed.data.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED &&
+    (!parsed.data.VIVA_OAUTH_ENABLED ||
+      parsed.data.VIVA_MODE === 'mock' ||
+      parsed.data.VIVA_MODE === 'disabled')
+  ) {
+    throw new Error(
+      'CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED requires Viva OAuth and VIVA_MODE=sandbox or production',
     );
   }
   if (parsed.data.CUP_DEV_AUTH_ENABLED) {

@@ -1004,6 +1004,50 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/provider-phone:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [profiles]
+      operationId: linkProviderViewerPhone
+      summary: Link the provider-asserted viewer phone from the certified client transport
+      description: |
+        Accepts only the phone of the authenticated viewer as the certified browser read it from the
+        provider end-user profile. The server re-validates and normalizes the value and links it in
+        integration custody: it never becomes a PadlHub login key, never enters the auth-owned profile
+        column and never serves as proof for payment, participation or activity-history guards. A phone
+        already linked to another active user is skipped instead of shared.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileProviderPhoneRequest'
+      responses:
+        '200':
+          description: The link outcome for the authenticated viewer.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileProviderPhoneResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/privacy:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -4312,8 +4356,32 @@ components:
             type: string
             minLength: 1
             maxLength: 253
+        providerPhoneSync:
+          type: boolean
+          description: >-
+            Server-owned capability: the client hands the provider profile phone back to the
+            authenticated profile endpoint only when the server asks for it. Clients never choose
+            data sources themselves.
     UserProfile:
       $ref: '#/components/schemas/HomeProfile'
+    ProfileProviderPhoneRequest:
+      type: object
+      additionalProperties: false
+      required: [phoneE164]
+      properties:
+        phoneE164:
+          type: string
+          description: Provider-asserted viewer phone in russian E.164 form, re-validated by the server.
+          minLength: 4
+          maxLength: 32
+    ProfileProviderPhoneResult:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome:
+          type: string
+          enum: [linked, unchanged, conflict, absent]
     ProfilePhotoSyncResult:
       type: object
       additionalProperties: false

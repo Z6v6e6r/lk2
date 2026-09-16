@@ -443,6 +443,26 @@ and the API stores the re-encoded image in that bucket. Delivery stays presigned
 `S3_PUBLIC_ENDPOINT`, so the bucket itself does not need public read and raw provider photo URLs are
 never handed to clients.
 
+`CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED=true` adds the client-certified provider phone link. The
+provider certifies only the browser transport for its end-user profile API — its host answers our
+server egress for `/end-user/api` with `403`, so the server cannot read that profile at all. The web
+client therefore hands the phone from the profile read it already performs to
+`POST /user/api/v1/<tenantKey>/profile/provider-phone`; the API re-normalizes the value and stores it
+in `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`), which is what keys the
+viewer-scoped legacy (CUP) community and history reads. The value never becomes a PadlHub login key,
+never enters `profile.user_summaries.phone_e164` and is never proof for payment, participation or
+activity-history guards; a phone already linked to another active user is skipped as `conflict`.
+Verify the operator-side effect after a real cabinet profile read:
+
+```sql
+select count(*), max(last_synced_at)
+  from integration.external_entity_map
+ where entity_type = 'legacy_viewer_phone';
+```
+
+A viewer whose legacy communities still read `UNAVAILABLE` either has no linked phone yet or owns no
+delegation, because the legacy read path needs both.
+
 ## Operator dependencies
 
 PostgreSQL, Redis, RabbitMQ and ClamAV run as operator-managed containers on the external

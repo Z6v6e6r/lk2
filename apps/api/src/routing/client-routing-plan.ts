@@ -68,6 +68,7 @@ export function buildClientRoutingPlan(input: {
             allowedMediaHosts: input.config.PROFILE_PHOTO_ALLOWED_HOSTS.split(',')
               .map((host) => host.trim().toLowerCase())
               .filter(Boolean),
+            providerPhoneSync: input.config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED,
           },
         }
       : {}),

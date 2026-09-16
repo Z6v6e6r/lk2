@@ -34,6 +34,10 @@ phone-login value in `profile.user_summaries.phone_e164`, or the provider-assert
 integration contour as `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`); the verified
 value always wins. A provider-asserted phone is never written into the auth-owned profile column, is
 never a PadlHub login key and is never proof for payment, participation or activity-history guards.
+The provider-asserted phone reaches the integration contour either from a server-side profile read
+(where the provider allows it) or from our own client, which is the only transport the provider
+certifies for its end-user profile API: the client reads the profile itself and hands the phone to an
+authenticated endpoint, and the server re-validates and links it. The client keeps no copy.
 `integration.external_entity_map` is unique per tenant, external system, entity type and external id,
 so a phone already linked to another active user is skipped instead of sharing one legacy viewer
 identity. It filters active memberships, maps source community IDs to PadlHub UUIDs and

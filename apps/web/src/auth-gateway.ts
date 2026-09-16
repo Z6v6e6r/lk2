@@ -163,6 +163,7 @@ import {
   ClientTransportError,
   createClientTransportExecutor,
   fetchClientAssistedVivaProfilePhoto,
+  vivaProfileViewerPhone,
   normalizePadlHubUserProfile,
   normalizeVivaUserProfile,
   vivaProfilePhotoObservation,
@@ -665,6 +666,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let vivaProfilePhotoCommandIdempotencyKey: string | undefined;
   let vivaProfilePhotoGrantExpiresAt = 0;
   let vivaStableProfilePhoto: { readonly avatarUrl: string; readonly syncedAt: number } | undefined;
+  // The provider certifies only the browser transport for its end-user profile API, so the phone that
+  // keys the viewer's legacy identity is handed to our API from here. One attempt per principal keeps
+  // a repeated profile read from resending it.
+  let providerPhoneLinkAttemptedFor: string | undefined;
   let profilePhotoSyncRetryAfter = 0;
   let profilePhotoSyncFailureCount = 0;
   let profilePhotoSyncFailureSourceUrl: string | undefined;
@@ -989,6 +994,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     let directVivaPhotoObservation = { kind: 'UNAVAILABLE' } as ReturnType<
       typeof vivaProfilePhotoObservation
     >;
+    let directVivaViewerPhone: string | undefined;
     selfProfileExpiresAt = Number.POSITIVE_INFINITY;
     const prepareDirectProfileObservation = async (): Promise<void> => {
       let plan = routingPlan;
@@ -1022,6 +1028,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         normalizeViva: (payload) => {
           directVivaRead = true;
           directVivaPhotoObservation = vivaProfilePhotoObservation(payload);
+          directVivaViewerPhone = vivaProfileViewerPhone(payload);
           return normalizeVivaUserProfile(payload, userId);
         },
       });
@@ -1049,6 +1056,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             ? { ...candidate, avatarUrl: vivaStableProfilePhoto.avatarUrl }
             : candidate;
         };
+        if (
+          directVivaViewerPhone &&
+          routingPlan?.directViva?.providerPhoneSync === true &&
+          providerPhoneLinkAttemptedFor !== userId
+        ) {
+          providerPhoneLinkAttemptedFor = userId;
+          const phoneE164 = directVivaViewerPhone;
+          void client.linkProviderPhone({ phoneE164 }).catch(() => {
+            // A later profile read retries; failing here must never affect the profile itself.
+            if (providerPhoneLinkAttemptedFor === userId) providerPhoneLinkAttemptedFor = undefined;
+          });
+        }
         let resolvedProfile = applyStablePhoto(profile);
         const allowedMediaHosts = routingPlan?.directViva?.allowedMediaHosts;
         if (directVivaRead && directVivaPhotoObservation.kind === 'ABSENT') {
