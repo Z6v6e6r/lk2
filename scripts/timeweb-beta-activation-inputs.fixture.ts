@@ -95,6 +95,11 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // endpoints must fail closed rather than serve fabricated data.
     HOME_READ_MODE: 'projection',
     HOME_BASE_SYNC_ENABLED: 'true',
+    // The projection window must exceed both sync cadences (source and projector advance twenty users
+    // every two minutes), otherwise a freshly synchronized section ages out to UNAVAILABLE between
+    // cycles. Provider media URLs stay valid for an hour, so thirty minutes of grace is safe.
+    HOME_PROJECTION_TTL_SECONDS: '900',
+    HOME_PROJECTION_MAX_STALE_SECONDS: '900',
     // Game commands are open for beta testing; participation commands stay off until the shared
     // gateway token, tenant key and principal key exist and are shared with the calling side.
     GAMES_COMMANDS_ENABLED: 'true',
@@ -143,6 +148,8 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
     LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
     LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: tenantKey,
+    HOME_PROJECTION_TTL_SECONDS: '900',
+    HOME_PROJECTION_MAX_STALE_SECONDS: '900',
     // The Worker's profile-photo maintenance is a required-true flag, so its config insists on the
     // same media-storage binding the API carries.
     S3_ENDPOINT: 'https://s3.twcstorage.ru',
