@@ -127,6 +127,10 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // The OAuth login reads the provider profile once and stores the phone that keys viewer-scoped
     // legacy reads in integration custody; the phone never becomes a PadlHub login key.
     CUP_IDENTITY_PROFILE_LINK_ENABLED: 'true',
+    // The provider certifies only the browser transport for its end-user profile API, so the web client
+    // reads the phone itself and hands it to our authenticated endpoint, which links it in integration
+    // custody under the same invariant.
+    CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED: 'true',
     // Client-assisted avatar sync is a required-true flag, so startup config insists on a complete
     // media-storage binding even in the synthetic fixture.
     S3_ENDPOINT: 'https://s3.twcstorage.ru',

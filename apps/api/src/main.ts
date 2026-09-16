@@ -188,6 +188,17 @@ const legacyViewerIdentityLink = config.CUP_IDENTITY_PROFILE_LINK_ENABLED
       };
     })()
   : undefined;
+const providerIdentityLink = config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED
+  ? {
+      linkProviderPhone: (input: {
+        readonly tenantId: string;
+        readonly userId: string;
+        readonly phoneE164: string;
+        readonly fetchedAt: string;
+      }) => linkLegacyViewerPhone({ pool, ...input }),
+    }
+  : undefined;
+
 const authService = new AuthService({
   config,
   repository: new PostgresAuthRepository(pool),
@@ -532,6 +543,7 @@ const app = await buildApp({
   profilePhotoMediaRepository: profileSummaryRepository,
   communityLogoMediaRepository: createCommunityLogoMediaRepository(pool),
   ...(profilePhotoMediaStore ? { profilePhotoMediaStore } : {}),
+  ...(providerIdentityLink ? { providerIdentityLink } : {}),
   ...(trainerAvatarMediaStore
     ? {
         trainerAvatarRepository: createTrainerAvatarRepository(pool),

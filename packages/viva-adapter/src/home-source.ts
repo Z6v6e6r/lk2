@@ -7,7 +7,7 @@ import { z } from 'zod';
  * eleven digits starting with `8` onto `+7…`, which would turn a foreign or truncated number into a
  * plausible but wrong identity link.
  */
-function cupViewerPhone(value: string | null | undefined): string | undefined {
+export function normalizeProviderViewerPhone(value: string | null | undefined): string | undefined {
   if (!value) return undefined;
   const digits = value.replace(/\D/gu, '');
   if (/^[78]\d{10}$/u.test(digits)) return `+7${digits.slice(1)}`;
@@ -394,7 +394,7 @@ export class VivaHomeSourceAdapter {
       operation: 'profile',
       schema: profileSchema,
     });
-    return cupViewerPhone(profile.phone);
+    return normalizeProviderViewerPhone(profile.phone);
   }
 
   public async read(input: {
@@ -448,7 +448,7 @@ export class VivaHomeSourceAdapter {
       .filter(Boolean)
       .join(' ');
     const phoneDigits = profile.phone?.replace(/\D/g, '') ?? '';
-    const phoneE164 = cupViewerPhone(profile.phone);
+    const phoneE164 = normalizeProviderViewerPhone(profile.phone);
     const upcoming = bookingDetails
       .filter((item) => !item.isCancelled)
       .flatMap<VivaHomeUpcomingSource>((item) => {

@@ -914,6 +914,28 @@ describe('loadConfig', () => {
     ).toThrow('ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED requires ACTIVITY_HISTORY_SYNC_ENABLED=true');
   });
 
+  it('accepts the provider viewer phone from the client only over a certified Viva OAuth transport', () => {
+    expect(() =>
+      loadConfig({ ...validEnvironment, CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED: 'true' }),
+    ).toThrow(
+      'CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED requires Viva OAuth and VIVA_MODE=sandbox or production',
+    );
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        VIVA_MODE: 'sandbox',
+        VIVA_OAUTH_ENABLED: 'true',
+        VIVA_OAUTH_REDIRECT_URI: 'https://lk.padlhub.test/oauth/callback',
+        VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://lk.padlhub.test/',
+        VIVA_DELEGATION_ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED: 'true',
+      }),
+    ).toMatchObject({
+      CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED: true,
+    });
+  });
+
   it('gates the targeted Viva Home Game bridge independently from continuous roster sync', () => {
     expect(() =>
       loadConfig({

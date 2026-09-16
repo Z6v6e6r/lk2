@@ -64,6 +64,8 @@ export interface ClientRoutingPlan {
     readonly accessTokenPath: '/auth/viva/access';
     readonly allowedRequestHeaders: readonly ['Authorization'];
     readonly allowedMediaHosts?: readonly string[];
+    /** Server-owned capability: the client hands the provider profile phone back only when asked. */
+    readonly providerPhoneSync?: boolean;
   };
 }
 
