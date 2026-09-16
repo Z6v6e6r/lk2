@@ -173,6 +173,10 @@ const legacyViewerIdentityLink = config.CUP_IDENTITY_PROFILE_LINK_ENABLED
         }) => adapterFor(input.providerTenantKey).readViewerPhone(input),
         readLinkedPhone: (input: { readonly tenantId: string; readonly userId: string }) =>
           readLegacyViewerPhone({ pool, ...input }),
+        refreshDelegation: (input: {
+          readonly refreshToken: string;
+          readonly correlationId: string;
+        }) => vivaIdentityProvider.refreshUserDelegation(input),
         linkPhone: (input: {
           readonly tenantId: string;
           readonly userId: string;

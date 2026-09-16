@@ -1834,4 +1834,69 @@ describe('provider-neutral authentication routes', () => {
     await expect(completeFirstOAuthLogin(service)).resolves.toBeUndefined();
     expect(outcomes).toEqual(['unavailable']);
   });
+  it('retries the provider phone read with the delegation token when the login token is rejected', async () => {
+    const tokens: string[] = [];
+    const refreshedWith: string[] = [];
+    const outcomes: string[] = [];
+    const linked: Array<string | undefined> = [];
+    const service = new AuthService({
+      config: legacyLinkConfig(),
+      repository: new FakeRepository(),
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: new MemoryVivaOAuthStateStore(),
+      legacyViewerIdentityLink: {
+        enabled: true,
+        readViewerPhone: (input) => {
+          tokens.push(input.accessToken);
+          // The freshly issued login token is rejected by the end-user CRM API on the first attempt.
+          return tokens.length === 1
+            ? Promise.reject(new Error('EXTERNAL_SOURCE_UNAVAILABLE'))
+            : Promise.resolve('+79104303190');
+        },
+        readLinkedPhone: () => Promise.resolve(undefined),
+        refreshDelegation: (input) => {
+          refreshedWith.push(input.refreshToken);
+          return Promise.resolve({ accessToken: 'delegation-access-token' });
+        },
+        linkPhone: (input) => {
+          linked.push(input.phoneE164);
+          return Promise.resolve('linked' as const);
+        },
+        onOutcome: (outcome) => outcomes.push(outcome),
+      },
+    });
+
+    await completeFirstOAuthLogin(service);
+
+    expect(tokens).toEqual(['initial-viva-access-token', 'delegation-access-token']);
+    expect(refreshedWith).toHaveLength(1);
+    expect(linked).toEqual(['+79104303190']);
+    expect(outcomes).toEqual(['linked']);
+  });
+
+  it('reports an unavailable provider read without failing the login', async () => {
+    const outcomes: string[] = [];
+    const service = new AuthService({
+      config: legacyLinkConfig(),
+      repository: new FakeRepository(),
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: new MemoryVivaOAuthStateStore(),
+      legacyViewerIdentityLink: {
+        enabled: true,
+        readViewerPhone: () => Promise.reject(new Error('EXTERNAL_SOURCE_UNAVAILABLE')),
+        readLinkedPhone: () => Promise.resolve(undefined),
+        linkPhone: () => {
+          throw new Error('linkPhone must not run when no phone was read');
+        },
+        onOutcome: (outcome) => outcomes.push(outcome),
+      },
+    });
+
+    await expect(completeFirstOAuthLogin(service)).resolves.toBeUndefined();
+    expect(outcomes).toEqual(['unavailable']);
+  });
 });
