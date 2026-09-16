@@ -40,6 +40,38 @@ describe('community repositories', () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it('falls back to the provider-asserted legacy viewer phone when PadlHub has no verified one', async () => {
+    const { pool } = poolWithQueries((text) => {
+      if (text.includes('from identity.users')) {
+        return {
+          rows: [{ phone_e164: null, provider_phone_e164: '+79104303190', client_id: null }],
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      createCommunityLegacyBridgeRepository(pool).getViewerIdentity(tenantId, userId),
+    ).resolves.toEqual({ phoneE164: '+79104303190' });
+  });
+
+  it('prefers the verified phone-login value over the provider link', async () => {
+    const { pool } = poolWithQueries((text) => {
+      if (text.includes('from identity.users')) {
+        return {
+          rows: [
+            { phone_e164: '+79990000001', provider_phone_e164: '+79104303190', client_id: null },
+          ],
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      createCommunityLegacyBridgeRepository(pool).getViewerIdentity(tenantId, userId),
+    ).resolves.toEqual({ phoneE164: '+79990000001' });
+  });
+
   it('deduplicates legacy IDs and returns only their PadlHub UUID mapping', async () => {
     const { pool } = poolWithQueries((text, values) => {
       if (text.includes('insert into integration.external_entity_map')) {

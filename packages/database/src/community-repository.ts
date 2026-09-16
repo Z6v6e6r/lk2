@@ -15,6 +15,7 @@ export type {
 
 interface ViewerIdentityRow extends QueryResultRow {
   readonly phone_e164: string | null;
+  readonly provider_phone_e164: string | null;
   readonly client_id: string | null;
 }
 
@@ -77,10 +78,20 @@ export function createCommunityLegacyBridgeRepository(
       return withTenantTransaction(pool, tenantId, async (client) => {
         const row = (
           await client.query<ViewerIdentityRow>(
-            `select p.phone_e164, legacy.client_id
+            `select p.phone_e164, provider_phone.external_id as provider_phone_e164, legacy.client_id
                from identity.users u
                left join profile.user_summaries p
                  on p.tenant_id = u.tenant_id and p.user_id = u.id
+               left join lateral (
+                 select e.external_id
+                   from integration.external_entity_map e
+                  where e.tenant_id = u.tenant_id
+                    and e.external_system = 'VIVA'
+                    and e.entity_type = 'legacy_viewer_phone'
+                    and e.internal_id = u.id
+                  order by e.last_synced_at desc nulls last, e.id
+                  limit 1
+               ) provider_phone on true
                left join lateral (
                  select e.external_id as client_id
                    from integration.external_entity_map e
@@ -95,8 +106,11 @@ export function createCommunityLegacyBridgeRepository(
             [tenantId, userId],
           )
         ).rows[0];
+        // A verified phone-login value always wins; the provider-asserted integration link is the
+        // fallback that lets an OAuth-only account reach its own legacy viewer identity.
+        const viewerPhone = row?.phone_e164 ?? row?.provider_phone_e164 ?? undefined;
         return {
-          ...(row?.phone_e164 ? { phoneE164: row.phone_e164 } : {}),
+          ...(viewerPhone ? { phoneE164: viewerPhone } : {}),
           ...(row?.client_id ? { clientId: row.client_id } : {}),
         };
       });

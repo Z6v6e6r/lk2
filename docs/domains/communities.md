@@ -194,6 +194,14 @@ PadlHub user to server-only phone/Viva profile identity, calls the fixed
 selects only rows whose single summary member matches that server-resolved identity. Open catalog
 rows and other members are discarded.
 
+That identity is the verified phone-login value in `profile.user_summaries.phone_e164` when present,
+otherwise the provider-asserted phone the integration contour keeps as
+`integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`). The provider copy never enters the
+auth-owned profile column, never becomes a PadlHub login key and never serves as proof for payment,
+participation or activity-history guards; the mapping table is unique per tenant, external system,
+entity type and external id, so a phone already linked to another active user is skipped rather than
+sharing one legacy viewer identity.
+
 When the summary member does not already contain a rank, the bridge enriches only the visible page
 (at most eight communities) from the current
 `/lk/communities/{communityId}/rating?tab=overall&period=30d` snapshot. The request carries the

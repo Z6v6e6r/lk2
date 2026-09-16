@@ -1,5 +1,20 @@
-import { normalizePhoneE164 } from '@phub/auth';
 import { z } from 'zod';
+
+/**
+ * Provider phones reach the legacy contour only as a viewer key, never as a PadlHub credential, so this
+ * accepts the unambiguous Russian forms and rejects everything else instead of guessing a country code.
+ * `normalizePhoneE164` from `@phub/auth` is deliberately not used here: it maps any ten digits or any
+ * eleven digits starting with `8` onto `+7…`, which would turn a foreign or truncated number into a
+ * plausible but wrong identity link.
+ */
+function cupViewerPhone(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const digits = value.replace(/\D/gu, '');
+  if (/^[78]\d{10}$/u.test(digits)) return `+7${digits.slice(1)}`;
+  // Russian mobile without a country code: ten digits starting with the mobile prefix.
+  if (/^9\d{9}$/u.test(digits)) return `+7${digits}`;
+  return undefined;
+}
 
 export type VivaHomeSourceErrorCode =
   | 'EXTERNAL_SOURCE_DISABLED'
@@ -415,7 +430,7 @@ export class VivaHomeSourceAdapter {
       .filter(Boolean)
       .join(' ');
     const phoneDigits = profile.phone?.replace(/\D/g, '') ?? '';
-    const phoneE164 = profile.phone ? normalizePhoneE164(profile.phone) : undefined;
+    const phoneE164 = cupViewerPhone(profile.phone);
     const upcoming = bookingDetails
       .filter((item) => !item.isCancelled)
       .flatMap<VivaHomeUpcomingSource>((item) => {
