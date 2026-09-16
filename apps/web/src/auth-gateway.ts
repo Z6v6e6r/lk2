@@ -1030,6 +1030,26 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       vivaProfilePhotoCommandIdempotencyKey = undefined;
       vivaProfilePhotoGrantExpiresAt = 0;
     };
+    /**
+     * A media grant authorizes exactly one tombstone or upload command: the server stores at most
+     * one command per grant and resolves the replay by `idempotency_key` or `grant_id`. Reusing a
+     * delivered grant for a second command — or retrying a command whose response was lost, with
+     * different image bytes — is rejected as `PROFILE_PHOTO_IDEMPOTENCY_CONFLICT` and stores no
+     * avatar. Release the pair as soon as the command may have reached the server so that the next
+     * one always obtains a fresh grant and its own command key.
+     */
+    const releaseProfilePhotoGrant = (
+      grant: string | undefined,
+      idempotencyKey: string | undefined,
+    ): void => {
+      if (
+        grant !== undefined &&
+        vivaProfilePhotoGrant === grant &&
+        vivaProfilePhotoCommandIdempotencyKey === idempotencyKey
+      ) {
+        clearProfilePhotoGrant();
+      }
+    };
     const request = prepareDirectProfileObservation()
       .then(executeProfileRead)
       .then(async (profile) => {
@@ -1066,17 +1086,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
                 const grant = vivaProfilePhotoGrant;
                 const idempotencyKey = vivaProfilePhotoCommandIdempotencyKey;
                 if (!grant || !idempotencyKey) throw new Error('PROFILE_PHOTO_GRANT_UNAVAILABLE');
-                await client.removeUserProfilePhoto({ grant, idempotencyKey });
+                await client.removeUserProfilePhoto({ grant, idempotencyKey }).finally(() => {
+                  releaseProfilePhotoGrant(grant, idempotencyKey);
+                });
                 if (generation !== principalGeneration || currentUserId !== userId) {
                   throw new Error('AUTH_PRINCIPAL_CHANGED');
                 }
                 vivaStableProfilePhoto = undefined;
-                if (
-                  vivaProfilePhotoGrant === grant &&
-                  vivaProfilePhotoCommandIdempotencyKey === idempotencyKey
-                ) {
-                  clearProfilePhotoGrant();
-                }
                 profilePhotoSyncRetryAfter = 0;
                 profilePhotoSyncFailureCount = 0;
                 profilePhotoSyncFailureSourceUrl = undefined;
@@ -1158,23 +1174,19 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             if (generation !== principalGeneration || currentUserId !== userId) {
               throw new Error('AUTH_PRINCIPAL_CHANGED');
             }
-            const synchronized = await client.syncUserProfilePhoto({
-              ...photo,
-              grant,
-              idempotencyKey,
-            });
+            const synchronized = await client
+              .syncUserProfilePhoto({
+                ...photo,
+                grant,
+                idempotencyKey,
+              })
+              .finally(() => {
+                releaseProfilePhotoGrant(grant, idempotencyKey);
+              });
             if (generation !== principalGeneration || currentUserId !== userId) {
               throw new Error('AUTH_PRINCIPAL_CHANGED');
             }
             vivaStableProfilePhoto = { avatarUrl: synchronized.avatarUrl, syncedAt: Date.now() };
-            if (
-              vivaProfilePhotoGrant === grant &&
-              vivaProfilePhotoCommandIdempotencyKey === idempotencyKey
-            ) {
-              vivaProfilePhotoGrant = undefined;
-              vivaProfilePhotoCommandIdempotencyKey = undefined;
-              vivaProfilePhotoGrantExpiresAt = 0;
-            }
             profilePhotoSyncRetryAfter = 0;
             profilePhotoSyncFailureCount = 0;
             resolvedProfile = { ...profile, avatarUrl: synchronized.avatarUrl };
