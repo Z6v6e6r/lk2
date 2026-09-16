@@ -72,6 +72,18 @@ export interface LegacyGameParticipantSyncResult {
   readonly skipped: number;
 }
 
+export interface LegacyGameRosterRebaselineResult {
+  readonly tenantId: string;
+  readonly rebaselined: readonly { readonly gameId: string; readonly externalId: string }[];
+  readonly deferred: readonly {
+    readonly gameId: string;
+    readonly externalId: string;
+    readonly code: 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL';
+    readonly removableParticipantCount: number;
+  }[];
+  readonly skipped: number;
+}
+
 export interface LegacyGameImportRepository {
   /** Server-only lookup used to bind the authenticated viewer to a sanitized CUP participant. */
   resolveVivaProfileExternalId(input: {
@@ -116,6 +128,18 @@ export interface LegacyGameImportRepository {
     readonly correlationId: string;
     readonly now?: Date;
   }): Promise<LegacyGameParticipantSyncResult>;
+  /**
+   * Audited operator repair for quarantined rosters. Only Games whose sync state is `CONFLICT` are
+   * touched. With `allowLocalRemovals: false` a Game whose source omits an active local participant
+   * stays quarantined and is reported, so the repair can never move a paid participant unnoticed.
+   */
+  rebaselineParticipants(input: {
+    readonly tenantKey: string;
+    readonly snapshots: readonly LegacyGameImportSnapshot[];
+    readonly correlationId: string;
+    readonly allowLocalRemovals?: boolean;
+    readonly now?: Date;
+  }): Promise<LegacyGameRosterRebaselineResult>;
 }
 
 interface TenantRow extends QueryResultRow {
@@ -1297,7 +1321,9 @@ async function recordRosterConflict(
     readonly sourceExternalVersion: string;
     readonly currentRevision: number;
     readonly code:
-      'LEGACY_GAME_ROSTER_BASELINE_MISMATCH' | 'LEGACY_GAME_ROSTER_LOCAL_REVISION_CHANGED';
+      | 'LEGACY_GAME_ROSTER_BASELINE_MISMATCH'
+      | 'LEGACY_GAME_ROSTER_LOCAL_REVISION_CHANGED'
+      | 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL';
     readonly correlationId: string;
   },
 ): Promise<void> {
@@ -1427,152 +1453,314 @@ async function synchronizeOne(
     if (state.source_external_version === input.snapshot.externalVersion)
       return { outcome: 'unchanged' };
 
-    const sourceUsers = new Map<
-      string,
-      { userId: string; participant: LegacyGameImportParticipant }
-    >();
-    for (const participant of input.snapshot.participants) {
-      sourceUsers.set(participant.externalId, {
-        userId: await resolvePlayer(
-          client,
-          input.tenantId,
-          participant,
-          input.snapshot.externalVersion,
-        ),
+    await applySourceRoster(client, {
+      tenantId: input.tenantId,
+      game,
+      snapshot: input.snapshot,
+      correlationId: input.correlationId,
+      now: input.now,
+      currentParticipants: currentParticipants.rows,
+      auditAction: 'GAME_PARTICIPANTS_SYNCED_FROM_LEGACY_SNAPSHOT',
+      auditReason: 'MIRROR',
+      stateWrite: 'mirror-only',
+    });
+    return { outcome: 'synced', gameId: game.id, projectionEventId: randomUUID() };
+  });
+}
+
+/**
+ * Applies one source roster to the canonical aggregate in a single transaction. `mirror-only` keeps
+ * the existing mirror contract (the state row must already be `MIRROR`); `upsert` is the audited
+ * repair path, where an operator has accepted the source roster for a quarantined game.
+ */
+async function applySourceRoster(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly game: LegacyGameRow;
+    readonly snapshot: LegacyGameImportSnapshot;
+    readonly correlationId: string;
+    readonly now: Date;
+    readonly currentParticipants: readonly ActiveParticipantRow[];
+    readonly auditAction: string;
+    readonly auditReason: string;
+    readonly stateWrite: 'mirror-only' | 'upsert';
+  },
+): Promise<{ readonly nextRevision: number; readonly activeParticipantCount: number }> {
+  const sourceUsers = new Map<
+    string,
+    { userId: string; participant: LegacyGameImportParticipant }
+  >();
+  for (const participant of input.snapshot.participants) {
+    sourceUsers.set(participant.externalId, {
+      userId: await resolvePlayer(
+        client,
+        input.tenantId,
         participant,
-      });
-    }
-    const organizer = sourceUsers.get(input.snapshot.organizerExternalId);
-    if (!organizer) throw new Error('LEGACY_GAME_ORGANIZER_MAPPING_MISSING');
-    const sourceByUserId = new Map(
-      [...sourceUsers.values()].map((item) => [item.userId, item.participant]),
+        input.snapshot.externalVersion,
+      ),
+      participant,
+    });
+  }
+  const organizer = sourceUsers.get(input.snapshot.organizerExternalId);
+  if (!organizer) throw new Error('LEGACY_GAME_ORGANIZER_MAPPING_MISSING');
+  const sourceByUserId = new Map(
+    [...sourceUsers.values()].map((item) => [item.userId, item.participant]),
+  );
+  const activeByUserId = new Map(input.currentParticipants.map((item) => [item.user_id, item]));
+  for (const participant of input.currentParticipants) {
+    if (sourceByUserId.has(participant.user_id)) continue;
+    await client.query(
+      `update games.participations
+          set state = 'LEFT', left_at = $4, updated_at = $4
+        where tenant_id = $1 and game_id = $2 and id = $3 and state = 'ACTIVE'`,
+      [input.tenantId, input.game.id, participant.id, input.now.toISOString()],
     );
-    const activeByUserId = new Map(currentParticipants.rows.map((item) => [item.user_id, item]));
-    for (const participant of currentParticipants.rows) {
-      if (sourceByUserId.has(participant.user_id)) continue;
+  }
+  // The partial unique organizer index requires demoting a previous organizer before a new
+  // organizer can be promoted in the same mirror transaction.
+  await client.query(
+    `update games.participations set role = 'PLAYER', updated_at = $4
+      where tenant_id = $1 and game_id = $2 and user_id <> $3
+        and state = 'ACTIVE' and role = 'ORGANIZER'`,
+    [input.tenantId, input.game.id, organizer.userId, input.now.toISOString()],
+  );
+  for (const { userId, participant } of sourceUsers.values()) {
+    const current = activeByUserId.get(userId);
+    const role: 'ORGANIZER' | 'PLAYER' =
+      participant.externalId === input.snapshot.organizerExternalId ? 'ORGANIZER' : 'PLAYER';
+    if (!current) {
       await client.query(
-        `update games.participations
-            set state = 'LEFT', left_at = $4, updated_at = $4
-          where tenant_id = $1 and game_id = $2 and id = $3 and state = 'ACTIVE'`,
-        [input.tenantId, game.id, participant.id, input.now.toISOString()],
+        `insert into games.participations (
+           tenant_id, game_id, user_id, role, state, payment_state, joined_at, updated_at
+         ) values ($1, $2, $3, $4, 'ACTIVE', $5, $6, $6)`,
+        [
+          input.tenantId,
+          input.game.id,
+          userId,
+          role,
+          participant.paymentState,
+          input.now.toISOString(),
+        ],
+      );
+    } else {
+      await client.query(
+        `update games.participations set role = $4, payment_state = $5, updated_at = $6
+          where tenant_id = $1 and game_id = $2 and id = $3`,
+        [
+          input.tenantId,
+          input.game.id,
+          current.id,
+          role,
+          participant.paymentState,
+          input.now.toISOString(),
+        ],
       );
     }
-    // The partial unique organizer index requires demoting a previous organizer before a new
-    // organizer can be promoted in the same mirror transaction.
+  }
+  const updatedGame = await queryOne<{ revision: string | number }>(
+    client,
+    `update games.games
+        set organizer_user_id = $3, revision = revision + 1, updated_at = $4
+      where tenant_id = $1 and id = $2
+      returning revision`,
+    [input.tenantId, input.game.id, organizer.userId, input.now.toISOString()],
+  );
+  if (!updatedGame) throw new Error('LEGACY_GAME_ROSTER_GAME_UPDATE_FAILED');
+  const nextRevision = Number(updatedGame.revision);
+  await client.query(
+    `update integration.external_entity_map
+        set external_version = $5, last_synced_at = now(), sync_status = 'synced', sync_error_code = null
+      where tenant_id = $1 and external_system = $2 and entity_type = 'game' and internal_id = $3
+        and external_id = $4`,
+    [
+      input.tenantId,
+      EXTERNAL_SYSTEM,
+      input.game.id,
+      input.snapshot.externalId,
+      input.snapshot.externalVersion,
+    ],
+  );
+  if (input.stateWrite === 'upsert') {
     await client.query(
-      `update games.participations set role = 'PLAYER', updated_at = $4
-        where tenant_id = $1 and game_id = $2 and user_id <> $3
-          and state = 'ACTIVE' and role = 'ORGANIZER'`,
-      [input.tenantId, game.id, organizer.userId, input.now.toISOString()],
+      `insert into integration.legacy_game_roster_sync_state (
+         tenant_id, game_id, source_external_version, last_synced_game_revision, mode,
+         conflict_code, last_synced_at, updated_at
+       ) values ($1, $2, $3, $4, 'MIRROR', null, now(), now())
+       on conflict (tenant_id, game_id) do update set
+         source_external_version = excluded.source_external_version,
+         last_synced_game_revision = excluded.last_synced_game_revision,
+         mode = 'MIRROR', conflict_code = null, last_synced_at = now(), updated_at = now()`,
+      [input.tenantId, input.game.id, input.snapshot.externalVersion, nextRevision],
     );
-    for (const { userId, participant } of sourceUsers.values()) {
-      const current = activeByUserId.get(userId);
-      const role: 'ORGANIZER' | 'PLAYER' =
-        participant.externalId === input.snapshot.organizerExternalId ? 'ORGANIZER' : 'PLAYER';
-      if (!current) {
-        await client.query(
-          `insert into games.participations (
-             tenant_id, game_id, user_id, role, state, payment_state, joined_at, updated_at
-           ) values ($1, $2, $3, $4, 'ACTIVE', $5, $6, $6)`,
-          [
-            input.tenantId,
-            game.id,
-            userId,
-            role,
-            participant.paymentState,
-            input.now.toISOString(),
-          ],
-        );
-      } else {
-        await client.query(
-          `update games.participations set role = $4, payment_state = $5, updated_at = $6
-            where tenant_id = $1 and game_id = $2 and id = $3`,
-          [
-            input.tenantId,
-            game.id,
-            current.id,
-            role,
-            participant.paymentState,
-            input.now.toISOString(),
-          ],
-        );
-      }
-    }
-    const updatedGame = await queryOne<{ revision: string | number }>(
-      client,
-      `update games.games
-          set organizer_user_id = $3, revision = revision + 1, updated_at = $4
-        where tenant_id = $1 and id = $2
-        returning revision`,
-      [input.tenantId, game.id, organizer.userId, input.now.toISOString()],
-    );
-    if (!updatedGame) throw new Error('LEGACY_GAME_ROSTER_GAME_UPDATE_FAILED');
-    const nextRevision = Number(updatedGame.revision);
-    await client.query(
-      `update integration.external_entity_map
-          set external_version = $5, last_synced_at = now(), sync_status = 'synced', sync_error_code = null
-        where tenant_id = $1 and external_system = $2 and entity_type = 'game' and internal_id = $3
-          and external_id = $4`,
-      [
-        input.tenantId,
-        EXTERNAL_SYSTEM,
-        game.id,
-        input.snapshot.externalId,
-        input.snapshot.externalVersion,
-      ],
-    );
+  } else {
     await client.query(
       `update integration.legacy_game_roster_sync_state
           set source_external_version = $3, last_synced_game_revision = $4,
               last_synced_at = now(), updated_at = now()
         where tenant_id = $1 and game_id = $2 and mode = 'MIRROR'`,
-      [input.tenantId, game.id, input.snapshot.externalVersion, nextRevision],
+      [input.tenantId, input.game.id, input.snapshot.externalVersion, nextRevision],
     );
-    const projectionEventId = randomUUID();
-    const event = gameDomainEventSchema.parse({
-      id: projectionEventId,
-      type: 'game.scheduled.v1',
-      aggregateId: game.id,
-      tenantId: input.tenantId,
-      occurredAt: input.now.toISOString(),
-      correlationId: input.correlationId,
-      payload: {
-        gameId: game.id,
-        aggregateRevision: String(nextRevision),
-        causationId: projectionEventId,
-        actorUserId: null,
-        organizerUserId: organizer.userId,
-      },
-    });
-    await client.query(
-      `insert into audit.outbox_events (
-         id, tenant_id, event_type, aggregate_id, correlation_id, payload, occurred_at
-       ) values ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
-      [
-        event.id,
-        event.tenantId,
-        event.type,
-        event.aggregateId,
-        event.correlationId,
-        JSON.stringify(event.payload),
-        event.occurredAt,
-      ],
+  }
+  const projectionEventId = randomUUID();
+  const event = gameDomainEventSchema.parse({
+    id: projectionEventId,
+    type: 'game.scheduled.v1',
+    aggregateId: input.game.id,
+    tenantId: input.tenantId,
+    occurredAt: input.now.toISOString(),
+    correlationId: input.correlationId,
+    payload: {
+      gameId: input.game.id,
+      aggregateRevision: String(nextRevision),
+      causationId: projectionEventId,
+      actorUserId: null,
+      organizerUserId: organizer.userId,
+    },
+  });
+  await client.query(
+    `insert into audit.outbox_events (
+       id, tenant_id, event_type, aggregate_id, correlation_id, payload, occurred_at
+     ) values ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+    [
+      event.id,
+      event.tenantId,
+      event.type,
+      event.aggregateId,
+      event.correlationId,
+      JSON.stringify(event.payload),
+      event.occurredAt,
+    ],
+  );
+  await client.query(
+    `insert into audit.audit_log (
+       tenant_id, actor_id, action, resource_type, resource_id, result, reason, correlation_id,
+       old_value, new_value
+     ) values ($1, null, $2, 'GAME', $3,
+               'SUCCESS', $4, $5, $6::jsonb, $7::jsonb)`,
+    [
+      input.tenantId,
+      input.auditAction,
+      input.game.id,
+      input.auditReason,
+      input.correlationId,
+      JSON.stringify({ activeParticipantCount: input.currentParticipants.length }),
+      JSON.stringify({ activeParticipantCount: sourceUsers.size, revision: nextRevision }),
+    ],
+  );
+  return { nextRevision, activeParticipantCount: sourceUsers.size };
+}
+
+/**
+ * Audited repair for a quarantined roster. It never takes ownership silently: the operator decides
+ * whether a repair may move a local participant to `LEFT`. With `allowLocalRemovals: false` a game
+ * whose source omits an active local participant stays quarantined and is reported instead.
+ */
+async function rebaselineOne(
+  pool: Pool,
+  input: {
+    readonly tenantId: string;
+    readonly snapshot: LegacyGameImportSnapshot;
+    readonly correlationId: string;
+    readonly now: Date;
+    readonly allowLocalRemovals: boolean;
+  },
+): Promise<
+  | { readonly outcome: 'rebaselined'; readonly gameId: string }
+  | {
+      readonly outcome: 'deferred';
+      readonly gameId: string;
+      readonly code: 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL';
+      readonly removableParticipantCount: number;
+    }
+  | { readonly outcome: 'skipped' }
+> {
+  return withTenantTransaction(pool, input.tenantId, async (client) => {
+    await client.query("select set_config('app.profile_level_history_origin', $1, true)", [
+      EXTERNAL_SYSTEM,
+    ]);
+    const mappings = await findMappings(
+      client,
+      input.tenantId,
+      'game',
+      canonicalAndAliases(input.snapshot.externalId, input.snapshot.externalAliases),
     );
-    await client.query(
-      `insert into audit.audit_log (
-         tenant_id, actor_id, action, resource_type, resource_id, result, reason, correlation_id,
-         old_value, new_value
-       ) values ($1, null, 'GAME_PARTICIPANTS_SYNCED_FROM_LEGACY_SNAPSHOT', 'GAME', $2,
-                 'SUCCESS', 'MIRROR', $3, $4::jsonb, $5::jsonb)`,
-      [
+    const mapping = mappings[0];
+    if (!mapping) return { outcome: 'skipped' as const };
+    const gameId = await canonicalRedirectTarget(client, input.tenantId, mapping.internal_id);
+    const game = await queryOne<LegacyGameRow>(
+      client,
+      `select id, revision, organizer_user_id, lifecycle_state
+         from games.games where tenant_id = $1 and id = $2 for update`,
+      [input.tenantId, gameId],
+    );
+    if (!game || game.lifecycle_state !== 'SCHEDULED') return { outcome: 'skipped' as const };
+    const state = await queryOne<RosterSyncStateRow>(
+      client,
+      `select source_external_version, last_synced_game_revision, mode
+         from integration.legacy_game_roster_sync_state
+        where tenant_id = $1 and game_id = $2 for update`,
+      [input.tenantId, game.id],
+    );
+    // Only a quarantined game is repaired here; mirror-owned and never-seen games keep their own path.
+    if (!state || state.mode === 'MIRROR') return { outcome: 'skipped' as const };
+    const currentParticipants = await client.query<ActiveParticipantRow>(
+      `select p.id, p.user_id, p.role, p.payment_state, player.external_id
+         from games.participations p
+         left join integration.external_entity_map player
+           on player.tenant_id = p.tenant_id and player.external_system = $3
+          and player.entity_type = 'game_player' and player.internal_id = p.user_id
+        where p.tenant_id = $1 and p.game_id = $2 and p.state = 'ACTIVE'
+        order by p.joined_at, p.id
+        for update of p`,
+      [input.tenantId, game.id, EXTERNAL_SYSTEM],
+    );
+    const sourceExternalIds = new Set(input.snapshot.participants.map((item) => item.externalId));
+    const sourcePlayerByUserId = new Map<string, string>();
+    for (const participant of input.snapshot.participants) {
+      const userId = await resolvePlayer(
+        client,
         input.tenantId,
-        game.id,
-        input.correlationId,
-        JSON.stringify({ activeParticipantCount: currentParticipants.rows.length }),
-        JSON.stringify({ activeParticipantCount: sourceUsers.size, revision: nextRevision }),
-      ],
+        participant,
+        input.snapshot.externalVersion,
+      );
+      sourcePlayerByUserId.set(userId, participant.externalId);
+    }
+    const removable = currentParticipants.rows.filter(
+      (participant) =>
+        !sourcePlayerByUserId.has(participant.user_id) &&
+        (!participant.external_id || !sourceExternalIds.has(participant.external_id)),
     );
-    return { outcome: 'synced', gameId: game.id, projectionEventId };
+    if (removable.length > 0 && !input.allowLocalRemovals) {
+      await recordRosterConflict(client, {
+        tenantId: input.tenantId,
+        gameId: game.id,
+        sourceExternalVersion: input.snapshot.externalVersion,
+        currentRevision: Number(game.revision),
+        code: 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL',
+        correlationId: input.correlationId,
+      });
+      return {
+        outcome: 'deferred' as const,
+        gameId: game.id,
+        code: 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL' as const,
+        removableParticipantCount: removable.length,
+      };
+    }
+    await applySourceRoster(client, {
+      tenantId: input.tenantId,
+      game,
+      snapshot: input.snapshot,
+      correlationId: input.correlationId,
+      now: input.now,
+      currentParticipants: currentParticipants.rows,
+      auditAction: 'GAME_PARTICIPANTS_REBASELINED_FROM_LEGACY_SNAPSHOT',
+      auditReason: input.allowLocalRemovals
+        ? 'OPERATOR_REPAIR_WITH_LOCAL_REMOVALS'
+        : 'OPERATOR_REPAIR_ADDITIVE',
+      stateWrite: 'upsert',
+    });
+    return { outcome: 'rebaselined' as const, gameId: game.id };
   });
 }
 
@@ -1826,6 +2014,49 @@ export function createLegacyGameImportRepository(pool: Pool): LegacyGameImportRe
         else skipped += 1;
       }
       return { tenantId: tenant.id, synced, bootstrapped, unchanged, conflicts, skipped };
+    },
+
+    async rebaselineParticipants(input) {
+      const tenant = (
+        await pool.query<TenantRow>(
+          `select id from identity.tenants where tenant_key = $1 and active = true`,
+          [input.tenantKey],
+        )
+      ).rows[0];
+      if (!tenant) throw new Error('LEGACY_GAME_IMPORT_TENANT_NOT_FOUND');
+      if (!input.correlationId.trim() || input.correlationId.length < 8) {
+        throw new Error('LEGACY_GAME_IMPORT_CORRELATION_ID_INVALID');
+      }
+      const rebaselined: { gameId: string; externalId: string }[] = [];
+      const deferred: {
+        gameId: string;
+        externalId: string;
+        code: 'LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL';
+        removableParticipantCount: number;
+      }[] = [];
+      let skipped = 0;
+      for (const snapshot of input.snapshots) {
+        const result = await rebaselineOne(pool, {
+          tenantId: tenant.id,
+          snapshot,
+          correlationId: input.correlationId,
+          now: input.now ?? new Date(),
+          allowLocalRemovals: input.allowLocalRemovals === true,
+        });
+        if (result.outcome === 'rebaselined') {
+          rebaselined.push({ gameId: result.gameId, externalId: snapshot.externalId });
+        } else if (result.outcome === 'deferred') {
+          deferred.push({
+            gameId: result.gameId,
+            externalId: snapshot.externalId,
+            code: result.code,
+            removableParticipantCount: result.removableParticipantCount,
+          });
+        } else {
+          skipped += 1;
+        }
+      }
+      return { tenantId: tenant.id, rebaselined, deferred, skipped };
     },
   };
 }
