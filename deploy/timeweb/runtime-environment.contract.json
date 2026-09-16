@@ -187,7 +187,7 @@
         "PARTICIPATION_COMMAND_EXPIRY_WORKER_ENABLED",
         "PROFILE_PHOTO_MAINTENANCE_ENABLED"
       ],
-      "requiredDisabledModes": ["GAMES_RESULTS_WRITE_MODE", "GIFT_CERTIFICATE_PAYMENT_MODE"],
+      "requiredDisabledModes": ["GIFT_CERTIFICATE_PAYMENT_MODE"],
       "requiredOffModes": ["SUBSCRIPTION_RUNTIME_WARN_MODE"]
     },
     "worker": {
@@ -330,7 +330,7 @@
         "ACTIVITY_HISTORY_SYNC_ENABLED",
         "ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED"
       ],
-      "requiredDisabledModes": ["GAMES_RESULTS_WRITE_MODE", "GIFT_CERTIFICATE_PAYMENT_MODE"],
+      "requiredDisabledModes": ["GIFT_CERTIFICATE_PAYMENT_MODE"],
       "requiredOffModes": ["SUBSCRIPTION_RUNTIME_WARN_MODE"]
     },
     "realtime": {

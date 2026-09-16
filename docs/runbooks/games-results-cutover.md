@@ -39,6 +39,21 @@ CUP must:
 
 Partial player updates, browser tokens, phone selectors and Viva identifiers are forbidden.
 
+## Beta (Timeweb staging) state
+
+The beta contour runs `GAMES_RESULTS_WRITE_MODE=local_primary` while
+`CUP_RATING_CONSUMER_ENABLED=false`, because the CUP apply boundary does not exist yet. In that state
+PadlHub owns result entry: submit, confirm and dispute commit the canonical result, the set/player
+facts, the audit row and the outbox event in one transaction, and confirmation never waits for CUP.
+The `game.result.confirmed.v1` rating application stays queued in the outbox, so beta verifies result
+entry, the card projector and the activity history, but **not** the CUP rating ledger. Enabling the
+consumer needs `CUP_RATING_API_URL` and `CUP_RATING_SERVICE_TOKEN` plus the CUP endpoint check from
+step 4 below, and it is the only switch that may write provider level state.
+
+Because no mode dual-writes to legacy LK, the legacy result button must not be used for the same
+games while beta owns them: a CUP-direct result would leave the local canonical result absent and the
+rating ledger inconsistent with it. Return to `disabled` before any legacy writer resumes.
+
 ## Staging sequence
 
 1. Back up PostgreSQL and apply migration `0040_game_results_v2.sql` through the migrator process.
