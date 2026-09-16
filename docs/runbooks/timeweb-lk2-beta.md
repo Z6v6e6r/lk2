@@ -513,11 +513,28 @@ select count(*) as conflict_games,
 
 On 2026-09-16 that returned `139 | 0 | 103 | 36`: no game is quarantined because of an unmapped
 participant, 103 have a matching import provenance and a genuinely different source roster, and 36
-were imported from an older source revision. Both groups are real drift, so taking ownership would
-change who is on a roster that local users may already have paid for. There is no rebaseline or
-"adopt source roster" operator path in the codebase, and none may be improvised against live data:
-an audited repair needs an explicit product decision about the local participation, and it is a
-roster mutation gate of its own.
+were imported from an older source revision. Both groups are real drift, so taking ownership changes
+who is on a roster that local users may already have paid for.
+
+The audited repair exists as a worker one-shot, and it is additive by default:
+
+```sh
+docker exec phub-timeweb-beta-worker-1 \
+  node /app/apps/worker/dist/repair-legacy-game-rosters.js --tenant-key local-padel --limit 500
+```
+
+It reads the same bounded source window as the sync cycle, touches only Games whose sync state is
+`CONFLICT`, reuses the mirror application in one transaction, writes the `game.scheduled.v1` outbox
+fact and an audit row (`GAME_PARTICIPANTS_REBASELINED_FROM_LEGACY_SNAPSHOT`, reason
+`OPERATOR_REPAIR_ADDITIVE`), and prints a `PHUB_TIMEWEB_LEGACY_ROSTER_REPAIR_V1` report. A Game whose
+source omits an active local participant is **not** modified: it is reported as `deferred` with the
+new `LEGACY_GAME_ROSTER_REPAIR_REQUIRES_LOCAL_REMOVAL` code and stays quarantined. Moving those
+participants to `LEFT` requires `--allow-local-removals`, and that flag is a live roster mutation
+that needs its own explicit decision.
+
+First run on 2026-09-16 (release `25bf365bb804…-35143892965-1`): `attempted 294`, `rebaselined 113`,
+`deferred 3` (two local participants each), `skipped 178`; the contour then held `MIRROR 175` /
+`CONFLICT 37` and 113 `game.scheduled.v1` events, with zero worker errors.
 
 ## Operator dependencies
 
