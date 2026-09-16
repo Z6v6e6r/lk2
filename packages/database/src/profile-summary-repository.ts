@@ -153,6 +153,21 @@ function deleteCommandMatches(
   );
 }
 
+/**
+ * A media grant authorizes exactly one command. A stored command under the same grant that is not
+ * an exact replay is a consumed one-time grant, not a conflicting command: reporting it as a stale
+ * grant keeps the single-use rule explicit and lets the browser obtain a fresh grant. Only a reused
+ * command key under another grant stays an idempotency conflict.
+ */
+function consumedCommandError(
+  row: Pick<ClientPhotoCommandRow, 'grant_id'>,
+  input: { readonly grantId: string },
+): ProfilePhotoGrantStaleError | ProfilePhotoIdempotencyConflictError {
+  return row.grant_id === input.grantId
+    ? new ProfilePhotoGrantStaleError()
+    : new ProfilePhotoIdempotencyConflictError();
+}
+
 function grantIsStale(current: CurrentPhotoRow | undefined, grantIssuedAt: string): boolean {
   if (!current) return false;
   const issuedAt = Date.parse(grantIssuedAt);
@@ -263,7 +278,7 @@ export function createProfileSummaryRepository(pool: Pool): ProfileSummaryReposi
         );
         if (previousCommand) {
           if (!commandMatches(previousCommand, input)) {
-            throw new ProfilePhotoIdempotencyConflictError();
+            throw consumedCommandError(previousCommand, input);
           }
           if (previousCommand.avatar_url) {
             return { avatarUrl: previousCommand.avatar_url, replayed: true };
@@ -476,7 +491,7 @@ export function createProfileSummaryRepository(pool: Pool): ProfileSummaryReposi
         );
         if (previousCommand) {
           if (!deleteCommandMatches(previousCommand, input)) {
-            throw new ProfilePhotoIdempotencyConflictError();
+            throw consumedCommandError(previousCommand, input);
           }
           return { removed: true, replayed: true };
         }
