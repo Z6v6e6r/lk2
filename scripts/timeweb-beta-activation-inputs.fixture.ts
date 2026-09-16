@@ -157,6 +157,8 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     HOME_BASE_SYNC_BATCH_SIZE: '40',
     PROMOTIONS_SYNC_INTERVAL_MS: '60000',
     PROMOTIONS_SYNC_BATCH_SIZE: '40',
+    COMMUNITY_HOME_SYNC_INTERVAL_MS: '60000',
+    COMMUNITY_HOME_SYNC_BATCH_SIZE: '40',
     // The Worker's profile-photo maintenance is a required-true flag, so its config insists on the
     // same media-storage binding the API carries.
     S3_ENDPOINT: 'https://s3.twcstorage.ru',
