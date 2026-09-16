@@ -1039,6 +1039,10 @@ export function persistVivaHomeSource(input: {
       `update profile.user_summaries
           set level_label = case when cup.player_id is null then $3 else profile.user_summaries.level_label end,
               level_value = case when cup.player_id is null then $4 else profile.user_summaries.level_value end,
+              -- The provider profile owns the phone that keys every viewer-scoped legacy community
+              -- read. Fill it only when PadlHub has none so a verified phone-login value is never
+              -- replaced by the provider copy.
+              phone_e164 = coalesce(profile.user_summaries.phone_e164, $5),
               updated_at = now()
          from (select $1::uuid as tenant_id, $2::uuid as player_id) actor
          left join eligibility.cup_player_level_projections cup
@@ -1052,6 +1056,7 @@ export function persistVivaHomeSource(input: {
         input.delegation.userId,
         levelLabel,
         input.snapshot.profile.level.value,
+        input.snapshot.profile.phoneE164 ?? null,
       ],
     );
     const storedLevel = savedProfileLevel.rows[0];

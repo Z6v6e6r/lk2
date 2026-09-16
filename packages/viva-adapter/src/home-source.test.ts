@@ -149,4 +149,44 @@ describe('Viva Home source adapter', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(4);
     expect(metrics).toContain('profile:retry');
   });
+
+  it('exposes the provider phone as the CUP identity link and keeps the display mask', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ...profile(), phone: '8 (910) 430-31-90' }))
+      .mockResolvedValueOnce(Response.json({ content: [] }))
+      .mockResolvedValueOnce(Response.json({ content: [] }));
+    const adapter = new VivaHomeSourceAdapter({
+      mode: 'sandbox',
+      apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+      tenantKey: 'tenant-key',
+      timeoutMs: 100,
+      fetchImplementation,
+    });
+
+    const snapshot = await adapter.read(access);
+    expect(snapshot.profile).toMatchObject({
+      phoneE164: '+79104303190',
+      phoneLast4: '3190',
+    });
+  });
+
+  it('never invents an identity link from an unusable provider phone', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ...profile(), phone: '12345' }))
+      .mockResolvedValueOnce(Response.json({ content: [] }))
+      .mockResolvedValueOnce(Response.json({ content: [] }));
+    const adapter = new VivaHomeSourceAdapter({
+      mode: 'sandbox',
+      apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+      tenantKey: 'tenant-key',
+      timeoutMs: 100,
+      fetchImplementation,
+    });
+
+    const snapshot = await adapter.read(access);
+    expect(snapshot.profile).not.toHaveProperty('phoneE164');
+    expect(snapshot.profile).toMatchObject({ phoneLast4: '2345' });
+  });
 });

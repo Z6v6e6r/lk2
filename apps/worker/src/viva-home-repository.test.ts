@@ -289,6 +289,10 @@ describe('Viva Home producer repository', () => {
       }
       if (text.includes('update profile.user_summaries') && text.includes('set level_label')) {
         expect(text).toContain('eligibility.cup_player_level_projections');
+        // The provider phone is the legacy CUP identity link: it may only fill an empty column, so a
+        // verified phone-login value is never overwritten by the provider copy.
+        expect(text).toContain('phone_e164 = coalesce(profile.user_summaries.phone_e164, $5)');
+        expect(values[4]).toBe('+79104303190');
         return Promise.resolve({
           rows: [{ level_label: 'C+', level_value: '3.63000' }],
           rowCount: 1,
@@ -342,6 +346,8 @@ describe('Viva Home producer repository', () => {
             displayName: 'Алексей Петров',
             firstName: 'Алексей',
             lastName: 'Петров',
+            phoneE164: '+79104303190',
+            phoneLast4: '3190',
             balanceMinor: -100,
             level: { label: 'D', value: 0, assessmentRequired: true },
           },

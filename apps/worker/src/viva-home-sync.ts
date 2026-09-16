@@ -442,6 +442,7 @@ export async function runVivaHomeSyncCycle(input: {
             tenantId: delegation.tenantId,
             userId: delegation.userId,
             correlationId,
+            cupPhoneLinked: snapshot.profile.phoneE164 !== undefined,
             components: components.map((component) => ({
               name: component.component,
               revision: component.revision,

@@ -1,3 +1,4 @@
+import { normalizePhoneE164 } from '@phub/auth';
 import { z } from 'zod';
 
 export type VivaHomeSourceErrorCode =
@@ -26,6 +27,12 @@ export interface VivaHomeProfileSource {
   /** Provider-owned source URL, consumed only by the server-side media synchronizer. */
   readonly photoUrl?: string;
   readonly phoneLast4?: string;
+  /**
+   * Provider-owned E.164 phone of the authenticated profile. The legacy contour keys every
+   * viewer-scoped community read by this phone, so the server-side Home synchronizer persists it as
+   * the CUP identity link. It is never used as a PadlHub login key.
+   */
+  readonly phoneE164?: string;
   readonly balanceMinor: number;
   readonly level: {
     readonly label: string;
@@ -408,6 +415,7 @@ export class VivaHomeSourceAdapter {
       .filter(Boolean)
       .join(' ');
     const phoneDigits = profile.phone?.replace(/\D/g, '') ?? '';
+    const phoneE164 = profile.phone ? normalizePhoneE164(profile.phone) : undefined;
     const upcoming = bookingDetails
       .filter((item) => !item.isCancelled)
       .flatMap<VivaHomeUpcomingSource>((item) => {
@@ -447,6 +455,7 @@ export class VivaHomeSourceAdapter {
         ...(profile.lastName?.trim() ? { lastName: bounded(profile.lastName, 100) } : {}),
         ...(profile.photo ? { photoUrl: profile.photo } : {}),
         ...(phoneDigits.length >= 4 ? { phoneLast4: phoneDigits.slice(-4) } : {}),
+        ...(phoneE164 ? { phoneE164 } : {}),
         balanceMinor: profile.deposit,
         level: readLevel(profile.customFields),
       },
