@@ -247,4 +247,97 @@ describe('HomeBase local projector', () => {
     expect(auditCount).toBe(1);
     expect(watermarkCount).toBe(1);
   });
+
+  it('rewrites an identical projection when the re-verified source advances the section freshness', async () => {
+    // A re-synchronized source whose content is byte-identical must still move observedAt/staleAt:
+    // the read path hides a section as UNAVAILABLE once staleAt plus the max-stale window passed, so a
+    // frozen timestamp hides freshly synchronized content.
+    let persistedPayload: Record<string, unknown> | undefined;
+    let insertCount = 0;
+    let watermarkCount = 0;
+    let sourceFetchedAt = new Date('2026-07-29T11:59:00.000Z');
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (
+        text === 'begin isolation level repeatable read' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from locations.profiles')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from identity.users identity_user')) {
+        return Promise.resolve({
+          rows: [{ roles: ['client'], permissions: ['profile.read', 'games.play'] }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from integration.community_home_source_components')) {
+        return Promise.resolve({
+          rows: [{ source_revision: '7', payload: [], fetched_at: sourceFetchedAt }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from integration.promotion_home_source_components')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from home.base_snapshots') && text.includes('for update')) {
+        return Promise.resolve({
+          rows:
+            persistedPayload === undefined
+              ? []
+              : [
+                  {
+                    source_revision: '1',
+                    snapshot_version: 'home-base-v1-1',
+                    payload: persistedPayload,
+                  },
+                ],
+          rowCount: persistedPayload === undefined ? 0 : 1,
+        });
+      }
+      if (text.includes('insert into home.base_snapshots')) {
+        insertCount += 1;
+        persistedPayload = JSON.parse(String(values[5])) as Record<string, unknown>;
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into audit.audit_log')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('update home.base_snapshots') && text.includes('set checked_at')) {
+        watermarkCount += 1;
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+    const input = {
+      pool: pool as never,
+      tenantId,
+      userId,
+      correlationId: 'home-base-freshness-test',
+      ttlSeconds: 300,
+      now: new Date('2026-07-29T12:00:00.000Z'),
+    };
+
+    await expect(projectHomeBaseUser(input)).resolves.toMatchObject({ outcome: 'projected' });
+    const firstStaleAt = (
+      (persistedPayload?.communities as { readonly staleAt?: string } | undefined) ?? {}
+    ).staleAt;
+    expect(firstStaleAt).toBe('2026-07-29T12:04:00.000Z');
+
+    sourceFetchedAt = new Date('2026-07-29T12:04:30.000Z');
+    await expect(
+      projectHomeBaseUser({ ...input, now: new Date('2026-07-29T12:05:00.000Z') }),
+    ).resolves.toMatchObject({ outcome: 'projected' });
+    const secondStaleAt = (
+      (persistedPayload?.communities as { readonly staleAt?: string } | undefined) ?? {}
+    ).staleAt;
+    expect(secondStaleAt).toBe('2026-07-29T12:09:30.000Z');
+    expect(insertCount).toBe(2);
+    expect(watermarkCount).toBe(0);
+  });
 });
