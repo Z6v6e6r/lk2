@@ -159,7 +159,13 @@ describe('game result routes', () => {
             padlHubClaims?: { sub: string };
           };
           current.tenantId = IDS.tenant;
-          current.padlHubClaims = { sub: IDS.organizer };
+          current.padlHubClaims = {
+            sub: IDS.organizer,
+            tenants: [IDS.tenant],
+            roles: ['PLAYER'],
+            permissions: ['games:play'],
+            sid: 'session-result-disabled-test',
+          };
           return Promise.resolve();
         },
       ],
