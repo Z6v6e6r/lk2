@@ -123,6 +123,9 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // Game commands are open for beta testing; participation commands stay off until the shared
     // gateway token, tenant key and principal key exist and are shared with the calling side.
     GAMES_COMMANDS_ENABLED: 'true',
+    // The API owns canonical result entry on beta. No mode dual-writes to legacy LK, and the rating
+    // application stays with the CUP consumer, which this contour leaves off.
+    GAMES_RESULTS_WRITE_MODE: 'local_primary',
     PARTICIPATION_COMMANDS_ENABLED: 'true',
     // The participation command gateway needs its own shared token and principal identity; the
     // token must be handed to whichever service posts commands before that integration is used.
@@ -190,6 +193,10 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'mongo',
     LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: tenantKey,
     LEGACY_GAMES_MONGODB_URI: 'mongodb://synthetic-mongo.invalid:27017/?authSource=admin',
+    // The Worker never owns result entry: only the API process runs the result repository, and the
+    // isolated worker keeps commands disabled, so its config must keep the write mode at `disabled`.
+    // The rating application stays with the CUP consumer, which this contour leaves off.
+    GAMES_RESULTS_WRITE_MODE: 'disabled',
     HOME_PROJECTION_TTL_SECONDS: '900',
     HOME_PROJECTION_MAX_STALE_SECONDS: '900',
     // A full synchronization pass over the tenant must stay well inside the freshness window: with the
