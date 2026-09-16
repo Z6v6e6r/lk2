@@ -376,7 +376,7 @@ describe('profile summary repository', () => {
     ).toBe(false);
   });
 
-  it('rejects reuse of a grant under another idempotency key', async () => {
+  it('reports a command under an already consumed grant as a stale grant', async () => {
     const query = vi.fn((text: string) => {
       if (
         text === 'begin' ||
@@ -421,7 +421,151 @@ describe('profile summary repository', () => {
         grantIssuedAt: '2026-08-14T09:59:00.000Z',
         expiresAt: '2026-08-14T11:00:00.000Z',
       }),
+    ).rejects.toBeInstanceOf(ProfilePhotoGrantStaleError);
+  });
+
+  it('reports a tombstone consumed under the same grant as a stale grant for the next upload', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        return Promise.resolve({
+          rows: [
+            {
+              command_kind: 'DELETE',
+              idempotency_key: 'profile-photo-delete-key',
+              grant_id: '33333333-3333-4333-8333-333333333333',
+              request_sha256: null,
+              content_sha256: null,
+              object_key: null,
+              grant_issued_at: '2026-08-14T09:59:00.000Z',
+              avatar_url: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.reserveClientAssistedPhoto?.({
+        tenantId,
+        userId: firstUserId,
+        objectKey: `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`,
+        contentSha256: 'a'.repeat(64),
+        requestSha256: 'b'.repeat(64),
+        idempotencyKey: 'profile-photo-upload-key',
+        grantId: '33333333-3333-4333-8333-333333333333',
+        grantIssuedAt: '2026-08-14T09:59:00.000Z',
+        expiresAt: '2026-08-14T11:00:00.000Z',
+      }),
+    ).rejects.toBeInstanceOf(ProfilePhotoGrantStaleError);
+  });
+
+  it('keeps rejecting the same command key reused under another grant', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        return Promise.resolve({
+          rows: [
+            {
+              command_kind: 'UPSERT',
+              idempotency_key: 'shared-key',
+              grant_id: '44444444-4444-4444-8444-444444444444',
+              request_sha256: 'b'.repeat(64),
+              content_sha256: 'a'.repeat(64),
+              object_key: `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`,
+              grant_issued_at: '2026-08-14T09:58:00.000Z',
+              avatar_url: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.reserveClientAssistedPhoto?.({
+        tenantId,
+        userId: firstUserId,
+        objectKey: `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`,
+        contentSha256: 'a'.repeat(64),
+        requestSha256: 'b'.repeat(64),
+        idempotencyKey: 'shared-key',
+        grantId: '33333333-3333-4333-8333-333333333333',
+        grantIssuedAt: '2026-08-14T09:59:00.000Z',
+        expiresAt: '2026-08-14T11:00:00.000Z',
+      }),
     ).rejects.toBeInstanceOf(ProfilePhotoIdempotencyConflictError);
+  });
+
+  it('reports a stale grant when a tombstone reuses a consumed upload grant', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        return Promise.resolve({
+          rows: [
+            {
+              command_kind: 'UPSERT',
+              idempotency_key: 'profile-photo-upload-key',
+              grant_id: '33333333-3333-4333-8333-333333333333',
+              request_sha256: 'b'.repeat(64),
+              content_sha256: 'a'.repeat(64),
+              object_key: `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`,
+              grant_issued_at: '2026-08-14T09:59:00.000Z',
+              avatar_url: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.removeClientAssistedPhoto?.({
+        tenantId,
+        userId: firstUserId,
+        idempotencyKey: 'profile-photo-delete-key',
+        grantId: '33333333-3333-4333-8333-333333333333',
+        grantIssuedAt: '2026-08-14T09:59:00.000Z',
+        observedAt: '2026-08-14T10:00:00.000Z',
+        expiresAt: '2026-08-14T11:00:00.000Z',
+        previousObjectRetentionSeconds: 3_600,
+        correlationId: 'profile-photo-delete-key',
+      }),
+    ).rejects.toBeInstanceOf(ProfilePhotoGrantStaleError);
   });
 
   it('loads current display names for game-card initials in one batch', async () => {
