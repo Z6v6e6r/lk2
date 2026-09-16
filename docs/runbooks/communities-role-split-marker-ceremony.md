@@ -517,6 +517,14 @@ package imports or source map and rebuilds byte-for-byte. Importing exposes the 
 only; direct execution without a separately reviewed host entrypoint emits
 `COMMUNITIES_ROLE_SPLIT_EXECUTION_NOT_AUTHORIZED` and exits `78`.
 
+The bundle is a committed artifact at
+`deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs` and it inlines
+its whole `@phub/*` dependency graph, including any community source reachable from the wiring. Any
+edit to such an inlined source therefore changes the bundle bytes: rebuild it with
+`npm run db:communities-role-split:runtime-bundle:build` in the same commit and never hand-edit the
+generated file. `scripts/communities-role-split-trusted-inventory-runtime-bundle.test.ts` enforces
+the byte-for-byte identity and fails in `quality-full` until the artifact is regenerated.
+
 V12 packages the exact runtime source and bundle but deliberately does not claim that operational
 runtime wiring is complete: it contains no runtime configuration, active link, credential reader,
 credential/producer descriptors, preparation or authorization envelopes, evidence paths, output
