@@ -250,7 +250,36 @@ export interface AuthServiceOptions {
   readonly providers: ReadonlyMap<IdentityProviderKey, IdentityProviderPort>;
   readonly vivaOAuthProvider?: VivaOAuthProviderPort;
   readonly vivaOAuthStateStore?: VivaOAuthStateStore;
+  /**
+   * Server-side link between a PadlHub account and the legacy (CUP) viewer identity its provider phone
+   * keys. Optional so environments without the provider profile read stay unchanged.
+   */
+  readonly legacyViewerIdentityLink?: LegacyViewerIdentityLink;
   readonly now?: () => Date;
+}
+
+export interface LegacyViewerIdentityLink {
+  readonly enabled: boolean;
+  /** Reads the provider-asserted phone for the freshly authenticated viewer, if any. */
+  readonly readViewerPhone: (input: {
+    readonly accessToken: string;
+    readonly correlationId: string;
+    readonly providerTenantKey: string;
+  }) => Promise<string | undefined>;
+  /** Returns the phone already linked to this account, so a repeat login skips the provider read. */
+  readonly readLinkedPhone: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+  }) => Promise<string | undefined>;
+  readonly linkPhone: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly phoneE164: string | undefined;
+    readonly fetchedAt: string;
+  }) => Promise<'linked' | 'unchanged' | 'conflict' | 'absent'>;
+  readonly onOutcome?: (
+    outcome: 'linked' | 'unchanged' | 'conflict' | 'absent' | 'unavailable',
+  ) => void;
 }
 
 export class AuthService {
@@ -525,6 +554,43 @@ export class AuthService {
     };
   }
 
+  /**
+   * Links the provider-asserted phone that keys viewer-scoped legacy (CUP) reads. The phone stays in
+   * integration custody and is never the account's login key; a provider, storage or conflict failure
+   * is logged as an outcome and never fails the login itself.
+   */
+  private async linkLegacyViewerIdentity(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly accessToken: string;
+    readonly correlationId: string;
+    readonly providerTenantKey: string;
+  }): Promise<void> {
+    const link = this.options.legacyViewerIdentityLink;
+    if (!link?.enabled) return;
+    try {
+      const existing = await link.readLinkedPhone({
+        tenantId: input.tenantId,
+        userId: input.userId,
+      });
+      if (existing) return;
+      const phoneE164 = await link.readViewerPhone({
+        accessToken: input.accessToken,
+        correlationId: input.correlationId,
+        providerTenantKey: input.providerTenantKey,
+      });
+      const outcome = await link.linkPhone({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        phoneE164,
+        fetchedAt: this.now().toISOString(),
+      });
+      link.onOutcome?.(outcome);
+    } catch {
+      link.onOutcome?.('unavailable');
+    }
+  }
+
   public async completeVivaOAuth(input: {
     readonly tenantKey: string;
     readonly state: string;
@@ -650,6 +716,13 @@ export class AuthService {
     } else {
       await this.options.repository.saveVivaDelegation(delegationInput);
     }
+    await this.linkLegacyViewerIdentity({
+      tenantId: binding.tenantId,
+      userId: user.id,
+      accessToken: result.accessToken,
+      correlationId: input.correlationId,
+      providerTenantKey: binding.providerTenantKey,
+    });
     const vivaHandoffCode = randomBytes(24).toString('base64url');
     await this.options.vivaOAuthStateStore.putHandoff(
       {

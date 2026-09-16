@@ -57,7 +57,8 @@
         "S3_SECRET_KEY",
         "HOME_BASE_SYNC_ENABLED",
         "HOME_READ_MODE",
-        "ACTIVITY_HISTORY_ENABLED"
+        "ACTIVITY_HISTORY_ENABLED",
+        "CUP_IDENTITY_PROFILE_LINK_ENABLED"
       ],
       "allowed": [
         "APP_ENV",
@@ -132,7 +133,8 @@
         "ACTIVITY_HISTORY_ENABLED",
         "VIVA_DIRECT_READ_ENABLED",
         "PROFILE_PHOTO_CLIENT_SYNC_ENABLED",
-        "LEGACY_GAMES_MONGODB_URI"
+        "LEGACY_GAMES_MONGODB_URI",
+        "CUP_IDENTITY_PROFILE_LINK_ENABLED"
       ],
       "forbidden": ["AUTH_DEV_PHONE_E164", "AUTH_DEV_OTP_CODE"],
       "requiredTrueFlags": [
@@ -142,7 +144,8 @@
         "HOME_BASE_SYNC_ENABLED",
         "PROFILE_PHOTO_CLIENT_SYNC_ENABLED",
         "ACTIVITY_HISTORY_ENABLED",
-        "ACTIVITY_HISTORY_SYNC_ENABLED"
+        "ACTIVITY_HISTORY_SYNC_ENABLED",
+        "CUP_IDENTITY_PROFILE_LINK_ENABLED"
       ],
       "requiredFalseFlags": [
         "CUP_DEV_AUTH_ENABLED",

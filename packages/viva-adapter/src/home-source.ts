@@ -379,6 +379,24 @@ export class VivaHomeSourceAdapter {
     );
   }
 
+  /**
+   * Reads only the provider phone that keys viewer-scoped legacy reads, so an authenticated login can
+   * link the identity without paying for the full Home snapshot (bookings, details, subscriptions).
+   */
+  public async readViewerPhone(input: {
+    readonly accessToken: string;
+    readonly correlationId: string;
+  }): Promise<string | undefined> {
+    const profile = await this.getJson({
+      url: this.endpoint('v1', '/profile'),
+      accessToken: input.accessToken,
+      correlationId: input.correlationId,
+      operation: 'profile',
+      schema: profileSchema,
+    });
+    return cupViewerPhone(profile.phone);
+  }
+
   public async read(input: {
     readonly accessToken: string;
     readonly correlationId: string;

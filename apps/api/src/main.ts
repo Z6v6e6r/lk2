@@ -19,6 +19,8 @@ import {
   createGameRosterRepository,
   createHomeBaseProjectionRepository,
   createHomeDashboardProjectionRepository,
+  linkLegacyViewerPhone,
+  readLegacyViewerPhone,
   createLegacyGameImportRepository,
   createLegacyGameRosterBridgeRepository,
   createLocationMediaRepository,
@@ -47,7 +49,7 @@ import {
 } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
-import { VivaIdentityProvider } from '@phub/viva-adapter';
+import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
 import { ManagedSubscriptionRuntimeQuoteClient } from '@phub/subscription-runtime-adapter';
 import Redis from 'ioredis';
 
@@ -144,6 +146,44 @@ const vivaIdentityProvider = new VivaIdentityProvider({
 const providers = new Map<IdentityProviderKey, IdentityProviderPort>([
   [vivaIdentityProvider.key, vivaIdentityProvider],
 ]);
+const legacyViewerIdentityLink = config.CUP_IDENTITY_PROFILE_LINK_ENABLED
+  ? (() => {
+      // One adapter per provider tenant key: the end-user profile URL carries the tenant the viewer
+      // authenticated against, so a single config default would read the wrong tenant's profile.
+      const adapters = new Map<string, VivaHomeSourceAdapter>();
+      const adapterFor = (providerTenantKey: string): VivaHomeSourceAdapter => {
+        const existing = adapters.get(providerTenantKey);
+        if (existing) return existing;
+        const created = new VivaHomeSourceAdapter({
+          mode: config.VIVA_MODE,
+          apiBaseUrl: config.VIVA_END_USER_API_URL,
+          tenantKey: providerTenantKey,
+          timeoutMs: config.VIVA_TIMEOUT_MS,
+          onMetric: (metric) => logger.info({ metric }, 'provider viewer phone read'),
+        });
+        adapters.set(providerTenantKey, created);
+        return created;
+      };
+      return {
+        enabled: true,
+        readViewerPhone: (input: {
+          readonly accessToken: string;
+          readonly correlationId: string;
+          readonly providerTenantKey: string;
+        }) => adapterFor(input.providerTenantKey).readViewerPhone(input),
+        readLinkedPhone: (input: { readonly tenantId: string; readonly userId: string }) =>
+          readLegacyViewerPhone({ pool, ...input }),
+        linkPhone: (input: {
+          readonly tenantId: string;
+          readonly userId: string;
+          readonly phoneE164: string | undefined;
+          readonly fetchedAt: string;
+        }) => linkLegacyViewerPhone({ pool, ...input }),
+        onOutcome: (outcome: string) =>
+          logger.info({ outcome }, 'legacy viewer identity link completed'),
+      };
+    })()
+  : undefined;
 const authService = new AuthService({
   config,
   repository: new PostgresAuthRepository(pool),
@@ -151,6 +191,7 @@ const authService = new AuthService({
   vivaOAuthProvider: vivaIdentityProvider,
   vivaOAuthStateStore: new RedisVivaOAuthStateStore(redis),
   providers,
+  ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
 });
 const activityHistoryRepository = config.ACTIVITY_HISTORY_ENABLED
   ? createActivityHistoryRepository(pool)
