@@ -72,6 +72,9 @@
   max-width: 50%;
   margin: 0;
 }
+.booking-recommendation-ad.is-card img.is-contained {
+  object-fit: contain;
+}
 .recommendation-ad-controls {
   position: absolute;
   right: 12px;

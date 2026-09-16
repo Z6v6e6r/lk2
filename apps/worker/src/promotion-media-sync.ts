@@ -229,6 +229,9 @@ async function synchronizeOne(input: {
         height: input.mobileHeight,
         fit: 'cover',
         position: 'attention',
+        // The CUP can serve a card creative well below the mobile frame (a 178x178 square today), so
+        // the mobile derivative must never magnify it: enlargement only amplifies existing blur.
+        withoutEnlargement: true,
       })
       .webp({ quality: input.webpQuality, effort: 4 })
       .toBuffer(),

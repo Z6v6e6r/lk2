@@ -117,4 +117,67 @@ describe('promotion media synchronization', () => {
       }),
     ).resolves.toHaveLength(1);
   });
+
+  it('never enlarges a creative that is smaller than the mobile frame', async () => {
+    const source = await sharp({
+      create: { width: 178, height: 178, channels: 3, background: '#b9a1ff' },
+    })
+      .webp()
+      .toBuffer();
+    const objects = new Map<string, Buffer>();
+    const store: ProfilePhotoObjectStore = {
+      put: vi.fn<ProfilePhotoObjectStore['put']>((input) => {
+        objects.set(input.key, input.body);
+        return Promise.resolve();
+      }),
+      createReadUrl: vi.fn<ProfilePhotoObjectStore['createReadUrl']>((key) =>
+        Promise.resolve(`https://media.padlhub.test/${key}`),
+      ),
+      exists: vi.fn<ProfilePhotoObjectStore['exists']>(() => Promise.resolve(true)),
+      delete: vi.fn<ProfilePhotoObjectStore['delete']>(() => Promise.resolve()),
+    };
+
+    const result = await synchronizePromotionMedia({
+      store,
+      tenantId: '86afbe01-0318-4dd2-bc25-303b7bf0d430',
+      candidates: [
+        {
+          promotionId: '33333333-3333-4333-8333-333333333333',
+          sourceUrl: 'https://padlhub.su/api/advertising/assets/asset-small',
+        },
+      ],
+      current: new Map(),
+      fetchedAt: '2026-09-16T12:00:00.000Z',
+      allowedHosts: ['padlhub.su'],
+      privateHttpHosts: [],
+      maxBytes: 10 * 1_024 * 1_024,
+      desktopMaxWidth: 1_600,
+      desktopMaxHeight: 900,
+      mobileWidth: 750,
+      mobileHeight: 480,
+      webpQuality: 80,
+      previousObjectRetentionSeconds: 4_000,
+      readUrlTtlSeconds: 3_600,
+      timeoutMs: 1_000,
+      fetchImplementation: vi
+        .fn()
+        .mockResolvedValue(new Response(source, { headers: { 'content-type': 'image/webp' } })),
+    });
+
+    const stored = result[0];
+    const desktop = objects.get(stored?.persistence.desktopObjectKey ?? '');
+    const mobile = objects.get(stored?.persistence.mobileObjectKey ?? '');
+    expect(desktop).toBeDefined();
+    expect(mobile).toBeDefined();
+    await expect(sharp(desktop).metadata()).resolves.toMatchObject({
+      format: 'webp',
+      width: 178,
+      height: 178,
+    });
+    await expect(sharp(mobile).metadata()).resolves.toMatchObject({
+      format: 'webp',
+      width: 178,
+      height: 178,
+    });
+  });
 });
