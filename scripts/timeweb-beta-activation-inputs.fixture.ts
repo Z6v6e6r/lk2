@@ -130,6 +130,14 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     OTEL_SERVICE_INSTANCE_ID: 'timeweb-beta-worker-1',
     OUTBOX_PUBLISH_MODE: 'leased',
     WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: 'true',
+    // The top advertising slot lives on its own CUP placement; without this the hero deck only
+    // mirrors the standard placement and the slot is never read or mirrored.
+    PROMOTIONS_HERO_PLACEMENT: 'cabinet_home_top',
+    // Real game and roster synchronization from the public CUP games API. The Mongo mirror stays the
+    // staging source for the activity-history game backfill only.
+    LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
+    LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+    LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: tenantKey,
     // The Worker's profile-photo maintenance is a required-true flag, so its config insists on the
     // same media-storage binding the API carries.
     S3_ENDPOINT: 'https://s3.twcstorage.ru',
