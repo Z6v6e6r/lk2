@@ -216,6 +216,56 @@ describe('legacy community read repository', () => {
     expect(rankingUrl).toContain('/lk/communities/community_legacy_mine/rating');
   });
 
+  it('accepts a large rating snapshot instead of treating it as invalid', async () => {
+    // Large communities return ranking rows for every member: real responses reach ~1.5 MB, and a
+    // 512 KB bound used to discard them as COMMUNITY_LEGACY_RESPONSE_INVALID.
+    const source = payload({ embeddedRank: false });
+    const filler = Array.from({ length: 4_000 }, (_value, index) => ({
+      rank: index + 100,
+      playerId: `legacy-filler-${index}`,
+      playerName: 'Заполнитель',
+      note: 'x'.repeat(120),
+    }));
+    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((input) => {
+      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+      if (url.pathname.endsWith('/rating')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              communityId: 'community_legacy_mine',
+              calculationVersion: 'community-rating-v1.3.0',
+              items: [
+                { rank: 12, playerId: 'legacy-client-1', playerName: 'Скрытое имя' },
+                ...filler,
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(source), { status: 200 }));
+    });
+    const repository = new LegacyCommunityReadRepository({
+      baseUrl: 'https://legacy.padlhub.test',
+      timeoutMs: 5_000,
+      maxAttempts: 1,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      cacheTtlMs: 30_000,
+      bridge: bridge(),
+      fetchImplementation,
+    });
+
+    const page = await repository.listMemberships({
+      tenantId,
+      userId,
+      correlationId: 'community-rating-large',
+      limit: 4,
+    });
+
+    expect(page.items[0]).toEqual(expect.objectContaining({ memberRank: 12 }));
+  });
+
   it('does not hold the membership page open for a slow optional rank lookup', async () => {
     const source = payload({ embeddedRank: false });
     let resolveRank: ((response: Response) => void) | undefined;
