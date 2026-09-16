@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { HomeRecommendationPromotionDeck } from '@phub/home-projection';
 
+import { recommendationAdImageFit } from './recommendation-advertising-image-fit.js';
 import './RecommendationAdvertisingCard.css';
 
 type Promotion = HomeRecommendationPromotionDeck['items'][number];
@@ -31,6 +32,8 @@ export function RecommendationAdvertisingCard({
     items.findIndex((candidate) => candidate.id === item.id),
   );
   const rootRef = useRef<HTMLElement>(null);
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [imageFit, setImageFit] = useState<'cover' | 'contain'>('cover');
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === 'undefined');
   const [documentVisible, setDocumentVisible] = useState(() => !document.hidden);
   const impression = useRef<string | null>(null);
@@ -104,6 +107,40 @@ export function RecommendationAdvertisingCard({
   const imageUrl = kind === 'card' ? cardImageUrl : (item.imageUrl ?? item.mobileImageUrl);
   const figmaLayout = photoGrid && layout === 'compact';
 
+  const applyImageFit = useCallback((): void => {
+    const image = imageRef.current;
+    if (!image) return;
+    const fit = recommendationAdImageFit({
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+      renderedWidth: image.clientWidth,
+      renderedHeight: image.clientHeight,
+    });
+    setImageFit((current) => (current === fit ? current : fit));
+  }, []);
+  useEffect(() => {
+    // The wide banner keeps `cover`: that slot is meant to crop, and a contained banner would shrink
+    // into a thumbnail. Only the card slot shows the creative whole when it does not fit.
+    if (kind !== 'card') return;
+    const image = imageRef.current;
+    if (!image) return;
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(applyImageFit);
+    observer?.observe(image);
+    image.addEventListener('load', applyImageFit);
+    window.addEventListener('resize', applyImageFit);
+    // A cached creative may already be decoded before the effect runs, so wait for the image
+    // pipeline itself instead of measuring the node synchronously here.
+    if (typeof image.decode === 'function') {
+      void image.decode().then(applyImageFit, () => undefined);
+    }
+    return () => {
+      image.removeEventListener('load', applyImageFit);
+      window.removeEventListener('resize', applyImageFit);
+      observer?.disconnect();
+    };
+  }, [kind, imageUrl, applyImageFit]);
+
   return (
     <article
       ref={rootRef}
@@ -130,7 +167,14 @@ export function RecommendationAdvertisingCard({
           {kind === 'strip' && item.mobileImageUrl ? (
             <source media="(max-width: 480px)" srcSet={item.mobileImageUrl} />
           ) : null}
-          {imageUrl ? <img src={imageUrl} alt="" /> : null}
+          {imageUrl ? (
+            <img
+              ref={imageRef}
+              src={imageUrl}
+              alt=""
+              className={imageFit === 'contain' ? 'is-contained' : undefined}
+            />
+          ) : null}
         </picture>
         {figmaLayout ? (
           <span className="recommendation-ad-artwork">

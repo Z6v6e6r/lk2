@@ -233,7 +233,11 @@ export async function runPromotionHomeSyncCycle(input: {
               mobileImageUrl: squareAsset?.imageUrl ?? asset.mobileImageUrl,
               ...(sourcePrefix === 'card'
                 ? {
-                    squareImageUrl: squareAsset?.imageUrl ?? asset.mobileImageUrl,
+                    // Never feed the card slot the mobile derivative: it is derived from the square
+                    // source and used to be enlarged to the mobile frame. Fall back to the horizontal
+                    // creative instead. Unreachable today (the guard above throws), kept as a
+                    // safety net.
+                    squareImageUrl: squareAsset?.imageUrl ?? asset.imageUrl,
                     horizontalImageUrl: asset.imageUrl,
                   }
                 : {}),
