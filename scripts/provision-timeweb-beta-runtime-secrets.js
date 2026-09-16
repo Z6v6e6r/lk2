@@ -174,11 +174,29 @@ const JSON_OBJECT_SECRET_KEYS = new Set(['NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS'
 const JSON_OBJECT_SECRET_VALUE =
   /^\{(?:"[A-Za-z0-9._-]{1,64}":"[A-Za-z0-9+/=_-]{1,512}")(?:,"[A-Za-z0-9._-]{1,64}":"[A-Za-z0-9+/=_-]{1,512}")*\}$/u;
 
+// The runtime decrypts every stored push endpoint with this keyring, so a value that only looks like
+// base64 would surface as a start-up or first-send failure long after provisioning. The same
+// canonical 32-byte rule the runtime applies is enforced here instead.
+function assertEndpointKeyringEntries(value) {
+  const entries = JSON.parse(value);
+  for (const entry of Object.values(entries)) {
+    const decoded = Buffer.from(entry, 'base64');
+    if (
+      decoded.length !== 32 ||
+      decoded.toString('base64').replace(/=+$/u, '') !== entry.replace(/=+$/u, '')
+    ) {
+      fail('endpoint_keyring_entry_invalid');
+    }
+  }
+}
+
 export function assertComposableSecretValue(key, value) {
   if (/[#$'\\\s]/u.test(value)) fail('compose_metacharacter');
   if (!value.includes('"')) return;
-  if (JSON_OBJECT_SECRET_KEYS.has(key) && JSON_OBJECT_SECRET_VALUE.test(value)) return;
-  fail('compose_metacharacter');
+  if (!JSON_OBJECT_SECRET_KEYS.has(key) || !JSON_OBJECT_SECRET_VALUE.test(value)) {
+    fail('compose_metacharacter');
+  }
+  assertEndpointKeyringEntries(value);
 }
 
 export function parseTimewebSecretEnvironment(bytes) {
