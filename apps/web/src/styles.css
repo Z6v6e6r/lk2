@@ -12063,8 +12063,9 @@ button.participant-avatar-stack__open-slot:focus-visible {
   }
 }
 
-/* Level-aware profile — the supplied 941 × 1672 art is scaled to the 375px LK surface. */
+/* Profile and its fixed navigation share the responsive page width. */
 .profile-shell {
+  --fh-page-width: min(100vw, 375px);
   min-height: 100svh;
   background: #252327;
 }
@@ -12072,7 +12073,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 .profile-page {
   position: relative;
   isolation: isolate;
-  width: min(100%, 375px);
+  width: var(--fh-page-width);
   min-height: 100svh;
   padding: 18px 0 112px;
   overflow: hidden;
@@ -14185,6 +14186,10 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 /* Phone layouts fill the viewport; wider screens retain the centered Home canvas. */
 @media (max-width: 600px) {
+  .profile-shell {
+    --fh-page-width: 100vw;
+  }
+
   .figma-home-shell,
   .figma-home-shell.is-home-v3 {
     --fh-page-width: 100vw;
