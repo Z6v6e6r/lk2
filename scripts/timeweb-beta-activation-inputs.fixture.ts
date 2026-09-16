@@ -134,7 +134,9 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // mirrors the standard placement and the slot is never read or mirrored.
     PROMOTIONS_HERO_PLACEMENT: 'cabinet_home_top',
     // Real game and roster synchronization from the public CUP games API. The Mongo mirror stays the
-    // staging source for the activity-history game backfill only.
+    // staging source for the activity-history game backfill only. The roster sync requires the game
+    // read flag, and the worker keeps commands disabled, so its lifecycle process manager stays off.
+    GAMES_READ_ENABLED: 'true',
     LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
     LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
     LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: tenantKey,
