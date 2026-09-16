@@ -390,6 +390,37 @@ and the API stores the re-encoded image in that bucket. Delivery stays presigned
 `S3_PUBLIC_ENDPOINT`, so the bucket itself does not need public read and raw provider photo URLs are
 never handed to clients.
 
+## Operator dependencies
+
+PostgreSQL, Redis, RabbitMQ and ClamAV run as operator-managed containers on the external
+`phub-timeweb-beta` network and are **not** part of the immutable release. Their Compose model is
+`/opt/phub/timeweb-beta/operator/compose.dependencies.yaml` on the host and every image is pinned by
+digest; the release stages never create, pull or replace them.
+
+| Service  | Address        | Purpose                                                      |
+| -------- | -------------- | ------------------------------------------------------------ |
+| postgres | `172.30.26.20` | canonical database (`phub_beta`)                             |
+| redis    | `172.30.26.21` | cache, locks, rate limits, read-job state                    |
+| rabbitmq | `172.30.26.22` | outbox and consumer transport                                |
+| clamav   | `172.30.26.23` | malware scanning for community media (`clamd` INSTREAM 3310) |
+
+ClamAV is pinned to
+`docker.io/clamav/clamav@sha256:f156095071757e3838caa50265d65e36cdf7f934a27aacf851ea6d2fadbe8200`
+and keeps its signatures on the `phub-timeweb-beta-clamav-data` volume, so only the first start pays
+the signature download and the health check allows a 300-second start period. The worker's scanner
+uses the `zINSTREAM` command over TCP, so the container publishes no ports:
+
+```sh
+# Verify the scanner the worker actually speaks to (expect FOUND, then OK).
+docker exec phub-timeweb-beta-worker-1 node -e '<zINSTREAM probe against 172.30.26.23:3310>'
+```
+
+Provisioning ClamAV does not enable community media. `COMMUNITY_MEDIA_ENABLED=true` is rejected by
+configuration while `COMMUNITIES_READ_MODE=legacy`, because uploads require PadlHub to own community
+writes; enabling media therefore belongs to the same change that switches the contour to
+`COMMUNITIES_READ_MODE=local`, and needs `COMMUNITY_MEDIA_SCAN_MODE=clamav` plus
+`COMMUNITY_MEDIA_CLAMAV_HOST` in the release environment contract.
+
 ## Operator Node bootstrap
 
 Use only `scripts/control-timeweb-operator-node-bootstrap.py` and the adjacent protected
