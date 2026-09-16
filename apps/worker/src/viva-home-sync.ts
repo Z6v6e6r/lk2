@@ -23,6 +23,7 @@ import { synchronizeLegacyParticipantPhotos } from './legacy-participant-photo-s
 import {
   deleteProfilePhotoObjectIfSafe,
   deleteExpiredProfilePhotoClientCommands,
+  linkLegacyViewerPhone,
   listDueVivaHomeDelegations,
   listDueProfilePhotoObjects,
   persistLegacyParticipantViewerProfile,
@@ -436,12 +437,31 @@ export async function runVivaHomeSyncCycle(input: {
           profilePhoto: profilePhoto.persistence,
           correlationId,
         });
+        const cupPhoneLink = await linkLegacyViewerPhone({
+          pool: input.pool,
+          tenantId: delegation.tenantId,
+          userId: delegation.userId,
+          phoneE164: snapshot.profile.phoneE164,
+          fetchedAt: snapshot.fetchedAt,
+        });
+        if (cupPhoneLink === 'conflict') {
+          input.logger.warn(
+            {
+              tenantId: delegation.tenantId,
+              userId: delegation.userId,
+              correlationId,
+              code: 'CUP_IDENTITY_PHONE_CONFLICT',
+            },
+            'provider phone already identifies another PadlHub viewer and was not linked',
+          );
+        }
         synced += 1;
         input.logger.info(
           {
             tenantId: delegation.tenantId,
             userId: delegation.userId,
             correlationId,
+            cupPhoneLink,
             components: components.map((component) => ({
               name: component.component,
               revision: component.revision,

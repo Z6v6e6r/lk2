@@ -149,4 +149,78 @@ describe('Viva Home source adapter', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(4);
     expect(metrics).toContain('profile:retry');
   });
+
+  it('exposes the provider phone as the CUP identity link and keeps the display mask', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ...profile(), phone: '8 (910) 430-31-90' }))
+      .mockResolvedValueOnce(Response.json({ content: [] }))
+      .mockResolvedValueOnce(Response.json({ content: [] }));
+    const adapter = new VivaHomeSourceAdapter({
+      mode: 'sandbox',
+      apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+      tenantKey: 'tenant-key',
+      timeoutMs: 100,
+      fetchImplementation,
+    });
+
+    const snapshot = await adapter.read(access);
+    expect(snapshot.profile).toMatchObject({
+      phoneE164: '+79104303190',
+      phoneLast4: '3190',
+    });
+  });
+
+  it('never invents an identity link from an unusable provider phone', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ...profile(), phone: '12345' }))
+      .mockResolvedValueOnce(Response.json({ content: [] }))
+      .mockResolvedValueOnce(Response.json({ content: [] }));
+    const adapter = new VivaHomeSourceAdapter({
+      mode: 'sandbox',
+      apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+      tenantKey: 'tenant-key',
+      timeoutMs: 100,
+      fetchImplementation,
+    });
+
+    const snapshot = await adapter.read(access);
+    expect(snapshot.profile).not.toHaveProperty('phoneE164');
+    expect(snapshot.profile).toMatchObject({ phoneLast4: '2345' });
+  });
+});
+
+describe('CUP viewer phone normalization', () => {
+  const cases: readonly (readonly [string, string | null, string | undefined])[] = [
+    ['country code with plus', '+7 910 430-31-90', '+79104303190'],
+    ['eleven digits with eight', '8 (910) 430-31-90', '+79104303190'],
+    ['eleven digits with seven', '79104303190', '+79104303190'],
+    ['ten digit russian mobile', '9104303190', '+79104303190'],
+    ['foreign ten digit national', '4155552671', undefined],
+    ['truncated russian number', '7910430319', undefined],
+    ['extension noise', '+79104303190 доб. 123', undefined],
+    ['two numbers', '+79104303190, +79100000000', undefined],
+    ['empty', '', undefined],
+  ];
+
+  for (const [name, phone, expected] of cases) {
+    it(`maps ${name} to ${expected ?? 'no link'}`, async () => {
+      const fetchImplementation = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(Response.json({ ...profile(), phone }))
+        .mockResolvedValueOnce(Response.json({ content: [] }))
+        .mockResolvedValueOnce(Response.json({ content: [] }));
+      const adapter = new VivaHomeSourceAdapter({
+        mode: 'sandbox',
+        apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+        tenantKey: 'tenant-key',
+        timeoutMs: 100,
+        fetchImplementation,
+      });
+
+      const snapshot = await adapter.read(access);
+      expect(snapshot.profile.phoneE164).toBe(expected);
+    });
+  }
 });
