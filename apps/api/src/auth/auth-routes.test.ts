@@ -1899,4 +1899,76 @@ describe('provider-neutral authentication routes', () => {
     await expect(completeFirstOAuthLogin(service)).resolves.toBeUndefined();
     expect(outcomes).toEqual(['unavailable']);
   });
+  it('links the legacy phone from the refreshed delegation on the live token path', async () => {
+    const repository = new FakeRepository();
+    const tokens: string[] = [];
+    const outcomes: string[] = [];
+    const linked: Array<string | undefined> = [];
+    const service = new AuthService({
+      config: legacyLinkConfig(),
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: new MemoryVivaOAuthStateStore(),
+      legacyViewerIdentityLink: {
+        enabled: true,
+        // The login token answers without a phone; only the delegation token exposes it.
+        readViewerPhone: (input) => {
+          tokens.push(input.accessToken);
+          return Promise.resolve(
+            input.accessToken === 'refreshed-viva-access-token' ? '+79104303190' : undefined,
+          );
+        },
+        readLinkedPhone: () => Promise.resolve(undefined),
+        linkPhone: (input) => {
+          linked.push(input.phoneE164);
+          return Promise.resolve('linked' as const);
+        },
+        onOutcome: (outcome) => outcomes.push(outcome),
+      },
+    });
+
+    const started = await service.startVivaOAuth({
+      tenantKey: binding.tenantKey,
+      provider: 'vkid',
+      publicOfferAccepted: true,
+      personalDataPolicyAccepted: true,
+      correlationId: 'delegation-link-start',
+    });
+    const state = new URL(started.redirectUrl).searchParams.get('state') ?? '';
+    const completed = await service.completeVivaOAuth({
+      tenantKey: binding.tenantKey,
+      state,
+      code: 'authorization-code',
+      correlationId: 'delegation-link-complete',
+      idempotencyKey: 'delegation-link-idempotency',
+      oauthBrowserNonce: started.browserNonce,
+    });
+    const sessionId = repository.activeSessionId;
+    if (!sessionId) throw new Error('Expected an active PadlHub session');
+
+    const refreshed = await service.issueVivaAccessToken({
+      tenantKey: binding.tenantKey,
+      tenantId: binding.tenantId,
+      userId: user.id,
+      sessionId,
+      correlationId: 'delegation-link-refresh',
+      handoffCode: completed.vivaHandoffCode,
+    });
+    expect(refreshed.accessToken).toBe('initial-viva-access-token');
+
+    const rotated = await service.issueVivaAccessToken({
+      tenantKey: binding.tenantKey,
+      tenantId: binding.tenantId,
+      userId: user.id,
+      sessionId,
+      correlationId: 'delegation-link-rotated',
+    });
+    expect(rotated.accessToken).toBe('refreshed-viva-access-token');
+
+    expect(tokens).toEqual(['initial-viva-access-token', 'refreshed-viva-access-token']);
+    expect(linked).toEqual(['+79104303190']);
+    expect(outcomes).toEqual(['absent', 'linked']);
+  });
 });

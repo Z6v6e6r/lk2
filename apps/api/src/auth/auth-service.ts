@@ -903,6 +903,16 @@ export class AuthService {
         correlationId: input.correlationId,
       });
       if (!saved) throw new AuthServiceError('VIVA_REAUTH_REQUIRED');
+      // The refreshed delegation token is the credential the end-user CRM API certifies, so this live
+      // path is also where an already signed-in viewer gets its legacy identity link, without waiting
+      // for a new full login.
+      await this.linkLegacyViewerIdentityFromDelegation({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        accessToken: refreshed.accessToken,
+        correlationId: input.correlationId,
+        tenantKey: input.tenantKey,
+      });
       const expiresAt = new Date(
         this.now().getTime() + (refreshed.accessExpiresIn ?? 300) * 1000,
       ).toISOString();
@@ -918,6 +928,47 @@ export class AuthService {
       };
     } finally {
       await this.options.vivaOAuthStateStore.releaseRefresh(lockKey, claimId);
+    }
+  }
+
+  /**
+   * Links the provider-asserted legacy viewer phone from a freshly refreshed delegation. Best effort:
+   * a provider or storage failure is reported as an outcome and never fails the caller.
+   */
+  private async linkLegacyViewerIdentityFromDelegation(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly accessToken: string;
+    readonly correlationId: string;
+    readonly tenantKey: string;
+  }): Promise<void> {
+    const link = this.options.legacyViewerIdentityLink;
+    if (!link?.enabled) return;
+    try {
+      const existing = await link.readLinkedPhone({
+        tenantId: input.tenantId,
+        userId: input.userId,
+      });
+      if (existing) return;
+      const binding = await this.binding(input.tenantKey);
+      const phoneE164 = await link.readViewerPhone({
+        accessToken: input.accessToken,
+        correlationId: input.correlationId,
+        providerTenantKey: binding.providerTenantKey,
+      });
+      if (!phoneE164) {
+        link.onOutcome?.('absent');
+        return;
+      }
+      const outcome = await link.linkPhone({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        phoneE164,
+        fetchedAt: this.now().toISOString(),
+      });
+      link.onOutcome?.(outcome);
+    } catch {
+      link.onOutcome?.('unavailable');
     }
   }
 
