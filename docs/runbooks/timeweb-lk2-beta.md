@@ -415,6 +415,17 @@ uses the `zINSTREAM` command over TCP, so the container publishes no ports:
 docker exec phub-timeweb-beta-worker-1 node -e '<zINSTREAM probe against 172.30.26.23:3310>'
 ```
 
+Signature freshness is an operational gap on this contour. The ClamAV CDN
+(`database.clamav.net`, fronted by Cloudflare) answers every request from the beta host and from a
+normal workstation with a `403` Cloudflare block page, whatever the user agent or TLS stack, so
+`freshclam` inside the container fails with `Forbidden; Blocked by CDN` and reports itself as
+fatally unable to continue. The scanner therefore runs on the signatures shipped inside the pinned
+image (observed `ClamAV 1.4.6/28122/Sun Sep 13 06:26:25 2026` on 2026-09-16) and stays functional for
+scanning, but does not gain new signatures. Until a mirror or an allowed egress is provided, the
+interim mitigation is to re-pull a newer `clamav/clamav` image and re-create the container, which
+refreshes the bundled databases; the durable fix is a signature mirror or a scheduled fetch through
+an egress the CDN accepts.
+
 Provisioning ClamAV does not enable community media. `COMMUNITY_MEDIA_ENABLED=true` is rejected by
 configuration while `COMMUNITIES_READ_MODE=legacy`, because uploads require PadlHub to own community
 writes; enabling media therefore belongs to the same change that switches the contour to
