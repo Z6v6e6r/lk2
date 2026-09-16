@@ -8,7 +8,7 @@ import {
   vivaRefreshLockRedisKey,
 } from '@phub/auth/viva-delegation';
 import type { WorkerConfig } from '@phub/config';
-import { createLegacyGameImportRepository } from '@phub/database';
+import { createLegacyGameImportRepository, linkLegacyViewerPhone } from '@phub/database';
 import {
   localVivaProfileAssociationId,
   type LegacyGamesMongoAdapter,
@@ -23,7 +23,6 @@ import { synchronizeLegacyParticipantPhotos } from './legacy-participant-photo-s
 import {
   deleteProfilePhotoObjectIfSafe,
   deleteExpiredProfilePhotoClientCommands,
-  linkLegacyViewerPhone,
   listDueVivaHomeDelegations,
   listDueProfilePhotoObjects,
   persistLegacyParticipantViewerProfile,

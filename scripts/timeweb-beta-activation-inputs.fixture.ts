@@ -114,6 +114,9 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // The Viva End User profile read is the only operation certified for the direct browser
     // transport, so the web client fetches the profile from Viva itself.
     VIVA_DIRECT_READ_ENABLED: 'true',
+    // The OAuth login reads the provider profile once and stores the phone that keys viewer-scoped
+    // legacy reads in integration custody; the phone never becomes a PadlHub login key.
+    CUP_IDENTITY_PROFILE_LINK_ENABLED: 'true',
     // Client-assisted avatar sync is a required-true flag, so startup config insists on a complete
     // media-storage binding even in the synthetic fixture.
     S3_ENDPOINT: 'https://s3.twcstorage.ru',

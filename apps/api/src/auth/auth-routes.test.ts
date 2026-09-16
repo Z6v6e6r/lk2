@@ -1708,4 +1708,130 @@ describe('provider-neutral authentication routes', () => {
     expect(response.statusCode).toBe(410);
     expect(response.json()).toMatchObject({ code: 'AUTH_CODE_EXPIRED' });
   });
+  const legacyLinkConfig = () =>
+    loadConfig({
+      APP_ENV: 'ci',
+      DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+      REDIS_URL: 'redis://localhost:6379',
+      RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+      JWT_ISSUER: 'phub-identity',
+      JWT_AUDIENCE: 'phub-api',
+      JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+      JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+      VIVA_MODE: 'sandbox',
+      VIVA_OAUTH_ENABLED: 'true',
+      VIVA_OAUTH_REDIRECT_URI:
+        'https://api.example.test/user/api/v1/local-padel/auth/viva/callback',
+      VIVA_OAUTH_SUCCESS_REDIRECT_URL: 'https://app.example.test/',
+      VIVA_DELEGATION_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64url'),
+    });
+
+  async function completeFirstOAuthLogin(service: AuthService): Promise<void> {
+    const started = await service.startVivaOAuth({
+      tenantKey: binding.tenantKey,
+      provider: 'vkid',
+      publicOfferAccepted: true,
+      personalDataPolicyAccepted: true,
+      correlationId: 'legacy-link-start',
+    });
+    const state = new URL(started.redirectUrl).searchParams.get('state') ?? '';
+    await service.completeVivaOAuth({
+      tenantKey: binding.tenantKey,
+      state,
+      code: 'authorization-code',
+      correlationId: 'legacy-link-complete',
+      idempotencyKey: 'legacy-link-idempotency',
+      oauthBrowserNonce: started.browserNonce,
+    });
+  }
+
+  it('links the provider viewer phone on OAuth login while the phone stays out of the auth profile', async () => {
+    const repository = new FakeRepository();
+    const linked: Array<{ tenantId: string; userId: string; phone: string | undefined }> = [];
+    const outcomes: string[] = [];
+    let providerReads = 0;
+    const service = new AuthService({
+      config: legacyLinkConfig(),
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: new MemoryVivaOAuthStateStore(),
+      legacyViewerIdentityLink: {
+        enabled: true,
+        readViewerPhone: () => {
+          providerReads += 1;
+          return Promise.resolve('+79104303190');
+        },
+        readLinkedPhone: () => Promise.resolve(undefined),
+        linkPhone: (input) => {
+          linked.push({
+            tenantId: input.tenantId,
+            userId: input.userId,
+            phone: input.phoneE164,
+          });
+          return Promise.resolve('linked' as const);
+        },
+        onOutcome: (outcome) => outcomes.push(outcome),
+      },
+    });
+
+    await completeFirstOAuthLogin(service);
+
+    expect(providerReads).toBe(1);
+    expect(linked).toEqual([
+      { tenantId: binding.tenantId, userId: user.id, phone: '+79104303190' },
+    ]);
+    expect(outcomes).toEqual(['linked']);
+  });
+
+  it('skips the provider phone read when the account already holds a link', async () => {
+    const repository = new FakeRepository();
+    let providerReads = 0;
+    const service = new AuthService({
+      config: legacyLinkConfig(),
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: new MemoryVivaOAuthStateStore(),
+      legacyViewerIdentityLink: {
+        enabled: true,
+        readViewerPhone: () => {
+          providerReads += 1;
+          return Promise.resolve('+79104303190');
+        },
+        readLinkedPhone: () => Promise.resolve('+79104303190'),
+        linkPhone: () => Promise.resolve('unchanged' as const),
+      },
+    });
+
+    await completeFirstOAuthLogin(service);
+
+    expect(providerReads).toBe(0);
+  });
+
+  it('never fails the login when the provider phone read or the link storage fails', async () => {
+    const outcomes: string[] = [];
+    const service = new AuthService({
+      config: legacyLinkConfig(),
+      repository: new FakeRepository(),
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', provider]]),
+      vivaOAuthProvider: oauthProvider,
+      vivaOAuthStateStore: new MemoryVivaOAuthStateStore(),
+      legacyViewerIdentityLink: {
+        enabled: true,
+        readViewerPhone: () => Promise.reject(new Error('EXTERNAL_SOURCE_UNAVAILABLE')),
+        readLinkedPhone: () => Promise.resolve(undefined),
+        linkPhone: () => {
+          throw new Error('linkPhone must not run when the provider read failed');
+        },
+        onOutcome: (outcome) => outcomes.push(outcome),
+      },
+    });
+
+    await expect(completeFirstOAuthLogin(service)).resolves.toBeUndefined();
+    expect(outcomes).toEqual(['unavailable']);
+  });
 });

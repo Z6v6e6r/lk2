@@ -224,3 +224,42 @@ describe('CUP viewer phone normalization', () => {
     });
   }
 });
+
+describe('Viva viewer phone read', () => {
+  it('reads only the profile and returns the normalized phone', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ...profile(), phone: '8 (910) 430-31-90' }));
+    const adapter = new VivaHomeSourceAdapter({
+      mode: 'sandbox',
+      apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+      tenantKey: 'tenant-key',
+      timeoutMs: 100,
+      fetchImplementation,
+    });
+
+    await expect(
+      adapter.readViewerPhone({ accessToken: 'server-only-token', correlationId: 'phone-read' }),
+    ).resolves.toBe('+79104303190');
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+    const url = fetchUrl(fetchImplementation.mock.calls[0]?.[0]);
+    expect(url.pathname).toBe('/end-user/api/v1/tenant-key/profile');
+  });
+
+  it('returns no phone when the provider profile carries an unusable number', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ...profile(), phone: '4155552671' }));
+    const adapter = new VivaHomeSourceAdapter({
+      mode: 'sandbox',
+      apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+      tenantKey: 'tenant-key',
+      timeoutMs: 100,
+      fetchImplementation,
+    });
+
+    await expect(
+      adapter.readViewerPhone({ accessToken: 'server-only-token', correlationId: 'phone-read' }),
+    ).resolves.toBeUndefined();
+  });
+});

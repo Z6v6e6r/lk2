@@ -109,6 +109,12 @@ const environmentSchema = z.object({
     .string()
     .regex(/^\d{4}$/)
     .default('0000'),
+  /**
+   * Links the provider-asserted phone that keys viewer-scoped legacy (CUP) reads to the account that
+   * just authenticated. The phone stays in integration custody: it is not a PadlHub login key and not
+   * proof for payment, participation or activity-history guards.
+   */
+  CUP_IDENTITY_PROFILE_LINK_ENABLED: booleanFromEnvironment,
   CUP_DEV_AUTH_ENABLED: booleanFromEnvironment,
   CUP_DEV_AUTH_PHONE_E164: z
     .string()
@@ -883,6 +889,16 @@ export function loadConfig(
   }
   if (parsed.data.APP_ENV === 'production' && !parsed.data.TRUSTED_PROXY_CIDRS.trim()) {
     throw new Error('TRUSTED_PROXY_CIDRS is required in production');
+  }
+  if (
+    parsed.data.CUP_IDENTITY_PROFILE_LINK_ENABLED &&
+    (!parsed.data.VIVA_OAUTH_ENABLED ||
+      parsed.data.VIVA_MODE === 'mock' ||
+      parsed.data.VIVA_MODE === 'disabled')
+  ) {
+    throw new Error(
+      'CUP_IDENTITY_PROFILE_LINK_ENABLED requires Viva OAuth and VIVA_MODE=sandbox or production',
+    );
   }
   if (parsed.data.CUP_DEV_AUTH_ENABLED) {
     if (parsed.data.APP_ENV !== 'local') {

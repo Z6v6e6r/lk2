@@ -36970,6 +36970,9 @@ init_esm_shims();
 init_esm_shims();
 import { randomUUID as randomUUID7 } from "crypto";
 
+// ../../packages/database/src/legacy-viewer-identity-repository.ts
+init_esm_shims();
+
 // ../../packages/database/src/legacy-game-roster-bridge-repository.ts
 init_esm_shims();
 
