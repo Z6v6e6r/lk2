@@ -272,7 +272,10 @@ endpoint в обратимый `SUSPENDED_POLICY`, а не в provider-invalid. 
 достоверного receipt. `DISPLAYED` и `OPENED` приходят отдельными идемпотентными событиями клиента;
 ни Web Push, ни APNs/FCM acceptance не трактуются как просмотр пользователем. Push payload содержит
 notification UUID, безопасный preview и deep-link route; полный чувствительный текст клиент
-получает из User API после авторизации.
+получает из User API после авторизации. Worker берёт заголовок и preview из неизменяемого
+`notifications.intents` snapshot, ограничивает их 300 символами и общим размером payload; при
+слишком длинном deep-link он опускается, и service worker возвращается к своему безопасному
+маршруту `/notifications`, а не к усечённому адресу.
 
 Один общий atomic finalizer фиксирует результат любого push delivery port. Он проверяет не только
 `attempt_count`, но и непросроченный lease, а stale worker не может добавить attempt, receipt,

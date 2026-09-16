@@ -27,6 +27,8 @@ interface DeliveryRow extends QueryResultRow {
   readonly address_ciphertext: Buffer;
   readonly encryption_key_id: string;
   readonly notification_id: string;
+  readonly rendered_title: string;
+  readonly rendered_body: string;
   readonly deep_link: string | null;
   readonly attempt_count: number;
 }
@@ -41,6 +43,8 @@ interface ClaimedDelivery {
   readonly addressCiphertext: Buffer;
   readonly encryptionKeyId: string;
   readonly notificationId: string;
+  readonly renderedTitle: string;
+  readonly renderedBody: string;
   readonly deepLink?: string;
   readonly attemptNo: number;
   readonly startedAt: string;
@@ -48,6 +52,82 @@ interface ClaimedDelivery {
 
 // Provider calls time out at no more than 30 seconds; the extra margin keeps finalization fenced.
 export const WEB_PUSH_DELIVERY_LEASE_SECONDS = 60;
+
+// The rendered intent snapshot is already stored for the in-app inbox. A push payload may repeat a
+// bounded part of it because the transport is encrypted end to end to the browser subscription.
+// `web-push` rejects an aes128gcm payload above 3_993 bytes, and any rejection here would repeat as
+// a retryable failure, so the payload is fitted before the provider call instead of failing late.
+export const WEB_PUSH_PAYLOAD_MAX_BYTES = 3_500;
+export const WEB_PUSH_TITLE_MAX_CHARACTERS = 300;
+export const WEB_PUSH_PREVIEW_MAX_CHARACTERS = 300;
+
+export interface WebPushNotificationPayload {
+  readonly id: string;
+  readonly title: string;
+  readonly preview: string;
+  readonly deepLink?: string;
+}
+
+function collapseNotificationText(value: string): string {
+  return value.replace(/\s+/gu, ' ').trim();
+}
+
+function codePoints(value: string): readonly string[] {
+  return [...value];
+}
+
+function dropTrailingCodePoints(value: string, count: number): string {
+  const points = codePoints(value);
+  return points.slice(0, Math.max(0, points.length - count)).join('');
+}
+
+function truncateCodePoints(value: string, maximum: number): string {
+  return dropTrailingCodePoints(value, Math.max(0, codePoints(value).length - maximum));
+}
+
+/**
+ * Builds the transport payload from the rendered intent snapshot. The notification id and the
+ * internal deep link stay exact; the visible text is bounded and, when the deep link alone cannot
+ * fit the transport budget, it is dropped so the service worker falls back to its own safe
+ * `/notifications` route instead of navigating to a truncated address.
+ */
+export function buildWebPushNotification(input: {
+  readonly id: string;
+  readonly title: string;
+  readonly body: string;
+  readonly deepLink?: string | null;
+}): WebPushNotificationPayload {
+  const title = truncateCodePoints(
+    collapseNotificationText(input.title),
+    WEB_PUSH_TITLE_MAX_CHARACTERS,
+  );
+  const body = truncateCodePoints(
+    collapseNotificationText(input.body),
+    WEB_PUSH_PREVIEW_MAX_CHARACTERS,
+  );
+  const payload: WebPushNotificationPayload = {
+    id: input.id,
+    title,
+    preview: body || title,
+  };
+  if (!input.deepLink) return payload;
+  const routed: WebPushNotificationPayload = { ...payload, deepLink: input.deepLink };
+  // Bounded title and preview alone always fit; only the deep link can exceed the budget.
+  return webPushPayloadBytes(routed) <= WEB_PUSH_PAYLOAD_MAX_BYTES ? routed : payload;
+}
+
+function webPushPayloadBytes(payload: WebPushNotificationPayload): number {
+  // Mirrors the exact wire shape built by the Web Push adapter, including its key order.
+  return Buffer.byteLength(
+    JSON.stringify({
+      notificationId: payload.id,
+      title: payload.title,
+      preview: payload.preview,
+      ...(payload.deepLink ? { deepLink: payload.deepLink } : {}),
+    }),
+    'utf8',
+  );
+}
 
 async function claimBatch(options: {
   readonly pool: Pool;
@@ -62,6 +142,7 @@ async function claimBatch(options: {
               a.id as provider_account_id,
               e.status as endpoint_status, e.address_ciphertext, e.encryption_key_id,
               coalesce(inbox.id, i.id) as notification_id,
+              i.rendered_title, i.rendered_body,
               i.rendered_deep_link as deep_link
          from notifications.deliveries d
          join notifications.intents i
@@ -117,6 +198,8 @@ async function claimBatch(options: {
         addressCiphertext: row.address_ciphertext,
         encryptionKeyId: row.encryption_key_id,
         notificationId: row.notification_id,
+        renderedTitle: row.rendered_title,
+        renderedBody: row.rendered_body,
         ...(row.deep_link ? { deepLink: row.deep_link } : {}),
         attemptNo,
         startedAt: new Date().toISOString(),
@@ -174,12 +257,12 @@ export async function runWebPushDeliveryBatch(options: {
           providerAccountId: job.providerAccountId,
           platform: 'WEB',
           endpoint: JSON.stringify(subscription),
-          notification: {
+          notification: buildWebPushNotification({
             id: job.notificationId,
-            title: 'ПаделХАБ',
-            preview: 'Новое оповещение',
-            ...(job.deepLink ? { deepLink: job.deepLink } : {}),
-          },
+            title: job.renderedTitle,
+            body: job.renderedBody,
+            deepLink: job.deepLink ?? null,
+          }),
           providerIdempotencyKey: `web-push:${job.deliveryId}`,
         });
       } catch {
