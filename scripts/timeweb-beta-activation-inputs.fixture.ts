@@ -29,6 +29,26 @@ const strongValue = (purpose: string) =>
   createHash('sha512').update(`synthetic-timeweb-beta-${purpose}`).digest('base64url');
 const exact32ByteValue = (purpose: string) =>
   createHash('sha256').update(`synthetic-timeweb-beta-${purpose}`).digest('base64url');
+// The endpoint-encryption keyring requires canonical standard base64 of exactly 32 bytes, not the
+// base64url form the other synthetic secrets use.
+const exact32ByteBase64Value = (purpose: string) =>
+  createHash('sha256').update(`synthetic-timeweb-beta-${purpose}`).digest('base64');
+// Synthetic but shape-correct VAPID material: 65 uncompressed public bytes and a 32-byte private
+// scalar in base64url. The pair is not usable for signing; the rehearsal only pins the shape, and the
+// runbook points at the real generator for the target.
+const syntheticVapidKeyPair = (() => {
+  const publicBytes = Buffer.concat([
+    Buffer.from([4]),
+    createHash('sha512').update('synthetic-timeweb-beta-web-push-public').digest().subarray(0, 64),
+  ]);
+  const privateBytes = createHash('sha256')
+    .update('synthetic-timeweb-beta-web-push-private')
+    .digest();
+  return {
+    publicKey: publicBytes.toString('base64url'),
+    privateKey: privateBytes.toString('base64url'),
+  };
+})();
 
 const contract = JSON.parse(
   readFileSync('deploy/timeweb/runtime-environment.contract.json', 'utf8'),
@@ -135,6 +155,18 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     S3_BUCKET: 'synthetic-profile-photo-bucket',
     S3_ACCESS_KEY: 'synthetic-media-access-key',
     S3_SECRET_KEY: 'synthetic-media-secret-key',
+    // Web Push belongs to the beta runtime contract: a VAPID pair and the endpoint-encryption keyring
+    // stay stable for the lifetime of the browser subscriptions that were already handed to a push
+    // service, so the provisioner requires them even while a tenant gate keeps push closed.
+    WEB_PUSH_ENABLED: 'true',
+    WEB_PUSH_ENVIRONMENT: 'SANDBOX',
+    WEB_PUSH_APP_ID: 'padlhub-web',
+    WEB_PUSH_VAPID_SUBJECT: `mailto:ops@${host}`,
+    WEB_PUSH_VAPID_PUBLIC_KEY: syntheticVapidKeyPair.publicKey,
+    WEB_PUSH_VAPID_PRIVATE_KEY: syntheticVapidKeyPair.privateKey,
+    WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://fcm.googleapis.com',
+    NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: `{"v1":"${exact32ByteBase64Value('notification-endpoint-keyring')}"}`,
+    NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: 'v1',
   };
   const worker = {
     ...baseEnvironment('worker'),
@@ -173,6 +205,16 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     S3_BUCKET: 'synthetic-profile-photo-bucket',
     S3_ACCESS_KEY: 'synthetic-media-access-key',
     S3_SECRET_KEY: 'synthetic-media-secret-key',
+    // The worker signs the Web Push request, so it needs the same VAPID pair and keyring as the API.
+    WEB_PUSH_ENABLED: 'true',
+    WEB_PUSH_ENVIRONMENT: 'SANDBOX',
+    WEB_PUSH_APP_ID: 'padlhub-web',
+    WEB_PUSH_VAPID_SUBJECT: `mailto:ops@${host}`,
+    WEB_PUSH_VAPID_PUBLIC_KEY: syntheticVapidKeyPair.publicKey,
+    WEB_PUSH_VAPID_PRIVATE_KEY: syntheticVapidKeyPair.privateKey,
+    WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://fcm.googleapis.com',
+    NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: `{"v1":"${exact32ByteBase64Value('notification-endpoint-keyring')}"}`,
+    NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: 'v1',
   };
   const realtime = {
     ...baseEnvironment('realtime'),
