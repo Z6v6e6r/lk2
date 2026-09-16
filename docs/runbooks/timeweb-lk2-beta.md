@@ -194,10 +194,40 @@ service without containing credential values. API, worker, realtime, and migrato
 required env files. Worker receives no API/provider/signing key set; realtime receives no API
 access/refresh signing secret or provider credential. Initial write-capable flags remain disabled.
 
+The API and Worker runtime additionally carry the Web Push key set: `WEB_PUSH_ENABLED=true`,
+`WEB_PUSH_ENVIRONMENT`, `WEB_PUSH_APP_ID`, `WEB_PUSH_VAPID_SUBJECT`, `WEB_PUSH_VAPID_PUBLIC_KEY`,
+`WEB_PUSH_VAPID_PRIVATE_KEY`, `WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS`,
+`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS` and `NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID`. The VAPID pair and
+the endpoint-encryption keyring are required on every release even while push stays closed for a
+tenant, because a browser subscription that was already handed to a push service is bound to that
+exact pair and keyring; replacing them orphans every stored endpoint and needs an explicit rotation
+plan. `WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS` lists the public push services (`https://fcm.googleapis.com`
+for Chrome) and nothing else. Push stays closed per tenant through
+`notifications.tenant_runtime_settings.web_push_enabled` and an active `WEB_PUSH` provider account,
+so a release that carries the keys does not by itself deliver anything.
+
+`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS` is the only secret whose value is a JSON object, and the
+provisioner admits exactly one flat identifier-to-base64 object for that key while it keeps rejecting
+`$`, `#`, `'`, backslash and whitespace for every value. The value must start with `{` so Compose
+treats it as unquoted and preserves the inner quotes; the round trip is covered by tests.
+
 The default application model contains only web, API, and realtime. Worker is gated by profile
 `background`; migrator is gated by profile `migration`; neither is a dependency of a default
 service. Only ingress may bind host ports. Publication, deployment, Caddy activation, migration,
 worker activation, OAuth/provider changes, and any live write each require a later explicit gate.
+
+Web Push activation on this target is therefore three separately authorized transitions: install the
+release that carries the key set and the delivery code (`--compose-stage pull-api` then
+`--compose-stage up-api`, then `--compose-stage pull-worker` then `--compose-stage up-worker` under
+the worker activation gate), provision the secret input files with a freshly generated VAPID pair and
+keyring, and only then open the tenant. Opening the tenant means an active `WEB_PUSH` provider
+account followed by the `web_push_enabled` gate, both through the operator commands in
+[the chats and notifications runbook](chats-notifications-moderation.md); `in_app_enabled` stays
+independent. Verify with one user-granted browser subscription from `/notifications` and one
+delivered notification, then read `notifications.deliveries` and `delivery_receipts` for
+`SENT`/`PROVIDER_ACCEPTED`. Rollback order is the tenant gate first, the provider account second, and
+the release third; keep `WEB_PUSH_ENABLED=true` while already-created deliveries reach a terminal
+state.
 
 For the authorized public Yandex beta, the API runtime must additionally contain
 `VIVA_OAUTH_ALLOWED_PROVIDERS=yandex` and

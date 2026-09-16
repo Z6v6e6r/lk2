@@ -74,6 +74,38 @@ function installedReleaseId(targetDir: string): string {
 }
 
 describe('Timeweb beta runtime secret provisioner', () => {
+  it('keeps the flat JSON endpoint-encryption keyring byte-exact', () => {
+    const keyring = `{"v1":"${'A'.repeat(43)}","v2":"${'B'.repeat(43)}"}`;
+    const parsed = parseTimewebSecretEnvironment(
+      Buffer.from(`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS=${keyring}\n`, 'utf8'),
+    );
+    expect(parsed).toEqual({ NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: keyring });
+    expect(JSON.parse(parsed.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS!)).toEqual({
+      v1: 'A'.repeat(43),
+      v2: 'B'.repeat(43),
+    });
+  });
+
+  it.each([
+    ['an interpolation metacharacter inside the keyring', '{"v1":"a$b"}'],
+    ['a comment metacharacter inside the keyring', '{"v1":"a#b"}'],
+    ['a keyring that does not start with an object', '["v1"]'],
+    ['a nested keyring object', '{"v1":{"v2":"a"}}'],
+    ['a keyring with an unquoted key', '{v1:"a"}'],
+  ])('rejects %s', (_name, value) => {
+    expect(() =>
+      parseTimewebSecretEnvironment(
+        Buffer.from(`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS=${value}\n`, 'utf8'),
+      ),
+    ).toThrow('compose_metacharacter');
+  });
+
+  it('rejects a JSON object for a key outside the keyring allowlist', () => {
+    expect(() =>
+      parseTimewebSecretEnvironment(Buffer.from('JWT_ACCESS_SECRET={"v1":"a"}\n', 'utf8')),
+    ).toThrow('compose_metacharacter');
+  });
+
   it.each([
     ['VIVA_OAUTH_ALLOWED_PROVIDERS', undefined],
     ['VIVA_OAUTH_ALLOWED_PROVIDERS', 'vkid,yandex'],
