@@ -31,6 +31,7 @@ export interface LegacyPromotionSourceItem {
 export interface LegacyPromotionSourceSnapshot {
   readonly rotationEnabled: boolean;
   readonly repeatEveryCards?: number;
+  readonly intervalSeconds?: number;
   readonly items: readonly LegacyPromotionSourceItem[];
   readonly updatedAt?: string;
 }
@@ -46,6 +47,7 @@ export interface LegacyPromotionSourceMetric {
 export interface LegacyPromotionSourceOptions {
   readonly baseUrl: string;
   readonly placement?: LegacyPromotionPlacement;
+  readonly recommendationTimerEnabled?: boolean;
   readonly privateHttpHosts?: readonly string[];
   readonly timeoutMs: number;
   readonly maxAttempts: number;
@@ -105,6 +107,7 @@ function normalizeSnapshot(
   baseUrl: string,
   placement: LegacyPromotionPlacement,
   privateHttpHosts: readonly string[],
+  recommendationTimerEnabled: boolean,
 ): LegacyPromotionSourceSnapshot {
   if (!isRecord(payload) || payload.placement !== placement || !Array.isArray(payload.ads)) {
     throw new LegacyPromotionSourceError('PROMOTION_LEGACY_RESPONSE_INVALID');
@@ -150,11 +153,27 @@ function normalizeSnapshot(
         : {}),
     });
   }
+  if (
+    recommendationTimerEnabled &&
+    ['cabinet_for_me_strip', 'cabinet_for_me_card'].includes(placement) &&
+    payload.intervalSeconds !== undefined &&
+    (!Number.isInteger(payload.intervalSeconds) ||
+      Number(payload.intervalSeconds) < 3 ||
+      Number(payload.intervalSeconds) > 30)
+  ) {
+    throw new LegacyPromotionSourceError('PROMOTION_LEGACY_RESPONSE_INVALID');
+  }
   const updatedAt = stringValue(payload.updatedAt);
   return {
     rotationEnabled: payload.rotationEnabled === true,
     ...(['cabinet_for_me_strip', 'cabinet_for_me_card'].includes(placement)
       ? {
+          ...(recommendationTimerEnabled &&
+          Number.isInteger(payload.intervalSeconds) &&
+          Number(payload.intervalSeconds) >= 3 &&
+          Number(payload.intervalSeconds) <= 30
+            ? { intervalSeconds: Number(payload.intervalSeconds) }
+            : {}),
           repeatEveryCards:
             Number.isInteger(payload.repeatEveryCards) &&
             Number(payload.repeatEveryCards) >= 1 &&
@@ -264,6 +283,7 @@ export class LegacyPromotionSource {
           this.options.baseUrl,
           placement,
           this.options.privateHttpHosts ?? [],
+          this.options.recommendationTimerEnabled === true,
         );
         this.consecutiveFailures = 0;
         this.circuitOpenUntil = 0;

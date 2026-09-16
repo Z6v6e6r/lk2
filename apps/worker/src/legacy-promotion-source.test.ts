@@ -109,6 +109,7 @@ describe('legacy CUP promotion source', () => {
         placement: 'cabinet_for_me_card',
         rotationEnabled: false,
         repeatEveryCards: 5,
+        intervalSeconds: 9,
         ads: [
           {
             id: 'recommendation-ad-1',
@@ -126,6 +127,7 @@ describe('legacy CUP promotion source', () => {
     const source = new LegacyPromotionSource({
       baseUrl: 'https://padlhub.su',
       placement: 'cabinet_for_me_card',
+      recommendationTimerEnabled: true,
       timeoutMs: 1_000,
       maxAttempts: 1,
       circuitFailureThreshold: 3,
@@ -135,6 +137,7 @@ describe('legacy CUP promotion source', () => {
 
     await expect(source.getSnapshot('recommendation-card-source-test')).resolves.toMatchObject({
       repeatEveryCards: 5,
+      intervalSeconds: 9,
       items: [
         {
           title: 'Новая ракетка',
@@ -148,6 +151,52 @@ describe('legacy CUP promotion source', () => {
     const [request] = fetchImplementation.mock.calls[0] ?? [];
     expect(request).toEqual(new URL('https://padlhub.su/api/advertising/cabinet-for-me-card'));
   });
+
+  it.each(
+    [3, 30, undefined, 2, 31, 3.5, '6', null].flatMap((intervalSeconds) =>
+      [false, true].map((recommendationTimerEnabled) => ({
+        intervalSeconds,
+        recommendationTimerEnabled,
+      })),
+    ),
+  )(
+    'bounds the CUP timer only after activation: $intervalSeconds / $recommendationTimerEnabled',
+    async ({ intervalSeconds, recommendationTimerEnabled }) => {
+      const source = new LegacyPromotionSource({
+        baseUrl: 'https://padlhub.su',
+        placement: 'cabinet_for_me_strip',
+        recommendationTimerEnabled,
+        timeoutMs: 1000,
+        maxAttempts: 1,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 30000,
+        fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+          Response.json({
+            placement: 'cabinet_for_me_strip',
+            rotationEnabled: true,
+            intervalSeconds,
+            ads: [],
+          }),
+        ),
+      });
+      if (
+        recommendationTimerEnabled &&
+        intervalSeconds !== undefined &&
+        intervalSeconds !== 3 &&
+        intervalSeconds !== 30
+      ) {
+        await expect(source.getSnapshot('timer-test')).rejects.toMatchObject({
+          code: 'PROMOTION_LEGACY_RESPONSE_INVALID',
+        });
+        return;
+      }
+      const result = await source.getSnapshot('timer-test');
+      expect(result.rotationEnabled).toBe(true);
+      if (recommendationTimerEnabled && (intervalSeconds === 3 || intervalSeconds === 30))
+        expect(result.intervalSeconds).toBe(intervalSeconds);
+      else expect(result).not.toHaveProperty('intervalSeconds');
+    },
+  );
 
   it('accepts image URLs from an explicitly allowlisted private staging host', async () => {
     const source = new LegacyPromotionSource({

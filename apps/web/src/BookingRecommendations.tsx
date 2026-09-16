@@ -15,6 +15,7 @@ import { EventCalendarIcon, EventLevelIcon, EventLocationIcon } from './Activity
 import { CreateGameButtonIcon } from './CreateGameButtonIcon.js';
 import { GameCard } from './GameCard.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
+import { RecommendationAdvertisingCard } from './RecommendationAdvertisingCard.js';
 import { RecommendationGridCard } from './RecommendationGridCard.js';
 
 type RecommendationItem = BookingRecommendationPage['items'][number];
@@ -504,93 +505,6 @@ function recommendationAdvertisingInsertions(input: {
   });
 }
 
-function RecommendationAdvertisingCard({
-  item,
-  kind,
-  layout,
-  onEngagement,
-}: {
-  readonly item: RecommendationAdvertisingItem;
-  readonly kind: 'strip' | 'card';
-  readonly layout: RecommendationAdvertisingLayout;
-  readonly onEngagement?: (promotionId: string, kind: 'IMPRESSION' | 'CLICK') => unknown;
-}): React.JSX.Element {
-  const rootRef = useRef<HTMLElement>(null);
-  const impressionSentForId = useRef<string | null>(null);
-  const cardImageUrl =
-    layout === 'compact'
-      ? (item.squareImageUrl ?? item.mobileImageUrl ?? item.imageUrl)
-      : (item.horizontalImageUrl ?? item.imageUrl ?? item.mobileImageUrl);
-
-  useEffect(() => {
-    const element = rootRef.current;
-    if (!element || impressionSentForId.current === item.id || !onEngagement) return;
-    const recordImpression = (): void => {
-      if (impressionSentForId.current === item.id) return;
-      impressionSentForId.current = item.id;
-      void Promise.resolve(onEngagement(item.id, 'IMPRESSION')).catch(() => undefined);
-    };
-    if (typeof IntersectionObserver === 'undefined') {
-      recordImpression();
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= 0.5)) {
-          recordImpression();
-          observer.disconnect();
-        }
-      },
-      { threshold: 0.5 },
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [item.id, onEngagement]);
-
-  return (
-    <article
-      ref={rootRef}
-      className={`booking-recommendation-ad is-${kind} is-${layout}`}
-      data-recommendation-ad-kind={kind}
-    >
-      <a
-        href={item.route}
-        aria-label={`Реклама: ${item.title}`}
-        onClick={() => {
-          if (onEngagement) {
-            void Promise.resolve(onEngagement(item.id, 'CLICK')).catch(() => undefined);
-          }
-        }}
-      >
-        <picture aria-hidden="true">
-          {kind === 'strip' && item.mobileImageUrl ? (
-            <source media="(max-width: 480px)" srcSet={item.mobileImageUrl} />
-          ) : null}
-          {(kind === 'card' ? cardImageUrl : item.imageUrl) ? (
-            <img
-              src={kind === 'card' ? (cardImageUrl ?? undefined) : (item.imageUrl ?? undefined)}
-              alt=""
-            />
-          ) : null}
-        </picture>
-        {kind === 'card' ? (
-          <span className="booking-recommendation-ad__content">
-            {item.badgeText ? (
-              <span className="booking-recommendation-ad__badge">{item.badgeText}</span>
-            ) : null}
-            {layout === 'compact' ? null : <strong>{item.title}</strong>}
-            {item.footerText ? (
-              <span className="booking-recommendation-ad__footer">{item.footerText}</span>
-            ) : null}
-          </span>
-        ) : (
-          <strong className="booking-recommendation-ad__strip-title">{item.title}</strong>
-        )}
-      </a>
-    </article>
-  );
-}
-
 export function BookingRecommendations({
   page,
   compact = false,
@@ -713,7 +627,10 @@ export function BookingRecommendations({
             </section>
             {cardItem ? (
               <RecommendationAdvertisingCard
+                key={cardItem.id}
                 item={cardItem}
+                deck={recommendationCardAdvertising}
+                photoGrid={compactVisualVariant === 'photo-grid'}
                 kind="card"
                 layout={advertisingLayout}
                 {...(onAdvertisingEngagement ? { onEngagement: onAdvertisingEngagement } : {})}
@@ -721,7 +638,10 @@ export function BookingRecommendations({
             ) : null}
             {stripItem ? (
               <RecommendationAdvertisingCard
+                key={stripItem.id}
                 item={stripItem}
+                deck={recommendationStripAdvertising}
+                photoGrid={compactVisualVariant === 'photo-grid'}
                 kind="strip"
                 layout="compact"
                 {...(onAdvertisingEngagement ? { onEngagement: onAdvertisingEngagement } : {})}

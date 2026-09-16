@@ -561,6 +561,96 @@ describe('Home progressive navigation', () => {
     },
   );
 
+  it.each([false, true])(
+    'finds a date beyond the first page and supports retry: %s',
+    async (failOnce) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-07-17T12:00:00Z'));
+      const item: BookingRecommendationPage['items'][number] = {
+        kind: 'TRAINING',
+        reasons: [],
+        activity: {
+          id: '55555555-5555-4555-8555-555555555555',
+          kind: 'TRAINING',
+          title: 'Групповая тренировка уровень D',
+          startsAt: '2026-07-31T09:00:00Z',
+          endsAt: '2026-07-31T10:00:00Z',
+          timezone: 'Europe/Moscow',
+          station: {
+            id: '60000000-0000-4000-8000-000000000001',
+            name: 'Тестовая станция',
+            shortAddress: null,
+          },
+          levelRange: null,
+          capacity: { total: 4, open: 2 },
+          host: null,
+          route: '/trainings/test',
+        },
+      };
+      const page: BookingRecommendationPage = {
+        version: 'date-test',
+        generatedAt: '2026-07-17T12:00:00Z',
+        staleAt: '2026-07-17T12:05:00Z',
+        personalization: 'BASIC',
+        items: [],
+        nextCursor: null,
+      };
+      let failed = false;
+      const loader = vi.fn((input?: { phase?: string; cursor?: string }) => {
+        if (input?.cursor) {
+          if (failOnce && !failed) {
+            failed = true;
+            return Promise.reject(new Error('test read failure'));
+          }
+          return Promise.resolve({ ...page, items: [item] });
+        }
+        return Promise.resolve(
+          input?.phase === 'EXPANDED' ? { ...page, nextCursor: 'next-date-page' } : page,
+        );
+      });
+      render(
+        <HomeDashboardPage
+          {...independentSectionProps}
+          dashboard={homeBase}
+          tenantName="ПадлХАБ"
+          layoutVariant="v3"
+          notificationUnreadCount={0}
+          logoutBusy={false}
+          onLogout={vi.fn()}
+          loadBookingRecommendations={loader}
+        />,
+      );
+      const calendar = within(screen.getByLabelText('Фильтр рекомендаций по дате'));
+      expect(calendar.getAllByRole('button')).toHaveLength(16);
+      const lastDay = calendar.getByRole('button', { name: /пятница, 31 июля/i });
+      fireEvent.click(lastDay);
+      expect(
+        screen.getByRole('status', { name: 'Загружаем события на выбранную дату' }),
+      ).toHaveClass('fh-for-me-loader--pulse');
+      if (failOnce) {
+        await screen.findByRole('button', { name: 'Повторить поиск' });
+        expect(loader.mock.calls.filter(([input]) => input?.cursor)).toHaveLength(1);
+        fireEvent.click(screen.getByRole('button', { name: 'Повторить поиск' }));
+      }
+      await screen.findByRole('link', { name: 'Групповая тренировка D' });
+      expect(
+        screen.queryByRole('status', { name: 'Загружаем события на выбранную дату' }),
+      ).not.toBeInTheDocument();
+      expect(loader).toHaveBeenCalledWith({ limit: 12, cursor: 'next-date-page' });
+      expect(lastDay).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.click(calendar.getByRole('button', { name: /суббота, 18 июля/i }));
+      expect(
+        screen.queryByRole('link', { name: 'Групповая тренировка D' }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText('На выбранную дату подходящих событий нет.')).toBeInTheDocument();
+      fireEvent.click(calendar.getByRole('button', { name: /суббота, 18 июля/i }));
+      expect(calendar.getByRole('button', { name: 'Все даты' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+    },
+  );
+
   it('marks the third Home variant and requests its first 14 recommendations', async () => {
     const loadBookingRecommendations = vi.fn().mockResolvedValue({
       version: 'a'.repeat(64),

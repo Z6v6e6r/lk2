@@ -296,6 +296,29 @@ and publishes the strict `promotion` component independently of Viva. `rotationE
 fixes the first active hero/standard item; `true` rotates only when at least two items exist. A
 failed source or media refresh leaves the last valid Home component in place.
 
+Recommendation blocks 3/4 also accept optional `rotationEnabled` and `intervalSeconds` (integer
+3–30) from CUP. `repeatEveryCards` remains the insertion frequency; the timer is independent.
+The worker disables rotation with fewer than two creatives and uses
+`PROMOTION_ROTATION_INTERVAL_SECONDS` (default 6) for an absent legacy interval. A present invalid interval rejects the source snapshot with
+`PROMOTION_LEGACY_RESPONSE_INVALID` and retains the last valid Home component.
+Old snapshots without timer fields remain valid and do not autoplay. The web carousel pauses
+while offscreen, document-hidden, hovered or focused, respects reduced motion, and offers slide
+selection and a persistent pause control. An empty active-items list hides its placement.
+Each newly visible creative exposure emits an impression; duplicate observer callbacks do not.
+These fields define the integration extension expected from the legacy CUP endpoints; the legacy advertising editor is not
+implemented in `apps/cup-admin` and its controls must expose these fields at the source.
+
+Compatibility: previous strict readers reject the new timer keys. The worker flag
+`PROMOTIONS_RECOMMENDATION_TIMER_PAYLOAD_ENABLED=false` (default) ignores timer input and omits both keys, even when CUP
+supplies them, so a mixed-version worker fleet continues publishing the old shape. The promotions
+owner may enable this rollout gate only after all API and worker/projector readers are upgraded,
+old consumer processes are drained, and the external CUP editor's persisted API shape is verified.
+Review removal of the gate after the rollback window closes. Local contract tests cover old-reader
+acceptance with the gate off and rejection with it on; a real fleet rollout is not rehearsed here. Rollback must retain compatible
+readers until extended promotion components and derived Home snapshots have been regenerated in
+the old shape; merely rolling back the binary is unsafe. This is a release requirement, not an
+instruction to mutate existing snapshots during local development.
+
 Legacy advertising image URLs remain integration-only. For every active card the worker downloads
 an HTTPS-allowlisted, byte/pixel-bounded source and creates metadata-free WebP derivatives: a
 desktop image bounded to 1600×900 and an exact 750×480 mobile crop by default. Both objects are

@@ -335,7 +335,7 @@ describe('Home layout scroll contract', () => {
     expect(bodyRule).toMatch(/flex:\s*1\s*;/);
     expect(titleRule).toMatch(/-webkit-line-clamp:\s*2\s*;/);
     expect(titleRule).not.toMatch(/min-height\s*:/);
-    expect(titleRule).toMatch(/line-height:\s*1\.24\s*;/);
+    expect(titleRule).toMatch(/line-height:\s*1\s*;/);
     expect(titleRule).not.toMatch(/flex-shrink\s*:/);
     expect(socialRule).toMatch(/margin-top:\s*0\s*;/);
     expect(socialAvatarRule).toMatch(/order:\s*0\s*;/);

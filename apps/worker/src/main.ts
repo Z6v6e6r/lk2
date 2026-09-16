@@ -227,6 +227,7 @@ const promotionSources = (() => {
     new LegacyPromotionSource({
       baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
       placement,
+      recommendationTimerEnabled: config.PROMOTIONS_RECOMMENDATION_TIMER_PAYLOAD_ENABLED,
       privateHttpHosts: config.PROMOTION_IMAGE_PRIVATE_HTTP_HOSTS.split(',')
         .map((host) => host.trim())
         .filter(Boolean),

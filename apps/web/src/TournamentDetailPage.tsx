@@ -1,3 +1,4 @@
+import { MoreIcon } from './MoreIcon.js';
 import { useEffect, useMemo, useState } from 'react';
 
 import { EventCalendarIcon, EventLevelIcon, EventLocationIcon } from './ActivityCardIcons.js';
@@ -47,16 +48,6 @@ function BackIcon(): React.JSX.Element {
         strokeLinejoin="round"
         strokeWidth="2.4"
       />
-    </svg>
-  );
-}
-
-function MoreIcon(): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="5" cy="12" r="1.7" fill="currentColor" />
-      <circle cx="12" cy="12" r="1.7" fill="currentColor" />
-      <circle cx="19" cy="12" r="1.7" fill="currentColor" />
     </svg>
   );
 }
