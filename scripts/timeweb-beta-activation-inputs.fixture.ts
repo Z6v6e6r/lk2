@@ -150,6 +150,13 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: tenantKey,
     HOME_PROJECTION_TTL_SECONDS: '900',
     HOME_PROJECTION_MAX_STALE_SECONDS: '900',
+    // A full synchronization pass over the tenant must stay well inside the freshness window: with the
+    // default twenty users per two minutes a pass took about eighteen minutes, so a user's section was
+    // rewritten just before its source advanced and expired before the next visit.
+    HOME_BASE_SYNC_INTERVAL_MS: '60000',
+    HOME_BASE_SYNC_BATCH_SIZE: '40',
+    PROMOTIONS_SYNC_INTERVAL_MS: '60000',
+    PROMOTIONS_SYNC_BATCH_SIZE: '40',
     // The Worker's profile-photo maintenance is a required-true flag, so its config insists on the
     // same media-storage binding the API carries.
     S3_ENDPOINT: 'https://s3.twcstorage.ru',
