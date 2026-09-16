@@ -20890,7 +20890,7 @@ var communityLogoUrlSchema = external_exports.string().max(2048).refine((value) 
 // ../../packages/communities/src/legacy-community-read-repository.ts
 init_esm_shims();
 var MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-var MAX_RANK_RESPONSE_BYTES = 512 * 1024;
+var MAX_RANK_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 // ../../packages/communities/src/community-read-experience.ts
 init_esm_shims();
