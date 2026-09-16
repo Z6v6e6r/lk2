@@ -119,6 +119,11 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // The Viva End User profile read is the only operation certified for the direct browser
     // transport, so the web client fetches the profile from Viva itself.
     VIVA_DIRECT_READ_ENABLED: 'true',
+    // The activity-history game backfill reads the production CUP Mongo store (`games.lk_games`).
+    ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: 'true',
+    LEGACY_GAMES_MONGODB_URI: 'mongodb://synthetic-mongo.invalid:27017/?authSource=admin',
+    LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'mongo',
+    LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: tenantKey,
     // The OAuth login reads the provider profile once and stores the phone that keys viewer-scoped
     // legacy reads in integration custody; the phone never becomes a PadlHub login key.
     CUP_IDENTITY_PROFILE_LINK_ENABLED: 'true',
@@ -146,8 +151,9 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // read flag, and the worker keeps commands disabled, so its lifecycle process manager stays off.
     GAMES_READ_ENABLED: 'true',
     LEGACY_GAMES_ROSTER_SYNC_ENABLED: 'true',
-    LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'public',
+    LEGACY_GAMES_ROSTER_SYNC_SOURCE: 'mongo',
     LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: tenantKey,
+    LEGACY_GAMES_MONGODB_URI: 'mongodb://synthetic-mongo.invalid:27017/?authSource=admin',
     HOME_PROJECTION_TTL_SECONDS: '900',
     HOME_PROJECTION_MAX_STALE_SECONDS: '900',
     // A full synchronization pass over the tenant must stay well inside the freshness window: with the
