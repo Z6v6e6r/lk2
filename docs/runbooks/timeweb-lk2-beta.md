@@ -463,6 +463,62 @@ select count(*), max(last_synced_at)
 A viewer whose legacy communities still read `UNAVAILABLE` either has no linked phone yet or owns no
 delegation, because the legacy read path needs both.
 
+## Legacy roster quarantine on this contour
+
+The beta worker reads the CUP Mongo mirror (`LEGACY_GAMES_ROSTER_SYNC_SOURCE=mongo`) and mirrors a
+roster only when its recorded mirror revision still matches. A game that was imported before this
+contour and whose source has since moved on is never taken over silently: the worker records
+`LEGACY_GAME_ROSTER_BASELINE_MISMATCH` in `integration.legacy_game_roster_sync_state` and leaves the
+game quarantined, as `docs/runbooks/games-legacy-server-migration.md` requires.
+
+Live state on 2026-09-16 after the activity-history release:
+
+| Mode       | Rows | Meaning                                                               |
+| ---------- | ---- | --------------------------------------------------------------------- |
+| `MIRROR`   | 62   | the worker owns and refreshes the roster                              |
+| `CONFLICT` | 139  | quarantined; every one carries `LEGACY_GAME_ROSTER_BASELINE_MISMATCH` |
+
+Classify the quarantined games before proposing any repair:
+
+```sql
+with c as (
+  select s.tenant_id, s.game_id, s.source_external_version,
+         (select m.external_version from integration.external_entity_map m
+           where m.tenant_id = s.tenant_id and m.external_system = 'LK_LEGACY_SNAPSHOT'
+             and m.entity_type = 'game' and m.internal_id = s.game_id
+           order by m.last_synced_at desc nulls last limit 1) as mapping_version
+    from integration.legacy_game_roster_sync_state s
+   where s.mode <> 'MIRROR'
+), p as (
+  select c.game_id,
+         count(pt.id) as active_participants,
+         count(*) filter (where player.internal_id is null) as unmapped_participants
+    from c
+    join games.participations pt
+      on pt.tenant_id = c.tenant_id and pt.game_id = c.game_id and pt.state = 'ACTIVE'
+    left join integration.external_entity_map player
+      on player.tenant_id = pt.tenant_id and player.external_system = 'LK_LEGACY_SNAPSHOT'
+     and player.entity_type = 'game_player' and player.internal_id = pt.user_id
+   group by 1
+)
+select count(*) as conflict_games,
+       count(*) filter (where p.unmapped_participants > 0) as with_unmapped_participant,
+       count(*) filter (where coalesce(p.unmapped_participants,0) = 0
+                          and c.mapping_version = c.source_external_version) as mapped_same_version,
+       count(*) filter (where coalesce(p.unmapped_participants,0) = 0
+                          and c.mapping_version is distinct from c.source_external_version)
+         as mapped_version_drift
+  from c left join p on p.game_id = c.game_id;
+```
+
+On 2026-09-16 that returned `139 | 0 | 103 | 36`: no game is quarantined because of an unmapped
+participant, 103 have a matching import provenance and a genuinely different source roster, and 36
+were imported from an older source revision. Both groups are real drift, so taking ownership would
+change who is on a roster that local users may already have paid for. There is no rebaseline or
+"adopt source roster" operator path in the codebase, and none may be improvised against live data:
+an audited repair needs an explicit product decision about the local participation, and it is a
+roster mutation gate of its own.
+
 ## Operator dependencies
 
 PostgreSQL, Redis, RabbitMQ and ClamAV run as operator-managed containers on the external
