@@ -5,9 +5,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   WEB_PUSH_DELIVERY_LEASE_SECONDS,
+  WEB_PUSH_PAYLOAD_MAX_BYTES,
+  buildWebPushNotification,
   resolveNotificationIntentState,
   runWebPushDeliveryBatch,
   webPushRetryDelayMs,
+  type WebPushNotificationPayload,
 } from './web-push-delivery.js';
 
 function result(rows: readonly unknown[] = [], rowCount = rows.length): QueryResult<never> {
@@ -77,6 +80,8 @@ describe('Web Push delivery state machine', () => {
               address_ciphertext: Buffer.from('retained-ciphertext'),
               encryption_key_id: 'v1',
               notification_id: '66666666-6666-4666-8666-666666666666',
+              rendered_title: 'Запись отменена',
+              rendered_body: 'Теннис: 12 сентября 19:00, Корт 3',
               deep_link: null,
               attempt_count: 0,
             },
@@ -144,6 +149,8 @@ describe('Web Push delivery state machine', () => {
               address_ciphertext: Buffer.from('ciphertext'),
               encryption_key_id: 'test-key',
               notification_id: '66666666-6666-4666-8666-666666666666',
+              rendered_title: 'Запись подтверждена',
+              rendered_body: 'Теннис: 12 сентября 19:00, Корт 3',
               deep_link: null,
               attempt_count: 4,
             },
@@ -247,6 +254,8 @@ describe('Web Push delivery state machine', () => {
               address_ciphertext: Buffer.from(`ciphertext-${index}`),
               encryption_key_id: 'test-key',
               notification_id: `66666666-6666-4666-8666-66666666666${index}`,
+              rendered_title: `Запись ${index}`,
+              rendered_body: `Теннис: 12 сентября 19:0${index}, Корт 3`,
               deep_link: null,
               attempt_count: 0,
             })),
@@ -357,5 +366,100 @@ describe('Web Push delivery state machine', () => {
         errorCode: 'NOTIFICATION_PROVIDER_MESSAGE_LINK_CONFLICT',
       }),
     );
+  });
+});
+
+describe('Web Push notification payload', () => {
+  const notificationId = '66666666-6666-4666-8666-666666666666';
+
+  function payloadSize(payload: WebPushNotificationPayload): number {
+    return Buffer.byteLength(
+      JSON.stringify({
+        notificationId: payload.id,
+        title: payload.title,
+        preview: payload.preview,
+        ...(payload.deepLink ? { deepLink: payload.deepLink } : {}),
+      }),
+      'utf8',
+    );
+  }
+
+  it('carries the rendered intent snapshot instead of a generic placeholder', () => {
+    expect(
+      buildWebPushNotification({
+        id: notificationId,
+        title: 'Запись подтверждена',
+        body: 'Теннис: 12 сентября 19:00, Корт 3',
+        deepLink: '/bookings',
+      }),
+    ).toEqual({
+      id: notificationId,
+      title: 'Запись подтверждена',
+      preview: 'Теннис: 12 сентября 19:00, Корт 3',
+      deepLink: '/bookings',
+    });
+  });
+
+  it('collapses rendered line breaks and falls back to the title for a blank body', () => {
+    expect(
+      buildWebPushNotification({
+        id: notificationId,
+        title: 'Напоминание о записи',
+        body: '  Теннис:  12 сентября\n19:00, Корт 3  ',
+        deepLink: '/bookings',
+      }).preview,
+    ).toBe('Теннис: 12 сентября 19:00, Корт 3');
+    expect(
+      buildWebPushNotification({
+        id: notificationId,
+        title: 'Напоминание о записи',
+        body: '   ',
+        deepLink: null,
+      }).preview,
+    ).toBe('Напоминание о записи');
+  });
+
+  it('keeps the transport payload inside the Web Push byte budget for a maximum snapshot', () => {
+    const payload = buildWebPushNotification({
+      id: notificationId,
+      title: 'З'.repeat(300),
+      body: 'Я'.repeat(8_000),
+      deepLink: '/games/10000000-0000-4000-8000-000000000001',
+    });
+
+    expect(payload.id).toBe(notificationId);
+    expect(payload.deepLink).toBe('/games/10000000-0000-4000-8000-000000000001');
+    expect(payload.title).toBe('З'.repeat(300));
+    expect(payload.preview.length).toBeGreaterThan(0);
+    expect(payload.preview.length).toBeLessThan(8_000);
+    expect(payload.preview.startsWith('Я')).toBe(true);
+    expect(payloadSize(payload)).toBeLessThanOrEqual(WEB_PUSH_PAYLOAD_MAX_BYTES);
+  });
+
+  it('drops an unfittable deep link instead of truncating the route', () => {
+    const pathologicalRoute = `/${'о'.repeat(2_000)}`;
+    const payload = buildWebPushNotification({
+      id: notificationId,
+      title: 'Запись изменена',
+      body: 'Теннис: 12 сентября 19:00, Корт 3',
+      deepLink: pathologicalRoute,
+    });
+
+    expect(payload.deepLink).toBeUndefined();
+    expect(payload.title).toBe('Запись изменена');
+    expect(payload.preview).toBe('Теннис: 12 сентября 19:00, Корт 3');
+    expect(payloadSize(payload)).toBeLessThanOrEqual(WEB_PUSH_PAYLOAD_MAX_BYTES);
+  });
+
+  it('never returns a payload above the budget that web-push would reject', () => {
+    const payload = buildWebPushNotification({
+      id: notificationId,
+      title: 'З'.repeat(300),
+      body: 'Я'.repeat(8_000),
+      deepLink: `/${'о'.repeat(2_000)}`,
+    });
+
+    expect(payloadSize(payload)).toBeLessThanOrEqual(WEB_PUSH_PAYLOAD_MAX_BYTES);
+    expect(payload.title.length).toBeGreaterThan(0);
   });
 });

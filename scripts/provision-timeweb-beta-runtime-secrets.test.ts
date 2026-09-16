@@ -74,6 +74,53 @@ function installedReleaseId(targetDir: string): string {
 }
 
 describe('Timeweb beta runtime secret provisioner', () => {
+  it('keeps the flat JSON endpoint-encryption keyring byte-exact', () => {
+    const first = Buffer.alloc(32, 1).toString('base64');
+    const second = Buffer.alloc(32, 2).toString('base64');
+    const keyring = `{"v1":"${first}","v2":"${second}"}`;
+    const parsed = parseTimewebSecretEnvironment(
+      Buffer.from(`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS=${keyring}\n`, 'utf8'),
+    );
+    expect(parsed).toEqual({ NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: keyring });
+    expect(JSON.parse(parsed.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS!)).toEqual({
+      v1: first,
+      v2: second,
+    });
+  });
+
+  it.each([
+    ['an interpolation metacharacter inside the keyring', '{"v1":"a$b"}'],
+    ['a comment metacharacter inside the keyring', '{"v1":"a#b"}'],
+    ['a keyring that does not start with an object', '["v1"]'],
+    ['a nested keyring object', '{"v1":{"v2":"a"}}'],
+    ['a keyring with an unquoted key', '{v1:"a"}'],
+  ])('rejects %s', (_name, value) => {
+    expect(() =>
+      parseTimewebSecretEnvironment(
+        Buffer.from(`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS=${value}\n`, 'utf8'),
+      ),
+    ).toThrow('compose_metacharacter');
+  });
+
+  it('rejects a JSON object for a key outside the keyring allowlist', () => {
+    expect(() =>
+      parseTimewebSecretEnvironment(Buffer.from('JWT_ACCESS_SECRET={"v1":"a"}\n', 'utf8')),
+    ).toThrow('compose_metacharacter');
+  });
+
+  it.each([
+    ['a base64url entry', '{"v1":"-base64url_value_with_dash_and_underscore-"}'],
+    ['a short entry', `{"v1":"${Buffer.alloc(16, 7).toString('base64')}"}`],
+    ['a long entry', `{"v1":"${Buffer.alloc(64, 7).toString('base64')}"}`],
+    ['a non-canonical entry', `{"v1":"${Buffer.alloc(32, 7).toString('base64')}x"}`],
+  ])('rejects a keyring with %s that the runtime would refuse to load', (_name, value) => {
+    expect(() =>
+      parseTimewebSecretEnvironment(
+        Buffer.from(`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS=${value}\n`, 'utf8'),
+      ),
+    ).toThrow('endpoint_keyring_entry_invalid');
+  });
+
   it.each([
     ['VIVA_OAUTH_ALLOWED_PROVIDERS', undefined],
     ['VIVA_OAUTH_ALLOWED_PROVIDERS', 'vkid,yandex'],

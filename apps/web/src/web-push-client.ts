@@ -83,16 +83,32 @@ export async function getWebPushBrowserState(
   return (await registration.pushManager.getSubscription()) ? 'subscribed' : 'ready';
 }
 
+async function activatedRegistration(
+  registration: ServiceWorkerRegistration,
+): Promise<ServiceWorkerRegistration> {
+  if (registration.active) return registration;
+  // `register()` resolves while the very first script is still installing. `PushManager.subscribe`
+  // requires an activated worker, so wait for the pending worker instead of losing the user's tap.
+  const pending = registration.installing ?? registration.waiting;
+  if (!pending) return registration;
+  await navigator.serviceWorker.ready;
+  return registration;
+}
+
 export async function enableWebPush(input: {
   readonly gateway: AuthGateway;
   readonly publicKey: string;
   readonly serviceWorkerUrl: string;
 }): Promise<void> {
   if (!webPushSupported()) throw new Error('WEB_PUSH_UNSUPPORTED');
+  // The same-origin service worker contract is checked before the browser permission prompt so a
+  // misconfigured URL cannot consume the one-time user decision.
+  const scriptUrl = serviceWorkerScriptUrl(input.serviceWorkerUrl);
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') throw new Error('WEB_PUSH_PERMISSION_DENIED');
-  const scriptUrl = serviceWorkerScriptUrl(input.serviceWorkerUrl);
-  const registration = await navigator.serviceWorker.register(scriptUrl.pathname, { scope: '/' });
+  const registration = await activatedRegistration(
+    await navigator.serviceWorker.register(scriptUrl.pathname, { scope: '/' }),
+  );
   const existing = await registration.pushManager.getSubscription();
   const subscription =
     existing ??

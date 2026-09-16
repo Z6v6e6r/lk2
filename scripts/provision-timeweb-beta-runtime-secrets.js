@@ -166,6 +166,39 @@ function decodeUtf8(bytes) {
   }
 }
 
+// A JSON-object secret cannot be written without double quotes, and Compose keeps the inner quotes
+// of a value that starts with `{` byte-exact. A value that starts with a quote would lose it and
+// `$`/`#` stay reinterpreted, so the exception is limited to one flat identifier-to-key object for
+// the endpoint-encryption keyring; every other metacharacter stays rejected for every key.
+const JSON_OBJECT_SECRET_KEYS = new Set(['NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS']);
+const JSON_OBJECT_SECRET_VALUE =
+  /^\{(?:"[A-Za-z0-9._-]{1,64}":"[A-Za-z0-9+/=_-]{1,512}")(?:,"[A-Za-z0-9._-]{1,64}":"[A-Za-z0-9+/=_-]{1,512}")*\}$/u;
+
+// The runtime decrypts every stored push endpoint with this keyring, so a value that only looks like
+// base64 would surface as a start-up or first-send failure long after provisioning. The same
+// canonical 32-byte rule the runtime applies is enforced here instead.
+function assertEndpointKeyringEntries(value) {
+  const entries = JSON.parse(value);
+  for (const entry of Object.values(entries)) {
+    const decoded = Buffer.from(entry, 'base64');
+    if (
+      decoded.length !== 32 ||
+      decoded.toString('base64').replace(/=+$/u, '') !== entry.replace(/=+$/u, '')
+    ) {
+      fail('endpoint_keyring_entry_invalid');
+    }
+  }
+}
+
+export function assertComposableSecretValue(key, value) {
+  if (/[#$'\\\s]/u.test(value)) fail('compose_metacharacter');
+  if (!value.includes('"')) return;
+  if (!JSON_OBJECT_SECRET_KEYS.has(key) || !JSON_OBJECT_SECRET_VALUE.test(value)) {
+    fail('compose_metacharacter');
+  }
+  assertEndpointKeyringEntries(value);
+}
+
 export function parseTimewebSecretEnvironment(bytes) {
   const contents = Buffer.isBuffer(bytes) ? decodeUtf8(bytes) : bytes;
   if (typeof contents !== 'string') fail('invalid_encoding');
@@ -181,7 +214,7 @@ export function parseTimewebSecretEnvironment(bytes) {
     if (Object.hasOwn(values, key)) fail('duplicate_key');
     if (value.includes('\0') || value.includes('\n') || value.includes('\r'))
       fail('forbidden_newline');
-    if (/[#$'"\\\s]/u.test(value)) fail('compose_metacharacter');
+    assertComposableSecretValue(key, value);
     values[key] = value;
   }
   return values;

@@ -6,6 +6,8 @@ export type TimewebRuntimeEnvironment = Record<string, string>;
 
 export function parseTimewebSecretEnvironment(bytes: Buffer | string): TimewebRuntimeEnvironment;
 
+export function assertComposableSecretValue(key: string, value: string): void;
+
 export function validateTimewebRuntimeEnvironments(
   environments: Record<'api' | 'worker' | 'realtime' | 'migrator', TimewebRuntimeEnvironment>,
   identity: { host: string; tenantKey: string },
