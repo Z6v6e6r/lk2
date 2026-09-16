@@ -266,6 +266,14 @@ export interface LegacyViewerIdentityLink {
     readonly correlationId: string;
     readonly providerTenantKey: string;
   }) => Promise<string | undefined>;
+  /**
+   * Exchanges the stored delegation refresh token for an access token. The end-user CRM API is
+   * certified for delegation tokens, so this is the fallback when the login token is not accepted.
+   */
+  readonly refreshDelegation?: (input: {
+    readonly refreshToken: string;
+    readonly correlationId: string;
+  }) => Promise<{ readonly accessToken: string }>;
   /** Returns the phone already linked to this account, so a repeat login skips the provider read. */
   readonly readLinkedPhone: (input: {
     readonly tenantId: string;
@@ -563,6 +571,7 @@ export class AuthService {
     readonly tenantId: string;
     readonly userId: string;
     readonly accessToken: string;
+    readonly refreshToken?: string;
     readonly correlationId: string;
     readonly providerTenantKey: string;
   }): Promise<void> {
@@ -574,11 +583,37 @@ export class AuthService {
         userId: input.userId,
       });
       if (existing) return;
-      const phoneE164 = await link.readViewerPhone({
-        accessToken: input.accessToken,
-        correlationId: input.correlationId,
-        providerTenantKey: input.providerTenantKey,
-      });
+      const readWith = (accessToken: string) =>
+        link.readViewerPhone({
+          accessToken,
+          correlationId: input.correlationId,
+          providerTenantKey: input.providerTenantKey,
+        });
+      let phoneE164: string | undefined;
+      let unavailable = false;
+      try {
+        phoneE164 = await readWith(input.accessToken);
+      } catch {
+        unavailable = true;
+      }
+      if (unavailable && input.refreshToken && link.refreshDelegation) {
+        // The login token may carry an audience the end-user CRM API rejects. The delegation stored by
+        // this very login is the certified credential, so retry through it before giving up.
+        try {
+          const refreshed = await link.refreshDelegation({
+            refreshToken: input.refreshToken,
+            correlationId: input.correlationId,
+          });
+          phoneE164 = await readWith(refreshed.accessToken);
+          unavailable = false;
+        } catch {
+          unavailable = true;
+        }
+      }
+      if (!phoneE164) {
+        link.onOutcome?.(unavailable ? 'unavailable' : 'absent');
+        return;
+      }
       const outcome = await link.linkPhone({
         tenantId: input.tenantId,
         userId: input.userId,
@@ -720,6 +755,7 @@ export class AuthService {
       tenantId: binding.tenantId,
       userId: user.id,
       accessToken: result.accessToken,
+      ...(result.refreshToken ? { refreshToken: result.refreshToken } : {}),
       correlationId: input.correlationId,
       providerTenantKey: binding.providerTenantKey,
     });
