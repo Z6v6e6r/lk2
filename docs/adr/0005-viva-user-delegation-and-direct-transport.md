@@ -148,11 +148,14 @@ authoritative removal observation: the browser immediately stops rendering the s
 sends an idempotent, tenant/user/session-bound tombstone command using the one-time media grant.
 PadlHub atomically clears the profile summary and delivery mapping, advances the observation
 watermark, audits the command and queues the former immutable object for bounded garbage collection.
-The browser obtains a fresh media grant before the direct profile observation. Tombstones and
-uploads are ordered by that signed grant's issuance epoch, not by API receipt time, so a delayed
-older null observation cannot erase a mapping produced under a newer grant. If the tombstone is
-rejected as stale, the browser performs at most one bounded fresh-grant plus fresh-provider-read
-attempt and never attaches a new grant to the old null result. Once a tombstone is accepted, every
+The browser obtains a fresh media grant before the direct profile observation. A grant authorizes
+exactly one tombstone or upload command: the browser discards the grant and its command key as soon
+as the command may have reached PadlHub, so a retry obtains a new grant instead of replaying a
+consumed one under changed image bytes. Tombstones and uploads are ordered by that signed grant's
+issuance epoch, not by API receipt time, so a delayed older null observation cannot erase a mapping
+produced under a newer grant. If the tombstone is rejected as stale, the browser performs at most
+one bounded fresh-grant plus fresh-provider-read attempt and never attaches a new grant to the old
+null result. Once a tombstone is accepted, every
 upload grant issued before its signed epoch is stale and cannot resurrect the deleted mapping.
 The former delivery URL therefore returns `404` after commit. An omitted or invalid Viva photo field
 is treated as unavailable metadata, not as removal; it may preserve a fresh in-memory mapping but a
