@@ -57,6 +57,10 @@ function checksum(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+function sectionStaleAt(section: HomeBase['communities'] | HomeBase['promotions']): string | null {
+  return section.status === 'UNAVAILABLE' ? null : section.staleAt;
+}
+
 function projectionContent(value: HomeBase): unknown {
   return {
     viewerUserId: value.viewerUserId,
@@ -315,11 +319,19 @@ export async function projectHomeBaseUser(input: {
         : {}),
     });
     const currentPayload = homeBaseSchema.safeParse(currentProjection?.payload);
-    if (
-      currentProjection &&
+    const contentUnchanged =
+      currentProjection !== undefined &&
       currentPayload.success &&
-      checksum(projectionContent(currentPayload.data)) === checksum(projectionContent(homeBase))
-    ) {
+      checksum(projectionContent(currentPayload.data)) === checksum(projectionContent(homeBase));
+    // Freshness is served, not just stored: `normalizeHomeBaseFreshness` ages a section out to
+    // UNAVAILABLE once `staleAt + HOME_PROJECTION_MAX_STALE_SECONDS` has passed. A re-verified source
+    // whose content is byte-identical must therefore still advance the section timestamps, otherwise a
+    // freshly synchronized section is hidden while its source is up to date.
+    const freshnessUnchanged =
+      currentPayload.success &&
+      sectionStaleAt(currentPayload.data.communities) === sectionStaleAt(homeBase.communities) &&
+      sectionStaleAt(currentPayload.data.promotions) === sectionStaleAt(homeBase.promotions);
+    if (contentUnchanged && freshnessUnchanged) {
       await client.query(
         `update home.base_snapshots
             set checked_at = $3
