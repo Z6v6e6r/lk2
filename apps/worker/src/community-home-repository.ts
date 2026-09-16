@@ -79,16 +79,26 @@ export function listDueCommunityHomeUsers(input: {
         where u.tenant_id = $1
           and u.status = 'ACTIVE'
           and (source.last_synced_at is null or source.last_synced_at < $2)
-          and exists (
-            select 1
-              from integration.user_delegations delegation
-             where delegation.tenant_id = u.tenant_id
-               and delegation.user_id = u.id
-               and delegation.provider = 'VIVA'
-               and delegation.revoked_at is null
-               and (delegation.refresh_expires_at is null or delegation.refresh_expires_at > now())
-          )
-        order by source.last_synced_at asc nulls first, u.id
+        -- A live Viva delegation only prioritizes the pass. It must not gate it: a viewer whose
+        -- account is linked by provider phone still owns a community projection, and filtering it out
+        -- here would leave that section permanently unavailable.
+        order by case
+                   when exists (
+                     select 1
+                       from integration.user_delegations delegation
+                      where delegation.tenant_id = u.tenant_id
+                        and delegation.user_id = u.id
+                        and delegation.provider = 'VIVA'
+                        and delegation.revoked_at is null
+                        and (
+                          delegation.refresh_expires_at is null
+                          or delegation.refresh_expires_at > now()
+                        )
+                   ) then 0
+                   else 1
+                 end,
+                 source.last_synced_at asc nulls first,
+                 u.id
         limit $3`,
       [input.tenantId, input.dueBefore, input.limit],
     );

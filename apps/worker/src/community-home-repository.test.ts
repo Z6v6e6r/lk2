@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   deleteCommunityLogoObjectIfSafe,
+  listDueCommunityHomeUsers,
   listDueCommunityLogoObjects,
   persistCommunityHomeSource,
   reserveCommunityLogoObjectUpload,
@@ -930,5 +931,27 @@ describe('community Home source persistence', () => {
     });
 
     expect(deliveryUpdated).toBe(false);
+  });
+  it('selects due viewers without requiring a Viva delegation, only prioritizing one', async () => {
+    // A provider-phone linked account without an OAuth delegation must still receive its community
+    // projection, so the delegation can only influence the order of the pass.
+    const { pool, query } = poolWithQueries((text, values) => {
+      expect(values).toEqual([tenantId, new Date('2026-09-16T10:00:00.000Z'), 40]);
+      expect(text).toContain('order by case');
+      expect(text).not.toContain('and exists (');
+      return {
+        rows: [{ user_id: userId }, { user_id: '11111111-1111-4111-8111-111111111111' }],
+      };
+    });
+
+    await expect(
+      listDueCommunityHomeUsers({
+        pool,
+        tenantId,
+        dueBefore: new Date('2026-09-16T10:00:00.000Z'),
+        limit: 40,
+      }),
+    ).resolves.toEqual([{ userId }, { userId: '11111111-1111-4111-8111-111111111111' }]);
+    expect(query).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [tenantId]);
   });
 });
