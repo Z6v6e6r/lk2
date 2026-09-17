@@ -8,7 +8,9 @@ const CORS_ORIGIN_HOST_PATTERN =
   /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u;
 
 export function readTimewebCorsOrigins(target) {
-  if (typeof target?.hostname !== 'string') return { ok: false, reason: 'cup_origins_hostname' };
+  if (typeof target?.hostname !== 'string' || !CORS_ORIGIN_HOST_PATTERN.test(target.hostname)) {
+    return { ok: false, reason: 'cup_origins_hostname' };
+  }
   const declared = target.cupOrigins;
   if (declared === undefined) return { ok: true, value: `https://${target.hostname}` };
   if (!Array.isArray(declared)) return { ok: false, reason: 'cup_origins_shape' };

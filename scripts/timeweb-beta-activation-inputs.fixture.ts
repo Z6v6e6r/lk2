@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
+import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
 import {
   baseImageEvidence,
   parseBaseImageLock,
@@ -24,10 +25,15 @@ export const runId = '12345678901';
 export const releaseId = `${sourceSha}-${runId}-1`;
 export const host = 'lk2.padlhub.su';
 export const tenantKey = 'local-padel';
-// The API allow-list is the target's own host plus the separately hosted CUP origin declared in
-// deploy/timeweb/target.json; the fixture mirrors that declaration.
-export const cupOrigin = 'padlhub.su';
-export const corsOrigins = `https://${host},https://${cupOrigin}`;
+// The API allow-list is derived from deploy/timeweb/target.json, so the fixture cannot keep passing
+// against a stale expectation after the declared CUP origin changes.
+const targetContract = JSON.parse(
+  readFileSync(new URL('../deploy/timeweb/target.json', import.meta.url), 'utf8'),
+) as { hostname: string; cupOrigins?: readonly string[] };
+const targetCorsOrigins = readTimewebCorsOrigins(targetContract);
+if (!targetCorsOrigins.ok)
+  throw new Error(`fixture target contract invalid: ${targetCorsOrigins.reason}`);
+export const corsOrigins = targetCorsOrigins.value;
 
 const strongValue = (purpose: string) =>
   createHash('sha512').update(`synthetic-timeweb-beta-${purpose}`).digest('base64url');

@@ -1007,9 +1007,11 @@ export function validateRuntimeEnvironments(environments, contract, target) {
   for (const name of ['api', 'worker', 'realtime']) {
     if (environments[name].APP_ENV !== 'staging') reject(`env_${name}_app_env`);
   }
+  const targetCorsOrigins = readTimewebCorsOrigins(target);
+  if (!targetCorsOrigins.ok) reject(targetCorsOrigins.reason);
   if (
     environments.api.LK2_BETA_HOST !== target.hostname ||
-    environments.api.CORS_ORIGINS !== readTimewebCorsOrigins(target).value ||
+    environments.api.CORS_ORIGINS !== targetCorsOrigins.value ||
     environments.api.TRUSTED_PROXY_CIDRS !== `${target.network.ingressAddress}/32` ||
     environments.api.AUTH_COOKIE_SECURE !== 'true' ||
     environments.api.VIVA_MODE !== 'production' ||
