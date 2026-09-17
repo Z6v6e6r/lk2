@@ -151,11 +151,15 @@ watermark, audits the command and queues the former immutable object for bounded
 The browser obtains a fresh media grant before the direct profile observation. A grant authorizes
 exactly one tombstone or upload command: the browser discards the grant and its command key as soon
 as the command may have reached PadlHub, so a retry obtains a new grant instead of replaying a
-consumed one under changed image bytes. Tombstones and uploads are ordered by that signed grant's
-issuance epoch, not by API receipt time, so a delayed older null observation cannot erase a mapping
-produced under a newer grant. If the tombstone is rejected as stale, the browser performs at most
-one bounded fresh-grant plus fresh-provider-read attempt and never attaches a new grant to the old
-null result. Once a tombstone is accepted, every
+consumed one under changed image bytes. A stored command that is not an exact replay is rejected
+with a stable reason: a command key reused for another payload or another grant is an idempotency
+conflict, while a command key that meets a grant already consumed by another command is a stale
+grant. Both are audited rejection reasons for the same one-command-per-grant rule, never a merged
+result. Tombstones and uploads are ordered by that signed grant's issuance epoch, not by API receipt
+time, so a delayed older null observation cannot erase a mapping produced under a newer grant. If
+the tombstone is rejected as stale, the browser performs at most one bounded fresh-grant plus
+fresh-provider-read attempt and never attaches a new grant to the old null result. Once a tombstone
+is accepted, every
 upload grant issued before its signed epoch is stale and cannot resurrect the deleted mapping.
 The former delivery URL therefore returns `404` after commit. An omitted or invalid Viva photo field
 is treated as unavailable metadata, not as removal; it may preserve a fresh in-memory mapping but a

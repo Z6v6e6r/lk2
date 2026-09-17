@@ -665,6 +665,54 @@ describe('profile summary repository', () => {
     ).rejects.toBeInstanceOf(ProfilePhotoIdempotencyConflictError);
   });
 
+  it('keeps rejecting a reused command key whose payload changed under the same grant', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        return Promise.resolve({
+          rows: [
+            {
+              command_kind: 'UPSERT',
+              idempotency_key: 'shared-key',
+              grant_id: '33333333-3333-4333-8333-333333333333',
+              request_sha256: 'b'.repeat(64),
+              content_sha256: 'c'.repeat(64),
+              object_key: `profile-photos/${tenantId}/${firstUserId}/${'c'.repeat(64)}.webp`,
+              grant_issued_at: '2026-08-14T09:59:00.000Z',
+              avatar_url: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.reserveClientAssistedPhoto?.({
+        tenantId,
+        userId: firstUserId,
+        objectKey: `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`,
+        contentSha256: 'a'.repeat(64),
+        requestSha256: 'b'.repeat(64),
+        idempotencyKey: 'shared-key',
+        grantId: '33333333-3333-4333-8333-333333333333',
+        grantIssuedAt: '2026-08-14T09:59:00.000Z',
+        expiresAt: '2026-08-14T11:00:00.000Z',
+      }),
+    ).rejects.toBeInstanceOf(ProfilePhotoIdempotencyConflictError);
+  });
+
   it('reports a stale grant when a tombstone reuses a consumed upload grant', async () => {
     const query = vi.fn((text: string) => {
       if (

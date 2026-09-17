@@ -164,18 +164,19 @@ function deleteCommandMatches(
 }
 
 /**
- * A media grant authorizes exactly one command. A stored command under the same grant that is not
- * an exact replay is a consumed one-time grant, not a conflicting command: reporting it as a stale
- * grant keeps the single-use rule explicit and lets the browser obtain a fresh grant. Only a reused
- * command key under another grant stays an idempotency conflict.
+ * A media grant authorizes exactly one command, so a stored command that is not an exact replay is
+ * never a valid retry. Its cause decides the stable error code, and the browser and the operator
+ * must both be able to tell the two apart:
+ * - the same command key was reused for another payload or another grant → idempotency conflict;
+ * - a different command key already consumed this grant → stale grant.
  */
 function consumedCommandError(
-  row: Pick<ClientPhotoCommandRow, 'grant_id'>,
-  input: { readonly grantId: string },
+  row: Pick<ClientPhotoCommandRow, 'grant_id' | 'idempotency_key'>,
+  input: { readonly grantId: string; readonly idempotencyKey: string },
 ): ProfilePhotoGrantStaleError | ProfilePhotoIdempotencyConflictError {
-  return row.grant_id === input.grantId
-    ? new ProfilePhotoGrantStaleError()
-    : new ProfilePhotoIdempotencyConflictError();
+  return row.idempotency_key === input.idempotencyKey
+    ? new ProfilePhotoIdempotencyConflictError()
+    : new ProfilePhotoGrantStaleError();
 }
 
 function grantIsStale(current: CurrentPhotoRow | undefined, grantIssuedAt: string): boolean {
