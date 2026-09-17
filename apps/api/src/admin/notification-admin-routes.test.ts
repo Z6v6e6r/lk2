@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { loadConfig } from '@phub/config';
 import type { AdminNotificationRepository } from '@phub/database';
 import { createLogger } from '@phub/observability';
@@ -71,6 +73,7 @@ function repository() {
       },
     ],
     unresolvedPhones: [],
+    unresolvedUserIds: [],
   });
   const createCampaign = vi.fn().mockResolvedValue({
     outcome: 'accepted',
@@ -92,6 +95,18 @@ function repository() {
     resolveRecipients,
     createCampaign,
   };
+}
+
+type CreateCampaignInput = Parameters<AdminNotificationRepository['createCampaign']>[0];
+
+// The repository double records its calls with `any` arguments; read them through one typed accessor
+// instead of an unsafe member access at every assertion.
+function createCampaignInput(
+  createCampaign: ReturnType<typeof repository>['createCampaign'],
+  index: number,
+): CreateCampaignInput | undefined {
+  const call = createCampaign.mock.calls[index];
+  return call ? (call[0] as CreateCampaignInput) : undefined;
 }
 
 afterEach(async () => {
@@ -157,7 +172,121 @@ describe('admin notification routes', () => {
     expect(response.json()).toMatchObject({
       matched: [{ phoneMasked: '•••• 0001' }],
       unresolvedPhones: [],
+      unresolvedUserIds: [],
     });
+  });
+
+  it('normalizes user ids and forwards both selectors to the repository', async () => {
+    const adminRepository = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/recipients/resolve',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'x-app-platform': 'cup-admin',
+      },
+      payload: {
+        phones: ['8 (999) 000-00-01'],
+        userIds: [
+          '  F342DF5E-2E86-42CF-B938-C00F56A2EE6E  ',
+          'f342df5e-2e86-42cf-b938-c00f56a2ee6e',
+        ],
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(adminRepository.resolveRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({
+        normalizedPhones: ['+79990000001'],
+        normalizedUserIds: ['f342df5e-2e86-42cf-b938-c00f56a2ee6e'],
+      }),
+    );
+  });
+
+  it('resolves recipients addressed only by user id', async () => {
+    const adminRepository = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/recipients/resolve',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'x-app-platform': 'cup-admin',
+      },
+      payload: { userIds: ['f342df5e-2e86-42cf-b938-c00f56a2ee6e'] },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(adminRepository.resolveRecipients).toHaveBeenCalledWith(
+      expect.objectContaining({
+        normalizedPhones: [],
+        normalizedUserIds: ['f342df5e-2e86-42cf-b938-c00f56a2ee6e'],
+      }),
+    );
+  });
+
+  it('rejects an empty selector and a malformed user id with stable codes', async () => {
+    const adminRepository = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await token()}`,
+      'x-app-platform': 'cup-admin',
+    };
+
+    const empty = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/recipients/resolve',
+      headers,
+      payload: {},
+    });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+
+    const malformed = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/recipients/resolve',
+      headers,
+      payload: { userIds: ['not-a-uuid'] },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toMatchObject({ code: 'USER_ID_INVALID' });
+
+    const tooMany = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/recipients/resolve',
+      headers,
+      payload: {
+        phones: ['+79990000001', '+79990000002'],
+        userIds: Array.from(
+          { length: 99 },
+          (_, index) => `f342df5e-2e86-42cf-b938-${String(index).padStart(12, '0')}`,
+        ),
+      },
+    });
+    expect(tooMany.statusCode).toBe(400);
+    expect(tooMany.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+    expect(adminRepository.resolveRecipients).not.toHaveBeenCalled();
   });
 
   it('fails closed for mobile channels until APNs and FCM are implemented', async () => {
@@ -227,9 +356,83 @@ describe('admin notification routes', () => {
     expect(adminRepository.createCampaign).toHaveBeenCalledWith(
       expect.objectContaining({
         actorUserId: userId,
+        normalizedPhones: ['+79990000001'],
+        normalizedUserIds: [],
         requestedChannels: ['WEB_PUSH', 'IN_APP'],
         idempotencyKey: 'admin-notification-send-test-0001',
       }),
     );
+  });
+
+  it('accepts a campaign addressed by user id and hashes the selector into the request hash', async () => {
+    const adminRepository = repository();
+    const app = await buildApp({
+      config: { ...config, WEB_PUSH_ENABLED: true },
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await token()}`,
+      'x-app-platform': 'cup-admin',
+    };
+    const recipientUserId = 'f342df5e-2e86-42cf-b938-c00f56a2ee6e';
+    const payload = {
+      userIds: [recipientUserId],
+      title: 'Тест',
+      body: 'Сообщение',
+      channels: ['IN_APP'],
+    };
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/campaigns',
+      headers: { ...headers, 'idempotency-key': 'admin-notification-user-id-test-0001' },
+      payload,
+    });
+
+    expect(response.statusCode).toBe(202);
+    const first = createCampaignInput(adminRepository.createCampaign, 0);
+    expect(first).toMatchObject({
+      normalizedPhones: [],
+      normalizedUserIds: [recipientUserId],
+    });
+
+    // The same command with a different selector must not replay under the same idempotency key.
+    await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/campaigns',
+      headers: { ...headers, 'idempotency-key': 'admin-notification-user-id-test-0002' },
+      payload: { ...payload, userIds: ['96d1b47c-dc5c-493f-836c-827f01c31546'] },
+    });
+    const second = createCampaignInput(adminRepository.createCampaign, 1);
+    expect(second?.requestHash).not.toBe(first?.requestHash);
+
+    // A phone-only request keeps the pre-user-id hash, so an in-flight retry still replays.
+    await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/campaigns',
+      headers: { ...headers, 'idempotency-key': 'admin-notification-phone-hash-test-0001' },
+      payload: {
+        phones: ['+79990000001'],
+        title: 'Тест',
+        body: 'Сообщение',
+        channels: ['IN_APP'],
+      },
+    });
+    const phoneOnly = createCampaignInput(adminRepository.createCampaign, 2);
+    const legacyHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          normalizedPhones: ['+79990000001'],
+          title: 'Тест',
+          body: 'Сообщение',
+          deepLink: null,
+          channels: ['IN_APP'],
+        }),
+      )
+      .digest('hex');
+    expect(phoneOnly?.requestHash).toBe(legacyHash);
   });
 });

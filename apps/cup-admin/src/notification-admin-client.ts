@@ -39,13 +39,24 @@ export interface AdminNotificationCapabilities {
 export interface AdminNotificationRecipient {
   readonly userId: string;
   readonly displayName: string;
-  readonly phoneMasked: string;
+  /** Present only when the recipient resolved with a phone number. */
+  readonly phoneMasked?: string;
   readonly availableChannels: readonly AdminNotificationChannel[];
 }
 
 export interface AdminNotificationRecipientResolution {
   readonly matched: readonly AdminNotificationRecipient[];
   readonly unresolvedPhones: readonly string[];
+  readonly unresolvedUserIds: readonly string[];
+}
+
+/**
+ * Recipients are addressed by phone number, by PadlHub user id, or by both. The user id is the
+ * authoritative selector: it needs no phone mapping and cannot be redirected by a phone claim.
+ */
+export interface AdminNotificationRecipientSelector {
+  readonly phones?: readonly string[];
+  readonly userIds?: readonly string[];
 }
 
 export interface AdminNotificationCampaignAccepted {
@@ -195,14 +206,17 @@ export interface NotificationAdminClient {
   verifyCode(challengeId: string, code: string): Promise<AuthenticatedSession>;
   logout(): Promise<void>;
   getCapabilities(): Promise<AdminNotificationCapabilities>;
-  resolveRecipients(phones: readonly string[]): Promise<AdminNotificationRecipientResolution>;
-  createCampaign(input: {
-    readonly phones: readonly string[];
-    readonly title: string;
-    readonly body: string;
-    readonly deepLink?: string;
-    readonly channels: readonly AdminNotificationChannel[];
-  }): Promise<AdminNotificationCampaignAccepted>;
+  resolveRecipients(
+    selector: AdminNotificationRecipientSelector,
+  ): Promise<AdminNotificationRecipientResolution>;
+  createCampaign(
+    input: AdminNotificationRecipientSelector & {
+      readonly title: string;
+      readonly body: string;
+      readonly deepLink?: string;
+      readonly channels: readonly AdminNotificationChannel[];
+    },
+  ): Promise<AdminNotificationCampaignAccepted>;
   listPendingCommunityJoinRequests(input?: {
     readonly communityId?: string;
     readonly cursor?: string;
@@ -428,10 +442,10 @@ export function createNotificationAdminClient(
     getCapabilities() {
       return adminRequest<AdminNotificationCapabilities>('/notifications/capabilities');
     },
-    resolveRecipients(phones) {
+    resolveRecipients(selector) {
       return adminRequest<AdminNotificationRecipientResolution>(
         '/notifications/recipients/resolve',
-        { method: 'POST', body: JSON.stringify({ phones }) },
+        { method: 'POST', body: JSON.stringify(selector) },
       );
     },
     createCampaign(input) {

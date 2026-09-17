@@ -481,3 +481,101 @@ describe('NotificationAdminClient community moderation', () => {
     });
   });
 });
+
+describe('NotificationAdminClient notification targeting', () => {
+  it('posts a user-id selector and returns unresolved user ids', async () => {
+    const calls: Array<{
+      readonly input: Parameters<typeof fetch>[0];
+      readonly init?: RequestInit;
+    }> = [];
+    const userId = 'd938caf6-4eca-49d3-8f78-c7ab1b967a41';
+    const unresolvedUserId = '96d1b47c-dc5c-493f-836c-827f01c31546';
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init ? { init } : {}) });
+      return Promise.resolve(
+        Response.json({
+          matched: [
+            {
+              userId,
+              displayName: 'Анна',
+              availableChannels: ['WEB_PUSH'],
+            },
+          ],
+          unresolvedPhones: [],
+          unresolvedUserIds: [unresolvedUserId],
+        }),
+      );
+    };
+    const client = createNotificationAdminClient({
+      baseUrl: 'https://api.padlhub.test',
+      tenantKey: 'local-padel',
+      appVersion: '0.1.0',
+      fetchImplementation,
+    });
+
+    const resolution = await client.resolveRecipients({ userIds: [userId, unresolvedUserId] });
+
+    expect(calls[0]?.input).toBe(
+      'https://api.padlhub.test/admin/api/v1/local-padel/notifications/recipients/resolve',
+    );
+    const previewBody = calls[0]?.init?.body;
+    expect(typeof previewBody).toBe('string');
+    if (typeof previewBody !== 'string') throw new Error('Expected a JSON request body');
+    expect(JSON.parse(previewBody)).toEqual({ userIds: [userId, unresolvedUserId] });
+    // A recipient that resolved by user id alone carries no masked phone.
+    expect(resolution.matched[0]?.phoneMasked).toBeUndefined();
+    expect(resolution.unresolvedUserIds).toEqual([unresolvedUserId]);
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBeNull();
+  });
+
+  it('creates a campaign from phone and user-id selectors with a retry-safe key', async () => {
+    const calls: Array<{
+      readonly input: Parameters<typeof fetch>[0];
+      readonly init?: RequestInit;
+    }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init ? { init } : {}) });
+      return Promise.resolve(
+        Response.json({
+          outcome: 'accepted',
+          campaignId: '50b93bf8-490c-4b76-a5b0-d76c3a4b685a',
+          matchedCount: 1,
+          unresolvedCount: 0,
+          inAppCreatedCount: 1,
+          pushQueuedCount: 1,
+          suppressedCount: 0,
+          replayed: false,
+        }),
+      );
+    };
+    const client = createNotificationAdminClient({
+      baseUrl: 'https://api.padlhub.test',
+      tenantKey: 'local-padel',
+      appVersion: '0.1.0',
+      fetchImplementation,
+    });
+    const userId = 'd938caf6-4eca-49d3-8f78-c7ab1b967a41';
+
+    await client.createCampaign({
+      phones: ['+79990000001'],
+      userIds: [userId],
+      title: 'Тест',
+      body: 'Сообщение',
+      channels: ['IN_APP'],
+    });
+
+    const campaignBody = calls[0]?.init?.body;
+    expect(typeof campaignBody).toBe('string');
+    if (typeof campaignBody !== 'string') throw new Error('Expected a JSON request body');
+    expect(JSON.parse(campaignBody)).toEqual({
+      phones: ['+79990000001'],
+      userIds: [userId],
+      title: 'Тест',
+      body: 'Сообщение',
+      channels: ['IN_APP'],
+    });
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toMatch(
+      /^[A-Za-z0-9-]{16,}$/,
+    );
+  });
+});
