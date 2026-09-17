@@ -1,7 +1,11 @@
 import { useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
-import type { NotificationInboxPage, WebPushConfiguration } from './auth-gateway.js';
+import type {
+  NotificationInboxPage,
+  ProfileFriendRequestSummary,
+  WebPushConfiguration,
+} from './auth-gateway.js';
 import { NotificationFilters } from './notifications-ui/NotificationFilters.js';
 import { NotificationList } from './notifications-ui/NotificationList.js';
 import {
@@ -19,6 +23,11 @@ interface NotificationsPageProps {
   readonly busy: boolean;
   readonly error?: string | null;
   readonly inboxUnavailable: boolean;
+  readonly friendRequests: readonly ProfileFriendRequestSummary[];
+  readonly friendRequestsError?: string | null;
+  readonly friendRequestBusyId: string | null;
+  readonly onAcceptFriendRequest: (requestId: string) => void;
+  readonly onDeclineFriendRequest: (requestId: string) => void;
   readonly onEnableWebPush: () => void;
   readonly onDisableWebPush: () => void;
   readonly onMarkAllRead: () => void;
@@ -44,6 +53,11 @@ export function NotificationsPage({
   busy,
   error,
   inboxUnavailable,
+  friendRequests,
+  friendRequestsError,
+  friendRequestBusyId,
+  onAcceptFriendRequest,
+  onDeclineFriendRequest,
   onEnableWebPush,
   onDisableWebPush,
   onMarkAllRead,
@@ -92,6 +106,48 @@ export function NotificationsPage({
           <p className={styles.error} role="alert">
             {error}
           </p>
+        ) : null}
+
+        {friendRequestsError ? (
+          <p className={styles.error} role="alert">
+            {friendRequestsError}
+          </p>
+        ) : null}
+
+        {friendRequests.length > 0 ? (
+          <section className={styles.friendRequests} aria-labelledby="friend-requests-title">
+            <header className={styles.listHeader}>
+              <h2 id="friend-requests-title">Заявки в друзья</h2>
+              <span className={styles.friendRequestCount}>{friendRequests.length}</span>
+            </header>
+            <ul className={styles.friendRequestList}>
+              {friendRequests.map((request) => (
+                <li className={styles.friendRequestCard} key={request.requestId}>
+                  <a className={styles.friendRequestPerson} href={request.route}>
+                    <strong>{request.displayName}</strong>
+                    <small>хочет добавить вас в друзья</small>
+                  </a>
+                  <div className={styles.friendRequestActions}>
+                    <button
+                      type="button"
+                      disabled={busy || friendRequestBusyId !== null}
+                      onClick={() => onAcceptFriendRequest(request.requestId)}
+                    >
+                      {friendRequestBusyId === request.requestId ? 'Добавляем…' : 'Добавить'}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.friendRequestDecline}
+                      disabled={busy || friendRequestBusyId !== null}
+                      onClick={() => onDeclineFriendRequest(request.requestId)}
+                    >
+                      Отказаться
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
         ) : null}
 
         {inboxUnavailable ? (

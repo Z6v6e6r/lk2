@@ -82,6 +82,8 @@ export type ProfilePrivacyUpdateRequest = components['schemas']['ProfilePrivacyU
 export type ProfileFriendship = components['schemas']['ProfileFriendship'];
 export type ProfileFriendSummary = components['schemas']['ProfileFriendSummary'];
 export type ProfileFriendPage = components['schemas']['ProfileFriendPage'];
+export type ProfileFriendRequestSummary = components['schemas']['ProfileFriendRequestSummary'];
+export type ProfileFriendRequestPage = components['schemas']['ProfileFriendRequestPage'];
 export type ProfileLevelHistory = components['schemas']['ProfileLevelHistory'];
 export type ProfileLevelHistoryPoint = components['schemas']['ProfileLevelHistoryPoint'];
 export interface CanonicalProfileLevel {
@@ -777,6 +779,32 @@ export class PadlHubApiClient {
         method: 'POST',
         idempotencyKey,
       }),
+    );
+  }
+
+  public listProfileFriendRequests(limit = 8): Promise<ProfileFriendRequestPage> {
+    return this.request<ProfileFriendRequestPage>(
+      `/profile/friend-requests?limit=${encodeURIComponent(limit)}`,
+    );
+  }
+
+  public acceptProfileFriendRequest(requestId: string): Promise<ProfileFriendship> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ProfileFriendship>(
+        `/profile/friend-requests/${encodeURIComponent(requestId)}/accept`,
+        { method: 'POST', idempotencyKey },
+      ),
+    );
+  }
+
+  public declineProfileFriendRequest(requestId: string): Promise<ProfileFriendship> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ProfileFriendship>(
+        `/profile/friend-requests/${encodeURIComponent(requestId)}/decline`,
+        { method: 'POST', idempotencyKey },
+      ),
     );
   }
 

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { sendApiError } from '../http-errors.js';
 
 const targetParamsSchema = z.object({ userId: z.string().uuid() }).passthrough();
+const requestParamsSchema = z.object({ requestId: z.string().uuid() }).passthrough();
 const listQuerySchema = z
   .object({ limit: z.coerce.number().int().min(1).max(24).default(8) })
   .strict();
@@ -46,6 +47,26 @@ function targetParams(request: FastifyRequest, reply: FastifyReply) {
   return undefined;
 }
 
+function requestParams(request: FastifyRequest, reply: FastifyReply) {
+  const parsed = requestParamsSchema.safeParse(request.params);
+  if (parsed.success) return parsed.data;
+  sendApiError(request, reply, 400, 'PROFILE_FRIEND_REQUEST_INVALID', 'Заявка не найдена.');
+  return undefined;
+}
+
+function requireIdempotencyKey(request: FastifyRequest, reply: FastifyReply): string | undefined {
+  const idempotencyKey = request.headers['idempotency-key'];
+  if (typeof idempotencyKey === 'string' && idempotencyKey.length >= 16) return idempotencyKey;
+  sendApiError(
+    request,
+    reply,
+    400,
+    'IDEMPOTENCY_KEY_REQUIRED',
+    'Для команды нужен заголовок Idempotency-Key.',
+  );
+  return undefined;
+}
+
 export function registerProfileFriendshipRoutes(
   app: FastifyInstance,
   options: {
@@ -80,6 +101,31 @@ export function registerProfileFriendshipRoutes(
   );
 
   app.get(
+    '/user/api/v1/:tenantKey/profile/friend-requests',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!canUseFriendships(request, reply)) return;
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      if (!options.repository) return unavailable(request, reply);
+      const query = listQuerySchema.safeParse(request.query);
+      if (!query.success) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'PROFILE_FRIEND_REQUESTS_QUERY_INVALID',
+          'Проверьте параметры списка заявок.',
+        );
+      }
+      return options.repository.listIncoming(current.tenantId, current.userId, query.data.limit);
+    },
+  );
+
+  app.get(
     '/user/api/v1/:tenantKey/profile/friends/:userId',
     { preHandler: [...options.authenticatedTenantHandlers] },
     async (request, reply) => {
@@ -101,11 +147,11 @@ export function registerProfileFriendshipRoutes(
       if (!canUseFriendships(request, reply)) return;
       const current = principal(request);
       const target = targetParams(request, reply);
-      const idempotencyKey = request.headers['idempotency-key'];
-      if (!current || !target || typeof idempotencyKey !== 'string') return;
+      const idempotencyKey = requireIdempotencyKey(request, reply);
+      if (!current || !target || !idempotencyKey) return;
       if (!options.repository) return unavailable(request, reply);
       const requestHash = createHash('sha256').update(target.userId).digest('hex');
-      const result = await options.repository.add({
+      const result = await options.repository.request({
         tenantId: current.tenantId,
         actorUserId: current.userId,
         targetUserId: target.userId,
@@ -138,4 +184,51 @@ export function registerProfileFriendshipRoutes(
       return reply.code(result.replayed ? 200 : 201).send(result.friendship);
     },
   );
+
+  for (const [suffix, action] of [
+    ['accept', 'ACCEPT'],
+    ['decline', 'DECLINE'],
+  ] as const) {
+    app.post(
+      `/user/api/v1/:tenantKey/profile/friend-requests/:requestId/${suffix}`,
+      { preHandler: [...options.commandHandlers] },
+      async (request, reply) => {
+        reply.header('Cache-Control', 'no-store');
+        if (!canUseFriendships(request, reply)) return;
+        const current = principal(request);
+        const params = requestParams(request, reply);
+        const idempotencyKey = requireIdempotencyKey(request, reply);
+        if (!current || !params || !idempotencyKey) return;
+        if (!options.repository) return unavailable(request, reply);
+        const result = await options.repository.respond({
+          tenantId: current.tenantId,
+          actorUserId: current.userId,
+          requestId: params.requestId,
+          action,
+          idempotencyKey,
+          correlationId: request.id,
+        });
+        if (result.outcome === 'not_found') {
+          return sendApiError(
+            request,
+            reply,
+            404,
+            'PROFILE_FRIEND_REQUEST_NOT_FOUND',
+            'Заявка не найдена.',
+          );
+        }
+        if (result.outcome === 'idempotency_conflict') {
+          return sendApiError(
+            request,
+            reply,
+            409,
+            'IDEMPOTENCY_KEY_REUSED',
+            'Idempotency-Key уже использован для другой команды.',
+          );
+        }
+        reply.header('X-Idempotent-Replayed', String(result.replayed));
+        return reply.code(result.replayed ? 200 : 201).send(result.friendship);
+      },
+    );
+  }
 }

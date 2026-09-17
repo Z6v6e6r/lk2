@@ -44,6 +44,7 @@ import type {
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
   ProfileFriendPage,
+  ProfileFriendRequestSummary,
   ProfileFriendship,
   UserProfile,
   UserUpcomingBookings,
@@ -622,6 +623,9 @@ export function App({
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [notificationsInboxUnavailable, setNotificationsInboxUnavailable] = useState(false);
+  const [friendRequests, setFriendRequests] = useState<readonly ProfileFriendRequestSummary[]>([]);
+  const [friendRequestsError, setFriendRequestsError] = useState<string | null>(null);
+  const [friendRequestBusyId, setFriendRequestBusyId] = useState<string | null>(null);
   const [, refreshLocation] = useReducer((revision: number) => revision + 1, 0);
   useEffect(() => {
     const handlePopState = (): void => refreshLocation();
@@ -1205,7 +1209,22 @@ export function App({
     if (protectedRoute.kind === 'notifications') {
       const serviceWorkerUrl =
         window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
+      const loadFriendRequests = (): void => {
+        void gateway.listProfileFriendRequests().then(
+          (page) => {
+            if (!active) return;
+            setFriendRequests(page.items);
+            setFriendRequestsError(null);
+          },
+          () => {
+            if (!active) return;
+            setFriendRequests([]);
+            setFriendRequestsError('Не удалось загрузить заявки в друзья.');
+          },
+        );
+      };
       const refreshNotifications = (): void => {
+        loadFriendRequests();
         void gateway.listNotifications().then(
           (page) => {
             if (!active) return;
@@ -1226,9 +1245,17 @@ export function App({
         gateway.listNotifications(),
         gateway.getWebPushConfiguration(),
         getWebPushBrowserState(serviceWorkerUrl),
-      ]).then(([pageResult, pushConfigurationResult, browserStateResult]) => {
+        gateway.listProfileFriendRequests(),
+      ]).then(([pageResult, pushConfigurationResult, browserStateResult, friendRequestResult]) => {
         if (!active) return;
         const errors: string[] = [];
+        if (friendRequestResult.status === 'fulfilled') {
+          setFriendRequests(friendRequestResult.value.items);
+          setFriendRequestsError(null);
+        } else {
+          setFriendRequests([]);
+          setFriendRequestsError('Не удалось загрузить заявки в друзья.');
+        }
         if (pageResult.status === 'fulfilled') {
           setNotifications(pageResult.value);
           setNotificationsInboxUnavailable(false);
@@ -1816,7 +1843,8 @@ export function App({
   }
 
   function handleAddProfileFriend(): void {
-    if (!requestedProfileUserId || profileFriendship?.status === 'FRIEND') return;
+    if (!requestedProfileUserId) return;
+    if (profileFriendship && profileFriendship.status !== 'NONE') return;
     setProfileFriendsBusy(true);
     setProfileFriendsError(null);
     void gateway.addProfileFriend(requestedProfileUserId).then(
@@ -1829,6 +1857,44 @@ export function App({
         setProfileFriendsError('Не удалось добавить игрока в друзья. Повторите попытку.');
       },
     );
+  }
+
+  function settleFriendRequest(requestId: string, action: 'accept' | 'decline'): void {
+    setFriendRequestBusyId(requestId);
+    setFriendRequestsError(null);
+    const command =
+      action === 'accept'
+        ? gateway.acceptProfileFriendRequest(requestId)
+        : gateway.declineProfileFriendRequest(requestId);
+    void command.then(
+      () => {
+        setFriendRequests((current) =>
+          current.filter((request) => request.requestId !== requestId),
+        );
+        setFriendRequestBusyId(null);
+        if (profileFriendship?.requestId === requestId) {
+          void gateway
+            .getProfileFriendship(profileFriendship.userId)
+            .then((friendship) => setProfileFriendship(friendship), () => undefined);
+        }
+      },
+      () => {
+        setFriendRequestBusyId(null);
+        setFriendRequestsError(
+          action === 'accept'
+            ? 'Не удалось принять заявку. Повторите попытку.'
+            : 'Не удалось отклонить заявку. Повторите попытку.',
+        );
+      },
+    );
+  }
+
+  function handleAcceptFriendRequest(requestId: string): void {
+    settleFriendRequest(requestId, 'accept');
+  }
+
+  function handleDeclineFriendRequest(requestId: string): void {
+    settleFriendRequest(requestId, 'decline');
   }
 
   if (publicGiftRoute) {
@@ -1915,6 +1981,7 @@ export function App({
             ? { onSaveBookingPreferences: handleSaveBookingPreferences }
             : {})}
           onAddFriend={handleAddProfileFriend}
+          onAcceptFriendRequest={handleAcceptFriendRequest}
           onLogout={handleLogout}
         />
       );
@@ -2011,6 +2078,11 @@ export function App({
           busy={notificationsBusy}
           error={notificationsError}
           inboxUnavailable={notificationsInboxUnavailable}
+          friendRequests={friendRequests}
+          friendRequestsError={friendRequestsError}
+          friendRequestBusyId={friendRequestBusyId}
+          onAcceptFriendRequest={handleAcceptFriendRequest}
+          onDeclineFriendRequest={handleDeclineFriendRequest}
           onEnableWebPush={handleEnableWebPush}
           onDisableWebPush={handleDisableWebPush}
           onMarkAllRead={handleMarkAllNotificationsRead}

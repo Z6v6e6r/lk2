@@ -63,6 +63,7 @@ interface ProfilePageProps {
   readonly onSavePrivacy?: (input: ProfilePrivacyUpdateRequest) => void;
   readonly onSaveBookingPreferences?: (input: BookingPreferencesUpdateRequest) => void;
   readonly onAddFriend?: () => void;
+  readonly onAcceptFriendRequest?: (requestId: string) => void;
   readonly onLogout: () => void;
 }
 
@@ -971,28 +972,65 @@ function FriendshipAction({
   busy,
   error,
   onAdd,
+  onAccept,
 }: {
   readonly friendship?: ProfileFriendship | null;
   readonly busy: boolean;
   readonly error?: string | null;
   readonly onAdd?: () => void;
+  readonly onAccept?: (requestId: string) => void;
 }): React.JSX.Element {
-  const isFriend = friendship?.status === 'FRIEND';
+  const status = friendship?.status ?? 'NONE';
+  const isFriend = status === 'FRIEND';
+  const isOutgoing = status === 'PENDING_OUTGOING';
+  const isIncoming = status === 'PENDING_INCOMING';
+  const title = isFriend
+    ? 'Уже в друзьях'
+    : isOutgoing
+      ? 'Заявка отправлена'
+      : isIncoming
+        ? 'Заявка в друзья'
+        : 'Добавить в друзья';
+  const description = isFriend
+    ? 'Игрок отображается в вашем блоке друзей'
+    : isOutgoing
+      ? 'Игрок увидит заявку в уведомлениях'
+      : isIncoming
+        ? 'Этот игрок хочет добавить вас в друзья'
+        : 'Игрок получит заявку в уведомлениях';
+  const acceptRequestId = isIncoming ? friendship?.requestId : null;
+  const disabledByState = isFriend || isOutgoing;
+  const handleClick = isIncoming
+    ? acceptRequestId
+      ? () => onAccept?.(acceptRequestId)
+      : undefined
+    : onAdd;
+
   return (
     <section className="profile-friendship-action" aria-labelledby="profile-friendship-title">
       <span className="profile-inline-icon">
         <ProfileIcon name="friends" />
       </span>
       <span>
-        <strong id="profile-friendship-title">
-          {isFriend ? 'Уже в друзьях' : 'Добавить в друзья'}
-        </strong>
-        <small>
-          {isFriend ? 'Игрок отображается в вашем блоке друзей' : 'Игрок появится в вашем профиле'}
-        </small>
+        <strong id="profile-friendship-title">{title}</strong>
+        <small>{description}</small>
       </span>
-      <button type="button" disabled={busy || isFriend || !friendship || !onAdd} onClick={onAdd}>
-        {busy ? 'Добавляем…' : isFriend ? 'Добавлен' : 'Добавить'}
+      <button
+        type="button"
+        disabled={busy || disabledByState || !friendship || !handleClick}
+        onClick={handleClick}
+      >
+        {busy
+          ? isIncoming
+            ? 'Принимаем…'
+            : 'Отправляем…'
+          : isFriend
+            ? 'Добавлен'
+            : isOutgoing
+              ? 'Ожидает ответа'
+              : isIncoming
+                ? 'Принять заявку'
+                : 'Добавить'}
       </button>
       {error ? <p role="alert">{error}</p> : null}
     </section>
@@ -1182,6 +1220,7 @@ export function ProfilePage({
   onSavePrivacy,
   onSaveBookingPreferences,
   onAddFriend,
+  onAcceptFriendRequest,
   onLogout,
 }: ProfilePageProps): React.JSX.Element {
   const { profile, privateAccount, access } = view;
@@ -1347,6 +1386,7 @@ export function ProfilePage({
                 {...(friendship !== undefined ? { friendship } : {})}
                 {...(friendsError !== undefined ? { error: friendsError } : {})}
                 {...(onAddFriend ? { onAdd: onAddFriend } : {})}
+                {...(onAcceptFriendRequest ? { onAccept: onAcceptFriendRequest } : {})}
               />
               <section className="profile-access-section" aria-labelledby="profile-actions-title">
                 <div className="profile-section-heading">

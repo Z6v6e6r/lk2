@@ -758,7 +758,13 @@ describe('health endpoints', () => {
       config,
       logger: createLogger('api-test', 'silent'),
       pool: fakePool(),
-      profileFriendshipRepository: { list, get: vi.fn(), add: vi.fn() },
+      profileFriendshipRepository: {
+        list,
+        get: vi.fn(),
+        listIncoming: vi.fn(),
+        request: vi.fn(),
+        respond: vi.fn(),
+      },
     });
     apps.push(app);
 
@@ -816,14 +822,15 @@ describe('health endpoints', () => {
     expect(list).toHaveBeenCalledWith(tenantId, '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca', 100);
   });
 
-  it('adds a friend through an audited idempotent command route', async () => {
+  it('sends a friend request through an audited idempotent command route', async () => {
     const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
     const friendship = {
       userId: targetUserId,
-      status: 'FRIEND' as const,
+      status: 'PENDING_OUTGOING' as const,
       createdAt: '2026-07-26T10:00:00.000Z',
+      requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
     };
-    const add = vi.fn<ProfileFriendshipRepository['add']>().mockResolvedValue({
+    const request = vi.fn<ProfileFriendshipRepository['request']>().mockResolvedValue({
       outcome: 'applied',
       friendship,
       replayed: false,
@@ -832,7 +839,13 @@ describe('health endpoints', () => {
       config,
       logger: createLogger('api-test', 'silent'),
       pool: fakePool(),
-      profileFriendshipRepository: { list: vi.fn(), get: vi.fn(), add },
+      profileFriendshipRepository: {
+        list: vi.fn(),
+        get: vi.fn(),
+        listIncoming: vi.fn(),
+        request,
+        respond: vi.fn(),
+      },
     });
     apps.push(app);
 
@@ -849,14 +862,109 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(201);
     expect(response.headers['x-idempotent-replayed']).toBe('false');
     expect(response.json()).toEqual(friendship);
-    expect(add.mock.calls[0]?.[0]).toMatchObject({
+    expect(request.mock.calls[0]?.[0]).toMatchObject({
       tenantId,
       actorUserId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
       targetUserId,
       idempotencyKey: 'profile-friend-add-test-0001',
       correlationId: 'profile-friend-correlation-0001',
     });
-    expect(add.mock.calls[0]?.[0].requestHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(request.mock.calls[0]?.[0].requestHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('lists incoming friend requests for the notifications feed', async () => {
+    const listIncoming = vi.fn<ProfileFriendshipRepository['listIncoming']>().mockResolvedValue({
+      items: [
+        {
+          requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
+          userId: '6a81e965-c508-4321-812c-4be323606a70',
+          displayName: 'Мария Соколова',
+          avatarUrl: null,
+          levelLabel: 'C',
+          createdAt: '2026-07-26T10:00:00.000Z',
+          route: '/profile/6a81e965-c508-4321-812c-4be323606a70',
+        },
+      ],
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: {
+        list: vi.fn(),
+        get: vi.fn(),
+        listIncoming,
+        request: vi.fn(),
+        respond: vi.fn(),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile/friend-requests?limit=4',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toMatchObject({
+      items: [{ displayName: 'Мария Соколова', requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91' }],
+    });
+    expect(listIncoming).toHaveBeenCalledWith(
+      tenantId,
+      '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      4,
+    );
+  });
+
+  it.each([
+    ['accept', 'ACCEPT'],
+    ['decline', 'DECLINE'],
+  ] as const)('answers a friend request over %s', async (suffix, action) => {
+    const requestId = '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91';
+    const friendship = {
+      userId: '6a81e965-c508-4321-812c-4be323606a70',
+      status: action === 'ACCEPT' ? ('FRIEND' as const) : ('NONE' as const),
+      createdAt: action === 'ACCEPT' ? '2026-07-26T10:00:00.000Z' : null,
+      requestId: null,
+    };
+    const respond = vi.fn<ProfileFriendshipRepository['respond']>().mockResolvedValue({
+      outcome: 'applied',
+      friendship,
+      replayed: false,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: {
+        list: vi.fn(),
+        get: vi.fn(),
+        listIncoming: vi.fn(),
+        request: vi.fn(),
+        respond,
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/profile/friend-requests/${requestId}/${suffix}`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': `profile-friend-${suffix}-test-0001`,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual(friendship);
+    expect(respond.mock.calls[0]?.[0]).toMatchObject({
+      tenantId,
+      actorUserId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      requestId,
+      action,
+    });
   });
 
   it('returns a self profile view with private account data', async () => {

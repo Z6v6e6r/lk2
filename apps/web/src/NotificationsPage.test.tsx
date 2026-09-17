@@ -44,6 +44,11 @@ const defaultProps = {
   busy: false,
   error: null,
   inboxUnavailable: false,
+  friendRequests: [],
+  friendRequestsError: null,
+  friendRequestBusyId: null,
+  onAcceptFriendRequest: vi.fn(),
+  onDeclineFriendRequest: vi.fn(),
   onEnableWebPush: vi.fn(),
   onDisableWebPush: vi.fn(),
   onMarkAllRead: vi.fn(),
@@ -147,5 +152,46 @@ describe('NotificationsPage', () => {
     expect(screen.queryByText('Пока тихо')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
     expect(onRetryInbox).toHaveBeenCalledOnce();
+  });
+
+  it('renders an incoming friend request with accept and decline commands', () => {
+    const onAcceptFriendRequest = vi.fn();
+    const onDeclineFriendRequest = vi.fn();
+    render(
+      <NotificationsPage
+        {...defaultProps}
+        friendRequests={[
+          {
+            requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
+            userId: '6a81e965-c508-4321-812c-4be323606a70',
+            displayName: 'Мария Соколова',
+            avatarUrl: null,
+            levelLabel: 'C',
+            createdAt: '2026-08-29T10:00:00+03:00',
+            route: '/profile/6a81e965-c508-4321-812c-4be323606a70',
+          },
+        ]}
+        onAcceptFriendRequest={onAcceptFriendRequest}
+        onDeclineFriendRequest={onDeclineFriendRequest}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Заявки в друзья' })).toBeVisible();
+    expect(screen.getByText('хочет добавить вас в друзья')).toBeVisible();
+    expect(screen.getByRole('link', { name: /Мария Соколова/ })).toHaveAttribute(
+      'href',
+      '/profile/6a81e965-c508-4321-812c-4be323606a70',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить' }));
+    expect(onAcceptFriendRequest).toHaveBeenCalledWith('18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Отказаться' }));
+    expect(onDeclineFriendRequest).toHaveBeenCalledWith('18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91');
+  });
+
+  it('hides the friend request section when there is nothing to answer', () => {
+    render(<NotificationsPage {...defaultProps} />);
+    expect(screen.queryByRole('heading', { name: 'Заявки в друзья' })).not.toBeInTheDocument();
   });
 });
