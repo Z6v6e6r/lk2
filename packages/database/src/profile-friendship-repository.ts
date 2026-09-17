@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto';
-
 import { profilePhotoDeliveryUrl } from '@phub/domain';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
@@ -82,6 +80,7 @@ export interface ProfileFriendshipRepository {
     readonly actorUserId: string;
     readonly targetUserId: string;
     readonly expectedCreatedAt: string;
+    readonly requestHash: string;
     readonly idempotencyKey: string;
     readonly correlationId: string;
   }): Promise<RespondFriendRequestResult | { readonly outcome: 'friendship_changed' }>;
@@ -544,9 +543,6 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
       if (input.actorUserId === input.targetUserId)
         return Promise.resolve({ outcome: 'not_found' });
       const [leftUserId, rightUserId] = orderedPair(input.actorUserId, input.targetUserId);
-      const requestHash = createHash('sha256')
-        .update(`REMOVE:${input.targetUserId}:${input.expectedCreatedAt}`)
-        .digest('hex');
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `${input.tenantId}:friendship-remove:${input.actorUserId}:${input.idempotencyKey}`,
@@ -560,7 +556,7 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
         if (previous) {
           if (
             previous.target_user_id !== input.targetUserId ||
-            previous.request_hash !== requestHash
+            previous.request_hash !== input.requestHash
           ) {
             return { outcome: 'idempotency_conflict' };
           }
@@ -611,7 +607,7 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
             input.actorUserId,
             input.targetUserId,
             input.idempotencyKey,
-            requestHash,
+            input.requestHash,
             JSON.stringify(result),
           ],
         );

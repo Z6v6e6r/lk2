@@ -208,11 +208,16 @@ export function registerProfileFriendshipRoutes(
           'Обновите профиль и повторите попытку.',
         );
       if (!options.repository) return unavailable(request, reply);
+      const expectedCreatedAt = new Date(body.data.expectedCreatedAt).toISOString();
+      const requestHash = createHash('sha256')
+        .update(`REMOVE:${target.userId}:${expectedCreatedAt}`)
+        .digest('hex');
       const result = await options.repository.remove({
         tenantId: current.tenantId,
         actorUserId: current.userId,
         targetUserId: target.userId,
-        expectedCreatedAt: new Date(body.data.expectedCreatedAt).toISOString(),
+        expectedCreatedAt,
+        requestHash,
         idempotencyKey,
         correlationId: request.id,
       });

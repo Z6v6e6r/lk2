@@ -13,6 +13,7 @@ const input = {
   actorUserId,
   targetUserId,
   expectedCreatedAt: createdAt,
+  requestHash: createHash('sha256').update(`REMOVE:${targetUserId}:${createdAt}`).digest('hex'),
   idempotencyKey: 'remove-friend-test-0001',
   correlationId: 'remove-friend-correlation',
 };

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { loadConfig } from '@phub/config';
 import type {
   ProfileFriendshipRepository,
@@ -915,6 +917,9 @@ describe('health endpoints', () => {
         actorUserId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
         targetUserId,
         ...payload,
+        requestHash: createHash('sha256')
+          .update(`REMOVE:${targetUserId}:${payload.expectedCreatedAt}`)
+          .digest('hex'),
       }),
     );
     remove.mockClear();
