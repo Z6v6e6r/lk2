@@ -398,6 +398,96 @@ describe('admin notification repository', () => {
     });
   });
 
+  it('lists Web Push subscribers with keyset pagination and masked phones', async () => {
+    const subscriberRows = [
+      {
+        user_id: userOneId,
+        display_name: 'Анна',
+        phone_e164: '79990000001',
+        endpoint_count: 2,
+        last_confirmed_at: new Date('2026-09-17T12:00:00.000Z'),
+      },
+      {
+        user_id: userTwoId,
+        display_name: 'Борис',
+        phone_e164: null,
+        endpoint_count: 1,
+        last_confirmed_at: null,
+      },
+    ];
+    const { repository, query } = repositoryWithQuery((text) => {
+      if (text.includes('from integration.notification_endpoints e')) {
+        // The requested page size is one below the rows returned, so a next cursor must appear.
+        return { rows: subscriberRows, rowCount: subscriberRows.length };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      repository.listWebPushSubscribers({
+        tenantId,
+        webPushAppId: 'padlhub-web',
+        webPushEnvironment: 'SANDBOX',
+        limit: 1,
+      }),
+    ).resolves.toEqual({
+      items: [
+        {
+          userId: userOneId,
+          displayName: 'Анна',
+          phoneMasked: '•••• 0001',
+          endpointCount: 2,
+          lastConfirmedAt: '2026-09-17T12:00:00.000Z',
+        },
+      ],
+      nextCursor: userOneId,
+    });
+
+    // The query asks for the resolver's reachability predicate and only active accounts.
+    const listSql = String(
+      query.mock.calls.find(([text]) =>
+        String(text).includes('from integration.notification_endpoints e'),
+      )?.[0],
+    );
+    expect(listSql).toContain("e.channel = 'PUSH'");
+    expect(listSql).toContain("a.provider = 'WEB_PUSH'");
+    expect(listSql).toContain('a.environment = $3');
+    expect(listSql).toContain("u.status = 'ACTIVE'");
+    expect(listSql).toContain('u.id > $4::uuid');
+  });
+
+  it('omits the cursor on the last page of Web Push subscribers', async () => {
+    const { repository } = repositoryWithQuery((text) => {
+      if (text.includes('from integration.notification_endpoints e')) {
+        return {
+          rows: [
+            {
+              user_id: userOneId,
+              display_name: 'Анна',
+              phone_e164: null,
+              endpoint_count: 1,
+              last_confirmed_at: null,
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      repository.listWebPushSubscribers({
+        tenantId,
+        webPushAppId: 'padlhub-web',
+        webPushEnvironment: 'SANDBOX',
+        limit: 20,
+        cursor: userTwoId,
+      }),
+    ).resolves.toEqual({
+      items: [{ userId: userOneId, displayName: 'Анна', endpointCount: 1 }],
+    });
+  });
+
   it('creates in-app and web-push projections while recording suppressed preferences', async () => {
     const { repository, query } = repositoryWithQuery(
       campaignProjectionHandler({

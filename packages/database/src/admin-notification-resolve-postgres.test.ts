@@ -414,4 +414,51 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
     expect(campaign.unresolvedCount).toBe(2);
     await expect(campaignRecipients(campaign.campaignId)).resolves.toEqual([idOnlyUser]);
   });
+
+  it('lists only the accounts that can receive a Web Push now, page by page', async () => {
+    const repository = createAdminNotificationRepository(pool);
+    const first = await repository.listWebPushSubscribers({
+      tenantId,
+      webPushAppId: 'padlhub-web',
+      webPushEnvironment: 'SANDBOX',
+      limit: 1,
+    });
+
+    expect(first.items).toHaveLength(1);
+    expect(first.nextCursor).toBe(first.items[0]?.userId);
+    // Endpoints exist for the verified-login owner, the provider-only account and the dual-phone
+    // account; the disabled owner and the foreign tenant must never appear.
+    const seen = new Set([first.items[0]!.userId]);
+    let cursor = first.nextCursor;
+    while (cursor) {
+      const page = await repository.listWebPushSubscribers({
+        tenantId,
+        webPushAppId: 'padlhub-web',
+        webPushEnvironment: 'SANDBOX',
+        limit: 1,
+        cursor,
+      });
+      for (const item of page.items) {
+        expect(seen.has(item.userId)).toBe(false);
+        seen.add(item.userId);
+      }
+      cursor = page.nextCursor;
+    }
+    expect([...seen].sort()).toEqual([loginOwner, providerOnly, dualPhoneUser].sort());
+
+    const all = await repository.listWebPushSubscribers({
+      tenantId,
+      webPushAppId: 'padlhub-web',
+      webPushEnvironment: 'SANDBOX',
+      limit: 20,
+    });
+    expect(all.nextCursor).toBeUndefined();
+    expect(all.items).toHaveLength(3);
+    // The list carries the same masked phone the resolver shows, never the raw value.
+    const owner = all.items.find((item) => item.userId === loginOwner);
+    expect(owner?.phoneMasked).toBe('•••• 0001');
+    expect(JSON.stringify(all.items)).not.toContain(loginPhone);
+    expect(all.items.some((item) => item.userId === disabledProviderOwner)).toBe(false);
+    expect(all.items.some((item) => item.userId === foreignUserId)).toBe(false);
+  });
 });

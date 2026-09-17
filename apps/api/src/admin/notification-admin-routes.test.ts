@@ -75,6 +75,18 @@ function repository() {
     unresolvedPhones: [],
     unresolvedUserIds: [],
   });
+  const listWebPushSubscribers = vi.fn().mockResolvedValue({
+    items: [
+      {
+        userId: 'd938caf6-4eca-49d3-8f78-c7ab1b967a41',
+        displayName: 'Сергеев Алексей',
+        phoneMasked: '•••• 3190',
+        endpointCount: 2,
+        lastConfirmedAt: '2026-09-17T12:00:00.000Z',
+      },
+    ],
+    nextCursor: 'd938caf6-4eca-49d3-8f78-c7ab1b967a41',
+  });
   const createCampaign = vi.fn().mockResolvedValue({
     outcome: 'accepted',
     campaignId: '50b93bf8-490c-4b76-a5b0-d76c3a4b685a',
@@ -89,10 +101,12 @@ function repository() {
     value: {
       getCapabilities,
       resolveRecipients,
+      listWebPushSubscribers,
       createCampaign,
     } satisfies AdminNotificationRepository,
     getCapabilities,
     resolveRecipients,
+    listWebPushSubscribers,
     createCampaign,
   };
 }
@@ -484,5 +498,82 @@ describe('admin notification routes', () => {
     expect(createCampaignInput(adminRepository.createCampaign, 1)?.requestHash).not.toBe(
       createCampaignInput(adminRepository.createCampaign, 0)?.requestHash,
     );
+  });
+
+  it('lists the accounts that have an active Web Push subscription with masked phones', async () => {
+    const adminRepository = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/notifications/web-push-subscribers?limit=10&cursor=d938caf6-4eca-49d3-8f78-c7ab1b967a41',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'x-app-platform': 'cup-admin',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(adminRepository.listWebPushSubscribers).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 10,
+        cursor: 'd938caf6-4eca-49d3-8f78-c7ab1b967a41',
+        webPushAppId: 'padlhub-web',
+        webPushEnvironment: 'SANDBOX',
+      }),
+    );
+    expect(response.json()).toMatchObject({
+      items: [
+        {
+          userId: 'd938caf6-4eca-49d3-8f78-c7ab1b967a41',
+          displayName: 'Сергеев Алексей',
+          phoneMasked: '•••• 3190',
+          endpointCount: 2,
+        },
+      ],
+      nextCursor: 'd938caf6-4eca-49d3-8f78-c7ab1b967a41',
+    });
+    expect(response.body).not.toContain('+79104303190');
+  });
+
+  it('defaults the page size and rejects a malformed page or cursor', async () => {
+    const adminRepository = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await token()}`,
+      'x-app-platform': 'cup-admin',
+    };
+
+    const defaulted = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/notifications/web-push-subscribers',
+      headers,
+    });
+    expect(defaulted.statusCode).toBe(200);
+    expect(adminRepository.listWebPushSubscribers).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 20 }),
+    );
+
+    for (const query of ['limit=0', 'limit=51', 'limit=abc', 'cursor=not-a-uuid']) {
+      const invalid = await app.inject({
+        method: 'GET',
+        url: `/admin/api/v1/local-padel/notifications/web-push-subscribers?${query}`,
+        headers,
+      });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+    }
   });
 });

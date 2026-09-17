@@ -19,6 +19,24 @@ export interface AdminNotificationRecipientResolution {
   readonly unresolvedUserIds: readonly string[];
 }
 
+/**
+ * One operator-visible row for the CUP: an account that can actually receive a Web Push right now. The
+ * phone is only ever masked, and the count and the last confirmation let the operator judge whether the
+ * subscription is live.
+ */
+export interface AdminWebPushSubscriber {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly phoneMasked?: string;
+  readonly endpointCount: number;
+  readonly lastConfirmedAt?: string;
+}
+
+export interface AdminWebPushSubscriberPage {
+  readonly items: readonly AdminWebPushSubscriber[];
+  readonly nextCursor?: string;
+}
+
 export interface AdminNotificationCapabilities {
   readonly inAppTenantEnabled: boolean;
   readonly webPushTenantEnabled: boolean;
@@ -58,6 +76,13 @@ export interface AdminNotificationRepository {
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
   }): Promise<AdminNotificationRecipientResolution>;
+  listWebPushSubscribers(input: {
+    readonly tenantId: string;
+    readonly webPushAppId: string;
+    readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    readonly limit: number;
+    readonly cursor?: string;
+  }): Promise<AdminWebPushSubscriberPage>;
   createCampaign(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -82,6 +107,14 @@ interface CapabilitiesRow extends QueryResultRow {
   readonly ios_push_enabled: boolean;
   readonly android_push_enabled: boolean;
   readonly web_push_provider_configured: boolean;
+}
+
+interface SubscriberRow extends QueryResultRow {
+  readonly user_id: string;
+  readonly display_name: string;
+  readonly phone_e164: string | null;
+  readonly endpoint_count: number;
+  readonly last_confirmed_at: Date | null;
 }
 
 interface RecipientRow extends QueryResultRow {
@@ -524,6 +557,63 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
           matched,
           unresolvedPhones: byPhone.unresolvedPhones,
           unresolvedUserIds: byUserId.unresolvedUserIds,
+        };
+      });
+    },
+
+    listWebPushSubscribers(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        // Keyset pagination on the user id: the resolver's reachability predicate applies, so only
+        // accounts with an active Web Push endpoint of an active provider account are listed.
+        const result = await client.query<SubscriberRow>(
+          `select
+             u.id as user_id,
+             p.display_name,
+             p.phone_e164,
+             count(e.id)::integer as endpoint_count,
+             max(e.last_confirmed_at) as last_confirmed_at
+           from integration.notification_endpoints e
+           join integration.notification_provider_accounts a
+             on a.tenant_id = e.tenant_id and a.id = e.provider_account_id
+           join identity.users u
+             on u.tenant_id = e.tenant_id and u.id = e.user_id
+           join profile.user_summaries p
+             on p.tenant_id = u.tenant_id and p.user_id = u.id
+          where e.tenant_id = $1
+            and e.channel = 'PUSH'
+            and e.status = 'ACTIVE'
+            and a.channel = 'PUSH'
+            and a.platform = 'WEB'
+            and a.provider = 'WEB_PUSH'
+            and a.app_id = $2
+            and a.environment = $3
+            and a.status = 'ACTIVE'
+            and u.status = 'ACTIVE'
+            and ($4::uuid is null or u.id > $4::uuid)
+          group by u.id, p.display_name, p.phone_e164
+          order by u.id
+          limit $5`,
+          [
+            input.tenantId,
+            input.webPushAppId,
+            input.webPushEnvironment,
+            input.cursor ?? null,
+            input.limit + 1,
+          ],
+        );
+        const page = result.rows.slice(0, input.limit);
+        const last = page[page.length - 1];
+        return {
+          items: page.map((row) => ({
+            userId: row.user_id,
+            displayName: row.display_name,
+            ...(row.phone_e164 ? { phoneMasked: maskPhone(row.phone_e164) } : {}),
+            endpointCount: row.endpoint_count,
+            ...(row.last_confirmed_at
+              ? { lastConfirmedAt: row.last_confirmed_at.toISOString() }
+              : {}),
+          })),
+          ...(result.rows.length > input.limit && last ? { nextCursor: last.user_id } : {}),
         };
       });
     },

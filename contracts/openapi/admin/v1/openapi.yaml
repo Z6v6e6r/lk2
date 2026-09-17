@@ -736,6 +736,44 @@ paths:
           $ref: '#/components/responses/ApiError'
         '403':
           $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/notifications/web-push-subscribers:
+    get:
+      tags: [Notifications]
+      operationId: listAdminNotificationWebPushSubscribers
+      summary: List accounts that can receive a Web Push right now
+      description: >
+        Keyset-paginated read over the accounts with an active Web Push endpoint of an active provider
+        account for the configured app and environment. Phones are masked; the cursor is the last user
+        id of the previous page and also serves as a ready-to-use targeting value.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: One page of Web Push subscribers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminWebPushSubscriberPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
   /admin/api/v1/{tenantKey}/notifications/campaigns:
     post:
       tags: [Notifications]
@@ -2356,6 +2394,39 @@ components:
           properties:
             userIds:
               minItems: 1
+    AdminWebPushSubscriber:
+      type: object
+      additionalProperties: false
+      description: >
+        An account that can receive a Web Push now. phoneMasked is present only when the account has a
+        verified phone.
+      required: [userId, displayName, endpointCount]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        phoneMasked:
+          type: string
+        endpointCount:
+          type: integer
+          minimum: 1
+        lastConfirmedAt:
+          type: string
+          format: date-time
+    AdminWebPushSubscriberPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminWebPushSubscriber'
+        nextCursor:
+          type: string
+          format: uuid
     AdminNotificationChannelCapability:
       type: object
       additionalProperties: false
