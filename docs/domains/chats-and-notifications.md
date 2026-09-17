@@ -39,7 +39,15 @@ read cursor. Tournament остаётся закрыт без identity-linked can
 
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT
-/notifications/read-cursor` и типизированный SDK. Реализованный Web Push срез добавляет
+/notifications/read-cursor` и типизированный SDK. Direct-chat family добавляет ruleset
+`messaging.ru-ru.v1`: `messaging.conversation.created.v1` и `messaging.message.created.v1` идут по
+generic source-event схеме, их payload остаётся identifier-only (tenant, conversation, message,
+sequence и `recipientUserIds`), а получатели резолвятся правилом
+`EVENT_USERS/recipientUserIds` из активных участников разговора, кроме автора. Шаблон не цитирует
+текст сообщения: inbox-item ведёт ссылкой `/chats/{{conversationId}}`, категория `MESSAGING`
+опциональна для получателя. Провижининг — `npm run notifications:messaging:provision`,
+отдельная очередь проектора — `phub.messaging-notification-intent-projector.v1`.
+Реализованный Web Push срез добавляет
 зашифрованные subscription endpoint, capability/register/revoke API, браузерный service worker,
 PUSH delivery jobs, VAPID adapter, bounded retries, circuit breaker и инвалидирование 404/410.
 Ручной срез ЦУП добавляет отдельный `phub-admin` JWT audience, tenant-scoped permission

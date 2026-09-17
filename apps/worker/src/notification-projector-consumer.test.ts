@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GAME_DOMAIN_EVENT_TYPES, consumersForGameEvent, gameDomainEventSchema } from '@phub/games';
-import { GAME_NOTIFICATION_EVENT_TYPES, notificationSourceEventSchema } from '@phub/notifications';
+import {
+  GAME_NOTIFICATION_EVENT_TYPES,
+  MESSAGING_NOTIFICATION_EVENT_TYPES,
+  notificationSourceEventSchema,
+} from '@phub/notifications';
 
 const projector = vi.hoisted(() => ({ applyNotificationSourceEvent: vi.fn() }));
 
@@ -9,6 +13,8 @@ vi.mock('./notification-projector.js', () => projector);
 import {
   GAME_NOTIFICATION_PROJECTOR_QUEUE,
   GAME_NOTIFICATION_SOURCE_ROUTING_KEYS,
+  MESSAGING_NOTIFICATION_PROJECTOR_QUEUE,
+  MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS,
   NOTIFICATION_PROJECTOR_QUEUE,
   NOTIFICATION_SOURCE_ROUTING_KEYS,
   registerNotificationProjectorConsumer,
@@ -112,6 +118,10 @@ describe('notification projector topology', () => {
       GAME_NOTIFICATION_PROJECTOR_QUEUE,
       expect.objectContaining({ durable: true }),
     );
+    expect(channel.assertQueue).toHaveBeenCalledWith(
+      MESSAGING_NOTIFICATION_PROJECTOR_QUEUE,
+      expect.objectContaining({ durable: true }),
+    );
     expect(
       channel.bindQueue.mock.calls
         .filter((call) => call[0] === NOTIFICATION_PROJECTOR_QUEUE)
@@ -122,8 +132,19 @@ describe('notification projector topology', () => {
         .filter((call) => call[0] === GAME_NOTIFICATION_PROJECTOR_QUEUE)
         .map((call) => call[2]),
     ).toEqual(GAME_NOTIFICATION_SOURCE_ROUTING_KEYS);
+    expect(MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS).toEqual(MESSAGING_NOTIFICATION_EVENT_TYPES);
+    expect(
+      channel.bindQueue.mock.calls
+        .filter((call) => call[0] === MESSAGING_NOTIFICATION_PROJECTOR_QUEUE)
+        .map((call) => call[2]),
+    ).toEqual(MESSAGING_NOTIFICATION_EVENT_TYPES);
     expect(channel.consume).toHaveBeenCalledWith(
       GAME_NOTIFICATION_PROJECTOR_QUEUE,
+      expect.any(Function),
+      { noAck: false },
+    );
+    expect(channel.consume).toHaveBeenCalledWith(
+      MESSAGING_NOTIFICATION_PROJECTOR_QUEUE,
       expect.any(Function),
       { noAck: false },
     );
@@ -138,6 +159,9 @@ describe('notification projector topology', () => {
       ),
       ...GAME_NOTIFICATION_SOURCE_ROUTING_KEYS.map(
         (routingKey) => `bind:${GAME_NOTIFICATION_PROJECTOR_QUEUE}:${routingKey}`,
+      ),
+      ...MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS.map(
+        (routingKey) => `bind:${MESSAGING_NOTIFICATION_PROJECTOR_QUEUE}:${routingKey}`,
       ),
       'unbind:#',
     ]);

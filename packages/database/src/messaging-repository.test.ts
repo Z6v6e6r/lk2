@@ -220,6 +220,9 @@ describe('messaging repository', () => {
       if (text.includes('insert into messaging.conversations')) {
         return Promise.resolve({ rows: [{ id: conversationId }], rowCount: 1 });
       }
+      if (text.includes('select member.user_id')) {
+        return Promise.resolve({ rows: [{ user_id: otherUserId }], rowCount: 1 });
+      }
       if (
         text.includes('insert into messaging.conversation_members') ||
         text.includes('insert into audit.outbox_events') ||
@@ -609,6 +612,9 @@ describe('messaging repository', () => {
       ) {
         return Promise.resolve({ rows: [], rowCount: 1 });
       }
+      if (text.includes('select member.user_id')) {
+        return Promise.resolve({ rows: [{ user_id: otherUserId }], rowCount: 1 });
+      }
       if (text.includes('message.id = $4')) {
         return Promise.resolve({
           rows: [
@@ -654,6 +660,11 @@ describe('messaging repository', () => {
     expect(outboxCall).toBeDefined();
     expect(JSON.stringify(outboxCall?.[1])).not.toContain(body);
     expect(JSON.stringify(outboxCall?.[1])).toContain(messageId);
+    expect(JSON.parse(String(outboxCall?.[1]?.[3]))).toMatchObject({
+      conversationId,
+      messageId,
+      recipientUserIds: [otherUserId],
+    });
     const auditCall = query.mock.calls.find(([text]) =>
       String(text).includes('insert into audit.audit_log'),
     );

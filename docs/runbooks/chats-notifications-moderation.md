@@ -1268,14 +1268,23 @@ Worker startup must declare `phub.dead-letter.v1` as a durable quorum queue and 
 `phub.dead-letter` topic exchange with routing key `#`. This is shared retention for rejected
 events; it does not change the routing keys or delivery policy of existing consumers.
 
-Notification projectors use two explicit queues. `phub.notification-intent-projector.v1` retains
+Notification projectors use three explicit queues. `phub.notification-intent-projector.v1` retains
 only the four booking contracts so old workers remain safe during a rolling upgrade;
 `phub.game-notification-intent-projector.v1` binds only the three GAME contracts and is consumed
-only by workers that understand their schemas and recipient fence. The worker removes the legacy
-`phub.events` / `#` binding from the booking queue. Verify that neither projector queue has a
-wildcard binding before enabling rules. Every future notification-producing vertical must add its
-versioned routing key to a code-owned topology manifest and test; a database rule alone must not
-broaden broker consumption.
+only by workers that understand their schemas and recipient fence;
+`phub.messaging-notification-intent-projector.v1` binds only `messaging.conversation.created.v1` and
+`messaging.message.created.v1`, whose identifier-only payloads carry the `recipientUserIds` the
+ruleset audience selector reads. The worker removes the legacy `phub.events` / `#` binding from the
+booking queue. Verify that no projector queue has a wildcard binding before enabling rules. Every
+future notification-producing vertical must add its versioned routing key to a code-owned topology
+manifest and test; a database rule alone must not broaden broker consumption.
+
+Direct-chat notifications are optional per category: provision them with
+`npm run notifications:messaging:provision -- --tenant-key=<key> --actor-id=<uuid>
+--idempotency-key=<16-128 chars>` (dry-run first, then `--confirm=APPLY_MESSAGING_NOTIFICATION_RULESET`)
+and enable in-app delivery with the existing notification runtime command. Without the messaging
+runtime gates (`messaging.tenant_runtime_settings`) no messaging event is produced at all, so a
+missing conversation notification is first an HTTP/tenant-gate question, not a projector fault.
 
 GAME chat membership uses the separate durable quorum queue
 `phub.game-messaging-membership.v1`. It binds exactly the catalog routes `game.scheduled.v1`,

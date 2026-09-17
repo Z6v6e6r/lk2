@@ -155,6 +155,77 @@ export const GAME_NOTIFICATION_RULE_ACTIVE = GAME_NOTIFICATION_CANONICAL_CONTRAC
 export const GAME_NOTIFICATION_DEFINITIONS = GAME_NOTIFICATION_CANONICAL_CONTRACT.definitions;
 export type GameNotificationDefinition = (typeof GAME_NOTIFICATION_DEFINITIONS)[number];
 
+/**
+ * Direct-chat notification ruleset. Messaging events stay on the generic source-event schema: ADR
+ * 0022 keeps their payload identifier-only (tenant, conversation, message, sequence and recipient
+ * identifiers), so the projector resolves recipients from `recipientUserIds` instead of a dedicated
+ * payload contract, and the rendered text never quotes message content.
+ */
+export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
+  rulesetVersion: 'messaging.ru-ru.v1',
+  template: {
+    version: 1,
+    locale: 'ru-RU',
+    category: 'MESSAGING',
+    deepLink: '/chats/{{conversationId}}',
+    channels: ['IN_APP'],
+    active: true,
+  },
+  rule: {
+    keySuffix: 'default',
+    channelOverride: ['IN_APP'],
+    active: true,
+  },
+  definitions: [
+    {
+      key: 'messaging.conversation.created',
+      sourceEventType: 'messaging.conversation.created.v1',
+      title: 'Новый чат',
+      body: 'Откройте чат в ПадлХАБ, чтобы ответить.',
+      audienceSelector: {
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+      },
+      mandatory: false,
+    },
+    {
+      key: 'messaging.message.created',
+      sourceEventType: 'messaging.message.created.v1',
+      title: 'Новое сообщение',
+      body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+      audienceSelector: {
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+      },
+      mandatory: false,
+    },
+  ],
+} as const;
+
+export const MESSAGING_NOTIFICATION_RULESET_VERSION =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.rulesetVersion;
+export const MESSAGING_NOTIFICATION_TEMPLATE_VERSION =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.version;
+export const MESSAGING_NOTIFICATION_LOCALE =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.locale;
+export const MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.category;
+export const MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.deepLink;
+export const MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.channels;
+export const MESSAGING_NOTIFICATION_TEMPLATE_ACTIVE =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.active;
+export const MESSAGING_NOTIFICATION_RULE_KEY_SUFFIX =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.rule.keySuffix;
+export const MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.rule.channelOverride;
+export const MESSAGING_NOTIFICATION_RULE_ACTIVE =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.rule.active;
+export const MESSAGING_NOTIFICATION_DEFINITIONS =
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.definitions;
+export type MessagingNotificationDefinition = (typeof MESSAGING_NOTIFICATION_DEFINITIONS)[number];
+
 export function bookingNotificationContractHash(contract: object): string {
   const serialized = JSON.stringify(contract);
   if (!serialized) throw new Error('BOOKING_NOTIFICATION_CONTRACT_NOT_SERIALIZABLE');
@@ -166,6 +237,9 @@ export const BOOKING_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash
 );
 export const GAME_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
   GAME_NOTIFICATION_CANONICAL_CONTRACT,
+);
+export const MESSAGING_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
+  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT,
 );
 
 export const BOOKING_NOTIFICATION_EVENT_TYPES = [
@@ -179,6 +253,11 @@ export const GAME_NOTIFICATION_EVENT_TYPES = [
   'game.participation.confirmed.v1',
   'game.participation.left.v1',
   'game.cancelled.v1',
+] as const;
+
+export const MESSAGING_NOTIFICATION_EVENT_TYPES = [
+  'messaging.conversation.created.v1',
+  'messaging.message.created.v1',
 ] as const;
 
 export const MAX_NOTIFICATION_EVENT_RECIPIENTS = 50;

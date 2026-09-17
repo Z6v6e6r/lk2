@@ -1,6 +1,7 @@
 import {
   BOOKING_NOTIFICATION_EVENT_TYPES,
   GAME_NOTIFICATION_EVENT_TYPES,
+  MESSAGING_NOTIFICATION_EVENT_TYPES,
   notificationSourceEventSchema,
 } from '@phub/notifications';
 import type { Channel, ConsumeMessage } from 'amqplib';
@@ -11,8 +12,11 @@ import { applyNotificationSourceEvent } from './notification-projector.js';
 
 export const NOTIFICATION_PROJECTOR_QUEUE = 'phub.notification-intent-projector.v1';
 export const GAME_NOTIFICATION_PROJECTOR_QUEUE = 'phub.game-notification-intent-projector.v1';
+export const MESSAGING_NOTIFICATION_PROJECTOR_QUEUE =
+  'phub.messaging-notification-intent-projector.v1';
 export const NOTIFICATION_SOURCE_ROUTING_KEYS = BOOKING_NOTIFICATION_EVENT_TYPES;
 export const GAME_NOTIFICATION_SOURCE_ROUTING_KEYS = GAME_NOTIFICATION_EVENT_TYPES;
+export const MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS = MESSAGING_NOTIFICATION_EVENT_TYPES;
 
 async function handleMessage(options: {
   readonly channel: Channel;
@@ -123,6 +127,16 @@ export async function registerNotificationProjectorConsumer(options: {
   for (const routingKey of GAME_NOTIFICATION_SOURCE_ROUTING_KEYS) {
     await options.channel.bindQueue(GAME_NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', routingKey);
   }
+  // Messaging events get their own queue for the same reason as GAME: an older worker must never
+  // consume a selector or payload shape it does not understand.
+  await options.channel.assertQueue(MESSAGING_NOTIFICATION_PROJECTOR_QUEUE, queueOptions);
+  for (const routingKey of MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS) {
+    await options.channel.bindQueue(
+      MESSAGING_NOTIFICATION_PROJECTOR_QUEUE,
+      'phub.events',
+      routingKey,
+    );
+  }
   // Establish a complete route for every GAME event before removing the legacy wildcard. RabbitMQ
   // publisher confirms do not reject unroutable messages, so the opposite order creates a loss gap.
   await options.channel.unbindQueue(NOTIFICATION_PROJECTOR_QUEUE, 'phub.events', '#');
@@ -136,6 +150,13 @@ export async function registerNotificationProjectorConsumer(options: {
   );
   await options.channel.consume(
     GAME_NOTIFICATION_PROJECTOR_QUEUE,
+    (message) => {
+      if (message) void handleMessage({ ...options, message });
+    },
+    { noAck: false },
+  );
+  await options.channel.consume(
+    MESSAGING_NOTIFICATION_PROJECTOR_QUEUE,
     (message) => {
       if (message) void handleMessage({ ...options, message });
     },
