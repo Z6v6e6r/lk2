@@ -1,6 +1,7 @@
+import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import styles from './ChatsUi.module.css';
 
-export type ChatFilter = 'ALL' | 'DIRECT' | 'GAME';
+export type ChatFilter = 'ALL' | 'DIRECT' | 'GAME' | 'TOURNAMENT' | 'STATION' | 'COMMUNITY';
 
 interface ChatFiltersProps {
   readonly filter: ChatFilter;
@@ -13,6 +14,9 @@ const filters = [
   { value: 'ALL', label: 'Все' },
   { value: 'DIRECT', label: 'Личные' },
   { value: 'GAME', label: 'Игры' },
+  { value: 'TOURNAMENT', label: 'Турниры' },
+  { value: 'STATION', label: 'Станции' },
+  { value: 'COMMUNITY', label: 'Сообщества' },
 ] as const;
 
 export function ChatFilters({
@@ -51,10 +55,14 @@ export function ChatFilters({
             aria-pressed={filter === item.value}
             onClick={() => onFilterChange(item.value)}
           >
-            {item.label}
+            <ChatCategoryIcon name={item.value} />
+            <span>{item.label}</span>
           </button>
         ))}
-        <a href="/notifications">Уведомления</a>
+        <a href="/notifications">
+          <ChatCategoryIcon name="NOTIFICATIONS" />
+          <span>Уведомления</span>
+        </a>
       </nav>
     </div>
   );

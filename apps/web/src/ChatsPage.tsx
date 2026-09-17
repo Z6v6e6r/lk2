@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type { ConversationMessage, ConversationPage } from './auth-gateway.js';
+import { ChatCategoryIcon } from './chats-ui/ChatCategoryIcon.js';
 import { ChatFilters, type ChatFilter } from './chats-ui/ChatFilters.js';
 import { ChatList } from './chats-ui/ChatList.js';
 import { ChatThread } from './chats-ui/ChatThread.js';
@@ -80,6 +81,7 @@ export function ChatsPage({
 }: ChatsPageProps): React.JSX.Element {
   const [filter, setFilter] = useState<ChatFilter>('ALL');
   const [query, setQuery] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(false);
   const selected = page?.items.find((conversation) => conversation.id === selectedConversationId);
 
   if (mode === 'new') {
@@ -138,9 +140,22 @@ export function ChatsPage({
         <aside className={styles.listPane} aria-label="Список чатов">
           <header className={styles.listHeader}>
             <h1>Чаты</h1>
-            <a className={styles.notificationsShortcut} href="/notifications">
-              События
-            </a>
+            <div className={styles.headerActions}>
+              <button
+                type="button"
+                className={`${styles.unreadToggle} ${unreadOnly ? styles.unreadToggleActive : ''}`}
+                aria-label="Только непрочитанные"
+                title="Только непрочитанные"
+                aria-pressed={unreadOnly}
+                onClick={() => setUnreadOnly(!unreadOnly)}
+              >
+                <ChatCategoryIcon name="UNREAD" />
+              </button>
+              <a className={styles.notificationsShortcut} href="/notifications">
+                <ChatCategoryIcon name="NOTIFICATIONS" />
+                <span className="sr-only">События</span>
+              </a>
+            </div>
           </header>
           <ChatFilters
             filter={filter}
@@ -151,6 +166,7 @@ export function ChatsPage({
           <ChatList
             page={page}
             error={Boolean(error)}
+            unreadOnly={unreadOnly}
             filter={filter}
             query={query}
             {...(selectedConversationId ? { selectedConversationId } : {})}
@@ -174,8 +190,15 @@ export function ChatsPage({
           />
         ) : (
           <section className={styles.threadPlaceholder} aria-label="История сообщений">
-            <h2>Выберите диалог</h2>
-            <p>История откроется здесь, а на мобильном — на отдельном экране.</p>
+            <span className={styles.placeholderIcon} aria-hidden="true">
+              <ChatCategoryIcon name="ALL" />
+            </span>
+            <h2>Будьте на связи</h2>
+            <p>
+              Обсуждайте игры и договаривайтесь о встречах.
+              <br />
+              Выберите чат, чтобы начать общение.
+            </p>
           </section>
         )}
       </section>
