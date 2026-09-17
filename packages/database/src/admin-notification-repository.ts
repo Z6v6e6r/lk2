@@ -167,11 +167,46 @@ async function recipientRows(
   },
 ): Promise<readonly RecipientRow[]> {
   if (input.normalizedPhones.length === 0) return [];
+  // A phone reaches a PadlHub user through two different sources. `integration.external_entity_map`
+  // holds the provider-asserted phone and is unique per phone inside the tenant, while
+  // `profile.user_summaries.phone_e164` only ever holds a phone that was verified by a phone login and
+  // can be stale (a legacy import can leave it on another account). The provider mapping is therefore
+  // authoritative and the login column is only a fallback for users the provider never reported; a
+  // phone resolved from the provider mapping is never re-resolved from a stale summary row. Ambiguity
+  // stays fail-closed downstream: two rows for one phone never match.
   const result = await client.query<RecipientRow>(
-    `select
+    `with requested as (
+       select unnest($2::text[]) as phone
+     ),
+     provider_link as (
+       select requested.phone, link.internal_id as user_id
+         from requested
+         join integration.external_entity_map link
+           on link.tenant_id = $1
+          and link.external_system = 'VIVA'
+          and link.entity_type = 'legacy_viewer_phone'
+          and link.external_id = requested.phone
+     ),
+     login_phone as (
+       select requested.phone, summary.user_id
+         from requested
+         join profile.user_summaries summary
+           on summary.tenant_id = $1
+          and summary.phone_e164 = requested.phone
+     ),
+     resolved as (
+       select phone, user_id from provider_link
+       union all
+       select login_phone.phone, login_phone.user_id
+         from login_phone
+        where not exists (
+          select 1 from provider_link where provider_link.phone = login_phone.phone
+        )
+     )
+     select
        u.id as user_id,
        p.display_name,
-       p.phone_e164,
+       resolved.phone as phone_e164,
        coalesce((
          select pref.enabled
            from notifications.user_preferences pref
@@ -204,13 +239,13 @@ async function recipientRows(
             and a.environment = $4
             and a.status = 'ACTIVE'
        ) as web_push_endpoint_count
-     from identity.users u
+     from resolved
+     join identity.users u
+       on u.tenant_id = $1 and u.id = resolved.user_id
      join profile.user_summaries p
        on p.tenant_id = u.tenant_id and p.user_id = u.id
-    where u.tenant_id = $1
-      and u.status = 'ACTIVE'
-      and p.phone_e164 = any($2::text[])
-    order by p.phone_e164, u.id`,
+    where u.status = 'ACTIVE'
+    order by resolved.phone, u.id`,
     [input.tenantId, [...input.normalizedPhones], input.webPushAppId, input.webPushEnvironment],
   );
   return result.rows;
