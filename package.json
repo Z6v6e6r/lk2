@@ -47,6 +47,7 @@
     "contracts:generate": "openapi-typescript contracts/openapi/public/v1/openapi.yaml -o packages/api-contracts/src/generated-public.ts && openapi-typescript contracts/openapi/user/v1/openapi.yaml -o packages/api-contracts/src/generated-user.ts && openapi-typescript contracts/openapi/user/v2/openapi.yaml -o packages/api-contracts/src/generated-user-v2.ts && openapi-typescript contracts/openapi/internal/v1/openapi.yaml -o packages/api-contracts/src/generated-internal.ts",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "db:migrate:check": "node --import tsx scripts/check-migrations.ts",
+    "identity:phone-anomalies:report": "node --env-file-if-exists=.env --import tsx scripts/report-phone-identity-anomalies.ts",
     "db:booking-reminders:verify": "vitest run apps/worker/src/booking-reminder-scheduler.pg.test.ts",
     "db:role-boundary:verify": "vitest run apps/migrator/src/database-role-boundary.pg.test.ts",
     "db:communities-role-split:pg16:verify": "sh scripts/run-communities-role-split-pg16-verification.sh",
