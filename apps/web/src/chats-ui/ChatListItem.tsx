@@ -1,4 +1,4 @@
-import { ChatIcon } from '../HomeDashboardPage.js';
+import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import type { ConversationSummary } from '../auth-gateway.js';
 import {
   conversationTitle,
@@ -29,10 +29,14 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
           className={`${styles.avatar} ${conversation.kind === 'GAME' ? styles.gameAvatar : ''}`}
           aria-hidden="true"
         >
-          {conversation.kind === 'GAME' ? <ChatIcon /> : initials(title)}
+          {conversation.kind === 'GAME' ? <ChatCategoryIcon name="GAME" /> : initials(title)}
         </span>
         <span className={styles.listCopy}>
-          <span className={styles.listTitle}>{title}</span>
+          <span
+            className={`${styles.listTitle} ${conversation.kind === 'GAME' ? styles.gameTitle : ''}`}
+          >
+            {title}
+          </span>
           <span className={styles.listPreview}>
             {conversation.lastMessage?.body ?? 'Новый диалог'}
           </span>

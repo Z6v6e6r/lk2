@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 
+import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import styles from './ChatsUi.module.css';
 
 interface ChatComposerProps {
@@ -46,8 +47,13 @@ export function ChatComposer({
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={onKeyDown}
       />
-      <button type="submit" disabled={busy || forbidden || !draft.trim()}>
-        {busy ? 'Отправляем…' : 'Отправить'}
+      <button
+        type="submit"
+        aria-label={busy ? 'Отправляем…' : 'Отправить'}
+        title="Отправить"
+        disabled={busy || forbidden || !draft.trim()}
+      >
+        <ChatCategoryIcon name="SEND" />
       </button>
       <small>Enter — новая строка · Ctrl/⌘+Enter — отправить</small>
     </form>

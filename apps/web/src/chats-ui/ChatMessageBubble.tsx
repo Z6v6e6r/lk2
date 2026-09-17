@@ -1,5 +1,5 @@
 import type { ConversationMessage } from '../auth-gateway.js';
-import { formatMessageTime } from './chat-format.js';
+import { formatMessageTime, initials } from './chat-format.js';
 import styles from './ChatsUi.module.css';
 
 interface ChatMessageBubbleProps {
@@ -15,6 +15,11 @@ export function ChatMessageBubble({
 }: ChatMessageBubbleProps): React.JSX.Element {
   return (
     <li className={`${styles.messageRow} ${own ? styles.ownMessageRow : ''}`}>
+      {showSender && !own ? (
+        <span className={styles.senderAvatar} aria-hidden="true">
+          {initials(message.sender.displayName)}
+        </span>
+      ) : null}
       <article className={`${styles.messageBubble} ${own ? styles.ownMessageBubble : ''}`}>
         <span className="sr-only">Отправитель: {own ? 'Вы' : message.sender.displayName}</span>
         {showSender && !own ? (

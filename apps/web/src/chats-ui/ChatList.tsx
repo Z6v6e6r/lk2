@@ -1,4 +1,5 @@
 import type { ConversationPage } from '../auth-gateway.js';
+import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import type { ChatFilter } from './ChatFilters.js';
 import { ChatListItem } from './ChatListItem.js';
 import { conversationTitle } from './chat-format.js';
@@ -9,6 +10,7 @@ interface ChatListProps {
   readonly error: boolean;
   readonly filter: ChatFilter;
   readonly query: string;
+  readonly unreadOnly: boolean;
   readonly selectedConversationId?: string;
 }
 
@@ -17,6 +19,7 @@ export function ChatList({
   error,
   filter,
   query,
+  unreadOnly,
   selectedConversationId,
 }: ChatListProps): React.JSX.Element {
   if (!page && !error) {
@@ -31,8 +34,27 @@ export function ChatList({
 
   if (!page || error) return <div className={styles.listSpacer} />;
 
+  // These categories are planned UI destinations, not conversation kinds accepted by the API.
+  if (filter === 'TOURNAMENT' || filter === 'STATION' || filter === 'COMMUNITY') {
+    const labels = {
+      TOURNAMENT: 'Чаты турниров',
+      STATION: 'Чаты станций',
+      COMMUNITY: 'Чаты сообществ',
+    };
+    return (
+      <div className={styles.emptyState} role="status">
+        <span className={styles.emptyIcon} aria-hidden="true">
+          <ChatCategoryIcon name={filter} />
+        </span>
+        <strong>{labels[filter]}</strong>
+        <p>Этот тип чатов ещё не подключён. Здесь появятся обсуждения с участниками.</p>
+      </div>
+    );
+  }
+
   const normalizedQuery = query.trim().toLocaleLowerCase('ru-RU');
   const conversations = page.items.filter((conversation) => {
+    if (unreadOnly && conversation.unreadCount <= 0) return false;
     if (filter !== 'ALL' && conversation.kind !== filter) return false;
     if (!normalizedQuery) return true;
     return [conversationTitle(conversation), conversation.lastMessage?.body ?? ''].some((value) =>
@@ -44,7 +66,16 @@ export function ChatList({
     return (
       <div className={styles.emptyState} role="status">
         <strong>Диалогов пока нет</strong>
-        <p>Личный чат откроется по безопасной ссылке из профиля или карточки игры.</p>
+        <p>Начните общение из профиля игрока или откройте чат в карточке своей игры.</p>
+      </div>
+    );
+  }
+
+  if (conversations.length === 0 && unreadOnly && !normalizedQuery) {
+    return (
+      <div className={styles.emptyState} role="status">
+        <strong>Нет непрочитанных чатов</strong>
+        <p>Все сообщения в этой категории прочитаны.</p>
       </div>
     );
   }

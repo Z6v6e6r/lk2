@@ -1,5 +1,6 @@
 import type { GameConversationSummary } from '../auth-gateway.js';
 import { safeGameHref } from './chat-format.js';
+import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import styles from './ChatsUi.module.css';
 
 export function ChatContextCard({
@@ -11,7 +12,9 @@ export function ChatContextCard({
 
   return (
     <aside className={styles.contextCard} aria-label="Контекст игры">
-      <span className={styles.contextLabel}>Игра</span>
+      <span className={styles.contextLabel}>
+        <ChatCategoryIcon name="GAME" /> Игра
+      </span>
       <strong>{conversation.title}</strong>
       {href ? <a href={href}>Открыть игру</a> : null}
     </aside>
