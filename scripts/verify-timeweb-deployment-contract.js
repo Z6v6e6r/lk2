@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { parseDocument } from 'yaml';
 
 import { parseStrictJson } from './strict-json.js';
+import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
 import { validateTimewebObservabilityContract } from './verify-timeweb-api-web-observability.js';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -92,6 +93,7 @@ export function validateTargetContract(target) {
     [
       'schema',
       'hostname',
+      'cupOrigins',
       'ipv4',
       'dns',
       'platform',
@@ -106,6 +108,8 @@ export function validateTargetContract(target) {
   );
   if (target.schema !== 'PHUB_TIMEWEB_TARGET_V1') reject('target_schema');
   if (target.hostname !== 'lk2.padlhub.su') reject('target_hostname');
+  const targetCorsOrigins = readTimewebCorsOrigins(target);
+  if (!targetCorsOrigins.ok) reject(targetCorsOrigins.reason);
   if (target.ipv4 !== '103.88.243.171') reject('target_ipv4');
 
   exactKeys(target.dns, ['aExpected', 'aaaaExpected', 'cnameExpected', 'ttl'], 'target_dns');
@@ -1005,7 +1009,7 @@ export function validateRuntimeEnvironments(environments, contract, target) {
   }
   if (
     environments.api.LK2_BETA_HOST !== target.hostname ||
-    environments.api.CORS_ORIGINS !== `https://${target.hostname}` ||
+    environments.api.CORS_ORIGINS !== readTimewebCorsOrigins(target).value ||
     environments.api.TRUSTED_PROXY_CIDRS !== `${target.network.ingressAddress}/32` ||
     environments.api.AUTH_COOKIE_SECURE !== 'true' ||
     environments.api.VIVA_MODE !== 'production' ||

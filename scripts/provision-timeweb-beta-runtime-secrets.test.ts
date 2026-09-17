@@ -431,6 +431,20 @@ describe('Timeweb beta runtime secret provisioner', () => {
       'realtime_replica_identity',
     ],
     [
+      'an API origin that the target contract does not declare',
+      (environments: ReturnType<typeof safeRuntimeEnvironments>) => {
+        environments.api!.CORS_ORIGINS = `${environments.api!.CORS_ORIGINS},https://cup.invalid`;
+      },
+      'runtime_identity',
+    ],
+    [
+      'a CUP origin without the beta host',
+      (environments: ReturnType<typeof safeRuntimeEnvironments>) => {
+        environments.api!.CORS_ORIGINS = 'https://padlhub.su';
+      },
+      'runtime_identity',
+    ],
+    [
       'delegation key reused as a JWT key',
       (environments: ReturnType<typeof safeRuntimeEnvironments>) => {
         const delegationKey = environments.api!.VIVA_DELEGATION_ENCRYPTION_KEY;

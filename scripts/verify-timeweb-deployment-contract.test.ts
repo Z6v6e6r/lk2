@@ -134,7 +134,7 @@ function syntheticEnvironments(): Record<string, Record<string, string>> {
     JWT_REALTIME_SECRET: 'synthetic-realtime-key-material-0000003',
     VIVA_DELEGATION_ENCRYPTION_KEY: 'synthetic-viva-key-material-000000004',
     AUTH_COOKIE_SECURE: 'true',
-    CORS_ORIGINS: `https://${target.hostname}`,
+    CORS_ORIGINS: `https://${target.hostname},https://${target.cupOrigins[0]}`,
     TRUSTED_PROXY_CIDRS: `${target.network.ingressAddress}/32`,
     VIVA_MODE: 'production',
     VIVA_OAUTH_ALLOWED_PROVIDERS: 'yandex',
@@ -170,6 +170,18 @@ describe('Timeweb deployment contract', () => {
 
   it('3. rejects the wrong IPv4 address', () => {
     expect(() => validateTargetContract({ ...target, ipv4: '192.0.2.1' })).toThrow('target_ipv4');
+    expect(() => validateTargetContract({ ...target, cupOrigins: ['https://padlhub.su'] })).toThrow(
+      'cup_origins_host',
+    );
+    expect(() => validateTargetContract({ ...target, cupOrigins: ['*.padlhub.su'] })).toThrow(
+      'cup_origins_host',
+    );
+    expect(() =>
+      validateTargetContract({ ...target, cupOrigins: [target.cupOrigins[0], target.cupOrigins[0]] }),
+    ).toThrow('cup_origins_duplicate');
+    expect(() => validateTargetContract({ ...target, cupOrigins: target.hostname })).toThrow(
+      'cup_origins_shape',
+    );
   });
 
   it('4. rejects a wrong SSH fingerprint or algorithm downgrade', () => {

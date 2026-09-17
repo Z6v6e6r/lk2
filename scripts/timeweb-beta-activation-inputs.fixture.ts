@@ -24,6 +24,10 @@ export const runId = '12345678901';
 export const releaseId = `${sourceSha}-${runId}-1`;
 export const host = 'lk2.padlhub.su';
 export const tenantKey = 'local-padel';
+// The API allow-list is the target's own host plus the separately hosted CUP origin declared in
+// deploy/timeweb/target.json; the fixture mirrors that declaration.
+export const cupOrigin = 'padlhub.su';
+export const corsOrigins = `https://${host},https://${cupOrigin}`;
 
 const strongValue = (purpose: string) =>
   createHash('sha512').update(`synthetic-timeweb-beta-${purpose}`).digest('base64url');
@@ -98,7 +102,7 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     JWT_REFRESH_SECRET: strongValue('refresh'),
     JWT_REALTIME_SECRET: strongValue('realtime'),
     AUTH_COOKIE_SECURE: 'true',
-    CORS_ORIGINS: `https://${host}`,
+    CORS_ORIGINS: corsOrigins,
     TRUSTED_PROXY_CIDRS: '172.30.26.10/32',
     CUP_DEV_AUTH_ENABLED: 'false',
     VIVA_MODE: 'production',
