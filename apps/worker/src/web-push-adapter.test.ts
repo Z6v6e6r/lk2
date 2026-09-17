@@ -66,6 +66,40 @@ describe('Web Push delivery adapter', () => {
     });
   });
 
+  it('forwards the per-delivery urgency and TTL without touching the visible payload', async () => {
+    const sendImplementation = vi.fn().mockResolvedValue({
+      statusCode: 201,
+      headers: {},
+      body: '',
+    });
+    const adapter = new WebPushDeliveryAdapter({
+      subject: 'mailto:ops@padlhub.test',
+      publicKey: 'public-key',
+      privateKey: 'private-key',
+      ttlSeconds: 300,
+      timeoutMs: 5_000,
+      circuitFailureThreshold: 5,
+      circuitResetMs: 30_000,
+      allowedEndpointOrigins: ['https://push.example.test'],
+      sendImplementation,
+    });
+
+    await expect(adapter.send({ ...request, urgency: 'high', ttlSeconds: 3_600 })).resolves.toEqual(
+      { outcome: 'accepted' },
+    );
+
+    expect(sendImplementation.mock.calls[0]?.[2]).toMatchObject({
+      TTL: 3_600,
+      urgency: 'high',
+    });
+    expect(JSON.parse(String(sendImplementation.mock.calls[0]?.[1]))).toEqual({
+      notificationId: request.notification.id,
+      title: request.notification.title,
+      preview: request.notification.preview,
+      deepLink: request.notification.deepLink,
+    });
+  });
+
   it('invalidates gone subscriptions without logging provider response bodies', () => {
     expect(
       mapWebPushFailure(

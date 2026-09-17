@@ -449,6 +449,12 @@ export interface PushDeliveryRequest {
     readonly preview: string;
     readonly deepLink?: string;
   };
+  /**
+   * RFC 8030 scheduling hints. They change how the push service treats the message, not the visible
+   * payload, so a time-critical notification keeps the same wire shape as an informational one.
+   */
+  readonly urgency?: 'very-low' | 'low' | 'normal' | 'high';
+  readonly ttlSeconds?: number;
   readonly providerIdempotencyKey: string;
 }
 

@@ -33,6 +33,18 @@ self.addEventListener('push', function handlePush(event) {
       {
         body: typeof payload.preview === 'string' ? payload.preview : 'Новое оповещение',
         tag: 'phub-notification-' + notificationId,
+        // A repeat of the same notification replaces the older one and alerts again instead of
+        // silently updating it.
+        renotify: true,
+        icon: '/phub-notification-icon-192.png',
+        badge: '/phub-notification-badge-72.png',
+        // Android honours this while the device is awake and the site's own channel allows it; the
+        // operating system still owns the banner, priority and Do Not Disturb decisions.
+        vibrate: [200, 100, 200],
+        silent: false,
+        lang: 'ru',
+        dir: 'ltr',
+        timestamp: Date.now(),
         data: { notificationId: notificationId, deepLink: deepLink },
       },
     ),

@@ -239,11 +239,11 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
           publicKey: this.options.publicKey,
           privateKey: this.options.privateKey,
         },
-        TTL: this.options.ttlSeconds,
+        TTL: request.ttlSeconds ?? this.options.ttlSeconds,
         timeout: this.options.timeoutMs,
         agent: this.egressAgent,
         contentEncoding: 'aes128gcm',
-        urgency: 'normal',
+        urgency: request.urgency ?? 'normal',
         topic: createHash('sha256')
           .update(request.providerIdempotencyKey)
           .digest('base64url')
