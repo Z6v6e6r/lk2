@@ -37,25 +37,40 @@ export function ChatComposer({
       <label className="sr-only" htmlFor="chat-message-body">
         Сообщение
       </label>
-      <textarea
-        id="chat-message-body"
-        rows={1}
-        value={draft}
-        maxLength={8000}
-        placeholder={forbidden ? 'Отправка недоступна' : 'Введите сообщение'}
-        disabled={busy || forbidden}
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={onKeyDown}
-      />
-      <button
-        type="submit"
-        aria-label={busy ? 'Отправляем…' : 'Отправить'}
-        title="Отправить"
-        disabled={busy || forbidden || !draft.trim()}
-      >
-        <ChatCategoryIcon name="SEND" />
-      </button>
-      <small>Enter — новая строка · Ctrl/⌘+Enter — отправить</small>
+      <div className={styles.composerLine}>
+        <button
+          className={styles.attachButton}
+          type="button"
+          disabled
+          aria-label="Прикрепить файл — пока недоступно"
+          title="Прикрепление файлов пока недоступно"
+        >
+          <span aria-hidden="true">+</span>
+        </button>
+        <textarea
+          id="chat-message-body"
+          rows={1}
+          aria-describedby="chat-composer-hint"
+          value={draft}
+          maxLength={8000}
+          placeholder={forbidden ? 'Отправка недоступна' : 'Введите сообщение'}
+          disabled={busy || forbidden}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={onKeyDown}
+        />
+        <button
+          className={styles.sendButton}
+          type="submit"
+          aria-label={busy ? 'Отправляем…' : 'Отправить'}
+          title="Отправить"
+          disabled={busy || forbidden || !draft.trim()}
+        >
+          <ChatCategoryIcon name="SEND" />
+        </button>
+      </div>
+      <small id="chat-composer-hint" className="sr-only">
+        Enter — новая строка · Ctrl/⌘+Enter — отправить
+      </small>
     </form>
   );
 }

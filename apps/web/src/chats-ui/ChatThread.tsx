@@ -193,8 +193,8 @@ export function ChatThread({
             </button>
           </div>
         ) : null}
-        <ChatComposer busy={busy === 'send'} forbidden={forbidden} onSendMessage={onSendMessage} />
       </div>
+      <ChatComposer busy={busy === 'send'} forbidden={forbidden} onSendMessage={onSendMessage} />
     </section>
   );
 }

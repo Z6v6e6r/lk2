@@ -372,7 +372,7 @@ export function MainBottomNavigation({
       </a>
       <a
         href="/chats"
-        aria-current={active === 'chats' ? 'page' : undefined}
+        aria-current={active === 'chats' || active === 'notifications' ? 'page' : undefined}
         aria-label={
           chatsUnreadCount > 0 ? `Чаты, непрочитанных сообщений: ${chatsUnreadCount}` : 'Чаты'
         }
@@ -383,13 +383,6 @@ export function MainBottomNavigation({
             {chatsUnreadCount > 99 ? '99+' : chatsUnreadCount}
           </span>
         ) : null}
-      </a>
-      <a
-        href="/notifications"
-        aria-current={active === 'notifications' ? 'page' : undefined}
-        aria-label="Уведомления"
-      >
-        <BottomNavIcon name="notifications" />
       </a>
       <a
         href="/profile"

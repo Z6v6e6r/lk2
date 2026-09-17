@@ -727,7 +727,7 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'true');
     const bottomNavigation = screen.getByRole('navigation', { name: 'Основная навигация' });
     const bottomNavigationLinks = within(bottomNavigation).getAllByRole('link');
-    expect(bottomNavigationLinks).toHaveLength(6);
+    expect(bottomNavigationLinks).toHaveLength(5);
     expect(bottomNavigationLinks[2]).toHaveAccessibleName('Создать игру');
     expect(bottomNavigationLinks[2]).toHaveAttribute('href', '/games/new?new=1');
     expect(bottomNavigationLinks[2]?.querySelector('.fh-create-button svg')).toHaveAttribute(
@@ -740,10 +740,9 @@ describe('PadlHub web authentication', () => {
     );
     const chatsLink = within(bottomNavigation).getByRole('link', { name: 'Чаты' });
     expect(chatsLink).toHaveAttribute('href', '/chats');
-    expect(within(bottomNavigation).getByRole('link', { name: 'Уведомления' })).toHaveAttribute(
-      'href',
-      '/notifications',
-    );
+    expect(
+      within(bottomNavigation).queryByRole('link', { name: 'Уведомления' }),
+    ).not.toBeInTheDocument();
     const communityCard = screen.getByRole('group', {
       name: 'Padel Friends, непрочитанных сообщений: 2',
     });
