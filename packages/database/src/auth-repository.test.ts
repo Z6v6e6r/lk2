@@ -277,6 +277,51 @@ describe('identity auth repository', () => {
     expect(query).toHaveBeenCalledWith('rollback');
   });
 
+  it('maps a verified phone claimed by another account to a stable auth code', async () => {
+    const { repository, query } = repositoryWithClient((text) => {
+      if (text.includes('from integration.external_identity_map e')) return { rows: [] };
+      if (text.includes('from integration.external_entity_map e')) return { rows: [] };
+      if (text.includes('from identity.users')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              status: 'ACTIVE',
+              display_name: 'Игрок',
+              phone_last_4: null,
+            },
+          ],
+        };
+      }
+      if (text.includes('insert into identity.users')) return { rows: [{ id: userId }] };
+      // Only the summary write is rejected: reads of the same table must keep working.
+      if (text.includes('insert into profile.user_summaries')) {
+        const conflict = new Error('duplicate key value violates unique constraint') as Error & {
+          code: string;
+          constraint: string;
+        };
+        conflict.code = '23505';
+        conflict.constraint = 'user_summaries_phone_lookup_idx';
+        throw conflict;
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await expect(
+      repository.upsertExternalUser({
+        tenantId,
+        provider: 'VIVA',
+        issuer: 'https://kc.vivacrm.ru/realms/clients',
+        subject: 'phone-conflict-subject',
+        displayName: 'Игрок',
+        phoneE164: '+79995550001',
+        correlationId: 'phone-conflict-correlation',
+      }),
+    ).rejects.toThrow('AUTH_PHONE_ALREADY_BOUND');
+    expect(query).toHaveBeenCalledWith('rollback');
+  });
+
   it('rejects an external identity conflict that remains linked to a different user', async () => {
     const conflictingUserId = '55555555-5555-4555-8555-555555555555';
     const { repository } = repositoryWithClient((text) => {

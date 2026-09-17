@@ -28,15 +28,15 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
   const loginOwner = randomUUID();
   const providerClaimant = randomUUID();
   const providerOnly = randomUUID();
-  const ambiguousUser = randomUUID();
-  const ambiguousTwinUser = randomUUID();
+  const idOnlyUser = randomUUID();
+  const twinProviderUser = randomUUID();
   const disabledProviderOwner = randomUUID();
   const dualPhoneUser = randomUUID();
   const foreignTenantId = randomUUID();
   const foreignUserId = randomUUID();
   const loginPhone = '+79995550001';
   const providerOnlyPhone = '+79995550002';
-  const ambiguousPhone = '+79995550003';
+  const unclaimedPhone = '+79995550003';
   const disabledOwnerPhone = '+79995550004';
   const dualLoginPhone = '+79995550005';
   const dualProviderPhone = '+79995550006';
@@ -95,8 +95,12 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
       await insertUser(client, loginOwner, 'ACTIVE', 'Проверенный вход', loginPhone);
       await insertUser(client, providerClaimant, 'ACTIVE', 'Заявка провайдера', null);
       await insertUser(client, providerOnly, 'ACTIVE', 'Только провайдер', null);
-      await insertUser(client, ambiguousUser, 'ACTIVE', 'Спорный первый', ambiguousPhone);
-      await insertUser(client, ambiguousTwinUser, 'ACTIVE', 'Спорный второй', ambiguousPhone);
+      // Ambiguity is impossible by construction on both phone sources: `profile.user_summaries
+      // (tenant_id, phone_e164)` is unique (migration 0091) and `integration.external_entity_map` is
+      // unique per (tenant, system, entity type, external id). The fail-closed ambiguity contract
+      // lives in the mocked resolver test; here the schema refusals are proven.
+      await insertUser(client, idOnlyUser, 'ACTIVE', 'Только по id', null);
+      await insertUser(client, twinProviderUser, 'ACTIVE', 'Второй с тем же провайдерским', null);
       await insertUser(client, disabledProviderOwner, 'DISABLED', 'Отключён', null);
       await insertUser(client, dualPhoneUser, 'ACTIVE', 'Два номера', dualLoginPhone);
 
@@ -119,6 +123,7 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
       await insertProviderPhone(client, providerOnly, providerOnlyPhone);
       await insertProviderPhone(client, disabledProviderOwner, disabledOwnerPhone);
       await insertProviderPhone(client, dualPhoneUser, dualProviderPhone);
+      await insertProviderPhone(client, idOnlyUser, '+79995550009');
     });
     // A neighbouring tenant proves the selector stays tenant-scoped even though the phone and the user
     // id are otherwise perfectly valid.
@@ -249,11 +254,36 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
     expect(resolution.matched[0]?.availableChannels).toEqual(['IN_APP', 'WEB_PUSH']);
   });
 
-  it('never resolves a phone that two login rows claim', async () => {
-    const resolution = await resolve([ambiguousPhone]);
+  it('rejects a second account claiming the same provider phone', async () => {
+    await expect(
+      withTenantTransaction(pool, tenantId, async (client) => {
+        await insertProviderPhone(client, twinProviderUser, '+79995550009');
+      }),
+    ).rejects.toMatchObject({ code: '23505' });
+
+    const resolution = await resolve(['+79995550009']);
+    expect(resolution.matched.map((recipient) => recipient.userId)).toEqual([idOnlyUser]);
+  });
+
+  it('never resolves a phone that no account claims', async () => {
+    const resolution = await resolve([unclaimedPhone]);
 
     expect(resolution.matched).toEqual([]);
     expect(resolution.unresolvedPhones).toEqual(['•••• 0003']);
+  });
+
+  it('rejects a second account claiming a verified phone', async () => {
+    // The runtime refusal above cannot be reached through the login-phone source any more: the schema
+    // now guarantees one account per verified phone within a tenant.
+    await expect(
+      withTenantTransaction(pool, tenantId, async (client) => {
+        await client.query(
+          `insert into profile.user_summaries (tenant_id, user_id, display_name, phone_e164)
+           values ($1, $2, $3, $4)`,
+          [tenantId, randomUUID(), 'Дубликат телефона', loginPhone],
+        );
+      }),
+    ).rejects.toMatchObject({ code: '23505' });
   });
 
   it('drops a provider phone whose owner is not active instead of guessing', async () => {
@@ -366,16 +396,16 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
   it('keeps the campaign counters consistent for a mixed selector campaign', async () => {
     const unknownUserId = randomUUID();
     const campaign = await createCampaignFor({
-      phones: [ambiguousPhone],
-      userIds: [ambiguousUser, unknownUserId],
+      phones: [unclaimedPhone],
+      userIds: [idOnlyUser, unknownUserId],
     });
 
     if (campaign.outcome !== 'accepted') {
       throw new Error(`unexpected campaign outcome: ${campaign.outcome}`);
     }
-    // ambiguousPhone stays ambiguous, unknownUserId does not exist; ambiguousUser resolves by id.
+    // unclaimedPhone reaches nobody, unknownUserId does not exist; idOnlyUser resolves by id.
     expect(campaign.matchedCount).toBe(1);
     expect(campaign.unresolvedCount).toBe(2);
-    await expect(campaignRecipients(campaign.campaignId)).resolves.toEqual([ambiguousUser]);
+    await expect(campaignRecipients(campaign.campaignId)).resolves.toEqual([idOnlyUser]);
   });
 });

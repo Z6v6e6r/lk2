@@ -1,4 +1,4 @@
--- phub:reviewed-new-table-index
+-- phub:reviewed-blocking-index
 --
 -- Non-concurrent index reviewed as low-risk rather than blocking:
 --   * the table holds 417 rows in the beta contour and 109 in the only deployed production contour,
@@ -20,9 +20,18 @@
 -- turns that runtime refusal into a schema guarantee.
 --
 -- The guard below fails the migration with an actionable count when any tenant still holds duplicate
--- non-null phones, so the failure happens before the index build and names the offending tenants
--- instead of surfacing a bare "could not create unique index". Phone values themselves are not
--- printed: the operator resolves them with `npm run identity:phone-anomalies:report`.
+-- non-null phones, so the failure happens before the index build and reports how many tenants and how
+-- many phone pairs are affected instead of surfacing a bare "could not create unique index". Phone
+-- values themselves are never printed: the operator resolves them with
+-- `npm run identity:phone-anomalies:report`.
+--
+-- Rollback: the previous definition is
+-- `create index if not exists user_summaries_phone_lookup_idx on profile.user_summaries
+-- (tenant_id, phone_e164) where phone_e164 is not null` (0017_admin_notification_campaigns.sql), so a
+-- manual revert is a drop plus that statement. Two cautions: the migration stays recorded in
+-- `schema_migrations`, so a manual revert is silent drift that a later `db:migrate` will not correct;
+-- and renaming an already-applied file trips MIGRATION_LEDGER_UNKNOWN and blocks every later
+-- migration on that contour.
 --
 -- The previous index (`user_summaries_phone_lookup_idx`) was a non-unique partial index on the same
 -- columns, so lookups keep using the same index and the change is backward compatible for existing
@@ -35,8 +44,10 @@ set local statement_timeout = '30s';
 do $$
 declare
   duplicate_tenants integer;
+  duplicate_pairs integer;
 begin
-  select count(*) into duplicate_tenants
+  select count(distinct tenant_id), count(*)
+    into duplicate_tenants, duplicate_pairs
     from (
       select tenant_id
         from profile.user_summaries
@@ -45,10 +56,11 @@ begin
       having count(*) > 1
     ) duplicated;
 
-  if duplicate_tenants > 0 then
+  if duplicate_pairs > 0 then
     raise exception
-      'verified_phone_duplicate: % tenant/phone pair(s) hold more than one account; run identity:phone-anomalies:report and resolve them before this migration',
-      duplicate_tenants;
+      'verified_phone_duplicate: % tenant(s) hold % verified phone(s) claimed by more than one account; run identity:phone-anomalies:report and resolve them before this migration',
+      duplicate_tenants,
+      duplicate_pairs;
   end if;
 end
 $$;

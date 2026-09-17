@@ -185,6 +185,7 @@ export type AuthServiceErrorCode =
   | 'VIVA_DELEGATION_BUSY'
   | 'LEGAL_ACCEPTANCE_REQUIRED'
   | 'AUTH_IDENTITY_CONFLICT'
+  | 'AUTH_PHONE_ALREADY_BOUND'
   | 'AUTH_IDENTITY_LINK_REQUIRED'
   | 'IDEMPOTENCY_KEY_CONFLICT'
   | 'TENANT_KEY_INVALID'
@@ -205,6 +206,7 @@ const errorStatus: Readonly<Record<AuthServiceErrorCode, number>> = {
   VIVA_DELEGATION_BUSY: 409,
   LEGAL_ACCEPTANCE_REQUIRED: 400,
   AUTH_IDENTITY_CONFLICT: 409,
+  AUTH_PHONE_ALREADY_BOUND: 409,
   AUTH_IDENTITY_LINK_REQUIRED: 409,
   IDEMPOTENCY_KEY_CONFLICT: 409,
   TENANT_KEY_INVALID: 400,
@@ -329,6 +331,9 @@ export class AuthService {
         error.message === 'AUTH_USER_NOT_ACTIVE')
     ) {
       throw new AuthServiceError('AUTH_IDENTITY_CONFLICT');
+    }
+    if (error instanceof Error && error.message === 'AUTH_PHONE_ALREADY_BOUND') {
+      throw new AuthServiceError('AUTH_PHONE_ALREADY_BOUND');
     }
     throw error;
   }

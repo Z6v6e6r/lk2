@@ -87,6 +87,8 @@ function errorMessage(code: string): string {
     LEGAL_ACCEPTANCE_REQUIRED: 'Подтвердите публичную оферту и обработку персональных данных.',
     AUTH_IDENTITY_CONFLICT:
       'Профиль уже связан с другим аккаунтом ПаделХАБ. Обратитесь в поддержку.',
+    AUTH_PHONE_ALREADY_BOUND:
+      'Этот телефон уже привязан к другому аккаунту ПаделХАБ. Обратитесь в поддержку.',
     AUTH_IDENTITY_LINK_REQUIRED:
       'Сначала свяжите этот профиль Viva с аккаунтом ПаделХАБ через поддержку.',
     IDEMPOTENCY_KEY_CONFLICT: 'Этот ключ операции уже использован с другими данными.',

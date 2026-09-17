@@ -1,5 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
+// `profile.user_summaries (tenant_id, phone_e164)` is unique since migration 0091: a phone that a
+// phone login verified can belong to one account per tenant. The provider profile sync is the only
+// writer, so its violation is mapped to a stable code instead of leaking a raw 23505 to the caller.
+const VERIFIED_PHONE_INDEX = 'user_summaries_phone_lookup_idx';
+
+function isVerifiedPhoneConflict(error: unknown): boolean {
+  const candidate = error as { readonly code?: unknown; readonly constraint?: unknown };
+  return candidate?.code === '23505' && candidate?.constraint === VERIFIED_PHONE_INDEX;
+}
+
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
@@ -432,26 +442,32 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
         if (existing) {
           await linkExternalIdentity(client, input, existing.id);
           await ensureCanonicalProviderMapping(client, input, existing.id);
-          await client.query(
-            `
-              update profile.user_summaries
-              set
-                display_name = $3,
-                phone_e164 = coalesce($4, phone_e164),
-                email = coalesce($5, email),
-                photo_url = coalesce($6, photo_url),
-                updated_at = now()
-              where tenant_id = $1 and user_id = $2
-            `,
-            [
-              input.tenantId,
-              existing.id,
-              input.displayName,
-              input.phoneE164 ?? null,
-              input.email ?? null,
-              input.photoUrl ?? null,
-            ],
-          );
+          try {
+            await client.query(
+              `
+                update profile.user_summaries
+                set
+                  display_name = $3,
+                  phone_e164 = coalesce($4, phone_e164),
+                  email = coalesce($5, email),
+                  photo_url = coalesce($6, photo_url),
+                  updated_at = now()
+                where tenant_id = $1 and user_id = $2
+              `,
+              [
+                input.tenantId,
+                existing.id,
+                input.displayName,
+                input.phoneE164 ?? null,
+                input.email ?? null,
+                input.photoUrl ?? null,
+              ],
+            );
+          } catch (error) {
+            if (isVerifiedPhoneConflict(error))
+              throw new Error('AUTH_PHONE_ALREADY_BOUND', { cause: error });
+            throw error;
+          }
           await client.query(
             'update identity.users set updated_at = now() where tenant_id = $1 and id = $2',
             [input.tenantId, existing.id],
@@ -480,21 +496,27 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
         );
         if (!user) throw new Error('AUTH_USER_CREATE_FAILED');
 
-        await client.query(
-          `
-            insert into profile.user_summaries (
-              tenant_id, user_id, display_name, phone_e164, email, photo_url
-            ) values ($1, $2, $3, $4, $5, $6)
-          `,
-          [
-            input.tenantId,
-            user.id,
-            input.displayName,
-            input.phoneE164 ?? null,
-            input.email ?? null,
-            input.photoUrl ?? null,
-          ],
-        );
+        try {
+          await client.query(
+            `
+              insert into profile.user_summaries (
+                tenant_id, user_id, display_name, phone_e164, email, photo_url
+              ) values ($1, $2, $3, $4, $5, $6)
+            `,
+            [
+              input.tenantId,
+              user.id,
+              input.displayName,
+              input.phoneE164 ?? null,
+              input.email ?? null,
+              input.photoUrl ?? null,
+            ],
+          );
+        } catch (error) {
+          if (isVerifiedPhoneConflict(error))
+            throw new Error('AUTH_PHONE_ALREADY_BOUND', { cause: error });
+          throw error;
+        }
         await linkExternalIdentity(client, input, user.id);
         await ensureCanonicalProviderMapping(client, input, user.id);
 
