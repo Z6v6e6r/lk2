@@ -1,13 +1,15 @@
 import { createHmac } from 'node:crypto';
 
-import type {
-  IdentityProviderPort,
-  VerifiedExternalIdentity,
-  VivaOAuthProviderPort,
+import {
+  IdentityProviderError,
+  type IdentityProviderPort,
+  type VerifiedExternalIdentity,
+  type VivaOAuthProviderPort,
 } from '@phub/auth';
 import { loadConfig } from '@phub/config';
 import { createLogger } from '@phub/observability';
-import { jwtVerify } from 'jose';
+import { SignJWT, jwtVerify } from 'jose';
+import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from '../app.js';
@@ -78,6 +80,12 @@ class FakeRepository implements AuthRepository {
   private legalAcceptanceCount = 0;
   private currentLegalAcceptances = true;
   private existingSubjectUser: AuthUser | undefined = user;
+  private subjectOwner: AuthUser | undefined;
+  private confirmationOutcome:
+    | { readonly outcome: 'confirmed'; readonly releasedPhoneLast4?: string }
+    | { readonly outcome: 'already_confirmed' }
+    | { readonly outcome: 'phone_taken' } = { outcome: 'confirmed' };
+  private confirmedPhones: string[] = [];
   private identityUpsertCount = 0;
   private refreshSessionCreationCount = 0;
   private vivaDelegationSaveCount = 0;
@@ -161,6 +169,39 @@ class FakeRepository implements AuthRepository {
 
   public resolveExistingExternalIdentity(): Promise<AuthUser | undefined> {
     return Promise.resolve(this.existingSubjectUser);
+  }
+
+  public setSubjectOwner(owner: AuthUser | undefined): void {
+    this.subjectOwner = owner;
+  }
+
+  public setConfirmationOutcome(
+    outcome:
+      | { readonly outcome: 'confirmed'; readonly releasedPhoneLast4?: string }
+      | { readonly outcome: 'already_confirmed' }
+      | { readonly outcome: 'phone_taken' },
+  ): void {
+    this.confirmationOutcome = outcome;
+  }
+
+  public get confirmedPhoneValues(): readonly string[] {
+    return this.confirmedPhones;
+  }
+
+  public findExternalSubjectUser(): Promise<AuthUser | undefined> {
+    return Promise.resolve(this.subjectOwner);
+  }
+
+  public confirmProfilePhone(input: {
+    readonly phoneE164: string;
+  }): Promise<
+    | { readonly outcome: 'confirmed'; readonly releasedPhoneLast4?: string }
+    | { readonly outcome: 'already_confirmed' }
+    | { readonly outcome: 'phone_taken' }
+  > {
+    if (this.confirmationOutcome.outcome === 'confirmed')
+      this.confirmedPhones.push(input.phoneE164);
+    return Promise.resolve(this.confirmationOutcome);
   }
 
   public upsertExternalIdentity(): Promise<AuthUser> {
@@ -1970,5 +2011,262 @@ describe('provider-neutral authentication routes', () => {
     expect(tokens).toEqual(['initial-viva-access-token', 'refreshed-viva-access-token']);
     expect(linked).toEqual(['+79104303190']);
     expect(outcomes).toEqual(['absent', 'linked']);
+  });
+});
+
+describe('profile phone confirmation', () => {
+  const confirmationConfig = loadConfig({
+    APP_ENV: 'ci',
+    DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+    REDIS_URL: 'redis://localhost:6379',
+    RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+    JWT_ISSUER: 'phub-identity',
+    JWT_AUDIENCE: 'phub-api',
+    JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
+    JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
+    VIVA_MODE: 'sandbox',
+  });
+
+  async function userAccessToken(subject: string): Promise<string> {
+    return new SignJWT({
+      tenants: [binding.tenantId],
+      roles: ['client'],
+      permissions: ['profile.read'],
+      sid: '55555555-5555-4555-8555-555555555555',
+    })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuer(confirmationConfig.JWT_ISSUER)
+      .setAudience(confirmationConfig.JWT_AUDIENCE)
+      .setSubject(subject)
+      .setExpirationTime('5m')
+      .sign(new TextEncoder().encode(confirmationConfig.JWT_ACCESS_SECRET));
+  }
+
+  // The confirmation block uses a provider that fails the way the real adapter does for a wrong code.
+  const confirmationProvider: IdentityProviderPort = {
+    key: 'VIVA',
+    requestPhoneCode: () => Promise.resolve(),
+    verifyPhoneCode: (input): Promise<VerifiedExternalIdentity> => {
+      if (input.code !== '0000')
+        return Promise.reject(new IdentityProviderError('AUTH_CODE_INVALID'));
+      return Promise.resolve({
+        issuer: 'https://identity.example.test',
+        subject: 'external-user-1',
+        phoneE164: input.phoneE164,
+        displayName: user.displayName,
+      });
+    },
+  };
+
+  async function confirmationApp(options: { readonly subject?: string } = {}) {
+    const repository = new FakeRepository();
+    const subject = options.subject ?? user.id;
+    const authService = new AuthService({
+      config: confirmationConfig,
+      repository,
+      challengeStore: new MemoryAuthChallengeStore(),
+      providers: new Map([['VIVA', confirmationProvider]]),
+    });
+    const app = await buildApp({
+      config: confirmationConfig,
+      logger: createLogger('api-profile-phone-confirmation-test', 'silent'),
+      pool: {
+        query: (text: string) =>
+          text.includes('identity.tenants')
+            ? Promise.resolve({ rows: [{ id: binding.tenantId }] })
+            : Promise.reject(new Error(`Unexpected query: ${text}`)),
+      } as unknown as Pool,
+      authService,
+    });
+    apps.push(app);
+    return {
+      app,
+      repository,
+      authorization: `Bearer ${await userAccessToken(subject)}`,
+      tenantUrl: '/user/api/v1/local-padel/profile/phone/challenges',
+    };
+  }
+
+  it('starts a confirmation challenge for the authenticated account and masks the number', async () => {
+    const { app, authorization, tenantUrl } = await confirmationApp();
+
+    const response = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization, 'idempotency-key': 'profile-phone-start-0001' },
+      payload: { phone: '+7 999 000-00-01' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ phoneMasked: '•••• 0001' });
+    expect(JSON.stringify(response.json())).not.toContain('+79990000001');
+  });
+
+  it('confirms the phone on the caller account without creating a session or a delegation', async () => {
+    const { app, repository, authorization, tenantUrl } = await confirmationApp();
+    const start = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization, 'idempotency-key': 'profile-phone-start-0002' },
+      payload: { phone: '+79990000001' },
+    });
+    const challengeId = start.json<{ challengeId: string }>().challengeId;
+
+    const verify = await app.inject({
+      method: 'POST',
+      url: `${tenantUrl}/${challengeId}/verify`,
+      headers: { authorization, 'idempotency-key': 'profile-phone-verify-0002' },
+      payload: { code: '0000' },
+    });
+
+    expect(verify.statusCode).toBe(200);
+    expect(verify.json()).toMatchObject({ phoneMasked: '•••• 0001' });
+    expect(repository.confirmedPhoneValues).toEqual(['+79990000001']);
+    expect(repository.refreshSessionCreations).toBe(0);
+    expect(repository.vivaDelegationSaves).toBe(0);
+  });
+
+  it('refuses a code exchange that belongs to another account without writing', async () => {
+    const { app, repository, authorization, tenantUrl } = await confirmationApp();
+    repository.setSubjectOwner({
+      id: '96d1b47c-dc5c-493f-836c-827f01c31546',
+      tenantId: binding.tenantId,
+      displayName: 'Другой аккаунт',
+    });
+    const start = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization, 'idempotency-key': 'profile-phone-start-0003' },
+      payload: { phone: '+79990000001' },
+    });
+    const challengeId = start.json<{ challengeId: string }>().challengeId;
+
+    const verify = await app.inject({
+      method: 'POST',
+      url: `${tenantUrl}/${challengeId}/verify`,
+      headers: { authorization, 'idempotency-key': 'profile-phone-verify-0003' },
+      payload: { code: '0000' },
+    });
+
+    expect(verify.statusCode).toBe(409);
+    expect(verify.json()).toMatchObject({ code: 'AUTH_PHONE_ALREADY_BOUND' });
+    expect(repository.confirmedPhoneValues).toEqual([]);
+  });
+
+  it('reports a phone another account already holds', async () => {
+    const { app, repository, authorization, tenantUrl } = await confirmationApp();
+    repository.setConfirmationOutcome({ outcome: 'phone_taken' });
+    const start = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization, 'idempotency-key': 'profile-phone-start-0004' },
+      payload: { phone: '+79990000001' },
+    });
+    const challengeId = start.json<{ challengeId: string }>().challengeId;
+
+    const verify = await app.inject({
+      method: 'POST',
+      url: `${tenantUrl}/${challengeId}/verify`,
+      headers: { authorization, 'idempotency-key': 'profile-phone-verify-0004' },
+      payload: { code: '0000' },
+    });
+
+    expect(verify.statusCode).toBe(409);
+    expect(verify.json()).toMatchObject({ code: 'AUTH_PHONE_ALREADY_BOUND' });
+  });
+
+  it('treats a repeated confirmation of the same phone as success without a second write', async () => {
+    const { app, repository, authorization, tenantUrl } = await confirmationApp();
+    repository.setConfirmationOutcome({ outcome: 'already_confirmed' });
+    const start = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization, 'idempotency-key': 'profile-phone-start-0005' },
+      payload: { phone: '+79990000001' },
+    });
+    const challengeId = start.json<{ challengeId: string }>().challengeId;
+
+    const verify = await app.inject({
+      method: 'POST',
+      url: `${tenantUrl}/${challengeId}/verify`,
+      headers: { authorization, 'idempotency-key': 'profile-phone-verify-0005' },
+      payload: { code: '0000' },
+    });
+
+    expect(verify.statusCode).toBe(200);
+    expect(repository.confirmedPhoneValues).toEqual([]);
+  });
+
+  it('refuses a challenge issued to another account', async () => {
+    const first = await confirmationApp();
+    const start = await first.app.inject({
+      method: 'POST',
+      url: first.tenantUrl,
+      headers: {
+        authorization: first.authorization,
+        'idempotency-key': 'profile-phone-start-0006',
+      },
+      payload: { phone: '+79990000001' },
+    });
+    const challengeId = start.json<{ challengeId: string }>().challengeId;
+    const other = await confirmationApp({
+      subject: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+    });
+
+    const verify = await other.app.inject({
+      method: 'POST',
+      url: `${other.tenantUrl}/${challengeId}/verify`,
+      headers: {
+        authorization: other.authorization,
+        'idempotency-key': 'profile-phone-verify-0006',
+      },
+      payload: { code: '0000' },
+    });
+
+    expect(verify.statusCode).toBe(410);
+    expect(verify.json()).toMatchObject({ code: 'AUTH_CODE_EXPIRED' });
+    expect(other.repository.confirmedPhoneValues).toEqual([]);
+  });
+
+  it('requires authentication and an idempotency key', async () => {
+    const { app, authorization, tenantUrl } = await confirmationApp();
+
+    const anonymous = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { 'idempotency-key': 'profile-phone-start-0007' },
+      payload: { phone: '+79990000001' },
+    });
+    expect(anonymous.statusCode).toBe(401);
+
+    const withoutKey = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization },
+      payload: { phone: '+79990000001' },
+    });
+    expect(withoutKey.statusCode).toBe(400);
+  });
+
+  it('rejects a wrong code without writing the phone', async () => {
+    const { app, repository, authorization, tenantUrl } = await confirmationApp();
+    const start = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization, 'idempotency-key': 'profile-phone-start-0008' },
+      payload: { phone: '+79990000001' },
+    });
+    const challengeId = start.json<{ challengeId: string }>().challengeId;
+
+    const verify = await app.inject({
+      method: 'POST',
+      url: `${tenantUrl}/${challengeId}/verify`,
+      headers: { authorization, 'idempotency-key': 'profile-phone-verify-0008' },
+      payload: { code: '9999' },
+    });
+
+    expect(verify.statusCode).toBe(401);
+    expect(verify.json()).toMatchObject({ code: 'AUTH_CODE_INVALID' });
+    expect(repository.confirmedPhoneValues).toEqual([]);
   });
 });

@@ -4,8 +4,15 @@ import type Redis from 'ioredis';
 
 import type { IdentityProviderKey } from '@phub/auth';
 
+export type AuthChallengePurpose = 'LOGIN' | 'PHONE_CONFIRMATION';
+
 export interface AuthChallenge {
   readonly id: string;
+  // A login challenge creates or switches the session; a confirmation challenge only proves a phone
+  // for the authenticated account. The purpose keeps the two apart, and an absent value is read as a
+  // login so challenges issued before this field existed stay valid across the deploy.
+  readonly purpose: AuthChallengePurpose;
+  readonly userId?: string;
   readonly tenantId: string;
   readonly tenantKey: string;
   readonly provider: IdentityProviderKey;
@@ -35,13 +42,17 @@ function claimKey(challengeId: string): string {
   return `${challengeKey(challengeId)}:claim`;
 }
 
-function cooldownKey(challenge: Pick<AuthChallenge, 'tenantId' | 'phoneE164'>): string {
+function cooldownKey(challenge: Pick<AuthChallenge, 'tenantId' | 'phoneE164' | 'purpose'>): string {
   const phoneHash = createHash('sha256').update(challenge.phoneE164).digest('base64url');
-  return `${KEY_PREFIX}cooldown:${challenge.tenantId}:${phoneHash}`;
+  // The purpose is part of the key: a fresh login code must not block a confirmation request for the
+  // same phone (and the other way round).
+  return `${KEY_PREFIX}cooldown:${challenge.tenantId}:${challenge.purpose}:${phoneHash}`;
 }
 
 function parseChallenge(value: Record<string, string>): AuthChallenge | undefined {
   const attempts = Number(value.attempts);
+  const purpose = value.purpose ?? 'LOGIN';
+  if (purpose !== 'LOGIN' && purpose !== 'PHONE_CONFIRMATION') return undefined;
   if (
     !value.id ||
     !value.tenantId ||
@@ -57,6 +68,8 @@ function parseChallenge(value: Record<string, string>): AuthChallenge | undefine
   }
   return {
     id: value.id,
+    purpose,
+    ...(value.userId ? { userId: value.userId } : {}),
     tenantId: value.tenantId,
     tenantKey: value.tenantKey,
     provider: value.provider,
@@ -85,6 +98,8 @@ export class RedisAuthChallengeStore implements AuthChallengeStore {
         .multi()
         .hset(key, {
           id: challenge.id,
+          purpose: challenge.purpose,
+          ...(challenge.userId ? { userId: challenge.userId } : {}),
           tenantId: challenge.tenantId,
           tenantKey: challenge.tenantKey,
           provider: challenge.provider,

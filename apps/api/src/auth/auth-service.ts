@@ -26,6 +26,11 @@ import type { VivaOAuthStart, VivaOAuthStateStore } from './oauth-state-store.js
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const OTP_PATTERN = /^\d{4}$/;
 
+/** The only phone shape the auth API ever returns: the last four digits, never the full number. */
+function maskPhoneE164(phoneE164: string): string {
+  return `•••• ${phoneE164.slice(-4)}`;
+}
+
 export interface TenantAuthBinding {
   readonly tenantId: string;
   readonly tenantKey: string;
@@ -120,6 +125,30 @@ export interface AuthRepository {
   getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined>;
   getUserAccessProfile?(tenantId: string, userId: string): Promise<UserAccessProfile | undefined>;
   getUserByPhone?(tenantId: string, phoneE164: string): Promise<AuthUser | undefined>;
+  /**
+   * Which account already owns this provider subject, if any (read-only). Phone confirmation uses it
+   * to stop before writing when the code exchange lands on a different account than the caller.
+   */
+  findExternalSubjectUser(input: {
+    readonly binding: TenantAuthBinding;
+    readonly identity: Pick<VerifiedExternalIdentity, 'issuer' | 'subject'>;
+  }): Promise<AuthUser | undefined>;
+  /**
+   * Attaches an attested phone to one account for the tenant. Returns `phone_taken` when another
+   * account holds the number, `already_confirmed` when it is already the same value, and `confirmed`
+   * with the previously released masked tail otherwise.
+   */
+  confirmProfilePhone(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly phoneE164: string;
+    readonly challengeId: string;
+    readonly correlationId: string;
+  }): Promise<
+    | { readonly outcome: 'confirmed'; readonly releasedPhoneLast4?: string }
+    | { readonly outcome: 'already_confirmed' }
+    | { readonly outcome: 'phone_taken' }
+  >;
   getRefreshSessionPrincipal?(
     tenantKey: string,
     tokenHash: string,
@@ -1082,6 +1111,199 @@ export class AuthService {
     };
   }
 
+  /**
+   * Starts a confirmation challenge for an already authenticated account. It is deliberately separate
+   * from a login challenge: verifying it must never create, switch or re-link an account, and the
+   * challenge is bound to the caller so one account cannot confirm a code issued for another.
+   */
+  public async startPhoneConfirmation(input: {
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly phone: string;
+    readonly correlationId: string;
+    readonly idempotencyKey: string;
+  }): Promise<{
+    challengeId: string;
+    expiresAt: string;
+    resendAfterSeconds: number;
+    phoneMasked: string;
+  }> {
+    const phoneE164 = normalizePhoneE164(input.phone);
+    if (!phoneE164) throw new AuthServiceError('AUTH_PHONE_INVALID');
+    const binding = await this.binding(input.tenantKey);
+    const now = this.now();
+    // A different derivation namespace from the login challenge, plus the purpose and the caller, so the
+    // two endpoints can never collide on the same idempotency key.
+    const challengeId = this.deriveUuid('profile-phone-challenge', [
+      input.tenantKey,
+      input.userId,
+      input.idempotencyKey,
+    ]);
+    const existing = await this.options.challengeStore.get(challengeId);
+    if (existing) {
+      if (
+        existing.tenantId !== binding.tenantId ||
+        existing.phoneE164 !== phoneE164 ||
+        existing.userId !== input.userId ||
+        existing.purpose !== 'PHONE_CONFIRMATION'
+      ) {
+        throw new AuthServiceError('IDEMPOTENCY_KEY_CONFLICT');
+      }
+      return {
+        challengeId: existing.id,
+        expiresAt: existing.expiresAt,
+        resendAfterSeconds: Math.max(
+          0,
+          Math.ceil((Date.parse(existing.resendAt) - now.getTime()) / 1000),
+        ),
+        phoneMasked: maskPhoneE164(phoneE164),
+      };
+    }
+    const challenge: AuthChallenge = {
+      id: challengeId,
+      purpose: 'PHONE_CONFIRMATION',
+      userId: input.userId,
+      tenantId: binding.tenantId,
+      tenantKey: binding.tenantKey,
+      provider: binding.provider,
+      providerTenantKey: binding.providerTenantKey,
+      phoneE164,
+      attempts: 0,
+      expiresAt: new Date(
+        now.getTime() + this.options.config.AUTH_CHALLENGE_TTL_SECONDS * 1000,
+      ).toISOString(),
+      resendAt: new Date(
+        now.getTime() + this.options.config.AUTH_CHALLENGE_RESEND_SECONDS * 1000,
+      ).toISOString(),
+    };
+    const reserved = await this.options.challengeStore.put(
+      challenge,
+      this.options.config.AUTH_CHALLENGE_TTL_SECONDS,
+      this.options.config.AUTH_CHALLENGE_RESEND_SECONDS,
+    );
+    if (!reserved) throw new AuthServiceError('AUTH_RATE_LIMITED');
+    try {
+      await this.provider(binding.provider).requestPhoneCode({
+        phoneE164,
+        providerTenantKey: binding.providerTenantKey,
+        correlationId: input.correlationId,
+      });
+    } catch (error) {
+      await this.options.challengeStore.delete(challenge.id);
+      if (error instanceof IdentityProviderError && error.code === 'AUTH_CODE_INVALID') {
+        throw new AuthServiceError('AUTH_PHONE_INVALID');
+      }
+      this.mapProviderError(error);
+    }
+    return {
+      challengeId: challenge.id,
+      expiresAt: challenge.expiresAt,
+      resendAfterSeconds: this.options.config.AUTH_CHALLENGE_RESEND_SECONDS,
+      phoneMasked: maskPhoneE164(phoneE164),
+    };
+  }
+
+  /**
+   * Verifies a confirmation code and attaches the attested phone to the caller's account. Fail-closed
+   * order: the challenge belongs to the caller, the provider subject must not belong to another
+   * account, the phone must not be held by another account, and only then is the phone written with one
+   * audit event. No session is created and no provider delegation is persisted here.
+   */
+  public async confirmPhoneChallenge(input: {
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly challengeId: string;
+    readonly code: string;
+    readonly correlationId: string;
+  }): Promise<{ phoneMasked: string; confirmedAt: string; releasedPhoneLast4?: string }> {
+    if (!OTP_PATTERN.test(input.code)) throw new AuthServiceError('AUTH_CODE_INVALID');
+    const currentBinding = await this.binding(input.tenantKey);
+    const challenge = await this.options.challengeStore.get(input.challengeId);
+    if (
+      !challenge ||
+      challenge.tenantKey !== input.tenantKey ||
+      challenge.purpose !== 'PHONE_CONFIRMATION' ||
+      challenge.userId !== input.userId
+    ) {
+      throw new AuthServiceError('AUTH_CODE_EXPIRED');
+    }
+    if (
+      currentBinding.tenantId !== challenge.tenantId ||
+      currentBinding.provider !== challenge.provider ||
+      currentBinding.providerTenantKey !== challenge.providerTenantKey
+    ) {
+      await this.options.challengeStore.delete(challenge.id);
+      throw new AuthServiceError('AUTH_CODE_EXPIRED');
+    }
+    if (
+      Date.parse(challenge.expiresAt) <= this.now().getTime() ||
+      challenge.attempts >= this.options.config.AUTH_CHALLENGE_MAX_ATTEMPTS
+    ) {
+      await this.options.challengeStore.delete(challenge.id);
+      throw new AuthServiceError('AUTH_CODE_EXPIRED');
+    }
+    const claimId = randomUUID();
+    const claimed = await this.options.challengeStore.claim(challenge.id, claimId, 30);
+    if (!claimed) throw new AuthServiceError('AUTH_CHALLENGE_IN_PROGRESS');
+
+    let identity: VerifiedExternalIdentity;
+    try {
+      const verification = await this.provider(challenge.provider).verifyPhoneCode({
+        phoneE164: challenge.phoneE164,
+        code: input.code,
+        providerTenantKey: challenge.providerTenantKey,
+        correlationId: input.correlationId,
+      });
+      identity = 'identity' in verification ? verification.identity : verification;
+    } catch (error) {
+      if (error instanceof IdentityProviderError && error.code === 'AUTH_CODE_INVALID') {
+        const attempts = await this.options.challengeStore.incrementAttempts(challenge.id);
+        if (attempts !== undefined && attempts >= this.options.config.AUTH_CHALLENGE_MAX_ATTEMPTS) {
+          await this.options.challengeStore.delete(challenge.id);
+        } else {
+          await this.options.challengeStore.release(challenge.id, claimId);
+        }
+      } else {
+        await this.options.challengeStore.release(challenge.id, claimId);
+      }
+      this.mapProviderError(error);
+    }
+
+    // The code exchange names the provider account behind the number. If that account is not the caller
+    // the number belongs to someone else's account, and writing it here would make the CUP resolve a
+    // phone to one account while a phone login still lands on another.
+    const subjectUser = await this.options.repository.findExternalSubjectUser({
+      binding: {
+        tenantId: challenge.tenantId,
+        tenantKey: challenge.tenantKey,
+        provider: challenge.provider,
+        providerTenantKey: challenge.providerTenantKey,
+      },
+      identity: { issuer: identity.issuer, subject: identity.subject },
+    });
+    if (subjectUser && subjectUser.id !== input.userId) {
+      await this.options.challengeStore.delete(challenge.id);
+      throw new AuthServiceError('AUTH_PHONE_ALREADY_BOUND');
+    }
+
+    const result = await this.options.repository.confirmProfilePhone({
+      tenantId: challenge.tenantId,
+      userId: input.userId,
+      phoneE164: challenge.phoneE164,
+      challengeId: challenge.id,
+      correlationId: input.correlationId,
+    });
+    await this.options.challengeStore.delete(challenge.id);
+    if (result.outcome === 'phone_taken') throw new AuthServiceError('AUTH_PHONE_ALREADY_BOUND');
+    return {
+      phoneMasked: maskPhoneE164(challenge.phoneE164),
+      confirmedAt: this.now().toISOString(),
+      ...(result.outcome === 'confirmed' && result.releasedPhoneLast4
+        ? { releasedPhoneLast4: result.releasedPhoneLast4 }
+        : {}),
+    };
+  }
+
   public async startPhoneChallenge(input: {
     readonly tenantKey: string;
     readonly phone: string;
@@ -1111,6 +1333,7 @@ export class AuthService {
     }
     const challenge: AuthChallenge = {
       id: challengeId,
+      purpose: 'LOGIN',
       tenantId: binding.tenantId,
       tenantKey: binding.tenantKey,
       provider: binding.provider,
