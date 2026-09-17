@@ -14,25 +14,29 @@ const connectionString = suppliedConnectionString ?? ciConnectionString;
 const describePostgres = connectionString ? describe : describe.skip;
 
 /**
- * The CUP addresses recipients by phone. A phone reaches a PadlHub user either through the provider
- * custody mapping or through the login-verified profile column, and a legacy import can leave the same
- * phone on a different account. This needs a real database to prove which source wins, that an inactive
- * provider owner never falls back to a stale row, and that ambiguity stays fail-closed.
+ * The CUP addresses recipients by phone. A phone reaches a PadlHub user either through the verified
+ * phone-login column or through the provider viewer-phone mapping, and the client relays the provider
+ * value without server attestation. This needs a real database to prove the login value wins, that the
+ * provider mapping still makes an OAuth-only account reachable, that ambiguity stays fail-closed, and
+ * that two phones of one person produce one recipient.
  */
 describePostgres('CUP phone resolution against real PostgreSQL', () => {
   const pool = new Pool({ connectionString, max: 4 });
   const tenantId = randomUUID();
   const providerAccountId = randomUUID();
-  const providerUser = randomUUID();
-  const staleSummaryUser = randomUUID();
-  const loginOnlyUser = randomUUID();
+  const loginOwner = randomUUID();
+  const providerClaimant = randomUUID();
+  const providerOnly = randomUUID();
   const ambiguousUser = randomUUID();
   const ambiguousTwinUser = randomUUID();
-  const disabledProviderUser = randomUUID();
-  const providerPhone = '+79995550001';
-  const loginOnlyPhone = '+79995550002';
+  const disabledProviderOwner = randomUUID();
+  const dualPhoneUser = randomUUID();
+  const loginPhone = '+79995550001';
+  const providerOnlyPhone = '+79995550002';
   const ambiguousPhone = '+79995550003';
   const disabledOwnerPhone = '+79995550004';
+  const dualLoginPhone = '+79995550005';
+  const dualProviderPhone = '+79995550006';
 
   async function insertUser(
     client: PoolClient,
@@ -69,18 +73,28 @@ describePostgres('CUP phone resolution against real PostgreSQL', () => {
     );
   }
 
+  async function insertProviderPhone(client: PoolClient, userId: string, phone: string) {
+    await client.query(
+      `insert into integration.external_entity_map (
+         tenant_id, external_system, entity_type, internal_id, external_id, last_synced_at, sync_status
+       ) values ($1, 'VIVA', 'legacy_viewer_phone', $2, $3, now(), 'synced')`,
+      [tenantId, userId, phone],
+    );
+  }
+
   beforeAll(async () => {
     await pool.query(
       `insert into identity.tenants (id, tenant_key, display_name) values ($1, $2, $3)`,
       [tenantId, `cup-phone-${tenantId}`, 'CUP phone resolution'],
     );
     await withTenantTransaction(pool, tenantId, async (client) => {
-      await insertUser(client, providerUser, 'ACTIVE', 'Провайдер', null);
-      await insertUser(client, staleSummaryUser, 'ACTIVE', 'Старая проекция', providerPhone);
-      await insertUser(client, loginOnlyUser, 'ACTIVE', 'Только вход', loginOnlyPhone);
+      await insertUser(client, loginOwner, 'ACTIVE', 'Проверенный вход', loginPhone);
+      await insertUser(client, providerClaimant, 'ACTIVE', 'Заявка провайдера', null);
+      await insertUser(client, providerOnly, 'ACTIVE', 'Только провайдер', null);
       await insertUser(client, ambiguousUser, 'ACTIVE', 'Спорный первый', ambiguousPhone);
       await insertUser(client, ambiguousTwinUser, 'ACTIVE', 'Спорный второй', ambiguousPhone);
-      await insertUser(client, disabledProviderUser, 'DISABLED', 'Отключён', null);
+      await insertUser(client, disabledProviderOwner, 'DISABLED', 'Отключён', null);
+      await insertUser(client, dualPhoneUser, 'ACTIVE', 'Два номера', dualLoginPhone);
 
       await client.query(
         `insert into integration.notification_provider_accounts (
@@ -93,25 +107,35 @@ describePostgres('CUP phone resolution against real PostgreSQL', () => {
          values ($1, true, true)`,
         [tenantId],
       );
-      await insertEndpoint(client, providerUser, 'a');
-      await insertEndpoint(client, loginOnlyUser, 'b');
+      await insertEndpoint(client, loginOwner, 'a');
+      await insertEndpoint(client, providerOnly, 'b');
+      await insertEndpoint(client, dualPhoneUser, 'c');
 
-      for (const [userId, phone] of [
-        [providerUser, providerPhone],
-        [disabledProviderUser, disabledOwnerPhone],
-      ] as const) {
-        await client.query(
-          `insert into integration.external_entity_map (
-             tenant_id, external_system, entity_type, internal_id, external_id, last_synced_at, sync_status
-           ) values ($1, 'VIVA', 'legacy_viewer_phone', $2, $3, now(), 'synced')`,
-          [tenantId, userId, phone],
-        );
-      }
+      await insertProviderPhone(client, providerClaimant, loginPhone);
+      await insertProviderPhone(client, providerOnly, providerOnlyPhone);
+      await insertProviderPhone(client, disabledProviderOwner, disabledOwnerPhone);
+      await insertProviderPhone(client, dualPhoneUser, dualProviderPhone);
     });
   });
 
   afterAll(async () => {
     await withTenantTransaction(pool, tenantId, async (client) => {
+      await client.query(
+        'delete from notifications.admin_campaign_recipients where tenant_id = $1',
+        [tenantId],
+      );
+      await client.query('delete from notifications.admin_campaign_commands where tenant_id = $1', [
+        tenantId,
+      ]);
+      await client.query('delete from notifications.admin_campaigns where tenant_id = $1', [
+        tenantId,
+      ]);
+      await client.query('delete from notifications.inbox_items where tenant_id = $1', [tenantId]);
+      await client.query('delete from notifications.deliveries where tenant_id = $1', [tenantId]);
+      await client.query('delete from notifications.intents where tenant_id = $1', [tenantId]);
+      await client.query('delete from notifications.templates where tenant_id = $1', [tenantId]);
+      await client.query('delete from audit.outbox_events where tenant_id = $1', [tenantId]);
+      await client.query('delete from audit.audit_log where tenant_id = $1', [tenantId]);
       await client.query('delete from integration.notification_endpoints where tenant_id = $1', [
         tenantId,
       ]);
@@ -144,20 +168,20 @@ describePostgres('CUP phone resolution against real PostgreSQL', () => {
     });
   }
 
-  it('resolves a phone to the provider-linked user, not to the stale login column', async () => {
-    const resolution = await resolve([providerPhone]);
+  it('never lets a client-relayed provider phone outrank the verified login phone', async () => {
+    const resolution = await resolve([loginPhone]);
 
     expect(resolution.unresolvedPhones).toEqual([]);
-    expect(resolution.matched).toHaveLength(1);
-    expect(resolution.matched[0]?.userId).toBe(providerUser);
+    expect(resolution.matched.map((recipient) => recipient.userId)).toEqual([loginOwner]);
     expect(resolution.matched[0]?.availableChannels).toEqual(['IN_APP', 'WEB_PUSH']);
   });
 
-  it('keeps the login-verified column as a fallback for users the provider never reported', async () => {
-    const resolution = await resolve([loginOnlyPhone]);
+  it('reaches an OAuth-only account through the provider phone mapping', async () => {
+    const resolution = await resolve([providerOnlyPhone]);
 
     expect(resolution.unresolvedPhones).toEqual([]);
-    expect(resolution.matched.map((recipient) => recipient.userId)).toEqual([loginOnlyUser]);
+    expect(resolution.matched.map((recipient) => recipient.userId)).toEqual([providerOnly]);
+    expect(resolution.matched[0]?.availableChannels).toEqual(['IN_APP', 'WEB_PUSH']);
   });
 
   it('never resolves a phone that two login rows claim', async () => {
@@ -167,20 +191,50 @@ describePostgres('CUP phone resolution against real PostgreSQL', () => {
     expect(resolution.unresolvedPhones).toEqual(['•••• 0003']);
   });
 
-  it('does not fall back to a stale row when the provider-linked user is inactive', async () => {
+  it('drops a provider phone whose owner is not active instead of guessing', async () => {
     const resolution = await resolve([disabledOwnerPhone]);
 
     expect(resolution.matched).toEqual([]);
     expect(resolution.unresolvedPhones).toEqual(['•••• 0004']);
   });
 
-  it('resolves several phones in one request without crossing their owners', async () => {
-    const resolution = await resolve([providerPhone, loginOnlyPhone]);
+  it('collapses two phones of one person into a single recipient', async () => {
+    const resolution = await resolve([dualProviderPhone, dualLoginPhone]);
 
-    expect(resolution.matched.map((recipient) => recipient.userId)).toEqual([
-      providerUser,
-      loginOnlyUser,
-    ]);
     expect(resolution.unresolvedPhones).toEqual([]);
+    expect(resolution.matched.map((recipient) => recipient.userId)).toEqual([dualPhoneUser]);
+  });
+
+  it('creates one campaign recipient when two phones belong to the same user', async () => {
+    const repository = createAdminNotificationRepository(pool);
+    const campaign = await repository.createCampaign({
+      tenantId,
+      actorUserId: loginOwner,
+      normalizedPhones: [dualProviderPhone, dualLoginPhone],
+      title: 'Проверка баннера',
+      body: 'Один получатель на два номера',
+      deepLink: '/notifications',
+      requestedChannels: ['IN_APP'],
+      requestHash: 'a'.repeat(64),
+      idempotencyKey: `cup-phone-${randomUUID()}`,
+      correlationId: randomUUID(),
+      webPushGloballyEnabled: true,
+      webPushAppId: 'padlhub-web',
+      webPushEnvironment: 'SANDBOX',
+    });
+
+    if (campaign.outcome !== 'accepted') {
+      throw new Error(`unexpected campaign outcome: ${campaign.outcome}`);
+    }
+    expect(campaign.matchedCount).toBe(1);
+
+    const recipients = await withTenantTransaction(pool, tenantId, async (client) => {
+      const result = await client.query<{ user_id: string }>(
+        `select user_id from notifications.admin_campaign_recipients where tenant_id = $1 and campaign_id = $2`,
+        [tenantId, campaign.campaignId],
+      );
+      return result.rows.map((row) => row.user_id);
+    });
+    expect(recipients).toEqual([dualPhoneUser]);
   });
 });

@@ -147,7 +147,7 @@ describe('admin notification repository', () => {
     });
   });
 
-  it('asks the provider phone mapping first and only falls back to the login column', async () => {
+  it('asks the verified login phone first and only falls back to the provider mapping', async () => {
     const phones = ['79990000001'];
     const { repository, query } = repositoryWithQuery((text) => {
       if (text.includes('web_push_provider_configured')) {
@@ -167,14 +167,13 @@ describe('admin notification repository', () => {
     const resolveSql = String(
       query.mock.calls.find(([text]) => String(text).includes('join identity.users u'))?.[0],
     );
-    // The provider custody mapping is the authoritative phone-to-user source.
+    // The verified login phone always wins.
+    expect(resolveSql).toContain('select login_phone.phone, login_phone.user_id from login_phone');
+    // The provider viewer-phone mapping is the fallback that reaches OAuth-only accounts.
     expect(resolveSql).toContain('integration.external_entity_map');
     expect(resolveSql).toContain("entity_type = 'legacy_viewer_phone'");
     expect(resolveSql).toContain('link.internal_id as user_id');
-    // The login column stays a fallback and never overrides a provider-mapped phone.
-    expect(resolveSql).toContain('profile.user_summaries summary');
-    expect(resolveSql).toContain('where not exists');
-    expect(resolveSql).toContain('where provider_link.phone = login_phone.phone');
+    expect(resolveSql).toContain('where login_phone.phone = provider_link.phone');
   });
 
   it('does not query recipients for an empty phone list', async () => {
