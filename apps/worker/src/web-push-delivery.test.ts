@@ -6,9 +6,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   WEB_PUSH_DELIVERY_LEASE_SECONDS,
   WEB_PUSH_PAYLOAD_MAX_BYTES,
+  WEB_PUSH_URGENT_TTL_SECONDS,
   buildWebPushNotification,
   resolveNotificationIntentState,
   runWebPushDeliveryBatch,
+  webPushDeliveryHints,
   webPushRetryDelayMs,
   type WebPushNotificationPayload,
 } from './web-push-delivery.js';
@@ -61,6 +63,13 @@ describe('Web Push delivery state machine', () => {
     expect(queries.find((text) => text.includes('for update of d skip locked'))).not.toContain(
       "'SUSPENDED_POLICY'",
     );
+    // The scheduling hints come from the template category, so the claim has to join it.
+    expect(queries.find((text) => text.includes('for update of d skip locked'))).toContain(
+      'join notifications.templates t',
+    );
+    expect(queries.find((text) => text.includes('for update of d skip locked'))).toContain(
+      't.category',
+    );
   });
 
   it('terminalizes a revoked endpoint backlog without decrypting or calling the provider', async () => {
@@ -82,6 +91,7 @@ describe('Web Push delivery state machine', () => {
               notification_id: '66666666-6666-4666-8666-666666666666',
               rendered_title: 'Запись отменена',
               rendered_body: 'Теннис: 12 сентября 19:00, Корт 3',
+              category: 'BOOKING',
               deep_link: null,
               attempt_count: 0,
             },
@@ -151,6 +161,7 @@ describe('Web Push delivery state machine', () => {
               notification_id: '66666666-6666-4666-8666-666666666666',
               rendered_title: 'Запись подтверждена',
               rendered_body: 'Теннис: 12 сентября 19:00, Корт 3',
+              category: 'BOOKING',
               deep_link: null,
               attempt_count: 4,
             },
@@ -256,6 +267,7 @@ describe('Web Push delivery state machine', () => {
               notification_id: `66666666-6666-4666-8666-66666666666${index}`,
               rendered_title: `Запись ${index}`,
               rendered_body: `Теннис: 12 сентября 19:0${index}, Корт 3`,
+              category: 'BOOKING',
               deep_link: null,
               attempt_count: 0,
             })),
@@ -461,5 +473,29 @@ describe('Web Push notification payload', () => {
 
     expect(payloadSize(payload)).toBeLessThanOrEqual(WEB_PUSH_PAYLOAD_MAX_BYTES);
     expect(payload.title.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Web Push delivery scheduling hints', () => {
+  it.each(['BOOKING', 'GAME'])(
+    'sends the %s category as an urgent push that outlives a nap',
+    (category) => {
+      expect(webPushDeliveryHints(category)).toEqual({
+        urgency: 'high',
+        ttlSeconds: WEB_PUSH_URGENT_TTL_SECONDS,
+      });
+    },
+  );
+
+  it.each(['SYSTEM', 'ADMIN', 'CHAT', ''])(
+    'keeps the %s category on the transport default',
+    (category) => {
+      expect(webPushDeliveryHints(category)).toEqual({ urgency: 'normal' });
+    },
+  );
+
+  it('never marks an informational category urgent just because the name is a prefix', () => {
+    expect(webPushDeliveryHints('BOOKING_DIGEST').urgency).toBe('normal');
+    expect(webPushDeliveryHints('GAME_INVITE').urgency).toBe('normal');
   });
 });

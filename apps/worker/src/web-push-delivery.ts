@@ -29,6 +29,7 @@ interface DeliveryRow extends QueryResultRow {
   readonly notification_id: string;
   readonly rendered_title: string;
   readonly rendered_body: string;
+  readonly category: string;
   readonly deep_link: string | null;
   readonly attempt_count: number;
 }
@@ -45,6 +46,7 @@ interface ClaimedDelivery {
   readonly notificationId: string;
   readonly renderedTitle: string;
   readonly renderedBody: string;
+  readonly category: string;
   readonly deepLink?: string;
   readonly attemptNo: number;
   readonly startedAt: string;
@@ -52,6 +54,22 @@ interface ClaimedDelivery {
 
 // Provider calls time out at no more than 30 seconds; the extra margin keeps finalization fenced.
 export const WEB_PUSH_DELIVERY_LEASE_SECONDS = 60;
+
+// Booking changes and game reminders are time-bound: send them as an urgent push with a longer TTL so
+// a dozing phone still wakes up for them and a briefly offline one does not miss the change. Every
+// other category keeps the transport default, because an urgent flag on informational messages only
+// trains the operating system to deprioritize the app.
+export const WEB_PUSH_URGENT_CATEGORIES = ['BOOKING', 'GAME'] as const;
+export const WEB_PUSH_URGENT_TTL_SECONDS = 3_600;
+
+export function webPushDeliveryHints(category: string): {
+  readonly urgency: 'normal' | 'high';
+  readonly ttlSeconds?: number;
+} {
+  return (WEB_PUSH_URGENT_CATEGORIES as readonly string[]).includes(category)
+    ? { urgency: 'high', ttlSeconds: WEB_PUSH_URGENT_TTL_SECONDS }
+    : { urgency: 'normal' };
+}
 
 // The rendered intent snapshot is already stored for the in-app inbox. A push payload may repeat a
 // bounded part of it because the transport is encrypted end to end to the browser subscription.
@@ -143,10 +161,13 @@ async function claimBatch(options: {
               e.status as endpoint_status, e.address_ciphertext, e.encryption_key_id,
               coalesce(inbox.id, i.id) as notification_id,
               i.rendered_title, i.rendered_body,
+              t.category,
               i.rendered_deep_link as deep_link
          from notifications.deliveries d
          join notifications.intents i
            on i.tenant_id = d.tenant_id and i.id = d.intent_id
+         join notifications.templates t
+           on t.tenant_id = i.tenant_id and t.id = i.template_id
          join integration.notification_endpoints e
            on e.tenant_id = d.tenant_id and e.id = d.endpoint_id
          join integration.notification_provider_accounts a
@@ -200,6 +221,7 @@ async function claimBatch(options: {
         notificationId: row.notification_id,
         renderedTitle: row.rendered_title,
         renderedBody: row.rendered_body,
+        category: row.category,
         ...(row.deep_link ? { deepLink: row.deep_link } : {}),
         attemptNo,
         startedAt: new Date().toISOString(),
@@ -263,6 +285,7 @@ export async function runWebPushDeliveryBatch(options: {
             body: job.renderedBody,
             deepLink: job.deepLink ?? null,
           }),
+          ...webPushDeliveryHints(job.category),
           providerIdempotencyKey: `web-push:${job.deliveryId}`,
         });
       } catch {
