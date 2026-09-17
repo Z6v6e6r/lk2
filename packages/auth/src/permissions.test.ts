@@ -4,6 +4,7 @@ import {
   ADMIN_ONLY_PERMISSIONS,
   FULL_CLIENT_PERMISSIONS,
   isAdminOnlyPermission,
+  mergeFullClientAccess,
   resolveClientPermissions,
 } from './index.js';
 
@@ -41,5 +42,31 @@ describe('client permission catalog', () => {
   it('recognizes admin-only permissions for the admin audience check', () => {
     expect(isAdminOnlyPermission('notifications.manage')).toBe(true);
     expect(isAdminOnlyPermission('chat.direct.create')).toBe(false);
+  });
+});
+
+describe('bulk beta client-access merge', () => {
+  it('adds the catalog and the client role to an empty profile', () => {
+    const merged = mergeFullClientAccess({});
+    expect(merged.roles).toEqual(['client']);
+    expect(merged.permissions).toEqual([...FULL_CLIENT_PERMISSIONS].sort());
+  });
+
+  it('never demotes an operator or drops admin-only permissions', () => {
+    const merged = mergeFullClientAccess({
+      roles: ['admin', 'client'],
+      permissions: ['notifications.manage', 'locations.publish', 'profile.read'],
+    });
+
+    expect(merged.roles).toEqual(['admin', 'client']);
+    expect(merged.permissions).toContain('notifications.manage');
+    expect(merged.permissions).toContain('locations.publish');
+    expect(merged.permissions).toEqual(expect.arrayContaining([...FULL_CLIENT_PERMISSIONS]));
+  });
+
+  it('is idempotent and deterministic for an already granted profile', () => {
+    const once = mergeFullClientAccess({ roles: ['client'], permissions: ['games.play'] });
+    const twice = mergeFullClientAccess(once);
+    expect(twice).toEqual(once);
   });
 });

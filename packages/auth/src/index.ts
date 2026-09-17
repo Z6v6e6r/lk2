@@ -241,3 +241,22 @@ export function resolveClientPermissions(input: {
   for (const permission of ADMIN_ONLY_PERMISSIONS) permissions.delete(permission);
   return [...permissions];
 }
+
+/**
+ * Adds the closed-beta client catalog to a stored access profile without removing anything. Roles
+ * other than the guaranteed `client` role and every existing permission, including admin-only ones,
+ * stay in place, so a bulk testing grant can never demote an operator or drop console access.
+ */
+export function mergeFullClientAccess(stored: {
+  readonly roles?: readonly string[] | null;
+  readonly permissions?: readonly string[] | null;
+}): { readonly roles: readonly string[]; readonly permissions: readonly string[] } {
+  const roles = new Set(stored.roles ?? []);
+  roles.add('client');
+  const permissions = new Set(stored.permissions ?? []);
+  for (const permission of FULL_CLIENT_PERMISSIONS) permissions.add(permission);
+  return {
+    roles: [...roles].sort(),
+    permissions: [...permissions].sort(),
+  };
+}

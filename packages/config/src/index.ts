@@ -104,7 +104,7 @@ const environmentSchema = z.object({
   /**
    * Closed-beta testing switch: every client access token additionally carries
    * `FULL_CLIENT_PERMISSIONS`. Owner: LK2 beta testing. Remove once the beta is over or once
-   * `scripts/set-user-access.ts --all-active-users` has made the grants durable in the database.
+   * `scripts/grant-beta-full-client-access.ts` has made the grants durable in the database.
    */
   BETA_FULL_CLIENT_ACCESS_ENABLED: booleanFromEnvironment,
   AUTH_DEV_PHONE_E164: z
