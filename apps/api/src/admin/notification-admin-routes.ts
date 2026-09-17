@@ -7,10 +7,14 @@ import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
 
-const phoneListSchema = z.object({
-  phones: z.array(z.string().min(5).max(32)).min(1).max(100),
+// The CUP addresses recipients either by phone or by PadlHub user id. The user id is the
+// authoritative selector: it needs no phone mapping and cannot be redirected by a phone claim.
+const MAX_SELECTOR_VALUES = 100;
+const recipientsSchema = z.object({
+  phones: z.array(z.string().min(5).max(32)).max(MAX_SELECTOR_VALUES).optional(),
+  userIds: z.array(z.string().trim().min(1).max(64)).max(MAX_SELECTOR_VALUES).optional(),
 });
-const campaignSchema = phoneListSchema.extend({
+const campaignSchema = recipientsSchema.extend({
   title: z.string().trim().min(1).max(300),
   body: z.string().trim().min(1).max(8_000),
   deepLink: z
@@ -26,10 +30,73 @@ const campaignSchema = phoneListSchema.extend({
     .max(4),
 });
 
+const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
 function normalizePhones(phones: readonly string[]): readonly string[] | undefined {
   const normalized = phones.map(normalizePhoneE164);
   if (normalized.some((phone) => !phone)) return undefined;
   return [...new Set(normalized as string[])];
+}
+
+// A user id is compared as a canonical UUID, so the same identifier in a different letter case or
+// with surrounding whitespace must not become two selector values.
+function normalizeUserIds(userIds: readonly string[]): readonly string[] | undefined {
+  const normalized = userIds.map((userId) => userId.trim().toLowerCase());
+  if (normalized.some((userId) => !USER_ID_PATTERN.test(userId))) return undefined;
+  return [...new Set(normalized)];
+}
+
+interface RecipientSelector {
+  readonly normalizedPhones: readonly string[];
+  readonly normalizedUserIds: readonly string[];
+}
+
+type SelectorParseResult =
+  | { readonly selector: RecipientSelector }
+  | { readonly error: { readonly code: string; readonly message: string } };
+
+function parseRecipientSelector(input: {
+  readonly phones?: readonly string[] | undefined;
+  readonly userIds?: readonly string[] | undefined;
+}): SelectorParseResult {
+  const phones = input.phones ?? [];
+  const userIds = input.userIds ?? [];
+  const requested = phones.length + userIds.length;
+  if (requested === 0) {
+    return {
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'Укажите хотя бы один номер телефона или идентификатор пользователя.',
+      },
+    };
+  }
+  if (requested > MAX_SELECTOR_VALUES) {
+    return {
+      error: {
+        code: 'INVALID_REQUEST',
+        message: 'Укажите не более 100 получателей за один запрос.',
+      },
+    };
+  }
+  const normalizedPhones = normalizePhones(phones);
+  if (!normalizedPhones) {
+    return {
+      error: {
+        code: 'PHONE_INVALID',
+        message: 'Один или несколько номеров телефонов указаны неверно.',
+      },
+    };
+  }
+  const normalizedUserIds = normalizeUserIds(userIds);
+  if (!normalizedUserIds) {
+    return {
+      error: {
+        code: 'USER_ID_INVALID',
+        message: 'Один или несколько идентификаторов пользователя указаны неверно.',
+      },
+    };
+  }
+  return { selector: { normalizedPhones, normalizedUserIds } };
 }
 
 function idempotencyKey(request: FastifyRequest): string {
@@ -38,11 +105,13 @@ function idempotencyKey(request: FastifyRequest): string {
 
 function campaignRequestHash(input: {
   readonly normalizedPhones: readonly string[];
+  readonly normalizedUserIds: readonly string[];
   readonly title: string;
   readonly body: string;
   readonly deepLink?: string;
   readonly channels: readonly AdminNotificationChannel[];
 }): string {
+  const normalizedUserIds = [...input.normalizedUserIds].sort();
   return createHash('sha256')
     .update(
       JSON.stringify({
@@ -51,6 +120,9 @@ function campaignRequestHash(input: {
         body: input.body,
         deepLink: input.deepLink ?? null,
         channels: [...new Set(input.channels)].sort(),
+        // Phone-only requests keep the hash they had before user-id targeting existed, so a retry of
+        // an in-flight command still replays instead of failing as a conflict.
+        ...(normalizedUserIds.length > 0 ? { normalizedUserIds } : {}),
       }),
     )
     .digest('hex');
@@ -134,29 +206,29 @@ export function registerAdminNotificationRoutes(
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       if (!options.repository || !request.tenantId) return repositoryUnavailable(request, reply);
-      const parsed = phoneListSchema.safeParse(request.body);
+      const parsed = recipientsSchema.safeParse(request.body);
       if (!parsed.success) {
         return sendApiError(
           request,
           reply,
           400,
           'INVALID_REQUEST',
-          'Укажите от 1 до 100 номеров телефонов.',
+          'Укажите от 1 до 100 номеров телефонов или идентификаторов пользователей.',
         );
       }
-      const normalizedPhones = normalizePhones(parsed.data.phones);
-      if (!normalizedPhones) {
+      const parsedSelector = parseRecipientSelector(parsed.data);
+      if ('error' in parsedSelector) {
         return sendApiError(
           request,
           reply,
           400,
-          'PHONE_INVALID',
-          'Один или несколько номеров телефонов указаны неверно.',
+          parsedSelector.error.code,
+          parsedSelector.error.message,
         );
       }
       return options.repository.resolveRecipients({
         tenantId: request.tenantId,
-        normalizedPhones,
+        ...parsedSelector.selector,
         webPushGloballyEnabled: options.webPushGloballyEnabled,
         webPushAppId: options.webPushAppId,
         webPushEnvironment: options.webPushEnvironment,
@@ -183,16 +255,17 @@ export function registerAdminNotificationRoutes(
           'Проверьте получателей, текст и каналы отправки.',
         );
       }
-      const normalizedPhones = normalizePhones(parsed.data.phones);
-      if (!normalizedPhones) {
+      const parsedSelector = parseRecipientSelector(parsed.data);
+      if ('error' in parsedSelector) {
         return sendApiError(
           request,
           reply,
           400,
-          'PHONE_INVALID',
-          'Один или несколько номеров телефонов указаны неверно.',
+          parsedSelector.error.code,
+          parsedSelector.error.message,
         );
       }
+      const { normalizedPhones, normalizedUserIds } = parsedSelector.selector;
       const channels = [...new Set(parsed.data.channels)];
       const unsupportedChannel = channels.find(
         (channel) => channel === 'IOS_PUSH' || channel === 'ANDROID_PUSH',
@@ -213,12 +286,14 @@ export function registerAdminNotificationRoutes(
         tenantId: request.tenantId,
         actorUserId,
         normalizedPhones,
+        normalizedUserIds,
         title: parsed.data.title,
         body: parsed.data.body,
         ...(parsed.data.deepLink ? { deepLink: parsed.data.deepLink } : {}),
         requestedChannels: supportedChannels,
         requestHash: campaignRequestHash({
           normalizedPhones,
+          normalizedUserIds,
           title: parsed.data.title,
           body: parsed.data.body,
           ...(parsed.data.deepLink ? { deepLink: parsed.data.deepLink } : {}),
@@ -257,7 +332,7 @@ export function registerAdminNotificationRoutes(
           reply,
           422,
           'NOTIFICATION_RECIPIENTS_NOT_FOUND',
-          'Активные пользователи с указанными номерами не найдены.',
+          'Активные получатели по указанным номерам телефонов и идентификаторам не найдены.',
         );
       }
       return reply.status(202).send(result);

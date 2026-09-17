@@ -9,13 +9,14 @@ export type AdminNotificationChannel = 'IN_APP' | 'WEB_PUSH' | 'IOS_PUSH' | 'AND
 export interface AdminNotificationRecipient {
   readonly userId: string;
   readonly displayName: string;
-  readonly phoneMasked: string;
+  readonly phoneMasked?: string;
   readonly availableChannels: readonly AdminNotificationChannel[];
 }
 
 export interface AdminNotificationRecipientResolution {
   readonly matched: readonly AdminNotificationRecipient[];
   readonly unresolvedPhones: readonly string[];
+  readonly unresolvedUserIds: readonly string[];
 }
 
 export interface AdminNotificationCapabilities {
@@ -52,6 +53,7 @@ export interface AdminNotificationRepository {
   resolveRecipients(input: {
     readonly tenantId: string;
     readonly normalizedPhones: readonly string[];
+    readonly normalizedUserIds: readonly string[];
     readonly webPushGloballyEnabled: boolean;
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
@@ -60,6 +62,7 @@ export interface AdminNotificationRepository {
     readonly tenantId: string;
     readonly actorUserId: string;
     readonly normalizedPhones: readonly string[];
+    readonly normalizedUserIds: readonly string[];
     readonly title: string;
     readonly body: string;
     readonly deepLink?: string;
@@ -84,7 +87,7 @@ interface CapabilitiesRow extends QueryResultRow {
 interface RecipientRow extends QueryResultRow {
   readonly user_id: string;
   readonly display_name: string;
-  readonly phone_e164: string;
+  readonly phone_e164: string | null;
   readonly in_app_preference_enabled: boolean;
   readonly push_preference_enabled: boolean;
   readonly web_push_endpoint_count: number;
@@ -157,6 +160,48 @@ async function capabilities(
   };
 }
 
+// Both recipient sources return the same shape: identity, display name, optional phone, the
+// ADMIN_MESSAGE preferences and the number of live Web Push endpoints for the requested provider app.
+function recipientSelect(phoneExpression: string): string {
+  return `\
+select
+  u.id as user_id,
+  p.display_name,
+  ${phoneExpression} as phone_e164,
+  coalesce((
+    select pref.enabled
+      from notifications.user_preferences pref
+     where pref.tenant_id = u.tenant_id
+       and pref.user_id = u.id
+       and pref.category = 'ADMIN_MESSAGE'
+       and pref.channel = 'IN_APP'
+  ), true) as in_app_preference_enabled,
+  coalesce((
+    select pref.enabled
+      from notifications.user_preferences pref
+     where pref.tenant_id = u.tenant_id
+       and pref.user_id = u.id
+       and pref.category = 'ADMIN_MESSAGE'
+       and pref.channel = 'PUSH'
+  ), true) as push_preference_enabled,
+  (
+    select count(*)::integer
+      from integration.notification_endpoints e
+      join integration.notification_provider_accounts a
+        on a.tenant_id = e.tenant_id and a.id = e.provider_account_id
+     where e.tenant_id = u.tenant_id
+       and e.user_id = u.id
+       and e.channel = 'PUSH'
+       and e.status = 'ACTIVE'
+       and a.channel = 'PUSH'
+       and a.platform = 'WEB'
+       and a.provider = 'WEB_PUSH'
+       and a.app_id = $3
+       and a.environment = $4
+       and a.status = 'ACTIVE'
+  ) as web_push_endpoint_count`;
+}
+
 async function recipientRows(
   client: PoolClient,
   input: {
@@ -203,42 +248,7 @@ async function recipientRows(
           select 1 from login_phone where login_phone.phone = provider_link.phone
         )
      )
-     select
-       u.id as user_id,
-       p.display_name,
-       resolved.phone as phone_e164,
-       coalesce((
-         select pref.enabled
-           from notifications.user_preferences pref
-          where pref.tenant_id = u.tenant_id
-            and pref.user_id = u.id
-            and pref.category = 'ADMIN_MESSAGE'
-            and pref.channel = 'IN_APP'
-       ), true) as in_app_preference_enabled,
-       coalesce((
-         select pref.enabled
-           from notifications.user_preferences pref
-          where pref.tenant_id = u.tenant_id
-            and pref.user_id = u.id
-            and pref.category = 'ADMIN_MESSAGE'
-            and pref.channel = 'PUSH'
-       ), true) as push_preference_enabled,
-       (
-         select count(*)::integer
-           from integration.notification_endpoints e
-           join integration.notification_provider_accounts a
-             on a.tenant_id = e.tenant_id and a.id = e.provider_account_id
-          where e.tenant_id = u.tenant_id
-            and e.user_id = u.id
-            and e.channel = 'PUSH'
-            and e.status = 'ACTIVE'
-            and a.channel = 'PUSH'
-            and a.platform = 'WEB'
-            and a.provider = 'WEB_PUSH'
-            and a.app_id = $3
-            and a.environment = $4
-            and a.status = 'ACTIVE'
-       ) as web_push_endpoint_count
+${recipientSelect('resolved.phone')}
      from resolved
      join identity.users u
        on u.tenant_id = $1 and u.id = resolved.user_id
@@ -251,14 +261,116 @@ async function recipientRows(
   return result.rows;
 }
 
+// The CUP may address recipients by PadlHub UUID, which is the authoritative selector: it does not
+// depend on any phone mapping and cannot be redirected by a phone claim. Only active users with a
+// profile summary are returned; unknown or disabled identifiers stay unresolved.
+async function recipientRowsByIds(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly normalizedUserIds: readonly string[];
+    readonly webPushAppId: string;
+    readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+  },
+): Promise<readonly RecipientRow[]> {
+  if (input.normalizedUserIds.length === 0) return [];
+  const result = await client.query<RecipientRow>(
+    `${recipientSelect('p.phone_e164')}
+       from identity.users u
+       join profile.user_summaries p
+         on p.tenant_id = u.tenant_id and p.user_id = u.id
+      where u.tenant_id = $1
+        and u.status = 'ACTIVE'
+        and u.id = any($2::uuid[])
+      order by u.id`,
+    [input.tenantId, [...input.normalizedUserIds], input.webPushAppId, input.webPushEnvironment],
+  );
+  return result.rows;
+}
+
+function availableChannels(
+  row: RecipientRow,
+  capabilities: AdminNotificationCapabilities,
+  webPushGloballyEnabled: boolean,
+): readonly AdminNotificationChannel[] {
+  const channels: AdminNotificationChannel[] = [];
+  if (capabilities.inAppTenantEnabled && row.in_app_preference_enabled) channels.push('IN_APP');
+  if (
+    webPushGloballyEnabled &&
+    capabilities.webPushTenantEnabled &&
+    capabilities.webPushProviderConfigured &&
+    row.push_preference_enabled &&
+    row.web_push_endpoint_count > 0
+  ) {
+    channels.push('WEB_PUSH');
+  }
+  return channels;
+}
+
+// One person can be addressed by several selectors at once; the campaign and the preview must list
+// that person once, so the first occurrence (the more specific selector) wins.
+function dedupeRecipients(
+  recipients: readonly AdminNotificationRecipient[],
+): readonly AdminNotificationRecipient[] {
+  const seen = new Set<string>();
+  const unique: AdminNotificationRecipient[] = [];
+  for (const recipient of recipients) {
+    if (seen.has(recipient.userId)) continue;
+    seen.add(recipient.userId);
+    unique.push(recipient);
+  }
+  return unique;
+}
+
+function recipientView(
+  row: RecipientRow,
+  capabilities: AdminNotificationCapabilities,
+  webPushGloballyEnabled: boolean,
+): AdminNotificationRecipient {
+  return {
+    userId: row.user_id,
+    displayName: row.display_name,
+    ...(row.phone_e164 ? { phoneMasked: maskPhone(row.phone_e164) } : {}),
+    availableChannels: availableChannels(row, capabilities, webPushGloballyEnabled),
+  };
+}
+
+function mapUserIdResolution(input: {
+  readonly rows: readonly RecipientRow[];
+  readonly normalizedUserIds: readonly string[];
+  readonly capabilities: AdminNotificationCapabilities;
+  readonly webPushGloballyEnabled: boolean;
+}): {
+  readonly matched: readonly AdminNotificationRecipient[];
+  readonly unresolvedUserIds: readonly string[];
+} {
+  const byUserId = new Map<string, RecipientRow>();
+  for (const row of input.rows) byUserId.set(row.user_id, row);
+  const matched: AdminNotificationRecipient[] = [];
+  const unresolvedUserIds: string[] = [];
+  for (const userId of input.normalizedUserIds) {
+    const row = byUserId.get(userId);
+    if (!row) {
+      unresolvedUserIds.push(userId);
+      continue;
+    }
+    matched.push(recipientView(row, input.capabilities, input.webPushGloballyEnabled));
+  }
+  return { matched, unresolvedUserIds };
+}
+
 function mapResolution(input: {
   readonly rows: readonly RecipientRow[];
   readonly normalizedPhones: readonly string[];
   readonly capabilities: AdminNotificationCapabilities;
   readonly webPushGloballyEnabled: boolean;
-}): AdminNotificationRecipientResolution {
+}): {
+  readonly matched: readonly AdminNotificationRecipient[];
+  readonly unresolvedPhones: readonly string[];
+} {
   const byPhone = new Map<string, RecipientRow[]>();
   for (const row of input.rows) {
+    if (!row.phone_e164) continue;
     const group = byPhone.get(row.phone_e164) ?? [];
     group.push(row);
     byPhone.set(row.phone_e164, group);
@@ -277,26 +389,8 @@ function mapResolution(input: {
     const row = group[0];
     if (!row) continue;
     if (matchedUserIds.has(row.user_id)) continue;
-    const availableChannels: AdminNotificationChannel[] = [];
-    if (input.capabilities.inAppTenantEnabled && row.in_app_preference_enabled) {
-      availableChannels.push('IN_APP');
-    }
-    if (
-      input.webPushGloballyEnabled &&
-      input.capabilities.webPushTenantEnabled &&
-      input.capabilities.webPushProviderConfigured &&
-      row.push_preference_enabled &&
-      row.web_push_endpoint_count > 0
-    ) {
-      availableChannels.push('WEB_PUSH');
-    }
     matchedUserIds.add(row.user_id);
-    matched.push({
-      userId: row.user_id,
-      displayName: row.display_name,
-      phoneMasked: maskPhone(row.phone_e164),
-      availableChannels,
-    });
+    matched.push(recipientView(row, input.capabilities, input.webPushGloballyEnabled));
   }
   return { matched, unresolvedPhones };
 }
@@ -307,6 +401,7 @@ function unambiguousRecipientRows(
 ): readonly RecipientRow[] {
   const byPhone = new Map<string, RecipientRow[]>();
   for (const row of rows) {
+    if (!row.phone_e164) continue;
     const group = byPhone.get(row.phone_e164) ?? [];
     group.push(row);
     byPhone.set(row.phone_e164, group);
@@ -406,16 +501,30 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
 
     resolveRecipients(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const [runtime, rows] = await Promise.all([
-          capabilities(client, input),
-          recipientRows(client, input),
-        ]);
-        return mapResolution({
-          rows,
+        // One client per transaction serves one query at a time; the selectors run in a stable order.
+        const runtime = await capabilities(client, input);
+        const phoneRows = await recipientRows(client, input);
+        const userIdRows = await recipientRowsByIds(client, input);
+        const byPhone = mapResolution({
+          rows: phoneRows,
           normalizedPhones: input.normalizedPhones,
           capabilities: runtime,
           webPushGloballyEnabled: input.webPushGloballyEnabled,
         });
+        const byUserId = mapUserIdResolution({
+          rows: userIdRows,
+          normalizedUserIds: input.normalizedUserIds,
+          capabilities: runtime,
+          webPushGloballyEnabled: input.webPushGloballyEnabled,
+        });
+        const matched = dedupeRecipients([...byPhone.matched, ...byUserId.matched]);
+        // A selector value is either matched or unresolved, never both: an unresolved entry is only
+        // produced where no single row was found, so the two lists stay disjoint by construction.
+        return {
+          matched,
+          unresolvedPhones: byPhone.unresolvedPhones,
+          unresolvedUserIds: byUserId.unresolvedUserIds,
+        };
       });
     },
 
@@ -457,7 +566,23 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
         }
 
         const candidateRows = await recipientRows(client, input);
-        const rows = unambiguousRecipientRows(candidateRows, input.normalizedPhones);
+        const userIdRows = await recipientRowsByIds(client, input);
+        const unambiguousRows = unambiguousRecipientRows(candidateRows, input.normalizedPhones);
+        // One person can arrive through both selectors, and the campaign writes exactly one recipient
+        // row, one intent and one dedupe key per user, so the rows collapse by user id.
+        const seenUserIds = new Set<string>();
+        const rows: RecipientRow[] = [];
+        for (const row of [...unambiguousRows, ...userIdRows]) {
+          if (seenUserIds.has(row.user_id)) continue;
+          seenUserIds.add(row.user_id);
+          rows.push(row);
+        }
+        // The campaign row keeps the schema invariant `unresolved_count = input_count - matched_count`:
+        // input_count counts selector values and matched_count counts distinct people, so a second
+        // selector value that names an already matched person is counted as not adding a recipient.
+        // The recipient preview reports the precise unresolved lists instead.
+        const inputCount = input.normalizedPhones.length + input.normalizedUserIds.length;
+        const unresolvedCount = inputCount - rows.length;
         if (rows.length === 0) return { outcome: 'recipients_not_found' };
         await client.query(
           `insert into notifications.admin_campaign_commands (
@@ -479,9 +604,9 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
             input.body,
             input.deepLink ?? null,
             [...input.requestedChannels],
-            input.normalizedPhones.length,
+            inputCount,
             rows.length,
-            input.normalizedPhones.length - rows.length,
+            unresolvedCount,
             input.actorUserId,
           ],
         );
@@ -702,9 +827,9 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
             input.correlationId,
             JSON.stringify({
               requestedChannels: input.requestedChannels,
-              inputCount: input.normalizedPhones.length,
+              inputCount,
               matchedCount: rows.length,
-              unresolvedCount: input.normalizedPhones.length - rows.length,
+              unresolvedCount,
               inAppCreatedCount,
               pushQueuedCount,
               suppressedCount,
@@ -731,7 +856,7 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
           outcome: 'accepted',
           campaignId: campaign.id,
           matchedCount: rows.length,
-          unresolvedCount: input.normalizedPhones.length - rows.length,
+          unresolvedCount,
           inAppCreatedCount,
           pushQueuedCount,
           suppressedCount,

@@ -17,6 +17,7 @@ const campaignInput = {
   tenantId,
   actorUserId,
   normalizedPhones: ['79990000001'],
+  normalizedUserIds: [] as readonly string[],
   title: 'Турнир сегодня',
   body: 'Начало в 19:00',
   requestedChannels: ['IN_APP', 'WEB_PUSH'] as const,
@@ -67,6 +68,97 @@ function capabilitiesRow(overrides: Record<string, unknown> = {}) {
     android_push_enabled: false,
     web_push_provider_configured: true,
     ...overrides,
+  };
+}
+
+// A type alias (not an interface) keeps an implicit index signature, so fixtures satisfy the
+// `Record<string, unknown>` rows of the query-shaped test double.
+type RecipientRowFixture = {
+  readonly user_id: string;
+  readonly display_name: string;
+  readonly phone_e164: string | null;
+  readonly in_app_preference_enabled: boolean;
+  readonly push_preference_enabled: boolean;
+  readonly web_push_endpoint_count: number;
+};
+
+function recipientRowFixture(
+  overrides: Partial<RecipientRowFixture> & { readonly user_id: string },
+): RecipientRowFixture {
+  return {
+    display_name: 'Игрок',
+    phone_e164: null,
+    in_app_preference_enabled: true,
+    push_preference_enabled: true,
+    web_push_endpoint_count: 1,
+    ...overrides,
+  };
+}
+
+// The campaign projection walks identity, template, intent, delivery, inbox and endpoint writes. The
+// phone selector (`with requested as`) and the user-id selector (`u.id = any($2::uuid[])`) are
+// answered separately so a test can prove which selector actually ran.
+function campaignProjectionHandler(input: {
+  readonly phoneRows?: readonly RecipientRowFixture[];
+  readonly userIdRows?: readonly RecipientRowFixture[];
+  readonly endpointRows?: readonly { readonly id: string }[];
+}) {
+  let intentNumber = 0;
+  let deliveryNumber = 0;
+  const phoneRows = input.phoneRows ?? [];
+  const userIdRows = input.userIdRows ?? [];
+  const endpointRows = input.endpointRows ?? [{ id: '99999999-9999-4999-8999-999999999999' }];
+  return (text: string) => {
+    if (text.includes('from notifications.admin_campaign_commands')) {
+      return { rows: [], rowCount: 0 };
+    }
+    if (text.includes('web_push_provider_configured')) {
+      return { rows: [capabilitiesRow()], rowCount: 1 };
+    }
+    if (text.includes('u.id = any($2::uuid[])')) {
+      return { rows: userIdRows, rowCount: userIdRows.length };
+    }
+    if (text.includes('join identity.users u')) {
+      return { rows: phoneRows, rowCount: phoneRows.length };
+    }
+    if (text.includes('insert into notifications.templates')) {
+      return { rows: [{ id: '55555555-5555-4555-8555-555555555555' }], rowCount: 1 };
+    }
+    if (text.includes('from notifications.templates')) return { rows: [], rowCount: 0 };
+    if (text.includes('insert into notifications.admin_campaigns')) {
+      return { rows: [{ id: campaignId }], rowCount: 1 };
+    }
+    if (text.includes('insert into notifications.intents')) {
+      intentNumber += 1;
+      return {
+        rows: [{ id: `66666666-6666-4666-8666-66666666666${intentNumber}` }],
+        rowCount: 1,
+      };
+    }
+    if (text.includes('insert into notifications.deliveries')) {
+      deliveryNumber += 1;
+      return {
+        rows: [{ id: `77777777-7777-4777-8777-77777777777${deliveryNumber}` }],
+        rowCount: 1,
+      };
+    }
+    if (text.includes('insert into notifications.inbox_items')) {
+      return { rows: [{ id: '88888888-8888-4888-8888-888888888888' }], rowCount: 1 };
+    }
+    if (text.includes('from integration.notification_endpoints e')) {
+      return { rows: endpointRows, rowCount: endpointRows.length };
+    }
+    if (
+      text.includes('insert into notifications.admin_campaign_commands') ||
+      text.includes('insert into audit.outbox_events') ||
+      text.includes('insert into notifications.admin_campaign_recipients') ||
+      text.includes('update notifications.admin_campaigns') ||
+      text.includes('update notifications.admin_campaign_commands') ||
+      text.includes('insert into audit.audit_log')
+    ) {
+      return { rows: [], rowCount: 1 };
+    }
+    throw new Error(`Unexpected query: ${text}`);
   };
 }
 
@@ -131,6 +223,7 @@ describe('admin notification repository', () => {
       repository.resolveRecipients({
         tenantId,
         normalizedPhones: phones,
+        normalizedUserIds: [],
         webPushGloballyEnabled: true,
         ...selector,
       }),
@@ -144,6 +237,7 @@ describe('admin notification repository', () => {
         },
       ],
       unresolvedPhones: ['•••• 0002', '•••• 0003'],
+      unresolvedUserIds: [],
     });
   });
 
@@ -160,6 +254,7 @@ describe('admin notification repository', () => {
     await repository.resolveRecipients({
       tenantId,
       normalizedPhones: phones,
+      normalizedUserIds: [],
       webPushGloballyEnabled: true,
       ...selector,
     });
@@ -188,10 +283,11 @@ describe('admin notification repository', () => {
       repository.resolveRecipients({
         tenantId,
         normalizedPhones: [],
+        normalizedUserIds: [],
         webPushGloballyEnabled: false,
         ...selector,
       }),
-    ).resolves.toEqual({ matched: [], unresolvedPhones: [] });
+    ).resolves.toEqual({ matched: [], unresolvedPhones: [], unresolvedUserIds: [] });
     expect(query.mock.calls.some(([text]) => String(text).includes('join identity.users u'))).toBe(
       false,
     );
@@ -303,86 +399,25 @@ describe('admin notification repository', () => {
   });
 
   it('creates in-app and web-push projections while recording suppressed preferences', async () => {
-    let intentNumber = 0;
-    let deliveryNumber = 0;
-    const { repository, query } = repositoryWithQuery((text) => {
-      if (text.includes('from notifications.admin_campaign_commands')) {
-        return { rows: [], rowCount: 0 };
-      }
-      if (text.includes('web_push_provider_configured')) {
-        return { rows: [capabilitiesRow()], rowCount: 1 };
-      }
-      if (text.includes('join identity.users u')) {
-        return {
-          rows: [
-            {
-              user_id: userOneId,
-              display_name: 'Анна',
-              phone_e164: '79990000001',
-              in_app_preference_enabled: true,
-              push_preference_enabled: true,
-              web_push_endpoint_count: 1,
-            },
-            {
-              user_id: userTwoId,
-              display_name: 'Борис',
-              phone_e164: '79990000002',
-              in_app_preference_enabled: false,
-              push_preference_enabled: false,
-              web_push_endpoint_count: 0,
-            },
-          ],
-          rowCount: 2,
-        };
-      }
-      if (text.includes('insert into notifications.templates')) {
-        return {
-          rows: [{ id: '55555555-5555-4555-8555-555555555555' }],
-          rowCount: 1,
-        };
-      }
-      if (text.includes('from notifications.templates')) return { rows: [], rowCount: 0 };
-      if (text.includes('insert into notifications.admin_campaigns')) {
-        return { rows: [{ id: campaignId }], rowCount: 1 };
-      }
-      if (text.includes('insert into notifications.intents')) {
-        intentNumber += 1;
-        return {
-          rows: [{ id: `66666666-6666-4666-8666-66666666666${intentNumber}` }],
-          rowCount: 1,
-        };
-      }
-      if (text.includes('insert into notifications.deliveries')) {
-        deliveryNumber += 1;
-        return {
-          rows: [{ id: `77777777-7777-4777-8777-77777777777${deliveryNumber}` }],
-          rowCount: 1,
-        };
-      }
-      if (text.includes('insert into notifications.inbox_items')) {
-        return {
-          rows: [{ id: '88888888-8888-4888-8888-888888888888' }],
-          rowCount: 1,
-        };
-      }
-      if (text.includes('from integration.notification_endpoints e')) {
-        return {
-          rows: [{ id: '99999999-9999-4999-8999-999999999999' }],
-          rowCount: 1,
-        };
-      }
-      if (
-        text.includes('insert into notifications.admin_campaign_commands') ||
-        text.includes('insert into audit.outbox_events') ||
-        text.includes('insert into notifications.admin_campaign_recipients') ||
-        text.includes('update notifications.admin_campaigns') ||
-        text.includes('update notifications.admin_campaign_commands') ||
-        text.includes('insert into audit.audit_log')
-      ) {
-        return { rows: [], rowCount: 1 };
-      }
-      throw new Error(`Unexpected query: ${text}`);
-    });
+    const { repository, query } = repositoryWithQuery(
+      campaignProjectionHandler({
+        phoneRows: [
+          recipientRowFixture({
+            user_id: userOneId,
+            display_name: 'Анна',
+            phone_e164: '79990000001',
+          }),
+          recipientRowFixture({
+            user_id: userTwoId,
+            display_name: 'Борис',
+            phone_e164: '79990000002',
+            in_app_preference_enabled: false,
+            push_preference_enabled: false,
+            web_push_endpoint_count: 0,
+          }),
+        ],
+      }),
+    );
 
     await expect(
       repository.createCampaign({
@@ -406,5 +441,202 @@ describe('admin notification repository', () => {
           (values as readonly unknown[]).includes('SUPPRESSED'),
       ),
     ).toBe(true);
+  });
+
+  it('resolves a user-id recipient that has no verified phone', async () => {
+    const { repository, query } = repositoryWithQuery((text) => {
+      if (text.includes('web_push_provider_configured')) {
+        return { rows: [capabilitiesRow()], rowCount: 1 };
+      }
+      if (text.includes('u.id = any($2::uuid[])')) {
+        return {
+          rows: [
+            recipientRowFixture({
+              user_id: userOneId,
+              display_name: 'Анна',
+              phone_e164: null,
+              web_push_endpoint_count: 2,
+            }),
+          ],
+          rowCount: 1,
+        };
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      repository.resolveRecipients({
+        tenantId,
+        normalizedPhones: [],
+        normalizedUserIds: [userOneId, userTwoId],
+        webPushGloballyEnabled: true,
+        ...selector,
+      }),
+    ).resolves.toEqual({
+      matched: [
+        {
+          userId: userOneId,
+          displayName: 'Анна',
+          availableChannels: ['IN_APP', 'WEB_PUSH'],
+        },
+      ],
+      unresolvedPhones: [],
+      unresolvedUserIds: [userTwoId],
+    });
+    // A user-id preview never touches the phone selector query.
+    expect(query.mock.calls.some(([text]) => String(text).includes('with requested as'))).toBe(
+      false,
+    );
+  });
+
+  it('lists a recipient addressed by phone and user id at the same time only once', async () => {
+    const shared = recipientRowFixture({
+      user_id: userOneId,
+      display_name: 'Анна',
+      phone_e164: '79990000001',
+    });
+    const { repository } = repositoryWithQuery((text) => {
+      if (text.includes('web_push_provider_configured')) {
+        return { rows: [capabilitiesRow()], rowCount: 1 };
+      }
+      if (text.includes('u.id = any($2::uuid[])')) return { rows: [shared], rowCount: 1 };
+      if (text.includes('join identity.users u')) return { rows: [shared], rowCount: 1 };
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await expect(
+      repository.resolveRecipients({
+        tenantId,
+        normalizedPhones: ['79990000001'],
+        normalizedUserIds: [userOneId],
+        webPushGloballyEnabled: true,
+        ...selector,
+      }),
+    ).resolves.toEqual({
+      matched: [
+        {
+          userId: userOneId,
+          displayName: 'Анна',
+          phoneMasked: '•••• 0001',
+          availableChannels: ['IN_APP', 'WEB_PUSH'],
+        },
+      ],
+      unresolvedPhones: [],
+      unresolvedUserIds: [],
+    });
+  });
+
+  it('creates a campaign addressed only by user id and counts distinct selector values', async () => {
+    const { repository, query } = repositoryWithQuery(
+      campaignProjectionHandler({
+        userIdRows: [
+          recipientRowFixture({ user_id: userOneId, display_name: 'Анна' }),
+          recipientRowFixture({
+            user_id: userTwoId,
+            display_name: 'Борис',
+            push_preference_enabled: false,
+            web_push_endpoint_count: 0,
+            in_app_preference_enabled: false,
+          }),
+        ],
+      }),
+    );
+
+    await expect(
+      repository.createCampaign({
+        ...campaignInput,
+        normalizedPhones: [],
+        normalizedUserIds: [userOneId, userTwoId, '44444444-4444-4444-8444-444444444444'],
+      }),
+    ).resolves.toEqual({
+      outcome: 'accepted',
+      campaignId,
+      matchedCount: 2,
+      unresolvedCount: 1,
+      inAppCreatedCount: 1,
+      pushQueuedCount: 1,
+      suppressedCount: 1,
+      replayed: false,
+    });
+
+    const campaignInsert = query.mock.calls.find(([text]) =>
+      String(text).includes('insert into notifications.admin_campaigns'),
+    );
+    // input_count, matched_count and unresolved_count are stored per distinct selector value.
+    expect(campaignInsert?.[1]?.slice(4)).toEqual([['IN_APP', 'WEB_PUSH'], 3, 2, 1, actorUserId]);
+    expect(query.mock.calls.some(([text]) => String(text).includes('with requested as'))).toBe(
+      false,
+    );
+  });
+
+  it('writes one recipient, intent and dedupe key when both selectors name the same person', async () => {
+    const { repository, query } = repositoryWithQuery(
+      campaignProjectionHandler({
+        phoneRows: [
+          recipientRowFixture({
+            user_id: userOneId,
+            display_name: 'Анна',
+            phone_e164: '79990000001',
+          }),
+        ],
+        userIdRows: [recipientRowFixture({ user_id: userOneId, display_name: 'Анна' })],
+      }),
+    );
+
+    await expect(
+      repository.createCampaign({
+        ...campaignInput,
+        normalizedPhones: ['79990000001'],
+        normalizedUserIds: [userOneId],
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'accepted',
+      matchedCount: 1,
+      // inputCount - matchedCount: the phone selector value did not add a second recipient.
+      unresolvedCount: 1,
+    });
+    expect(
+      query.mock.calls.filter(([text]) =>
+        String(text).includes('insert into notifications.admin_campaign_recipients'),
+      ),
+    ).toHaveLength(1);
+    expect(
+      query.mock.calls.filter(([text]) =>
+        String(text).includes('insert into notifications.intents'),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('keeps an ambiguous phone unresolved even when the same user is addressed by id', async () => {
+    const { repository } = repositoryWithQuery(
+      campaignProjectionHandler({
+        phoneRows: [
+          recipientRowFixture({
+            user_id: userOneId,
+            display_name: 'Анна',
+            phone_e164: '79990000001',
+          }),
+          recipientRowFixture({
+            user_id: '44444444-4444-4444-8444-444444444444',
+            display_name: 'Дубликат',
+            phone_e164: '79990000001',
+          }),
+        ],
+        userIdRows: [recipientRowFixture({ user_id: userOneId, display_name: 'Анна' })],
+      }),
+    );
+
+    await expect(
+      repository.createCampaign({
+        ...campaignInput,
+        normalizedPhones: ['79990000001'],
+        normalizedUserIds: [userOneId],
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'accepted',
+      // The user id resolves Anna; the ambiguous phone still counts as one unresolved input.
+      matchedCount: 1,
+      unresolvedCount: 1,
+    });
   });
 });

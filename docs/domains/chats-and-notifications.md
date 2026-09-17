@@ -238,21 +238,30 @@ notifications остаются NO-GO независимо от наличия sc
 1. ЦУП получает только короткоживущий PadlHub JWT с audience `phub-admin`. Токен выдаётся лишь
    пользователю с ролью `admin` и permission `notifications.manage`; обычный `phub-api` токен не
    принимается Admin API.
-2. `POST /admin/api/v1/{tenantKey}/notifications/recipients/resolve` нормализует до 100 телефонов,
-   разрешает только однозначно найденных активных PadlHub users и возвращает masked номера.
-   Введённые номера не сохраняются в кампании, audit или broker payload. Источник телефона имеет
-   приоритет: всегда побеждает подтверждённый вход по телефону
+2. `POST /admin/api/v1/{tenantKey}/notifications/recipients/resolve` принимает два селектора —
+   `phones[]` и `userIds[]` (PadlHub UUID) — суммой до 100 значений, нормализует и дедуплицирует их,
+   разрешает только активных PadlHub users и возвращает masked номер или его отсутствие.
+   Переданные значения не сохраняются в кампании, audit или broker payload.
+   `userIds` — авторитетный селектор: он не зависит от привязки телефона и не может быть
+   перенаправлен телефонным claim со стороны клиента. Телефонный селектор имеет два источника с
+   разной силой доказательства: всегда побеждает подтверждённый вход по телефону
    (`profile.user_summaries.phone_e164`), а provider-привязка
    `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`) служит fallback и именно она
    делает достижимым OAuth-аккаунт, у которого колонка входа пуста. Provider-значение клиент
    передаёт сам, поэтому оно не имеет права перекрывать проверенный вход. Неоднозначность внутри
    источника остаётся fail-closed: два пользователя с одним телефоном дают unresolved, а телефон,
-   привязанный провайдером к неактивному пользователю, не откатывается на угадывание. Один человек
-   с двумя номерами (вход и provider) даёт одного получателя: кампания пишет одну recipient-строку,
-   один intent и один dedupe-ключ на пользователя.
+   привязанный провайдером к неактивному пользователю, не откатывается на угадывание. Ответ
+   разделяет `unresolvedPhones` и `unresolvedUserIds`; неактивный или неизвестный UUID не
+   подменяется телефоном. Один человек, названный несколькими селекторами, даёт одного получателя:
+   кампания пишет одну recipient-строку, один intent и один dedupe-ключ на пользователя;
+   `matchedCount` считает людей, а `unresolvedCount` сохраняет инвариант схемы
+   `unresolved_count = input_count - matched_count`, поэтому второе значение, назвавшее уже
+   найденного человека, попадает в счётчик как не добавившее получателя, тогда как preview
+   возвращает точные списки `unresolvedPhones` и `unresolvedUserIds`.
 3. Команда кампании требует `Idempotency-Key`. API ещё раз разрешает получателей внутри tenant
    transaction, проверяет runtime/provider gates и отклоняет APNs/FCM, пока соответствующий adapter
-   не реализован.
+   не реализован. Request hash включает `userIds` только когда они переданы, поэтому телефонный
+   запрос сохраняет прежний hash и повтор уже начатой команды остаётся replay, а не conflict.
 4. Campaign, recipient rows, intents, inbox items, pending Web Push deliveries, audit и outbox
    записываются в одной PostgreSQL transaction. RabbitMQ получает только campaign/intent/delivery
    UUID и безопасные счётчики, но не title/body/phone/endpoint.
@@ -395,7 +404,8 @@ gates; остальной список — целевая карта.
 
 - `GET /admin/api/v1/{tenantKey}/notifications/capabilities`: эффективная готовность Web
   Push/iOS/Android/in-app;
-- `POST /admin/api/v1/{tenantKey}/notifications/recipients/resolve`: masked preview по телефонам;
+- `POST /admin/api/v1/{tenantKey}/notifications/recipients/resolve`: masked preview по телефонам
+  и/или PadlHub user id;
 - `POST /admin/api/v1/{tenantKey}/notifications/campaigns`: аудируемая идемпотентная ручная
   кампания;
 - inbox: список support conversations, фильтры connector/status/assignee/unread;

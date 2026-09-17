@@ -13,6 +13,7 @@ import {
   type AdminNotificationChannel,
   type AdminNotificationRecipientResolution,
 } from './notification-admin-client.js';
+import { parsePhones, parseUserIds } from './notification-recipients.js';
 
 const tenantKey = import.meta.env.VITE_PHUB_TENANT_KEY ?? 'local-padel';
 const client = createNotificationAdminClient({
@@ -57,17 +58,6 @@ const reasonCopy: Readonly<Record<string, string>> = {
   FCM_ADAPTER_NOT_IMPLEMENTED: 'FCM ещё не подключён',
   APNS_ADAPTER_NOT_IMPLEMENTED: 'APNs ещё не подключён',
 };
-
-function parsePhones(value: string): readonly string[] {
-  return [
-    ...new Set(
-      value
-        .split(/[\n,;]+/)
-        .map((phone) => phone.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
 
 function errorText(error: unknown): string {
   if (error instanceof ApiClientError) return error.message;
@@ -201,6 +191,7 @@ function NotificationWorkspace(props: {
   >('settings');
   const [capabilities, setCapabilities] = useState<AdminNotificationCapabilities>();
   const [phonesText, setPhonesText] = useState('');
+  const [userIdsText, setUserIdsText] = useState('');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [deepLink, setDeepLink] = useState('/notifications');
@@ -212,6 +203,15 @@ function NotificationWorkspace(props: {
   const [busy, setBusy] = useState<'preview' | 'send'>();
   const [error, setError] = useState<string>();
   const phones = useMemo(() => parsePhones(phonesText), [phonesText]);
+  const parsedUserIds = useMemo(() => parseUserIds(userIdsText), [userIdsText]);
+  const userIds = parsedUserIds.ids;
+  const selector = useMemo(
+    () => ({
+      ...(phones.length > 0 ? { phones } : {}),
+      ...(userIds.length > 0 ? { userIds } : {}),
+    }),
+    [phones, userIds],
+  );
 
   useEffect(() => {
     void client
@@ -249,7 +249,7 @@ function NotificationWorkspace(props: {
     setError(undefined);
     setResult(undefined);
     try {
-      setResolution(await client.resolveRecipients(phones));
+      setResolution(await client.resolveRecipients(selector));
     } catch (previewError) {
       setResolution(undefined);
       setError(errorText(previewError));
@@ -264,7 +264,7 @@ function NotificationWorkspace(props: {
     setResult(undefined);
     try {
       const accepted = await client.createCampaign({
-        phones,
+        ...selector,
         title,
         body,
         ...(deepLink.trim() ? { deepLink: deepLink.trim() } : {}),
@@ -278,7 +278,11 @@ function NotificationWorkspace(props: {
     }
   }
 
-  const canPreview = phones.length > 0 && !busy;
+  const canPreview =
+    phones.length + userIds.length > 0 && parsedUserIds.invalid.length === 0 && !busy;
+  // cup-admin is deployed separately from the API, so an additive response field must not blank the
+  // workspace when a new bundle talks to a node that does not return it yet.
+  const unresolvedUserIds = resolution?.unresolvedUserIds ?? [];
   const canSend =
     Boolean(resolution?.matched.length) &&
     title.trim().length > 0 &&
@@ -377,7 +381,7 @@ function NotificationWorkspace(props: {
                 <span className="step">1</span>
                 <div>
                   <h2>Получатели</h2>
-                  <p>До 100 номеров, каждый с новой строки или через запятую.</p>
+                  <p>До 100 значений всего: номера или PadlHub ID, каждое с новой строки.</p>
                 </div>
               </div>
               <label>
@@ -393,8 +397,31 @@ function NotificationWorkspace(props: {
                   placeholder={'+7 999 123-45-67\n+7 999 765-43-21'}
                 />
               </label>
+              <label>
+                PadlHub ID пользователей
+                <textarea
+                  className="phones-input"
+                  value={userIdsText}
+                  onChange={(event) => {
+                    setUserIdsText(event.target.value);
+                    setResolution(undefined);
+                    setResult(undefined);
+                  }}
+                  placeholder={
+                    'd938caf6-4eca-49d3-8f78-c7ab1b967a41\n96d1b47c-dc5c-493f-836c-827f01c31546'
+                  }
+                />
+              </label>
+              {parsedUserIds.invalid.length ? (
+                <div className="notice warning">
+                  Не похоже на PadlHub ID: {parsedUserIds.invalid.join(', ')}. Исправьте или удалите
+                  эти значения — пока они здесь, отправка заблокирована.
+                </div>
+              ) : null}
               <div className="input-meta">
-                <span>{phones.length} номеров</span>
+                <span>
+                  {phones.length} номеров · {userIds.length} ID
+                </span>
                 <button
                   type="button"
                   className="secondary-button"
@@ -464,13 +491,13 @@ function NotificationWorkspace(props: {
                 <div className="section-heading compact">
                   <div>
                     <h2>Проверка получателей</h2>
-                    <p>Номера не сохраняются в кампании.</p>
+                    <p>Номера и ID не сохраняются в кампании.</p>
                   </div>
                 </div>
                 {!resolution ? (
                   <div className="empty-state">
                     <span>◎</span>
-                    <p>Добавьте номера и запустите проверку.</p>
+                    <p>Добавьте номера или PadlHub ID и запустите проверку.</p>
                   </div>
                 ) : (
                   <>
@@ -479,7 +506,10 @@ function NotificationWorkspace(props: {
                         <strong>{resolution.matched.length}</strong> найдено
                       </span>
                       <span className="summary warning">
-                        <strong>{resolution.unresolvedPhones.length}</strong> не найдено
+                        <strong>
+                          {resolution.unresolvedPhones.length + unresolvedUserIds.length}
+                        </strong>{' '}
+                        не найдено
                       </span>
                     </div>
                     <div className="recipient-list">
@@ -490,7 +520,7 @@ function NotificationWorkspace(props: {
                           </span>
                           <span>
                             <strong>{recipient.displayName}</strong>
-                            <small>{recipient.phoneMasked}</small>
+                            <small>{recipient.phoneMasked ?? recipient.userId}</small>
                           </span>
                           <span className="recipient-channels">
                             {recipient.availableChannels.map((channel) => (
@@ -503,6 +533,11 @@ function NotificationWorkspace(props: {
                     {resolution.unresolvedPhones.length ? (
                       <div className="notice warning">
                         Не найдены или неоднозначны: {resolution.unresolvedPhones.join(', ')}
+                      </div>
+                    ) : null}
+                    {unresolvedUserIds.length ? (
+                      <div className="notice warning">
+                        Не найдены PadlHub ID: {unresolvedUserIds.join(', ')}
                       </div>
                     ) : null}
                   </>
