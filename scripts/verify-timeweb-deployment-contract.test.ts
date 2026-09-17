@@ -177,7 +177,10 @@ describe('Timeweb deployment contract', () => {
       'cup_origins_host',
     );
     expect(() =>
-      validateTargetContract({ ...target, cupOrigins: [target.cupOrigins[0], target.cupOrigins[0]] }),
+      validateTargetContract({
+        ...target,
+        cupOrigins: [target.cupOrigins[0], target.cupOrigins[0]],
+      }),
     ).toThrow('cup_origins_duplicate');
     expect(() => validateTargetContract({ ...target, cupOrigins: target.hostname })).toThrow(
       'cup_origins_shape',
