@@ -1,6 +1,7 @@
 {
   "schema": "PHUB_TIMEWEB_TARGET_V1",
   "hostname": "lk2.padlhub.su",
+  "cupOrigins": ["padlhub.su"],
   "ipv4": "103.88.243.171",
   "dns": {
     "aExpected": true,

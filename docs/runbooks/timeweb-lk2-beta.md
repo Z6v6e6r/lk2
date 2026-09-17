@@ -12,6 +12,13 @@ identity is:
 
 - hostname `lk2.padlhub.su`;
 - IPv4 `103.88.243.171`;
+- API CORS allow-list `https://lk2.padlhub.su,https://padlhub.su`: the contour's own origin plus the
+  separately hosted production CUP origin declared in `cupOrigins`, so an operator can drive this beta
+  API from the CUP at `padlhub.su`. The list stays an exact bare-host declaration (no wildcards); the
+  provisioner and the deployment-contract verifier both compare `api.CORS_ORIGINS` against it. The
+  declaration is a required part of this target contract, so the beta always names its CUP origin;
+  `readTimewebCorsOrigins` only falls back to the single self-origin value for a target that omits the
+  key;
 - Linux/AMD64 on an `x86_64` host;
 - Timeweb server `Cute Hoopoe`, server ID `8886471`, project ID `262717`;
 - management only through `tailscale0` with pinned ED25519 fingerprint

@@ -23,6 +23,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 
+import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
 import {
   assertExactTimewebFrozenSource,
   requireExactTimewebFrozenSourceAuthority,
@@ -278,6 +279,8 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
   }
 
   const { api, worker, realtime, migrator } = environments;
+  const corsOrigins = readTimewebCorsOrigins(targetContract);
+  if (!corsOrigins.ok) fail(corsOrigins.reason);
   if (
     api.APP_ENV !== 'staging' ||
     worker.APP_ENV !== 'staging' ||
@@ -286,7 +289,7 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
     api.TENANT_KEY !== tenantKey ||
     worker.TENANT_KEY !== tenantKey ||
     api.AUTH_COOKIE_SECURE !== 'true' ||
-    api.CORS_ORIGINS !== `https://${host}` ||
+    api.CORS_ORIGINS !== corsOrigins.value ||
     api.TRUSTED_PROXY_CIDRS !== `${targetContract.network.ingressAddress}/32` ||
     api.CUP_DEV_AUTH_ENABLED !== 'false' ||
     api.VIVA_MODE !== 'production' ||

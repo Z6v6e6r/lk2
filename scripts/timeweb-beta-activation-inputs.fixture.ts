@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 
+import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
 import {
   baseImageEvidence,
   parseBaseImageLock,
@@ -24,6 +25,15 @@ export const runId = '12345678901';
 export const releaseId = `${sourceSha}-${runId}-1`;
 export const host = 'lk2.padlhub.su';
 export const tenantKey = 'local-padel';
+// The API allow-list is derived from deploy/timeweb/target.json, so the fixture cannot keep passing
+// against a stale expectation after the declared CUP origin changes.
+const targetContract = JSON.parse(
+  readFileSync(new URL('../deploy/timeweb/target.json', import.meta.url), 'utf8'),
+) as { hostname: string; cupOrigins?: readonly string[] };
+const targetCorsOrigins = readTimewebCorsOrigins(targetContract);
+if (!targetCorsOrigins.ok)
+  throw new Error(`fixture target contract invalid: ${targetCorsOrigins.reason}`);
+export const corsOrigins = targetCorsOrigins.value;
 
 const strongValue = (purpose: string) =>
   createHash('sha512').update(`synthetic-timeweb-beta-${purpose}`).digest('base64url');
@@ -98,7 +108,7 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     JWT_REFRESH_SECRET: strongValue('refresh'),
     JWT_REALTIME_SECRET: strongValue('realtime'),
     AUTH_COOKIE_SECURE: 'true',
-    CORS_ORIGINS: `https://${host}`,
+    CORS_ORIGINS: corsOrigins,
     TRUSTED_PROXY_CIDRS: '172.30.26.10/32',
     CUP_DEV_AUTH_ENABLED: 'false',
     VIVA_MODE: 'production',

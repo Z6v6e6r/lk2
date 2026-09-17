@@ -9,6 +9,7 @@ export interface TimewebHistoricalEvidence {
 export interface TimewebTargetContract {
   schema: string;
   hostname: string;
+  cupOrigins: readonly string[];
   ipv4: string;
   dns: {
     aExpected: boolean;
