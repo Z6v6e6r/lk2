@@ -30,7 +30,7 @@ what the flow below provides.
 
 ## Part 1 — Phone confirmation (the account proves a phone it already controls)
 
-Today only a *login* challenge can verify a phone, and verifying one creates or switches the session to
+Today only a _login_ challenge can verify a phone, and verifying one creates or switches the session to
 the account that the phone-login subject maps to. That is the wrong primitive for an already
 authenticated user: it can silently move the operator (or the person) to another account instead of
 attaching the phone to the account they are using.
@@ -51,7 +51,7 @@ can never change the session identity:
   - **free phone** → writes `profile.user_summaries.phone_e164` on the authenticated account, writes an
     audit event (`PROFILE_PHONE_CONFIRMED`, source `LOGIN_ATTESTED`) and returns the masked phone;
   - **phone already bound to another account in the tenant** → no write; `409
-    PROFILE_PHONE_ALREADY_BOUND` with `{ candidateUserId? }` only when that account is reachable under
+PROFILE_PHONE_ALREADY_BOUND` with `{ candidateUserId? }` only when that account is reachable under
     the caller's own claims, and a hint that linking is required (Part 2). The unique index is the
     atomic guard: a concurrent claim surfaces as the same stable code, never as a raw `23505`.
   - **provider subject belongs to another account** → this is the interesting case: the person proved a
@@ -85,7 +85,7 @@ account claims. That is a human-verifiable claim, not an inference from the clie
 Expand-only schema additions:
 
 - `identity.account_links (tenant_id, primary_user_id, secondary_user_id, reason, evidence, created_by,
-  created_at, status)` — append-only ledger of every link with its evidence;
+created_at, status)` — append-only ledger of every link with its evidence;
 - `identity.users.merged_into_user_id uuid null` — the canonical-account pointer reads use;
 - a single resolver helper `resolveCanonicalUserId(tenantId, userId)` used by notification reads and the
   CUP so historical rows (intents, deliveries, inbox items) keep resolving after a merge.
@@ -116,7 +116,7 @@ Expand-only schema additions:
   audience and `X-App-Platform: cup-admin`.
 - Self-service: after a successful phone confirmation that hits `PROFILE_PHONE_ALREADY_BOUND`, the
   person may request the link ("это мой аккаунт"); it still needs the operator (or an explicit policy)
-  to execute, because a phone alone is not proof of ownership of the *other* account's history.
+  to execute, because a phone alone is not proof of ownership of the _other_ account's history.
 
 ### Acceptance criteria
 
