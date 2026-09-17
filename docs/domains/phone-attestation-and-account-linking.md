@@ -1,147 +1,168 @@
 # Phone attestation and account linking
 
-Status: design for review. Scope: how a PadlHub account acquires a **trusted** phone, and how two
-accounts of one person are linked once that trust exists. No provider change is assumed: the Viva
-integration exposes only the phone-OTP login today (a signed token with `phone_number_verified`), and
-the OAuth path carries no phone claim for our client. Everything below therefore builds on the
-attestation we already perform ourselves.
+Status: design for review. Scope: how an account acquires a **trusted** phone, and which account-linking
+operations are safe on top of that trust. No provider change is assumed: the Viva integration exposes
+only the phone-OTP login, and the OAuth path carries no phone claim for our client.
 
-## Why
+## Review outcome (what changed after the first review round)
+
+An independent review rejected the first version of Part 2 and found nine blocking issues. They are
+recorded here because they define the boundary of what may be built:
+
+1. **A confirmed phone is not proof for taking over another account's history.** The OTP path proves
+   current possession of the number (`phone_number_verified` on a JWKS-verified token), not that the
+   confirmer is the person behind the account that already holds it. A recycled, shared or borrowed
+   number would let its new holder absorb a victim's history. Account-linking therefore needs stronger
+   evidence than Part 1 alone (dual authentication of both accounts, a cooling-off window, notification
+   to the affected account's live channels), and the first version's "operator moves the rows" flow is
+   withdrawn.
+2. **Part 1 must resolve the provider subject first.** If the phone column is free but the subject
+   returned by the code exchange already maps to another account, writing the phone to the caller
+   creates a split brain: the CUP resolves by the new phone while a phone login still lands on the other
+   account. The subject check runs before any write and fails closed.
+3. **A forward-only canonical pointer does not preserve readability.** Reads filter `user_id = <caller>`
+   in many places (`notifications.inbox_items` list/unread/mark-read, `user_read_state`,
+   `booking.activity_history_projection`, the home snapshot, `eligibility.cup_player_level_projections`,
+   `notifications.user_preferences`, `identity.refresh_sessions`), so "history is not rewritten" is
+   false for every reader except the three tables the first version named.
+4. **`integration.external_entity_map` cannot simply be re-pointed.** Besides the
+   `(tenant, system, type, external_id)` key, migration 0042 created the partial unique index
+   `external_entity_map_canonical_internal_idx` on `(tenant, system, type, internal_id)`, so both
+   accounts' `viva_profile` rows cannot move to one owner; leaving the secondary's row lets provider
+   login resolve to the disabled account.
+5. **`integration.user_delegations` is not movable** (two unique keys, `on conflict … do update`, and a
+   `subject <> $4` delete on every persist). A merge would either collide or leave a live Viva refresh
+   credential on a disabled account. Part 1 must therefore **not** persist a delegation at all: doing so
+   would delete the caller's existing one and contradict "confirmation never touches the session".
+6. **Endpoints are revoked, not transferred.** The live-address owner index has no `user_id`, deliveries
+   reference endpoints by foreign key, the per-user quota can overflow, and the projector selects
+   endpoints by `user_id = recipientUserId`. The repository already documents the intended rule ("do not
+   transfer a row: pending deliveries retain the original endpoint owner").
+7. **The first version's rollback was not implementable**: deduplicated or revoked endpoints cannot be
+   restored by moving rows, preference rows have no before-image, and the replaced delegation is deleted
+   on write.
+8. **New identity tables need RLS and a defined chain**: `enable` + `force row level security` with the
+   `app.tenant_id` policy, plus explicit transitive-resolution and re-link rules. `DISABLED` alone does
+   not contain already-issued access tokens, so revocation is part of the operation.
+9. **CRITICAL command requirements were missing**: a durable idempotency record, a defined dry-run token
+   (there is no precedent in the repository), a rate limit, observability, an expand/migrate/contract
+   migration sequence, and the permission wiring beyond `ADMIN_ONLY_PERMISSIONS` (a hand-written route
+   guard wired after `authenticateAdmin`, plus an operator grant path).
+
+Consequently this document now has **Part 1 (build now)** and **Part 2 (data repair without merging)**;
+the row-moving merge is deferred to a separate project, not designed here.
+
+## Why a trusted phone matters
 
 The CUP resolves a recipient by phone through two sources with different proof strength:
 
-1. `profile.user_summaries.phone_e164` — a phone that a **phone login verified**. The identity
-   provider's access token is checked against the realm JWKS and must carry
-   `phone_number_verified === true`, so this value is server-attested. The resolver always prefers it.
-2. `integration.external_entity_map` (`VIVA` / `legacy_viewer_phone`) — the phone the provider profile
-   reported, relayed by our own client without server attestation. Fallback only.
+1. `profile.user_summaries.phone_e164` — server-attested: the identity provider's access token is
+   verified against the realm JWKS and must carry `phone_number_verified === true`. The resolver always
+   prefers it.
+2. `integration.external_entity_map` (`VIVA` / `legacy_viewer_phone`) — relayed by our own client
+   without server attestation. Fallback only.
 
 An OAuth-only account (VK ID / Yandex) never obtains source 1, because the brokered token has no phone
-claim. Such an account is reachable only through the client-relayed source 2 or by user id. When one
-person owns two accounts — one that logged in by phone, one that actually has the app sessions and Web
-Push endpoints — a phone campaign resolves to the account that cannot receive it. That happened in the
-beta contour and is what this design removes, without asking the provider for anything.
+claim. When one person owns two accounts — one that logged in by phone, one that holds the app sessions
+and Web Push endpoints — a phone campaign resolves to the account that cannot receive it. That is the
+beta case this work removes, without asking the provider for anything.
 
-A second invariant now exists in the schema: `profile.user_summaries (tenant_id, phone_e164)` is unique
-(migration 0091), and `integration.external_entity_map` is already unique per
-`(tenant_id, external_system, entity_type, external_id)`. In other words, **one phone can belong to one
-account per tenant, and the only way to move it is a deliberate, audited operation** — which is exactly
-what the flow below provides.
+Both sources are unique per tenant (`profile.user_summaries (tenant_id, phone_e164)` since migration
+0091, and `integration.external_entity_map` per `(tenant, system, type, external_id)`), so one phone
+belongs to one account and moving it is always a deliberate operation.
 
-## Part 1 — Phone confirmation (the account proves a phone it already controls)
+## Part 1 — Phone confirmation (build now)
 
-Today only a _login_ challenge can verify a phone, and verifying one creates or switches the session to
-the account that the phone-login subject maps to. That is the wrong primitive for an already
-authenticated user: it can silently move the operator (or the person) to another account instead of
-attaching the phone to the account they are using.
+Confirmation attaches a phone the person demonstrably controls to the account they are using. It never
+creates, disables or merges an account, never switches the session, and never persists a provider
+delegation.
 
 ### API
 
-Two authenticated endpoints, deliberately separate from the login challenges so that verifying a code
-can never change the session identity:
-
 - `POST /user/api/v1/:tenantKey/profile/phone/challenges`
   body `{ phone }` → `202 { challengeId, expiresAt, phoneMasked }`
-  - authenticated user; rate limited like `auth/challenges`; `Idempotency-Key` required;
-  - the challenge is stored with `purpose = 'PHONE_CONFIRMATION'` **and** `userId`, so a challenge
-    issued for one account cannot be verified for another (the login challenge has no owner).
 - `POST /user/api/v1/:tenantKey/profile/phone/challenges/:challengeId/verify`
-  body `{ code, acceptance? }` → `200 { phoneMasked, confirmedAt }`
-  - verifies the code with the identity provider server-side (signed token, `phone_number_verified`);
-  - **free phone** → writes `profile.user_summaries.phone_e164` on the authenticated account, writes an
-    audit event (`PROFILE_PHONE_CONFIRMED`, source `LOGIN_ATTESTED`) and returns the masked phone;
-  - **phone already bound to another account in the tenant** → no write; `409
-PROFILE_PHONE_ALREADY_BOUND` with `{ candidateUserId? }` only when that account is reachable under
-    the caller's own claims, and a hint that linking is required (Part 2). The unique index is the
-    atomic guard: a concurrent claim surfaces as the same stable code, never as a raw `23505`.
-  - **provider subject belongs to another account** → this is the interesting case: the person proved a
-    phone that another account holds. Nothing moves automatically; the response reports the situation so
-    Part 2 can link the accounts with that proof.
+  body `{ code }` → `200 { phoneMasked, confirmedAt }`
 
-### Invariants
+Both are authenticated, rate limited, require `Idempotency-Key`, and reuse the login challenge store
+with two added, **optional** fields:
 
-- Confirming a phone never creates, disables or merges an account, and never touches the session.
-- The phone is never returned in full and never logged; only `phoneMasked` (`•••• 1234`).
-- A challenge is single-use, expires (existing TTL policy) and is bound to `(tenant, user, phone)`.
-- `PROFILE_PHONE_ALREADY_BOUND` is the same stable code the provider-profile sync path already returns
-  when the unique index rejects a duplicate (`AUTH_PHONE_ALREADY_BOUND` for the login/sync path).
+- `purpose` (`LOGIN` default, `PHONE_CONFIRMATION`) and `userId`. Making `purpose` optional with a
+  `LOGIN` default is what keeps in-flight login challenges valid across the deploy;
+- the challenge id derivation must include `purpose` and `userId`, otherwise the two endpoints collide
+  on a reused idempotency key;
+- the resend cooldown key must include the purpose, because today it is `(tenant, sha256(phone))` and a
+  fresh login OTP would block a confirmation request.
 
-### Acceptance criteria
+### Verify order (fail closed at every step)
 
-- After a phone confirmation, the CUP resolves that phone to **this** account and shows its channels.
-- A second confirmation of the same phone by another account fails closed with
-  `PROFILE_PHONE_ALREADY_BOUND` and leaves both accounts untouched.
-- Confirming a phone that the account already holds is idempotent (no second audit event for the same
-  value, no error).
-- The phone-login flow, sessions, and the resolver keep their current behaviour.
+1. The challenge exists, is unexpired, unused, belongs to the caller and to this tenant, and its
+   purpose is `PHONE_CONFIRMATION`. Otherwise `AUTH_CODE_EXPIRED` / `INVALID_REQUEST` as today.
+2. The code is verified server-side with the identity provider; a provider failure leaves the challenge
+   usable (no consumption) and returns `AUTH_PROVIDER_UNAVAILABLE`.
+3. **The provider subject from the code exchange is resolved to a PadlHub account first.** If it maps to
+   a different account than the caller, the request stops with `AUTH_PHONE_ALREADY_BOUND` and no write —
+   even when the phone column is free (blocking finding 2).
+4. If another account already holds the phone in `profile.user_summaries` **or** as its
+   `legacy_viewer_phone` provider value, the request stops with the same code and no write. The unique
+   index is the atomic guard: a concurrent claim surfaces as the same stable code, never a raw `23505`.
+5. Otherwise the phone is written on the caller's `profile.user_summaries.phone_e164`, with one audit
+   event (`PROFILE_PHONE_CONFIRMED`, `source = LOGIN_ATTESTED`, the challenge id as evidence) and a
+   masked response.
 
-## Part 2 — Account linking (two accounts of one person become one)
+### Rules and failure modes
 
-Proof: a completed phone confirmation (Part 1) is evidence that the caller controls a phone another
-account claims. That is a human-verifiable claim, not an inference from the client-relayed value.
+- Re-confirming the phone the account already holds is idempotent: no second audit event, no error.
+- Confirming a **different** phone replaces the previous one only when no other account claims it, and
+  the response says which masked number was released; the released number is never audited in full.
+- A disabled caller is refused (`AUTH_USER_NOT_ACTIVE`); a cross-tenant challenge id is
+  `INVALID_REQUEST`; a challenge owned by another user is refused with the same code as a missing one.
+- The response never contains the full phone and never a candidate account id: an operator-only view may
+  report which account holds the number, the self-service response may not (enumeration/PII).
+- The existing `AUTH_PHONE_ALREADY_BOUND` code is reused for "this phone belongs to another account"; no
+  second code is introduced for the same condition.
+- Existing invariants that describe `phone_e164` as "a phone that a phone login verified" are updated
+  with this change (the repository, the resolver and the migration header now say: verified by a
+  phone-OTP exchange, not necessarily a login), and `docs/domains/profiles.md` plus
+  `docs/domains/chats-and-notifications.md` are corrected in the same pull request.
 
-### Model
+### Tests
 
-Expand-only schema additions:
+Challenge owned by another user; expired challenge; attempts exhausted; provider unavailable leaves the
+challenge usable; concurrent verify has one winner; concurrent claim of the same phone by two accounts
+returns the stable code, never a raw `23505`, and leaves both accounts untouched; caller already holds a
+different phone (replacement plus audit); caller disabled; confirmation is idempotent and audits once;
+the subject-elsewhere case performs no write; responses are masked and no phone reaches the logs; the
+login flow, sessions and the resolver behave exactly as before.
 
-- `identity.account_links (tenant_id, primary_user_id, secondary_user_id, reason, evidence, created_by,
-created_at, status)` — append-only ledger of every link with its evidence;
-- `identity.users.merged_into_user_id uuid null` — the canonical-account pointer reads use;
-- a single resolver helper `resolveCanonicalUserId(tenantId, userId)` used by notification reads and the
-  CUP so historical rows (intents, deliveries, inbox items) keep resolving after a merge.
+## Part 2 — Data repair without merging (build now)
 
-### Semantics
+For the accounts the Step 1 report already flags, the repair the beta needed needs no schema: the person
+confirms their phone on the account they actually use (Part 1), and the operator re-registers the Web
+Push endpoints on that account with the existing supported operations (revoke on the old account,
+register on the new one) instead of moving rows. That path reuses the endpoint repository's
+revoke/register semantics, keeps the live-address invariant, leaves every delivery foreign key intact,
+and needs no read-path change.
 
-- **Primary** is the account the person actually uses: the one that owns the attested phone and/or has
-  app activity. The link operation takes the primary explicitly; nothing is inferred silently.
-- Moves to the primary: `integration.notification_endpoints` (respecting the live-address unique index
-  and the per-user quota), `notifications.user_preferences`, `integration.external_entity_map` and
-  `integration.external_identity_map` (so future logins of the secondary's subjects land on the
-  primary), and the secondary's attested phone when the primary has none.
-- History is **not** rewritten: intents, deliveries and inbox items keep their original `user_id` and
-  resolve through `merged_into_user_id`.
-- The secondary becomes `DISABLED` with `merged_into_user_id = primary`; it is not deleted, so audit and
-  history stay explainable.
-- The operation is idempotent (same link replay returns the previous result), audited
-  (`IDENTITY_ACCOUNT_LINKED`, with the evidence and the moved-row counts), and refuses cross-tenant
-  pairs, cycles, disabled primaries and self-links.
+Operator guidance and the acceptance check:
 
-### Command surface
+- the report (`npm run identity:phone-anomalies:report`) lists the affected accounts;
+- after the repair the report shows no "verified phone without an endpoint" / "provider phone without a
+  verified phone" pair for that person, and the CUP preview resolves the phone to the account that holds
+  the endpoints;
+- the old account keeps its history; nothing is deleted and no row changes owner.
 
-- Operator (CUP): `POST /admin/api/v1/:tenantKey/identity/account-links` with a **dry-run** mode that
-  reports what would move (endpoint counts per channel, preferences, provider links, phone move) and an
-  execute mode that requires the dry-run token — so an operator sees the effect before changing
-  identity. Permission `identity.accounts.link`, added to `ADMIN_ONLY_PERMISSIONS` in
-  `packages/auth/src/index.ts` (admin-audience only, like `notifications.manage`), plus the existing CUP
-  audience and `X-App-Platform: cup-admin`.
-- Self-service: after a successful phone confirmation that hits `PROFILE_PHONE_ALREADY_BOUND`, the
-  person may request the link ("это мой аккаунт"); it still needs the operator (or an explicit policy)
-  to execute, because a phone alone is not proof of ownership of the _other_ account's history.
+## Part 3 — Account merge (separate project, not designed here)
 
-### Acceptance criteria
-
-- After a link, a campaign addressed by the person's phone reaches the primary account's endpoints and
-  the CUP preview shows one recipient.
-- The secondary's endpoints/preferences/links exist on the primary; the live-address uniqueness holds
-  (two identical endpoints collapse to one, never an error).
-- Historical notifications of the secondary are still readable by the person after the merge.
-- A replayed link command changes nothing and returns the same result; a link of the same pair in the
-  opposite direction is refused once a direction exists.
-
-## Risks and boundaries
-
-- Identity and PII: R3/R4. Every write is audited, the phone is masked everywhere it is returned, and
-  no automatic merge happens without an explicit primary and a recorded evidence.
-- No provider dependency: only the existing signed-token attestation is used; the OAuth gap is closed
-  by asking the person to confirm a phone once, not by waiting for a claim Viva does not send.
-- Rollback: the link ledger plus `merged_into_user_id` make a link reversible in data terms (move rows
-  back, clear the pointer, restore the secondary's status) — the reversal is coded and tested with the
-  same command surface, because "merge" without a tested way back is not acceptable on identity.
-- `schemas`/`phone_e164` uniqueness remains the hard guard: no flow above can create two accounts with
-  the same verified phone.
+A true merge is possible but is a project of its own, and the review's findings are its requirements:
+read-path expansion (or real row moves with collision rules) for every user-keyed table, endpoint
+re-registration rather than transfer, delegation re-derivation, preference precedence with before-images,
+RLS on new tables, transitive link semantics, revocation of the secondary's sessions, a durable
+idempotency record, a defined dry-run token, observability, and a tested reversal. It needs dual
+authentication of both accounts as its evidence, because a confirmed phone alone is not ownership proof.
 
 ## Delivery order
 
-1. Part 1 (phone confirmation): challenge purpose, endpoints, audit, real-PG and route tests.
-2. Part 2a (link model + canonical resolution + audited operator command with dry-run).
-3. Part 2b (self-service request after a bound-phone confirmation).
+1. Part 1 (confirmation) with the tests above, plus the documentation corrections.
+2. Part 2 (operator repair guidance; no code beyond what exists).
+3. Part 3 only as a separately approved project with its own design and review.
