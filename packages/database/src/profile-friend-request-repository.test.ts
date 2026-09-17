@@ -167,6 +167,59 @@ describe('profile friend request repository', () => {
     ).resolves.toEqual({ outcome: 'not_found' });
   });
 
+  it('locks the pair before re-reading a settled request and never recreates a removed friendship', async () => {
+    const query = baseQuery((text) => {
+      if (text.includes('from profile.friend_request_responses')) return { rows: [], rowCount: 0 };
+      if (text.includes('from profile.friend_requests'))
+        return {
+          rows: [
+            {
+              id: requestId,
+              requester_user_id: actorUserId,
+              target_user_id: targetUserId,
+              state: 'DECLINED',
+            },
+          ],
+          rowCount: 1,
+        };
+      if (text.includes('from profile.friendships')) return { rows: [], rowCount: 0 };
+      if (text.includes('insert into profile.friend_request_responses'))
+        return { rows: [], rowCount: 1 };
+      return undefined;
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+    expect(
+      await repository.respond({
+        tenantId,
+        actorUserId: targetUserId,
+        requestId,
+        action: 'ACCEPT',
+        idempotencyKey: 'friend-response-after-removal',
+        correlationId: 'friend-response-correlation',
+      }),
+    ).toMatchObject({
+      outcome: 'applied',
+      friendship: { userId: actorUserId, status: 'NONE' },
+      replayed: false,
+    });
+    const calls = query.mock.calls as unknown as [string, unknown[]][];
+    const preRead = calls.findIndex(([sql]) =>
+      sql.includes('select requester_user_id, target_user_id'),
+    );
+    const lock = calls.findIndex(
+      ([sql, values]) =>
+        sql.includes('pg_advisory_xact_lock') &&
+        values?.[0] === `${tenantId}:${actorUserId}:${targetUserId}`,
+    );
+    const rowLock = calls.findIndex(
+      ([sql]) => sql.includes('from profile.friend_requests') && sql.includes('for update'),
+    );
+    expect(preRead).toBeGreaterThan(0);
+    expect(lock).toBeGreaterThan(preRead);
+    expect(rowLock).toBeGreaterThan(lock);
+    expect(calls.some(([sql]) => sql.includes('insert into profile.friendships'))).toBe(false);
+  });
+
   it('replays a stored response instead of answering twice', async () => {
     const stored = {
       userId: targetUserId,

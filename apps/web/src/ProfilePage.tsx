@@ -63,6 +63,7 @@ interface ProfilePageProps {
   readonly onSavePrivacy?: (input: ProfilePrivacyUpdateRequest) => void;
   readonly onSaveBookingPreferences?: (input: BookingPreferencesUpdateRequest) => void;
   readonly onAddFriend?: () => void;
+  readonly onRemoveFriend?: () => void;
   readonly onAcceptFriendRequest?: (requestId: string) => void;
   readonly onLogout: () => void;
 }
@@ -973,11 +974,13 @@ function FriendshipAction({
   error,
   onAdd,
   onAccept,
+  onRemove,
 }: {
   readonly friendship?: ProfileFriendship | null;
   readonly busy: boolean;
   readonly error?: string | null;
   readonly onAdd?: () => void;
+  readonly onRemove?: () => void;
   readonly onAccept?: (requestId: string) => void;
 }): React.JSX.Element {
   const status = friendship?.status ?? 'NONE';
@@ -999,12 +1002,14 @@ function FriendshipAction({
         ? 'Этот игрок хочет добавить вас в друзья'
         : 'Игрок получит заявку в уведомлениях';
   const acceptRequestId = isIncoming ? friendship?.requestId : null;
-  const disabledByState = isFriend || isOutgoing;
-  const handleClick = isIncoming
-    ? acceptRequestId
-      ? () => onAccept?.(acceptRequestId)
-      : undefined
-    : onAdd;
+  const disabledByState = isOutgoing;
+  const handleClick = isFriend
+    ? onRemove
+    : isIncoming
+      ? acceptRequestId
+        ? () => onAccept?.(acceptRequestId)
+        : undefined
+      : onAdd;
 
   return (
     <section className="profile-friendship-action" aria-labelledby="profile-friendship-title">
@@ -1019,13 +1024,16 @@ function FriendshipAction({
         type="button"
         disabled={busy || disabledByState || !friendship || !handleClick}
         onClick={handleClick}
+        aria-label={isFriend ? 'Удалить из друзей' : undefined}
       >
         {busy
-          ? isIncoming
-            ? 'Принимаем…'
-            : 'Отправляем…'
+          ? isFriend
+            ? 'Удаляем…'
+            : isIncoming
+              ? 'Принимаем…'
+              : 'Отправляем…'
           : isFriend
-            ? 'Добавлен'
+            ? 'Удалить'
             : isOutgoing
               ? 'Ожидает ответа'
               : isIncoming
@@ -1220,6 +1228,7 @@ export function ProfilePage({
   onSavePrivacy,
   onSaveBookingPreferences,
   onAddFriend,
+  onRemoveFriend,
   onAcceptFriendRequest,
   onLogout,
 }: ProfilePageProps): React.JSX.Element {
@@ -1386,6 +1395,7 @@ export function ProfilePage({
                 {...(friendship !== undefined ? { friendship } : {})}
                 {...(friendsError !== undefined ? { error: friendsError } : {})}
                 {...(onAddFriend ? { onAdd: onAddFriend } : {})}
+                {...(onRemoveFriend ? { onRemove: onRemoveFriend } : {})}
                 {...(onAcceptFriendRequest ? { onAccept: onAcceptFriendRequest } : {})}
               />
               <section className="profile-access-section" aria-labelledby="profile-actions-title">
@@ -1504,18 +1514,6 @@ export function ProfilePage({
               <i aria-hidden="true">›</i>
             </a>
           ) : null}
-
-          <section className="profile-privacy-note" aria-labelledby="profile-privacy-title">
-            <span aria-hidden="true">◎</span>
-            <div>
-              <h2 id="profile-privacy-title">Приватность и доступ</h2>
-              <p>
-                {isSelf
-                  ? 'Другие игроки видят только разрешённые поля. Связь и личный чат открываются после серверной проверки доступа.'
-                  : 'Это уже отфильтрованный профиль: телефон, баланс и закрытые поля не передаются в браузер.'}
-              </p>
-            </div>
-          </section>
 
           {error ? (
             <p className="profile-error" role="alert">

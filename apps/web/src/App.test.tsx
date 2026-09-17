@@ -327,6 +327,12 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       createdAt: null,
       requestId: null,
     }),
+    removeProfileFriend: vi.fn().mockResolvedValue({
+      userId: '6a81e965-c508-4321-812c-4be323606a70',
+      status: 'NONE',
+      createdAt: null,
+      requestId: null,
+    }),
     addProfileFriend: vi.fn().mockResolvedValue({
       userId: '6a81e965-c508-4321-812c-4be323606a70',
       status: 'PENDING_OUTGOING',
@@ -1358,6 +1364,59 @@ describe('PadlHub web authentication', () => {
     expect(await screen.findByRole('button', { name: 'Ожидает ответа' })).toBeDisabled();
     expect(screen.getByText('Заявка отправлена')).toBeVisible();
     expect(screen.getByText('Игрок увидит заявку в уведомлениях')).toBeVisible();
+  });
+
+  it.each([false, true])('confirms friendship removal and handles failure=%s', async (fails) => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const createdAt = '2026-09-17T10:00:00.000Z';
+    window.history.replaceState({}, '', `/profile/${targetUserId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getPlayerProfile: vi.fn().mockResolvedValue({
+        profile: {
+          userId: targetUserId,
+          displayName: 'Мария Соколова',
+          avatarUrl: null,
+          level: { label: 'C', assessmentRequired: false },
+        },
+        access: {
+          audience: 'OTHER',
+          tier: 'BASIC',
+          visibleSections: ['BASIC'],
+          contact: { status: 'HIDDEN', reason: 'ACCESS_REQUIRED' },
+          chat: { status: 'HIDDEN', reason: 'ACCESS_REQUIRED' },
+        },
+      }),
+      getProfileFriendship: vi
+        .fn()
+        .mockResolvedValue({ userId: targetUserId, status: 'FRIEND', createdAt, requestId: null }),
+      ...(fails
+        ? { removeProfileFriend: vi.fn().mockRejectedValue(new Error('network failure')) }
+        : {}),
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    try {
+      render(<App gateway={gateway} tenantKey="padlhub" />);
+      const button = await screen.findByRole('button', { name: 'Удалить из друзей' });
+      await userEvent.click(button);
+      expect(gateway.removeProfileFriend).not.toHaveBeenCalled();
+      confirm.mockReturnValue(true);
+      await userEvent.click(button);
+      expect(gateway.removeProfileFriend).toHaveBeenCalledWith(targetUserId, createdAt);
+      if (fails) {
+        expect(
+          await screen.findByText(
+            'Не удалось удалить игрока из друзей. Обновите профиль и повторите попытку.',
+          ),
+        ).toBeVisible();
+        expect(screen.getByRole('button', { name: 'Удалить из друзей' })).toBeEnabled();
+      } else {
+        expect(await screen.findByRole('button', { name: 'Добавить' })).toBeEnabled();
+        expect(screen.queryByText('Уже в друзьях')).not.toBeInTheDocument();
+      }
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it('loads the bookings route as a separate PadlHub aggregate without requesting Home', async () => {

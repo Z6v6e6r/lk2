@@ -782,6 +782,20 @@ export class PadlHubApiClient {
     );
   }
 
+  public removeProfileFriend(
+    userId: string,
+    expectedCreatedAt: string,
+  ): Promise<ProfileFriendship> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ProfileFriendship>(`/profile/friends/${encodeURIComponent(userId)}`, {
+        method: 'DELETE',
+        idempotencyKey,
+        body: jsonRequestBody({ expectedCreatedAt }),
+      }),
+    );
+  }
+
   public listProfileFriendRequests(limit = 8): Promise<ProfileFriendRequestPage> {
     return this.request<ProfileFriendRequestPage>(
       `/profile/friend-requests?limit=${encodeURIComponent(limit)}`,

@@ -185,6 +185,71 @@ export function registerProfileFriendshipRoutes(
     },
   );
 
+  app.delete(
+    '/user/api/v1/:tenantKey/profile/friends/:userId',
+    { preHandler: [...options.commandHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!canUseFriendships(request, reply)) return;
+      const current = principal(request);
+      const target = targetParams(request, reply);
+      const idempotencyKey = requireIdempotencyKey(request, reply);
+      if (!current || !target || !idempotencyKey) return;
+      const body = z
+        .object({ expectedCreatedAt: z.string().datetime() })
+        .strict()
+        .safeParse(request.body);
+      if (!body.success)
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'PROFILE_FRIEND_REMOVE_INVALID',
+          'Обновите профиль и повторите попытку.',
+        );
+      if (!options.repository) return unavailable(request, reply);
+      const expectedCreatedAt = new Date(body.data.expectedCreatedAt).toISOString();
+      const requestHash = createHash('sha256')
+        .update(`REMOVE:${target.userId}:${expectedCreatedAt}`)
+        .digest('hex');
+      const result = await options.repository.remove({
+        tenantId: current.tenantId,
+        actorUserId: current.userId,
+        targetUserId: target.userId,
+        expectedCreatedAt,
+        requestHash,
+        idempotencyKey,
+        correlationId: request.id,
+      });
+      if (result.outcome === 'not_found')
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'PROFILE_FRIENDSHIP_NOT_FOUND',
+          'Игрок уже не в друзьях. Обновите профиль.',
+        );
+      if (result.outcome === 'friendship_changed')
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'PROFILE_FRIENDSHIP_CHANGED',
+          'Статус дружбы изменился. Обновите профиль.',
+        );
+      if (result.outcome === 'idempotency_conflict')
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'IDEMPOTENCY_KEY_REUSED',
+          'Idempotency-Key уже использован для другой команды.',
+        );
+      reply.header('X-Idempotent-Replayed', String(result.replayed));
+      return result.friendship;
+    },
+  );
+
   for (const [suffix, action] of [
     ['accept', 'ACCEPT'],
     ['decline', 'DECLINE'],

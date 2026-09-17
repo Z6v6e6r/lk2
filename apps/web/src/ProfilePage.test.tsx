@@ -306,6 +306,33 @@ describe('ProfilePage', () => {
     },
   };
 
+  it('offers removal only for an existing friendship and keeps pending/error state visible', () => {
+    const onRemoveFriend = vi.fn();
+    const props = {
+      profile: otherProfile,
+      friendship: {
+        userId: otherProfile.profile.userId,
+        status: 'FRIEND' as const,
+        createdAt: '2026-09-17T10:00:00.000Z',
+        requestId: null,
+      },
+      onRemoveFriend,
+      logoutBusy: false,
+      onLogout: () => undefined,
+    };
+    const { rerender } = render(<ProfilePage {...props} />);
+    expect(screen.queryByText('Приватность и доступ')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить из друзей' }));
+    expect(onRemoveFriend).toHaveBeenCalledOnce();
+    rerender(<ProfilePage {...props} friendsBusy />);
+    expect(screen.getByRole('button', { name: 'Удалить из друзей' })).toBeDisabled();
+    expect(screen.getByText('Удаляем…')).toBeVisible();
+    rerender(<ProfilePage {...props} friendsError="Не удалось удалить игрока" />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Не удалось удалить игрока');
+    expect(screen.getByText('Уже в друзьях')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Удалить из друзей' })).toBeEnabled();
+  });
+
   it('shows a pending outgoing request without offering a duplicate command', () => {
     render(
       <ProfilePage
