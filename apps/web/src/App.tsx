@@ -1873,9 +1873,10 @@ export function App({
         );
         setFriendRequestBusyId(null);
         if (profileFriendship?.requestId === requestId) {
-          void gateway
-            .getProfileFriendship(profileFriendship.userId)
-            .then((friendship) => setProfileFriendship(friendship), () => undefined);
+          void gateway.getProfileFriendship(profileFriendship.userId).then(
+            (friendship) => setProfileFriendship(friendship),
+            () => undefined,
+          );
         }
       },
       () => {

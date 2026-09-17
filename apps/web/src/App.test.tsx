@@ -721,7 +721,7 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('tab', { name: 'Для меня' })).toHaveAttribute('aria-selected', 'true');
     const bottomNavigation = screen.getByRole('navigation', { name: 'Основная навигация' });
     const bottomNavigationLinks = within(bottomNavigation).getAllByRole('link');
-    expect(bottomNavigationLinks).toHaveLength(5);
+    expect(bottomNavigationLinks).toHaveLength(6);
     expect(bottomNavigationLinks[2]).toHaveAccessibleName('Создать игру');
     expect(bottomNavigationLinks[2]).toHaveAttribute('href', '/games/new?new=1');
     expect(bottomNavigationLinks[2]?.querySelector('.fh-create-button svg')).toHaveAttribute(
@@ -732,7 +732,12 @@ describe('PadlHub web authentication', () => {
       'width',
       '56',
     );
-    expect(screen.queryByRole('link', { name: 'Чаты' })).not.toBeInTheDocument();
+    const chatsLink = within(bottomNavigation).getByRole('link', { name: 'Чаты' });
+    expect(chatsLink).toHaveAttribute('href', '/chats');
+    expect(within(bottomNavigation).getByRole('link', { name: 'Уведомления' })).toHaveAttribute(
+      'href',
+      '/notifications',
+    );
     const communityCard = screen.getByRole('group', {
       name: 'Padel Friends, непрочитанных сообщений: 2',
     });
@@ -1322,7 +1327,7 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getProfileFriendship).toHaveBeenCalledWith(targetUserId);
   });
 
-  it('adds another player to friends from the viewer-filtered profile', async () => {
+  it('sends a friend request from the viewer-filtered profile', async () => {
     const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
     window.history.replaceState({}, '', `/profile/${targetUserId}`);
     const gateway = createGateway({
@@ -1350,8 +1355,9 @@ describe('PadlHub web authentication', () => {
     await userEvent.click(addButton);
 
     await waitFor(() => expect(gateway.addProfileFriend).toHaveBeenCalledWith(targetUserId));
-    expect(await screen.findByRole('button', { name: 'Добавлен' })).toBeDisabled();
-    expect(screen.getByText('Уже в друзьях')).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Ожидает ответа' })).toBeDisabled();
+    expect(screen.getByText('Заявка отправлена')).toBeVisible();
+    expect(screen.getByText('Игрок увидит заявку в уведомлениях')).toBeVisible();
   });
 
   it('loads the bookings route as a separate PadlHub aggregate without requesting Home', async () => {

@@ -139,10 +139,7 @@ describe('admin access token audience', () => {
   it('keeps the admin audience closed to a beta tester without the admin role', async () => {
     const betaConfig = loadConfig({ ...environment, BETA_FULL_CLIENT_ACCESS_ENABLED: 'true' });
     await expect(
-      service(
-        { roles: ['client'], permissions: ['profile.read'] },
-        betaConfig,
-      ).refreshSession(
+      service({ roles: ['client'], permissions: ['profile.read'] }, betaConfig).refreshSession(
         'local-padel',
         'existing-refresh-token',
         'beta-admin-auth-test-correlation',

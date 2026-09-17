@@ -84,7 +84,9 @@ describe('profile friend request repository', () => {
     expect(insert).toContain('requester_user_id');
     expect(insert).not.toContain("'ACCEPTED'");
     expect(auditActions(query)).toContain('PROFILE_FRIEND_REQUEST_CREATED');
-    expect(statements.some((text) => text.includes('profile.friend_request.created.v1'))).toBe(true);
+    expect(statements.some((text) => text.includes('profile.friend_request.created.v1'))).toBe(
+      true,
+    );
     expect(
       statements.some((text) => text.includes('insert into profile.friend_request_commands')),
     ).toBe(true);
@@ -127,9 +129,7 @@ describe('profile friend request repository', () => {
       outcome: 'applied',
       friendship: { userId: targetUserId, status: 'FRIEND' },
     });
-    expect(
-      statements.some((text) => text.includes('PROFILE_FRIEND_REQUEST_ACCEPTED')),
-    ).toBe(false);
+    expect(statements.some((text) => text.includes('PROFILE_FRIEND_REQUEST_ACCEPTED'))).toBe(false);
     expect(auditActions(query)).toContain('PROFILE_FRIEND_REQUEST_ACCEPTED');
     expect(statements.some((text) => text.includes('profile.friendship.created.v1'))).toBe(true);
   });

@@ -911,11 +911,7 @@ describe('health endpoints', () => {
     expect(response.json()).toMatchObject({
       items: [{ displayName: 'Мария Соколова', requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91' }],
     });
-    expect(listIncoming).toHaveBeenCalledWith(
-      tenantId,
-      '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
-      4,
-    );
+    expect(listIncoming).toHaveBeenCalledWith(tenantId, '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca', 4);
   });
 
   it.each([

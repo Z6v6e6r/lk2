@@ -39,9 +39,5 @@ export function subscribeChatsUnreadCount(listener: () => void): () => void {
 }
 
 export function useChatsUnreadCount(): number {
-  return useSyncExternalStore(
-    subscribeChatsUnreadCount,
-    getChatsUnreadCount,
-    () => 0,
-  );
+  return useSyncExternalStore(subscribeChatsUnreadCount, getChatsUnreadCount, () => 0);
 }

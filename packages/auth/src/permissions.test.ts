@@ -18,12 +18,12 @@ describe('client permission catalog', () => {
   });
 
   it('adds the catalog only when the beta switch is on', () => {
-    expect(resolveClientPermissions({ stored: ['profile.read'], fullClientAccess: false })).toEqual([
-      'profile.read',
-    ]);
-    expect(
-      resolveClientPermissions({ stored: ['profile.read'], fullClientAccess: true }),
-    ).toEqual(expect.arrayContaining([...FULL_CLIENT_PERMISSIONS]));
+    expect(resolveClientPermissions({ stored: ['profile.read'], fullClientAccess: false })).toEqual(
+      ['profile.read'],
+    );
+    expect(resolveClientPermissions({ stored: ['profile.read'], fullClientAccess: true })).toEqual(
+      expect.arrayContaining([...FULL_CLIENT_PERMISSIONS]),
+    );
   });
 
   it('strips admin-only permissions from a client token in both modes', () => {

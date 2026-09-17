@@ -640,10 +640,7 @@ async function settledState(
   },
   viewerUserId: string,
 ): Promise<FriendshipState> {
-  const [leftUserId, rightUserId] = orderedPair(
-    request.requester_user_id,
-    request.target_user_id,
-  );
+  const [leftUserId, rightUserId] = orderedPair(request.requester_user_id, request.target_user_id);
   const friendship = await queryOne<FriendshipRow>(
     client,
     `select created_at
