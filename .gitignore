@@ -38,3 +38,6 @@ apps/mobile/ios/
 
 # Per-worktree disposable local preview state
 .lk2-local/
+
+# Generated Timeweb beta activation fixture directories (scripts/*.test.ts)
+.phub-timeweb-activation-inputs-*/

@@ -1,10 +1,11 @@
+import { FULL_CLIENT_PERMISSIONS } from '@phub/auth';
 import { loadConfig } from '@phub/config';
 import { decodeJwt, jwtVerify } from 'jose';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AuthService, type AuthRepository, type AuthUser } from './auth-service.js';
 
-const config = loadConfig({
+const environment = {
   APP_ENV: 'ci',
   DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
   REDIS_URL: 'redis://localhost:6379',
@@ -14,7 +15,9 @@ const config = loadConfig({
   JWT_ADMIN_AUDIENCE: 'phub-admin',
   JWT_ACCESS_SECRET: 'test-access-secret-at-least-32-characters',
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
-});
+} as const;
+
+const config = loadConfig(environment);
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const user: AuthUser = {
   id: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
@@ -31,10 +34,13 @@ const communityAdminPermissions = [
   'communities.create.quota.override',
 ] as const;
 
-function service(access: {
-  readonly roles: readonly string[];
-  readonly permissions: readonly string[];
-}) {
+function service(
+  access: {
+    readonly roles: readonly string[];
+    readonly permissions: readonly string[];
+  },
+  serviceConfig: typeof config = config,
+) {
   const repository = {
     resolveTenantAuthBinding: () =>
       Promise.resolve({
@@ -56,7 +62,7 @@ function service(access: {
     getUserAccessProfile: () => Promise.resolve(access),
   } as unknown as AuthRepository;
   return new AuthService({
-    config,
+    config: serviceConfig,
     repository,
     challengeStore: {} as never,
     providers: new Map(),
@@ -105,6 +111,42 @@ describe('admin access token audience', () => {
 
     expect(claims.roles).toEqual(['client']);
     expect(claims.permissions).toEqual(['profile.read']);
+  });
+
+  it('adds the full client catalog under the beta switch without leaking admin claims', async () => {
+    const betaConfig = loadConfig({ ...environment, BETA_FULL_CLIENT_ACCESS_ENABLED: 'true' });
+    const session = await service(
+      {
+        roles: ['client', 'admin'],
+        permissions: ['profile.read', 'notifications.manage'],
+      },
+      betaConfig,
+    ).refreshSession(
+      'local-padel',
+      'existing-refresh-token',
+      'beta-client-auth-test-correlation',
+      'beta-client-auth-idempotency-0001',
+      'client',
+    );
+    const claims = decodeJwt(session.accessToken);
+
+    expect(claims.roles).toEqual(['client']);
+    expect(claims.permissions).toEqual(expect.arrayContaining([...FULL_CLIENT_PERMISSIONS]));
+    expect(claims.permissions).not.toContain('notifications.manage');
+    expect(claims.permissions).toContain('chat.direct.create');
+  });
+
+  it('keeps the admin audience closed to a beta tester without the admin role', async () => {
+    const betaConfig = loadConfig({ ...environment, BETA_FULL_CLIENT_ACCESS_ENABLED: 'true' });
+    await expect(
+      service({ roles: ['client'], permissions: ['profile.read'] }, betaConfig).refreshSession(
+        'local-padel',
+        'existing-refresh-token',
+        'beta-admin-auth-test-correlation',
+        'beta-admin-auth-idempotency-0001',
+        'admin',
+      ),
+    ).rejects.toThrow('AUTH_ADMIN_ACCESS_DENIED');
   });
 
   it.each(communityAdminPermissions)(

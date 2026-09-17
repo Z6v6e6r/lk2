@@ -289,4 +289,61 @@ describe('ProfilePage', () => {
     expect(screen.getByRole('link', { name: 'хАБ Терехово, вне рейтинга' })).toBeVisible();
     expect(screen.getByText('вне рейтинга')).toBeVisible();
   });
+
+  const otherProfile: PlayerProfileView = {
+    profile: {
+      userId: '6a81e965-c508-4321-812c-4be323606a70',
+      displayName: 'Мария Соколова',
+      avatarUrl: null,
+      level: { label: 'C', assessmentRequired: false },
+    },
+    access: {
+      audience: 'OTHER',
+      tier: 'INTERACTION',
+      visibleSections: ['BASIC', 'PLAYER_LEVEL'],
+      contact: { status: 'LOCKED', reason: 'FEATURE_UNAVAILABLE' },
+      chat: { status: 'LOCKED', reason: 'FEATURE_UNAVAILABLE' },
+    },
+  };
+
+  it('shows a pending outgoing request without offering a duplicate command', () => {
+    render(
+      <ProfilePage
+        profile={otherProfile}
+        friendship={{
+          userId: otherProfile.profile.userId,
+          status: 'PENDING_OUTGOING',
+          createdAt: '2026-08-29T10:00:00.000Z',
+          requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
+        }}
+        onAddFriend={() => undefined}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText('Заявка отправлена')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Ожидает ответа' })).toBeDisabled();
+  });
+
+  it('lets the addressed player accept an incoming request from the profile', () => {
+    const onAcceptFriendRequest = vi.fn();
+    render(
+      <ProfilePage
+        profile={otherProfile}
+        friendship={{
+          userId: otherProfile.profile.userId,
+          status: 'PENDING_INCOMING',
+          createdAt: '2026-08-29T10:00:00.000Z',
+          requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
+        }}
+        onAcceptFriendRequest={onAcceptFriendRequest}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Принять заявку' }));
+    expect(onAcceptFriendRequest).toHaveBeenCalledWith('18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91');
+  });
 });

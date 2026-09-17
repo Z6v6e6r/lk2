@@ -406,6 +406,109 @@ describe('notification intent projector', () => {
     ).toHaveLength(2);
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it('projects an identifier-only direct message event for every other member', async () => {
+    const secondUserId = '59d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+    const conversationId = '73333333-3333-4333-8333-333333333333';
+    const messageEvent: NotificationSourceEvent = {
+      id: '74444444-4444-4444-8444-444444444444',
+      type: 'messaging.message.created.v1',
+      aggregateId: conversationId,
+      tenantId,
+      occurredAt: '2026-08-03T12:00:00.000Z',
+      correlationId: 'messaging-message-worker-test',
+      payload: {
+        conversationId,
+        messageId: '75555555-5555-4555-8555-555555555555',
+        sequence: 7,
+        recipientUserIds: [userId, secondUserId],
+      },
+    };
+    let intentNumber = 0;
+    const observed: { readonly text: string; readonly values: readonly unknown[] }[] = [];
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      observed.push({ text, values });
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into audit.inbox_events')) {
+        return Promise.resolve({ rows: [{ event_id: messageEvent.id }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.tenant_runtime_settings')) {
+        return Promise.resolve({ rows: [{ in_app_enabled: true }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.trigger_rules')) {
+        return Promise.resolve({
+          rows: [
+            {
+              rule_id: '76666666-6666-4666-8666-666666666666',
+              template_id: '77777777-7777-4777-8777-777777777777',
+              audience_selector: { type: 'EVENT_USERS', field: 'recipientUserIds' },
+              mandatory: false,
+              effective_channels: ['IN_APP'],
+              category: 'MESSAGING',
+              title_template: 'Новое сообщение',
+              body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+              deep_link_template: '/chats/{{conversationId}}',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from identity.users')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.user_preferences')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into notifications.intents')) {
+        intentNumber += 1;
+        return Promise.resolve({
+          rows: [{ id: `80000000-0000-4000-8000-${String(intentNumber).padStart(12, '0')}` }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.deliveries')) {
+        return Promise.resolve({
+          rows: [{ id: `81000000-0000-4000-8000-${String(intentNumber).padStart(12, '0')}` }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.inbox_items')) {
+        return Promise.resolve({
+          rows: [{ id: `82000000-0000-4000-8000-${String(intentNumber).padStart(12, '0')}` }],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('update audit.inbox_events')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      applyNotificationSourceEvent({ pool: pool as never, event: messageEvent }),
+    ).resolves.toMatchObject({ outcome: 'processed', created: 2, skippedRules: 0 });
+
+    const inboxCalls = observed.filter((call) =>
+      call.text.includes('insert into notifications.inbox_items'),
+    );
+    expect(inboxCalls).toHaveLength(2);
+    // The rendered deep link resolves the conversation identifier; no message body is projected.
+    for (const call of inboxCalls) {
+      expect(call.values).toContain(`/chats/${conversationId}`);
+      const serialized = JSON.stringify(call.values);
+      expect(serialized).not.toContain('секрет');
+    }
+    expect(
+      observed.filter((call) => call.text.includes('insert into notifications.deliveries')),
+    ).toHaveLength(2);
+  });
 });
 
 function gameFingerprint(source: GameNotificationSourceEvent): string {

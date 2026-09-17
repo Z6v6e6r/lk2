@@ -339,6 +339,96 @@
   }
 }
 
+.friendRequests {
+  display: grid;
+  margin: 0 18px 18px;
+  padding: 14px;
+  gap: 12px;
+  border: 1px solid #e7defc;
+  border-radius: 18px;
+  background: #faf7ff;
+}
+
+.friendRequests .listHeader {
+  margin: 0;
+}
+
+.friendRequestCount {
+  display: inline-grid;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  place-items: center;
+  border-radius: 999px;
+  background: #f0ebff;
+  color: var(--notifications-accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.friendRequestList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 10px;
+  list-style: none;
+}
+
+.friendRequestCard {
+  display: grid;
+  padding: 12px 14px;
+  gap: 10px;
+  border: 1px solid var(--notifications-line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.friendRequestPerson {
+  display: grid;
+  gap: 2px;
+  color: var(--notifications-ink);
+  text-decoration: none;
+}
+
+.friendRequestPerson strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.friendRequestPerson small {
+  color: var(--notifications-muted);
+  font-size: 13px;
+}
+
+.friendRequestActions {
+  display: flex;
+  gap: 8px;
+}
+
+.friendRequestActions button {
+  min-height: 40px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--notifications-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.friendRequestActions button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.friendRequestActions .friendRequestDecline {
+  border: 1px solid var(--notifications-line);
+  background: #fff;
+  color: var(--notifications-muted);
+}
+
 @media (min-width: 768px) {
   .page :global(.fh-bottom-nav) {
     display: none;

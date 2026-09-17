@@ -45,12 +45,18 @@ The owner manages the independently versioned privacy aggregate through
 `GET /{tenantKey}/profile/privacy` and idempotent `PUT /{tenantKey}/profile/privacy`. It is
 `LOCAL_ONLY`; profile identity and rating can remain `VIVA_PRIMARY` without creating a dual write.
 
-Friendships are a separate symmetric `LOCAL_ONLY` aggregate. `GET /{tenantKey}/profile/friends`
-lists the authenticated user's friends, `GET /{tenantKey}/profile/friends/{userId}` returns the
-relationship state for a player profile, and idempotent
-`POST /{tenantKey}/profile/friends/{userId}` creates the relationship. The aggregate stores only
-tenant-scoped PadlHub user UUIDs. Its business row, command result, audit entry and
-`profile.friendship.created.v1` outbox event commit in one PostgreSQL transaction.
+Friendships are a separate symmetric `LOCAL_ONLY` aggregate reached through a request. Idempotent
+`POST /{tenantKey}/profile/friends/{userId}` creates a pending `profile.friend_requests` row and the
+target answers it from the notifications feed through
+`POST /{tenantKey}/profile/friend-requests/{requestId}/accept|decline`; the friendship row is written
+only on acceptance, so a request never grants friendship by itself. A request in the opposite
+direction is answered immediately because both players already expressed the same intent.
+`GET /{tenantKey}/profile/friend-requests` lists pending incoming requests, and
+`GET /{tenantKey}/profile/friends` still lists accepted friends only.
+`GET /{tenantKey}/profile/friends/{userId}` reports `NONE`, `PENDING_OUTGOING`, `PENDING_INCOMING` or
+`FRIEND`. The aggregate stores only tenant-scoped PadlHub user UUIDs. Its business row, command
+result, audit entry and the `profile.friend_request.created.v1` or `profile.friendship.created.v1`
+outbox event commit in one PostgreSQL transaction.
 
 Level history is an immutable PadlHub read-model exposed only to the authenticated owner through
 `GET /{tenantKey}/profile/level-history`. `profile.level_history` stores the normalized level label,

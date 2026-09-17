@@ -409,9 +409,6 @@ const CONVERSATION_SELECT = `
     left join profile.user_summaries other_summary
       on other_summary.tenant_id = other_member.tenant_id
      and other_summary.user_id = other_member.user_id
-    left join profile.privacy_settings target_privacy
-      on target_privacy.tenant_id = other_user.tenant_id
-     and target_privacy.user_id = other_user.id
     left join lateral (
       select message.sequence, message.body, message.created_at
         from messaging.messages message
@@ -424,7 +421,6 @@ const CONVERSATION_SELECT = `
    where conversation.tenant_id = $1
      and conversation.kind = 'DIRECT'
      and conversation.state = 'OPEN'
-     and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
      and not exists (
        select 1
          from messaging.user_blocks block
@@ -593,14 +589,10 @@ async function getAuthorizedMember(
                   on other_user.tenant_id = other_member.tenant_id
                  and other_user.id = other_member.user_id
                  and other_user.status = 'ACTIVE'
-                left join profile.privacy_settings target_privacy
-                  on target_privacy.tenant_id = other_user.tenant_id
-                 and target_privacy.user_id = other_user.id
                where other_member.tenant_id = member.tenant_id
                  and other_member.conversation_id = member.conversation_id
                  and other_member.user_id <> member.user_id
                  and other_member.state = 'ACTIVE'
-                 and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
                  and not exists (
                    select 1
                      from messaging.user_blocks block
@@ -675,6 +667,127 @@ async function getMessage(
         and message.deleted_at is null`,
     [tenantId, userId, conversationId, messageId],
   );
+}
+
+/**
+ * Active user members that may receive a conversation event. Realtime additionally requires its
+ * own tenant gate; in-app notification projection reuses the same membership, permission and block
+ * gates without requiring realtime to be enabled.
+ */
+function recipientUserIdsSql(options: { readonly requireRealtime: boolean }): string {
+  return `select member.user_id
+             from messaging.tenant_runtime_settings settings
+             join messaging.conversations conversation
+               on conversation.tenant_id = settings.tenant_id
+              and conversation.id = $2
+              and conversation.kind in ('DIRECT', 'GAME')
+              and conversation.state = 'OPEN'
+             join messaging.messages message
+               on message.tenant_id = conversation.tenant_id
+              and message.conversation_id = conversation.id
+              and message.id = $3
+              and message.sequence = $4
+              and message.deleted_at is null
+             join messaging.conversation_members member
+               on member.tenant_id = conversation.tenant_id
+              and member.conversation_id = conversation.id
+              and member.member_type = 'USER'
+              and member.user_id is not null
+              and member.state = 'ACTIVE'
+             join identity.users viewer_user
+               on viewer_user.tenant_id = member.tenant_id
+              and viewer_user.id = member.user_id
+              and viewer_user.status = 'ACTIVE'
+             join identity.user_access_profiles current_access
+               on current_access.tenant_id = viewer_user.tenant_id
+              and current_access.user_id = viewer_user.id
+            where settings.tenant_id = $1
+              and settings.http_enabled = true
+              ${options.requireRealtime ? 'and settings.realtime_enabled = true\n' : ''}              and (
+                (
+                  conversation.kind = 'DIRECT'
+                  and settings.direct_enabled = true
+                  and 'chat.direct.create' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from messaging.conversation_members other_member
+                      join identity.users other_user
+                        on other_user.tenant_id = other_member.tenant_id
+                       and other_user.id = other_member.user_id
+                       and other_user.status = 'ACTIVE'
+                     where other_member.tenant_id = conversation.tenant_id
+                       and other_member.conversation_id = conversation.id
+                       and other_member.member_type = 'USER'
+                       and other_member.user_id is not null
+                       and other_member.user_id <> member.user_id
+                       and other_member.state = 'ACTIVE'
+                  )
+                  and not exists (
+                    select 1
+                      from messaging.direct_conversations pair
+                      join messaging.user_blocks block
+                        on block.tenant_id = pair.tenant_id
+                       and pair.conversation_id = conversation.id
+                       and ((block.blocker_user_id = pair.left_user_id and block.blocked_user_id = pair.right_user_id)
+                         or (block.blocker_user_id = pair.right_user_id and block.blocked_user_id = pair.left_user_id))
+                  )
+                )
+                or
+                (
+                  conversation.kind = 'GAME'
+                  and conversation.context_type = 'GAME'
+                  and settings.contextual_enabled = true
+                  and 'games.play' = any(current_access.permissions)
+                  and exists (
+                    select 1
+                      from games.games game
+                     where game.tenant_id = conversation.tenant_id
+                       and game.id = conversation.context_id
+                       and game.lifecycle_state <> 'CANCELLED'
+                  )
+                  and exists (
+                    select 1
+                      from games.participations participation
+                     where participation.tenant_id = conversation.tenant_id
+                       and participation.game_id = conversation.context_id
+                       and participation.user_id = member.user_id
+                       and participation.state = 'ACTIVE'
+                  )
+                )
+              )`;
+}
+
+/**
+ * An outbox payload is identifier-only, so the notification rule resolves its recipients from
+ * `recipientUserIds`. The cap matches `MAX_NOTIFICATION_EVENT_RECIPIENTS` in `@phub/notifications`:
+ * a longer list is rejected by the audience selector and the rule is skipped instead of notifying
+ * a partially addressed conversation.
+ */
+const MAX_NOTIFICATION_RECIPIENT_USER_IDS = 50;
+
+/**
+ * Recipients of an in-app notification about a conversation event. Uses the same membership,
+ * permission and block gates as realtime without requiring the realtime tenant gate, and never
+ * notifies the actor that produced the event.
+ */
+async function listNotificationRecipientUserIds(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly conversationId: string;
+    readonly messageId: string;
+    readonly sequence: number;
+    readonly actorUserId: string;
+  },
+): Promise<string[]> {
+  const result = await client.query<{ user_id: string }>(
+    recipientUserIdsSql({ requireRealtime: false }),
+    [input.tenantId, input.conversationId, input.messageId, input.sequence],
+  );
+  return result.rows
+    .map((row) => row.user_id)
+    .filter((userId) => userId !== input.actorUserId)
+    .slice(0, MAX_NOTIFICATION_RECIPIENT_USER_IDS);
 }
 
 export function createMessagingRepository(pool: Pool): MessagingRepository {
@@ -819,7 +932,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               input.tenantId,
               conversationId,
               input.correlationId,
-              JSON.stringify({ conversationId, kind: 'DIRECT' }),
+              JSON.stringify({
+                conversationId,
+                kind: 'DIRECT',
+                recipientUserIds: [input.otherUserId],
+              }),
             ],
           );
           await client.query(
@@ -957,6 +1074,27 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                 and participation.state = 'ACTIVE'`,
             [input.tenantId, conversationId, input.gameId],
           );
+          const rosterRecipients = await client.query<{ user_id: string }>(
+            `select member.user_id
+               from messaging.conversation_members member
+               join identity.users roster_user
+                 on roster_user.tenant_id = member.tenant_id
+                and roster_user.id = member.user_id
+                and roster_user.status = 'ACTIVE'
+              where member.tenant_id = $1
+                and member.conversation_id = $2
+                and member.member_type = 'USER'
+                and member.user_id is not null
+                and member.user_id <> $3
+              order by member.user_id
+              limit $4`,
+            [
+              input.tenantId,
+              conversationId,
+              input.actorUserId,
+              MAX_NOTIFICATION_RECIPIENT_USER_IDS,
+            ],
+          );
           await client.query(
             `insert into audit.outbox_events (
                tenant_id, event_type, aggregate_id, correlation_id, payload
@@ -965,7 +1103,12 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               input.tenantId,
               conversationId,
               input.correlationId,
-              JSON.stringify({ conversationId, kind: 'GAME', contextId: input.gameId }),
+              JSON.stringify({
+                conversationId,
+                kind: 'GAME',
+                contextId: input.gameId,
+                recipientUserIds: rosterRecipients.rows.map((row) => row.user_id),
+              }),
             ],
           );
           await client.query(
@@ -1378,6 +1521,13 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             where tenant_id = $1 and conversation_id = $2 and id = $3`,
           [input.tenantId, input.conversationId, member.member_id, allocatedSequence],
         );
+        const recipients = await listNotificationRecipientUserIds(client, {
+          tenantId: input.tenantId,
+          conversationId: input.conversationId,
+          messageId: inserted.id,
+          sequence: allocatedSequence,
+          actorUserId: input.userId,
+        });
         await client.query(
           `insert into audit.outbox_events (
              tenant_id, event_type, aggregate_id, correlation_id, payload
@@ -1390,6 +1540,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               conversationId: input.conversationId,
               messageId: inserted.id,
               sequence: allocatedSequence,
+              recipientUserIds: recipients,
             }),
           ],
         );
@@ -1720,91 +1871,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
     listRealtimeRecipientUserIds(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const result = await client.query<{ user_id: string }>(
-          `select member.user_id
-             from messaging.tenant_runtime_settings settings
-             join messaging.conversations conversation
-               on conversation.tenant_id = settings.tenant_id
-              and conversation.id = $2
-              and conversation.kind in ('DIRECT', 'GAME')
-              and conversation.state = 'OPEN'
-             join messaging.messages message
-               on message.tenant_id = conversation.tenant_id
-              and message.conversation_id = conversation.id
-              and message.id = $3
-              and message.sequence = $4
-              and message.deleted_at is null
-             join messaging.conversation_members member
-               on member.tenant_id = conversation.tenant_id
-              and member.conversation_id = conversation.id
-              and member.member_type = 'USER'
-              and member.user_id is not null
-              and member.state = 'ACTIVE'
-             join identity.users viewer_user
-               on viewer_user.tenant_id = member.tenant_id
-              and viewer_user.id = member.user_id
-              and viewer_user.status = 'ACTIVE'
-             join identity.user_access_profiles current_access
-               on current_access.tenant_id = viewer_user.tenant_id
-              and current_access.user_id = viewer_user.id
-            where settings.tenant_id = $1
-              and settings.http_enabled = true
-              and settings.realtime_enabled = true
-              and (
-                (
-                  conversation.kind = 'DIRECT'
-                  and settings.direct_enabled = true
-                  and 'chat.direct.create' = any(current_access.permissions)
-                  and exists (
-                    select 1
-                      from messaging.conversation_members other_member
-                      join identity.users other_user
-                        on other_user.tenant_id = other_member.tenant_id
-                       and other_user.id = other_member.user_id
-                       and other_user.status = 'ACTIVE'
-                      left join profile.privacy_settings target_privacy
-                        on target_privacy.tenant_id = other_user.tenant_id
-                       and target_privacy.user_id = other_user.id
-                     where other_member.tenant_id = conversation.tenant_id
-                       and other_member.conversation_id = conversation.id
-                       and other_member.member_type = 'USER'
-                       and other_member.user_id is not null
-                       and other_member.user_id <> member.user_id
-                       and other_member.state = 'ACTIVE'
-                       and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
-                  )
-                  and not exists (
-                    select 1
-                      from messaging.direct_conversations pair
-                      join messaging.user_blocks block
-                        on block.tenant_id = pair.tenant_id
-                       and pair.conversation_id = conversation.id
-                       and ((block.blocker_user_id = pair.left_user_id and block.blocked_user_id = pair.right_user_id)
-                         or (block.blocker_user_id = pair.right_user_id and block.blocked_user_id = pair.left_user_id))
-                  )
-                )
-                or
-                (
-                  conversation.kind = 'GAME'
-                  and conversation.context_type = 'GAME'
-                  and settings.contextual_enabled = true
-                  and 'games.play' = any(current_access.permissions)
-                  and exists (
-                    select 1
-                      from games.games game
-                     where game.tenant_id = conversation.tenant_id
-                       and game.id = conversation.context_id
-                       and game.lifecycle_state <> 'CANCELLED'
-                  )
-                  and exists (
-                    select 1
-                      from games.participations participation
-                     where participation.tenant_id = conversation.tenant_id
-                       and participation.game_id = conversation.context_id
-                       and participation.user_id = member.user_id
-                       and participation.state = 'ACTIVE'
-                  )
-                )
-              )`,
+          recipientUserIdsSql({ requireRealtime: true }),
           [input.tenantId, input.conversationId, input.messageId, input.sequence],
         );
         return result.rows.map((row) => row.user_id);

@@ -220,6 +220,9 @@ describe('messaging repository', () => {
       if (text.includes('insert into messaging.conversations')) {
         return Promise.resolve({ rows: [{ id: conversationId }], rowCount: 1 });
       }
+      if (text.includes('select member.user_id')) {
+        return Promise.resolve({ rows: [{ user_id: otherUserId }], rowCount: 1 });
+      }
       if (
         text.includes('insert into messaging.conversation_members') ||
         text.includes('insert into audit.outbox_events') ||
@@ -438,9 +441,8 @@ describe('messaging repository', () => {
     expect(directQuery).toContain('identity.user_access_profiles current_access');
     expect(directQuery).toContain("'chat.direct.create' = any(current_access.permissions)");
     expect(directQuery).toContain("other_user.status = 'ACTIVE'");
-    expect(directQuery).toContain(
-      "coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'",
-    );
+    // `chat_policy` gates starting a new conversation, never an existing membership.
+    expect(directQuery).not.toContain('target_privacy');
   });
 
   it('issues a realtime authority result for a contextual-only games.play session', async () => {
@@ -557,7 +559,7 @@ describe('messaging repository', () => {
         expect(text).toContain('settings.contextual_enabled = true');
         expect(text).toContain("participation.state = 'ACTIVE'");
         expect(text).toContain("'games.play' = any(current_access.permissions)");
-        expect(text).toContain("coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'");
+        expect(text).not.toContain('target_privacy');
         return Promise.resolve({
           rows: [{ user_id: userId }, { user_id: otherUserId }],
           rowCount: 2,
@@ -610,6 +612,9 @@ describe('messaging repository', () => {
       ) {
         return Promise.resolve({ rows: [], rowCount: 1 });
       }
+      if (text.includes('select member.user_id')) {
+        return Promise.resolve({ rows: [{ user_id: otherUserId }], rowCount: 1 });
+      }
       if (text.includes('message.id = $4')) {
         return Promise.resolve({
           rows: [
@@ -655,6 +660,11 @@ describe('messaging repository', () => {
     expect(outboxCall).toBeDefined();
     expect(JSON.stringify(outboxCall?.[1])).not.toContain(body);
     expect(JSON.stringify(outboxCall?.[1])).toContain(messageId);
+    expect(JSON.parse(String(outboxCall?.[1]?.[3]))).toMatchObject({
+      conversationId,
+      messageId,
+      recipientUserIds: [otherUserId],
+    });
     const auditCall = query.mock.calls.find(([text]) =>
       String(text).includes('insert into audit.audit_log'),
     );
@@ -698,9 +708,7 @@ describe('messaging repository', () => {
       expect(authorizationQuery).not.toMatch(/\bcurrent_user\b/i);
       expect(authorizationQuery).toContain("other_member.state = 'ACTIVE'");
       expect(authorizationQuery).toContain("other_user.status = 'ACTIVE'");
-      expect(authorizationQuery).toContain(
-        "coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'",
-      );
+      expect(authorizationQuery).not.toContain('target_privacy');
       expect(
         query.mock.calls.some(([text]) =>
           /message\.idempotency_key|insert into messaging\.messages|insert into audit\.outbox_events/.test(
@@ -1334,9 +1342,7 @@ describe('messaging repository', () => {
     expect(membershipSql).toContain("conversation.kind = 'DIRECT'");
     expect(membershipSql).toContain("'chat.direct.create' = any(current_access.permissions)");
     expect(membershipSql).toContain("other_user.status = 'ACTIVE'");
-    expect(membershipSql).toContain(
-      "coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'",
-    );
+    expect(membershipSql).not.toContain('target_privacy');
   });
 
   it('denies a blocked realtime subscription and returns no fanout recipients', async () => {
@@ -1387,8 +1393,8 @@ describe('messaging repository', () => {
     );
     expect(subscriptionSql).toContain('messaging.user_blocks block');
     expect(fanoutSql).toContain('messaging.user_blocks block');
-    expect(subscriptionSql).toContain('profile.privacy_settings target_privacy');
-    expect(fanoutSql).toContain('profile.privacy_settings target_privacy');
+    expect(subscriptionSql).not.toContain('profile.privacy_settings target_privacy');
+    expect(fanoutSql).not.toContain('profile.privacy_settings target_privacy');
     expect(fanoutSql).toContain("'chat.direct.create' = any(current_access.permissions)");
   });
 });

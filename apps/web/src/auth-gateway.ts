@@ -70,6 +70,7 @@ import type {
   LevelAssessmentDefinition,
   CompleteLevelAssessmentResponse,
   ProfileFriendPage,
+  ProfileFriendRequestPage,
   ProfileFriendship,
   UserProfile,
   UserUpcomingBookings,
@@ -146,6 +147,8 @@ export type {
   LevelAssessmentDefinition,
   CompleteLevelAssessmentResponse,
   ProfileFriendPage,
+  ProfileFriendRequestPage,
+  ProfileFriendRequestSummary,
   ProfileFriendship,
   UserProfile,
   UserUpcomingBookings,
@@ -330,6 +333,9 @@ export interface AuthGateway {
   readonly listProfileFriends: (limit?: number) => Promise<ProfileFriendPage>;
   readonly getProfileFriendship: (userId: string) => Promise<ProfileFriendship>;
   readonly addProfileFriend: (userId: string) => Promise<ProfileFriendship>;
+  readonly listProfileFriendRequests: (limit?: number) => Promise<ProfileFriendRequestPage>;
+  readonly acceptProfileFriendRequest: (requestId: string) => Promise<ProfileFriendship>;
+  readonly declineProfileFriendRequest: (requestId: string) => Promise<ProfileFriendship>;
   readonly getBookingPreferences: () => Promise<BookingPreferences>;
   readonly updateBookingPreferences: (
     input: BookingPreferencesUpdateRequest,
@@ -1664,6 +1670,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     addProfileFriend(userId) {
       return client.addProfileFriend(userId);
+    },
+
+    listProfileFriendRequests(limit) {
+      return client.listProfileFriendRequests(limit);
+    },
+
+    acceptProfileFriendRequest(requestId) {
+      return client.acceptProfileFriendRequest(requestId);
+    },
+
+    declineProfileFriendRequest(requestId) {
+      return client.declineProfileFriendRequest(requestId);
     },
 
     getBookingPreferences() {

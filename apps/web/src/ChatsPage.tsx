@@ -111,7 +111,7 @@ export function ChatsPage({
             </div>
           )}
         </section>
-        <MainBottomNavigation communicationsDestination="chats" active="chats" />
+        <MainBottomNavigation active="chats" />
       </main>
     );
   }
@@ -202,7 +202,7 @@ export function ChatsPage({
           </section>
         )}
       </section>
-      <MainBottomNavigation communicationsDestination="chats" active="chats" />
+      <MainBottomNavigation active="chats" />
     </main>
   );
 }

@@ -509,7 +509,9 @@ describe('ChatsPage', () => {
     );
     expect(screen.getByRole('alert')).toHaveTextContent('Нет связи');
     expect(screen.queryByText('Чаты станций')).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Уведомления' })).toHaveAttribute(
+    // The global bottom navigation also exposes Уведомления, so scope the rail assertion.
+    const filterRail = within(screen.getByRole('navigation', { name: 'Типы чатов' }));
+    expect(filterRail.getByRole('link', { name: 'Уведомления' })).toHaveAttribute(
       'href',
       '/notifications',
     );

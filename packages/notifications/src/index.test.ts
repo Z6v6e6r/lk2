@@ -4,6 +4,10 @@ import {
   GAME_NOTIFICATION_EVENT_TYPES,
   GAME_NOTIFICATION_REQUEST_HASH,
   MAX_NOTIFICATION_EVENT_RECIPIENTS,
+  MESSAGING_NOTIFICATION_DEFINITIONS,
+  MESSAGING_NOTIFICATION_EVENT_TYPES,
+  MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY,
+  MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
   bookingNotificationSourceEventSchema,
   canonicalWebPushEndpoint,
   canonicalWebPushSubscription,
@@ -355,5 +359,63 @@ describe('notification domain contracts', () => {
         payload: {},
       }),
     ).toThrow('NOTIFICATION_DEEP_LINK_INVALID');
+  });
+
+  it('routes direct-chat events through the generic schema and identifier-only recipients', () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const firstRecipient = '44444444-4444-4444-8444-444444444444';
+    const secondRecipient = '55555555-5555-4555-8555-555555555555';
+    const event = notificationSourceEventSchema.parse({
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'messaging.message.created.v1',
+      aggregateId: conversationId,
+      tenantId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: '2026-09-17T12:00:00.000Z',
+      correlationId: 'messaging-notification-test',
+      payload: {
+        conversationId,
+        messageId: '66666666-6666-4666-8666-666666666666',
+        sequence: 4,
+        recipientUserIds: [firstRecipient, secondRecipient, firstRecipient],
+      },
+    });
+
+    expect(MESSAGING_NOTIFICATION_EVENT_TYPES).toContain(event.type);
+    expect(GAME_NOTIFICATION_EVENT_TYPES).not.toContain(event.type);
+    const selector = notificationAudienceSelectorSchema.parse({
+      type: 'EVENT_USERS',
+      field: 'recipientUserIds',
+    });
+    expect(resolveNotificationRecipients(event, selector)).toEqual([
+      firstRecipient,
+      secondRecipient,
+    ]);
+    expect(
+      renderNotificationTemplate({
+        titleTemplate: 'Новое сообщение',
+        bodyTemplate: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+        deepLinkTemplate: MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
+        payload: { conversationId },
+      }),
+    ).toEqual({
+      title: 'Новое сообщение',
+      body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+      deepLink: `/chats/${conversationId}`,
+    });
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY).toBe('MESSAGING');
+  });
+
+  it('keeps one ruleset definition per direct-chat source event', () => {
+    expect(
+      MESSAGING_NOTIFICATION_DEFINITIONS.map((definition) => definition.sourceEventType),
+    ).toEqual([...MESSAGING_NOTIFICATION_EVENT_TYPES]);
+    for (const definition of MESSAGING_NOTIFICATION_DEFINITIONS) {
+      expect(definition.audienceSelector).toEqual({
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+      });
+      // Chat notifications are optional: a player can mute the category.
+      expect(definition.mandatory).toBe(false);
+    }
   });
 });

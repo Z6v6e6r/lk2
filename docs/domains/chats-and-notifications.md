@@ -7,8 +7,11 @@ HTTP M1 и recoverable realtime M2 с Web UI, in-app, Web Push/VAPID и ручн
 
 Локально собранный direct-chat M1 включает User API, типизированный SDK и Web-маршруты
 для list/create/history/send/read cursor. Каноническая пара PadlHub UUID дедуплицируется;
-создание и отправка повторно проверяют current permission, active membership, active target и его
-`chatPolicy`. Tenant gates по умолчанию выключены. Наличие кода не доказывает, что срез активирован
+создание повторно проверяет current permission, active target и его `chatPolicy`; отправка и чтение
+проверяют current permission, active membership и block policy. `chatPolicy` участника — правило
+входящих новых диалогов: он закрывает создание разговора с ним, но не скрывает и не блокирует уже
+принятый membership, поэтому смена политики одной стороной не может оставить переписку без второй
+стороны. Tenant gates по умолчанию выключены. Наличие кода не доказывает, что срез активирован
 или проверен в целевой среде. Tenant-local directed block-list теперь закрывает DIRECT create/list/
 history/send/read/realtime в обе стороны, но не удаляет историю и не меняет GAME roster policy.
 Мутации block-list дополнительно закрыты глобальным
@@ -36,7 +39,15 @@ read cursor. Tournament остаётся закрыт без identity-linked can
 
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT
-/notifications/read-cursor` и типизированный SDK. Реализованный Web Push срез добавляет
+/notifications/read-cursor` и типизированный SDK. Direct-chat family добавляет ruleset
+`messaging.ru-ru.v1`: `messaging.conversation.created.v1` и `messaging.message.created.v1` идут по
+generic source-event схеме, их payload остаётся identifier-only (tenant, conversation, message,
+sequence и `recipientUserIds`), а получатели резолвятся правилом
+`EVENT_USERS/recipientUserIds` из активных участников разговора, кроме автора. Шаблон не цитирует
+текст сообщения: inbox-item ведёт ссылкой `/chats/{{conversationId}}`, категория `MESSAGING`
+опциональна для получателя. Провижининг — `npm run notifications:messaging:provision`,
+отдельная очередь проектора — `phub.messaging-notification-intent-projector.v1`.
+Реализованный Web Push срез добавляет
 зашифрованные subscription endpoint, capability/register/revoke API, браузерный service worker,
 PUSH delivery jobs, VAPID adapter, bounded retries, circuit breaker и инвалидирование 404/410.
 Ручной срез ЦУП добавляет отдельный `phub-admin` JWT audience, tenant-scoped permission
@@ -448,8 +459,11 @@ Notification projector хранит tenant-scoped booking fence в PostgreSQL. L
 - Выход из игры/турнира/сообщества вызывает membership policy: доступ закрывается сразу либо после
   явно заданного grace/read-history правила. Решение фиксируется на уровне домена, не клиента.
 - Direct chat учитывает user block policy до создания/чтения разговора, перед каждой отправкой и
-  при realtime subscribe/fanout. Те же realtime checks повторно проверяют current permission,
-  active peer и `chatPolicy` peer-а; старый socket/subscription не обходит `NOBODY`. Любая directed запись
+  при realtime subscribe/fanout. Те же realtime checks повторно проверяют current permission и
+  active peer; старый socket/subscription не обходит `chat.direct.create`. `chatPolicy` peer-а
+  проверяется только при создании нового DIRECT-разговора: уже принятый membership остаётся видимым
+  и доступным для записи обеим сторонам, поэтому `NOBODY` одной стороны не скрывает переписку от
+  второй. Любая directed запись
   закрывает пару для обеих сторон; удаление
   A→B не отменяет существующий B→A block. Сообщение, committed до block transaction, сохраняется,
   но история недоступна, пока хотя бы один block активен.

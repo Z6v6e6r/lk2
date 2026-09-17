@@ -143,7 +143,9 @@ describe('platform Home source persistence', () => {
     expect(unreadSql).toMatch(/runtime\.direct_enabled/);
     expect(unreadSql).toMatch(/'chat\.direct\.create' = any\(current_access\.permissions\)/);
     expect(unreadSql).toMatch(/other_user\.status = 'ACTIVE'/);
-    expect(unreadSql).toMatch(/target_privacy\.chat_policy/);
+    // The other member's `chat_policy` gates new conversations, not the unread counter of an
+    // existing membership.
+    expect(unreadSql).not.toMatch(/target_privacy/);
     expect(unreadSql).toMatch(/conversation\.kind = 'GAME'/);
     expect(unreadSql).toMatch(/runtime\.contextual_enabled/);
     expect(unreadSql).toMatch(/'games\.play' = any\(current_access\.permissions\)/);

@@ -1191,10 +1191,13 @@ paths:
     post:
       tags: [profiles]
       operationId: addProfileFriend
-      summary: Add another player as a friend
+      summary: Send a friend request to another player
       description: |
-        Creates a symmetric LOCAL_ONLY friendship. The command is authorized, idempotent,
-        audited and publishes an outbox event in the same PostgreSQL transaction.
+        Creates a pending LOCAL_ONLY friend request. The target receives it in the notifications
+        feed and becomes a friend only after accepting. A request in the opposite direction is
+        accepted immediately because both players already expressed the same intent. The command is
+        authorized, idempotent, audited and publishes an outbox event in the same PostgreSQL
+        transaction.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
@@ -1211,7 +1214,165 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProfileFriendship'
         '201':
-          description: Friendship created.
+          description: Friend request created, or a reciprocal request completed the friendship.
+          headers:
+            X-Idempotent-Replayed:
+              description: Always false for a newly applied command.
+              schema:
+                type: string
+                const: 'false'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendship'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/friend-requests:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [profiles]
+      operationId: listProfileFriendRequests
+      summary: List the authenticated user's incoming friend requests
+      description: |
+        Pending requests addressed to the authenticated player, newest first. Every item carries the
+        request id used by the accept and decline commands, so the notifications feed never has to
+        resolve pending state on the client.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 24
+            default: 8
+      responses:
+        '200':
+          description: Pending incoming requests ordered by most recent first.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendRequestPage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/friend-requests/{requestId}/accept:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: requestId
+        in: path
+        required: true
+        description: Stable PadlHub UUID of the incoming friend request.
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [profiles]
+      operationId: acceptProfileFriendRequest
+      summary: Accept an incoming friend request
+      description: |
+        Creates the symmetric LOCAL_ONLY friendship and settles the request. Only the addressed
+        player may accept; the command is idempotent and audited.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Idempotent replay of an existing command result.
+          headers:
+            X-Idempotent-Replayed:
+              description: Always true for this response.
+              schema:
+                type: string
+                const: 'true'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendship'
+        '201':
+          description: Friendship created from the accepted request.
+          headers:
+            X-Idempotent-Replayed:
+              description: Always false for a newly applied command.
+              schema:
+                type: string
+                const: 'false'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendship'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/friend-requests/{requestId}/decline:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: requestId
+        in: path
+        required: true
+        description: Stable PadlHub UUID of the incoming friend request.
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [profiles]
+      operationId: declineProfileFriendRequest
+      summary: Decline an incoming friend request
+      description: |
+        Settles the request without creating a friendship. The requester may send a new request
+        later. Only the addressed player may decline; the command is idempotent and audited.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Idempotent replay of an existing command result.
+          headers:
+            X-Idempotent-Replayed:
+              description: Always true for this response.
+              schema:
+                type: string
+                const: 'true'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendship'
+        '201':
+          description: Request declined.
           headers:
             X-Idempotent-Replayed:
               description: Always false for a newly applied command.
@@ -4639,17 +4800,60 @@ components:
     ProfileFriendship:
       type: object
       additionalProperties: false
-      required: [userId, status, createdAt]
+      required: [userId, status, createdAt, requestId]
       properties:
         userId:
           type: string
           format: uuid
         status:
           type: string
-          enum: [NONE, FRIEND]
+          description: |
+            `PENDING_OUTGOING` when the authenticated player is waiting for an answer,
+            `PENDING_INCOMING` when the other player asked first.
+          enum: [NONE, FRIEND, PENDING_OUTGOING, PENDING_INCOMING]
         createdAt:
           type: [string, 'null']
           format: date-time
+        requestId:
+          type: [string, 'null']
+          format: uuid
+    ProfileFriendRequestSummary:
+      type: object
+      additionalProperties: false
+      required: [requestId, userId, displayName, avatarUrl, levelLabel, createdAt, route]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        avatarUrl:
+          type: [string, 'null']
+          pattern: '^/public/api/v1/media/profile-photos/'
+        levelLabel:
+          type: [string, 'null']
+          maxLength: 20
+        createdAt:
+          type: string
+          format: date-time
+        route:
+          type: string
+          pattern: '^/profile/[0-9a-f-]+$'
+    ProfileFriendRequestPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 24
+          items:
+            $ref: '#/components/schemas/ProfileFriendRequestSummary'
     ProfileFriendSummary:
       type: object
       additionalProperties: false
