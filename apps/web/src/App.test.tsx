@@ -2525,7 +2525,7 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByLabelText('Сообщение')).toBeDisabled();
     act(() => connection?.onRecoveryRequired(0));
 
-    await waitFor(() => expect(screen.getByText('Отправлено')).toBeVisible());
+    await waitFor(() => expect(screen.getByLabelText('Отправлено')).toBeVisible());
     expect(screen.getByLabelText('Сообщение')).toBeEnabled();
     expect(screen.getAllByText(durableMessage.body)).toHaveLength(1);
     act(() => resolveSend?.({ outcome: 'ok', message: durableMessage, replayed: false }));
