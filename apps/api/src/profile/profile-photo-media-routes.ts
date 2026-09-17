@@ -5,7 +5,7 @@ import {
   ProfilePhotoGrantStaleError,
   type ProfileSummaryRepository,
 } from '@phub/database';
-import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
+import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { jwtVerify } from 'jose';
 import sharp from 'sharp';
 
@@ -17,6 +17,26 @@ import {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IMAGE_CONTENT_TYPES = new Set(['image/avif', 'image/jpeg', 'image/png', 'image/webp']);
+
+/**
+ * A rejected photo command is a typed, expected outcome with two different causes (a reused command
+ * key versus a consumed one-time grant). Both used to be silent, which made a live 409 impossible to
+ * attribute from the API logs; record the stable code without any credential or provider value.
+ */
+function logPhotoCommandRejection(
+  request: FastifyRequest,
+  input: { readonly code: string; readonly tenantId: string; readonly userId: string },
+): void {
+  request.log.warn(
+    {
+      event: 'profile_photo_command_rejected',
+      code: input.code,
+      tenantId: input.tenantId,
+      userId: input.userId,
+    },
+    'client-assisted profile photo command rejected',
+  );
+}
 
 async function verifyProfilePhotoGrant(input: {
   readonly token: string | undefined;
@@ -230,6 +250,11 @@ export function registerProfilePhotoMediaRoutes(
         return result;
       } catch (error) {
         if (error instanceof ProfilePhotoIdempotencyConflictError) {
+          logPhotoCommandRejection(request, {
+            code: 'PROFILE_PHOTO_IDEMPOTENCY_CONFLICT',
+            tenantId,
+            userId,
+          });
           return sendApiError(
             request,
             reply,
@@ -239,6 +264,11 @@ export function registerProfilePhotoMediaRoutes(
           );
         }
         if (error instanceof ProfilePhotoGrantStaleError) {
+          logPhotoCommandRejection(request, {
+            code: 'PROFILE_PHOTO_GRANT_STALE',
+            tenantId,
+            userId,
+          });
           return sendApiError(
             request,
             reply,
@@ -328,6 +358,11 @@ export function registerProfilePhotoMediaRoutes(
         return result;
       } catch (error) {
         if (error instanceof ProfilePhotoIdempotencyConflictError) {
+          logPhotoCommandRejection(request, {
+            code: 'PROFILE_PHOTO_IDEMPOTENCY_CONFLICT',
+            tenantId,
+            userId,
+          });
           return sendApiError(
             request,
             reply,
@@ -337,6 +372,11 @@ export function registerProfilePhotoMediaRoutes(
           );
         }
         if (error instanceof ProfilePhotoGrantStaleError) {
+          logPhotoCommandRejection(request, {
+            code: 'PROFILE_PHOTO_GRANT_STALE',
+            tenantId,
+            userId,
+          });
           return sendApiError(
             request,
             reply,

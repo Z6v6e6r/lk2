@@ -236,6 +236,8 @@ describe('ChatsPage', () => {
     );
 
     await user.tab();
+    expect(screen.getByRole('button', { name: 'Только непрочитанные' })).toHaveFocus();
+    await user.tab();
     expect(screen.getByRole('link', { name: 'События' })).toHaveFocus();
     await user.tab();
     const search = screen.getByRole('searchbox', { name: 'Поиск по чатам' });
@@ -420,5 +422,96 @@ describe('ChatsPage', () => {
       target: { value: 'несуществующий' },
     });
     expect(screen.getByText('Ничего не найдено')).toBeVisible();
+  });
+  it.each([
+    ['Турниры', 'Чаты турниров'],
+    ['Станции', 'Чаты станций'],
+    ['Сообщества', 'Чаты сообществ'],
+  ])(
+    'exposes %s without inventing conversations or an unsupported write action',
+    (label, heading) => {
+      const onCreateDirect = vi.fn();
+      render(
+        <ChatsPage
+          {...defaultProps}
+          mode="list"
+          hasExplicitRecipient={false}
+          onCreateDirect={onCreateDirect}
+        />,
+      );
+      const filter = screen.getByRole('button', { name: label });
+      fireEvent.click(filter);
+      expect(filter).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('status')).toHaveTextContent(heading);
+      expect(screen.getByRole('status')).toHaveTextContent('ещё не подключён');
+      expect(screen.queryByRole('list', { name: 'Диалоги' })).not.toBeInTheDocument();
+      expect(onCreateDirect).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Все' }));
+      expect(screen.getByRole('status')).toHaveTextContent('Диалогов пока нет');
+    },
+  );
+
+  it('combines unread, type and search filters without altering the supplied conversation list', () => {
+    const page = {
+      items: [
+        {
+          id: conversationId,
+          kind: 'DIRECT' as const,
+          participant: { userId: currentUserId, displayName: 'Анна' },
+          unreadCount: 0,
+          updatedAt: '2026-09-17T09:00:00Z',
+        },
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          kind: 'GAME' as const,
+          contextId: '33333333-3333-4333-8333-333333333333',
+          title: 'Вечерняя игра',
+          unreadCount: 2,
+          updatedAt: '2026-09-17T10:00:00Z',
+        },
+      ],
+    };
+    render(<ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={page} />);
+    const unread = screen.getByRole('button', { name: 'Только непрочитанные' });
+    fireEvent.click(unread);
+    expect(unread).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('Анна')).not.toBeInTheDocument();
+    expect(screen.getByText('Вечерняя игра')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Личные' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Нет непрочитанных чатов');
+    fireEvent.click(screen.getByRole('button', { name: 'Игры' }));
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'утро' } });
+    expect(screen.getByRole('status')).toHaveTextContent('Ничего не найдено');
+    fireEvent.click(screen.getByRole('button', { name: 'Очистить' }));
+    expect(screen.getByText('Вечерняя игра')).toBeVisible();
+    fireEvent.click(unread);
+    fireEvent.click(screen.getByRole('button', { name: 'Все' }));
+    expect(screen.getByText('Анна')).toBeVisible();
+    expect(page.items).toHaveLength(2);
+    expect(page.items[1]?.unreadCount).toBe(2);
+  });
+
+  it('keeps loading and errors distinct from planned category and empty states', () => {
+    const { rerender } = render(
+      <ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={null} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    expect(screen.getByRole('status', { name: 'Загружаем диалоги' })).toBeVisible();
+    expect(screen.queryByText('Чаты станций')).not.toBeInTheDocument();
+    rerender(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        page={null}
+        error={{ kind: 'RETRYABLE', message: 'Нет связи' }}
+      />,
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Нет связи');
+    expect(screen.queryByText('Чаты станций')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Уведомления' })).toHaveAttribute(
+      'href',
+      '/notifications',
+    );
   });
 });

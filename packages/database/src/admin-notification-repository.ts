@@ -167,11 +167,46 @@ async function recipientRows(
   },
 ): Promise<readonly RecipientRow[]> {
   if (input.normalizedPhones.length === 0) return [];
+  // A phone reaches a PadlHub user through two sources with different proof strength.
+  // `profile.user_summaries.phone_e164` only ever holds a phone that a phone login verified, so it
+  // always wins. `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`) carries the phone the
+  // provider profile reported and is the fallback that makes an OAuth-only account reachable at all —
+  // and because one of its writers relays that value from the client without server attestation, it
+  // must never outrank a verified login phone. Ambiguity inside a source stays fail-closed: two rows
+  // for one phone resolve to nothing.
   const result = await client.query<RecipientRow>(
-    `select
+    `with requested as (
+       select unnest($2::text[]) as phone
+     ),
+     provider_link as (
+       select requested.phone, link.internal_id as user_id
+         from requested
+         join integration.external_entity_map link
+           on link.tenant_id = $1
+          and link.external_system = 'VIVA'
+          and link.entity_type = 'legacy_viewer_phone'
+          and link.external_id = requested.phone
+     ),
+     login_phone as (
+       select requested.phone, summary.user_id
+         from requested
+         join profile.user_summaries summary
+           on summary.tenant_id = $1
+          and summary.phone_e164 = requested.phone
+     ),
+     resolved as (
+       select login_phone.phone, login_phone.user_id from login_phone
+       union all
+       select provider_link.phone, provider_link.user_id
+         from provider_link
+        where not exists (
+          select 1 from login_phone where login_phone.phone = provider_link.phone
+        )
+     )
+     select
        u.id as user_id,
        p.display_name,
-       p.phone_e164,
+       resolved.phone as phone_e164,
        coalesce((
          select pref.enabled
            from notifications.user_preferences pref
@@ -204,13 +239,13 @@ async function recipientRows(
             and a.environment = $4
             and a.status = 'ACTIVE'
        ) as web_push_endpoint_count
-     from identity.users u
+     from resolved
+     join identity.users u
+       on u.tenant_id = $1 and u.id = resolved.user_id
      join profile.user_summaries p
        on p.tenant_id = u.tenant_id and p.user_id = u.id
-    where u.tenant_id = $1
-      and u.status = 'ACTIVE'
-      and p.phone_e164 = any($2::text[])
-    order by p.phone_e164, u.id`,
+    where u.status = 'ACTIVE'
+    order by resolved.phone, u.id`,
     [input.tenantId, [...input.normalizedPhones], input.webPushAppId, input.webPushEnvironment],
   );
   return result.rows;
@@ -230,6 +265,9 @@ function mapResolution(input: {
   }
   const matched: AdminNotificationRecipient[] = [];
   const unresolvedPhones: string[] = [];
+  // One user can own two requested phones (a verified login phone and a provider phone). The preview
+  // lists that person once, so the operator never sees the same recipient twice.
+  const matchedUserIds = new Set<string>();
   for (const phone of input.normalizedPhones) {
     const group = byPhone.get(phone) ?? [];
     if (group.length !== 1) {
@@ -238,6 +276,7 @@ function mapResolution(input: {
     }
     const row = group[0];
     if (!row) continue;
+    if (matchedUserIds.has(row.user_id)) continue;
     const availableChannels: AdminNotificationChannel[] = [];
     if (input.capabilities.inAppTenantEnabled && row.in_app_preference_enabled) {
       availableChannels.push('IN_APP');
@@ -251,6 +290,7 @@ function mapResolution(input: {
     ) {
       availableChannels.push('WEB_PUSH');
     }
+    matchedUserIds.add(row.user_id);
     matched.push({
       userId: row.user_id,
       displayName: row.display_name,
@@ -271,10 +311,19 @@ function unambiguousRecipientRows(
     group.push(row);
     byPhone.set(row.phone_e164, group);
   }
-  return normalizedPhones.flatMap((phone) => {
+  // A campaign writes one recipient row, one intent and one dedupe key per user, so two requested
+  // phones that belong to the same person must collapse into a single recipient here.
+  const seenUserIds = new Set<string>();
+  const recipients: RecipientRow[] = [];
+  for (const phone of normalizedPhones) {
     const group = byPhone.get(phone) ?? [];
-    return group.length === 1 ? group : [];
-  });
+    if (group.length !== 1) continue;
+    const row = group[0];
+    if (!row || seenUserIds.has(row.user_id)) continue;
+    seenUserIds.add(row.user_id);
+    recipients.push(row);
+  }
+  return recipients;
 }
 
 async function ensureManualTemplate(

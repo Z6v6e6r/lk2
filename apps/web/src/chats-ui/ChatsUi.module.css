@@ -1,29 +1,30 @@
 .page {
-  --comms-accent: #7253d8;
+  --comms-accent: #8766eb;
+  --comms-accent-ink: #6846bc;
   --comms-accent-soft: #f0ebff;
   --comms-ink: #27262a;
-  --comms-muted: #777579;
+  --comms-muted: #737077;
   --comms-line: #ededed;
   --comms-surface: #fafafa;
   min-height: 100dvh;
   padding: max(20px, env(safe-area-inset-top)) 20px 112px;
   background: var(--comms-surface);
   color: var(--comms-ink);
-  font-family: 'RF Dewi', 'Inter Display', system-ui, sans-serif;
+  font-family: 'Inter Display', system-ui, sans-serif;
 }
 
 .shell {
   display: grid;
   width: min(100%, 1180px);
   height: calc(100dvh - max(40px, env(safe-area-inset-top)) - 40px);
-  min-height: 620px;
+  min-height: 360px;
   margin: 0 auto;
   overflow: hidden;
-  grid-template-columns: minmax(340px, 370px) minmax(0, 1fr);
+  grid-template-columns: minmax(340px, 390px) minmax(0, 1fr);
   border: 1px solid var(--comms-line);
   border-radius: 22px;
   background: #fff;
-  box-shadow: 0 14px 40px rgb(41 31 62 / 8%);
+  box-shadow: 0 8px 32px rgb(41 31 62 / 4%);
 }
 
 .listPane {
@@ -60,7 +61,7 @@
   justify-content: center;
   border-radius: 14px;
   background: var(--comms-accent-soft);
-  color: var(--comms-accent);
+  color: var(--comms-accent-ink);
   font-size: 11px;
   font-weight: 700;
   text-decoration: none;
@@ -129,7 +130,7 @@
   padding: 0 8px;
   border: 0;
   background: transparent;
-  color: var(--comms-accent);
+  color: var(--comms-accent-ink);
   font-size: 11px;
   font-weight: 700;
 }
@@ -137,9 +138,11 @@
 .filterRail {
   display: flex;
   min-width: 0;
-  margin-top: 10px;
+  margin-top: 14px;
+  padding: 2px 0 8px;
   overflow-x: auto;
-  gap: 8px;
+  gap: 6px;
+  scroll-padding-inline: 4px;
   scrollbar-width: none;
 }
 
@@ -150,24 +153,28 @@
 .filterRail button,
 .filterRail a {
   display: inline-flex;
-  min-width: max-content;
-  min-height: 44px;
-  padding: 0 14px;
+  min-width: 62px;
+  min-height: 62px;
+  padding: 9px 10px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 7px;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--comms-line);
-  border-radius: 12px;
-  background: #fff;
-  color: var(--comms-muted);
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: #f6f5f7;
+  color: #67636d;
   font: inherit;
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
   text-decoration: none;
 }
 
 .filterRail button.activeFilter {
   border-color: var(--comms-accent);
-  background: var(--comms-accent);
+  background: linear-gradient(145deg, #805ddd, #7250ca);
+  box-shadow: 0 3px 8px rgb(135 102 235 / 18%);
   color: #fff;
 }
 
@@ -180,7 +187,7 @@
 }
 
 .listItem + .listItem {
-  border-top: 1px solid var(--comms-line);
+  border-top: 1px dashed var(--comms-line);
 }
 
 .listLink,
@@ -188,9 +195,9 @@
   display: grid;
   min-width: 0;
   min-height: 74px;
-  padding: 12px 14px;
+  padding: 15px 20px;
   align-items: center;
-  grid-template-columns: 48px minmax(0, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   gap: 12px;
   color: inherit;
   text-decoration: none;
@@ -209,6 +216,7 @@
 .filterRail button:focus-visible,
 .filterRail a:focus-visible,
 .notificationsShortcut:focus-visible,
+.unreadToggle:focus-visible,
 .thread button:focus-visible,
 .thread a:focus-visible {
   position: relative;
@@ -219,13 +227,13 @@
 
 .avatar {
   display: grid;
-  width: 48px;
-  height: 48px;
-  flex: 0 0 48px;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
   place-items: center;
   overflow: hidden;
-  border-radius: 50%;
-  background: #e8e2f7;
+  border-radius: 15px;
+  background: #ebe6f5;
   color: #4f397d;
   font-size: 13px;
   font-weight: 750;
@@ -233,7 +241,7 @@
 
 .gameAvatar {
   background: var(--comms-accent-soft);
-  color: var(--comms-accent);
+  color: var(--comms-accent-ink);
 }
 
 .gameAvatar svg {
@@ -278,20 +286,20 @@
 }
 
 .listMeta time {
-  color: #9a989d;
+  color: var(--comms-muted);
   font-size: 10px;
   white-space: nowrap;
 }
 
 .unreadBadge {
   display: inline-grid;
-  min-width: 22px;
-  height: 22px;
+  min-width: 20px;
+  height: 20px;
   padding: 0 6px;
   box-sizing: border-box;
   place-items: center;
   border-radius: 999px;
-  background: var(--comms-accent);
+  background: #7956d7;
   color: #fff;
   font-size: 10px;
   font-weight: 750;
@@ -397,7 +405,7 @@
   border: 1px solid var(--comms-line);
   border-radius: 12px;
   background: #fff;
-  color: var(--comms-accent);
+  color: var(--comms-accent-ink);
   font: inherit;
   font-size: 11px;
   font-weight: 700;
@@ -412,7 +420,7 @@
   flex-direction: column;
   gap: 8px;
   overscroll-behavior: contain;
-  background: #fcfbfd;
+  background: #fff;
   list-style: none;
   scroll-behavior: smooth;
 }
@@ -442,10 +450,12 @@
 }
 
 .contextLabel {
-  color: var(--comms-accent);
-  font-size: 10px;
-  font-weight: 750;
-  text-transform: uppercase;
+  color: var(--comms-accent-ink);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .contextCard strong {
@@ -454,8 +464,11 @@
 }
 
 .contextCard a {
-  width: max-content;
-  color: var(--comms-accent);
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  color: var(--comms-accent-ink);
   font-size: 12px;
   font-weight: 700;
   text-decoration: none;
@@ -480,6 +493,8 @@
   display: flex;
   width: 100%;
   justify-content: flex-start;
+  align-items: flex-end;
+  gap: 8px;
 }
 
 .ownMessageRow {
@@ -495,13 +510,13 @@
 
 .ownMessageBubble {
   border-radius: 15px 15px 5px;
-  background: #e9ddff;
+  background: #eee6ff;
 }
 
 .messageBubble strong {
   display: block;
   margin-bottom: 4px;
-  color: var(--comms-accent);
+  color: var(--comms-accent-ink);
   font-size: 10px;
 }
 
@@ -585,12 +600,14 @@
 }
 
 .composer button {
-  min-width: 88px;
+  display: grid;
+  width: 44px;
   min-height: 44px;
-  padding: 0 14px;
+  padding: 0;
+  place-items: center;
   border: 0;
-  border-radius: 15px;
-  background: var(--comms-accent);
+  border-radius: 50%;
+  background: #7956d7;
   color: #fff;
   font: inherit;
   font-size: 11px;
@@ -657,7 +674,7 @@
   justify-content: center;
   border: 0;
   border-radius: 12px;
-  background: var(--comms-accent);
+  background: #7956d7;
   color: #fff;
   font-weight: 700;
   text-decoration: none;
@@ -682,7 +699,110 @@
 .directStart > a:first-child {
   padding: 0;
   background: transparent;
-  color: var(--comms-accent);
+  color: var(--comms-accent-ink);
+}
+
+.listHeader h1,
+.listTitle,
+.threadHeading h2,
+.threadPlaceholder h2 {
+  font-family: 'RF Dewi', 'Inter Display', system-ui, sans-serif;
+  font-weight: 600;
+}
+
+.page :global(.fh-bottom-nav > a[aria-current='page']) {
+  color: var(--comms-accent-ink);
+}
+
+.headerActions {
+  display: flex;
+  gap: 4px;
+}
+
+.unreadToggle {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 14px;
+  background: #f6f5f7;
+  color: var(--comms-muted);
+  cursor: pointer;
+}
+
+.unreadToggleActive {
+  background: var(--comms-accent-soft);
+  color: var(--comms-accent-ink);
+  box-shadow: inset 0 0 0 1px var(--comms-accent);
+}
+
+.filterRail svg {
+  width: 20px;
+  height: 20px;
+}
+
+.filterRail button {
+  cursor: pointer;
+}
+
+.gameTitle {
+  color: var(--comms-accent-ink);
+}
+
+.senderAvatar {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 3px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: 10px;
+  background: #ebe6f5;
+  color: #574675;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.placeholderIcon,
+.emptyIcon {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 20px;
+  place-items: center;
+  border: 1px solid #e7ddfb;
+  border-radius: 22px;
+  background: var(--comms-accent-soft);
+  color: var(--comms-accent-ink);
+}
+
+.placeholderIcon svg,
+.emptyIcon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.threadPlaceholder p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.contextLabel svg {
+  width: 16px;
+  height: 16px;
+}
+
+.refreshButton {
+  display: grid;
+  width: 44px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #f6f5f7;
 }
 
 @keyframes skeletonPulse {
@@ -747,17 +867,25 @@
   .threadHeader {
     min-height: calc(68px + env(safe-area-inset-top));
     padding-top: max(10px, env(safe-area-inset-top));
-    grid-template-columns: 44px 44px minmax(0, 1fr) 66px;
+    grid-template-columns: 36px 36px minmax(0, 1fr) 44px;
+    gap: 8px;
   }
 
   .backLink {
     display: inline-flex;
+    width: 36px;
+  }
+
+  .threadHeader .avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
   }
 
   .refreshButton {
-    width: 66px;
-    padding: 0 6px;
-    color: var(--comms-accent);
+    width: 44px;
+    padding: 0;
+    color: var(--comms-accent-ink);
     font-size: 10px;
   }
 

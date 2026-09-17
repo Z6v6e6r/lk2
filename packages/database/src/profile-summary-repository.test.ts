@@ -376,6 +376,151 @@ describe('profile summary repository', () => {
     ).toBe(false);
   });
 
+  it('replays a command whose stored grant timestamp is a driver Date with milliseconds', async () => {
+    const avatarUrl = `/public/api/v1/media/profile-photos/${tenantId}/33333333-3333-4333-8333-333333333333`;
+    const objectKey = `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`;
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        return Promise.resolve({
+          rows: [
+            {
+              command_kind: 'UPSERT',
+              idempotency_key: 'profile-photo-client-sync-ms',
+              grant_id: '33333333-3333-4333-8333-333333333333',
+              request_sha256: 'b'.repeat(64),
+              content_sha256: 'a'.repeat(64),
+              object_key: objectKey,
+              // `pg` returns timestamptz as Date, and Date.toString() drops milliseconds.
+              grant_issued_at: new Date('2026-08-14T09:59:00.123Z'),
+              avatar_url: avatarUrl,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.reserveClientAssistedPhoto?.({
+        tenantId,
+        userId: firstUserId,
+        objectKey,
+        contentSha256: 'a'.repeat(64),
+        requestSha256: 'b'.repeat(64),
+        idempotencyKey: 'profile-photo-client-sync-ms',
+        grantId: '33333333-3333-4333-8333-333333333333',
+        grantIssuedAt: '2026-08-14T09:59:00.123Z',
+        expiresAt: '2026-08-14T11:00:00.000Z',
+      }),
+    ).resolves.toEqual({ avatarUrl, replayed: true });
+  });
+
+  it('finalizes an upload whose stored grant timestamp is a driver Date with milliseconds', async () => {
+    const objectKey = `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`;
+    let commandReads = 0;
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock') ||
+        text.includes('delete from integration.profile_photo_object_gc') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select delivery_id, object_key, content_sha256')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_observation_watermarks')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        commandReads += 1;
+        return Promise.resolve({
+          rows:
+            commandReads === 1
+              ? []
+              : [
+                  {
+                    command_kind: 'UPSERT',
+                    idempotency_key: 'profile-photo-client-sync-ms',
+                    grant_id: '33333333-3333-4333-8333-333333333333',
+                    request_sha256: 'b'.repeat(64),
+                    content_sha256: 'a'.repeat(64),
+                    object_key: objectKey,
+                    // `pg` returns timestamptz as Date, and Date.toString() drops milliseconds.
+                    grant_issued_at: new Date('2026-08-14T09:59:00.123Z'),
+                    avatar_url: null,
+                  },
+                ],
+          rowCount: commandReads === 1 ? 0 : 1,
+        });
+      }
+      if (text.includes('update profile.user_summaries')) {
+        expect(values?.[0]).toBe(tenantId);
+        expect(values?.[1]).toBe(firstUserId);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into integration.user_profile_photo_sync')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into integration.profile_photo_observation_watermarks')) {
+        expect(values?.[2]).toBe('2026-08-14T09:59:00.123Z');
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (
+        text.includes('insert into integration.profile_photo_client_commands') ||
+        text.includes('insert into integration.profile_photo_object_gc') ||
+        text.includes('update integration.profile_photo_client_commands')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    const command = {
+      tenantId,
+      userId: firstUserId,
+      objectKey,
+      contentSha256: 'a'.repeat(64),
+      requestSha256: 'b'.repeat(64),
+      idempotencyKey: 'profile-photo-client-sync-ms',
+      grantId: '33333333-3333-4333-8333-333333333333',
+      grantIssuedAt: '2026-08-14T09:59:00.123Z',
+    } as const;
+    await expect(
+      repository.reserveClientAssistedPhoto?.({
+        ...command,
+        expiresAt: '2026-08-14T11:00:00.000Z',
+      }),
+    ).resolves.toEqual({ replayed: false });
+    await expect(
+      repository.finalizeClientAssistedPhoto?.({
+        ...command,
+        syncedAt: '2026-08-14T10:00:00.000Z',
+        previousObjectRetentionSeconds: 3_600,
+        correlationId: 'profile-photo-client-sync-ms',
+      }),
+    ).resolves.toMatchObject({ replayed: false });
+  });
+
   it('reports a command under an already consumed grant as a stale grant', async () => {
     const query = vi.fn((text: string) => {
       if (
@@ -493,6 +638,54 @@ describe('profile summary repository', () => {
               content_sha256: 'a'.repeat(64),
               object_key: `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`,
               grant_issued_at: '2026-08-14T09:58:00.000Z',
+              avatar_url: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileSummaryRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.reserveClientAssistedPhoto?.({
+        tenantId,
+        userId: firstUserId,
+        objectKey: `profile-photos/${tenantId}/${firstUserId}/${'a'.repeat(64)}.webp`,
+        contentSha256: 'a'.repeat(64),
+        requestSha256: 'b'.repeat(64),
+        idempotencyKey: 'shared-key',
+        grantId: '33333333-3333-4333-8333-333333333333',
+        grantIssuedAt: '2026-08-14T09:59:00.000Z',
+        expiresAt: '2026-08-14T11:00:00.000Z',
+      }),
+    ).rejects.toBeInstanceOf(ProfilePhotoIdempotencyConflictError);
+  });
+
+  it('keeps rejecting a reused command key whose payload changed under the same grant', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.profile_photo_client_commands')) {
+        return Promise.resolve({
+          rows: [
+            {
+              command_kind: 'UPSERT',
+              idempotency_key: 'shared-key',
+              grant_id: '33333333-3333-4333-8333-333333333333',
+              request_sha256: 'b'.repeat(64),
+              content_sha256: 'c'.repeat(64),
+              object_key: `profile-photos/${tenantId}/${firstUserId}/${'c'.repeat(64)}.webp`,
+              grant_issued_at: '2026-08-14T09:59:00.000Z',
               avatar_url: null,
             },
           ],

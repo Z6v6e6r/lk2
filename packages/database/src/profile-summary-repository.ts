@@ -115,6 +115,16 @@ interface PhotoObservationWatermarkRow extends QueryResultRow {
   readonly observed_at: Date | string;
 }
 
+/**
+ * `pg` returns `timestamptz` columns as `Date`, and `Date.prototype.toString` drops milliseconds.
+ * Comparing a driver `Date` through `String(value)` therefore truncates it to the second and makes
+ * an exact client replay look like a different command: the upload command stays pending and every
+ * attempt is rejected as a conflict. Normalize both sides to epoch milliseconds instead.
+ */
+function timestampMs(value: Date | string): number {
+  return value instanceof Date ? value.getTime() : Date.parse(value);
+}
+
 function commandMatches(
   row: ClientPhotoCommandRow,
   input: {
@@ -133,7 +143,7 @@ function commandMatches(
     row.request_sha256 === input.requestSha256 &&
     row.content_sha256 === input.contentSha256 &&
     row.object_key === input.objectKey &&
-    Date.parse(String(row.grant_issued_at)) === Date.parse(input.grantIssuedAt)
+    timestampMs(row.grant_issued_at) === timestampMs(input.grantIssuedAt)
   );
 }
 
@@ -149,44 +159,40 @@ function deleteCommandMatches(
     row.command_kind === 'DELETE' &&
     row.idempotency_key === input.idempotencyKey &&
     row.grant_id === input.grantId &&
-    Date.parse(String(row.grant_issued_at)) === Date.parse(input.grantIssuedAt)
+    timestampMs(row.grant_issued_at) === timestampMs(input.grantIssuedAt)
   );
 }
 
 /**
- * A media grant authorizes exactly one command. A stored command under the same grant that is not
- * an exact replay is a consumed one-time grant, not a conflicting command: reporting it as a stale
- * grant keeps the single-use rule explicit and lets the browser obtain a fresh grant. Only a reused
- * command key under another grant stays an idempotency conflict.
+ * A media grant authorizes exactly one command, so a stored command that is not an exact replay is
+ * never a valid retry. Its cause decides the stable error code, and the browser and the operator
+ * must both be able to tell the two apart:
+ * - the same command key was reused for another payload or another grant → idempotency conflict;
+ * - a different command key already consumed this grant → stale grant.
  */
 function consumedCommandError(
-  row: Pick<ClientPhotoCommandRow, 'grant_id'>,
-  input: { readonly grantId: string },
+  row: Pick<ClientPhotoCommandRow, 'grant_id' | 'idempotency_key'>,
+  input: { readonly grantId: string; readonly idempotencyKey: string },
 ): ProfilePhotoGrantStaleError | ProfilePhotoIdempotencyConflictError {
-  return row.grant_id === input.grantId
-    ? new ProfilePhotoGrantStaleError()
-    : new ProfilePhotoIdempotencyConflictError();
+  return row.idempotency_key === input.idempotencyKey
+    ? new ProfilePhotoIdempotencyConflictError()
+    : new ProfilePhotoGrantStaleError();
 }
 
 function grantIsStale(current: CurrentPhotoRow | undefined, grantIssuedAt: string): boolean {
   if (!current) return false;
   const issuedAt = Date.parse(grantIssuedAt);
-  if (
-    current.client_grant_issued_at &&
-    issuedAt <= Date.parse(String(current.client_grant_issued_at))
-  ) {
+  if (current.client_grant_issued_at && issuedAt <= timestampMs(current.client_grant_issued_at)) {
     return true;
   }
-  return Boolean(current.source_url && issuedAt <= Date.parse(String(current.synced_at)));
+  return Boolean(current.source_url && issuedAt <= timestampMs(current.synced_at));
 }
 
 function watermarkIsStale(
   watermark: PhotoObservationWatermarkRow | undefined,
   observationAt: string,
 ): boolean {
-  return Boolean(
-    watermark && Date.parse(observationAt) <= Date.parse(String(watermark.observed_at)),
-  );
+  return Boolean(watermark && Date.parse(observationAt) <= timestampMs(watermark.observed_at));
 }
 
 function levelValue(value: number | string | null): number | null {

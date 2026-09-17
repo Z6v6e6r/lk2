@@ -93,7 +93,7 @@ describe('admin notification repository', () => {
       if (text.includes('web_push_provider_configured')) {
         return { rows: [capabilitiesRow()], rowCount: 1 };
       }
-      if (text.includes('from identity.users u')) {
+      if (text.includes('join identity.users u')) {
         return {
           rows: [
             {
@@ -147,6 +147,35 @@ describe('admin notification repository', () => {
     });
   });
 
+  it('asks the verified login phone first and only falls back to the provider mapping', async () => {
+    const phones = ['79990000001'];
+    const { repository, query } = repositoryWithQuery((text) => {
+      if (text.includes('web_push_provider_configured')) {
+        return { rows: [capabilitiesRow()], rowCount: 1 };
+      }
+      if (text.includes('join identity.users u')) return { rows: [], rowCount: 0 };
+      throw new Error(`Unexpected query: ${text}`);
+    });
+
+    await repository.resolveRecipients({
+      tenantId,
+      normalizedPhones: phones,
+      webPushGloballyEnabled: true,
+      ...selector,
+    });
+
+    const resolveSql = String(
+      query.mock.calls.find(([text]) => String(text).includes('join identity.users u'))?.[0],
+    );
+    // The verified login phone always wins.
+    expect(resolveSql).toContain('select login_phone.phone, login_phone.user_id from login_phone');
+    // The provider viewer-phone mapping is the fallback that reaches OAuth-only accounts.
+    expect(resolveSql).toContain('integration.external_entity_map');
+    expect(resolveSql).toContain("entity_type = 'legacy_viewer_phone'");
+    expect(resolveSql).toContain('link.internal_id as user_id');
+    expect(resolveSql).toContain('where login_phone.phone = provider_link.phone');
+  });
+
   it('does not query recipients for an empty phone list', async () => {
     const { repository, query } = repositoryWithQuery((text) => {
       if (text.includes('web_push_provider_configured')) {
@@ -163,7 +192,7 @@ describe('admin notification repository', () => {
         ...selector,
       }),
     ).resolves.toEqual({ matched: [], unresolvedPhones: [] });
-    expect(query.mock.calls.some(([text]) => String(text).includes('from identity.users u'))).toBe(
+    expect(query.mock.calls.some(([text]) => String(text).includes('join identity.users u'))).toBe(
       false,
     );
   });
@@ -264,7 +293,7 @@ describe('admin notification repository', () => {
       if (text.includes('web_push_provider_configured')) {
         return { rows: [capabilitiesRow()], rowCount: 1 };
       }
-      if (text.includes('from identity.users u')) return { rows: [], rowCount: 0 };
+      if (text.includes('join identity.users u')) return { rows: [], rowCount: 0 };
       throw new Error(`Unexpected query: ${text}`);
     });
 
@@ -283,7 +312,7 @@ describe('admin notification repository', () => {
       if (text.includes('web_push_provider_configured')) {
         return { rows: [capabilitiesRow()], rowCount: 1 };
       }
-      if (text.includes('from identity.users u')) {
+      if (text.includes('join identity.users u')) {
         return {
           rows: [
             {

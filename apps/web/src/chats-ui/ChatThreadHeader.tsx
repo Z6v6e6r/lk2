@@ -1,4 +1,4 @@
-import { ChatIcon } from '../HomeDashboardPage.js';
+import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import type { ConversationSummary } from '../auth-gateway.js';
 import { conversationTitle, initials } from './chat-format.js';
 import styles from './ChatsUi.module.css';
@@ -25,15 +25,22 @@ export function ChatThreadHeader({
         <span aria-hidden="true">←</span>
       </a>
       <span className={`${styles.avatar} ${isGame ? styles.gameAvatar : ''}`} aria-hidden="true">
-        {isGame ? <ChatIcon /> : initials(title)}
+        {isGame ? <ChatCategoryIcon name="GAME" /> : initials(title)}
       </span>
       <div className={styles.threadHeading}>
         <h2>{title}</h2>
         <small>{isGame ? 'Чат игры' : 'Личный чат'}</small>
         {connectionStatus ? <span role="status">{connectionStatus}</span> : null}
       </div>
-      <button type="button" className={styles.refreshButton} disabled={busy} onClick={onRefresh}>
-        {busy ? 'Обновляем…' : 'Обновить'}
+      <button
+        type="button"
+        className={styles.refreshButton}
+        aria-label={busy ? 'Обновляем…' : 'Обновить'}
+        title="Обновить"
+        disabled={busy}
+        onClick={onRefresh}
+      >
+        <ChatCategoryIcon name="REFRESH" />
       </button>
     </header>
   );
