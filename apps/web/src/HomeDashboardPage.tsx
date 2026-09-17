@@ -16,6 +16,7 @@ import type {
 import { ActivityHistoryModal } from './ActivityHistory.js';
 import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import { BookingRecommendations } from './BookingRecommendations.js';
+import { useChatsUnreadCount } from './chats-unread.js';
 import { GameTypeBadge } from './GameTypeBadge.js';
 import locationSeligerUrl from './assets/home/location-seliger.png';
 import promotionHeroFallbackUrl from './assets/home/promotion-hero-fallback.png';
@@ -194,7 +195,7 @@ function WalletIcon(): React.JSX.Element {
   );
 }
 
-type BottomNavIconName = 'home' | 'games' | 'create' | 'chat' | 'profile';
+type BottomNavIconName = 'home' | 'games' | 'create' | 'chat' | 'notifications' | 'profile';
 
 export function ChatIcon(): React.JSX.Element {
   return (
@@ -296,6 +297,25 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
       );
     case 'chat':
       return <ChatIcon />;
+    case 'notifications':
+      return (
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path
+            d="M10 2.292a5.208 5.208 0 0 0-5.208 5.208v1.958c0 .45-.163.96-.375 1.342l-.825 1.383c-.45.758-.192 1.6.575 1.9a22.4 22.4 0 0 0 2.633.7 17.6 17.6 0 0 0 6.4 0 21.3 21.3 0 0 0 2.633-.7c.717-.275.984-1.05.575-1.775l-.825-1.375c-.217-.4-.375-.917-.375-1.375V7.5A5.208 5.208 0 0 0 10 2.292Z"
+            stroke="currentColor"
+            strokeWidth="1.25"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M11.842 16.05A2.09 2.09 0 0 1 10 17.008a2.09 2.09 0 0 1-1.842-.958"
+            stroke="currentColor"
+            strokeWidth="1.25"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
     case 'profile':
       return (
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -323,18 +343,15 @@ export type MainNavigationSection = 'home' | 'games' | 'chats' | 'notifications'
 interface MainBottomNavigationProps {
   readonly active?: MainNavigationSection;
   readonly gamesDestination?: 'bookings' | 'games';
-  readonly communicationsDestination?: 'chats' | 'notifications';
 }
 
 export function MainBottomNavigation({
   active,
   gamesDestination = 'bookings',
-  communicationsDestination = 'notifications',
 }: MainBottomNavigationProps): React.JSX.Element {
   const gamesHref = gamesDestination === 'games' ? '/games' : '/bookings';
   const gamesLabel = gamesDestination === 'games' ? 'Игры' : 'Записи';
-  const communicationsHref = communicationsDestination === 'chats' ? '/chats' : '/notifications';
-  const communicationsLabel = communicationsDestination === 'chats' ? 'Чаты' : 'Уведомления';
+  const chatsUnreadCount = useChatsUnreadCount();
 
   return (
     <nav className="fh-bottom-nav" aria-label="Основная навигация">
@@ -354,11 +371,25 @@ export function MainBottomNavigation({
         </span>
       </a>
       <a
-        href={communicationsHref}
-        aria-current={active === communicationsDestination ? 'page' : undefined}
-        aria-label={communicationsLabel}
+        href="/chats"
+        aria-current={active === 'chats' ? 'page' : undefined}
+        aria-label={
+          chatsUnreadCount > 0 ? `Чаты, непрочитанных сообщений: ${chatsUnreadCount}` : 'Чаты'
+        }
       >
         <BottomNavIcon name="chat" />
+        {chatsUnreadCount > 0 ? (
+          <span className="fh-nav-badge" aria-hidden="true">
+            {chatsUnreadCount > 99 ? '99+' : chatsUnreadCount}
+          </span>
+        ) : null}
+      </a>
+      <a
+        href="/notifications"
+        aria-current={active === 'notifications' ? 'page' : undefined}
+        aria-label="Уведомления"
+      >
+        <BottomNavIcon name="notifications" />
       </a>
       <a
         href="/profile"

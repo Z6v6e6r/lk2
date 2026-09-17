@@ -52,6 +52,11 @@ import type {
 } from './auth-gateway.js';
 import { createMessagingCommandId } from './auth-gateway.js';
 import {
+  CHATS_UNREAD_REFRESH_INTERVAL_MS,
+  setChatsUnreadCount,
+  totalUnreadConversations,
+} from './chats-unread.js';
+import {
   disableWebPush,
   enableWebPush,
   getWebPushBrowserState,
@@ -685,6 +690,37 @@ export function App({
 
   useEffect(() => () => communityRealtimeTransport?.clear(), [communityRealtimeTransport]);
 
+  // The bottom navigation renders on every page, so the unread-chat badge is refreshed from here
+  // instead of from the chats route only. Accounts without the direct-chat permission never call
+  // the conversations endpoint.
+  useEffect(() => {
+    if (state.view !== 'home' || !state.session) return;
+    if (!state.session.context.permissions.includes('chat.direct.create')) {
+      setChatsUnreadCount(0);
+      return;
+    }
+    let active = true;
+    const loadUnreadChats = (): void => {
+      void gateway.listConversations().then(
+        (page) => {
+          if (active) setChatsUnreadCount(totalUnreadConversations(page));
+        },
+        () => undefined,
+      );
+    };
+    loadUnreadChats();
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') loadUnreadChats();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    const interval = window.setInterval(loadUnreadChats, CHATS_UNREAD_REFRESH_INTERVAL_MS);
+    return () => {
+      active = false;
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.clearInterval(interval);
+    };
+  }, [gateway, state.session, state.view]);
+
   useEffect(() => {
     if (publicGiftRoute) return;
     let active = true;
@@ -1067,8 +1103,10 @@ export function App({
         }
         if (!active) return;
 
-        if (listResult.status === 'fulfilled') setConversations(listResult.page);
-        else {
+        if (listResult.status === 'fulfilled') {
+          setConversations(listResult.page);
+          setChatsUnreadCount(totalUnreadConversations(listResult.page));
+        } else {
           setConversations(null);
           setLoadedRealtimeConversationId(null);
           setChatsError(chatUiError(listResult.error, 'list'));
@@ -1500,6 +1538,7 @@ export function App({
           chatGameNavigationRef.current = null;
           setChatRealtimeState(null);
           chatCreateCommandRef.current = null;
+          setChatsUnreadCount(0);
           setNotifications(null);
           setWebPushConfiguration(null);
           setNotificationsError(null);

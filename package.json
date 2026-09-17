@@ -59,6 +59,7 @@
     "home:component:enqueue": "node --env-file-if-exists=.env --import tsx scripts/enqueue-home-component.ts",
     "routing:plan:set": "node --env-file-if-exists=.env --import tsx scripts/set-client-routing-plan.ts",
     "user:access:set": "node --env-file-if-exists=.env --import tsx scripts/set-user-access.ts",
+    "user:access:beta-full": "node --env-file-if-exists=.env --import tsx scripts/grant-beta-full-client-access.ts",
     "notifications:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-notification-runtime.ts",
     "messaging:runtime:set": "node --env-file-if-exists=.env --import tsx scripts/set-messaging-runtime.ts",
     "notifications:booking:provision": "node --env-file-if-exists=.env --import tsx scripts/provision-booking-notifications.ts",

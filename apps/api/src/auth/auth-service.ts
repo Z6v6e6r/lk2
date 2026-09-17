@@ -2,7 +2,9 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 import {
   IdentityProviderError,
+  isAdminOnlyPermission,
   normalizePhoneE164,
+  resolveClientPermissions,
   type IdentityProviderKey,
   type IdentityProviderPort,
   type VerifiedPhoneAuthentication,
@@ -45,21 +47,8 @@ export interface UserAccessProfile {
 
 export type AccessTokenAudience = 'client' | 'admin';
 
-const ADMIN_ONLY_PERMISSIONS = new Set([
-  'notifications.manage',
-  'locations.read',
-  'locations.manage',
-  'locations.publish',
-  'gift_certificates.catalog.read',
-  'gift_certificates.catalog.manage',
-  'gift_certificates.catalog.publish',
-  'communities.moderation.read',
-  'communities.join.decide',
-  'communities.content.moderation.read',
-  'communities.content.moderation.decide',
-  'communities.invite.quota.override',
-  'communities.create.quota.override',
-]);
+/** Access granted to an active user that has no explicit `identity.user_access_profiles` row. */
+const DEFAULT_CLIENT_PERMISSIONS = ['profile.read'] as const;
 
 export interface RefreshSessionIdentity {
   readonly sessionId: string;
@@ -1014,7 +1003,7 @@ export class AuthService {
       identity.user.id,
     )) ?? {
       roles: ['client'],
-      permissions: ['profile.read'],
+      permissions: DEFAULT_CLIENT_PERMISSIONS,
     };
     this.assertAudienceAccess(audience, storedAccess);
     const roles =
@@ -1024,7 +1013,10 @@ export class AuthService {
     const permissions =
       audience === 'admin'
         ? storedAccess.permissions
-        : storedAccess.permissions.filter((permission) => !ADMIN_ONLY_PERMISSIONS.has(permission));
+        : resolveClientPermissions({
+            stored: storedAccess.permissions,
+            fullClientAccess: this.options.config.BETA_FULL_CLIENT_ACCESS_ENABLED,
+          });
     const accessToken = await new SignJWT({
       tenants: [identity.tenantId],
       roles,
@@ -1049,7 +1041,7 @@ export class AuthService {
     if (
       audience === 'admin' &&
       (!access.roles.includes('admin') ||
-        !access.permissions.some((permission) => ADMIN_ONLY_PERMISSIONS.has(permission)))
+        !access.permissions.some((permission) => isAdminOnlyPermission(permission)))
     ) {
       throw new AuthServiceError('AUTH_ADMIN_ACCESS_DENIED');
     }
@@ -1063,7 +1055,7 @@ export class AuthService {
     if (audience !== 'admin') return;
     const access = (await this.options.repository.getUserAccessProfile?.(tenantId, userId)) ?? {
       roles: ['client'],
-      permissions: ['profile.read'],
+      permissions: DEFAULT_CLIENT_PERMISSIONS,
     };
     this.assertAudienceAccess(audience, access);
   }

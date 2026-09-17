@@ -101,6 +101,12 @@ const environmentSchema = z.object({
   AUTH_CHALLENGE_RESEND_SECONDS: z.coerce.number().int().min(10).max(300).default(60),
   AUTH_CHALLENGE_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
   AUTH_COOKIE_SECURE: booleanFromEnvironment,
+  /**
+   * Closed-beta testing switch: every client access token additionally carries
+   * `FULL_CLIENT_PERMISSIONS`. Owner: LK2 beta testing. Remove once the beta is over or once
+   * `scripts/set-user-access.ts --all-active-users` has made the grants durable in the database.
+   */
+  BETA_FULL_CLIENT_ACCESS_ENABLED: booleanFromEnvironment,
   AUTH_DEV_PHONE_E164: z
     .string()
     .regex(/^\+7\d{10}$/)

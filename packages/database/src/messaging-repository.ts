@@ -409,9 +409,6 @@ const CONVERSATION_SELECT = `
     left join profile.user_summaries other_summary
       on other_summary.tenant_id = other_member.tenant_id
      and other_summary.user_id = other_member.user_id
-    left join profile.privacy_settings target_privacy
-      on target_privacy.tenant_id = other_user.tenant_id
-     and target_privacy.user_id = other_user.id
     left join lateral (
       select message.sequence, message.body, message.created_at
         from messaging.messages message
@@ -424,7 +421,6 @@ const CONVERSATION_SELECT = `
    where conversation.tenant_id = $1
      and conversation.kind = 'DIRECT'
      and conversation.state = 'OPEN'
-     and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
      and not exists (
        select 1
          from messaging.user_blocks block
@@ -593,14 +589,10 @@ async function getAuthorizedMember(
                   on other_user.tenant_id = other_member.tenant_id
                  and other_user.id = other_member.user_id
                  and other_user.status = 'ACTIVE'
-                left join profile.privacy_settings target_privacy
-                  on target_privacy.tenant_id = other_user.tenant_id
-                 and target_privacy.user_id = other_user.id
                where other_member.tenant_id = member.tenant_id
                  and other_member.conversation_id = member.conversation_id
                  and other_member.user_id <> member.user_id
                  and other_member.state = 'ACTIVE'
-                 and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
                  and not exists (
                    select 1
                      from messaging.user_blocks block
@@ -1761,16 +1753,12 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                         on other_user.tenant_id = other_member.tenant_id
                        and other_user.id = other_member.user_id
                        and other_user.status = 'ACTIVE'
-                      left join profile.privacy_settings target_privacy
-                        on target_privacy.tenant_id = other_user.tenant_id
-                       and target_privacy.user_id = other_user.id
                      where other_member.tenant_id = conversation.tenant_id
                        and other_member.conversation_id = conversation.id
                        and other_member.member_type = 'USER'
                        and other_member.user_id is not null
                        and other_member.user_id <> member.user_id
                        and other_member.state = 'ACTIVE'
-                       and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
                   )
                   and not exists (
                     select 1

@@ -532,4 +532,26 @@ describe('Home layout scroll contract', () => {
     expect(stateRule).toMatch(/font-weight:\s*500\s*;/);
     expect(stateRule).toMatch(/line-height:\s*100%\s*;/);
   });
+
+  it('fits the six bottom-navigation entries into the fixed Home canvas', () => {
+    const navRule = ruleBody('.fh-bottom-nav');
+    const itemRule = ruleBody('.fh-bottom-nav > a');
+    const createRule = ruleBody('.fh-bottom-nav > a.fh-create');
+
+    expect(navRule).toMatch(/display:\s*flex\s*;/);
+    // Five flexible entries share the canvas next to the fixed 100px create button.
+    expect(itemRule).toMatch(/flex:\s*1 1 0\s*;/);
+    expect(itemRule).toMatch(/min-width:\s*0\s*;/);
+    expect(itemRule).toMatch(/width:\s*auto\s*;/);
+    expect(createRule).toMatch(/flex:\s*0 0 100px\s*;/);
+  });
+
+  it('anchors the unread-chat badge to the chats icon without shifting the layout', () => {
+    const itemRule = ruleBody('.fh-bottom-nav > a');
+    const badgeRule = ruleBody('.fh-nav-badge');
+
+    expect(itemRule).toMatch(/position:\s*relative\s*;/);
+    expect(badgeRule).toMatch(/position:\s*absolute\s*;/);
+    expect(badgeRule).toMatch(/border-radius:\s*999px\s*;/);
+  });
 });

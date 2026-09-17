@@ -184,3 +184,60 @@ export function assertNoExternalIdentityToken(tokens: TokenPair & { vivaToken?: 
     throw new Error('External identity tokens must never be stored by PadlHub clients');
   }
 }
+
+/**
+ * Permissions that only ever appear on an admin-audience access token. A client token never
+ * carries them, and an admin audience additionally requires the `admin` role.
+ */
+export const ADMIN_ONLY_PERMISSIONS = [
+  'notifications.manage',
+  'locations.read',
+  'locations.manage',
+  'locations.publish',
+  'gift_certificates.catalog.read',
+  'gift_certificates.catalog.manage',
+  'gift_certificates.catalog.publish',
+  'communities.moderation.read',
+  'communities.join.decide',
+  'communities.content.moderation.read',
+  'communities.content.moderation.decide',
+  'communities.invite.quota.override',
+  'communities.create.quota.override',
+] as const;
+
+/**
+ * Every permission a PadlHub player surface can require. Used only by the
+ * `BETA_FULL_CLIENT_ACCESS_ENABLED` testing switch and the matching backfill script, so a closed
+ * beta can exercise every client feature without an operator granting rights account by account.
+ * The admin role and every `ADMIN_ONLY_PERMISSIONS` entry stay out of this list on purpose.
+ */
+export const FULL_CLIENT_PERMISSIONS = [
+  'profile.read',
+  'profile.extended.read',
+  'profile.contact.request',
+  'chat.direct.create',
+  'games.play',
+  'communities.create',
+  'tournaments.manage',
+] as const;
+
+export function isAdminOnlyPermission(permission: string): boolean {
+  return (ADMIN_ONLY_PERMISSIONS as readonly string[]).includes(permission);
+}
+
+/**
+ * Client permissions actually written into the access token. The stored profile stays the source
+ * of truth; the beta switch only adds the testing catalog, and admin-only entries are removed from
+ * a client-audience token even when a stored profile carries them.
+ */
+export function resolveClientPermissions(input: {
+  readonly stored: readonly string[];
+  readonly fullClientAccess: boolean;
+}): string[] {
+  const permissions = new Set(input.stored);
+  if (input.fullClientAccess) {
+    for (const permission of FULL_CLIENT_PERMISSIONS) permissions.add(permission);
+  }
+  for (const permission of ADMIN_ONLY_PERMISSIONS) permissions.delete(permission);
+  return [...permissions];
+}

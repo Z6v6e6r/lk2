@@ -201,14 +201,10 @@ export function synchronizePlatformHomeUser(input: {
                         on other_user.tenant_id = other_member.tenant_id
                        and other_user.id = other_member.user_id
                        and other_user.status = 'ACTIVE'
-                      left join profile.privacy_settings target_privacy
-                        on target_privacy.tenant_id = other_user.tenant_id
-                       and target_privacy.user_id = other_user.id
                      where other_member.tenant_id = member.tenant_id
                        and other_member.conversation_id = member.conversation_id
                        and other_member.user_id <> member.user_id
                        and other_member.state = 'ACTIVE'
-                       and coalesce(target_privacy.chat_policy, 'AUTHORIZED') = 'AUTHORIZED'
                   )
                 )
                 or

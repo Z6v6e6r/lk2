@@ -9,7 +9,10 @@ HTTP and PostgreSQL history. API issues a 30-second one-time JWT ticket bound to
 refresh session family. The ticket is sent in the first WebSocket frame, never in a URL. API and
 realtime both revalidate current gates, user permission and session authority; subscription and
 every fanout revalidate active conversation membership. DIRECT keeps its current bidirectional
-block, target privacy and `chat.direct.create` checks. GAME separately requires the contextual
+block and `chat.direct.create` checks; the peer `chatPolicy` is evaluated only when a new direct
+conversation is created, so an already accepted membership stays visible and writable for both
+participants and a one-sided policy change cannot hide a conversation from only one of them. GAME
+separately requires the contextual
 gate, `games.play` and current `games.participations.state='ACTIVE'`; a stale messaging membership
 never grants subscription or fanout.
 
