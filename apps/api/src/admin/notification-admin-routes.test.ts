@@ -399,13 +399,14 @@ describe('admin notification routes', () => {
       normalizedUserIds: [recipientUserId],
     });
 
-    // The same command with a different selector must not replay under the same idempotency key.
     await app.inject({
       method: 'POST',
       url: '/admin/api/v1/local-padel/notifications/campaigns',
       headers: { ...headers, 'idempotency-key': 'admin-notification-user-id-test-0002' },
       payload: { ...payload, userIds: ['96d1b47c-dc5c-493f-836c-827f01c31546'] },
     });
+    // A different selector set must hash differently, so a repeated key cannot replay a command that
+    // would reach different recipients.
     const second = createCampaignInput(adminRepository.createCampaign, 1);
     expect(second?.requestHash).not.toBe(first?.requestHash);
 
@@ -434,5 +435,54 @@ describe('admin notification routes', () => {
       )
       .digest('hex');
     expect(phoneOnly?.requestHash).toBe(legacyHash);
+  });
+
+  it('maps a reused idempotency key with a different selector to a stable conflict', async () => {
+    const adminRepository = repository();
+    adminRepository.createCampaign
+      .mockResolvedValueOnce({
+        outcome: 'accepted',
+        campaignId: '50b93bf8-490c-4b76-a5b0-d76c3a4b685a',
+        matchedCount: 1,
+        unresolvedCount: 0,
+        inAppCreatedCount: 1,
+        pushQueuedCount: 0,
+        suppressedCount: 0,
+        replayed: false,
+      })
+      .mockResolvedValueOnce({ outcome: 'idempotency_conflict' });
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await token()}`,
+      'x-app-platform': 'cup-admin',
+      'idempotency-key': 'admin-notification-reused-key-0001',
+    };
+    const base = { title: 'Тест', body: 'Сообщение', channels: ['IN_APP'] as const };
+
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/campaigns',
+      headers,
+      payload: { ...base, userIds: ['f342df5e-2e86-42cf-b938-c00f56a2ee6e'] },
+    });
+    expect(accepted.statusCode).toBe(202);
+
+    const conflict = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/campaigns',
+      headers,
+      payload: { ...base, userIds: ['96d1b47c-dc5c-493f-836c-827f01c31546'] },
+    });
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_CONFLICT' });
+    expect(createCampaignInput(adminRepository.createCampaign, 1)?.requestHash).not.toBe(
+      createCampaignInput(adminRepository.createCampaign, 0)?.requestHash,
+    );
   });
 });

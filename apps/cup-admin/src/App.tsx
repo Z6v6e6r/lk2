@@ -13,6 +13,7 @@ import {
   type AdminNotificationChannel,
   type AdminNotificationRecipientResolution,
 } from './notification-admin-client.js';
+import { parsePhones, parseUserIds } from './notification-recipients.js';
 
 const tenantKey = import.meta.env.VITE_PHUB_TENANT_KEY ?? 'local-padel';
 const client = createNotificationAdminClient({
@@ -57,30 +58,6 @@ const reasonCopy: Readonly<Record<string, string>> = {
   FCM_ADAPTER_NOT_IMPLEMENTED: 'FCM ещё не подключён',
   APNS_ADAPTER_NOT_IMPLEMENTED: 'APNs ещё не подключён',
 };
-
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-
-function parseUserIds(value: string): readonly string[] {
-  return [
-    ...new Set(
-      value
-        .split(/[\s,;]+/)
-        .map((userId) => userId.trim().toLowerCase())
-        .filter((userId) => UUID_PATTERN.test(userId)),
-    ),
-  ];
-}
-
-function parsePhones(value: string): readonly string[] {
-  return [
-    ...new Set(
-      value
-        .split(/[\n,;]+/)
-        .map((phone) => phone.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
 
 function errorText(error: unknown): string {
   if (error instanceof ApiClientError) return error.message;
@@ -226,7 +203,8 @@ function NotificationWorkspace(props: {
   const [busy, setBusy] = useState<'preview' | 'send'>();
   const [error, setError] = useState<string>();
   const phones = useMemo(() => parsePhones(phonesText), [phonesText]);
-  const userIds = useMemo(() => parseUserIds(userIdsText), [userIdsText]);
+  const parsedUserIds = useMemo(() => parseUserIds(userIdsText), [userIdsText]);
+  const userIds = parsedUserIds.ids;
   const selector = useMemo(
     () => ({
       ...(phones.length > 0 ? { phones } : {}),
@@ -300,7 +278,11 @@ function NotificationWorkspace(props: {
     }
   }
 
-  const canPreview = phones.length + userIds.length > 0 && !busy;
+  const canPreview =
+    phones.length + userIds.length > 0 && parsedUserIds.invalid.length === 0 && !busy;
+  // cup-admin is deployed separately from the API, so an additive response field must not blank the
+  // workspace when a new bundle talks to a node that does not return it yet.
+  const unresolvedUserIds = resolution?.unresolvedUserIds ?? [];
   const canSend =
     Boolean(resolution?.matched.length) &&
     title.trim().length > 0 &&
@@ -430,6 +412,12 @@ function NotificationWorkspace(props: {
                   }
                 />
               </label>
+              {parsedUserIds.invalid.length ? (
+                <div className="notice warning">
+                  Не похоже на PadlHub ID: {parsedUserIds.invalid.join(', ')}. Исправьте или удалите
+                  эти значения — пока они здесь, отправка заблокирована.
+                </div>
+              ) : null}
               <div className="input-meta">
                 <span>
                   {phones.length} номеров · {userIds.length} ID
@@ -519,7 +507,7 @@ function NotificationWorkspace(props: {
                       </span>
                       <span className="summary warning">
                         <strong>
-                          {resolution.unresolvedPhones.length + resolution.unresolvedUserIds.length}
+                          {resolution.unresolvedPhones.length + unresolvedUserIds.length}
                         </strong>{' '}
                         не найдено
                       </span>
@@ -547,9 +535,9 @@ function NotificationWorkspace(props: {
                         Не найдены или неоднозначны: {resolution.unresolvedPhones.join(', ')}
                       </div>
                     ) : null}
-                    {resolution.unresolvedUserIds.length ? (
+                    {unresolvedUserIds.length ? (
                       <div className="notice warning">
-                        Не найдены PadlHub ID: {resolution.unresolvedUserIds.join(', ')}
+                        Не найдены PadlHub ID: {unresolvedUserIds.join(', ')}
                       </div>
                     ) : null}
                   </>

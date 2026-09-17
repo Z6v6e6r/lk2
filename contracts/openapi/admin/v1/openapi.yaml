@@ -719,7 +719,10 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AdminNotificationRecipientSelector'
+              allOf:
+                - $ref: '#/components/schemas/AdminNotificationRecipientSelector'
+                - $ref: '#/components/schemas/AdminNotificationRecipientSelectorRequired'
+              unevaluatedProperties: false
       responses:
         '200':
           description: Resolved recipients and masked unresolved inputs
@@ -2315,18 +2318,17 @@ components:
     AdminNotificationChannel:
       type: string
       enum: [IN_APP, WEB_PUSH, IOS_PUSH, ANDROID_PUSH]
+    # The selector holds only the shared recipient fields. Each operation that uses it composes the
+    # rest of its body with `allOf` and closes the object with `unevaluatedProperties: false`, because
+    # `additionalProperties: false` inside one `allOf` branch would reject the other branch's fields.
     AdminNotificationRecipientSelector:
       type: object
-      additionalProperties: false
       description: >
-        Recipients are addressed by phone number, by PadlHub user id, or by both. At least one
-        selector value is required, and the combined number of values must not exceed 100. A user id
-        is the authoritative selector: it needs no phone mapping and cannot be redirected by a phone
-        claim. Selector values are normalized before matching and are never persisted in the
+        Recipients are addressed by phone number, by PadlHub user id, or by both. A user id is the
+        authoritative selector: it needs no phone mapping and cannot be redirected by a phone claim.
+        Values are trimmed and deduplicated before matching (user ids are also lowercased), the
+        combined number of values must not exceed 100, and no selector value is persisted in the
         campaign.
-      anyOf:
-        - required: [phones]
-        - required: [userIds]
       properties:
         phones:
           type: array
@@ -2343,6 +2345,17 @@ components:
           items:
             type: string
             format: uuid
+    AdminNotificationRecipientSelectorRequired:
+      description: At least one selector must be present, and a present selector cannot be empty.
+      anyOf:
+        - required: [phones]
+          properties:
+            phones:
+              minItems: 1
+        - required: [userIds]
+          properties:
+            userIds:
+              minItems: 1
     AdminNotificationChannelCapability:
       type: object
       additionalProperties: false
@@ -2405,6 +2418,7 @@ components:
     CreateAdminNotificationCampaign:
       allOf:
         - $ref: '#/components/schemas/AdminNotificationRecipientSelector'
+        - $ref: '#/components/schemas/AdminNotificationRecipientSelectorRequired'
         - type: object
           required: [title, body, channels]
           properties:
@@ -2428,6 +2442,7 @@ components:
               uniqueItems: true
               items:
                 $ref: '#/components/schemas/AdminNotificationChannel'
+      unevaluatedProperties: false
     AdminNotificationCampaignAccepted:
       type: object
       additionalProperties: false
