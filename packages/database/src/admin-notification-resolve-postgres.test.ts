@@ -274,16 +274,22 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
 
   it('rejects a second account claiming a verified phone', async () => {
     // The runtime refusal above cannot be reached through the login-phone source any more: the schema
-    // now guarantees one account per verified phone within a tenant.
+    // now guarantees one account per verified phone within a tenant. A real second account keeps the
+    // assertion about the unique index rather than about foreign-key ordering.
+    const duplicateUserId = randomUUID();
     await expect(
       withTenantTransaction(pool, tenantId, async (client) => {
         await client.query(
+          `insert into identity.users (id, tenant_id, status) values ($1, $2, 'ACTIVE')`,
+          [duplicateUserId, tenantId],
+        );
+        await client.query(
           `insert into profile.user_summaries (tenant_id, user_id, display_name, phone_e164)
            values ($1, $2, $3, $4)`,
-          [tenantId, randomUUID(), 'Дубликат телефона', loginPhone],
+          [tenantId, duplicateUserId, 'Дубликат телефона', loginPhone],
         );
       }),
-    ).rejects.toMatchObject({ code: '23505' });
+    ).rejects.toMatchObject({ code: '23505', constraint: 'user_summaries_phone_lookup_idx' });
   });
 
   it('drops a provider phone whose owner is not active instead of guessing', async () => {
