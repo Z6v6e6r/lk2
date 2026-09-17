@@ -236,6 +236,7 @@ export interface GameRepository {
     readonly viewerUserId: string;
     readonly candidateLimit: number;
     readonly historyLimit: number;
+    readonly localDate?: string;
   }): Promise<GameRecommendationProjectionInputs>;
   listCardProjectionLag(input: {
     readonly tenantId: string;
@@ -1341,6 +1342,10 @@ export function createGameRepository(pool: Pool): GameRepository {
                 and lifecycle_state = 'SCHEDULED'
                 and visibility = 'PUBLIC'
                 and starts_at > now()
+                and ($5::date is null or (
+                  starts_at >= ($5::date::timestamp at time zone 'Europe/Moscow')
+                  and starts_at < (($5::date + 1)::timestamp at time zone 'Europe/Moscow')
+                ))
               order by starts_at, game_id
               limit $3
            ), history as (
@@ -1367,7 +1372,13 @@ export function createGameRepository(pool: Pool): GameRepository {
            select 'candidate'::text as input_kind, candidates.* from candidates
            union all
            select 'history'::text as input_kind, history.* from history`,
-          [input.tenantId, input.viewerUserId, candidateLimit, historyLimit],
+          [
+            input.tenantId,
+            input.viewerUserId,
+            candidateLimit,
+            historyLimit,
+            input.localDate ?? null,
+          ],
         );
         return {
           candidates: result.rows

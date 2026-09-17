@@ -978,12 +978,20 @@ export class PadlHubApiClient {
   }
 
   public startBookingScreenReadJob(
+    screen: 'FOR_ME',
+    localDate: string,
+  ): Promise<BookingScreenReadJob>;
+  public startBookingScreenReadJob(
     screen: 'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS',
+  ): Promise<BookingScreenReadJob>;
+  public startBookingScreenReadJob(
+    screen: 'FOR_ME' | 'GROUP_TRAININGS' | 'MY_BOOKINGS',
+    localDate?: string,
   ): Promise<BookingScreenReadJob> {
     return this.request<BookingScreenReadJob>('/booking-screen-read-jobs', {
       method: 'POST',
       idempotencyKey: createCorrelationId(),
-      body: jsonRequestBody({ screen }),
+      body: jsonRequestBody({ screen, ...(localDate ? { localDate } : {}) }),
     });
   }
 

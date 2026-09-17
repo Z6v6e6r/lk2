@@ -414,6 +414,13 @@ export function registerBookingRecommendationRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       const body = request.body as Record<string, unknown> | undefined;
+      const now = new Date();
+      const localDate = body?.localDate;
+      const validLocalDate =
+        typeof localDate === 'string' &&
+        Array.from({ length: 15 }, (_, index) =>
+          moscowDate(new Date(now.getTime() + index * 24 * 60 * 60 * 1_000)),
+        ).includes(localDate);
       const catalogQuery =
         body?.screen === 'EVENT_CATALOG'
           ? (normalizeTrainingEventCatalogQuery(body.query) ??
@@ -425,7 +432,9 @@ export function registerBookingRecommendationRoutes(
         body?.screen === 'MY_BOOKINGS';
       if (
         !body ||
-        (legacyScreen && Object.keys(body).length !== 1) ||
+        (legacyScreen &&
+          (Object.keys(body).some((key) => key !== 'screen' && key !== 'localDate') ||
+            (localDate !== undefined && (body.screen !== 'FOR_ME' || !validLocalDate)))) ||
         (!legacyScreen &&
           (body.screen !== 'EVENT_CATALOG' || Object.keys(body).length !== 2 || !catalogQuery))
       ) {
@@ -439,7 +448,6 @@ export function registerBookingRecommendationRoutes(
       }
       if (!options.clientAssistedJobStore) return unavailable(request, reply);
 
-      const now = new Date();
       const jobId = randomUUID();
       const screen = body.screen as BookingScreenReadJob['screen'];
       const job: BookingScreenReadJob = {
@@ -450,13 +458,15 @@ export function registerBookingRecommendationRoutes(
         createdAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + CLIENT_ASSISTED_JOB_TTL_SECONDS * 1_000).toISOString(),
         ...(catalogQuery ? { catalogQuery } : {}),
+        ...(validLocalDate ? { localDate: localDate } : {}),
         commands:
           screen !== 'MY_BOOKINGS'
             ? (catalogQuery &&
               catalogQuery.surface === 'GAMES' &&
               !catalogQuery.kinds.includes('COACH_GAME')
                 ? []
-                : (catalogQuery?.localDates ?? recommendationDates(now))
+                : (catalogQuery?.localDates ??
+                  (validLocalDate ? [localDate] : recommendationDates(now)))
               ).map((date) => ({
                 commandId: randomUUID(),
                 operation: 'schedule.read' as const,
@@ -1016,8 +1026,9 @@ export function registerBookingRecommendationRoutes(
       try {
         const tenantKey = (request.params as { tenantKey: string }).tenantKey;
         const completedDates = completedScheduleDates(job, results);
-        const tournamentDates =
-          phase === 'HOME_INITIAL'
+        const tournamentDates = job.localDate
+          ? [job.localDate]
+          : phase === 'HOME_INITIAL'
             ? []
             : phase === 'HOME_TOURNAMENTS' ||
                 (phase === undefined && results.length < job.commands.length)
@@ -1054,10 +1065,14 @@ export function registerBookingRecommendationRoutes(
           ),
           now: new Date().toISOString(),
           limit,
+          ...(job.localDate ? { localDate: job.localDate } : {}),
         });
         return {
           screen: job.screen,
-          state: results.length === job.commands.length ? 'READY' : 'PARTIAL',
+          state:
+            results.length === job.commands.length && (!job.localDate || tournaments.complete)
+              ? 'READY'
+              : 'PARTIAL',
           completedCommands: results.length,
           totalCommands: job.commands.length,
           page,

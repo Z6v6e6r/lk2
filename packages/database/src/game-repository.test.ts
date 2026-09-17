@@ -100,6 +100,27 @@ function poolWithHandler(
 }
 
 describe('game repository', () => {
+  it.each([undefined, '2026-07-31'])(
+    'bounds recommendation candidates by Moscow date before LIMIT: %s',
+    async (localDate) => {
+      const { pool, query } = poolWithHandler(() => ({ rows: [] }));
+      await createGameRepository(pool as never).listRecommendationCardProjections({
+        tenantId,
+        viewerUserId: actorUserId,
+        candidateLimit: 100,
+        historyLimit: 50,
+        ...(localDate ? { localDate } : {}),
+      });
+      const read = query.mock.calls.find(([text]) => text.includes('with candidates as'));
+      expect(read?.[1]).toEqual([tenantId, actorUserId, 100, 50, localDate ?? null]);
+      expect(read?.[0]).toMatch(/starts_at >= .*Europe\/Moscow/s);
+      expect(read?.[0].indexOf('$5::date')).toBeLessThan(read?.[0].indexOf('limit $3') ?? 0);
+      expect(query).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [
+        tenantId,
+      ]);
+    },
+  );
+
   it('bounds and deduplicates tenant-scoped roster batch reads', async () => {
     const { pool, query } = poolWithHandler(() => ({ rows: [] }));
     const ids = Array.from(

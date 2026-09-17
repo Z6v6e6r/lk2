@@ -40,6 +40,7 @@ export interface BookingScreenReadJob {
   readonly expiresAt: string;
   readonly commands: readonly BookingScreenReadCommand[];
   readonly catalogQuery?: TrainingEventCatalogQuery | GamesEventCatalogQuery;
+  readonly localDate?: string;
   readonly historyReason?: 'UNCOVERED' | 'STALE' | 'NEXT_PAGE';
 }
 
