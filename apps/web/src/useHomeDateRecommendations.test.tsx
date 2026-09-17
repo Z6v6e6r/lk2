@@ -62,10 +62,12 @@ describe('Home date recommendations', () => {
       input?.localDate === '2026-07-19' ? a.promise : b.promise,
     );
     const initial = page('2026-07-19', 'weekly-cursor');
-    const { result, rerender } = renderHook(
-      ({ date }: { date: string | null }) => useHomeDateRecommendations(date, initial, load),
-      { initialProps: { date: '2026-07-19' } },
-    );
+    const { result, rerender } = renderHook<
+      ReturnType<typeof useHomeDateRecommendations>,
+      { date: string | null }
+    >(({ date }: { date: string | null }) => useHomeDateRecommendations(date, initial, load), {
+      initialProps: { date: '2026-07-19' },
+    });
     expect(result.current.page?.items).toEqual(initial.items);
     expect(result.current.page?.nextCursor).toBeNull();
     expect(result.current.loading).toBe(true);
@@ -110,10 +112,12 @@ describe('Home date recommendations', () => {
     const initial = page('2026-07-19');
     const refreshed = { ...initial, version: 'fresh', staleAt: '2026-07-19T09:11:00Z' };
     const load = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(refreshed);
-    const { result, rerender } = renderHook(
-      ({ date }: { date: string | null }) => useHomeDateRecommendations(date, initial, load),
-      { initialProps: { date: '2026-07-19' } },
-    );
+    const { result, rerender } = renderHook<
+      ReturnType<typeof useHomeDateRecommendations>,
+      { date: string | null }
+    >(({ date }: { date: string | null }) => useHomeDateRecommendations(date, initial, load), {
+      initialProps: { date: '2026-07-19' },
+    });
     await waitFor(() => expect(result.current.loading).toBe(false));
     rerender({ date: null });
     vi.setSystemTime(new Date('2026-07-19T09:06:00Z'));
