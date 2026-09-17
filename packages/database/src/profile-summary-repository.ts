@@ -115,6 +115,16 @@ interface PhotoObservationWatermarkRow extends QueryResultRow {
   readonly observed_at: Date | string;
 }
 
+/**
+ * `pg` returns `timestamptz` columns as `Date`, and `Date.prototype.toString` drops milliseconds.
+ * Comparing a driver `Date` through `String(value)` therefore truncates it to the second and makes
+ * an exact client replay look like a different command: the upload command stays pending and every
+ * attempt is rejected as a conflict. Normalize both sides to epoch milliseconds instead.
+ */
+function timestampMs(value: Date | string): number {
+  return value instanceof Date ? value.getTime() : Date.parse(value);
+}
+
 function commandMatches(
   row: ClientPhotoCommandRow,
   input: {
@@ -133,7 +143,7 @@ function commandMatches(
     row.request_sha256 === input.requestSha256 &&
     row.content_sha256 === input.contentSha256 &&
     row.object_key === input.objectKey &&
-    Date.parse(String(row.grant_issued_at)) === Date.parse(input.grantIssuedAt)
+    timestampMs(row.grant_issued_at) === timestampMs(input.grantIssuedAt)
   );
 }
 
@@ -149,7 +159,7 @@ function deleteCommandMatches(
     row.command_kind === 'DELETE' &&
     row.idempotency_key === input.idempotencyKey &&
     row.grant_id === input.grantId &&
-    Date.parse(String(row.grant_issued_at)) === Date.parse(input.grantIssuedAt)
+    timestampMs(row.grant_issued_at) === timestampMs(input.grantIssuedAt)
   );
 }
 
@@ -171,22 +181,17 @@ function consumedCommandError(
 function grantIsStale(current: CurrentPhotoRow | undefined, grantIssuedAt: string): boolean {
   if (!current) return false;
   const issuedAt = Date.parse(grantIssuedAt);
-  if (
-    current.client_grant_issued_at &&
-    issuedAt <= Date.parse(String(current.client_grant_issued_at))
-  ) {
+  if (current.client_grant_issued_at && issuedAt <= timestampMs(current.client_grant_issued_at)) {
     return true;
   }
-  return Boolean(current.source_url && issuedAt <= Date.parse(String(current.synced_at)));
+  return Boolean(current.source_url && issuedAt <= timestampMs(current.synced_at));
 }
 
 function watermarkIsStale(
   watermark: PhotoObservationWatermarkRow | undefined,
   observationAt: string,
 ): boolean {
-  return Boolean(
-    watermark && Date.parse(observationAt) <= Date.parse(String(watermark.observed_at)),
-  );
+  return Boolean(watermark && Date.parse(observationAt) <= timestampMs(watermark.observed_at));
 }
 
 function levelValue(value: number | string | null): number | null {
