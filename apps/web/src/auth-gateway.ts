@@ -71,7 +71,6 @@ import type {
   CompleteLevelAssessmentResponse,
   ProfileFriendPage,
   ProfileFriendRequestPage,
-  ProfileFriendRequestSummary,
   ProfileFriendship,
   UserProfile,
   UserUpcomingBookings,

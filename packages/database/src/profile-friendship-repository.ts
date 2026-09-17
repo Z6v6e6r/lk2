@@ -160,8 +160,8 @@ function storedState(value: unknown): FriendshipState {
   return {
     userId: value.userId,
     status: value.status as FriendshipStatus,
-    createdAt: value.createdAt as string | null,
-    requestId: value.requestId as string | null,
+    createdAt: value.createdAt,
+    requestId: value.requestId,
   };
 }
 
