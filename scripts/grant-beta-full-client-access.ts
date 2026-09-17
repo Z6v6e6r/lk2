@@ -1,4 +1,4 @@
-import { FULL_CLIENT_PERMISSIONS, isAdminOnlyPermission } from '@phub/auth';
+import { FULL_CLIENT_PERMISSIONS, mergeFullClientAccess } from '@phub/auth';
 import { createDatabasePool, withTenantTransaction } from '@phub/database';
 import type { PoolClient, QueryResultRow } from 'pg';
 
@@ -7,10 +7,11 @@ import type { PoolClient, QueryResultRow } from 'pg';
  * permission catalog, so a tester can exercise profile, chats, games and communities without an
  * operator editing rights account by account.
  *
- * The environment must already run with `BETA_FULL_CLIENT_ACCESS_ENABLED=true`; the switch only
- * covers token issuance, and this script is what makes the grant durable in
- * `identity.user_access_profiles`. Existing permissions and roles are preserved, `admin` is never
- * granted, and admin-only permissions are never added. Dry-run is the default.
+ * The environment must already run with `BETA_FULL_CLIENT_ACCESS_ENABLED=true`; the switch covers
+ * token issuance for accounts without an explicit profile, and this script is what makes the grant
+ * durable in `identity.user_access_profiles`. The merge only adds: existing roles and permissions,
+ * including `admin` and admin-only permissions, are preserved, and the admin role is never granted.
+ * Dry-run is the default.
  */
 
 const CONFIRMATION_TOKEN = 'APPLY_USER_ACCESS';
@@ -37,15 +38,8 @@ function argument(name: string): string | undefined {
 }
 
 function mergedAccess(row: UserAccessRow): { roles: string[]; permissions: string[] } {
-  const roles = new Set(row.roles ?? []);
-  roles.add('client');
-  const permissions = new Set(row.permissions ?? []);
-  for (const permission of FULL_CLIENT_PERMISSIONS) permissions.add(permission);
-  for (const permission of permissions) {
-    if (isAdminOnlyPermission(permission)) permissions.delete(permission);
-  }
-  roles.delete('admin');
-  return { roles: [...roles].sort(), permissions: [...permissions].sort() };
+  const merged = mergeFullClientAccess({ roles: row.roles, permissions: row.permissions });
+  return { roles: [...merged.roles], permissions: [...merged.permissions] };
 }
 
 function alreadyFull(row: UserAccessRow): boolean {

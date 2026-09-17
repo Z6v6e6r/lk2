@@ -154,6 +154,10 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // reads the phone itself and hands it to our authenticated endpoint, which links it in integration
     // custody under the same invariant.
     CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED: 'true',
+    // Closed-beta access switch: every client token on this contour carries the full client
+    // permission catalog, so a new tester can exercise profile, chats, games and communities
+    // without an operator editing rights account by account.
+    BETA_FULL_CLIENT_ACCESS_ENABLED: 'true',
     // Client-assisted avatar sync is a required-true flag, so startup config insists on a complete
     // media-storage binding even in the synthetic fixture.
     S3_ENDPOINT: 'https://s3.twcstorage.ru',
