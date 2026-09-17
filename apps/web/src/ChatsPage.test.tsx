@@ -91,6 +91,42 @@ describe('ChatsPage', () => {
     expect(onSendMessage).toHaveBeenCalledWith('Новое сообщение');
   });
 
+  it('groups consecutive sender messages only within a day and retains sender labels', () => {
+    const messages = [
+      { sender: 'Борис', userId: 'boris', day: '01', body: 'Первая реплика' },
+      { sender: 'Борис', userId: 'boris', day: '01', body: 'Продолжение' },
+      { sender: 'Борис', userId: 'boris', day: '02', body: 'На следующий день' },
+      { sender: 'Анна', userId: currentUserId, day: '02', body: 'Ответ' },
+      { sender: 'Борис', userId: 'boris', day: '02', body: 'Новая группа' },
+    ].map((item, index) => ({
+      id: `message-${index}`,
+      conversationId,
+      sequence: index + 1,
+      sender: { userId: item.userId, displayName: item.sender },
+      messageType: 'TEXT' as const,
+      body: item.body,
+      createdAt: `2026-04-${item.day}T12:00:00.000Z`,
+    }));
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        messages={messages}
+      />,
+    );
+    const history = within(screen.getByRole('region', { name: 'История сообщений' }));
+    const articles = history.getAllByRole('article');
+    expect(articles.map((article) => article.querySelector('strong')?.textContent ?? null)).toEqual(
+      ['Борис', null, 'Борис', null, 'Борис'],
+    );
+    expect(history.getAllByText('Отправитель: Борис')).toHaveLength(4);
+    expect(history.getByLabelText('Отправлено')).toBeInTheDocument();
+    expect(history.queryByText('Прочитано')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Чаты', current: 'page' })).toBeInTheDocument();
+  });
+
   it('starts a direct chat only from an explicit profile deep link without a UUID field', () => {
     const onCreateDirect = vi.fn();
     const { rerender } = render(
@@ -509,7 +545,9 @@ describe('ChatsPage', () => {
     );
     expect(screen.getByRole('alert')).toHaveTextContent('Нет связи');
     expect(screen.queryByText('Чаты станций')).not.toBeInTheDocument();
-    // The global bottom navigation also exposes Уведомления, so scope the rail assertion.
+    const bottomNav = within(screen.getByRole('navigation', { name: 'Основная навигация' }));
+    expect(bottomNav.queryByRole('link', { name: 'Уведомления' })).not.toBeInTheDocument();
+    expect(bottomNav.getAllByRole('link')).toHaveLength(5);
     const filterRail = within(screen.getByRole('navigation', { name: 'Типы чатов' }));
     expect(filterRail.getByRole('link', { name: 'Уведомления' })).toHaveAttribute(
       'href',

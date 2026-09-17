@@ -119,70 +119,81 @@ export function ChatThread({
         onRefresh={onRefresh}
         connectionStatus={connectionStatus}
       />
-      <ol className={styles.messages} ref={listRef} onScroll={handleScroll}>
-        {hasEarlierMessages && onLoadEarlier ? (
-          <li className={styles.loadEarlierRow} role="presentation">
-            <button type="button" disabled={busy !== null} onClick={onLoadEarlier}>
-              {busy === 'load-earlier' ? 'Загружаем…' : 'Показать предыдущие сообщения'}
-            </button>
-          </li>
-        ) : null}
-        {conversation?.kind === 'GAME' ? (
-          <li className={styles.contextRow} role="presentation">
-            <ChatContextCard conversation={conversation} />
-          </li>
-        ) : null}
-        {orderedMessages.length === 0 && !pendingMessage ? (
-          <li className={styles.threadEmpty}>Сообщений пока нет. Начните разговор.</li>
-        ) : (
-          orderedMessages.map((message, index) => {
-            const previous = orderedMessages[index - 1];
-            const startsDay =
-              !previous || messageDayKey(previous.createdAt) !== messageDayKey(message.createdAt);
-            return (
-              <Fragment key={message.id}>
-                {startsDay ? (
-                  <li className={styles.daySeparator} role="separator">
-                    <span>{formatMessageDay(message.createdAt)}</span>
-                  </li>
-                ) : null}
-                <ChatMessageBubble
-                  message={message}
-                  own={message.sender.userId === currentUserId}
-                  showSender={conversation?.kind === 'GAME'}
-                />
-              </Fragment>
-            );
-          })
-        )}
-        {pendingMessage && !durablePendingExists ? (
-          <li className={`${styles.messageRow} ${styles.ownMessageRow}`}>
-            <article
-              className={`${styles.messageBubble} ${styles.ownMessageBubble} ${styles.pendingBubble} ${
-                pendingMessage.state === 'failed' ? styles.failedBubble : ''
-              }`}
-            >
-              <p>{pendingMessage.body}</p>
-              <span role="status">
-                {pendingMessage.state === 'sending' ? 'Отправляется…' : 'Не отправлено'}
-              </span>
-            </article>
-          </li>
-        ) : null}
-      </ol>
-      {hasNewMessages ? (
-        <button type="button" className={styles.newMessagesButton} onClick={scrollToLatest}>
-          Новые сообщения
-        </button>
-      ) : null}
-      {canRetrySend ? (
-        <div className={styles.retryBar} role="status">
-          <span>Сообщение не подтверждено сервером.</span>
-          <button type="button" disabled={busy !== null} onClick={onRetrySend}>
-            Повторить отправку
+      <div className={styles.threadBody}>
+        <ol className={styles.messages} ref={listRef} onScroll={handleScroll}>
+          {hasEarlierMessages && onLoadEarlier ? (
+            <li className={styles.loadEarlierRow} role="presentation">
+              <button type="button" disabled={busy !== null} onClick={onLoadEarlier}>
+                {busy === 'load-earlier' ? 'Загружаем…' : 'Показать предыдущие сообщения'}
+              </button>
+            </li>
+          ) : null}
+          {conversation?.kind === 'GAME' ? (
+            <li className={styles.contextRow} role="presentation">
+              <ChatContextCard conversation={conversation} />
+            </li>
+          ) : null}
+          {orderedMessages.length === 0 && !pendingMessage ? (
+            <li className={styles.threadEmpty}>Сообщений пока нет. Начните разговор.</li>
+          ) : (
+            orderedMessages.map((message, index) => {
+              const previous = orderedMessages[index - 1];
+              const startsDay =
+                !previous || messageDayKey(previous.createdAt) !== messageDayKey(message.createdAt);
+              const next = orderedMessages[index + 1];
+              const continuesGroup =
+                !startsDay && previous?.sender.userId === message.sender.userId;
+              const endsGroup =
+                !next ||
+                next.sender.userId !== message.sender.userId ||
+                messageDayKey(next.createdAt) !== messageDayKey(message.createdAt);
+              return (
+                <Fragment key={message.id}>
+                  {startsDay ? (
+                    <li className={styles.daySeparator} role="separator">
+                      <span>{formatMessageDay(message.createdAt)}</span>
+                    </li>
+                  ) : null}
+                  <ChatMessageBubble
+                    message={message}
+                    own={message.sender.userId === currentUserId}
+                    showSender
+                    continuesGroup={continuesGroup}
+                    endsGroup={endsGroup}
+                  />
+                </Fragment>
+              );
+            })
+          )}
+          {pendingMessage && !durablePendingExists ? (
+            <li className={`${styles.messageRow} ${styles.ownMessageRow}`}>
+              <article
+                className={`${styles.messageBubble} ${styles.ownMessageBubble} ${styles.pendingBubble} ${
+                  pendingMessage.state === 'failed' ? styles.failedBubble : ''
+                }`}
+              >
+                <p>{pendingMessage.body}</p>
+                <span role="status">
+                  {pendingMessage.state === 'sending' ? 'Отправляется…' : 'Не отправлено'}
+                </span>
+              </article>
+            </li>
+          ) : null}
+        </ol>
+        {hasNewMessages ? (
+          <button type="button" className={styles.newMessagesButton} onClick={scrollToLatest}>
+            Новые сообщения
           </button>
-        </div>
-      ) : null}
+        ) : null}
+        {canRetrySend ? (
+          <div className={styles.retryBar} role="status">
+            <span>Сообщение не подтверждено сервером.</span>
+            <button type="button" disabled={busy !== null} onClick={onRetrySend}>
+              Повторить отправку
+            </button>
+          </div>
+        ) : null}
+      </div>
       <ChatComposer busy={busy === 'send'} forbidden={forbidden} onSendMessage={onSendMessage} />
     </section>
   );

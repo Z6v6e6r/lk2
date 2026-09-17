@@ -60,6 +60,7 @@ describe('NotificationsPage', () => {
   it('renders mapped filters while preserving unknown categories in All', () => {
     render(<NotificationsPage {...defaultProps} />);
     expect(screen.getByRole('heading', { name: 'Уведомления' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Чаты', current: 'page' })).toBeVisible();
     expect(screen.getByText('Неизвестная категория')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Акции' })).not.toBeInTheDocument();
 

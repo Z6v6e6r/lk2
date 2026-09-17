@@ -13,14 +13,11 @@ afterEach(() => {
 });
 
 describe('bottom navigation communications entries', () => {
-  it('exposes both Chats and Notifications on every page', () => {
+  it('exposes Chats without a separate Notifications entry', () => {
     render(<MainBottomNavigation active="home" />);
 
     expect(screen.getByRole('link', { name: 'Чаты' })).toHaveAttribute('href', '/chats');
-    expect(screen.getByRole('link', { name: 'Уведомления' })).toHaveAttribute(
-      'href',
-      '/notifications',
-    );
+    expect(screen.queryByRole('link', { name: 'Уведомления' })).not.toBeInTheDocument();
   });
 
   it('marks the active communications section', () => {
@@ -29,10 +26,7 @@ describe('bottom navigation communications entries', () => {
     unmount();
 
     render(<MainBottomNavigation active="notifications" />);
-    expect(screen.getByRole('link', { name: 'Уведомления' })).toHaveAttribute(
-      'aria-current',
-      'page',
-    );
+    expect(screen.getByRole('link', { name: 'Чаты' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('announces unread chats instead of hiding them behind an icon', () => {
