@@ -340,14 +340,31 @@
 
 .thread {
   position: relative;
-  display: grid;
+  display: flex;
   min-width: 0;
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  flex-direction: column;
+  background: #fafafa;
+}
+
+.threadBody {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  margin: 0 8px;
+  overflow: hidden;
+  flex-direction: column;
+  border: 0;
+  border-radius: 28px 28px 0 0;
   background: #fff;
+  box-shadow:
+    inset 0 0 0 0.5px #ededed,
+    0 0 8px rgb(0 0 0 / 2%);
 }
 
 .threadHeader {
+  flex: 0 0 auto;
   display: grid;
   min-height: 74px;
   padding: 10px 16px;
@@ -415,7 +432,8 @@
   display: flex;
   min-height: 0;
   margin: 0;
-  padding: 16px clamp(14px, 3vw, 30px) 22px;
+  padding: 16px 20px;
+  flex: 1;
   overflow-y: auto;
   flex-direction: column;
   gap: 8px;
@@ -423,6 +441,7 @@
   background: #fff;
   list-style: none;
   scroll-behavior: smooth;
+  scrollbar-width: thin;
 }
 
 .loadEarlierRow,
@@ -477,63 +496,135 @@
 .daySeparator {
   display: flex;
   justify-content: center;
-  padding: 8px 0 2px;
+  padding: 8px 0;
 }
 
 .daySeparator span {
-  padding: 5px 10px;
-  border-radius: 999px;
-  background: #f0eff2;
-  color: var(--comms-muted);
+  color: #b4b4b4;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
 }
 
 .messageRow {
   display: flex;
   width: 100%;
+  padding-right: 48px;
+  flex: 0 0 auto;
   justify-content: flex-start;
   align-items: flex-end;
-  gap: 8px;
+  gap: 12px;
+}
+
+.continuedMessageRow {
+  margin-top: -6px;
 }
 
 .ownMessageRow {
+  padding-right: 0;
+  padding-left: 48px;
   justify-content: flex-end;
 }
 
 .messageBubble {
-  max-width: min(76%, 560px);
-  padding: 9px 12px 7px;
-  border-radius: 15px 15px 15px 5px;
-  background: #f0eff2;
+  position: relative;
+  min-width: 0;
+  max-width: 560px;
+  padding: 12px;
+  flex: 1;
+  border-radius: 12px;
+  background: #f6f6f6;
+  color: #1f1e20;
+}
+
+.messageTail::before {
+  position: absolute;
+  bottom: 0;
+  left: -6px;
+  width: 13px;
+  height: 15px;
+  background: inherit;
+  clip-path: polygon(46% 0, 100% 100%, 0 100%, 25% 70%);
+  content: '';
 }
 
 .ownMessageBubble {
-  border-radius: 15px 15px 5px;
-  background: #eee6ff;
+  background: #ece6fc;
+}
+
+.ownMessageBubble.messageTail::before {
+  right: -6px;
+  left: auto;
+  transform: scaleX(-1);
 }
 
 .messageBubble strong {
   display: block;
   margin-bottom: 4px;
-  color: var(--comms-accent-ink);
-  font-size: 10px;
+  overflow-wrap: anywhere;
+  color: #8766eb;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .messageBubble p {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.42;
+  font-family: 'RF Dewi', 'Inter Display', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.28;
   white-space: pre-wrap;
 }
 
-.messageBubble time,
-.messageBubble > span {
+/* Reserve the end of the last line for time/status, including long messages. */
+.messageTail p::after {
+  display: inline-block;
+  width: 30px;
+  content: '';
+}
+
+.ownMessageBubble.messageTail p::after {
+  width: 42px;
+}
+
+.messageMeta {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  height: 12px;
+  align-items: center;
+  gap: 1px;
+  color: #b4b4b4;
+}
+
+.messageMeta time {
+  font-size: 8px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.04em;
+}
+
+.ownMessageBubble .messageMeta {
+  color: #8766eb;
+}
+
+.messageMeta span {
+  width: 12px;
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+}
+
+.pendingBubble > span {
   display: block;
-  margin-top: 3px;
+  margin-top: 4px;
   color: var(--comms-muted);
-  font-size: 9px;
+  font-size: 10px;
   text-align: right;
 }
 
@@ -570,7 +661,8 @@
 
 .composer {
   display: grid;
-  padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  padding: 10px 20px 16px;
+  flex: 0 0 auto;
   align-items: end;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -753,16 +845,19 @@
 
 .senderAvatar {
   display: grid;
-  width: 28px;
-  height: 28px;
-  margin-bottom: 3px;
-  flex: 0 0 28px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   place-items: center;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #ebe6f5;
   color: #574675;
   font-size: 9px;
   font-weight: 700;
+}
+
+.hiddenAvatar {
+  visibility: hidden;
 }
 
 .placeholderIcon,
@@ -819,18 +914,6 @@
     padding: 0 0 88px;
     overflow-x: hidden;
     background: #fff;
-  }
-
-  .threadPage {
-    padding-bottom: 0;
-  }
-
-  .threadPage .shell {
-    height: 100dvh;
-  }
-
-  .threadPage :global(.fh-bottom-nav) {
-    display: none;
   }
 
   .page :global(.fh-bottom-nav) {
@@ -894,16 +977,8 @@
     padding-top: max(16px, env(safe-area-inset-top));
   }
 
-  .messageBubble {
-    max-width: 86%;
-  }
-
   .composer small {
     display: none;
-  }
-
-  .composer {
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
   .errorBanner {
@@ -936,4 +1011,33 @@
   .messages {
     scroll-behavior: auto;
   }
+}
+
+/* Keep the thread and composer above the shared navigation at every viewport height. */
+.threadPage {
+  --chat-nav-height: calc(64px + max(24px, env(safe-area-inset-bottom)));
+  --fh-page-width: min(100vw, 375px);
+  display: flex;
+  height: 100dvh;
+  min-height: 0;
+  padding-bottom: var(--chat-nav-height);
+  flex-direction: column;
+}
+
+.threadPage .shell {
+  height: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.threadPage .errorBanner {
+  max-height: 30dvh;
+  flex: 0 0 auto;
+  overflow-y: auto;
+}
+
+.threadPage :global(.fh-bottom-nav) {
+  display: flex;
+  height: var(--chat-nav-height);
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
 }
