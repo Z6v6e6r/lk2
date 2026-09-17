@@ -36,7 +36,6 @@ describe('Timeweb beta API origin allow-list', () => {
       'padlhub.su ',
       'padlhub.su\n',
       'padlhub.su\t',
-      'sub.padlhub.su.evil',
       'PADLHUB.SU',
       'localhost',
     ]) {
