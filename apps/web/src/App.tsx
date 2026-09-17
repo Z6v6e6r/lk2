@@ -1859,6 +1859,48 @@ export function App({
     );
   }
 
+  function handleRemoveProfileFriend(): void {
+    if (
+      !requestedProfileUserId ||
+      profileFriendsBusy ||
+      profileFriendship?.userId !== requestedProfileUserId ||
+      profileFriendship.status !== 'FRIEND' ||
+      !profileFriendship.createdAt
+    )
+      return;
+    if (
+      !window.confirm(
+        'Удалить игрока из друзей? Чтобы снова стать друзьями, потребуется новая заявка.',
+      )
+    )
+      return;
+    const targetUserId = requestedProfileUserId;
+    const isCurrentProfile = (): boolean => {
+      const route = resolveProtectedRoute(window.location.pathname);
+      return route.kind === 'profile' && route.userId === targetUserId;
+    };
+    setProfileFriendsBusy(true);
+    setProfileFriendsError(null);
+    void gateway.removeProfileFriend(targetUserId, profileFriendship.createdAt).then(
+      (friendship) => {
+        setProfileFriendsBusy(false);
+        setProfileFriends((current) =>
+          current
+            ? { items: current.items.filter((friend) => friend.userId !== targetUserId) }
+            : current,
+        );
+        if (isCurrentProfile()) setProfileFriendship(friendship);
+      },
+      () => {
+        setProfileFriendsBusy(false);
+        if (isCurrentProfile())
+          setProfileFriendsError(
+            'Не удалось удалить игрока из друзей. Обновите профиль и повторите попытку.',
+          );
+      },
+    );
+  }
+
   function settleFriendRequest(requestId: string, action: 'accept' | 'decline'): void {
     setFriendRequestBusyId(requestId);
     setFriendRequestsError(null);
@@ -1982,6 +2024,7 @@ export function App({
             ? { onSaveBookingPreferences: handleSaveBookingPreferences }
             : {})}
           onAddFriend={handleAddProfileFriend}
+          onRemoveFriend={handleRemoveProfileFriend}
           onAcceptFriendRequest={handleAcceptFriendRequest}
           onLogout={handleLogout}
         />

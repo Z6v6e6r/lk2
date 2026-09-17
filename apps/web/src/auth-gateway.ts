@@ -332,6 +332,10 @@ export interface AuthGateway {
   ) => Promise<ProfilePrivacySettings>;
   readonly listProfileFriends: (limit?: number) => Promise<ProfileFriendPage>;
   readonly getProfileFriendship: (userId: string) => Promise<ProfileFriendship>;
+  readonly removeProfileFriend: (
+    userId: string,
+    expectedCreatedAt: string,
+  ) => Promise<ProfileFriendship>;
   readonly addProfileFriend: (userId: string) => Promise<ProfileFriendship>;
   readonly listProfileFriendRequests: (limit?: number) => Promise<ProfileFriendRequestPage>;
   readonly acceptProfileFriendRequest: (requestId: string) => Promise<ProfileFriendship>;
@@ -1666,6 +1670,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getProfileFriendship(userId) {
       return client.getProfileFriendship(userId);
+    },
+
+    removeProfileFriend(userId, expectedCreatedAt) {
+      return client.removeProfileFriend(userId, expectedCreatedAt);
     },
 
     addProfileFriend(userId) {

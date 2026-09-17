@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { profilePhotoDeliveryUrl } from '@phub/domain';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
@@ -75,6 +77,14 @@ export interface ProfileFriendshipRepository {
     readonly requestHash: string;
     readonly correlationId: string;
   }): Promise<RequestFriendResult>;
+  remove(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly targetUserId: string;
+    readonly expectedCreatedAt: string;
+    readonly idempotencyKey: string;
+    readonly correlationId: string;
+  }): Promise<RespondFriendRequestResult | { readonly outcome: 'friendship_changed' }>;
   respond(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -400,6 +410,9 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
       const [leftUserId, rightUserId] = orderedPair(input.actorUserId, input.targetUserId);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:friend-request:${input.actorUserId}:${input.idempotencyKey}`,
+        ]);
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `${input.tenantId}:${leftUserId}:${rightUserId}`,
         ]);
         const previous = await queryOne<RequestCommandRow>(
@@ -527,10 +540,112 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
       });
     },
 
+    remove(input) {
+      if (input.actorUserId === input.targetUserId)
+        return Promise.resolve({ outcome: 'not_found' });
+      const [leftUserId, rightUserId] = orderedPair(input.actorUserId, input.targetUserId);
+      const requestHash = createHash('sha256')
+        .update(`REMOVE:${input.targetUserId}:${input.expectedCreatedAt}`)
+        .digest('hex');
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:friendship-remove:${input.actorUserId}:${input.idempotencyKey}`,
+        ]);
+        const previous = await queryOne<RequestCommandRow>(
+          client,
+          `select target_user_id, request_hash, result_payload from profile.friendship_commands
+           where tenant_id = $1 and actor_user_id = $2 and idempotency_key = $3 for update`,
+          [input.tenantId, input.actorUserId, input.idempotencyKey],
+        );
+        if (previous) {
+          if (
+            previous.target_user_id !== input.targetUserId ||
+            previous.request_hash !== requestHash
+          ) {
+            return { outcome: 'idempotency_conflict' };
+          }
+          return {
+            outcome: 'applied',
+            friendship: storedState(previous.result_payload),
+            replayed: true,
+          };
+        }
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:${leftUserId}:${rightUserId}`,
+        ]);
+        const friendship = await queryOne<FriendshipRow>(
+          client,
+          `select created_at from profile.friendships
+           where tenant_id = $1 and left_user_id = $2 and right_user_id = $3 for update`,
+          [input.tenantId, leftUserId, rightUserId],
+        );
+        if (
+          friendship &&
+          new Date(friendship.created_at).toISOString() !== input.expectedCreatedAt
+        ) {
+          return { outcome: 'friendship_changed' };
+        }
+        // A fresh command against an absent friendship must not cancel a pending request.
+        if (!friendship) return { outcome: 'not_found' };
+        await client.query(
+          `delete from profile.friendships
+           where tenant_id = $1 and left_user_id = $2 and right_user_id = $3`,
+          [input.tenantId, leftUserId, rightUserId],
+        );
+        // DECLINED also retires a previously accepted request. Keep its row and command receipts,
+        // and preserve its former state in the removal audit so a new request can be accepted.
+        const retired = await client.query<{ id: string }>(
+          `update profile.friend_requests set state = 'DECLINED'
+           where tenant_id = $1 and state = 'ACCEPTED'
+             and ((requester_user_id = $2 and target_user_id = $3)
+               or (requester_user_id = $3 and target_user_id = $2)) returning id`,
+          [input.tenantId, leftUserId, rightUserId],
+        );
+        const result = state(input.targetUserId, 'NONE', null);
+        await client.query(
+          `insert into profile.friendship_commands
+           (tenant_id, actor_user_id, target_user_id, idempotency_key, request_hash, result_payload)
+           values ($1, $2, $3, $4, $5, $6::jsonb)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            input.targetUserId,
+            input.idempotencyKey,
+            requestHash,
+            JSON.stringify(result),
+          ],
+        );
+        const payload = {
+          actorUserId: input.actorUserId,
+          targetUserId: input.targetUserId,
+          removedCreatedAt: input.expectedCreatedAt,
+          retiredAcceptedRequestIds: retired.rows.map((row) => row.id),
+        };
+        await client.query(
+          `insert into audit.audit_log
+           (tenant_id, actor_id, action, resource_type, resource_id, result, correlation_id, new_value)
+           values ($1, $2, 'PROFILE_FRIENDSHIP_REMOVED', 'PROFILE_FRIENDSHIP', $3, 'SUCCESS', $4, $5::jsonb)`,
+          [
+            input.tenantId,
+            input.actorUserId,
+            input.targetUserId,
+            input.correlationId,
+            JSON.stringify(payload),
+          ],
+        );
+        await client.query(
+          `insert into audit.outbox_events (tenant_id, event_type, aggregate_id, correlation_id, payload)
+           values ($1, 'profile.friendship.removed.v1', $2, $3, $4::jsonb)`,
+          [input.tenantId, input.actorUserId, input.correlationId, JSON.stringify(payload)],
+        );
+        return { outcome: 'applied', friendship: result, replayed: false };
+      });
+    },
+
     respond(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `${input.tenantId}:friend-request:${input.requestId}`,
+          `${input.tenantId}:friend-response:${input.actorUserId}:${input.idempotencyKey}`,
         ]);
         const previous = await queryOne<ResponseCommandRow>(
           client,
@@ -550,6 +665,21 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
             replayed: true,
           };
         }
+        const identity = await queryOne<{ requester_user_id: string; target_user_id: string }>(
+          client,
+          `select requester_user_id, target_user_id from profile.friend_requests
+           where tenant_id = $1 and id = $2`,
+          [input.tenantId, input.requestId],
+        );
+        if (!identity || identity.target_user_id !== input.actorUserId)
+          return { outcome: 'not_found' };
+        const [pairLeft, pairRight] = orderedPair(
+          identity.requester_user_id,
+          identity.target_user_id,
+        );
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `${input.tenantId}:${pairLeft}:${pairRight}`,
+        ]);
         const request = await queryOne<{
           readonly id: string;
           readonly requester_user_id: string;
@@ -648,8 +778,10 @@ async function settledState(
       where tenant_id = $1 and left_user_id = $2 and right_user_id = $3`,
     [tenantId, leftUserId, rightUserId],
   );
-  if (friendship) return state(viewerUserId, 'FRIEND', friendship.created_at);
-  return state(viewerUserId, 'NONE', null);
+  const targetUserId =
+    request.requester_user_id === viewerUserId ? request.target_user_id : request.requester_user_id;
+  if (friendship) return state(targetUserId, 'FRIEND', friendship.created_at);
+  return state(targetUserId, 'NONE', null);
 }
 
 async function recordRequestCommand(

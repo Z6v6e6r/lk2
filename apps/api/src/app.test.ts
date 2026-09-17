@@ -759,6 +759,7 @@ describe('health endpoints', () => {
       logger: createLogger('api-test', 'silent'),
       pool: fakePool(),
       profileFriendshipRepository: {
+        remove: vi.fn(),
         list,
         get: vi.fn(),
         listIncoming: vi.fn(),
@@ -840,6 +841,7 @@ describe('health endpoints', () => {
       logger: createLogger('api-test', 'silent'),
       pool: fakePool(),
       profileFriendshipRepository: {
+        remove: vi.fn(),
         list: vi.fn(),
         get: vi.fn(),
         listIncoming: vi.fn(),
@@ -872,6 +874,105 @@ describe('health endpoints', () => {
     expect(request.mock.calls[0]?.[0].requestHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('removes the authenticated actor pair and enforces the command boundary', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const friendship = {
+      userId: targetUserId,
+      status: 'NONE' as const,
+      createdAt: null,
+      requestId: null,
+    };
+    const remove = vi
+      .fn<ProfileFriendshipRepository['remove']>()
+      .mockResolvedValue({ outcome: 'applied', friendship, replayed: false });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: {
+        get: vi.fn(),
+        list: vi.fn(),
+        listIncoming: vi.fn(),
+        request: vi.fn(),
+        respond: vi.fn(),
+        remove,
+      },
+    });
+    apps.push(app);
+    const url = `/user/api/v1/local-padel/profile/friends/${targetUserId}`;
+    const headers = {
+      authorization: `Bearer ${await accessToken()}`,
+      'idempotency-key': 'remove-friend-test-0001',
+    };
+    const payload = { expectedCreatedAt: '2026-09-17T10:00:00.000Z' };
+    const response = await app.inject({ method: 'DELETE', url, headers, payload });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(friendship);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(remove).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        actorUserId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+        targetUserId,
+        ...payload,
+      }),
+    );
+    remove.mockClear();
+    const invalid = [
+      await app.inject({ method: 'DELETE', url, payload }),
+      await app.inject({
+        method: 'DELETE',
+        url,
+        payload,
+        headers: { ...headers, authorization: `Bearer ${await accessToken([tenantId], [])}` },
+      }),
+      await app.inject({
+        method: 'DELETE',
+        url,
+        payload,
+        headers: {
+          ...headers,
+          authorization: `Bearer ${await accessToken(['11111111-1111-4111-8111-111111111111'])}`,
+        },
+      }),
+      await app.inject({
+        method: 'DELETE',
+        url,
+        payload,
+        headers: { authorization: headers.authorization },
+      }),
+      await app.inject({
+        method: 'DELETE',
+        url,
+        headers,
+        payload: { ...payload, actorUserId: targetUserId },
+      }),
+      await app.inject({ method: 'DELETE', url, headers, payload: {} }),
+      await app.inject({
+        method: 'DELETE',
+        url: url.replace(targetUserId, 'invalid'),
+        headers,
+        payload,
+      }),
+    ];
+    expect(invalid.map((value) => value.statusCode)).toEqual([401, 403, 403, 400, 400, 400, 400]);
+    expect(remove).not.toHaveBeenCalled();
+    for (const [outcome, status, code] of [
+      ['not_found', 404, 'PROFILE_FRIENDSHIP_NOT_FOUND'],
+      ['friendship_changed', 409, 'PROFILE_FRIENDSHIP_CHANGED'],
+      ['idempotency_conflict', 409, 'IDEMPOTENCY_KEY_REUSED'],
+    ] as const) {
+      remove.mockResolvedValueOnce({ outcome });
+      const error = await app.inject({ method: 'DELETE', url, headers, payload });
+      expect(error.statusCode).toBe(status);
+      expect(error.json<{ code: string }>().code).toBe(code);
+    }
+    remove.mockResolvedValueOnce({ outcome: 'applied', friendship, replayed: true });
+    const replay = await app.inject({ method: 'DELETE', url, headers, payload });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.headers['x-idempotent-replayed']).toBe('true');
+  });
+
   it('lists incoming friend requests for the notifications feed', async () => {
     const listIncoming = vi.fn<ProfileFriendshipRepository['listIncoming']>().mockResolvedValue({
       items: [
@@ -891,6 +992,7 @@ describe('health endpoints', () => {
       logger: createLogger('api-test', 'silent'),
       pool: fakePool(),
       profileFriendshipRepository: {
+        remove: vi.fn(),
         list: vi.fn(),
         get: vi.fn(),
         listIncoming,
@@ -935,6 +1037,7 @@ describe('health endpoints', () => {
       logger: createLogger('api-test', 'silent'),
       pool: fakePool(),
       profileFriendshipRepository: {
+        remove: vi.fn(),
         list: vi.fn(),
         get: vi.fn(),
         listIncoming: vi.fn(),

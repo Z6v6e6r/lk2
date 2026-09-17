@@ -69,6 +69,28 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('retries friendship removal with the same key and displayed generation', async () => {
+    const target = '6a81e965-c508-4321-812c-4be323606a70';
+    const expectedCreatedAt = '2026-09-17T10:00:00.000Z';
+    const result = { userId: target, status: 'NONE', createdAt: null, requestId: null };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockRejectedValueOnce(new TypeError('network failure'))
+      .mockResolvedValueOnce(jsonResponse(result));
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    expect(await client.removeProfileFriend(target, expectedCreatedAt)).toEqual(result);
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    const [first, second] = fetchImplementation.mock.calls;
+    expect(requestUrl(first![0])).toContain(`/profile/friends/${target}`);
+    expect(first![1]?.method).toBe('DELETE');
+    expect(JSON.parse(stringRequestBody(first![1]?.body))).toEqual({ expectedCreatedAt });
+    const key = new Headers(first![1]?.headers).get('Idempotency-Key');
+    expect(key).toBeTruthy();
+    expect(new Headers(second![1]?.headers).get('Idempotency-Key')).toBe(key);
+  });
+
   it('uses only source-neutral read-only community view routes', async () => {
     const fetchImplementation = vi
       .fn<typeof fetch>()

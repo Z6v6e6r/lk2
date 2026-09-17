@@ -160,3 +160,24 @@ profile/community reads.
    ADR; do not connect subscriptions or memberships before that decision.
 4. Implement mediated contact and direct-chat commands with current-state revalidation.
 5. Move the source from the Home component to a dedicated profile projection.
+
+## Removing a friendship
+
+The profile offers a confirmed `DELETE /profile/friends/{userId}` command with the displayed
+`expectedCreatedAt` and an idempotency key. Only the authenticated actor's tenant-scoped pair can
+be removed. A changed creation time fails with `PROFILE_FRIENDSHIP_CHANGED`; an absent friendship
+fails with `PROFILE_FRIENDSHIP_NOT_FOUND`. Pending requests are untouched. The existing friendship
+command ledger stores the operation-specific hash and result; replays never delete a new friendship.
+
+Request, response and removal writers acquire a command-key lock before the shared ordered-pair
+lock; responses resolve the pair before locking/re-reading the request. Removal, receipt, audit
+(`PROFILE_FRIENDSHIP_REMOVED`) and outbox (`profile.friendship.removed.v1`) commit together. Existing
+accepted requests in both directions are retired to `DECLINED` to release the accepted-pair unique
+index for a new request. Their rows, original response receipts and acceptance audit remain; the
+removal audit records the retired accepted request ids and removed creation time. Here `DECLINED`
+also represents a request retired after friendship removal. No migration or provider call is needed.
+
+Removal does not revoke chat/contact permissions or delete conversations. The explanatory privacy
+card is omitted from the profile; server filtering and privacy settings remain unchanged. Rollback
+is a source rollback: existing tables/receipts remain compatible and removed friendships require
+new user consent through the normal request flow, never automatic restoration.

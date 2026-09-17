@@ -1239,6 +1239,56 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    delete:
+      tags: [profiles]
+      operationId: removeProfileFriend
+      summary: Remove an existing friendship with another player
+      description: |
+        Removes only the authenticated player's friendship in this tenant. Requires the displayed
+        friendship creation time to avoid removing a later friendship. Command receipt, audit and
+        profile.friendship.removed.v1 outbox event commit atomically. Replays return the stored result.
+        Pending requests are never cancelled by this command. No provider or access permissions change.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedCreatedAt]
+              properties:
+                expectedCreatedAt:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: Friendship removed or original successful command replayed.
+          headers:
+            X-Idempotent-Replayed:
+              description: Whether this is the stored result of an earlier command.
+              schema:
+                type: string
+                enum: ['true', 'false']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileFriendship'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/friend-requests:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
