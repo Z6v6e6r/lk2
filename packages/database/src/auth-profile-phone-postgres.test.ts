@@ -42,19 +42,24 @@ describePostgres('profile phone confirmation against real PostgreSQL', () => {
   const concurrentSecond = randomUUID();
   const concurrentPhone = '+79996660016';
   const withoutSummary = randomUUID();
+  const disabledUser = randomUUID();
+  const disabledPhone = '+79996660018';
+  const replayedUser = randomUUID();
+  const replayedPhone = '+79996660019';
 
   async function insertUser(
     client: PoolClient,
     id: string,
     displayName: string,
     phone: string | null,
-    options: { readonly tenant?: string } = {},
+    options: { readonly tenant?: string; readonly status?: 'ACTIVE' | 'DISABLED' } = {},
   ): Promise<void> {
     const tenant = options.tenant ?? tenantId;
-    await client.query(
-      `insert into identity.users (id, tenant_id, status) values ($1, $2, 'ACTIVE')`,
-      [id, tenant],
-    );
+    await client.query(`insert into identity.users (id, tenant_id, status) values ($1, $2, $3)`, [
+      id,
+      tenant,
+      options.status ?? 'ACTIVE',
+    ]);
     await client.query(
       `insert into profile.user_summaries (tenant_id, user_id, display_name, phone_e164)
        values ($1, $2, $3, $4)`,
@@ -150,6 +155,8 @@ describePostgres('profile phone confirmation against real PostgreSQL', () => {
       await insertUser(client, firstTime, 'Первый телефон', null);
       await insertUser(client, tenantScoped, 'Соседний номер в своём тенанте', null);
       await insertUser(client, concurrentFirst, 'Параллельно первый', null);
+      await insertUser(client, disabledUser, 'Отключённый аккаунт', null, { status: 'DISABLED' });
+      await insertUser(client, replayedUser, 'Повторная команда', null);
       await insertUser(client, concurrentSecond, 'Параллельно второй', null);
       await client.query(
         `insert into identity.users (id, tenant_id, status) values ($1, $2, 'ACTIVE')`,
@@ -201,8 +208,9 @@ describePostgres('profile phone confirmation against real PostgreSQL', () => {
     expect(audits).toHaveLength(1);
     expect(audits[0]?.correlation_id).toBe(correlationId);
     expect(audits[0]?.new_value).toMatchObject({
-      source: 'LOGIN_ATTESTED',
+      source: 'PROFILE_PHONE_CONFIRMATION',
       challengeId: `challenge-${mover}`,
+      phoneLast4: moverPhoneAfter.slice(-4),
       releasedPhoneLast4: moverPhoneBefore.slice(-4),
     });
     // The whole previous phone never enters the audit trail.
@@ -237,6 +245,7 @@ describePostgres('profile phone confirmation against real PostgreSQL', () => {
     expect(result).not.toHaveProperty('releasedPhoneLast4');
     await expect(phoneOf(firstTime)).resolves.toBe(firstTimePhone);
     expect((await confirmationAudits(firstTime))[0]?.new_value).toMatchObject({
+      phoneLast4: firstTimePhone.slice(-4),
       releasedPhoneLast4: null,
     });
   });
@@ -278,6 +287,48 @@ describePostgres('profile phone confirmation against real PostgreSQL', () => {
 
   it('refuses an account that has no profile summary to write to', async () => {
     await expect(confirm(withoutSummary, '+79996660017')).rejects.toThrow('AUTH_USER_NOT_ACTIVE');
+  });
+
+  it('refuses to write a phone for a disabled account', async () => {
+    await expect(confirm(disabledUser, disabledPhone)).rejects.toThrow('AUTH_USER_NOT_ACTIVE');
+    await expect(phoneOf(disabledUser)).resolves.toBeNull();
+    await expect(confirmationAudits(disabledUser)).resolves.toHaveLength(0);
+  });
+
+  it('reads back the recorded confirmation so a retried command is not a false expiry', async () => {
+    await expect(confirm(replayedUser, replayedPhone)).resolves.toMatchObject({
+      outcome: 'confirmed',
+    });
+    const repository = createIdentityAuthRepository(pool);
+    const recorded = await repository.findProfilePhoneConfirmation({
+      tenantId,
+      userId: replayedUser,
+      challengeId: `challenge-${replayedUser}`,
+    });
+    expect(recorded).toMatchObject({ phoneLast4: replayedPhone.slice(-4) });
+    expect(Number.isFinite(Date.parse(recorded?.confirmedAt ?? ''))).toBe(true);
+    // The replay record is addressed by the caller's own account, the tenant and that exact challenge.
+    await expect(
+      repository.findProfilePhoneConfirmation({
+        tenantId,
+        userId: replayedUser,
+        challengeId: 'challenge-unknown',
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      repository.findProfilePhoneConfirmation({
+        tenantId,
+        userId: firstTime,
+        challengeId: `challenge-${replayedUser}`,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      repository.findProfilePhoneConfirmation({
+        tenantId: foreignTenantId,
+        userId: replayedUser,
+        challengeId: `challenge-${replayedUser}`,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it('resolves the account behind a provider subject inside the caller tenant only', async () => {

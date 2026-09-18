@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -141,6 +143,29 @@ describe('Redis auth challenge purpose', () => {
         30,
       ),
     ).resolves.toBe(false);
+  });
+
+  it('clears the cooldown a pre-purpose process wrote under the old key shape', async () => {
+    const redis = new FakeRedis();
+    const store = new RedisAuthChallengeStore(redis as never);
+    await store.put(challenge({ id: 'legacy-cooldown-1' }), 600, 30);
+    const legacyKey = `phub:auth:challenge:cooldown:tenant-1:${createHash('sha256')
+      .update('+79990000001')
+      .digest('base64url')}`;
+    redis.values.set(legacyKey, 'older-challenge');
+
+    await store.delete('legacy-cooldown-1');
+
+    expect(redis.values.has(legacyKey)).toBe(false);
+    // A confirmation challenge must not touch the login cooldown shape.
+    await store.put(
+      challenge({ id: 'confirm-legacy-1', purpose: 'PHONE_CONFIRMATION', userId: 'user-1' }),
+      600,
+      30,
+    );
+    redis.values.set(legacyKey, 'older-challenge');
+    await store.delete('confirm-legacy-1');
+    expect(redis.values.has(legacyKey)).toBe(true);
   });
 
   it('releases only the cooldown of the deleted purpose', async () => {

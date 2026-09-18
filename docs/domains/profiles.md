@@ -98,6 +98,11 @@ one transaction together with one `PROFILE_PHONE_CONFIRMED` audit event. The uni
 `(tenant_id, phone_e164)` is the atomic guard, so two concurrent confirmations of one free number
 produce exactly one owner.
 
+The verify command is idempotent by its `Idempotency-Key`: the challenge id is derived from that key, so
+a retried command whose response was lost reads the recorded outcome back from the audit row instead of
+answering that the code expired, and no second write or audit event is produced. The account must still be
+`ACTIVE`; a stale access token for a disabled account cannot rotate the phone.
+
 Responses, audit values and logs expose at most the last four digits; the full number never leaves the
 auth-owned column, the provider request or the encrypted integration custody. A confirmation that
 replaces an existing number reports the released tail so the owner can be told which number was let

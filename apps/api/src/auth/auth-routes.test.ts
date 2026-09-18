@@ -86,6 +86,15 @@ class FakeRepository implements AuthRepository {
     | { readonly outcome: 'already_confirmed' }
     | { readonly outcome: 'phone_taken' } = { outcome: 'confirmed' };
   private confirmedPhones: string[] = [];
+  // Mirrors the durable audit row the real repository writes, so the replay read-back can be exercised.
+  private readonly confirmationRecords = new Map<
+    string,
+    {
+      readonly phoneLast4: string;
+      readonly releasedPhoneLast4?: string;
+      readonly confirmedAt: string;
+    }
+  >();
   private identityUpsertCount = 0;
   private refreshSessionCreationCount = 0;
   private vivaDelegationSaveCount = 0;
@@ -194,14 +203,36 @@ class FakeRepository implements AuthRepository {
 
   public confirmProfilePhone(input: {
     readonly phoneE164: string;
+    readonly challengeId?: string;
   }): Promise<
     | { readonly outcome: 'confirmed'; readonly releasedPhoneLast4?: string }
     | { readonly outcome: 'already_confirmed' }
     | { readonly outcome: 'phone_taken' }
   > {
-    if (this.confirmationOutcome.outcome === 'confirmed')
+    if (this.confirmationOutcome.outcome === 'confirmed') {
       this.confirmedPhones.push(input.phoneE164);
+      if (input.challengeId) {
+        this.confirmationRecords.set(input.challengeId, {
+          phoneLast4: input.phoneE164.slice(-4),
+          ...(this.confirmationOutcome.releasedPhoneLast4
+            ? { releasedPhoneLast4: this.confirmationOutcome.releasedPhoneLast4 }
+            : {}),
+          confirmedAt: new Date().toISOString(),
+        });
+      }
+    }
     return Promise.resolve(this.confirmationOutcome);
+  }
+
+  public findProfilePhoneConfirmation(input: { readonly challengeId: string }): Promise<
+    | {
+        readonly confirmedAt: string;
+        readonly phoneLast4: string;
+        readonly releasedPhoneLast4?: string;
+      }
+    | undefined
+  > {
+    return Promise.resolve(this.confirmationRecords.get(input.challengeId));
   }
 
   public upsertExternalIdentity(): Promise<AuthUser> {
@@ -2058,13 +2089,17 @@ describe('profile phone confirmation', () => {
     },
   };
 
-  async function confirmationApp(options: { readonly subject?: string } = {}) {
+  async function confirmationApp(
+    options: { readonly subject?: string; readonly store?: MemoryAuthChallengeStore } = {},
+  ) {
     const repository = new FakeRepository();
     const subject = options.subject ?? user.id;
+    // Production shares one Redis challenge store across API processes, so tests may share one too.
+    const store = options.store ?? new MemoryAuthChallengeStore();
     const authService = new AuthService({
       config: confirmationConfig,
       repository,
-      challengeStore: new MemoryAuthChallengeStore(),
+      challengeStore: store,
       providers: new Map([['VIVA', confirmationProvider]]),
     });
     const app = await buildApp({
@@ -2082,6 +2117,7 @@ describe('profile phone confirmation', () => {
     return {
       app,
       repository,
+      store,
       authorization: `Bearer ${await userAccessToken(subject)}`,
       tenantUrl: '/user/api/v1/local-padel/profile/phone/challenges',
     };
@@ -2198,7 +2234,8 @@ describe('profile phone confirmation', () => {
   });
 
   it('refuses a challenge issued to another account', async () => {
-    const first = await confirmationApp();
+    const sharedStore = new MemoryAuthChallengeStore();
+    const first = await confirmationApp({ store: sharedStore });
     const start = await first.app.inject({
       method: 'POST',
       url: first.tenantUrl,
@@ -2209,8 +2246,10 @@ describe('profile phone confirmation', () => {
       payload: { phone: '+79990000001' },
     });
     const challengeId = start.json<{ challengeId: string }>().challengeId;
+    // A real second account: `user.id` is the default caller, so reusing it would test nothing.
     const other = await confirmationApp({
-      subject: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
+      subject: '96d1b47c-dc5c-493f-836c-827f01c31546',
+      store: sharedStore,
     });
 
     const verify = await other.app.inject({
@@ -2246,6 +2285,111 @@ describe('profile phone confirmation', () => {
       payload: { phone: '+79990000001' },
     });
     expect(withoutKey.statusCode).toBe(400);
+  });
+
+  it('refuses a login challenge on the confirmation route and a confirmation challenge on login', async () => {
+    const sharedStore = new MemoryAuthChallengeStore();
+    const confirmation = await confirmationApp({ store: sharedStore });
+    // A login challenge id must never confirm a phone for the account behind the JWT.
+    const loginChallenge = await confirmation.app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/challenges',
+      headers: { 'idempotency-key': 'purpose-cross-login-0001' },
+      payload: { method: 'phone_otp', phone: '+79990000001' },
+    });
+    expect(loginChallenge.statusCode).toBe(202);
+    const loginChallengeId = loginChallenge.json<{ challengeId: string }>().challengeId;
+    const confirmationWithLoginId = await confirmation.app.inject({
+      method: 'POST',
+      url: `${confirmation.tenantUrl}/${loginChallengeId}/verify`,
+      headers: {
+        authorization: confirmation.authorization,
+        'idempotency-key': 'purpose-cross-confirm-0001',
+      },
+      payload: { code: '0000' },
+    });
+    expect(confirmationWithLoginId.statusCode).toBe(410);
+    expect(confirmationWithLoginId.json()).toMatchObject({ code: 'AUTH_CODE_EXPIRED' });
+    expect(confirmation.repository.confirmedPhoneValues).toEqual([]);
+
+    // ...and a confirmation challenge must never establish a session.
+    const confirmationChallenge = await confirmation.app.inject({
+      method: 'POST',
+      url: confirmation.tenantUrl,
+      headers: {
+        authorization: confirmation.authorization,
+        'idempotency-key': 'purpose-cross-start-0001',
+      },
+      payload: { phone: '+79990000001' },
+    });
+    expect(confirmationChallenge.statusCode).toBe(202);
+    const confirmationChallengeId = confirmationChallenge.json<{ challengeId: string }>()
+      .challengeId;
+    const loginWithConfirmationId = await confirmation.app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/auth/challenges/${confirmationChallengeId}/verify`,
+      headers: { 'idempotency-key': 'purpose-cross-verify-0001' },
+      payload: {
+        code: '0000',
+        acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+      },
+    });
+    expect(loginWithConfirmationId.statusCode).toBe(410);
+    expect(loginWithConfirmationId.json()).toMatchObject({ code: 'AUTH_CODE_EXPIRED' });
+    expect(confirmation.repository.refreshSessionCreations).toBe(0);
+  });
+
+  it('requires an idempotency key on the confirmation verify route too', async () => {
+    const { app, authorization, tenantUrl } = await confirmationApp();
+    const start = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization, 'idempotency-key': 'profile-phone-start-0009' },
+      payload: { phone: '+79990000001' },
+    });
+    const challengeId = start.json<{ challengeId: string }>().challengeId;
+
+    const withoutKey = await app.inject({
+      method: 'POST',
+      url: `${tenantUrl}/${challengeId}/verify`,
+      headers: { authorization },
+      payload: { code: '0000' },
+    });
+
+    expect(withoutKey.statusCode).toBe(400);
+    expect(withoutKey.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+  });
+
+  it('replays a retried confirmation instead of reporting an expired code', async () => {
+    const { app, repository, authorization, tenantUrl } = await confirmationApp();
+    const start = await app.inject({
+      method: 'POST',
+      url: tenantUrl,
+      headers: { authorization, 'idempotency-key': 'profile-phone-start-0010' },
+      payload: { phone: '+79990000001' },
+    });
+    const challengeId = start.json<{ challengeId: string }>().challengeId;
+    const verify = () =>
+      app.inject({
+        method: 'POST',
+        url: `${tenantUrl}/${challengeId}/verify`,
+        headers: { authorization, 'idempotency-key': 'profile-phone-verify-0010' },
+        payload: { code: '0000' },
+      });
+
+    const first = await verify();
+    expect(first.statusCode).toBe(200);
+    const retry = await verify();
+
+    // The challenge is consumed by the first attempt, so only the durable record can answer the retry.
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toMatchObject({
+      phoneMasked: first.json<{ phoneMasked: string }>().phoneMasked,
+    });
+    expect(retry.json()).toMatchObject({
+      confirmedAt: first.json<{ confirmedAt: string }>().confirmedAt,
+    });
+    expect(repository.confirmedPhoneValues).toEqual(['+79990000001']);
   });
 
   it('rejects a wrong code without writing the phone', async () => {

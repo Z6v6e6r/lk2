@@ -49,6 +49,16 @@ function cooldownKey(challenge: Pick<AuthChallenge, 'tenantId' | 'phoneE164' | '
   return `${KEY_PREFIX}cooldown:${challenge.tenantId}:${challenge.purpose}:${phoneHash}`;
 }
 
+/**
+ * The cooldown key shape used before the purpose existed. A login cooldown written by an older process
+ * is still live for its short TTL after a rolling deploy, and the purpose-aware key can no longer
+ * address it, so deletion also has to clear this shape.
+ */
+function legacyCooldownKey(challenge: Pick<AuthChallenge, 'tenantId' | 'phoneE164'>): string {
+  const phoneHash = createHash('sha256').update(challenge.phoneE164).digest('base64url');
+  return `${KEY_PREFIX}cooldown:${challenge.tenantId}:${phoneHash}`;
+}
+
 function parseChallenge(value: Record<string, string>): AuthChallenge | undefined {
   const attempts = Number(value.attempts);
   const purpose = value.purpose ?? 'LOGIN';
@@ -150,6 +160,7 @@ export class RedisAuthChallengeStore implements AuthChallengeStore {
     const challenge = await this.get(challengeId);
     const keys = [challengeKey(challengeId), claimKey(challengeId)];
     if (challenge) keys.push(cooldownKey(challenge));
+    if (challenge?.purpose === 'LOGIN') keys.push(legacyCooldownKey(challenge));
     await this.redis.del(...keys);
   }
 }
@@ -198,7 +209,10 @@ export class MemoryAuthChallengeStore implements AuthChallengeStore {
 
   public delete(challengeId: string): Promise<void> {
     const challenge = this.values.get(challengeId);
-    if (challenge) this.cooldowns.delete(cooldownKey(challenge));
+    if (challenge) {
+      this.cooldowns.delete(cooldownKey(challenge));
+      if (challenge.purpose === 'LOGIN') this.cooldowns.delete(legacyCooldownKey(challenge));
+    }
     this.values.delete(challengeId);
     this.claims.delete(challengeId);
     return Promise.resolve();

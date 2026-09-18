@@ -102,6 +102,21 @@ export class PostgresAuthRepository implements AuthRepository {
     });
   }
 
+  public findProfilePhoneConfirmation(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly challengeId: string;
+  }): Promise<
+    | {
+        readonly confirmedAt: string;
+        readonly phoneLast4: string;
+        readonly releasedPhoneLast4?: string;
+      }
+    | undefined
+  > {
+    return this.repository.findProfilePhoneConfirmation(input);
+  }
+
   public confirmProfilePhone(input: {
     readonly tenantId: string;
     readonly userId: string;

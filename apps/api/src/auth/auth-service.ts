@@ -134,6 +134,23 @@ export interface AuthRepository {
     readonly identity: Pick<VerifiedExternalIdentity, 'issuer' | 'subject'>;
   }): Promise<AuthUser | undefined>;
   /**
+   * The recorded outcome of an already applied confirmation for this account and challenge id. The
+   * challenge id is derived from the caller's Idempotency-Key, so a retried verify command reads back
+   * what the first attempt wrote instead of failing on the consumed challenge.
+   */
+  findProfilePhoneConfirmation?(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly challengeId: string;
+  }): Promise<
+    | {
+        readonly confirmedAt: string;
+        readonly phoneLast4: string;
+        readonly releasedPhoneLast4?: string;
+      }
+    | undefined
+  >;
+  /**
    * Attaches an attested phone to one account for the tenant. Returns `phone_taken` when another
    * account holds the number, `already_confirmed` when it is already the same value, and `confirmed`
    * with the previously released masked tail otherwise.
@@ -1207,7 +1224,9 @@ export class AuthService {
    * Verifies a confirmation code and attaches the attested phone to the caller's account. Fail-closed
    * order: the challenge belongs to the caller, the provider subject must not belong to another
    * account, the phone must not be held by another account, and only then is the phone written with one
-   * audit event. No session is created and no provider delegation is persisted here.
+   * audit event. No session is created and no provider delegation is persisted here. A retry of an
+   * already applied command reads back the recorded outcome, because the challenge id is derived from
+   * the caller's Idempotency-Key.
    */
   public async confirmPhoneChallenge(input: {
     readonly tenantKey: string;
@@ -1225,6 +1244,14 @@ export class AuthService {
       challenge.purpose !== 'PHONE_CONFIRMATION' ||
       challenge.userId !== input.userId
     ) {
+      // A consumed challenge is the normal shape of a retried command, so the durable record decides
+      // whether this is a replay or a genuinely expired code.
+      const replay = await this.replayProfilePhoneConfirmation(
+        currentBinding.tenantId,
+        input.userId,
+        input.challengeId,
+      );
+      if (replay) return replay;
       throw new AuthServiceError('AUTH_CODE_EXPIRED');
     }
     if (
@@ -1269,38 +1296,69 @@ export class AuthService {
       this.mapProviderError(error);
     }
 
-    // The code exchange names the provider account behind the number. If that account is not the caller
-    // the number belongs to someone else's account, and writing it here would make the CUP resolve a
-    // phone to one account while a phone login still lands on another.
-    const subjectUser = await this.options.repository.findExternalSubjectUser({
-      binding: {
-        tenantId: challenge.tenantId,
-        tenantKey: challenge.tenantKey,
-        provider: challenge.provider,
-        providerTenantKey: challenge.providerTenantKey,
-      },
-      identity: { issuer: identity.issuer, subject: identity.subject },
-    });
-    if (subjectUser && subjectUser.id !== input.userId) {
-      await this.options.challengeStore.delete(challenge.id);
-      throw new AuthServiceError('AUTH_PHONE_ALREADY_BOUND');
-    }
+    try {
+      // The code exchange names the provider account behind the number. If that account is not the
+      // caller the number belongs to someone else's account, and writing it here would make the CUP
+      // resolve a phone to one account while a phone login still lands on another.
+      const subjectUser = await this.options.repository.findExternalSubjectUser({
+        binding: {
+          tenantId: challenge.tenantId,
+          tenantKey: challenge.tenantKey,
+          provider: challenge.provider,
+          providerTenantKey: challenge.providerTenantKey,
+        },
+        identity: { issuer: identity.issuer, subject: identity.subject },
+      });
+      if (subjectUser && subjectUser.id !== input.userId) {
+        await this.options.challengeStore.delete(challenge.id);
+        throw new AuthServiceError('AUTH_PHONE_ALREADY_BOUND');
+      }
 
-    const result = await this.options.repository.confirmProfilePhone({
-      tenantId: challenge.tenantId,
-      userId: input.userId,
-      phoneE164: challenge.phoneE164,
-      challengeId: challenge.id,
-      correlationId: input.correlationId,
+      const result = await this.options.repository.confirmProfilePhone({
+        tenantId: challenge.tenantId,
+        userId: input.userId,
+        phoneE164: challenge.phoneE164,
+        challengeId: challenge.id,
+        correlationId: input.correlationId,
+      });
+      await this.options.challengeStore.delete(challenge.id);
+      if (result.outcome === 'phone_taken') throw new AuthServiceError('AUTH_PHONE_ALREADY_BOUND');
+      return {
+        phoneMasked: maskPhoneE164(challenge.phoneE164),
+        confirmedAt: this.now().toISOString(),
+        ...(result.outcome === 'confirmed' && result.releasedPhoneLast4
+          ? { releasedPhoneLast4: result.releasedPhoneLast4 }
+          : {}),
+      };
+    } catch (error) {
+      // A terminal outcome already deleted the challenge; an unexpected failure must release the lease
+      // instead of leaving a valid challenge that answers "already in progress" on every retry.
+      if (!(error instanceof AuthServiceError)) {
+        await this.options.challengeStore.release(challenge.id, claimId);
+        this.mapIdentityRepositoryError(error);
+      }
+      throw error;
+    }
+  }
+
+  /** Reads back the outcome of an already applied confirmation for this account and challenge. */
+  private async replayProfilePhoneConfirmation(
+    tenantId: string,
+    userId: string,
+    challengeId: string,
+  ): Promise<
+    { phoneMasked: string; confirmedAt: string; releasedPhoneLast4?: string } | undefined
+  > {
+    const recorded = await this.options.repository.findProfilePhoneConfirmation?.({
+      tenantId,
+      userId,
+      challengeId,
     });
-    await this.options.challengeStore.delete(challenge.id);
-    if (result.outcome === 'phone_taken') throw new AuthServiceError('AUTH_PHONE_ALREADY_BOUND');
+    if (!recorded) return undefined;
     return {
-      phoneMasked: maskPhoneE164(challenge.phoneE164),
-      confirmedAt: this.now().toISOString(),
-      ...(result.outcome === 'confirmed' && result.releasedPhoneLast4
-        ? { releasedPhoneLast4: result.releasedPhoneLast4 }
-        : {}),
+      phoneMasked: maskPhoneE164(recorded.phoneLast4),
+      confirmedAt: recorded.confirmedAt,
+      ...(recorded.releasedPhoneLast4 ? { releasedPhoneLast4: recorded.releasedPhoneLast4 } : {}),
     };
   }
 
@@ -1420,7 +1478,9 @@ export class AuthService {
     }
     const currentBinding = await this.binding(input.tenantKey);
     const challenge = await this.options.challengeStore.get(input.challengeId);
-    if (!challenge || challenge.tenantKey !== input.tenantKey) {
+    // Only a login challenge may establish a session. A confirmation challenge is bound to an
+    // already-authenticated account and must never be replayed here as a way to log in.
+    if (!challenge || challenge.tenantKey !== input.tenantKey || challenge.purpose !== 'LOGIN') {
       throw new AuthServiceError('AUTH_CODE_EXPIRED');
     }
     if (
