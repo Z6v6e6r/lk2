@@ -1296,11 +1296,13 @@ paths:
     get:
       tags: [profiles]
       operationId: listProfileFriendRequests
-      summary: List the authenticated user's incoming friend requests
+      summary: List the authenticated user's pending friend requests
       description: |
-        Pending requests addressed to the authenticated player, newest first. Every item carries the
-        request id used by the accept and decline commands, so the notifications feed never has to
-        resolve pending state on the client.
+        Pending requests the authenticated player can still act on, newest first. `direction=incoming`
+        (the default) lists requests addressed to the player; every item carries the request id used
+        by the accept and decline commands, so the notifications feed never has to resolve pending
+        state on the client. `direction=outgoing` lists requests the player has sent and still waits
+        on; those items are read-only and name the addressed peer.
       parameters:
         - name: limit
           in: query
@@ -1309,9 +1311,15 @@ paths:
             minimum: 1
             maximum: 24
             default: 8
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum: [incoming, outgoing]
+            default: incoming
       responses:
         '200':
-          description: Pending incoming requests ordered by most recent first.
+          description: Pending requests for the requested direction, most recent first.
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId

@@ -69,6 +69,7 @@ export interface ProfileFriendshipRepository {
   get(tenantId: string, viewerUserId: string, targetUserId: string): Promise<FriendshipState>;
   list(tenantId: string, viewerUserId: string, limit: number): Promise<FriendPage>;
   listIncoming(tenantId: string, viewerUserId: string, limit: number): Promise<FriendRequestPage>;
+  listOutgoing(tenantId: string, viewerUserId: string, limit: number): Promise<FriendRequestPage>;
   request(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -110,7 +111,7 @@ interface FriendRow extends QueryResultRow {
 
 interface FriendRequestRow extends QueryResultRow {
   readonly id: string;
-  readonly requester_user_id: string;
+  readonly peer_user_id: string;
   readonly display_name: string;
   readonly level_label: string | null;
   readonly delivery_id: string | null;
@@ -297,6 +298,57 @@ async function announceFriendshipCreated(
   );
 }
 
+/**
+ * Pending friend requests rendered in the "Уведомления" feed, from either side of the request. The
+ * peer is addressed by PadlHub UUID only and the card never resolves state on the client.
+ */
+async function listPendingRequests(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly viewerUserId: string;
+    readonly limit: number;
+    readonly direction: 'incoming' | 'outgoing';
+  },
+): Promise<FriendRequestPage> {
+  const viewerColumn =
+    input.direction === 'incoming' ? 'request.target_user_id' : 'request.requester_user_id';
+  const peerColumn =
+    input.direction === 'incoming' ? 'request.requester_user_id' : 'request.target_user_id';
+  const result = await client.query<FriendRequestRow>(
+    `select request.id,
+            ${peerColumn} as peer_user_id,
+            coalesce(nullif(btrim(summary.display_name), ''), 'Игрок ПадлХАБ') as display_name,
+            summary.level_label,
+            photo.delivery_id,
+            request.created_at
+       from profile.friend_requests request
+       left join profile.user_summaries summary
+         on summary.tenant_id = request.tenant_id
+        and summary.user_id = ${peerColumn}
+       left join integration.user_profile_photo_sync photo
+         on photo.tenant_id = request.tenant_id
+        and photo.user_id = ${peerColumn}
+      where request.tenant_id = $1
+        and ${viewerColumn} = $2
+        and request.state = 'PENDING'
+      order by request.created_at desc
+      limit $3`,
+    [input.tenantId, input.viewerUserId, input.limit],
+  );
+  return {
+    items: result.rows.map((row) => ({
+      requestId: row.id,
+      userId: row.peer_user_id,
+      displayName: row.display_name,
+      avatarUrl: row.delivery_id ? profilePhotoDeliveryUrl(input.tenantId, row.delivery_id) : null,
+      levelLabel: row.level_label,
+      createdAt: new Date(row.created_at).toISOString(),
+      route: `/profile/${row.peer_user_id}`,
+    })),
+  };
+}
+
 export function createProfileFriendshipRepository(pool: Pool): ProfileFriendshipRepository {
   return {
     get(tenantId, viewerUserId, targetUserId) {
@@ -381,40 +433,15 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
     },
 
     listIncoming(tenantId, viewerUserId, limit) {
-      return withTenantTransaction(pool, tenantId, async (client) => {
-        const result = await client.query<FriendRequestRow>(
-          `select request.id,
-                  request.requester_user_id,
-                  coalesce(nullif(btrim(summary.display_name), ''), 'Игрок ПадлХАБ') as display_name,
-                  summary.level_label,
-                  photo.delivery_id,
-                  request.created_at
-             from profile.friend_requests request
-             left join profile.user_summaries summary
-               on summary.tenant_id = request.tenant_id
-              and summary.user_id = request.requester_user_id
-             left join integration.user_profile_photo_sync photo
-               on photo.tenant_id = request.tenant_id
-              and photo.user_id = request.requester_user_id
-            where request.tenant_id = $1
-              and request.target_user_id = $2
-              and request.state = 'PENDING'
-            order by request.created_at desc
-            limit $3`,
-          [tenantId, viewerUserId, limit],
-        );
-        return {
-          items: result.rows.map((row) => ({
-            requestId: row.id,
-            userId: row.requester_user_id,
-            displayName: row.display_name,
-            avatarUrl: row.delivery_id ? profilePhotoDeliveryUrl(tenantId, row.delivery_id) : null,
-            levelLabel: row.level_label,
-            createdAt: new Date(row.created_at).toISOString(),
-            route: `/profile/${row.requester_user_id}`,
-          })),
-        };
-      });
+      return withTenantTransaction(pool, tenantId, (client) =>
+        listPendingRequests(client, { tenantId, viewerUserId, limit, direction: 'incoming' }),
+      );
+    },
+
+    listOutgoing(tenantId, viewerUserId, limit) {
+      return withTenantTransaction(pool, tenantId, (client) =>
+        listPendingRequests(client, { tenantId, viewerUserId, limit, direction: 'outgoing' }),
+      );
     },
 
     request(input) {

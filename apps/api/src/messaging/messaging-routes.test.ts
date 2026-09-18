@@ -805,4 +805,33 @@ describe('messaging User API', () => {
     expect(send.statusCode).toBe(409);
     expect(send.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
   });
+
+  it('refuses a direct message to a participant who never signed in', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ outcome: 'target_unreachable' });
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ sendMessage }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/messages`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'message-command-unreachable-0001',
+      },
+      payload: { clientMessageId: 'client-message-unreachable-0001', body: 'Привет' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: 'CHAT_PARTICIPANT_UNREACHABLE',
+      message:
+        'Игрок ещё не входил в ПадлХАБ: он не увидит сообщение, пока не войдёт в приложение.',
+    });
+    expect(sendMessage).toHaveBeenCalledOnce();
+  });
 });

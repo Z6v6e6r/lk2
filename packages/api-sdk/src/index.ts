@@ -796,9 +796,12 @@ export class PadlHubApiClient {
     );
   }
 
-  public listProfileFriendRequests(limit = 8): Promise<ProfileFriendRequestPage> {
+  public listProfileFriendRequests(
+    limit = 8,
+    direction: 'incoming' | 'outgoing' = 'incoming',
+  ): Promise<ProfileFriendRequestPage> {
     return this.request<ProfileFriendRequestPage>(
-      `/profile/friend-requests?limit=${encodeURIComponent(limit)}`,
+      `/profile/friend-requests?limit=${encodeURIComponent(limit)}&direction=${direction}`,
     );
   }
 
