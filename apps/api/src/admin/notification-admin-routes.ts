@@ -99,6 +99,11 @@ function parseRecipientSelector(input: {
   return { selector: { normalizedPhones, normalizedUserIds } };
 }
 
+const subscriberQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+  cursor: z.string().uuid().optional(),
+});
+
 function idempotencyKey(request: FastifyRequest): string {
   return request.headers['idempotency-key'] as string;
 }
@@ -197,6 +202,32 @@ export function registerAdminNotificationRoutes(
           },
         ],
       };
+    },
+  );
+
+  app.get(
+    '/admin/api/v1/:tenantKey/notifications/web-push-subscribers',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!options.repository || !request.tenantId) return repositoryUnavailable(request, reply);
+      const parsed = subscriberQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Укажите курсор в виде UUID и размер страницы от 1 до 50.',
+        );
+      }
+      return options.repository.listWebPushSubscribers({
+        tenantId: request.tenantId,
+        webPushAppId: options.webPushAppId,
+        webPushEnvironment: options.webPushEnvironment,
+        limit: parsed.data.limit ?? 20,
+        ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
+      });
     },
   );
 
