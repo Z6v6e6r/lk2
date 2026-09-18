@@ -5,8 +5,9 @@ import { createDatabasePool, withTenantTransaction } from '@phub/database';
 /**
  * Read-only operator report over the phone identity that the CUP recipient resolver depends on.
  *
- * A phone reaches an account two ways: `profile.user_summaries.phone_e164` holds a phone that a phone
- * login verified (it wins, and the schema now keeps it unique per tenant), and
+ * A phone reaches an account two ways: `profile.user_summaries.phone_e164` holds a phone that was
+ * proved by a phone login or by the authenticated profile confirmation (it wins, and the schema now
+ * keeps it unique per tenant), and
  * `integration.external_entity_map` holds the provider viewer phone the client relayed (fallback
  * only). When the two live on different accounts of one person, a campaign addressed by phone
  * resolves to the account that cannot receive Web Push. Nothing is written here: the report only

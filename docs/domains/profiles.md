@@ -73,6 +73,37 @@ relevant API and worker instance sets the provenance marker and remains a safe r
 Until that second phase, initializing a previously missing snapshot-only summary may still create
 one technical baseline point at import time.
 
+## Confirmed phone
+
+A phone reaches `profile.user_summaries.phone_e164` through two writers, and both prove possession of
+the number with a one-time code: the phone-login challenge and the authenticated confirmation below.
+The confirmation exists because a person whose account was created through OAuth can still own a
+phone without that phone ever becoming a login key.
+
+| Command                                                  | Purpose                                                  |
+| -------------------------------------------------------- | -------------------------------------------------------- |
+| `POST /{tenantKey}/profile/phone/challenges`             | Send a code for a phone the authenticated account claims |
+| `POST /{tenantKey}/profile/phone/challenges/{id}/verify` | Verify the code and attach that phone to the account     |
+
+Both require an authenticated PadlHub JWT and an `Idempotency-Key`. The challenge is bound to the
+caller's account, tenant and phone, and is stored under its own purpose, so a code issued here can
+never create a session, switch an account or be replayed as a login challenge, and a login cooldown
+does not block a confirmation for the same number (and the other way round).
+
+Verification fails closed in this order: the challenge must belong to the caller; the provider subject
+behind the exchanged code must not already belong to another account; and the number must not be held
+by another account in the tenant, either as its confirmed phone or as its provider viewer phone
+(`integration.external_entity_map`, `VIVA`/`legacy_viewer_phone`). Only then is the column written in
+one transaction together with one `PROFILE_PHONE_CONFIRMED` audit event. The unique partial index on
+`(tenant_id, phone_e164)` is the atomic guard, so two concurrent confirmations of one free number
+produce exactly one owner.
+
+Responses, audit values and logs expose at most the last four digits; the full number never leaves the
+auth-owned column, the provider request or the encrypted integration custody. A confirmation that
+replaces an existing number reports the released tail so the owner can be told which number was let
+go. Confirming a phone does not grant a payment, participation or activity-history identity by itself:
+those guards keep reading the same server-resolved value they read before.
+
 ## Visibility tiers
 
 | Tier          | Visible data                                                 | Contact/chat                     |
