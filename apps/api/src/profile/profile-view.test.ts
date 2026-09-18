@@ -111,4 +111,29 @@ describe('player profile view policy', () => {
     });
     expect(view.access.chat).toEqual({ status: 'LOCKED', reason: 'PROFILE_RESTRICTED' });
   });
+
+  it('exposes an imported account that cannot sign in and locks both invites', () => {
+    const view = buildPlayerProfileView({
+      profile: source,
+      viewerUserId: '6a81e965-c508-4321-812c-4be323606a70',
+      permissions: [PROFILE_CONTACT_PERMISSION, DIRECT_CHAT_PERMISSION],
+      directChatEnabled: true,
+      reachable: false,
+    });
+
+    expect(view.reachable).toBe(false);
+    expect(view.access.contact).toEqual({ status: 'LOCKED', reason: 'TARGET_UNREACHABLE' });
+    expect(view.access.chat).toEqual({ status: 'LOCKED', reason: 'TARGET_UNREACHABLE' });
+  });
+
+  it('never marks the viewer own profile unreachable', () => {
+    const view = buildPlayerProfileView({
+      profile: source,
+      viewerUserId: source.userId,
+      permissions: [],
+      reachable: false,
+    });
+
+    expect(view.reachable).toBe(true);
+  });
 });

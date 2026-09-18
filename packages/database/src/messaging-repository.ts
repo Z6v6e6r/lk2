@@ -1,6 +1,7 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import { profileReachableSql } from './profile-reachability-repository.js';
 
 export interface MessagingRuntimeSettings {
   readonly httpEnabled: boolean;
@@ -61,6 +62,7 @@ export interface ConversationMessagePage {
 
 export type CreateDirectConversationResult =
   | { readonly outcome: 'target_not_found' }
+  | { readonly outcome: 'target_unreachable' }
   | { readonly outcome: 'idempotency_conflict' }
   | {
       readonly outcome: 'ok';
@@ -839,9 +841,14 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `${input.tenantId}:${leftUserId}:${rightUserId}`,
         ]);
-        const activeUsers = await client.query<{ id: string; chat_policy: string }>(
+        const activeUsers = await client.query<{
+          id: string;
+          chat_policy: string;
+          reachable: boolean;
+        }>(
           `select user_account.id,
-                  coalesce(privacy.chat_policy, 'AUTHORIZED') as chat_policy
+                  coalesce(privacy.chat_policy, 'AUTHORIZED') as chat_policy,
+                  ${profileReachableSql({ tenantParam: '$1', userParam: 'user_account.id' })} as reachable
              from identity.users user_account
              join identity.user_access_profiles current_access
                on current_access.tenant_id = user_account.tenant_id
@@ -860,6 +867,9 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         if (!target || target.chat_policy !== 'AUTHORIZED') {
           return { outcome: 'target_not_found' };
         }
+        // An imported record with no login path can never open the cabinet, so a new conversation
+        // would stay invisible for its owner.
+        if (target.reachable !== true) return { outcome: 'target_unreachable' };
         const blocked = await queryOne<{ blocked: boolean }>(
           client,
           `select true as blocked

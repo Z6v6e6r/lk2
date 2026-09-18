@@ -2,6 +2,7 @@ import { profilePhotoDeliveryUrl } from '@phub/domain';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import { profileReachableSql } from './profile-reachability-repository.js';
 
 export type FriendshipStatus = 'NONE' | 'FRIEND' | 'PENDING_OUTGOING' | 'PENDING_INCOMING';
 
@@ -52,7 +53,8 @@ export type RequestFriendResult =
     }
   | { readonly outcome: 'idempotency_conflict' }
   | { readonly outcome: 'self_target' }
-  | { readonly outcome: 'target_not_found' };
+  | { readonly outcome: 'target_not_found' }
+  | { readonly outcome: 'target_unreachable' };
 
 export type RespondFriendRequestResult =
   | {
@@ -174,19 +176,32 @@ function storedState(value: unknown): FriendshipState {
   };
 }
 
-async function requireActiveTarget(
+/**
+ * Distinguishes an unknown target from an active but unreachable imported record: only the latter
+ * can sign in nowhere, so a request addressed to it would never be seen.
+ */
+async function classifyTarget(
   client: PoolClient,
   tenantId: string,
   targetUserId: string,
-): Promise<boolean> {
-  const target = await queryOne<QueryResultRow>(
+): Promise<'ok' | 'not_found' | 'unreachable'> {
+  const reachable = await queryOne<QueryResultRow>(
+    client,
+    `select 1
+       from identity.users
+      where tenant_id = $1 and id = $2 and status = 'ACTIVE'
+        and ${profileReachableSql({ tenantParam: '$1', userParam: '$2' })}`,
+    [tenantId, targetUserId],
+  );
+  if (reachable) return 'ok';
+  const active = await queryOne<QueryResultRow>(
     client,
     `select 1
        from identity.users
       where tenant_id = $1 and id = $2 and status = 'ACTIVE'`,
     [tenantId, targetUserId],
   );
-  return target !== undefined;
+  return active ? 'unreachable' : 'not_found';
 }
 
 function acceptedState(targetUserId: string, createdAt: Date | string): FriendshipState {
@@ -435,9 +450,9 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
             replayed: true,
           };
         }
-        if (!(await requireActiveTarget(client, input.tenantId, input.targetUserId))) {
-          return { outcome: 'target_not_found' };
-        }
+        const targetState = await classifyTarget(client, input.tenantId, input.targetUserId);
+        if (targetState === 'not_found') return { outcome: 'target_not_found' };
+        if (targetState === 'unreachable') return { outcome: 'target_unreachable' };
         const friendship = await queryOne<FriendshipRow>(
           client,
           `select created_at

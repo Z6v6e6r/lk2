@@ -978,6 +978,39 @@ describe('health endpoints', () => {
     expect(replay.headers['x-idempotent-replayed']).toBe('true');
   });
 
+  it('refuses a friend request to an account that never signed in', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const request = vi
+      .fn<ProfileFriendshipRepository['request']>()
+      .mockResolvedValue({ outcome: 'target_unreachable' });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: {
+        list: vi.fn(),
+        get: vi.fn(),
+        listIncoming: vi.fn(),
+        request,
+        respond: vi.fn(),
+        remove: vi.fn(),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/profile/friends/${targetUserId}`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'profile-friend-unreachable-test-0001',
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'PROFILE_FRIEND_TARGET_UNREACHABLE' });
+  });
+
   it('lists incoming friend requests for the notifications feed', async () => {
     const listIncoming = vi.fn<ProfileFriendshipRepository['listIncoming']>().mockResolvedValue({
       items: [

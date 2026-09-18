@@ -13,12 +13,21 @@ export interface PlayerProfileViewInput {
   readonly permissions: readonly string[];
   readonly policy?: Pick<ProfilePrivacySettings, 'contactPolicy' | 'chatPolicy'>;
   readonly directChatEnabled?: boolean;
+  /**
+   * False for an imported player record that never signed in and has no login path: the owner
+   * lands on a different account, so invites and conversations addressed to this row stay unseen.
+   */
+  readonly reachable?: boolean;
 }
 
 export interface ProfileActionCapability {
   readonly status: 'AVAILABLE' | 'LOCKED' | 'HIDDEN';
   readonly reason?:
-    'ACCESS_REQUIRED' | 'PROFILE_RESTRICTED' | 'SELF_PROFILE' | 'FEATURE_UNAVAILABLE';
+    | 'ACCESS_REQUIRED'
+    | 'PROFILE_RESTRICTED'
+    | 'SELF_PROFILE'
+    | 'FEATURE_UNAVAILABLE'
+    | 'TARGET_UNREACHABLE';
   readonly route?: string;
 }
 
@@ -42,6 +51,8 @@ export interface PlayerProfileView {
     readonly balanceMinor?: number;
     readonly currency?: string;
   };
+  /** Always true for the viewer's own profile. */
+  readonly reachable: boolean;
   readonly access: {
     readonly audience: 'SELF' | 'OTHER';
     readonly tier: 'BASIC' | 'EXTENDED' | 'INTERACTION' | 'SELF';
@@ -61,7 +72,9 @@ function otherAction(
   granted: boolean,
   policy: ProfilePrivacySettings['contactPolicy'],
   unavailablePresentation: 'LOCKED' | 'HIDDEN',
+  reachable: boolean,
 ): ProfileActionCapability {
+  if (!reachable) return { status: 'LOCKED', reason: 'TARGET_UNREACHABLE' };
   if (policy === 'NOBODY') return { status: 'LOCKED', reason: 'PROFILE_RESTRICTED' };
   if (!granted) return { status: 'LOCKED', reason: 'ACCESS_REQUIRED' };
   // Authorization and target privacy are necessary but not sufficient to
@@ -77,8 +90,10 @@ function chatAction(input: {
   readonly granted: boolean;
   readonly policy: ProfilePrivacySettings['chatPolicy'];
   readonly enabled: boolean;
+  readonly reachable: boolean;
   readonly targetUserId: string;
 }): ProfileActionCapability {
+  if (!input.reachable) return { status: 'LOCKED', reason: 'TARGET_UNREACHABLE' };
   if (input.policy === 'NOBODY') return { status: 'LOCKED', reason: 'PROFILE_RESTRICTED' };
   if (!input.granted) return { status: 'LOCKED', reason: 'ACCESS_REQUIRED' };
   if (!input.enabled) return { status: 'HIDDEN' };
@@ -95,6 +110,7 @@ function chatAction(input: {
  */
 export function buildPlayerProfileView(input: PlayerProfileViewInput): PlayerProfileView {
   const isSelf = input.viewerUserId === input.profile.userId;
+  const reachable = isSelf || input.reachable !== false;
   const policy = input.policy ?? DEFAULT_PROFILE_PRIVACY_SETTINGS;
   const canReadExtended = isSelf || input.permissions.includes(PROFILE_EXTENDED_READ_PERMISSION);
   const canContact = input.permissions.includes(PROFILE_CONTACT_PERMISSION);
@@ -127,6 +143,7 @@ export function buildPlayerProfileView(input: PlayerProfileViewInput): PlayerPro
 
   return {
     profile,
+    reachable,
     ...(isSelf
       ? {
           privateAccount: {
@@ -148,13 +165,16 @@ export function buildPlayerProfileView(input: PlayerProfileViewInput): PlayerPro
             ? 'EXTENDED'
             : 'BASIC',
       visibleSections,
-      contact: isSelf ? selfAction() : otherAction(canContact, policy.contactPolicy, 'LOCKED'),
+      contact: isSelf
+        ? selfAction()
+        : otherAction(canContact, policy.contactPolicy, 'LOCKED', reachable),
       chat: isSelf
         ? selfAction()
         : chatAction({
             granted: canChat,
             policy: policy.chatPolicy,
             enabled: input.directChatEnabled ?? false,
+            reachable,
             targetUserId: input.profile.userId,
           }),
     },

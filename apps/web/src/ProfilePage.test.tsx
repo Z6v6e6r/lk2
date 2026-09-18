@@ -18,6 +18,7 @@ function selfProfile(level: string): PlayerProfileView {
       level: { label: level, value: 3.64, assessmentRequired: false },
     },
     privateAccount: { phoneLast4: '5826', balanceMinor: 54000, currency: 'RUB' },
+    reachable: true,
     access: {
       audience: 'SELF',
       tier: 'SELF',
@@ -297,6 +298,7 @@ describe('ProfilePage', () => {
       avatarUrl: null,
       level: { label: 'C', assessmentRequired: false },
     },
+    reachable: true,
     access: {
       audience: 'OTHER',
       tier: 'INTERACTION',
@@ -439,5 +441,37 @@ describe('ProfilePage', () => {
     expect(
       screen.getByText('Добавляйте игроков из их профилей — они появятся здесь.'),
     ).toBeVisible();
+  });
+
+  it('warns that an account which never signed in cannot receive the invite', () => {
+    render(
+      <ProfilePage
+        profile={{
+          ...otherProfile,
+          reachable: false,
+          access: {
+            ...otherProfile.access,
+            contact: { status: 'LOCKED', reason: 'TARGET_UNREACHABLE' },
+            chat: { status: 'LOCKED', reason: 'TARGET_UNREACHABLE' },
+          },
+        }}
+        friendship={{
+          userId: otherProfile.profile.userId,
+          status: 'NONE',
+          createdAt: null,
+          requestId: null,
+        }}
+        onAddFriend={() => undefined}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText('Игрок ещё не входил в приложение: заявку он не увидит')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Недоступен' })).toBeDisabled();
+    // Both the contact and the chat action explain the same server-derived reason.
+    expect(
+      screen.getAllByText('Игрок ещё не входил в приложение — заявка и сообщения не дойдут.'),
+    ).toHaveLength(2);
   });
 });

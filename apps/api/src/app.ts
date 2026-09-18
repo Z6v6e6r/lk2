@@ -49,6 +49,7 @@ import type {
   NotificationInboxRepository,
   ParticipationCommandRepository,
   ProfileFriendshipRepository,
+  ProfileReachabilityRepository,
   ProfileLevelHistoryRepository,
   ProfilePrivacyRepository,
   ProfileSummaryRepository,
@@ -270,6 +271,7 @@ export interface BuildAppOptions {
   readonly giftCertificateArtifactStore?: GiftCertificateArtifactReadStore;
   readonly profilePrivacyRepository?: ProfilePrivacyRepository;
   readonly profileFriendshipRepository?: ProfileFriendshipRepository;
+  readonly profileReachabilityRepository?: ProfileReachabilityRepository;
   readonly profileLevelHistoryRepository?: ProfileLevelHistoryRepository;
   readonly profileSummaryRepository?: Pick<ProfileSummaryRepository, 'get'>;
   readonly promotionEngagementRepository?: PromotionEngagementRepository;
@@ -1493,6 +1495,13 @@ export async function buildApp(options: BuildAppOptions) {
       const directChatEnabled = Boolean(
         messagingRuntime?.httpEnabled && messagingRuntime.directEnabled,
       );
+      // Imported legacy player rows cannot sign in, so an invite addressed to one would never be
+      // seen: expose that instead of letting the client write a dead request.
+      const targetReachable =
+        targetUserId === viewerUserId
+          ? true
+          : ((await options.profileReachabilityRepository?.isReachable(tenantId, targetUserId)) ??
+            true);
 
       if (options.config.HOME_READ_MODE === 'mock') {
         const isSelf = targetUserId === viewerUserId;
@@ -1514,6 +1523,7 @@ export async function buildApp(options: BuildAppOptions) {
           viewerUserId,
           permissions,
           directChatEnabled,
+          reachable: targetReachable,
           ...(privacyPolicy ? { policy: privacyPolicy } : {}),
         });
       }
@@ -1547,6 +1557,7 @@ export async function buildApp(options: BuildAppOptions) {
             viewerUserId,
             permissions,
             directChatEnabled,
+            reachable: targetReachable,
             ...(privacyPolicy ? { policy: privacyPolicy } : {}),
           });
         }
@@ -1596,6 +1607,7 @@ export async function buildApp(options: BuildAppOptions) {
         viewerUserId,
         permissions,
         directChatEnabled,
+        reachable: targetReachable,
         ...(privacyPolicy ? { policy: privacyPolicy } : {}),
       });
     },

@@ -33,6 +33,7 @@ import {
   createParticipationCommandRepository,
   createProfilePrivacyRepository,
   createProfileFriendshipRepository,
+  createProfileReachabilityRepository,
   createProfileLevelHistoryRepository,
   createProfileSummaryRepository,
   createPromotionEngagementRepository,
@@ -553,6 +554,7 @@ const app = await buildApp({
   ...(giftCertificateArtifactStore ? { giftCertificateArtifactStore } : {}),
   profilePrivacyRepository: createProfilePrivacyRepository(pool),
   profileFriendshipRepository: createProfileFriendshipRepository(pool),
+  profileReachabilityRepository: createProfileReachabilityRepository(pool),
   profileLevelHistoryRepository: createProfileLevelHistoryRepository(pool),
   profileSummaryRepository,
   ...(promotionEngagementSink

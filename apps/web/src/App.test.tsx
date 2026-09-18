@@ -198,6 +198,7 @@ const userProfile: PlayerProfileView = {
       ? {}
       : { currency: homeDashboard.profile.currency }),
   },
+  reachable: true,
   access: {
     audience: 'SELF',
     tier: 'SELF',
@@ -1305,6 +1306,7 @@ describe('PadlHub web authentication', () => {
         avatarUrl: null,
         level: { label: 'C', assessmentRequired: false },
       },
+      reachable: true,
       access: {
         audience: 'OTHER',
         tier: 'BASIC',
@@ -1344,6 +1346,7 @@ describe('PadlHub web authentication', () => {
           avatarUrl: null,
           level: { label: 'C', assessmentRequired: false },
         },
+        reachable: true,
         access: {
           audience: 'OTHER',
           tier: 'BASIC',
@@ -1378,6 +1381,7 @@ describe('PadlHub web authentication', () => {
           avatarUrl: null,
           level: { label: 'C', assessmentRequired: false },
         },
+        reachable: true,
         access: {
           audience: 'OTHER',
           tier: 'BASIC',
@@ -2045,6 +2049,7 @@ describe('PadlHub web authentication', () => {
         avatarUrl: null,
         level: { label: 'C', value: 3.1, assessmentRequired: false },
       },
+      reachable: true,
       access: {
         audience: 'OTHER',
         tier: 'INTERACTION',

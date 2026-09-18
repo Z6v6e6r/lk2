@@ -646,6 +646,7 @@ function buildSelfPlayerProfileView(profile: UserProfile): PlayerProfileView {
             },
           }),
     },
+    reachable: true,
     privateAccount: {
       ...(profile.phoneLast4 ? { phoneLast4: profile.phoneLast4 } : {}),
       ...(profile.balanceMinor === undefined ? {} : { balanceMinor: profile.balanceMinor }),

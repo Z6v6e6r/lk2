@@ -70,6 +70,7 @@ export * from './communities-staging-role-split-trusted-inventory.js';
 export * from './eligibility-payment-acl-matrix.js';
 export * from './messaging-repository.js';
 export * from './profile-privacy-repository.js';
+export * from './profile-reachability-repository.js';
 export * from './profile-friendship-repository.js';
 export * from './profile-level-history-repository.js';
 export * from './profile-summary-repository.js';
