@@ -19,6 +19,10 @@ const filters = [
   { value: 'COMMUNITY', label: 'Сообщества' },
 ] as const;
 
+export function ChatFilterHeading({ filter }: { readonly filter: ChatFilter }): React.JSX.Element {
+  return <h1 aria-live="polite">{filters.find((item) => item.value === filter)?.label}</h1>;
+}
+
 export function ChatFilters({
   filter,
   query,
@@ -53,15 +57,16 @@ export function ChatFilters({
             key={item.value}
             className={filter === item.value ? styles.activeFilter : undefined}
             aria-pressed={filter === item.value}
+            title={item.label}
             onClick={() => onFilterChange(item.value)}
           >
             <ChatCategoryIcon name={item.value} />
-            <span>{item.label}</span>
+            <span className="sr-only">{item.label}</span>
           </button>
         ))}
-        <a href="/notifications">
+        <a href="/notifications" title="Уведомления">
           <ChatCategoryIcon name="NOTIFICATIONS" />
-          <span>Уведомления</span>
+          <span className="sr-only">Уведомления</span>
         </a>
       </nav>
     </div>
