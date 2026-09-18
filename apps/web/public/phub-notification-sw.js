@@ -17,6 +17,21 @@ self.phubSafeDeepLink = function phubSafeDeepLink(value) {
   }
 };
 
+/**
+ * Shows the notification and, if the platform rejects an option it does not implement, retries with the
+ * members every engine supports. iOS ignores the notification artwork and has no vibration API, and a
+ * rejected options dictionary would otherwise mean no banner at all.
+ */
+self.phubShowNotification = function phubShowNotification(title, options) {
+  return self.registration.showNotification(title, options).catch(function fallback() {
+    return self.registration.showNotification(title, {
+      body: options.body,
+      tag: options.tag,
+      data: options.data,
+    });
+  });
+};
+
 self.addEventListener('push', function handlePush(event) {
   var payload = {};
   try {
@@ -28,26 +43,23 @@ self.addEventListener('push', function handlePush(event) {
     typeof payload.notificationId === 'string' ? payload.notificationId : 'unknown';
   var deepLink = self.phubSafeDeepLink(payload.deepLink);
   event.waitUntil(
-    self.registration.showNotification(
-      typeof payload.title === 'string' ? payload.title : 'ПаделХАБ',
-      {
-        body: typeof payload.preview === 'string' ? payload.preview : 'Новое оповещение',
-        tag: 'phub-notification-' + notificationId,
-        // A repeat of the same notification replaces the older one and alerts again instead of
-        // silently updating it.
-        renotify: true,
-        icon: '/phub-notification-icon-192.png',
-        badge: '/phub-notification-badge-72.png',
-        // Android honours this while the device is awake and the site's own channel allows it; the
-        // operating system still owns the banner, priority and Do Not Disturb decisions.
-        vibrate: [200, 100, 200],
-        silent: false,
-        lang: 'ru',
-        dir: 'ltr',
-        timestamp: Date.now(),
-        data: { notificationId: notificationId, deepLink: deepLink },
-      },
-    ),
+    self.phubShowNotification(typeof payload.title === 'string' ? payload.title : 'ПаделХАБ', {
+      body: typeof payload.preview === 'string' ? payload.preview : 'Новое оповещение',
+      tag: 'phub-notification-' + notificationId,
+      // A repeat of the same notification replaces the older one and alerts again instead of
+      // silently updating it.
+      renotify: true,
+      icon: '/phub-notification-icon-192.png',
+      badge: '/phub-notification-badge-72.png',
+      // Android honours this while the device is awake and the site's own channel allows it; the
+      // operating system still owns the banner, priority and Do Not Disturb decisions.
+      vibrate: [200, 100, 200],
+      silent: false,
+      lang: 'ru',
+      dir: 'ltr',
+      timestamp: Date.now(),
+      data: { notificationId: notificationId, deepLink: deepLink },
+    }),
   );
 });
 

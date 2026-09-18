@@ -2,7 +2,49 @@ import type { AuthGateway, WebPushEndpointRegistration } from './auth-gateway.js
 
 const INSTALLATION_STORAGE_KEY = 'phub.webPush.installationId';
 
-export type WebPushBrowserState = 'unsupported' | 'default' | 'denied' | 'ready' | 'subscribed';
+export type WebPushBrowserState =
+  'unsupported' | 'needs_install' | 'default' | 'denied' | 'ready' | 'subscribed';
+
+/**
+ * iOS and iPadOS only deliver Web Push to a web app that the person added to the Home Screen, and the
+ * permission prompt does not exist in a Safari tab at all. iPadOS 13 and newer report a desktop
+ * `Macintosh` user agent, so the touch capability is what separates an iPad from a Mac.
+ */
+export type IosHomeScreenState = 'not_ios' | 'needs_home_screen' | 'home_screen';
+
+interface IosBrowserFacts {
+  readonly userAgent: string;
+  readonly maxTouchPoints: number;
+  /** `true` only in an iOS Home Screen web app; the display-mode media query covers the rest. */
+  readonly standalone: boolean;
+}
+
+export function iosHomeScreenState(
+  facts: IosBrowserFacts,
+  standaloneDisplayMode: boolean,
+): IosHomeScreenState {
+  const isIos =
+    /iPad|iPhone|iPod/u.test(facts.userAgent) ||
+    (/Macintosh/u.test(facts.userAgent) && facts.maxTouchPoints > 1);
+  if (!isIos) return 'not_ios';
+  return facts.standalone || standaloneDisplayMode ? 'home_screen' : 'needs_home_screen';
+}
+
+function currentIosHomeScreenState(): IosHomeScreenState {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return 'not_ios';
+  const standaloneDisplayMode =
+    typeof window.matchMedia === 'function' &&
+    (window.matchMedia('(display-mode: standalone)').matches ||
+      window.matchMedia('(display-mode: fullscreen)').matches);
+  return iosHomeScreenState(
+    {
+      userAgent: navigator.userAgent,
+      maxTouchPoints: navigator.maxTouchPoints,
+      standalone: (navigator as Navigator & { readonly standalone?: boolean }).standalone === true,
+    },
+    standaloneDisplayMode,
+  );
+}
 
 function fallbackUuid(): string {
   const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
@@ -74,6 +116,9 @@ export function webPushSupported(): boolean {
 export async function getWebPushBrowserState(
   serviceWorkerUrl: string,
 ): Promise<WebPushBrowserState> {
+  // Checked before `webPushSupported`: a Safari tab on iOS reports no usable PushManager, and calling
+  // that "unsupported" would hide the one instruction that makes push work there.
+  if (currentIosHomeScreenState() === 'needs_home_screen') return 'needs_install';
   if (!webPushSupported()) return 'unsupported';
   if (Notification.permission === 'denied') return 'denied';
   if (Notification.permission === 'default') return 'default';
@@ -101,6 +146,10 @@ export async function enableWebPush(input: {
   readonly serviceWorkerUrl: string;
 }): Promise<void> {
   if (!webPushSupported()) throw new Error('WEB_PUSH_UNSUPPORTED');
+  // An iOS tab has no push at all, and the permission prompt is the person's one-time decision: refuse
+  // before it is spent, so the same tap works after the app is added to the Home Screen.
+  if (currentIosHomeScreenState() === 'needs_home_screen')
+    throw new Error('WEB_PUSH_HOME_SCREEN_REQUIRED');
   // The same-origin service worker contract is checked before the browser permission prompt so a
   // misconfigured URL cannot consume the one-time user decision.
   const scriptUrl = serviceWorkerScriptUrl(input.serviceWorkerUrl);

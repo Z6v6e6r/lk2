@@ -214,12 +214,23 @@ block from [the chats and notifications runbook](chats-notifications-moderation.
 `WEB_PUSH_BATCH_SIZE` and `WEB_PUSH_ENDPOINTS_PER_USER_MAX` are not in this target's allowlist and an
 env file carrying them fails closed as an unknown key, so the code defaults stay in force.
 
-`WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS` lists the public push services and nothing else. At activation
-time this is `https://fcm.googleapis.com`, which is what Chrome uses, so this beta serves Chrome and
-Chromium browsers only; Firefox and Safari endpoints are rejected by policy until their origins are
-added by a separate release. Push stays closed per tenant through
-`notifications.tenant_runtime_settings.web_push_enabled` and an active `WEB_PUSH` provider account,
-so a release that carries the keys does not by itself deliver anything.
+`WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS` lists the public push services and nothing else. It carries
+`https://fcm.googleapis.com` for Chrome/Chromium and `https://web.push.apple.com` for Safari on iOS and
+iPadOS; a subscription from any other origin is rejected as `WEB_PUSH_SUBSCRIPTION_INVALID`, and the
+Worker repeats the same check before it sends. Firefox endpoints stay rejected until their origin is
+added by a separate release, and a new origin must be added to both `api.env` and `worker.env`, because
+the API validates the registration and the Worker validates the delivery.
+
+iOS delivers Web Push only to a web app the person added to the Home Screen (iOS 16.4+), so the web
+client ships `manifest.webmanifest` with `display: standalone` and an `apple-touch-icon`, and reports
+`needs_install` in a Safari tab instead of offering a button that cannot work. iOS ignores the
+notification `icon`/`badge` and shows the installed app icon, so a notification on an iPhone carries the
+title and body only; verify the install path on a real device, because no Apple endpoint exists in the
+contour until one is registered from a Home Screen app.
+
+Push stays closed per tenant through `notifications.tenant_runtime_settings.web_push_enabled` and an
+active `WEB_PUSH` provider account, so a release that carries the keys does not by itself deliver
+anything.
 
 `WEB_PUSH_VAPID_PRIVATE_KEY` is required in `api.env` although only the Worker signs a push request,
 because the shared runtime config requires the complete Web Push key set whenever
