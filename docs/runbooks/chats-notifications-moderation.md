@@ -981,6 +981,21 @@ credentials exist. Resolve a known internal phone, send one test campaign, then 
 - the same `Idempotency-Key` returns the original campaign with `replayed=true`;
 - logs and RabbitMQ contain no title, body, phone or endpoint material.
 
+The API accepts a title of up to 300 characters, because that is the in-app inbox limit. The system
+banner is narrower and is truncated by the operating system or browser, not by PadlHub, so write for the
+banner and let the inbox carry the rest:
+
+| Field | Operator budget                             | What happens beyond it                                                  |
+| ----- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| Title | 40 characters, 30 to be safe on iOS banners | The banner clips or ellipsizes the line; the inbox keeps the full title |
+| Body  | 120 characters                              | The banner shows a shortened preview; the inbox keeps the full body     |
+
+Length is counted in characters, so Cyrillic, emoji and links consume the budget faster than they look.
+A title that fits one desktop line (about 40 characters) can wrap or clip on an iPhone banner (about 30);
+keep the meaning inside the first 30 characters. The CUP notification form shows a live counter for the
+title and warns when the value exceeds the banner budget — the warning never blocks sending, because
+in-app delivery is still complete.
+
 ### Nano CUP binding
 
 On Nano the active operator surface is `https://cup.nano.padlhub.su/api/ui/admin`. Configure its
