@@ -41,6 +41,8 @@ function pushStatus(
 ): string {
   if (!configuration.enabled) return 'Push пока не включён для этой организации.';
   if (browserState === 'unsupported') return 'Этот браузер не поддерживает Web Push.';
+  if (browserState === 'needs_install')
+    return 'На iPhone и iPad push работает только из приложения на экране «Домой».';
   if (browserState === 'denied') return 'Уведомления запрещены в настройках браузера.';
   if (browserState === 'subscribed') return 'Push-уведомления включены на этом устройстве.';
   return 'Включите push, чтобы получать события при закрытом кабинете.';
@@ -70,6 +72,7 @@ export function NotificationsPage({
   const canEnable =
     webPush.enabled &&
     browserState !== 'unsupported' &&
+    browserState !== 'needs_install' &&
     browserState !== 'denied' &&
     browserState !== 'subscribed';
 
@@ -90,8 +93,14 @@ export function NotificationsPage({
           <div>
             <h2 id="web-push-title">Уведомления на устройстве</h2>
             <p>{pushStatus(webPush, browserState)}</p>
+            {browserState === 'needs_install' ? (
+              <p className={styles.pushHint}>
+                Откройте PadlHub в Safari, нажмите «Поделиться» → «На экран „Домой“» и включите push
+                уже из приложения: только так iOS разрешает уведомления.
+              </p>
+            ) : null}
           </div>
-          {browserState === 'subscribed' ? (
+          {browserState === 'needs_install' ? null : browserState === 'subscribed' ? (
             <button type="button" disabled={busy} onClick={onDisableWebPush}>
               {busy ? 'Отключаем…' : 'Отключить push'}
             </button>

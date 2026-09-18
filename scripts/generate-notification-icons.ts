@@ -1,14 +1,17 @@
 /**
- * Generates the Web Push notification artwork from the brand logo, so the icon can be regenerated
- * whenever the logo changes instead of being a hand-made binary nobody can reproduce.
+ * Generates the PadlHub brand artwork for notifications and for the installable web app, so it can be
+ * regenerated whenever the logo changes instead of being a hand-made binary nobody can reproduce.
  *
- * The icon follows the platform expectations:
+ * The notification icon follows the platform expectations:
  *   * `icon` is a square brand avatar (Chrome renders it in the notification, Android crops it to a
  *     circle), so the full logo lock-up is set in white on the brand gradient with even padding;
  *   * `badge` is a monochrome silhouette (Android tints it), so it keeps the racket mark alone,
  *     drawn white on transparent.
  *
- * Usage: npm run notification:icons:generate
+ * The app icons are what an installed Home Screen app shows. On iOS that is the only artwork a
+ * notification uses, so `apple-touch-icon.png` is generated opaque at 180 px.
+ *
+ * Usage: npm run notifications:icons:generate
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -97,6 +100,23 @@ for (const size of [192, 512]) {
     .png({ compressionLevel: 9 })
     .toBuffer();
   const path = resolve(outputDirectory, `phub-notification-icon-${size}.png`);
+  writeFileSync(path, png);
+  process.stdout.write(`wrote ${path} (${png.length} bytes)\n`);
+}
+
+// The installable-app artwork. Android and desktop browsers read the manifest icons; iOS reads
+// `apple-touch-icon`, which must be an opaque square because iOS composites it over the Home Screen and
+// never honours transparency. iOS also ignores the notification `icon`, so this is the only artwork an
+// iPhone shows for a padlhub.su notification.
+for (const [name, size] of [
+  ['phub-app-icon-192.png', 192],
+  ['phub-app-icon-512.png', 512],
+  ['apple-touch-icon.png', 180],
+] as const) {
+  const png = await sharp(Buffer.from(squareComposition({ content: lockup, viewBox, size })))
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+  const path = resolve(outputDirectory, name);
   writeFileSync(path, png);
   process.stdout.write(`wrote ${path} (${png.length} bytes)\n`);
 }

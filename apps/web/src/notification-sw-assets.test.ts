@@ -48,6 +48,17 @@ describe('notification service worker assets', () => {
       expect(serviceWorker).toContain(option);
     }
   });
+
+  it('shows the banner through a helper that has a minimal fallback for stricter engines', () => {
+    // iOS ignores the artwork and has no vibration API; a rejected options dictionary must not mean a
+    // silent push, so the push handler goes through the guarded helper instead of calling directly.
+    expect(serviceWorker).toContain('self.phubShowNotification = function phubShowNotification');
+    expect(serviceWorker).toContain('self.phubShowNotification(typeof payload.title');
+    expect(serviceWorker.match(/self\.registration\.showNotification\(/g)?.length ?? 0).toBe(2);
+    expect(serviceWorker).toMatch(
+      /catch\(function fallback\(\) \{\s*\n\s*return self\.registration\.showNotification\(title, \{\s*\n\s*body: options\.body,\s*\n\s*tag: options\.tag,\s*\n\s*data: options\.data,/u,
+    );
+  });
 });
 
 describe('notification brand artwork', () => {
@@ -100,6 +111,57 @@ describe('notification brand artwork', () => {
     expect(clear / total).toBeLessThan(0.9);
     // Any colour left in the silhouette would render as a solid blob once the platform applies its tint.
     expect(tinted).toBe(0);
+  });
+});
+
+describe('installable web app artwork', () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL('../public/manifest.webmanifest', import.meta.url), 'utf8'),
+  ) as {
+    readonly display?: string;
+    readonly start_url?: string;
+    readonly scope?: string;
+    readonly icons?: readonly {
+      readonly src: string;
+      readonly sizes: string;
+      readonly type: string;
+    }[];
+  };
+  const indexHtml = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+
+  it('declares a standalone manifest, because iOS only offers Web Push to a Home Screen app', () => {
+    expect(manifest.display).toBe('standalone');
+    expect(manifest.start_url).toBe('/');
+    expect(manifest.scope).toBe('/');
+    expect(manifest.icons?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it('ships every manifest icon at the size the manifest promises', async () => {
+    for (const icon of manifest.icons ?? []) {
+      expect(icon.src.startsWith('/')).toBe(true);
+      expect(icon.type).toBe('image/png');
+      const [width, height] = icon.sizes.split('x').map(Number);
+      const metadata = await sharp(assetPath(icon.src.slice(1))).metadata();
+      expect([metadata.width, metadata.height]).toEqual([width, height]);
+    }
+  });
+
+  it('links the manifest and an opaque 180px touch icon from the document head', () => {
+    expect(indexHtml).toContain('rel="manifest" href="/manifest.webmanifest"');
+    expect(indexHtml).toContain(
+      'rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png"',
+    );
+    expect(indexHtml).toContain('name="apple-mobile-web-app-capable" content="yes"');
+  });
+
+  it('keeps the iOS touch icon opaque, because iOS composites it over the Home Screen', async () => {
+    const icon = await readBitmap('apple-touch-icon.png');
+    expect([icon.width, icon.height]).toEqual([180, 180]);
+    const translucent = countPixels(icon, (rgba) => rgba[3] !== 255);
+    expect(translucent).toBe(0);
+    // The same brand gradient as the notification avatar, so the installed app matches the brand.
+    expect(pixel(icon, 0, 0).slice(0, 3)).toEqual([177, 125, 232]);
+    expect(pixel(icon, icon.width - 1, icon.height - 1).slice(0, 3)).toEqual([153, 131, 251]);
   });
 });
 

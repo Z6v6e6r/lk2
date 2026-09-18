@@ -95,6 +95,12 @@
   line-height: 1.45;
 }
 
+/* The Home Screen steps are the only action available on iOS, so they read as instructions, not as a hint. */
+.pushPanel .pushHint {
+  max-width: 46ch;
+  color: var(--notifications-text, #33151f);
+}
+
 .pushPanel button,
 .markAllButton {
   min-height: 42px;

@@ -124,6 +124,21 @@ describe('NotificationsPage', () => {
     expect(onDisableWebPush).toHaveBeenCalledOnce();
   });
 
+  it('sends an iOS tab to the Home Screen instead of offering a button that cannot work', () => {
+    render(<NotificationsPage {...defaultProps} browserState="needs_install" />);
+
+    expect(
+      screen.getByText('На iPhone и iPad push работает только из приложения на экране «Домой».'),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Откройте PadlHub в Safari, нажмите «Поделиться» → «На экран/),
+    ).toBeVisible();
+    // No enable control: an iOS tab cannot subscribe, so offering the button would only burn the
+    // one-time permission decision.
+    expect(screen.queryByRole('button', { name: 'Включить push' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Отключить push' })).not.toBeInTheDocument();
+  });
+
   it('renders an empty state without hiding the disabled push control', () => {
     render(
       <NotificationsPage

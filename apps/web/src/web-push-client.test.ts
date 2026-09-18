@@ -3,10 +3,41 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthGateway } from './auth-gateway.js';
-import { disableWebPush, enableWebPush } from './web-push-client.js';
+import {
+  disableWebPush,
+  enableWebPush,
+  getWebPushBrowserState,
+  iosHomeScreenState,
+} from './web-push-client.js';
 
 const originalServiceWorker = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker');
 const originalSecureContext = Object.getOwnPropertyDescriptor(window, 'isSecureContext');
+const originalUserAgent = Object.getOwnPropertyDescriptor(navigator, 'userAgent');
+const originalMaxTouchPoints = Object.getOwnPropertyDescriptor(navigator, 'maxTouchPoints');
+const originalStandalone = Object.getOwnPropertyDescriptor(navigator, 'standalone');
+
+/**
+ * A browser that reports itself as an iOS device. `standalone` is set only when iOS launched the site
+ * from the Home Screen, which is the one context where its Web Push API exists.
+ */
+function iosBrowser(
+  options: { readonly userAgent?: string; readonly standalone?: boolean } = {},
+): void {
+  Object.defineProperty(navigator, 'userAgent', {
+    configurable: true,
+    value: options.userAgent ?? IPHONE_SAFARI_USER_AGENT,
+  });
+  Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: 5 });
+  Object.defineProperty(navigator, 'standalone', {
+    configurable: true,
+    value: options.standalone === true,
+  });
+}
+
+const IPHONE_SAFARI_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/23F77 Safari/604.1';
+const IPAD_DESKTOP_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
 
 const INSTALLATION_STORAGE_KEY = 'phub.webPush.installationId';
 const VAPID_PUBLIC_KEY = 'AQAB';
@@ -56,6 +87,17 @@ afterEach(() => {
     Object.defineProperty(window, 'isSecureContext', originalSecureContext);
   } else {
     Reflect.deleteProperty(window, 'isSecureContext');
+  }
+  for (const [key, descriptor] of [
+    ['userAgent', originalUserAgent],
+    ['maxTouchPoints', originalMaxTouchPoints],
+    ['standalone', originalStandalone],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(navigator, key, descriptor);
+    } else {
+      Reflect.deleteProperty(navigator, key);
+    }
   }
 });
 
@@ -281,5 +323,108 @@ describe('Web Push browser lifecycle', () => {
     expect(revokeWebPushEndpoint).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
     expect(localStorage.getItem('phub.webPush.installationId')).toBeNull();
+  });
+});
+
+describe('iOS Home Screen requirement', () => {
+  it('treats a desktop user agent with touch points as an iPad and a Mac without them as a desktop', () => {
+    expect(
+      iosHomeScreenState(
+        { userAgent: IPHONE_SAFARI_USER_AGENT, maxTouchPoints: 5, standalone: false },
+        false,
+      ),
+    ).toBe('needs_home_screen');
+    expect(
+      iosHomeScreenState(
+        { userAgent: IPHONE_SAFARI_USER_AGENT, maxTouchPoints: 5, standalone: true },
+        false,
+      ),
+    ).toBe('home_screen');
+    // iPadOS 13+ claims to be a Macintosh; only the touch capability separates it from a desktop Mac.
+    expect(
+      iosHomeScreenState(
+        { userAgent: IPAD_DESKTOP_USER_AGENT, maxTouchPoints: 5, standalone: false },
+        false,
+      ),
+    ).toBe('needs_home_screen');
+    expect(
+      iosHomeScreenState(
+        { userAgent: IPAD_DESKTOP_USER_AGENT, maxTouchPoints: 0, standalone: false },
+        false,
+      ),
+    ).toBe('not_ios');
+    expect(
+      iosHomeScreenState(
+        {
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          maxTouchPoints: 0,
+          standalone: false,
+        },
+        false,
+      ),
+    ).toBe('not_ios');
+    // The display-mode media query is the non-Apple way an installed app reports itself.
+    expect(
+      iosHomeScreenState(
+        { userAgent: IPHONE_SAFARI_USER_AGENT, maxTouchPoints: 5, standalone: false },
+        true,
+      ),
+    ).toBe('home_screen');
+  });
+
+  it('asks a Safari tab on iOS for the Home Screen install before calling push unsupported', async () => {
+    iosBrowser();
+
+    // A tab has no usable PushManager, which is exactly why the install instruction must win.
+    await expect(getWebPushBrowserState('/phub-notification-sw.js')).resolves.toBe('needs_install');
+  });
+
+  it('reports the normal pre-permission state once iOS runs the site from the Home Screen', async () => {
+    iosBrowser({ standalone: true });
+    supportedBrowser({
+      register: vi.fn().mockResolvedValue({
+        pushManager: { getSubscription: vi.fn().mockResolvedValue(null) },
+      }),
+    });
+
+    // `default` is the ordinary "permission not decided yet" state, so the Home Screen app offers the button.
+    await expect(getWebPushBrowserState('/phub-notification-sw.js')).resolves.toBe('default');
+  });
+
+  it('refuses to spend the one-time permission prompt in an iOS tab', async () => {
+    iosBrowser();
+    const requestPermission = vi.fn().mockResolvedValue('granted');
+    supportedBrowser({ requestPermission });
+
+    await expect(
+      enableWebPush({
+        gateway: {} as unknown as AuthGateway,
+        publicKey: VAPID_PUBLIC_KEY,
+        serviceWorkerUrl: '/phub-notification-sw.js',
+      }),
+    ).rejects.toThrow('WEB_PUSH_HOME_SCREEN_REQUIRED');
+
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('subscribes normally inside the iOS Home Screen app', async () => {
+    iosBrowser({ standalone: true });
+    const subscription = subscriptionFixture();
+    const subscribe = vi.fn().mockResolvedValue(subscription);
+    supportedBrowser({
+      register: vi.fn().mockResolvedValue({
+        pushManager: { getSubscription: vi.fn().mockResolvedValue(null), subscribe },
+      }),
+    });
+    const registerWebPushEndpoint = vi.fn().mockResolvedValue(undefined);
+
+    await enableWebPush({
+      gateway: { registerWebPushEndpoint } as unknown as AuthGateway,
+      publicKey: VAPID_PUBLIC_KEY,
+      serviceWorkerUrl: '/phub-notification-sw.js',
+    });
+
+    expect(subscribe).toHaveBeenCalledOnce();
+    expect(registerWebPushEndpoint).toHaveBeenCalledOnce();
   });
 });
