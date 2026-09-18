@@ -207,7 +207,11 @@ export function GameCard({
     compact && 'resultSummary' in game && game.resultSummary?.state === 'CONFIRMED';
   const showFooterParticipants = !hasStructuredResult;
   const showFooterActions = !hasConfirmedResult;
-  const showFooter = showFooterParticipants || showFooterActions;
+  // History cards keep the result status next to the score. The structured
+  // result table replaces the participant footer, but it must not hide the
+  // final lifecycle state as well.
+  const showFooterStatus = compact && hasConfirmedResult;
+  const showFooter = showFooterParticipants || showFooterActions || showFooterStatus;
   const detailsUrl = `/games/${encodeURIComponent(game.id)}`;
 
   return (
@@ -417,7 +421,7 @@ export function GameCard({
             )
           ) : null}
 
-          {showFooterActions ? (
+          {showFooterActions || showFooterStatus ? (
             <div
               className={`game-card__actions${
                 usesMiniCreateAction ? ' game-card__actions--mini-create' : ''

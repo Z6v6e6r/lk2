@@ -350,8 +350,8 @@ describe('GameCard lifecycle template', () => {
     expect(within(card).getAllByRole('row')).toHaveLength(2);
     expect(within(card).queryByLabelText('Участники игры')).not.toBeInTheDocument();
     expect(card.querySelector('.game-score')).not.toBeInTheDocument();
-    expect(card.querySelector('.game-card__footer')).not.toBeInTheDocument();
-    expect(within(card).queryByText('Результат внесён')).not.toBeInTheDocument();
+    expect(card.querySelector('.game-card__footer')).toBeInTheDocument();
+    expect(within(card).getByText('Результат внесён')).toBeVisible();
   });
 
   it('derives the visible action only from server allowedActions', () => {

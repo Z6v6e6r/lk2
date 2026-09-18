@@ -114,7 +114,7 @@ describe('ActivityHistoryPanel', () => {
     expect(screen.getByText('Иван Смирнов')).toBeVisible();
     expect(screen.getByText('3 место')).toBeVisible();
     expect(screen.getByLabelText('Счёт по сетам')).toBeInTheDocument();
-    expect(screen.queryByText('Результат внесён')).not.toBeInTheDocument();
+    expect(screen.getByText('Результат внесён')).toBeVisible();
     expect(loadHistory).toHaveBeenCalledWith({ status: 'COMPLETED', limit: 20 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Тренировки' }));
