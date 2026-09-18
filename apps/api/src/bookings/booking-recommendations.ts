@@ -126,6 +126,13 @@ interface BookingRecommendationCursor {
   readonly offset: number;
 }
 
+const recommendationDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Moscow',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
 const HASH_PATTERN = /^[0-9a-f]{64}$/;
 const RECOMMENDATION_FEED_CACHE_MAX_ENTRIES = 500;
 
@@ -631,6 +638,7 @@ export async function listBookingRecommendations(input: {
   readonly now: string;
   readonly limit: number;
   readonly cursor?: string;
+  readonly localDate?: string;
 }): Promise<BookingRecommendationPage> {
   const cursor = input.cursor ? decodeCursor(input.cursor) : undefined;
   if (cursor) {
@@ -646,6 +654,7 @@ export async function listBookingRecommendations(input: {
     viewerUserId: input.userId,
     candidateLimit: 100,
     historyLimit: 50,
+    ...(input.localDate ? { localDate: input.localDate } : {}),
   });
   const deliveryIds = input.photoRepository
     ? await input.photoRepository.getPhotoDeliveryIds(
@@ -675,9 +684,12 @@ export async function listBookingRecommendations(input: {
       },
     ),
   );
+  const onSelectedDate = (event: { readonly startsAt: string }) =>
+    !input.localDate ||
+    recommendationDateFormatter.format(new Date(event.startsAt)) === input.localDate;
   const rankedGames = rankGames({
     ...input,
-    candidates,
+    candidates: candidates.filter(onSelectedDate),
     history,
     friendUserIds: new Set(input.friendUserIds ?? []),
   });
@@ -690,7 +702,7 @@ export async function listBookingRecommendations(input: {
   ];
   const rankedActivities = rankActivities({
     ...input,
-    activities,
+    activities: activities.filter(onSelectedDate),
     history,
   });
   const rankedRecommendations = [...rankedGames, ...rankedActivities];
@@ -698,6 +710,7 @@ export async function listBookingRecommendations(input: {
   const version = createHash('sha256')
     .update(
       JSON.stringify({
+        ...(input.localDate ? { localDate: input.localDate } : {}),
         preferenceVersion: input.preferences.version,
         friendUserIds: input.preferences.recommendFriends
           ? [...(input.friendUserIds ?? [])].sort()

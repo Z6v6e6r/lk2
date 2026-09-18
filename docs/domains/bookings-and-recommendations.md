@@ -102,6 +102,16 @@ Recommendation ranking remains exclusive to `FOR_ME` and must not be used as a c
   fewer than six eligible items. The first visible slice does not wait for tournament I/O; a dense
   slice is then recompleted with two tournament dates, while a sparse expansion uses the full
   accepted tournament range.
+- Selecting a Home calendar day uses optional `localDate` on the `FOR_ME` read job. It is a
+  Moscow date bounded to today through today + 14 days, matching the visible calendar. The job
+  reads only that day's schedule and tournaments; game candidates are date-bounded before the
+  database candidate limit. Ranking and cursor pagination operate on this dated feed, whose
+  version includes the date. Omitted dates preserve the progressive weekly behavior.
+- The calendar immediately displays matching warm Home items without reusing their weekly cursor.
+  Per-date state isolates concurrent responses and reuses fresh visited days during the mounted Home
+  session; revisiting after `staleAt` refreshes that day while retaining visible cards. A dated partial read retains available cards and exposes retry instead of a final empty
+  state; retry restarts the same day. Backend support must precede the new Web client; older clients
+  remain supported. Rolling the Web client back restores weekly reads without a data migration.
 - Unconfigured or failed recommendation dependencies return
   `BOOKING_RECOMMENDATIONS_UNAVAILABLE`; Home keeps the upcoming tab usable.
 - Opening a recommendation performs a fresh viewer-aware Games detail read. Join commands still

@@ -134,11 +134,12 @@ components:
     BookingScreenReadJobRequest:
       oneOf:
         - $ref: '#/components/schemas/LegacyBookingScreenReadJobRequest'
+        - $ref: '#/components/schemas/RecommendationScreenReadJobRequest'
         - $ref: '#/components/schemas/EventCatalogReadJobRequest'
       discriminator:
         propertyName: screen
         mapping:
-          FOR_ME: '#/components/schemas/LegacyBookingScreenReadJobRequest'
+          FOR_ME: '#/components/schemas/RecommendationScreenReadJobRequest'
           GROUP_TRAININGS: '#/components/schemas/LegacyBookingScreenReadJobRequest'
           MY_BOOKINGS: '#/components/schemas/LegacyBookingScreenReadJobRequest'
           EVENT_CATALOG: '#/components/schemas/EventCatalogReadJobRequest'
@@ -149,7 +150,19 @@ components:
       properties:
         screen:
           type: string
-          enum: [FOR_ME, GROUP_TRAININGS, MY_BOOKINGS]
+          enum: [GROUP_TRAININGS, MY_BOOKINGS]
+    RecommendationScreenReadJobRequest:
+      type: object
+      additionalProperties: false
+      required: [screen]
+      properties:
+        screen:
+          type: string
+          const: FOR_ME
+        localDate:
+          type: string
+          format: date
+          description: Optional Moscow calendar date, today through today plus 14 days. Omit for the existing weekly Home read.
     EventCatalogReadJobRequest:
       type: object
       additionalProperties: false

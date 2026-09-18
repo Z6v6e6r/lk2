@@ -2697,18 +2697,20 @@ describe('browser auth gateway', () => {
     };
     const expandedPage = { ...initialPage, version: 'b'.repeat(64) };
     let completionCount = 0;
+    let requestedDate: string | undefined;
     const completionPhases: unknown[] = [];
     const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
       const url = requestUrl(input);
       if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
       if (url.endsWith('/booking-screen-read-jobs')) {
+        requestedDate = (JSON.parse(init?.body as string) as { localDate?: string }).localDate;
         return Promise.resolve(
           Response.json({
             jobId,
             screen: 'FOR_ME',
             expiresAt: '2099-08-01T09:02:00.000Z',
             concurrency: 3,
-            commands,
+            commands: requestedDate ? [{ ...commands[0], date: requestedDate }] : commands,
           }),
         );
       }
@@ -2762,7 +2764,7 @@ describe('browser auth gateway', () => {
         return Promise.resolve(
           Response.json({
             screen: 'FOR_ME',
-            state: completionCount < 3 ? 'PARTIAL' : 'READY',
+            state: requestedDate ? 'PARTIAL' : completionCount < 3 ? 'PARTIAL' : 'READY',
             completedCommands: completionCount < 3 ? 3 : 7,
             totalCommands: 7,
             page: completionCount < 3 ? initialPage : expandedPage,
@@ -2807,6 +2809,19 @@ describe('browser auth gateway', () => {
       urls.filter((url) => url.endsWith(`/booking-screen-read-jobs/${jobId}/complete`)),
     ).toHaveLength(3);
     expect(completionPhases).toEqual(['HOME_INITIAL', 'HOME_TOURNAMENTS', 'FULL']);
+    await expect(
+      gateway.listHomeBookingRecommendations?.({ limit: 14, localDate: '2026-08-14' }),
+    ).resolves.toEqual({ ...expandedPage, incomplete: true });
+    const datedRequests = fetchImplementation.mock.calls.filter(([input]) =>
+      requestUrl(input).endsWith('/booking-screen-read-jobs'),
+    );
+    expect(datedRequests).toHaveLength(2);
+    expect(JSON.parse(datedRequests[1]?.[1]?.body as string)).toEqual({
+      screen: 'FOR_ME',
+      localDate: '2026-08-14',
+    });
+    urls = fetchImplementation.mock.calls.map(([input]) => requestUrl(input));
+    expect(urls.filter((url) => url.startsWith('https://api.vivacrm.invalid/'))).toHaveLength(8);
   });
 
   it('loads the complete group-training catalog through the dedicated read screen', async () => {

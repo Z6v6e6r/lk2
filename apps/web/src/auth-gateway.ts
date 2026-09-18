@@ -284,8 +284,13 @@ export interface SendConversationMessageCommand {
 
 export type ActivityHistoryQuery = ActivityHistoryFilters;
 
+export type HomeBookingRecommendationPage = BookingRecommendationPage & {
+  readonly incomplete?: boolean;
+};
+
 export interface HomeBookingRecommendationFilters extends BookingRecommendationFilters {
   readonly phase?: 'INITIAL' | 'TOURNAMENTS' | 'EXPANDED';
+  readonly localDate?: string;
 }
 
 export interface PhoneChallenge {
@@ -350,7 +355,7 @@ export interface AuthGateway {
   ) => Promise<BookingRecommendationPage>;
   readonly listHomeBookingRecommendations?: (
     input?: HomeBookingRecommendationFilters,
-  ) => Promise<BookingRecommendationPage>;
+  ) => Promise<HomeBookingRecommendationPage>;
   readonly recordPromotionEngagement: (
     promotionId: string,
     kind: 'IMPRESSION' | 'CLICK',
@@ -1341,17 +1346,24 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   async function loadClientAssistedRecommendations(
-    input: BookingRecommendationFilters,
-  ): Promise<BookingRecommendationPage> {
+    input: HomeBookingRecommendationFilters,
+  ): Promise<HomeBookingRecommendationPage> {
     const limit = input.limit ?? 6;
     if (input.cursor) return client.listBookingRecommendations(input);
 
-    const job = await client.startBookingScreenReadJob('FOR_ME');
+    const job = input.localDate
+      ? await client.startBookingScreenReadJob('FOR_ME', input.localDate)
+      : await client.startBookingScreenReadJob('FOR_ME');
     const commands = job.commands.filter(
       (command): command is BookingScreenScheduleReadCommand =>
         command.operation === 'schedule.read',
     );
     await executeScheduleCommands(job, commands);
+    if (input.localDate) {
+      const completion = await client.completeBookingScreenReadJob(job.jobId, limit, 'FULL');
+      if (completion.screen !== 'FOR_ME') throw new Error('BOOKING_SCREEN_READ_JOB_MISMATCH');
+      return { ...completion.page, incomplete: completion.state !== 'READY' };
+    }
     return completeRecommendationJob(job, limit);
   }
 
@@ -1744,6 +1756,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     listHomeBookingRecommendations(input = {}) {
       if (input.cursor) return client.listBookingRecommendations(input);
+      if (input.localDate) return loadClientAssistedRecommendations(input);
       const limit = input.limit ?? 6;
       const phase = input.phase ?? 'INITIAL';
       const promiseKey = `${phase}:${limit}`;

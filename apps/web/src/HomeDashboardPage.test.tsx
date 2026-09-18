@@ -562,7 +562,7 @@ describe('Home progressive navigation', () => {
   );
 
   it.each([false, true])(
-    'finds a date beyond the first page and supports retry: %s',
+    'requests the selected date directly and supports retry: %s',
     async (failOnce) => {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(new Date('2026-07-17T12:00:00Z'));
@@ -596,17 +596,15 @@ describe('Home progressive navigation', () => {
         nextCursor: null,
       };
       let failed = false;
-      const loader = vi.fn((input?: { phase?: string; cursor?: string }) => {
-        if (input?.cursor) {
+      const loader = vi.fn((input?: { phase?: string; cursor?: string; localDate?: string }) => {
+        if (input?.localDate === '2026-07-31') {
           if (failOnce && !failed) {
             failed = true;
             return Promise.reject(new Error('test read failure'));
           }
           return Promise.resolve({ ...page, items: [item] });
         }
-        return Promise.resolve(
-          input?.phase === 'EXPANDED' ? { ...page, nextCursor: 'next-date-page' } : page,
-        );
+        return Promise.resolve(page);
       });
       render(
         <HomeDashboardPage
@@ -629,20 +627,23 @@ describe('Home progressive navigation', () => {
       ).toHaveClass('fh-for-me-loader--pulse');
       if (failOnce) {
         await screen.findByRole('button', { name: 'Повторить поиск' });
-        expect(loader.mock.calls.filter(([input]) => input?.cursor)).toHaveLength(1);
+        expect(loader.mock.calls.filter(([input]) => input?.localDate)).toHaveLength(1);
         fireEvent.click(screen.getByRole('button', { name: 'Повторить поиск' }));
       }
       await screen.findByRole('link', { name: 'Групповая тренировка D' });
       expect(
         screen.queryByRole('status', { name: 'Загружаем события на выбранную дату' }),
       ).not.toBeInTheDocument();
-      expect(loader).toHaveBeenCalledWith({ limit: 12, cursor: 'next-date-page' });
+      expect(loader).toHaveBeenCalledWith({ limit: 14, localDate: '2026-07-31' });
+      expect(loader.mock.calls.some(([input]) => input?.cursor)).toBe(false);
       expect(lastDay).toHaveAttribute('aria-pressed', 'true');
       fireEvent.click(calendar.getByRole('button', { name: /суббота, 18 июля/i }));
       expect(
         screen.queryByRole('link', { name: 'Групповая тренировка D' }),
       ).not.toBeInTheDocument();
-      expect(screen.getByText('На выбранную дату подходящих событий нет.')).toBeInTheDocument();
+      expect(
+        await screen.findByText('На выбранную дату подходящих событий нет.'),
+      ).toBeInTheDocument();
       fireEvent.click(calendar.getByRole('button', { name: /суббота, 18 июля/i }));
       expect(calendar.getByRole('button', { name: 'Все даты' })).toHaveAttribute(
         'aria-pressed',

@@ -271,7 +271,7 @@ describe('booking recommendations', () => {
       }),
     };
 
-    const page = await listBookingRecommendations({
+    const input: Parameters<typeof listBookingRecommendations>[0] = {
       repository,
       tenantId,
       userId,
@@ -355,7 +355,8 @@ describe('booking recommendations', () => {
       ],
       now: '2026-07-18T09:00:00.000Z',
       limit: 4,
-    });
+    };
+    const page = await listBookingRecommendations(input);
 
     expect(page.items).toHaveLength(4);
     expect(page.items.map((item) => item.kind)).toEqual(
@@ -380,6 +381,24 @@ describe('booking recommendations', () => {
       item.kind === 'GAME' ? item.game.startsAt : item.activity.startsAt,
     );
     expect(startsAt).toEqual([...startsAt].sort((left, right) => left.localeCompare(right)));
+    const dated = await listBookingRecommendations({
+      ...input,
+      localDate: '2026-07-22',
+      limit: 20,
+    });
+    expect(dated.items.map((item) => item.kind)).toEqual(['TOURNAMENT', 'GAME']);
+    const trainingDay = await listBookingRecommendations({
+      ...input,
+      localDate: '2026-07-21',
+      limit: 20,
+    });
+    expect(trainingDay.items.map((item) => item.kind)).toEqual(['TRAINING', 'GAME']);
+    const otherDay = await listBookingRecommendations({
+      ...input,
+      localDate: '2026-07-25',
+      limit: 20,
+    });
+    expect(otherDay.items).toEqual([]);
   });
 
   it('returns a stable first page of 14 recommendations and subsequent pages of 12', async () => {
@@ -441,5 +460,52 @@ describe('booking recommendations', () => {
       ),
     );
     expect(distinctIds.size).toBe(30);
+    const dated = await listBookingRecommendations({
+      ...baseInput,
+      limit: 5,
+      localDate: '2026-07-21',
+    });
+    expect(repository.listRecommendationCardProjections).toHaveBeenLastCalledWith(
+      expect.objectContaining({ localDate: '2026-07-21' }),
+    );
+    expect(dated.items).toHaveLength(5);
+    expect(dated.version).not.toBe(firstPage.version);
+    const continued = await listBookingRecommendations({
+      ...baseInput,
+      limit: 20,
+      cursor: dated.nextCursor!,
+    });
+    const datedItems = [...dated.items, ...continued.items];
+    expect(datedItems).toHaveLength(18);
+    expect(
+      datedItems.every(
+        (item) =>
+          item.kind === 'GAME' &&
+          Date.parse(item.game.startsAt) >= Date.parse('2026-07-20T21:00:00Z') &&
+          Date.parse(item.game.startsAt) < Date.parse('2026-07-21T21:00:00Z'),
+      ),
+    ).toBe(true);
+    expect(continued.nextCursor).toBeNull();
+    await expect(
+      listBookingRecommendations({
+        ...baseInput,
+        userId: organizerId,
+        limit: 5,
+        cursor: dated.nextCursor!,
+      }),
+    ).rejects.toThrow('BOOKING_RECOMMENDATION_CURSOR_INVALID');
+    const emptyA = await listBookingRecommendations({
+      ...baseInput,
+      limit: 14,
+      localDate: '2026-07-25',
+    });
+    const emptyB = await listBookingRecommendations({
+      ...baseInput,
+      limit: 14,
+      localDate: '2026-07-26',
+    });
+    expect(emptyA.items).toEqual([]);
+    expect(emptyB.items).toEqual([]);
+    expect(emptyA.version).not.toBe(emptyB.version);
   });
 });
