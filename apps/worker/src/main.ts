@@ -20,6 +20,7 @@ import {
   createLocalCommunityDirectoryRepository,
   createMessagingRepository,
   createParticipationCommandRepository,
+  createProfileFriendshipRepository,
 } from '@phub/database';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher } from '@phub/notifications';
@@ -115,8 +116,11 @@ const gameRepository = createGameRepository(pool);
 const gameRosterRepository = createGameRosterRepository(pool);
 const messagingRepository = createMessagingRepository(pool);
 const participationCommandRepository = createParticipationCommandRepository(pool);
+const profileFriendshipRepository = createProfileFriendshipRepository(pool);
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS = 60_000;
+const DEFERRED_FRIEND_REQUEST_DELIVERY_INTERVAL_MS = 60_000;
+const DEFERRED_FRIEND_REQUEST_DELIVERY_BATCH_SIZE = 100;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_BATCH_SIZE = 100;
 const COMMUNITY_MEMBER_COUNT_RECONCILIATION_INTERVAL_MS = 60_000;
 const COMMUNITY_MEMBER_COUNT_RECONCILIATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -636,6 +640,36 @@ const runParticipationCommandExpiryCycle = async (): Promise<void> => {
   }
 };
 
+const runDeferredFriendRequestDeliveryCycle = async (): Promise<void> => {
+  if (shuttingDown) return;
+  let delivered = 0;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true order by id',
+    );
+    for (const tenant of tenants.rows) {
+      const result = await profileFriendshipRepository.deliverDeferredFriendRequests({
+        tenantId: tenant.id,
+        limit: DEFERRED_FRIEND_REQUEST_DELIVERY_BATCH_SIZE,
+        correlationId: `deferred-friend-request-${randomUUID()}`,
+      });
+      delivered += result.delivered;
+    }
+    if (delivered > 0) {
+      logger.info({ delivered }, 'deferred friend request delivery cycle completed');
+    }
+  } catch (error) {
+    logger.error({ error }, 'deferred friend request delivery cycle failed');
+  } finally {
+    if (!shuttingDown) {
+      setTimeout(
+        () => void runDeferredFriendRequestDeliveryCycle(),
+        DEFERRED_FRIEND_REQUEST_DELIVERY_INTERVAL_MS,
+      );
+    }
+  }
+};
+
 const runCommunityMemberCountReconciliation = async (): Promise<void> => {
   if (shuttingDown || !communityMemberCountRepository) return;
   try {
@@ -1102,6 +1136,7 @@ void runWebPushCycle();
 void runGiftCertificateDeliveryCycle();
 void runCommunityDirectInviteExpiryCycle();
 void runParticipationCommandExpiryCycle();
+void runDeferredFriendRequestDeliveryCycle();
 if (canonicalCommunityWorkerEnabled) {
   void runCommunityMemberCountReconciliation();
   void runCommunityEventRetention();

@@ -1197,7 +1197,10 @@ paths:
         feed and becomes a friend only after accepting. A request in the opposite direction is
         accepted immediately because both players already expressed the same intent. The command is
         authorized, idempotent, audited and publishes an outbox event in the same PostgreSQL
-        transaction.
+        transaction. A target that never signed in is refused with a stable conflict code unless
+        its imported player association is known: then the request is stored against that
+        association, answers `201` with `status: PENDING_DEFERRED`, and is delivered as a regular
+        request once the person signs in and the account is bound.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
@@ -1214,7 +1217,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProfileFriendship'
         '201':
-          description: Friend request created, or a reciprocal request completed the friendship.
+          description: |
+            Friend request created, a reciprocal request completed the friendship, or the request
+            was stored against an imported player association (`PENDING_DEFERRED`).
           headers:
             X-Idempotent-Replayed:
               description: Always false for a newly applied command.
@@ -4754,9 +4759,12 @@ components:
           type: boolean
           description: |
             False for an imported player row that has never signed in and has no login path: the
-            owner reaches PadlHub through a different account, so friend requests and direct
-            conversations addressed to this row would stay unseen. Always true for the viewer. The
-            friends, requests and chat commands reject such a target with a stable conflict code.
+            owner reaches PadlHub through a different account, so direct conversations and contact
+            requests addressed to this row would stay unseen. Always true for the viewer. A friend
+            request is still accepted when the imported player association is known: it is kept
+            against that association and delivered once the person signs in and their account is
+            bound, which the friendship state reports as `PENDING_DEFERRED`. Direct chat commands
+            reject such a target with a stable conflict code.
         privateAccount:
           $ref: '#/components/schemas/PlayerPrivateAccount'
         access:
@@ -4881,8 +4889,10 @@ components:
           type: string
           description: |
             `PENDING_OUTGOING` when the authenticated player is waiting for an answer,
-            `PENDING_INCOMING` when the other player asked first.
-          enum: [NONE, FRIEND, PENDING_OUTGOING, PENDING_INCOMING]
+            `PENDING_INCOMING` when the other player asked first, `PENDING_DEFERRED` when the
+            request is stored against an imported player association and is delivered once that
+            person signs in and the account is bound. A deferred request has no `requestId` yet.
+          enum: [NONE, FRIEND, PENDING_OUTGOING, PENDING_INCOMING, PENDING_DEFERRED]
         createdAt:
           type: [string, 'null']
           format: date-time

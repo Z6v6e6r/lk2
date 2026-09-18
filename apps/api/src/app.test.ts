@@ -766,6 +766,7 @@ describe('health endpoints', () => {
         get: vi.fn(),
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
+        deliverDeferredFriendRequests: vi.fn(),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -849,6 +850,7 @@ describe('health endpoints', () => {
         get: vi.fn(),
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
+        deliverDeferredFriendRequests: vi.fn(),
         request,
         respond: vi.fn(),
       },
@@ -898,6 +900,7 @@ describe('health endpoints', () => {
         list: vi.fn(),
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
+        deliverDeferredFriendRequests: vi.fn(),
         request: vi.fn(),
         respond: vi.fn(),
         remove,
@@ -995,6 +998,7 @@ describe('health endpoints', () => {
         get: vi.fn(),
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
+        deliverDeferredFriendRequests: vi.fn(),
         request,
         respond: vi.fn(),
         remove: vi.fn(),
@@ -1013,6 +1017,53 @@ describe('health endpoints', () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: 'PROFILE_FRIEND_TARGET_UNREACHABLE' });
+  });
+
+  it('reports a deferred friend request for an imported player whose association is known', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    const request = vi.fn<ProfileFriendshipRepository['request']>().mockResolvedValue({
+      outcome: 'applied',
+      friendship: {
+        userId: targetUserId,
+        status: 'PENDING_DEFERRED',
+        createdAt: '2026-09-18T09:00:00.000Z',
+        requestId: null,
+      },
+      replayed: false,
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: {
+        list: vi.fn(),
+        get: vi.fn(),
+        listIncoming: vi.fn(),
+        listOutgoing: vi.fn(),
+        deliverDeferredFriendRequests: vi.fn(),
+        request,
+        respond: vi.fn(),
+        remove: vi.fn(),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/profile/friends/${targetUserId}`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'profile-friend-deferred-test-0001',
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.headers['x-idempotent-replayed']).toBe('false');
+    expect(response.json()).toMatchObject({
+      userId: targetUserId,
+      status: 'PENDING_DEFERRED',
+      requestId: null,
+    });
   });
 
   it('lists incoming friend requests for the notifications feed', async () => {
@@ -1039,6 +1090,7 @@ describe('health endpoints', () => {
         get: vi.fn(),
         listIncoming,
         listOutgoing: vi.fn(),
+        deliverDeferredFriendRequests: vi.fn(),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -1084,6 +1136,7 @@ describe('health endpoints', () => {
         get: vi.fn(),
         listIncoming,
         listOutgoing,
+        deliverDeferredFriendRequests: vi.fn(),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -1117,6 +1170,7 @@ describe('health endpoints', () => {
         get: vi.fn(),
         listIncoming,
         listOutgoing,
+        deliverDeferredFriendRequests: vi.fn(),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -1161,6 +1215,7 @@ describe('health endpoints', () => {
         get: vi.fn(),
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
+        deliverDeferredFriendRequests: vi.fn(),
         request: vi.fn(),
         respond,
       },
