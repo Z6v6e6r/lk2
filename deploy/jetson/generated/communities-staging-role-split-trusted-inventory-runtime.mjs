@@ -37529,6 +37529,9 @@ function parseCommunitiesStagingRoleSplitTrustedInventoryReceipt(text) {
 // ../../packages/database/src/messaging-repository.ts
 init_esm_shims();
 
+// ../../packages/database/src/profile-reachability-repository.ts
+init_esm_shims();
+
 // ../../packages/database/src/profile-privacy-repository.ts
 init_esm_shims();
 

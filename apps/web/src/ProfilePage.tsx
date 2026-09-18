@@ -1041,6 +1041,7 @@ function FriendshipAction({
   friendship,
   busy,
   error,
+  reachable = true,
   onAdd,
   onAccept,
   onRemove,
@@ -1048,6 +1049,7 @@ function FriendshipAction({
   readonly friendship?: ProfileFriendship | null;
   readonly busy: boolean;
   readonly error?: string | null;
+  readonly reachable?: boolean;
   readonly onAdd?: () => void;
   readonly onRemove?: () => void;
   readonly onAccept?: (requestId: string) => void;
@@ -1063,15 +1065,18 @@ function FriendshipAction({
       : isIncoming
         ? 'Заявка в друзья'
         : 'Добавить в друзья';
-  const description = isFriend
-    ? 'Игрок отображается в вашем блоке друзей'
-    : isOutgoing
-      ? 'Игрок увидит заявку в уведомлениях'
-      : isIncoming
-        ? 'Этот игрок хочет добавить вас в друзья'
-        : 'Игрок получит заявку в уведомлениях';
+  const unreachable = !reachable && !isFriend && !isIncoming;
+  const description = unreachable
+    ? 'Игрок ещё не входил в приложение: заявку он не увидит'
+    : isFriend
+      ? 'Игрок отображается в вашем блоке друзей'
+      : isOutgoing
+        ? 'Игрок увидит заявку в уведомлениях'
+        : isIncoming
+          ? 'Этот игрок хочет добавить вас в друзья'
+          : 'Игрок получит заявку в уведомлениях';
   const acceptRequestId = isIncoming ? friendship?.requestId : null;
-  const disabledByState = isOutgoing;
+  const disabledByState = isOutgoing || unreachable;
   const handleClick = isFriend
     ? onRemove
     : isIncoming
@@ -1103,11 +1108,13 @@ function FriendshipAction({
               : 'Отправляем…'
           : isFriend
             ? 'Удалить'
-            : isOutgoing
-              ? 'Ожидает ответа'
-              : isIncoming
-                ? 'Принять заявку'
-                : 'Добавить'}
+            : unreachable
+              ? 'Недоступен'
+              : isOutgoing
+                ? 'Ожидает ответа'
+                : isIncoming
+                  ? 'Принять заявку'
+                  : 'Добавить'}
       </button>
       {error ? <p role="alert">{error}</p> : null}
     </section>
@@ -1135,6 +1142,8 @@ function lockedActionMessage(capability: ProfileActionCapability): string {
       return 'Для этого действия пока нет доступа.';
     case 'FEATURE_UNAVAILABLE':
       return 'Действие скоро появится.';
+    case 'TARGET_UNREACHABLE':
+      return 'Игрок ещё не входил в приложение — заявка и сообщения не дойдут.';
     default:
       return 'Действие сейчас недоступно.';
   }
@@ -1465,6 +1474,7 @@ export function ProfilePage({
             <>
               <FriendshipAction
                 busy={friendsBusy}
+                reachable={view.reachable}
                 {...(friendship !== undefined ? { friendship } : {})}
                 {...(friendsError !== undefined ? { error: friendsError } : {})}
                 {...(onAddFriend ? { onAdd: onAddFriend } : {})}

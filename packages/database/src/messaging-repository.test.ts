@@ -829,8 +829,8 @@ describe('messaging repository', () => {
       if (text.includes('from identity.users user_account')) {
         return Promise.resolve({
           rows: [
-            { id: userId, chat_policy: 'AUTHORIZED' },
-            { id: otherUserId, chat_policy: 'NOBODY' },
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true },
+            { id: otherUserId, chat_policy: 'NOBODY', reachable: true },
           ],
           rowCount: 2,
         });
@@ -873,8 +873,8 @@ describe('messaging repository', () => {
         if (text.includes('from identity.users user_account')) {
           return Promise.resolve({
             rows: [
-              { id: actorUserId, chat_policy: 'AUTHORIZED' },
-              { id: blockedUserId, chat_policy: 'AUTHORIZED' },
+              { id: actorUserId, chat_policy: 'AUTHORIZED', reachable: true },
+              { id: blockedUserId, chat_policy: 'AUTHORIZED', reachable: true },
             ],
             rowCount: 2,
           });
@@ -968,8 +968,8 @@ describe('messaging repository', () => {
       if (text.includes('from identity.users user_account')) {
         return Promise.resolve({
           rows: [
-            { id: userId, chat_policy: 'AUTHORIZED' },
-            { id: otherUserId, chat_policy: 'AUTHORIZED' },
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true },
+            { id: otherUserId, chat_policy: 'AUTHORIZED', reachable: true },
           ],
           rowCount: 2,
         });

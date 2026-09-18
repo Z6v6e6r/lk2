@@ -249,4 +249,33 @@ describe('profile friend request repository', () => {
       }),
     ).resolves.toEqual({ outcome: 'applied', friendship: stored, replayed: true });
   });
+
+  it('refuses an active target that has no login path at all', async () => {
+    const statements: string[] = [];
+    const query = baseQuery((text) => {
+      statements.push(text);
+      if (text.includes('from profile.friend_request_commands')) return { rows: [], rowCount: 0 };
+      // The reachability-guarded lookup finds nothing, while the plain active-user lookup does:
+      // the row is an imported legacy player that can never sign in.
+      if (text.includes('reachable_summary')) return { rows: [], rowCount: 0 };
+      if (text.includes('from identity.users')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
+      return undefined;
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.request({
+        tenantId,
+        actorUserId,
+        targetUserId,
+        idempotencyKey: 'friend-request-unreachable-0001',
+        requestHash: 'c'.repeat(64),
+        correlationId: 'friend-request-unreachable-correlation-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'target_unreachable' });
+
+    expect(statements.some((text) => text.includes('insert into profile.friend_requests'))).toBe(
+      false,
+    );
+  });
 });

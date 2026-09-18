@@ -4738,10 +4738,17 @@ components:
     PlayerProfileView:
       type: object
       additionalProperties: false
-      required: [profile, access]
+      required: [profile, reachable, access]
       properties:
         profile:
           $ref: '#/components/schemas/PlayerProfile'
+        reachable:
+          type: boolean
+          description: |
+            False for an imported player row that has never signed in and has no login path: the
+            owner reaches PadlHub through a different account, so friend requests and direct
+            conversations addressed to this row would stay unseen. Always true for the viewer. The
+            friends, requests and chat commands reject such a target with a stable conflict code.
         privateAccount:
           $ref: '#/components/schemas/PlayerPrivateAccount'
         access:
@@ -4842,7 +4849,14 @@ components:
           description: AVAILABLE is emitted only when a working PadlHub route for the action is mounted in the current release.
         reason:
           type: string
-          enum: [ACCESS_REQUIRED, PROFILE_RESTRICTED, SELF_PROFILE, FEATURE_UNAVAILABLE]
+          enum:
+            [
+              ACCESS_REQUIRED,
+              PROFILE_RESTRICTED,
+              SELF_PROFILE,
+              FEATURE_UNAVAILABLE,
+              TARGET_UNREACHABLE,
+            ]
         route:
           type: string
           pattern: '^/'

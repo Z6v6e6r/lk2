@@ -171,6 +171,15 @@ export function registerProfileFriendshipRoutes(
       if (result.outcome === 'target_not_found') {
         return sendApiError(request, reply, 404, 'PROFILE_NOT_FOUND', 'Профиль игрока не найден.');
       }
+      if (result.outcome === 'target_unreachable') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'PROFILE_FRIEND_TARGET_UNREACHABLE',
+          'Игрок ещё не входил в ПадлХАБ: заявка не дойдёт, пока он не войдёт в приложение.',
+        );
+      }
       if (result.outcome === 'idempotency_conflict') {
         return sendApiError(
           request,
