@@ -12726,6 +12726,120 @@ button.participant-avatar-stack__open-slot:focus-visible {
   white-space: nowrap;
 }
 
+.profile-friend-requests {
+  display: grid;
+  margin-top: 10px;
+  padding: 10px;
+  gap: 8px;
+  border: 1px dashed rgb(135 102 235 / 45%);
+  border-radius: 11px;
+  background: rgb(240 235 255 / 62%);
+}
+
+.profile-friend-requests-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.profile-friend-requests-heading h3 {
+  margin: 0;
+  font-family: 'RF Dewi', 'Inter Display', sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.profile-friend-requests-heading > span {
+  display: grid;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0 6px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--profile-level-accent);
+  background: var(--profile-level-soft);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.profile-friend-request-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  list-style: none;
+}
+
+.profile-friend-request-list > li {
+  display: grid;
+  padding: 8px;
+  gap: 8px;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.profile-friend-request-list > li > a {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #29252f;
+  text-decoration: none;
+}
+
+.profile-friend-request-list .participant-avatar-stack {
+  width: 40px;
+  height: 44px;
+  min-width: 40px;
+}
+
+.profile-friend-request-person {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.profile-friend-request-person strong {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-friend-request-person small {
+  color: #716a78;
+  font-size: 9px;
+}
+
+.profile-friend-request-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.profile-friend-request-actions button {
+  flex: 1 1 auto;
+  min-height: 30px;
+  border: 0;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--profile-level-accent);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.profile-friend-request-actions button:disabled {
+  opacity: 0.6;
+}
+
+.profile-friend-request-actions .profile-friend-request-decline {
+  border: 1px solid rgb(135 102 235 / 28%);
+  color: #716a78;
+  background: #fff;
+}
+
 .profile-friendship-action {
   position: relative;
   display: grid;

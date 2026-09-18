@@ -373,4 +373,71 @@ describe('ProfilePage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Принять заявку' }));
     expect(onAcceptFriendRequest).toHaveBeenCalledWith('18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91');
   });
+
+  it('shows incoming friend requests inside the friends block with answer buttons', () => {
+    const onAcceptRequest = vi.fn();
+    const onDeclineRequest = vi.fn();
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        friends={{
+          items: [
+            {
+              userId: '6a81e965-c508-4321-812c-4be323606a70',
+              displayName: 'Мария Соколова',
+              avatarUrl: null,
+              levelLabel: 'C',
+              addedAt: '2026-07-26T10:00:00.000Z',
+              route: '/profile/6a81e965-c508-4321-812c-4be323606a70',
+            },
+          ],
+        }}
+        friendRequests={[
+          {
+            requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
+            userId: '3f2f0f0e-9c1e-4a2f-9c1e-9c1e9c1e9c1e',
+            displayName: 'Анна Шубина',
+            avatarUrl: null,
+            levelLabel: 'D+',
+            createdAt: '2026-09-17T15:57:25.000Z',
+            route: '/profile/3f2f0f0e-9c1e-4a2f-9c1e-9c1e9c1e9c1e',
+          },
+        ]}
+        onAcceptFriendRequest={onAcceptRequest}
+        onDeclineFriendRequest={onDeclineRequest}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+
+    const requestsBlock = screen.getByRole('region', { name: 'Заявки в друзья' });
+    expect(within(requestsBlock).getByText('Анна Шубина')).toBeVisible();
+    expect(within(requestsBlock).getByText('хочет добавить вас в друзья')).toBeVisible();
+    expect(within(requestsBlock).getByRole('link', { name: /Анна Шубина/ })).toHaveAttribute(
+      'href',
+      '/profile/3f2f0f0e-9c1e-4a2f-9c1e-9c1e9c1e9c1e',
+    );
+
+    fireEvent.click(within(requestsBlock).getByRole('button', { name: 'Добавить' }));
+    expect(onAcceptRequest).toHaveBeenCalledWith('18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91');
+    fireEvent.click(within(requestsBlock).getByRole('button', { name: 'Отказаться' }));
+    expect(onDeclineRequest).toHaveBeenCalledWith('18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91');
+  });
+
+  it('keeps the friends block unchanged when no request is pending', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        friends={{ items: [] }}
+        friendRequests={[]}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByRole('region', { name: 'Заявки в друзья' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Добавляйте игроков из их профилей — они появятся здесь.'),
+    ).toBeVisible();
+  });
 });
