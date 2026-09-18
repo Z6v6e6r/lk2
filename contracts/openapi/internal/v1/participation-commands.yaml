@@ -4,11 +4,17 @@ paths:
       tags: [participation]
       operationId: authorizeParticipationCommand
       summary: Evaluate and persist a server-owned participation authorization
+      description: >
+        The end user is never named in the request body. The caller forwards the end user's own
+        bearer assertion in `Authorization`; the server verifies it and resolves the canonical
+        PadlHub actor from the verified external identity, scoped to the tenant.
       security:
         - ParticipationCommandToken: []
       parameters:
         - $ref: '#/components/parameters/TenantKey'
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/UserAssertion'
+        - $ref: '#/components/parameters/ParticipationCallerToken'
       requestBody:
         required: true
         content:
@@ -23,9 +29,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ParticipationCommand'
         '400': { description: Invalid request. }
-        '403': { description: Invalid service credential or tenant scope. }
-        '409': { description: Rejected authorization or contract conflict. }
-        '503': { description: Participation command contour is disabled. }
+        '401': { description: 'Missing or invalid end-user assertion.' }
+        '403': { description: 'Invalid service credential or tenant scope.' }
+        '409': { description: 'Rejected authorization, unlinked actor, or contract conflict.' }
+        '503': { description: 'Contour disabled, or the identity verifier is unavailable.' }
   /{tenantKey}/participation-commands/{commandId}:
     get:
       tags: [participation]
@@ -36,6 +43,7 @@ paths:
       parameters:
         - $ref: '#/components/parameters/TenantKey'
         - $ref: '#/components/parameters/CommandId'
+        - $ref: '#/components/parameters/ParticipationCallerToken'
       responses:
         '200':
           description: Persisted participation command.
@@ -57,6 +65,7 @@ paths:
         - $ref: '#/components/parameters/TenantKey'
         - $ref: '#/components/parameters/CommandId'
         - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/ParticipationCallerToken'
       requestBody:
         required: true
         content:
@@ -95,18 +104,31 @@ components:
       in: header
       required: true
       schema: { type: string, minLength: 8, maxLength: 200 }
+    UserAssertion:
+      name: Authorization
+      in: header
+      required: true
+      description: >
+        The end user's own bearer assertion. Verified by the participation identity verifier; the
+        canonical actor is resolved from the verified external identity.
+      schema: { type: string, pattern: '^Bearer\s+\S+$' }
+    ParticipationCallerToken:
+      name: X-Phub-Participation-Caller-Token
+      in: header
+      required: false
+      description: >
+        Optional originating-caller credential. When supplied it is digested and bound to the
+        command, so only the caller that authorized a command may acknowledge or read it.
+      schema: { type: string, minLength: 16, maxLength: 512 }
   schemas:
     AuthorizeParticipationCommandRequest:
       type: object
       additionalProperties: false
-      required: [actor, activity, action]
+      description: >
+        The actor is intentionally absent: it is derived server-side from the verified
+        `Authorization` assertion, so a caller cannot nominate an arbitrary end user.
+      required: [activity, action]
       properties:
-        actor:
-          type: object
-          additionalProperties: false
-          required: [userId]
-          properties:
-            userId: { type: string, format: uuid }
         activity:
           type: object
           additionalProperties: false

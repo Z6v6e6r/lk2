@@ -62,7 +62,7 @@ import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapsho
 import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { EventCatalogItem } from './bookings/booking-recommendation-routes.js';
 import { listViewerGameCards } from './games/game-card-queries.js';
-import { CupLegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
+import { CupHttpIdentityVerifier } from './identity/cup-identity-verifier.js';
 import { S3GiftCertificateMediaStore } from './gift-certificates/gift-certificate-media-store.js';
 import { S3GiftCertificateArtifactReadStore } from './gift-certificates/gift-certificate-artifact-store.js';
 import { S3LocationMediaStore } from './locations/location-media-store.js';
@@ -263,10 +263,17 @@ const participationCommandRepository = createParticipationCommandRepository(pool
   },
 });
 const legacyLkIdentityVerifier = config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED
-  ? new CupLegacyLkIdentityVerifier({
+  ? new CupHttpIdentityVerifier({
       url: config.LEGACY_GAME_IDENTITY_VERIFY_URL as string,
       integrationToken: config.LEGACY_GAME_IDENTITY_VERIFY_TOKEN as string,
       timeoutMs: config.LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS,
+    })
+  : undefined;
+const participationIdentityVerifier = config.PARTICIPATION_COMMANDS_ENABLED
+  ? new CupHttpIdentityVerifier({
+      url: config.PARTICIPATION_IDENTITY_VERIFY_URL as string,
+      integrationToken: config.PARTICIPATION_IDENTITY_VERIFY_TOKEN as string,
+      timeoutMs: config.PARTICIPATION_IDENTITY_VERIFY_TIMEOUT_MS,
     })
   : undefined;
 const promotionEngagementSink = config.PROMOTIONS_ENGAGEMENT_SECRET
@@ -532,6 +539,9 @@ const app = await buildApp({
   playerLevelRepository: createPlayerLevelRepository(pool),
   cupPlayerLevelProjectionRepository: createCupPlayerLevelProjectionRepository(pool),
   participationCommandRepository,
+  ...(config.PARTICIPATION_COMMANDS_ENABLED && participationIdentityVerifier
+    ? { participationIdentityVerifier }
+    : {}),
   locationMediaRepository: createLocationMediaRepository(pool),
   giftCertificateCatalogRepository: createGiftCertificateCatalogRepository(pool),
   giftCertificateMediaRepository: createGiftCertificateMediaRepository(pool),

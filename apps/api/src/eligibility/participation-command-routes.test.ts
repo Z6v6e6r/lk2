@@ -1,7 +1,13 @@
+import { createHash } from 'node:crypto';
+
 import type { ParticipationCommandRepository, ParticipationCommandView } from '@phub/database';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  CupIdentityVerificationError,
+  type VerifiedCupIdentity,
+} from '../identity/cup-identity-verifier.js';
 import { registerParticipationCommandRoutes } from './participation-command-routes.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
@@ -13,11 +19,24 @@ const apps: FastifyInstance[] = [];
 
 function body() {
   return {
-    actor: { userId: actorUserId },
     activity: { type: 'GAME', id: activityId, expectedSourceRevision: 7 },
     action: 'JOIN',
   } as const;
 }
+
+const verifiedIdentity: VerifiedCupIdentity = {
+  issuer: 'https://cup.padlhub.test/realms/lk',
+  subject: 'legacy-user-4711',
+  phoneNorm: '+79990000000',
+  tenantKey: 'local-padel',
+  authorizedParty: 'lk-legacy',
+};
+
+function verifier(identity: VerifiedCupIdentity = verifiedIdentity) {
+  return { verify: vi.fn().mockResolvedValue(identity) };
+}
+
+const USER_ASSERTION = { authorization: 'Bearer legacy-user-assertion' } as const;
 
 function view(state: ParticipationCommandView['state'] = 'AUTHORIZED'): ParticipationCommandView {
   return {
@@ -46,7 +65,13 @@ function view(state: ParticipationCommandView['state'] = 'AUTHORIZED'): Particip
   };
 }
 
-async function appWith(repository: ParticipationCommandRepository, enabled = true) {
+async function appWith(
+  repository: ParticipationCommandRepository,
+  enabled = true,
+  identityVerifier: {
+    verify: (authorization: string) => Promise<VerifiedCupIdentity>;
+  } = verifier(),
+) {
   const app = Fastify();
   registerParticipationCommandRoutes(app, {
     enabled,
@@ -55,6 +80,7 @@ async function appWith(repository: ParticipationCommandRepository, enabled = tru
     principalKey: 'legacy-lk-writer',
     authorizationTtlSeconds: 300,
     repository,
+    identityVerifier,
     commandHandlers: [
       (request) => {
         request.tenantId = tenantId;
@@ -74,6 +100,7 @@ async function appWith(repository: ParticipationCommandRepository, enabled = tru
 
 function repository(overrides: Partial<ParticipationCommandRepository> = {}) {
   return {
+    resolveActor: vi.fn().mockResolvedValue({ outcome: 'resolved', userId: actorUserId }),
     authorize: vi.fn().mockResolvedValue(view()),
     acknowledge: vi.fn().mockResolvedValue({ ...view(), state: 'APPLIED' }),
     get: vi.fn().mockResolvedValue(view()),
@@ -93,7 +120,11 @@ describe('participation command routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/internal/api/v1/local-padel/participation-commands',
-      headers: { 'x-phub-participation-token': token, 'idempotency-key': 'join-request-0001' },
+      headers: {
+        ...USER_ASSERTION,
+        'x-phub-participation-token': token,
+        'idempotency-key': 'join-request-0001',
+      },
       payload: body(),
     });
     expect(response.statusCode).toBe(200);
@@ -119,7 +150,11 @@ describe('participation command routes', () => {
       const response = await app.inject({
         method: 'POST',
         url: '/internal/api/v1/local-padel/participation-commands',
-        headers: { 'x-phub-participation-token': token, 'idempotency-key': 'join-request-0002' },
+        headers: {
+          ...USER_ASSERTION,
+          'x-phub-participation-token': token,
+          'idempotency-key': 'join-request-0002',
+        },
         payload: { ...body(), ...extra },
       });
       expect(response.statusCode).toBe(400);
@@ -151,6 +186,7 @@ describe('participation command routes', () => {
         method: 'POST',
         url: `/internal/api/v1/${request.tenantKey}/participation-commands`,
         headers: {
+          ...USER_ASSERTION,
           'x-phub-participation-token': request.suppliedToken,
           'idempotency-key': 'join-request-0004',
         },
@@ -168,7 +204,11 @@ describe('participation command routes', () => {
     const rejected = await app.inject({
       method: 'POST',
       url: '/internal/api/v1/local-padel/participation-commands',
-      headers: { 'x-phub-participation-token': token, 'idempotency-key': 'join-request-0005' },
+      headers: {
+        ...USER_ASSERTION,
+        'x-phub-participation-token': token,
+        'idempotency-key': 'join-request-0005',
+      },
       payload: body(),
     });
     expect(rejected.statusCode).toBe(409);
@@ -187,5 +227,174 @@ describe('participation command routes', () => {
     expect(repo.acknowledge).toHaveBeenCalledWith(
       expect.objectContaining({ commandId, result: { outcome: 'APPLIED' } }),
     );
+  });
+
+  it('ignores no caller-supplied actor: a body actor is rejected outright', async () => {
+    const repo = repository();
+    const app = await appWith(repo);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/participation-commands',
+      headers: {
+        ...USER_ASSERTION,
+        'x-phub-participation-token': token,
+        'idempotency-key': 'join-request-forged-actor',
+      },
+      payload: { ...body(), actor: { userId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(repo.authorize).not.toHaveBeenCalled();
+  });
+
+  it('requires a forwarded end-user assertion and resolves the actor server-side', async () => {
+    const repo = repository();
+    const app = await appWith(repo);
+    const withoutAssertion = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/participation-commands',
+      headers: { 'x-phub-participation-token': token, 'idempotency-key': 'join-request-no-user' },
+      payload: body(),
+    });
+    expect(withoutAssertion.statusCode).toBe(401);
+    expect(withoutAssertion.json()).toMatchObject({
+      code: 'PARTICIPATION_USER_ASSERTION_REQUIRED',
+    });
+    expect(repo.resolveActor).not.toHaveBeenCalled();
+    expect(repo.authorize).not.toHaveBeenCalled();
+
+    const withAssertion = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/participation-commands',
+      headers: {
+        ...USER_ASSERTION,
+        'x-phub-participation-token': token,
+        'idempotency-key': 'join-request-resolved',
+      },
+      payload: body(),
+    });
+    expect(withAssertion.statusCode).toBe(200);
+    expect(repo.resolveActor).toHaveBeenCalledWith({
+      tenantId,
+      issuer: verifiedIdentity.issuer,
+      subject: verifiedIdentity.subject,
+    });
+    expect(repo.authorize).toHaveBeenCalledWith(expect.objectContaining({ actorUserId, tenantId }));
+  });
+
+  it('refuses an assertion that belongs to another tenant', async () => {
+    const repo = repository();
+    const app = await appWith(
+      repo,
+      true,
+      verifier({ ...verifiedIdentity, tenantKey: 'another-tenant' }),
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/participation-commands',
+      headers: {
+        ...USER_ASSERTION,
+        'x-phub-participation-token': token,
+        'idempotency-key': 'join-request-foreign-tenant',
+      },
+      payload: body(),
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toMatchObject({ code: 'PARTICIPATION_USER_TENANT_MISMATCH' });
+    expect(repo.resolveActor).not.toHaveBeenCalled();
+    expect(repo.authorize).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the identity assertion is rejected or the verifier is unavailable', async () => {
+    const repo = repository();
+    const rejected = await appWith(repo, true, {
+      verify: vi.fn().mockRejectedValue(new CupIdentityVerificationError('rejected', 'nope')),
+    });
+    const rejectedResponse = await rejected.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/participation-commands',
+      headers: {
+        ...USER_ASSERTION,
+        'x-phub-participation-token': token,
+        'idempotency-key': 'join-request-rejected',
+      },
+      payload: body(),
+    });
+    expect(rejectedResponse.statusCode).toBe(401);
+
+    const unavailable = await appWith(repo, true, {
+      verify: vi.fn().mockRejectedValue(new CupIdentityVerificationError('unavailable', 'down')),
+    });
+    const unavailableResponse = await unavailable.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/participation-commands',
+      headers: {
+        ...USER_ASSERTION,
+        'x-phub-participation-token': token,
+        'idempotency-key': 'join-request-unavailable',
+      },
+      payload: body(),
+    });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(repo.authorize).not.toHaveBeenCalled();
+  });
+
+  it('refuses to serve when no identity verifier is configured', async () => {
+    const repo = repository();
+    const app = Fastify();
+    registerParticipationCommandRoutes(app, {
+      enabled: true,
+      integrationToken: token,
+      authorizedTenantKey: 'local-padel',
+      principalKey: 'legacy-lk-writer',
+      authorizationTtlSeconds: 300,
+      repository: repo,
+      commandHandlers: [
+        (request) => {
+          request.tenantId = tenantId;
+          return Promise.resolve();
+        },
+      ],
+      readHandlers: [
+        (request) => {
+          request.tenantId = tenantId;
+          return Promise.resolve();
+        },
+      ],
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/internal/api/v1/local-padel/participation-commands',
+      headers: {
+        ...USER_ASSERTION,
+        'x-phub-participation-token': token,
+        'idempotency-key': 'join-request-no-verifier',
+      },
+      payload: body(),
+    });
+    expect(response.statusCode).toBe(503);
+    expect(repo.authorize).not.toHaveBeenCalled();
+  });
+
+  it('binds an acknowledgement to the caller that authorized the command', async () => {
+    const repo = repository();
+    const app = await appWith(repo);
+    await app.inject({
+      method: 'POST',
+      url: `/internal/api/v1/local-padel/participation-commands/${commandId}/acknowledgements`,
+      headers: {
+        'x-phub-participation-token': token,
+        'x-phub-participation-caller-token': 'writer-one-credential',
+        'idempotency-key': 'ack-request-caller-one',
+      },
+      payload: {
+        outcome: 'APPLIED',
+        writerOperationId: '340f475e-686d-44fa-9729-bc073bce3c2c',
+      },
+    });
+    const [firstCall] = vi.mocked(repo.acknowledge).mock.calls;
+    expect(firstCall?.[0]).toMatchObject({
+      callerKey: createHash('sha256').update('writer-one-credential').digest('hex'),
+    });
   });
 });

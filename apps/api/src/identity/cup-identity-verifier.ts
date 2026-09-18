@@ -1,4 +1,4 @@
-export interface VerifiedLegacyLkActor {
+export interface VerifiedCupIdentity {
   readonly issuer: string;
   readonly subject: string;
   readonly clientId?: string;
@@ -8,17 +8,17 @@ export interface VerifiedLegacyLkActor {
   readonly authorizedParty: string;
 }
 
-export interface LegacyLkIdentityVerifier {
-  verify(authorization: string): Promise<VerifiedLegacyLkActor>;
+export interface CupIdentityVerifier {
+  verify(authorization: string): Promise<VerifiedCupIdentity>;
 }
 
-export class LegacyLkIdentityVerificationError extends Error {
+export class CupIdentityVerificationError extends Error {
   public constructor(
     public readonly outcome: 'rejected' | 'unavailable',
     message: string,
   ) {
     super(message);
-    this.name = 'LegacyLkIdentityVerificationError';
+    this.name = 'CupIdentityVerificationError';
   }
 }
 
@@ -34,7 +34,7 @@ function nonEmptyString(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function parseActor(payload: unknown): VerifiedLegacyLkActor | undefined {
+function parseActor(payload: unknown): VerifiedCupIdentity | undefined {
   const root = record(payload);
   const actor = record(root?.actor);
   const issuer = nonEmptyString(actor?.issuer);
@@ -67,7 +67,7 @@ function parseActor(payload: unknown): VerifiedLegacyLkActor | undefined {
   };
 }
 
-export class CupLegacyLkIdentityVerifier implements LegacyLkIdentityVerifier {
+export class CupHttpIdentityVerifier implements CupIdentityVerifier {
   public constructor(
     private readonly options: {
       readonly url: string;
@@ -77,7 +77,7 @@ export class CupLegacyLkIdentityVerifier implements LegacyLkIdentityVerifier {
     },
   ) {}
 
-  public async verify(authorization: string): Promise<VerifiedLegacyLkActor> {
+  public async verify(authorization: string): Promise<VerifiedCupIdentity> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs);
     try {
@@ -98,25 +98,22 @@ export class CupLegacyLkIdentityVerifier implements LegacyLkIdentityVerifier {
         payload = null;
       }
       if (response.status === 401 || response.status === 403) {
-        throw new LegacyLkIdentityVerificationError('rejected', 'LEGACY_LK_IDENTITY_REJECTED');
+        throw new CupIdentityVerificationError('rejected', 'LEGACY_LK_IDENTITY_REJECTED');
       }
       if (!response.ok) {
-        throw new LegacyLkIdentityVerificationError(
-          'unavailable',
-          'LEGACY_LK_IDENTITY_UNAVAILABLE',
-        );
+        throw new CupIdentityVerificationError('unavailable', 'LEGACY_LK_IDENTITY_UNAVAILABLE');
       }
       const actor = parseActor(payload);
       if (!actor) {
-        throw new LegacyLkIdentityVerificationError(
+        throw new CupIdentityVerificationError(
           'unavailable',
           'LEGACY_LK_IDENTITY_RESPONSE_INVALID',
         );
       }
       return actor;
     } catch (error) {
-      if (error instanceof LegacyLkIdentityVerificationError) throw error;
-      throw new LegacyLkIdentityVerificationError('unavailable', 'LEGACY_LK_IDENTITY_UNAVAILABLE');
+      if (error instanceof CupIdentityVerificationError) throw error;
+      throw new CupIdentityVerificationError('unavailable', 'LEGACY_LK_IDENTITY_UNAVAILABLE');
     } finally {
       clearTimeout(timeout);
     }

@@ -117,7 +117,7 @@ import {
 import { registerCoachGameSummaryRoutes } from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
 import { registerLegacyGameRosterBridgeRoutes } from './games/legacy-game-roster-bridge-routes.js';
-import type { LegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
+import type { CupIdentityVerifier } from './identity/cup-identity-verifier.js';
 import { registerGameResultRoutes } from './games/game-result-routes.js';
 import { registerGameReadRoutes } from './games/game-read-routes.js';
 import { registerGiftCertificateRoutes } from './gift-certificates/gift-certificate-routes.js';
@@ -238,7 +238,7 @@ export interface BuildAppOptions {
   > &
     Partial<Pick<GameRosterRepository, 'confirmPayment'>>;
   readonly legacyGameRosterBridgeRepository?: LegacyGameRosterBridgeRepository;
-  readonly legacyLkIdentityVerifier?: LegacyLkIdentityVerifier;
+  readonly legacyLkIdentityVerifier?: CupIdentityVerifier;
   readonly gameResultRepository?: Pick<GameResultRepository, 'submit' | 'confirm' | 'dispute'>;
   readonly gameCommandRepository?: Pick<
     GameRepository,
@@ -261,6 +261,7 @@ export interface BuildAppOptions {
   readonly playerLevelRepository?: PlayerLevelRepository;
   readonly cupPlayerLevelProjectionRepository?: CupPlayerLevelProjectionRepository;
   readonly participationCommandRepository?: ParticipationCommandRepository;
+  readonly participationIdentityVerifier?: CupIdentityVerifier;
   readonly locationMediaRepository?: LocationMediaRepository;
   readonly giftCertificateCatalogRepository?: GiftCertificateCatalogRepository;
   readonly giftCertificateMediaRepository?: GiftCertificateMediaRepository;
@@ -1003,6 +1004,9 @@ export async function buildApp(options: BuildAppOptions) {
       ? { principalKey: options.config.PARTICIPATION_COMMAND_PRINCIPAL_KEY }
       : {}),
     authorizationTtlSeconds: options.config.PARTICIPATION_COMMAND_AUTHORIZATION_TTL_SECONDS,
+    ...(options.participationIdentityVerifier
+      ? { identityVerifier: options.participationIdentityVerifier }
+      : {}),
     ...(options.participationCommandRepository
       ? { repository: options.participationCommandRepository }
       : {}),
