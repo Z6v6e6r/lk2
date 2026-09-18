@@ -101,8 +101,10 @@ describe('Home date recommendations', () => {
     await waitFor(() => expect(result.current.error).toBe(true));
     expect(result.current.page?.items).toEqual(initial.items);
     act(() => result.current.loadMore());
-    await waitFor(() => expect(result.current.error).toBe(false));
-    expect(result.current.page?.items).toEqual([]);
+    // `loadMore` clears the error synchronously, so waiting on that flag would pass before the retried page
+    // is applied and the assertion below would race it. Wait for the outcome the test is actually about.
+    await waitFor(() => expect(result.current.page?.items).toEqual([]));
+    expect(result.current.error).toBe(false);
     expect(result.current.loading).toBe(false);
     expect(load).toHaveBeenCalledTimes(2);
     expect(load).toHaveBeenLastCalledWith({ limit: 14, localDate: '2026-07-19' });
