@@ -934,6 +934,20 @@ export function App({
             setProfileFriendsError('Не удалось загрузить друзей.');
           },
         );
+        // Pending requests belong to the profile's friends block, not only to the notifications
+        // feed, so the viewer sees them without opening another screen.
+        void gateway.listProfileFriendRequests(8).then(
+          (page) => {
+            if (!active) return;
+            setFriendRequests(page.items);
+            setFriendRequestsError(null);
+          },
+          () => {
+            if (!active) return;
+            setFriendRequests([]);
+            setFriendRequestsError('Не удалось загрузить заявки в друзья.');
+          },
+        );
       } else {
         void gateway.getProfileFriendship(targetUserId).then(
           (friendship) => {
@@ -2018,6 +2032,9 @@ export function App({
           friendship={profileFriendship}
           friendsBusy={profileFriendsBusy}
           friendsError={profileFriendsError}
+          friendRequests={friendRequests}
+          friendRequestsError={friendRequestsError}
+          friendRequestBusyId={friendRequestBusyId}
           error={state.error}
           {...(!realAccountPreview ? { onSavePrivacy: handleSaveProfilePrivacy } : {})}
           {...(!realAccountPreview
@@ -2026,6 +2043,7 @@ export function App({
           onAddFriend={handleAddProfileFriend}
           onRemoveFriend={handleRemoveProfileFriend}
           onAcceptFriendRequest={handleAcceptFriendRequest}
+          onDeclineFriendRequest={handleDeclineFriendRequest}
           onLogout={handleLogout}
         />
       );

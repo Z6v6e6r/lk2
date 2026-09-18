@@ -6,6 +6,7 @@ import type {
   PlayerProfileView,
   ProfileActionCapability,
   ProfileFriendPage,
+  ProfileFriendRequestSummary,
   ProfileFriendship,
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
@@ -59,12 +60,16 @@ interface ProfilePageProps {
   readonly friendship?: ProfileFriendship | null;
   readonly friendsBusy?: boolean;
   readonly friendsError?: string | null;
+  readonly friendRequests?: readonly ProfileFriendRequestSummary[];
+  readonly friendRequestsError?: string | null;
+  readonly friendRequestBusyId?: string | null;
   readonly error?: string | null;
   readonly onSavePrivacy?: (input: ProfilePrivacyUpdateRequest) => void;
   readonly onSaveBookingPreferences?: (input: BookingPreferencesUpdateRequest) => void;
   readonly onAddFriend?: () => void;
   readonly onRemoveFriend?: () => void;
   readonly onAcceptFriendRequest?: (requestId: string) => void;
+  readonly onDeclineFriendRequest?: (requestId: string) => void;
   readonly onLogout: () => void;
 }
 
@@ -909,11 +914,22 @@ function ProfileCommunities({
 function ProfileFriends({
   page,
   error,
+  requests,
+  requestsError,
+  friendRequestBusyId = null,
+  onAcceptRequest,
+  onDeclineRequest,
 }: {
   readonly page?: ProfileFriendPage | null;
   readonly error?: string | null;
+  readonly requests?: readonly ProfileFriendRequestSummary[];
+  readonly requestsError?: string | null;
+  readonly friendRequestBusyId?: string | null;
+  readonly onAcceptRequest?: (requestId: string) => void;
+  readonly onDeclineRequest?: (requestId: string) => void;
 }): React.JSX.Element {
   const friends = page?.items.slice(0, 4) ?? [];
+  const incoming = requests ?? [];
   return (
     <section className="profile-friends" aria-labelledby="profile-friends-title">
       <header>
@@ -923,6 +939,59 @@ function ProfileFriends({
         <h2 id="profile-friends-title">Друзья</h2>
         {page ? <span>{page.items.length}</span> : null}
       </header>
+      {requestsError ? <p role="alert">{requestsError}</p> : null}
+      {incoming.length > 0 ? (
+        <section
+          className="profile-friend-requests"
+          aria-labelledby="profile-friend-requests-title"
+        >
+          <div className="profile-friend-requests-heading">
+            <h3 id="profile-friend-requests-title">Заявки в друзья</h3>
+            <span aria-label={`Новых заявок: ${incoming.length}`}>{incoming.length}</span>
+          </div>
+          <ul className="profile-friend-request-list">
+            {incoming.map((request) => (
+              <li key={request.requestId}>
+                <a href={request.route}>
+                  <ParticipantAvatarStack
+                    ariaLabel={request.displayName}
+                    capacity={1}
+                    participants={[
+                      {
+                        key: request.userId,
+                        displayName: request.displayName,
+                        avatarUrl: request.avatarUrl,
+                        level: request.levelLabel,
+                      },
+                    ]}
+                  />
+                  <span className="profile-friend-request-person">
+                    <strong>{request.displayName}</strong>
+                    <small>хочет добавить вас в друзья</small>
+                  </span>
+                </a>
+                <div className="profile-friend-request-actions">
+                  <button
+                    type="button"
+                    disabled={friendRequestBusyId !== null}
+                    onClick={() => onAcceptRequest?.(request.requestId)}
+                  >
+                    {friendRequestBusyId === request.requestId ? 'Добавляем…' : 'Добавить'}
+                  </button>
+                  <button
+                    type="button"
+                    className="profile-friend-request-decline"
+                    disabled={friendRequestBusyId !== null}
+                    onClick={() => onDeclineRequest?.(request.requestId)}
+                  >
+                    Отказаться
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       {error ? (
         <p role="alert">{error}</p>
       ) : !page ? (
@@ -1224,12 +1293,16 @@ export function ProfilePage({
   friendship,
   friendsBusy = false,
   friendsError,
+  friendRequests,
+  friendRequestsError,
+  friendRequestBusyId = null,
   error,
   onSavePrivacy,
   onSaveBookingPreferences,
   onAddFriend,
   onRemoveFriend,
   onAcceptFriendRequest,
+  onDeclineFriendRequest,
   onLogout,
 }: ProfilePageProps): React.JSX.Element {
   const { profile, privateAccount, access } = view;
@@ -1440,6 +1513,11 @@ export function ProfilePage({
             <ProfileFriends
               {...(friends !== undefined ? { page: friends } : {})}
               {...(friendsError !== undefined ? { error: friendsError } : {})}
+              {...(friendRequests !== undefined ? { requests: friendRequests } : {})}
+              {...(friendRequestsError !== undefined ? { requestsError: friendRequestsError } : {})}
+              friendRequestBusyId={friendRequestBusyId}
+              {...(onAcceptFriendRequest ? { onAcceptRequest: onAcceptFriendRequest } : {})}
+              {...(onDeclineFriendRequest ? { onDeclineRequest: onDeclineFriendRequest } : {})}
             />
           ) : null}
 
