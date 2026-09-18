@@ -1058,25 +1058,30 @@ function FriendshipAction({
   const isFriend = status === 'FRIEND';
   const isOutgoing = status === 'PENDING_OUTGOING';
   const isIncoming = status === 'PENDING_INCOMING';
+  const isDeferred = status === 'PENDING_DEFERRED';
   const title = isFriend
     ? 'Уже в друзьях'
     : isOutgoing
       ? 'Заявка отправлена'
-      : isIncoming
-        ? 'Заявка в друзья'
-        : 'Добавить в друзья';
-  const unreachable = !reachable && !isFriend && !isIncoming;
-  const description = unreachable
-    ? 'Игрок ещё не входил в приложение: заявку он не увидит'
-    : isFriend
-      ? 'Игрок отображается в вашем блоке друзей'
-      : isOutgoing
-        ? 'Игрок увидит заявку в уведомлениях'
+      : isDeferred
+        ? 'Заявка сохранена'
         : isIncoming
-          ? 'Этот игрок хочет добавить вас в друзья'
-          : 'Игрок получит заявку в уведомлениях';
+          ? 'Заявка в друзья'
+          : 'Добавить в друзья';
+  const unreachable = !reachable && !isFriend && !isIncoming && !isDeferred;
+  const description = isDeferred
+    ? 'Отправим заявку, когда игрок войдёт в приложение'
+    : unreachable
+      ? 'Игрок ещё не входил в приложение: заявку сохраним и отправим, когда он войдёт'
+      : isFriend
+        ? 'Игрок отображается в вашем блоке друзей'
+        : isOutgoing
+          ? 'Игрок увидит заявку в уведомлениях'
+          : isIncoming
+            ? 'Этот игрок хочет добавить вас в друзья'
+            : 'Игрок получит заявку в уведомлениях';
   const acceptRequestId = isIncoming ? friendship?.requestId : null;
-  const disabledByState = isOutgoing || unreachable;
+  const disabledByState = isOutgoing || isDeferred;
   const handleClick = isFriend
     ? onRemove
     : isIncoming
@@ -1108,8 +1113,8 @@ function FriendshipAction({
               : 'Отправляем…'
           : isFriend
             ? 'Удалить'
-            : unreachable
-              ? 'Недоступен'
+            : isDeferred
+              ? 'Ожидает входа игрока'
               : isOutgoing
                 ? 'Ожидает ответа'
                 : isIncoming

@@ -51,12 +51,27 @@ target answers it from the notifications feed through
 `POST /{tenantKey}/profile/friend-requests/{requestId}/accept|decline`; the friendship row is written
 only on acceptance, so a request never grants friendship by itself. A request in the opposite
 direction is answered immediately because both players already expressed the same intent.
-`GET /{tenantKey}/profile/friend-requests` lists pending incoming requests, and
+`GET /{tenantKey}/profile/friend-requests` lists pending requests in the requested direction
+(`direction=incoming` by default, `outgoing` for the requester's own waiting requests), and
 `GET /{tenantKey}/profile/friends` still lists accepted friends only.
-`GET /{tenantKey}/profile/friends/{userId}` reports `NONE`, `PENDING_OUTGOING`, `PENDING_INCOMING` or
-`FRIEND`. The aggregate stores only tenant-scoped PadlHub user UUIDs. Its business row, command
-result, audit entry and the `profile.friend_request.created.v1` or `profile.friendship.created.v1`
-outbox event commit in one PostgreSQL transaction.
+`GET /{tenantKey}/profile/friends/{userId}` reports `NONE`, `PENDING_OUTGOING`, `PENDING_INCOMING`,
+`PENDING_DEFERRED` or `FRIEND`. The aggregate stores only tenant-scoped PadlHub user UUIDs. Its
+business row, command result, audit entry and the `profile.friend_request.created.v1` or
+`profile.friendship.created.v1` outbox event commit in one PostgreSQL transaction.
+
+A target imported from the legacy cabinet never signed in, so a durable request addressed to that
+row would stay unseen. When the imported player association is known (the 64-hex key imported games
+already store next to the synthesized account), `POST /profile/friends/{userId}` keeps the request in
+`profile.deferred_friend_requests` against that association instead of the row and reports
+`PENDING_DEFERRED`; without an unambiguous association the command still refuses the target with a
+stable conflict code. The worker delivery cycle joins pending deferred rows with
+`integration.legacy_game_player_bindings` and, once the person signed in and the association is
+proven for a live account, creates the regular request under the deterministic idempotency key
+`deferred-friend-request:<row id>`, then settles the row exactly once with a terminal reason
+(`REQUEST_CREATED`, `ALREADY_FRIEND`, `SELF_TARGET`, `TARGET_UNAVAILABLE`). A deferred row stays
+pending while the live account is not yet reachable and is never silently dropped, because the
+requester was told the request was saved. Deferred rows emit no `profile.friend_request.created.v1`
+event: that event belongs to a real request.
 
 Level history is an immutable PadlHub read-model exposed only to the authenticated owner through
 `GET /{tenantKey}/profile/level-history`. `profile.level_history` stores the normalized level label,

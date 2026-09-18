@@ -443,7 +443,8 @@ describe('ProfilePage', () => {
     ).toBeVisible();
   });
 
-  it('warns that an account which never signed in cannot receive the invite', () => {
+  it('keeps the invite actionable for an imported account and explains the deferred delivery', () => {
+    const onAddFriend = vi.fn();
     render(
       <ProfilePage
         profile={{
@@ -461,17 +462,45 @@ describe('ProfilePage', () => {
           createdAt: null,
           requestId: null,
         }}
+        onAddFriend={onAddFriend}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        'Игрок ещё не входил в приложение: заявку сохраним и отправим, когда он войдёт',
+      ),
+    ).toBeVisible();
+    const addButton = screen.getByRole('button', { name: 'Добавить' });
+    expect(addButton).toBeEnabled();
+    fireEvent.click(addButton);
+    expect(onAddFriend).toHaveBeenCalledTimes(1);
+    // Both the contact and the chat action explain the same server-derived reason.
+    expect(
+      screen.getAllByText('Игрок ещё не входил в приложение — заявка и сообщения не дойдут.'),
+    ).toHaveLength(2);
+  });
+
+  it('shows a stored deferred request without offering the command again', () => {
+    render(
+      <ProfilePage
+        profile={{ ...otherProfile, reachable: false }}
+        friendship={{
+          userId: otherProfile.profile.userId,
+          status: 'PENDING_DEFERRED',
+          createdAt: '2026-09-18T09:00:00.000Z',
+          requestId: null,
+        }}
         onAddFriend={() => undefined}
         logoutBusy={false}
         onLogout={() => undefined}
       />,
     );
 
-    expect(screen.getByText('Игрок ещё не входил в приложение: заявку он не увидит')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Недоступен' })).toBeDisabled();
-    // Both the contact and the chat action explain the same server-derived reason.
-    expect(
-      screen.getAllByText('Игрок ещё не входил в приложение — заявка и сообщения не дойдут.'),
-    ).toHaveLength(2);
+    expect(screen.getByText('Заявка сохранена')).toBeVisible();
+    expect(screen.getByText('Отправим заявку, когда игрок войдёт в приложение')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Ожидает входа игрока' })).toBeDisabled();
   });
 });

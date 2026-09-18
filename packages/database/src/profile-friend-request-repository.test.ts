@@ -259,6 +259,8 @@ describe('profile friend request repository', () => {
       // the row is an imported legacy player that can never sign in.
       if (text.includes('reachable_summary')) return { rows: [], rowCount: 0 };
       if (text.includes('from identity.users')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
+      // No unambiguous imported player association, so the request cannot be kept either.
+      if (text.includes('from integration.external_entity_map')) return { rows: [], rowCount: 0 };
       return undefined;
     });
     const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
@@ -277,6 +279,234 @@ describe('profile friend request repository', () => {
     expect(statements.some((text) => text.includes('insert into profile.friend_requests'))).toBe(
       false,
     );
+    expect(
+      statements.some((text) => text.includes('insert into profile.deferred_friend_requests')),
+    ).toBe(false);
+  });
+
+  it('keeps a deferred request for an imported player whose association is known', async () => {
+    const deferredId = '7c1f0f52-7f0e-4a3f-9f39-2f7a1f2f6c11';
+    const associationId = 'b'.repeat(64);
+    const statements: string[] = [];
+    const query = baseQuery((text) => {
+      statements.push(text);
+      if (text.includes('from profile.friend_request_commands')) return { rows: [], rowCount: 0 };
+      if (text.includes('reachable_summary')) return { rows: [], rowCount: 0 };
+      if (text.includes('from identity.users')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
+      if (text.includes('from integration.external_entity_map')) {
+        return { rows: [{ external_id: associationId }], rowCount: 1 };
+      }
+      if (text.includes('from profile.deferred_friend_requests')) return { rows: [], rowCount: 0 };
+      if (text.includes('insert into profile.deferred_friend_requests')) {
+        return {
+          rows: [{ id: deferredId, created_at: '2026-09-18T09:00:00.000Z' }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes('insert into')) return { rows: [], rowCount: 1 };
+      return undefined;
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.request({
+        tenantId,
+        actorUserId,
+        targetUserId,
+        idempotencyKey: 'friend-request-deferred-0001',
+        requestHash: 'd'.repeat(64),
+        correlationId: 'friend-request-deferred-correlation-0001',
+      }),
+    ).resolves.toEqual({
+      outcome: 'applied',
+      friendship: {
+        userId: targetUserId,
+        status: 'PENDING_DEFERRED',
+        createdAt: '2026-09-18T09:00:00.000Z',
+        requestId: null,
+      },
+      replayed: false,
+    });
+
+    expect(
+      statements.some((text) => text.includes('insert into profile.deferred_friend_requests')),
+    ).toBe(true);
+    expect(statements.some((text) => text.includes('insert into profile.friend_requests'))).toBe(
+      false,
+    );
+    // A deferred request is not a real request yet, so it must not announce one.
+    expect(statements.some((text) => text.includes('profile.friend_request.created.v1'))).toBe(
+      false,
+    );
+    const audit = statements.find((text) => text.includes('audit.audit_log'));
+    expect(audit).toBeDefined();
+  });
+
+  it('replays a stored deferred request for the same command key', async () => {
+    const stored = {
+      userId: targetUserId,
+      status: 'PENDING_DEFERRED',
+      createdAt: '2026-09-18T09:00:00.000Z',
+      requestId: null,
+    };
+    const statements: string[] = [];
+    const query = baseQuery((text) => {
+      statements.push(text);
+      if (text.includes('from profile.friend_request_commands')) {
+        return {
+          rows: [
+            {
+              target_user_id: targetUserId,
+              request_hash: 'e'.repeat(64),
+              result_payload: stored,
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      return undefined;
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.request({
+        tenantId,
+        actorUserId,
+        targetUserId,
+        idempotencyKey: 'friend-request-deferred-replay-0001',
+        requestHash: 'e'.repeat(64),
+        correlationId: 'friend-request-deferred-replay-correlation-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'applied', friendship: stored, replayed: true });
+    expect(statements.some((text) => text.includes('from integration.external_entity_map'))).toBe(
+      false,
+    );
+  });
+
+  it('delivers a deferred request once the imported association is bound to a live account', async () => {
+    const deferredId = '7c1f0f52-7f0e-4a3f-9f39-2f7a1f2f6c11';
+    const deliveredRequestId = '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91';
+    const statements: string[] = [];
+    const settlements: unknown[][] = [];
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      statements.push(text);
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('join integration.legacy_game_player_bindings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: deferredId,
+              requester_user_id: actorUserId,
+              live_user_id: targetUserId,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes("set state = 'DELIVERED'")) {
+        settlements.push(values ? [...values] : []);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('from profile.friend_request_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('reachable_summary')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from profile.friendships')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into profile.friend_requests')) {
+        return Promise.resolve({
+          rows: [{ id: deliveredRequestId, created_at: '2026-09-18T10:00:00.000Z' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from profile.friend_requests')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into')) return Promise.resolve({ rows: [], rowCount: 1 });
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.deliverDeferredFriendRequests({
+        tenantId,
+        limit: 10,
+        correlationId: 'deferred-delivery-correlation-0001',
+      }),
+    ).resolves.toEqual({ delivered: 1, pending: 0 });
+
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]).toEqual([tenantId, deferredId, 'REQUEST_CREATED', deliveredRequestId]);
+    expect(
+      statements.some(
+        (text) =>
+          text.includes('insert into profile.friend_requests') &&
+          text.includes('values ($1, $2, $3)'),
+      ),
+    ).toBe(true);
+  });
+
+  it('leaves a deferred request pending while the live account is still unreachable', async () => {
+    const deferredId = '7c1f0f52-7f0e-4a3f-9f39-2f7a1f2f6c11';
+    const statements: string[] = [];
+    const query = vi.fn((text: string) => {
+      statements.push(text);
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('join integration.legacy_game_player_bindings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: deferredId,
+              requester_user_id: actorUserId,
+              live_user_id: targetUserId,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from profile.friend_request_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('reachable_summary')) return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('from identity.users')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      // The live account exists but still has no login path, and the live id carries no imported
+      // association of its own, so the row must stay pending instead of settling.
+      if (text.includes('from integration.external_entity_map')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.deliverDeferredFriendRequests({
+        tenantId,
+        limit: 10,
+        correlationId: 'deferred-delivery-correlation-0002',
+      }),
+    ).resolves.toEqual({ delivered: 0, pending: 1 });
+    expect(statements.some((text) => text.includes("set state = 'DELIVERED'"))).toBe(false);
   });
 
   it('lists pending outgoing requests by requester and names the addressed peer', async () => {

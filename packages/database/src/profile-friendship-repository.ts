@@ -1,10 +1,13 @@
+import { createHash } from 'node:crypto';
+
 import { profilePhotoDeliveryUrl } from '@phub/domain';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
 import { profileReachableSql } from './profile-reachability-repository.js';
 
-export type FriendshipStatus = 'NONE' | 'FRIEND' | 'PENDING_OUTGOING' | 'PENDING_INCOMING';
+export type FriendshipStatus =
+  'NONE' | 'FRIEND' | 'PENDING_OUTGOING' | 'PENDING_INCOMING' | 'PENDING_DEFERRED';
 
 export interface FriendshipState {
   readonly userId: string;
@@ -45,6 +48,20 @@ export interface FriendRequestPage {
   readonly items: readonly FriendRequestSummary[];
 }
 
+export interface RequestFriendInput {
+  readonly tenantId: string;
+  readonly actorUserId: string;
+  readonly targetUserId: string;
+  readonly idempotencyKey: string;
+  readonly requestHash: string;
+  readonly correlationId: string;
+}
+
+export interface DeferredDeliveryResult {
+  readonly delivered: number;
+  readonly pending: number;
+}
+
 export type RequestFriendResult =
   | {
       readonly outcome: 'applied';
@@ -70,14 +87,7 @@ export interface ProfileFriendshipRepository {
   list(tenantId: string, viewerUserId: string, limit: number): Promise<FriendPage>;
   listIncoming(tenantId: string, viewerUserId: string, limit: number): Promise<FriendRequestPage>;
   listOutgoing(tenantId: string, viewerUserId: string, limit: number): Promise<FriendRequestPage>;
-  request(input: {
-    readonly tenantId: string;
-    readonly actorUserId: string;
-    readonly targetUserId: string;
-    readonly idempotencyKey: string;
-    readonly requestHash: string;
-    readonly correlationId: string;
-  }): Promise<RequestFriendResult>;
+  request(input: RequestFriendInput): Promise<RequestFriendResult>;
   remove(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -95,6 +105,15 @@ export interface ProfileFriendshipRepository {
     readonly idempotencyKey: string;
     readonly correlationId: string;
   }): Promise<RespondFriendRequestResult>;
+  /**
+   * Delivers deferred requests whose imported player association is now proven for a live account.
+   * Each row is settled exactly once; rows whose live account is still unreachable stay pending.
+   */
+  deliverDeferredFriendRequests(input: {
+    readonly tenantId: string;
+    readonly limit: number;
+    readonly correlationId: string;
+  }): Promise<DeferredDeliveryResult>;
 }
 
 interface FriendshipRow extends QueryResultRow {
@@ -161,7 +180,9 @@ function storedState(value: unknown): FriendshipState {
     typeof value.userId !== 'string' ||
     !('status' in value) ||
     typeof value.status !== 'string' ||
-    !['NONE', 'FRIEND', 'PENDING_OUTGOING', 'PENDING_INCOMING'].includes(value.status) ||
+    !['NONE', 'FRIEND', 'PENDING_OUTGOING', 'PENDING_INCOMING', 'PENDING_DEFERRED'].includes(
+      value.status,
+    ) ||
     !('createdAt' in value) ||
     (value.createdAt !== null && typeof value.createdAt !== 'string') ||
     !('requestId' in value) ||
@@ -207,6 +228,36 @@ async function classifyTarget(
 
 function acceptedState(targetUserId: string, createdAt: Date | string): FriendshipState {
   return state(targetUserId, 'FRIEND', createdAt);
+}
+
+/**
+ * Resolves the legacy player association of an imported record. The game import stores the
+ * one-way 64-hex association key next to the synthesized account, which is what a deferred
+ * request keeps: after the owner signs in, the mapping is re-pointed to the live account and the
+ * phantom id no longer resolves, while the association key still matches the binding.
+ *
+ * `internal_id` is deliberately not unique per canonical key, so only an unambiguous answer is
+ * accepted; anything else keeps today's explicit refusal instead of guessing a recipient.
+ */
+async function resolveLegacyAssociation(
+  client: PoolClient,
+  tenantId: string,
+  targetUserId: string,
+): Promise<string | null> {
+  const rows = await client.query<{ external_id: string }>(
+    `select distinct mapping.external_id
+       from integration.external_entity_map mapping
+      where mapping.tenant_id = $1
+        and mapping.external_system = 'LK_LEGACY_SNAPSHOT'
+        and mapping.entity_type = 'game_player'
+        and mapping.internal_id = $2
+        and mapping.external_id ~ '^[0-9a-f]{64}$'
+      order by mapping.external_id
+      limit 2`,
+    [tenantId, targetUserId],
+  );
+  if (rows.rows.length !== 1) return null;
+  return rows.rows[0]?.external_id ?? null;
 }
 
 /**
@@ -349,6 +400,187 @@ async function listPendingRequests(
   };
 }
 
+/**
+ * Creates a pending request, or keeps it as a deferred request when the target record belongs to
+ * somebody who never signed in and its imported player association is known.
+ */
+function requestPendingFriendship(
+  client: PoolClient,
+  input: RequestFriendInput,
+): Promise<RequestFriendResult> {
+  const [leftUserId, rightUserId] = orderedPair(input.actorUserId, input.targetUserId);
+  return (async () => {
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `${input.tenantId}:friend-request:${input.actorUserId}:${input.idempotencyKey}`,
+    ]);
+    await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      `${input.tenantId}:${leftUserId}:${rightUserId}`,
+    ]);
+    const previous = await queryOne<RequestCommandRow>(
+      client,
+      `select target_user_id, request_hash, result_payload
+             from profile.friend_request_commands
+            where tenant_id = $1 and actor_user_id = $2 and idempotency_key = $3
+            for update`,
+      [input.tenantId, input.actorUserId, input.idempotencyKey],
+    );
+    if (previous) {
+      if (previous.target_user_id !== input.targetUserId) {
+        return { outcome: 'idempotency_conflict' };
+      }
+      if (previous.request_hash !== input.requestHash) {
+        return { outcome: 'idempotency_conflict' };
+      }
+      return {
+        outcome: 'applied',
+        friendship: storedState(previous.result_payload),
+        replayed: true,
+      };
+    }
+    const targetState = await classifyTarget(client, input.tenantId, input.targetUserId);
+    if (targetState === 'not_found') return { outcome: 'target_not_found' };
+    if (targetState === 'unreachable') {
+      // The record belongs to somebody who never signed in, so a durable request row would be
+      // addressed to an account nobody opens. When the imported player association is known the
+      // request is kept against it and delivered once that person signs in and is bound.
+      const associationId = await resolveLegacyAssociation(
+        client,
+        input.tenantId,
+        input.targetUserId,
+      );
+      if (!associationId) return { outcome: 'target_unreachable' };
+      const pending = await queryOne<PendingRequestRow>(
+        client,
+        `select id, created_at
+               from profile.deferred_friend_requests
+              where tenant_id = $1 and requester_user_id = $2 and target_user_id = $3
+                and state = 'PENDING'
+              for update`,
+        [input.tenantId, input.actorUserId, input.targetUserId],
+      );
+      const deferred =
+        pending ??
+        (await queryOne<PendingRequestRow>(
+          client,
+          `insert into profile.deferred_friend_requests (
+                 tenant_id, requester_user_id, target_user_id, source_player_association_id
+               ) values ($1, $2, $3, $4)
+               returning id, created_at`,
+          [input.tenantId, input.actorUserId, input.targetUserId, associationId],
+        ));
+      if (!deferred) throw new Error('PROFILE_DEFERRED_FRIEND_REQUEST_INSERT_FAILED');
+      const current = state(input.targetUserId, 'PENDING_DEFERRED', deferred.created_at, null);
+      if (!pending) {
+        await auditFriendRequest(client, {
+          tenantId: input.tenantId,
+          actorUserId: input.actorUserId,
+          requestId: deferred.id,
+          action: 'PROFILE_FRIEND_REQUEST_DEFERRED',
+          correlationId: input.correlationId,
+          newValue: current,
+        });
+      }
+      // The command ledger keeps the client idempotency key replayable; `request_id` stays null
+      // because no profile.friend_requests row exists yet.
+      await recordRequestCommand(client, input, null, current);
+      return { outcome: 'applied', friendship: current, replayed: false };
+    }
+    const friendship = await queryOne<FriendshipRow>(
+      client,
+      `select created_at
+             from profile.friendships
+            where tenant_id = $1 and left_user_id = $2 and right_user_id = $3`,
+      [input.tenantId, leftUserId, rightUserId],
+    );
+    if (friendship) {
+      const current = state(input.targetUserId, 'FRIEND', friendship.created_at);
+      await recordRequestCommand(client, input, null, current);
+      return { outcome: 'applied', friendship: current, replayed: false };
+    }
+    // The other player already asked first: both sides want the friendship, so finish it.
+    const reciprocal = await queryOne<PendingRequestRow>(
+      client,
+      `select id, created_at
+             from profile.friend_requests
+            where tenant_id = $1 and requester_user_id = $2 and target_user_id = $3
+              and state = 'PENDING'
+            for update`,
+      [input.tenantId, input.targetUserId, input.actorUserId],
+    );
+    if (reciprocal) {
+      const createdAt = await insertFriendship(client, {
+        tenantId: input.tenantId,
+        leftUserId,
+        rightUserId,
+        createdBy: input.targetUserId,
+      });
+      await client.query(
+        `update profile.friend_requests
+                set state = 'ACCEPTED', responded_at = now()
+              where tenant_id = $1 and id = $2`,
+        [input.tenantId, reciprocal.id],
+      );
+      const current = acceptedState(input.targetUserId, createdAt);
+      await auditFriendRequest(client, {
+        tenantId: input.tenantId,
+        actorUserId: input.actorUserId,
+        requestId: reciprocal.id,
+        action: 'PROFILE_FRIEND_REQUEST_ACCEPTED',
+        correlationId: input.correlationId,
+        newValue: current,
+      });
+      await announceFriendshipCreated(client, {
+        tenantId: input.tenantId,
+        actorUserId: input.actorUserId,
+        targetUserId: input.targetUserId,
+        correlationId: input.correlationId,
+        createdAt: current.createdAt,
+      });
+      await recordRequestCommand(client, input, reciprocal.id, current);
+      return { outcome: 'applied', friendship: current, replayed: false };
+    }
+    const existing = await queryOne<PendingRequestRow>(
+      client,
+      `select id, created_at
+             from profile.friend_requests
+            where tenant_id = $1 and requester_user_id = $2 and target_user_id = $3
+              and state = 'PENDING'`,
+      [input.tenantId, input.actorUserId, input.targetUserId],
+    );
+    if (existing) {
+      const current = state(
+        input.targetUserId,
+        'PENDING_OUTGOING',
+        existing.created_at,
+        existing.id,
+      );
+      await recordRequestCommand(client, input, existing.id, current);
+      return { outcome: 'applied', friendship: current, replayed: false };
+    }
+    const inserted = await queryOne<PendingRequestRow>(
+      client,
+      `insert into profile.friend_requests (
+             tenant_id, requester_user_id, target_user_id
+           ) values ($1, $2, $3)
+           returning id, created_at`,
+      [input.tenantId, input.actorUserId, input.targetUserId],
+    );
+    if (!inserted) throw new Error('PROFILE_FRIEND_REQUEST_INSERT_FAILED');
+    const current = state(input.targetUserId, 'PENDING_OUTGOING', inserted.created_at, inserted.id);
+    await auditFriendRequest(client, {
+      tenantId: input.tenantId,
+      actorUserId: input.actorUserId,
+      requestId: inserted.id,
+      action: 'PROFILE_FRIEND_REQUEST_CREATED',
+      correlationId: input.correlationId,
+      newValue: current,
+    });
+    await announceFriendRequestCreated(client, input, inserted.id, current);
+    await recordRequestCommand(client, input, inserted.id, current);
+    return { outcome: 'applied', friendship: current, replayed: false };
+  })();
+}
+
 export function createProfileFriendshipRepository(pool: Pool): ProfileFriendshipRepository {
   return {
     get(tenantId, viewerUserId, targetUserId) {
@@ -386,6 +618,17 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
         );
         if (incoming) {
           return state(targetUserId, 'PENDING_INCOMING', incoming.created_at, incoming.id);
+        }
+        const deferred = await queryOne<PendingRequestRow>(
+          client,
+          `select id, created_at
+             from profile.deferred_friend_requests
+            where tenant_id = $1 and requester_user_id = $2 and target_user_id = $3
+              and state = 'PENDING'`,
+          [tenantId, viewerUserId, targetUserId],
+        );
+        if (deferred) {
+          return state(targetUserId, 'PENDING_DEFERRED', deferred.created_at, null);
         }
         return state(targetUserId, 'NONE', null);
       });
@@ -448,139 +691,10 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
       if (input.actorUserId === input.targetUserId) {
         return Promise.resolve({ outcome: 'self_target' });
       }
-      const [leftUserId, rightUserId] = orderedPair(input.actorUserId, input.targetUserId);
-      return withTenantTransaction(pool, input.tenantId, async (client) => {
-        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `${input.tenantId}:friend-request:${input.actorUserId}:${input.idempotencyKey}`,
-        ]);
-        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `${input.tenantId}:${leftUserId}:${rightUserId}`,
-        ]);
-        const previous = await queryOne<RequestCommandRow>(
-          client,
-          `select target_user_id, request_hash, result_payload
-             from profile.friend_request_commands
-            where tenant_id = $1 and actor_user_id = $2 and idempotency_key = $3
-            for update`,
-          [input.tenantId, input.actorUserId, input.idempotencyKey],
-        );
-        if (previous) {
-          if (previous.target_user_id !== input.targetUserId) {
-            return { outcome: 'idempotency_conflict' };
-          }
-          if (previous.request_hash !== input.requestHash) {
-            return { outcome: 'idempotency_conflict' };
-          }
-          return {
-            outcome: 'applied',
-            friendship: storedState(previous.result_payload),
-            replayed: true,
-          };
-        }
-        const targetState = await classifyTarget(client, input.tenantId, input.targetUserId);
-        if (targetState === 'not_found') return { outcome: 'target_not_found' };
-        if (targetState === 'unreachable') return { outcome: 'target_unreachable' };
-        const friendship = await queryOne<FriendshipRow>(
-          client,
-          `select created_at
-             from profile.friendships
-            where tenant_id = $1 and left_user_id = $2 and right_user_id = $3`,
-          [input.tenantId, leftUserId, rightUserId],
-        );
-        if (friendship) {
-          const current = state(input.targetUserId, 'FRIEND', friendship.created_at);
-          await recordRequestCommand(client, input, null, current);
-          return { outcome: 'applied', friendship: current, replayed: false };
-        }
-        // The other player already asked first: both sides want the friendship, so finish it.
-        const reciprocal = await queryOne<PendingRequestRow>(
-          client,
-          `select id, created_at
-             from profile.friend_requests
-            where tenant_id = $1 and requester_user_id = $2 and target_user_id = $3
-              and state = 'PENDING'
-            for update`,
-          [input.tenantId, input.targetUserId, input.actorUserId],
-        );
-        if (reciprocal) {
-          const createdAt = await insertFriendship(client, {
-            tenantId: input.tenantId,
-            leftUserId,
-            rightUserId,
-            createdBy: input.targetUserId,
-          });
-          await client.query(
-            `update profile.friend_requests
-                set state = 'ACCEPTED', responded_at = now()
-              where tenant_id = $1 and id = $2`,
-            [input.tenantId, reciprocal.id],
-          );
-          const current = acceptedState(input.targetUserId, createdAt);
-          await auditFriendRequest(client, {
-            tenantId: input.tenantId,
-            actorUserId: input.actorUserId,
-            requestId: reciprocal.id,
-            action: 'PROFILE_FRIEND_REQUEST_ACCEPTED',
-            correlationId: input.correlationId,
-            newValue: current,
-          });
-          await announceFriendshipCreated(client, {
-            tenantId: input.tenantId,
-            actorUserId: input.actorUserId,
-            targetUserId: input.targetUserId,
-            correlationId: input.correlationId,
-            createdAt: current.createdAt,
-          });
-          await recordRequestCommand(client, input, reciprocal.id, current);
-          return { outcome: 'applied', friendship: current, replayed: false };
-        }
-        const existing = await queryOne<PendingRequestRow>(
-          client,
-          `select id, created_at
-             from profile.friend_requests
-            where tenant_id = $1 and requester_user_id = $2 and target_user_id = $3
-              and state = 'PENDING'`,
-          [input.tenantId, input.actorUserId, input.targetUserId],
-        );
-        if (existing) {
-          const current = state(
-            input.targetUserId,
-            'PENDING_OUTGOING',
-            existing.created_at,
-            existing.id,
-          );
-          await recordRequestCommand(client, input, existing.id, current);
-          return { outcome: 'applied', friendship: current, replayed: false };
-        }
-        const inserted = await queryOne<PendingRequestRow>(
-          client,
-          `insert into profile.friend_requests (
-             tenant_id, requester_user_id, target_user_id
-           ) values ($1, $2, $3)
-           returning id, created_at`,
-          [input.tenantId, input.actorUserId, input.targetUserId],
-        );
-        if (!inserted) throw new Error('PROFILE_FRIEND_REQUEST_INSERT_FAILED');
-        const current = state(
-          input.targetUserId,
-          'PENDING_OUTGOING',
-          inserted.created_at,
-          inserted.id,
-        );
-        await auditFriendRequest(client, {
-          tenantId: input.tenantId,
-          actorUserId: input.actorUserId,
-          requestId: inserted.id,
-          action: 'PROFILE_FRIEND_REQUEST_CREATED',
-          correlationId: input.correlationId,
-          newValue: current,
-        });
-        await announceFriendRequestCreated(client, input, inserted.id, current);
-        await recordRequestCommand(client, input, inserted.id, current);
-        return { outcome: 'applied', friendship: current, replayed: false };
-      });
+      return withTenantTransaction(pool, input.tenantId, (client) =>
+        requestPendingFriendship(client, input),
+      );
     },
-
     remove(input) {
       if (input.actorUserId === input.targetUserId)
         return Promise.resolve({ outcome: 'not_found' });
@@ -795,7 +909,81 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
         return { outcome: 'applied', friendship: accepted, replayed: false };
       });
     },
+
+    async deliverDeferredFriendRequests(input) {
+      const candidates = await withTenantTransaction(pool, input.tenantId, async (client) => {
+        const rows = await client.query<{
+          id: string;
+          requester_user_id: string;
+          live_user_id: string;
+        }>(
+          `select deferred.id, deferred.requester_user_id, binding.user_id as live_user_id
+             from profile.deferred_friend_requests deferred
+             join integration.legacy_game_player_bindings binding
+               on binding.tenant_id = deferred.tenant_id
+              and binding.source_player_association_id = deferred.source_player_association_id
+            where deferred.tenant_id = $1
+              and deferred.state = 'PENDING'
+            order by deferred.created_at
+            limit $2`,
+          [input.tenantId, input.limit],
+        );
+        return rows.rows;
+      });
+      let delivered = 0;
+      for (const candidate of candidates) {
+        const requestId = `deferred-friend-request:${candidate.id}`;
+        const result = await withTenantTransaction(pool, input.tenantId, (client) =>
+          requestPendingFriendship(client, {
+            tenantId: input.tenantId,
+            actorUserId: candidate.requester_user_id,
+            targetUserId: candidate.live_user_id,
+            idempotencyKey: requestId,
+            requestHash: createHash('sha256').update(`DEFERRED:${candidate.id}`).digest('hex'),
+            correlationId: input.correlationId,
+          }),
+        );
+        const settlement = deferredSettlement(result);
+        if (!settlement) continue;
+        const settled = await withTenantTransaction(pool, input.tenantId, (client) =>
+          client.query(
+            `update profile.deferred_friend_requests
+                set state = 'DELIVERED', settled_at = now(), settled_reason = $3,
+                    delivered_request_id = $4
+              where tenant_id = $1 and id = $2 and state = 'PENDING'`,
+            [input.tenantId, candidate.id, settlement.reason, settlement.deliveredRequestId],
+          ),
+        );
+        if ((settled.rowCount ?? 0) > 0) delivered += 1;
+      }
+      return { delivered, pending: candidates.length - delivered };
+    },
   };
+}
+
+/**
+ * Maps a delivery attempt to the terminal reason of the deferred row. `undefined` keeps the row
+ * pending: the live account may still become reachable (or the binding may appear) later, and a
+ * silent drop would contradict what the requester was told.
+ */
+function deferredSettlement(
+  result: RequestFriendResult,
+): { readonly reason: string; readonly deliveredRequestId: string | null } | undefined {
+  if (result.outcome === 'idempotency_conflict') {
+    throw new Error('PROFILE_DEFERRED_FRIEND_REQUEST_COMMAND_CONFLICT');
+  }
+  if (result.outcome === 'target_not_found') {
+    return { reason: 'TARGET_UNAVAILABLE', deliveredRequestId: null };
+  }
+  if (result.outcome === 'self_target') {
+    return { reason: 'SELF_TARGET', deliveredRequestId: null };
+  }
+  if (result.outcome === 'target_unreachable') return undefined;
+  if (result.friendship.status === 'FRIEND') {
+    return { reason: 'ALREADY_FRIEND', deliveredRequestId: null };
+  }
+  if (result.friendship.status === 'PENDING_DEFERRED') return undefined;
+  return { reason: 'REQUEST_CREATED', deliveredRequestId: result.friendship.requestId };
 }
 
 async function settledState(
