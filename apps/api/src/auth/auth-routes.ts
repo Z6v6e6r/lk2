@@ -16,6 +16,12 @@ const challengeBodySchema = z.object({
   method: z.literal('phone_otp'),
   phone: z.string().min(5).max(32),
 });
+const profilePhoneChallengeBodySchema = z.object({
+  phone: z.string().min(5).max(32),
+});
+const profilePhoneVerifyBodySchema = z.object({
+  code: z.string().regex(/^\d{4}$/),
+});
 const verifyBodySchema = z.object({
   code: z.string().regex(/^\d{4}$/),
   acceptance: z
@@ -478,6 +484,80 @@ export function registerAuthRoutes(
           accessAudience: accessAudience(request),
         });
         return reply.status(202).send(challenge);
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/profile/phone/challenges',
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: '1 minute',
+          groupId: 'profile-phone-challenge',
+          keyGenerator: (request) => protectedRateKey(request, config, 'challenge'),
+        },
+      },
+      preHandler: [...authenticatedPreHandlers, requireAuthIdempotency],
+    },
+    async (request, reply) => {
+      try {
+        const { tenantKey } = paramsSchema.parse(request.params);
+        const body = profilePhoneChallengeBodySchema.parse(request.body);
+        const userId = request.padlHubClaims?.sub;
+        if (!request.tenantId || !userId) {
+          return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        preventCredentialCaching(reply);
+        return reply.status(202).send(
+          await authService.startPhoneConfirmation({
+            tenantKey,
+            userId,
+            phone: body.phone,
+            correlationId: request.id,
+            idempotencyKey: idempotencyKey(request),
+          }),
+        );
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/profile/phone/challenges/:challengeId/verify',
+    {
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: '1 minute',
+          groupId: 'profile-phone-verify',
+          keyGenerator: (request) => protectedRateKey(request, config, 'verify'),
+        },
+      },
+      preHandler: [...authenticatedPreHandlers, requireAuthIdempotency],
+    },
+    async (request, reply) => {
+      try {
+        const { tenantKey, challengeId } = verifyParamsSchema.parse(request.params);
+        const body = profilePhoneVerifyBodySchema.parse(request.body);
+        const userId = request.padlHubClaims?.sub;
+        if (!request.tenantId || !userId) {
+          return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        preventCredentialCaching(reply);
+        return reply.send(
+          await authService.confirmPhoneChallenge({
+            tenantKey,
+            userId,
+            challengeId,
+            code: body.code,
+            correlationId: request.id,
+          }),
+        );
       } catch (error) {
         return handleAuthError(error, request, reply);
       }

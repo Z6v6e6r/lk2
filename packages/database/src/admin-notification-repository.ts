@@ -246,8 +246,9 @@ async function recipientRows(
 ): Promise<readonly RecipientRow[]> {
   if (input.normalizedPhones.length === 0) return [];
   // A phone reaches a PadlHub user through two sources with different proof strength.
-  // `profile.user_summaries.phone_e164` only ever holds a phone that a phone login verified, so it
-  // always wins. `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`) carries the phone the
+  // `profile.user_summaries.phone_e164` only ever holds a phone that an attested command verified (the
+  // phone-login exchange or the authenticated profile confirmation), so it always wins.
+  // `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`) carries the phone the
   // provider profile reported and is the fallback that makes an OAuth-only account reachable at all —
   // and because one of its writers relays that value from the client without server attestation, it
   // must never outrank a verified login phone. Ambiguity inside a source stays fail-closed: two rows

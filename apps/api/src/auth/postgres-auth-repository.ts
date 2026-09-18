@@ -87,6 +87,50 @@ export class PostgresAuthRepository implements AuthRepository {
     });
   }
 
+  public findExternalSubjectUser(input: {
+    readonly binding: TenantAuthBinding;
+    readonly identity: {
+      readonly issuer: string;
+      readonly subject: string;
+    };
+  }): Promise<AuthUser | undefined> {
+    return this.repository.findExternalSubjectUser({
+      tenantId: input.binding.tenantId,
+      provider: input.binding.provider,
+      issuer: input.identity.issuer,
+      subject: input.identity.subject,
+    });
+  }
+
+  public findProfilePhoneConfirmation(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly challengeId: string;
+  }): Promise<
+    | {
+        readonly confirmedAt: string;
+        readonly phoneLast4: string;
+        readonly releasedPhoneLast4?: string;
+      }
+    | undefined
+  > {
+    return this.repository.findProfilePhoneConfirmation(input);
+  }
+
+  public confirmProfilePhone(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly phoneE164: string;
+    readonly challengeId: string;
+    readonly correlationId: string;
+  }): Promise<
+    | { readonly outcome: 'confirmed'; readonly releasedPhoneLast4?: string }
+    | { readonly outcome: 'already_confirmed' }
+    | { readonly outcome: 'phone_taken' }
+  > {
+    return this.repository.confirmProfilePhone(input);
+  }
+
   public async createRefreshSession(input: {
     readonly sessionId: string;
     readonly tenantId: string;
