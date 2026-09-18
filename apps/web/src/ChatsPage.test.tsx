@@ -228,7 +228,9 @@ describe('ChatsPage', () => {
       />,
     );
 
+    expect(screen.getByRole('heading', { name: 'Все' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Личные' }));
+    expect(screen.getByRole('heading', { name: 'Личные' })).toBeInTheDocument();
     expect(screen.getByText('Мария Петрова')).toBeVisible();
     expect(screen.queryByText('Игра · Хаб Селигерская')).not.toBeInTheDocument();
 

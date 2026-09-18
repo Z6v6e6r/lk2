@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type { ConversationMessage, ConversationPage } from './auth-gateway.js';
 import { ChatCategoryIcon } from './chats-ui/ChatCategoryIcon.js';
-import { ChatFilters, type ChatFilter } from './chats-ui/ChatFilters.js';
+import { ChatFilterHeading, ChatFilters, type ChatFilter } from './chats-ui/ChatFilters.js';
 import { ChatList } from './chats-ui/ChatList.js';
 import { ChatThread } from './chats-ui/ChatThread.js';
 import styles from './chats-ui/ChatsUi.module.css';
@@ -139,7 +139,7 @@ export function ChatsPage({
       >
         <aside className={styles.listPane} aria-label="Список чатов">
           <header className={styles.listHeader}>
-            <h1>Чаты</h1>
+            <ChatFilterHeading filter={filter} />
             <div className={styles.headerActions}>
               <button
                 type="button"
