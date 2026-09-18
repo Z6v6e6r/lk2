@@ -625,6 +625,9 @@ export function App({
   const [notificationsInboxUnavailable, setNotificationsInboxUnavailable] = useState(false);
   const [friendRequests, setFriendRequests] = useState<readonly ProfileFriendRequestSummary[]>([]);
   const [friendRequestsError, setFriendRequestsError] = useState<string | null>(null);
+  const [outgoingFriendRequests, setOutgoingFriendRequests] = useState<
+    readonly ProfileFriendRequestSummary[]
+  >([]);
   const [friendRequestBusyId, setFriendRequestBusyId] = useState<string | null>(null);
   const [, refreshLocation] = useReducer((revision: number) => revision + 1, 0);
   useEffect(() => {
@@ -948,6 +951,16 @@ export function App({
             setFriendRequestsError('Не удалось загрузить заявки в друзья.');
           },
         );
+        void gateway.listProfileFriendRequests(8, 'outgoing').then(
+          (page) => {
+            if (!active) return;
+            setOutgoingFriendRequests(page.items);
+          },
+          () => {
+            if (!active) return;
+            setOutgoingFriendRequests([]);
+          },
+        );
       } else {
         void gateway.getProfileFriendship(targetUserId).then(
           (friendship) => {
@@ -1236,6 +1249,16 @@ export function App({
             setFriendRequestsError('Не удалось загрузить заявки в друзья.');
           },
         );
+        void gateway.listProfileFriendRequests(8, 'outgoing').then(
+          (page) => {
+            if (!active) return;
+            setOutgoingFriendRequests(page.items);
+          },
+          () => {
+            if (!active) return;
+            setOutgoingFriendRequests([]);
+          },
+        );
       };
       const refreshNotifications = (): void => {
         loadFriendRequests();
@@ -1260,38 +1283,52 @@ export function App({
         gateway.getWebPushConfiguration(),
         getWebPushBrowserState(serviceWorkerUrl),
         gateway.listProfileFriendRequests(),
-      ]).then(([pageResult, pushConfigurationResult, browserStateResult, friendRequestResult]) => {
-        if (!active) return;
-        const errors: string[] = [];
-        if (friendRequestResult.status === 'fulfilled') {
-          setFriendRequests(friendRequestResult.value.items);
-          setFriendRequestsError(null);
-        } else {
-          setFriendRequests([]);
-          setFriendRequestsError('Не удалось загрузить заявки в друзья.');
-        }
-        if (pageResult.status === 'fulfilled') {
-          setNotifications(pageResult.value);
-          setNotificationsInboxUnavailable(false);
-        } else {
-          setNotifications({ items: [], unreadCount: 0 });
-          setNotificationsInboxUnavailable(true);
-          errors.push('Лента оповещений временно недоступна.');
-        }
-        if (pushConfigurationResult.status === 'fulfilled') {
-          setWebPushConfiguration(pushConfigurationResult.value);
-        } else {
-          setWebPushConfiguration({ enabled: false, reason: 'RUNTIME_UNAVAILABLE' });
-          errors.push('Настройки Web Push временно недоступны.');
-        }
-        if (browserStateResult.status === 'fulfilled') {
-          setWebPushBrowserState(browserStateResult.value);
-        } else {
-          setWebPushBrowserState('unsupported');
-          errors.push('Не удалось проверить поддержку Web Push.');
-        }
-        setNotificationsError(errors.length > 0 ? errors.join(' ') : null);
-      });
+        gateway.listProfileFriendRequests(8, 'outgoing'),
+      ]).then(
+        ([
+          pageResult,
+          pushConfigurationResult,
+          browserStateResult,
+          friendRequestResult,
+          outgoingFriendRequestResult,
+        ]) => {
+          if (!active) return;
+          const errors: string[] = [];
+          setOutgoingFriendRequests(
+            outgoingFriendRequestResult.status === 'fulfilled'
+              ? outgoingFriendRequestResult.value.items
+              : [],
+          );
+          if (friendRequestResult.status === 'fulfilled') {
+            setFriendRequests(friendRequestResult.value.items);
+            setFriendRequestsError(null);
+          } else {
+            setFriendRequests([]);
+            setFriendRequestsError('Не удалось загрузить заявки в друзья.');
+          }
+          if (pageResult.status === 'fulfilled') {
+            setNotifications(pageResult.value);
+            setNotificationsInboxUnavailable(false);
+          } else {
+            setNotifications({ items: [], unreadCount: 0 });
+            setNotificationsInboxUnavailable(true);
+            errors.push('Лента оповещений временно недоступна.');
+          }
+          if (pushConfigurationResult.status === 'fulfilled') {
+            setWebPushConfiguration(pushConfigurationResult.value);
+          } else {
+            setWebPushConfiguration({ enabled: false, reason: 'RUNTIME_UNAVAILABLE' });
+            errors.push('Настройки Web Push временно недоступны.');
+          }
+          if (browserStateResult.status === 'fulfilled') {
+            setWebPushBrowserState(browserStateResult.value);
+          } else {
+            setWebPushBrowserState('unsupported');
+            errors.push('Не удалось проверить поддержку Web Push.');
+          }
+          setNotificationsError(errors.length > 0 ? errors.join(' ') : null);
+        },
+      );
       const refreshInterval = window.setInterval(
         refreshNotifications,
         NOTIFICATIONS_REFRESH_INTERVAL_MS,
@@ -1368,6 +1405,13 @@ export function App({
       void gateway.listNotifications().then(
         (page) => {
           if (active) setNotifications(page);
+        },
+        () => undefined,
+      );
+      // Pending friend requests are actionable from the bell, so the badge counts them too.
+      void gateway.listProfileFriendRequests().then(
+        (page) => {
+          if (active) setFriendRequests(page.items);
         },
         () => undefined,
       );
@@ -2014,7 +2058,7 @@ export function App({
         <ProfilePage
           profile={userProfile}
           logoutBusy={state.busy === 'logout'}
-          notificationUnreadCount={notifications?.unreadCount ?? 0}
+          notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}
           privacySettings={profilePrivacy}
           privacyBusy={profilePrivacyBusy}
           privacyError={profilePrivacyError}
@@ -2142,6 +2186,7 @@ export function App({
           inboxUnavailable={notificationsInboxUnavailable}
           friendRequests={friendRequests}
           friendRequestsError={friendRequestsError}
+          outgoingFriendRequests={outgoingFriendRequests}
           friendRequestBusyId={friendRequestBusyId}
           onAcceptFriendRequest={handleAcceptFriendRequest}
           onDeclineFriendRequest={handleDeclineFriendRequest}
@@ -2410,7 +2455,7 @@ export function App({
               : 'default'
         }
         recommendationDisplay={bookingPreferences?.recommendationDisplay ?? 'CARDS'}
-        notificationUnreadCount={notifications?.unreadCount ?? 0}
+        notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}
         loadCommunityPage={gateway.listMyCommunities}
         communityPageSize={10}
         loadBookingRecommendations={(input) =>

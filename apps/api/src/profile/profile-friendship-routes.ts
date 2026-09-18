@@ -9,7 +9,10 @@ import { sendApiError } from '../http-errors.js';
 const targetParamsSchema = z.object({ userId: z.string().uuid() }).passthrough();
 const requestParamsSchema = z.object({ requestId: z.string().uuid() }).passthrough();
 const listQuerySchema = z
-  .object({ limit: z.coerce.number().int().min(1).max(24).default(8) })
+  .object({
+    limit: z.coerce.number().int().min(1).max(24).default(8),
+    direction: z.enum(['incoming', 'outgoing']).default('incoming'),
+  })
   .strict();
 
 function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
@@ -121,7 +124,9 @@ export function registerProfileFriendshipRoutes(
           'Проверьте параметры списка заявок.',
         );
       }
-      return options.repository.listIncoming(current.tenantId, current.userId, query.data.limit);
+      return query.data.direction === 'outgoing'
+        ? options.repository.listOutgoing(current.tenantId, current.userId, query.data.limit)
+        : options.repository.listIncoming(current.tenantId, current.userId, query.data.limit);
     },
   );
 

@@ -482,6 +482,15 @@ export function registerMessagingRoutes(
         correlationId: request.id,
       });
       if (result.outcome === 'not_found') return notFound(request, reply);
+      if (result.outcome === 'target_unreachable') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'CHAT_PARTICIPANT_UNREACHABLE',
+          'Игрок ещё не входил в ПадлХАБ: он не увидит сообщение, пока не войдёт в приложение.',
+        );
+      }
       if (result.outcome === 'idempotency_conflict') return conflict(request, reply);
       return result;
     },

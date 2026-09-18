@@ -25,6 +25,7 @@ interface NotificationsPageProps {
   readonly inboxUnavailable: boolean;
   readonly friendRequests: readonly ProfileFriendRequestSummary[];
   readonly friendRequestsError?: string | null;
+  readonly outgoingFriendRequests: readonly ProfileFriendRequestSummary[];
   readonly friendRequestBusyId: string | null;
   readonly onAcceptFriendRequest: (requestId: string) => void;
   readonly onDeclineFriendRequest: (requestId: string) => void;
@@ -57,6 +58,7 @@ export function NotificationsPage({
   inboxUnavailable,
   friendRequests,
   friendRequestsError,
+  outgoingFriendRequests,
   friendRequestBusyId,
   onAcceptFriendRequest,
   onDeclineFriendRequest,
@@ -153,6 +155,28 @@ export function NotificationsPage({
                       Отказаться
                     </button>
                   </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {outgoingFriendRequests.length > 0 ? (
+          <section
+            className={styles.friendRequests}
+            aria-labelledby="outgoing-friend-requests-title"
+          >
+            <header className={styles.listHeader}>
+              <h2 id="outgoing-friend-requests-title">Отправленные заявки</h2>
+              <span className={styles.friendRequestCount}>{outgoingFriendRequests.length}</span>
+            </header>
+            <ul className={styles.friendRequestList}>
+              {outgoingFriendRequests.map((request) => (
+                <li className={styles.friendRequestCard} key={request.requestId}>
+                  <a className={styles.friendRequestPerson} href={request.route}>
+                    <strong>{request.displayName}</strong>
+                    <small>ожидает ответа</small>
+                  </a>
                 </li>
               ))}
             </ul>

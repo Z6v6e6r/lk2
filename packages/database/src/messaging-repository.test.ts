@@ -1072,6 +1072,68 @@ describe('messaging repository', () => {
     ).resolves.toEqual({ outcome: 'idempotency_conflict' });
   });
 
+  it('refuses a direct message when the other participant never signed in', async () => {
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select next_sequence')) {
+        return Promise.resolve({
+          rows: [{ next_sequence: '1', kind: 'DIRECT', context_id: null }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select left_user_id, right_user_id')) {
+        return Promise.resolve({
+          rows: [{ left_user_id: userId, right_user_id: otherUserId }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('member.id as member_id')) {
+        return Promise.resolve({
+          rows: [{ member_id: memberId, last_read_sequence: '0', last_sequence: '0' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('message.idempotency_key = $3')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('as reachable')) {
+        expect(values).toEqual([tenantId, otherUserId]);
+        return Promise.resolve({ rows: [{ reachable: false }], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.sendMessage({
+        tenantId,
+        userId,
+        conversationId,
+        clientMessageId: 'client-message-dead-peer-0001',
+        idempotencyKey: 'message-command-dead-peer-0001',
+        body: 'Сообщение не должно уйти недостижимому игроку',
+        correlationId: 'message-correlation-dead-peer-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'target_unreachable' });
+    expect(
+      query.mock.calls.some(([text]) => String(text).includes('insert into messaging.messages')),
+    ).toBe(false);
+    expect(
+      query.mock.calls.some(
+        ([text]) =>
+          String(text).includes('insert into audit.outbox_events') ||
+          String(text).includes('insert into audit.audit_log'),
+      ),
+    ).toBe(false);
+  });
+
   it('serializes and rejects clientMessageId reuse across conversations for the same user', async () => {
     const otherConversationId = '99999999-9999-4999-8999-999999999999';
     const gameId = '88888888-8888-4888-8888-888888888888';

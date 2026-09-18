@@ -765,6 +765,7 @@ describe('health endpoints', () => {
         list,
         get: vi.fn(),
         listIncoming: vi.fn(),
+        listOutgoing: vi.fn(),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -847,6 +848,7 @@ describe('health endpoints', () => {
         list: vi.fn(),
         get: vi.fn(),
         listIncoming: vi.fn(),
+        listOutgoing: vi.fn(),
         request,
         respond: vi.fn(),
       },
@@ -895,6 +897,7 @@ describe('health endpoints', () => {
         get: vi.fn(),
         list: vi.fn(),
         listIncoming: vi.fn(),
+        listOutgoing: vi.fn(),
         request: vi.fn(),
         respond: vi.fn(),
         remove,
@@ -991,6 +994,7 @@ describe('health endpoints', () => {
         list: vi.fn(),
         get: vi.fn(),
         listIncoming: vi.fn(),
+        listOutgoing: vi.fn(),
         request,
         respond: vi.fn(),
         remove: vi.fn(),
@@ -1034,6 +1038,7 @@ describe('health endpoints', () => {
         list: vi.fn(),
         get: vi.fn(),
         listIncoming,
+        listOutgoing: vi.fn(),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -1052,6 +1057,82 @@ describe('health endpoints', () => {
       items: [{ displayName: 'Мария Соколова', requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91' }],
     });
     expect(listIncoming).toHaveBeenCalledWith(tenantId, '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca', 4);
+  });
+
+  it('lists outgoing friend requests for the requester without accept or decline actions', async () => {
+    const listOutgoing = vi.fn<ProfileFriendshipRepository['listOutgoing']>().mockResolvedValue({
+      items: [
+        {
+          requestId: 'd0a3bd8e-1d4a-4d3a-9d21-2a1a8f9c4b77',
+          userId: 'b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
+          displayName: 'Пётр Волков',
+          avatarUrl: null,
+          levelLabel: 'B',
+          createdAt: '2026-07-25T10:00:00.000Z',
+          route: '/profile/b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
+        },
+      ],
+    });
+    const listIncoming = vi.fn<ProfileFriendshipRepository['listIncoming']>();
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: {
+        remove: vi.fn(),
+        list: vi.fn(),
+        get: vi.fn(),
+        listIncoming,
+        listOutgoing,
+        request: vi.fn(),
+        respond: vi.fn(),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile/friend-requests?limit=4&direction=outgoing',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [{ displayName: 'Пётр Волков', requestId: 'd0a3bd8e-1d4a-4d3a-9d21-2a1a8f9c4b77' }],
+    });
+    expect(listOutgoing).toHaveBeenCalledWith(tenantId, '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca', 4);
+    expect(listIncoming).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown friend request direction instead of silently listing incoming', async () => {
+    const listIncoming = vi.fn<ProfileFriendshipRepository['listIncoming']>();
+    const listOutgoing = vi.fn<ProfileFriendshipRepository['listOutgoing']>();
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      profileFriendshipRepository: {
+        remove: vi.fn(),
+        list: vi.fn(),
+        get: vi.fn(),
+        listIncoming,
+        listOutgoing,
+        request: vi.fn(),
+        respond: vi.fn(),
+      },
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/profile/friend-requests?direction=all',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'PROFILE_FRIEND_REQUESTS_QUERY_INVALID' });
+    expect(listIncoming).not.toHaveBeenCalled();
+    expect(listOutgoing).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -1079,6 +1160,7 @@ describe('health endpoints', () => {
         list: vi.fn(),
         get: vi.fn(),
         listIncoming: vi.fn(),
+        listOutgoing: vi.fn(),
         request: vi.fn(),
         respond,
       },

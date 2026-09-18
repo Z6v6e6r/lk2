@@ -278,4 +278,85 @@ describe('profile friend request repository', () => {
       false,
     );
   });
+
+  it('lists pending outgoing requests by requester and names the addressed peer', async () => {
+    let sql = '';
+    let params: readonly unknown[] | undefined;
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from profile.friend_requests request')) {
+        sql = text;
+        params = values;
+        return Promise.resolve({
+          rows: [
+            {
+              id: requestId,
+              peer_user_id: targetUserId,
+              display_name: 'Пётр Волков',
+              level_label: 'B',
+              delivery_id: null,
+              created_at: '2026-08-30T09:00:00.000Z',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(repository.listOutgoing(tenantId, actorUserId, 8)).resolves.toEqual({
+      items: [
+        {
+          requestId,
+          userId: targetUserId,
+          displayName: 'Пётр Волков',
+          avatarUrl: null,
+          levelLabel: 'B',
+          createdAt: '2026-08-30T09:00:00.000Z',
+          route: `/profile/${targetUserId}`,
+        },
+      ],
+    });
+    expect(sql).toContain('request.requester_user_id = $2');
+    expect(sql).toContain("request.state = 'PENDING'");
+    expect(sql).not.toContain('request.target_user_id = $2');
+    expect(params).toEqual([tenantId, actorUserId, 8]);
+  });
+
+  it('keeps the incoming list scoped to the addressee', async () => {
+    let sql = '';
+    let params: readonly unknown[] | undefined;
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from profile.friend_requests request')) {
+        sql = text;
+        params = values;
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(repository.listIncoming(tenantId, actorUserId, 4)).resolves.toEqual({
+      items: [],
+    });
+    expect(sql).toContain('request.target_user_id = $2');
+    expect(sql).not.toContain('request.requester_user_id = $2');
+    expect(params).toEqual([tenantId, actorUserId, 4]);
+  });
 });

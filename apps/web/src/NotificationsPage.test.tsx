@@ -46,6 +46,7 @@ const defaultProps = {
   inboxUnavailable: false,
   friendRequests: [],
   friendRequestsError: null,
+  outgoingFriendRequests: [],
   friendRequestBusyId: null,
   onAcceptFriendRequest: vi.fn(),
   onDeclineFriendRequest: vi.fn(),
@@ -209,5 +210,33 @@ describe('NotificationsPage', () => {
   it('hides the friend request section when there is nothing to answer', () => {
     render(<NotificationsPage {...defaultProps} />);
     expect(screen.queryByRole('heading', { name: 'Заявки в друзья' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Отправленные заявки' })).not.toBeInTheDocument();
+  });
+
+  it('shows sent requests as read-only cards with the addressed peer', () => {
+    render(
+      <NotificationsPage
+        {...defaultProps}
+        outgoingFriendRequests={[
+          {
+            requestId: 'd0a3bd8e-1d4a-4d3a-9d21-2a1a8f9c4b77',
+            userId: 'b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
+            displayName: 'Пётр Волков',
+            avatarUrl: null,
+            levelLabel: 'B',
+            createdAt: '2026-08-30T09:00:00+03:00',
+            route: '/profile/b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Отправленные заявки' })).toBeVisible();
+    expect(screen.getByText('ожидает ответа')).toBeVisible();
+    expect(screen.getByRole('link', { name: /Пётр Волков/ })).toHaveAttribute(
+      'href',
+      '/profile/b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
+    );
+    expect(screen.queryByRole('button', { name: 'Отказаться' })).not.toBeInTheDocument();
   });
 });

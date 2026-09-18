@@ -90,6 +90,7 @@ export type ListConversationMessagesResult =
 
 export type SendConversationMessageResult =
   | { readonly outcome: 'not_found' }
+  | { readonly outcome: 'target_unreachable' }
   | { readonly outcome: 'idempotency_conflict' }
   | {
       readonly outcome: 'ok';
@@ -1410,6 +1411,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           [input.tenantId, input.conversationId],
         );
         if (!locked) return { outcome: 'not_found' };
+        let directPeerUserId: string | null = null;
         if (locked.kind === 'DIRECT') {
           const pair = await queryOne<{ left_user_id: string; right_user_id: string }>(
             client,
@@ -1419,6 +1421,8 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             [input.tenantId, input.conversationId],
           );
           if (!pair) return { outcome: 'not_found' };
+          directPeerUserId =
+            pair.left_user_id === input.userId ? pair.right_user_id : pair.left_user_id;
           await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
             `${input.tenantId}:${pair.left_user_id}:${pair.right_user_id}`,
           ]);
@@ -1498,6 +1502,18 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             return { outcome: 'idempotency_conflict' };
           }
           return { outcome: 'ok', message: mapMessage(previous), replayed: true };
+        }
+
+        // A direct conversation stays readable, but a message addressed to a peer who never signed in
+        // is undeliverable: the notification and the realtime event land on an account nobody opens.
+        // Replays above stay honoured so an already committed send is never rewritten by this guard.
+        if (directPeerUserId) {
+          const peer = await queryOne<{ reachable: boolean }>(
+            client,
+            `select ${profileReachableSql({ tenantParam: '$1', userParam: '$2' })} as reachable`,
+            [input.tenantId, directPeerUserId],
+          );
+          if (peer?.reachable !== true) return { outcome: 'target_unreachable' };
         }
 
         const allocatedSequence = sequence(locked.next_sequence);
