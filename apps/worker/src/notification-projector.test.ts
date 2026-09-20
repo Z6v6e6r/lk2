@@ -509,6 +509,127 @@ describe('notification intent projector', () => {
       observed.filter((call) => call.text.includes('insert into notifications.deliveries')),
     ).toHaveLength(2);
   });
+
+  it('queues an in-app and a push delivery for an incoming friend request', async () => {
+    const requestId = '76666666-6666-4666-8666-666666666666';
+    const friendRequestEvent: NotificationSourceEvent = {
+      id: '74444444-4444-4444-8444-444444444445',
+      type: 'profile.friend_request.created.v1',
+      aggregateId: requestId,
+      tenantId,
+      occurredAt: '2026-09-20T12:00:00.000Z',
+      correlationId: 'friendship-request-worker-test',
+      payload: {
+        requestId,
+        requesterUserId: '88888888-8888-4888-8888-888888888888',
+        targetUserId: userId,
+        recipientUserIds: [userId],
+        createdAt: '2026-09-20T12:00:00.000Z',
+      },
+    };
+    const observed: { readonly text: string; readonly values: readonly unknown[] }[] = [];
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      observed.push({ text, values });
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into audit.inbox_events')) {
+        return Promise.resolve({ rows: [{ event_id: friendRequestEvent.id }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [{ in_app_enabled: true, web_push_enabled: true }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from notifications.trigger_rules')) {
+        return Promise.resolve({
+          rows: [
+            {
+              rule_id: '77777777-7777-4777-8777-777777777777',
+              template_id: '78888888-8888-4888-8888-888888888888',
+              audience_selector: { type: 'EVENT_USERS', field: 'recipientUserIds' },
+              mandatory: false,
+              effective_channels: ['IN_APP', 'PUSH'],
+              category: 'FRIENDSHIP',
+              title_template: 'Заявка в друзья',
+              body_template: 'Откройте ПадлХАБ, чтобы ответить.',
+              deep_link_template: '/notifications',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from identity.users')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.user_preferences')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from integration.notification_endpoints')) {
+        return Promise.resolve({
+          rows: [{ id: '79999999-9999-4999-8999-999999999999' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.intents')) {
+        return Promise.resolve({
+          rows: [{ id: '80000000-0000-4000-8000-000000000001' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes("'IN_APP', $3")) {
+        return Promise.resolve({
+          rows: [{ id: '81000000-0000-4000-8000-000000000001' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes("'PUSH', $3")) {
+        return Promise.resolve({
+          rows: [{ id: '81000000-0000-4000-8000-000000000002' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.inbox_items')) {
+        return Promise.resolve({
+          rows: [{ id: '82000000-0000-4000-8000-000000000001' }],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('update audit.inbox_events')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      applyNotificationSourceEvent({
+        pool: pool as never,
+        event: friendRequestEvent,
+        webPush: { appId: 'padlhub-web', environment: 'SANDBOX' },
+      }),
+    ).resolves.toMatchObject({ outcome: 'processed', created: 1, pushQueued: 1 });
+
+    const deliveryCalls = observed.filter((call) =>
+      call.text.includes('insert into notifications.deliveries'),
+    );
+    expect(deliveryCalls).toHaveLength(2);
+    expect(deliveryCalls.some((call) => call.text.includes("'PUSH'"))).toBe(true);
+    const inboxCalls = observed.filter((call) =>
+      call.text.includes('insert into notifications.inbox_items'),
+    );
+    expect(inboxCalls).toHaveLength(1);
+    expect(inboxCalls[0]?.values).toContain('/notifications');
+    // The notification never quotes the requester identifier or a display name.
+    expect(JSON.stringify(inboxCalls[0]?.values)).not.toContain(
+      '88888888-8888-4888-8888-888888888888',
+    );
+  });
 });
 
 function gameFingerprint(source: GameNotificationSourceEvent): string {

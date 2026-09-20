@@ -40,22 +40,42 @@ function baseQuery(handler: (text: string) => { rows: unknown[]; rowCount: numbe
 describe('profile friend request repository', () => {
   it('creates a pending request with audit and outbox rows in one transaction', async () => {
     const statements: string[] = [];
-    const query = baseQuery((text) => {
+    const outboxPayloads: string[] = [];
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
       statements.push(text);
-      if (text.includes('from profile.friend_request_commands')) {
-        return { rows: [], rowCount: 0 };
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
       }
-      if (text.includes('from identity.users')) return { rows: [{ '?column?': 1 }], rowCount: 1 };
-      if (text.includes('from profile.friendships')) return { rows: [], rowCount: 0 };
-      if (text.includes('from profile.friend_requests')) return { rows: [], rowCount: 0 };
+      if (text.includes('insert into audit.outbox_events')) {
+        outboxPayloads.push(String(values[3]));
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('from profile.friend_request_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from identity.users')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from profile.friendships')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from profile.friend_requests')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
       if (text.includes('insert into profile.friend_requests')) {
-        return {
+        return Promise.resolve({
           rows: [{ id: requestId, created_at: '2026-08-29T10:00:00.000Z' }],
           rowCount: 1,
-        };
+        });
       }
-      if (text.includes('insert into')) return { rows: [], rowCount: 1 };
-      return undefined;
+      if (text.includes('insert into')) return Promise.resolve({ rows: [], rowCount: 1 });
+      throw new Error(`Unexpected query: ${text}`);
     });
     const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
 
@@ -87,6 +107,14 @@ describe('profile friend request repository', () => {
     expect(statements.some((text) => text.includes('profile.friend_request.created.v1'))).toBe(
       true,
     );
+    // The notification ruleset resolves the addressed account from this payload field.
+    expect(outboxPayloads).toHaveLength(1);
+    expect(JSON.parse(outboxPayloads[0] ?? '{}')).toMatchObject({
+      requestId,
+      requesterUserId: actorUserId,
+      targetUserId,
+      recipientUserIds: [targetUserId],
+    });
     expect(
       statements.some((text) => text.includes('insert into profile.friend_request_commands')),
     ).toBe(true);
