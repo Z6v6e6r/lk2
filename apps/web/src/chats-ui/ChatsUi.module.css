@@ -311,10 +311,36 @@
 
 .emptyState,
 .threadEmpty {
+  position: relative;
+  isolation: isolate;
   display: grid;
   padding: 32px 24px;
   place-content: center;
+  overflow: hidden;
+  background: #f7f4fc;
   text-align: center;
+}
+
+.emptyState::before,
+.threadEmpty::before,
+.threadPlaceholder::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-image: url('/padlhub-sleeve-wallpaper.png');
+  background-position: center;
+  background-repeat: repeat;
+  background-size: 1800px 180px;
+  content: '';
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.emptyState > *,
+.threadEmpty > *,
+.threadPlaceholder > * {
+  position: relative;
+  z-index: 1;
 }
 
 .emptyState p,
@@ -442,7 +468,15 @@
   flex-direction: column;
   gap: 8px;
   overscroll-behavior: contain;
-  background: #fff;
+  background-color: #f7f4fc;
+  background-image:
+    linear-gradient(rgb(247 244 252 / 91%), rgb(247 244 252 / 91%)),
+    url('/padlhub-sleeve-wallpaper.png');
+  background-position: center, center;
+  background-repeat: repeat, repeat;
+  background-size:
+    auto,
+    1800px 180px;
   list-style: none;
   scroll-behavior: smooth;
   scrollbar-width: thin;
@@ -756,11 +790,14 @@
 }
 
 .threadPlaceholder {
+  position: relative;
+  isolation: isolate;
   display: grid;
   min-height: 0;
   place-content: center;
   padding: 32px;
-  background: #fcfbfd;
+  overflow: hidden;
+  background: #f7f4fc;
   color: var(--comms-muted);
   text-align: center;
 }
