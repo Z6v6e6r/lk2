@@ -47,6 +47,7 @@ function eventDate(value: string): string {
     weekday: 'short',
     day: 'numeric',
     month: 'long',
+    timeZone: 'Europe/Moscow',
   }).format(new Date(value));
 }
 
@@ -54,6 +55,7 @@ function eventTime(startsAt: string, endsAt?: string | null): string {
   const formatter = new Intl.DateTimeFormat('ru-RU', {
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: 'Europe/Moscow',
   });
   const start = formatter.format(new Date(startsAt));
   return endsAt ? `${start}–${formatter.format(new Date(endsAt))}` : start;
@@ -62,8 +64,14 @@ function eventTime(startsAt: string, endsAt?: string | null): string {
 function tournamentDate(value: string): { readonly day: string; readonly month: string } {
   const date = new Date(value);
   return {
-    day: new Intl.DateTimeFormat('ru-RU', { day: '2-digit' }).format(date),
-    month: new Intl.DateTimeFormat('ru-RU', { month: 'short' })
+    day: new Intl.DateTimeFormat('ru-RU', {
+      day: '2-digit',
+      timeZone: 'Europe/Moscow',
+    }).format(date),
+    month: new Intl.DateTimeFormat('ru-RU', {
+      month: 'short',
+      timeZone: 'Europe/Moscow',
+    })
       .format(date)
       .replace('.', '')
       .toUpperCase(),
@@ -71,9 +79,11 @@ function tournamentDate(value: string): { readonly day: string; readonly month: 
 }
 
 function calendarDate(value: string): string {
-  return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'long' }).format(
-    new Date(value),
-  );
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: 'long',
+    timeZone: 'Europe/Moscow',
+  }).format(new Date(value));
 }
 
 function shortPlayerName(displayName: string): string {

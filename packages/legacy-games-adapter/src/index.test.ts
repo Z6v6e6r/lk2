@@ -909,7 +909,9 @@ describe('legacy games adapter', () => {
 
   it('evicts the oldest tournament-result cache entries at the configured bound', async () => {
     const fetchImplementation = vi.fn<typeof fetch>((input) => {
-      const tournamentId = new URL(input.toString()).searchParams.get('tournamentId');
+      const requestUrl =
+        input instanceof Request ? input.url : typeof input === 'string' ? input : input.href;
+      const tournamentId = new URL(requestUrl).searchParams.get('tournamentId');
       return Promise.resolve(
         Response.json([
           {
