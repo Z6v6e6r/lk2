@@ -441,6 +441,118 @@
   color: var(--notifications-muted);
 }
 
+.preferencePanel {
+  border-bottom: 1px solid var(--notifications-line);
+  background: #fbfaff;
+}
+
+.preferencePanel > details > summary {
+  min-height: 48px;
+  padding: 14px 18px;
+  color: var(--notifications-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.preferencePanel .preferenceHint {
+  margin: 0;
+  padding: 0 18px 10px;
+  color: var(--notifications-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.preferenceList {
+  display: grid;
+  margin: 0;
+  padding: 0 18px;
+  gap: 10px;
+  list-style: none;
+}
+
+.preferenceCategory {
+  display: grid;
+  padding: 10px 0;
+  gap: 8px;
+  border-top: 1px solid var(--notifications-line);
+}
+
+.preferenceCategoryName {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.preferenceChannels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.preferenceToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--notifications-ink);
+  font-size: 12px;
+}
+
+.preferenceToggle small {
+  color: var(--notifications-muted);
+  font-size: 10px;
+}
+
+.quietHours {
+  display: grid;
+  padding: 12px 18px 4px;
+  gap: 8px;
+  border-top: 1px solid var(--notifications-line);
+}
+
+.quietHoursInputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.quietHoursInputs label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--notifications-muted);
+  font-size: 12px;
+}
+
+.quietHoursInputs input {
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #ded7ee;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--notifications-ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.preferenceSave {
+  min-height: 42px;
+  margin: 12px 18px 16px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--notifications-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.preferenceSave:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 @media (min-width: 768px) {
   .page :global(.fh-bottom-nav) {
     display: none;

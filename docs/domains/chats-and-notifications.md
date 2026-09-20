@@ -39,7 +39,25 @@ read cursor. Tournament остаётся закрыт без identity-linked can
 
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT
-/notifications/read-cursor` и типизированный SDK. Direct-chat family добавляет ruleset
+/notifications/read-cursor` и типизированный SDK. Пользовательские настройки каналов —
+`GET/PUT /notifications/preferences`: ответ перечисляет только те пары `category/channel`, которые
+тенант сейчас действительно может доставить (активные правила шаблонов плюс `ADMIN_MESSAGE` ручных
+кампаний), отсутствующая строка означает серверный default «включено», а `available` отражает
+tenant gate канала, а не выбор получателя. `PUT` заменяет только переданные категории,
+идемпотентен по содержимому (повтор не создаёт ни audit, ни outbox), принимает только доставляемые
+пары, требует актуальный `quiet_from`/`quiet_until` в паре и валидный IANA `timezone`. Тихие часы
+применяются исключительно к `PUSH`: inbox item остаётся durable, а правило с `mandatory = true`
+игнорирует и настройку, и окно — поэтому сервисное сообщение нельзя замолчать. Отдельно от
+категорий действует политика конкретного разговора: `PUT
+/conversations/{conversationId}/notification-policy` меняет только собственную строку участника
+(`conversation_members.notification_level` и `muted_until`), команда идемпотентна по содержимому и
+пишет audit плюс identifier-only outbox только при реальном изменении. Fan-out уведомлений о
+сообщении берёт лишь участников с `level = ALL` и закрытым/истёкшим `muted_until`; realtime
+доставка, история и unread count от этой политики не зависят, поэтому приглушённый чат продолжает
+открываться вживую. Упоминаний в сообщениях пока нет, поэтому `MENTIONS` тоже не получает
+уведомление; эффективное состояние (`muted`) считает сервер и отдаёт в summary разговора.
+Direct-chat family
+добавляет ruleset
 `messaging.ru-ru.v2`: `messaging.conversation.created.v1` и `messaging.message.created.v1` идут по
 generic source-event схеме, их payload остаётся identifier-only (tenant, conversation, message,
 sequence и `recipientUserIds`), а получатели резолвятся правилом
@@ -450,9 +468,10 @@ gates; остальной список — целевая карта.
 - `POST /{tenantKey}/conversations/{conversationId}/messages`
 - `PATCH|DELETE /{tenantKey}/conversations/{conversationId}/messages/{messageId}`
 - `PUT /{tenantKey}/conversations/{conversationId}/read-cursor`
+- `PUT /{tenantKey}/conversations/{conversationId}/notification-policy`
 - `GET /{tenantKey}/notifications`
 - `PUT /{tenantKey}/notifications/read-cursor`
-- `GET|PATCH /{tenantKey}/notification-preferences`
+- `GET|PUT /{tenantKey}/notifications/preferences`
 - `GET /{tenantKey}/notification-endpoints/web/config`
 - `POST /{tenantKey}/notification-endpoints/web`
 - `DELETE /{tenantKey}/notification-endpoints/web/{installationId}`
@@ -584,12 +603,13 @@ p95 < 2 s после commit; 99.9% intent либо доставлен хотя �
 3. **Realtime:** DIRECT и GAME используют session-bound tickets, авторизованные subscriptions и
    sequence-gap recovery; HTTP остаётся канонической историей и fallback.
 4. **CUP support + один connector:** inbound/outbound dedupe, assignment, retry/DLQ.
-5. **In-app notifications:** templates, rules, intents, preferences и inbox. Пользовательский срез
-   и ручная отправка из ЦУП реализованы и закрыты tenant/admin gates; управление версиями
-   templates/rules остаётся следующей задачей.
-6. **Web/iOS/Android push:** Web Push endpoint API, шифрование, VAPID adapter, retry/circuit и
-   provider-acceptance receipt реализованы за выключенными global/tenant/provider gates. APNs/FCM,
-   quiet hours и клиентские display/open receipts остаются следующими подэтапами.
+5. **In-app notifications:** templates, rules, intents, preferences и inbox. Пользовательский срез,
+   настройки каналов и ручная отправка из ЦУП реализованы и закрыты tenant/admin gates; управление
+   версиями templates/rules остаётся следующей задачей.
+6. **Web/iOS/Android push:** Web Push endpoint API, шифрование, VAPID adapter, retry/circuit,
+   provider-acceptance receipt, quiet hours канала `PUSH`, mute конкретного разговора и клиентские
+   display/open receipts реализованы за выключенными global/tenant/provider gates. APNs/FCM
+   остаются следующим подэтапом.
 7. **Moderation/control:** reports, ЦУП queue, reversible auto-policy, immutable decisions и затем
    один external provider в `SIGNAL_ONLY` режиме.
 

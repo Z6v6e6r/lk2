@@ -1,5 +1,5 @@
 import { loadConfig } from '@phub/config';
-import type { NotificationInboxRepository } from '@phub/database';
+import type { NotificationInboxRepository, NotificationPreferenceRepository } from '@phub/database';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
@@ -76,6 +76,22 @@ function repository(
       changedCount: 1,
       replayed: false,
     }),
+    ...overrides,
+  };
+}
+
+function preferenceRepository(
+  overrides: Partial<NotificationPreferenceRepository> = {},
+): NotificationPreferenceRepository {
+  return {
+    listConfigurableChannels: vi.fn().mockResolvedValue([
+      { category: 'ADMIN_MESSAGE', channel: 'IN_APP' },
+      { category: 'ADMIN_MESSAGE', channel: 'PUSH' },
+      { category: 'MESSAGING', channel: 'IN_APP' },
+      { category: 'MESSAGING', channel: 'PUSH' },
+    ]),
+    listPreferences: vi.fn().mockResolvedValue([]),
+    replacePreferences: vi.fn().mockResolvedValue([]),
     ...overrides,
   };
 }
@@ -188,5 +204,322 @@ describe('notification User API', () => {
     expect(markReadThrough).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId, userId, throughItemId: itemId }),
     );
+  });
+
+  it('returns the merged preference view with an absent row defaulting to enabled', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('notification-api-test', 'silent'),
+      pool: fakePool(),
+      notificationRepository: repository({
+        getRuntimeSettings: vi.fn().mockResolvedValue({
+          inAppEnabled: true,
+          webPushEnabled: true,
+          iosPushEnabled: false,
+          androidPushEnabled: false,
+        }),
+      }),
+      notificationPreferenceRepository: preferenceRepository({
+        listPreferences: vi.fn().mockResolvedValue([
+          {
+            category: 'MESSAGING',
+            channel: 'PUSH',
+            enabled: false,
+            quietFrom: '23:00',
+            quietUntil: '07:00',
+            timezone: 'Europe/Moscow',
+          },
+        ]),
+      }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/notifications/preferences',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toEqual({
+      categories: [
+        {
+          category: 'ADMIN_MESSAGE',
+          channels: [
+            {
+              channel: 'IN_APP',
+              enabled: true,
+              timezone: 'Europe/Moscow',
+              available: true,
+            },
+            {
+              channel: 'PUSH',
+              enabled: true,
+              timezone: 'Europe/Moscow',
+              available: true,
+            },
+          ],
+        },
+        {
+          category: 'MESSAGING',
+          channels: [
+            {
+              channel: 'IN_APP',
+              enabled: true,
+              timezone: 'Europe/Moscow',
+              available: true,
+            },
+            {
+              channel: 'PUSH',
+              enabled: false,
+              timezone: 'Europe/Moscow',
+              available: true,
+              quietFrom: '23:00',
+              quietUntil: '07:00',
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('marks a channel unavailable when its tenant runtime gate is off', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('notification-api-test', 'silent'),
+      pool: fakePool(),
+      notificationRepository: repository(),
+      notificationPreferenceRepository: preferenceRepository(),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/notifications/preferences',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      categories: [
+        {
+          category: 'ADMIN_MESSAGE',
+          channels: [
+            expect.objectContaining({ channel: 'IN_APP', available: true }),
+            expect.objectContaining({ channel: 'PUSH', available: false }),
+          ],
+        },
+        {
+          category: 'MESSAGING',
+          channels: [
+            expect.objectContaining({ channel: 'IN_APP', available: true }),
+            expect.objectContaining({ channel: 'PUSH', available: false }),
+          ],
+        },
+      ],
+    });
+  });
+
+  it('rejects an unknown category, an unavailable channel and an incomplete quiet window', async () => {
+    const replacePreferences = vi.fn();
+    const app = await buildApp({
+      config,
+      logger: createLogger('notification-api-test', 'silent'),
+      pool: fakePool(),
+      notificationRepository: repository(),
+      notificationPreferenceRepository: preferenceRepository({ replacePreferences }),
+    });
+    apps.push(app);
+    const authorization = `Bearer ${await accessToken()}`;
+    const headers = { authorization, 'idempotency-key': 'notification-preference-test-0001' };
+    const send = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: 'PUT',
+        url: '/user/api/v1/local-padel/notifications/preferences',
+        headers,
+        payload,
+      });
+
+    const unknownCategory = await send({
+      categories: [{ category: 'UNKNOWN', channels: [{ channel: 'IN_APP', enabled: false }] }],
+    });
+    expect(unknownCategory.statusCode).toBe(400);
+    expect(unknownCategory.json()).toMatchObject({
+      code: 'NOTIFICATION_PREFERENCE_NOT_CONFIGURABLE',
+    });
+
+    const unavailableChannel = await send({
+      categories: [{ category: 'BOOKING', channels: [{ channel: 'IN_APP', enabled: false }] }],
+    });
+    expect(unavailableChannel.statusCode).toBe(400);
+    expect(unavailableChannel.json()).toMatchObject({
+      code: 'NOTIFICATION_PREFERENCE_NOT_CONFIGURABLE',
+    });
+
+    const incompleteWindow = await send({
+      categories: [
+        {
+          category: 'MESSAGING',
+          channels: [{ channel: 'PUSH', enabled: true, quietFrom: '23:00' }],
+        },
+      ],
+    });
+    expect(incompleteWindow.statusCode).toBe(400);
+    expect(incompleteWindow.json()).toMatchObject({ code: 'NOTIFICATION_PREFERENCE_INVALID' });
+
+    const unknownZone = await send({
+      categories: [
+        {
+          category: 'MESSAGING',
+          channels: [{ channel: 'PUSH', enabled: true, timezone: 'Not/AZone' }],
+        },
+      ],
+    });
+    expect(unknownZone.statusCode).toBe(400);
+    expect(unknownZone.json()).toMatchObject({ code: 'NOTIFICATION_PREFERENCE_INVALID' });
+
+    const duplicatedChannel = await send({
+      categories: [
+        {
+          category: 'MESSAGING',
+          channels: [
+            { channel: 'PUSH', enabled: true },
+            { channel: 'PUSH', enabled: false },
+          ],
+        },
+      ],
+    });
+    expect(duplicatedChannel.statusCode).toBe(400);
+    expect(duplicatedChannel.json()).toMatchObject({ code: 'NOTIFICATION_PREFERENCE_INVALID' });
+    expect(replacePreferences).not.toHaveBeenCalled();
+  });
+
+  it('requires idempotency and applies the normalized preference write', async () => {
+    const replacePreferences = vi
+      .fn<NotificationPreferenceRepository['replacePreferences']>()
+      .mockResolvedValue([
+        {
+          category: 'MESSAGING',
+          channel: 'PUSH',
+          enabled: false,
+          quietFrom: '23:00',
+          quietUntil: '07:00',
+          timezone: 'Europe/Moscow',
+        },
+      ]);
+    const app = await buildApp({
+      config,
+      logger: createLogger('notification-api-test', 'silent'),
+      pool: fakePool(),
+      notificationRepository: repository(),
+      notificationPreferenceRepository: preferenceRepository({ replacePreferences }),
+    });
+    apps.push(app);
+    const authorization = `Bearer ${await accessToken()}`;
+    const payload = {
+      categories: [
+        {
+          category: 'MESSAGING',
+          channels: [{ channel: 'PUSH', enabled: false, quietFrom: '23:00', quietUntil: '07:00' }],
+        },
+      ],
+    };
+
+    const missingKey = await app.inject({
+      method: 'PUT',
+      url: '/user/api/v1/local-padel/notifications/preferences',
+      headers: { authorization },
+      payload,
+    });
+    expect(missingKey.statusCode).toBe(400);
+    expect(missingKey.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/user/api/v1/local-padel/notifications/preferences',
+      headers: { authorization, 'idempotency-key': 'notification-preference-test-0002' },
+      payload,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(replacePreferences).toHaveBeenCalledTimes(1);
+    const command = replacePreferences.mock.calls[0]?.[0];
+    expect(command).toMatchObject({
+      tenantId,
+      userId,
+      entries: [
+        {
+          category: 'MESSAGING',
+          channel: 'PUSH',
+          enabled: false,
+          quietFrom: '23:00',
+          quietUntil: '07:00',
+          timezone: 'Europe/Moscow',
+        },
+      ],
+    });
+    expect(typeof command?.correlationId).toBe('string');
+    expect(response.json()).toMatchObject({
+      categories: [
+        {
+          category: 'ADMIN_MESSAGE',
+          channels: [
+            { channel: 'IN_APP', enabled: true, available: true },
+            { channel: 'PUSH', enabled: true, available: false },
+          ],
+        },
+        {
+          category: 'MESSAGING',
+          channels: [
+            { channel: 'IN_APP', enabled: true, available: true },
+            {
+              channel: 'PUSH',
+              enabled: false,
+              available: false,
+              quietFrom: '23:00',
+              quietUntil: '07:00',
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('keeps the preference routes closed while the notification section is disabled', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('notification-api-test', 'silent'),
+      pool: fakePool(),
+      notificationRepository: repository({
+        getRuntimeSettings: vi.fn().mockResolvedValue({
+          inAppEnabled: false,
+          webPushEnabled: false,
+          iosPushEnabled: false,
+          androidPushEnabled: false,
+        }),
+      }),
+      notificationPreferenceRepository: preferenceRepository(),
+    });
+    apps.push(app);
+    const authorization = `Bearer ${await accessToken()}`;
+
+    const read = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/notifications/preferences',
+      headers: { authorization },
+    });
+    expect(read.statusCode).toBe(404);
+    expect(read.json()).toMatchObject({ code: 'NOTIFICATIONS_DISABLED' });
+
+    const write = await app.inject({
+      method: 'PUT',
+      url: '/user/api/v1/local-padel/notifications/preferences',
+      headers: { authorization, 'idempotency-key': 'notification-preference-test-0003' },
+      payload: {
+        categories: [{ category: 'MESSAGING', channels: [{ channel: 'PUSH', enabled: true }] }],
+      },
+    });
+    expect(write.statusCode).toBe(404);
+    expect(write.json()).toMatchObject({ code: 'NOTIFICATIONS_DISABLED' });
   });
 });

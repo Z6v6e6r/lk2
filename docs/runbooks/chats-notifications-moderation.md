@@ -44,7 +44,10 @@ enabling chats.
 6. Enable realtime and verify reconnect plus sequence-gap recovery through HTTP.
 7. Enable in-app notification intents/inbox, then one trigger rule with a synthetic audience.
 8. Enable push one platform at a time: Web Push sandbox, APNs sandbox, FCM test project, then the
-   corresponding production account. Never switch all platforms in one change window.
+   corresponding production account. Never switch all platforms in one change window. Chat push needs
+   the `messaging.ru-ru.v2` ruleset as well; follow
+   [Messaging chat push prerequisites and acceptance](#messaging-chat-push-prerequisites-and-acceptance)
+   after the Web Push sandbox gate.
 9. Enable one messaging connector in sandbox; verify inbound/outbound deduplication and DLQ replay.
 10. Enable user reports and CUP moderation. Enable reversible auto-quarantine only after expiry and
     reversal tests pass.
@@ -1097,6 +1100,28 @@ still require `rabbit-required`; the inert mode cannot satisfy a live-runtime ve
 a compatible consumer instead requires a separately approved, bounded rollback window and
 continuous queue-depth observation. A database rollback is not required: the expand-only recipient
 fence table is inert for older workers.
+
+### Messaging chat push prerequisites and acceptance
+
+Version 2 (`messaging.ru-ru.v2`) adds the optional `PUSH` channel to the same two direct-chat rules;
+the source events, the identifier-only payload and the `/chats/{{conversationId}}` deep link do not
+change, and both rules stay `mandatory = false`. The provisioning procedure, the request-hash rule
+and the inactive-first template ordering are described with the other rulesets above.
+
+Provisioning a version never enables a transport by itself. Chat push starts only while all of these
+hold for the tenant: `WEB_PUSH_ENABLED` on every API and worker replica, an `ACTIVE` Web Push provider
+account, the recipient has an `ACTIVE` endpoint registered, and the tenant gate
+`notifications.tenant_runtime_settings.web_push_enabled` is on. The recipient's own settings still
+decide each message: category `MESSAGING` + channel `PUSH` must not be disabled, the quiet window
+must be closed, and the conversation policy must not be muted (`ALL` with no open `muted_until`).
+Realtime delivery and the inbox item are unaffected by that policy.
+
+Acceptance: one chat message yields one inbox item and at most one push per active endpoint;
+disabling `MESSAGING/PUSH` or entering quiet hours removes the push while the item still lands; a
+muted conversation produces no push but still delivers realtime; RabbitMQ payloads, logs and metrics
+contain no message body and no endpoint address. Rollback turns `web_push_enabled` off and leaves the
+in-app item; provisioning never rewrites an older version's templates, so the previous rows remain
+inactive history.
 
 ### Booking notification ruleset M1
 

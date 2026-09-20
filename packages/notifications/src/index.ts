@@ -870,6 +870,98 @@ function parseEndpointKeyring(serializedKeys: string): ReadonlyMap<string, Buffe
   return keys;
 }
 
+/**
+ * User-owned notification preferences. A preference is stored per tenant, user, category and
+ * channel (`notifications.user_preferences`); an absent row means the server default and therefore
+ * "enabled". Only IN_APP and PUSH are user-configurable today — EMAIL, SMS and CONNECTOR have no
+ * product surface — and a mandatory rule still bypasses the preference, so these settings can never
+ * silence a server-owned message such as a confirmed booking.
+ */
+export const USER_NOTIFICATION_PREFERENCE_CHANNELS = ['IN_APP', 'PUSH'] as const;
+
+export type UserNotificationPreferenceChannel =
+  (typeof USER_NOTIFICATION_PREFERENCE_CHANNELS)[number];
+
+export function isUserNotificationPreferenceChannel(
+  value: unknown,
+): value is UserNotificationPreferenceChannel {
+  return (
+    typeof value === 'string' &&
+    (USER_NOTIFICATION_PREFERENCE_CHANNELS as readonly string[]).includes(value)
+  );
+}
+
+const quietTime = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/);
+
+export const notificationPreferenceChannelUpdateSchema = z.object({
+  channel: z.enum(USER_NOTIFICATION_PREFERENCE_CHANNELS),
+  enabled: z.boolean(),
+  quietFrom: quietTime.nullish(),
+  quietUntil: quietTime.nullish(),
+  timezone: z.string().min(1).max(64).nullish(),
+});
+
+export const notificationPreferenceCategoryUpdateSchema = z.object({
+  category: z.string().regex(/^[A-Z][A-Z0-9_]{1,63}$/),
+  channels: z.array(notificationPreferenceChannelUpdateSchema).min(1).max(2),
+});
+
+export const NOTIFICATION_PREFERENCE_DEFAULT_TIMEZONE = 'Europe/Moscow';
+
+const MINUTES_PER_DAY = 24 * 60;
+
+export function isSupportedNotificationTimeZone(value: string): boolean {
+  if (value.length === 0 || value.length > 64 || /\s/.test(value)) return false;
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: value }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function localMinutesOfDay(now: Date, timezone: string): number | undefined {
+  if (!isSupportedNotificationTimeZone(timezone)) return undefined;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(now);
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return undefined;
+  // `hour12: false` can render midnight as 24 in some ICU versions.
+  return ((hour % 24) * 60 + minute) % MINUTES_PER_DAY;
+}
+
+function minutesOfDay(value: string): number | undefined {
+  const match = /^([01][0-9]|2[0-3]):([0-5][0-9])$/.exec(value);
+  if (!match) return undefined;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+/**
+ * Whether the recipient's local clock sits inside their quiet window. `quietFrom === quietUntil`
+ * means "no quiet hours" rather than an all-day silence, and a window that crosses midnight
+ * (`23:00`–`07:00`) is honoured as one interval. An unreadable window is never quiet: a bad row must
+ * not silently swallow a notification.
+ */
+export function quietHoursActive(input: {
+  readonly now: Date;
+  readonly quietFrom: string;
+  readonly quietUntil: string;
+  readonly timezone: string;
+}): boolean {
+  const from = minutesOfDay(input.quietFrom);
+  const until = minutesOfDay(input.quietUntil);
+  const current = localMinutesOfDay(input.now, input.timezone);
+  if (from === undefined || until === undefined || current === undefined) return false;
+  if (from === until) return false;
+  if (from < until) return current >= from && current < until;
+  return current >= from || current < until;
+}
+
 export function createNotificationEndpointCipher(input: {
   readonly serializedKeys: string;
   readonly activeKeyId: string;

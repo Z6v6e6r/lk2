@@ -12,15 +12,20 @@ import {
   MAX_NOTIFICATION_EVENT_RECIPIENTS,
   MESSAGING_NOTIFICATION_DEFINITIONS,
   MESSAGING_NOTIFICATION_EVENT_TYPES,
+  MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE,
   MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY,
   MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS,
   MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
+  MESSAGING_NOTIFICATION_TEMPLATE_VERSION,
   bookingNotificationSourceEventSchema,
   canonicalWebPushEndpoint,
   canonicalWebPushSubscription,
   createNotificationEndpointCipher,
   gameNotificationSourceEventSchema,
   isWebPushEndpointOriginAllowed,
+  isSupportedNotificationTimeZone,
+  notificationPreferenceCategoryUpdateSchema,
+  quietHoursActive,
   createNotificationReceiptToken,
   notificationReceiptSecret,
   storedWebPushEndpoint,
@@ -555,5 +560,101 @@ describe('notification domain contracts', () => {
       });
       expect(definition.mandatory).toBe(false);
     }
+  });
+
+  it('requests the durable inbox item and the optional push for a direct-chat event', () => {
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_VERSION).toBe(2);
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
+    expect(MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE).toEqual(['IN_APP', 'PUSH']);
+    // The push payload is rendered from the same snapshot; no message text is part of it.
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK).toBe('/chats/{{conversationId}}');
+  });
+});
+
+describe('notification preference quiet hours', () => {
+  const moscow = 'Europe/Moscow';
+
+  it('reports whether the recipient local clock is inside the window', () => {
+    // 2026-08-03T20:30:00Z is 23:30 in Moscow.
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T20:30:00.000Z'),
+        quietFrom: '23:00',
+        quietUntil: '07:00',
+        timezone: moscow,
+      }),
+    ).toBe(true);
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T12:00:00.000Z'),
+        quietFrom: '23:00',
+        quietUntil: '07:00',
+        timezone: moscow,
+      }),
+    ).toBe(false);
+  });
+
+  it('handles a window that stays inside one calendar day', () => {
+    // 10:00 and 14:00 Moscow on the same day.
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T07:00:00.000Z'),
+        quietFrom: '09:00',
+        quietUntil: '18:00',
+        timezone: moscow,
+      }),
+    ).toBe(true);
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T19:00:00.000Z'),
+        quietFrom: '09:00',
+        quietUntil: '18:00',
+        timezone: moscow,
+      }),
+    ).toBe(false);
+  });
+
+  it('treats an empty window as no quiet hours and an unreadable row as never quiet', () => {
+    const now = new Date('2026-08-03T20:30:00.000Z');
+    expect(
+      quietHoursActive({ now, quietFrom: '23:00', quietUntil: '23:00', timezone: moscow }),
+    ).toBe(false);
+    expect(
+      quietHoursActive({ now, quietFrom: 'не время', quietUntil: '07:00', timezone: moscow }),
+    ).toBe(false);
+    expect(
+      quietHoursActive({ now, quietFrom: '23:00', quietUntil: '07:00', timezone: 'Not/AZone' }),
+    ).toBe(false);
+  });
+
+  it('accepts only a real IANA time zone and a bounded HH:MM time', () => {
+    const valid = notificationPreferenceCategoryUpdateSchema.safeParse({
+      category: 'MESSAGING',
+      channels: [
+        {
+          channel: 'PUSH',
+          enabled: true,
+          quietFrom: '23:00',
+          quietUntil: '07:00',
+          timezone: moscow,
+        },
+      ],
+    });
+    expect(valid.success).toBe(true);
+    expect(isSupportedNotificationTimeZone(moscow)).toBe(true);
+    expect(isSupportedNotificationTimeZone('Not/AZone')).toBe(false);
+    expect(isSupportedNotificationTimeZone('')).toBe(false);
+    expect(
+      notificationPreferenceCategoryUpdateSchema.safeParse({
+        category: 'messaging',
+        channels: [{ channel: 'EMAIL', enabled: true }],
+      }).success,
+    ).toBe(false);
+    expect(
+      notificationPreferenceCategoryUpdateSchema.safeParse({
+        category: 'MESSAGING',
+        channels: [{ channel: 'PUSH', enabled: true, quietFrom: '25:00' }],
+      }).success,
+    ).toBe(false);
   });
 });

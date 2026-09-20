@@ -18,10 +18,15 @@ describe('MESSAGING notification provisioning contract', () => {
     expect(contract).toContain("sourceEventType: 'messaging.conversation.created.v1'");
     expect(contract).toContain("sourceEventType: 'messaging.message.created.v1'");
     expect(contract).toContain("field: 'recipientUserIds'");
-    // A provisioned template version can never change its channels, so opening PUSH moves both the
-    // template and the ruleset version forward.
-    expect(contract).toContain("channels: ['IN_APP', 'PUSH']");
-    expect(contract).toContain('version: 2,');
+    // A provisioned template version can never change its channels, so opening PUSH moves both
+    // the template and the ruleset version forward.
+    const messagingContract = contract.slice(
+      contract.indexOf('export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT'),
+      contract.indexOf('export const MESSAGING_NOTIFICATION_RULESET_VERSION'),
+    );
+    expect(messagingContract).toContain("channels: ['IN_APP', 'PUSH']");
+    expect(messagingContract).toContain("channelOverride: ['IN_APP', 'PUSH']");
+    expect(messagingContract).toContain('version: 2,');
     expect(source).toContain('notifications.ruleset_provision_commands');
     expect(source).toContain('MESSAGING_NOTIFICATION_REQUEST_HASH');
     expect(source).toContain('MESSAGING_NOTIFICATION_RULESET_PROVISIONED');

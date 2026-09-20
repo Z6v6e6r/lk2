@@ -405,6 +405,9 @@ describe('messaging repository', () => {
               last_sequence: '3',
               last_body: 'Готов',
               last_created_at: '2026-08-03 11:59:00.000000+00',
+              notification_level: 'ALL',
+              muted_until: null,
+              notifications_muted: false,
             },
           ],
           rowCount: 1,
@@ -422,6 +425,7 @@ describe('messaging repository', () => {
         title: 'Игра',
         unreadCount: 2,
         updatedAt: '2026-08-03T12:00:00.000000+00:00',
+        notificationPolicy: { level: 'ALL', muted: false },
         lastMessage: {
           sequence: 3,
           body: 'Готов',
@@ -1458,5 +1462,232 @@ describe('messaging repository', () => {
     expect(subscriptionSql).not.toContain('profile.privacy_settings target_privacy');
     expect(fanoutSql).not.toContain('profile.privacy_settings target_privacy');
     expect(fanoutSql).toContain("'chat.direct.create' = any(current_access.permissions)");
+  });
+});
+
+describe('messaging notification policy', () => {
+  function policyQuery(
+    handler: (text: string, values?: readonly unknown[]) => unknown,
+  ): ReturnType<typeof vi.fn> {
+    return vi.fn((text: string, values?: readonly unknown[]) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('member.id as member_id')) {
+        return Promise.resolve({
+          rows: [{ member_id: memberId, last_read_sequence: '0', last_sequence: '9' }],
+          rowCount: 1,
+        });
+      }
+      return handler(text, values);
+    });
+  }
+
+  it('asks only members whose own policy still allows a message notification', async () => {
+    const query = policyQuery((text) => {
+      if (text.includes('insert into audit.inbox_events')) {
+        return Promise.resolve({ rows: [{ event_id: messageId }], rowCount: 1 });
+      }
+      if (text.includes('select next_sequence')) {
+        return Promise.resolve({ rows: [{ next_sequence: '2' }], rowCount: 1 });
+      }
+      if (text.includes('message.idempotency_key = $3')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into messaging.messages')) {
+        return Promise.resolve({ rows: [{ id: messageId }], rowCount: 1 });
+      }
+      if (text.includes('select member.user_id')) {
+        return Promise.resolve({ rows: [{ user_id: otherUserId }], rowCount: 1 });
+      }
+      if (text.includes('message.id = $4')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: messageId,
+              conversation_id: conversationId,
+              sequence: '2',
+              sender_user_id: userId,
+              sender_display_name: 'Анна',
+              message_type: 'TEXT',
+              body: 'Привет',
+              created_at: '2026-07-26 12:00:00.123456+00',
+              client_message_id: 'client-message-policy-0001',
+              idempotency_key: 'message-command-policy-0001',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('update messaging.conversations') ||
+        text.includes('update messaging.conversation_members') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await repository.sendMessage({
+      tenantId,
+      userId,
+      conversationId,
+      clientMessageId: 'client-message-policy-0001',
+      idempotencyKey: 'message-command-policy-0001',
+      body: 'Привет',
+      correlationId: 'message-correlation-policy-0001',
+    });
+
+    const notificationRecipientsSql = String(
+      query.mock.calls.find(([text]) => String(text).includes('select member.user_id'))?.[0],
+    );
+    expect(notificationRecipientsSql).toContain("member.notification_level = 'ALL'");
+    expect(notificationRecipientsSql).toContain('member.muted_until <= now()');
+  });
+
+  it('leaves realtime fanout policy-free so a muted chat still opens live', async () => {
+    const source = await readFile(new URL('./messaging-repository.ts', import.meta.url), 'utf8');
+
+    expect(source).toContain('respectNotificationPolicy: true');
+    expect(source).toContain('respectNotificationPolicy: false');
+    // The realtime caller is the only `requireRealtime: true` call site.
+    const realtimeCall = /requireRealtime: true,\s*respectNotificationPolicy: (\w+)/.exec(source);
+    expect(realtimeCall?.[1]).toBe('false');
+  });
+
+  it('writes nothing when the requested policy already matches', async () => {
+    const query = policyQuery((text) => {
+      if (text.includes('select notification_level')) {
+        return Promise.resolve({
+          rows: [
+            {
+              notification_level: 'ALL',
+              muted_until: '2026-07-27 04:00:00+00',
+              notifications_muted: false,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'ALL',
+        mutedUntil: '2026-07-27T04:00:00.000Z',
+        idempotencyKey: 'notification-policy-command-0001',
+        correlationId: 'notification-policy-correlation-0001',
+      }),
+    ).resolves.toEqual({
+      outcome: 'ok',
+      policy: { level: 'ALL', muted: false, mutedUntil: '2026-07-27T04:00:00+00:00' },
+      changed: false,
+    });
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('update messaging.conversation_members'),
+      ),
+    ).toBe(false);
+    expect(query.mock.calls.some(([text]) => String(text).includes('insert into audit.'))).toBe(
+      false,
+    );
+  });
+
+  it('updates own membership with one audit entry and one identifier-only event', async () => {
+    const reads: unknown[][] = [
+      [{ notification_level: 'ALL', muted_until: null, notifications_muted: false }],
+      [
+        {
+          notification_level: 'NONE',
+          muted_until: null,
+          notifications_muted: true,
+        },
+      ],
+    ];
+    const query = policyQuery((text, values) => {
+      if (text.includes('select notification_level')) {
+        return Promise.resolve({ rows: reads.shift() ?? [], rowCount: 1 });
+      }
+      if (text.includes('update messaging.conversation_members')) {
+        expect(values?.[3]).toBe('NONE');
+        expect(values?.[4]).toBeNull();
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into audit.audit_log')) {
+        expect(String(values?.[2])).toBe(conversationId);
+        expect(String(values?.[4])).toContain('"level":"NONE"');
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into audit.outbox_events')) {
+        expect(String(values?.[1])).toBe(conversationId);
+        const payload = String(values?.[3]);
+        expect(payload).toContain('"level":"NONE"');
+        expect(payload).not.toContain('Привет');
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'NONE',
+        mutedUntil: null,
+        idempotencyKey: 'notification-policy-command-0002',
+        correlationId: 'notification-policy-correlation-0002',
+      }),
+    ).resolves.toEqual({
+      outcome: 'ok',
+      policy: { level: 'NONE', muted: true },
+      changed: true,
+    });
+  });
+
+  it('refuses a policy write for a conversation the caller does not belong to', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock') ||
+        text.includes('member.id as member_id')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'ALL',
+        mutedUntil: null,
+        idempotencyKey: 'notification-policy-command-0003',
+        correlationId: 'notification-policy-correlation-0003',
+      }),
+    ).resolves.toEqual({ outcome: 'not_found' });
+    expect(query.mock.calls.some(([text]) => String(text).includes('update messaging.'))).toBe(
+      false,
+    );
   });
 });

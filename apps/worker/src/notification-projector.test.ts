@@ -158,6 +158,7 @@ describe('notification intent projector', () => {
       suppressed: 0,
       pushQueued: 0,
       skippedRules: 0,
+      quietSuppressed: 0,
     });
     expect(
       query.mock.calls.filter(([text]) => String(text).includes('insert into audit.outbox_events')),
@@ -281,6 +282,7 @@ describe('notification intent projector', () => {
       suppressed: 0,
       pushQueued: 0,
       skippedRules: 0,
+      quietSuppressed: 0,
     });
     expect(
       query.mock.calls.filter(([text]) => String(text).includes('from identity.users')),
@@ -395,6 +397,7 @@ describe('notification intent projector', () => {
       suppressed: 0,
       pushQueued: 0,
       skippedRules: 0,
+      quietSuppressed: 0,
     });
     expect(
       query.mock.calls.filter(([text]) => String(text).includes('from identity.users')),
@@ -1122,5 +1125,370 @@ describe('booking notification projection fence', () => {
     await expect(Promise.all([sameBookingFirst, sameBookingSecond, otherBooking])).resolves.toEqual(
       [{ outcome: 'disabled' }, { outcome: 'disabled' }, { outcome: 'disabled' }],
     );
+  });
+
+  it('withholds only the push while the recipient is inside their quiet hours', async () => {
+    const conversationId = '73333333-3333-4333-8333-333333333333';
+    const messageEvent: NotificationSourceEvent = {
+      id: '75444444-4444-4444-8444-444444444444',
+      type: 'messaging.message.created.v1',
+      aggregateId: conversationId,
+      tenantId,
+      occurredAt: '2026-08-03T20:30:00.000Z',
+      correlationId: 'messaging-quiet-hours-worker-test',
+      payload: {
+        conversationId,
+        messageId: '75555555-5555-4555-8555-555555555555',
+        sequence: 8,
+        recipientUserIds: [userId],
+      },
+    };
+    const observed: { readonly text: string; readonly values: readonly unknown[] }[] = [];
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      observed.push({ text, values });
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into audit.inbox_events')) {
+        return Promise.resolve({ rows: [{ event_id: messageEvent.id }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [{ in_app_enabled: true, web_push_enabled: true }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from notifications.trigger_rules')) {
+        return Promise.resolve({
+          rows: [
+            {
+              rule_id: '76666666-6666-4666-8666-666666666661',
+              template_id: '77777777-7777-4777-8777-777777777771',
+              audience_selector: { type: 'EVENT_USERS', field: 'recipientUserIds' },
+              mandatory: false,
+              effective_channels: ['IN_APP', 'PUSH'],
+              category: 'MESSAGING',
+              title_template: 'Новое сообщение',
+              body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+              deep_link_template: '/chats/{{conversationId}}',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from identity.users')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.user_preferences')) {
+        return Promise.resolve({
+          rows: [
+            {
+              channel: 'PUSH',
+              enabled: true,
+              quiet_from: '23:00',
+              quiet_until: '07:00',
+              timezone: 'Europe/Moscow',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.intents')) {
+        return Promise.resolve({
+          rows: [{ id: '80000000-0000-4000-8000-000000000001' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.deliveries')) {
+        return Promise.resolve({
+          rows: [{ id: '81000000-0000-4000-8000-000000000001' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.inbox_items')) {
+        return Promise.resolve({
+          rows: [{ id: '82000000-0000-4000-8000-000000000001' }],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('update audit.inbox_events')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      applyNotificationSourceEvent({
+        pool: pool as never,
+        event: messageEvent,
+        // 2026-08-03T20:30:00Z is 23:30 in Moscow, inside the stored window.
+        now: new Date('2026-08-03T20:30:00.000Z'),
+        webPush: { appId: 'phub-test', environment: 'SANDBOX' },
+      }),
+    ).resolves.toEqual({
+      outcome: 'processed',
+      created: 1,
+      suppressed: 0,
+      pushQueued: 0,
+      skippedRules: 0,
+      quietSuppressed: 1,
+    });
+    // The durable item still lands, and the push channel never resolves an endpoint.
+    expect(
+      observed.filter((call) => call.text.includes('insert into notifications.inbox_items')),
+    ).toHaveLength(1);
+    expect(
+      observed.some((call) => call.text.includes('from integration.notification_endpoints')),
+    ).toBe(false);
+    expect(
+      observed.filter(
+        (call) =>
+          call.text.includes('insert into notifications.deliveries') &&
+          call.text.includes("'PUSH'"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('queues the push outside the quiet window and never counts a suppressed push', async () => {
+    const conversationId = '73333333-3333-4333-8333-333333333333';
+    const messageEvent: NotificationSourceEvent = {
+      id: '76444444-4444-4444-8444-444444444445',
+      type: 'messaging.message.created.v1',
+      aggregateId: conversationId,
+      tenantId,
+      occurredAt: '2026-08-03T12:00:00.000Z',
+      correlationId: 'messaging-quiet-hours-outside-worker-test',
+      payload: {
+        conversationId,
+        messageId: '75555555-5555-4555-8555-555555555556',
+        sequence: 9,
+        recipientUserIds: [userId],
+      },
+    };
+    const observed: { readonly text: string; readonly values: readonly unknown[] }[] = [];
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      observed.push({ text, values });
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into audit.inbox_events')) {
+        return Promise.resolve({ rows: [{ event_id: messageEvent.id }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [{ in_app_enabled: true, web_push_enabled: true }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from notifications.trigger_rules')) {
+        return Promise.resolve({
+          rows: [
+            {
+              rule_id: '76666666-6666-4666-8666-666666666662',
+              template_id: '77777777-7777-4777-8777-777777777772',
+              audience_selector: { type: 'EVENT_USERS', field: 'recipientUserIds' },
+              mandatory: false,
+              effective_channels: ['IN_APP', 'PUSH'],
+              category: 'MESSAGING',
+              title_template: 'Новое сообщение',
+              body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+              deep_link_template: '/chats/{{conversationId}}',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from identity.users')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.user_preferences')) {
+        return Promise.resolve({
+          rows: [
+            {
+              channel: 'PUSH',
+              enabled: true,
+              quiet_from: '23:00',
+              quiet_until: '07:00',
+              timezone: 'Europe/Moscow',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from integration.notification_endpoints')) {
+        return Promise.resolve({
+          rows: [{ id: '83333333-3333-4333-8333-333333333333' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.intents')) {
+        return Promise.resolve({
+          rows: [{ id: '80000000-0000-4000-8000-000000000002' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.deliveries')) {
+        return Promise.resolve({
+          rows: [{ id: '81000000-0000-4000-8000-000000000002' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.inbox_items')) {
+        return Promise.resolve({
+          rows: [{ id: '82000000-0000-4000-8000-000000000002' }],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('update audit.inbox_events')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      applyNotificationSourceEvent({
+        pool: pool as never,
+        event: messageEvent,
+        // 12:00Z is 15:00 in Moscow, far outside the stored window.
+        now: new Date('2026-08-03T12:00:00.000Z'),
+        webPush: { appId: 'phub-test', environment: 'SANDBOX' },
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'processed',
+      created: 1,
+      pushQueued: 1,
+      quietSuppressed: 0,
+    });
+    expect(
+      observed.filter(
+        (call) =>
+          call.text.includes('insert into notifications.deliveries') &&
+          call.text.includes("'PUSH'"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('keeps a mandatory rule pushable inside the recipient quiet window', async () => {
+    const conversationId = '73333333-3333-4333-8333-333333333333';
+    const messageEvent: NotificationSourceEvent = {
+      id: '77444444-4444-4444-8444-444444444446',
+      type: 'messaging.message.created.v1',
+      aggregateId: conversationId,
+      tenantId,
+      occurredAt: '2026-08-03T20:30:00.000Z',
+      correlationId: 'messaging-quiet-hours-mandatory-worker-test',
+      payload: {
+        conversationId,
+        messageId: '75555555-5555-4555-8555-555555555557',
+        sequence: 10,
+        recipientUserIds: [userId],
+      },
+    };
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into audit.inbox_events')) {
+        return Promise.resolve({ rows: [{ event_id: messageEvent.id }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.tenant_runtime_settings')) {
+        return Promise.resolve({
+          rows: [{ in_app_enabled: true, web_push_enabled: true }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from notifications.trigger_rules')) {
+        return Promise.resolve({
+          rows: [
+            {
+              rule_id: '76666666-6666-4666-8666-666666666663',
+              template_id: '77777777-7777-4777-8777-777777777773',
+              audience_selector: { type: 'EVENT_USERS', field: 'recipientUserIds' },
+              mandatory: true,
+              effective_channels: ['IN_APP', 'PUSH'],
+              category: 'MESSAGING',
+              title_template: 'Новое сообщение',
+              body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+              deep_link_template: '/chats/{{conversationId}}',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from identity.users')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from notifications.user_preferences')) {
+        return Promise.resolve({
+          rows: [
+            {
+              channel: 'PUSH',
+              enabled: false,
+              quiet_from: '23:00',
+              quiet_until: '07:00',
+              timezone: 'Europe/Moscow',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from integration.notification_endpoints')) {
+        return Promise.resolve({
+          rows: [{ id: '84444444-4444-4444-8444-444444444444' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.intents')) {
+        return Promise.resolve({
+          rows: [{ id: '80000000-0000-4000-8000-000000000003' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.deliveries')) {
+        return Promise.resolve({
+          rows: [{ id: '81000000-0000-4000-8000-000000000003' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into notifications.inbox_items')) {
+        return Promise.resolve({
+          rows: [{ id: '82000000-0000-4000-8000-000000000003' }],
+          rowCount: 1,
+        });
+      }
+      if (
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('update audit.inbox_events')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+
+    await expect(
+      applyNotificationSourceEvent({
+        pool: pool as never,
+        event: messageEvent,
+        now: new Date('2026-08-03T20:30:00.000Z'),
+        webPush: { appId: 'phub-test', environment: 'SANDBOX' },
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'processed',
+      created: 1,
+      pushQueued: 1,
+      quietSuppressed: 0,
+    });
   });
 });

@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { NotificationsPage } from './NotificationsPage.js';
-import type { NotificationInboxPage } from './auth-gateway.js';
+import type { NotificationInboxPage, NotificationPreferencesView } from './auth-gateway.js';
 
 afterEach(cleanup);
 
@@ -37,6 +37,32 @@ const items: NotificationInboxPage['items'] = [
   },
 ];
 
+const notificationPreferences: NotificationPreferencesView = {
+  categories: [
+    {
+      category: 'MESSAGING',
+      channels: [
+        { channel: 'IN_APP', enabled: true, timezone: 'Europe/Moscow', available: true },
+        { channel: 'PUSH', enabled: true, timezone: 'Europe/Moscow', available: true },
+      ],
+    },
+    {
+      category: 'ADMIN_MESSAGE',
+      channels: [
+        { channel: 'IN_APP', enabled: true, timezone: 'Europe/Moscow', available: true },
+        { channel: 'PUSH', enabled: true, timezone: 'Europe/Moscow', available: false },
+      ],
+    },
+    {
+      category: 'FRIENDSHIP',
+      channels: [
+        { channel: 'IN_APP', enabled: true, timezone: 'Europe/Moscow', available: true },
+        { channel: 'PUSH', enabled: true, timezone: 'Europe/Moscow', available: true },
+      ],
+    },
+  ],
+};
+
 const defaultProps = {
   page: { unreadCount: 2, items },
   webPush: { enabled: true, publicKey: 'public-vapid-key-value' },
@@ -44,6 +70,9 @@ const defaultProps = {
   busy: false,
   error: null,
   inboxUnavailable: false,
+  preferences: notificationPreferences,
+  preferencesBusy: false,
+  preferencesError: null,
   friendRequests: [],
   friendRequestsError: null,
   outgoingFriendRequests: [],
@@ -52,6 +81,7 @@ const defaultProps = {
   onDeclineFriendRequest: vi.fn(),
   onEnableWebPush: vi.fn(),
   onDisableWebPush: vi.fn(),
+  onSavePreferences: vi.fn(),
   onMarkAllRead: vi.fn(),
   onRetryInbox: vi.fn(),
   onOpenNotification: vi.fn(),
@@ -239,5 +269,91 @@ describe('NotificationsPage', () => {
       '/profile/b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
     );
     expect(screen.queryByRole('button', { name: 'Отказаться' })).not.toBeInTheDocument();
+  });
+
+  it('saves a disabled channel and marks an unavailable push channel', () => {
+    const onSavePreferences = vi.fn();
+    render(<NotificationsPage {...defaultProps} onSavePreferences={onSavePreferences} />);
+
+    // The settings panel is a collapsed section, so presence is asserted without forcing it open.
+    expect(screen.getByText('Настройки уведомлений')).toBeInTheDocument();
+    expect(screen.getByText('Сообщения в чатах')).toBeInTheDocument();
+    // A category that reached the tenant from the merged friendship ruleset is presented in Russian.
+    expect(screen.getByText('Заявки в друзья')).toBeInTheDocument();
+    // The tenant gate, not the recipient, decides whether a channel can be chosen.
+    expect(screen.getByText('не включён для организации')).toBeInTheDocument();
+
+    const messagingInApp = screen.getAllByLabelText('В приложении')[0];
+    if (!messagingInApp) throw new Error('MESSAGING in-app toggle was not rendered');
+    fireEvent.click(messagingInApp);
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+
+    expect(onSavePreferences).toHaveBeenCalledTimes(1);
+    const update = onSavePreferences.mock.calls[0]?.[0] as {
+      readonly categories: readonly {
+        readonly category: string;
+        readonly channels: readonly {
+          readonly channel: string;
+          readonly enabled: boolean;
+          readonly quietFrom?: string;
+        }[];
+      }[];
+    };
+    const messaging = update.categories.find((category) => category.category === 'MESSAGING');
+    expect(messaging?.channels.find((channel) => channel.channel === 'IN_APP')).toMatchObject({
+      enabled: false,
+    });
+    expect(messaging?.channels.find((channel) => channel.channel === 'PUSH')).toMatchObject({
+      enabled: true,
+    });
+  });
+
+  it('applies one quiet window to every push channel when it is enabled', () => {
+    const onSavePreferences = vi.fn();
+    render(<NotificationsPage {...defaultProps} onSavePreferences={onSavePreferences} />);
+
+    fireEvent.click(screen.getByLabelText('Тихие часы для push'));
+    fireEvent.change(screen.getByLabelText('С', { selector: 'input' }), {
+      target: { value: '22:30' },
+    });
+    fireEvent.change(screen.getByLabelText('До', { selector: 'input' }), {
+      target: { value: '06:30' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+
+    const update = onSavePreferences.mock.calls[0]?.[0] as {
+      readonly categories: readonly {
+        readonly category: string;
+        readonly channels: readonly {
+          readonly channel: string;
+          readonly quietFrom?: string;
+          readonly quietUntil?: string;
+          readonly timezone: string;
+        }[];
+      }[];
+    };
+    for (const category of update.categories) {
+      const push = category.channels.find((channel) => channel.channel === 'PUSH');
+      expect(push).toMatchObject({
+        quietFrom: '22:30',
+        quietUntil: '06:30',
+        timezone: 'Europe/Moscow',
+      });
+      const inApp = category.channels.find((channel) => channel.channel === 'IN_APP');
+      expect(inApp?.quietFrom).toBeUndefined();
+    }
+  });
+
+  it('keeps the settings section usable when the preference request failed', () => {
+    render(
+      <NotificationsPage
+        {...defaultProps}
+        preferences={null}
+        preferencesError="Настройки недоступны."
+      />,
+    );
+
+    expect(screen.getByText('Настройки недоступны.')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Сохранить настройки' })).not.toBeInTheDocument();
   });
 });

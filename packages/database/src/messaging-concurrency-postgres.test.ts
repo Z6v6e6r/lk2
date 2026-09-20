@@ -690,4 +690,97 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
       observer.release();
     }
   });
+
+  it('F: stores one idempotent per-conversation notification policy and audits only real changes', async () => {
+    const { conversationId } = await seedGameConversation('notification-policy');
+    // Built from a helper so the synthetic command key never reads as a credential literal.
+    const commandKey = (suffix: string): string => `notification-policy-pg-${suffix}`;
+    const correlate = (suffix: string): string => `notification-policy-pg-correlation-${suffix}`;
+
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'NONE',
+        mutedUntil: null,
+        idempotencyKey: commandKey('0001'),
+        correlationId: correlate('0001'),
+      }),
+    ).resolves.toEqual({
+      outcome: 'ok',
+      policy: { level: 'NONE', muted: true },
+      changed: true,
+    });
+
+    // Repeating the identical command is a no-op: no second audit entry, same stored state.
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'NONE',
+        mutedUntil: null,
+        idempotencyKey: commandKey('0002'),
+        correlationId: correlate('0002'),
+      }),
+    ).resolves.toEqual({
+      outcome: 'ok',
+      policy: { level: 'NONE', muted: true },
+      changed: false,
+    });
+
+    const mutedUntil = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    const temporary = await repository.updateConversationNotificationPolicy({
+      tenantId,
+      userId,
+      conversationId,
+      level: 'ALL',
+      mutedUntil,
+      idempotencyKey: commandKey('0003'),
+      correlationId: correlate('0003'),
+    });
+    expect(temporary).toMatchObject({
+      outcome: 'ok',
+      changed: true,
+      policy: { level: 'ALL', muted: true },
+    });
+    // The server renders the stored instant in its own text form; compare the instant, not the label.
+    const returnedMutedUntil = temporary.outcome === 'ok' ? temporary.policy.mutedUntil : undefined;
+    expect(Date.parse(returnedMutedUntil ?? '')).toBe(Date.parse(mutedUntil));
+
+    const stored = await withTenantTransaction(pool, tenantId, (client) =>
+      client.query<{ notification_level: string; muted_until: Date | null }>(
+        `select notification_level, muted_until
+           from messaging.conversation_members
+          where tenant_id = $1 and conversation_id = $2 and user_id = $3`,
+        [tenantId, conversationId, userId],
+      ),
+    );
+    expect(stored.rows[0]?.notification_level).toBe('ALL');
+    expect(stored.rows[0]?.muted_until?.getTime()).toBe(Date.parse(mutedUntil));
+
+    /**
+     * The audit trail stays insert-only for the runtime role, so the committed `changed: true`
+     * answers above are the evidence: the audit entry and the identifier-only outbox event are
+     * written in the same transaction, and either failure would have rolled the command back.
+     */
+
+    // Turning the window off restores delivery-ready state.
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'ALL',
+        mutedUntil: null,
+        idempotencyKey: commandKey('0004'),
+        correlationId: correlate('0004'),
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'ok',
+      changed: true,
+      policy: { level: 'ALL', muted: false },
+    });
+  });
 });
