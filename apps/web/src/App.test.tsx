@@ -33,6 +33,7 @@ import type {
   HomeBase,
   HomeDashboard,
   NotificationInboxPage,
+  NotificationPreferencesView,
   PlayerProfileView,
   PublicGiftCertificateCatalog,
   UserUpcomingBookings,
@@ -230,6 +231,27 @@ const notificationInbox: NotificationInboxPage = {
       body: 'Начало сегодня в 18:00.',
       deepLink: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
       createdAt: '2026-07-16T15:00:00.000Z',
+    },
+  ],
+};
+const notificationPreferences: NotificationPreferencesView = {
+  categories: [
+    {
+      category: 'MESSAGING',
+      channels: [
+        {
+          channel: 'IN_APP',
+          enabled: true,
+          timezone: 'Europe/Moscow',
+          available: true,
+        },
+        {
+          channel: 'PUSH',
+          enabled: true,
+          timezone: 'Europe/Moscow',
+          available: false,
+        },
+      ],
     },
   ],
 };
@@ -503,6 +525,8 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
     }),
     listNotifications: vi.fn().mockResolvedValue(notificationInbox),
     markNotificationsRead: vi.fn().mockResolvedValue(undefined),
+    getNotificationPreferences: vi.fn().mockResolvedValue(notificationPreferences),
+    updateNotificationPreferences: vi.fn().mockResolvedValue(notificationPreferences),
     getWebPushConfiguration: vi.fn().mockResolvedValue({
       enabled: false,
       reason: 'GLOBAL_GATE_DISABLED',
@@ -1797,6 +1821,36 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByText('Лента недоступна')).toBeVisible();
     expect(screen.queryByText('Пока тихо')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Уведомления на устройстве' })).toBeVisible();
+  });
+
+  it('loads and saves notification preferences from the notifications page', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    const updateNotificationPreferences = vi.fn().mockResolvedValue(notificationPreferences);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      updateNotificationPreferences,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Уведомления' })).toBeVisible();
+    expect(gateway.getNotificationPreferences).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByLabelText('Тихие часы для push'));
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+
+    await waitFor(() => expect(updateNotificationPreferences).toHaveBeenCalledTimes(1));
+    const update = updateNotificationPreferences.mock.calls[0]?.[0] as {
+      readonly categories: readonly {
+        readonly channels: readonly {
+          readonly channel: string;
+          readonly quietFrom?: string;
+          readonly quietUntil?: string;
+        }[];
+      }[];
+    };
+    expect(
+      update.categories[0]?.channels.find((channel) => channel.channel === 'PUSH'),
+    ).toMatchObject({ quietFrom: '23:00', quietUntil: '07:00' });
   });
 
   it('fails closed for an unknown section route instead of showing a placeholder', async () => {

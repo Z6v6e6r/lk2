@@ -50,6 +50,8 @@ import type {
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  NotificationPreferencesUpdateRequest,
+  NotificationPreferencesView,
   MessagingRealtimeTicket,
   RealtimeTicket,
   PlayerProfileView,
@@ -127,6 +129,8 @@ export type {
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  NotificationPreferencesUpdateRequest,
+  NotificationPreferencesView,
   RealtimeTicket,
   PlayerProfileView,
   PublicGameCard,
@@ -546,6 +550,10 @@ export interface AuthGateway {
   ) => Promise<ConversationReadCursorResult>;
   readonly listNotifications: () => Promise<NotificationInboxPage>;
   readonly markNotificationsRead: (throughId: string) => Promise<void>;
+  readonly getNotificationPreferences: () => Promise<NotificationPreferencesView>;
+  readonly updateNotificationPreferences: (
+    input: NotificationPreferencesUpdateRequest,
+  ) => Promise<NotificationPreferencesView>;
   readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
   readonly registerWebPushEndpoint: (
     input: WebPushEndpointRegistration,
@@ -2246,6 +2254,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       notificationsCacheRevision += 1;
       notificationsCache = undefined;
       notificationsPromise = undefined;
+    },
+
+    getNotificationPreferences() {
+      return client.getNotificationPreferences();
+    },
+
+    updateNotificationPreferences(input) {
+      return client.updateNotificationPreferences(input);
     },
 
     getWebPushConfiguration() {

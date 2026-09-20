@@ -38,6 +38,8 @@ import type {
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  NotificationPreferencesUpdateRequest,
+  NotificationPreferencesView,
   PlayerProfileView,
   PhoneChallenge,
   ProfileLevelHistory,
@@ -623,6 +625,12 @@ export function App({
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [notificationsInboxUnavailable, setNotificationsInboxUnavailable] = useState(false);
+  const [notificationPreferences, setNotificationPreferences] =
+    useState<NotificationPreferencesView | null>(null);
+  const [notificationPreferencesBusy, setNotificationPreferencesBusy] = useState(false);
+  const [notificationPreferencesError, setNotificationPreferencesError] = useState<string | null>(
+    null,
+  );
   const [friendRequests, setFriendRequests] = useState<readonly ProfileFriendRequestSummary[]>([]);
   const [friendRequestsError, setFriendRequestsError] = useState<string | null>(null);
   const [outgoingFriendRequests, setOutgoingFriendRequests] = useState<
@@ -1284,6 +1292,7 @@ export function App({
         getWebPushBrowserState(serviceWorkerUrl),
         gateway.listProfileFriendRequests(),
         gateway.listProfileFriendRequests(8, 'outgoing'),
+        gateway.getNotificationPreferences(),
       ]).then(
         ([
           pageResult,
@@ -1291,6 +1300,7 @@ export function App({
           browserStateResult,
           friendRequestResult,
           outgoingFriendRequestResult,
+          preferenceResult,
         ]) => {
           if (!active) return;
           const errors: string[] = [];
@@ -1299,6 +1309,13 @@ export function App({
               ? outgoingFriendRequestResult.value.items
               : [],
           );
+          if (preferenceResult.status === 'fulfilled') {
+            setNotificationPreferences(preferenceResult.value);
+            setNotificationPreferencesError(null);
+          } else {
+            setNotificationPreferences(null);
+            setNotificationPreferencesError('Настройки уведомлений временно недоступны.');
+          }
           if (friendRequestResult.status === 'fulfilled') {
             setFriendRequests(friendRequestResult.value.items);
             setFriendRequestsError(null);
@@ -1818,6 +1835,22 @@ export function App({
       );
   }
 
+  function handleSaveNotificationPreferences(update: NotificationPreferencesUpdateRequest): void {
+    if (notificationPreferencesBusy) return;
+    setNotificationPreferencesBusy(true);
+    setNotificationPreferencesError(null);
+    void gateway.updateNotificationPreferences(update).then(
+      (preferences) => {
+        setNotificationPreferences(preferences);
+        setNotificationPreferencesBusy(false);
+      },
+      () => {
+        setNotificationPreferencesError('Не удалось сохранить настройки уведомлений.');
+        setNotificationPreferencesBusy(false);
+      },
+    );
+  }
+
   function navigateToNotificationTarget(href: string): void {
     window.history.pushState({}, '', href);
     refreshLocation();
@@ -2184,6 +2217,9 @@ export function App({
           busy={notificationsBusy}
           error={notificationsError}
           inboxUnavailable={notificationsInboxUnavailable}
+          preferences={notificationPreferences}
+          preferencesBusy={notificationPreferencesBusy}
+          preferencesError={notificationPreferencesError}
           friendRequests={friendRequests}
           friendRequestsError={friendRequestsError}
           outgoingFriendRequests={outgoingFriendRequests}
@@ -2192,6 +2228,7 @@ export function App({
           onDeclineFriendRequest={handleDeclineFriendRequest}
           onEnableWebPush={handleEnableWebPush}
           onDisableWebPush={handleDisableWebPush}
+          onSavePreferences={handleSaveNotificationPreferences}
           onMarkAllRead={handleMarkAllNotificationsRead}
           onRetryInbox={handleRetryNotificationInbox}
           onOpenNotification={handleOpenNotification}
