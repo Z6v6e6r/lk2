@@ -169,6 +169,9 @@ export type ConversationReadCursorResult = components['schemas']['ConversationRe
 export type MessagingRealtimeTicket = components['schemas']['MessagingRealtimeTicket'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
+export type NotificationPreferencesView = components['schemas']['NotificationPreferencesView'];
+export type NotificationPreferencesUpdateRequest =
+  components['schemas']['NotificationPreferencesUpdateRequest'];
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
 export type WebPushEndpointRegistration = components['schemas']['WebPushEndpointRegistration'];
 export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpointCommandResult'];
@@ -2013,6 +2016,23 @@ export class PadlHubApiClient {
         method: 'PUT',
         idempotencyKey,
         body: jsonRequestBody({ throughId }),
+      }),
+    );
+  }
+
+  public getNotificationPreferences(): Promise<NotificationPreferencesView> {
+    return this.request<NotificationPreferencesView>('/notifications/preferences');
+  }
+
+  public updateNotificationPreferences(
+    input: NotificationPreferencesUpdateRequest,
+  ): Promise<NotificationPreferencesView> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<NotificationPreferencesView>('/notifications/preferences', {
+        method: 'PUT',
+        idempotencyKey,
+        body: jsonRequestBody(input),
       }),
     );
   }

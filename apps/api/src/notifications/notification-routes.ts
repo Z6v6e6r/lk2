@@ -1,9 +1,67 @@
-import type { NotificationInboxPosition, NotificationInboxRepository } from '@phub/database';
+import type {
+  NotificationInboxPosition,
+  NotificationInboxRepository,
+  NotificationPreferenceChannelRule,
+  NotificationPreferenceRecord,
+  NotificationPreferenceRepository,
+  NotificationPreferenceUpdate,
+  NotificationRuntimeSettings,
+} from '@phub/database';
+import {
+  NOTIFICATION_PREFERENCE_DEFAULT_TIMEZONE,
+  isSupportedNotificationTimeZone,
+  notificationPreferenceCategoryUpdateSchema,
+} from '@phub/notifications';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** One configurable channel of one category, already merged with the recipient's stored row. */
+interface NotificationPreferenceChannelView {
+  readonly channel: string;
+  readonly enabled: boolean;
+  readonly timezone: string;
+  readonly available: boolean;
+  readonly quietFrom?: string;
+  readonly quietUntil?: string;
+}
+
+interface NotificationPreferenceCategoryView {
+  readonly category: string;
+  readonly channels: readonly NotificationPreferenceChannelView[];
+}
+
+function preferenceView(input: {
+  readonly configurable: readonly NotificationPreferenceChannelRule[];
+  readonly stored: readonly NotificationPreferenceRecord[];
+  readonly runtime: NotificationRuntimeSettings;
+}): { readonly categories: readonly NotificationPreferenceCategoryView[] } {
+  const storedByKey = new Map(
+    input.stored.map((preference) => [`${preference.category}:${preference.channel}`, preference]),
+  );
+  const categories = new Map<string, NotificationPreferenceChannelView[]>();
+  for (const rule of input.configurable) {
+    const preference = storedByKey.get(`${rule.category}:${rule.channel}`);
+    const channels = categories.get(rule.category) ?? [];
+    channels.push({
+      channel: rule.channel,
+      // An absent row is the server default: the recipient allows the channel.
+      enabled: preference?.enabled ?? true,
+      timezone: preference?.timezone ?? NOTIFICATION_PREFERENCE_DEFAULT_TIMEZONE,
+      available:
+        rule.channel === 'IN_APP' ? input.runtime.inAppEnabled : input.runtime.webPushEnabled,
+      ...(preference?.quietFrom && preference.quietUntil
+        ? { quietFrom: preference.quietFrom, quietUntil: preference.quietUntil }
+        : {}),
+    });
+    categories.set(rule.category, channels);
+  }
+  return {
+    categories: [...categories.entries()].map(([category, channels]) => ({ category, channels })),
+  };
+}
 
 function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
   const notificationRequest = request as FastifyRequest & {
@@ -60,10 +118,27 @@ async function inAppEnabled(
   return false;
 }
 
+/**
+ * The notification section is reachable while at least one channel is enabled for the tenant, so a
+ * tenant that runs Web Push without the in-app feed can still manage its preferences.
+ */
+async function notificationRuntime(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  repository: Pick<NotificationInboxRepository, 'getRuntimeSettings'>,
+  tenantId: string,
+): Promise<NotificationRuntimeSettings | undefined> {
+  const settings = await repository.getRuntimeSettings(tenantId);
+  if (settings.inAppEnabled || settings.webPushEnabled) return settings;
+  sendApiError(request, reply, 404, 'NOTIFICATIONS_DISABLED', 'Раздел оповещений не включён.');
+  return undefined;
+}
+
 export function registerNotificationRoutes(
   app: FastifyInstance,
   options: {
     readonly repository?: NotificationInboxRepository;
+    readonly preferenceRepository?: NotificationPreferenceRepository;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
@@ -190,6 +265,151 @@ export function registerNotificationRoutes(
         );
       }
       return result;
+    },
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/notifications/preferences',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const preferenceRepository = options.preferenceRepository;
+      if (!options.repository || !preferenceRepository) return unavailable(request, reply);
+      const runtime = await notificationRuntime(
+        request,
+        reply,
+        options.repository,
+        current.tenantId,
+      );
+      if (!runtime) return;
+
+      const [configurable, stored] = await Promise.all([
+        preferenceRepository.listConfigurableChannels(current.tenantId),
+        preferenceRepository.listPreferences({
+          tenantId: current.tenantId,
+          userId: current.userId,
+        }),
+      ]);
+      return preferenceView({ configurable, stored, runtime });
+    },
+  );
+
+  app.put(
+    '/user/api/v1/:tenantKey/notifications/preferences',
+    { preHandler: [...options.commandHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const preferenceRepository = options.preferenceRepository;
+      if (!options.repository || !preferenceRepository) return unavailable(request, reply);
+      const runtime = await notificationRuntime(
+        request,
+        reply,
+        options.repository,
+        current.tenantId,
+      );
+      if (!runtime) return;
+
+      const body = request.body as Record<string, unknown> | null;
+      if (
+        !body ||
+        Array.isArray(body) ||
+        Object.keys(body).length !== 1 ||
+        !Array.isArray(body.categories) ||
+        body.categories.length === 0 ||
+        body.categories.length > 8
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'NOTIFICATION_PREFERENCE_INVALID',
+          'Передайте список категорий с настройками каналов.',
+        );
+      }
+
+      const configurable = await preferenceRepository.listConfigurableChannels(current.tenantId);
+      const allowed = new Set(configurable.map((rule) => `${rule.category}:${rule.channel}`));
+      const entries: NotificationPreferenceUpdate[] = [];
+      const seen = new Set<string>();
+      for (const candidate of body.categories) {
+        const parsed = notificationPreferenceCategoryUpdateSchema.safeParse(candidate);
+        if (!parsed.success) {
+          return sendApiError(
+            request,
+            reply,
+            400,
+            'NOTIFICATION_PREFERENCE_INVALID',
+            'Некорректная категория или канал оповещений.',
+          );
+        }
+        for (const channel of parsed.data.channels) {
+          const key = `${parsed.data.category}:${channel.channel}`;
+          if (seen.has(key)) {
+            return sendApiError(
+              request,
+              reply,
+              400,
+              'NOTIFICATION_PREFERENCE_INVALID',
+              'Канал указан в категории дважды.',
+            );
+          }
+          seen.add(key);
+          if (!allowed.has(key)) {
+            return sendApiError(
+              request,
+              reply,
+              400,
+              'NOTIFICATION_PREFERENCE_NOT_CONFIGURABLE',
+              'Этот канал оповещений недоступен для организации.',
+            );
+          }
+          const quietFrom = channel.quietFrom ?? null;
+          const quietUntil = channel.quietUntil ?? null;
+          if ((quietFrom === null) !== (quietUntil === null)) {
+            return sendApiError(
+              request,
+              reply,
+              400,
+              'NOTIFICATION_PREFERENCE_INVALID',
+              'Тихие часы требуют и начала, и конца интервала.',
+            );
+          }
+          const timezone = channel.timezone?.trim() || NOTIFICATION_PREFERENCE_DEFAULT_TIMEZONE;
+          if (!isSupportedNotificationTimeZone(timezone)) {
+            return sendApiError(
+              request,
+              reply,
+              400,
+              'NOTIFICATION_PREFERENCE_INVALID',
+              'Неизвестный часовой пояс для тихих часов.',
+            );
+          }
+          entries.push({
+            category: parsed.data.category,
+            channel: channel.channel,
+            enabled: channel.enabled,
+            quietFrom,
+            quietUntil,
+            timezone,
+          });
+        }
+      }
+
+      const stored = await preferenceRepository.replacePreferences({
+        tenantId: current.tenantId,
+        userId: current.userId,
+        entries,
+        correlationId: request.id,
+      });
+      return preferenceView({ configurable, stored, runtime });
     },
   );
 }

@@ -14,6 +14,9 @@ import {
   createNotificationEndpointCipher,
   gameNotificationSourceEventSchema,
   isWebPushEndpointOriginAllowed,
+  isSupportedNotificationTimeZone,
+  notificationPreferenceCategoryUpdateSchema,
+  quietHoursActive,
   createNotificationReceiptToken,
   notificationReceiptSecret,
   storedWebPushEndpoint,
@@ -490,5 +493,93 @@ describe('notification domain contracts', () => {
       // Chat notifications are optional: a player can mute the category.
       expect(definition.mandatory).toBe(false);
     }
+  });
+});
+
+describe('notification preference quiet hours', () => {
+  const moscow = 'Europe/Moscow';
+
+  it('reports whether the recipient local clock is inside the window', () => {
+    // 2026-08-03T20:30:00Z is 23:30 in Moscow.
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T20:30:00.000Z'),
+        quietFrom: '23:00',
+        quietUntil: '07:00',
+        timezone: moscow,
+      }),
+    ).toBe(true);
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T12:00:00.000Z'),
+        quietFrom: '23:00',
+        quietUntil: '07:00',
+        timezone: moscow,
+      }),
+    ).toBe(false);
+  });
+
+  it('handles a window that stays inside one calendar day', () => {
+    // 10:00 and 14:00 Moscow on the same day.
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T07:00:00.000Z'),
+        quietFrom: '09:00',
+        quietUntil: '18:00',
+        timezone: moscow,
+      }),
+    ).toBe(true);
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T19:00:00.000Z'),
+        quietFrom: '09:00',
+        quietUntil: '18:00',
+        timezone: moscow,
+      }),
+    ).toBe(false);
+  });
+
+  it('treats an empty window as no quiet hours and an unreadable row as never quiet', () => {
+    const now = new Date('2026-08-03T20:30:00.000Z');
+    expect(
+      quietHoursActive({ now, quietFrom: '23:00', quietUntil: '23:00', timezone: moscow }),
+    ).toBe(false);
+    expect(
+      quietHoursActive({ now, quietFrom: 'не время', quietUntil: '07:00', timezone: moscow }),
+    ).toBe(false);
+    expect(
+      quietHoursActive({ now, quietFrom: '23:00', quietUntil: '07:00', timezone: 'Not/AZone' }),
+    ).toBe(false);
+  });
+
+  it('accepts only a real IANA time zone and a bounded HH:MM time', () => {
+    const valid = notificationPreferenceCategoryUpdateSchema.safeParse({
+      category: 'MESSAGING',
+      channels: [
+        {
+          channel: 'PUSH',
+          enabled: true,
+          quietFrom: '23:00',
+          quietUntil: '07:00',
+          timezone: moscow,
+        },
+      ],
+    });
+    expect(valid.success).toBe(true);
+    expect(isSupportedNotificationTimeZone(moscow)).toBe(true);
+    expect(isSupportedNotificationTimeZone('Not/AZone')).toBe(false);
+    expect(isSupportedNotificationTimeZone('')).toBe(false);
+    expect(
+      notificationPreferenceCategoryUpdateSchema.safeParse({
+        category: 'messaging',
+        channels: [{ channel: 'EMAIL', enabled: true }],
+      }).success,
+    ).toBe(false);
+    expect(
+      notificationPreferenceCategoryUpdateSchema.safeParse({
+        category: 'MESSAGING',
+        channels: [{ channel: 'PUSH', enabled: true, quietFrom: '25:00' }],
+      }).success,
+    ).toBe(false);
   });
 });

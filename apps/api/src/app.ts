@@ -47,6 +47,7 @@ import type {
   MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
+  NotificationPreferenceRepository,
   ParticipationCommandRepository,
   ProfileFriendshipRepository,
   ProfileReachabilityRepository,
@@ -251,6 +252,7 @@ export interface BuildAppOptions {
     Partial<Pick<GameRepository, 'listRecommendationCardProjections' | 'getCardProjections'>>;
   readonly clientRoutingPlanRepository?: Pick<ClientRoutingPlanRepository, 'get'>;
   readonly notificationRepository?: NotificationInboxRepository;
+  readonly notificationPreferenceRepository?: NotificationPreferenceRepository;
   readonly notificationEndpointRepository?: NotificationEndpointRepository;
   readonly notificationEndpointCipher?: NotificationEndpointCipher;
   /** Signs the per-delivery receipt tokens the service worker reports displays and clicks with. */
@@ -810,6 +812,9 @@ export async function buildApp(options: BuildAppOptions) {
 
   registerNotificationRoutes(app as unknown as FastifyInstance, {
     ...(options.notificationRepository ? { repository: options.notificationRepository } : {}),
+    ...(options.notificationPreferenceRepository
+      ? { preferenceRepository: options.notificationPreferenceRepository }
+      : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });

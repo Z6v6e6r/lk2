@@ -38,6 +38,7 @@ export * from './player-level-repository.js';
 export * from './client-routing-plan-repository.js';
 export * from './cup-player-level-projection-repository.js';
 export * from './notification-repository.js';
+export * from './notification-preference-repository.js';
 export * from './notification-endpoint-repository.js';
 export * from './admin-notification-repository.js';
 export * from './location-repository.js';
