@@ -982,7 +982,21 @@ jobs:
 
   build:
     needs: [validate-request, verify]
-    if: ${{ needs.validate-request.outputs.mode == 'deploy' && needs.verify.result == 'success' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
+    # `verify` and `deploy` carry `always()` because `media-baseline` is skipped for every profile
+    # except MEDIA_BINARY_ONLY, and that skip propagates down the dependency chain, so without a
+    # status function here this job was skipped although its own condition was true (run 35527093145
+    # attempt 1: mode=deploy, CHAT_PUSH_FOUNDATION, verify success) and the foundation deploy reached
+    # neither `build` nor `deploy`. `always()` removes the implicit success() veto, so every former
+    # gate is now written out explicitly, including the validate-request result: that job publishes
+    # its `mode` output before its action-pin step can still fail.
+    if: >-
+      ${{
+        always() &&
+        needs.validate-request.result == 'success' &&
+        needs.validate-request.outputs.mode == 'deploy' &&
+        needs.verify.result == 'success' &&
+        inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY'
+      }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
