@@ -185,6 +185,59 @@ locks. RabbitMQ содержит транзитные события/retry/DLQ �
 применяется optimistic predicate по текущей версии; удаление создаёт tombstone и не переиспользует
 sequence.
 
+### Вложения в сообщении (срез 1: изображения и файлы)
+
+1. Клиент запрашивает upload intent для конкретного разговора: `fileName`, `contentType`,
+   `byteSize` (не более 15 МиБ) и `sha256`. Сервер проверяет текущее членство, лимиты загрузок
+   (10 незавершённых, 20 в pipeline, 100 запросов и 150 МиБ в сутки на пользователя, 100 объектов
+   на tenant), создаёт `messaging.media_assets` в состоянии `UPLOADING` и выдаёт одноразовый
+   signed PUT в приватный quarantine (`If-None-Match: *`, `x-amz-checksum-sha256`).
+2. Клиент кладёт байты напрямую в S3, затем вызывает finalize. Сервер делает HEAD точной версии
+   объекта и требует совпадения content type, размера и sha256 с заявленными; только после этого
+   запись переходит в `SCANNING`.
+3. Worker читает объект точной версии с ограничением по размеру, проверяет sha256 и magic bytes
+   изображения, сканирует ClamAV и либо переносит байты в `chat-media/ready/...` с версией
+   `READY`, либо фиксирует `REJECTED` с кодом отказа. Истёкшие и непривязанные объекты удаляются
+   по точной версии через `messaging.media_gc_jobs`.
+4. Отправка сообщения принимает до четырёх `attachmentIds`. В одной транзакции с сообщением сервер
+   проверяет владельца, разговор, состояние `READY` и отсутствие привязки, пишет
+   `messaging.message_attachments` с позицией 1..4 и обновляет привязку актива. Отложенный
+   constraint trigger `message_attachments_ready_guard` не даёт привязать не-`READY` или чужой
+   объект даже будущему писателю; при нарушении сообщение не создаётся.
+5. `message_type` выводится сервером: `TEXT` без вложений, `IMAGE` когда все вложения —
+   JPEG/PNG/WebP, иначе `FILE`. Текст может быть пустым, если есть вложения.
+6. Чтение отдаётся только через API: `GET .../media/{mediaId}/content` проверяет текущее членство,
+   активного пользователя, `READY`, отсутствие `deleted_at`/`hidden_at` и отсутствие block в любую
+   сторону, после чего отвечает `302` на короткоживущий signed URL точной версии. Изображения
+   отдаются `inline`, файлы всегда `attachment`; object key и signed URL не попадают в DTO,
+   события и логи.
+7. Запрещённые типы (`text/html`, `application/xhtml+xml`, `image/svg+xml`,
+   `application/javascript`, `text/javascript`) отклоняются на входе и запрещены check-констрейнтом.
+   Любой другой `image/*` вне трёх поддерживаемых форматов тоже отклоняется: он не должен
+   превращаться в «файл» вопреки запросу клиента.
+
+### Жалоба на сообщение и скрытие по модерации
+
+1. Пользователь-участник разговора подаёт `POST .../messages/{messageId}/report` с reason code из
+   фиксированного списка и необязательными деталями (до 2000 символов). Своё сообщение пожаловать
+   нельзя; неизвестное сообщение или отсутствие членства отвечает `404`, чтобы не раскрывать
+   существование.
+2. Первая жалоба создаёт `moderation.cases` с `source = USER_REPORT` и
+   `dedupe_key = 'chat-message:<messageId>'`; жалобы других пользователей на то же сообщение
+   присоединяются к этому же case. Повторная жалоба того же пользователя с тем же reason —
+   `duplicate` без второй записи.
+3. ЦУП читает очередь по permission `chat.moderation.read` и решает по `chat.moderation.decide`:
+   `HIDE_MESSAGE` (`REDACT_MESSAGE`), `RESTORE_MESSAGE` или `DISMISS`. Команда требует
+   `Idempotency-Key`; уникальность `(tenant_id, idempotency_key)` в `moderation.actions` делает
+   повтор идемпотентным, а другой payload с тем же ключом — конфликтом.
+4. Скрытие не удаляет данные: `messaging.messages.hidden_at` и `hidden_by_action_id` заполняются
+   парой, строка, вложения и audit остаются. Все читатели — история, оба last-message lateral,
+   readback, fan-out получателей и выдача вложений — фильтруют `hidden_at is null`, поэтому
+   скрытое сообщение не возвращается и не порождает событий. `RESTORE_MESSAGE` снимает пару и
+   возвращает case в `OPEN`.
+5. Автоматического скрытия без решения модератора в срезе 1 нет: жалоба сама по себе не меняет
+   видимость. Reversible auto-quarantine (`cases.quarantine_until`) остаётся отдельным флагом.
+
 ### Входящее сообщение коннектора
 
 1. Webhook ingress проверяет подпись, timestamp/replay window, лимит тела и connector account.
@@ -467,6 +520,10 @@ gates; остальной список — целевая карта.
 - `GET /{tenantKey}/conversations/{conversationId}/messages?afterSequence=`
 - `POST /{tenantKey}/conversations/{conversationId}/messages`
 - `PATCH|DELETE /{tenantKey}/conversations/{conversationId}/messages/{messageId}`
+- `POST /{tenantKey}/conversations/{conversationId}/media/uploads`
+- `POST /{tenantKey}/conversations/{conversationId}/media/{mediaId}/finalize`
+- `GET /{tenantKey}/conversations/{conversationId}/media/{mediaId}`
+- `GET /{tenantKey}/conversations/{conversationId}/media/{mediaId}/content` (302 на signed URL)
 - `PUT /{tenantKey}/conversations/{conversationId}/read-cursor`
 - `PUT /{tenantKey}/conversations/{conversationId}/notification-policy`
 - `GET /{tenantKey}/notifications`
@@ -477,7 +534,8 @@ gates; остальной список — целевая карта.
 - `DELETE /{tenantKey}/notification-endpoints/web/{installationId}`
 - `POST|DELETE /{tenantKey}/notification-endpoints` для будущих iOS/Android установок
 - `POST /{tenantKey}/notification-deliveries/{deliveryId}/receipts`
-- `POST /{tenantKey}/conversations/{conversationId}/messages/{messageId}/reports`
+- `POST /{tenantKey}/conversations/{conversationId}/messages/{messageId}/report` (reason code и
+  детали; своё сообщение и неизвестное сообщение отклоняются)
 - `POST /{tenantKey}/messaging/realtime-ticket`
 - `PUT|DELETE /{tenantKey}/messaging/users/{otherUserId}/block`
 
@@ -576,6 +634,14 @@ Notification projector хранит tenant-scoped booking fence в PostgreSQL. L
 `CONNECTOR_UNAVAILABLE`, `DELIVERY_RETRY_EXHAUSTED`, `NOTIFICATION_SUPPRESSED`.
 `PUSH_ENDPOINT_INVALID`, `MODERATION_CASE_CONFLICT`, `MODERATION_ACTION_FORBIDDEN`,
 `EXTERNAL_SIGNAL_DUPLICATE`.
+
+Вложения: `MESSAGING_MEDIA_DISABLED`, `MESSAGING_MEDIA_PAYLOAD_INVALID`,
+`MESSAGING_MEDIA_NOT_FOUND`, `MESSAGING_MEDIA_OBJECT_MISSING`, `MESSAGING_MEDIA_OBJECT_MISMATCH`,
+`MESSAGING_MEDIA_UPLOAD_EXPIRED`, `MESSAGING_MEDIA_STATE_INVALID`, `MESSAGING_MEDIA_NOT_READY`,
+`MESSAGING_MEDIA_FORBIDDEN`, `MESSAGING_MEDIA_ALREADY_ATTACHED`, `MESSAGING_MEDIA_DUPLICATE`,
+`MESSAGING_MEDIA_LIMIT_EXCEEDED`, `MESSAGING_MEDIA_UNAVAILABLE` и лимиты с `Retry-After`.
+Жалоба и модерация: `MESSAGING_REPORT_PAYLOAD_INVALID`, `MESSAGING_REPORT_SELF_TARGET`,
+`MESSAGING_REPORT_DUPLICATE`, `MESSAGING_MODERATION_UNAVAILABLE`.
 
 Минимальные метрики:
 

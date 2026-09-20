@@ -4,6 +4,7 @@ import {
   MESSAGING_MEDIA_FORBIDDEN_CONTENT_TYPES,
   MESSAGING_MEDIA_IMAGE_CONTENT_TYPES,
   MESSAGING_MEDIA_MAX_BYTES,
+  type MessagingMediaAsset,
   type MessagingMediaFailureCode,
   type MessagingMediaRepository,
   type MessagingRepository,
@@ -14,10 +15,17 @@ import { z } from 'zod';
 import { sendApiError } from '../http-errors.js';
 import type { MessagingMediaObjectStore } from './messaging-media-object-store.js';
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTENT_TYPE_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,100}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,100}$/;
-/** Windows-style separators and traversal never reach storage: the name is display-only. */
-const UNSAFE_FILE_NAME = /[\u0000-\u001f\u007f/\\]/;
+/**
+ * Windows-style separators, control characters and traversal never reach storage: the name is
+ * display-only and must not be able to confuse a download prompt.
+ */
+function unsafeFileName(fileName: string): boolean {
+  return [...fileName].some((character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 0x20 || code === 0x7f || character === '/' || character === '\\';
+  });
+}
 
 const paramsSchema = z
   .object({ tenantKey: z.string().min(1), conversationId: z.string().uuid() })
@@ -34,6 +42,16 @@ const issueSchema = z
 const finalizeSchema = z
   .object({ declaredByteSize: z.number().int().min(1).max(MESSAGING_MEDIA_MAX_BYTES) })
   .strict();
+
+/**
+ * Public media representation. The ready object version is an internal storage detail: a reader may
+ * never address an object directly, so it stays out of every DTO.
+ */
+function mediaView(media: MessagingMediaAsset): Omit<MessagingMediaAsset, 'readyObjectVersion'> {
+  const view: Record<string, unknown> = { ...media };
+  delete view.readyObjectVersion;
+  return view as Omit<MessagingMediaAsset, 'readyObjectVersion'>;
+}
 
 function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {
   const current = request as FastifyRequest & {
@@ -158,7 +176,7 @@ export function registerMessagingMediaRoutes(
         !params.success ||
         !body.success ||
         typeof idempotencyKey !== 'string' ||
-        UNSAFE_FILE_NAME.test(body.data.fileName) ||
+        unsafeFileName(body.data.fileName) ||
         body.data.fileName.trim().length < 1 ||
         !CONTENT_TYPE_PATTERN.test(body.data.contentType) ||
         forbiddenContentType(body.data.contentType)
@@ -277,7 +295,7 @@ export function registerMessagingMediaRoutes(
       });
       if (target.outcome === 'finalized') {
         reply.header('X-Idempotent-Replayed', 'true');
-        return reply.code(200).send(target.media);
+        return reply.code(200).send(mediaView(target.media));
       }
       if (target.outcome === 'upload_expired') {
         return sendApiError(
@@ -350,7 +368,7 @@ export function registerMessagingMediaRoutes(
       });
       if (finalized.outcome === 'finalized') {
         reply.header('X-Idempotent-Replayed', String(finalized.replayed));
-        return reply.code(finalized.replayed ? 200 : 202).send(finalized.media);
+        return reply.code(finalized.replayed ? 200 : 202).send(mediaView(finalized.media));
       }
       if (finalized.outcome === 'object_missing') {
         return sendApiError(
@@ -430,7 +448,7 @@ export function registerMessagingMediaRoutes(
       if (result.outcome !== 'ok' || result.media.conversationId !== params.data.conversationId) {
         return mediaNotFound(request, reply);
       }
-      return result.media;
+      return mediaView(result.media);
     },
   );
 

@@ -631,6 +631,25 @@ privilege, unrelated grantee, runtime grant option, runtime column grant or othe
 privilege on all six tables;
 a runtime DML check satisfied only through PUBLIC is never accepted.
 
+Chat attachments and chat moderation extend this contour with two schema-local default ACLs that are
+provisioned separately and only after review:
+
+```sql
+-- Chat attachments (chat-media/*) and chat message moderation read and write moderation.*.
+alter default privileges for role "<migrator-role>" in schema moderation
+  revoke all on tables from public;
+alter default privileges for role "<migrator-role>" in schema moderation
+  grant select, insert, update on tables to "<runtime-role>";
+grant usage on schema moderation to "<runtime-role>";
+-- The three moderation tables predate any default ACL, so they need explicit least-privilege grants.
+grant select, insert, update on moderation.reports, moderation.cases, moderation.actions
+  to "<runtime-role>";
+```
+
+`moderation` never receives `DELETE`, because a hidden chat message and its moderation trail stay
+readable for review and can only be restored (`RESTORE_MESSAGE`) or re-hidden. The API runtime role
+must not be able to erase a report, a case or an action.
+
 This core check intentionally provisions only `notifications` and `messaging`. A media rollout sets
 `DATABASE_ROLE_BOUNDARY_SCOPE=media` and additionally requires exact migrator ownership of the two
 pre-existing media mapping tables plus a separately reviewed schema-local `integration` default ACL.
@@ -1100,6 +1119,35 @@ still require `rabbit-required`; the inert mode cannot satisfy a live-runtime ve
 a compatible consumer instead requires a separately approved, bounded rollback window and
 continuous queue-depth observation. A database rollback is not required: the expand-only recipient
 fence table is inert for older workers.
+
+### Chat attachments и скрытие по жалобе
+
+Флаги: `CHAT_MEDIA_ENABLED` (владелец — вертикаль чатов; критерий включения — сквозная проверка на
+beta; условие снятия — после полного раската), `CHAT_MEDIA_SCAN_MODE` (`mock` только local/ci,
+вне них обязателен `clamav`), `CHAT_MEDIA_CLAMAV_HOST/PORT/TIMEOUT_MS`,
+`CHAT_MEDIA_POLL_INTERVAL_MS`, `CHAT_MEDIA_BATCH_SIZE`, `CHAT_MEDIA_SCAN_MAX_ATTEMPTS`,
+`CHAT_MEDIA_GC_MAX_ATTEMPTS`, `CHAT_MEDIA_READ_URL_TTL_SECONDS`. Требуются те же S3-ключи и
+включённое versioning, что и для медиа сообществ.
+
+Порядок включения:
+
+1. Применить миграции `0093` и `0094` и убедиться, что обе применились и повторный прогон
+   migrator ничего не меняет.
+2. Provision ACL: `usage` на схему `moderation`, явные `select, insert, update` на
+   `moderation.reports/cases/actions`, schema-local default ACL (см. раздел про role boundary).
+   Без этого жалобы и решения модератора отвечают `503`, а вложения работают.
+3. Выдать модераторам `chat.moderation.read` и `chat.moderation.decide` через
+   `scripts/set-user-access.ts`; оба permission входят в `ADMIN_ONLY_PERMISSIONS`, поэтому
+   client-токен их никогда не несёт.
+4. Включить `CHAT_MEDIA_ENABLED=true` для api и worker и `CHAT_MEDIA_SCAN_MODE=clamav`,
+   перезапустить оба процесса, проверить `/ready` (worker сообщает `messagingMedia`).
+5. Проверить: загрузка изображения ≤15 МиБ доходит до `READY`, отправка с `attachmentIds`
+   возвращает вложение, `GET .../media/{mediaId}/content` отвечает `302` только участнику
+   разговора, жалоба создаёт case, `HIDE_MESSAGE` скрывает сообщение из истории и выдачи вложений,
+   `RESTORE_MESSAGE` возвращает его.
+
+Отключение: `CHAT_MEDIA_ENABLED=false` закрывает и user-, и admin-маршруты вложений кодом
+`MESSAGING_MEDIA_DISABLED`; уже загруженные объекты остаются и удаляются по TTL/GC.
 
 ### Messaging chat push prerequisites and acceptance
 
