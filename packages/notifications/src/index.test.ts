@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  FRIENDSHIP_NOTIFICATION_DEFINITIONS,
+  FRIENDSHIP_NOTIFICATION_EVENT_TYPES,
+  FRIENDSHIP_NOTIFICATION_REQUEST_HASH,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK,
   GAME_NOTIFICATION_EVENT_TYPES,
   GAME_NOTIFICATION_REQUEST_HASH,
   MAX_NOTIFICATION_EVENT_RECIPIENTS,
   MESSAGING_NOTIFICATION_DEFINITIONS,
   MESSAGING_NOTIFICATION_EVENT_TYPES,
   MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY,
+  MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS,
   MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
   bookingNotificationSourceEventSchema,
   canonicalWebPushEndpoint,
@@ -488,6 +495,64 @@ describe('notification domain contracts', () => {
         field: 'recipientUserIds',
       });
       // Chat notifications are optional: a player can mute the category.
+      expect(definition.mandatory).toBe(false);
+    }
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
+  });
+
+  it('addresses an incoming friend request to the player who has to answer it', () => {
+    const recipientUserId = '44444444-4444-4444-8444-444444444444';
+    const requestEvent = notificationSourceEventSchema.parse({
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'profile.friend_request.created.v1',
+      aggregateId: '77777777-7777-4777-8777-777777777777',
+      tenantId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: '2026-09-20T12:00:00.000Z',
+      correlationId: 'friendship-notification-test',
+      payload: {
+        requestId: '77777777-7777-4777-8777-777777777777',
+        requesterUserId: '88888888-8888-4888-8888-888888888888',
+        targetUserId: recipientUserId,
+        recipientUserIds: [recipientUserId],
+        createdAt: '2026-09-20T12:00:00.000Z',
+      },
+    });
+
+    expect(FRIENDSHIP_NOTIFICATION_EVENT_TYPES).toContain(requestEvent.type);
+    expect(GAME_NOTIFICATION_EVENT_TYPES).not.toContain(requestEvent.type);
+    expect(MESSAGING_NOTIFICATION_EVENT_TYPES).not.toContain(requestEvent.type);
+
+    const definition = FRIENDSHIP_NOTIFICATION_DEFINITIONS[0];
+    expect(resolveNotificationRecipients(requestEvent, definition.audienceSelector)).toEqual([
+      recipientUserId,
+    ]);
+    const rendered = renderNotificationTemplate({
+      titleTemplate: definition.title,
+      bodyTemplate: definition.body,
+      deepLinkTemplate: FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK,
+      payload: requestEvent.payload,
+    });
+    expect(rendered).toEqual({
+      title: 'Заявка в друзья',
+      body: 'Откройте ПадлХАБ, чтобы ответить.',
+      deepLink: '/notifications',
+    });
+    // The rendered notification never names the requester or a profile detail.
+    expect(JSON.stringify(rendered)).not.toContain('88888888-8888-4888-8888-888888888888');
+    expect(FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY).toBe('FRIENDSHIP');
+    expect(FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
+    expect(FRIENDSHIP_NOTIFICATION_REQUEST_HASH).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('keeps one ruleset definition per friendship source event', () => {
+    expect(
+      FRIENDSHIP_NOTIFICATION_DEFINITIONS.map((definition) => definition.sourceEventType),
+    ).toEqual([...FRIENDSHIP_NOTIFICATION_EVENT_TYPES]);
+    for (const definition of FRIENDSHIP_NOTIFICATION_DEFINITIONS) {
+      expect(definition.audienceSelector).toEqual({
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+      });
       expect(definition.mandatory).toBe(false);
     }
   });

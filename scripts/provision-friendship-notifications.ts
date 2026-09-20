@@ -1,32 +1,33 @@
+/**
+ * Provision the incoming-friend-request notification ruleset for one tenant: one template and one
+ * active rule per friendship source event. The request event names the addressed account in
+ * `recipientUserIds`, so the rule resolves its recipient from the event and the rendered text quotes
+ * neither the requester nor any profile detail.
+ *
+ * Dry-run is the default. Applying requires `--confirm=APPLY_FRIENDSHIP_NOTIFICATION_RULESET`, an
+ * operator with the `admin` role plus `notifications.manage`, and an idempotency key.
+ */
 import { createDatabasePool, queryOne, withTenantTransaction } from '@phub/database';
 import {
-  BOOKING_NOTIFICATION_AUDIENCE_SELECTOR,
-  BOOKING_NOTIFICATION_DEFINITIONS,
-  BOOKING_NOTIFICATION_LOCALE,
-  BOOKING_NOTIFICATION_REQUEST_HASH,
-  BOOKING_NOTIFICATION_RULE_ACTIVE,
-  BOOKING_NOTIFICATION_RULE_CHANNEL_OVERRIDE,
-  BOOKING_NOTIFICATION_RULE_KEY_SUFFIX,
-  BOOKING_NOTIFICATION_RULESET_VERSION,
-  BOOKING_NOTIFICATION_TEMPLATE_CATEGORY,
-  BOOKING_NOTIFICATION_TEMPLATE_CHANNELS,
-  BOOKING_NOTIFICATION_TEMPLATE_DEEP_LINK,
-  BOOKING_NOTIFICATION_TEMPLATE_ACTIVE,
-  BOOKING_NOTIFICATION_TEMPLATE_VERSION,
+  FRIENDSHIP_NOTIFICATION_DEFINITIONS,
+  FRIENDSHIP_NOTIFICATION_LOCALE,
+  FRIENDSHIP_NOTIFICATION_REQUEST_HASH,
+  FRIENDSHIP_NOTIFICATION_RULE_ACTIVE,
+  FRIENDSHIP_NOTIFICATION_RULE_CHANNEL_OVERRIDE,
+  FRIENDSHIP_NOTIFICATION_RULE_KEY_SUFFIX,
+  FRIENDSHIP_NOTIFICATION_RULESET_VERSION,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_ACTIVE,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_VERSION,
 } from '@phub/notifications';
 import type { PoolClient, QueryResultRow } from 'pg';
 
-const CONFIRMATION_TOKEN = 'APPLY_BOOKING_NOTIFICATION_RULESET';
-const RULESET_VERSION = BOOKING_NOTIFICATION_RULESET_VERSION;
-const TEMPLATE_VERSION = BOOKING_NOTIFICATION_TEMPLATE_VERSION;
-const LOCALE = BOOKING_NOTIFICATION_LOCALE;
-const TEMPLATE_DEEP_LINK = BOOKING_NOTIFICATION_TEMPLATE_DEEP_LINK;
+const CONFIRMATION_TOKEN = 'APPLY_FRIENDSHIP_NOTIFICATION_RULESET';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,128}$/;
-
-const definitions = BOOKING_NOTIFICATION_DEFINITIONS;
-const requestHash = BOOKING_NOTIFICATION_REQUEST_HASH;
 
 interface TenantRow extends QueryResultRow {
   readonly id: string;
@@ -34,11 +35,9 @@ interface TenantRow extends QueryResultRow {
 
 interface RuntimeRow extends QueryResultRow {
   readonly in_app_enabled: boolean;
-  readonly web_push_enabled: boolean;
 }
 
 interface ProvisionCommandRow extends QueryResultRow {
-  readonly ruleset_version: string;
   readonly request_hash: string;
   readonly result: unknown;
 }
@@ -64,13 +63,16 @@ function argument(name: string): string | undefined {
     ?.slice(prefix.length);
 }
 
-function templateMatches(row: TemplateRow, definition: (typeof definitions)[number]): boolean {
+function templateMatches(
+  row: TemplateRow,
+  definition: (typeof FRIENDSHIP_NOTIFICATION_DEFINITIONS)[number],
+): boolean {
   return (
-    row.category === BOOKING_NOTIFICATION_TEMPLATE_CATEGORY &&
-    JSON.stringify(row.channels) === JSON.stringify(BOOKING_NOTIFICATION_TEMPLATE_CHANNELS) &&
+    row.category === FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY &&
+    JSON.stringify(row.channels) === JSON.stringify(FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS) &&
     row.title_template === definition.title &&
     row.body_template === definition.body &&
-    row.deep_link_template === TEMPLATE_DEEP_LINK
+    row.deep_link_template === FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK
   );
 }
 
@@ -124,14 +126,14 @@ try {
     await assertNotificationAdminAccess(client, tenantId, actorId);
     const runtime = await queryOne<RuntimeRow>(
       client,
-      `select in_app_enabled, web_push_enabled
+      `select in_app_enabled
          from notifications.tenant_runtime_settings
         where tenant_id = $1`,
       [tenantId],
     );
     const previous = await queryOne<ProvisionCommandRow>(
       client,
-      `select ruleset_version, request_hash, result
+      `select request_hash, result
          from notifications.ruleset_provision_commands
         where tenant_id = $1 and idempotency_key = $2`,
       [tenantId, idempotencyKey],
@@ -139,7 +141,7 @@ try {
     return { runtime, previous };
   });
 
-  if (current.previous && current.previous.request_hash !== requestHash) {
+  if (current.previous && current.previous.request_hash !== FRIENDSHIP_NOTIFICATION_REQUEST_HASH) {
     throw new Error('IDEMPOTENCY_KEY_REUSED');
   }
 
@@ -148,16 +150,16 @@ try {
     tenantKey,
     tenantId,
     actorId,
-    rulesetVersion: RULESET_VERSION,
-    locale: LOCALE,
+    rulesetVersion: FRIENDSHIP_NOTIFICATION_RULESET_VERSION,
+    locale: FRIENDSHIP_NOTIFICATION_LOCALE,
     idempotencyKey,
     replay: Boolean(current.previous),
     inAppRuntimeEnabled: current.runtime?.in_app_enabled ?? false,
-    webPushRuntimeEnabled: current.runtime?.web_push_enabled ?? false,
     runtimeChangedByThisCommand: false,
-    definitions: definitions.map((definition) => ({
+    definitions: FRIENDSHIP_NOTIFICATION_DEFINITIONS.map((definition) => ({
       key: definition.key,
       sourceEventType: definition.sourceEventType,
+      audienceSelector: definition.audienceSelector,
       mandatory: definition.mandatory,
     })),
   };
@@ -172,26 +174,28 @@ try {
         `notification-runtime:${tenantId}`,
       ]);
       await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-        `notification-ruleset:${tenantId}:${RULESET_VERSION}`,
+        `notification-ruleset:${tenantId}:${FRIENDSHIP_NOTIFICATION_RULESET_VERSION}`,
       ]);
       await assertNotificationAdminAccess(client, tenantId, actorId);
 
       const previous = await queryOne<ProvisionCommandRow>(
         client,
-        `select ruleset_version, request_hash, result
+        `select request_hash, result
            from notifications.ruleset_provision_commands
           where tenant_id = $1 and idempotency_key = $2
           for update`,
         [tenantId, idempotencyKey],
       );
       if (previous) {
-        if (previous.request_hash !== requestHash) throw new Error('IDEMPOTENCY_KEY_REUSED');
+        if (previous.request_hash !== FRIENDSHIP_NOTIFICATION_REQUEST_HASH) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
         return { replay: true, result: previous.result };
       }
 
       const templateIds: string[] = [];
       const ruleIds: string[] = [];
-      for (const definition of definitions) {
+      for (const definition of FRIENDSHIP_NOTIFICATION_DEFINITIONS) {
         await client.query(
           `insert into notifications.templates (
              tenant_id, template_key, version, locale, category, channels,
@@ -201,13 +205,13 @@ try {
           [
             tenantId,
             definition.key,
-            TEMPLATE_VERSION,
-            LOCALE,
-            BOOKING_NOTIFICATION_TEMPLATE_CATEGORY,
-            [...BOOKING_NOTIFICATION_TEMPLATE_CHANNELS],
+            FRIENDSHIP_NOTIFICATION_TEMPLATE_VERSION,
+            FRIENDSHIP_NOTIFICATION_LOCALE,
+            FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY,
+            [...FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS],
             definition.title,
             definition.body,
-            TEMPLATE_DEEP_LINK,
+            FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK,
             // A new version always lands inactive: the schema keeps at most one active
             // template per (template_key, locale), so the swap below retires the previous
             // version before this one is activated.
@@ -221,23 +225,28 @@ try {
              from notifications.templates
             where tenant_id = $1 and template_key = $2 and version = $3 and locale = $4
             for update`,
-          [tenantId, definition.key, TEMPLATE_VERSION, LOCALE],
+          [
+            tenantId,
+            definition.key,
+            FRIENDSHIP_NOTIFICATION_TEMPLATE_VERSION,
+            FRIENDSHIP_NOTIFICATION_LOCALE,
+          ],
         );
-        if (!template) throw new Error('BOOKING_NOTIFICATION_TEMPLATE_WRITE_LOST');
+        if (!template) throw new Error('FRIENDSHIP_NOTIFICATION_TEMPLATE_WRITE_LOST');
         if (!templateMatches(template, definition)) {
-          throw new Error(`BOOKING_NOTIFICATION_TEMPLATE_VERSION_CONFLICT:${definition.key}`);
+          throw new Error(`FRIENDSHIP_NOTIFICATION_TEMPLATE_VERSION_CONFLICT:${definition.key}`);
         }
         await client.query(
           `update notifications.templates
               set active = false
             where tenant_id = $1 and template_key = $2 and locale = $3
               and id <> $4 and active = true`,
-          [tenantId, definition.key, LOCALE, template.id],
+          [tenantId, definition.key, FRIENDSHIP_NOTIFICATION_LOCALE, template.id],
         );
         await client.query(
           `update notifications.templates set active = $3
             where tenant_id = $1 and id = $2`,
-          [tenantId, template.id, BOOKING_NOTIFICATION_TEMPLATE_ACTIVE],
+          [tenantId, template.id, FRIENDSHIP_NOTIFICATION_TEMPLATE_ACTIVE],
         );
         templateIds.push(template.id);
 
@@ -258,24 +267,24 @@ try {
           returning id`,
           [
             tenantId,
-            `${definition.key}.${BOOKING_NOTIFICATION_RULE_KEY_SUFFIX}`,
+            `${definition.key}.${FRIENDSHIP_NOTIFICATION_RULE_KEY_SUFFIX}`,
             definition.sourceEventType,
             template.id,
-            JSON.stringify(BOOKING_NOTIFICATION_AUDIENCE_SELECTOR),
-            [...BOOKING_NOTIFICATION_RULE_CHANNEL_OVERRIDE],
+            JSON.stringify(definition.audienceSelector),
+            [...FRIENDSHIP_NOTIFICATION_RULE_CHANNEL_OVERRIDE],
             definition.mandatory,
-            BOOKING_NOTIFICATION_RULE_ACTIVE,
+            FRIENDSHIP_NOTIFICATION_RULE_ACTIVE,
             actorId,
           ],
         );
-        if (!rule) throw new Error('BOOKING_NOTIFICATION_RULE_WRITE_LOST');
+        if (!rule) throw new Error('FRIENDSHIP_NOTIFICATION_RULE_WRITE_LOST');
         ruleIds.push(rule.id);
       }
 
       const appliedResult = {
-        rulesetVersion: RULESET_VERSION,
-        templateVersion: TEMPLATE_VERSION,
-        locale: LOCALE,
+        rulesetVersion: FRIENDSHIP_NOTIFICATION_RULESET_VERSION,
+        templateVersion: FRIENDSHIP_NOTIFICATION_TEMPLATE_VERSION,
+        locale: FRIENDSHIP_NOTIFICATION_LOCALE,
         templateIds,
         ruleIds,
         runtimeChanged: false,
@@ -287,8 +296,8 @@ try {
         [
           tenantId,
           idempotencyKey,
-          RULESET_VERSION,
-          requestHash,
+          FRIENDSHIP_NOTIFICATION_RULESET_VERSION,
+          FRIENDSHIP_NOTIFICATION_REQUEST_HASH,
           actorId,
           JSON.stringify(appliedResult),
         ],
@@ -297,12 +306,12 @@ try {
         `insert into audit.audit_log (
            tenant_id, actor_id, action, resource_type, resource_id,
            result, correlation_id, new_value
-         ) values ($1, $2, 'BOOKING_NOTIFICATION_RULESET_PROVISIONED', 'TENANT', $1,
+         ) values ($1, $2, 'FRIENDSHIP_NOTIFICATION_RULESET_PROVISIONED', 'TENANT', $1,
                    'SUCCESS', $3, $4::jsonb)`,
         [
           tenantId,
           actorId,
-          `booking-notification-ruleset:${idempotencyKey}`,
+          `friendship-notification-ruleset:${idempotencyKey}`,
           JSON.stringify(appliedResult),
         ],
       );

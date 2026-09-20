@@ -15,6 +15,10 @@ describe('notification presentation mapping', () => {
       categoryLabel: 'Системное',
       markerKind: 'brand',
     });
+    expect(notificationCategory('FRIENDSHIP')).toMatchObject({
+      filter: 'FRIENDSHIP',
+      categoryLabel: 'Друзья',
+    });
     expect(notificationCategory('FUTURE_CATEGORY')).toMatchObject({
       filter: null,
       categoryLabel: 'Событие',
@@ -42,6 +46,21 @@ describe('notification presentation mapping', () => {
     expect(filters).toEqual([
       { value: 'ALL', label: 'Все' },
       { value: 'GAME', label: 'Игры' },
+    ]);
+
+    expect(
+      notificationFilters([
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          category: 'FRIENDSHIP',
+          title: 'Заявка в друзья',
+          body: 'Откройте ПадлХАБ, чтобы ответить.',
+          createdAt: '2026-09-20T10:00:00+03:00',
+        },
+      ]),
+    ).toEqual([
+      { value: 'ALL', label: 'Все' },
+      { value: 'FRIENDSHIP', label: 'Друзья' },
     ]);
   });
 

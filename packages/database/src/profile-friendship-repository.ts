@@ -1192,6 +1192,9 @@ async function announceFriendRequestCreated(
         requestId,
         requesterUserId: input.actorUserId,
         targetUserId: input.targetUserId,
+        // The notification ruleset addresses the account that has to answer, so the recipient is
+        // resolved from the same `recipientUserIds` field every other trigger event uses.
+        recipientUserIds: [input.targetUserId],
         createdAt: result.createdAt,
       }),
     ],
