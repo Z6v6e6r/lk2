@@ -1,7 +1,7 @@
 import type { NotificationInboxPage } from '../auth-gateway.js';
 
 export type NotificationItem = NotificationInboxPage['items'][number];
-export type NotificationFilter = 'ALL' | 'GAME' | 'MESSAGING' | 'SYSTEM';
+export type NotificationFilter = 'ALL' | 'GAME' | 'MESSAGING' | 'FRIENDSHIP' | 'SYSTEM';
 
 export interface NotificationCategoryPresentation {
   readonly filter: Exclude<NotificationFilter, 'ALL'> | null;
@@ -39,6 +39,13 @@ const CATEGORY_PRESENTATION: Readonly<Record<string, NotificationCategoryPresent
     filterLabel: 'Чаты',
     categoryLabel: 'Чат',
     marker: 'Ч',
+    tone: 'accent',
+  },
+  FRIENDSHIP: {
+    filter: 'FRIENDSHIP',
+    filterLabel: 'Друзья',
+    categoryLabel: 'Друзья',
+    marker: 'Д',
     tone: 'accent',
   },
   ADMIN_MESSAGE: {

@@ -31,6 +31,14 @@ describe('FRIENDSHIP notification provisioning contract', () => {
     ).toHaveLength(2);
     expect(source).toContain('`notification-runtime:${tenantId}`');
     expect(source).toContain('runtimeChangedByThisCommand: false');
+    // The schema keeps at most one active template per (template_key, locale), so a new
+    // version must land inactive and be activated only after the previous one is retired.
+    const insert = source.slice(
+      source.indexOf('insert into notifications.templates'),
+      source.indexOf('const template = await queryOne'),
+    );
+    expect(insert).toContain('false,');
+    expect(insert).not.toContain('FRIENDSHIP_NOTIFICATION_TEMPLATE_ACTIVE');
     expect(source).not.toContain('insert into notifications.tenant_runtime_settings');
     expect(source).not.toContain('update notifications.tenant_runtime_settings');
     // The rendered text never quotes the requester or a profile detail.
