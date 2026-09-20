@@ -495,15 +495,15 @@ select state, count(*)
 
 The log line `legacy viewer association proof completed` carries one outcome per phone link:
 
-| Outcome           | Meaning                                                                           |
-| ----------------- | --------------------------------------------------------------------------------- |
-| `absent`          | no usable phone in the request; nothing was read                                  |
-| `tenant_mismatch` | the caller's tenant is not the configured legacy tenant; nothing was read         |
-| `no_pending`      | no saved request is waiting in the tenant; nothing was read                       |
-| `no_match`        | the mirror has no Game proving that phone, or stores the number unusably          |
-| `not_deliverable` | player keys were proven but no waiting saved request could be settled             |
-| `delivered`       | at least one saved request became a real request for that account                 |
-| `unavailable`     | the legacy read or the delivery failed; nothing changed and the next link retries |
+| Outcome           | Meaning                                                                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `absent`          | no usable phone in the request; nothing was read                                                                                               |
+| `tenant_mismatch` | the caller's tenant is not the configured legacy tenant; nothing was read                                                                      |
+| `no_pending`      | no saved request is waiting in the tenant; nothing was read                                                                                    |
+| `no_match`        | the mirror has no Game proving that phone, or stores the number unusably                                                                       |
+| `not_deliverable` | player keys were proven but no waiting saved request could be settled                                                                          |
+| `delivered`       | at least one saved request settled; a real request exists unless the settled reason is `SELF_TARGET`, `ALREADY_FRIEND` or `TARGET_UNAVAILABLE` |
+| `unavailable`     | the legacy read or the delivery failed; nothing changed and the next link retries                                                              |
 
 The viewer-phone lookup matches the mirror's own phone columns in memory and accepts the same stored
 shapes as the viewer-scoped legacy community reader (`79990000001`, `+7 (999) 000-00-01`,

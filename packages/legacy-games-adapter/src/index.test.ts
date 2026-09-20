@@ -8,6 +8,23 @@ import {
   testing,
 } from './index.js';
 
+function phoneGameDocument(organizer: Record<string, unknown>) {
+  return {
+    id: 'legacy-game-phone',
+    status: 'PAID',
+    organizer: { id: 'viewer-profile', name: 'Анна', ...organizer },
+    participants: [{ id: 'viewer-profile', name: 'Анна', status: 'PAID' }],
+    settings: { isPrivate: false, ratingGame: false },
+    metadata: { gameFormat: 'doubles' },
+    booking: {
+      studioId: 'station',
+      studioName: 'Терехово',
+      timeFromIso: '2026-07-20T09:00:00+03:00',
+      timeToIso: '2026-07-20T10:00:00+03:00',
+    },
+  };
+}
+
 describe('legacy games adapter', () => {
   it('retains organizer and participant photos in the bounded Mongo projection', () => {
     expect(testing.legacyGameProjection).toMatchObject({
@@ -28,21 +45,6 @@ describe('legacy games adapter', () => {
   });
 
   it('proves the viewer key from every stored phone shape and ignores another number', () => {
-    const document = (organizer: Record<string, unknown>) => ({
-      id: 'legacy-game-phone',
-      status: 'PAID',
-      organizer: { id: 'viewer-profile', name: 'Анна', ...organizer },
-      participants: [{ id: 'viewer-profile', name: 'Анна', status: 'PAID' }],
-      settings: { isPrivate: false, ratingGame: false },
-      metadata: { gameFormat: 'doubles' },
-      booking: {
-        studioId: 'station',
-        studioName: 'Терехово',
-        timeFromIso: '2026-07-20T09:00:00+03:00',
-        timeToIso: '2026-07-20T10:00:00+03:00',
-      },
-    });
-
     for (const stored of [
       { phone: '79990000001' },
       { phone: '+7 (999) 000-00-01' },
@@ -52,15 +54,36 @@ describe('legacy games adapter', () => {
       { phoneNorm: '', phone: '+79990000001' },
     ]) {
       expect(
-        testing.mapLegacyGame(document(stored), '+79990000001')?.viewerParticipantExternalId,
+        testing.mapLegacyGame(phoneGameDocument(stored), '+79990000001')
+          ?.viewerParticipantExternalId,
         JSON.stringify(stored),
       ).toBe('viewer-profile');
     }
 
     expect(
-      testing.mapLegacyGame(document({ phone: '+79990000002' }), '+79990000001')
+      testing.mapLegacyGame(phoneGameDocument({ phone: '+79990000002' }), '+79990000001')
         ?.viewerParticipantExternalId,
     ).toBeNull();
+  });
+
+  // The Mongo candidate filter selects these values; every one of them must resolve back to the same
+  // viewer key, otherwise the filter fetches a row the matcher then drops.
+  it('keeps the viewer-phone candidate filter aligned with the matcher', () => {
+    const forms = testing.phoneCandidateForms(testing.normalizedPhoneKey('+7 (999) 000-00-01')!);
+    expect(forms).toEqual([
+      '79990000001',
+      '+79990000001',
+      '89990000001',
+      '9990000001',
+      79990000001,
+    ]);
+    for (const stored of forms) {
+      expect(
+        testing.mapLegacyGame(phoneGameDocument({ phone: stored }), '+79990000001')
+          ?.viewerParticipantExternalId,
+        String(stored),
+      ).toBe('viewer-profile');
+    }
   });
 
   it('builds a bounded targeted photo lookup and pseudonymizes its result', () => {

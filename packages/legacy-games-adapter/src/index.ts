@@ -167,7 +167,7 @@ function stringValue(value: unknown): string | undefined {
 
 /**
  * Canonical comparison form for a legacy phone. Mirrors the viewer-scoped legacy community reader so
- * both legacy contours accept the same stored shapes: `79990000001`, `+7 (999) 000-00-01`,
+ * both legacy contours accept the same stored values: `79990000001`, `+7 (999) 000-00-01`,
  * `89990000001` and a bare 10-digit national number all resolve to `79990000001`.
  */
 function normalizedPhoneKey(value: unknown): string | undefined {
@@ -178,7 +178,13 @@ function normalizedPhoneKey(value: unknown): string | undefined {
   return digits.length >= 11 ? digits : undefined;
 }
 
-/** Every stored shape `normalizedPhoneKey` resolves for the same viewer must also be filterable. */
+/**
+ * The candidate values the Mongo filter can select for one viewer phone. The mirror is documented to
+ * hold bare digits (`7XXXXXXXXXX`); these cover the canonical, plus-prefixed, `8`-prefixed, bare
+ * national and numeric BSON values, and each of them is resolved back by `normalizedPhoneKey`. A
+ * separator-formatted value is not selectable by an exact-match filter, so the beta runbook keeps the
+ * stored-shape check that would extend this list instead of silently disabling the proof.
+ */
 function phoneCandidateForms(phone: string): unknown[] {
   const national = phone.slice(1);
   return [...new Set([phone, `+${phone}`, `8${national}`, national, Number(phone)])];
@@ -1686,4 +1692,6 @@ export const testing = {
   normalizeMongoParticipantPhoto,
   participantPhotoPipeline,
   matchesVivaExerciseOccurrence,
+  normalizedPhoneKey,
+  phoneCandidateForms,
 };
