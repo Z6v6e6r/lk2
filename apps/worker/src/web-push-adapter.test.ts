@@ -34,7 +34,9 @@ const request = {
 
 describe('Web Push delivery adapter', () => {
   it('adds a per-delivery receipt token so the client can report the funnel', async () => {
-    const sendImplementation = vi.fn().mockResolvedValue({ statusCode: 201, headers: {}, body: '' });
+    const sendImplementation = vi
+      .fn()
+      .mockResolvedValue({ statusCode: 201, headers: {}, body: '' });
     const adapter = new WebPushDeliveryAdapter({
       subject: 'mailto:ops@padlhub.test',
       publicKey: 'public-key',
