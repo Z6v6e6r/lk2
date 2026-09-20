@@ -619,6 +619,22 @@ export function isWebPushEndpointOriginAllowed(
   return origin !== undefined && allowedOrigins.includes(origin);
 }
 
+/**
+ * Which push service backs a subscription. The origin already names the browser family: Chrome and every
+ * Chromium browser use FCM, while Safari and every browser on iOS use Apple. Deriving the value from the
+ * stored endpoint keeps the platform visible to operators without retaining anything new about a device
+ * and without a schema change.
+ */
+export type WebPushEndpointPlatform = 'CHROME' | 'SAFARI' | 'OTHER';
+
+export function webPushEndpointPlatform(endpoint: string): WebPushEndpointPlatform | undefined {
+  const origin = webPushEndpointOrigin(endpoint);
+  if (origin === undefined) return undefined;
+  if (origin === 'https://fcm.googleapis.com') return 'CHROME';
+  if (origin === 'https://web.push.apple.com') return 'SAFARI';
+  return 'OTHER';
+}
+
 export const webPushSubscriptionSchema = z
   .object({
     endpoint: z

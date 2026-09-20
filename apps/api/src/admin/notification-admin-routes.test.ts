@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { loadConfig } from '@phub/config';
 import type { AdminNotificationRepository } from '@phub/database';
+import type { NotificationEndpointCipher } from '@phub/notifications';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
@@ -83,9 +84,62 @@ function repository() {
         phoneMasked: '•••• 3190',
         endpointCount: 2,
         lastConfirmedAt: '2026-09-17T12:00:00.000Z',
+        // One Chrome and one Safari endpoint: the route must turn these into the platform list and
+        // never return the encrypted addresses themselves.
+        endpoints: [
+          { ciphertext: Buffer.from('chrome-endpoint'), encryptionKeyId: 'v1' },
+          { ciphertext: Buffer.from('safari-endpoint'), encryptionKeyId: 'v1' },
+        ],
       },
     ],
     nextCursor: 'd938caf6-4eca-49d3-8f78-c7ab1b967a41',
+  });
+  const getDeliveryStats = vi.fn().mockResolvedValue({
+    since: '2026-09-13T00:00:00.000Z',
+    channels: [
+      {
+        channel: 'PUSH',
+        queued: 7,
+        accepted: 6,
+        failed: 0,
+        dead: 1,
+        suppressed: 0,
+        pending: 0,
+        medianAcceptSeconds: 3,
+      },
+    ],
+    campaigns: [
+      {
+        campaignId: '50b93bf8-490c-4b76-a5b0-d76c3a4b685a',
+        createdAt: '2026-09-19T09:00:00.000Z',
+        requestedChannels: ['IN_APP', 'WEB_PUSH'],
+        matchedCount: 1,
+        pushQueuedCount: 1,
+        suppressedCount: 0,
+        inAppCreatedCount: 1,
+        pushAccepted: 1,
+        pushFailed: 0,
+        pushDead: 0,
+      },
+    ],
+    failures: [
+      {
+        channel: 'PUSH',
+        errorCode: 'WEB_PUSH_SUBSCRIPTION_GONE',
+        count: 1,
+        lastOccurredAt: '2026-09-19T09:00:05.000Z',
+      },
+    ],
+    endpoints: {
+      active: 3,
+      invalid: 1,
+      revoked: 4,
+      suspendedPolicy: 0,
+      activeEndpointSample: [
+        { ciphertext: Buffer.from('chrome-endpoint'), encryptionKeyId: 'v1' },
+        { ciphertext: Buffer.from('safari-endpoint'), encryptionKeyId: 'v1' },
+      ],
+    },
   });
   const createCampaign = vi.fn().mockResolvedValue({
     outcome: 'accepted',
@@ -102,14 +156,32 @@ function repository() {
       getCapabilities,
       resolveRecipients,
       listWebPushSubscribers,
+      getDeliveryStats,
       createCampaign,
     } satisfies AdminNotificationRepository,
     getCapabilities,
     resolveRecipients,
     listWebPushSubscribers,
+    getDeliveryStats,
     createCampaign,
   };
 }
+
+// The route only ever sees ciphertext; this keyring maps the two fixtures to the two push services a
+// browser can use, so the derived platform can be asserted without storing a plaintext endpoint.
+const endpointCipher: NotificationEndpointCipher = {
+  activeKeyId: 'v1',
+  encrypt: (plaintext) => ({
+    ciphertext: Buffer.from(plaintext),
+    keyId: 'v1',
+  }),
+  decrypt: (ciphertext) => {
+    const value = ciphertext.toString('utf8');
+    if (value === 'chrome-endpoint') return 'https://fcm.googleapis.com/fcm/send/opaque';
+    if (value === 'safari-endpoint') return 'https://web.push.apple.com/opaque';
+    throw new Error('UNKNOWN_ENDPOINT_FIXTURE');
+  },
+};
 
 type CreateCampaignInput = Parameters<AdminNotificationRepository['createCampaign']>[0];
 
@@ -574,6 +646,96 @@ describe('admin notification routes', () => {
       });
       expect(invalid.statusCode).toBe(400);
       expect(invalid.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+    }
+  });
+
+  it('reports the push service behind every subscriber endpoint and never the address itself', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: repository().value,
+      notificationEndpointCipher: endpointCipher,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/notifications/web-push-subscribers?limit=1',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'x-app-platform': 'cup-admin',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{
+      items: readonly { platforms?: readonly string[]; endpoints?: unknown }[];
+    }>();
+    expect(body.items[0]?.platforms).toEqual(['CHROME', 'SAFARI']);
+    // The encrypted endpoint stays server-side: only the derived browser family is published.
+    expect(body.items[0]?.endpoints).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('ciphertext');
+  });
+
+  it('summarises delivery outcomes, failures and endpoint health for the window', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: repository().value,
+      notificationEndpointCipher: endpointCipher,
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/notifications/delivery-stats?days=30',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'x-app-platform': 'cup-admin',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<Record<string, unknown>>();
+    expect(body).toMatchObject({
+      windowDays: 30,
+      channels: [{ channel: 'PUSH', queued: 7, accepted: 6, dead: 1, medianAcceptSeconds: 3 }],
+      campaigns: [{ campaignId: '50b93bf8-490c-4b76-a5b0-d76c3a4b685a', pushAccepted: 1 }],
+      failures: [{ errorCode: 'WEB_PUSH_SUBSCRIPTION_GONE', count: 1 }],
+      endpoints: {
+        active: 3,
+        invalid: 1,
+        revoked: 4,
+        platforms: { CHROME: 1, SAFARI: 1, OTHER: 0 },
+        unreadableEndpoints: 0,
+      },
+    });
+    // The bounded ciphertext sample is an implementation detail of the derivation.
+    expect((body.endpoints as Record<string, unknown>).activeEndpointSample).toBeUndefined();
+  });
+
+  it('refuses a delivery window outside the supported range', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: repository().value,
+    });
+    apps.push(app);
+
+    for (const days of ['0', '91', 'soon']) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `/admin/api/v1/local-padel/notifications/delivery-stats?days=${days}`,
+        headers: {
+          authorization: `Bearer ${await token()}`,
+          'x-app-platform': 'cup-admin',
+        },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'INVALID_REQUEST' });
     }
   });
 });

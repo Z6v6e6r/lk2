@@ -981,6 +981,16 @@ credentials exist. Resolve a known internal phone, send one test campaign, then 
 - the same `Idempotency-Key` returns the original campaign with `replayed=true`;
 - logs and RabbitMQ contain no title, body, phone or endpoint material.
 
+Before and after a campaign, the same tab can open the delivery report
+(`GET /admin/api/v1/<tenant-key>/notifications/delivery-stats?days=7`): it shows what was queued per
+channel, what the push service accepted, which stable error codes caused the failures, the last campaigns
+with their per-endpoint outcomes, and the current endpoint health with the platform split. Remember what
+the numbers can and cannot say: Web Push has no provider dashboard and no receipt beyond acceptance, so
+`SENT` means "the push service took it", not "the person saw it"; a subscription that was deleted on the
+device keeps looking accepted until the service answers 404/410, at which point the endpoint turns
+`INVALID`. When a person says nothing arrived, compare their `lastConfirmedAt` first — a live row with an
+old confirmation usually means the browser or the installed app was replaced and has to subscribe again.
+
 The API accepts a title of up to 300 characters, because that is the in-app inbox limit. The system
 banner is narrower and is truncated by the operating system or browser, not by PadlHub, so write for the
 banner and let the inbox carry the rest:
