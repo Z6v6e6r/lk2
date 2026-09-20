@@ -10,6 +10,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   BOOKING: 'Записи и напоминания',
   GAME: 'Игры',
   MESSAGING: 'Сообщения в чатах',
+  FRIENDSHIP: 'Заявки в друзья',
   ADMIN_MESSAGE: 'Сообщения клуба',
 };
 

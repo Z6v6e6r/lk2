@@ -53,6 +53,13 @@ const notificationPreferences: NotificationPreferencesView = {
         { channel: 'PUSH', enabled: true, timezone: 'Europe/Moscow', available: false },
       ],
     },
+    {
+      category: 'FRIENDSHIP',
+      channels: [
+        { channel: 'IN_APP', enabled: true, timezone: 'Europe/Moscow', available: true },
+        { channel: 'PUSH', enabled: true, timezone: 'Europe/Moscow', available: true },
+      ],
+    },
   ],
 };
 
@@ -271,6 +278,8 @@ describe('NotificationsPage', () => {
     // The settings panel is a collapsed section, so presence is asserted without forcing it open.
     expect(screen.getByText('Настройки уведомлений')).toBeInTheDocument();
     expect(screen.getByText('Сообщения в чатах')).toBeInTheDocument();
+    // A category that reached the tenant from the merged friendship ruleset is presented in Russian.
+    expect(screen.getByText('Заявки в друзья')).toBeInTheDocument();
     // The tenant gate, not the recipient, decides whether a channel can be chosen.
     expect(screen.getByText('не включён для организации')).toBeInTheDocument();
 
