@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type {
+  ConversationSummary,
   NotificationInboxPage,
   NotificationPreferencesUpdateRequest,
   NotificationPreferencesView,
@@ -9,13 +10,24 @@ import type {
   WebPushConfiguration,
 } from './auth-gateway.js';
 import { NotificationFilters } from './notifications-ui/NotificationFilters.js';
+import { NotificationIcon } from './notifications-ui/NotificationIcon.js';
 import { NotificationList } from './notifications-ui/NotificationList.js';
-import { NotificationPreferenceSettings } from './notifications-ui/NotificationPreferenceSettings.js';
+import { NotificationQuietHoursScreen } from './notifications-ui/NotificationQuietHoursScreen.js';
+import { NotificationSettingsScreen } from './notifications-ui/NotificationSettingsScreen.js';
 import {
+  notificationConversationIndex,
+  notificationFilters,
+  groupNotifications,
   type NotificationItem,
   type NotificationFilter,
-  notificationFilters,
 } from './notifications-ui/notification-format.js';
+import {
+  canToggleNotificationPush,
+  draftFromView,
+  notificationPushStatus,
+  requestFromDraft,
+  type PreferenceDraft,
+} from './notifications-ui/notification-preferences.js';
 import styles from './notifications-ui/NotificationsUi.module.css';
 import type { WebPushBrowserState } from './web-push-client.js';
 
@@ -23,6 +35,7 @@ interface NotificationsPageProps {
   readonly page: NotificationInboxPage;
   readonly webPush: WebPushConfiguration;
   readonly browserState: WebPushBrowserState;
+  readonly conversations: readonly ConversationSummary[];
   readonly busy: boolean;
   readonly error?: string | null;
   readonly inboxUnavailable: boolean;
@@ -43,23 +56,13 @@ interface NotificationsPageProps {
   readonly onOpenNotification: (item: NotificationItem, href: string, navigate: boolean) => void;
 }
 
-function pushStatus(
-  configuration: WebPushConfiguration,
-  browserState: WebPushBrowserState,
-): string {
-  if (!configuration.enabled) return 'Push пока не включён для этой организации.';
-  if (browserState === 'unsupported') return 'Этот браузер не поддерживает Web Push.';
-  if (browserState === 'needs_install')
-    return 'На iPhone и iPad push работает только из приложения на экране «Домой».';
-  if (browserState === 'denied') return 'Уведомления запрещены в настройках браузера.';
-  if (browserState === 'subscribed') return 'Push-уведомления включены на этом устройстве.';
-  return 'Включите push, чтобы получать события при закрытом кабинете.';
-}
+type NotificationView = 'inbox' | 'settings' | 'quiet-hours';
 
 export function NotificationsPage({
   page,
   webPush,
   browserState,
+  conversations,
   busy,
   error,
   inboxUnavailable,
@@ -79,15 +82,79 @@ export function NotificationsPage({
   onRetryInbox,
   onOpenNotification,
 }: NotificationsPageProps): React.JSX.Element {
+  const [view, setView] = useState<NotificationView>('inbox');
   const [filter, setFilter] = useState<NotificationFilter>('ALL');
+
+  // The draft follows the stored server view. React re-renders before committing the render-phase
+  // update, so every stored answer — including one that repeats the previous values — resets the
+  // switches without a state-syncing effect. The identity of the stored view is the trigger, so a
+  // repeated answer still counts as a new answer.
+  const [draftState, setDraftState] = useState<{
+    readonly signature: NotificationPreferencesView | null;
+    readonly draft: PreferenceDraft | null;
+  }>(() => ({
+    signature: preferences,
+    draft: preferences ? draftFromView(preferences) : null,
+  }));
+  if (draftState.signature !== preferences) {
+    setDraftState({
+      signature: preferences,
+      draft: preferences ? draftFromView(preferences) : null,
+    });
+  }
+  const draft = draftState.draft;
+
+  const groups = useMemo(() => groupNotifications(page.items), [page.items]);
+  const conversationIndex = useMemo(
+    () => notificationConversationIndex(conversations),
+    [conversations],
+  );
   const filters = notificationFilters(page.items);
   const selectedFilter = filters.some((item) => item.value === filter) ? filter : 'ALL';
-  const canEnable =
-    webPush.enabled &&
-    browserState !== 'unsupported' &&
-    browserState !== 'needs_install' &&
-    browserState !== 'denied' &&
-    browserState !== 'subscribed';
+  const subscribed = browserState === 'subscribed';
+  const canEnablePush = canToggleNotificationPush(webPush, browserState);
+  // The inbox keeps the call to action only while it is still actionable; a subscribed device
+  // manages push from the settings screen.
+  const showPushPanel = !subscribed || !webPush.enabled;
+
+  function applyDraft(next: PreferenceDraft): void {
+    setDraftState({ signature: preferences, draft: next });
+    onSavePreferences(requestFromDraft(next));
+  }
+
+  if (view === 'settings') {
+    return (
+      <main className={styles.page}>
+        <NotificationSettingsScreen
+          draft={draft}
+          busy={preferencesBusy}
+          error={preferencesError}
+          webPush={webPush}
+          browserState={browserState}
+          onEnableWebPush={onEnableWebPush}
+          onDisableWebPush={onDisableWebPush}
+          onOpenQuietHours={() => setView('quiet-hours')}
+          onApplyDraft={applyDraft}
+          onBack={() => setView('inbox')}
+        />
+        <MainBottomNavigation active="notifications" />
+      </main>
+    );
+  }
+
+  if (view === 'quiet-hours' && draft) {
+    return (
+      <main className={styles.page}>
+        <NotificationQuietHoursScreen
+          draft={draft}
+          busy={preferencesBusy}
+          onApplyDraft={applyDraft}
+          onBack={() => setView('settings')}
+        />
+        <MainBottomNavigation active="notifications" />
+      </main>
+    );
+  }
 
   return (
     <main className={styles.page}>
@@ -100,43 +167,45 @@ export function NotificationsPage({
           <span aria-label={`Непрочитанных уведомлений: ${page.unreadCount}`}>
             {page.unreadCount > 99 ? '99+' : page.unreadCount}
           </span>
+          <button
+            type="button"
+            className={styles.headerAction}
+            aria-label="Настройки уведомлений"
+            onClick={() => setView('settings')}
+          >
+            <NotificationIcon name="gear" />
+          </button>
         </header>
 
-        <section className={styles.pushPanel} aria-labelledby="web-push-title">
-          <div>
-            <h2 id="web-push-title">Уведомления на устройстве</h2>
-            <p>{pushStatus(webPush, browserState)}</p>
-            {browserState === 'needs_install' ? (
-              <p className={styles.pushHint}>
-                Откройте PadlHub в Safari, нажмите «Поделиться» → «На экран „Домой“» и включите push
-                уже из приложения: только так iOS разрешает уведомления.
-              </p>
-            ) : null}
-          </div>
-          {browserState === 'needs_install' ? null : browserState === 'subscribed' ? (
-            <button type="button" disabled={busy} onClick={onDisableWebPush}>
-              {busy ? 'Отключаем…' : 'Отключить push'}
-            </button>
-          ) : (
-            <button type="button" disabled={busy || !canEnable} onClick={onEnableWebPush}>
-              {busy ? 'Включаем…' : 'Включить push'}
-            </button>
-          )}
-        </section>
+        {showPushPanel ? (
+          <section className={styles.pushPanel} aria-labelledby="web-push-title">
+            <div>
+              <h2 id="web-push-title">Уведомления на устройстве</h2>
+              <p>{notificationPushStatus(webPush, browserState)}</p>
+              {browserState === 'needs_install' ? (
+                <p className={styles.pushHint}>
+                  Откройте PadlHub в Safari, нажмите «Поделиться» → «На экран „Домой“» и включите
+                  push уже из приложения: только так iOS разрешает уведомления.
+                </p>
+              ) : null}
+            </div>
+            {browserState === 'needs_install' ? null : subscribed ? (
+              <button type="button" disabled={busy} onClick={onDisableWebPush}>
+                {busy ? 'Отключаем…' : 'Отключить push'}
+              </button>
+            ) : (
+              <button type="button" disabled={busy || !canEnablePush} onClick={onEnableWebPush}>
+                {busy ? 'Включаем…' : 'Включить push'}
+              </button>
+            )}
+          </section>
+        ) : null}
 
         {error ? (
           <p className={styles.error} role="alert">
             {error}
           </p>
         ) : null}
-
-        <NotificationPreferenceSettings
-          key={preferences ? JSON.stringify(preferences) : 'unavailable'}
-          preferences={preferences}
-          busy={preferencesBusy}
-          error={preferencesError}
-          onSave={onSavePreferences}
-        />
 
         {friendRequestsError ? (
           <p className={styles.error} role="alert">
@@ -231,7 +300,13 @@ export function NotificationsPage({
                 </button>
               ) : null}
             </header>
-            <NotificationList page={page} filter={selectedFilter} onOpen={onOpenNotification} />
+            <NotificationList
+              page={page}
+              groups={groups}
+              conversations={conversationIndex}
+              filter={selectedFilter}
+              onOpen={onOpenNotification}
+            />
           </>
         )}
       </section>

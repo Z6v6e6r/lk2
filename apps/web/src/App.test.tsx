@@ -1705,6 +1705,64 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 
+  it('collapses every message of one chat into one inbox row', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const listConversations = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: conversationId,
+          kind: 'DIRECT' as const,
+          participant: {
+            userId: '11111111-1111-4111-8111-111111111111',
+            displayName: 'Мария Соколова',
+          },
+          unreadCount: 4,
+          updatedAt: '2026-07-16T15:05:00.000Z',
+          lastMessage: {
+            sequence: 9,
+            body: 'Кто идёт на выходных?',
+            createdAt: '2026-07-16T15:05:00.000Z',
+          },
+        },
+      ],
+    });
+    const listNotifications = vi.fn().mockResolvedValue({
+      unreadCount: 2,
+      items: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          category: 'MESSAGING',
+          title: 'Новое сообщение',
+          body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+          deepLink: `/chats/${conversationId}`,
+          createdAt: '2026-07-16T15:00:00.000Z',
+        },
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          category: 'MESSAGING',
+          title: 'Новое сообщение',
+          body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+          deepLink: `/chats/${conversationId}`,
+          createdAt: '2026-07-16T14:00:00.000Z',
+        },
+      ],
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations,
+      listNotifications,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    const chatRow = await screen.findByRole('link', { name: /Мария Соколова/u });
+    expect(chatRow).toHaveAttribute('href', `/chats/${conversationId}`);
+    expect(chatRow).toHaveTextContent('4 новых сообщения');
+    expect(chatRow).toHaveTextContent('Кто идёт на выходных?');
+    expect(screen.getAllByRole('link', { name: /Мария Соколова/u })).toHaveLength(1);
+  });
+
   it('marks an unread GAME notification before following its deep link', async () => {
     window.history.replaceState({}, '', '/notifications');
     const markNotificationsRead = vi.fn().mockResolvedValue({
@@ -1828,7 +1886,7 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByRole('heading', { name: 'Уведомления на устройстве' })).toBeVisible();
   });
 
-  it('loads and saves notification preferences from the notifications page', async () => {
+  it('loads and applies notification preferences from the settings screen', async () => {
     window.history.replaceState({}, '', '/notifications');
     const updateNotificationPreferences = vi.fn().mockResolvedValue(notificationPreferences);
     const gateway = createGateway({
@@ -1840,22 +1898,25 @@ describe('PadlHub web authentication', () => {
 
     expect(await screen.findByRole('heading', { name: 'Уведомления' })).toBeVisible();
     expect(gateway.getNotificationPreferences).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByLabelText('Тихие часы для push'));
-    fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
+    // A switch applies immediately through the replace-preferences command.
+    fireEvent.click(screen.getByRole('switch', { name: 'Чаты: показывать в приложении' }));
 
     await waitFor(() => expect(updateNotificationPreferences).toHaveBeenCalledTimes(1));
     const update = updateNotificationPreferences.mock.calls[0]?.[0] as {
       readonly categories: readonly {
+        readonly category: string;
         readonly channels: readonly {
           readonly channel: string;
-          readonly quietFrom?: string;
-          readonly quietUntil?: string;
+          readonly enabled: boolean;
         }[];
       }[];
     };
     expect(
-      update.categories[0]?.channels.find((channel) => channel.channel === 'PUSH'),
-    ).toMatchObject({ quietFrom: '23:00', quietUntil: '07:00' });
+      update.categories
+        .find((category) => category.category === 'MESSAGING')
+        ?.channels.find((channel) => channel.channel === 'IN_APP'),
+    ).toMatchObject({ enabled: false });
   });
 
   it('fails closed for an unknown section route instead of showing a placeholder', async () => {

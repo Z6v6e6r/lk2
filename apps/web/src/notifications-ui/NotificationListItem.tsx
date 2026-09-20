@@ -1,27 +1,40 @@
-import type { NotificationItem } from './notification-format.js';
-import {
-  formatNotificationTime,
-  notificationCategory,
-  safeNotificationDeepLink,
-} from './notification-format.js';
 import padlHubLogoUrl from '../assets/padlhub-logo.svg';
+import { initials } from '../chats-ui/chat-format.js';
+import type { ConversationSummary } from '../auth-gateway.js';
+import type { NotificationGroup, NotificationItem } from './notification-format.js';
+import { formatNotificationTime, notificationGroupPresentation } from './notification-format.js';
 import styles from './NotificationsUi.module.css';
 
-export function NotificationListItem({
-  item,
-  onOpen,
-}: {
-  readonly item: NotificationItem;
+interface NotificationListItemProps {
+  readonly group: NotificationGroup;
+  readonly conversation?: ConversationSummary | undefined;
   readonly onOpen: (item: NotificationItem, href: string, navigate: boolean) => void;
-}): React.JSX.Element {
-  const presentation = notificationCategory(item.category);
-  const href = safeNotificationDeepLink(item.deepLink);
+}
+
+const TONE_CLASS: Readonly<Record<'accent' | 'warm' | 'neutral', string | undefined>> = {
+  accent: styles.toneAccent,
+  warm: styles.toneWarm,
+  neutral: styles.toneNeutral,
+};
+
+export function NotificationListItem({
+  group,
+  conversation,
+  onOpen,
+}: NotificationListItemProps): React.JSX.Element | null {
+  const latest = group.items[0];
+  if (!latest) return null;
+  const presentation = notificationGroupPresentation(group, conversation);
+  const marker =
+    presentation.kind === 'conversation' && !presentation.markerKind
+      ? initials(presentation.title)
+      : presentation.marker;
 
   return (
     <li className={styles.listItem}>
       <a
-        className={item.readAt ? styles.readItem : styles.unreadItem}
-        href={href}
+        className={presentation.unread ? styles.unreadItem : styles.readItem}
+        href={presentation.href}
         onClick={(event) => {
           if (
             event.button !== 0 ||
@@ -30,31 +43,42 @@ export function NotificationListItem({
             event.shiftKey ||
             event.altKey
           ) {
-            onOpen(item, href, false);
+            onOpen(latest, presentation.href, false);
             return;
           }
           event.preventDefault();
-          onOpen(item, href, true);
+          onOpen(latest, presentation.href, true);
         }}
       >
         <span
-          className={`${styles.categoryMarker} ${styles[`tone-${presentation.tone}`] ?? ''}`}
+          className={`${styles.categoryMarker} ${TONE_CLASS[presentation.tone] ?? ''}`}
           aria-hidden="true"
         >
           {presentation.markerKind === 'brand' ? (
             <img className={styles.brandMarkerLogo} src={padlHubLogoUrl} alt="" />
           ) : (
-            presentation.marker
+            marker
           )}
         </span>
         <span className={styles.itemCopy}>
-          <span className={styles.itemTitle}>{item.title}</span>
-          <span className={styles.itemBody}>{item.body}</span>
-          <time dateTime={item.createdAt}>{formatNotificationTime(item.createdAt)}</time>
+          <span className={styles.itemTitle}>{presentation.title}</span>
+          <span className={styles.itemSubtitle}>{presentation.meta}</span>
+          <span className={styles.itemBody}>{presentation.preview}</span>
+          <time dateTime={presentation.createdAt}>
+            {formatNotificationTime(presentation.createdAt)}
+          </time>
         </span>
-        <span className={styles.itemMeta}>
-          <span>{presentation.categoryLabel}</span>
-          {!item.readAt ? <i aria-label="Непрочитанное уведомление" /> : null}
+        <span className={styles.itemSide}>
+          {presentation.badge ? (
+            <span
+              className={styles.itemBadge}
+              aria-label={`Непрочитанных событий: ${presentation.badge}`}
+            >
+              {presentation.badge}
+            </span>
+          ) : presentation.unread ? (
+            <i aria-label="Непрочитанное уведомление" />
+          ) : null}
         </span>
       </a>
     </li>

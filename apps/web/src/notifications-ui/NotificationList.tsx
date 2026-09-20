@@ -1,21 +1,29 @@
-import type { NotificationInboxPage } from '../auth-gateway.js';
+import type { ConversationSummary, NotificationInboxPage } from '../auth-gateway.js';
 import { NotificationListItem } from './NotificationListItem.js';
-import type { NotificationFilter } from './notification-format.js';
-import { notificationMatchesFilter, type NotificationItem } from './notification-format.js';
+import type { NotificationFilter, NotificationGroup } from './notification-format.js';
+import { notificationGroupsForFilter } from './notification-format.js';
 import styles from './NotificationsUi.module.css';
 
 interface NotificationListProps {
   readonly page: NotificationInboxPage;
+  readonly groups: readonly NotificationGroup[];
+  readonly conversations: ReadonlyMap<string, ConversationSummary>;
   readonly filter: NotificationFilter;
-  readonly onOpen: (item: NotificationItem, href: string, navigate: boolean) => void;
+  readonly onOpen: (
+    item: NotificationInboxPage['items'][number],
+    href: string,
+    navigate: boolean,
+  ) => void;
 }
 
 export function NotificationList({
   page,
+  groups,
+  conversations,
   filter,
   onOpen,
 }: NotificationListProps): React.JSX.Element {
-  const items = page.items.filter((item) => notificationMatchesFilter(item, filter));
+  const visible = notificationGroupsForFilter(groups, filter);
 
   if (page.items.length === 0) {
     return (
@@ -26,7 +34,7 @@ export function NotificationList({
     );
   }
 
-  if (items.length === 0) {
+  if (visible.length === 0) {
     return (
       <div className={styles.emptyState} role="status">
         <strong>В этой категории пусто</strong>
@@ -37,9 +45,20 @@ export function NotificationList({
 
   return (
     <ul className={styles.list} aria-label="Лента уведомлений">
-      {items.map((item) => (
-        <NotificationListItem key={item.id} item={item} onOpen={onOpen} />
-      ))}
+      {visible.map((group) => {
+        const conversation =
+          group.kind === 'conversation' && group.sourceId
+            ? conversations.get(group.sourceId)
+            : undefined;
+        return (
+          <NotificationListItem
+            key={group.key}
+            group={group}
+            conversation={conversation}
+            onOpen={onOpen}
+          />
+        );
+      })}
     </ul>
   );
 }
