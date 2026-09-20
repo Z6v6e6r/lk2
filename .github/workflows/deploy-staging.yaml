@@ -1436,10 +1436,12 @@ jobs:
               install -m 644 "/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml" \
                 /opt/phub/monitoring/padlhub-alerts.yaml
               rm -f "/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml"
-              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml \
+              docker compose --env-file /opt/phub/infrastructure.env \
+                -f /opt/phub/compose.infrastructure.yaml \
                 run --rm --no-deps -T --entrypoint promtool prometheus \
                 check rules /etc/prometheus/rules/padlhub-alerts.yaml
-              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml \
+              docker compose --env-file /opt/phub/infrastructure.env \
+                -f /opt/phub/compose.infrastructure.yaml \
                 up -d --no-deps --force-recreate prometheus
               foundation_env=/opt/phub/staging.chat-push-foundation.env
               foundation_env_tmp="${foundation_env}.$$"

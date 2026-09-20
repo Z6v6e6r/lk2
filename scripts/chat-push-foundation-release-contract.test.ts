@@ -278,6 +278,20 @@ describe('chat/push staging foundation release contract', () => {
     );
   });
 
+  it('runs the foundation monitoring commands from an absolute compose root', () => {
+    const start = workflow.indexOf('install -d -m 755 /opt/phub/monitoring');
+    const end = workflow.indexOf('foundation_env=/opt/phub/staging.chat-push-foundation.env');
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const block = workflow.slice(start, end);
+    expect(block).toContain('docker compose --env-file /opt/phub/infrastructure.env');
+    expect(block).toContain('-f /opt/phub/compose.infrastructure.yaml');
+    expect(block).toContain('--force-recreate prometheus');
+    expect(block).toContain('check rules /etc/prometheus/rules/padlhub-alerts.yaml');
+    expect(block).not.toContain('--env-file infrastructure.env');
+    expect(block).not.toContain('-f compose.infrastructure.yaml');
+  });
+
   it('uses a final API/worker-only kill-switch overlay and snapshots both states', () => {
     expect(stagingCompose.match(/RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE/g)).toHaveLength(2);
     const api = stagingCompose.slice(
