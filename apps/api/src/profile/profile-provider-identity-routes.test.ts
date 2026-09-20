@@ -14,6 +14,21 @@ function appWith(options: {
     readonly phoneE164: string;
     readonly fetchedAt: string;
   }) => Promise<'linked' | 'unchanged' | 'conflict' | 'absent'>;
+  readonly associationProof?: (input: {
+    readonly tenantKey: string | undefined;
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly phoneE164: string;
+    readonly correlationId: string;
+  }) => Promise<
+    | 'absent'
+    | 'tenant_mismatch'
+    | 'no_pending'
+    | 'no_match'
+    | 'not_deliverable'
+    | 'delivered'
+    | 'unavailable'
+  >;
 }) {
   const app = Fastify();
   registerProfileProviderIdentityRoutes(app, {
@@ -21,6 +36,7 @@ function appWith(options: {
     ...(options.linkProviderPhone
       ? { repository: { linkProviderPhone: options.linkProviderPhone } }
       : {}),
+    ...(options.associationProof ? { associationProof: { prove: options.associationProof } } : {}),
     now: () => new Date('2026-09-16T12:00:00.000Z'),
     commandHandlers: [
       (request: FastifyRequest) => {
@@ -130,5 +146,63 @@ describe('profile provider phone link route', () => {
 
     expect(response.statusCode).toBe(400);
     expect(linkProviderPhone).not.toHaveBeenCalled();
+  });
+
+  it('proves the legacy player association once the provider phone is linked', async () => {
+    let proofInput: unknown;
+    const associationProof = vi.fn((input: unknown) => {
+      proofInput = input;
+      return Promise.resolve('delivered' as const);
+    });
+    const app = await appWith({
+      linkProviderPhone: () => Promise.resolve('linked'),
+      associationProof,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url,
+      payload: { phoneE164: '+79104303190' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ outcome: 'linked' });
+    expect(proofInput).toMatchObject({
+      tenantKey: 'padlhub',
+      tenantId: TENANT,
+      userId: USER,
+      phoneE164: '+79104303190',
+    });
+    expect(typeof (proofInput as { readonly correlationId?: unknown }).correlationId).toBe(
+      'string',
+    );
+    expect(associationProof).toHaveBeenCalledTimes(1);
+  });
+
+  it('never proves an association for a phone another account owns, and survives a failed proof', async () => {
+    const conflictProof = vi.fn();
+    const conflict = await appWith({
+      linkProviderPhone: () => Promise.resolve('conflict'),
+      associationProof: conflictProof,
+    });
+    const conflictResponse = await conflict.inject({
+      method: 'POST',
+      url,
+      payload: { phoneE164: '+79104303190' },
+    });
+    expect(conflictResponse.json()).toEqual({ outcome: 'conflict' });
+    expect(conflictProof).not.toHaveBeenCalled();
+
+    const failing = await appWith({
+      linkProviderPhone: () => Promise.resolve('unchanged'),
+      associationProof: () => Promise.reject(new Error('LEGACY_GAMES_SOURCE_UNAVAILABLE')),
+    });
+    const failingResponse = await failing.inject({
+      method: 'POST',
+      url,
+      payload: { phoneE164: '+79104303190' },
+    });
+    expect(failingResponse.statusCode).toBe(200);
+    expect(failingResponse.json()).toEqual({ outcome: 'unchanged' });
   });
 });

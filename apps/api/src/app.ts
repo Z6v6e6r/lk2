@@ -150,6 +150,7 @@ import { registerPromotionEngagementRoutes } from './promotions/promotion-engage
 import type { PromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
 import { registerProfileProviderIdentityRoutes } from './profile/profile-provider-identity-routes.js';
+import type { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
 import { buildLocalHomeProfile } from './profile/local-home-profile.js';
 import {
@@ -302,6 +303,7 @@ export interface BuildAppOptions {
       readonly fetchedAt: string;
     }) => Promise<'linked' | 'unchanged' | 'conflict' | 'absent'>;
   };
+  readonly legacyViewerAssociationProof?: Pick<LegacyViewerAssociationProof, 'prove'>;
   readonly communityLogoMediaRepository?: CommunityLogoMediaRepository;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
@@ -1221,6 +1223,9 @@ export async function buildApp(options: BuildAppOptions) {
   registerProfileProviderIdentityRoutes(app as unknown as FastifyInstance, {
     enabled: options.config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED,
     ...(options.providerIdentityLink ? { repository: options.providerIdentityLink } : {}),
+    ...(options.legacyViewerAssociationProof
+      ? { associationProof: options.legacyViewerAssociationProof }
+      : {}),
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
   registerCommunityLogoMediaRoutes(app as unknown as FastifyInstance, {

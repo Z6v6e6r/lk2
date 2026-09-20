@@ -9,12 +9,82 @@ import {
   testing,
 } from './index.js';
 
+function phoneGameDocument(organizer: Record<string, unknown>) {
+  return {
+    id: 'legacy-game-phone',
+    status: 'PAID',
+    organizer: { id: 'viewer-profile', name: 'Анна', ...organizer },
+    participants: [{ id: 'viewer-profile', name: 'Анна', status: 'PAID' }],
+    settings: { isPrivate: false, ratingGame: false },
+    metadata: { gameFormat: 'doubles' },
+    booking: {
+      studioId: 'station',
+      studioName: 'Терехово',
+      timeFromIso: '2026-07-20T09:00:00+03:00',
+      timeToIso: '2026-07-20T10:00:00+03:00',
+    },
+  };
+}
+
 describe('legacy games adapter', () => {
   it('retains organizer and participant photos in the bounded Mongo projection', () => {
     expect(testing.legacyGameProjection).toMatchObject({
       'organizer.photo': 1,
       'participants.photo': 1,
     });
+  });
+
+  // Without the phone columns the in-memory VIEWER_PHONE lookup always sees `undefined`, so a
+  // Mongo-sourced deployment can never prove a viewer's legacy player key.
+  it('retains the phone columns the viewer-phone association proof matches in memory', () => {
+    expect(testing.legacyGameProjection).toMatchObject({
+      'organizer.phone': 1,
+      'organizer.phoneNorm': 1,
+      'participants.phone': 1,
+      'participants.phoneNorm': 1,
+    });
+  });
+
+  it('proves the viewer key from every stored phone shape and ignores another number', () => {
+    for (const stored of [
+      { phone: '79990000001' },
+      { phone: '+7 (999) 000-00-01' },
+      { phone: '89990000001' },
+      { phone: '9990000001' },
+      { phone: 79990000001 },
+      { phoneNorm: '', phone: '+79990000001' },
+    ]) {
+      expect(
+        testing.mapLegacyGame(phoneGameDocument(stored), '+79990000001')
+          ?.viewerParticipantExternalId,
+        JSON.stringify(stored),
+      ).toBe('viewer-profile');
+    }
+
+    expect(
+      testing.mapLegacyGame(phoneGameDocument({ phone: '+79990000002' }), '+79990000001')
+        ?.viewerParticipantExternalId,
+    ).toBeNull();
+  });
+
+  // The Mongo candidate filter selects these values; every one of them must resolve back to the same
+  // viewer key, otherwise the filter fetches a row the matcher then drops.
+  it('keeps the viewer-phone candidate filter aligned with the matcher', () => {
+    const forms = testing.phoneCandidateForms(testing.normalizedPhoneKey('+7 (999) 000-00-01')!);
+    expect(forms).toEqual([
+      '79990000001',
+      '+79990000001',
+      '89990000001',
+      '9990000001',
+      79990000001,
+    ]);
+    for (const stored of forms) {
+      expect(
+        testing.mapLegacyGame(phoneGameDocument({ phone: stored }), '+79990000001')
+          ?.viewerParticipantExternalId,
+        String(stored),
+      ).toBe('viewer-profile');
+    }
   });
 
   it('builds a bounded targeted photo lookup and pseudonymizes its result', () => {
@@ -470,6 +540,75 @@ describe('legacy games adapter', () => {
       localVivaProfileAssociationId('viewer-profile'),
     );
     expect(JSON.stringify(result)).not.toContain('79990000001');
+  });
+
+  it('proves the viewer player key from the provider phone alone and keeps the phone out', async () => {
+    const fetchImplementation = vi.fn((url: URL | RequestInfo) => {
+      const requestedUrl = new URL(
+        typeof url === 'string' ? url : url instanceof URL ? url.href : url.url,
+      );
+      expect(requestedUrl.pathname).toBe('/lk/games/by-phone');
+      expect(requestedUrl.searchParams.get('phone')).toBe('79990000001');
+      return Promise.resolve(
+        Response.json({
+          games: [
+            {
+              id: 'viewer-game',
+              status: 'PAID',
+              organizer: { id: 'organizer-player', name: 'Борис' },
+              participants: [
+                { id: 'viewer-profile', name: 'Анна', phone: '+79990000001', status: 'PAID' },
+              ],
+              settings: { isPrivate: true, ratingGame: false },
+              metadata: { gameFormat: 'doubles' },
+              booking: {
+                studioId: 'station',
+                studioName: 'Терехово',
+                timeFromIso: '2026-07-20T09:00:00+03:00',
+                timeToIso: '2026-07-20T10:00:00+03:00',
+              },
+            },
+            {
+              id: 'other-game',
+              status: 'PAID',
+              organizer: { id: 'organizer-player', name: 'Борис' },
+              participants: [{ id: 'other-player', name: 'Пётр', status: 'PAID' }],
+              settings: { isPrivate: true, ratingGame: false },
+              metadata: { gameFormat: 'doubles' },
+              booking: {
+                studioId: 'station',
+                studioName: 'Терехово',
+                timeFromIso: '2026-07-21T09:00:00+03:00',
+                timeToIso: '2026-07-21T10:00:00+03:00',
+              },
+            },
+          ],
+        }),
+      );
+    });
+
+    const result = await new LegacyGamesPublicAdapter({
+      fetchImplementation,
+    }).readByViewerPhone({ phoneE164: '+7 (999) 000-00-01', limit: 5 });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.viewerParticipantExternalId).toBe(
+      localVivaProfileAssociationId('viewer-profile'),
+    );
+    expect(JSON.stringify(result)).not.toContain('79990000001');
+    expect(JSON.stringify(result)).not.toContain('viewer-profile');
+  });
+
+  it('refuses a viewer-phone read without a usable phone and bounds the limit', async () => {
+    const fetchImplementation = vi.fn();
+    const adapter = new LegacyGamesPublicAdapter({ fetchImplementation });
+
+    await expect(adapter.readByViewerPhone({ phoneE164: '', limit: 5 })).resolves.toEqual([]);
+    await expect(adapter.readByViewerPhone({ phoneE164: '123', limit: 5 })).resolves.toEqual([]);
+    await expect(
+      adapter.readByViewerPhone({ phoneE164: '+79990000001', limit: 0 }),
+    ).rejects.toThrow('LEGACY_GAMES_LIMIT_INVALID');
+    expect(fetchImplementation).not.toHaveBeenCalled();
   });
 
   it('continues through CUP history pages until it finds an older Viva exercise', async () => {
