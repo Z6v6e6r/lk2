@@ -736,15 +736,15 @@ export function createNotificationReceiptToken(input: {
 }
 
 /**
- * Returns the delivery a token authorises, or nothing. Every failure — malformed token, wrong tenant,
- * expired, tampered signature — is the same answer, so a probe cannot tell them apart.
+ * Returns the delivery a token authorises, or nothing. The tenant comes from the signed payload, so the
+ * capability fully describes what it may do and the client needs no tenant key of its own. Every failure
+ * — malformed token, expired, tampered signature — is the same answer, so a probe cannot tell them apart.
  */
 export function verifyNotificationReceiptToken(input: {
   readonly secret: string;
-  readonly tenantId: string;
   readonly token: string;
   readonly now?: Date;
-}): { readonly deliveryId: string } | undefined {
+}): { readonly tenantId: string; readonly deliveryId: string } | undefined {
   const [payload, signature] = input.token.split('.');
   if (!payload || !signature) return undefined;
   let provided: Buffer;
@@ -761,11 +761,11 @@ export function verifyNotificationReceiptToken(input: {
   } catch {
     return undefined;
   }
-  if (parsed.t !== input.tenantId || typeof parsed.d !== 'string' || typeof parsed.e !== 'number')
+  if (typeof parsed.t !== 'string' || typeof parsed.d !== 'string' || typeof parsed.e !== 'number')
     return undefined;
   const now = (input.now ?? new Date()).getTime() / 1000;
   if (!Number.isFinite(parsed.e) || parsed.e <= now) return undefined;
-  return { deliveryId: parsed.d };
+  return { tenantId: parsed.t, deliveryId: parsed.d };
 }
 
 export interface NotificationEndpointCipher {

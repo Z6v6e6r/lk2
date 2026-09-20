@@ -171,8 +171,6 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
       readonly allowedEndpointOrigins: readonly string[];
       /** Derived keyring secret used to sign the per-delivery receipt token; absent disables the funnel. */
       readonly receiptTokenSecret?: string;
-      /** Tenant key the service worker posts the receipt to; it is public in every client URL. */
-      readonly receiptTenantKey?: string;
       readonly receiptTokenTtlSeconds?: number;
       readonly sendImplementation?: SendImplementation;
       readonly now?: () => number;
@@ -232,9 +230,7 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
         title: request.notification.title,
         preview: request.notification.preview,
         ...(request.notification.deepLink ? { deepLink: request.notification.deepLink } : {}),
-        ...(withReceipt && receiptToken && this.options.receiptTenantKey
-          ? { receiptToken, receiptTenantKey: this.options.receiptTenantKey }
-          : {}),
+        ...(withReceipt && receiptToken ? { receiptToken } : {}),
       });
     // The receipt token is an addition to a payload whose budget was already agreed; if it does not fit,
     // the notification itself wins and the funnel loses this one delivery.

@@ -215,7 +215,9 @@ export function registerWebPushRoutes(
   );
 
   app.post(
-    '/user/api/v1/:tenantKey/notifications/receipts',
+    // Not tenant-addressed: the signed token names the tenant, which keeps the service worker free of any
+    // contour-specific value it cannot know while the page is closed.
+    '/user/api/v1/notifications/receipts',
     {
       config: {
         rateLimit: {
@@ -229,7 +231,6 @@ export function registerWebPushRoutes(
     },
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
-      const tenantKey = (request.params as { readonly tenantKey?: string }).tenantKey;
       if (!options.repository || !options.receiptTokenSecret) {
         return sendApiError(
           request,
@@ -240,16 +241,11 @@ export function registerWebPushRoutes(
         );
       }
       const parsed = notificationReceiptSchema.safeParse(request.body);
-      if (!parsed.success || !tenantKey) {
+      if (!parsed.success) {
         return sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная квитанция.');
-      }
-      const tenantId = await options.repository.resolveTenantId(tenantKey);
-      if (!tenantId) {
-        return sendApiError(request, reply, 404, 'NOT_FOUND', 'Организация не найдена.');
       }
       const verified = verifyNotificationReceiptToken({
         secret: options.receiptTokenSecret,
-        tenantId,
         token: parsed.data.token,
       });
       if (!verified) {
@@ -263,7 +259,7 @@ export function registerWebPushRoutes(
         );
       }
       const result = await options.repository.recordClientDeliveryReceipt({
-        tenantId,
+        tenantId: verified.tenantId,
         deliveryId: verified.deliveryId,
         receiptType: parsed.data.type,
       });

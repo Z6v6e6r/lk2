@@ -294,6 +294,7 @@ const webPushRuntime =
           timeoutMs: config.WEB_PUSH_TIMEOUT_MS,
           circuitFailureThreshold: config.WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD,
           circuitResetMs: config.WEB_PUSH_CIRCUIT_RESET_MS,
+          ...(receiptTokenSecret ? { receiptTokenSecret } : {}),
           allowedEndpointOrigins:
             config.WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS.split(',').filter(Boolean),
           onProviderOutcome: (outcome) =>

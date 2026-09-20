@@ -47,26 +47,22 @@ describe('Web Push delivery adapter', () => {
       circuitResetMs: 30_000,
       allowedEndpointOrigins: ['https://push.example.test'],
       receiptTokenSecret: 'derived-receipt-secret',
-      receiptTenantKey: 'local-padel',
       sendImplementation,
     });
 
     await expect(adapter.send(request)).resolves.toEqual({ outcome: 'accepted' });
     const payload = JSON.parse(String(sendImplementation.mock.calls[0]?.[1])) as {
       readonly receiptToken?: string;
-      readonly receiptTenantKey?: string;
     };
-    expect(payload.receiptTenantKey).toBe('local-padel');
     // The token is signed for this delivery and tenant, and it is not the secret itself.
     expect(payload.receiptToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
     expect(payload.receiptToken).not.toContain('derived-receipt-secret');
     expect(
       verifyNotificationReceiptToken({
         secret: 'derived-receipt-secret',
-        tenantId: request.tenantId,
         token: payload.receiptToken ?? '',
       }),
-    ).toEqual({ deliveryId: request.deliveryId });
+    ).toEqual({ tenantId: request.tenantId, deliveryId: request.deliveryId });
   });
 
   it('sends only the bounded notification payload with VAPID options', async () => {

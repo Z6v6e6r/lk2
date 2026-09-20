@@ -119,25 +119,16 @@ describe('Web Push endpoint protection', () => {
       expiresAt: new Date(Date.now() + 60_000),
     });
 
-    expect(verifyNotificationReceiptToken({ secret, tenantId, token })).toEqual({ deliveryId });
-    // Another tenant, a tampered signature, an expiry in the past and garbage are one answer each.
+    // The tenant comes back from the signed payload, so the caller needs no tenant input at all.
+    expect(verifyNotificationReceiptToken({ secret, token })).toEqual({ tenantId, deliveryId });
+    // A tampered signature, an expiry in the past, garbage and a foreign secret are one answer each.
+    expect(
+      verifyNotificationReceiptToken({ secret, token: `${token.slice(0, -3)}abc` }),
+    ).toBeUndefined();
+    expect(verifyNotificationReceiptToken({ secret, token: 'not-a-token' })).toBeUndefined();
     expect(
       verifyNotificationReceiptToken({
         secret,
-        tenantId: '96d1b47c-dc5c-493f-836c-827f01c31546',
-        token,
-      }),
-    ).toBeUndefined();
-    expect(
-      verifyNotificationReceiptToken({ secret, tenantId, token: `${token.slice(0, -3)}abc` }),
-    ).toBeUndefined();
-    expect(
-      verifyNotificationReceiptToken({ secret, tenantId, token: 'not-a-token' }),
-    ).toBeUndefined();
-    expect(
-      verifyNotificationReceiptToken({
-        secret,
-        tenantId,
         token: createNotificationReceiptToken({
           secret,
           tenantId,
@@ -146,13 +137,7 @@ describe('Web Push endpoint protection', () => {
         }),
       }),
     ).toBeUndefined();
-    expect(
-      verifyNotificationReceiptToken({
-        secret: 'another-secret',
-        tenantId,
-        token,
-      }),
-    ).toBeUndefined();
+    expect(verifyNotificationReceiptToken({ secret: 'another-secret', token })).toBeUndefined();
     // The derived secret is not the keyring value itself: the keyring key can never sign a receipt.
     expect(secret).not.toBe(Buffer.alloc(32, 7).toString('base64'));
   });

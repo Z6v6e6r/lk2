@@ -29,8 +29,6 @@ export type WebPushEndpointCommandResult =
     };
 
 export interface NotificationEndpointRepository {
-  /** Resolves a tenant key to its id so a session-less receipt can be scoped before it is trusted. */
-  resolveTenantId(tenantKey: string): Promise<string | undefined>;
   /**
    * Records a display or click the service worker reported for one delivery. Idempotent by the
    * (delivery, type) pair, and silent when the delivery is not in that tenant.
@@ -204,17 +202,6 @@ async function activeProvider(
 
 export function createNotificationEndpointRepository(pool: Pool): NotificationEndpointRepository {
   return {
-    async resolveTenantId(tenantKey) {
-      // The tenant key is the only unauthenticated input of a receipt request, so it is resolved before
-      // the signed token is checked against the id it returns. This mirrors the API's own tenant
-      // resolution, which also reads the tenant table outside a tenant transaction.
-      const result = await pool.query<{ readonly id: string }>(
-        'select id from identity.tenants where tenant_key = $1 and active = true',
-        [tenantKey],
-      );
-      return result.rows[0]?.id;
-    },
-
     recordClientDeliveryReceipt(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const receiptKey = createHash('sha256')

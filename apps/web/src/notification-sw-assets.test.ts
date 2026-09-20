@@ -53,23 +53,20 @@ describe('notification service worker assets', () => {
     // A service worker has no session, so the payload's signed token is the whole authorization and the
     // report must never be able to break the notification itself.
     expect(serviceWorker).toContain('self.phubReportReceipt = function phubReportReceipt');
-    expect(serviceWorker).toMatch(
-      /fetch\('\/user\/api\/v1\/' \+ encodeURIComponent\(tenantKey\) \+ '\/notifications\/receipts', \{/u,
-    );
+    expect(serviceWorker).toContain("fetch('/user/api/v1/notifications/receipts', {");
     expect(serviceWorker).toContain("credentials: 'omit'");
     expect(serviceWorker).toContain('keepalive: true');
     expect(serviceWorker).toMatch(
       /\.catch\(function ignoreReceiptFailure\(\) \{\s*\n\s*return undefined;/u,
     );
-    expect(serviceWorker).toContain("self.phubReportReceipt(tenantKey, receiptToken, 'DISPLAYED')");
+    expect(serviceWorker).toContain("self.phubReportReceipt(receiptToken, 'DISPLAYED')");
     expect(serviceWorker).toContain(
-      "event.waitUntil(self.phubReportReceipt(data.receiptTenantKey, data.receiptToken, 'OPENED'))",
+      "event.waitUntil(self.phubReportReceipt(data.receiptToken, 'OPENED'))",
     );
     // The click still navigates: the receipt is reported before the window opens.
     expect(serviceWorker).toContain('return self.clients.openWindow(deepLink);');
     // The token is optional in the payload, so an older worker payload cannot break the banner.
     expect(serviceWorker).toContain("typeof payload.receiptToken === 'string'");
-    expect(serviceWorker).toContain("typeof payload.receiptTenantKey === 'string'");
   });
 
   it('shows the banner through a helper that has a minimal fallback for stricter engines', () => {

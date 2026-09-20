@@ -22,10 +22,10 @@ self.phubSafeDeepLink = function phubSafeDeepLink(value) {
  * the page is closed, so the push payload carries a token that authorises exactly this delivery. A receipt
  * is best effort: whatever happens here must never affect the notification the person sees.
  */
-self.phubReportReceipt = function phubReportReceipt(tenantKey, receiptToken, type) {
-  if (typeof tenantKey !== 'string' || !tenantKey) return Promise.resolve();
+self.phubReportReceipt = function phubReportReceipt(receiptToken, type) {
   if (typeof receiptToken !== 'string' || receiptToken.length < 16) return Promise.resolve();
-  return fetch('/user/api/v1/' + encodeURIComponent(tenantKey) + '/notifications/receipts', {
+  // The token names the tenant, so the worker needs no contour value it cannot know.
+  return fetch('/user/api/v1/notifications/receipts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token: receiptToken, type: type }),
@@ -42,7 +42,6 @@ self.phubReportReceipt = function phubReportReceipt(tenantKey, receiptToken, typ
  * rejected options dictionary would otherwise mean no banner at all.
  */
 self.phubShowNotification = function phubShowNotification(title, options) {
-  var tenantKey = options.data && options.data.receiptTenantKey;
   var receiptToken = options.data && options.data.receiptToken;
   return self.registration
     .showNotification(title, options)
@@ -55,7 +54,7 @@ self.phubShowNotification = function phubShowNotification(title, options) {
     })
     .then(function reportDisplayed() {
       // Reported only after the banner exists, so a counted display is a display.
-      return self.phubReportReceipt(tenantKey, receiptToken, 'DISPLAYED');
+      return self.phubReportReceipt(receiptToken, 'DISPLAYED');
     });
 };
 
@@ -90,9 +89,6 @@ self.addEventListener('push', function handlePush(event) {
         deepLink: deepLink,
         // Present only when the Worker could sign a receipt for this delivery.
         ...(typeof payload.receiptToken === 'string' ? { receiptToken: payload.receiptToken } : {}),
-        ...(typeof payload.receiptTenantKey === 'string'
-          ? { receiptTenantKey: payload.receiptTenantKey }
-          : {}),
       },
     }),
   );
@@ -103,7 +99,7 @@ self.addEventListener('notificationclick', function handleNotificationClick(even
   var data = event.notification.data || {};
   var deepLink = self.phubSafeDeepLink(data.deepLink);
   // A click is the strongest signal the funnel has, so it is reported before the window is opened.
-  event.waitUntil(self.phubReportReceipt(data.receiptTenantKey, data.receiptToken, 'OPENED'));
+  event.waitUntil(self.phubReportReceipt(data.receiptToken, 'OPENED'));
   event.waitUntil(
     self.clients
       .matchAll({ type: 'window', includeUncontrolled: true })

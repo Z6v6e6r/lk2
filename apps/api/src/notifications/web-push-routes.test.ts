@@ -78,7 +78,6 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
-        resolveTenantId: vi.fn().mockResolvedValue(tenantId),
         recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
         getWebPushCapabilities,
         registerWebPush: vi.fn(),
@@ -121,7 +120,6 @@ describe('Web Push endpoint User API', () => {
       replayed: false,
     });
     const repository: NotificationEndpointRepository = {
-      resolveTenantId: vi.fn().mockResolvedValue(tenantId),
       recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
       getWebPushCapabilities: vi.fn().mockResolvedValue({
         tenantEnabled: true,
@@ -193,7 +191,6 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
-        resolveTenantId: vi.fn().mockResolvedValue(tenantId),
         recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
         getWebPushCapabilities: vi.fn(),
         registerWebPush: vi.fn(),
@@ -222,7 +219,6 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
-        resolveTenantId: vi.fn().mockResolvedValue(tenantId),
         recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
         getWebPushCapabilities: vi.fn().mockResolvedValue({
           tenantEnabled: true,
@@ -284,7 +280,6 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
-        resolveTenantId: vi.fn().mockResolvedValue(tenantId),
         recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
         getWebPushCapabilities: vi.fn().mockResolvedValue({
           tenantEnabled: true,
@@ -332,7 +327,6 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
-        resolveTenantId: vi.fn().mockResolvedValue(tenantId),
         recordClientDeliveryReceipt,
         getWebPushCapabilities: vi.fn(),
         registerWebPush: vi.fn(),
@@ -355,7 +349,7 @@ describe('Web Push endpoint User API', () => {
     // A service worker holds no access token, so the signed token is the whole authorization.
     const recorded = await app.inject({
       method: 'POST',
-      url: '/user/api/v1/local-padel/notifications/receipts',
+      url: '/user/api/v1/notifications/receipts',
       payload: { token, type: 'DISPLAYED' },
     });
 
@@ -371,14 +365,14 @@ describe('Web Push endpoint User API', () => {
     const tampered = `${token.slice(0, -4)}aaaa`;
     const rejected = await app.inject({
       method: 'POST',
-      url: '/user/api/v1/local-padel/notifications/receipts',
+      url: '/user/api/v1/notifications/receipts',
       payload: { token: tampered, type: 'OPENED' },
     });
     expect(rejected.statusCode).toBe(403);
     expect(rejected.json()).toMatchObject({ code: 'NOTIFICATION_RECEIPT_INVALID' });
     const expired = await app.inject({
       method: 'POST',
-      url: '/user/api/v1/local-padel/notifications/receipts',
+      url: '/user/api/v1/notifications/receipts',
       payload: {
         token: createNotificationReceiptToken({
           secret,
