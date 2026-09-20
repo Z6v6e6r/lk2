@@ -1,4 +1,11 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
 
 import { z } from 'zod';
 
@@ -687,6 +694,78 @@ export function canonicalWebPushSubscription(subscription: WebPushSubscription):
       auth: subscription.keys.auth,
     },
   });
+}
+
+/**
+ * A display or click receipt is reported by the service worker, which has no session and often runs while
+ * the page is closed. The push therefore carries a token that authorises exactly one thing: recording a
+ * receipt for the one delivery it was sent for. The key is derived from the endpoint keyring, which both
+ * the API and the Worker already hold, so no new secret and no new configuration key appear anywhere.
+ */
+export const NOTIFICATION_RECEIPT_TOKEN_DOMAIN = 'phub:notification-receipt:v1';
+
+export function notificationReceiptSecret(input: {
+  readonly serializedKeys: string;
+  readonly activeKeyId: string;
+}): string {
+  const keys = parseEndpointKeyring(input.serializedKeys);
+  const key = keys.get(input.activeKeyId);
+  if (!key) throw new Error('NOTIFICATION_ENDPOINT_ACTIVE_KEY_MISSING');
+  return createHmac('sha256', key).update(NOTIFICATION_RECEIPT_TOKEN_DOMAIN).digest('base64url');
+}
+
+function receiptTokenSignature(secret: string, encodedPayload: string): Buffer {
+  return createHmac('sha256', secret).update(encodedPayload).digest();
+}
+
+export function createNotificationReceiptToken(input: {
+  readonly secret: string;
+  readonly tenantId: string;
+  readonly deliveryId: string;
+  readonly expiresAt: Date;
+}): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      t: input.tenantId,
+      d: input.deliveryId,
+      e: Math.floor(input.expiresAt.getTime() / 1000),
+    }),
+    'utf8',
+  ).toString('base64url');
+  return `${payload}.${receiptTokenSignature(input.secret, payload).toString('base64url')}`;
+}
+
+/**
+ * Returns the delivery a token authorises, or nothing. The tenant comes from the signed payload, so the
+ * capability fully describes what it may do and the client needs no tenant key of its own. Every failure
+ * — malformed token, expired, tampered signature — is the same answer, so a probe cannot tell them apart.
+ */
+export function verifyNotificationReceiptToken(input: {
+  readonly secret: string;
+  readonly token: string;
+  readonly now?: Date;
+}): { readonly tenantId: string; readonly deliveryId: string } | undefined {
+  const [payload, signature] = input.token.split('.');
+  if (!payload || !signature) return undefined;
+  let provided: Buffer;
+  try {
+    provided = Buffer.from(signature, 'base64url');
+  } catch {
+    return undefined;
+  }
+  const expected = receiptTokenSignature(input.secret, payload);
+  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return undefined;
+  let parsed: { readonly t?: unknown; readonly d?: unknown; readonly e?: unknown };
+  try {
+    parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as typeof parsed;
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed.t !== 'string' || typeof parsed.d !== 'string' || typeof parsed.e !== 'number')
+    return undefined;
+  const now = (input.now ?? new Date()).getTime() / 1000;
+  if (!Number.isFinite(parsed.e) || parsed.e <= now) return undefined;
+  return { tenantId: parsed.t, deliveryId: parsed.d };
 }
 
 export interface NotificationEndpointCipher {

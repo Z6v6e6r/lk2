@@ -48,7 +48,7 @@ import {
   LegacyGamesPublicAdapter,
   LegacyTournamentSummaryAdapter,
 } from '@phub/legacy-games-adapter';
-import { createNotificationEndpointCipher } from '@phub/notifications';
+import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
 import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
 import { ManagedSubscriptionRuntimeQuoteClient } from '@phub/subscription-runtime-adapter';
@@ -122,6 +122,15 @@ const clientRoutingPlanRepository = createClientRoutingPlanRepository(pool);
 const notificationEndpointCipher =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? createNotificationEndpointCipher({
+        serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
+        activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
+      })
+    : undefined;
+// The Worker derives the same value from the same keyring, so a receipt token needs no shared session
+// and no new configuration key.
+const notificationReceiptKey =
+  config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
+    ? notificationReceiptSecret({
         serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
         activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
       })
@@ -592,6 +601,7 @@ const app = await buildApp({
       }
     : {}),
   ...(notificationEndpointCipher ? { notificationEndpointCipher } : {}),
+  ...(notificationReceiptKey ? { notificationReceiptSecret: notificationReceiptKey } : {}),
   authDependencyReady: async () => (await redis.ping()) === 'PONG',
   rateLimitRedis: redis,
 });

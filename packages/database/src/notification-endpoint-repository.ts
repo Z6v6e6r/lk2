@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
@@ -28,6 +29,15 @@ export type WebPushEndpointCommandResult =
     };
 
 export interface NotificationEndpointRepository {
+  /**
+   * Records a display or click the service worker reported for one delivery. Idempotent by the
+   * (delivery, type) pair, and silent when the delivery is not in that tenant.
+   */
+  recordClientDeliveryReceipt(input: {
+    readonly tenantId: string;
+    readonly deliveryId: string;
+    readonly receiptType: 'DISPLAYED' | 'OPENED';
+  }): Promise<{ readonly recorded: boolean }>;
   getWebPushCapabilities(
     tenantId: string,
     selector: WebPushProviderSelector,
@@ -192,6 +202,27 @@ async function activeProvider(
 
 export function createNotificationEndpointRepository(pool: Pool): NotificationEndpointRepository {
   return {
+    recordClientDeliveryReceipt(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const receiptKey = createHash('sha256')
+          .update(`web:client-${input.receiptType.toLowerCase()}:${input.deliveryId}`)
+          .digest('hex');
+        const row = await queryOne<{ readonly id: string }>(
+          client,
+          `insert into notifications.delivery_receipts (
+             tenant_id, delivery_id, receipt_key, receipt_type, source, platform, occurred_at
+           )
+           select $1, d.id, $3, $4, 'CLIENT', 'WEB', now()
+             from notifications.deliveries d
+            where d.tenant_id = $1 and d.id = $2
+           on conflict (tenant_id, receipt_key) do nothing
+           returning id`,
+          [input.tenantId, input.deliveryId, receiptKey, input.receiptType],
+        );
+        return { recorded: row !== undefined };
+      });
+    },
+
     getWebPushCapabilities(tenantId, selector) {
       return withTenantTransaction(pool, tenantId, async (client) => {
         const row = await queryOne<CapabilitiesRow>(

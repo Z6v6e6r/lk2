@@ -14,7 +14,10 @@ import {
   createNotificationEndpointCipher,
   gameNotificationSourceEventSchema,
   isWebPushEndpointOriginAllowed,
+  createNotificationReceiptToken,
+  notificationReceiptSecret,
   storedWebPushEndpoint,
+  verifyNotificationReceiptToken,
   webPushEndpointPlatform,
   notificationAudienceSelectorSchema,
   notificationSourceEventSchema,
@@ -102,6 +105,41 @@ describe('Web Push endpoint protection', () => {
         allowedOrigins,
       ),
     ).toBe(false);
+  });
+
+  it('signs a receipt token that authorises exactly one delivery and expires', () => {
+    const keyring = JSON.stringify({ v1: Buffer.alloc(32, 7).toString('base64') });
+    const secret = notificationReceiptSecret({ serializedKeys: keyring, activeKeyId: 'v1' });
+    const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
+    const deliveryId = '33333333-3333-4333-8333-333333333333';
+    const token = createNotificationReceiptToken({
+      secret,
+      tenantId,
+      deliveryId,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+
+    // The tenant comes back from the signed payload, so the caller needs no tenant input at all.
+    expect(verifyNotificationReceiptToken({ secret, token })).toEqual({ tenantId, deliveryId });
+    // A tampered signature, an expiry in the past, garbage and a foreign secret are one answer each.
+    expect(
+      verifyNotificationReceiptToken({ secret, token: `${token.slice(0, -3)}abc` }),
+    ).toBeUndefined();
+    expect(verifyNotificationReceiptToken({ secret, token: 'not-a-token' })).toBeUndefined();
+    expect(
+      verifyNotificationReceiptToken({
+        secret,
+        token: createNotificationReceiptToken({
+          secret,
+          tenantId,
+          deliveryId,
+          expiresAt: new Date(Date.now() - 1000),
+        }),
+      }),
+    ).toBeUndefined();
+    expect(verifyNotificationReceiptToken({ secret: 'another-secret', token })).toBeUndefined();
+    // The derived secret is not the keyring value itself: the keyring key can never sign a receipt.
+    expect(secret).not.toBe(Buffer.alloc(32, 7).toString('base64'));
   });
 
   it('reads the address out of the stored subscription envelope the registration writes', () => {

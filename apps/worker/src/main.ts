@@ -23,7 +23,7 @@ import {
   createProfileFriendshipRepository,
 } from '@phub/database';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
-import { createNotificationEndpointCipher } from '@phub/notifications';
+import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
 import { connect } from 'amqplib';
 
@@ -270,6 +270,15 @@ const createLegacyGamesRosterSource = () =>
 const legacyGamesRosterWindowSource = config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
   ? createLegacyGamesRosterSource()
   : undefined;
+// The API derives the same receipt secret from the same keyring, which is what lets a service worker
+// report a display without holding a session.
+const receiptTokenSecret =
+  config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
+    ? notificationReceiptSecret({
+        serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
+        activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
+      })
+    : undefined;
 const webPushRuntime =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? {
@@ -285,6 +294,7 @@ const webPushRuntime =
           timeoutMs: config.WEB_PUSH_TIMEOUT_MS,
           circuitFailureThreshold: config.WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD,
           circuitResetMs: config.WEB_PUSH_CIRCUIT_RESET_MS,
+          ...(receiptTokenSecret ? { receiptTokenSecret } : {}),
           allowedEndpointOrigins:
             config.WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS.split(',').filter(Boolean),
           onProviderOutcome: (outcome) =>

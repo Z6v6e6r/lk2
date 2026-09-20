@@ -2495,7 +2495,7 @@ components:
     AdminNotificationChannelDeliveryStats:
       type: object
       additionalProperties: false
-      required: [channel, queued, accepted, failed, dead, suppressed, pending]
+      required: [channel, queued, accepted, failed, dead, suppressed, pending, displayed, opened]
       properties:
         channel:
           type: string
@@ -2518,6 +2518,13 @@ components:
         pending:
           type: integer
           minimum: 0
+        displayed:
+          type: integer
+          minimum: 0
+          description: Deliveries the client reported as shown; a floor, because a closed iOS web app may not run the worker.
+        opened:
+          type: integer
+          minimum: 0
         medianAcceptSeconds:
           type: integer
           minimum: 0
@@ -2535,6 +2542,8 @@ components:
         - pushAccepted
         - pushFailed
         - pushDead
+        - pushDisplayed
+        - pushOpened
       properties:
         campaignId:
           type: string
@@ -2565,6 +2574,12 @@ components:
           type: integer
           minimum: 0
         pushDead:
+          type: integer
+          minimum: 0
+        pushDisplayed:
+          type: integer
+          minimum: 0
+        pushOpened:
           type: integer
           minimum: 0
     AdminNotificationDeliveryFailure:

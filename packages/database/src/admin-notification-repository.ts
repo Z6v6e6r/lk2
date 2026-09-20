@@ -63,6 +63,9 @@ export interface AdminNotificationChannelDeliveryStats {
   readonly dead: number;
   readonly suppressed: number;
   readonly pending: number;
+  /** Deliveries the client reported as shown, and as opened. Both are a floor, never a guarantee. */
+  readonly displayed: number;
+  readonly opened: number;
   /** Median seconds from queueing to the terminal state; absent while nothing has completed yet. */
   readonly medianAcceptSeconds?: number;
 }
@@ -78,6 +81,8 @@ export interface AdminNotificationCampaignDeliveryStats {
   readonly pushAccepted: number;
   readonly pushFailed: number;
   readonly pushDead: number;
+  readonly pushDisplayed: number;
+  readonly pushOpened: number;
 }
 
 export interface AdminNotificationDeliveryFailure {
@@ -199,6 +204,12 @@ interface SubscriberRow extends QueryResultRow {
   readonly encryption_key_ids: string[] | null;
 }
 
+interface ReceiptFunnelRow extends QueryResultRow {
+  readonly channel: string;
+  readonly displayed: number;
+  readonly opened: number;
+}
+
 interface ChannelDeliveryStatsRow extends QueryResultRow {
   readonly channel: string;
   readonly queued: number;
@@ -221,6 +232,8 @@ interface CampaignDeliveryStatsRow extends QueryResultRow {
   readonly push_accepted: number;
   readonly push_failed: number;
   readonly push_dead: number;
+  readonly push_displayed: number;
+  readonly push_opened: number;
 }
 
 interface DeliveryFailureRow extends QueryResultRow {
@@ -780,23 +793,44 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
              c.push_queued_count,
              c.suppressed_count,
              c.in_app_created_count,
-             count(d.id) filter (where d.channel = 'PUSH' and d.state in ('SENT', 'DELIVERED'))
+             count(distinct d.id) filter (where d.channel = 'PUSH' and d.state in ('SENT', 'DELIVERED'))
                ::integer as push_accepted,
-             count(d.id) filter (where d.channel = 'PUSH' and d.state = 'FAILED')::integer
+             count(distinct d.id) filter (where d.channel = 'PUSH' and d.state = 'FAILED')::integer
                as push_failed,
-             count(d.id) filter (where d.channel = 'PUSH' and d.state = 'DEAD')::integer
-               as push_dead
+             count(distinct d.id) filter (where d.channel = 'PUSH' and d.state = 'DEAD')::integer
+               as push_dead,
+             count(distinct r.delivery_id) filter (where r.receipt_type = 'DISPLAYED')::integer
+               as push_displayed,
+             count(distinct r.delivery_id) filter (where r.receipt_type = 'OPENED')::integer
+               as push_opened
            from notifications.admin_campaigns c
            left join notifications.intents i
              on i.tenant_id = c.tenant_id and i.source_event_id = c.id
            left join notifications.deliveries d
              on d.tenant_id = i.tenant_id and d.intent_id = i.id
+           left join notifications.delivery_receipts r
+             on r.tenant_id = d.tenant_id and r.delivery_id = d.id
           where c.tenant_id = $1 and c.created_at >= $2
           group by c.id, c.created_at, c.requested_channels, c.matched_count, c.push_queued_count,
                    c.suppressed_count, c.in_app_created_count
           order by c.created_at desc
           limit $3`,
           [input.tenantId, input.since, input.campaignLimit],
+        );
+        // Kept separate from the delivery counters on purpose: joining receipts into that aggregate would
+        // multiply every delivery that produced two receipts and inflate the queue numbers.
+        const funnel = await client.query<ReceiptFunnelRow>(
+          `select d.channel,
+                  count(distinct r.delivery_id) filter (where r.receipt_type = 'DISPLAYED')
+                    ::integer as displayed,
+                  count(distinct r.delivery_id) filter (where r.receipt_type = 'OPENED')::integer
+                    as opened
+             from notifications.delivery_receipts r
+             join notifications.deliveries d
+               on d.tenant_id = r.tenant_id and d.id = r.delivery_id
+            where r.tenant_id = $1 and d.created_at >= $2
+            group by d.channel`,
+          [input.tenantId, input.since],
         );
         const failures = await client.query<DeliveryFailureRow>(
           `select channel, last_error_code as error_code, count(*)::integer as failure_count,
@@ -837,6 +871,8 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
             dead: row.dead,
             suppressed: row.suppressed,
             pending: row.pending,
+            displayed: funnel.rows.find((entry) => entry.channel === row.channel)?.displayed ?? 0,
+            opened: funnel.rows.find((entry) => entry.channel === row.channel)?.opened ?? 0,
             ...(row.median_accept_seconds === null
               ? {}
               : { medianAcceptSeconds: Math.round(Number(row.median_accept_seconds)) }),
@@ -852,6 +888,8 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
             pushAccepted: row.push_accepted,
             pushFailed: row.push_failed,
             pushDead: row.push_dead,
+            pushDisplayed: row.push_displayed,
+            pushOpened: row.push_opened,
           })),
           failures: failures.rows.map((row) => ({
             channel: row.channel,

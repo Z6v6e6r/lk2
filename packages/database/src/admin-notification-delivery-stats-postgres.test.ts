@@ -197,6 +197,10 @@ describePostgres('admin notification delivery stats against real PostgreSQL', ()
   afterAll(async () => {
     for (const tenant of [tenantId, foreignTenantId]) {
       await withTenantTransaction(pool, tenant, async (client) => {
+        // Receipts reference deliveries, so they go first.
+        await client.query('delete from notifications.delivery_receipts where tenant_id = $1', [
+          tenant,
+        ]);
         await client.query('delete from notifications.deliveries where tenant_id = $1', [tenant]);
         await client.query('delete from notifications.inbox_items where tenant_id = $1', [tenant]);
         // Children first: recipients reference intents, and the campaign templates reference the actor.
@@ -307,6 +311,35 @@ describePostgres('admin notification delivery stats against real PostgreSQL', ()
     // Campaigns are windowed too, but endpoint health is a current-state view and stays reported.
     expect(empty.campaigns).toEqual([]);
     expect(empty.endpoints.active).toBe(2);
+  });
+
+  it('reports the display and open funnel the client sends back', async () => {
+    const campaignId = await createAcceptedCampaign('Воронка', [recipient]);
+    const deliveries = await deliveriesOf(campaignId);
+    const pushDelivery = deliveries.find((delivery) => delivery.channel === 'PUSH');
+    expect(pushDelivery).toBeDefined();
+    await setDeliveryState(pushDelivery!.id, 'SENT');
+    // Both receipts are written the way the API writes them, and a repeat of one must not double count.
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      for (const type of ['DISPLAYED', 'DISPLAYED', 'OPENED']) {
+        await client.query(
+          `insert into notifications.delivery_receipts (
+             tenant_id, delivery_id, receipt_key, receipt_type, source, platform, occurred_at
+           ) values ($1, $2, $3, $4, 'CLIENT', 'WEB', now())
+           on conflict (tenant_id, receipt_key) do nothing`,
+          [tenantId, pushDelivery!.id, `funnel:${type}:${randomUUID()}`, type],
+        );
+      }
+    });
+
+    const result = await stats(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    const pushChannel = result.channels.find((row) => row.channel === 'PUSH');
+    // Two display rows exist, but the report counts deliveries, not receipts.
+    expect(pushChannel).toMatchObject({ displayed: 1, opened: 1 });
+    expect(result.campaigns.find((row) => row.campaignId === campaignId)).toMatchObject({
+      pushDisplayed: 1,
+      pushOpened: 1,
+    });
   });
 
   it('keeps the report inside the tenant that asked for it', async () => {
