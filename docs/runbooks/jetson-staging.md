@@ -240,7 +240,8 @@ the old cookie with that same key and receives the same deterministic successor.
 atomically written and directory-synchronized before the ticket/WebSocket handshake; application
 rollback never restores an old refresh credential.
 
-The B0 controller runs the host-only helper twice under the staging workflow lock: once after the
+The B0 controller runs the host-only helper twice under the staging workflow lock unless the run
+carries the deliberate smoke waiver documented below: once after the
 durable bundle is published but before marker/runtime-secret/service mutation, and once after the
 candidate public release and runtime checks but before the rollback trap is removed. It resolves
 `lk.nano.padlhub.su` to the staging host gateway, forbids redirects, and requests only one
@@ -258,6 +259,44 @@ run-scoped helper. The durable state records the last successful rotation and th
 expiry without logging either credential. The default refresh TTL is 30 days; a failed weekly job
 must be investigated before expiry, and an expired session fails closed until separately reviewed
 reprovisioning. `RECOVER` never rotates or requires the smoke credential.
+
+#### Deliberate synthetic-smoke waiver for `START`
+
+When no synthetic smoke principal can be provisioned (no dedicated non-personal SIM is available),
+`START` accepts `smoke_session_waiver=WAIVE_STAGING_REALTIME_SMOKE_SESSION`. The workflow refuses any
+other value and accepts this one only for `START`, only on run attempt 1, and only when
+`github.actor` equals `github.repository_owner`, so no collaborator account and no re-run can set it.
+The `staging` environment approval still applies to the dispatch itself. Do not pin this to the
+`staging-foundation-maintenance` owner variable: that variable is environment-scoped, so it is not
+visible here and an empty value would refuse every waiver. `RECOVER` never needs the waiver.
+
+Waived mode skips both host-path smoke proofs (`staging_realtime_smoke_session status=waived
+reason=synthetic_smoke_principal_absent`), so the run produces no authenticated realtime ticket or
+WebSocket evidence. It bypasses every smoke outcome, not only an absent credential: an expired or
+revoked refresh token, a wrong session tenant or context, and a broadened permission set would all
+go unnoticed by a waived run. Everything else still gates the cutover: the offline
+`loadRealtimeConfig` proof of the candidate allowlist, the disabled-flag assertions, candidate image
+and health checks, the public release and ingress attestation, and the strict secret-isolation
+verification. The end state is unchanged and still leaves `COMMUNITIES_REALTIME_ENABLED=false`.
+
+Consequences to accept explicitly before dispatching a waived run:
+
+- the skipped proof cannot be produced afterwards through B0. `START` is one-shot: once the run
+  finalizes, the durable `/etc/phub/.runtime-secret-bootstrap.finalized.json` receipt makes every
+  later `START` fail with `unresolved transition artifact exists`, and `RECOVER` only attests the
+  already-finalized state. The compensating proof is the weekly
+  `Renew staging realtime smoke session` workflow, which exercises the same helper against the
+  now-serving candidate through public ingress, or the Communities realtime enablement gate;
+- the weekly `Renew staging realtime smoke session` workflow keeps failing until the principal
+  exists; a failed weekly job must not be treated as a regression of this transition;
+- enabling Communities realtime for real traffic (step C) still requires a provisioned principal and
+  a non-waived proof, because a waived run asserts nothing about ticket issuance or WebSocket
+  handshakes;
+- the waiver leaves no durable host-side trace of its own: it is recorded in the run warning, the
+  step summary and the 30-day `b0-evidence` artifact, while the host marker and finalized receipt
+  carry no smoke field;
+- the waiver is an attested-owner, temporary escape hatch, not the default path. Delete the
+  `smoke_session_waiver` input and its attestation step once the principal is installed.
 
 ### Temporary legacy OTP canary
 
