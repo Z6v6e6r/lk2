@@ -110,12 +110,6 @@ export function registerMessagingReportRoutes(
         reasonCode: body.data.reasonCode,
         details: details && details.length > 0 ? details : null,
         idempotencyKey,
-        requestHash: JSON.stringify({
-          conversationId: params.data.conversationId,
-          messageId: params.data.messageId,
-          reasonCode: body.data.reasonCode,
-          details: details && details.length > 0 ? details : null,
-        }),
         correlationId: request.id,
       });
       switch (result.outcome) {
@@ -136,14 +130,6 @@ export function registerMessagingReportRoutes(
             409,
             'MESSAGING_REPORT_DUPLICATE',
             'Жалоба на это сообщение с этой причиной уже отправлена.',
-          );
-        case 'idempotency_conflict':
-          return sendApiError(
-            request,
-            reply,
-            409,
-            'IDEMPOTENCY_KEY_REUSED',
-            'Idempotency-Key уже использован для другой команды.',
           );
         case 'submitted':
           if (result.replayed) {

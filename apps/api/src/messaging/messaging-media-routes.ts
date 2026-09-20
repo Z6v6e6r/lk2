@@ -47,10 +47,15 @@ const finalizeSchema = z
  * Public media representation. The ready object version is an internal storage detail: a reader may
  * never address an object directly, so it stays out of every DTO.
  */
-function mediaView(media: MessagingMediaAsset): Omit<MessagingMediaAsset, 'readyObjectVersion'> {
+function mediaView(
+  media: MessagingMediaAsset,
+): Omit<MessagingMediaAsset, 'readyObjectVersion' | 'uploaderUserId'> {
   const view: Record<string, unknown> = { ...media };
   delete view.readyObjectVersion;
-  return view as Omit<MessagingMediaAsset, 'readyObjectVersion'>;
+  // The caller is always the uploader of the media it reads, so the identifier carries no
+  // information for a client and stays out of the public DTO.
+  delete view.uploaderUserId;
+  return view as Omit<MessagingMediaAsset, 'readyObjectVersion' | 'uploaderUserId'>;
 }
 
 function principal(request: FastifyRequest): { tenantId: string; userId: string } | undefined {

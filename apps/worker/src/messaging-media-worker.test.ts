@@ -626,6 +626,35 @@ describe('messaging media worker cycle', () => {
     expect(order).toEqual(['deleteExact', 'confirm', 'confirm']);
   });
 
+  it('discovers the object version of an abandoned upload before confirming absence', async () => {
+    const schedule = vi.fn().mockResolvedValue(undefined);
+    const currentVersion = vi.fn().mockResolvedValue('abandoned-version-1');
+    const confirm = vi.fn().mockResolvedValue(false);
+
+    const result = await run({
+      repository: repository({
+        expireDue: vi.fn().mockResolvedValue([
+          {
+            mediaId: '00000000-0000-4000-8000-000000000041',
+            objectKey: 'chat-media/quarantine/t/c/m/source',
+            objectVersion: null,
+          },
+        ]),
+        scheduleExpiredSourceVersion: schedule,
+        confirmExpiredObjectsAbsent: confirm,
+      }),
+      store: store({ currentVersion }).store,
+    });
+
+    expect(currentVersion).toHaveBeenCalledWith('chat-media/quarantine/t/c/m/source');
+    expect(schedule).toHaveBeenCalledWith({
+      tenantId,
+      mediaId: '00000000-0000-4000-8000-000000000041',
+      objectVersion: 'abandoned-version-1',
+    });
+    expect(result.expired).toBe(1);
+  });
+
   it('defers expiry and claim failures with a warning instead of throwing', async () => {
     const log = logger();
     const result = await run({

@@ -379,6 +379,51 @@ describePostgres('chat media PostgreSQL pipeline', () => {
     expect(restored.page.messages.some((message) => message.id === messageId)).toBe(true);
   });
 
+  it('deletes the quarantine object of an abandoned upload discovered by key', async () => {
+    const issued = await issue('abandoned.png', 'image/png', 3_072);
+    if (issued.outcome !== 'issued') throw new Error('ISSUE_FAILED');
+    await withTenantTransaction(pool, tenantId, (client) =>
+      client.query(
+        `update messaging.media_assets set upload_expires_at = now() - interval '1 minute'
+          where tenant_id = $1 and id = $2`,
+        [tenantId, issued.intent.id],
+      ),
+    );
+
+    const expired = await media.expireDue({
+      tenantId,
+      limit: 10,
+      correlationId: `media-correlation-${randomUUID()}`,
+    });
+    const abandoned = expired.find((row) => row.mediaId === issued.intent.id);
+    expect(abandoned).toMatchObject({ objectVersion: null });
+
+    // The worker discovers the version of the never-finalized object and records it for deletion.
+    await media.scheduleExpiredSourceVersion({
+      tenantId,
+      mediaId: issued.intent.id,
+      objectVersion: 'abandoned-version-1',
+    });
+    const claims = await media.claimGc({
+      tenantId,
+      limit: 10,
+      leaseOwner: 'media-pg-test',
+      leaseSeconds: 30,
+    });
+    for (const claim of claims.filter((candidate) => candidate.mediaId === issued.intent.id)) {
+      expect(
+        await media.completeGc({
+          tenantId,
+          leaseOwner: 'media-pg-test',
+          jobId: claim.jobId,
+        }),
+      ).toBe('deleted');
+    }
+    await expect(
+      media.confirmExpiredObjectsAbsent({ tenantId, mediaId: issued.intent.id }),
+    ).resolves.toBe(true);
+  });
+
   it('expires an unattached READY asset and schedules both exact object versions for deletion', async () => {
     const mediaId = await ready('expiring.png');
     await withTenantTransaction(pool, tenantId, (client) =>

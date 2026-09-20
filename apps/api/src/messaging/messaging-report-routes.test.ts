@@ -260,8 +260,7 @@ describe('messaging report User API', () => {
           .fn()
           .mockResolvedValueOnce({ outcome: 'self_report' })
           .mockResolvedValueOnce({ outcome: 'duplicate' })
-          .mockResolvedValueOnce({ outcome: 'not_found' })
-          .mockResolvedValueOnce({ outcome: 'idempotency_conflict' }),
+          .mockResolvedValueOnce({ outcome: 'not_found' }),
       }),
     });
     apps.push(app);
@@ -288,21 +287,12 @@ describe('messaging report User API', () => {
       headers,
       payload: { reasonCode: 'SPAM' },
     });
-    const conflict = await app.inject({
-      method: 'POST',
-      url: `/user/api/v1/local-padel/conversations/${conversationId}/messages/${messageId}/report`,
-      headers,
-      payload: { reasonCode: 'SPAM' },
-    });
-
     expect(self.statusCode).toBe(409);
     expect(self.json()).toMatchObject({ code: 'MESSAGING_REPORT_SELF_TARGET' });
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json()).toMatchObject({ code: 'MESSAGING_REPORT_DUPLICATE' });
     expect(unknown.statusCode).toBe(404);
     expect(unknown.json()).toMatchObject({ code: 'CONVERSATION_NOT_FOUND' });
-    expect(conflict.statusCode).toBe(409);
-    expect(conflict.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
   });
 
   it('answers 503 while the moderation contour is not wired', async () => {

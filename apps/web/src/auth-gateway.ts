@@ -633,11 +633,6 @@ export interface AuthGateway {
     mediaId: string,
   ) => Promise<MessagingMediaAsset>;
   /**
-   * Synchronous, same-origin content URL for `<img src>` / download links. The
-   * endpoint answers 302 to a short-lived signed URL, so the value must never be
-   * cached in application state nor fetched through XHR.
-   */
-  /**
    * Attachment bytes for the active session. The API answers 302 to a short-lived signed URL, and a
    * browser cannot attach the bearer token to an `<img src>`, so readers receive a blob they turn
    * into an object URL and revoke again.

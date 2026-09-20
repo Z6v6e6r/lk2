@@ -116,7 +116,6 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
       reasonCode: 'ABUSE',
       details: 'грубость',
       idempotencyKey: `report-${command()}`,
-      requestHash: command(),
       correlationId: `correlation-report-${command()}`,
     });
     expect(first).toMatchObject({ outcome: 'submitted', replayed: false });
@@ -218,7 +217,6 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
       reasonCode: 'SPAM',
       details: null,
       idempotencyKey: `report-${command()}`,
-      requestHash: command(),
       correlationId: `correlation-report-${command()}`,
     });
     expect(self).toEqual({ outcome: 'self_report' });
@@ -232,7 +230,6 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
       reasonCode: 'SPAM',
       details: 'реклама',
       idempotencyKey: key,
-      requestHash: command(),
       correlationId: `correlation-report-${command()}`,
     });
     expect(first).toMatchObject({ outcome: 'submitted', replayed: false });
@@ -245,7 +242,6 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
       reasonCode: 'SPAM',
       details: 'реклама',
       idempotencyKey: key,
-      requestHash: command(),
       correlationId: `correlation-report-${command()}`,
     });
     expect(retry).toMatchObject({ outcome: 'submitted', replayed: true });
@@ -258,7 +254,6 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
       reasonCode: 'SPAM',
       details: 'другое описание',
       idempotencyKey: key,
-      requestHash: command(),
       correlationId: `correlation-report-${command()}`,
     });
     expect(changedDetails).toEqual({ outcome: 'duplicate' });
@@ -272,7 +267,6 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
       reasonCode: 'SCAM',
       details: null,
       idempotencyKey: `report-${command()}`,
-      requestHash: command(),
       correlationId: `correlation-report-${command()}`,
     });
     expect(secondReason).toMatchObject({ outcome: 'submitted' });

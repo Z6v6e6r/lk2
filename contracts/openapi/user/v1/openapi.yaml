@@ -7122,10 +7122,10 @@ components:
           type: integer
           minimum: 1
         readyAt:
-          type: string
+          type: [string, 'null']
           format: date-time
         rejectionCode:
-          type: string
+          type: [string, 'null']
           maxLength: 100
         createdAt:
           type: string

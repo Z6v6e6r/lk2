@@ -1345,6 +1345,97 @@ describe('messaging repository', () => {
     }
   });
 
+  it('replays an attachment-only message instead of reporting a conflict', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('member.id as member_id') && !text.includes('for update of member')) {
+        return Promise.resolve({
+          rows: [{ member_id: memberId, last_read_sequence: '0', last_sequence: '2' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select next_sequence')) {
+        return Promise.resolve({ rows: [{ next_sequence: '3', kind: 'DIRECT' }], rowCount: 1 });
+      }
+      if (text.includes('select left_user_id, right_user_id')) {
+        return Promise.resolve({
+          rows: [{ left_user_id: userId, right_user_id: otherUserId }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('message.idempotency_key = $3')) {
+        // The stored attachment-only message keeps no body at all.
+        return Promise.resolve({
+          rows: [
+            {
+              id: messageId,
+              conversation_id: conversationId,
+              sequence: '2',
+              sender_user_id: userId,
+              sender_display_name: 'Анна',
+              message_type: 'IMAGE',
+              body: null,
+              created_at: '2026-09-20 10:00:00+00',
+              client_message_id: 'client-message-attachment-0001',
+              idempotency_key: 'message-command-attachment-0001',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from messaging.message_attachments')) {
+        return Promise.resolve({
+          rows: [
+            {
+              message_id: messageId,
+              media_id: '77777777-7777-4777-8777-777777777777',
+              position: 1,
+              file_name: 'photo.png',
+              content_type: 'image/png',
+              size_bytes: '1024',
+              media_type: 'IMAGE',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    const replayed = await repository.sendMessage({
+      tenantId,
+      userId,
+      conversationId,
+      clientMessageId: 'client-message-attachment-0001',
+      idempotencyKey: 'message-command-attachment-0001',
+      body: '',
+      attachmentMediaIds: ['77777777-7777-4777-8777-777777777777'],
+      correlationId: 'message-correlation-attachment-0001',
+    });
+
+    expect(replayed).toMatchObject({
+      outcome: 'ok',
+      replayed: true,
+      message: {
+        id: messageId,
+        messageType: 'IMAGE',
+        body: '',
+        attachments: [{ mediaId: '77777777-7777-4777-8777-777777777777', position: 1 }],
+      },
+    });
+    expect(
+      query.mock.calls.some(([text]) => String(text).includes('insert into messaging.messages')),
+    ).toBe(false);
+  });
+
   it('does not reveal a conversation to a non-member', async () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {

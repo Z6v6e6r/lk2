@@ -246,6 +246,11 @@ export interface MessagingMediaRepository {
       readonly objectVersion: string | null;
     }[]
   >;
+  scheduleExpiredSourceVersion(input: {
+    readonly tenantId: string;
+    readonly mediaId: string;
+    readonly objectVersion: string;
+  }): Promise<void>;
   confirmExpiredObjectsAbsent(input: {
     readonly tenantId: string;
     readonly mediaId: string;
@@ -1094,6 +1099,24 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
           objectKey: row.source_object_key,
           objectVersion: row.source_object_version,
         }));
+      });
+    },
+
+    scheduleExpiredSourceVersion(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        // An abandoned upload never reached finalize, so the database does not know its object
+        // version; the caller discovers it by key and records it here for exact deletion.
+        await client.query(
+          `insert into messaging.media_gc_jobs (
+             tenant_id, media_id, object_kind, object_key, object_version, available_at
+           )
+           select asset.tenant_id, asset.id, 'SOURCE', asset.source_object_key, $3, now()
+             from messaging.media_assets asset
+            where asset.tenant_id = $1 and asset.id = $2
+           on conflict (tenant_id, object_key, object_version) do update
+             set available_at = least(messaging.media_gc_jobs.available_at, excluded.available_at)`,
+          [input.tenantId, input.mediaId, input.objectVersion],
+        );
       });
     },
 

@@ -64,8 +64,7 @@ export type MessagingReportSubmitResult =
     }
   | { readonly outcome: 'not_found' }
   | { readonly outcome: 'self_report' }
-  | { readonly outcome: 'duplicate' }
-  | { readonly outcome: 'idempotency_conflict' };
+  | { readonly outcome: 'duplicate' };
 
 export type MessagingReportDecisionResult =
   | {
@@ -86,7 +85,6 @@ export interface MessagingModerationRepository {
     readonly reasonCode: string;
     readonly details: string | null;
     readonly idempotencyKey: string;
-    readonly requestHash: string;
     readonly correlationId: string;
   }): Promise<MessagingReportSubmitResult>;
   listReportQueue(input: {
@@ -148,6 +146,7 @@ interface ReportDecisionRow extends QueryResultRow {
 
 interface StoredActionRow extends QueryResultRow {
   readonly id: string;
+  readonly case_id: string;
   readonly action_type: string;
   readonly reason_code: string;
 }
@@ -397,13 +396,23 @@ export function createMessagingModerationRepository(pool: Pool): MessagingModera
 
         const previous = await queryOne<StoredActionRow>(
           client,
-          `select id, action_type, reason_code
+          `select id, case_id, action_type, reason_code
              from moderation.actions
             where tenant_id = $1 and idempotency_key = $2
             for update`,
           [input.tenantId, input.idempotencyKey],
         );
         if (previous) {
+          // The stored action is only a replay when it decided the same case; the same key reused
+          // for another report must never report success while changing nothing.
+          const previousCase = await queryOne<{ readonly case_id: string | null } & QueryResultRow>(
+            client,
+            `select case_id from moderation.reports where tenant_id = $1 and id = $2`,
+            [input.tenantId, input.reportId],
+          );
+          if (!previousCase || previousCase.case_id !== previous.case_id) {
+            return { outcome: 'idempotency_conflict' } as const;
+          }
           const replay = await replayDecision(client, input, previous);
           if (replay) return replay;
         }

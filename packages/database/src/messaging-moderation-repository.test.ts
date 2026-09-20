@@ -72,7 +72,6 @@ describe('messaging moderation repository', () => {
         reasonCode: 'SPAM',
         details: null,
         idempotencyKey,
-        requestHash: 'hash-0001',
         correlationId,
       }),
     ).resolves.toEqual({ outcome: 'not_found' });
@@ -108,7 +107,6 @@ describe('messaging moderation repository', () => {
         reasonCode: 'ABUSE',
         details: 'неприемлемый текст',
         idempotencyKey,
-        requestHash: 'hash-0002',
         correlationId,
       }),
     ).resolves.toEqual({ outcome: 'self_report' });
@@ -160,7 +158,6 @@ describe('messaging moderation repository', () => {
         reasonCode: 'SPAM',
         details: null,
         idempotencyKey,
-        requestHash: 'hash-0001',
         correlationId,
       }),
     ).resolves.toEqual({
@@ -224,7 +221,6 @@ describe('messaging moderation repository', () => {
       reasonCode: 'ABUSE',
       details: null,
       idempotencyKey: 'messaging-report-command-0002',
-      requestHash: 'hash-0003',
       correlationId,
     });
 
@@ -260,7 +256,6 @@ describe('messaging moderation repository', () => {
         reasonCode: 'SPAM',
         details: null,
         idempotencyKey,
-        requestHash: 'hash-0001',
         correlationId,
       }),
     ).resolves.toMatchObject({ outcome: 'submitted', caseId, replayed: true });
@@ -299,7 +294,6 @@ describe('messaging moderation repository', () => {
         reasonCode: 'SPAM',
         details: 'другой текст',
         idempotencyKey,
-        requestHash: 'hash-9999',
         correlationId,
       }),
     ).resolves.toEqual({ outcome: 'duplicate' });
@@ -334,7 +328,6 @@ describe('messaging moderation repository', () => {
         reasonCode: 'SPAM',
         details: null,
         idempotencyKey: 'messaging-report-command-0003',
-        requestHash: 'hash-0001',
         correlationId,
       }),
     ).resolves.toEqual({ outcome: 'duplicate' });
@@ -592,9 +585,20 @@ describe('messaging moderation repository', () => {
       if (text.includes('from moderation.actions')) {
         expect(values).toContain(idempotencyKey);
         return Promise.resolve({
-          rows: [{ id: actionId, action_type: 'REDACT_MESSAGE', reason_code: 'POLICY_VIOLATION' }],
+          rows: [
+            {
+              id: actionId,
+              case_id: caseId,
+              action_type: 'REDACT_MESSAGE',
+              reason_code: 'POLICY_VIOLATION',
+            },
+          ],
           rowCount: 1,
         });
+      }
+      if (text.includes('select case_id from moderation.reports')) {
+        // The stored action may only replay when it decided the same case.
+        return Promise.resolve({ rows: [{ case_id: caseId }], rowCount: 1 });
       }
       if (text.includes('from messaging.messages message')) {
         return Promise.resolve({
@@ -634,6 +638,52 @@ describe('messaging moderation repository', () => {
         correlationId,
       }),
     ).resolves.toEqual({ outcome: 'idempotency_conflict' });
+  });
+
+  it('refuses to replay a decision key for another report', async () => {
+    const otherReportId = '99999999-9999-4999-8999-999999999999';
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('from moderation.actions')) {
+        expect(values).toContain(idempotencyKey);
+        return Promise.resolve({
+          rows: [
+            {
+              id: actionId,
+              case_id: caseId,
+              action_type: 'REDACT_MESSAGE',
+              reason_code: 'POLICY_VIOLATION',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select case_id from moderation.reports')) {
+        return Promise.resolve({
+          rows: [{ case_id: '66666666-6666-4666-8666-666666666666' }],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`A conflicting reuse must not write: ${text}`);
+    });
+    const repository = createMessagingModerationRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.decideReport({
+        tenantId,
+        moderatorUserId,
+        reportId: otherReportId,
+        action: 'HIDE_MESSAGE',
+        reasonCode: 'POLICY_VIOLATION',
+        idempotencyKey,
+        correlationId,
+      }),
+    ).resolves.toEqual({ outcome: 'idempotency_conflict' });
+    expect(
+      query.mock.calls.some(([text]) =>
+        /insert into moderation\.actions|update messaging\.messages/u.test(String(text)),
+      ),
+    ).toBe(false);
   });
 
   it('answers not_found for an unknown report without writing an action', async () => {

@@ -3167,7 +3167,7 @@ describe('browser auth gateway', () => {
       if (url.endsWith(`/conversations/${conversationId}/media/${mediaId}/content`)) {
         // The route answers 302 to a short-lived signed URL; fetch follows it and returns the bytes.
         return Promise.resolve(
-          new Response(new Blob(['attachment-bytes']), {
+          new Response('attachment-bytes', {
             status: 200,
             headers: { 'content-type': 'image/png' },
           }),

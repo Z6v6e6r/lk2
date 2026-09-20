@@ -152,8 +152,9 @@ export async function runMessagingMediaCycle(input: {
     );
   };
 
-  // Expiry already scheduled the exact SOURCE and READY versions in its own transaction, so the
-  // cycle only has to confirm absence once those GC jobs are gone.
+  // Expiry scheduled the exact SOURCE and READY versions for every asset whose version was already
+  // known. An abandoned upload never reached finalize, so its version is discovered here by key and
+  // recorded for exact deletion; otherwise the quarantine object would outlive the asset forever.
   let expiredMediaIds: readonly string[] = [];
   let expired = 0;
   try {
@@ -164,6 +165,22 @@ export async function runMessagingMediaCycle(input: {
     });
     expiredMediaIds = due.map((media) => media.mediaId);
     expired = due.length;
+    for (const media of due) {
+      if (media.objectVersion !== null) continue;
+      try {
+        const version = await input.store.currentVersion(media.objectKey);
+        if (!version) continue;
+        await input.repository.scheduleExpiredSourceVersion({
+          tenantId: input.tenantId,
+          mediaId: media.mediaId,
+          objectVersion: version,
+        });
+      } catch (error) {
+        // The object stays scheduled for the next cycle; the asset is not confirmed PURGED while a
+        // deletion is still outstanding.
+        logWarning(error, 'messaging media expired source discovery deferred', media.mediaId);
+      }
+    }
   } catch (error) {
     logWarning(error, 'messaging media expiry deferred');
   }

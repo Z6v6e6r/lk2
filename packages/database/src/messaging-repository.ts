@@ -429,11 +429,13 @@ function mapConversation(row: ConversationRow): ConversationSummary {
     unreadCount: sequence(row.unread_count),
     updatedAt: timestamp(row.updated_at),
     notificationPolicy: mapNotificationPolicy(row),
-    ...(row.last_sequence !== null && row.last_body !== null && row.last_created_at !== null
+    // A body-less last message (an image or a file) still previews: the client shows the
+    // attachment instead of an empty line.
+    ...(row.last_sequence !== null && row.last_created_at !== null
       ? {
           lastMessage: {
             sequence: sequence(row.last_sequence),
-            body: row.last_body,
+            body: row.last_body ?? '',
             createdAt: timestamp(row.last_created_at),
           },
         }
@@ -450,11 +452,11 @@ function mapGameConversation(row: GameConversationRow): GameConversationSummary 
     unreadCount: sequence(row.unread_count),
     updatedAt: timestamp(row.updated_at),
     notificationPolicy: mapNotificationPolicy(row),
-    ...(row.last_sequence != null && row.last_body != null && row.last_created_at != null
+    ...(row.last_sequence != null && row.last_created_at != null
       ? {
           lastMessage: {
             sequence: sequence(row.last_sequence),
-            body: row.last_body,
+            body: row.last_body ?? '',
             createdAt: timestamp(row.last_created_at),
           },
         }
@@ -1688,11 +1690,22 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               previous.sender_user_id !== input.userId ||
               previous.idempotency_key !== input.idempotencyKey ||
               previous.client_message_id !== input.clientMessageId ||
-              previous.body !== input.body
+              // An attachment-only message stores no body at all, so the stored null and the empty
+              // request body describe the same command.
+              (previous.body ?? '') !== input.body
             ) {
               return { outcome: 'idempotency_conflict' };
             }
-            return { outcome: 'ok', message: mapMessage(previous), replayed: true };
+            const replayedAttachments = await attachmentsForMessages(client, {
+              tenantId: input.tenantId,
+              conversationId: input.conversationId,
+              messageIds: [previous.id],
+            });
+            return {
+              outcome: 'ok',
+              message: mapMessage(previous, replayedAttachments.get(previous.id) ?? []),
+              replayed: true,
+            };
           }
 
           // A direct conversation stays readable, but a message addressed to a peer who never signed in
@@ -1883,16 +1896,6 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
                on message.tenant_id = attachment.tenant_id
               and message.conversation_id = attachment.conversation_id
               and message.id = attachment.message_id
-             join messaging.conversation_members viewer
-               on viewer.tenant_id = attachment.tenant_id
-              and viewer.conversation_id = attachment.conversation_id
-              and viewer.user_id = $3
-              and viewer.member_type = 'USER'
-              and viewer.state = 'ACTIVE'
-             join identity.users viewer_user
-               on viewer_user.tenant_id = viewer.tenant_id
-              and viewer_user.id = viewer.user_id
-              and viewer_user.status = 'ACTIVE'
             where attachment.tenant_id = $1
               and attachment.media_id = $2
               and media.state = 'READY'
@@ -1921,6 +1924,15 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         // A READY asset always carries its ready object version; a missing one cannot be served
         // safely by exact version and stays invisible.
         if (!row || row.object_version === null) return { outcome: 'not_found' } as const;
+        // The attachment is readable exactly while the message is: the same membership, tenant gate,
+        // permission and GAME participation predicate that guards message history.
+        const member = await getAuthorizedMember(
+          client,
+          input.tenantId,
+          input.userId,
+          row.conversation_id,
+        );
+        if (!member) return { outcome: 'not_found' } as const;
         return {
           outcome: 'ok',
           media: {

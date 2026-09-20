@@ -114,6 +114,7 @@ function mediaRepository(
     releaseScan: vi.fn().mockResolvedValue(undefined),
     failScan: vi.fn().mockResolvedValue('rejected'),
     expireDue: vi.fn().mockResolvedValue([]),
+    scheduleExpiredSourceVersion: vi.fn().mockResolvedValue(undefined),
     confirmExpiredObjectsAbsent: vi.fn().mockResolvedValue(true),
     claimGc: vi.fn().mockResolvedValue([]),
     completeGc: vi.fn().mockResolvedValue('deleted'),
