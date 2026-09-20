@@ -44,6 +44,7 @@ import type {
   LevelEligibilityPolicyRepository,
   LegacyGameRosterBridgeRepository,
   PlayerLevelRepository,
+  MessagingMediaRepository,
   MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
@@ -137,6 +138,8 @@ import { registerLocationRoutes } from './locations/location-routes.js';
 import { registerParticipationCommandRoutes } from './eligibility/participation-command-routes.js';
 import { registerLocationMediaRoutes } from './locations/location-media-routes.js';
 import type { LocationMediaStore } from './locations/location-media-store.js';
+import { registerMessagingMediaRoutes } from './messaging/messaging-media-routes.js';
+import type { MessagingMediaObjectStore } from './messaging/messaging-media-object-store.js';
 import { registerMessagingRoutes } from './messaging/messaging-routes.js';
 import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
@@ -260,6 +263,8 @@ export interface BuildAppOptions {
   readonly notificationReceiptSecret?: string;
   readonly adminNotificationRepository?: AdminNotificationRepository;
   readonly messagingRepository?: MessagingRepository;
+  readonly messagingMediaRepository?: MessagingMediaRepository;
+  readonly messagingMediaObjectStore?: MessagingMediaObjectStore;
   readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
   readonly locationRepository?: LocationRepository;
   readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
@@ -837,6 +842,22 @@ export async function buildApp(options: BuildAppOptions) {
       resolveTenant,
       requireIdempotencyKey,
     ],
+    commandHandlers: [
+      authenticate,
+      authorizeMessagingCommand,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
+  });
+  registerMessagingMediaRoutes(app as unknown as FastifyInstance, {
+    ...(options.messagingMediaRepository ? { repository: options.messagingMediaRepository } : {}),
+    ...(options.messagingMediaObjectStore
+      ? { objectStore: options.messagingMediaObjectStore }
+      : {}),
+    ...(options.messagingRepository ? { messageRepository: options.messagingRepository } : {}),
+    enabled: options.config.CHAT_MEDIA_ENABLED,
+    readUrlTtlSeconds: options.config.CHAT_MEDIA_READ_URL_TTL_SECONDS,
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [
       authenticate,
       authorizeMessagingCommand,

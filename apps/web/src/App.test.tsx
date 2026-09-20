@@ -517,6 +517,17 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       .mockRejectedValue(new Error('CONTEXTUAL_MESSAGING_DISABLED')),
     listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
     sendConversationMessage: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
+    issueConversationMediaUpload: vi
+      .fn()
+      .mockRejectedValue(new Error('MESSAGING_MEDIA_DISABLED')),
+    finalizeConversationMediaUpload: vi
+      .fn()
+      .mockRejectedValue(new Error('MESSAGING_MEDIA_DISABLED')),
+    getConversationMedia: vi.fn().mockRejectedValue(new Error('MESSAGING_MEDIA_DISABLED')),
+    conversationMediaContentUrl: vi.fn(
+      (conversationId: string, mediaId: string) =>
+        `https://api.padlhub.test/user/api/v1/padlhub/conversations/${conversationId}/media/${mediaId}/content`,
+    ),
     markConversationRead: vi.fn().mockResolvedValue({
       outcome: 'ok',
       readThroughSequence: 0,

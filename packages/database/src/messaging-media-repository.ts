@@ -49,6 +49,7 @@ export interface MessagingMediaAsset {
   readonly byteSize: number;
   readonly sha256: string;
   readonly revision: number;
+  readonly readyObjectVersion: string | null;
   readonly readyAt: string | null;
   readonly rejectionCode: string | null;
   readonly createdAt: string;
@@ -137,7 +138,8 @@ export interface MessagingMediaRepository {
         readonly intent: MessagingMediaUploadIntent;
         readonly replayed: boolean;
       }
-    | { readonly outcome: 'not_found' | 'state_invalid' }
+    | { readonly outcome: 'not_found' }
+    | { readonly outcome: 'state_invalid' }
     | { readonly outcome: 'idempotency_conflict' }
     | {
         readonly outcome:
@@ -209,6 +211,7 @@ export interface MessagingMediaRepository {
     readonly leaseOwner: string;
     readonly mediaId: string;
     readonly readyObjectKey: string;
+    readonly readyObjectVersion: string;
     readonly correlationId: string;
   }): Promise<'ready' | 'lease_lost'>;
   rejectScan(input: {
@@ -243,12 +246,7 @@ export interface MessagingMediaRepository {
       readonly objectVersion: string | null;
     }[]
   >;
-  scheduleExpiredSourceVersion(input: {
-    readonly tenantId: string;
-    readonly mediaId: string;
-    readonly objectVersion: string;
-  }): Promise<void>;
-  confirmExpiredSourceAbsent(input: {
+  confirmExpiredObjectsAbsent(input: {
     readonly tenantId: string;
     readonly mediaId: string;
   }): Promise<boolean>;
@@ -281,7 +279,7 @@ export interface MessagingMediaRepository {
 const MEDIA_COLUMNS = `id, conversation_id, uploader_user_id, media_type, state, file_name,
        declared_content_type, declared_size_bytes, declared_sha256,
        source_object_key, source_object_version, source_etag, source_content_type,
-       source_size_bytes, source_sha256, ready_object_key, bound_message_id,
+       source_size_bytes, source_sha256, ready_object_key, ready_object_version, bound_message_id,
        revision, rejection_code, ready_at, finalized_at, upload_expires_at,
        unattached_expires_at, expired_at, purged_at, created_at, updated_at`;
 
@@ -302,6 +300,7 @@ interface MediaRow extends QueryResultRow {
   readonly source_size_bytes: string | number | null;
   readonly source_sha256: string | null;
   readonly ready_object_key: string | null;
+  readonly ready_object_version: string | null;
   readonly bound_message_id: string | null;
   readonly revision: string | number;
   readonly rejection_code: string | null;
@@ -354,6 +353,7 @@ function asset(row: MediaRow): MessagingMediaAsset {
     byteSize: Number(observedSize),
     sha256: row.source_sha256 ?? row.declared_sha256,
     revision: Number(row.revision),
+    readyObjectVersion: row.ready_object_version,
     readyAt: row.ready_at ? iso(row.ready_at) : null,
     rejectionCode: row.rejection_code,
     createdAt: iso(row.created_at),
@@ -889,8 +889,9 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
           `update messaging.media_assets
               set state = 'READY',
                   ready_object_key = $4,
+                  ready_object_version = $5,
                   ready_at = now(),
-                  unattached_expires_at = now() + ($5::bigint * interval '1 millisecond'),
+                  unattached_expires_at = now() + ($6::bigint * interval '1 millisecond'),
                   scan_lease_owner = null,
                   scan_lease_expires_at = null,
                   rejection_code = null,
@@ -904,6 +905,7 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
             input.mediaId,
             input.leaseOwner,
             input.readyObjectKey,
+            input.readyObjectVersion,
             MESSAGING_MEDIA_UNATTACHED_TTL_MS,
           ],
         );
@@ -1055,6 +1057,28 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
             returning ${MEDIA_COLUMNS}`,
           [input.tenantId, input.limit],
         );
+        if (rows.rows.length > 0) {
+          // Expiry schedules the exact object versions for deletion in the same transaction, so an
+          // expired asset never keeps a reachable version behind.
+          await client.query(
+            `insert into messaging.media_gc_jobs (
+               tenant_id, media_id, object_kind, object_key, object_version, available_at
+             )
+             select asset.tenant_id, asset.id, 'SOURCE', asset.source_object_key,
+                    asset.source_object_version, now()
+               from messaging.media_assets asset
+              where asset.tenant_id = $1 and asset.id = any($2::uuid[])
+                and asset.source_object_version is not null
+             union all
+             select asset.tenant_id, asset.id, 'READY', asset.ready_object_key,
+                    asset.ready_object_version, now()
+               from messaging.media_assets asset
+              where asset.tenant_id = $1 and asset.id = any($2::uuid[])
+                and asset.ready_object_key is not null and asset.ready_object_version is not null
+             on conflict (tenant_id, object_key, object_version) do nothing`,
+            [input.tenantId, rows.rows.map((row) => row.id)],
+          );
+        }
         return rows.rows.map((row) => ({
           mediaId: row.id,
           objectKey: row.source_object_key,
@@ -1063,22 +1087,7 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
       });
     },
 
-    scheduleExpiredSourceVersion(input) {
-      return withTenantTransaction(pool, input.tenantId, async (client) => {
-        await client.query(
-          `insert into messaging.media_gc_jobs (
-             tenant_id, media_id, object_kind, object_key, object_version, available_at
-           )
-           select asset.tenant_id, asset.id, 'SOURCE', asset.source_object_key, $3, now()
-             from messaging.media_assets asset
-            where asset.tenant_id = $1 and asset.id = $2
-           on conflict (tenant_id, object_key, object_version) do nothing`,
-          [input.tenantId, input.mediaId, input.objectVersion],
-        );
-      });
-    },
-
-    confirmExpiredSourceAbsent(input) {
+    confirmExpiredObjectsAbsent(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const row = await queryOne<{ readonly id: string } & QueryResultRow>(
           client,
@@ -1087,7 +1096,7 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
             where tenant_id = $1 and id = $2 and state = 'EXPIRED'
               and not exists (
                 select 1 from messaging.media_gc_jobs job
-                 where job.tenant_id = $1 and job.media_id = $2 and job.object_kind = 'SOURCE'
+                 where job.tenant_id = $1 and job.media_id = $2
                    and job.dead_at is null
               )
             returning id`,

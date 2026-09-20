@@ -287,6 +287,22 @@ const environmentSchema = z.object({
   COMMUNITY_MEDIA_SCAN_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
   COMMUNITY_MEDIA_GC_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
   COMMUNITY_MEDIA_READ_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
+  /**
+   * Chat attachments. Owner: chats vertical. Purpose: roll out photo/file messages behind the same
+   * quarantine-and-scan contour as community media. Activation criterion: beta verified end to end.
+   * Removal/review condition: drop the flag once attachments are the default and no rollback is
+   * expected.
+   */
+  CHAT_MEDIA_ENABLED: booleanFromEnvironment,
+  CHAT_MEDIA_SCAN_MODE: z.enum(['mock', 'clamav']).default('mock'),
+  CHAT_MEDIA_CLAMAV_HOST: z.string().min(1).optional(),
+  CHAT_MEDIA_CLAMAV_PORT: z.coerce.number().int().min(1).max(65_535).default(3310),
+  CHAT_MEDIA_CLAMAV_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(120_000).default(30_000),
+  CHAT_MEDIA_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(2_000),
+  CHAT_MEDIA_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  CHAT_MEDIA_SCAN_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
+  CHAT_MEDIA_GC_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
+  CHAT_MEDIA_READ_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
   COMMUNITY_INVITE_TOKEN_KEYS: z.string().optional(),
   COMMUNITY_INVITE_ACTIVE_KEY_ID: z.string().min(1).max(64).optional(),
   COMMUNITIES_LEGACY_BASE_URL: z.string().url().default('https://padlhub.su'),
@@ -1331,6 +1347,32 @@ export function loadConfig(
       !parsed.data.COMMUNITY_MEDIA_CLAMAV_HOST
     ) {
       throw new Error('COMMUNITY_MEDIA_SCAN_MODE=clamav requires COMMUNITY_MEDIA_CLAMAV_HOST');
+    }
+  }
+  if (parsed.data.CHAT_MEDIA_ENABLED) {
+    const missingStorage = [
+      ['S3_ENDPOINT', parsed.data.S3_ENDPOINT],
+      ['S3_PUBLIC_ENDPOINT', parsed.data.S3_PUBLIC_ENDPOINT],
+      ['S3_BUCKET', parsed.data.S3_BUCKET],
+      ['S3_ACCESS_KEY', parsed.data.S3_ACCESS_KEY],
+      ['S3_SECRET_KEY', parsed.data.S3_SECRET_KEY],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingStorage.length > 0) {
+      throw new Error(
+        `CHAT_MEDIA_ENABLED requires versioned media storage: ${missingStorage.join(', ')}`,
+      );
+    }
+    if (
+      parsed.data.APP_ENV !== 'local' &&
+      parsed.data.APP_ENV !== 'ci' &&
+      parsed.data.CHAT_MEDIA_SCAN_MODE !== 'clamav'
+    ) {
+      throw new Error('CHAT_MEDIA_ENABLED requires CHAT_MEDIA_SCAN_MODE=clamav outside local/ci');
+    }
+    if (parsed.data.CHAT_MEDIA_SCAN_MODE === 'clamav' && !parsed.data.CHAT_MEDIA_CLAMAV_HOST) {
+      throw new Error('CHAT_MEDIA_SCAN_MODE=clamav requires CHAT_MEDIA_CLAMAV_HOST');
     }
   }
   if (parsed.data.COMMUNITY_INVITES_ENABLED) {

@@ -27,6 +27,8 @@ import {
   createLocationRepository,
   createLevelEligibilityPolicyRepository,
   createPlayerLevelRepository,
+  MESSAGING_MEDIA_MAX_BYTES,
+  createMessagingMediaRepository,
   createMessagingRepository,
   createNotificationEndpointRepository,
   createNotificationInboxRepository,
@@ -70,6 +72,7 @@ import { S3GiftCertificateArtifactReadStore } from './gift-certificates/gift-cer
 import { S3LocationMediaStore } from './locations/location-media-store.js';
 import { S3ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
 import { S3CommunityMediaObjectStore } from './communities/community-media-object-store.js';
+import { S3MessagingMediaObjectStore } from './messaging/messaging-media-object-store.js';
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
@@ -458,6 +461,19 @@ const communityOwnershipTransferService = createCommunityOwnershipTransferRuntim
 const communityContentService = createCommunityContentRuntime({ config, pool });
 const communityContentModerationService = createCommunityContentModerationRuntime({ config, pool });
 const communityEventRecoveryService = createCommunityEventRecoveryRuntime({ config, pool });
+const chatMediaObjectStore = config.CHAT_MEDIA_ENABLED
+  ? new S3MessagingMediaObjectStore({
+      endpoint: config.S3_ENDPOINT as string,
+      publicEndpoint: config.S3_PUBLIC_ENDPOINT as string,
+      region: config.S3_REGION,
+      bucket: config.S3_BUCKET as string,
+      accessKey: config.S3_ACCESS_KEY as string,
+      secretKey: config.S3_SECRET_KEY as string,
+      forcePathStyle: config.S3_FORCE_PATH_STYLE,
+      autoCreateBucket: config.S3_AUTO_CREATE_BUCKET,
+      maxBytes: MESSAGING_MEDIA_MAX_BYTES,
+    })
+  : undefined;
 const communityMediaObjectStore = config.COMMUNITY_MEDIA_ENABLED
   ? new S3CommunityMediaObjectStore({
       endpoint: config.S3_ENDPOINT as string,
@@ -552,6 +568,12 @@ const app = await buildApp({
   notificationRepository: createNotificationInboxRepository(pool),
   notificationPreferenceRepository: createNotificationPreferenceRepository(pool),
   messagingRepository: createMessagingRepository(pool),
+  ...(chatMediaObjectStore
+    ? {
+        messagingMediaRepository: createMessagingMediaRepository(pool),
+        messagingMediaObjectStore: chatMediaObjectStore,
+      }
+    : {}),
   realtimeTicketIssuer: new RedisRealtimeTicketIssuer(redis, config),
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
   adminNotificationRepository: createAdminNotificationRepository(pool),

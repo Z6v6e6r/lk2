@@ -27,6 +27,7 @@ create table messaging.media_assets (
   source_size_bytes bigint check (source_size_bytes is null or source_size_bytes between 1 and 15728640),
   source_sha256 text check (source_sha256 is null or source_sha256 ~ '^[0-9a-f]{64}$'),
   ready_object_key text check (ready_object_key is null or char_length(ready_object_key) between 1 and 1000),
+  ready_object_version text check (ready_object_version is null or char_length(ready_object_version) between 1 and 200),
   bound_conversation_id uuid,
   bound_message_id uuid,
   revision integer not null default 1 check (revision > 0),
@@ -54,15 +55,18 @@ create table messaging.media_assets (
   unique (tenant_id, source_object_key),
   check (
     (state = 'UPLOADING' and source_object_version is null and finalized_at is null
-      and ready_at is null and ready_object_key is null and rejected_at is null
+      and ready_at is null and ready_object_key is null and ready_object_version is null
+      and rejected_at is null
       and rejection_code is null and unattached_expires_at is null)
     or (state = 'SCANNING' and source_object_version is not null and finalized_at is not null
-      and ready_at is null and ready_object_key is null and rejected_at is null
+      and ready_at is null and ready_object_key is null and ready_object_version is null
+      and rejected_at is null
       and rejection_code is null and unattached_expires_at is null)
     or (state = 'READY' and source_object_version is not null and ready_at is not null
-      and ready_object_key is not null and rejected_at is null and rejection_code is null)
+      and ready_object_key is not null and ready_object_version is not null
+      and rejected_at is null and rejection_code is null)
     or (state = 'REJECTED' and rejected_at is not null and rejection_code is not null
-      and ready_at is null and ready_object_key is null)
+      and ready_at is null and ready_object_key is null and ready_object_version is null)
     or (state in ('EXPIRED', 'PURGED') and expired_at is not null)
   ),
   check ((bound_message_id is null) = (bound_conversation_id is null)),

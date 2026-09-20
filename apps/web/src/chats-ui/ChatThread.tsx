@@ -6,10 +6,11 @@ import type {
   ConversationSummary,
 } from '../auth-gateway.js';
 import type { PendingChatMessage } from '../ChatsPage.js';
-import { ChatComposer } from './ChatComposer.js';
+import { ChatComposer, type ChatComposerSend } from './ChatComposer.js';
 import { ChatContextCard } from './ChatContextCard.js';
 import { ChatMessageBubble } from './ChatMessageBubble.js';
 import { ChatThreadHeader } from './ChatThreadHeader.js';
+import type { ChatAttachmentDraft } from './chat-attachments.js';
 import { formatMessageDay, messageDayKey } from './chat-format.js';
 import styles from './ChatsUi.module.css';
 
@@ -24,7 +25,12 @@ interface ChatThreadProps {
   readonly hasEarlierMessages?: boolean | undefined;
   readonly canRetrySend: boolean;
   readonly policyBusy: boolean;
-  readonly onSendMessage: (body: string) => void;
+  readonly attachments: readonly ChatAttachmentDraft[];
+  readonly attachmentNotice?: string | null | undefined;
+  readonly resolveMediaContentUrl: (conversationId: string, mediaId: string) => string;
+  readonly onAttachFiles: (files: readonly File[]) => void;
+  readonly onRemoveAttachment: (localId: string) => void;
+  readonly onSendMessage: (input: ChatComposerSend) => void;
   readonly onRetrySend: () => void;
   readonly onRefresh: () => void;
   readonly onLoadEarlier?: (() => void) | undefined;
@@ -44,6 +50,11 @@ export function ChatThread({
   hasEarlierMessages,
   canRetrySend,
   policyBusy,
+  attachments,
+  attachmentNotice,
+  resolveMediaContentUrl,
+  onAttachFiles,
+  onRemoveAttachment,
   onSendMessage,
   onRetrySend,
   onRefresh,
@@ -170,6 +181,7 @@ export function ChatThread({
                     showSender
                     continuesGroup={continuesGroup}
                     endsGroup={endsGroup}
+                    resolveMediaContentUrl={resolveMediaContentUrl}
                   />
                 </Fragment>
               );
@@ -182,7 +194,7 @@ export function ChatThread({
                   pendingMessage.state === 'failed' ? styles.failedBubble : ''
                 }`}
               >
-                <p>{pendingMessage.body}</p>
+                <p>{pendingMessage.body || (pendingMessage.attachmentIds?.length ? 'Вложение' : '')}</p>
                 <span role="status">
                   {pendingMessage.state === 'sending' ? 'Отправляется…' : 'Не отправлено'}
                 </span>
@@ -204,7 +216,15 @@ export function ChatThread({
           </div>
         ) : null}
       </div>
-      <ChatComposer busy={busy === 'send'} forbidden={forbidden} onSendMessage={onSendMessage} />
+      <ChatComposer
+        busy={busy === 'send'}
+        forbidden={forbidden}
+        attachments={attachments}
+        attachmentNotice={attachmentNotice}
+        onAttachFiles={onAttachFiles}
+        onRemoveAttachment={onRemoveAttachment}
+        onSendMessage={onSendMessage}
+      />
     </section>
   );
 }

@@ -1,7 +1,11 @@
-import type { MessagingRepository } from '@phub/database';
+import {
+  MESSAGING_MEDIA_MAX_ATTACHMENTS_PER_MESSAGE,
+  type MessagingRepository,
+} from '@phub/database';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
+import { messagingAttachmentFailure } from './messaging-media-routes.js';
 import { RealtimeTicketStoreError, type RealtimeTicketIssuer } from './realtime-ticket-issuer.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -453,16 +457,27 @@ export function registerMessagingRoutes(
       const clientMessageId = body?.clientMessageId;
       const text = body?.body;
       const normalizedBody = typeof text === 'string' ? text.trim() : '';
+      const rawAttachments = body?.attachmentIds;
+      const attachmentIds =
+        rawAttachments === undefined
+          ? []
+          : Array.isArray(rawAttachments) &&
+              rawAttachments.length <= MESSAGING_MEDIA_MAX_ATTACHMENTS_PER_MESSAGE &&
+              rawAttachments.every((value) => typeof value === 'string' && UUID_PATTERN.test(value))
+            ? (rawAttachments as string[])
+            : undefined;
       if (
         !conversationId ||
         !UUID_PATTERN.test(conversationId) ||
         !body ||
         Array.isArray(body) ||
-        Object.keys(body).some((key) => key !== 'clientMessageId' && key !== 'body') ||
-        Object.keys(body).length !== 2 ||
+        Object.keys(body).some(
+          (key) => key !== 'clientMessageId' && key !== 'body' && key !== 'attachmentIds',
+        ) ||
         typeof clientMessageId !== 'string' ||
         !CLIENT_MESSAGE_ID_PATTERN.test(clientMessageId) ||
-        normalizedBody.length < 1 ||
+        attachmentIds === undefined ||
+        (normalizedBody.length < 1 && attachmentIds.length < 1) ||
         normalizedBody.length > 8_000 ||
         normalizedBody.includes('\0')
       ) {
@@ -481,9 +496,13 @@ export function registerMessagingRoutes(
         clientMessageId,
         idempotencyKey: request.headers['idempotency-key'] as string,
         body: normalizedBody,
+        ...(attachmentIds.length > 0 ? { attachmentMediaIds: attachmentIds } : {}),
         correlationId: request.id,
       });
       if (result.outcome === 'not_found') return notFound(request, reply);
+      if (result.outcome === 'attachment_invalid') {
+        return messagingAttachmentFailure(request, reply, result.reason);
+      }
       if (result.outcome === 'target_unreachable') {
         return sendApiError(
           request,

@@ -2189,6 +2189,224 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/media/uploads:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [messaging]
+      operationId: issueConversationMediaUpload
+      summary: Reserve one chat attachment and return a single-use quarantine upload URL
+      description: |
+        Requires current ACTIVE membership in the conversation and the messaging command permission.
+        The declared content type, byte size and sha256 are fixed here and verified again when the
+        upload is finalized. The route stays closed while chat attachments are not enabled for the
+        deployment (MESSAGING_MEDIA_DISABLED).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessagingMediaUploadRequest'
+      responses:
+        '201':
+          description: Reserved media and its quarantine upload grant.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagingMediaUploadResult'
+        '200':
+          description: Idempotent replay of the same reservation.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              schema:
+                type: string
+                const: 'true'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagingMediaUploadResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '422':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/media/{mediaId}/finalize:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: mediaId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [messaging]
+      operationId: finalizeConversationMediaUpload
+      summary: Verify the uploaded quarantine object and queue it for scanning
+      description: |
+        The server inspects the exact uploaded object version, compares it with the declared
+        content type, byte size and sha256, and only then moves the media to SCANNING. The asset
+        becomes attachable after the malware scan marks it READY.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessagingMediaFinalizeRequest'
+      responses:
+        '202':
+          description: Object verified and queued for scanning.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagingMediaAsset'
+        '200':
+          description: Idempotent replay of a finished or already finalized upload.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagingMediaAsset'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '422':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/media/{mediaId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: mediaId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [messaging]
+      operationId: getConversationMedia
+      summary: Read the sender's own chat media state
+      description: |
+        Returns the current media state so the composer can wait for READY. Only the uploader of the
+        media sees this representation; neither object keys nor signed URLs appear here.
+      responses:
+        '200':
+          description: Current media state for the uploader.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagingMediaAsset'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/media/{mediaId}/content:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: mediaId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [messaging]
+      operationId: openConversationMediaContent
+      summary: Redirect to a short-lived signed URL for one READY attachment
+      description: |
+        Allowed only for a current conversation member while the carrying message is neither
+        deleted nor hidden by moderation and no direction of a direct pair blocks the reader. Images
+        are delivered inline, files always as a download. The redirect target expires within
+        minutes and must not be cached by clients.
+      responses:
+        '302':
+          description: Short-lived signed object URL.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/conversations/{conversationId}/messages:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -6634,6 +6852,40 @@ components:
           type: boolean
         replayed:
           type: boolean
+    ConversationMessageAttachment:
+      type: object
+      additionalProperties: false
+      required: [mediaId, position, mediaType, fileName, contentType, byteSize]
+      properties:
+        mediaId:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 1
+          maximum: 4
+        mediaType:
+          type: string
+          enum: [IMAGE, FILE]
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 500
+        contentType:
+          type: string
+          minLength: 1
+          maxLength: 200
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 15728640
+        width:
+          type: integer
+          minimum: 1
+        height:
+          type: integer
+          minimum: 1
     ConversationMessage:
       type: object
       additionalProperties: false
@@ -6657,11 +6909,20 @@ components:
           $ref: '#/components/schemas/MessagingParticipant'
         messageType:
           type: string
-          const: TEXT
+          enum: [TEXT, IMAGE, FILE]
+          description: |
+            TEXT carries only text, IMAGE means every attachment is a recognised image, FILE means
+            at least one attachment is a file.
         body:
           type: string
-          minLength: 1
           maxLength: 8000
+          description: Empty when the message carries attachments only.
+        attachments:
+          type: array
+          maxItems: 4
+          description: Present for every message; empty when the message carries no attachment.
+          items:
+            $ref: '#/components/schemas/ConversationMessageAttachment'
         createdAt:
           type: string
           format: date-time
@@ -6682,7 +6943,7 @@ components:
     SendConversationMessageRequest:
       type: object
       additionalProperties: false
-      required: [clientMessageId, body]
+      required: [clientMessageId]
       properties:
         clientMessageId:
           type: string
@@ -6694,8 +6955,130 @@ components:
             conversation is idempotent; reuse for another conversation is rejected.
         body:
           type: string
-          minLength: 1
           maxLength: 8000
+          description: Text of the message. Optional when attachmentIds is present.
+        attachmentIds:
+          type: array
+          maxItems: 4
+          description: |
+            Identifiers of READY chat media issued to this sender in this conversation. A file that
+            is still uploading or scanning is refused with MESSAGING_MEDIA_NOT_READY.
+          items:
+            type: string
+            format: uuid
+    MessagingMediaUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [fileName, contentType, byteSize, sha256]
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Display name only; path separators are refused.
+        contentType:
+          type: string
+          minLength: 3
+          maxLength: 200
+          description: |
+            image/jpeg, image/png and image/webp become image attachments. Any other content type
+            becomes a file that is always delivered as a download. Executable web content types
+            (text/html, application/xhtml+xml, image/svg+xml, application/javascript,
+            text/javascript) are refused.
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 15728640
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+    MessagingMediaUploadGrant:
+      type: object
+      additionalProperties: false
+      required: [method, url, requiredHeaders, expiresAt]
+      properties:
+        method:
+          type: string
+          const: PUT
+        url:
+          type: string
+          format: uri
+          description: Single-use signed quarantine upload URL. Send every required header verbatim.
+        requiredHeaders:
+          type: object
+          additionalProperties:
+            type: string
+        expiresAt:
+          type: string
+          format: date-time
+    MessagingMediaAsset:
+      type: object
+      additionalProperties: false
+      required:
+        [id, conversationId, mediaType, state, fileName, contentType, byteSize, sha256, revision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversationId:
+          type: string
+          format: uuid
+        mediaType:
+          type: string
+          enum: [IMAGE, FILE]
+        state:
+          type: string
+          enum: [UPLOADING, SCANNING, READY, REJECTED, EXPIRED, PURGED]
+        fileName:
+          type: string
+          maxLength: 500
+        contentType:
+          type: string
+          maxLength: 200
+        byteSize:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 15728640
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        revision:
+          type: integer
+          minimum: 1
+        readyAt:
+          type: string
+          format: date-time
+        rejectionCode:
+          type: string
+          maxLength: 100
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    MessagingMediaUploadResult:
+      type: object
+      additionalProperties: false
+      required: [media, upload]
+      properties:
+        media:
+          $ref: '#/components/schemas/MessagingMediaAsset'
+        upload:
+          $ref: '#/components/schemas/MessagingMediaUploadGrant'
+    MessagingMediaFinalizeRequest:
+      type: object
+      additionalProperties: false
+      required: [declaredByteSize]
+      properties:
+        declaredByteSize:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 15728640
+          description: Echo of the byte size declared at issue time; a mismatch fails closed.
     SendConversationMessageResult:
       type: object
       additionalProperties: false

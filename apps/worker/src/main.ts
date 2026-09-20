@@ -19,6 +19,7 @@ import {
   createGiftCertificateIssuanceRepository,
   createLocalCommunityDirectoryRepository,
   createMessagingRepository,
+  createMessagingMediaRepository,
   createParticipationCommandRepository,
   createProfileFriendshipRepository,
 } from '@phub/database';
@@ -38,6 +39,8 @@ import {
   S3CommunityMediaWorkerObjectStore,
 } from './community-media-processing.js';
 import { runCommunityMediaCycle } from './community-media-worker.js';
+import { S3MessagingMediaWorkerObjectStore } from './messaging-media-processing.js';
+import { createMessagingMediaScanner, runMessagingMediaCycle } from './messaging-media-worker.js';
 import { registerCoreBrokerTopology } from './broker-topology.js';
 import {
   isGameLifecycleProcessManagerEnabled,
@@ -159,6 +162,26 @@ const communityMediaRuntime = config.COMMUNITY_MEDIA_ENABLED
               timeoutMs: config.COMMUNITY_MEDIA_CLAMAV_TIMEOUT_MS,
             })
           : new MockCommunityMediaMalwareScanner(),
+    }
+  : undefined;
+const messagingMediaWorkerId = `messaging-media-${randomUUID()}`;
+const messagingMediaRuntime = config.CHAT_MEDIA_ENABLED
+  ? {
+      repository: createMessagingMediaRepository(pool),
+      store: new S3MessagingMediaWorkerObjectStore({
+        endpoint: config.S3_ENDPOINT as string,
+        region: config.S3_REGION,
+        bucket: config.S3_BUCKET as string,
+        accessKey: config.S3_ACCESS_KEY as string,
+        secretKey: config.S3_SECRET_KEY as string,
+        forcePathStyle: config.S3_FORCE_PATH_STYLE,
+      }),
+      scanner: createMessagingMediaScanner({
+        scanMode: config.CHAT_MEDIA_SCAN_MODE,
+        ...(config.CHAT_MEDIA_CLAMAV_HOST ? { clamavHost: config.CHAT_MEDIA_CLAMAV_HOST } : {}),
+        clamavPort: config.CHAT_MEDIA_CLAMAV_PORT,
+        clamavTimeoutMs: config.CHAT_MEDIA_CLAMAV_TIMEOUT_MS,
+      }),
     }
   : undefined;
 const profilePhotoStore =
@@ -428,23 +451,32 @@ const handleHealthRequest = async (
     return;
   }
   if (request.url === '/health/ready') {
-    const [databaseReady, communityMediaReady, profileMediaReady] = await Promise.all([
-      checkDatabaseReady(pool),
-      communityMediaRuntime
-        ? Promise.all([
-            communityMediaRuntime.store.checkReady(),
-            communityMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
-          ])
-            .then(() => true)
-            .catch(() => false)
-        : Promise.resolve(true),
-      profilePhotoStore
-        ? profilePhotoStore
-            .checkReady()
-            .then(() => true)
-            .catch(() => false)
-        : Promise.resolve(true),
-    ]);
+    const [databaseReady, communityMediaReady, messagingMediaReady, profileMediaReady] =
+      await Promise.all([
+        checkDatabaseReady(pool),
+        communityMediaRuntime
+          ? Promise.all([
+              communityMediaRuntime.store.checkReady(),
+              communityMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
+            ])
+              .then(() => true)
+              .catch(() => false)
+          : Promise.resolve(true),
+        messagingMediaRuntime
+          ? Promise.all([
+              messagingMediaRuntime.store.checkReady(),
+              messagingMediaRuntime.scanner.checkReady?.() ?? Promise.resolve(),
+            ])
+              .then(() => true)
+              .catch(() => false)
+          : Promise.resolve(true),
+        profilePhotoStore
+          ? profilePhotoStore
+              .checkReady()
+              .then(() => true)
+              .catch(() => false)
+          : Promise.resolve(true),
+      ]);
     const forwardProgress = workerForwardProgress.snapshot();
     const webPushProgress = webPushForwardProgress?.snapshot();
     const bookingReminderProgress = bookingReminderForwardProgress?.snapshot();
@@ -452,6 +484,7 @@ const handleHealthRequest = async (
       database: databaseReady,
       rabbitmq: rabbitReady,
       communityMedia: communityMediaReady,
+      messagingMedia: messagingMediaReady,
       profileMedia: profileMediaReady,
       forwardProgress: forwardProgress.ready,
       webPushForwardProgress: webPushProgress?.ready ?? true,
@@ -799,6 +832,59 @@ const runCommunityMedia = async (): Promise<void> => {
     workerMetrics.recordCommunityMediaCycle(aggregate, failures, Date.now() - startedAt);
     if (!shuttingDown) {
       setTimeout(() => void runCommunityMedia(), config.COMMUNITY_MEDIA_POLL_INTERVAL_MS);
+    }
+  }
+};
+
+const runMessagingMedia = async (): Promise<void> => {
+  if (shuttingDown || !messagingMediaRuntime) return;
+  const startedAt = Date.now();
+  const aggregate = {
+    expired: 0,
+    scanned: 0,
+    rejected: 0,
+    scanRetried: 0,
+    scanFailed: 0,
+    gcCompleted: 0,
+    gcRetried: 0,
+    gcDead: 0,
+  };
+  let failures = 0;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true',
+    );
+    for (const tenant of tenants.rows) {
+      const result = await runMessagingMediaCycle({
+        repository: messagingMediaRuntime.repository,
+        store: messagingMediaRuntime.store,
+        scanner: messagingMediaRuntime.scanner,
+        logger,
+        tenantId: tenant.id,
+        workerId: messagingMediaWorkerId,
+        batchSize: config.CHAT_MEDIA_BATCH_SIZE,
+        scanMaxAttempts: config.CHAT_MEDIA_SCAN_MAX_ATTEMPTS,
+        gcMaxAttempts: config.CHAT_MEDIA_GC_MAX_ATTEMPTS,
+      });
+      if (Object.values(result).some((value) => value > 0)) {
+        logger.info({ tenantId: tenant.id, result }, 'messaging media cycle completed');
+      }
+      aggregate.expired += result.expired;
+      aggregate.scanned += result.scanned;
+      aggregate.rejected += result.rejected;
+      aggregate.scanRetried += result.scanRetried;
+      aggregate.scanFailed += result.scanFailed;
+      aggregate.gcCompleted += result.gcCompleted;
+      aggregate.gcRetried += result.gcRetried;
+      aggregate.gcDead += result.gcDead;
+    }
+  } catch (error) {
+    failures += 1;
+    logger.error({ error }, 'messaging media cycle failed');
+  } finally {
+    workerMetrics.recordMessagingMediaCycle(aggregate, failures, Date.now() - startedAt);
+    if (!shuttingDown) {
+      setTimeout(() => void runMessagingMedia(), config.CHAT_MEDIA_POLL_INTERVAL_MS);
     }
   }
 };
@@ -1152,3 +1238,4 @@ if (canonicalCommunityWorkerEnabled) {
   void runCommunityEventRetention();
 }
 void runCommunityMedia();
+void runMessagingMedia();

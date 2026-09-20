@@ -1243,6 +1243,108 @@ describe('messaging repository', () => {
     ).toBe(false);
   });
 
+  it('hides a moderated message from every reader query', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('member.id as member_id')) {
+        return Promise.resolve({
+          rows: [{ member_id: memberId, last_read_sequence: '0', last_sequence: '2' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from messaging.message_attachments')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select next_sequence')) {
+        return Promise.resolve({ rows: [{ next_sequence: '3', kind: 'DIRECT' }], rowCount: 1 });
+      }
+      if (text.includes('select left_user_id, right_user_id')) {
+        return Promise.resolve({
+          rows: [{ left_user_id: userId, right_user_id: otherUserId }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('message.idempotency_key = $3')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into messaging.messages')) {
+        return Promise.resolve({ rows: [{ id: messageId }], rowCount: 1 });
+      }
+      if (text.includes('message.id = $4')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: messageId,
+              conversation_id: conversationId,
+              sequence: '3',
+              sender_user_id: userId,
+              sender_display_name: 'Анна',
+              message_type: 'TEXT',
+              body: 'Привет',
+              created_at: '2026-09-20 10:00:00+00',
+              client_message_id: 'client-message-hidden-0001',
+              idempotency_key: 'message-command-hidden-0001',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select member.user_id')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await repository.listMessages({
+      tenantId,
+      userId,
+      conversationId,
+      afterSequence: 0,
+      limit: 50,
+    });
+    await repository.listConversations({ tenantId, userId, limit: 50 });
+    await repository.sendMessage({
+      tenantId,
+      userId,
+      conversationId,
+      clientMessageId: 'client-message-hidden-0001',
+      idempotencyKey: 'message-command-hidden-0001',
+      body: 'Привет',
+      correlationId: 'message-correlation-hidden-0001',
+    });
+    await repository.listRealtimeRecipientUserIds({
+      tenantId,
+      conversationId,
+      messageId,
+      sequence: 3,
+    });
+
+    const messageReaders = query.mock.calls
+      .map(([text]) => String(text))
+      .filter(
+        (text) =>
+          (text.includes('from messaging.messages message') ||
+            text.includes('select member.user_id')) &&
+          // The idempotent command lookup must still find the stored row to replay it; every
+          // reader-facing query must not.
+          !text.includes('message.idempotency_key = $3'),
+      );
+    // History, both conversation list laterals, the single-message readback and the fan-out
+    // audience must all agree that a hidden message does not exist for a reader.
+    expect(messageReaders.length).toBeGreaterThanOrEqual(4);
+    for (const text of messageReaders) {
+      expect(text).toContain('message.hidden_at is null');
+    }
+  });
+
   it('does not reveal a conversation to a non-member', async () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {

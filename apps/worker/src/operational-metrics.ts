@@ -45,6 +45,17 @@ export const WORKER_METRIC_INSTRUMENTS = {
   communityMediaFailures: 'phub.worker.communities.media.failures',
   communityMediaCycleDurationMilliseconds:
     'phub.worker.communities.media.cycle_duration_milliseconds',
+  messagingMediaExpired: 'phub.worker.messaging.media.expired',
+  messagingMediaScanned: 'phub.worker.messaging.media.scanned',
+  messagingMediaRejected: 'phub.worker.messaging.media.rejected',
+  messagingMediaScanRetried: 'phub.worker.messaging.media.scan_retried',
+  messagingMediaScanFailed: 'phub.worker.messaging.media.scan_failed',
+  messagingMediaGcCompleted: 'phub.worker.messaging.media.gc_completed',
+  messagingMediaGcRetried: 'phub.worker.messaging.media.gc_retried',
+  messagingMediaGcDead: 'phub.worker.messaging.media.gc_dead',
+  messagingMediaFailures: 'phub.worker.messaging.media.failures',
+  messagingMediaCycleDurationMilliseconds:
+    'phub.worker.messaging.media.cycle_duration_milliseconds',
   pushDeliveriesPolicySuspended: 'phub.worker.notifications.push_deliveries_policy_suspended',
   bookingRemindersDue: 'phub.worker.notifications.booking_reminders_due',
   bookingReminderOldestDueAgeSeconds:
@@ -431,6 +442,20 @@ export interface WorkerMetricRecorder {
     failures: number,
     durationMilliseconds: number,
   ): void;
+  recordMessagingMediaCycle(
+    result: {
+      readonly expired: number;
+      readonly scanned: number;
+      readonly rejected: number;
+      readonly scanRetried: number;
+      readonly scanFailed: number;
+      readonly gcCompleted: number;
+      readonly gcRetried: number;
+      readonly gcDead: number;
+    },
+    failures: number,
+    durationMilliseconds: number,
+  ): void;
   recordWebPushCycle(
     failedTenants: number,
     rounds: number,
@@ -537,6 +562,34 @@ export function createWorkerMetricRecorder(options: {
   );
   const communityMediaDuration = meter.createHistogram(
     WORKER_METRIC_INSTRUMENTS.communityMediaCycleDurationMilliseconds,
+  );
+  const messagingMediaExpired = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaExpired,
+  );
+  const messagingMediaScanned = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaScanned,
+  );
+  const messagingMediaRejected = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaRejected,
+  );
+  const messagingMediaScanRetried = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaScanRetried,
+  );
+  const messagingMediaScanFailed = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaScanFailed,
+  );
+  const messagingMediaGcCompleted = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaGcCompleted,
+  );
+  const messagingMediaGcRetried = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaGcRetried,
+  );
+  const messagingMediaGcDead = meter.createCounter(WORKER_METRIC_INSTRUMENTS.messagingMediaGcDead);
+  const messagingMediaFailures = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaFailures,
+  );
+  const messagingMediaDuration = meter.createHistogram(
+    WORKER_METRIC_INSTRUMENTS.messagingMediaCycleDurationMilliseconds,
   );
   const pushDeliveriesPolicySuspended = meter.createGauge(
     WORKER_METRIC_INSTRUMENTS.pushDeliveriesPolicySuspended,
@@ -655,6 +708,18 @@ export function createWorkerMetricRecorder(options: {
       if (result.gcDead > 0) communityMediaGcDead.add(result.gcDead);
       if (failures > 0) communityMediaFailures.add(failures);
       communityMediaDuration.record(durationMilliseconds);
+    },
+    recordMessagingMediaCycle(result, failures, durationMilliseconds) {
+      if (result.expired > 0) messagingMediaExpired.add(result.expired);
+      if (result.scanned > 0) messagingMediaScanned.add(result.scanned);
+      if (result.rejected > 0) messagingMediaRejected.add(result.rejected);
+      if (result.scanRetried > 0) messagingMediaScanRetried.add(result.scanRetried);
+      if (result.scanFailed > 0) messagingMediaScanFailed.add(result.scanFailed);
+      if (result.gcCompleted > 0) messagingMediaGcCompleted.add(result.gcCompleted);
+      if (result.gcRetried > 0) messagingMediaGcRetried.add(result.gcRetried);
+      if (result.gcDead > 0) messagingMediaGcDead.add(result.gcDead);
+      if (failures > 0) messagingMediaFailures.add(failures);
+      messagingMediaDuration.record(durationMilliseconds);
     },
     recordWebPushCycle(failedTenants, rounds, durationMilliseconds, failed) {
       webPushCycleSuccess.record(failed || failedTenants > 0 ? 0 : 1, instanceAttributes);

@@ -146,6 +146,7 @@ export interface MessageMediaReadResult {
   readonly contentType: string;
   readonly byteSize: number;
   readonly objectKey: string;
+  readonly objectVersion: string;
   readonly sha256: string;
 }
 
@@ -338,7 +339,7 @@ interface MessageRow extends QueryResultRow {
   readonly sender_user_id: string;
   readonly sender_display_name: string;
   readonly message_type: MessageType;
-  readonly body: string;
+  readonly body: string | null;
   readonly created_at: Date | string;
   readonly client_message_id?: string;
   readonly idempotency_key?: string;
@@ -475,7 +476,8 @@ function mapMessage(
       displayName: row.sender_display_name,
     },
     messageType: row.message_type,
-    body: row.body,
+    // An image-only or file-only message carries no text at all.
+    body: row.body ?? '',
     attachments,
     createdAt: timestamp(row.created_at),
   };
@@ -576,7 +578,6 @@ const CONVERSATION_SELECT = `
          and message.conversation_id = conversation.id
          and message.deleted_at is null
          and message.hidden_at is null
-         and message.hidden_at is null
        order by message.sequence desc
        limit 1
     ) last_message on true
@@ -640,6 +641,7 @@ const GAME_CONVERSATION_SELECT = `
        where message.tenant_id = conversation.tenant_id
          and message.conversation_id = conversation.id
          and message.deleted_at is null
+         and message.hidden_at is null
        order by message.sequence desc
        limit 1
     ) last_message on true
@@ -865,7 +867,6 @@ function recipientUserIdsSql(options: {
               and message.id = $3
               and message.sequence = $4
               and message.deleted_at is null
-              and message.hidden_at is null
               and message.hidden_at is null
              join messaging.conversation_members member
                on member.tenant_id = conversation.tenant_id
@@ -1557,6 +1558,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               and message.conversation_id = $2
               and message.sequence > $3
               and message.deleted_at is null
+              and message.hidden_at is null
             order by message.sequence asc
             limit $4`,
           [input.tenantId, input.conversationId, input.afterSequence, input.limit + 1],
@@ -1738,7 +1740,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               input.clientMessageId,
               input.idempotencyKey,
               messageType,
-              input.body,
+              input.body.length > 0 ? input.body : null,
             ],
           );
           if (!inserted) throw new Error('MESSAGING_MESSAGE_INSERT_FAILED');
@@ -1865,13 +1867,15 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             readonly content_type: string;
             readonly size_bytes: string | number;
             readonly object_key: string;
+            readonly object_version: string | null;
             readonly sha256: string;
           } & QueryResultRow
         >(
           client,
           `select attachment.media_id, attachment.message_id, attachment.conversation_id,
                   media.media_type, attachment.file_name, attachment.content_type,
-                  attachment.size_bytes, attachment.object_key, attachment.sha256
+                  attachment.size_bytes, attachment.object_key,
+                  media.ready_object_version as object_version, attachment.sha256
              from messaging.message_attachments attachment
              join messaging.media_assets media
                on media.tenant_id = attachment.tenant_id and media.id = attachment.media_id
@@ -1914,7 +1918,9 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               )`,
           [input.tenantId, input.mediaId, input.userId],
         );
-        if (!row) return { outcome: 'not_found' } as const;
+        // A READY asset always carries its ready object version; a missing one cannot be served
+        // safely by exact version and stays invisible.
+        if (!row || row.object_version === null) return { outcome: 'not_found' } as const;
         return {
           outcome: 'ok',
           media: {
@@ -1926,6 +1932,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             contentType: row.content_type,
             byteSize: Number(row.size_bytes),
             objectKey: row.object_key,
+            objectVersion: row.object_version,
             sha256: row.sha256,
           },
         } as const;
