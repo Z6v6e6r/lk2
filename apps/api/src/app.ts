@@ -253,6 +253,8 @@ export interface BuildAppOptions {
   readonly notificationRepository?: NotificationInboxRepository;
   readonly notificationEndpointRepository?: NotificationEndpointRepository;
   readonly notificationEndpointCipher?: NotificationEndpointCipher;
+  /** Signs the per-delivery receipt tokens the service worker reports displays and clicks with. */
+  readonly notificationReceiptSecret?: string;
   readonly adminNotificationRepository?: AdminNotificationRepository;
   readonly messagingRepository?: MessagingRepository;
   readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
@@ -1117,6 +1119,9 @@ export async function buildApp(options: BuildAppOptions) {
       ? { repository: options.notificationEndpointRepository }
       : {}),
     ...(options.notificationEndpointCipher ? { cipher: options.notificationEndpointCipher } : {}),
+    ...(options.notificationReceiptSecret
+      ? { receiptTokenSecret: options.notificationReceiptSecret }
+      : {}),
     enabledGlobally: options.config.WEB_PUSH_ENABLED,
     maxEndpointsPerUser: options.config.WEB_PUSH_ENDPOINTS_PER_USER_MAX,
     allowedEndpointOrigins:

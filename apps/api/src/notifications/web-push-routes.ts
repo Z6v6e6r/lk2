@@ -4,10 +4,12 @@ import type { NotificationEndpointRepository, WebPushProviderSelector } from '@p
 import {
   canonicalWebPushSubscription,
   isWebPushEndpointOriginAllowed,
+  verifyNotificationReceiptToken,
   webPushSubscriptionSchema,
   type NotificationEndpointCipher,
 } from '@phub/notifications';
 import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fastify';
+import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
 
@@ -27,6 +29,13 @@ function commandHash(command: 'REGISTER' | 'REVOKE', payload: string): string {
   return createHash('sha256').update(`${command}:${payload}`).digest('hex');
 }
 
+// A receipt is a capability, not a command: the token in the body authorises exactly one delivery, so
+// the route needs no session and the service worker can report a display while the page is closed.
+const notificationReceiptSchema = z.object({
+  token: z.string().min(16).max(2048),
+  type: z.enum(['DISPLAYED', 'OPENED']),
+});
+
 export function registerWebPushRoutes(
   app: FastifyInstance,
   options: {
@@ -37,6 +46,8 @@ export function registerWebPushRoutes(
     readonly allowedEndpointOrigins: readonly string[];
     readonly publicKey?: string;
     readonly selector: WebPushProviderSelector;
+    /** Derived keyring secret that signs receipt tokens; absent keeps the funnel closed. */
+    readonly receiptTokenSecret?: string;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
@@ -200,6 +211,63 @@ export function registerWebPushRoutes(
         return sendApiError(request, reply, 500, 'INTERNAL_ERROR', 'Внутренняя ошибка сервиса.');
       }
       return result;
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/notifications/receipts',
+    {
+      config: {
+        rateLimit: {
+          // Receipts are best-effort and per-device, so the limit only has to stop a runaway loop.
+          max: 120,
+          timeWindow: '1 minute',
+          groupId: 'notification-receipts',
+          keyGenerator: (request) => `receipt:${request.ip}`,
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const tenantKey = (request.params as { readonly tenantKey?: string }).tenantKey;
+      if (!options.repository || !options.receiptTokenSecret) {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'NOTIFICATIONS_UNAVAILABLE',
+          'Уведомления временно недоступны.',
+        );
+      }
+      const parsed = notificationReceiptSchema.safeParse(request.body);
+      if (!parsed.success || !tenantKey) {
+        return sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная квитанция.');
+      }
+      const tenantId = await options.repository.resolveTenantId(tenantKey);
+      if (!tenantId) {
+        return sendApiError(request, reply, 404, 'NOT_FOUND', 'Организация не найдена.');
+      }
+      const verified = verifyNotificationReceiptToken({
+        secret: options.receiptTokenSecret,
+        tenantId,
+        token: parsed.data.token,
+      });
+      if (!verified) {
+        // Wrong tenant, expired, tampered and unparseable are one answer, so a probe learns nothing.
+        return sendApiError(
+          request,
+          reply,
+          403,
+          'NOTIFICATION_RECEIPT_INVALID',
+          'Квитанция недействительна.',
+        );
+      }
+      const result = await options.repository.recordClientDeliveryReceipt({
+        tenantId,
+        deliveryId: verified.deliveryId,
+        receiptType: parsed.data.type,
+      });
+      return reply.status(202).send({ outcome: result.recorded ? 'recorded' : 'already_recorded' });
     },
   );
 

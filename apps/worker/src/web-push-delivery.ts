@@ -84,6 +84,13 @@ export interface WebPushNotificationPayload {
   readonly title: string;
   readonly preview: string;
   readonly deepLink?: string;
+  /**
+   * Authorises the service worker to record a display or click receipt for this delivery without a
+   * session. It is built per delivery in the adapter, because only the adapter knows the delivery id.
+   */
+  readonly receiptToken?: string;
+  /** Tenant key the receipt is posted under; a service worker has no other way to know the contour. */
+  readonly receiptTenantKey?: string;
 }
 
 function collapseNotificationText(value: string): string {
@@ -114,6 +121,8 @@ export function buildWebPushNotification(input: {
   readonly title: string;
   readonly body: string;
   readonly deepLink?: string | null;
+  readonly receiptToken?: string;
+  readonly receiptTenantKey?: string;
 }): WebPushNotificationPayload {
   const title = truncateCodePoints(
     collapseNotificationText(input.title),
@@ -127,6 +136,9 @@ export function buildWebPushNotification(input: {
     id: input.id,
     title,
     preview: body || title,
+    ...(input.receiptToken && input.receiptTenantKey
+      ? { receiptToken: input.receiptToken, receiptTenantKey: input.receiptTenantKey }
+      : {}),
   };
   if (!input.deepLink) return payload;
   const routed: WebPushNotificationPayload = { ...payload, deepLink: input.deepLink };
@@ -142,6 +154,7 @@ function webPushPayloadBytes(payload: WebPushNotificationPayload): number {
       title: payload.title,
       preview: payload.preview,
       ...(payload.deepLink ? { deepLink: payload.deepLink } : {}),
+      ...(payload.receiptToken ? { receiptToken: payload.receiptToken } : {}),
     }),
     'utf8',
   );

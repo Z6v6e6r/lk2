@@ -4,6 +4,7 @@ import { Agent } from 'node:https';
 import type { LookupFunction } from 'node:net';
 
 import {
+  createNotificationReceiptToken,
   isWebPushEndpointOriginAllowed,
   webPushSubscriptionSchema,
   type NotificationPushDeliveryPort,
@@ -12,6 +13,8 @@ import {
 } from '@phub/notifications';
 import webPush, { type PushSubscription, type RequestOptions, type SendResult } from 'web-push';
 import ipaddr from 'ipaddr.js';
+
+import { WEB_PUSH_PAYLOAD_MAX_BYTES } from './web-push-delivery.js';
 
 const { sendNotification, WebPushError } = webPush;
 
@@ -142,6 +145,10 @@ export function mapWebPushFailure(error: unknown): PushDeliveryResult {
   return { outcome: 'retryable_failure', errorCode: 'WEB_PUSH_NETWORK_FAILURE' };
 }
 
+// A person may open a notification days after it arrived, so the receipt token outlives the delivery
+// attempt itself while still expiring.
+export const DEFAULT_RECEIPT_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
   public readonly platform = 'WEB' as const;
   private readonly circuits = new Map<string, CircuitState>();
@@ -162,6 +169,11 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
       readonly circuitFailureThreshold: number;
       readonly circuitResetMs: number;
       readonly allowedEndpointOrigins: readonly string[];
+      /** Derived keyring secret used to sign the per-delivery receipt token; absent disables the funnel. */
+      readonly receiptTokenSecret?: string;
+      /** Tenant key the service worker posts the receipt to; it is public in every client URL. */
+      readonly receiptTenantKey?: string;
+      readonly receiptTokenTtlSeconds?: number;
       readonly sendImplementation?: SendImplementation;
       readonly now?: () => number;
       readonly onProviderOutcome?: (outcome: WebPushProviderOutcome) => void;
@@ -203,12 +215,32 @@ export class WebPushDeliveryAdapter implements NotificationPushDeliveryPort {
         ...(decoded.success ? { suspendPolicy: true } : {}),
       });
     }
-    const payload = JSON.stringify({
-      notificationId: request.notification.id,
-      title: request.notification.title,
-      preview: request.notification.preview,
-      ...(request.notification.deepLink ? { deepLink: request.notification.deepLink } : {}),
-    });
+    const receiptToken = this.options.receiptTokenSecret
+      ? createNotificationReceiptToken({
+          secret: this.options.receiptTokenSecret,
+          tenantId: request.tenantId,
+          deliveryId: request.deliveryId,
+          expiresAt: new Date(
+            (this.options.now?.() ?? Date.now()) +
+              (this.options.receiptTokenTtlSeconds ?? DEFAULT_RECEIPT_TOKEN_TTL_SECONDS) * 1000,
+          ),
+        })
+      : undefined;
+    const wirePayload = (withReceipt: boolean) =>
+      JSON.stringify({
+        notificationId: request.notification.id,
+        title: request.notification.title,
+        preview: request.notification.preview,
+        ...(request.notification.deepLink ? { deepLink: request.notification.deepLink } : {}),
+        ...(withReceipt && receiptToken && this.options.receiptTenantKey
+          ? { receiptToken, receiptTenantKey: this.options.receiptTenantKey }
+          : {}),
+      });
+    // The receipt token is an addition to a payload whose budget was already agreed; if it does not fit,
+    // the notification itself wins and the funnel loses this one delivery.
+    let payload = wirePayload(true);
+    if (Buffer.byteLength(payload, 'utf8') > WEB_PUSH_PAYLOAD_MAX_BYTES)
+      payload = wirePayload(false);
     const subscription: PushSubscription = {
       endpoint: decoded.data.endpoint,
       keys: decoded.data.keys,

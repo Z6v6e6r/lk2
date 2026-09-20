@@ -18,18 +18,45 @@ self.phubSafeDeepLink = function phubSafeDeepLink(value) {
 };
 
 /**
+ * Reports that a notification was shown or opened. A service worker has no session and usually runs while
+ * the page is closed, so the push payload carries a token that authorises exactly this delivery. A receipt
+ * is best effort: whatever happens here must never affect the notification the person sees.
+ */
+self.phubReportReceipt = function phubReportReceipt(tenantKey, receiptToken, type) {
+  if (typeof tenantKey !== 'string' || !tenantKey) return Promise.resolve();
+  if (typeof receiptToken !== 'string' || receiptToken.length < 16) return Promise.resolve();
+  return fetch('/user/api/v1/' + encodeURIComponent(tenantKey) + '/notifications/receipts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: receiptToken, type: type }),
+    credentials: 'omit',
+    keepalive: true,
+  }).catch(function ignoreReceiptFailure() {
+    return undefined;
+  });
+};
+
+/**
  * Shows the notification and, if the platform rejects an option it does not implement, retries with the
  * members every engine supports. iOS ignores the notification artwork and has no vibration API, and a
  * rejected options dictionary would otherwise mean no banner at all.
  */
 self.phubShowNotification = function phubShowNotification(title, options) {
-  return self.registration.showNotification(title, options).catch(function fallback() {
-    return self.registration.showNotification(title, {
-      body: options.body,
-      tag: options.tag,
-      data: options.data,
+  var tenantKey = options.data && options.data.receiptTenantKey;
+  var receiptToken = options.data && options.data.receiptToken;
+  return self.registration
+    .showNotification(title, options)
+    .catch(function fallback() {
+      return self.registration.showNotification(title, {
+        body: options.body,
+        tag: options.tag,
+        data: options.data,
+      });
+    })
+    .then(function reportDisplayed() {
+      // Reported only after the banner exists, so a counted display is a display.
+      return self.phubReportReceipt(tenantKey, receiptToken, 'DISPLAYED');
     });
-  });
 };
 
 self.addEventListener('push', function handlePush(event) {
@@ -58,14 +85,25 @@ self.addEventListener('push', function handlePush(event) {
       lang: 'ru',
       dir: 'ltr',
       timestamp: Date.now(),
-      data: { notificationId: notificationId, deepLink: deepLink },
+      data: {
+        notificationId: notificationId,
+        deepLink: deepLink,
+        // Present only when the Worker could sign a receipt for this delivery.
+        ...(typeof payload.receiptToken === 'string' ? { receiptToken: payload.receiptToken } : {}),
+        ...(typeof payload.receiptTenantKey === 'string'
+          ? { receiptTenantKey: payload.receiptTenantKey }
+          : {}),
+      },
     }),
   );
 });
 
 self.addEventListener('notificationclick', function handleNotificationClick(event) {
   event.notification.close();
-  var deepLink = self.phubSafeDeepLink(event.notification.data && event.notification.data.deepLink);
+  var data = event.notification.data || {};
+  var deepLink = self.phubSafeDeepLink(data.deepLink);
+  // A click is the strongest signal the funnel has, so it is reported before the window is opened.
+  event.waitUntil(self.phubReportReceipt(data.receiptTenantKey, data.receiptToken, 'OPENED'));
   event.waitUntil(
     self.clients
       .matchAll({ type: 'window', includeUncontrolled: true })

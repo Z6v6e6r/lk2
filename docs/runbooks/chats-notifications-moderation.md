@@ -988,7 +988,12 @@ with their per-endpoint outcomes, and the current endpoint health with the platf
 the numbers can and cannot say: Web Push has no provider dashboard and no receipt beyond acceptance, so
 `SENT` means "the push service took it", not "the person saw it"; a subscription that was deleted on the
 device keeps looking accepted until the service answers 404/410, at which point the endpoint turns
-`INVALID`. When a person says nothing arrived, compare their `lastConfirmedAt` first — a live row with an
+`INVALID`. The report also carries the funnel: `displayed` and `opened` count deliveries whose client reported a
+receipt, not receipts themselves, so a message shown on two devices counts once per delivery. Treat both
+as a floor — an iPhone whose web app is closed may not run the worker at all — and never as proof that a
+person read anything.
+
+When a person says nothing arrived, compare their `lastConfirmedAt` first — a live row with an
 old confirmation usually means the browser or the installed app was replaced and has to subscribe again.
 
 The API accepts a title of up to 300 characters, because that is the in-app inbox limit. The system
