@@ -30,11 +30,14 @@ has_key() {
 read_key() {
   file=$1
   key=$2
+  # The staging hosts this gate runs on ship mawk 1.3.3, which has no POSIX character classes:
+  # `[[:space:]]` silently matches nothing there and every read would report a missing key. Spell
+  # the whitespace set out instead, so the same check works on mawk, gawk and busybox awk.
   awk -F= -v key="$key" '
-    $1 ~ "^[[:space:]]*" key "[[:space:]]*$" {
+    $1 ~ "^[ \t\r]*" key "[ \t\r]*$" {
       value = substr($0, index($0, "=") + 1)
-      sub(/^[[:space:]]+/, "", value)
-      sub(/[[:space:]]+$/, "", value)
+      sub(/^[ \t\r]+/, "", value)
+      sub(/[ \t\r]+$/, "", value)
       found = 1
     }
     END { if (found) print value; else exit 1 }
