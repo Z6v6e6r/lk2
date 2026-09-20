@@ -6,7 +6,11 @@ import type {
   PersistActivityHistoryItemInput,
   PersistActivityHistorySyncInput,
 } from '@phub/database';
-import { localVivaExerciseAssociationId } from '@phub/legacy-games-adapter';
+import {
+  localVivaExerciseAssociationId,
+  type LegacyTournamentResult,
+  type LegacyTournamentResultSource,
+} from '@phub/legacy-games-adapter';
 import type { VivaBookingHistoryPage, VivaBookingHistorySourcePort } from '@phub/viva-adapter';
 
 import type { ActivityHistoryRefreshService } from './activity-history-routes.js';
@@ -41,6 +45,11 @@ export interface ActivityHistoryProjectionCoordinatorOptions {
       readonly deepLink: string;
     }[]
   >;
+  readonly tournamentResultSource?: LegacyTournamentResultSource;
+  readonly resolveTournamentProfileIds?: (input: {
+    readonly tenantId: string;
+    readonly externalClientIds: readonly string[];
+  }) => Promise<ReadonlyMap<string, string>>;
   readonly now?: () => Date;
 }
 
@@ -146,6 +155,56 @@ function exerciseAssociationId(exerciseRef: string | undefined): string | undefi
   }
 }
 
+interface ProjectedTournamentResult {
+  readonly tournamentId: string;
+  readonly details: {
+    readonly status: 'CONFIRMED';
+    readonly podium: readonly {
+      readonly profileId: string | null;
+      readonly displayName: string;
+      readonly avatarUrl: null;
+      readonly place: number;
+    }[];
+    readonly viewer: {
+      readonly profileId: string;
+      readonly displayName: string;
+      readonly avatarUrl: null;
+      readonly place: number;
+    };
+  };
+}
+
+function projectedTournamentResult(
+  result: LegacyTournamentResult,
+  profileIds: ReadonlyMap<string, string>,
+  viewerUserId: string,
+): ProjectedTournamentResult | undefined {
+  const viewerRows = result.standings.filter(
+    (standing) => profileIds.get(standing.externalParticipantId) === viewerUserId,
+  );
+  if (viewerRows.length !== 1) return undefined;
+  const viewer = viewerRows[0];
+  if (!viewer) return undefined;
+  return {
+    tournamentId: result.id,
+    details: {
+      status: 'CONFIRMED',
+      podium: result.podium.map((standing) => ({
+        profileId: profileIds.get(standing.externalParticipantId) ?? null,
+        displayName: standing.displayName,
+        avatarUrl: null,
+        place: standing.place,
+      })),
+      viewer: {
+        profileId: viewerUserId,
+        displayName: viewer.displayName,
+        avatarUrl: null,
+        place: viewer.place,
+      },
+    },
+  };
+}
+
 export class ActivityHistoryRefreshCoordinator implements ActivityHistoryRefreshService {
   private readonly inflight = new Map<string, Promise<void>>();
   private readonly projector: ActivityHistoryProjectionCoordinator;
@@ -213,6 +272,63 @@ export class ActivityHistoryProjectionCoordinator {
     this.now = options.now ?? (() => new Date());
   }
 
+  private async readTournamentResults(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly page: VivaBookingHistoryPage;
+  }): Promise<ReadonlyMap<string, ProjectedTournamentResult>> {
+    if (!this.options.tournamentResultSource || !this.options.resolveTournamentProfileIds) {
+      return new Map();
+    }
+    const exerciseRefs = [
+      ...new Set(
+        input.page.records.flatMap((record) =>
+          record.kind === 'TOURNAMENT' &&
+          record.status === 'COMPLETED' &&
+          record.sourceRef.exerciseRef
+            ? [record.sourceRef.exerciseRef]
+            : [],
+        ),
+      ),
+    ].slice(0, 8);
+    const results = new Map<string, LegacyTournamentResult>();
+    for (let index = 0; index < exerciseRefs.length; index += 4) {
+      const batch = exerciseRefs.slice(index, index + 4);
+      const settled = await Promise.allSettled(
+        batch.map((exerciseRef) => this.options.tournamentResultSource!.read(exerciseRef)),
+      );
+      settled.forEach((outcome, resultIndex) => {
+        const exerciseRef = batch[resultIndex];
+        if (exerciseRef && outcome.status === 'fulfilled' && outcome.value) {
+          results.set(exerciseRef, outcome.value);
+        }
+      });
+    }
+    if (results.size === 0) return new Map();
+    const externalClientIds = [
+      ...new Set(
+        [...results.values()].flatMap((result) =>
+          result.standings.map((row) => row.externalParticipantId),
+        ),
+      ),
+    ];
+    let profileIds: ReadonlyMap<string, string>;
+    try {
+      profileIds = await this.options.resolveTournamentProfileIds({
+        tenantId: input.tenantId,
+        externalClientIds,
+      });
+    } catch {
+      return new Map();
+    }
+    return new Map(
+      [...results].flatMap(([exerciseRef, result]) => {
+        const projected = projectedTournamentResult(result, profileIds, input.userId);
+        return projected ? [[exerciseRef, projected] as const] : [];
+      }),
+    );
+  }
+
   public async project(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -228,6 +344,7 @@ export class ActivityHistoryProjectionCoordinator {
     if (input.page.page !== expectedPage) throw new Error('ACTIVITY_HISTORY_PAGE_MISMATCH');
     const fetchedAt = this.now();
     const sourceRevision = revision(input.page);
+    const tournamentResults = await this.readTournamentResults(input);
     const items: PersistActivityHistoryItemInput[] = [];
     const supersededItemIds = new Set<string>();
     const exerciseOccurrences = input.page.records.flatMap((record) =>
@@ -302,6 +419,9 @@ export class ActivityHistoryProjectionCoordinator {
         syncedAt: fetchedAt.toISOString(),
       });
       const subtitle = [record.venue.room, record.venue.address].filter(Boolean).join(' · ');
+      const tournamentResult = record.sourceRef.exerciseRef
+        ? tournamentResults.get(record.sourceRef.exerciseRef)
+        : undefined;
       items.push({
         id: mapping.internalId,
         kind: record.kind,
@@ -312,7 +432,15 @@ export class ActivityHistoryProjectionCoordinator {
         title: record.title,
         venueName: record.venue.name,
         integrationMappingId: mapping.mappingId,
-        details: subtitle ? { subtitle } : {},
+        ...(tournamentResult
+          ? {
+              tournamentId: tournamentResult.tournamentId,
+              details: {
+                ...(subtitle ? { subtitle } : {}),
+                tournamentResult: tournamentResult.details,
+              },
+            }
+          : { details: subtitle ? { subtitle } : {} }),
         sourceRevision,
         syncedAt: fetchedAt.toISOString(),
       });

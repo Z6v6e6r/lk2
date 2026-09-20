@@ -50,6 +50,7 @@ import {
 import {
   LegacyGamesMongoAdapter,
   LegacyGamesPublicAdapter,
+  LegacyTournamentResultAdapter,
   LegacyTournamentSummaryAdapter,
 } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
@@ -284,6 +285,20 @@ const legacyLkIdentityVerifier = config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED
       timeoutMs: config.LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS,
     })
   : undefined;
+const tournamentResultSource =
+  config.GAMES_READ_ENABLED && config.ACTIVITY_HISTORY_SYNC_ENABLED
+    ? new LegacyTournamentResultAdapter({
+        baseUrl: config.LEGACY_GAMES_PUBLIC_BASE_URL,
+        timeoutMs: Math.min(Math.max(config.VIVA_TIMEOUT_MS, 2_000), 5_000),
+        maxAttempts: 2,
+        freshTtlMs: 60_000,
+        staleTtlMs: 600_000,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'legacy tournament result read'),
+      })
+    : undefined;
+const bookingScreenMappingRepository = createBookingScreenMappingRepository(pool);
 const promotionEngagementSink = config.PROMOTIONS_ENGAGEMENT_SECRET
   ? new LegacyPromotionEngagementSink({
       baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
@@ -380,6 +395,15 @@ const activityHistoryProjector =
             }
           : {}),
         ...(readAllLocalGameHistory ? { readLocalGames: readAllLocalGameHistory } : {}),
+        ...(tournamentResultSource && bookingScreenMappingRepository?.resolveVivaProfileIds
+          ? {
+              tournamentResultSource,
+              resolveTournamentProfileIds: (input: {
+                readonly tenantId: string;
+                readonly externalClientIds: readonly string[];
+              }) => bookingScreenMappingRepository.resolveVivaProfileIds!(input),
+            }
+          : {}),
       })
     : undefined;
 const giftCertificateMediaStore = config.GIFT_CERTIFICATE_MEDIA_ENABLED
@@ -622,7 +646,7 @@ const app = await buildApp({
     ? {
         bookingScreenReadJobStore: new RedisBookingScreenReadJobStore(redis),
         eventCatalogSnapshotStore: new RedisEventCatalogSnapshotStore<EventCatalogItem>(redis),
-        bookingScreenMappingRepository: createBookingScreenMappingRepository(pool),
+        bookingScreenMappingRepository,
       }
     : {}),
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),
