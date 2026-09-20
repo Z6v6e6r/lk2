@@ -1014,6 +1014,7 @@ export interface LegacyTournamentResultAdapterOptions {
   readonly maxResponseBytes?: number;
   readonly freshTtlMs?: number;
   readonly staleTtlMs?: number;
+  readonly maxCacheEntries?: number;
   readonly circuitFailureThreshold?: number;
   readonly circuitResetMs?: number;
   readonly fetchImplementation?: typeof fetch;
@@ -1153,6 +1154,17 @@ export class LegacyTournamentResultAdapter implements LegacyTournamentResultSour
 
   public constructor(private readonly options: LegacyTournamentResultAdapterOptions = {}) {}
 
+  private cacheResult(key: string, result: LegacyTournamentResult | null): void {
+    const maxEntries = Math.max(1, Math.min(this.options.maxCacheEntries ?? 256, 2_000));
+    this.cache.set(key, { fetchedAt: this.options.now?.() ?? Date.now(), result });
+    while (this.cache.size > maxEntries) {
+      const oldestKey = [...this.cache.entries()].reduce((oldest, entry) =>
+        entry[1].fetchedAt < oldest[1].fetchedAt ? entry : oldest,
+      )[0];
+      this.cache.delete(oldestKey);
+    }
+  }
+
   private emit(
     outcome: Parameters<
       NonNullable<LegacyTournamentResultAdapterOptions['onMetric']>
@@ -1250,10 +1262,7 @@ export class LegacyTournamentResultAdapter implements LegacyTournamentResultSour
     if (existing) return existing;
     const request = this.fetch(normalized)
       .then((result) => {
-        this.cache.set(normalized, {
-          fetchedAt: this.options.now?.() ?? Date.now(),
-          result,
-        });
+        this.cacheResult(normalized, result);
         return result;
       })
       .catch((error) => {

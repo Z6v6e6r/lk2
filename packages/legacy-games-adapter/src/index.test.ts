@@ -906,4 +906,35 @@ describe('legacy games adapter', () => {
       'TOURNAMENT_RESULT_RESPONSE_TOO_LARGE',
     );
   });
+
+  it('evicts the oldest tournament-result cache entries at the configured bound', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const tournamentId = new URL(input.toString()).searchParams.get('tournamentId');
+      return Promise.resolve(
+        Response.json([
+          {
+            tournamentId,
+            params: { status: 'completed' },
+            summary: { status: 'completed', finished: true },
+            standings: [
+              { id: 'one', name: 'Один', rank: 1 },
+              { id: 'two', name: 'Два', rank: 2 },
+              { id: 'three', name: 'Три', rank: 3 },
+            ],
+          },
+        ]),
+      );
+    });
+    const adapter = new LegacyTournamentResultAdapter({
+      fetchImplementation,
+      maxCacheEntries: 2,
+    });
+
+    await adapter.read('tournament-1');
+    await adapter.read('tournament-2');
+    await adapter.read('tournament-3');
+    await adapter.read('tournament-1');
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(4);
+  });
 });
