@@ -883,4 +883,27 @@ describe('legacy games adapter', () => {
     });
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
+
+  it('bounds chunked tournament-result responses before buffering them', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('x'.repeat(128)));
+            controller.close();
+          },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const adapter = new LegacyTournamentResultAdapter({
+      fetchImplementation,
+      maxResponseBytes: 32,
+      maxAttempts: 1,
+    });
+
+    await expect(adapter.read('legacy-tournament')).rejects.toThrow(
+      'TOURNAMENT_RESULT_RESPONSE_TOO_LARGE',
+    );
+  });
 });

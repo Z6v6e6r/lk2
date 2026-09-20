@@ -1030,6 +1030,46 @@ interface LegacyTournamentResultCacheEntry {
   readonly result: LegacyTournamentResult | null;
 }
 
+async function readTournamentResultBytes(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+  }
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 function completedTournamentResult(
   value: unknown,
   exerciseExternalId: string,
@@ -1164,12 +1204,7 @@ export class LegacyTournamentResultAdapter implements LegacyTournamentResultSour
           this.options.maxResponseBytes ?? 1_024 * 1_024,
           2 * 1_024 * 1_024,
         );
-        const contentLength = Number(response.headers.get('content-length'));
-        if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-          throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
-        }
-        const bytes = await response.arrayBuffer();
-        if (bytes.byteLength > maxBytes) throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+        const bytes = await readTournamentResultBytes(response, maxBytes);
         let body: unknown;
         try {
           body = JSON.parse(new TextDecoder().decode(bytes));
