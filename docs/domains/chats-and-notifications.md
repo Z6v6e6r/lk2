@@ -63,14 +63,21 @@ generic source-event схеме, их payload остаётся identifier-only (
 sequence и `recipientUserIds`), а получатели резолвятся правилом
 `EVENT_USERS/recipientUserIds` из активных участников разговора, кроме автора. Шаблон не цитирует
 текст сообщения: inbox-item ведёт ссылкой `/chats/{{conversationId}}`, категория `MESSAGING`
-опциональна для получателя. Версия 2 добавляет к durable inbox второй канал `PUSH`: канал
-запрашивается правилом, но фактическая отправка по-прежнему зависит от tenant gate
-`web_push_enabled`, активного provider account, сохранённой настройки `MESSAGING/PUSH`, тихих часов
-и политики конкретного разговора; `mandatory = false`, поэтому всё это остаётся выбором
-получателя, а push payload рендерится из того же снапшота без текста сообщения. Провижининг —
-`npm run notifications:messaging:provision` (новая версия применяется тем же скриптом с новым
-`Idempotency-Key`; старые template rows остаются неизменными и неактивными), отдельная очередь
-проектора — `phub.messaging-notification-intent-projector.v1`.
+опциональна для получателя. Direct message — это разговор, в который человека нужно вернуть,
+поэтому каналы шаблона и правила — `IN_APP` и `PUSH`; версия ruleset и шаблона поднята, потому что
+провижиненная версия шаблона не может изменить свои каналы. Провижининг —
+`npm run notifications:messaging:provision`, отдельная очередь проектора —
+`phub.messaging-notification-intent-projector.v1`.
+
+Входящая заявка в друзья описана отдельным ruleset `friendship.ru-ru.v1`
+(`profile.friend_request.created.v1`): событие несёт адресованный аккаунт в `recipientUserIds`,
+правило резолвит его через `EVENT_USERS/recipientUserIds`, шаблон не называет ни отправителя, ни
+данные профиля, ведёт ссылкой `/notifications` и просит оба канала `IN_APP` и `PUSH`, потому что
+заявка бесполезна, если адресат увидит её только после входа в кабинет. Категория `FRIENDSHIP`
+опциональна для получателя. Провижининг — `npm run notifications:friendship:provision`, очередь
+проектора — `phub.friendship-notification-intent-projector.v1`. Заявка, сохранённая для
+импортированного legacy-игрока, становится настоящим `profile.friend_requests` только после
+доставки, поэтому уведомление появляется вместе с ней, а не в момент сохранения.
 Реализованный Web Push срез добавляет
 зашифрованные subscription endpoint, capability/register/revoke API, браузерный service worker,
 PUSH delivery jobs, VAPID adapter, bounded retries, circuit breaker и инвалидирование 404/410.

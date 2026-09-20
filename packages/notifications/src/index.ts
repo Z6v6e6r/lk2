@@ -166,13 +166,9 @@ export type GameNotificationDefinition = (typeof GAME_NOTIFICATION_DEFINITIONS)[
  * Direct-chat notification ruleset. Messaging events stay on the generic source-event schema: ADR
  * 0022 keeps their payload identifier-only (tenant, conversation, message, sequence and recipient
  * identifiers), so the projector resolves recipients from `recipientUserIds` instead of a dedicated
- * payload contract, and the rendered text never quotes message content.
- *
- * Version 2 adds the PUSH channel next to the durable inbox item. Chat push is still optional for
- * the recipient (category `MESSAGING`, `mandatory: false`): the projector applies the stored channel
- * preference, the recipient's quiet window and the per-conversation policy, and no message body ever
- * reaches the provider payload. Provisioning the new version is what turns it on for a tenant; the
- * old template rows stay immutable and inactive.
+ * payload contract, and the rendered text never quotes message content. Direct messages are the one
+ * conversation a person can be pulled back into, so the ruleset asks for both channels; the version
+ * moves to `messaging.ru-ru.v2` because a provisioned template version can never change its channels.
  */
 export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
   rulesetVersion: 'messaging.ru-ru.v2',
@@ -239,6 +235,67 @@ export const MESSAGING_NOTIFICATION_DEFINITIONS =
   MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.definitions;
 export type MessagingNotificationDefinition = (typeof MESSAGING_NOTIFICATION_DEFINITIONS)[number];
 
+/**
+ * Incoming friend-request ruleset. A request is addressed to one account, so the event carries that
+ * account in `recipientUserIds` and the rule resolves it from there; the rendered text names neither
+ * the requester nor any profile detail, and opens the notifications feed where the request can be
+ * answered. The channels include PUSH because a request is worthless if the addressed player only
+ * discovers it after opening the cabinet.
+ */
+export const FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT = {
+  rulesetVersion: 'friendship.ru-ru.v1',
+  template: {
+    version: 1,
+    locale: 'ru-RU',
+    category: 'FRIENDSHIP',
+    deepLink: '/notifications',
+    channels: ['IN_APP', 'PUSH'],
+    active: true,
+  },
+  rule: {
+    keySuffix: 'default',
+    channelOverride: ['IN_APP', 'PUSH'],
+    active: true,
+  },
+  definitions: [
+    {
+      key: 'profile.friend_request.created',
+      sourceEventType: 'profile.friend_request.created.v1',
+      title: 'Заявка в друзья',
+      body: 'Откройте ПадлХАБ, чтобы ответить.',
+      audienceSelector: {
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+      },
+      mandatory: false,
+    },
+  ],
+} as const;
+
+export const FRIENDSHIP_NOTIFICATION_RULESET_VERSION =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.rulesetVersion;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_VERSION =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.version;
+export const FRIENDSHIP_NOTIFICATION_LOCALE =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.locale;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.category;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.deepLink;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.channels;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_ACTIVE =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.active;
+export const FRIENDSHIP_NOTIFICATION_RULE_KEY_SUFFIX =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.rule.keySuffix;
+export const FRIENDSHIP_NOTIFICATION_RULE_CHANNEL_OVERRIDE =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.rule.channelOverride;
+export const FRIENDSHIP_NOTIFICATION_RULE_ACTIVE =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.rule.active;
+export const FRIENDSHIP_NOTIFICATION_DEFINITIONS =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.definitions;
+export type FriendshipNotificationDefinition = (typeof FRIENDSHIP_NOTIFICATION_DEFINITIONS)[number];
+
 export function bookingNotificationContractHash(contract: object): string {
   const serialized = JSON.stringify(contract);
   if (!serialized) throw new Error('BOOKING_NOTIFICATION_CONTRACT_NOT_SERIALIZABLE');
@@ -253,6 +310,9 @@ export const GAME_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
 );
 export const MESSAGING_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
   MESSAGING_NOTIFICATION_CANONICAL_CONTRACT,
+);
+export const FRIENDSHIP_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT,
 );
 
 export const BOOKING_NOTIFICATION_EVENT_TYPES = [
@@ -272,6 +332,8 @@ export const MESSAGING_NOTIFICATION_EVENT_TYPES = [
   'messaging.conversation.created.v1',
   'messaging.message.created.v1',
 ] as const;
+
+export const FRIENDSHIP_NOTIFICATION_EVENT_TYPES = ['profile.friend_request.created.v1'] as const;
 
 export const MAX_NOTIFICATION_EVENT_RECIPIENTS = 50;
 

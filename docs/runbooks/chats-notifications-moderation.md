@@ -46,7 +46,8 @@ enabling chats.
 8. Enable push one platform at a time: Web Push sandbox, APNs sandbox, FCM test project, then the
    corresponding production account. Never switch all platforms in one change window. Chat push needs
    the `messaging.ru-ru.v2` ruleset as well; follow
-   [Messaging chat push ruleset v2](#messaging-chat-push-ruleset-v2) after the Web Push sandbox gate.
+   [Messaging chat push prerequisites and acceptance](#messaging-chat-push-prerequisites-and-acceptance)
+   after the Web Push sandbox gate.
 9. Enable one messaging connector in sandbox; verify inbound/outbound deduplication and DLQ replay.
 10. Enable user reports and CUP moderation. Enable reversible auto-quarantine only after expiry and
     reversal tests pass.
@@ -1100,11 +1101,12 @@ a compatible consumer instead requires a separately approved, bounded rollback w
 continuous queue-depth observation. A database rollback is not required: the expand-only recipient
 fence table is inert for older workers.
 
-### Messaging chat push ruleset v2
+### Messaging chat push prerequisites and acceptance
 
-`messaging.ru-ru.v1` provisions the durable inbox item only. Version 2 (`messaging.ru-ru.v2`) adds the
-optional `PUSH` channel to the same two rules; the source events, the identifier-only payload and the
-`/chats/{{conversationId}}` deep link do not change, and both rules stay `mandatory = false`.
+Version 2 (`messaging.ru-ru.v2`) adds the optional `PUSH` channel to the same two direct-chat rules;
+the source events, the identifier-only payload and the `/chats/{{conversationId}}` deep link do not
+change, and both rules stay `mandatory = false`. The provisioning procedure, the request-hash rule
+and the inactive-first template ordering are described with the other rulesets above.
 
 Provisioning a version never enables a transport by itself. Chat push starts only while all of these
 hold for the tenant: `WEB_PUSH_ENABLED` on every API and worker replica, an `ACTIVE` Web Push provider
@@ -1113,22 +1115,6 @@ account, the recipient has an `ACTIVE` endpoint registered, and the tenant gate
 decide each message: category `MESSAGING` + channel `PUSH` must not be disabled, the quiet window
 must be closed, and the conversation policy must not be muted (`ALL` with no open `muted_until`).
 Realtime delivery and the inbox item are unaffected by that policy.
-
-Preview, then apply with a new operator idempotency key. Reusing a v1 key fails closed with
-`IDEMPOTENCY_KEY_REUSED`, because the request hash covers the channel set:
-
-```bash
-npm run notifications:messaging:provision -- \
-  --tenant-key=local-padel \
-  --actor-id=<active-padlhub-user-uuid> \
-  --idempotency-key=messaging-ruleset-v2-2026-09-20
-
-npm run notifications:messaging:provision -- \
-  --tenant-key=local-padel \
-  --actor-id=<active-padlhub-user-uuid> \
-  --idempotency-key=messaging-ruleset-v2-2026-09-20 \
-  --confirm=APPLY_MESSAGING_NOTIFICATION_RULESET
-```
 
 Acceptance: one chat message yields one inbox item and at most one push per active endpoint;
 disabling `MESSAGING/PUSH` or entering quiet hours removes the push while the item still lands; a
@@ -1337,23 +1323,48 @@ Worker startup must declare `phub.dead-letter.v1` as a durable quorum queue and 
 `phub.dead-letter` topic exchange with routing key `#`. This is shared retention for rejected
 events; it does not change the routing keys or delivery policy of existing consumers.
 
-Notification projectors use three explicit queues. `phub.notification-intent-projector.v1` retains
+Notification projectors use four explicit queues. `phub.notification-intent-projector.v1` retains
 only the four booking contracts so old workers remain safe during a rolling upgrade;
 `phub.game-notification-intent-projector.v1` binds only the three GAME contracts and is consumed
 only by workers that understand their schemas and recipient fence;
 `phub.messaging-notification-intent-projector.v1` binds only `messaging.conversation.created.v1` and
 `messaging.message.created.v1`, whose identifier-only payloads carry the `recipientUserIds` the
-ruleset audience selector reads. The worker removes the legacy `phub.events` / `#` binding from the
-booking queue. Verify that no projector queue has a wildcard binding before enabling rules. Every
-future notification-producing vertical must add its versioned routing key to a code-owned topology
-manifest and test; a database rule alone must not broaden broker consumption.
+ruleset audience selector reads; `phub.friendship-notification-intent-projector.v1` binds only
+`profile.friend_request.created.v1`, which addresses the account that has to answer in the same
+field. The worker removes the legacy `phub.events` / `#` binding from the booking queue only after
+every other queue is fully bound. Verify that no projector queue has a wildcard binding before
+enabling rules. Every future notification-producing vertical must add its own versioned queue,
+routing key and test; a database rule alone must not broaden broker consumption.
 
 Direct-chat notifications are optional per category: provision them with
 `npm run notifications:messaging:provision -- --tenant-key=<key> --actor-id=<uuid>
 --idempotency-key=<16-128 chars>` (dry-run first, then `--confirm=APPLY_MESSAGING_NOTIFICATION_RULESET`)
-and enable in-app delivery with the existing notification runtime command. Without the messaging
-runtime gates (`messaging.tenant_runtime_settings`) no messaging event is produced at all, so a
-missing conversation notification is first an HTTP/tenant-gate question, not a projector fault.
+and enable delivery with the existing notification runtime command. Ruleset `messaging.ru-ru.v2`
+requests both `IN_APP` and `PUSH`, so a tenant provisioned before v2 must be re-provisioned before a
+direct message can reach a closed browser. A new ruleset version changes the request hash, so the
+re-provisioning command needs a **new** idempotency key; reusing the v1 key fails with
+`IDEMPOTENCY_KEY_REUSED` before anything is written. The provisioner inserts the new template version
+inactive and only then retires the previous active version, because the schema keeps at most one
+active template per `(template_key, locale)`. Without the messaging runtime gates
+(`messaging.tenant_runtime_settings`) no messaging event is produced at all, so a missing
+conversation notification is first an HTTP/tenant-gate question, not a projector fault.
+
+Incoming friend requests are provisioned the same way:
+`npm run notifications:friendship:provision -- --tenant-key=<key> --actor-id=<uuid>
+--idempotency-key=<16-128 chars>` (dry-run first, then
+`--confirm=APPLY_FRIENDSHIP_NOTIFICATION_RULESET`). The `friendship.ru-ru.v1` ruleset also requests
+`IN_APP` and `PUSH` and addresses only the account that has to answer. A saved request for an
+imported legacy player emits `profile.friend_request.created.v1` when the worker delivers that row,
+not when the requester saves it, so its notification needs no separate deferred path.
+
+Two timing rules apply to both rulesets. First, the projection is only as good as the running worker:
+an event that arrives after the worker binds its queue but before the rule is provisioned is consumed
+and acknowledged with zero intents, and an event published while no queue is bound is dropped by the
+exchange because the publisher does not set `mandatory`. Provision the ruleset immediately after the
+worker rollout, and re-trigger the source event for acceptance instead of relying on the events from
+either gap. Second, an already `PENDING` friend request emits no new event when the requester taps
+"add" again — `POST /profile/friends/{userId}` replays the stored command — so verifying a friendship
+push needs a fresh requester/target pair or a declined request that is issued again.
 
 GAME chat membership uses the separate durable quorum queue
 `phub.game-messaging-membership.v1`. It binds exactly the catalog routes `game.scheduled.v1`,
