@@ -32,6 +32,7 @@ import type {
   BookingPreferencesUpdateRequest,
   CommunityMembershipPage,
   ConversationMessage,
+  ConversationNotificationPolicyUpdate,
   ConversationPage,
   HomeBase,
   HomeDashboard,
@@ -607,6 +608,7 @@ export function App({
   const [chatsBusy, setChatsBusy] = useState<'create' | 'send' | 'refresh' | 'load-earlier' | null>(
     null,
   );
+  const [chatPolicyBusyId, setChatPolicyBusyId] = useState<string | null>(null);
   const [chatsReloadToken, setChatsReloadToken] = useState(0);
   const [loadedRealtimeConversationId, setLoadedRealtimeConversationId] = useState<string | null>(
     null,
@@ -1741,6 +1743,40 @@ export function App({
     setChatsReloadToken((token) => token + 1);
   }
 
+  function handleSetConversationNotificationPolicy(
+    conversationId: string,
+    update: ConversationNotificationPolicyUpdate,
+  ): void {
+    if (chatPolicyBusyId) return;
+    setChatPolicyBusyId(conversationId);
+    setChatsError(null);
+    void gateway
+      .setConversationNotificationPolicy(conversationId, update, createMessagingCommandId())
+      .then(
+        (result) => {
+          setConversations((current) =>
+            current
+              ? {
+                  items: current.items.map((item) =>
+                    item.id === conversationId
+                      ? { ...item, notificationPolicy: result.policy }
+                      : item,
+                  ),
+                }
+              : current,
+          );
+          setChatPolicyBusyId(null);
+        },
+        () => {
+          setChatsError({
+            kind: 'RETRYABLE',
+            message: 'Не удалось изменить уведомления в этом чате.',
+          });
+          setChatPolicyBusyId(null);
+        },
+      );
+  }
+
   function handleLoadEarlierChatMessages(): void {
     if (!requestedConversationId) return;
     const earliestSequence = conversationMessages[0]?.sequence;
@@ -2182,6 +2218,12 @@ export function App({
           onRetrySend={handleRetryConversationMessage}
           onRefresh={handleRefreshChats}
           onLoadEarlier={handleLoadEarlierChatMessages}
+          policyBusy={chatPolicyBusyId !== null && chatPolicyBusyId === requestedConversationId}
+          onSetNotificationPolicy={(update) => {
+            if (requestedConversationId) {
+              handleSetConversationNotificationPolicy(requestedConversationId, update);
+            }
+          }}
         />
       );
     }

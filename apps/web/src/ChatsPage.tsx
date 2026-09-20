@@ -1,7 +1,11 @@
 import { useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
-import type { ConversationMessage, ConversationPage } from './auth-gateway.js';
+import type {
+  ConversationMessage,
+  ConversationNotificationPolicyUpdate,
+  ConversationPage,
+} from './auth-gateway.js';
 import { ChatCategoryIcon } from './chats-ui/ChatCategoryIcon.js';
 import { ChatFilterHeading, ChatFilters, type ChatFilter } from './chats-ui/ChatFilters.js';
 import { ChatList } from './chats-ui/ChatList.js';
@@ -36,11 +40,13 @@ interface ChatsPageProps {
   readonly realtimeState: ChatRealtimeUiState | null;
   readonly hasEarlierMessages: boolean;
   readonly canRetrySend: boolean;
+  readonly policyBusy: boolean;
   readonly onCreateDirect: () => void;
   readonly onSendMessage: (body: string) => void;
   readonly onRetrySend: () => void;
   readonly onRefresh: () => void;
   readonly onLoadEarlier: () => void;
+  readonly onSetNotificationPolicy: (update: ConversationNotificationPolicyUpdate) => void;
 }
 
 function errorTitle(kind: ChatUiError['kind']): string {
@@ -73,11 +79,13 @@ export function ChatsPage({
   realtimeState,
   hasEarlierMessages,
   canRetrySend,
+  policyBusy,
   onCreateDirect,
   onSendMessage,
   onRetrySend,
   onRefresh,
   onLoadEarlier,
+  onSetNotificationPolicy,
 }: ChatsPageProps): React.JSX.Element {
   const [filter, setFilter] = useState<ChatFilter>('ALL');
   const [query, setQuery] = useState('');
@@ -183,10 +191,12 @@ export function ChatsPage({
             connectionStatus={realtimeLabel(realtimeState)}
             hasEarlierMessages={hasEarlierMessages}
             canRetrySend={canRetrySend}
+            policyBusy={policyBusy}
             onSendMessage={onSendMessage}
             onRetrySend={onRetrySend}
             onRefresh={onRefresh}
             onLoadEarlier={onLoadEarlier}
+            onSetNotificationPolicy={onSetNotificationPolicy}
           />
         ) : (
           <section className={styles.threadPlaceholder} aria-label="История сообщений">

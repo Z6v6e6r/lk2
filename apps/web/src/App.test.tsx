@@ -523,6 +523,11 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       changed: false,
       replayed: false,
     }),
+    setConversationNotificationPolicy: vi.fn().mockResolvedValue({
+      outcome: 'ok',
+      policy: { level: 'ALL', muted: false },
+      changed: true,
+    }),
     listNotifications: vi.fn().mockResolvedValue(notificationInbox),
     markNotificationsRead: vi.fn().mockResolvedValue(undefined),
     getNotificationPreferences: vi.fn().mockResolvedValue(notificationPreferences),
@@ -2164,6 +2169,47 @@ describe('PadlHub web authentication', () => {
     await waitFor(() => expect(window.location.pathname).toBe(`/chats/${conversationId}`));
     expect(createDirectConversation).toHaveBeenCalledWith(recipientUserId, expect.any(String));
     await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
+  });
+
+  it('mutes the open conversation through the thread header and keeps the stored policy', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const setConversationNotificationPolicy = vi
+      .fn<AuthGateway['setConversationNotificationPolicy']>()
+      .mockResolvedValue({
+        outcome: 'ok',
+        policy: { level: 'NONE', muted: true, mutedUntil: '2026-08-04T02:00:00.000Z' },
+        changed: true,
+      });
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: conversationId,
+            kind: 'DIRECT' as const,
+            participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+            unreadCount: 0,
+            updatedAt: '2026-08-03T10:00:00.000Z',
+            notificationPolicy: { level: 'ALL' as const, muted: false },
+          },
+        ],
+      }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      setConversationNotificationPolicy,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    const bell = await screen.findByRole('button', { name: 'Уведомления включены' });
+    fireEvent.click(bell);
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Выключить' }));
+
+    await waitFor(() => expect(setConversationNotificationPolicy).toHaveBeenCalledTimes(1));
+    expect(setConversationNotificationPolicy.mock.calls[0]?.[0]).toBe(conversationId);
+    expect(setConversationNotificationPolicy.mock.calls[0]?.[1]).toEqual({ level: 'NONE' });
+    // The server answer is reflected without a full conversation reload.
+    expect(await screen.findByText(/уведомления выключены/)).toBeVisible();
   });
 
   it('opens the existing recoverable realtime path for a loaded GAME conversation', async () => {
