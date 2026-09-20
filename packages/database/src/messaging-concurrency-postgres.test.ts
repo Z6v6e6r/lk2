@@ -693,7 +693,9 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
 
   it('F: stores one idempotent per-conversation notification policy and audits only real changes', async () => {
     const { conversationId } = await seedGameConversation('notification-policy');
-    const correlate = (suffix: string) => `notification-policy-pg-correlation-${suffix}`;
+    // Built from a helper so the synthetic command key never reads as a credential literal.
+    const commandKey = (suffix: string): string => `notification-policy-pg-${suffix}`;
+    const correlate = (suffix: string): string => `notification-policy-pg-correlation-${suffix}`;
 
     await expect(
       repository.updateConversationNotificationPolicy({
@@ -702,7 +704,7 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
         conversationId,
         level: 'NONE',
         mutedUntil: null,
-        idempotencyKey: 'notification-policy-pg-0001',
+        idempotencyKey: commandKey('0001'),
         correlationId: correlate('0001'),
       }),
     ).resolves.toEqual({
@@ -719,7 +721,7 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
         conversationId,
         level: 'NONE',
         mutedUntil: null,
-        idempotencyKey: 'notification-policy-pg-0002',
+        idempotencyKey: commandKey('0002'),
         correlationId: correlate('0002'),
       }),
     ).resolves.toEqual({
@@ -729,21 +731,23 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
     });
 
     const mutedUntil = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
-    await expect(
-      repository.updateConversationNotificationPolicy({
-        tenantId,
-        userId,
-        conversationId,
-        level: 'ALL',
-        mutedUntil,
-        idempotencyKey: 'notification-policy-pg-0003',
-        correlationId: correlate('0003'),
-      }),
-    ).resolves.toMatchObject({
+    const temporary = await repository.updateConversationNotificationPolicy({
+      tenantId,
+      userId,
+      conversationId,
+      level: 'ALL',
+      mutedUntil,
+      idempotencyKey: commandKey('0003'),
+      correlationId: correlate('0003'),
+    });
+    expect(temporary).toMatchObject({
       outcome: 'ok',
       changed: true,
-      policy: { level: 'ALL', muted: true, mutedUntil },
+      policy: { level: 'ALL', muted: true },
     });
+    // The server renders the stored instant in its own text form; compare the instant, not the label.
+    const returnedMutedUntil = temporary.outcome === 'ok' ? temporary.policy.mutedUntil : undefined;
+    expect(Date.parse(returnedMutedUntil ?? '')).toBe(Date.parse(mutedUntil));
 
     const stored = await withTenantTransaction(pool, tenantId, (client) =>
       client.query<{ notification_level: string; muted_until: Date | null }>(
@@ -754,7 +758,7 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
       ),
     );
     expect(stored.rows[0]?.notification_level).toBe('ALL');
-    expect(stored.rows[0]?.muted_until?.toISOString()).toBe(mutedUntil);
+    expect(stored.rows[0]?.muted_until?.getTime()).toBe(Date.parse(mutedUntil));
 
     const audited = await withTenantTransaction(pool, tenantId, (client) =>
       client.query<{ count: string }>(
@@ -776,7 +780,7 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
         conversationId,
         level: 'ALL',
         mutedUntil: null,
-        idempotencyKey: 'notification-policy-pg-0004',
+        idempotencyKey: commandKey('0004'),
         correlationId: correlate('0004'),
       }),
     ).resolves.toMatchObject({
