@@ -5,18 +5,51 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { NotificationsPage } from './NotificationsPage.js';
-import type { NotificationInboxPage, NotificationPreferencesView } from './auth-gateway.js';
+import type {
+  ConversationSummary,
+  NotificationInboxPage,
+  NotificationPreferencesView,
+} from './auth-gateway.js';
 
 afterEach(cleanup);
+
+const conversationId = '22222222-2222-4222-8222-222222222222';
+
+const conversations: readonly ConversationSummary[] = [
+  {
+    id: conversationId,
+    kind: 'DIRECT',
+    participant: {
+      userId: '77777777-7777-4777-8777-777777777777',
+      displayName: 'Мария Соколова',
+    },
+    unreadCount: 3,
+    updatedAt: '2026-08-29T10:05:00+03:00',
+    lastMessage: {
+      sequence: 12,
+      body: 'Кто идёт на выходных?',
+      createdAt: '2026-08-29T10:05:00+03:00',
+    },
+  },
+];
 
 const items: NotificationInboxPage['items'] = [
   {
     id: '11111111-1111-4111-8111-111111111111',
-    category: 'GAME',
-    title: 'Новое сообщение в игре',
-    body: 'Хаб Селигерская',
-    deepLink: '/chats/22222222-2222-4222-8222-222222222222',
+    category: 'MESSAGING',
+    title: 'Новое сообщение',
+    body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+    deepLink: `/chats/${conversationId}`,
     createdAt: '2026-08-29T10:00:00+03:00',
+  },
+  {
+    id: '22222222-2222-4222-8222-222222222229',
+    category: 'MESSAGING',
+    title: 'Новое сообщение',
+    body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+    deepLink: `/chats/${conversationId}`,
+    createdAt: '2026-08-29T09:00:00+03:00',
+    readAt: '2026-08-29T09:10:00+03:00',
   },
   {
     id: '33333333-3333-4333-8333-333333333333',
@@ -42,8 +75,20 @@ const notificationPreferences: NotificationPreferencesView = {
     {
       category: 'MESSAGING',
       channels: [
-        { channel: 'IN_APP', enabled: true, timezone: 'Europe/Moscow', available: true },
-        { channel: 'PUSH', enabled: true, timezone: 'Europe/Moscow', available: true },
+        {
+          channel: 'IN_APP',
+          enabled: true,
+          timezone: 'Europe/Moscow',
+          available: true,
+        },
+        {
+          channel: 'PUSH',
+          enabled: true,
+          timezone: 'Europe/Moscow',
+          available: true,
+          quietFrom: '23:00',
+          quietUntil: '08:00',
+        },
       ],
     },
     {
@@ -67,6 +112,7 @@ const defaultProps = {
   page: { unreadCount: 2, items },
   webPush: { enabled: true, publicKey: 'public-vapid-key-value' },
   browserState: 'ready' as const,
+  conversations,
   busy: false,
   error: null,
   inboxUnavailable: false,
@@ -87,19 +133,31 @@ const defaultProps = {
   onOpenNotification: vi.fn(),
 };
 
-describe('NotificationsPage', () => {
+describe('NotificationsPage inbox', () => {
+  it('collapses every event of one chat into a single row named after the conversation', () => {
+    render(<NotificationsPage {...defaultProps} />);
+
+    const chatRow = screen.getByRole('link', { name: /Мария Соколова/u });
+    expect(chatRow).toHaveAttribute('href', `/chats/${conversationId}`);
+    expect(chatRow).toHaveTextContent('3 новых сообщения');
+    expect(chatRow).toHaveTextContent('Кто идёт на выходных?');
+    expect(screen.getByLabelText('Непрочитанных событий: 3')).toHaveTextContent('3');
+    // The second message of the same chat is part of the first row, not a row of its own.
+    expect(screen.getAllByRole('link', { name: /Мария Соколова/u })).toHaveLength(1);
+  });
+
   it('renders mapped filters while preserving unknown categories in All', () => {
     render(<NotificationsPage {...defaultProps} />);
     expect(screen.getByRole('heading', { name: 'Уведомления' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Чаты', current: 'page' })).toBeVisible();
     expect(screen.getByText('Неизвестная категория')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Акции' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Игры' })).not.toBeInTheDocument();
     expect(document.querySelector('img[src*="padlhub-logo"]')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Игры' }));
-    expect(screen.getByText('Новое сообщение в игре')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Системные' }));
+    expect(screen.getByText('Рейтинг обновился')).toBeVisible();
+    expect(screen.queryByRole('link', { name: /Мария Соколова/u })).not.toBeInTheDocument();
     expect(screen.queryByText('Неизвестная категория')).not.toBeInTheDocument();
-    expect(screen.queryByText('Рейтинг обновился')).not.toBeInTheDocument();
   });
 
   it('preserves safe links, unread semantics, and mark-all-read', () => {
@@ -112,26 +170,20 @@ describe('NotificationsPage', () => {
         onOpenNotification={onOpenNotification}
       />,
     );
-    expect(screen.getByRole('link', { name: /Новое сообщение в игре/u })).toHaveAttribute(
-      'href',
-      '/chats/22222222-2222-4222-8222-222222222222',
-    );
     expect(screen.getByRole('link', { name: /Неизвестная категория/u })).toHaveAttribute(
       'href',
       '/notifications',
     );
-    expect(screen.getAllByLabelText('Непрочитанное уведомление')).toHaveLength(2);
-    fireEvent.click(screen.getByRole('link', { name: /Новое сообщение в игре/u }));
-    expect(onOpenNotification).toHaveBeenCalledWith(
-      items[0],
-      '/chats/22222222-2222-4222-8222-222222222222',
-      true,
-    );
+    expect(screen.getAllByLabelText('Непрочитанное уведомление')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('link', { name: /Мария Соколова/u }));
+    expect(onOpenNotification).toHaveBeenCalledWith(items[0], `/chats/${conversationId}`, true);
+
     fireEvent.click(screen.getByRole('button', { name: 'Прочитать все' }));
     expect(onMarkAllRead).toHaveBeenCalledOnce();
   });
 
-  it('keeps Web Push controls and error state discoverable', () => {
+  it('keeps the push call to action only while the device is not subscribed', () => {
     const onEnableWebPush = vi.fn();
     const { rerender } = render(
       <NotificationsPage
@@ -144,16 +196,9 @@ describe('NotificationsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Включить push' }));
     expect(onEnableWebPush).toHaveBeenCalledOnce();
 
-    const onDisableWebPush = vi.fn();
-    rerender(
-      <NotificationsPage
-        {...defaultProps}
-        browserState="subscribed"
-        onDisableWebPush={onDisableWebPush}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Отключить push' }));
-    expect(onDisableWebPush).toHaveBeenCalledOnce();
+    rerender(<NotificationsPage {...defaultProps} browserState="subscribed" />);
+    expect(screen.queryByRole('button', { name: 'Включить push' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Отключить push' })).not.toBeInTheDocument();
   });
 
   it('sends an iOS tab to the Home Screen instead of offering a button that cannot work', () => {
@@ -168,7 +213,6 @@ describe('NotificationsPage', () => {
     // No enable control: an iOS tab cannot subscribe, so offering the button would only burn the
     // one-time permission decision.
     expect(screen.queryByRole('button', { name: 'Включить push' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Отключить push' })).not.toBeInTheDocument();
   });
 
   it('renders an empty state without hiding the disabled push control', () => {
@@ -202,6 +246,19 @@ describe('NotificationsPage', () => {
     expect(onRetryInbox).toHaveBeenCalledOnce();
   });
 
+  it('groups a chat without a matching conversation summary under the category label', () => {
+    render(<NotificationsPage {...defaultProps} conversations={[]} />);
+
+    const chatRow = screen
+      .getAllByRole('link')
+      .find((link) => link.getAttribute('href') === `/chats/${conversationId}`);
+    expect(chatRow).toBeDefined();
+    expect(chatRow).toHaveTextContent('Чат');
+    expect(chatRow).toHaveTextContent('1 новое сообщение');
+  });
+});
+
+describe('NotificationsPage friend requests', () => {
   it('renders an incoming friend request with accept and decline commands', () => {
     const onAcceptFriendRequest = vi.fn();
     const onDeclineFriendRequest = vi.fn();
@@ -212,7 +269,7 @@ describe('NotificationsPage', () => {
           {
             requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
             userId: '6a81e965-c508-4321-812c-4be323606a70',
-            displayName: 'Мария Соколова',
+            displayName: 'Ирина Кузнецова',
             avatarUrl: null,
             levelLabel: 'C',
             createdAt: '2026-08-29T10:00:00+03:00',
@@ -226,7 +283,7 @@ describe('NotificationsPage', () => {
 
     expect(screen.getByRole('heading', { name: 'Заявки в друзья' })).toBeVisible();
     expect(screen.getByText('хочет добавить вас в друзья')).toBeVisible();
-    expect(screen.getByRole('link', { name: /Мария Соколова/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Ирина Кузнецова/u })).toHaveAttribute(
       'href',
       '/profile/6a81e965-c508-4321-812c-4be323606a70',
     );
@@ -264,29 +321,36 @@ describe('NotificationsPage', () => {
 
     expect(screen.getByRole('heading', { name: 'Отправленные заявки' })).toBeVisible();
     expect(screen.getByText('ожидает ответа')).toBeVisible();
-    expect(screen.getByRole('link', { name: /Пётр Волков/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Пётр Волков/u })).toHaveAttribute(
       'href',
       '/profile/b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
     );
     expect(screen.queryByRole('button', { name: 'Отказаться' })).not.toBeInTheDocument();
   });
+});
 
-  it('saves a disabled channel and marks an unavailable push channel', () => {
+describe('NotificationsPage settings', () => {
+  it('opens the dedicated settings screen with a switch per notification type', () => {
+    render(<NotificationsPage {...defaultProps} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
+
+    expect(screen.getByRole('heading', { name: 'Настройки уведомлений' })).toBeVisible();
+    expect(screen.getByRole('switch', { name: 'Чаты: push-уведомления' })).toBeChecked();
+    expect(screen.getByRole('switch', { name: 'Чаты: показывать в приложении' })).toBeChecked();
+    // The tenant gate, not the recipient, decides whether a channel can be chosen.
+    expect(
+      screen.getByRole('switch', { name: 'Сообщения клуба: push-уведомления' }),
+    ).toBeDisabled();
+    expect(screen.getByText('23:00 – 08:00')).toBeVisible();
+  });
+
+  it('applies a push switch immediately through the replace-preferences command', () => {
     const onSavePreferences = vi.fn();
     render(<NotificationsPage {...defaultProps} onSavePreferences={onSavePreferences} />);
 
-    // The settings panel is a collapsed section, so presence is asserted without forcing it open.
-    expect(screen.getByText('Настройки уведомлений')).toBeInTheDocument();
-    expect(screen.getByText('Сообщения в чатах')).toBeInTheDocument();
-    // A category that reached the tenant from the merged friendship ruleset is presented in Russian.
-    expect(screen.getByText('Заявки в друзья')).toBeInTheDocument();
-    // The tenant gate, not the recipient, decides whether a channel can be chosen.
-    expect(screen.getByText('не включён для организации')).toBeInTheDocument();
-
-    const messagingInApp = screen.getAllByLabelText('В приложении')[0];
-    if (!messagingInApp) throw new Error('MESSAGING in-app toggle was not rendered');
-    fireEvent.click(messagingInApp);
-    fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Чаты: push-уведомления' }));
 
     expect(onSavePreferences).toHaveBeenCalledTimes(1);
     const update = onSavePreferences.mock.calls[0]?.[0] as {
@@ -300,51 +364,107 @@ describe('NotificationsPage', () => {
       }[];
     };
     const messaging = update.categories.find((category) => category.category === 'MESSAGING');
-    expect(messaging?.channels.find((channel) => channel.channel === 'IN_APP')).toMatchObject({
+    expect(messaging?.channels.find((channel) => channel.channel === 'PUSH')).toMatchObject({
       enabled: false,
     });
-    expect(messaging?.channels.find((channel) => channel.channel === 'PUSH')).toMatchObject({
+    expect(messaging?.channels.find((channel) => channel.channel === 'IN_APP')).toMatchObject({
       enabled: true,
     });
   });
 
-  it('applies one quiet window to every push channel when it is enabled', () => {
+  it('keeps the in-app channel as a secondary control', () => {
     const onSavePreferences = vi.fn();
     render(<NotificationsPage {...defaultProps} onSavePreferences={onSavePreferences} />);
 
-    fireEvent.click(screen.getByLabelText('Тихие часы для push'));
-    fireEvent.change(screen.getByLabelText('С', { selector: 'input' }), {
-      target: { value: '22:30' },
-    });
-    fireEvent.change(screen.getByLabelText('До', { selector: 'input' }), {
-      target: { value: '06:30' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Друзья: показывать в приложении' }));
 
     const update = onSavePreferences.mock.calls[0]?.[0] as {
       readonly categories: readonly {
         readonly category: string;
         readonly channels: readonly {
           readonly channel: string;
+          readonly enabled: boolean;
+          readonly quietFrom?: string;
+        }[];
+      }[];
+    };
+    const friendship = update.categories.find((category) => category.category === 'FRIENDSHIP');
+    expect(friendship?.channels.find((channel) => channel.channel === 'IN_APP')).toMatchObject({
+      enabled: false,
+    });
+    // Quiet hours belong to the push channel and must not leak into the inbox channel.
+    expect(friendship?.channels.find((channel) => channel.channel === 'IN_APP')?.quietFrom).toBe(
+      undefined,
+    );
+    expect(friendship?.channels.find((channel) => channel.channel === 'PUSH')).toMatchObject({
+      quietFrom: '23:00',
+      quietUntil: '08:00',
+    });
+  });
+
+  it('edits the quiet window on its own screen and applies it to every push channel', () => {
+    const onSavePreferences = vi.fn();
+    render(<NotificationsPage {...defaultProps} onSavePreferences={onSavePreferences} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
+    fireEvent.click(screen.getByRole('button', { name: /Тихие часы/u }));
+    expect(screen.getByRole('heading', { name: 'Тихие часы' })).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText('С', { selector: 'input' }), {
+      target: { value: '22:30' },
+    });
+
+    const update = onSavePreferences.mock.calls.at(-1)?.[0] as {
+      readonly categories: readonly {
+        readonly category: string;
+        readonly channels: readonly {
+          readonly channel: string;
           readonly quietFrom?: string;
           readonly quietUntil?: string;
-          readonly timezone: string;
         }[];
       }[];
     };
     for (const category of update.categories) {
       const push = category.channels.find((channel) => channel.channel === 'PUSH');
-      expect(push).toMatchObject({
-        quietFrom: '22:30',
-        quietUntil: '06:30',
-        timezone: 'Europe/Moscow',
-      });
-      const inApp = category.channels.find((channel) => channel.channel === 'IN_APP');
-      expect(inApp?.quietFrom).toBeUndefined();
+      if (push) {
+        expect(push).toMatchObject({ quietFrom: '22:30', quietUntil: '08:00' });
+      }
+      expect(category.channels.find((channel) => channel.channel === 'IN_APP')?.quietFrom).toBe(
+        undefined,
+      );
     }
   });
 
-  it('keeps the settings section usable when the preference request failed', () => {
+  it('drives the device push switch from the settings screen', () => {
+    const onEnableWebPush = vi.fn();
+    const onDisableWebPush = vi.fn();
+    const { rerender } = render(
+      <NotificationsPage
+        {...defaultProps}
+        onEnableWebPush={onEnableWebPush}
+        onDisableWebPush={onDisableWebPush}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Получать push-уведомления' }));
+    expect(onEnableWebPush).toHaveBeenCalledOnce();
+
+    rerender(
+      <NotificationsPage
+        {...defaultProps}
+        browserState="subscribed"
+        onEnableWebPush={onEnableWebPush}
+        onDisableWebPush={onDisableWebPush}
+      />,
+    );
+    // The settings screen stays open across the rerender, so the switch is already on screen.
+    fireEvent.click(screen.getByRole('switch', { name: 'Получать push-уведомления' }));
+    expect(onDisableWebPush).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the settings screen usable when the preference request failed', () => {
     render(
       <NotificationsPage
         {...defaultProps}
@@ -353,7 +473,10 @@ describe('NotificationsPage', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
     expect(screen.getByText('Настройки недоступны.')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Сохранить настройки' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('switch', { name: 'Чаты: push-уведомления' }),
+    ).not.toBeInTheDocument();
   });
 });
