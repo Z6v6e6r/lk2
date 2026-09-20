@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { Pool, QueryResultRow } from 'pg';
 
 import { withTenantTransaction } from './connection.js';
@@ -24,6 +26,11 @@ export interface BookingScreenMappingRepository {
     readonly exerciseAssociationIds: readonly string[];
     readonly stationExternalIds?: readonly string[];
   }): Promise<BookingScreenCanonicalMappings>;
+  /** Integration-only Viva identity lookup; provider IDs never leave the server. */
+  resolveVivaProfileIds?(input: {
+    readonly tenantId: string;
+    readonly externalClientIds: readonly string[];
+  }): Promise<ReadonlyMap<string, string>>;
 }
 
 interface BookingMappingRow extends QueryResultRow {
@@ -133,6 +140,64 @@ export function createBookingScreenMappingRepository(pool: Pool): BookingScreenM
             stationId: row.internal_id,
           })),
         };
+      });
+    },
+    resolveVivaProfileIds(input) {
+      const externalClientIds = [...new Set(input.externalClientIds.filter(Boolean))].slice(0, 100);
+      if (externalClientIds.length === 0) return Promise.resolve(new Map());
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const associationByExternalId = new Map(
+          externalClientIds.map((externalId) => [
+            externalId,
+            createHash('sha256')
+              .update(`phub-local-public-clone-v1:player:${externalId}`)
+              .digest('hex'),
+          ]),
+        );
+        const directMappings = await client.query<
+          QueryResultRow & { readonly external_id: string; readonly internal_id: string }
+        >(
+          `select mapping.external_id, mapping.internal_id
+             from integration.external_entity_map mapping
+             join identity.users identity_user
+               on identity_user.tenant_id = mapping.tenant_id
+              and identity_user.id = mapping.internal_id
+            where mapping.tenant_id = $1
+              and mapping.external_system = 'VIVA'
+              and mapping.entity_type = 'viva_profile'
+              and mapping.external_id = any($2::text[])
+              and identity_user.status = 'ACTIVE'`,
+          [input.tenantId, externalClientIds],
+        );
+        const legacyMappings = await client.query<
+          QueryResultRow & { readonly external_id: string; readonly internal_id: string }
+        >(
+          `select mapping.external_id, mapping.internal_id
+             from integration.external_entity_map mapping
+             join identity.users identity_user
+               on identity_user.tenant_id = mapping.tenant_id
+              and identity_user.id = mapping.internal_id
+            where mapping.tenant_id = $1
+              and mapping.external_system = 'LK_LEGACY_SNAPSHOT'
+              and mapping.entity_type = 'game_player'
+              and mapping.external_id = any($2::text[])
+              and identity_user.status = 'ACTIVE'`,
+          [input.tenantId, [...associationByExternalId.values()]],
+        );
+        const result = new Map(
+          directMappings.rows.map((row) => [row.external_id, row.internal_id]),
+        );
+        const externalIdByAssociation = new Map(
+          [...associationByExternalId].map(([externalId, associationId]) => [
+            associationId,
+            externalId,
+          ]),
+        );
+        for (const mapping of legacyMappings.rows) {
+          const externalId = externalIdByAssociation.get(mapping.external_id);
+          if (externalId && !result.has(externalId)) result.set(externalId, mapping.internal_id);
+        }
+        return result;
       });
     },
   };

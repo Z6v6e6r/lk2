@@ -134,8 +134,9 @@ const historyPageSchema = z.object({
 const OPEN_GAME_DIRECTION_IDS = new Set([4588]);
 const OPEN_GAME_TYPE_IDS = new Set([1613]);
 const GROUP_TRAINING_TYPE_IDS = new Set([605, 847, 963, 1208]);
-const TOURNAMENT_DIRECTION_IDS = new Set([2617, 3284, 4769]);
+const TOURNAMENT_DIRECTION_IDS = new Set([2617, 3284, 4769, 5278]);
 const TOURNAMENT_TYPE_IDS = new Set([839, 1013]);
+const TOURNAMENT_DIRECTION_TITLE_IDS = new Set([5278]);
 const MIN_PAGE_SIZE = 1;
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 20;
@@ -204,6 +205,17 @@ function bounded(value: string, maxLength: number): string {
   return value.trim().slice(0, maxLength);
 }
 
+function exerciseTitle(
+  exercise: z.infer<typeof exerciseSchema>,
+  kind: VivaBookingHistoryKind,
+): string {
+  const title =
+    kind === 'TOURNAMENT' && TOURNAMENT_DIRECTION_TITLE_IDS.has(exercise.direction.id)
+      ? exercise.direction.name
+      : exercise.type.name || exercise.direction.name;
+  return bounded(title, 160);
+}
+
 function normalizeRecord(booking: z.infer<typeof bookingSchema>): VivaBookingHistoryRecord | null {
   if (!booking.exercise) return null;
   const kind = classifyExercise(booking.exercise);
@@ -217,7 +229,7 @@ function normalizeRecord(booking: z.infer<typeof bookingSchema>): VivaBookingHis
     },
     kind,
     status: booking.isCancelled ? 'CANCELLED' : 'COMPLETED',
-    title: bounded(booking.exercise.type.name || booking.exercise.direction.name, 160),
+    title: exerciseTitle(booking.exercise, kind),
     startsAt: booking.exercise.timeFrom,
     ...(booking.exercise.timeTo ? { endsAt: booking.exercise.timeTo } : {}),
     venue: {
