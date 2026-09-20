@@ -34,6 +34,7 @@ import type {
   ConversationMessage,
   ConversationNotificationPolicyUpdate,
   ConversationPage,
+  ConversationSummary,
   HomeBase,
   HomeDashboard,
   LocationDetail,
@@ -619,6 +620,11 @@ export function App({
   const [chatRealtimeState, setChatRealtimeState] = useState<ChatRealtimeUiState | null>(null);
   const [hasEarlierChatMessages, setHasEarlierChatMessages] = useState(false);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
+  // Conversation summaries give a grouped chat row its real name and last-message preview; the
+  // notifications feed itself stays the single source for what is unread.
+  const [notificationConversations, setNotificationConversations] = useState<
+    readonly ConversationSummary[]
+  >([]);
   const [webPushConfiguration, setWebPushConfiguration] = useState<WebPushConfiguration | null>(
     null,
   );
@@ -1270,6 +1276,15 @@ export function App({
           },
         );
       };
+      const loadConversations = (): void => {
+        void gateway.listConversations().then(
+          (result) => {
+            if (!active) return;
+            setNotificationConversations(result.items);
+          },
+          () => undefined,
+        );
+      };
       const refreshNotifications = (): void => {
         loadFriendRequests();
         void gateway.listNotifications().then(
@@ -1288,6 +1303,13 @@ export function App({
       const refreshVisibleNotifications = (): void => {
         if (document.visibilityState === 'visible') refreshNotifications();
       };
+      // Chat names and last-message previews change far more slowly than the inbox, so they are
+      // loaded on entry and when the tab regains focus, not on every inbox poll.
+      const refreshOnFocus = (): void => {
+        loadConversations();
+        refreshNotifications();
+      };
+      loadConversations();
       void Promise.allSettled([
         gateway.listNotifications(),
         gateway.getWebPushConfiguration(),
@@ -1352,12 +1374,12 @@ export function App({
         refreshNotifications,
         NOTIFICATIONS_REFRESH_INTERVAL_MS,
       );
-      window.addEventListener('focus', refreshNotifications);
+      window.addEventListener('focus', refreshOnFocus);
       document.addEventListener('visibilitychange', refreshVisibleNotifications);
       return () => {
         active = false;
         window.clearInterval(refreshInterval);
-        window.removeEventListener('focus', refreshNotifications);
+        window.removeEventListener('focus', refreshOnFocus);
         document.removeEventListener('visibilitychange', refreshVisibleNotifications);
       };
     }
@@ -1644,6 +1666,7 @@ export function App({
           chatCreateCommandRef.current = null;
           setChatsUnreadCount(0);
           setNotifications(null);
+          setNotificationConversations([]);
           setWebPushConfiguration(null);
           setNotificationsError(null);
           dispatch({ type: 'logout-completed', entryView });
@@ -2256,6 +2279,7 @@ export function App({
           page={notifications}
           webPush={webPushConfiguration}
           browserState={webPushBrowserState}
+          conversations={notificationConversations}
           busy={notificationsBusy}
           error={notificationsError}
           inboxUnavailable={notificationsInboxUnavailable}
