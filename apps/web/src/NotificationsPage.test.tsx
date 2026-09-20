@@ -64,6 +64,7 @@ describe('NotificationsPage', () => {
     expect(screen.getByRole('link', { name: 'Чаты', current: 'page' })).toBeVisible();
     expect(screen.getByText('Неизвестная категория')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Акции' })).not.toBeInTheDocument();
+    expect(document.querySelector('img[src*="padlhub-logo"]')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Игры' }));
     expect(screen.getByText('Новое сообщение в игре')).toBeVisible();

@@ -224,6 +224,12 @@
   color: #59565d;
 }
 
+.brandMarkerLogo {
+  display: block;
+  width: 38px;
+  height: auto;
+}
+
 .itemCopy {
   display: grid;
   min-width: 0;
