@@ -690,4 +690,99 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
       observer.release();
     }
   });
+
+  it('F: stores one idempotent per-conversation notification policy and audits only real changes', async () => {
+    const { conversationId } = await seedGameConversation('notification-policy');
+    const correlate = (suffix: string) => `notification-policy-pg-correlation-${suffix}`;
+
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'NONE',
+        mutedUntil: null,
+        idempotencyKey: 'notification-policy-pg-0001',
+        correlationId: correlate('0001'),
+      }),
+    ).resolves.toEqual({
+      outcome: 'ok',
+      policy: { level: 'NONE', muted: true },
+      changed: true,
+    });
+
+    // Repeating the identical command is a no-op: no second audit entry, same stored state.
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'NONE',
+        mutedUntil: null,
+        idempotencyKey: 'notification-policy-pg-0002',
+        correlationId: correlate('0002'),
+      }),
+    ).resolves.toEqual({
+      outcome: 'ok',
+      policy: { level: 'NONE', muted: true },
+      changed: false,
+    });
+
+    const mutedUntil = new Date(Date.now() + 60 * 60 * 1_000).toISOString();
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'ALL',
+        mutedUntil,
+        idempotencyKey: 'notification-policy-pg-0003',
+        correlationId: correlate('0003'),
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'ok',
+      changed: true,
+      policy: { level: 'ALL', muted: true, mutedUntil },
+    });
+
+    const stored = await withTenantTransaction(pool, tenantId, (client) =>
+      client.query<{ notification_level: string; muted_until: Date | null }>(
+        `select notification_level, muted_until
+           from messaging.conversation_members
+          where tenant_id = $1 and conversation_id = $2 and user_id = $3`,
+        [tenantId, conversationId, userId],
+      ),
+    );
+    expect(stored.rows[0]?.notification_level).toBe('ALL');
+    expect(stored.rows[0]?.muted_until?.toISOString()).toBe(mutedUntil);
+
+    const audited = await withTenantTransaction(pool, tenantId, (client) =>
+      client.query<{ count: string }>(
+        `select count(*)::text as count
+           from audit.audit_log
+          where tenant_id = $1
+            and resource_id = $2
+            and action = 'CONVERSATION_NOTIFICATION_POLICY_SET'`,
+        [tenantId, conversationId],
+      ),
+    );
+    expect(audited.rows[0]?.count).toBe('2');
+
+    // Turning the window off restores delivery-ready state.
+    await expect(
+      repository.updateConversationNotificationPolicy({
+        tenantId,
+        userId,
+        conversationId,
+        level: 'ALL',
+        mutedUntil: null,
+        idempotencyKey: 'notification-policy-pg-0004',
+        correlationId: correlate('0004'),
+      }),
+    ).resolves.toMatchObject({
+      outcome: 'ok',
+      changed: true,
+      policy: { level: 'ALL', muted: false },
+    });
+  });
 });

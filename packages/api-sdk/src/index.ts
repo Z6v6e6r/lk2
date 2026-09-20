@@ -157,6 +157,12 @@ export type ActivityHistoryItem = components['schemas']['ActivityHistoryItem'];
 export type ActivityHistoryPage = components['schemas']['ActivityHistoryPage'];
 export type ConversationPage = components['schemas']['ConversationPage'];
 export type ConversationSummary = components['schemas']['ConversationSummary'];
+export type ConversationNotificationPolicy =
+  components['schemas']['ConversationNotificationPolicy'];
+export type ConversationNotificationPolicyUpdateRequest =
+  components['schemas']['ConversationNotificationPolicyUpdateRequest'];
+export type ConversationNotificationPolicyResult =
+  components['schemas']['ConversationNotificationPolicyResult'];
 export type ConversationMessagePage = components['schemas']['ConversationMessagePage'];
 export type ConversationMessage = components['schemas']['ConversationMessage'];
 export type CreateDirectConversationResult =
@@ -1894,6 +1900,23 @@ export class PadlHubApiClient {
           method: 'PUT',
           idempotencyKey,
           body: jsonRequestBody({ throughSequence }),
+        },
+      ),
+    );
+  }
+
+  public updateConversationNotificationPolicy(
+    conversationId: string,
+    input: ConversationNotificationPolicyUpdateRequest,
+  ): Promise<ConversationNotificationPolicyResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ConversationNotificationPolicyResult>(
+        `/conversations/${encodeURIComponent(conversationId)}/notification-policy`,
+        {
+          method: 'PUT',
+          idempotencyKey,
+          body: jsonRequestBody(input),
         },
       ),
     );

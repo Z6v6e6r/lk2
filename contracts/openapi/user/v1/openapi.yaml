@@ -2329,6 +2329,57 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/notification-policy:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [messaging]
+      operationId: updateConversationNotificationPolicy
+      summary: Set the authenticated member's own notification policy for one conversation
+      description: |
+        Only the caller's own membership row changes. `level` is `ALL`, `MENTIONS` or `NONE`, and an
+        optional future `mutedUntil` quiets the conversation until that instant. A plain message has
+        no mentions, so only `ALL` receives a message notification; realtime delivery and the durable
+        inbox item are unaffected by this policy. The command is idempotent by content: repeating an
+        unchanged request writes no audit entry and does not bump the row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationNotificationPolicyUpdateRequest'
+      responses:
+        '200':
+          description: The stored policy for the caller after the command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationNotificationPolicyResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/notifications:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -6410,7 +6461,7 @@ components:
     DirectConversationSummary:
       type: object
       additionalProperties: false
-      required: [id, kind, participant, unreadCount, updatedAt]
+      required: [id, kind, participant, unreadCount, updatedAt, notificationPolicy]
       properties:
         id:
           type: string
@@ -6426,6 +6477,8 @@ components:
         updatedAt:
           type: string
           format: date-time
+        notificationPolicy:
+          $ref: '#/components/schemas/ConversationNotificationPolicy'
         lastMessage:
           $ref: '#/components/schemas/ConversationLastMessage'
     ConversationSummary:
@@ -6494,7 +6547,7 @@ components:
     GameConversationSummary:
       type: object
       additionalProperties: false
-      required: [id, kind, contextId, title, unreadCount, updatedAt]
+      required: [id, kind, contextId, title, unreadCount, updatedAt, notificationPolicy]
       properties:
         id:
           type: string
@@ -6515,8 +6568,50 @@ components:
         updatedAt:
           type: string
           format: date-time
+        notificationPolicy:
+          $ref: '#/components/schemas/ConversationNotificationPolicy'
         lastMessage:
           $ref: '#/components/schemas/ConversationLastMessage'
+    ConversationNotificationPolicy:
+      type: object
+      additionalProperties: false
+      required: [level, muted]
+      properties:
+        level:
+          type: string
+          enum: [ALL, MENTIONS, NONE]
+          description: MENTIONS and NONE receive no message notification while mentions are absent.
+        muted:
+          type: boolean
+          description: Server-computed effective state of this member for this conversation.
+        mutedUntil:
+          type: string
+          format: date-time
+    ConversationNotificationPolicyUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [level]
+      properties:
+        level:
+          type: string
+          enum: [ALL, MENTIONS, NONE]
+        mutedUntil:
+          type: string
+          format: date-time
+          description: Future instant when a temporary mute ends. At most 30 days ahead.
+    ConversationNotificationPolicyResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, policy, changed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        policy:
+          $ref: '#/components/schemas/ConversationNotificationPolicy'
+        changed:
+          type: boolean
+          description: False when the requested policy already matched the stored row.
     GetOrCreateGameConversationRequest:
       type: object
       additionalProperties: false
