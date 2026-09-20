@@ -269,7 +269,7 @@ test -r "$migrator_env" || fail 'migrator credential file is unreadable'
 test "$(stat -c %a "$migrator_env")" = 600 || fail 'migrator credential mode is not 0600'
 test ! "$runtime_env" -ef "$migrator_env" || fail 'runtime and migrator credential files alias'
 awk '
-  /^[[:space:]]*($|#)/ { next }
+  /^[ \t\r]*($|#)/ { next }
   /^DATABASE_URL=/ { next }
   { exit 1 }
 ' "$migrator_env" || fail 'migrator credential file contains an unexpected key'

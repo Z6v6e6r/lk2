@@ -1606,7 +1606,7 @@ jobs:
             test "$(stat -c %a "$migrator_env")" = 600
             test ! "$runtime_env" -ef "$migrator_env"
             awk '\''
-              /^[[:space:]]*($|#)/ { next }
+              /^[ \t\r]*($|#)/ { next }
               /^DATABASE_URL=/ { next }
               { exit 1 }
             '\'' "$migrator_env"

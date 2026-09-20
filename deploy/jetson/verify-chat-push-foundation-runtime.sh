@@ -50,7 +50,7 @@ test "${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE+x}" != x ||
   fail 'foundation overlay path override is forbidden'
 for interpolation_file in infrastructure.env "$compose_release_env"; do
   awk -F= '
-    /^[[:space:]]*($|#)/ { next }
+    /^[ \t\r]*($|#)/ { next }
     $1 == "RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE" { found = 1 }
     END { exit found ? 1 : 0 }
   ' "$interpolation_file" || fail "$interpolation_file redirects the foundation overlay"
