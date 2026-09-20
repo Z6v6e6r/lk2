@@ -96,10 +96,27 @@ function checksumHex(
   return null;
 }
 
+/** Strips control characters and quotes that could break out of the header value. */
+function headerSafeName(fileName: string): string {
+  return [...fileName]
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code < 0x20 || code === 0x7f || character === '"' || character === '\\'
+        ? '_'
+        : character;
+    })
+    .join('');
+}
+
 /** RFC 6266 keeps a non-ASCII file name intact for the browser download prompt. */
 export function contentDispositionHeader(fileName: string, inline: boolean): string {
-  const safe = fileName.replace(/[\u0000-\u001f\u007f"\\]/g, '_');
-  const ascii = safe.replace(/[^\u0020-\u007e]/g, '_');
+  const safe = headerSafeName(fileName);
+  const ascii = [...safe]
+    .map((character) => {
+      const code = character.codePointAt(0) ?? 0;
+      return code >= 0x20 && code <= 0x7e ? character : '_';
+    })
+    .join('');
   return `${inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
 }
 

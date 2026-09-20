@@ -429,6 +429,17 @@ function mergeConversationMessages(
 const CHAT_ATTACHMENT_SCAN_POLL_MS = 1_500;
 const CHAT_ATTACHMENT_SCAN_TIMEOUT_MS = 60_000;
 
+/**
+ * Attachment drafts and their notice stay bound to the conversation that
+ * reserved them, so switching threads cannot leak a chip or an error into
+ * another chat.
+ */
+interface ChatAttachmentUiState {
+  readonly conversationId: string;
+  readonly drafts: readonly ChatAttachmentDraft[];
+  readonly notice: string | null;
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
@@ -705,8 +716,9 @@ export function App({
   const [pendingChatMessage, setPendingChatMessage] = useState<
     (PendingChatMessage & { readonly conversationId: string }) | null
   >(null);
-  const [chatAttachments, setChatAttachments] = useState<readonly ChatAttachmentDraft[]>([]);
-  const [chatAttachmentNotice, setChatAttachmentNotice] = useState<string | null>(null);
+  const [chatAttachmentState, setChatAttachmentState] = useState<ChatAttachmentUiState | null>(
+    null,
+  );
   const [chatRealtimeState, setChatRealtimeState] = useState<ChatRealtimeUiState | null>(null);
   const [hasEarlierChatMessages, setHasEarlierChatMessages] = useState(false);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
@@ -785,14 +797,20 @@ export function App({
   } | null>(null);
 
   // An attachment reservation is bound to one conversation. Switching threads
-  // aborts any in-flight transfer and drops the pending chips.
+  // aborts any in-flight transfer; the derived values below stop rendering the
+  // previous conversation's chips and notice immediately, without an effect
+  // writing state during the route change.
   useEffect(() => {
     chatAttachmentGenerationRef.current += 1;
     for (const abort of chatAttachmentAbortRef.current.values()) abort();
     chatAttachmentAbortRef.current.clear();
-    setChatAttachments([]);
-    setChatAttachmentNotice(null);
   }, [requestedConversationId]);
+  const activeChatAttachmentState =
+    chatAttachmentState && chatAttachmentState.conversationId === requestedConversationId
+      ? chatAttachmentState
+      : null;
+  const chatAttachments = activeChatAttachmentState?.drafts ?? [];
+  const chatAttachmentNotice = activeChatAttachmentState?.notice ?? null;
 
   const realtimeSessionActive =
     state.view === 'home' &&
@@ -1745,8 +1763,7 @@ export function App({
           chatAttachmentGenerationRef.current += 1;
           for (const abort of chatAttachmentAbortRef.current.values()) abort();
           chatAttachmentAbortRef.current.clear();
-          setChatAttachments([]);
-          setChatAttachmentNotice(null);
+          setChatAttachmentState(null);
           chatGameNavigationRef.current = null;
           setChatRealtimeState(null);
           chatCreateCommandRef.current = null;
@@ -1790,10 +1807,15 @@ export function App({
   }
 
   function updateChatAttachment(localId: string, patch: Partial<ChatAttachmentDraft>): void {
-    setChatAttachments((current) =>
-      current.map((attachment) =>
-        attachment.localId === localId ? { ...attachment, ...patch } : attachment,
-      ),
+    setChatAttachmentState((current) =>
+      current
+        ? {
+            ...current,
+            drafts: current.drafts.map((attachment) =>
+              attachment.localId === localId ? { ...attachment, ...patch } : attachment,
+            ),
+          }
+        : current,
     );
   }
 
@@ -1849,7 +1871,9 @@ export function App({
         state: 'FAILED',
         errorMessage: chatAttachmentUploadErrorMessage(error),
       });
-      setChatAttachmentNotice(chatAttachmentUploadErrorMessage(error));
+      setChatAttachmentState((current) =>
+        current ? { ...current, notice: chatAttachmentUploadErrorMessage(error) } : current,
+      );
     }
   }
 
@@ -1857,28 +1881,31 @@ export function App({
     const conversationId = requestedConversationId;
     if (!conversationId || files.length === 0) return;
     const generation = chatAttachmentGenerationRef.current;
-    setChatAttachmentNotice(null);
-    for (const file of files) {
-      const localId = createMessagingCommandId();
+    const drafts = files.map((file) => {
       const contentType = normalizeAttachmentContentType(file.type);
-      const fileName = normalizeAttachmentFileName(file.name);
-      setChatAttachments((current) => [
-        ...current,
-        {
-          localId,
-          fileName,
-          contentType,
-          byteSize: file.size,
-          mediaType: attachmentMediaType(contentType),
-          state: 'UPLOADING',
-          progress: 0,
-        },
-      ]);
+      return {
+        localId: createMessagingCommandId(),
+        fileName: normalizeAttachmentFileName(file.name),
+        contentType,
+        byteSize: file.size,
+        mediaType: attachmentMediaType(contentType),
+        state: 'UPLOADING' as const,
+        progress: 0,
+      };
+    });
+    setChatAttachmentState((current) => ({
+      conversationId,
+      drafts: [...(current?.conversationId === conversationId ? current.drafts : []), ...drafts],
+      notice: null,
+    }));
+    for (const [index, draft] of drafts.entries()) {
+      const file = files[index];
+      if (!file) continue;
       void uploadChatAttachment({
         conversationId,
-        localId,
-        fileName,
-        contentType,
+        localId: draft.localId,
+        fileName: draft.fileName,
+        contentType: draft.contentType,
         file,
         generation,
       });
@@ -1888,8 +1915,15 @@ export function App({
   function handleRemoveChatAttachment(localId: string): void {
     chatAttachmentAbortRef.current.get(localId)?.();
     chatAttachmentAbortRef.current.delete(localId);
-    setChatAttachments((current) => current.filter((attachment) => attachment.localId !== localId));
-    setChatAttachmentNotice(null);
+    setChatAttachmentState((current) =>
+      current
+        ? {
+            ...current,
+            drafts: current.drafts.filter((attachment) => attachment.localId !== localId),
+            notice: null,
+          }
+        : current,
+    );
   }
 
   function sendChatCommand(command: {
@@ -1951,8 +1985,7 @@ export function App({
     // (discarded together with the local draft).
     for (const abort of chatAttachmentAbortRef.current.values()) abort();
     chatAttachmentAbortRef.current.clear();
-    setChatAttachments([]);
-    setChatAttachmentNotice(null);
+    setChatAttachmentState(null);
     sendChatCommand(command);
   }
 
@@ -2439,7 +2472,7 @@ export function App({
           onCreateDirect={handleCreateDirectConversation}
           attachments={chatAttachments}
           attachmentNotice={chatAttachmentNotice}
-          resolveMediaContentUrl={gateway.conversationMediaContentUrl}
+          loadMedia={gateway.loadConversationMedia}
           onAttachFiles={handleAttachChatFiles}
           onRemoveAttachment={handleRemoveChatAttachment}
           onSendMessage={handleSendConversationMessage}

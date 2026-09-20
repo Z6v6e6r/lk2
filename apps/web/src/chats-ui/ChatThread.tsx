@@ -27,7 +27,7 @@ interface ChatThreadProps {
   readonly policyBusy: boolean;
   readonly attachments: readonly ChatAttachmentDraft[];
   readonly attachmentNotice?: string | null | undefined;
-  readonly resolveMediaContentUrl: (conversationId: string, mediaId: string) => string;
+  readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
   readonly onAttachFiles: (files: readonly File[]) => void;
   readonly onRemoveAttachment: (localId: string) => void;
   readonly onSendMessage: (input: ChatComposerSend) => void;
@@ -52,7 +52,7 @@ export function ChatThread({
   policyBusy,
   attachments,
   attachmentNotice,
-  resolveMediaContentUrl,
+  loadMedia,
   onAttachFiles,
   onRemoveAttachment,
   onSendMessage,
@@ -181,7 +181,7 @@ export function ChatThread({
                     showSender
                     continuesGroup={continuesGroup}
                     endsGroup={endsGroup}
-                    resolveMediaContentUrl={resolveMediaContentUrl}
+                    loadMedia={loadMedia}
                   />
                 </Fragment>
               );
@@ -194,7 +194,9 @@ export function ChatThread({
                   pendingMessage.state === 'failed' ? styles.failedBubble : ''
                 }`}
               >
-                <p>{pendingMessage.body || (pendingMessage.attachmentIds?.length ? 'Вложение' : '')}</p>
+                <p>
+                  {pendingMessage.body || (pendingMessage.attachmentIds?.length ? 'Вложение' : '')}
+                </p>
                 <span role="status">
                   {pendingMessage.state === 'sending' ? 'Отправляется…' : 'Не отправлено'}
                 </span>

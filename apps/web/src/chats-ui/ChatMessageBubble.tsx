@@ -1,7 +1,104 @@
-import type { ConversationMessage } from '../auth-gateway.js';
+import { useEffect, useState } from 'react';
+
+import type { ConversationMessage, ConversationMessageAttachment } from '../auth-gateway.js';
 import { formatAttachmentSize } from './chat-attachments.js';
 import { formatMessageTime, initials } from './chat-format.js';
 import styles from './ChatsUi.module.css';
+
+/** Loads one attachment exactly once and hands the component a revocable object URL. */
+function useAttachmentObjectUrl(
+  conversationId: string,
+  mediaId: string,
+  loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>,
+): { readonly url?: string; readonly failed: boolean } {
+  const [url, setUrl] = useState<string>();
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | undefined;
+    void loadMedia(conversationId, mediaId).then(
+      (blob) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(blob);
+        setUrl(objectUrl);
+      },
+      () => {
+        if (active) setFailed(true);
+      },
+    );
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [conversationId, mediaId, loadMedia]);
+
+  return { ...(url ? { url } : {}), failed };
+}
+
+function AttachmentImage({
+  conversationId,
+  attachment,
+  loadMedia,
+}: {
+  readonly conversationId: string;
+  readonly attachment: ConversationMessageAttachment;
+  readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
+}): React.JSX.Element {
+  const { url, failed } = useAttachmentObjectUrl(conversationId, attachment.mediaId, loadMedia);
+
+  if (failed) return <span className={styles.attachmentUnavailable}>Изображение недоступно</span>;
+  if (!url) {
+    return (
+      <span className={styles.attachmentPending} aria-live="polite">
+        Загружаем изображение…
+      </span>
+    );
+  }
+  return <img src={url} alt={attachment.fileName} loading="lazy" />;
+}
+
+function AttachmentFile({
+  conversationId,
+  attachment,
+  loadMedia,
+}: {
+  readonly conversationId: string;
+  readonly attachment: ConversationMessageAttachment;
+  readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
+}): React.JSX.Element {
+  const { url, failed } = useAttachmentObjectUrl(conversationId, attachment.mediaId, loadMedia);
+  const body = (
+    <>
+      <span className={styles.attachmentFileIcon} aria-hidden="true">
+        📄
+      </span>
+      <span className={styles.attachmentFileBody}>
+        <span className={styles.attachmentFileName} title={attachment.fileName}>
+          {attachment.fileName}
+        </span>
+        <span className={styles.attachmentFileMeta}>
+          {formatAttachmentSize(attachment.byteSize)}
+        </span>
+      </span>
+      <span className={styles.attachmentFileAction}>
+        {failed ? 'Недоступно' : url ? 'Скачать' : 'Готовим…'}
+      </span>
+    </>
+  );
+
+  if (!url) return <span className={styles.attachmentFileCard}>{body}</span>;
+  return (
+    <a
+      className={styles.attachmentFileCard}
+      href={url}
+      download={attachment.fileName}
+      aria-label={`Скачать файл ${attachment.fileName}`}
+    >
+      {body}
+    </a>
+  );
+}
 
 interface ChatMessageBubbleProps {
   readonly message: ConversationMessage;
@@ -9,8 +106,11 @@ interface ChatMessageBubbleProps {
   readonly showSender: boolean;
   readonly continuesGroup?: boolean;
   readonly endsGroup?: boolean;
-  /** Same-origin `/media/<mediaId>/content` URL; the API answers 302 to a signed URL. */
-  readonly resolveMediaContentUrl: (conversationId: string, mediaId: string) => string;
+  /**
+   * Authorized attachment loader. The route needs the bearer token and answers 302 to a short-lived
+   * signed URL, so a browser cannot use it directly as an `<img src>`.
+   */
+  readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
 }
 
 export function ChatMessageBubble({
@@ -19,7 +119,7 @@ export function ChatMessageBubble({
   showSender,
   continuesGroup = false,
   endsGroup = true,
-  resolveMediaContentUrl,
+  loadMedia,
 }: ChatMessageBubbleProps): React.JSX.Element {
   const attachments = message.attachments ?? [];
   const images = attachments.filter((attachment) => attachment.mediaType === 'IMAGE');
@@ -51,10 +151,10 @@ export function ChatMessageBubble({
           >
             {images.map((attachment) => (
               <li key={attachment.mediaId}>
-                <img
-                  src={resolveMediaContentUrl(message.conversationId, attachment.mediaId)}
-                  alt={attachment.fileName}
-                  loading="lazy"
+                <AttachmentImage
+                  conversationId={message.conversationId}
+                  attachment={attachment}
+                  loadMedia={loadMedia}
                 />
               </li>
             ))}
@@ -64,24 +164,11 @@ export function ChatMessageBubble({
           <ul className={styles.attachmentFiles} aria-label="Файлы в сообщении">
             {files.map((attachment) => (
               <li key={attachment.mediaId}>
-                <a
-                  className={styles.attachmentFileCard}
-                  href={resolveMediaContentUrl(message.conversationId, attachment.mediaId)}
-                  download={attachment.fileName}
-                >
-                  <span className={styles.attachmentFileIcon} aria-hidden="true">
-                    📄
-                  </span>
-                  <span className={styles.attachmentFileBody}>
-                    <span className={styles.attachmentFileName} title={attachment.fileName}>
-                      {attachment.fileName}
-                    </span>
-                    <span className={styles.attachmentFileMeta}>
-                      {formatAttachmentSize(attachment.byteSize)}
-                    </span>
-                  </span>
-                  <span className={styles.attachmentFileAction}>Скачать</span>
-                </a>
+                <AttachmentFile
+                  conversationId={message.conversationId}
+                  attachment={attachment}
+                  loadMedia={loadMedia}
+                />
               </li>
             ))}
           </ul>

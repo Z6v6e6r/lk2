@@ -196,7 +196,13 @@ afterEach(async () => {
 
 describe('messaging media API', () => {
   it('requires authorization before touching storage', async () => {
-    const store = objectStore();
+    const createUploadGrant = vi.fn().mockResolvedValue({
+      url: 'https://storage.example.test/signed',
+      method: 'PUT',
+      requiredHeaders: {},
+      expiresAt: '2026-09-20T10:15:00.000Z',
+    });
+    const store = objectStore({ createUploadGrant });
     const app = await build({ store });
     const response = await app.inject({
       method: 'POST',
@@ -206,7 +212,7 @@ describe('messaging media API', () => {
 
     expect(response.statusCode).toBe(401);
     expect(response.json()).toMatchObject({ code: 'AUTH_REQUIRED' });
-    expect(store.createUploadGrant).not.toHaveBeenCalled();
+    expect(createUploadGrant).not.toHaveBeenCalled();
   });
 
   it('issues a single-use quarantine grant for an image', async () => {
@@ -229,7 +235,8 @@ describe('messaging media API', () => {
   });
 
   it('refuses content a browser would execute and any unrecognised image type', async () => {
-    const media = mediaRepository();
+    const issueUpload = vi.fn().mockResolvedValue({ outcome: 'not_found' });
+    const media = mediaRepository({ issueUpload });
     const app = await build({ media });
     for (const contentType of ['image/svg+xml', 'text/html', 'image/gif']) {
       const response = await app.inject({
@@ -245,11 +252,12 @@ describe('messaging media API', () => {
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({ code: 'MESSAGING_MEDIA_PAYLOAD_INVALID' });
     }
-    expect(media.issueUpload).not.toHaveBeenCalled();
+    expect(issueUpload).not.toHaveBeenCalled();
   });
 
   it('refuses a path-like file name and an over-limit byte size', async () => {
-    const media = mediaRepository();
+    const issueUpload = vi.fn().mockResolvedValue({ outcome: 'not_found' });
+    const media = mediaRepository({ issueUpload });
     const app = await build({ media });
     const token = await accessToken();
     const traversal = await app.inject({
@@ -277,7 +285,7 @@ describe('messaging media API', () => {
 
     expect(traversal.statusCode).toBe(400);
     expect(oversized.statusCode).toBe(400);
-    expect(media.issueUpload).not.toHaveBeenCalled();
+    expect(issueUpload).not.toHaveBeenCalled();
   });
 
   it('maps upload quota refusals to a retryable stable code', async () => {
@@ -345,7 +353,8 @@ describe('messaging media API', () => {
   });
 
   it('hands a reader a short-lived redirect instead of an object key', async () => {
-    const store = objectStore();
+    const createDeliveryUrl = vi.fn().mockResolvedValue('https://storage.example.test/signed');
+    const store = objectStore({ createDeliveryUrl });
     const app = await build({ store });
     const response = await app.inject({
       method: 'GET',
@@ -355,7 +364,7 @@ describe('messaging media API', () => {
 
     expect(response.statusCode).toBe(302);
     expect(response.headers.location).toBe('https://storage.example.test/signed');
-    expect(store.createDeliveryUrl).toHaveBeenCalledWith({
+    expect(createDeliveryUrl).toHaveBeenCalledWith({
       delivery: {
         objectKey: `chat-media/ready/${tenantId}/${conversationId}/${mediaId}/content`,
         objectVersion: 'ready-version-1',
@@ -369,7 +378,8 @@ describe('messaging media API', () => {
   });
 
   it('hides a message attachment from a reader without an active membership', async () => {
-    const store = objectStore();
+    const createDeliveryUrl = vi.fn().mockResolvedValue('https://storage.example.test/signed');
+    const store = objectStore({ createDeliveryUrl });
     const app = await build({
       store,
       messages: messageRepository({
@@ -384,7 +394,7 @@ describe('messaging media API', () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ code: 'MESSAGING_MEDIA_NOT_FOUND' });
-    expect(store.createDeliveryUrl).not.toHaveBeenCalled();
+    expect(createDeliveryUrl).not.toHaveBeenCalled();
   });
 
   it('sends an attachment-only message through the messaging command', async () => {
@@ -412,7 +422,7 @@ describe('messaging media API', () => {
       },
     });
     const app = await build({
-      messages: messageRepository({ sendMessage } as unknown as Partial<MessagingRepository>),
+      messages: messageRepository({ sendMessage }),
     });
     const response = await app.inject({
       method: 'POST',
@@ -439,7 +449,7 @@ describe('messaging media API', () => {
   it('refuses a message with more than four attachments before the command runs', async () => {
     const sendMessage = vi.fn();
     const app = await build({
-      messages: messageRepository({ sendMessage } as unknown as Partial<MessagingRepository>),
+      messages: messageRepository({ sendMessage }),
     });
     const response = await app.inject({
       method: 'POST',
@@ -471,7 +481,7 @@ describe('messaging media API', () => {
         sendMessage: vi
           .fn()
           .mockResolvedValue({ outcome: 'attachment_invalid', reason: 'NOT_READY' }),
-      } as unknown as Partial<MessagingRepository>),
+      }),
     });
     const response = await app.inject({
       method: 'POST',

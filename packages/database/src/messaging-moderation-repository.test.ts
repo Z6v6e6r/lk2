@@ -24,8 +24,6 @@ const reportRow = {
   state: 'TRIAGED' as const,
   case_id: caseId,
   created_at: '2026-09-20T12:00:00.000Z',
-  idempotency_key: idempotencyKey,
-  request_hash: 'hash-0001',
 };
 
 function poolWithQuery(query: ReturnType<typeof vi.fn>) {
@@ -34,16 +32,24 @@ function poolWithQuery(query: ReturnType<typeof vi.fn>) {
   };
 }
 
-/** Shared plumbing: transaction keywords, advisory locks and the audit insert are always allowed. */
-function scaffolding(text: string): boolean {
-  return (
+const auditInsert = 'insert into audit.audit_log';
+
+/**
+ * Shared plumbing: transaction keywords, advisory locks and the audit row are always allowed. The
+ * audit insert echoes `reportRow` so a test can assert the exact `new_value` payload it captured.
+ */
+function scaffolding(text: string): { rows: readonly unknown[]; rowCount: number } | undefined {
+  if (
     text === 'begin' ||
     text === 'commit' ||
     text === 'rollback' ||
     text.includes("set_config('app.tenant_id'") ||
-    text.includes('pg_advisory_xact_lock') ||
-    text.includes('insert into audit.audit_log')
-  );
+    text.includes('pg_advisory_xact_lock')
+  ) {
+    return { rows: [], rowCount: 0 };
+  }
+  if (text.includes(auditInsert)) return { rows: [reportRow], rowCount: 1 };
+  return undefined;
 }
 
 describe('messaging moderation repository', () => {
@@ -82,9 +88,7 @@ describe('messaging moderation repository', () => {
 
   it('answers self_report without writing a report, a case or an audit row', async () => {
     const query = vi.fn((text: string) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from messaging.messages message')) {
         return Promise.resolve({
           rows: [{ sender_user_id: reporterUserId, hidden_at: null }],
@@ -118,9 +122,7 @@ describe('messaging moderation repository', () => {
 
   it('creates the shared case with the chat-message dedupe key and links the first report', async () => {
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from messaging.messages message')) {
         return Promise.resolve({
           rows: [{ sender_user_id: senderUserId, hidden_at: null }],
@@ -178,7 +180,9 @@ describe('messaging moderation repository', () => {
       replayed: false,
     });
 
-    const audit = query.mock.calls.find(([text]) => String(text).includes('insert into audit.audit_log'));
+    const audit = query.mock.calls.find(([text]) =>
+      String(text).includes('insert into audit.audit_log'),
+    );
     expect(audit).toBeDefined();
     const auditPayload = String(audit?.[1]?.[5]);
     expect(auditPayload).toContain(messageId);
@@ -187,9 +191,7 @@ describe('messaging moderation repository', () => {
 
   it('joins a second reason from the same reporter to the existing case', async () => {
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from messaging.messages message')) {
         return Promise.resolve({
           rows: [{ sender_user_id: senderUserId, hidden_at: null }],
@@ -227,32 +229,25 @@ describe('messaging moderation repository', () => {
     });
 
     expect(result).toMatchObject({ outcome: 'submitted', caseId, replayed: false });
-    expect(query.mock.calls.some(([text]) => String(text).includes('insert into moderation.cases'))).toBe(
-      false,
-    );
+    expect(
+      query.mock.calls.some(([text]) => String(text).includes('insert into moderation.cases')),
+    ).toBe(false);
   });
 
   it('replays a byte-identical retry without inserting a second case or report', async () => {
     const query = vi.fn((text: string) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from messaging.messages message')) {
         return Promise.resolve({
           rows: [{ sender_user_id: senderUserId, hidden_at: null }],
           rowCount: 1,
         });
       }
+      // The stored report row is the whole durable idempotency state: no command table, no update.
       if (text.includes('from moderation.reports')) {
-        if (text.includes('idempotency_key, request_hash')) {
-          return Promise.resolve({
-            rows: [{ idempotency_key: idempotencyKey, request_hash: 'hash-0001' }],
-            rowCount: 1,
-          });
-        }
         return Promise.resolve({ rows: [reportRow], rowCount: 1 });
       }
-      throw new Error(`Exact retry must be read-only: ${text}`);
+      throw new Error(`Unexpected query: ${text}`);
     });
     const repository = createMessagingModerationRepository(poolWithQuery(query) as never);
 
@@ -277,11 +272,9 @@ describe('messaging moderation repository', () => {
     ).toBe(false);
   });
 
-  it('reports idempotency_conflict when one command key carries a different report payload', async () => {
+  it('answers duplicate when the same report key carries a different details payload', async () => {
     const query = vi.fn((text: string) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from messaging.messages message')) {
         return Promise.resolve({
           rows: [{ sender_user_id: senderUserId, hidden_at: null }],
@@ -289,18 +282,14 @@ describe('messaging moderation repository', () => {
         });
       }
       if (text.includes('from moderation.reports')) {
-        if (text.includes('idempotency_key, request_hash')) {
-          return Promise.resolve({
-            rows: [{ idempotency_key: idempotencyKey, request_hash: 'hash-0001' }],
-            rowCount: 1,
-          });
-        }
         return Promise.resolve({ rows: [reportRow], rowCount: 1 });
       }
-      throw new Error(`Conflicting retry must be read-only: ${text}`);
+      throw new Error(`A repeated report key must never write: ${text}`);
     });
     const repository = createMessagingModerationRepository(poolWithQuery(query) as never);
 
+    // Without a moderation command table the stored report is the only idempotency state, so a
+    // reused command key with a different payload is a duplicate, not a second case or action.
     await expect(
       repository.submitReport({
         tenantId,
@@ -313,14 +302,12 @@ describe('messaging moderation repository', () => {
         requestHash: 'hash-9999',
         correlationId,
       }),
-    ).resolves.toEqual({ outcome: 'idempotency_conflict' });
+    ).resolves.toEqual({ outcome: 'duplicate' });
   });
 
-  it('answers duplicate and reconciles the command row when the same reason is reported again', async () => {
+  it('answers duplicate for a different reason from the same reporter and message', async () => {
     const query = vi.fn((text: string) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from messaging.messages message')) {
         return Promise.resolve({
           rows: [{ sender_user_id: senderUserId, hidden_at: null }],
@@ -328,16 +315,11 @@ describe('messaging moderation repository', () => {
         });
       }
       if (text.includes('from moderation.reports')) {
-        if (text.includes('idempotency_key, request_hash')) {
-          return Promise.resolve({
-            rows: [{ idempotency_key: 'another-command-key-0002', request_hash: 'hash-0001' }],
-            rowCount: 1,
-          });
-        }
-        return Promise.resolve({ rows: [reportRow], rowCount: 1 });
-      }
-      if (text.includes('update moderation.reports')) {
-        return Promise.resolve({ rows: [], rowCount: 1 });
+        // A different reason means a different row, so the case cannot already be attached.
+        return Promise.resolve({
+          rows: [{ ...reportRow, reason_code: 'SPAM', case_id: null }],
+          rowCount: 1,
+        });
       }
       throw new Error(`Unexpected query: ${text}`);
     });
@@ -428,9 +410,7 @@ describe('messaging moderation repository', () => {
         order.push('actions');
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from moderation.reports')) {
         order.push('report');
         return Promise.resolve({
@@ -449,7 +429,7 @@ describe('messaging moderation repository', () => {
       if (text.includes('insert into moderation.actions')) {
         order.push('insert-action');
         expect(values).toContain('REDACT_MESSAGE');
-        expect(values).toContain('STAFF');
+        expect(text).toContain("'STAFF'");
         expect(values).toContain(moderatorUserId);
         return Promise.resolve({ rows: [], rowCount: 1 });
       }
@@ -477,7 +457,12 @@ describe('messaging moderation repository', () => {
         idempotencyKey,
         correlationId,
       }),
-    ).resolves.toEqual({ outcome: 'decided', action: 'HIDE_MESSAGE', hidden: true, replayed: false });
+    ).resolves.toEqual({
+      outcome: 'decided',
+      action: 'HIDE_MESSAGE',
+      hidden: true,
+      replayed: false,
+    });
 
     expect(order).toEqual(['actions', 'report', 'insert-action', 'hide-message', 'resolve-case']);
     const audit = query.mock.calls.find(([text]) =>
@@ -489,9 +474,10 @@ describe('messaging moderation repository', () => {
 
   it('restores by clearing both hidden columns and reopening the case without resolved_at', async () => {
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
+      if (text.includes('from moderation.actions')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from moderation.reports')) {
         return Promise.resolve({
           rows: [
@@ -547,9 +533,10 @@ describe('messaging moderation repository', () => {
 
   it('dismisses the case without touching hidden_at', async () => {
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
+      if (text.includes('from moderation.actions')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from moderation.reports')) {
         return Promise.resolve({
           rows: [
@@ -601,9 +588,7 @@ describe('messaging moderation repository', () => {
 
   it('replays a stored decision and refuses a different payload on the same key', async () => {
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
-      }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from moderation.actions')) {
         expect(values).toContain(idempotencyKey);
         return Promise.resolve({
@@ -631,7 +616,12 @@ describe('messaging moderation repository', () => {
         idempotencyKey,
         correlationId,
       }),
-    ).resolves.toEqual({ outcome: 'decided', action: 'HIDE_MESSAGE', hidden: true, replayed: true });
+    ).resolves.toEqual({
+      outcome: 'decided',
+      action: 'HIDE_MESSAGE',
+      hidden: true,
+      replayed: true,
+    });
 
     await expect(
       repository.decideReport({
@@ -648,9 +638,10 @@ describe('messaging moderation repository', () => {
 
   it('answers not_found for an unknown report without writing an action', async () => {
     const query = vi.fn((text: string) => {
-      if (scaffolding(text) && !text.includes('audit.audit_log')) {
+      if (text.includes('from moderation.actions')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from moderation.reports')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }

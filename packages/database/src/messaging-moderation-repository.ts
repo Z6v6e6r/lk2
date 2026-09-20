@@ -154,7 +154,6 @@ interface StoredActionRow extends QueryResultRow {
 
 interface MessageSnapshotRow extends QueryResultRow {
   readonly sender_user_id: string | null;
-  readonly hidden_at: Date | string | null;
 }
 
 function iso(value: Date | string): string {
@@ -248,7 +247,7 @@ export function createMessagingModerationRepository(pool: Pool): MessagingModera
         // indistinguishable: the caller learns only "not found", never whether the message exists.
         const snapshot = await queryOne<MessageSnapshotRow>(
           client,
-          `select member.user_id as sender_user_id, message.hidden_at
+          `select member.user_id as sender_user_id
              from messaging.messages message
              join messaging.conversation_members member
                on member.tenant_id = message.tenant_id
@@ -282,19 +281,20 @@ export function createMessagingModerationRepository(pool: Pool): MessagingModera
           [input.tenantId, input.messageId, input.reporterUserId, input.reasonCode],
         );
         if (existing) {
-          const replay = await replayExistingReport(client, input, existing);
-          if (replay) return replay;
-          // A second attempt with a different command key is a duplicate. It records the newest
-          // request hash without writing a second report, case or audit row.
-          await client.query(
-            `update moderation.reports
-                set idempotency_key = $3,
-                    request_hash = $4,
-                    updated_at = now()
-              where tenant_id = $1 and id = $2`,
-            [input.tenantId, existing.id, input.idempotencyKey, input.requestHash],
-          );
-          return { outcome: 'duplicate' } as const;
+          // A report is identified by what it asserts, not by the command key: the unique
+          // `(tenant_id, message_id, reporter_user_id, reason_code)` index plus the advisory lock on
+          // the command key make the report row itself the durable idempotency state. An exact retry
+          // replays `submitted`; any other repeat of the same assertion answers `duplicate`; a new
+          // reason is a new report that joins the same case. No path writes a second report, case or
+          // audit row for one assertion, so a reused command key can never fork moderation state.
+          if (!existing.case_id) return { outcome: 'duplicate' } as const;
+          if (!sameReportRequest(input, existing)) return { outcome: 'duplicate' } as const;
+          return {
+            outcome: 'submitted',
+            report: report(existing),
+            caseId: existing.case_id,
+            replayed: true,
+          } as const;
         }
 
         const caseId = await resolveReportCase(client, input);
@@ -303,8 +303,8 @@ export function createMessagingModerationRepository(pool: Pool): MessagingModera
           client,
           `insert into moderation.reports (
              tenant_id, id, conversation_id, message_id, reporter_user_id, reason_code,
-             details, state, case_id, idempotency_key, request_hash
-           ) values ($1, $2, $3, $4, $5, $6, $7, 'TRIAGED', $8, $9, $10)
+             details, state, case_id
+           ) values ($1, $2, $3, $4, $5, $6, $7, 'TRIAGED', $8)
            returning ${REPORT_COLUMNS}`,
           [
             input.tenantId,
@@ -315,8 +315,6 @@ export function createMessagingModerationRepository(pool: Pool): MessagingModera
             input.reasonCode,
             input.details,
             caseId,
-            input.idempotencyKey,
-            input.requestHash,
           ],
         );
         if (!inserted) throw new Error('MESSAGING_REPORT_WRITE_LOST');
@@ -458,41 +456,27 @@ export function createMessagingModerationRepository(pool: Pool): MessagingModera
 }
 
 /**
- * Idempotency for reports uses only the report row itself: there is no `*_commands` table in the
- * moderation schema and this slice may not add a migration. An exact retry returns the stored
- * report with `replayed: true`; a retry that reuses the same command key with a different payload
- * is `idempotency_conflict`; any other repeated `(message, reporter, reason)` is `duplicate`.
+ * The stored report is the durable idempotency state, so a retry replays `submitted` exactly when
+ * the replayed command describes the same assertion. `details` is part of the comparison because it
+ * is the only free-form part of the payload.
  */
-async function replayExistingReport(
-  client: PoolClient,
+function sameReportRequest(
   input: {
-    readonly tenantId: string;
-    readonly idempotencyKey: string;
-    readonly requestHash: string;
+    readonly conversationId: string;
+    readonly messageId: string;
+    readonly reporterUserId: string;
+    readonly reasonCode: string;
+    readonly details: string | null;
   },
   existing: ReportRow,
-): Promise<MessagingReportSubmitResult | undefined> {
-  const stored = await queryOne<{
-    readonly idempotency_key: string | null;
-    readonly request_hash: string | null;
-  } & QueryResultRow>(
-    client,
-    `select idempotency_key, request_hash
-       from moderation.reports
-      where tenant_id = $1 and id = $2`,
-    [input.tenantId, existing.id],
+): boolean {
+  return (
+    existing.conversation_id === input.conversationId &&
+    existing.message_id === input.messageId &&
+    existing.reporter_user_id === input.reporterUserId &&
+    existing.reason_code === input.reasonCode &&
+    existing.details === input.details
   );
-  if (stored?.idempotency_key !== input.idempotencyKey) return undefined;
-  if (stored.request_hash !== input.requestHash) {
-    return { outcome: 'idempotency_conflict' } as const;
-  }
-  if (!existing.case_id) return { outcome: 'duplicate' } as const;
-  return {
-    outcome: 'submitted',
-    report: report(existing),
-    caseId: existing.case_id,
-    replayed: true,
-  } as const;
 }
 
 /**

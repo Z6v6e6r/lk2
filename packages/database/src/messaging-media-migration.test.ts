@@ -16,7 +16,9 @@ describe('messaging media attachments migration', () => {
     expect(sql).toContain('create table messaging.media_commands');
     expect(sql).toContain('create table messaging.media_gc_jobs');
     // Four attachments of at most 15 MiB each is the whole slice-1 budget.
-    expect(sql).toContain('declared_size_bytes bigint not null check (declared_size_bytes between 1 and 15728640)');
+    expect(sql).toContain(
+      'declared_size_bytes bigint not null check (declared_size_bytes between 1 and 15728640)',
+    );
     expect(sql).toContain(
       "check (state in ('UPLOADING', 'SCANNING', 'READY', 'REJECTED', 'EXPIRED', 'PURGED'))",
     );
@@ -39,7 +41,7 @@ describe('messaging media attachments migration', () => {
     // Serving and garbage collection both address one exact object version.
     expect(sql).toContain('ready_object_version text');
     expect(sql).toContain('ready_object_version is not null');
-    expect(sql).toContain('object_kind text not null check (object_kind in (\'SOURCE\', \'READY\'))');
+    expect(sql).toContain("object_kind text not null check (object_kind in ('SOURCE', 'READY'))");
     expect(sql).toContain('add column hidden_at timestamptz');
     expect(sql).toContain('add column hidden_by_action_id uuid');
     expect(sql).toContain('check ((hidden_at is null) = (hidden_by_action_id is null))');

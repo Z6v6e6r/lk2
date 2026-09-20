@@ -45,6 +45,7 @@ import type {
   LegacyGameRosterBridgeRepository,
   PlayerLevelRepository,
   MessagingMediaRepository,
+  MessagingModerationRepository,
   MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
@@ -87,6 +88,7 @@ import { registerCommunityMembershipAdminRoutes } from './admin/community-member
 import { registerCommunityDirectInviteAdminRoutes } from './admin/community-direct-invite-admin-routes.js';
 import { registerCommunityCreateQuotaAdminRoutes } from './admin/community-create-quota-admin-routes.js';
 import { registerCommunityContentModerationAdminRoutes } from './admin/community-content-moderation-admin-routes.js';
+import { registerMessagingModerationAdminRoutes } from './admin/messaging-moderation-admin-routes.js';
 import type { AuthService } from './auth/auth-service.js';
 import { registerBookingPreferenceRoutes } from './bookings/booking-preference-routes.js';
 import {
@@ -140,6 +142,7 @@ import { registerLocationMediaRoutes } from './locations/location-media-routes.j
 import type { LocationMediaStore } from './locations/location-media-store.js';
 import { registerMessagingMediaRoutes } from './messaging/messaging-media-routes.js';
 import type { MessagingMediaObjectStore } from './messaging/messaging-media-object-store.js';
+import { registerMessagingReportRoutes } from './messaging/messaging-report-routes.js';
 import { registerMessagingRoutes } from './messaging/messaging-routes.js';
 import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
@@ -264,6 +267,7 @@ export interface BuildAppOptions {
   readonly adminNotificationRepository?: AdminNotificationRepository;
   readonly messagingRepository?: MessagingRepository;
   readonly messagingMediaRepository?: MessagingMediaRepository;
+  readonly messagingModerationRepository?: MessagingModerationRepository;
   readonly messagingMediaObjectStore?: MessagingMediaObjectStore;
   readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
   readonly locationRepository?: LocationRepository;
@@ -865,6 +869,18 @@ export async function buildApp(options: BuildAppOptions) {
       requireIdempotencyKey,
     ],
   });
+  registerMessagingReportRoutes(app as unknown as FastifyInstance, {
+    ...(options.messagingModerationRepository
+      ? { repository: options.messagingModerationRepository }
+      : {}),
+    ...(options.messagingRepository ? { messageRepository: options.messagingRepository } : {}),
+    commandHandlers: [
+      authenticate,
+      authorizeMessagingCommand,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
+  });
   registerCommunityRoutes(app as unknown as FastifyInstance, {
     ...(options.communityDirectory ? { service: options.communityDirectory } : {}),
     ...(options.communityCreateService ? { createService: options.communityCreateService } : {}),
@@ -950,6 +966,13 @@ export async function buildApp(options: BuildAppOptions) {
       ? { mediaOperationsRepository: options.communityMediaOperationsRepository }
       : {}),
     mediaReadUrlTtlSeconds: options.config.COMMUNITY_MEDIA_READ_URL_TTL_SECONDS,
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
+  registerMessagingModerationAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.messagingModerationRepository
+      ? { repository: options.messagingModerationRepository }
+      : {}),
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });

@@ -46,7 +46,7 @@ interface ChatsPageProps {
   readonly policyBusy: boolean;
   readonly attachments: readonly ChatAttachmentDraft[];
   readonly attachmentNotice: string | null;
-  readonly resolveMediaContentUrl: (conversationId: string, mediaId: string) => string;
+  readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
   readonly onCreateDirect: () => void;
   readonly onAttachFiles: (files: readonly File[]) => void;
   readonly onRemoveAttachment: (localId: string) => void;
@@ -90,7 +90,7 @@ export function ChatsPage({
   policyBusy,
   attachments,
   attachmentNotice,
-  resolveMediaContentUrl,
+  loadMedia,
   onCreateDirect,
   onAttachFiles,
   onRemoveAttachment,
@@ -207,7 +207,7 @@ export function ChatsPage({
             policyBusy={policyBusy}
             attachments={attachments}
             attachmentNotice={attachmentNotice}
-            resolveMediaContentUrl={resolveMediaContentUrl}
+            loadMedia={loadMedia}
             onAttachFiles={onAttachFiles}
             onRemoveAttachment={onRemoveAttachment}
             onSendMessage={onSendMessage}

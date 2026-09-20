@@ -3114,6 +3114,216 @@ describe('browser auth gateway', () => {
     expect(new Headers(readInit?.headers).get('Idempotency-Key')).toBe(clientMessageId);
   });
 
+  it('reserves, finalizes and reads chat media through the messaging HTTP contract', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const mediaId = '55555555-5555-4555-8555-555555555555';
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const scanningAsset = {
+      id: mediaId,
+      conversationId,
+      mediaType: 'IMAGE',
+      state: 'SCANNING',
+      fileName: 'photo.png',
+      contentType: 'image/png',
+      byteSize: 2048,
+      sha256: 'a'.repeat(64),
+      revision: 1,
+    };
+    const uploadResult = {
+      media: scanningAsset,
+      upload: {
+        method: 'PUT',
+        url: 'https://storage.padlhub.test/quarantine/photo?sig=abc',
+        requiredHeaders: { 'x-ms-blob-type': 'BlockBlob' },
+        expiresAt: '2026-09-20T12:05:00.000Z',
+      },
+    };
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith(`/conversations/${conversationId}/media/uploads`)) {
+        return Promise.resolve(Response.json(uploadResult, { status: 201 }));
+      }
+      if (url.endsWith(`/conversations/${conversationId}/media/${mediaId}/finalize`)) {
+        return Promise.resolve(Response.json(scanningAsset, { status: 202 }));
+      }
+      if (url.endsWith(`/conversations/${conversationId}/media/${mediaId}`)) {
+        return Promise.resolve(Response.json({ ...scanningAsset, state: 'READY' }));
+      }
+      if (url.endsWith(`/conversations/${conversationId}/media/${mediaId}/content`)) {
+        // The route answers 302 to a short-lived signed URL; fetch follows it and returns the bytes.
+        return Promise.resolve(
+          new Response(new Blob(['attachment-bytes']), {
+            status: 200,
+            headers: { 'content-type': 'image/png' },
+          }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    const issueKey = 'issue-media-command-0001';
+    await expect(
+      gateway.issueConversationMediaUpload(
+        conversationId,
+        {
+          fileName: 'photo.png',
+          contentType: 'image/png',
+          byteSize: 2048,
+          sha256: 'a'.repeat(64),
+        },
+        issueKey,
+      ),
+    ).resolves.toEqual(uploadResult);
+    await expect(
+      gateway.finalizeConversationMediaUpload(
+        conversationId,
+        mediaId,
+        2048,
+        'finalize-media-command-0001',
+      ),
+    ).resolves.toMatchObject({ id: mediaId, state: 'SCANNING' });
+    await expect(gateway.getConversationMedia(conversationId, mediaId)).resolves.toMatchObject({
+      id: mediaId,
+      state: 'READY',
+    });
+    const mediaBlob = await gateway.loadConversationMedia(conversationId, mediaId);
+    expect(mediaBlob.size).toBeGreaterThan(0);
+    expect(
+      fetchImplementation.mock.calls.some(([input]) =>
+        requestUrl(input).endsWith(`/conversations/${conversationId}/media/${mediaId}/content`),
+      ),
+    ).toBe(true);
+
+    const callsByUrl = new Map(
+      fetchImplementation.mock.calls.map(([input, init]) => [requestUrl(input), init]),
+    );
+    const issueInit = callsByUrl.get(
+      `https://api.padlhub.test/user/api/v1/padlhub/conversations/${conversationId}/media/uploads`,
+    );
+    expect(issueInit?.method).toBe('POST');
+    expect(new Headers(issueInit?.headers).get('Idempotency-Key')).toBe(issueKey);
+    if (typeof issueInit?.body !== 'string') throw new Error('Expected a JSON request body');
+    expect(JSON.parse(issueInit.body)).toEqual({
+      fileName: 'photo.png',
+      contentType: 'image/png',
+      byteSize: 2048,
+      sha256: 'a'.repeat(64),
+    });
+    const finalizeInit = callsByUrl.get(
+      `https://api.padlhub.test/user/api/v1/padlhub/conversations/${conversationId}/media/${mediaId}/finalize`,
+    );
+    expect(finalizeInit?.method).toBe('POST');
+    expect(new Headers(finalizeInit?.headers).get('Idempotency-Key')).toBe(
+      'finalize-media-command-0001',
+    );
+    if (typeof finalizeInit?.body !== 'string') throw new Error('Expected a JSON request body');
+    expect(JSON.parse(finalizeInit.body)).toEqual({ declaredByteSize: 2048 });
+  });
+
+  it('sends READY attachment ids with an empty body and keeps text-only payloads unchanged', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const mediaId = '55555555-5555-4555-8555-555555555555';
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['profile.read'],
+      },
+    };
+    const sentMessage = {
+      id: '44444444-4444-4444-8444-444444444444',
+      conversationId,
+      sequence: 1,
+      sender: { userId, displayName: 'Анна' },
+      messageType: 'IMAGE',
+      body: '',
+      attachments: [
+        {
+          mediaId,
+          position: 1,
+          mediaType: 'IMAGE',
+          fileName: 'photo.png',
+          contentType: 'image/png',
+          byteSize: 2048,
+        },
+      ],
+      createdAt: '2026-09-20T10:00:00.000Z',
+    };
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith(`/conversations/${conversationId}/messages`)) {
+        return Promise.resolve(
+          Response.json({ outcome: 'ok', message: sentMessage, replayed: false }),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await expect(
+      gateway.sendConversationMessage(conversationId, {
+        clientMessageId: 'attachment-message-0001',
+        body: '',
+        attachmentIds: [mediaId],
+      }),
+    ).resolves.toMatchObject({ message: { messageType: 'IMAGE' } });
+    await expect(
+      gateway.sendConversationMessage(conversationId, {
+        clientMessageId: 'text-message-0001',
+        body: 'Привет',
+      }),
+    ).resolves.toMatchObject({ outcome: 'ok' });
+
+    const bodies = fetchImplementation.mock.calls
+      .filter(([input]) => requestUrl(input).endsWith(`/conversations/${conversationId}/messages`))
+      .map(([, init]) => {
+        if (typeof init?.body !== 'string') throw new Error('Expected a JSON request body');
+        const parsed: unknown = JSON.parse(init.body);
+        return parsed;
+      });
+    expect(bodies).toEqual([
+      { clientMessageId: 'attachment-message-0001', body: '', attachmentIds: [mediaId] },
+      { clientMessageId: 'text-message-0001', body: 'Привет' },
+    ]);
+  });
+
   it.each(['game-create', 'message-send'] as const)(
     'bounds a hung %s request and retries with the same idempotency identity',
     async (command) => {

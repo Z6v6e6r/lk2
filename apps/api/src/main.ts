@@ -29,6 +29,7 @@ import {
   createPlayerLevelRepository,
   MESSAGING_MEDIA_MAX_BYTES,
   createMessagingMediaRepository,
+  createMessagingModerationRepository,
   createMessagingRepository,
   createNotificationEndpointRepository,
   createNotificationInboxRepository,
@@ -568,6 +569,7 @@ const app = await buildApp({
   notificationRepository: createNotificationInboxRepository(pool),
   notificationPreferenceRepository: createNotificationPreferenceRepository(pool),
   messagingRepository: createMessagingRepository(pool),
+  messagingModerationRepository: createMessagingModerationRepository(pool),
   ...(chatMediaObjectStore
     ? {
         messagingMediaRepository: createMessagingMediaRepository(pool),

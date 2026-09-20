@@ -25,8 +25,7 @@ const defaultProps = {
   policyBusy: false,
   attachments: [],
   attachmentNotice: null,
-  resolveMediaContentUrl: (conversationId: string, mediaId: string) =>
-    `/user/api/v1/padlhub/conversations/${conversationId}/media/${mediaId}/content`,
+  loadMedia: () => Promise.resolve(new Blob(['attachment-bytes'])),
   onCreateDirect: vi.fn(),
   onAttachFiles: vi.fn(),
   onRemoveAttachment: vi.fn(),

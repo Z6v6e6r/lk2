@@ -1322,3 +1322,11 @@
   height: var(--chat-nav-height);
   padding-bottom: max(24px, env(safe-area-inset-bottom));
 }
+
+.attachmentPending,
+.attachmentUnavailable {
+  display: block;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  opacity: 0.75;
+}

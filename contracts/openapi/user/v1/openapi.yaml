@@ -2502,6 +2502,80 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/messages/{messageId}/report:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: messageId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [messaging]
+      operationId: reportConversationMessage
+      summary: Report one chat message to the moderation queue
+      description: |
+        Requires current ACTIVE membership in the conversation and the messaging command permission.
+        The reporter must not be the message sender. A hidden message may still be reported, while a
+        deleted message, a foreign message and a message in another conversation all answer
+        `CONVERSATION_NOT_FOUND` so the endpoint never leaks message existence. One report per
+        message, reporter and reason is stored; the first report creates the shared moderation case
+        and later reports attach to it. An exact retry replays the stored report with
+        `X-Idempotent-Replayed`; repeating the same assertion is refused as a duplicate; reporting the
+        same message for another reason is a new report that joins the same case. The response never
+        echoes the message body or the free-text details.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportConversationMessageRequest'
+      responses:
+        '201':
+          description: The report was stored and linked to the shared moderation case.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportConversationMessageResult'
+        '200':
+          description: Idempotent replay of the same report command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            X-Idempotent-Replayed:
+              schema:
+                type: string
+                const: 'true'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportConversationMessageResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/conversations/{conversationId}/read-cursor:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -7114,6 +7188,36 @@ components:
           minimum: 0
         changed:
           type: boolean
+        replayed:
+          type: boolean
+    ReportConversationMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [reasonCode]
+      properties:
+        reasonCode:
+          type: string
+          enum: [SPAM, ABUSE, SCAM, OTHER]
+          description: The only reason codes a player may submit for a chat message.
+        details:
+          type: string
+          maxLength: 2000
+          description: Optional free text for the moderator. NUL characters are refused.
+    ReportConversationMessageResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, reportId, caseId, replayed]
+      properties:
+        outcome:
+          type: string
+          const: submitted
+        reportId:
+          type: string
+          format: uuid
+        caseId:
+          type: string
+          format: uuid
+          description: Shared case for the reported message; every report on it joins this case.
         replayed:
           type: boolean
     NotificationInboxPage:

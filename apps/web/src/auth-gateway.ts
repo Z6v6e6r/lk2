@@ -279,12 +279,7 @@ export interface ConversationMessage {
 }
 
 export type MessagingMediaState =
-  | 'UPLOADING'
-  | 'SCANNING'
-  | 'READY'
-  | 'REJECTED'
-  | 'EXPIRED'
-  | 'PURGED';
+  'UPLOADING' | 'SCANNING' | 'READY' | 'REJECTED' | 'EXPIRED' | 'PURGED';
 
 export interface MessagingMediaAsset {
   readonly id: string;
@@ -642,7 +637,12 @@ export interface AuthGateway {
    * endpoint answers 302 to a short-lived signed URL, so the value must never be
    * cached in application state nor fetched through XHR.
    */
-  readonly conversationMediaContentUrl: (conversationId: string, mediaId: string) => string;
+  /**
+   * Attachment bytes for the active session. The API answers 302 to a short-lived signed URL, and a
+   * browser cannot attach the bearer token to an `<img src>`, so readers receive a blob they turn
+   * into an object URL and revoke again.
+   */
+  readonly loadConversationMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
   readonly markConversationRead: (
     conversationId: string,
     throughSequence: number,
@@ -2357,9 +2357,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       );
     },
 
-    conversationMediaContentUrl(conversationId, mediaId) {
-      const apiRoot = `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${encodeURIComponent(options.tenantKey)}`;
-      return `${apiRoot}/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/content`;
+    loadConversationMedia(conversationId, mediaId) {
+      return client.downloadConversationMedia(conversationId, mediaId);
     },
 
     markConversationRead(conversationId, throughSequence, idempotencyKey) {

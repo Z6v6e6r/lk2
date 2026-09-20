@@ -92,7 +92,7 @@ describePostgres('chat media PostgreSQL pipeline', () => {
 
   beforeAll(async () => {
     pool = new Pool({
-      connectionString: suppliedConnectionString ?? (ciConnectionString as string),
+      connectionString: suppliedConnectionString ?? ciConnectionString,
       max: 4,
       application_name: 'phub-messaging-media-pg-test',
     });
