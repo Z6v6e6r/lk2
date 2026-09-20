@@ -8,6 +8,7 @@ export interface NotificationCategoryPresentation {
   readonly filterLabel: string | null;
   readonly categoryLabel: string;
   readonly marker: string;
+  readonly markerKind?: 'brand';
   readonly tone: 'accent' | 'warm' | 'neutral';
 }
 
@@ -45,6 +46,7 @@ const CATEGORY_PRESENTATION: Readonly<Record<string, NotificationCategoryPresent
     filterLabel: 'Системные',
     categoryLabel: 'Системное',
     marker: 'PH',
+    markerKind: 'brand',
     tone: 'neutral',
   },
 };

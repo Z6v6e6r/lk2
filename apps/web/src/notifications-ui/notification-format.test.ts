@@ -13,6 +13,7 @@ describe('notification presentation mapping', () => {
     expect(notificationCategory('ADMIN_MESSAGE')).toMatchObject({
       filter: 'SYSTEM',
       categoryLabel: 'Системное',
+      markerKind: 'brand',
     });
     expect(notificationCategory('FUTURE_CATEGORY')).toMatchObject({
       filter: null,

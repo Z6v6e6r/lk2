@@ -4,6 +4,7 @@ import {
   notificationCategory,
   safeNotificationDeepLink,
 } from './notification-format.js';
+import padlHubLogoUrl from '../assets/padlhub-logo.svg';
 import styles from './NotificationsUi.module.css';
 
 export function NotificationListItem({
@@ -40,7 +41,11 @@ export function NotificationListItem({
           className={`${styles.categoryMarker} ${styles[`tone-${presentation.tone}`] ?? ''}`}
           aria-hidden="true"
         >
-          {presentation.marker}
+          {presentation.markerKind === 'brand' ? (
+            <img className={styles.brandMarkerLogo} src={padlHubLogoUrl} alt="" />
+          ) : (
+            presentation.marker
+          )}
         </span>
         <span className={styles.itemCopy}>
           <span className={styles.itemTitle}>{item.title}</span>
