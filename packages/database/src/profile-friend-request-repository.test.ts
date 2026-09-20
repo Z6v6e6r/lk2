@@ -284,6 +284,30 @@ describe('profile friend request repository', () => {
     ).toBe(false);
   });
 
+  it('reports the delivered request while the imported row it was saved against has no live link', async () => {
+    const requestId = '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91';
+    const query = baseQuery((text) => {
+      if (text.includes('from profile.friendships')) return { rows: [], rowCount: 0 };
+      if (text.includes('from profile.friend_requests')) return { rows: [], rowCount: 0 };
+      if (text.includes('join profile.friend_requests request')) {
+        return {
+          rows: [{ id: requestId, created_at: '2026-09-20T10:00:00.000Z' }],
+          rowCount: 1,
+        };
+      }
+      if (text.includes('from profile.deferred_friend_requests')) return { rows: [], rowCount: 0 };
+      return undefined;
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(repository.get(tenantId, actorUserId, targetUserId)).resolves.toEqual({
+      userId: targetUserId,
+      status: 'PENDING_OUTGOING',
+      createdAt: '2026-09-20T10:00:00.000Z',
+      requestId,
+    });
+  });
+
   it('keeps a deferred request for an imported player whose association is known', async () => {
     const deferredId = '7c1f0f52-7f0e-4a3f-9f39-2f7a1f2f6c11';
     const associationId = 'b'.repeat(64);
@@ -455,6 +479,173 @@ describe('profile friend request repository', () => {
           text.includes('values ($1, $2, $3)'),
       ),
     ).toBe(true);
+  });
+
+  it('delivers the saved requests of proven player keys without touching the binding ledger', async () => {
+    const deferredId = '7c1f0f52-7f0e-4a3f-9f39-2f7a1f2f6c11';
+    const deliveredRequestId = '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91';
+    const association = 'a'.repeat(64);
+    const statements: string[] = [];
+    const settlements: unknown[][] = [];
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      statements.push(text);
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('deferred.source_player_association_id = any($2::text[])')) {
+        expect(values).toEqual([tenantId, [association], targetUserId, 10]);
+        return Promise.resolve({
+          rows: [
+            {
+              id: deferredId,
+              requester_user_id: actorUserId,
+              live_user_id: targetUserId,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes("set state = 'DELIVERED'")) {
+        settlements.push(values ? [...values] : []);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('from profile.friend_request_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('reachable_summary')) {
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      }
+      if (text.includes('from profile.friendships')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into profile.friend_requests')) {
+        return Promise.resolve({
+          rows: [{ id: deliveredRequestId, created_at: '2026-09-20T10:00:00.000Z' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from profile.friend_requests')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into')) return Promise.resolve({ rows: [], rowCount: 1 });
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.deliverDeferredFriendRequestsForPlayerKeys({
+        tenantId,
+        deliveryUserId: targetUserId,
+        sourcePlayerAssociationIds: [association, association, 'not-an-association'],
+        limit: 10,
+        correlationId: 'deferred-key-delivery-correlation-0001',
+      }),
+    ).resolves.toEqual({ delivered: 1, pending: 0 });
+
+    expect(settlements).toEqual([[tenantId, deferredId, 'REQUEST_CREATED', deliveredRequestId]]);
+    const [candidateSql] = statements.filter((text) =>
+      text.includes('deferred.source_player_association_id = any($2::text[])'),
+    );
+    expect(candidateSql).toContain('binding.user_id <> $3');
+    expect(
+      statements.some((text) =>
+        text.includes('insert into integration.legacy_game_player_bindings'),
+      ),
+    ).toBe(false);
+  });
+
+  it('settles a saved request whose imported row resolved to its own requester', async () => {
+    const deferredId = '7c1f0f52-7f0e-4a3f-9f39-2f7a1f2f6c11';
+    const statements: string[] = [];
+    const settlements: unknown[][] = [];
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      statements.push(text);
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'")
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('join integration.legacy_game_player_bindings')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: deferredId,
+              requester_user_id: targetUserId,
+              live_user_id: targetUserId,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes("set state = 'DELIVERED'")) {
+        settlements.push(values ? [...values] : []);
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.deliverDeferredFriendRequests({
+        tenantId,
+        limit: 10,
+        correlationId: 'deferred-self-delivery-correlation-0001',
+      }),
+    ).resolves.toEqual({ delivered: 1, pending: 0 });
+
+    expect(settlements).toEqual([[tenantId, deferredId, 'SELF_TARGET', null]]);
+    expect(statements.some((text) => text.includes('insert into profile.friend_requests'))).toBe(
+      false,
+    );
+  });
+
+  it('reports nothing to deliver without a well-formed proven player key', async () => {
+    const query = baseQuery(() => ({ rows: [], rowCount: 0 }));
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.deliverDeferredFriendRequestsForPlayerKeys({
+        tenantId,
+        deliveryUserId: targetUserId,
+        sourcePlayerAssociationIds: ['', 'not-an-association'],
+        limit: 10,
+        correlationId: 'deferred-key-delivery-correlation-0002',
+      }),
+    ).resolves.toEqual({ delivered: 0, pending: 0 });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('reports whether any saved request still waits for a proven account', async () => {
+    const pending = baseQuery((text) =>
+      text.includes('from profile.deferred_friend_requests deferred')
+        ? { rows: [{ pending: true }], rowCount: 1 }
+        : undefined,
+    );
+    await expect(
+      createProfileFriendshipRepository(poolWithQuery(pending) as never).hasPendingDeferredRequests(
+        tenantId,
+      ),
+    ).resolves.toBe(true);
+
+    const idle = baseQuery((text) =>
+      text.includes('from profile.deferred_friend_requests deferred')
+        ? { rows: [{ pending: false }], rowCount: 1 }
+        : undefined,
+    );
+    await expect(
+      createProfileFriendshipRepository(poolWithQuery(idle) as never).hasPendingDeferredRequests(
+        tenantId,
+      ),
+    ).resolves.toBe(false);
   });
 
   it('leaves a deferred request pending while the live account is still unreachable', async () => {
