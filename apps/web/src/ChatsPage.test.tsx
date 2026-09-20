@@ -22,11 +22,13 @@ const defaultProps = {
   realtimeState: null,
   hasEarlierMessages: false,
   canRetrySend: false,
+  policyBusy: false,
   onCreateDirect: vi.fn(),
   onSendMessage: vi.fn(),
   onRetrySend: vi.fn(),
   onRefresh: vi.fn(),
   onLoadEarlier: vi.fn(),
+  onSetNotificationPolicy: vi.fn(),
 } as const;
 
 describe('ChatsPage', () => {
@@ -555,5 +557,116 @@ describe('ChatsPage', () => {
       'href',
       '/notifications',
     );
+  });
+
+  it('offers a bounded mute from the thread header and reports the stored policy', () => {
+    const onSetNotificationPolicy = vi.fn();
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        onSetNotificationPolicy={onSetNotificationPolicy}
+        page={{
+          items: [
+            {
+              id: conversationId,
+              kind: 'GAME',
+              contextId: '33333333-3333-4333-8333-333333333333',
+              title: 'Игра в среду',
+              unreadCount: 0,
+              updatedAt: '2026-07-26T12:00:00.000Z',
+              notificationPolicy: { level: 'ALL', muted: false },
+            },
+          ],
+        }}
+      />,
+    );
+
+    const bell = screen.getByRole('button', { name: 'Уведомления включены' });
+    fireEvent.click(bell);
+    const menu = screen.getByRole('menu', { name: 'Уведомления в этом чате' });
+    expect(within(menu).getByRole('menuitemradio', { name: 'Включены' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+
+    const before = Date.now();
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Выключить на 8 часов' }));
+
+    expect(onSetNotificationPolicy).toHaveBeenCalledTimes(1);
+    const update = onSetNotificationPolicy.mock.calls[0]?.[0] as {
+      readonly level: string;
+      readonly mutedUntil: string;
+    };
+    expect(update.level).toBe('ALL');
+    const mutedUntil = Date.parse(update.mutedUntil);
+    expect(mutedUntil).toBeGreaterThan(before);
+    expect(mutedUntil).toBeLessThanOrEqual(before + 8 * 60 * 60 * 1_000 + 1_000);
+    // The menu closes after a choice so the thread stays usable.
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('shows a muted thread and lets the member turn notifications back on', () => {
+    const onSetNotificationPolicy = vi.fn();
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        onSetNotificationPolicy={onSetNotificationPolicy}
+        page={{
+          items: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+              unreadCount: 2,
+              updatedAt: '2026-07-26T12:00:00.000Z',
+              notificationPolicy: {
+                level: 'ALL',
+                muted: true,
+                mutedUntil: '2026-07-27T04:00:00.000Z',
+              },
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/уведомления выключены/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Уведомления выключены' }));
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Включены' }));
+
+    expect(onSetNotificationPolicy).toHaveBeenCalledWith({ level: 'ALL' });
+  });
+
+  it('disables the notification control while an HTTP policy is still unknown', () => {
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        page={{
+          items: [
+            {
+              id: conversationId,
+              kind: 'GAME',
+              contextId: '33333333-3333-4333-8333-333333333333',
+              title: 'Игра в среду',
+              unreadCount: 0,
+              updatedAt: '2026-07-26T12:00:00.000Z',
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole('button', { name: 'Уведомления в этом чате ещё не загружены' }),
+    ).toBeDisabled();
   });
 });

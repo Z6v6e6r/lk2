@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GAME_DOMAIN_EVENT_TYPES, consumersForGameEvent, gameDomainEventSchema } from '@phub/games';
 import {
+  FRIENDSHIP_NOTIFICATION_EVENT_TYPES,
   GAME_NOTIFICATION_EVENT_TYPES,
   MESSAGING_NOTIFICATION_EVENT_TYPES,
   notificationSourceEventSchema,
@@ -11,6 +12,8 @@ const projector = vi.hoisted(() => ({ applyNotificationSourceEvent: vi.fn() }));
 vi.mock('./notification-projector.js', () => projector);
 
 import {
+  FRIENDSHIP_NOTIFICATION_PROJECTOR_QUEUE,
+  FRIENDSHIP_NOTIFICATION_SOURCE_ROUTING_KEYS,
   GAME_NOTIFICATION_PROJECTOR_QUEUE,
   GAME_NOTIFICATION_SOURCE_ROUTING_KEYS,
   MESSAGING_NOTIFICATION_PROJECTOR_QUEUE,
@@ -122,17 +125,30 @@ describe('notification projector topology', () => {
       MESSAGING_NOTIFICATION_PROJECTOR_QUEUE,
       expect.objectContaining({ durable: true }),
     );
+    expect(channel.assertQueue).toHaveBeenCalledWith(
+      FRIENDSHIP_NOTIFICATION_PROJECTOR_QUEUE,
+      expect.objectContaining({ durable: true }),
+    );
     expect(
       channel.bindQueue.mock.calls
         .filter((call) => call[0] === NOTIFICATION_PROJECTOR_QUEUE)
         .map((call) => call[2]),
     ).toEqual(NOTIFICATION_SOURCE_ROUTING_KEYS);
+    expect(NOTIFICATION_SOURCE_ROUTING_KEYS).not.toContain('profile.friend_request.created.v1');
     expect(
       channel.bindQueue.mock.calls
         .filter((call) => call[0] === GAME_NOTIFICATION_PROJECTOR_QUEUE)
         .map((call) => call[2]),
     ).toEqual(GAME_NOTIFICATION_SOURCE_ROUTING_KEYS);
     expect(MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS).toEqual(MESSAGING_NOTIFICATION_EVENT_TYPES);
+    // Every notification-producing vertical owns its queue, so an older worker can never consume a
+    // source event whose ruleset it does not know.
+    expect(FRIENDSHIP_NOTIFICATION_EVENT_TYPES).toEqual(['profile.friend_request.created.v1']);
+    expect(
+      channel.bindQueue.mock.calls
+        .filter((call) => call[0] === FRIENDSHIP_NOTIFICATION_PROJECTOR_QUEUE)
+        .map((call) => call[2]),
+    ).toEqual(FRIENDSHIP_NOTIFICATION_EVENT_TYPES);
     expect(
       channel.bindQueue.mock.calls
         .filter((call) => call[0] === MESSAGING_NOTIFICATION_PROJECTOR_QUEUE)
@@ -162,6 +178,9 @@ describe('notification projector topology', () => {
       ),
       ...MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS.map(
         (routingKey) => `bind:${MESSAGING_NOTIFICATION_PROJECTOR_QUEUE}:${routingKey}`,
+      ),
+      ...FRIENDSHIP_NOTIFICATION_SOURCE_ROUTING_KEYS.map(
+        (routingKey) => `bind:${FRIENDSHIP_NOTIFICATION_PROJECTOR_QUEUE}:${routingKey}`,
       ),
       'unbind:#',
     ]);

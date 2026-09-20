@@ -1,19 +1,31 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  FRIENDSHIP_NOTIFICATION_DEFINITIONS,
+  FRIENDSHIP_NOTIFICATION_EVENT_TYPES,
+  FRIENDSHIP_NOTIFICATION_REQUEST_HASH,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS,
+  FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK,
   GAME_NOTIFICATION_EVENT_TYPES,
   GAME_NOTIFICATION_REQUEST_HASH,
   MAX_NOTIFICATION_EVENT_RECIPIENTS,
   MESSAGING_NOTIFICATION_DEFINITIONS,
   MESSAGING_NOTIFICATION_EVENT_TYPES,
+  MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE,
   MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY,
+  MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS,
   MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
+  MESSAGING_NOTIFICATION_TEMPLATE_VERSION,
   bookingNotificationSourceEventSchema,
   canonicalWebPushEndpoint,
   canonicalWebPushSubscription,
   createNotificationEndpointCipher,
   gameNotificationSourceEventSchema,
   isWebPushEndpointOriginAllowed,
+  isSupportedNotificationTimeZone,
+  notificationPreferenceCategoryUpdateSchema,
+  quietHoursActive,
   createNotificationReceiptToken,
   notificationReceiptSecret,
   storedWebPushEndpoint,
@@ -490,5 +502,159 @@ describe('notification domain contracts', () => {
       // Chat notifications are optional: a player can mute the category.
       expect(definition.mandatory).toBe(false);
     }
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
+  });
+
+  it('addresses an incoming friend request to the player who has to answer it', () => {
+    const recipientUserId = '44444444-4444-4444-8444-444444444444';
+    const requestEvent = notificationSourceEventSchema.parse({
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'profile.friend_request.created.v1',
+      aggregateId: '77777777-7777-4777-8777-777777777777',
+      tenantId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: '2026-09-20T12:00:00.000Z',
+      correlationId: 'friendship-notification-test',
+      payload: {
+        requestId: '77777777-7777-4777-8777-777777777777',
+        requesterUserId: '88888888-8888-4888-8888-888888888888',
+        targetUserId: recipientUserId,
+        recipientUserIds: [recipientUserId],
+        createdAt: '2026-09-20T12:00:00.000Z',
+      },
+    });
+
+    expect(FRIENDSHIP_NOTIFICATION_EVENT_TYPES).toContain(requestEvent.type);
+    expect(GAME_NOTIFICATION_EVENT_TYPES).not.toContain(requestEvent.type);
+    expect(MESSAGING_NOTIFICATION_EVENT_TYPES).not.toContain(requestEvent.type);
+
+    const definition = FRIENDSHIP_NOTIFICATION_DEFINITIONS[0];
+    expect(resolveNotificationRecipients(requestEvent, definition.audienceSelector)).toEqual([
+      recipientUserId,
+    ]);
+    const rendered = renderNotificationTemplate({
+      titleTemplate: definition.title,
+      bodyTemplate: definition.body,
+      deepLinkTemplate: FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK,
+      payload: requestEvent.payload,
+    });
+    expect(rendered).toEqual({
+      title: 'Заявка в друзья',
+      body: 'Откройте ПадлХАБ, чтобы ответить.',
+      deepLink: '/notifications',
+    });
+    // The rendered notification never names the requester or a profile detail.
+    expect(JSON.stringify(rendered)).not.toContain('88888888-8888-4888-8888-888888888888');
+    expect(FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY).toBe('FRIENDSHIP');
+    expect(FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
+    expect(FRIENDSHIP_NOTIFICATION_REQUEST_HASH).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('keeps one ruleset definition per friendship source event', () => {
+    expect(
+      FRIENDSHIP_NOTIFICATION_DEFINITIONS.map((definition) => definition.sourceEventType),
+    ).toEqual([...FRIENDSHIP_NOTIFICATION_EVENT_TYPES]);
+    for (const definition of FRIENDSHIP_NOTIFICATION_DEFINITIONS) {
+      expect(definition.audienceSelector).toEqual({
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+      });
+      expect(definition.mandatory).toBe(false);
+    }
+  });
+
+  it('requests the durable inbox item and the optional push for a direct-chat event', () => {
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_VERSION).toBe(2);
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
+    expect(MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE).toEqual(['IN_APP', 'PUSH']);
+    // The push payload is rendered from the same snapshot; no message text is part of it.
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK).toBe('/chats/{{conversationId}}');
+  });
+});
+
+describe('notification preference quiet hours', () => {
+  const moscow = 'Europe/Moscow';
+
+  it('reports whether the recipient local clock is inside the window', () => {
+    // 2026-08-03T20:30:00Z is 23:30 in Moscow.
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T20:30:00.000Z'),
+        quietFrom: '23:00',
+        quietUntil: '07:00',
+        timezone: moscow,
+      }),
+    ).toBe(true);
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T12:00:00.000Z'),
+        quietFrom: '23:00',
+        quietUntil: '07:00',
+        timezone: moscow,
+      }),
+    ).toBe(false);
+  });
+
+  it('handles a window that stays inside one calendar day', () => {
+    // 10:00 and 14:00 Moscow on the same day.
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T07:00:00.000Z'),
+        quietFrom: '09:00',
+        quietUntil: '18:00',
+        timezone: moscow,
+      }),
+    ).toBe(true);
+    expect(
+      quietHoursActive({
+        now: new Date('2026-08-03T19:00:00.000Z'),
+        quietFrom: '09:00',
+        quietUntil: '18:00',
+        timezone: moscow,
+      }),
+    ).toBe(false);
+  });
+
+  it('treats an empty window as no quiet hours and an unreadable row as never quiet', () => {
+    const now = new Date('2026-08-03T20:30:00.000Z');
+    expect(
+      quietHoursActive({ now, quietFrom: '23:00', quietUntil: '23:00', timezone: moscow }),
+    ).toBe(false);
+    expect(
+      quietHoursActive({ now, quietFrom: 'не время', quietUntil: '07:00', timezone: moscow }),
+    ).toBe(false);
+    expect(
+      quietHoursActive({ now, quietFrom: '23:00', quietUntil: '07:00', timezone: 'Not/AZone' }),
+    ).toBe(false);
+  });
+
+  it('accepts only a real IANA time zone and a bounded HH:MM time', () => {
+    const valid = notificationPreferenceCategoryUpdateSchema.safeParse({
+      category: 'MESSAGING',
+      channels: [
+        {
+          channel: 'PUSH',
+          enabled: true,
+          quietFrom: '23:00',
+          quietUntil: '07:00',
+          timezone: moscow,
+        },
+      ],
+    });
+    expect(valid.success).toBe(true);
+    expect(isSupportedNotificationTimeZone(moscow)).toBe(true);
+    expect(isSupportedNotificationTimeZone('Not/AZone')).toBe(false);
+    expect(isSupportedNotificationTimeZone('')).toBe(false);
+    expect(
+      notificationPreferenceCategoryUpdateSchema.safeParse({
+        category: 'messaging',
+        channels: [{ channel: 'EMAIL', enabled: true }],
+      }).success,
+    ).toBe(false);
+    expect(
+      notificationPreferenceCategoryUpdateSchema.safeParse({
+        category: 'MESSAGING',
+        channels: [{ channel: 'PUSH', enabled: true, quietFrom: '25:00' }],
+      }).success,
+    ).toBe(false);
   });
 });

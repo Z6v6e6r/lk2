@@ -1,6 +1,10 @@
 import { Fragment, useLayoutEffect, useRef, useState } from 'react';
 
-import type { ConversationMessage, ConversationSummary } from '../auth-gateway.js';
+import type {
+  ConversationMessage,
+  ConversationNotificationPolicyUpdate,
+  ConversationSummary,
+} from '../auth-gateway.js';
 import type { PendingChatMessage } from '../ChatsPage.js';
 import { ChatComposer } from './ChatComposer.js';
 import { ChatContextCard } from './ChatContextCard.js';
@@ -19,10 +23,12 @@ interface ChatThreadProps {
   readonly connectionStatus?: string | null | undefined;
   readonly hasEarlierMessages?: boolean | undefined;
   readonly canRetrySend: boolean;
+  readonly policyBusy: boolean;
   readonly onSendMessage: (body: string) => void;
   readonly onRetrySend: () => void;
   readonly onRefresh: () => void;
   readonly onLoadEarlier?: (() => void) | undefined;
+  readonly onSetNotificationPolicy: (update: ConversationNotificationPolicyUpdate) => void;
 }
 
 type ClientMessage = ConversationMessage & { readonly clientMessageId?: string };
@@ -37,10 +43,12 @@ export function ChatThread({
   connectionStatus,
   hasEarlierMessages,
   canRetrySend,
+  policyBusy,
   onSendMessage,
   onRetrySend,
   onRefresh,
   onLoadEarlier,
+  onSetNotificationPolicy,
 }: ChatThreadProps): React.JSX.Element {
   const listRef = useRef<HTMLOListElement>(null);
   const snapshotRef = useRef<{
@@ -116,7 +124,9 @@ export function ChatThread({
       <ChatThreadHeader
         conversation={conversation}
         busy={busy === 'refresh'}
+        policyBusy={policyBusy}
         onRefresh={onRefresh}
+        onSetNotificationPolicy={onSetNotificationPolicy}
         connectionStatus={connectionStatus}
       />
       <div className={styles.threadBody}>

@@ -36998,6 +36998,9 @@ init_esm_shims();
 // ../../packages/database/src/notification-repository.ts
 init_esm_shims();
 
+// ../../packages/database/src/notification-preference-repository.ts
+init_esm_shims();
+
 // ../../packages/database/src/notification-endpoint-repository.ts
 init_esm_shims();
 import { createHash as createHash8 } from "crypto";

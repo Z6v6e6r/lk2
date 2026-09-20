@@ -2329,6 +2329,57 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/notification-policy:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: conversationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    put:
+      tags: [messaging]
+      operationId: updateConversationNotificationPolicy
+      summary: Set the authenticated member's own notification policy for one conversation
+      description: |
+        Only the caller's own membership row changes. `level` is `ALL`, `MENTIONS` or `NONE`, and an
+        optional future `mutedUntil` quiets the conversation until that instant. A plain message has
+        no mentions, so only `ALL` receives a message notification; realtime delivery and the durable
+        inbox item are unaffected by this policy. The command is idempotent by content: repeating an
+        unchanged request writes no audit entry and does not bump the row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationNotificationPolicyUpdateRequest'
+      responses:
+        '200':
+          description: The stored policy for the caller after the command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationNotificationPolicyResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/notifications:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -2413,6 +2464,81 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NotificationReadCursorResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notifications/preferences:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getNotificationPreferences
+      summary: Read the authenticated user's notification channel preferences
+      description: |
+        Returns every category/channel pair this tenant can currently deliver, merged with the
+        recipient's stored row. An absent row is the server default and therefore reports enabled.
+        `available` reflects the tenant runtime gate for that channel, not the recipient's choice.
+        The route stays closed while both in-app and Web Push are disabled for the tenant.
+      responses:
+        '200':
+          description: Category and channel preferences for the JWT subject.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferencesView'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    put:
+      operationId: updateNotificationPreferences
+      summary: Replace the authenticated user's notification channel preferences
+      description: |
+        Replaces only the categories present in the request; every other stored category is kept.
+        The command is idempotent: a repeated identical request produces no additional change,
+        audit entry or outbox event. A mandatory server-owned rule ignores the preference, so this
+        command can never silence a confirmed booking. Only category/channel pairs the tenant can
+        actually deliver are accepted, and quiet hours apply to the push channel alone.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationPreferencesUpdateRequest'
+      responses:
+        '200':
+          description: The stored preferences after the command.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationPreferencesView'
         '400':
           $ref: ../../common/components.yaml#/components/responses/BadRequest
         '401':
@@ -6373,7 +6499,7 @@ components:
     DirectConversationSummary:
       type: object
       additionalProperties: false
-      required: [id, kind, participant, unreadCount, updatedAt]
+      required: [id, kind, participant, unreadCount, updatedAt, notificationPolicy]
       properties:
         id:
           type: string
@@ -6389,6 +6515,8 @@ components:
         updatedAt:
           type: string
           format: date-time
+        notificationPolicy:
+          $ref: '#/components/schemas/ConversationNotificationPolicy'
         lastMessage:
           $ref: '#/components/schemas/ConversationLastMessage'
     ConversationSummary:
@@ -6457,7 +6585,7 @@ components:
     GameConversationSummary:
       type: object
       additionalProperties: false
-      required: [id, kind, contextId, title, unreadCount, updatedAt]
+      required: [id, kind, contextId, title, unreadCount, updatedAt, notificationPolicy]
       properties:
         id:
           type: string
@@ -6478,8 +6606,50 @@ components:
         updatedAt:
           type: string
           format: date-time
+        notificationPolicy:
+          $ref: '#/components/schemas/ConversationNotificationPolicy'
         lastMessage:
           $ref: '#/components/schemas/ConversationLastMessage'
+    ConversationNotificationPolicy:
+      type: object
+      additionalProperties: false
+      required: [level, muted]
+      properties:
+        level:
+          type: string
+          enum: [ALL, MENTIONS, NONE]
+          description: MENTIONS and NONE receive no message notification while mentions are absent.
+        muted:
+          type: boolean
+          description: Server-computed effective state of this member for this conversation.
+        mutedUntil:
+          type: string
+          format: date-time
+    ConversationNotificationPolicyUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [level]
+      properties:
+        level:
+          type: string
+          enum: [ALL, MENTIONS, NONE]
+        mutedUntil:
+          type: string
+          format: date-time
+          description: Future instant when a temporary mute ends. At most 30 days ahead.
+    ConversationNotificationPolicyResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, policy, changed]
+      properties:
+        outcome:
+          type: string
+          const: ok
+        policy:
+          $ref: '#/components/schemas/ConversationNotificationPolicy'
+        changed:
+          type: boolean
+          description: False when the requested policy already matched the stored row.
     GetOrCreateGameConversationRequest:
       type: object
       additionalProperties: false
@@ -6681,6 +6851,99 @@ components:
         createdAt:
           type: string
           format: date-time
+    NotificationPreferenceChannelView:
+      type: object
+      additionalProperties: false
+      required: [channel, enabled, timezone, available]
+      properties:
+        channel:
+          type: string
+          enum: [IN_APP, PUSH]
+        enabled:
+          type: boolean
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 64
+        available:
+          type: boolean
+          description: Whether the tenant runtime gate currently allows this channel.
+        quietFrom:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        quietUntil:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+    NotificationPreferenceCategoryView:
+      type: object
+      additionalProperties: false
+      required: [category, channels]
+      properties:
+        category:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+        channels:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/NotificationPreferenceChannelView'
+    NotificationPreferencesView:
+      type: object
+      additionalProperties: false
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/NotificationPreferenceCategoryView'
+    NotificationPreferenceChannelUpdate:
+      type: object
+      additionalProperties: false
+      required: [channel, enabled]
+      properties:
+        channel:
+          type: string
+          enum: [IN_APP, PUSH]
+        enabled:
+          type: boolean
+        quietFrom:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        quietUntil:
+          type: string
+          pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: IANA zone for the quiet window. Defaults to Europe/Moscow.
+    NotificationPreferenceCategoryUpdate:
+      type: object
+      additionalProperties: false
+      required: [category, channels]
+      properties:
+        category:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+        channels:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: '#/components/schemas/NotificationPreferenceChannelUpdate'
+    NotificationPreferencesUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/NotificationPreferenceCategoryUpdate'
     WebPushConfiguration:
       type: object
       additionalProperties: false

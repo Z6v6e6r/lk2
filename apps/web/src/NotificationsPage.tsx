@@ -3,11 +3,14 @@ import { useState } from 'react';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type {
   NotificationInboxPage,
+  NotificationPreferencesUpdateRequest,
+  NotificationPreferencesView,
   ProfileFriendRequestSummary,
   WebPushConfiguration,
 } from './auth-gateway.js';
 import { NotificationFilters } from './notifications-ui/NotificationFilters.js';
 import { NotificationList } from './notifications-ui/NotificationList.js';
+import { NotificationPreferenceSettings } from './notifications-ui/NotificationPreferenceSettings.js';
 import {
   type NotificationItem,
   type NotificationFilter,
@@ -23,6 +26,9 @@ interface NotificationsPageProps {
   readonly busy: boolean;
   readonly error?: string | null;
   readonly inboxUnavailable: boolean;
+  readonly preferences: NotificationPreferencesView | null;
+  readonly preferencesBusy: boolean;
+  readonly preferencesError?: string | null;
   readonly friendRequests: readonly ProfileFriendRequestSummary[];
   readonly friendRequestsError?: string | null;
   readonly outgoingFriendRequests: readonly ProfileFriendRequestSummary[];
@@ -31,6 +37,7 @@ interface NotificationsPageProps {
   readonly onDeclineFriendRequest: (requestId: string) => void;
   readonly onEnableWebPush: () => void;
   readonly onDisableWebPush: () => void;
+  readonly onSavePreferences: (update: NotificationPreferencesUpdateRequest) => void;
   readonly onMarkAllRead: () => void;
   readonly onRetryInbox: () => void;
   readonly onOpenNotification: (item: NotificationItem, href: string, navigate: boolean) => void;
@@ -56,6 +63,9 @@ export function NotificationsPage({
   busy,
   error,
   inboxUnavailable,
+  preferences,
+  preferencesBusy,
+  preferencesError,
   friendRequests,
   friendRequestsError,
   outgoingFriendRequests,
@@ -64,6 +74,7 @@ export function NotificationsPage({
   onDeclineFriendRequest,
   onEnableWebPush,
   onDisableWebPush,
+  onSavePreferences,
   onMarkAllRead,
   onRetryInbox,
   onOpenNotification,
@@ -118,6 +129,14 @@ export function NotificationsPage({
             {error}
           </p>
         ) : null}
+
+        <NotificationPreferenceSettings
+          key={preferences ? JSON.stringify(preferences) : 'unavailable'}
+          preferences={preferences}
+          busy={preferencesBusy}
+          error={preferencesError}
+          onSave={onSavePreferences}
+        />
 
         {friendRequestsError ? (
           <p className={styles.error} role="alert">
