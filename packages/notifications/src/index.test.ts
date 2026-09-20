@@ -14,6 +14,7 @@ import {
   createNotificationEndpointCipher,
   gameNotificationSourceEventSchema,
   isWebPushEndpointOriginAllowed,
+  storedWebPushEndpoint,
   webPushEndpointPlatform,
   notificationAudienceSelectorSchema,
   notificationSourceEventSchema,
@@ -101,6 +102,26 @@ describe('Web Push endpoint protection', () => {
         allowedOrigins,
       ),
     ).toBe(false);
+  });
+
+  it('reads the address out of the stored subscription envelope the registration writes', () => {
+    // This is the exact shape `canonicalWebPushSubscription` produces and the worker parses.
+    const stored = canonicalWebPushSubscription({
+      endpoint: 'https://web.push.apple.com/AbCdEf',
+      expirationTime: null,
+      keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
+    });
+    expect(storedWebPushEndpoint(stored)).toBe('https://web.push.apple.com/AbCdEf');
+    expect(webPushEndpointPlatform(storedWebPushEndpoint(stored) ?? '')).toBe('SAFARI');
+    // A bare address stays accepted, and a payload that cannot be read is absent rather than fatal.
+    expect(storedWebPushEndpoint('https://fcm.googleapis.com/fcm/send/opaque')).toBe(
+      'https://fcm.googleapis.com/fcm/send/opaque',
+    );
+    expect(storedWebPushEndpoint('')).toBeUndefined();
+    expect(storedWebPushEndpoint('   ')).toBeUndefined();
+    expect(storedWebPushEndpoint('{not json')).toBeUndefined();
+    expect(storedWebPushEndpoint('{"endpoint":42}')).toBeUndefined();
+    expect(storedWebPushEndpoint('{"expirationTime":null}')).toBeUndefined();
   });
 
   it('names the push service behind an endpoint so operators can see the platform split', () => {

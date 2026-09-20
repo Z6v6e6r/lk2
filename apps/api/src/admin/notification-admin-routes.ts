@@ -7,6 +7,7 @@ import type {
   AdminWebPushSubscriberEndpoint,
 } from '@phub/database';
 import {
+  storedWebPushEndpoint,
   webPushEndpointPlatform,
   type NotificationEndpointCipher,
   type WebPushEndpointPlatform,
@@ -69,9 +70,11 @@ function summarisePushPlatforms(
       continue;
     }
     try {
-      const platform = webPushEndpointPlatform(
+      // The stored payload is the subscription envelope, not a bare address.
+      const address = storedWebPushEndpoint(
         cipher.decrypt(endpoint.ciphertext, endpoint.encryptionKeyId),
       );
+      const platform = address === undefined ? undefined : webPushEndpointPlatform(address);
       if (platform === undefined) {
         unreadable += 1;
         continue;

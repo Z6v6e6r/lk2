@@ -635,6 +635,26 @@ export function webPushEndpointPlatform(endpoint: string): WebPushEndpointPlatfo
   return 'OTHER';
 }
 
+/**
+ * The endpoint address inside the stored subscription payload. Registration encrypts
+ * `canonicalWebPushSubscription`, which is a JSON envelope holding the address and its keys, so a reader
+ * that expects a bare URL sees nothing at all — exactly the mistake that made every live endpoint look
+ * unreadable. A bare address is still accepted so the helper stays total for an older or future shape,
+ * and an unreadable payload is reported as absent instead of throwing.
+ */
+export function storedWebPushEndpoint(payload: string): string | undefined {
+  const trimmed = payload.trim();
+  if (!trimmed.startsWith('{')) return trimmed.length > 0 ? trimmed : undefined;
+  try {
+    const parsed = JSON.parse(trimmed) as { readonly endpoint?: unknown };
+    return typeof parsed.endpoint === 'string' && parsed.endpoint.length > 0
+      ? parsed.endpoint
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const webPushSubscriptionSchema = z
   .object({
     endpoint: z
