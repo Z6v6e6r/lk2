@@ -57,6 +57,7 @@ import Redis from 'ioredis';
 import { buildApp } from './app.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
+import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import { RedisBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
 import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
 import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
@@ -311,6 +312,22 @@ const activityHistoryGameBackfill =
         projectGameCard: (input) => gameReadRepository.projectCardEvent(input),
       })
     : undefined;
+/**
+ * The provider phone link is the only anchor a client-assisted OAuth account has, so it is also where
+ * the saved friend requests addressed to that person's imported legacy rows can be delivered. This
+ * proof routes delivery only and never becomes a durable identity binding. It reuses the
+ * viewer-scoped legacy read the history backfill capability already enables and stays off with it.
+ */
+const legacyViewerAssociationProof =
+  providerIdentityLink && activityHistoryGameBackfillSource
+    ? new LegacyViewerAssociationProof({
+        source: activityHistoryGameBackfillSource,
+        delivery: createProfileFriendshipRepository(pool),
+        legacyTenantKey: config.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY,
+        onOutcome: (outcome, context) =>
+          logger.info({ outcome, ...context }, 'legacy viewer association proof completed'),
+      })
+    : undefined;
 const readAllLocalGameHistory = gameReadRepository
   ? async (input: { readonly tenantId: string; readonly userId: string }) => {
       const items: Awaited<ReturnType<typeof listViewerGameCards>>['items'][number][] = [];
@@ -554,6 +571,7 @@ const app = await buildApp({
   communityLogoMediaRepository: createCommunityLogoMediaRepository(pool),
   ...(profilePhotoMediaStore ? { profilePhotoMediaStore } : {}),
   ...(providerIdentityLink ? { providerIdentityLink } : {}),
+  ...(legacyViewerAssociationProof ? { legacyViewerAssociationProof } : {}),
   ...(trainerAvatarMediaStore
     ? {
         trainerAvatarRepository: createTrainerAvatarRepository(pool),

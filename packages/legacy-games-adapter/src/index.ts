@@ -130,12 +130,18 @@ const LEGACY_GAME_PROJECTION = {
   'organizer.rating': 1,
   'organizer.ratingNumeric': 1,
   'organizer.photo': 1,
+  // The viewer-phone lookup matches these in memory and never copies them into a snapshot, so a
+  // projection without them silently disables the VIEWER_PHONE association proof on this source.
+  'organizer.phone': 1,
+  'organizer.phoneNorm': 1,
   'participants.id': 1,
   'participants.name': 1,
   'participants.rating': 1,
   'participants.ratingNumeric': 1,
   'participants.status': 1,
   'participants.photo': 1,
+  'participants.phone': 1,
+  'participants.phoneNorm': 1,
   'settings.isPrivate': 1,
   'settings.minRating': 1,
   'settings.maxRating': 1,
@@ -159,9 +165,29 @@ function stringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-function phoneDigits(value: unknown): string | undefined {
+/**
+ * Canonical comparison form for a legacy phone. Mirrors the viewer-scoped legacy community reader so
+ * both legacy contours accept the same stored values: `79990000001`, `+7 (999) 000-00-01`,
+ * `89990000001` and a bare 10-digit national number all resolve to `79990000001`.
+ */
+function normalizedPhoneKey(value: unknown): string | undefined {
   const digits = stringValue(value)?.replace(/\D/g, '');
-  return digits && /^\d{10,15}$/.test(digits) ? digits : undefined;
+  if (!digits) return undefined;
+  if (digits.length === 10) return `7${digits}`;
+  if (digits.length === 11 && digits.startsWith('8')) return `7${digits.slice(1)}`;
+  return digits.length >= 11 ? digits : undefined;
+}
+
+/**
+ * The candidate values the Mongo filter can select for one viewer phone. The mirror is documented to
+ * hold bare digits (`7XXXXXXXXXX`); these cover the canonical, plus-prefixed, `8`-prefixed, bare
+ * national and numeric BSON values, and each of them is resolved back by `normalizedPhoneKey`. A
+ * separator-formatted value is not selectable by an exact-match filter, so the beta runbook keeps the
+ * stored-shape check that would extend this list instead of silently disabling the proof.
+ */
+function phoneCandidateForms(phone: string): unknown[] {
+  const national = phone.slice(1);
+  return [...new Set([phone, `+${phone}`, `8${national}`, national, Number(phone)])];
 }
 
 function uuidValue(value: unknown): string | undefined {
@@ -475,12 +501,13 @@ function mapLegacyGame(
   const format = stringValue(raw.metadata?.gameFormat);
   const capacity: 2 | 4 = format === 'singles' ? 2 : 4;
   const participants = [...participantMap.values()].slice(0, capacity);
-  const viewerPhone = phoneDigits(viewerPhoneE164);
+  const viewerPhone = normalizedPhoneKey(viewerPhoneE164);
   const viewerParticipantExternalId = viewerPhone
     ? [raw.organizer, ...(raw.participants ?? [])].find(
         (item) =>
-          phoneDigits(item?.phoneNorm ?? item?.phone) === viewerPhone &&
-          stringValue(item?.id) !== undefined,
+          // An empty or unusable stored `phoneNorm` must fall through to the plain phone.
+          (normalizedPhoneKey(item?.phoneNorm) ?? normalizedPhoneKey(item?.phone)) ===
+            viewerPhone && stringValue(item?.id) !== undefined,
       )?.id
     : undefined;
   const minRating = playerLevel(raw.settings?.minRating);
@@ -738,6 +765,43 @@ export class LegacyGamesMongoAdapter {
           requested.has(snapshot.vivaExerciseExternalId) &&
           matchesVivaExerciseOccurrence(snapshot, occurrences),
       )
+      .map(normalizeMongoSnapshot);
+  }
+
+  /**
+   * Reads the legacy Games that carry the authenticated viewer's own provider phone so the caller
+   * can prove that viewer's one-way player key. The phone is matched in memory and never enters the
+   * returned snapshot: only `viewerParticipantExternalId` leaves this method.
+   */
+  public async readByViewerPhone(input: {
+    readonly phoneE164: string;
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const phone = normalizedPhoneKey(input.phoneE164);
+    if (!phone) return [];
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    }
+    // The mirror stores the same number in more than one shape, so the candidate filter accepts every
+    // form the in-memory matcher resolves instead of only the canonical digits.
+    const phoneForms = phoneCandidateForms(phone);
+    const snapshots = await this.readMatching({
+      filter: {
+        archived: { $ne: true },
+        status: { $in: ['PAID', 'CANCELLED'] },
+        $or: [
+          { 'organizer.phoneNorm': { $in: phoneForms } },
+          { 'organizer.phone': { $in: phoneForms } },
+          { 'participants.phoneNorm': { $in: phoneForms } },
+          { 'participants.phone': { $in: phoneForms } },
+        ],
+      },
+      limit: input.limit,
+      sort: { updatedAt: -1, _id: 1 },
+      viewerPhoneE164: input.phoneE164,
+    });
+    return snapshots
+      .filter((snapshot) => Boolean(snapshot.viewerParticipantExternalId))
       .map(normalizeMongoSnapshot);
   }
 
@@ -1575,6 +1639,49 @@ export class LegacyGamesPublicAdapter {
       return matches.slice(0, input.limit).map((snapshot) => sanitizeSnapshot(snapshot));
     }
   }
+
+  /**
+   * Counterpart of the Mongo viewer-phone read for the public legacy bridge: asks the clone for the
+   * authenticated viewer's own games by provider phone and keeps the snapshots whose one-way player
+   * key that lookup proved. The phone never enters a returned snapshot.
+   */
+  public async readByViewerPhone(input: {
+    readonly phoneE164: string;
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const phone = normalizedPhoneKey(input.phoneE164);
+    if (!phone) return [];
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    }
+    const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
+    if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
+      throw new Error('LEGACY_GAMES_PUBLIC_BASE_URL_INVALID');
+    }
+    const matches: LegacyGameSourceSnapshot[] = [];
+    const pageSize = 500;
+    // The endpoint answers with the games of that phone only, so the first page already carries the
+    // proven player key; two pages bound the read while tolerating provider-side paging drift.
+    for (let pageIndex = 0; pageIndex < 2 && matches.length < input.limit; pageIndex += 1) {
+      const offset = pageIndex * pageSize;
+      const url = new URL('/lk/games/by-phone', baseUrl);
+      url.searchParams.set('phone', phone);
+      url.searchParams.set('includePast', 'true');
+      url.searchParams.set('limit', String(pageSize));
+      url.searchParams.set('offset', String(offset));
+      const page = await this.readMappedPage(url, input.phoneE164);
+      matches.push(
+        ...page.snapshots.filter((snapshot) => Boolean(snapshot.viewerParticipantExternalId)),
+      );
+      const hasMore =
+        page.hasMore ??
+        (page.total === undefined
+          ? page.rawCount === pageSize
+          : offset + page.rawCount < page.total);
+      if (!hasMore) break;
+    }
+    return matches.slice(0, input.limit).map((snapshot) => sanitizeSnapshot(snapshot));
+  }
 }
 
 export const testing = {
@@ -1585,4 +1692,6 @@ export const testing = {
   normalizeMongoParticipantPhoto,
   participantPhotoPipeline,
   matchesVivaExerciseOccurrence,
+  normalizedPhoneKey,
+  phoneCandidateForms,
 };
