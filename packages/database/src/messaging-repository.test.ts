@@ -619,6 +619,10 @@ describe('messaging repository', () => {
       if (text.includes('select member.user_id')) {
         return Promise.resolve({ rows: [{ user_id: otherUserId }], rowCount: 1 });
       }
+      if (text.includes('from messaging.message_attachments')) {
+        // Slice 1 sends without attachments here; the readback still asks for the bounded set.
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
       if (text.includes('message.id = $4')) {
         return Promise.resolve({
           rows: [
@@ -1484,6 +1488,10 @@ describe('messaging notification policy', () => {
           rows: [{ member_id: memberId, last_read_sequence: '0', last_sequence: '9' }],
           rowCount: 1,
         });
+      }
+      if (text.includes('from messaging.message_attachments')) {
+        // Slice 1 sends without attachments here; the readback still asks for the bounded set.
+        return Promise.resolve({ rows: [], rowCount: 0 });
       }
       return handler(text, values);
     });

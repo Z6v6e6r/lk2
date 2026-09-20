@@ -1,6 +1,11 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import {
+  attachReadyMediaToMessageWithClient,
+  listAttachmentsForMessagesWithClient,
+  type MessagingMediaType,
+} from './messaging-media-repository.js';
 import { profileReachableSql } from './profile-reachability-repository.js';
 
 export interface MessagingRuntimeSettings {
@@ -53,14 +58,27 @@ export interface GameConversationSummary {
 
 export type MessagingConversationSummary = ConversationSummary | GameConversationSummary;
 
+/** A message is text, an image set or a file set; attachments decide the stored type. */
+export type MessageType = 'TEXT' | 'IMAGE' | 'FILE';
+
+export interface ConversationMessageAttachment {
+  readonly mediaId: string;
+  readonly position: number;
+  readonly mediaType: MessagingMediaType;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly byteSize: number;
+}
+
 export interface ConversationMessage {
   readonly id: string;
   readonly conversationId: string;
   readonly sequence: number;
   readonly clientMessageId?: string;
   readonly sender: MessagingParticipant;
-  readonly messageType: 'TEXT';
+  readonly messageType: MessageType;
   readonly body: string;
+  readonly attachments: readonly ConversationMessageAttachment[];
   readonly createdAt: string;
 }
 
@@ -97,15 +115,39 @@ export type ListConversationMessagesResult =
       readonly page: ConversationMessagePage;
     };
 
+export type SendConversationMessageAttachmentFailure =
+  'NOT_FOUND' | 'NOT_READY' | 'FORBIDDEN' | 'ALREADY_BOUND' | 'DUPLICATE' | 'LIMIT';
+
 export type SendConversationMessageResult =
   | { readonly outcome: 'not_found' }
   | { readonly outcome: 'target_unreachable' }
   | { readonly outcome: 'idempotency_conflict' }
   | {
+      readonly outcome: 'attachment_invalid';
+      readonly reason: SendConversationMessageAttachmentFailure;
+    }
+  | {
       readonly outcome: 'ok';
       readonly message: ConversationMessage;
       readonly replayed: boolean;
     };
+
+/**
+ * Facts the API needs to hand a reader a short-lived signed URL. The repository resolves the
+ * conversation authority, the message visibility and the attachment in one place, so a signed URL can
+ * never outlive the permission that produced it.
+ */
+export interface MessageMediaReadResult {
+  readonly mediaId: string;
+  readonly messageId: string;
+  readonly conversationId: string;
+  readonly mediaType: MessagingMediaType;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly byteSize: number;
+  readonly objectKey: string;
+  readonly sha256: string;
+}
 
 export type MarkConversationReadResult =
   | { readonly outcome: 'not_found' }
@@ -200,8 +242,18 @@ export interface MessagingRepository {
     readonly clientMessageId: string;
     readonly idempotencyKey: string;
     readonly body: string;
+    readonly attachmentMediaIds?: readonly string[];
     readonly correlationId: string;
   }): Promise<SendConversationMessageResult>;
+  /** Resolves one attachment for a reader who may see the message that carries it. */
+  getMessageMediaForViewer(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly mediaId: string;
+  }): Promise<
+    | { readonly outcome: 'ok'; readonly media: MessageMediaReadResult }
+    | { readonly outcome: 'not_found' }
+  >;
   markRead(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -285,7 +337,7 @@ interface MessageRow extends QueryResultRow {
   readonly sequence: number | string;
   readonly sender_user_id: string;
   readonly sender_display_name: string;
-  readonly message_type: 'TEXT';
+  readonly message_type: MessageType;
   readonly body: string;
   readonly created_at: Date | string;
   readonly client_message_id?: string;
@@ -409,7 +461,10 @@ function mapGameConversation(row: GameConversationRow): GameConversationSummary 
   };
 }
 
-function mapMessage(row: MessageRow): ConversationMessage {
+function mapMessage(
+  row: MessageRow,
+  attachments: readonly ConversationMessageAttachment[] = [],
+): ConversationMessage {
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -421,8 +476,47 @@ function mapMessage(row: MessageRow): ConversationMessage {
     },
     messageType: row.message_type,
     body: row.body,
+    attachments,
     createdAt: timestamp(row.created_at),
   };
+}
+
+/**
+ * Raised inside the send transaction so the route can answer a stable failure code; the transaction
+ * rolls back and no message row survives.
+ */
+export class MessagingAttachmentError extends Error {
+  public constructor(public readonly reason: SendConversationMessageAttachmentFailure) {
+    super(`MESSAGING_ATTACHMENT_${reason}`);
+    this.name = 'MessagingAttachmentError';
+  }
+}
+
+/** One batched read for the attachments of a message page; never one query per message. */
+async function attachmentsForMessages(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly conversationId: string;
+    readonly messageIds: readonly string[];
+  },
+): Promise<ReadonlyMap<string, readonly ConversationMessageAttachment[]>> {
+  if (input.messageIds.length === 0) return new Map();
+  const rows = await listAttachmentsForMessagesWithClient(client, input);
+  const grouped = new Map<string, ConversationMessageAttachment[]>();
+  for (const row of rows) {
+    const existing = grouped.get(row.messageId) ?? [];
+    existing.push({
+      mediaId: row.mediaId,
+      position: row.position,
+      mediaType: row.mediaType,
+      fileName: row.fileName,
+      contentType: row.contentType,
+      byteSize: row.byteSize,
+    });
+    grouped.set(row.messageId, existing);
+  }
+  return grouped;
 }
 
 const CONVERSATION_SELECT = `
@@ -481,6 +575,8 @@ const CONVERSATION_SELECT = `
        where message.tenant_id = conversation.tenant_id
          and message.conversation_id = conversation.id
          and message.deleted_at is null
+         and message.hidden_at is null
+         and message.hidden_at is null
        order by message.sequence desc
        limit 1
     ) last_message on true
@@ -736,7 +832,8 @@ async function getMessage(
       where message.tenant_id = $1
         and message.conversation_id = $3
         and message.id = $4
-        and message.deleted_at is null`,
+        and message.deleted_at is null
+        and message.hidden_at is null`,
     [tenantId, userId, conversationId, messageId],
   );
 }
@@ -768,6 +865,8 @@ function recipientUserIdsSql(options: {
               and message.id = $3
               and message.sequence = $4
               and message.deleted_at is null
+              and message.hidden_at is null
+              and message.hidden_at is null
              join messaging.conversation_members member
                on member.tenant_id = conversation.tenant_id
               and member.conversation_id = conversation.id
@@ -1465,10 +1564,15 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         const hasMore = result.rows.length > input.limit;
         const visible = hasMore ? result.rows.slice(0, input.limit) : result.rows;
         const last = visible.at(-1);
+        const attachments = await attachmentsForMessages(client, {
+          tenantId: input.tenantId,
+          conversationId: input.conversationId,
+          messageIds: visible.map((row) => row.id),
+        });
         return {
           outcome: 'ok',
           page: {
-            messages: visible.map(mapMessage),
+            messages: visible.map((row) => mapMessage(row, attachments.get(row.id) ?? [])),
             ...(hasMore && last ? { nextAfterSequence: sequence(last.sequence) } : {}),
           },
         };
@@ -1476,86 +1580,89 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
     },
 
     sendMessage(input) {
-      return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const locked = await queryOne<{
-          next_sequence: number | string;
-          kind: 'DIRECT' | 'GAME';
-          context_id: string | null;
-        }>(
-          client,
-          `select next_sequence, kind, context_id
+      return withTenantTransaction(
+        pool,
+        input.tenantId,
+        async (client): Promise<SendConversationMessageResult> => {
+          const locked = await queryOne<{
+            next_sequence: number | string;
+            kind: 'DIRECT' | 'GAME';
+            context_id: string | null;
+          }>(
+            client,
+            `select next_sequence, kind, context_id
              from messaging.conversations
             where tenant_id = $1
               and id = $2
               and state = 'OPEN'
               and kind in ('DIRECT', 'GAME')
             for update`,
-          [input.tenantId, input.conversationId],
-        );
-        if (!locked) return { outcome: 'not_found' };
-        let directPeerUserId: string | null = null;
-        if (locked.kind === 'DIRECT') {
-          const pair = await queryOne<{ left_user_id: string; right_user_id: string }>(
-            client,
-            `select left_user_id, right_user_id
-               from messaging.direct_conversations
-              where tenant_id = $1 and conversation_id = $2`,
             [input.tenantId, input.conversationId],
           );
-          if (!pair) return { outcome: 'not_found' };
-          directPeerUserId =
-            pair.left_user_id === input.userId ? pair.right_user_id : pair.left_user_id;
-          await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-            `${input.tenantId}:${pair.left_user_id}:${pair.right_user_id}`,
-          ]);
-        }
+          if (!locked) return { outcome: 'not_found' };
+          let directPeerUserId: string | null = null;
+          if (locked.kind === 'DIRECT') {
+            const pair = await queryOne<{ left_user_id: string; right_user_id: string }>(
+              client,
+              `select left_user_id, right_user_id
+               from messaging.direct_conversations
+              where tenant_id = $1 and conversation_id = $2`,
+              [input.tenantId, input.conversationId],
+            );
+            if (!pair) return { outcome: 'not_found' };
+            directPeerUserId =
+              pair.left_user_id === input.userId ? pair.right_user_id : pair.left_user_id;
+            await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+              `${input.tenantId}:${pair.left_user_id}:${pair.right_user_id}`,
+            ]);
+          }
 
-        if (locked.kind === 'GAME') {
-          if (!locked.context_id) return { outcome: 'not_found' };
-          const game = await queryOne<{ id: string }>(
-            client,
-            `select id
+          if (locked.kind === 'GAME') {
+            if (!locked.context_id) return { outcome: 'not_found' };
+            const game = await queryOne<{ id: string }>(
+              client,
+              `select id
                from games.games
               where tenant_id = $1
                 and id = $2
                 and lifecycle_state <> 'CANCELLED'
               for share`,
-            [input.tenantId, locked.context_id],
-          );
-          if (!game) return { outcome: 'not_found' };
-          const participation = await queryOne<{ id: string }>(
-            client,
-            `select id
+              [input.tenantId, locked.context_id],
+            );
+            if (!game) return { outcome: 'not_found' };
+            const participation = await queryOne<{ id: string }>(
+              client,
+              `select id
                from games.participations
               where tenant_id = $1
                 and game_id = $2
                 and user_id = $3
                 and state = 'ACTIVE'
               for share`,
-            [input.tenantId, locked.context_id, input.userId],
+              [input.tenantId, locked.context_id, input.userId],
+            );
+            if (!participation) return { outcome: 'not_found' };
+          }
+
+          // Re-evaluate the authoritative access source after serializing on the conversation.
+          // GAME access is never inferred from the possibly stale messaging member row.
+          const member = await getAuthorizedMember(
+            client,
+            input.tenantId,
+            input.userId,
+            input.conversationId,
           );
-          if (!participation) return { outcome: 'not_found' };
-        }
+          if (!member) return { outcome: 'not_found' };
 
-        // Re-evaluate the authoritative access source after serializing on the conversation.
-        // GAME access is never inferred from the possibly stale messaging member row.
-        const member = await getAuthorizedMember(
-          client,
-          input.tenantId,
-          input.userId,
-          input.conversationId,
-        );
-        if (!member) return { outcome: 'not_found' };
-
-        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `${input.tenantId}:MESSAGE_COMMAND:${input.userId}:${input.idempotencyKey}`,
-        ]);
-        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `${input.tenantId}:MESSAGE_CLIENT:${input.userId}:${input.clientMessageId}`,
-        ]);
-        const previous = await queryOne<MessageRow>(
-          client,
-          `select message.id, message.conversation_id, message.sequence,
+          await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+            `${input.tenantId}:MESSAGE_COMMAND:${input.userId}:${input.idempotencyKey}`,
+          ]);
+          await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+            `${input.tenantId}:MESSAGE_CLIENT:${input.userId}:${input.clientMessageId}`,
+          ]);
+          const previous = await queryOne<MessageRow>(
+            client,
+            `select message.id, message.conversation_id, message.sequence,
                   sender.user_id as sender_user_id,
                   coalesce(summary.display_name, 'Участник') as sender_display_name,
                   message.message_type, message.body, message.created_at::text as created_at,
@@ -1571,114 +1678,257 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             where message.tenant_id = $1
               and sender.user_id = $2
               and (message.idempotency_key = $3 or message.client_message_id = $4)`,
-          [input.tenantId, input.userId, input.idempotencyKey, input.clientMessageId],
-        );
-        if (previous) {
-          if (
-            previous.conversation_id !== input.conversationId ||
-            previous.sender_user_id !== input.userId ||
-            previous.idempotency_key !== input.idempotencyKey ||
-            previous.client_message_id !== input.clientMessageId ||
-            previous.body !== input.body
-          ) {
-            return { outcome: 'idempotency_conflict' };
-          }
-          return { outcome: 'ok', message: mapMessage(previous), replayed: true };
-        }
-
-        // A direct conversation stays readable, but a message addressed to a peer who never signed in
-        // is undeliverable: the notification and the realtime event land on an account nobody opens.
-        // Replays above stay honoured so an already committed send is never rewritten by this guard.
-        if (directPeerUserId) {
-          const peer = await queryOne<{ reachable: boolean }>(
-            client,
-            `select ${profileReachableSql({ tenantParam: '$1', userParam: '$2' })} as reachable`,
-            [input.tenantId, directPeerUserId],
+            [input.tenantId, input.userId, input.idempotencyKey, input.clientMessageId],
           );
-          if (peer?.reachable !== true) return { outcome: 'target_unreachable' };
-        }
+          if (previous) {
+            if (
+              previous.conversation_id !== input.conversationId ||
+              previous.sender_user_id !== input.userId ||
+              previous.idempotency_key !== input.idempotencyKey ||
+              previous.client_message_id !== input.clientMessageId ||
+              previous.body !== input.body
+            ) {
+              return { outcome: 'idempotency_conflict' };
+            }
+            return { outcome: 'ok', message: mapMessage(previous), replayed: true };
+          }
 
-        const allocatedSequence = sequence(locked.next_sequence);
-        const inserted = await queryOne<{ id: string }>(
-          client,
-          `insert into messaging.messages (
+          // A direct conversation stays readable, but a message addressed to a peer who never signed in
+          // is undeliverable: the notification and the realtime event land on an account nobody opens.
+          // Replays above stay honoured so an already committed send is never rewritten by this guard.
+          if (directPeerUserId) {
+            const peer = await queryOne<{ reachable: boolean }>(
+              client,
+              `select ${profileReachableSql({ tenantParam: '$1', userParam: '$2' })} as reachable`,
+              [input.tenantId, directPeerUserId],
+            );
+            if (peer?.reachable !== true) return { outcome: 'target_unreachable' };
+          }
+
+          const allocatedSequence = sequence(locked.next_sequence);
+          const attachmentMediaIds = [...new Set(input.attachmentMediaIds ?? [])];
+          const attachmentMedia = attachmentMediaIds.length
+            ? await client.query<{ readonly media_type: MessagingMediaType }>(
+                `select media_type
+                 from messaging.media_assets
+                where tenant_id = $1 and id = any($2::uuid[])
+                order by id`,
+                [input.tenantId, attachmentMediaIds],
+              )
+            : undefined;
+          const messageType: MessageType =
+            attachmentMediaIds.length === 0
+              ? 'TEXT'
+              : (attachmentMedia?.rows.length ?? 0) === attachmentMediaIds.length &&
+                  attachmentMedia?.rows.every((row) => row.media_type === 'IMAGE')
+                ? 'IMAGE'
+                : 'FILE';
+          const inserted = await queryOne<{ id: string }>(
+            client,
+            `insert into messaging.messages (
              tenant_id, conversation_id, sequence, sender_member_id,
              client_message_id, idempotency_key, message_type, body
-           ) values ($1, $2, $3, $4, $5, $6, 'TEXT', $7)
+           ) values ($1, $2, $3, $4, $5, $6, $7, $8)
            returning id`,
-          [
-            input.tenantId,
-            input.conversationId,
-            allocatedSequence,
-            member.member_id,
-            input.clientMessageId,
-            input.idempotencyKey,
-            input.body,
-          ],
-        );
-        if (!inserted) throw new Error('MESSAGING_MESSAGE_INSERT_FAILED');
-        await client.query(
-          `update messaging.conversations
+            [
+              input.tenantId,
+              input.conversationId,
+              allocatedSequence,
+              member.member_id,
+              input.clientMessageId,
+              input.idempotencyKey,
+              messageType,
+              input.body,
+            ],
+          );
+          if (!inserted) throw new Error('MESSAGING_MESSAGE_INSERT_FAILED');
+          let attached: readonly ConversationMessageAttachment[] = [];
+          if (attachmentMediaIds.length > 0) {
+            try {
+              attached = await attachReadyMediaToMessageWithClient(client, {
+                tenantId: input.tenantId,
+                conversationId: input.conversationId,
+                messageId: inserted.id,
+                senderUserId: input.userId,
+                mediaIds: attachmentMediaIds,
+              });
+            } catch (error) {
+              const code = error instanceof Error ? error.message : '';
+              const reason: SendConversationMessageAttachmentFailure =
+                code === 'MESSAGING_ATTACHMENT_NOT_READY'
+                  ? 'NOT_READY'
+                  : code === 'MESSAGING_ATTACHMENT_FORBIDDEN'
+                    ? 'FORBIDDEN'
+                    : code === 'MESSAGING_ATTACHMENT_ALREADY_BOUND'
+                      ? 'ALREADY_BOUND'
+                      : code === 'MESSAGING_ATTACHMENT_DUPLICATE'
+                        ? 'DUPLICATE'
+                        : code === 'MESSAGING_ATTACHMENT_LIMIT_EXCEEDED'
+                          ? 'LIMIT'
+                          : 'NOT_FOUND';
+              // The whole send rolls back, so a rejected attachment never leaves a message behind.
+              throw new MessagingAttachmentError(reason);
+            }
+          }
+          await client.query(
+            `update messaging.conversations
               set next_sequence = next_sequence + 1, updated_at = now()
             where tenant_id = $1 and id = $2`,
-          [input.tenantId, input.conversationId],
-        );
-        await client.query(
-          `update messaging.conversation_members
+            [input.tenantId, input.conversationId],
+          );
+          await client.query(
+            `update messaging.conversation_members
               set last_read_sequence = greatest(last_read_sequence, $4)
             where tenant_id = $1 and conversation_id = $2 and id = $3`,
-          [input.tenantId, input.conversationId, member.member_id, allocatedSequence],
-        );
-        const recipients = await listNotificationRecipientUserIds(client, {
-          tenantId: input.tenantId,
-          conversationId: input.conversationId,
-          messageId: inserted.id,
-          sequence: allocatedSequence,
-          actorUserId: input.userId,
-        });
-        await client.query(
-          `insert into audit.outbox_events (
+            [input.tenantId, input.conversationId, member.member_id, allocatedSequence],
+          );
+          const recipients = await listNotificationRecipientUserIds(client, {
+            tenantId: input.tenantId,
+            conversationId: input.conversationId,
+            messageId: inserted.id,
+            sequence: allocatedSequence,
+            actorUserId: input.userId,
+          });
+          await client.query(
+            `insert into audit.outbox_events (
              tenant_id, event_type, aggregate_id, correlation_id, payload
            ) values ($1, 'messaging.message.created.v1', $2, $3, $4::jsonb)`,
-          [
-            input.tenantId,
-            input.conversationId,
-            input.correlationId,
-            JSON.stringify({
-              conversationId: input.conversationId,
-              messageId: inserted.id,
-              sequence: allocatedSequence,
-              recipientUserIds: recipients,
-            }),
-          ],
-        );
-        await client.query(
-          `insert into audit.audit_log (
+            [
+              input.tenantId,
+              input.conversationId,
+              input.correlationId,
+              JSON.stringify({
+                conversationId: input.conversationId,
+                messageId: inserted.id,
+                sequence: allocatedSequence,
+                recipientUserIds: recipients,
+              }),
+            ],
+          );
+          await client.query(
+            `insert into audit.audit_log (
              tenant_id, actor_id, action, resource_type, resource_id,
              result, correlation_id, new_value
            ) values ($1, $2, 'MESSAGE_SENT', 'MESSAGE', $3,
                      'SUCCESS', $4, $5::jsonb)`,
-          [
+            [
+              input.tenantId,
+              input.userId,
+              inserted.id,
+              input.correlationId,
+              JSON.stringify({
+                conversationId: input.conversationId,
+                sequence: allocatedSequence,
+                messageType,
+                attachmentCount: attached.length,
+              }),
+            ],
+          );
+          const message = await getMessage(
+            client,
             input.tenantId,
             input.userId,
+            input.conversationId,
             inserted.id,
-            input.correlationId,
-            JSON.stringify({
-              conversationId: input.conversationId,
-              sequence: allocatedSequence,
-              messageType: 'TEXT',
-            }),
-          ],
-        );
-        const message = await getMessage(
+          );
+          if (!message) throw new Error('MESSAGING_MESSAGE_READBACK_FAILED');
+          const readbackAttachments = await attachmentsForMessages(client, {
+            tenantId: input.tenantId,
+            conversationId: input.conversationId,
+            messageIds: [message.id],
+          });
+          return {
+            outcome: 'ok',
+            message: mapMessage(message, readbackAttachments.get(message.id) ?? []),
+            replayed: false,
+          };
+        },
+      ).catch((error: unknown) => {
+        // The attachment guard aborts and rolls back the send transaction, so the caller gets a
+        // stable refusal instead of a half-written message.
+        if (error instanceof MessagingAttachmentError) {
+          return { outcome: 'attachment_invalid', reason: error.reason } as const;
+        }
+        throw error;
+      });
+    },
+
+    getMessageMediaForViewer(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<
+          {
+            readonly media_id: string;
+            readonly message_id: string;
+            readonly conversation_id: string;
+            readonly media_type: MessagingMediaType;
+            readonly file_name: string;
+            readonly content_type: string;
+            readonly size_bytes: string | number;
+            readonly object_key: string;
+            readonly sha256: string;
+          } & QueryResultRow
+        >(
           client,
-          input.tenantId,
-          input.userId,
-          input.conversationId,
-          inserted.id,
+          `select attachment.media_id, attachment.message_id, attachment.conversation_id,
+                  media.media_type, attachment.file_name, attachment.content_type,
+                  attachment.size_bytes, attachment.object_key, attachment.sha256
+             from messaging.message_attachments attachment
+             join messaging.media_assets media
+               on media.tenant_id = attachment.tenant_id and media.id = attachment.media_id
+             join messaging.messages message
+               on message.tenant_id = attachment.tenant_id
+              and message.conversation_id = attachment.conversation_id
+              and message.id = attachment.message_id
+             join messaging.conversation_members viewer
+               on viewer.tenant_id = attachment.tenant_id
+              and viewer.conversation_id = attachment.conversation_id
+              and viewer.user_id = $3
+              and viewer.member_type = 'USER'
+              and viewer.state = 'ACTIVE'
+             join identity.users viewer_user
+               on viewer_user.tenant_id = viewer.tenant_id
+              and viewer_user.id = viewer.user_id
+              and viewer_user.status = 'ACTIVE'
+            where attachment.tenant_id = $1
+              and attachment.media_id = $2
+              and media.state = 'READY'
+              and message.deleted_at is null
+              and message.hidden_at is null
+              and not exists (
+                select 1
+                  from messaging.conversations conversation
+                  join messaging.direct_conversations pair
+                    on pair.tenant_id = conversation.tenant_id
+                   and pair.conversation_id = conversation.id
+                 where conversation.tenant_id = $1
+                   and conversation.id = attachment.conversation_id
+                   and exists (
+                     select 1
+                       from messaging.user_blocks block
+                      where block.tenant_id = conversation.tenant_id
+                        and (
+                          (block.blocker_user_id = $3 and block.blocked_user_id in (pair.left_user_id, pair.right_user_id))
+                          or (block.blocked_user_id = $3 and block.blocker_user_id in (pair.left_user_id, pair.right_user_id))
+                        )
+                   )
+              )`,
+          [input.tenantId, input.mediaId, input.userId],
         );
-        if (!message) throw new Error('MESSAGING_MESSAGE_READBACK_FAILED');
-        return { outcome: 'ok', message: mapMessage(message), replayed: false };
+        if (!row) return { outcome: 'not_found' } as const;
+        return {
+          outcome: 'ok',
+          media: {
+            mediaId: row.media_id,
+            messageId: row.message_id,
+            conversationId: row.conversation_id,
+            mediaType: row.media_type,
+            fileName: row.file_name,
+            contentType: row.content_type,
+            byteSize: Number(row.size_bytes),
+            objectKey: row.object_key,
+            sha256: row.sha256,
+          },
+        } as const;
       });
     },
 

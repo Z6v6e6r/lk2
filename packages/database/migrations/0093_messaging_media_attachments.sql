@@ -14,6 +14,7 @@ create table messaging.media_assets (
   conversation_id uuid not null,
   uploader_user_id uuid not null,
   media_type text not null check (media_type in ('IMAGE', 'FILE')),
+  file_name text not null check (char_length(btrim(file_name)) between 1 and 500),
   state text not null default 'UPLOADING'
     check (state in ('UPLOADING', 'SCANNING', 'READY', 'REJECTED', 'EXPIRED', 'PURGED')),
   declared_content_type text not null check (char_length(btrim(declared_content_type)) between 1 and 200),
