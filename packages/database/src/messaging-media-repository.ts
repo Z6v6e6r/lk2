@@ -276,6 +276,13 @@ export interface MessagingMediaRepository {
   }): Promise<void>;
 }
 
+/** The same column list, qualified for statements that join another relation with an id column. */
+function mediaColumns(alias: string): string {
+  return MEDIA_COLUMNS.split(',')
+    .map((column) => `${alias}.${column.trim()}`)
+    .join(', ');
+}
+
 const MEDIA_COLUMNS = `id, conversation_id, uploader_user_id, media_type, state, file_name,
        declared_content_type, declared_size_bytes, declared_sha256,
        source_object_key, source_object_version, source_etag, source_content_type,
@@ -1054,7 +1061,7 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
                   updated_at = now()
              from due
             where asset.tenant_id = $1 and asset.id = due.id
-            returning ${MEDIA_COLUMNS}`,
+            returning ${mediaColumns('asset')}`,
           [input.tenantId, input.limit],
         );
         if (rows.rows.length > 0) {
@@ -1075,7 +1082,10 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
                from messaging.media_assets asset
               where asset.tenant_id = $1 and asset.id = any($2::uuid[])
                 and asset.ready_object_key is not null and asset.ready_object_version is not null
-             on conflict (tenant_id, object_key, object_version) do nothing`,
+             on conflict (tenant_id, object_key, object_version) do update
+               set available_at = least(
+                 messaging.media_gc_jobs.available_at, excluded.available_at
+               )`,
             [input.tenantId, rows.rows.map((row) => row.id)],
           );
         }
