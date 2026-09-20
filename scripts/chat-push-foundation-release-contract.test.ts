@@ -185,9 +185,11 @@ describe('chat/push staging foundation release contract', () => {
     expect(workflow).toContain('FOUNDATION_ORIGINAL_RUN_MISMATCH');
     expect(workflow).toContain('run.head_sha !== process.argv[4]');
     expect(workflow).toContain("run.path !== '.github/workflows/deploy-staging.yaml'");
-    expect(workflow).toContain(
-      "needs.verify.result == 'success' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY'",
-    );
+    // The build gate is a multi-line folded condition now; its exact terms are pinned by
+    // scripts/deploy-staging-foundation-job-graph.test.ts, so assert the two requirements without
+    // coupling to the formatting of the expression.
+    expect(workflow).toContain("needs.verify.result == 'success'");
+    expect(workflow).toContain("inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY'");
   });
 
   it('starts digest-pinned API, worker, realtime and web strictly in that order', () => {
