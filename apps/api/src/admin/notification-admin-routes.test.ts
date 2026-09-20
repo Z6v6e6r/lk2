@@ -138,6 +138,7 @@ function repository() {
       activeEndpointSample: [
         { ciphertext: Buffer.from('chrome-endpoint'), encryptionKeyId: 'v1' },
         { ciphertext: Buffer.from('safari-endpoint'), encryptionKeyId: 'v1' },
+        { ciphertext: Buffer.from('rotated-key-endpoint'), encryptionKeyId: 'v0' },
       ],
     },
   });
@@ -177,8 +178,18 @@ const endpointCipher: NotificationEndpointCipher = {
   }),
   decrypt: (ciphertext) => {
     const value = ciphertext.toString('utf8');
-    if (value === 'chrome-endpoint') return 'https://fcm.googleapis.com/fcm/send/opaque';
-    if (value === 'safari-endpoint') return 'https://web.push.apple.com/opaque';
+    // The stored payload is the subscription envelope the registration writes, not a bare address: the
+    // fixture has to carry that shape or the platform derivation would look correct while reading nothing.
+    const stored = (endpoint: string) =>
+      JSON.stringify({
+        endpoint,
+        expirationTime: null,
+        keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) },
+      });
+    if (value === 'chrome-endpoint') return stored('https://fcm.googleapis.com/fcm/send/opaque');
+    if (value === 'safari-endpoint') return stored('https://web.push.apple.com/opaque');
+    // A key that rotated away must be reported, never thrown.
+    if (value === 'rotated-key-endpoint') throw new Error('NOTIFICATION_ENDPOINT_KEY_NOT_FOUND');
     throw new Error('UNKNOWN_ENDPOINT_FIXTURE');
   },
 };
@@ -709,7 +720,8 @@ describe('admin notification routes', () => {
         invalid: 1,
         revoked: 4,
         platforms: { CHROME: 1, SAFARI: 1, OTHER: 0 },
-        unreadableEndpoints: 0,
+        // The endpoint whose key rotated away is counted, not fatal.
+        unreadableEndpoints: 1,
       },
     });
     // The bounded ciphertext sample is an implementation detail of the derivation.
