@@ -406,6 +406,8 @@ describe('admin notification repository', () => {
         phone_e164: '79990000001',
         endpoint_count: 2,
         last_confirmed_at: new Date('2026-09-17T12:00:00.000Z'),
+        address_ciphertexts: [Buffer.from('endpoint-one'), Buffer.from('endpoint-two')],
+        encryption_key_ids: ['v1', 'v1'],
       },
       {
         user_id: userTwoId,
@@ -413,6 +415,8 @@ describe('admin notification repository', () => {
         phone_e164: null,
         endpoint_count: 1,
         last_confirmed_at: null,
+        address_ciphertexts: null,
+        encryption_key_ids: null,
       },
     ];
     const { repository, query } = repositoryWithQuery((text) => {
@@ -438,6 +442,11 @@ describe('admin notification repository', () => {
           phoneMasked: '•••• 0001',
           endpointCount: 2,
           lastConfirmedAt: '2026-09-17T12:00:00.000Z',
+          // The encrypted sample is carried so the admin route can name the push service.
+          endpoints: [
+            { ciphertext: Buffer.from('endpoint-one'), encryptionKeyId: 'v1' },
+            { ciphertext: Buffer.from('endpoint-two'), encryptionKeyId: 'v1' },
+          ],
         },
       ],
       nextCursor: userOneId,
@@ -467,6 +476,8 @@ describe('admin notification repository', () => {
               phone_e164: null,
               endpoint_count: 1,
               last_confirmed_at: null,
+              address_ciphertexts: null,
+              encryption_key_ids: null,
             },
           ],
           rowCount: 1,
@@ -484,7 +495,7 @@ describe('admin notification repository', () => {
         cursor: userTwoId,
       }),
     ).resolves.toEqual({
-      items: [{ userId: userOneId, displayName: 'Анна', endpointCount: 1 }],
+      items: [{ userId: userOneId, displayName: 'Анна', endpointCount: 1, endpoints: [] }],
     });
   });
 

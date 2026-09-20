@@ -14,6 +14,7 @@ import {
   createNotificationEndpointCipher,
   gameNotificationSourceEventSchema,
   isWebPushEndpointOriginAllowed,
+  webPushEndpointPlatform,
   notificationAudienceSelectorSchema,
   notificationSourceEventSchema,
   renderNotificationTemplate,
@@ -100,6 +101,19 @@ describe('Web Push endpoint protection', () => {
         allowedOrigins,
       ),
     ).toBe(false);
+  });
+
+  it('names the push service behind an endpoint so operators can see the platform split', () => {
+    expect(webPushEndpointPlatform('https://fcm.googleapis.com/fcm/send/opaque-capability')).toBe(
+      'CHROME',
+    );
+    expect(webPushEndpointPlatform('https://web.push.apple.com/AbCdEf')).toBe('SAFARI');
+    // A contour may allow another push service; it is reported as such instead of being guessed.
+    expect(webPushEndpointPlatform('https://push.example.test/subscriptions/abc')).toBe('OTHER');
+    expect(webPushEndpointPlatform('not a url')).toBeUndefined();
+    expect(
+      webPushEndpointPlatform('https://user:secret@web.push.apple.com/AbCdEf'),
+    ).toBeUndefined();
   });
 
   it('rejects an endpoint whose canonical URL expands beyond the storage limit', () => {

@@ -1135,6 +1135,10 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.adminNotificationRepository
       ? { repository: options.adminNotificationRepository }
       : {}),
+    // The CUP report names the push service behind a subscription; without the keyring it omits that.
+    ...(options.notificationEndpointCipher
+      ? { endpointCipher: options.notificationEndpointCipher }
+      : {}),
     webPushGloballyEnabled: options.config.WEB_PUSH_ENABLED,
     webPushAppId: options.config.WEB_PUSH_APP_ID,
     webPushEnvironment: options.config.WEB_PUSH_ENVIRONMENT,

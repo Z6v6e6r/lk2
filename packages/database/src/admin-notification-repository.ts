@@ -30,11 +30,84 @@ export interface AdminWebPushSubscriber {
   readonly phoneMasked?: string;
   readonly endpointCount: number;
   readonly lastConfirmedAt?: string;
+  /**
+   * The still-encrypted push endpoints of the account, most recently confirmed first. They stay in the
+   * storage shape on purpose: only the admin route holds the keyring, and it publishes the derived push
+   * service (browser family) instead of any address.
+   */
+  readonly endpoints: readonly AdminWebPushSubscriberEndpoint[];
+}
+
+export interface AdminWebPushSubscriberEndpoint {
+  readonly ciphertext: Buffer;
+  readonly encryptionKeyId: string;
 }
 
 export interface AdminWebPushSubscriberPage {
   readonly items: readonly AdminWebPushSubscriber[];
   readonly nextCursor?: string;
+}
+
+export interface AdminNotificationDeliveryStatsInput {
+  readonly tenantId: string;
+  readonly since: Date;
+  readonly campaignLimit: number;
+  readonly endpointSampleLimit: number;
+}
+
+export interface AdminNotificationChannelDeliveryStats {
+  readonly channel: string;
+  readonly queued: number;
+  readonly accepted: number;
+  readonly failed: number;
+  readonly dead: number;
+  readonly suppressed: number;
+  readonly pending: number;
+  /** Median seconds from queueing to the terminal state; absent while nothing has completed yet. */
+  readonly medianAcceptSeconds?: number;
+}
+
+export interface AdminNotificationCampaignDeliveryStats {
+  readonly campaignId: string;
+  readonly createdAt: string;
+  readonly requestedChannels: readonly string[];
+  readonly matchedCount: number;
+  readonly pushQueuedCount: number;
+  readonly suppressedCount: number;
+  readonly inAppCreatedCount: number;
+  readonly pushAccepted: number;
+  readonly pushFailed: number;
+  readonly pushDead: number;
+}
+
+export interface AdminNotificationDeliveryFailure {
+  readonly channel: string;
+  readonly errorCode: string;
+  readonly count: number;
+  readonly lastOccurredAt: string;
+}
+
+export interface AdminNotificationEndpointStats {
+  readonly active: number;
+  readonly invalid: number;
+  readonly revoked: number;
+  readonly suspendedPolicy: number;
+  /** A bounded sample of live endpoints, so the route can report the platform split without a column. */
+  readonly activeEndpointSample: readonly AdminWebPushSubscriberEndpoint[];
+}
+
+/**
+ * Operational delivery reporting for the CUP. Web Push has no provider-side dashboard and no delivery
+ * receipt beyond the push service's acceptance, so the honest source is our own tables: what was queued,
+ * what the service accepted, what failed with which stable code, and how the endpoints behind those
+ * deliveries are doing.
+ */
+export interface AdminNotificationDeliveryStats {
+  readonly since: string;
+  readonly channels: readonly AdminNotificationChannelDeliveryStats[];
+  readonly campaigns: readonly AdminNotificationCampaignDeliveryStats[];
+  readonly failures: readonly AdminNotificationDeliveryFailure[];
+  readonly endpoints: AdminNotificationEndpointStats;
 }
 
 export interface AdminNotificationCapabilities {
@@ -83,6 +156,13 @@ export interface AdminNotificationRepository {
     readonly limit: number;
     readonly cursor?: string;
   }): Promise<AdminWebPushSubscriberPage>;
+  /**
+   * Delivery outcomes, campaign counters, failure codes and endpoint health for one window. Read-only:
+   * the CUP uses it to see what actually happened to a campaign instead of only what was queued.
+   */
+  getDeliveryStats(
+    input: AdminNotificationDeliveryStatsInput,
+  ): Promise<AdminNotificationDeliveryStats>;
   createCampaign(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -115,6 +195,49 @@ interface SubscriberRow extends QueryResultRow {
   readonly phone_e164: string | null;
   readonly endpoint_count: number;
   readonly last_confirmed_at: Date | null;
+  readonly address_ciphertexts: Buffer[] | null;
+  readonly encryption_key_ids: string[] | null;
+}
+
+interface ChannelDeliveryStatsRow extends QueryResultRow {
+  readonly channel: string;
+  readonly queued: number;
+  readonly accepted: number;
+  readonly failed: number;
+  readonly dead: number;
+  readonly suppressed: number;
+  readonly pending: number;
+  readonly median_accept_seconds: number | string | null;
+}
+
+interface CampaignDeliveryStatsRow extends QueryResultRow {
+  readonly campaign_id: string;
+  readonly created_at: Date;
+  readonly requested_channels: string[];
+  readonly matched_count: number;
+  readonly push_queued_count: number;
+  readonly suppressed_count: number;
+  readonly in_app_created_count: number;
+  readonly push_accepted: number;
+  readonly push_failed: number;
+  readonly push_dead: number;
+}
+
+interface DeliveryFailureRow extends QueryResultRow {
+  readonly channel: string;
+  readonly error_code: string;
+  readonly failure_count: number;
+  readonly last_occurred_at: Date;
+}
+
+interface EndpointStatusRow extends QueryResultRow {
+  readonly status: string;
+  readonly endpoint_count: number;
+}
+
+interface EndpointSampleRow extends QueryResultRow {
+  readonly address_ciphertext: Buffer;
+  readonly encryption_key_id: string;
 }
 
 interface RecipientRow extends QueryResultRow {
@@ -571,7 +694,11 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
              p.display_name,
              p.phone_e164,
              count(e.id)::integer as endpoint_count,
-             max(e.last_confirmed_at) as last_confirmed_at
+             max(e.last_confirmed_at) as last_confirmed_at,
+             (array_agg(e.address_ciphertext order by e.last_confirmed_at desc nulls last))[1:5]
+               as address_ciphertexts,
+             (array_agg(e.encryption_key_id order by e.last_confirmed_at desc nulls last))[1:5]
+               as encryption_key_ids
            from integration.notification_endpoints e
            join integration.notification_provider_accounts a
              on a.tenant_id = e.tenant_id and a.id = e.provider_account_id
@@ -612,8 +739,136 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
             ...(row.last_confirmed_at
               ? { lastConfirmedAt: row.last_confirmed_at.toISOString() }
               : {}),
+            endpoints: (row.address_ciphertexts ?? []).flatMap((ciphertext, index) => {
+              const encryptionKeyId = row.encryption_key_ids?.[index];
+              return encryptionKeyId === undefined ? [] : [{ ciphertext, encryptionKeyId }];
+            }),
           })),
           ...(result.rows.length > input.limit && last ? { nextCursor: last.user_id } : {}),
+        };
+      });
+    },
+
+    getDeliveryStats(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const channels = await client.query<ChannelDeliveryStatsRow>(
+          `select
+             channel,
+             count(*)::integer as queued,
+             count(*) filter (where state in ('SENT', 'DELIVERED'))::integer as accepted,
+             count(*) filter (where state = 'FAILED')::integer as failed,
+             count(*) filter (where state = 'DEAD')::integer as dead,
+             count(*) filter (where state = 'SUPPRESSED')::integer as suppressed,
+             count(*) filter (where state in ('PENDING', 'SENDING'))::integer as pending,
+             percentile_cont(0.5) within group (
+               order by extract(epoch from (completed_at - created_at))
+             ) filter (where completed_at is not null) as median_accept_seconds
+           from notifications.deliveries
+          where tenant_id = $1 and created_at >= $2
+          group by channel
+          order by channel`,
+          [input.tenantId, input.since],
+        );
+        // A campaign's queue counters live on the campaign row and its outcomes on the deliveries of the
+        // intents it produced, so one join answers "what did we promise" and "what happened".
+        const campaigns = await client.query<CampaignDeliveryStatsRow>(
+          `select
+             c.id as campaign_id,
+             c.created_at,
+             c.requested_channels,
+             c.matched_count,
+             c.push_queued_count,
+             c.suppressed_count,
+             c.in_app_created_count,
+             count(d.id) filter (where d.channel = 'PUSH' and d.state in ('SENT', 'DELIVERED'))
+               ::integer as push_accepted,
+             count(d.id) filter (where d.channel = 'PUSH' and d.state = 'FAILED')::integer
+               as push_failed,
+             count(d.id) filter (where d.channel = 'PUSH' and d.state = 'DEAD')::integer
+               as push_dead
+           from notifications.admin_campaigns c
+           left join notifications.intents i
+             on i.tenant_id = c.tenant_id and i.source_event_id = c.id
+           left join notifications.deliveries d
+             on d.tenant_id = i.tenant_id and d.intent_id = i.id
+          where c.tenant_id = $1 and c.created_at >= $2
+          group by c.id, c.created_at, c.requested_channels, c.matched_count, c.push_queued_count,
+                   c.suppressed_count, c.in_app_created_count
+          order by c.created_at desc
+          limit $3`,
+          [input.tenantId, input.since, input.campaignLimit],
+        );
+        const failures = await client.query<DeliveryFailureRow>(
+          `select channel, last_error_code as error_code, count(*)::integer as failure_count,
+                  max(updated_at) as last_occurred_at
+             from notifications.deliveries
+            where tenant_id = $1 and created_at >= $2 and last_error_code is not null
+            group by channel, last_error_code
+            order by failure_count desc, error_code
+            limit 10`,
+          [input.tenantId, input.since],
+        );
+        const endpointCounts = await client.query<EndpointStatusRow>(
+          `select status, count(*)::integer as endpoint_count
+             from integration.notification_endpoints
+            where tenant_id = $1 and channel = 'PUSH'
+            group by status`,
+          [input.tenantId],
+        );
+        // Bounded sample: the platform split is derived by the caller from the endpoints it can decrypt.
+        const endpointSample = await client.query<EndpointSampleRow>(
+          `select address_ciphertext, encryption_key_id
+             from integration.notification_endpoints
+            where tenant_id = $1 and channel = 'PUSH' and status = 'ACTIVE'
+            order by last_confirmed_at desc nulls last
+            limit $2`,
+          [input.tenantId, input.endpointSampleLimit],
+        );
+
+        const endpointCount = (status: string): number =>
+          endpointCounts.rows.find((row) => row.status === status)?.endpoint_count ?? 0;
+        return {
+          since: input.since.toISOString(),
+          channels: channels.rows.map((row) => ({
+            channel: row.channel,
+            queued: row.queued,
+            accepted: row.accepted,
+            failed: row.failed,
+            dead: row.dead,
+            suppressed: row.suppressed,
+            pending: row.pending,
+            ...(row.median_accept_seconds === null
+              ? {}
+              : { medianAcceptSeconds: Math.round(Number(row.median_accept_seconds)) }),
+          })),
+          campaigns: campaigns.rows.map((row) => ({
+            campaignId: row.campaign_id,
+            createdAt: row.created_at.toISOString(),
+            requestedChannels: row.requested_channels,
+            matchedCount: row.matched_count,
+            pushQueuedCount: row.push_queued_count,
+            suppressedCount: row.suppressed_count,
+            inAppCreatedCount: row.in_app_created_count,
+            pushAccepted: row.push_accepted,
+            pushFailed: row.push_failed,
+            pushDead: row.push_dead,
+          })),
+          failures: failures.rows.map((row) => ({
+            channel: row.channel,
+            errorCode: row.error_code,
+            count: row.failure_count,
+            lastOccurredAt: row.last_occurred_at.toISOString(),
+          })),
+          endpoints: {
+            active: endpointCount('ACTIVE'),
+            invalid: endpointCount('INVALID'),
+            revoked: endpointCount('REVOKED'),
+            suspendedPolicy: endpointCount('SUSPENDED_POLICY'),
+            activeEndpointSample: endpointSample.rows.map((row) => ({
+              ciphertext: row.address_ciphertext,
+              encryptionKeyId: row.encryption_key_id,
+            })),
+          },
         };
       });
     },
