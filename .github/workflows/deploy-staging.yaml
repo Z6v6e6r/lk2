@@ -1365,6 +1365,7 @@ jobs:
           fi
           ssh "phub-deploy@$HOST" '
             set -eu
+            cd /opt/phub
             deployment_profile="${{ inputs.deployment_profile }}"
             compose_next="/opt/phub/.compose-staging-${{ github.run_id }}-${{ github.run_attempt }}.next"
             test -f "$compose_next" && test ! -L "$compose_next"
