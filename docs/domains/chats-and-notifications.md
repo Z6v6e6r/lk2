@@ -58,13 +58,19 @@ tenant gate канала, а не выбор получателя. `PUT` зам�
 уведомление; эффективное состояние (`muted`) считает сервер и отдаёт в summary разговора.
 Direct-chat family
 добавляет ruleset
-`messaging.ru-ru.v1`: `messaging.conversation.created.v1` и `messaging.message.created.v1` идут по
+`messaging.ru-ru.v2`: `messaging.conversation.created.v1` и `messaging.message.created.v1` идут по
 generic source-event схеме, их payload остаётся identifier-only (tenant, conversation, message,
 sequence и `recipientUserIds`), а получатели резолвятся правилом
 `EVENT_USERS/recipientUserIds` из активных участников разговора, кроме автора. Шаблон не цитирует
 текст сообщения: inbox-item ведёт ссылкой `/chats/{{conversationId}}`, категория `MESSAGING`
-опциональна для получателя. Провижининг — `npm run notifications:messaging:provision`,
-отдельная очередь проектора — `phub.messaging-notification-intent-projector.v1`.
+опциональна для получателя. Версия 2 добавляет к durable inbox второй канал `PUSH`: канал
+запрашивается правилом, но фактическая отправка по-прежнему зависит от tenant gate
+`web_push_enabled`, активного provider account, сохранённой настройки `MESSAGING/PUSH`, тихих часов
+и политики конкретного разговора; `mandatory = false`, поэтому всё это остаётся выбором
+получателя, а push payload рендерится из того же снапшота без текста сообщения. Провижининг —
+`npm run notifications:messaging:provision` (новая версия применяется тем же скриптом с новым
+`Idempotency-Key`; старые template rows остаются неизменными и неактивными), отдельная очередь
+проектора — `phub.messaging-notification-intent-projector.v1`.
 Реализованный Web Push срез добавляет
 зашифрованные subscription endpoint, capability/register/revoke API, браузерный service worker,
 PUSH delivery jobs, VAPID adapter, bounded retries, circuit breaker и инвалидирование 404/410.

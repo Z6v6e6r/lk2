@@ -167,20 +167,26 @@ export type GameNotificationDefinition = (typeof GAME_NOTIFICATION_DEFINITIONS)[
  * 0022 keeps their payload identifier-only (tenant, conversation, message, sequence and recipient
  * identifiers), so the projector resolves recipients from `recipientUserIds` instead of a dedicated
  * payload contract, and the rendered text never quotes message content.
+ *
+ * Version 2 adds the PUSH channel next to the durable inbox item. Chat push is still optional for
+ * the recipient (category `MESSAGING`, `mandatory: false`): the projector applies the stored channel
+ * preference, the recipient's quiet window and the per-conversation policy, and no message body ever
+ * reaches the provider payload. Provisioning the new version is what turns it on for a tenant; the
+ * old template rows stay immutable and inactive.
  */
 export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
-  rulesetVersion: 'messaging.ru-ru.v1',
+  rulesetVersion: 'messaging.ru-ru.v2',
   template: {
-    version: 1,
+    version: 2,
     locale: 'ru-RU',
     category: 'MESSAGING',
     deepLink: '/chats/{{conversationId}}',
-    channels: ['IN_APP'],
+    channels: ['IN_APP', 'PUSH'],
     active: true,
   },
   rule: {
     keySuffix: 'default',
-    channelOverride: ['IN_APP'],
+    channelOverride: ['IN_APP', 'PUSH'],
     active: true,
   },
   definitions: [

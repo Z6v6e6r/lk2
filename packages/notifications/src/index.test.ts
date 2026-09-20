@@ -6,8 +6,11 @@ import {
   MAX_NOTIFICATION_EVENT_RECIPIENTS,
   MESSAGING_NOTIFICATION_DEFINITIONS,
   MESSAGING_NOTIFICATION_EVENT_TYPES,
+  MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE,
   MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY,
+  MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS,
   MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
+  MESSAGING_NOTIFICATION_TEMPLATE_VERSION,
   bookingNotificationSourceEventSchema,
   canonicalWebPushEndpoint,
   canonicalWebPushSubscription,
@@ -493,6 +496,14 @@ describe('notification domain contracts', () => {
       // Chat notifications are optional: a player can mute the category.
       expect(definition.mandatory).toBe(false);
     }
+  });
+
+  it('requests the durable inbox item and the optional push for a direct-chat event', () => {
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_VERSION).toBe(2);
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
+    expect(MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE).toEqual(['IN_APP', 'PUSH']);
+    // The push payload is rendered from the same snapshot; no message text is part of it.
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK).toBe('/chats/{{conversationId}}');
   });
 });
 
