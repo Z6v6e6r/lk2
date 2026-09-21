@@ -78,6 +78,11 @@ if (!runtimeConnectionString || !migratorConnectionString || !approvedTenantKeys
           ? error.message
           : 'CHAT_PUSH_FOUNDATION_VERIFICATION_FAILED';
     process.stderr.write(`${code}\n`);
+    if (code === 'CHAT_PUSH_FOUNDATION_VERIFICATION_FAILED' && error instanceof Error) {
+      // Keep the stable code as the first line, then expose the underlying failure so a refused
+      // rehearsal can be diagnosed from the workflow log instead of a bare generic code.
+      process.stderr.write(`CHAT_PUSH_FOUNDATION_VERIFICATION_DETAIL:${error.name}:${error.message}\n`);
+    }
     process.exitCode = 1;
   }
 }
