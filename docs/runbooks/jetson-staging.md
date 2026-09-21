@@ -298,6 +298,66 @@ Consequences to accept explicitly before dispatching a waived run:
 - the waiver is an attested-owner, temporary escape hatch, not the default path. Delete the
   `smoke_session_waiver` input and its attestation step once the principal is installed.
 
+### `CHAT_PUSH_FOUNDATION` window prerequisites
+
+`CHAT_PUSH_FOUNDATION` runs the chat/push foundation maintenance window. Its release script verifies
+every prerequisite below before it stops a writer or applies a migration, so a refused preflight
+leaves the running release untouched. Check the host and database state first anyway: the workflow
+spends a full arm64 build before the `deploy` job reaches those checks.
+
+1. `/etc/phub/staging.env`, `/etc/phub/realtime.env` and `/etc/phub/staging.migrator.env` are each
+   mode `0600`, owned by `phub-deploy`, readable by it, and are not hard links to one another. The
+   migrator file contains exactly one `DATABASE_URL` and no other key; comments and blank lines are
+   allowed. Its URL differs from the runtime URL in `staging.env`. `MEDIA_BINARY_ONLY` is the only
+   profile that skips this check.
+2. The runtime URL belongs to the DDL-free runtime role and the migrator URL to the bounded DDL
+   role. The immutable migrator image proves that boundary with
+   `apps/migrator/dist/verify-role-boundary.js` before the first write and again after migration. The
+   exact accepted privileges, owners, policies and default ACLs are in
+   [chat and notification moderation](chats-notifications-moderation.md).
+3. The privileged foundation inventory is empty. The window refuses to start unless this query
+   returns `0|0|0|0`: no `integration.notification_endpoints` row, no unpublished
+   `booking.confirmed.v1`, `booking.changed.v1` or `booking.cancelled.v1` outbox event, no
+   `notifications.tenant_runtime_settings` row with web push, booking reminders or a reminder
+   ruleset/contract, and no `messaging.tenant_runtime_settings` row with `http`, `direct`, `realtime`
+   or `contextual` enabled.
+4. `public.schema_migrations` lists every migration the candidate expects, and the migrator role owns
+   that ledger plus the endpoint table.
+5. The host has room for the database dump and the application snapshot and can pull every candidate
+   digest.
+
+Read-only check on the host, from `/opt/phub`, before dispatching:
+
+```sh
+stat -c '%n %U:%G %a' /etc/phub/staging.env /etc/phub/realtime.env /etc/phub/staging.migrator.env
+df -h /var/lib/docker /opt/phub | tail -3
+docker compose --env-file infrastructure.env -f compose.infrastructure.yaml exec -T postgres \
+  psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atv ON_ERROR_STOP=1 -c "
+select
+  (select count(*) from integration.notification_endpoints) || '|' ||
+  (select count(*) from audit.outbox_events where published_at is null
+     and event_type in ('booking.confirmed.v1', 'booking.changed.v1', 'booking.cancelled.v1')) || '|' ||
+  (select count(*) from notifications.tenant_runtime_settings setting
+     where setting.web_push_enabled
+        or coalesce((to_jsonb(setting) ->> 'booking_reminders_enabled')::boolean, false)
+        or (to_jsonb(setting) ->> 'booking_reminder_ruleset_version') is not null
+        or (to_jsonb(setting) ->> 'booking_reminder_contract_hash') is not null) || '|' ||
+  (select count(*) from messaging.tenant_runtime_settings setting
+     where setting.http_enabled or setting.direct_enabled
+        or setting.realtime_enabled or setting.contextual_enabled);
+select count(*), max(filename) from public.schema_migrations;"
+```
+
+The window leaves `COMMUNITIES_REALTIME_ENABLED=false` and keeps `WEB_PUSH_ENABLED`,
+`MESSAGING_USER_BLOCK_COMMANDS_ENABLED` and `BOOKING_REMINDER_SCHEDULER_ENABLED` false in
+`/opt/phub/staging.chat-push-foundation.env`. It enables no tenant runtime switch and provisions no
+notification ruleset; those are separate enablement steps.
+
+This path never executed end to end before 2026-09-20. The two green `CHAT_PUSH_FOUNDATION`
+dispatches on that date deployed nothing: both had `build` and `deploy` skipped, because a skipped
+`build` propagated its skip through `needs`. Treat a green run whose `deploy` job is `skipped` as no
+deployment at all.
+
 ### Temporary legacy OTP canary
 
 If the exact active `e308181da5222645d9a87d03642923c6841be8d1` API cannot complete the Viva
