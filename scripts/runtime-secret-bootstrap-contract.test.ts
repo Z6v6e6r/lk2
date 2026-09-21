@@ -713,6 +713,9 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     const unknown = invoke('start', 'BOOTSTRAP_STAGING_RUNTIME_SECRETS', 'wavied');
     expect(unknown.status).toBe(1);
     expect(unknown.stderr).toContain('smoke session mode must be required or waived');
+    const emptyMode = invoke('start', 'BOOTSTRAP_STAGING_RUNTIME_SECRETS', '');
+    expect(emptyMode.status).toBe(1);
+    expect(emptyMode.stderr).not.toContain('smoke session mode');
     for (const operation of ['finalize', 'recover']) {
       const misplaced = invoke(
         operation,
