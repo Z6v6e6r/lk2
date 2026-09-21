@@ -115,6 +115,14 @@ infrastructure exec -T postgres sh -ec \
 clone_created=true
 printf '%s\n' OWNED > "$marker"
 
+# The clone rehearsal applies the gated migrations to the cloned catalog, and PostgreSQL's
+# `create schema if not exists` requires CREATE on the database even when the schema exists. The
+# bounded migrator role holds no database-level CREATE, so it is granted on this disposable clone
+# for the rehearsal and revoked again before the post-migration role verification.
+infrastructure exec -T postgres sh -ec \
+  "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 -c \
+     'grant create on database \"$clone_database\" to phub_migrator'" >/dev/null
+
 rewrite_and_import='const clone = process.env.CHAT_PUSH_FOUNDATION_CLONE_DATABASE;
 const rewrite = (value) => { const url = new URL(value); url.pathname = `/${clone}`; return url.toString(); };
 process.env.RUNTIME_DATABASE_URL = rewrite(process.env.RUNTIME_DATABASE_URL);
@@ -184,6 +192,9 @@ if printf '%s' "$pre_result" | grep -Fq '"pendingFoundationCount":0'; then
 else
   clone_migrate true
 fi
+infrastructure exec -T postgres sh -ec \
+  "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 -c \
+     'revoke create on database \"$clone_database\" from phub_migrator'" >/dev/null
 clone_role_verify post
 post_result="$(clone_foundation_verify post)"
 printf '%s\n' "$post_result"
