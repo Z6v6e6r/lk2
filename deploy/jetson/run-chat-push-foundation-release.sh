@@ -361,17 +361,18 @@ SQL
 # migration and revokes it before the post-migration role-boundary verification.
 set_migrator_database_create() {
   grant_revoke="$1"
+  grant_preposition="$2"
   infrastructure exec -T postgres sh -ec \
     "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 \
-       -c '$grant_revoke create on database \"$admin_database_name\" to phub_migrator'" >/dev/null
+       -c '$grant_revoke create on database \"$admin_database_name\" $grant_preposition phub_migrator'" >/dev/null
 }
 
 grant_migrator_database_create() {
-  set_migrator_database_create grant
+  set_migrator_database_create grant to
 }
 
 revoke_migrator_database_create() {
-  set_migrator_database_create revoke
+  set_migrator_database_create revoke from
 }
 
 service_is_healthy() {
