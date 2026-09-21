@@ -355,6 +355,25 @@ SQL
   test "$admin_counts" = '0|0|0|0' || fail 'privileged foundation inventory is not empty'
 }
 
+# The gated migrations create schemas, and PostgreSQL's `create schema if not exists` requires
+# CREATE on the database even when the schema already exists. The bounded migrator role deliberately
+# holds no database-level CREATE, so the maintenance window grants it only around the one-shot
+# migration and revokes it before the post-migration role-boundary verification.
+set_migrator_database_create() {
+  grant_revoke="$1"
+  infrastructure exec -T postgres sh -ec \
+    "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 -c \
+       '$grant_revoke' 'phub_migrator'" >/dev/null
+}
+
+grant_migrator_database_create() {
+  set_migrator_database_create 'grant create on database'
+}
+
+revoke_migrator_database_create() {
+  set_migrator_database_create 'revoke create on database'
+}
+
 service_is_healthy() {
   container_id="$(compose ps --status running -q "$1")"
   test -n "$container_id" &&
@@ -629,6 +648,7 @@ trap on_exit EXIT
 trap on_signal HUP INT TERM
 
 apply_foundation_migrations() {
+  grant_migrator_database_create
   write_phase_marker MIGRATION_STARTED
   export MIGRATOR_DATABASE_URL="$migrator_database_url"
   export MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS=30000
@@ -639,6 +659,7 @@ apply_foundation_migrations() {
 }
 
 verify_post_migration() {
+  revoke_migrator_database_create
   role_verify post
   foundation_verify post
   foundation_admin_verify
@@ -748,6 +769,7 @@ if test "$operation" = start; then
   foundation_admin_verify
   verify_rabbit_preflight_inventory
   verify_monitoring_digest
+  revoke_migrator_database_create
   role_verify pre
   pre_result="$(foundation_verify pre)"
   printf '%s\n' "$pre_result"
