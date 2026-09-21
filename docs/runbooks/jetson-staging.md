@@ -266,7 +266,10 @@ When no synthetic smoke principal can be provisioned (no dedicated non-personal 
 `START` accepts `smoke_session_waiver=WAIVE_STAGING_REALTIME_SMOKE_SESSION`. The workflow refuses any
 other value and accepts this one only for `START`, only on run attempt 1, and only when
 `github.actor` equals `github.repository_owner`, so no collaborator account and no re-run can set it.
-The `staging` environment approval still applies to the dispatch itself. Do not pin this to the
+The `staging` environment on the cutover job currently has no protection rules, so nothing pauses
+for approval: the binding gates for this waiver are the repository-owner actor check, run attempt 1,
+`START`-only and the exact value, together with merge authority over this workflow. Do not pin this to
+the
 `staging-foundation-maintenance` owner variable: that variable is environment-scoped, so it is not
 visible here and an empty value would refuse every waiver. `RECOVER` never needs the waiver.
 
@@ -295,7 +298,10 @@ Consequences to accept explicitly before dispatching a waived run:
 - the waiver leaves no durable host-side trace of its own: it is recorded in the run warning, the
   step summary and the 30-day `b0-evidence` artifact, while the host marker and finalized receipt
   carry no smoke field;
-- the waiver is an attested-owner, temporary escape hatch, not the default path. Delete the
+- the enforced property is only `github.actor == github.repository_owner`; if this repository is ever
+  transferred to an organization, no human actor can match it and the waiver becomes unusable until the
+  check is updated (fail-closed);
+- the waiver is a temporary escape hatch, not the default path. Delete the
   `smoke_session_waiver` input and its attestation step once the principal is installed.
 
 ### `CHAT_PUSH_FOUNDATION` window prerequisites
