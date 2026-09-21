@@ -37,7 +37,7 @@ describe('migration execution policy', () => {
     ).toThrow('CHAT_PUSH_FOUNDATION_MAINTENANCE_REQUIRED');
   });
 
-  it('allows the maintenance acknowledgement only when exactly the five gated files are pending', () => {
+  it('lets the maintenance acknowledgement carry a pending backlog alongside the five gated files', () => {
     const alreadyApplied = new Set(['0068_existing.sql', '0076_existing.sql']);
     expect(() =>
       assertMigrationExecutionAllowed({
@@ -51,6 +51,8 @@ describe('migration execution policy', () => {
       }),
     ).not.toThrow();
 
+    // A contour that skipped several releases has more than the five gated migrations pending; the
+    // acknowledgement covers the whole batch and the window applies it in package order.
     expect(() =>
       assertMigrationExecutionAllowed({
         appliedFilenames: alreadyApplied,
@@ -62,7 +64,7 @@ describe('migration execution policy', () => {
         ],
         maintenanceAcknowledgement: CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK,
       }),
-    ).toThrow('CHAT_PUSH_FOUNDATION_MAINTENANCE_UNEXPECTED_PENDING:0082_unexpected.sql');
+    ).not.toThrow();
   });
 
   it('uses a distinct acknowledgement only for a truly empty database', () => {
