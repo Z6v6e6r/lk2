@@ -362,16 +362,16 @@ SQL
 set_migrator_database_create() {
   grant_revoke="$1"
   infrastructure exec -T postgres sh -ec \
-    "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 -c \
-       '$grant_revoke' 'phub_migrator'" >/dev/null
+    "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 \
+       -c '$grant_revoke create on database \"$admin_database_name\" to phub_migrator'" >/dev/null
 }
 
 grant_migrator_database_create() {
-  set_migrator_database_create 'grant create on database'
+  set_migrator_database_create grant
 }
 
 revoke_migrator_database_create() {
-  set_migrator_database_create 'revoke create on database'
+  set_migrator_database_create revoke
 }
 
 service_is_healthy() {
