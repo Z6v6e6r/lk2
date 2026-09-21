@@ -44,15 +44,11 @@ export function assertMigrationExecutionAllowed(input: {
     return;
   }
   if (input.maintenanceAcknowledgement === CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK) {
-    const foundation = new Set<string>(CHAT_PUSH_FOUNDATION_MIGRATION_FILENAMES);
-    const unexpectedPending = input.packagedFilenames.filter(
-      (filename) => !input.appliedFilenames.has(filename) && !foundation.has(filename),
-    );
-    if (unexpectedPending.length > 0) {
-      throw new Error(
-        `CHAT_PUSH_FOUNDATION_MAINTENANCE_UNEXPECTED_PENDING:${unexpectedPending.join(',')}`,
-      );
-    }
+    // The acknowledgement authorizes the gated files inside a maintenance window regardless of how
+    // far behind the database is: a contour that skipped several releases has more than the five
+    // gated migrations pending, and refusing the whole batch would leave it permanently unable to
+    // migrate. The window still applies every pending migration in package order, and the caller
+    // reports the full pending set.
     return;
   }
   throw new Error(`CHAT_PUSH_FOUNDATION_MAINTENANCE_REQUIRED:${pendingFoundation.join(',')}`);
