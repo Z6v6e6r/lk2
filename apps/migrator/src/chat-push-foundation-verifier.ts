@@ -664,7 +664,7 @@ export async function verifyChatPushFoundation(options: {
          select count(indexrelid)::integer as matched_indexes,
                 count(*) filter (where indisvalid and indisready)::integer as ready_indexes,
                 count(*) filter (
-                  where actual_columns = expected_columns
+                  where actual_columns::text[] = expected_columns
                     and actual_options = expected_options
                     and actual_predicate = expected_predicate
                     and indisunique = expected_unique
