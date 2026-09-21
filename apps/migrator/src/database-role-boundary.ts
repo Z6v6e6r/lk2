@@ -431,12 +431,15 @@ async function withClient<T>(connectionString: string, operation: (client: Clien
     connectionString,
     application_name: 'phub-migrator-role-boundary',
     connectionTimeoutMillis: 5_000,
-    // The rehearsal of a freshly created clone runs while PostgreSQL is still copying a ~100 MB
-    // template and immediately after a gated migration batch, so the same read-only catalog
-    // queries take noticeably longer than on an idle host. Keep the verification deterministic
-    // instead of failing it on a tight budget; the installer's own advisory-lock budget is 30s.
-    query_timeout: 30_000,
-    statement_timeout: 30_000,
+    // Staging evidence (run 35644208435, 2026-09-21T20:13:53Z): `createdb --template` forces a
+    // checkpoint that saturated the Nano for 163s, the read-only catalog query below then crossed
+    // the old 5s client budget, and the client destroyed the connection mid-query.
+    // PostgreSQL only logged `could not send data to client: Broken pipe`, so the verifier could
+    // not report anything better than its generic code. Keep the server-side limit authoritative
+    // and the client budget above it, so a genuinely slow host yields a readable statement timeout
+    // instead of a lost connection during a maintenance window that already has stopped writers.
+    query_timeout: 65_000,
+    statement_timeout: 60_000,
   });
   await client.connect();
   try {
