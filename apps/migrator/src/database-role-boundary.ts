@@ -431,8 +431,12 @@ async function withClient<T>(connectionString: string, operation: (client: Clien
     connectionString,
     application_name: 'phub-migrator-role-boundary',
     connectionTimeoutMillis: 5_000,
-    query_timeout: 5_000,
-    statement_timeout: 5_000,
+    // The rehearsal of a freshly created clone runs while PostgreSQL is still copying a ~100 MB
+    // template and immediately after a gated migration batch, so the same read-only catalog
+    // queries take noticeably longer than on an idle host. Keep the verification deterministic
+    // instead of failing it on a tight budget; the installer's own advisory-lock budget is 30s.
+    query_timeout: 30_000,
+    statement_timeout: 30_000,
   });
   await client.connect();
   try {

@@ -61,7 +61,9 @@ if (phase !== 'pre' && phase !== 'post') {
     if (code === 'DATABASE_ROLE_BOUNDARY_CHECK_FAILED' && error instanceof Error) {
       // Keep the stable code as the first line, then expose the underlying failure so a refused
       // rehearsal can be diagnosed from the workflow log instead of a bare generic code.
-      process.stderr.write(`DATABASE_ROLE_BOUNDARY_DETAIL:${error.name}:${error.message}\n`);
+      process.stderr.write(
+        `DATABASE_ROLE_BOUNDARY_DETAIL:${phase}:${error.name}:${error.message}\n`,
+      );
     }
     process.exitCode = 1;
   }

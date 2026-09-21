@@ -82,7 +82,7 @@ if (!runtimeConnectionString || !migratorConnectionString || !approvedTenantKeys
       // Keep the stable code as the first line, then expose the underlying failure so a refused
       // rehearsal can be diagnosed from the workflow log instead of a bare generic code.
       process.stderr.write(
-        `CHAT_PUSH_FOUNDATION_VERIFICATION_DETAIL:${error.name}:${error.message}\n`,
+        `CHAT_PUSH_FOUNDATION_VERIFICATION_DETAIL:${phase}:${error.name}:${error.message}\n`,
       );
     }
     process.exitCode = 1;
