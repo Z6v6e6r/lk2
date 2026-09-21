@@ -122,10 +122,10 @@ process.env.MIGRATOR_DATABASE_URL = rewrite(process.env.MIGRATOR_DATABASE_URL);'
 
 clone_role_verify() {
   role_phase="$1"
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database" \
-  DATABASE_ROLE_BOUNDARY_PHASE="$role_phase" \
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database"
+  export DATABASE_ROLE_BOUNDARY_PHASE="$role_phase"
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL \
       -e CHAT_PUSH_FOUNDATION_CLONE_DATABASE -e DATABASE_ROLE_BOUNDARY_PHASE \
@@ -136,12 +136,12 @@ clone_role_verify() {
 
 clone_foundation_verify() {
   foundation_phase="$1"
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database" \
-  CHAT_PUSH_FOUNDATION_PHASE="$foundation_phase" \
-  CHAT_PUSH_FOUNDATION_TENANT_KEYS="$tenant_keys" \
-  CHAT_PUSH_FOUNDATION_CAPTURE_CATALOG_BASELINE=true \
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database"
+  export CHAT_PUSH_FOUNDATION_PHASE="$foundation_phase"
+  export CHAT_PUSH_FOUNDATION_TENANT_KEYS="$tenant_keys"
+  export CHAT_PUSH_FOUNDATION_CAPTURE_CATALOG_BASELINE=true
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL \
       -e CHAT_PUSH_FOUNDATION_CLONE_DATABASE -e CHAT_PUSH_FOUNDATION_PHASE \
@@ -167,9 +167,9 @@ process.env.MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS = '30000';
 delete process.env.CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK;
 await import('./apps/migrator/dist/main.js');"
   fi
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database" \
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database"
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e CHAT_PUSH_FOUNDATION_CLONE_DATABASE \
       --entrypoint node migrator --input-type=module --eval "$migration_import"
