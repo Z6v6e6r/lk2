@@ -255,9 +255,9 @@ describe('ChatsPage', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Чаты' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Все' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Личные' }));
-    expect(screen.getByRole('heading', { name: 'Чаты' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Личные' })).toBeInTheDocument();
     expect(screen.getByText('Мария Петрова')).toBeVisible();
     expect(screen.queryByText('Игра · Хаб Селигерская')).not.toBeInTheDocument();
 
@@ -301,13 +301,13 @@ describe('ChatsPage', () => {
     );
 
     await user.tab();
-    expect(screen.getByRole('button', { name: 'Действия с чатами' })).toHaveFocus();
-    await user.tab();
     const search = screen.getByRole('searchbox', { name: 'Поиск по чатам' });
     expect(search).toHaveFocus();
     await user.type(search, 'мария');
     await user.tab();
     expect(screen.getByRole('button', { name: 'Очистить' })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Действия с чатами' })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole('button', { name: 'Все' })).toHaveFocus();
     await user.tab();
@@ -339,7 +339,7 @@ describe('ChatsPage', () => {
       />,
     );
 
-    const link = screen.getByRole('link', { name: /Борис/u });
+    const link = screen.getByRole('link', { name: /^Борис/u });
     expect(link).toHaveAttribute('href', `/chats/${conversationId}`);
     expect(link).toHaveAttribute('aria-current', 'page');
     expect(screen.getByLabelText('Непрочитанных сообщений: 100')).toHaveTextContent('99+');

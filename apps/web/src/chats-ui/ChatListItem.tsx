@@ -13,26 +13,46 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
   const unread = unreadLabel(conversation.unreadCount);
   const activityAt = conversation.lastMessage?.createdAt ?? conversation.updatedAt;
 
+  const avatar = (
+    <ChatAvatar
+      isGame={conversation.kind === 'GAME'}
+      title={title}
+      photoUrl={conversation.kind === 'DIRECT' ? conversation.participant.avatarUrl : undefined}
+      level={conversation.kind === 'DIRECT' ? conversation.participant.level : undefined}
+      levelValue={conversation.kind === 'DIRECT' ? conversation.participant.levelValue : undefined}
+      fallbackSeed={
+        conversation.kind === 'DIRECT' ? conversation.participant.userId : conversation.id
+      }
+      size={48}
+    />
+  );
+
   return (
-    <li className={styles.listItem}>
+    <li
+      className={`${styles.listItem} ${styles.chatRow} ${selected ? styles.selectedChatRow : ''}`}
+    >
+      {conversation.kind === 'DIRECT' ? (
+        <a
+          className={styles.profileAvatarLink}
+          href={`/profile/${encodeURIComponent(conversation.participant.userId)}`}
+          aria-label={`Профиль игрока ${title}`}
+        >
+          {avatar}
+        </a>
+      ) : (
+        <a
+          className={styles.profileAvatarLink}
+          href={`/chats/${encodeURIComponent(conversation.id)}`}
+          aria-label={`Открыть чат ${title}`}
+        >
+          {avatar}
+        </a>
+      )}
       <a
         className={selected ? styles.selectedListLink : styles.listLink}
         href={`/chats/${encodeURIComponent(conversation.id)}`}
         aria-current={selected ? 'page' : undefined}
       >
-        <ChatAvatar
-          isGame={conversation.kind === 'GAME'}
-          title={title}
-          photoUrl={conversation.kind === 'DIRECT' ? conversation.participant.avatarUrl : undefined}
-          level={conversation.kind === 'DIRECT' ? conversation.participant.level : undefined}
-          levelValue={
-            conversation.kind === 'DIRECT' ? conversation.participant.levelValue : undefined
-          }
-          fallbackSeed={
-            conversation.kind === 'DIRECT' ? conversation.participant.userId : conversation.id
-          }
-          size={48}
-        />
         <span className={styles.listCopy}>
           <span
             className={`${styles.listTitle} ${conversation.kind === 'GAME' ? styles.gameTitle : ''}`}

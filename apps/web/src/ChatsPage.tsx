@@ -11,7 +11,12 @@ import type {
   StationSupportStation,
 } from './auth-gateway.js';
 import { ChatCategoryIcon } from './chats-ui/ChatCategoryIcon.js';
-import { ChatFilterHeading, ChatFilters, type ChatFilter } from './chats-ui/ChatFilters.js';
+import {
+  ChatFilterHeading,
+  ChatFilters,
+  ChatSearch,
+  type ChatFilter,
+} from './chats-ui/ChatFilters.js';
 import { ChatList } from './chats-ui/ChatList.js';
 import { ChatThread } from './chats-ui/ChatThread.js';
 import { StationDialogList, StationThread } from './chats-ui/StationChats.js';
@@ -529,7 +534,8 @@ export function ChatsPage({
       >
         <aside className={styles.listPane} aria-label="Список чатов">
           <header className={styles.listHeader}>
-            <ChatFilterHeading />
+            <ChatFilterHeading filter={filter} />
+            <ChatSearch query={query} onQueryChange={setQuery} />
             <div className={styles.headerMenu}>
               <button
                 type="button"
@@ -570,12 +576,7 @@ export function ChatsPage({
               ) : null}
             </div>
           </header>
-          <ChatFilters
-            filter={filter}
-            query={query}
-            onFilterChange={setFilter}
-            onQueryChange={setQuery}
-          />
+          <ChatFilters filter={filter} onFilterChange={setFilter} />
           {filter === 'STATION' ? (
             stationSource ? (
               <StationDialogList
