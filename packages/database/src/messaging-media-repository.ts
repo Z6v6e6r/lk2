@@ -1051,7 +1051,15 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
               where tenant_id = $1
                 and (
                   (state = 'UPLOADING' and upload_expires_at <= now())
+                  -- A scan that never finishes because the scanner or the object store stays down
+                  -- must not pin the quarantine object forever: after the stall window the upload
+                  -- expires, the sender re-uploads, and the bytes are reclaimed.
+                  or (state = 'SCANNING' and upload_expires_at <= now() - interval '24 hours')
                   or (state = 'READY' and bound_message_id is null and unattached_expires_at <= now())
+                  -- An earlier cycle expired the asset but failed to discover its source version, so
+                  -- the object was never scheduled for deletion. Return it until discovery succeeds;
+                  -- an asset without a discovered version must never be confirmed PURGED.
+                  or (state = 'EXPIRED' and purged_at is null and source_object_version is null)
                 )
               order by id
               limit $2
@@ -1059,11 +1067,17 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
            )
            update messaging.media_assets asset
               set state = 'EXPIRED',
-                  expired_at = now(),
+                  expired_at = coalesce(asset.expired_at, now()),
                   scan_lease_owner = null,
                   scan_lease_expires_at = null,
-                  revision = asset.revision + 1,
-                  updated_at = now()
+                  revision = case
+                    when asset.state = 'EXPIRED' then asset.revision
+                    else asset.revision + 1
+                  end,
+                  updated_at = case
+                    when asset.state = 'EXPIRED' then asset.updated_at
+                    else now()
+                  end
              from due
             where asset.tenant_id = $1 and asset.id = due.id
             returning ${mediaColumns('asset')}`,
@@ -1127,10 +1141,12 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
           `update messaging.media_assets
               set state = 'PURGED', purged_at = now(), revision = revision + 1, updated_at = now()
             where tenant_id = $1 and id = $2 and state = 'EXPIRED'
+              -- PURGED means every scheduled deletion completed. A dead-lettered job still holds
+              -- bytes in the bucket, so the asset stays EXPIRED and the dead-letter metric, not a
+              -- false PURGED row, is what surfaces the object for operator action.
               and not exists (
                 select 1 from messaging.media_gc_jobs job
                  where job.tenant_id = $1 and job.media_id = $2
-                   and job.dead_at is null
               )
             returning id`,
           [input.tenantId, input.mediaId],

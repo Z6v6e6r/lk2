@@ -377,7 +377,7 @@ describe('messaging media worker cycle', () => {
     expect(putReady).not.toHaveBeenCalled();
   });
 
-  it('retries a transient source read below the attempt limit and terminalizes at it', async () => {
+  it('retries a transient source read and never terminalizes it at the attempt budget', async () => {
     const releaseScan = vi.fn().mockResolvedValue(undefined);
     const failScan = vi.fn().mockResolvedValue('rejected');
     const transient = () => Promise.reject(new Error('socket hang up'));
@@ -402,8 +402,10 @@ describe('messaging media worker cycle', () => {
     expect(release.availableAt.getTime()).toBeGreaterThan(Date.now());
     expect(failScan).not.toHaveBeenCalled();
 
+    // Past the budget the asset stays SCANNING: the retry slows down to the maximum backoff and
+    // the file is never labelled as rejected, because a scanner outage is not a property of it.
     const releaseScanAtLimit = vi.fn().mockResolvedValue(undefined);
-    const failed = await run({
+    const exhausted = await run({
       repository: repository({
         claimScans: vi.fn().mockResolvedValue([claim({ attempt: 3 })]),
         releaseScan: releaseScanAtLimit,
@@ -413,19 +415,16 @@ describe('messaging media worker cycle', () => {
       scanMaxAttempts: 3,
     });
 
-    expect(failed).toMatchObject({ scanRetried: 0, scanFailed: 1, rejected: 1 });
-    expect(failScan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mediaId,
-        failureCode: 'MESSAGING_MEDIA_TRANSIENT_FAILURE',
-      }),
-    );
-    expect(releaseScanAtLimit).not.toHaveBeenCalled();
+    expect(exhausted).toMatchObject({ scanRetried: 1, scanFailed: 1, rejected: 0, scanned: 0 });
+    expect(failScan).not.toHaveBeenCalled();
+    const slowRelease = releaseScanAtLimit.mock.calls[0]?.[0] as { readonly availableAt: Date };
+    expect(slowRelease.availableAt.getTime()).toBeGreaterThan(Date.now() + 200_000);
   });
 
-  it('maps a reused ClamAV unavailability code onto the chat namespace', async () => {
+  it('maps a reused ClamAV unavailability code onto the chat namespace without rejecting', async () => {
     const body = pngBody();
     const failScan = vi.fn().mockResolvedValue('rejected');
+    const releaseScan = vi.fn().mockResolvedValue(undefined);
     const scanner: MessagingMediaMalwareScanner = {
       scan: vi.fn().mockRejectedValue(new Error('COMMUNITY_MEDIA_SCAN_UNAVAILABLE')),
     };
@@ -433,6 +432,7 @@ describe('messaging media worker cycle', () => {
     await run({
       repository: repository({
         claimScans: vi.fn().mockResolvedValue([claim({ declaredSha256: sha256(body) })]),
+        releaseScan,
         failScan,
       }),
       store: store({ getExact: vi.fn().mockResolvedValue({ body, contentType: 'image/png' }) })
@@ -441,9 +441,10 @@ describe('messaging media worker cycle', () => {
       scanMaxAttempts: 1,
     });
 
-    expect(failScan).toHaveBeenCalledWith(
+    expect(releaseScan).toHaveBeenCalledWith(
       expect.objectContaining({ failureCode: 'MESSAGING_MEDIA_SCAN_UNAVAILABLE' }),
     );
+    expect(failScan).not.toHaveBeenCalled();
   });
 
   it('deletes a GC claim and completes it, treating an absent version as deleted', async () => {
@@ -552,8 +553,8 @@ describe('messaging media worker cycle', () => {
       .fn()
       .mockRejectedValueOnce(new Error('MESSAGING_MEDIA_SCAN_PERSIST_FAILED'))
       .mockResolvedValueOnce('ready');
-    // Terminalizing the first item fails as well; the cycle must still process the second one.
-    const failScan = vi.fn().mockRejectedValue(new Error('MESSAGING_MEDIA_LEASE_STORE_DOWN'));
+    // Deferring the first item fails as well; the cycle must still process the second one.
+    const releaseScan = vi.fn().mockRejectedValue(new Error('MESSAGING_MEDIA_LEASE_STORE_DOWN'));
     const log = logger();
     const claims = [
       claim({ mediaId: '00000000-0000-4000-8000-000000000021' }),
@@ -563,12 +564,12 @@ describe('messaging media worker cycle', () => {
       repository: repository({
         claimScans: vi.fn().mockResolvedValue(claims),
         completeScan,
-        failScan,
+        releaseScan,
       }),
       store: store({ getExact: vi.fn().mockResolvedValue({ body, contentType: 'image/png' }) })
         .store,
       logger: log,
-      scanMaxAttempts: 1,
+      scanMaxAttempts: 2,
     });
 
     expect(result).toMatchObject({ scanned: 1, scanFailed: 0, rejected: 0 });
@@ -652,6 +653,37 @@ describe('messaging media worker cycle', () => {
       mediaId: '00000000-0000-4000-8000-000000000041',
       objectVersion: 'abandoned-version-1',
     });
+    expect(result.expired).toBe(1);
+  });
+
+  it('never confirms an expired asset whose source discovery failed', async () => {
+    const log = logger();
+    const confirm = vi.fn().mockResolvedValue(true);
+
+    const result = await run({
+      repository: repository({
+        expireDue: vi.fn().mockResolvedValue([
+          {
+            mediaId: '00000000-0000-4000-8000-000000000042',
+            objectKey: 'chat-media/quarantine/t/c/m/source',
+            objectVersion: null,
+          },
+        ]),
+        confirmExpiredObjectsAbsent: confirm,
+      }),
+      store: store({
+        currentVersion: vi.fn().mockRejectedValue(new Error('storage unavailable')),
+      }).store,
+      logger: log,
+    });
+
+    // The bytes are still in the bucket, so the asset must stay EXPIRED for a later cycle instead
+    // of being marked PURGED, and the failure is visible in the cycle log.
+    expect(confirm).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ mediaId: '00000000-0000-4000-8000-000000000042' }),
+      'messaging media expired source discovery deferred',
+    );
     expect(result.expired).toBe(1);
   });
 

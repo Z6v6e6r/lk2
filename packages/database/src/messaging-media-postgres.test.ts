@@ -470,4 +470,72 @@ describePostgres('chat media PostgreSQL pipeline', () => {
     }
     await expect(media.confirmExpiredObjectsAbsent({ tenantId, mediaId })).resolves.toBe(true);
   });
+
+  it('re-offers an expired asset whose source version was never discovered', async () => {
+    const issued = await issue('undiscovered.png', 'image/png', 2_048);
+    if (issued.outcome !== 'issued') throw new Error('ISSUE_FAILED');
+    await withTenantTransaction(pool, tenantId, (client) =>
+      client.query(
+        `update messaging.media_assets set upload_expires_at = now() - interval '1 minute'
+          where tenant_id = $1 and id = $2`,
+        [tenantId, issued.intent.id],
+      ),
+    );
+
+    const first = await media.expireDue({
+      tenantId,
+      limit: 10,
+      correlationId: `media-correlation-${randomUUID()}`,
+    });
+    expect(first.find((row) => row.mediaId === issued.intent.id)).toMatchObject({
+      objectVersion: null,
+    });
+
+    // Discovery of the never-finalized object failed in that cycle, so the asset must be offered
+    // again instead of becoming permanently invisible with its quarantine object left behind.
+    const second = await media.expireDue({
+      tenantId,
+      limit: 10,
+      correlationId: `media-correlation-${randomUUID()}`,
+    });
+    expect(second.some((row) => row.mediaId === issued.intent.id)).toBe(true);
+  });
+
+  it('never confirms an expired asset absent while a dead-lettered deletion holds bytes', async () => {
+    const mediaId = await ready('dead-letter.png');
+    await withTenantTransaction(pool, tenantId, (client) =>
+      client.query(
+        `update messaging.media_assets
+            set unattached_expires_at = now() - interval '1 minute',
+                upload_expires_at = now() - interval '1 minute'
+          where tenant_id = $1 and id = $2`,
+        [tenantId, mediaId],
+      ),
+    );
+    await media.expireDue({
+      tenantId,
+      limit: 10,
+      correlationId: `media-correlation-${randomUUID()}`,
+    });
+
+    const claims = await media.claimGc({
+      tenantId,
+      limit: 10,
+      leaseOwner: 'media-pg-test',
+      leaseSeconds: 30,
+    });
+    const mine = claims.filter((claim) => claim.mediaId === mediaId);
+    expect(mine.length).toBeGreaterThan(0);
+    for (const claim of mine) {
+      await media.deadLetterGc({
+        tenantId,
+        leaseOwner: 'media-pg-test',
+        jobId: claim.jobId,
+        failureCode: 'MESSAGING_MEDIA_GC_TEST_DOWN',
+      });
+    }
+
+    // PURGED would claim the bytes are gone while the dead-lettered job still holds them.
+    await expect(media.confirmExpiredObjectsAbsent({ tenantId, mediaId })).resolves.toBe(false);
+  });
 });

@@ -157,6 +157,7 @@ export async function runMessagingMediaCycle(input: {
   // recorded for exact deletion; otherwise the quarantine object would outlive the asset forever.
   let expiredMediaIds: readonly string[] = [];
   let expired = 0;
+  const discoveryDeferred = new Set<string>();
   try {
     const due = await input.repository.expireDue({
       tenantId: input.tenantId,
@@ -176,8 +177,10 @@ export async function runMessagingMediaCycle(input: {
           objectVersion: version,
         });
       } catch (error) {
-        // The object stays scheduled for the next cycle; the asset is not confirmed PURGED while a
-        // deletion is still outstanding.
+        // The version stays unknown, so this cycle must not confirm the object absent: expiry
+        // returns the asset again next cycle until discovery succeeds. Confirming here would mark it
+        // PURGED while the quarantine object is still in the bucket.
+        discoveryDeferred.add(media.mediaId);
         logWarning(error, 'messaging media expired source discovery deferred', media.mediaId);
       }
     }
@@ -205,33 +208,33 @@ export async function runMessagingMediaCycle(input: {
     }
   };
 
-  const retryOrTerminateScan = async (
+  const retryScan = async (
     mediaId: string,
     attempt: number,
     failureCode: string,
   ): Promise<void> => {
     try {
-      if (attempt < scanMaxAttempts) {
-        await input.repository.releaseScan({
-          tenantId: input.tenantId,
-          leaseOwner: input.workerId,
-          mediaId,
-          failureCode,
-          availableAt: retryAt(attempt),
-        });
-        scanRetried += 1;
-        return;
-      }
-      const outcome = await input.repository.failScan({
+      // A scanner or object-store outage is a property of the environment, not of the file, so an
+      // exhausted attempt budget only slows the retry down to the maximum backoff; it never marks
+      // the asset REJECTED and never schedules its bytes for deletion. A scan that stays impossible
+      // is reclaimed by expiry after the stall window, so the sender sees an expired upload and can
+      // re-upload instead of being told their file failed a security check.
+      const beyondBudget = attempt >= scanMaxAttempts;
+      await input.repository.releaseScan({
         tenantId: input.tenantId,
         leaseOwner: input.workerId,
         mediaId,
         failureCode,
-        correlationId,
+        availableAt: retryAt(beyondBudget ? scanMaxAttempts + 7 : attempt),
       });
-      if (outcome === 'rejected') {
+      scanRetried += 1;
+      if (beyondBudget) {
         scanFailed += 1;
-        rejected += 1;
+        logWarning(
+          { failureCode },
+          'messaging media scan still failing beyond the attempt budget; retrying at maximum backoff',
+          mediaId,
+        );
       }
     } catch (error) {
       logWarning(error, 'messaging media scan retry deferred', mediaId);
@@ -295,7 +298,7 @@ export async function runMessagingMediaCycle(input: {
         await rejectPermanently(claim.mediaId, sourceRejectionCode(error));
         continue;
       }
-      await retryOrTerminateScan(claim.mediaId, claim.attempt, mapScanErrorCode(error));
+      await retryScan(claim.mediaId, claim.attempt, mapScanErrorCode(error));
     }
   }
 
@@ -355,6 +358,9 @@ export async function runMessagingMediaCycle(input: {
   }
 
   for (const mediaId of expiredMediaIds) {
+    // An asset whose source version could not be discovered is never confirmed absent: the bytes
+    // are still there, and only a later cycle that discovers the version may purge the asset.
+    if (discoveryDeferred.has(mediaId)) continue;
     try {
       await input.repository.confirmExpiredObjectsAbsent({
         tenantId: input.tenantId,
