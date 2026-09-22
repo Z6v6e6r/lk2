@@ -190,7 +190,7 @@ LC_ALL=C awk '
     return "UNSAFE_KEY"
   }
 
-  /^[[:space:]]*$/ { next }
+  /^[ \t\r]*$/ { next }
   /^#/ { next }
   /^[A-Z][A-Z0-9_]*=[ -~]*$/ { next }
   {

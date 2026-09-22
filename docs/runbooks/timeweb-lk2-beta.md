@@ -470,13 +470,48 @@ in `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`), which is wh
 viewer-scoped legacy (CUP) community and history reads. The value never becomes a PadlHub login key,
 never enters `profile.user_summaries.phone_e164` and is never proof for payment, participation or
 activity-history guards; a phone already linked to another active user is skipped as `conflict`.
-Verify the operator-side effect after a real cabinet profile read:
+
+The same link is the only anchor a client-assisted OAuth account has for its imported legacy player
+row, so the API also resolves that account's one-way player keys against the legacy Games of that phone
+and delivers the friend requests saved against those imported rows. That resolution is delivery-only:
+it never writes `integration.legacy_game_player_bindings`, so the client-asserted phone can route a
+saved friend request but can never re-point an imported player, a roster or a participation; the
+identity binding stays reserved for the Viva-proven and verified-login-phone proofs. The proof is
+best-effort: a `403`, timeout or empty result never fails the link or the login. It is skipped while
+the tenant has no saved request waiting, which is a cost guard and not a per-account quota: one
+permanently pending row keeps the phone-keyed read in play for every later phone link, so treat a
+stuck `PENDING` row as an operator-visible condition rather than only a user complaint. Verify the
+operator-side effect after a real cabinet profile read:
 
 ```sql
 select count(*), max(last_synced_at)
   from integration.external_entity_map
  where entity_type = 'legacy_viewer_phone';
+
+select state, count(*)
+  from profile.deferred_friend_requests
+ group by state;
 ```
+
+The log line `legacy viewer association proof completed` carries one outcome per phone link:
+
+| Outcome           | Meaning                                                                                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `absent`          | no usable phone in the request; nothing was read                                                                                               |
+| `tenant_mismatch` | the caller's tenant is not the configured legacy tenant; nothing was read                                                                      |
+| `no_pending`      | no saved request is waiting in the tenant; nothing was read                                                                                    |
+| `no_match`        | the mirror has no Game proving that phone, or stores the number unusably                                                                       |
+| `not_deliverable` | player keys were proven but no waiting saved request could be settled                                                                          |
+| `delivered`       | at least one saved request settled; a real request exists unless the settled reason is `SELF_TARGET`, `ALREADY_FRIEND` or `TARGET_UNAVAILABLE` |
+| `unavailable`     | the legacy read or the delivery failed; nothing changed and the next link retries                                                              |
+
+The viewer-phone lookup matches the mirror's own phone columns in memory and accepts the same stored
+shapes as the viewer-scoped legacy community reader (`79990000001`, `+7 (999) 000-00-01`,
+`89990000001`, a bare national number or a numeric field). Confirm once against the mirror that a
+known tester number is actually stored in one of those shapes in
+`organizer.phoneNorm`/`participants.phoneNorm` or `organizer.phone`/`participants.phone`, and confirm
+the phone filter is index-supported, because a shape or an index the matcher cannot use returns
+`no_match` while the saved request simply stays pending.
 
 A viewer whose legacy communities still read `UNAVAILABLE` either has no linked phone yet or owns no
 delegation, because the legacy read path needs both.

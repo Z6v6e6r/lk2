@@ -4,3 +4,10 @@ aa105bd26d2aeb3d66a18df12a95fdff200947b9:packages/api-sdk/src/index.test.ts:gene
 aa105bd26d2aeb3d66a18df12a95fdff200947b9:apps/api/src/app.test.ts:generic-api-key:1483
 aa105bd26d2aeb3d66a18df12a95fdff200947b9:apps/api/src/app.test.ts:generic-api-key:1523
 aa105bd26d2aeb3d66a18df12a95fdff200947b9:apps/api/src/subscriptions/subscription-runtime-warn-routes.test.ts:generic-api-key:32
+# The same scanner reads synthetic `idempotencyKey` fixtures in the notification
+# policy PostgreSQL test as credentials. The literals were replaced by a helper in
+# the following commit; these four fingerprints only cover the immutable commit.
+1d284e1ca630e8b82e79e74f28e74329fda80215:packages/database/src/messaging-concurrency-postgres.test.ts:generic-api-key:705
+1d284e1ca630e8b82e79e74f28e74329fda80215:packages/database/src/messaging-concurrency-postgres.test.ts:generic-api-key:722
+1d284e1ca630e8b82e79e74f28e74329fda80215:packages/database/src/messaging-concurrency-postgres.test.ts:generic-api-key:739
+1d284e1ca630e8b82e79e74f28e74329fda80215:packages/database/src/messaging-concurrency-postgres.test.ts:generic-api-key:779

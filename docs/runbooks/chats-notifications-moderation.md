@@ -44,7 +44,10 @@ enabling chats.
 6. Enable realtime and verify reconnect plus sequence-gap recovery through HTTP.
 7. Enable in-app notification intents/inbox, then one trigger rule with a synthetic audience.
 8. Enable push one platform at a time: Web Push sandbox, APNs sandbox, FCM test project, then the
-   corresponding production account. Never switch all platforms in one change window.
+   corresponding production account. Never switch all platforms in one change window. Chat push needs
+   the `messaging.ru-ru.v2` ruleset as well; follow
+   [Messaging chat push prerequisites and acceptance](#messaging-chat-push-prerequisites-and-acceptance)
+   after the Web Push sandbox gate.
 9. Enable one messaging connector in sandbox; verify inbound/outbound deduplication and DLQ replay.
 10. Enable user reports and CUP moderation. Enable reversible auto-quarantine only after expiry and
     reversal tests pass.
@@ -77,10 +80,12 @@ conditions are recorded for the target:
    nodes; no old process may restart during the window;
 5. the pre-phase database role verifier, tenant-local duplicate inventory and production-like
    clone/lock rehearsal passed for the exact image digest.
-6. the ledger diff proves every packaged migration outside 0069–0073 is already applied. The
-   migrator rejects the maintenance acknowledgement with
-   `CHAT_PUSH_FOUNDATION_MAINTENANCE_UNEXPECTED_PENDING` if any sixth file is pending; combined
-   migration batches need a separate rehearsal and are not authorized by this procedure.
+6. the ledger diff shows all five gated migrations `0069`–`0073` are pending. The maintenance
+   acknowledgement authorizes that pending batch in package order, so a contour that skipped several
+   releases may carry an additional backlog into the same window; the verifier reports the gated
+   count (`pendingFoundationCount`) and the total (`pendingTotalCount`) so the operator sees the
+   batch it acknowledges. Without the acknowledgement the migrator still refuses every run while the
+   five are pending.
 
 Pass the acknowledgement only to the one-shot migrator process, never to a persistent env file or
 application container. The production command is self-contained for the production Compose model:
@@ -241,8 +246,12 @@ archive size, SHA-256 and `pg_restore --list`, then atomically changes the old h
 `RECOVERY_DRAINING` and `RECOVERY_WRITERS_DRAINED`. It skips the
 image build and downloads the five digest artifacts from the exact original workflow run; those
 artifacts must still exist and match the stored candidate release byte-for-byte. The protected
-workflow definition still comes from the current `main`, while verify/deploy checkout the exact
-original candidate commit, so advancing `main` does not force a different runtime into recovery.
+workflow definition still comes from the current `main`, and so do the deployment definitions that
+the recovery installs - Compose, the release helper, the foundation verifiers and the monitoring
+rules. `verify` keeps certifying the original candidate commit, and the runtime stays pinned to that
+candidate because only its digest artifacts are accepted and rebuilt-image drift is rejected, so
+advancing `main` cannot change the images a recovery starts. Advance `main` with a reviewed fix to
+those definitions when the failed initial run was itself blocked by them.
 The candidate Compose definition is uploaded to a run-bound same-directory temporary file,
 structurally validated and atomically renamed, so an interrupted transfer cannot corrupt the
 known-good definition used by failure containment to stop the writers.
@@ -981,6 +990,21 @@ credentials exist. Resolve a known internal phone, send one test campaign, then 
 - the same `Idempotency-Key` returns the original campaign with `replayed=true`;
 - logs and RabbitMQ contain no title, body, phone or endpoint material.
 
+Before and after a campaign, the same tab can open the delivery report
+(`GET /admin/api/v1/<tenant-key>/notifications/delivery-stats?days=7`): it shows what was queued per
+channel, what the push service accepted, which stable error codes caused the failures, the last campaigns
+with their per-endpoint outcomes, and the current endpoint health with the platform split. Remember what
+the numbers can and cannot say: Web Push has no provider dashboard and no receipt beyond acceptance, so
+`SENT` means "the push service took it", not "the person saw it"; a subscription that was deleted on the
+device keeps looking accepted until the service answers 404/410, at which point the endpoint turns
+`INVALID`. The report also carries the funnel: `displayed` and `opened` count deliveries whose client reported a
+receipt, not receipts themselves, so a message shown on two devices counts once per delivery. Treat both
+as a floor — an iPhone whose web app is closed may not run the worker at all — and never as proof that a
+person read anything.
+
+When a person says nothing arrived, compare their `lastConfirmedAt` first — a live row with an
+old confirmation usually means the browser or the installed app was replaced and has to subscribe again.
+
 The API accepts a title of up to 300 characters, because that is the in-app inbox limit. The system
 banner is narrower and is truncated by the operating system or browser, not by PadlHub, so write for the
 banner and let the inbox carry the rest:
@@ -1082,6 +1106,28 @@ still require `rabbit-required`; the inert mode cannot satisfy a live-runtime ve
 a compatible consumer instead requires a separately approved, bounded rollback window and
 continuous queue-depth observation. A database rollback is not required: the expand-only recipient
 fence table is inert for older workers.
+
+### Messaging chat push prerequisites and acceptance
+
+Version 2 (`messaging.ru-ru.v2`) adds the optional `PUSH` channel to the same two direct-chat rules;
+the source events, the identifier-only payload and the `/chats/{{conversationId}}` deep link do not
+change, and both rules stay `mandatory = false`. The provisioning procedure, the request-hash rule
+and the inactive-first template ordering are described with the other rulesets above.
+
+Provisioning a version never enables a transport by itself. Chat push starts only while all of these
+hold for the tenant: `WEB_PUSH_ENABLED` on every API and worker replica, an `ACTIVE` Web Push provider
+account, the recipient has an `ACTIVE` endpoint registered, and the tenant gate
+`notifications.tenant_runtime_settings.web_push_enabled` is on. The recipient's own settings still
+decide each message: category `MESSAGING` + channel `PUSH` must not be disabled, the quiet window
+must be closed, and the conversation policy must not be muted (`ALL` with no open `muted_until`).
+Realtime delivery and the inbox item are unaffected by that policy.
+
+Acceptance: one chat message yields one inbox item and at most one push per active endpoint;
+disabling `MESSAGING/PUSH` or entering quiet hours removes the push while the item still lands; a
+muted conversation produces no push but still delivers realtime; RabbitMQ payloads, logs and metrics
+contain no message body and no endpoint address. Rollback turns `web_push_enabled` off and leaves the
+in-app item; provisioning never rewrites an older version's templates, so the previous rows remain
+inactive history.
 
 ### Booking notification ruleset M1
 
@@ -1283,23 +1329,48 @@ Worker startup must declare `phub.dead-letter.v1` as a durable quorum queue and 
 `phub.dead-letter` topic exchange with routing key `#`. This is shared retention for rejected
 events; it does not change the routing keys or delivery policy of existing consumers.
 
-Notification projectors use three explicit queues. `phub.notification-intent-projector.v1` retains
+Notification projectors use four explicit queues. `phub.notification-intent-projector.v1` retains
 only the four booking contracts so old workers remain safe during a rolling upgrade;
 `phub.game-notification-intent-projector.v1` binds only the three GAME contracts and is consumed
 only by workers that understand their schemas and recipient fence;
 `phub.messaging-notification-intent-projector.v1` binds only `messaging.conversation.created.v1` and
 `messaging.message.created.v1`, whose identifier-only payloads carry the `recipientUserIds` the
-ruleset audience selector reads. The worker removes the legacy `phub.events` / `#` binding from the
-booking queue. Verify that no projector queue has a wildcard binding before enabling rules. Every
-future notification-producing vertical must add its versioned routing key to a code-owned topology
-manifest and test; a database rule alone must not broaden broker consumption.
+ruleset audience selector reads; `phub.friendship-notification-intent-projector.v1` binds only
+`profile.friend_request.created.v1`, which addresses the account that has to answer in the same
+field. The worker removes the legacy `phub.events` / `#` binding from the booking queue only after
+every other queue is fully bound. Verify that no projector queue has a wildcard binding before
+enabling rules. Every future notification-producing vertical must add its own versioned queue,
+routing key and test; a database rule alone must not broaden broker consumption.
 
 Direct-chat notifications are optional per category: provision them with
 `npm run notifications:messaging:provision -- --tenant-key=<key> --actor-id=<uuid>
 --idempotency-key=<16-128 chars>` (dry-run first, then `--confirm=APPLY_MESSAGING_NOTIFICATION_RULESET`)
-and enable in-app delivery with the existing notification runtime command. Without the messaging
-runtime gates (`messaging.tenant_runtime_settings`) no messaging event is produced at all, so a
-missing conversation notification is first an HTTP/tenant-gate question, not a projector fault.
+and enable delivery with the existing notification runtime command. Ruleset `messaging.ru-ru.v2`
+requests both `IN_APP` and `PUSH`, so a tenant provisioned before v2 must be re-provisioned before a
+direct message can reach a closed browser. A new ruleset version changes the request hash, so the
+re-provisioning command needs a **new** idempotency key; reusing the v1 key fails with
+`IDEMPOTENCY_KEY_REUSED` before anything is written. The provisioner inserts the new template version
+inactive and only then retires the previous active version, because the schema keeps at most one
+active template per `(template_key, locale)`. Without the messaging runtime gates
+(`messaging.tenant_runtime_settings`) no messaging event is produced at all, so a missing
+conversation notification is first an HTTP/tenant-gate question, not a projector fault.
+
+Incoming friend requests are provisioned the same way:
+`npm run notifications:friendship:provision -- --tenant-key=<key> --actor-id=<uuid>
+--idempotency-key=<16-128 chars>` (dry-run first, then
+`--confirm=APPLY_FRIENDSHIP_NOTIFICATION_RULESET`). The `friendship.ru-ru.v1` ruleset also requests
+`IN_APP` and `PUSH` and addresses only the account that has to answer. A saved request for an
+imported legacy player emits `profile.friend_request.created.v1` when the worker delivers that row,
+not when the requester saves it, so its notification needs no separate deferred path.
+
+Two timing rules apply to both rulesets. First, the projection is only as good as the running worker:
+an event that arrives after the worker binds its queue but before the rule is provisioned is consumed
+and acknowledged with zero intents, and an event published while no queue is bound is dropped by the
+exchange because the publisher does not set `mandatory`. Provision the ruleset immediately after the
+worker rollout, and re-trigger the source event for acceptance instead of relying on the events from
+either gap. Second, an already `PENDING` friend request emits no new event when the requester taps
+"add" again — `POST /profile/friends/{userId}` replays the stored command — so verifying a friendship
+push needs a fresh requester/target pair or a declined request that is issued again.
 
 GAME chat membership uses the separate durable quorum queue
 `phub.game-messaging-membership.v1`. It binds exactly the catalog routes `game.scheduled.v1`,

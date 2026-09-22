@@ -30,6 +30,7 @@ import {
   createMessagingRepository,
   createNotificationEndpointRepository,
   createNotificationInboxRepository,
+  createNotificationPreferenceRepository,
   createParticipationCommandRepository,
   createProfilePrivacyRepository,
   createProfileFriendshipRepository,
@@ -46,9 +47,10 @@ import {
 import {
   LegacyGamesMongoAdapter,
   LegacyGamesPublicAdapter,
+  LegacyTournamentResultAdapter,
   LegacyTournamentSummaryAdapter,
 } from '@phub/legacy-games-adapter';
-import { createNotificationEndpointCipher } from '@phub/notifications';
+import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
 import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
 import { ManagedSubscriptionRuntimeQuoteClient } from '@phub/subscription-runtime-adapter';
@@ -57,6 +59,7 @@ import Redis from 'ioredis';
 import { buildApp } from './app.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
+import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import { RedisBookingScreenReadJobStore } from './bookings/booking-screen-read-job-store.js';
 import { RedisEventCatalogSnapshotStore } from './bookings/event-catalog-snapshot-store.js';
 import { RedisRealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
@@ -122,6 +125,15 @@ const clientRoutingPlanRepository = createClientRoutingPlanRepository(pool);
 const notificationEndpointCipher =
   config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? createNotificationEndpointCipher({
+        serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
+        activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
+      })
+    : undefined;
+// The Worker derives the same value from the same keyring, so a receipt token needs no shared session
+// and no new configuration key.
+const notificationReceiptKey =
+  config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
+    ? notificationReceiptSecret({
         serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
         activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
       })
@@ -269,6 +281,20 @@ const legacyLkIdentityVerifier = config.LEGACY_GAME_COMMAND_BRIDGE_ENABLED
       timeoutMs: config.LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS,
     })
   : undefined;
+const tournamentResultSource =
+  config.GAMES_READ_ENABLED && config.ACTIVITY_HISTORY_SYNC_ENABLED
+    ? new LegacyTournamentResultAdapter({
+        baseUrl: config.LEGACY_GAMES_PUBLIC_BASE_URL,
+        timeoutMs: Math.min(Math.max(config.VIVA_TIMEOUT_MS, 2_000), 5_000),
+        maxAttempts: 2,
+        freshTtlMs: 60_000,
+        staleTtlMs: 600_000,
+        circuitFailureThreshold: 3,
+        circuitResetMs: 30_000,
+        onMetric: (metric) => logger.info({ metric }, 'legacy tournament result read'),
+      })
+    : undefined;
+const bookingScreenMappingRepository = createBookingScreenMappingRepository(pool);
 const promotionEngagementSink = config.PROMOTIONS_ENGAGEMENT_SECRET
   ? new LegacyPromotionEngagementSink({
       baseUrl: config.PROMOTIONS_LEGACY_BASE_URL,
@@ -300,6 +326,22 @@ const activityHistoryGameBackfill =
         source: activityHistoryGameBackfillSource,
         repository: createLegacyGameImportRepository(pool),
         projectGameCard: (input) => gameReadRepository.projectCardEvent(input),
+      })
+    : undefined;
+/**
+ * The provider phone link is the only anchor a client-assisted OAuth account has, so it is also where
+ * the saved friend requests addressed to that person's imported legacy rows can be delivered. This
+ * proof routes delivery only and never becomes a durable identity binding. It reuses the
+ * viewer-scoped legacy read the history backfill capability already enables and stays off with it.
+ */
+const legacyViewerAssociationProof =
+  providerIdentityLink && activityHistoryGameBackfillSource
+    ? new LegacyViewerAssociationProof({
+        source: activityHistoryGameBackfillSource,
+        delivery: createProfileFriendshipRepository(pool),
+        legacyTenantKey: config.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY,
+        onOutcome: (outcome, context) =>
+          logger.info({ outcome, ...context }, 'legacy viewer association proof completed'),
       })
     : undefined;
 const readAllLocalGameHistory = gameReadRepository
@@ -349,6 +391,15 @@ const activityHistoryProjector =
             }
           : {}),
         ...(readAllLocalGameHistory ? { readLocalGames: readAllLocalGameHistory } : {}),
+        ...(tournamentResultSource && bookingScreenMappingRepository?.resolveVivaProfileIds
+          ? {
+              tournamentResultSource,
+              resolveTournamentProfileIds: (input: {
+                readonly tenantId: string;
+                readonly externalClientIds: readonly string[];
+              }) => bookingScreenMappingRepository.resolveVivaProfileIds!(input),
+            }
+          : {}),
       })
     : undefined;
 const giftCertificateMediaStore = config.GIFT_CERTIFICATE_MEDIA_ENABLED
@@ -523,6 +574,7 @@ const app = await buildApp({
     : {}),
   clientRoutingPlanRepository,
   notificationRepository: createNotificationInboxRepository(pool),
+  notificationPreferenceRepository: createNotificationPreferenceRepository(pool),
   messagingRepository: createMessagingRepository(pool),
   realtimeTicketIssuer: new RedisRealtimeTicketIssuer(redis, config),
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
@@ -545,6 +597,7 @@ const app = await buildApp({
   communityLogoMediaRepository: createCommunityLogoMediaRepository(pool),
   ...(profilePhotoMediaStore ? { profilePhotoMediaStore } : {}),
   ...(providerIdentityLink ? { providerIdentityLink } : {}),
+  ...(legacyViewerAssociationProof ? { legacyViewerAssociationProof } : {}),
   ...(trainerAvatarMediaStore
     ? {
         trainerAvatarRepository: createTrainerAvatarRepository(pool),
@@ -569,7 +622,7 @@ const app = await buildApp({
     ? {
         bookingScreenReadJobStore: new RedisBookingScreenReadJobStore(redis),
         eventCatalogSnapshotStore: new RedisEventCatalogSnapshotStore<EventCatalogItem>(redis),
-        bookingScreenMappingRepository: createBookingScreenMappingRepository(pool),
+        bookingScreenMappingRepository,
       }
     : {}),
   ...(activityHistoryRepository ? { activityHistoryRepository } : {}),
@@ -592,6 +645,7 @@ const app = await buildApp({
       }
     : {}),
   ...(notificationEndpointCipher ? { notificationEndpointCipher } : {}),
+  ...(notificationReceiptKey ? { notificationReceiptSecret: notificationReceiptKey } : {}),
   authDependencyReady: async () => (await redis.ping()) === 'PONG',
   rateLimitRedis: redis,
 });

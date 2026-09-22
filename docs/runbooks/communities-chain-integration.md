@@ -91,8 +91,8 @@ does not prove an acceptable production writer pause.
      Complete the separately authorized maintenance procedure in
      `docs/runbooks/chats-notifications-moderation.md`, then restart this preflight from a fresh
      inventory whose `0069`–`0073` pending set is empty. If any other packaged migration is pending
-     alongside `0069`–`0073`, the current policy also returns
-     `CHAT_PUSH_FOUNDATION_MAINTENANCE_UNEXPECTED_PENDING` before DDL.
+     alongside `0069`–`0073`, the policy refuses the batch before DDL unless the chat/push
+     maintenance acknowledgement is supplied, which only that separately authorized procedure does.
 7. Compare Communities row counts before and after; require all indexes valid and all Communities
    tables to have both RLS and FORCE RLS.
 8. Validate existing `NOT VALID` Communities constraints in a transaction and roll it back.

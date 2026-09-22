@@ -767,6 +767,10 @@ describe('health endpoints', () => {
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -851,6 +855,10 @@ describe('health endpoints', () => {
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request,
         respond: vi.fn(),
       },
@@ -901,6 +909,10 @@ describe('health endpoints', () => {
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request: vi.fn(),
         respond: vi.fn(),
         remove,
@@ -999,6 +1011,10 @@ describe('health endpoints', () => {
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request,
         respond: vi.fn(),
         remove: vi.fn(),
@@ -1041,6 +1057,10 @@ describe('health endpoints', () => {
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request,
         respond: vi.fn(),
         remove: vi.fn(),
@@ -1091,6 +1111,10 @@ describe('health endpoints', () => {
         listIncoming,
         listOutgoing: vi.fn(),
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -1137,6 +1161,10 @@ describe('health endpoints', () => {
         listIncoming,
         listOutgoing,
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -1171,6 +1199,10 @@ describe('health endpoints', () => {
         listIncoming,
         listOutgoing,
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request: vi.fn(),
         respond: vi.fn(),
       },
@@ -1216,6 +1248,10 @@ describe('health endpoints', () => {
         listIncoming: vi.fn(),
         listOutgoing: vi.fn(),
         deliverDeferredFriendRequests: vi.fn(),
+        hasPendingDeferredRequests: vi.fn().mockResolvedValue(false),
+        deliverDeferredFriendRequestsForPlayerKeys: vi
+          .fn()
+          .mockResolvedValue({ delivered: 0, pending: 0 }),
         request: vi.fn(),
         respond,
       },

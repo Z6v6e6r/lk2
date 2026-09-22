@@ -9,6 +9,7 @@ export type ChatCategoryIconName =
   | 'STATION'
   | 'COMMUNITY'
   | 'NOTIFICATIONS'
+  | 'BELL_OFF'
   | 'UNREAD'
   | 'SEND'
   | 'REFRESH';
@@ -58,6 +59,11 @@ export function ChatCategoryIcon({
       {name === 'NOTIFICATIONS' ? (
         <>
           <path d="M6 9a6 6 0 0 1 12 0c0 6 2 7 2 8H4c0-1 2-2 2-8ZM10 21h4" />
+        </>
+      ) : null}
+      {name === 'BELL_OFF' ? (
+        <>
+          <path d="M6 9a6 6 0 0 1 9.3-5.1M18 11c0 6 2 7 2 8H6M10 21h4M4 4l16 16" />
         </>
       ) : null}
       {name === 'UNREAD' ? (

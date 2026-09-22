@@ -1,5 +1,6 @@
 import { Agent } from 'node:https';
 
+import { verifyNotificationReceiptToken } from '@phub/notifications';
 import webPush from 'web-push';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -32,6 +33,38 @@ const request = {
 };
 
 describe('Web Push delivery adapter', () => {
+  it('adds a per-delivery receipt token so the client can report the funnel', async () => {
+    const sendImplementation = vi
+      .fn()
+      .mockResolvedValue({ statusCode: 201, headers: {}, body: '' });
+    const adapter = new WebPushDeliveryAdapter({
+      subject: 'mailto:ops@padlhub.test',
+      publicKey: 'public-key',
+      privateKey: 'private-key',
+      ttlSeconds: 300,
+      timeoutMs: 5_000,
+      circuitFailureThreshold: 5,
+      circuitResetMs: 30_000,
+      allowedEndpointOrigins: ['https://push.example.test'],
+      receiptTokenSecret: 'derived-receipt-secret',
+      sendImplementation,
+    });
+
+    await expect(adapter.send(request)).resolves.toEqual({ outcome: 'accepted' });
+    const payload = JSON.parse(String(sendImplementation.mock.calls[0]?.[1])) as {
+      readonly receiptToken?: string;
+    };
+    // The token is signed for this delivery and tenant, and it is not the secret itself.
+    expect(payload.receiptToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
+    expect(payload.receiptToken).not.toContain('derived-receipt-secret');
+    expect(
+      verifyNotificationReceiptToken({
+        secret: 'derived-receipt-secret',
+        token: payload.receiptToken ?? '',
+      }),
+    ).toEqual({ tenantId: request.tenantId, deliveryId: request.deliveryId });
+  });
+
   it('sends only the bounded notification payload with VAPID options', async () => {
     const sendImplementation = vi.fn().mockResolvedValue({
       statusCode: 201,

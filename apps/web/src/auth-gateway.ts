@@ -50,6 +50,8 @@ import type {
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  NotificationPreferencesUpdateRequest,
+  NotificationPreferencesView,
   MessagingRealtimeTicket,
   RealtimeTicket,
   PlayerProfileView,
@@ -127,6 +129,8 @@ export type {
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  NotificationPreferencesUpdateRequest,
+  NotificationPreferencesView,
   RealtimeTicket,
   PlayerProfileView,
   PublicGameCard,
@@ -216,12 +220,20 @@ export interface ConversationLastMessage {
   readonly createdAt: string;
 }
 
+export interface ConversationNotificationPolicy {
+  readonly level: 'ALL' | 'MENTIONS' | 'NONE';
+  readonly muted: boolean;
+  readonly mutedUntil?: string;
+}
+
 export interface DirectConversationSummary {
   readonly id: string;
   readonly kind: 'DIRECT';
   readonly participant: MessagingParticipant;
   readonly unreadCount: number;
   readonly updatedAt: string;
+  /** Absent only on the local one-shot navigation hint, never on an HTTP summary. */
+  readonly notificationPolicy?: ConversationNotificationPolicy;
   readonly lastMessage?: ConversationLastMessage;
 }
 
@@ -232,6 +244,8 @@ export interface GameConversationSummary {
   readonly title: string;
   readonly unreadCount: number;
   readonly updatedAt: string;
+  /** Absent only on the local one-shot navigation hint, never on an HTTP summary. */
+  readonly notificationPolicy?: ConversationNotificationPolicy;
   readonly lastMessage?: ConversationLastMessage;
 }
 
@@ -275,6 +289,17 @@ export interface ConversationReadCursorResult {
   readonly readThroughSequence: number;
   readonly changed: boolean;
   readonly replayed: boolean;
+}
+
+export interface ConversationNotificationPolicyUpdate {
+  readonly level: 'ALL' | 'MENTIONS' | 'NONE';
+  readonly mutedUntil?: string;
+}
+
+export interface ConversationNotificationPolicyResult {
+  readonly outcome: 'ok';
+  readonly policy: ConversationNotificationPolicy;
+  readonly changed: boolean;
 }
 
 export interface SendConversationMessageCommand {
@@ -544,8 +569,17 @@ export interface AuthGateway {
     throughSequence: number,
     idempotencyKey: string,
   ) => Promise<ConversationReadCursorResult>;
+  readonly setConversationNotificationPolicy: (
+    conversationId: string,
+    update: ConversationNotificationPolicyUpdate,
+    idempotencyKey: string,
+  ) => Promise<ConversationNotificationPolicyResult>;
   readonly listNotifications: () => Promise<NotificationInboxPage>;
   readonly markNotificationsRead: (throughId: string) => Promise<void>;
+  readonly getNotificationPreferences: () => Promise<NotificationPreferencesView>;
+  readonly updateNotificationPreferences: (
+    input: NotificationPreferencesUpdateRequest,
+  ) => Promise<NotificationPreferencesView>;
   readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
   readonly registerWebPushEndpoint: (
     input: WebPushEndpointRegistration,
@@ -2217,6 +2251,20 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       );
     },
 
+    setConversationNotificationPolicy(conversationId, update, idempotencyKey) {
+      return retryMessagingCommand((signal) =>
+        client.request<ConversationNotificationPolicyResult>(
+          `/conversations/${encodeURIComponent(conversationId)}/notification-policy`,
+          {
+            method: 'PUT',
+            idempotencyKey,
+            body: JSON.stringify(update),
+            signal,
+          },
+        ),
+      );
+    },
+
     listNotifications() {
       if (notificationsCache && notificationsCache.expiresAt > Date.now()) {
         return Promise.resolve(notificationsCache.page);
@@ -2246,6 +2294,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       notificationsCacheRevision += 1;
       notificationsCache = undefined;
       notificationsPromise = undefined;
+    },
+
+    getNotificationPreferences() {
+      return client.getNotificationPreferences();
+    },
+
+    updateNotificationPreferences(input) {
+      return client.updateNotificationPreferences(input);
     },
 
     getWebPushConfiguration() {

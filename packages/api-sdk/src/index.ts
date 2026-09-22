@@ -157,6 +157,12 @@ export type ActivityHistoryItem = components['schemas']['ActivityHistoryItem'];
 export type ActivityHistoryPage = components['schemas']['ActivityHistoryPage'];
 export type ConversationPage = components['schemas']['ConversationPage'];
 export type ConversationSummary = components['schemas']['ConversationSummary'];
+export type ConversationNotificationPolicy =
+  components['schemas']['ConversationNotificationPolicy'];
+export type ConversationNotificationPolicyUpdateRequest =
+  components['schemas']['ConversationNotificationPolicyUpdateRequest'];
+export type ConversationNotificationPolicyResult =
+  components['schemas']['ConversationNotificationPolicyResult'];
 export type ConversationMessagePage = components['schemas']['ConversationMessagePage'];
 export type ConversationMessage = components['schemas']['ConversationMessage'];
 export type CreateDirectConversationResult =
@@ -169,6 +175,9 @@ export type ConversationReadCursorResult = components['schemas']['ConversationRe
 export type MessagingRealtimeTicket = components['schemas']['MessagingRealtimeTicket'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
+export type NotificationPreferencesView = components['schemas']['NotificationPreferencesView'];
+export type NotificationPreferencesUpdateRequest =
+  components['schemas']['NotificationPreferencesUpdateRequest'];
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
 export type WebPushEndpointRegistration = components['schemas']['WebPushEndpointRegistration'];
 export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpointCommandResult'];
@@ -1896,6 +1905,23 @@ export class PadlHubApiClient {
     );
   }
 
+  public updateConversationNotificationPolicy(
+    conversationId: string,
+    input: ConversationNotificationPolicyUpdateRequest,
+  ): Promise<ConversationNotificationPolicyResult> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<ConversationNotificationPolicyResult>(
+        `/conversations/${encodeURIComponent(conversationId)}/notification-policy`,
+        {
+          method: 'PUT',
+          idempotencyKey,
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
+  }
+
   public async getCommunityReadExperienceDetail(
     communityId: string,
   ): Promise<CommunityReadExperienceDetail> {
@@ -2013,6 +2039,23 @@ export class PadlHubApiClient {
         method: 'PUT',
         idempotencyKey,
         body: jsonRequestBody({ throughId }),
+      }),
+    );
+  }
+
+  public getNotificationPreferences(): Promise<NotificationPreferencesView> {
+    return this.request<NotificationPreferencesView>('/notifications/preferences');
+  }
+
+  public updateNotificationPreferences(
+    input: NotificationPreferencesUpdateRequest,
+  ): Promise<NotificationPreferencesView> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<NotificationPreferencesView>('/notifications/preferences', {
+        method: 'PUT',
+        idempotencyKey,
+        body: jsonRequestBody(input),
       }),
     );
   }

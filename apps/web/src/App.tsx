@@ -32,12 +32,16 @@ import type {
   BookingPreferencesUpdateRequest,
   CommunityMembershipPage,
   ConversationMessage,
+  ConversationNotificationPolicyUpdate,
   ConversationPage,
+  ConversationSummary,
   HomeBase,
   HomeDashboard,
   LocationDetail,
   LocationList,
   NotificationInboxPage,
+  NotificationPreferencesUpdateRequest,
+  NotificationPreferencesView,
   PlayerProfileView,
   PhoneChallenge,
   ProfileLevelHistory,
@@ -605,6 +609,7 @@ export function App({
   const [chatsBusy, setChatsBusy] = useState<'create' | 'send' | 'refresh' | 'load-earlier' | null>(
     null,
   );
+  const [chatPolicyBusyId, setChatPolicyBusyId] = useState<string | null>(null);
   const [chatsReloadToken, setChatsReloadToken] = useState(0);
   const [loadedRealtimeConversationId, setLoadedRealtimeConversationId] = useState<string | null>(
     null,
@@ -615,6 +620,11 @@ export function App({
   const [chatRealtimeState, setChatRealtimeState] = useState<ChatRealtimeUiState | null>(null);
   const [hasEarlierChatMessages, setHasEarlierChatMessages] = useState(false);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
+  // Conversation summaries give a grouped chat row its real name and last-message preview; the
+  // notifications feed itself stays the single source for what is unread.
+  const [notificationConversations, setNotificationConversations] = useState<
+    readonly ConversationSummary[]
+  >([]);
   const [webPushConfiguration, setWebPushConfiguration] = useState<WebPushConfiguration | null>(
     null,
   );
@@ -623,6 +633,12 @@ export function App({
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [notificationsBusy, setNotificationsBusy] = useState(false);
   const [notificationsInboxUnavailable, setNotificationsInboxUnavailable] = useState(false);
+  const [notificationPreferences, setNotificationPreferences] =
+    useState<NotificationPreferencesView | null>(null);
+  const [notificationPreferencesBusy, setNotificationPreferencesBusy] = useState(false);
+  const [notificationPreferencesError, setNotificationPreferencesError] = useState<string | null>(
+    null,
+  );
   const [friendRequests, setFriendRequests] = useState<readonly ProfileFriendRequestSummary[]>([]);
   const [friendRequestsError, setFriendRequestsError] = useState<string | null>(null);
   const [outgoingFriendRequests, setOutgoingFriendRequests] = useState<
@@ -1260,6 +1276,15 @@ export function App({
           },
         );
       };
+      const loadConversations = (): void => {
+        void gateway.listConversations().then(
+          (result) => {
+            if (!active) return;
+            setNotificationConversations(result.items);
+          },
+          () => undefined,
+        );
+      };
       const refreshNotifications = (): void => {
         loadFriendRequests();
         void gateway.listNotifications().then(
@@ -1278,12 +1303,20 @@ export function App({
       const refreshVisibleNotifications = (): void => {
         if (document.visibilityState === 'visible') refreshNotifications();
       };
+      // Chat names and last-message previews change far more slowly than the inbox, so they are
+      // loaded on entry and when the tab regains focus, not on every inbox poll.
+      const refreshOnFocus = (): void => {
+        loadConversations();
+        refreshNotifications();
+      };
+      loadConversations();
       void Promise.allSettled([
         gateway.listNotifications(),
         gateway.getWebPushConfiguration(),
         getWebPushBrowserState(serviceWorkerUrl),
         gateway.listProfileFriendRequests(),
         gateway.listProfileFriendRequests(8, 'outgoing'),
+        gateway.getNotificationPreferences(),
       ]).then(
         ([
           pageResult,
@@ -1291,6 +1324,7 @@ export function App({
           browserStateResult,
           friendRequestResult,
           outgoingFriendRequestResult,
+          preferenceResult,
         ]) => {
           if (!active) return;
           const errors: string[] = [];
@@ -1299,6 +1333,13 @@ export function App({
               ? outgoingFriendRequestResult.value.items
               : [],
           );
+          if (preferenceResult.status === 'fulfilled') {
+            setNotificationPreferences(preferenceResult.value);
+            setNotificationPreferencesError(null);
+          } else {
+            setNotificationPreferences(null);
+            setNotificationPreferencesError('Настройки уведомлений временно недоступны.');
+          }
           if (friendRequestResult.status === 'fulfilled') {
             setFriendRequests(friendRequestResult.value.items);
             setFriendRequestsError(null);
@@ -1333,12 +1374,12 @@ export function App({
         refreshNotifications,
         NOTIFICATIONS_REFRESH_INTERVAL_MS,
       );
-      window.addEventListener('focus', refreshNotifications);
+      window.addEventListener('focus', refreshOnFocus);
       document.addEventListener('visibilitychange', refreshVisibleNotifications);
       return () => {
         active = false;
         window.clearInterval(refreshInterval);
-        window.removeEventListener('focus', refreshNotifications);
+        window.removeEventListener('focus', refreshOnFocus);
         document.removeEventListener('visibilitychange', refreshVisibleNotifications);
       };
     }
@@ -1625,6 +1666,7 @@ export function App({
           chatCreateCommandRef.current = null;
           setChatsUnreadCount(0);
           setNotifications(null);
+          setNotificationConversations([]);
           setWebPushConfiguration(null);
           setNotificationsError(null);
           dispatch({ type: 'logout-completed', entryView });
@@ -1724,6 +1766,40 @@ export function App({
     setChatsReloadToken((token) => token + 1);
   }
 
+  function handleSetConversationNotificationPolicy(
+    conversationId: string,
+    update: ConversationNotificationPolicyUpdate,
+  ): void {
+    if (chatPolicyBusyId) return;
+    setChatPolicyBusyId(conversationId);
+    setChatsError(null);
+    void gateway
+      .setConversationNotificationPolicy(conversationId, update, createMessagingCommandId())
+      .then(
+        (result) => {
+          setConversations((current) =>
+            current
+              ? {
+                  items: current.items.map((item) =>
+                    item.id === conversationId
+                      ? { ...item, notificationPolicy: result.policy }
+                      : item,
+                  ),
+                }
+              : current,
+          );
+          setChatPolicyBusyId(null);
+        },
+        () => {
+          setChatsError({
+            kind: 'RETRYABLE',
+            message: 'Не удалось изменить уведомления в этом чате.',
+          });
+          setChatPolicyBusyId(null);
+        },
+      );
+  }
+
   function handleLoadEarlierChatMessages(): void {
     if (!requestedConversationId) return;
     const earliestSequence = conversationMessages[0]?.sequence;
@@ -1816,6 +1892,22 @@ export function App({
           setNotificationsBusy(false);
         },
       );
+  }
+
+  function handleSaveNotificationPreferences(update: NotificationPreferencesUpdateRequest): void {
+    if (notificationPreferencesBusy) return;
+    setNotificationPreferencesBusy(true);
+    setNotificationPreferencesError(null);
+    void gateway.updateNotificationPreferences(update).then(
+      (preferences) => {
+        setNotificationPreferences(preferences);
+        setNotificationPreferencesBusy(false);
+      },
+      () => {
+        setNotificationPreferencesError('Не удалось сохранить настройки уведомлений.');
+        setNotificationPreferencesBusy(false);
+      },
+    );
   }
 
   function navigateToNotificationTarget(href: string): void {
@@ -2149,6 +2241,12 @@ export function App({
           onRetrySend={handleRetryConversationMessage}
           onRefresh={handleRefreshChats}
           onLoadEarlier={handleLoadEarlierChatMessages}
+          policyBusy={chatPolicyBusyId !== null && chatPolicyBusyId === requestedConversationId}
+          onSetNotificationPolicy={(update) => {
+            if (requestedConversationId) {
+              handleSetConversationNotificationPolicy(requestedConversationId, update);
+            }
+          }}
         />
       );
     }
@@ -2181,9 +2279,13 @@ export function App({
           page={notifications}
           webPush={webPushConfiguration}
           browserState={webPushBrowserState}
+          conversations={notificationConversations}
           busy={notificationsBusy}
           error={notificationsError}
           inboxUnavailable={notificationsInboxUnavailable}
+          preferences={notificationPreferences}
+          preferencesBusy={notificationPreferencesBusy}
+          preferencesError={notificationPreferencesError}
           friendRequests={friendRequests}
           friendRequestsError={friendRequestsError}
           outgoingFriendRequests={outgoingFriendRequests}
@@ -2192,6 +2294,7 @@ export function App({
           onDeclineFriendRequest={handleDeclineFriendRequest}
           onEnableWebPush={handleEnableWebPush}
           onDisableWebPush={handleDisableWebPush}
+          onSavePreferences={handleSaveNotificationPreferences}
           onMarkAllRead={handleMarkAllNotificationsRead}
           onRetryInbox={handleRetryNotificationInbox}
           onOpenNotification={handleOpenNotification}

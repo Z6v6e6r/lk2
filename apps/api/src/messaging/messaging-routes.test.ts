@@ -67,6 +67,7 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
         participant: { userId: otherUserId, displayName: 'Борис' },
         unreadCount: 1,
         updatedAt: '2026-07-26T12:00:00.000Z',
+        notificationPolicy: { level: 'ALL', muted: false },
       },
     ]),
     createDirectConversation: vi.fn().mockResolvedValue({
@@ -77,6 +78,7 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
         participant: { userId: otherUserId, displayName: 'Борис' },
         unreadCount: 0,
         updatedAt: '2026-07-26T12:00:00.000Z',
+        notificationPolicy: { level: 'ALL', muted: false },
       },
       created: true,
       replayed: false,
@@ -117,6 +119,11 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
       readThroughSequence: 1,
       changed: true,
       replayed: false,
+    }),
+    updateConversationNotificationPolicy: vi.fn().mockResolvedValue({
+      outcome: 'ok',
+      policy: { level: 'ALL', muted: false },
+      changed: true,
     }),
     setUserBlock: vi.fn().mockResolvedValue({ outcome: 'ok', changed: true, replayed: false }),
     authorizeRealtimeConnection: vi.fn().mockResolvedValue({ outcome: 'disabled' }),
@@ -833,5 +840,123 @@ describe('messaging User API', () => {
         'Игрок ещё не входил в ПадлХАБ: он не увидит сообщение, пока не войдёт в приложение.',
     });
     expect(sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('mutes one conversation for a bounded window and normalizes the instant', async () => {
+    const updateConversationNotificationPolicy = vi
+      .fn<MessagingRepository['updateConversationNotificationPolicy']>()
+      .mockResolvedValue({
+        outcome: 'ok',
+        policy: { level: 'ALL', muted: true, mutedUntil: '2026-07-27T04:00:00.000Z' },
+        changed: true,
+      });
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ updateConversationNotificationPolicy }),
+    });
+    apps.push(app);
+    const mutedUntil = new Date(Date.now() + 8 * 60 * 60 * 1_000).toISOString();
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/notification-policy`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'notification-policy-command-0001',
+      },
+      payload: { level: 'ALL', mutedUntil },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      outcome: 'ok',
+      changed: true,
+      policy: { level: 'ALL', muted: true },
+    });
+    expect(updateConversationNotificationPolicy).toHaveBeenCalledTimes(1);
+    const command = updateConversationNotificationPolicy.mock.calls[0]?.[0];
+    expect(command).toMatchObject({
+      tenantId,
+      userId,
+      conversationId,
+      level: 'ALL',
+      mutedUntil,
+      idempotencyKey: 'notification-policy-command-0001',
+    });
+    expect(typeof command?.correlationId).toBe('string');
+  });
+
+  it('rejects an unbounded, expired or malformed notification policy', async () => {
+    const updateConversationNotificationPolicy = vi.fn();
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ updateConversationNotificationPolicy }),
+    });
+    apps.push(app);
+    const authorization = `Bearer ${await accessToken()}`;
+    const put = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: 'PUT',
+        url: `/user/api/v1/local-padel/conversations/${conversationId}/notification-policy`,
+        headers: { authorization, 'idempotency-key': 'notification-policy-command-0002' },
+        payload,
+      });
+
+    const missingIdempotency = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/notification-policy`,
+      headers: { authorization },
+      payload: { level: 'NONE' },
+    });
+    expect(missingIdempotency.statusCode).toBe(400);
+    expect(missingIdempotency.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REQUIRED' });
+
+    for (const payload of [
+      { level: 'SOMETIMES' },
+      { level: 'ALL', mutedUntil: 'not-a-date' },
+      { level: 'ALL', mutedUntil: new Date(Date.now() - 60_000).toISOString() },
+      {
+        level: 'ALL',
+        mutedUntil: new Date(Date.now() + 40 * 24 * 60 * 60 * 1_000).toISOString(),
+      },
+      { level: 'ALL', unexpected: true },
+    ]) {
+      const response = await put(payload);
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({
+        code: 'CONVERSATION_NOTIFICATION_POLICY_INVALID',
+      });
+    }
+    expect(updateConversationNotificationPolicy).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unknown conversation indistinguishable from a forbidden one', async () => {
+    const updateConversationNotificationPolicy = vi.fn().mockResolvedValue({
+      outcome: 'not_found',
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({ updateConversationNotificationPolicy }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/notification-policy`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'notification-policy-command-0003',
+      },
+      payload: { level: 'NONE' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: 'CONVERSATION_NOT_FOUND' });
   });
 });

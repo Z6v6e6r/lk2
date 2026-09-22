@@ -4,6 +4,7 @@ import {
   BOOKING_NOTIFICATION_EVENT_TYPES,
   GAME_NOTIFICATION_EVENT_TYPES,
   notificationAudienceSelectorSchema,
+  quietHoursActive,
   renderNotificationTemplate,
   resolveNotificationRecipients,
   type BookingNotificationSourceEvent,
@@ -41,6 +42,9 @@ interface IdRow extends QueryResultRow {
 interface PreferenceRow extends QueryResultRow {
   readonly channel: 'IN_APP' | 'PUSH';
   readonly enabled: boolean;
+  readonly quiet_from: string | null;
+  readonly quiet_until: string | null;
+  readonly timezone: string;
 }
 
 interface BookingNotificationFenceRow extends QueryResultRow {
@@ -81,6 +85,8 @@ export type NotificationProjectionResult =
       readonly suppressed: number;
       readonly pushQueued: number;
       readonly skippedRules: number;
+      /** Pushes the recipient's own quiet hours withheld while the in-app item still landed. */
+      readonly quietSuppressed: number;
     };
 
 function dedupeKey(eventId: string, ruleId: string, recipientUserId: string): string {
@@ -344,6 +350,8 @@ export async function applyNotificationSourceEvent(options: {
     readonly appId: string;
     readonly environment: 'SANDBOX' | 'PRODUCTION';
   };
+  /** Delivery clock for quiet hours; injectable so a replay test can pin the local window. */
+  readonly now?: Date;
 }): Promise<NotificationProjectionResult> {
   if (isBookingNotificationEvent(options.event)) {
     return serializeBookingProjection(options.event.tenantId, options.event.aggregateId, () =>
@@ -365,6 +373,7 @@ async function applyNotificationSourceEventInTransaction(options: {
     readonly appId: string;
     readonly environment: 'SANDBOX' | 'PRODUCTION';
   };
+  readonly now?: Date;
 }): Promise<NotificationProjectionResult> {
   const { event } = options;
   let gameFenceRecipientUserIds: ReadonlySet<string> | undefined;
@@ -467,6 +476,8 @@ async function applyNotificationSourceEventInTransaction(options: {
     let suppressed = 0;
     let pushQueued = 0;
     let skippedRules = 0;
+    let quietSuppressed = 0;
+    const deliveryClock = options.now ?? new Date();
     const renderData = {
       ...event.payload,
       aggregateId: event.aggregateId,
@@ -507,7 +518,10 @@ async function applyNotificationSourceEventInTransaction(options: {
         if (user.rowCount === 0) continue;
 
         const preferences = await client.query<PreferenceRow>(
-          `select channel, enabled
+          `select channel, enabled,
+                  left(quiet_from::text, 5) as quiet_from,
+                  left(quiet_until::text, 5) as quiet_until,
+                  timezone
              from notifications.user_preferences
             where tenant_id = $1
               and user_id = $2
@@ -517,8 +531,27 @@ async function applyNotificationSourceEventInTransaction(options: {
         );
         const preferenceEnabled = (channel: 'IN_APP' | 'PUSH'): boolean =>
           preferences.rows.find((preference) => preference.channel === channel)?.enabled !== false;
+        /**
+         * Quiet hours only hold back the interruption, never the durable item: the inbox row is
+         * still written so the recipient finds the event when they return. A mandatory rule is a
+         * server-owned message and ignores the window.
+         */
+        const quietActive = (channel: 'IN_APP' | 'PUSH'): boolean => {
+          const preference = preferences.rows.find((row) => row.channel === channel);
+          if (!preference?.quiet_from || !preference.quiet_until) return false;
+          return quietHoursActive({
+            now: deliveryClock,
+            quietFrom: preference.quiet_from,
+            quietUntil: preference.quiet_until,
+            timezone: preference.timezone,
+          });
+        };
         const deliverInApp = inAppRequested && (rule.mandatory || preferenceEnabled('IN_APP'));
-        const deliverPush = webPushRequested && (rule.mandatory || preferenceEnabled('PUSH'));
+        const quietPush =
+          webPushRequested && !rule.mandatory && preferenceEnabled('PUSH') && quietActive('PUSH');
+        const deliverPush =
+          webPushRequested && (rule.mandatory || preferenceEnabled('PUSH')) && !quietPush;
+        if (quietPush) quietSuppressed += 1;
         const endpoints =
           deliverPush && options.webPush
             ? await client.query<IdRow>(
@@ -707,7 +740,14 @@ async function applyNotificationSourceEventInTransaction(options: {
       [CONSUMER_NAME, event.id],
     );
     await client.query('commit');
-    return { outcome: 'processed', created, suppressed, pushQueued, skippedRules };
+    return {
+      outcome: 'processed',
+      created,
+      suppressed,
+      pushQueued,
+      skippedRules,
+      quietSuppressed,
+    };
   } catch (error) {
     await client.query('rollback');
     throw error;

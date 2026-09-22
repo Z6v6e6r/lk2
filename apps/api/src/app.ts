@@ -47,6 +47,7 @@ import type {
   MessagingRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
+  NotificationPreferenceRepository,
   ParticipationCommandRepository,
   ProfileFriendshipRepository,
   ProfileReachabilityRepository,
@@ -150,6 +151,7 @@ import { registerPromotionEngagementRoutes } from './promotions/promotion-engage
 import type { PromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { registerProfilePhotoMediaRoutes } from './profile/profile-photo-media-routes.js';
 import { registerProfileProviderIdentityRoutes } from './profile/profile-provider-identity-routes.js';
+import type { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
 import type { ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
 import { buildLocalHomeProfile } from './profile/local-home-profile.js';
 import {
@@ -251,8 +253,11 @@ export interface BuildAppOptions {
     Partial<Pick<GameRepository, 'listRecommendationCardProjections' | 'getCardProjections'>>;
   readonly clientRoutingPlanRepository?: Pick<ClientRoutingPlanRepository, 'get'>;
   readonly notificationRepository?: NotificationInboxRepository;
+  readonly notificationPreferenceRepository?: NotificationPreferenceRepository;
   readonly notificationEndpointRepository?: NotificationEndpointRepository;
   readonly notificationEndpointCipher?: NotificationEndpointCipher;
+  /** Signs the per-delivery receipt tokens the service worker reports displays and clicks with. */
+  readonly notificationReceiptSecret?: string;
   readonly adminNotificationRepository?: AdminNotificationRepository;
   readonly messagingRepository?: MessagingRepository;
   readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
@@ -300,6 +305,7 @@ export interface BuildAppOptions {
       readonly fetchedAt: string;
     }) => Promise<'linked' | 'unchanged' | 'conflict' | 'absent'>;
   };
+  readonly legacyViewerAssociationProof?: Pick<LegacyViewerAssociationProof, 'prove'>;
   readonly communityLogoMediaRepository?: CommunityLogoMediaRepository;
   readonly bookingPreferencesRepository?: BookingPreferencesRepository;
   readonly bookingScreenReadJobStore?: BookingScreenReadJobStore;
@@ -808,6 +814,9 @@ export async function buildApp(options: BuildAppOptions) {
 
   registerNotificationRoutes(app as unknown as FastifyInstance, {
     ...(options.notificationRepository ? { repository: options.notificationRepository } : {}),
+    ...(options.notificationPreferenceRepository
+      ? { preferenceRepository: options.notificationPreferenceRepository }
+      : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
@@ -1117,6 +1126,9 @@ export async function buildApp(options: BuildAppOptions) {
       ? { repository: options.notificationEndpointRepository }
       : {}),
     ...(options.notificationEndpointCipher ? { cipher: options.notificationEndpointCipher } : {}),
+    ...(options.notificationReceiptSecret
+      ? { receiptTokenSecret: options.notificationReceiptSecret }
+      : {}),
     enabledGlobally: options.config.WEB_PUSH_ENABLED,
     maxEndpointsPerUser: options.config.WEB_PUSH_ENDPOINTS_PER_USER_MAX,
     allowedEndpointOrigins:
@@ -1134,6 +1146,10 @@ export async function buildApp(options: BuildAppOptions) {
   registerAdminNotificationRoutes(app as unknown as FastifyInstance, {
     ...(options.adminNotificationRepository
       ? { repository: options.adminNotificationRepository }
+      : {}),
+    // The CUP report names the push service behind a subscription; without the keyring it omits that.
+    ...(options.notificationEndpointCipher
+      ? { endpointCipher: options.notificationEndpointCipher }
       : {}),
     webPushGloballyEnabled: options.config.WEB_PUSH_ENABLED,
     webPushAppId: options.config.WEB_PUSH_APP_ID,
@@ -1212,6 +1228,9 @@ export async function buildApp(options: BuildAppOptions) {
   registerProfileProviderIdentityRoutes(app as unknown as FastifyInstance, {
     enabled: options.config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED,
     ...(options.providerIdentityLink ? { repository: options.providerIdentityLink } : {}),
+    ...(options.legacyViewerAssociationProof
+      ? { associationProof: options.legacyViewerAssociationProof }
+      : {}),
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
   registerCommunityLogoMediaRoutes(app as unknown as FastifyInstance, {

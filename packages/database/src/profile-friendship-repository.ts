@@ -62,6 +62,9 @@ export interface DeferredDeliveryResult {
   readonly pending: number;
 }
 
+/** One phone proof can only ever name the few imported player keys that phone appears under. */
+const MAX_DELIVERED_PLAYER_KEYS = 20;
+
 export type RequestFriendResult =
   | {
       readonly outcome: 'applied';
@@ -111,6 +114,21 @@ export interface ProfileFriendshipRepository {
    */
   deliverDeferredFriendRequests(input: {
     readonly tenantId: string;
+    readonly limit: number;
+    readonly correlationId: string;
+  }): Promise<DeferredDeliveryResult>;
+  /** True while at least one saved request still waits for a proven live account. */
+  hasPendingDeferredRequests(tenantId: string): Promise<boolean>;
+  /**
+   * Delivers the saved requests that target one of the given imported player associations to the
+   * account that just proved them. The proof is supplied by the caller and is deliberately not
+   * persisted as an identity binding: it may only route a friend request, never re-point an
+   * imported player or a roster.
+   */
+  deliverDeferredFriendRequestsForPlayerKeys(input: {
+    readonly tenantId: string;
+    readonly deliveryUserId: string;
+    readonly sourcePlayerAssociationIds: readonly string[];
     readonly limit: number;
     readonly correlationId: string;
   }): Promise<DeferredDeliveryResult>;
@@ -408,6 +426,11 @@ function requestPendingFriendship(
   client: PoolClient,
   input: RequestFriendInput,
 ): Promise<RequestFriendResult> {
+  // Deliveries resolve an imported legacy row to the live account, which can be the requester's own
+  // account; the aggregate forbids a self request, so that row must settle instead of failing.
+  if (input.actorUserId === input.targetUserId) {
+    return Promise.resolve({ outcome: 'self_target' });
+  }
   const [leftUserId, rightUserId] = orderedPair(input.actorUserId, input.targetUserId);
   return (async () => {
     await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
@@ -629,6 +652,24 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
         );
         if (deferred) {
           return state(targetUserId, 'PENDING_DEFERRED', deferred.created_at, null);
+        }
+        // The worker has already turned a saved request into a real one addressed to the live
+        // account. The imported row still has to report that waiting request, otherwise the
+        // requester is invited to send the same invitation again.
+        const delivered = await queryOne<PendingRequestRow>(
+          client,
+          `select request.id, request.created_at
+             from profile.deferred_friend_requests deferred
+             join profile.friend_requests request
+               on request.tenant_id = deferred.tenant_id
+              and request.id = deferred.delivered_request_id
+            where deferred.tenant_id = $1 and deferred.requester_user_id = $2
+              and deferred.target_user_id = $3
+              and deferred.state = 'DELIVERED' and request.state = 'PENDING'`,
+          [tenantId, viewerUserId, targetUserId],
+        );
+        if (delivered) {
+          return state(targetUserId, 'PENDING_OUTGOING', delivered.created_at, delivered.id);
         }
         return state(targetUserId, 'NONE', null);
       });
@@ -912,11 +953,7 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
 
     async deliverDeferredFriendRequests(input) {
       const candidates = await withTenantTransaction(pool, input.tenantId, async (client) => {
-        const rows = await client.query<{
-          id: string;
-          requester_user_id: string;
-          live_user_id: string;
-        }>(
+        const rows = await client.query<DeferredDeliveryCandidate>(
           `select deferred.id, deferred.requester_user_id, binding.user_id as live_user_id
              from profile.deferred_friend_requests deferred
              join integration.legacy_game_player_bindings binding
@@ -930,35 +967,100 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
         );
         return rows.rows;
       });
-      let delivered = 0;
-      for (const candidate of candidates) {
-        const requestId = `deferred-friend-request:${candidate.id}`;
-        const result = await withTenantTransaction(pool, input.tenantId, (client) =>
-          requestPendingFriendship(client, {
-            tenantId: input.tenantId,
-            actorUserId: candidate.requester_user_id,
-            targetUserId: candidate.live_user_id,
-            idempotencyKey: requestId,
-            requestHash: createHash('sha256').update(`DEFERRED:${candidate.id}`).digest('hex'),
-            correlationId: input.correlationId,
-          }),
+      return deliverDeferredCandidates(pool, input.tenantId, candidates, input.correlationId);
+    },
+
+    hasPendingDeferredRequests(tenantId) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const row = await queryOne<{ readonly pending: boolean } & QueryResultRow>(
+          client,
+          `select exists (
+                    select 1
+                      from profile.deferred_friend_requests deferred
+                     where deferred.tenant_id = $1 and deferred.state = 'PENDING'
+                  ) as pending`,
+          [tenantId],
         );
-        const settlement = deferredSettlement(result);
-        if (!settlement) continue;
-        const settled = await withTenantTransaction(pool, input.tenantId, (client) =>
-          client.query(
-            `update profile.deferred_friend_requests
-                set state = 'DELIVERED', settled_at = now(), settled_reason = $3,
-                    delivered_request_id = $4
-              where tenant_id = $1 and id = $2 and state = 'PENDING'`,
-            [input.tenantId, candidate.id, settlement.reason, settlement.deliveredRequestId],
-          ),
+        return row?.pending === true;
+      });
+    },
+
+    async deliverDeferredFriendRequestsForPlayerKeys(input) {
+      const sourcePlayerAssociationIds = [
+        ...new Set(input.sourcePlayerAssociationIds.map((id) => id.trim())),
+      ]
+        .filter((id) => /^[0-9a-f]{64}$/.test(id))
+        .slice(0, MAX_DELIVERED_PLAYER_KEYS);
+      if (sourcePlayerAssociationIds.length === 0) return { delivered: 0, pending: 0 };
+      const candidates = await withTenantTransaction(pool, input.tenantId, async (client) => {
+        const rows = await client.query<DeferredDeliveryCandidate>(
+          `select deferred.id, deferred.requester_user_id, $3::uuid as live_user_id
+             from profile.deferred_friend_requests deferred
+            where deferred.tenant_id = $1
+              and deferred.state = 'PENDING'
+              and deferred.source_player_association_id = any($2::text[])
+              and not exists (
+                    select 1
+                      from integration.legacy_game_player_bindings binding
+                     where binding.tenant_id = deferred.tenant_id
+                       and binding.source_player_association_id = deferred.source_player_association_id
+                       and binding.user_id <> $3
+                  )
+            order by deferred.created_at
+            limit $4`,
+          [input.tenantId, sourcePlayerAssociationIds, input.deliveryUserId, input.limit],
         );
-        if ((settled.rowCount ?? 0) > 0) delivered += 1;
-      }
-      return { delivered, pending: candidates.length - delivered };
+        return rows.rows;
+      });
+      return deliverDeferredCandidates(pool, input.tenantId, candidates, input.correlationId);
     },
   };
+}
+
+interface DeferredDeliveryCandidate {
+  readonly id: string;
+  readonly requester_user_id: string;
+  readonly live_user_id: string;
+}
+
+/**
+ * Delivers each candidate to its proven live account under the deterministic per-row idempotency key
+ * and settles the row exactly once. A row the delivery cannot settle yet stays pending, because the
+ * requester was told the request was saved.
+ */
+async function deliverDeferredCandidates(
+  pool: Pool,
+  tenantId: string,
+  candidates: readonly DeferredDeliveryCandidate[],
+  correlationId: string,
+): Promise<DeferredDeliveryResult> {
+  let delivered = 0;
+  for (const candidate of candidates) {
+    const requestId = `deferred-friend-request:${candidate.id}`;
+    const result = await withTenantTransaction(pool, tenantId, (client) =>
+      requestPendingFriendship(client, {
+        tenantId,
+        actorUserId: candidate.requester_user_id,
+        targetUserId: candidate.live_user_id,
+        idempotencyKey: requestId,
+        requestHash: createHash('sha256').update(`DEFERRED:${candidate.id}`).digest('hex'),
+        correlationId,
+      }),
+    );
+    const settlement = deferredSettlement(result);
+    if (!settlement) continue;
+    const settled = await withTenantTransaction(pool, tenantId, (client) =>
+      client.query(
+        `update profile.deferred_friend_requests
+            set state = 'DELIVERED', settled_at = now(), settled_reason = $3,
+                delivered_request_id = $4
+          where tenant_id = $1 and id = $2 and state = 'PENDING'`,
+        [tenantId, candidate.id, settlement.reason, settlement.deliveredRequestId],
+      ),
+    );
+    if ((settled.rowCount ?? 0) > 0) delivered += 1;
+  }
+  return { delivered, pending: candidates.length - delivered };
 }
 
 /**
@@ -1090,6 +1192,9 @@ async function announceFriendRequestCreated(
         requestId,
         requesterUserId: input.actorUserId,
         targetUserId: input.targetUserId,
+        // The notification ruleset addresses the account that has to answer, so the recipient is
+        // resolved from the same `recipientUserIds` field every other trigger event uses.
+        recipientUserIds: [input.targetUserId],
         createdAt: result.createdAt,
       }),
     ],

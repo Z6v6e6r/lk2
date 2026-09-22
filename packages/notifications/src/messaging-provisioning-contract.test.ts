@@ -13,11 +13,20 @@ describe('MESSAGING notification provisioning contract', () => {
     ]);
 
     expect(source).toContain("const CONFIRMATION_TOKEN = 'APPLY_MESSAGING_NOTIFICATION_RULESET'");
-    expect(contract).toContain("rulesetVersion: 'messaging.ru-ru.v1'");
+    expect(contract).toContain("rulesetVersion: 'messaging.ru-ru.v2'");
     expect(contract).toContain("deepLink: '/chats/{{conversationId}}'");
     expect(contract).toContain("sourceEventType: 'messaging.conversation.created.v1'");
     expect(contract).toContain("sourceEventType: 'messaging.message.created.v1'");
     expect(contract).toContain("field: 'recipientUserIds'");
+    // A provisioned template version can never change its channels, so opening PUSH moves both
+    // the template and the ruleset version forward.
+    const messagingContract = contract.slice(
+      contract.indexOf('export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT'),
+      contract.indexOf('export const MESSAGING_NOTIFICATION_RULESET_VERSION'),
+    );
+    expect(messagingContract).toContain("channels: ['IN_APP', 'PUSH']");
+    expect(messagingContract).toContain("channelOverride: ['IN_APP', 'PUSH']");
+    expect(messagingContract).toContain('version: 2,');
     expect(source).toContain('notifications.ruleset_provision_commands');
     expect(source).toContain('MESSAGING_NOTIFICATION_REQUEST_HASH');
     expect(source).toContain('MESSAGING_NOTIFICATION_RULESET_PROVISIONED');
@@ -29,6 +38,14 @@ describe('MESSAGING notification provisioning contract', () => {
     ).toHaveLength(2);
     expect(source).toContain('`notification-runtime:${tenantId}`');
     expect(source).toContain('runtimeChangedByThisCommand: false');
+    // The schema keeps at most one active template per (template_key, locale), so a new
+    // version must land inactive and be activated only after the previous one is retired.
+    const insert = source.slice(
+      source.indexOf('insert into notifications.templates'),
+      source.indexOf('const template = await queryOne'),
+    );
+    expect(insert).toContain('false,');
+    expect(insert).not.toContain('MESSAGING_NOTIFICATION_TEMPLATE_ACTIVE');
     expect(source).not.toContain('insert into notifications.tenant_runtime_settings');
     expect(source).not.toContain('update notifications.tenant_runtime_settings');
     // The identifier-only payload is the reason for this ruleset; no message body is rendered.

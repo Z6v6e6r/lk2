@@ -73,6 +73,19 @@ pending while the live account is not yet reachable and is never silently droppe
 requester was told the request was saved. Deferred rows emit no `profile.friend_request.created.v1`
 event: that event belongs to a real request.
 
+The proof is resolved where the live account's legacy identity becomes known, not only when the player
+happens to open a history screen: `POST /{tenantKey}/profile/provider-phone` records the
+provider-asserted viewer phone, resolves that account's one-way player keys against the legacy Games
+of that phone and delivers the saved requests addressed to those imported player rows. That resolution
+is delivery-only: it never writes `integration.legacy_game_player_bindings`, so a phone asserted by our
+own client may route a friend request but can never re-point an imported player, a roster or a
+participation. That identity binding stays reserved for the Viva-proven and verified-login-phone
+proofs, and the activity-history Game backfill keeps proving its keys from a verified login phone
+only. The phone is matched in memory inside the legacy adapter and only the 64-hex key crosses back; a
+phone already linked to another active account is refused by the link itself. A saved request whose
+association a recorded binding already owns is left to that stronger proof, and a request whose
+imported row resolves to its own requester settles as a self target instead of failing the sweep.
+
 Level history is an immutable PadlHub read-model exposed only to the authenticated owner through
 `GET /{tenantKey}/profile/level-history`. `profile.level_history` stores the normalized level label,
 optional numeric value and change time under tenant RLS. Migration backfill creates one baseline

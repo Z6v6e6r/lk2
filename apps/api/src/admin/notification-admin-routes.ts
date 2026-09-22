@@ -1,7 +1,17 @@
 import { createHash } from 'node:crypto';
 
 import { normalizePhoneE164 } from '@phub/auth';
-import type { AdminNotificationChannel, AdminNotificationRepository } from '@phub/database';
+import type {
+  AdminNotificationChannel,
+  AdminNotificationRepository,
+  AdminWebPushSubscriberEndpoint,
+} from '@phub/database';
+import {
+  storedWebPushEndpoint,
+  webPushEndpointPlatform,
+  type NotificationEndpointCipher,
+  type WebPushEndpointPlatform,
+} from '@phub/notifications';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { z } from 'zod';
 
@@ -29,6 +39,54 @@ const campaignSchema = recipientsSchema.extend({
     .min(1)
     .max(4),
 });
+
+// The report answers "what happened to what we sent", so a bounded window keeps the read cheap and the
+// numbers explainable; the CUP asks for a number of days, never for arbitrary SQL.
+const MAX_DELIVERY_STATS_DAYS = 90;
+const deliveryStatsQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(MAX_DELIVERY_STATS_DAYS).default(7),
+});
+const DELIVERY_STATS_CAMPAIGN_LIMIT = 20;
+const DELIVERY_STATS_ENDPOINT_SAMPLE_LIMIT = 200;
+
+interface PushPlatformBreakdown {
+  readonly platforms: Readonly<Record<WebPushEndpointPlatform, number>>;
+  readonly unreadable: number;
+}
+
+/**
+ * The stored endpoint is the only place the push service is visible. It is decrypted in the admin process
+ * and immediately reduced to a browser family: the address itself never leaves this function.
+ */
+function summarisePushPlatforms(
+  endpoints: readonly AdminWebPushSubscriberEndpoint[],
+  cipher: NotificationEndpointCipher | undefined,
+): PushPlatformBreakdown {
+  const platforms: Record<WebPushEndpointPlatform, number> = { CHROME: 0, SAFARI: 0, OTHER: 0 };
+  let unreadable = 0;
+  for (const endpoint of endpoints) {
+    if (!cipher) {
+      unreadable += 1;
+      continue;
+    }
+    try {
+      // The stored payload is the subscription envelope, not a bare address.
+      const address = storedWebPushEndpoint(
+        cipher.decrypt(endpoint.ciphertext, endpoint.encryptionKeyId),
+      );
+      const platform = address === undefined ? undefined : webPushEndpointPlatform(address);
+      if (platform === undefined) {
+        unreadable += 1;
+        continue;
+      }
+      platforms[platform] += 1;
+    } catch {
+      // A rotated-away or unreadable key must not fail the report; the row is counted as unknown.
+      unreadable += 1;
+    }
+  }
+  return { platforms, unreadable };
+}
 
 const USER_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
@@ -150,6 +208,8 @@ export function registerAdminNotificationRoutes(
     readonly webPushGloballyEnabled: boolean;
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    /** Required to report the push service behind a subscription; the report omits it without a keyring. */
+    readonly endpointCipher?: NotificationEndpointCipher;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
@@ -221,13 +281,75 @@ export function registerAdminNotificationRoutes(
           'Укажите курсор в виде UUID и размер страницы от 1 до 50.',
         );
       }
-      return options.repository.listWebPushSubscribers({
+      const page = await options.repository.listWebPushSubscribers({
         tenantId: request.tenantId,
         webPushAppId: options.webPushAppId,
         webPushEnvironment: options.webPushEnvironment,
         limit: parsed.data.limit ?? 20,
         ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {}),
       });
+      return {
+        items: page.items.map((item) => {
+          const { platforms } = summarisePushPlatforms(item.endpoints, options.endpointCipher);
+          const present = (Object.keys(platforms) as WebPushEndpointPlatform[]).filter(
+            (platform) => platforms[platform] > 0,
+          );
+          return {
+            userId: item.userId,
+            displayName: item.displayName,
+            ...(item.phoneMasked ? { phoneMasked: item.phoneMasked } : {}),
+            endpointCount: item.endpointCount,
+            ...(item.lastConfirmedAt ? { lastConfirmedAt: item.lastConfirmedAt } : {}),
+            ...(present.length > 0 ? { platforms: present } : {}),
+          };
+        }),
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      };
+    },
+  );
+
+  app.get(
+    '/admin/api/v1/:tenantKey/notifications/delivery-stats',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!options.repository || !request.tenantId) return repositoryUnavailable(request, reply);
+      const parsed = deliveryStatsQuerySchema.safeParse(request.query);
+      if (!parsed.success) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          `Укажите период от 1 до ${MAX_DELIVERY_STATS_DAYS} дней.`,
+        );
+      }
+      const stats = await options.repository.getDeliveryStats({
+        tenantId: request.tenantId,
+        since: new Date(Date.now() - parsed.data.days * 24 * 60 * 60 * 1000),
+        campaignLimit: DELIVERY_STATS_CAMPAIGN_LIMIT,
+        endpointSampleLimit: DELIVERY_STATS_ENDPOINT_SAMPLE_LIMIT,
+      });
+      const { platforms, unreadable } = summarisePushPlatforms(
+        stats.endpoints.activeEndpointSample,
+        options.endpointCipher,
+      );
+      return {
+        windowDays: parsed.data.days,
+        since: stats.since,
+        channels: stats.channels,
+        campaigns: stats.campaigns,
+        failures: stats.failures,
+        // The bounded ciphertext sample is an implementation detail of the platform derivation above.
+        endpoints: {
+          active: stats.endpoints.active,
+          invalid: stats.endpoints.invalid,
+          revoked: stats.endpoints.revoked,
+          suspendedPolicy: stats.endpoints.suspendedPolicy,
+          platforms,
+          unreadableEndpoints: unreadable,
+        },
+      };
     },
   );
 

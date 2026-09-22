@@ -2,11 +2,29 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   LegacyGamesPublicAdapter,
+  LegacyTournamentResultAdapter,
   LegacyTournamentSummaryAdapter,
   localVivaExerciseAssociationId,
   localVivaProfileAssociationId,
   testing,
 } from './index.js';
+
+function phoneGameDocument(organizer: Record<string, unknown>) {
+  return {
+    id: 'legacy-game-phone',
+    status: 'PAID',
+    organizer: { id: 'viewer-profile', name: 'Анна', ...organizer },
+    participants: [{ id: 'viewer-profile', name: 'Анна', status: 'PAID' }],
+    settings: { isPrivate: false, ratingGame: false },
+    metadata: { gameFormat: 'doubles' },
+    booking: {
+      studioId: 'station',
+      studioName: 'Терехово',
+      timeFromIso: '2026-07-20T09:00:00+03:00',
+      timeToIso: '2026-07-20T10:00:00+03:00',
+    },
+  };
+}
 
 describe('legacy games adapter', () => {
   it('retains organizer and participant photos in the bounded Mongo projection', () => {
@@ -14,6 +32,59 @@ describe('legacy games adapter', () => {
       'organizer.photo': 1,
       'participants.photo': 1,
     });
+  });
+
+  // Without the phone columns the in-memory VIEWER_PHONE lookup always sees `undefined`, so a
+  // Mongo-sourced deployment can never prove a viewer's legacy player key.
+  it('retains the phone columns the viewer-phone association proof matches in memory', () => {
+    expect(testing.legacyGameProjection).toMatchObject({
+      'organizer.phone': 1,
+      'organizer.phoneNorm': 1,
+      'participants.phone': 1,
+      'participants.phoneNorm': 1,
+    });
+  });
+
+  it('proves the viewer key from every stored phone shape and ignores another number', () => {
+    for (const stored of [
+      { phone: '79990000001' },
+      { phone: '+7 (999) 000-00-01' },
+      { phone: '89990000001' },
+      { phone: '9990000001' },
+      { phone: 79990000001 },
+      { phoneNorm: '', phone: '+79990000001' },
+    ]) {
+      expect(
+        testing.mapLegacyGame(phoneGameDocument(stored), '+79990000001')
+          ?.viewerParticipantExternalId,
+        JSON.stringify(stored),
+      ).toBe('viewer-profile');
+    }
+
+    expect(
+      testing.mapLegacyGame(phoneGameDocument({ phone: '+79990000002' }), '+79990000001')
+        ?.viewerParticipantExternalId,
+    ).toBeNull();
+  });
+
+  // The Mongo candidate filter selects these values; every one of them must resolve back to the same
+  // viewer key, otherwise the filter fetches a row the matcher then drops.
+  it('keeps the viewer-phone candidate filter aligned with the matcher', () => {
+    const forms = testing.phoneCandidateForms(testing.normalizedPhoneKey('+7 (999) 000-00-01')!);
+    expect(forms).toEqual([
+      '79990000001',
+      '+79990000001',
+      '89990000001',
+      '9990000001',
+      79990000001,
+    ]);
+    for (const stored of forms) {
+      expect(
+        testing.mapLegacyGame(phoneGameDocument({ phone: stored }), '+79990000001')
+          ?.viewerParticipantExternalId,
+        String(stored),
+      ).toBe('viewer-profile');
+    }
   });
 
   it('builds a bounded targeted photo lookup and pseudonymizes its result', () => {
@@ -471,6 +542,75 @@ describe('legacy games adapter', () => {
     expect(JSON.stringify(result)).not.toContain('79990000001');
   });
 
+  it('proves the viewer player key from the provider phone alone and keeps the phone out', async () => {
+    const fetchImplementation = vi.fn((url: URL | RequestInfo) => {
+      const requestedUrl = new URL(
+        typeof url === 'string' ? url : url instanceof URL ? url.href : url.url,
+      );
+      expect(requestedUrl.pathname).toBe('/lk/games/by-phone');
+      expect(requestedUrl.searchParams.get('phone')).toBe('79990000001');
+      return Promise.resolve(
+        Response.json({
+          games: [
+            {
+              id: 'viewer-game',
+              status: 'PAID',
+              organizer: { id: 'organizer-player', name: 'Борис' },
+              participants: [
+                { id: 'viewer-profile', name: 'Анна', phone: '+79990000001', status: 'PAID' },
+              ],
+              settings: { isPrivate: true, ratingGame: false },
+              metadata: { gameFormat: 'doubles' },
+              booking: {
+                studioId: 'station',
+                studioName: 'Терехово',
+                timeFromIso: '2026-07-20T09:00:00+03:00',
+                timeToIso: '2026-07-20T10:00:00+03:00',
+              },
+            },
+            {
+              id: 'other-game',
+              status: 'PAID',
+              organizer: { id: 'organizer-player', name: 'Борис' },
+              participants: [{ id: 'other-player', name: 'Пётр', status: 'PAID' }],
+              settings: { isPrivate: true, ratingGame: false },
+              metadata: { gameFormat: 'doubles' },
+              booking: {
+                studioId: 'station',
+                studioName: 'Терехово',
+                timeFromIso: '2026-07-21T09:00:00+03:00',
+                timeToIso: '2026-07-21T10:00:00+03:00',
+              },
+            },
+          ],
+        }),
+      );
+    });
+
+    const result = await new LegacyGamesPublicAdapter({
+      fetchImplementation,
+    }).readByViewerPhone({ phoneE164: '+7 (999) 000-00-01', limit: 5 });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.viewerParticipantExternalId).toBe(
+      localVivaProfileAssociationId('viewer-profile'),
+    );
+    expect(JSON.stringify(result)).not.toContain('79990000001');
+    expect(JSON.stringify(result)).not.toContain('viewer-profile');
+  });
+
+  it('refuses a viewer-phone read without a usable phone and bounds the limit', async () => {
+    const fetchImplementation = vi.fn();
+    const adapter = new LegacyGamesPublicAdapter({ fetchImplementation });
+
+    await expect(adapter.readByViewerPhone({ phoneE164: '', limit: 5 })).resolves.toEqual([]);
+    await expect(adapter.readByViewerPhone({ phoneE164: '123', limit: 5 })).resolves.toEqual([]);
+    await expect(
+      adapter.readByViewerPhone({ phoneE164: '+79990000001', limit: 0 }),
+    ).rejects.toThrow('LEGACY_GAMES_LIMIT_INVALID');
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
   it('continues through CUP history pages until it finds an older Viva exercise', async () => {
     const exerciseId = '21111111-1111-4111-8111-111111111111';
     const fetchImplementation = vi.fn((url: URL | RequestInfo) => {
@@ -643,5 +783,160 @@ describe('legacy games adapter', () => {
     expect(roster.items[0]?.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(JSON.stringify(roster)).not.toMatch(/viva-client|booking-|79990000001/);
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads only explicitly completed tournament standings through the private mapping boundary', async () => {
+    const exerciseExternalId = '4647f06f-c846-45f3-b89b-662d0b58671b';
+    const fetchImplementation = vi.fn((input: string | URL | Request) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      expect(url.pathname).toBe('/lk/tournaments/americano/history');
+      expect(url.searchParams.get('tournamentId')).toBe(exerciseExternalId);
+      return Promise.resolve(
+        Response.json([
+          {
+            tournamentId: exerciseExternalId,
+            updatedAt: '2026-07-29T20:00:00.000Z',
+            params: { status: 'completed' },
+            summary: {
+              status: 'completed',
+              finished: true,
+              completedAt: '2026-07-29T20:00:00.000Z',
+            },
+            standings: [
+              { id: 'viva-player-3', name: 'Максим Орлов', rank: 3 },
+              { id: 'viva-player-1', name: 'Иван Петров', rank: 1 },
+              { id: 'viva-player-4', name: 'Alexey Sergeev', rank: 5 },
+              { id: 'viva-player-2', name: 'Артём Сидоров', rank: 2 },
+            ],
+          },
+        ]),
+      );
+    });
+    const adapter = new LegacyTournamentResultAdapter({ fetchImplementation });
+
+    const result = await adapter.read(exerciseExternalId);
+
+    expect(result).toMatchObject({
+      status: 'CONFIRMED',
+      podium: [
+        { externalParticipantId: 'viva-player-1', displayName: 'Иван Петров', place: 1 },
+        { externalParticipantId: 'viva-player-2', displayName: 'Артём Сидоров', place: 2 },
+        { externalParticipantId: 'viva-player-3', displayName: 'Максим Орлов', place: 3 },
+      ],
+      standings: [
+        { place: 1 },
+        { place: 2 },
+        { place: 3 },
+        { externalParticipantId: 'viva-player-4', place: 5 },
+      ],
+      sourceUpdatedAt: '2026-07-29T20:00:00.000Z',
+    });
+    expect(result?.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('does not confirm standings without an explicit completed summary', async () => {
+    const adapter = new LegacyTournamentResultAdapter({
+      fetchImplementation: vi.fn().mockResolvedValue(
+        Response.json([
+          {
+            tournamentId: 'legacy-tournament',
+            params: { status: 'in_progress' },
+            summary: { status: 'in_progress', finished: false },
+            standings: [
+              { id: 'one', name: 'Один', rank: 1 },
+              { id: 'two', name: 'Два', rank: 2 },
+              { id: 'three', name: 'Три', rank: 3 },
+            ],
+          },
+        ]),
+      ),
+    });
+
+    await expect(adapter.read('legacy-tournament')).resolves.toBeNull();
+  });
+
+  it('retries a temporary tournament-result failure and caches the confirmed response', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(
+        Response.json([
+          {
+            tournamentId: 'legacy-tournament',
+            params: { status: 'completed' },
+            summary: { status: 'completed', finished: true },
+            standings: [
+              { id: 'one', name: 'Один', rank: 1 },
+              { id: 'two', name: 'Два', rank: 2 },
+              { id: 'three', name: 'Три', rank: 3 },
+            ],
+          },
+        ]),
+      );
+    const adapter = new LegacyTournamentResultAdapter({ fetchImplementation });
+
+    await expect(adapter.read('legacy-tournament')).resolves.toMatchObject({
+      status: 'CONFIRMED',
+    });
+    await expect(adapter.read('legacy-tournament')).resolves.toMatchObject({
+      status: 'CONFIRMED',
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds chunked tournament-result responses before buffering them', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('x'.repeat(128)));
+            controller.close();
+          },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const adapter = new LegacyTournamentResultAdapter({
+      fetchImplementation,
+      maxResponseBytes: 32,
+      maxAttempts: 1,
+    });
+
+    await expect(adapter.read('legacy-tournament')).rejects.toThrow(
+      'TOURNAMENT_RESULT_RESPONSE_TOO_LARGE',
+    );
+  });
+
+  it('evicts the oldest tournament-result cache entries at the configured bound', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const requestUrl =
+        input instanceof Request ? input.url : typeof input === 'string' ? input : input.href;
+      const tournamentId = new URL(requestUrl).searchParams.get('tournamentId');
+      return Promise.resolve(
+        Response.json([
+          {
+            tournamentId,
+            params: { status: 'completed' },
+            summary: { status: 'completed', finished: true },
+            standings: [
+              { id: 'one', name: 'Один', rank: 1 },
+              { id: 'two', name: 'Два', rank: 2 },
+              { id: 'three', name: 'Три', rank: 3 },
+            ],
+          },
+        ]),
+      );
+    });
+    const adapter = new LegacyTournamentResultAdapter({
+      fetchImplementation,
+      maxCacheEntries: 2,
+    });
+
+    await adapter.read('tournament-1');
+    await adapter.read('tournament-2');
+    await adapter.read('tournament-3');
+    await adapter.read('tournament-1');
+
+    expect(fetchImplementation).toHaveBeenCalledTimes(4);
   });
 });

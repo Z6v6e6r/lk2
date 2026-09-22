@@ -399,7 +399,7 @@
   min-height: 74px;
   padding: 10px 16px;
   align-items: center;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
+  grid-template-columns: 44px minmax(0, 1fr) auto auto;
   gap: 10px;
   border-bottom: 1px solid var(--comms-line);
 }
@@ -976,6 +976,49 @@
   background: #f6f5f7;
 }
 
+.policyControl {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.policyControl > .policyButtonMuted {
+  color: var(--comms-muted);
+}
+
+.policyMenu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 4;
+  display: grid;
+  min-width: 210px;
+  padding: 6px;
+  gap: 2px;
+  border: 1px solid var(--comms-line);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 16px 32px rgb(35 28 48 / 14%);
+}
+
+.policyMenu button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--comms-ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.policyMenu button[aria-checked='true'] {
+  background: #f1ecff;
+  color: var(--comms-accent-ink);
+  font-weight: 700;
+}
+
 @keyframes skeletonPulse {
   from {
     opacity: 0.55;
@@ -1026,7 +1069,7 @@
   .threadHeader {
     min-height: calc(68px + env(safe-area-inset-top));
     padding-top: max(10px, env(safe-area-inset-top));
-    grid-template-columns: 36px 36px minmax(0, 1fr) 44px;
+    grid-template-columns: 36px 36px minmax(0, 1fr) 44px 44px;
     gap: 8px;
   }
 

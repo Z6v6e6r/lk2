@@ -33,6 +33,7 @@ import type {
   HomeBase,
   HomeDashboard,
   NotificationInboxPage,
+  NotificationPreferencesView,
   PlayerProfileView,
   PublicGiftCertificateCatalog,
   UserUpcomingBookings,
@@ -230,6 +231,27 @@ const notificationInbox: NotificationInboxPage = {
       body: 'Начало сегодня в 18:00.',
       deepLink: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
       createdAt: '2026-07-16T15:00:00.000Z',
+    },
+  ],
+};
+const notificationPreferences: NotificationPreferencesView = {
+  categories: [
+    {
+      category: 'MESSAGING',
+      channels: [
+        {
+          channel: 'IN_APP',
+          enabled: true,
+          timezone: 'Europe/Moscow',
+          available: true,
+        },
+        {
+          channel: 'PUSH',
+          enabled: true,
+          timezone: 'Europe/Moscow',
+          available: false,
+        },
+      ],
     },
   ],
 };
@@ -501,8 +523,15 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       changed: false,
       replayed: false,
     }),
+    setConversationNotificationPolicy: vi.fn().mockResolvedValue({
+      outcome: 'ok',
+      policy: { level: 'ALL', muted: false },
+      changed: true,
+    }),
     listNotifications: vi.fn().mockResolvedValue(notificationInbox),
     markNotificationsRead: vi.fn().mockResolvedValue(undefined),
+    getNotificationPreferences: vi.fn().mockResolvedValue(notificationPreferences),
+    updateNotificationPreferences: vi.fn().mockResolvedValue(notificationPreferences),
     getWebPushConfiguration: vi.fn().mockResolvedValue({
       enabled: false,
       reason: 'GLOBAL_GATE_DISABLED',
@@ -1676,6 +1705,64 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 
+  it('collapses every message of one chat into one inbox row', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const listConversations = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: conversationId,
+          kind: 'DIRECT' as const,
+          participant: {
+            userId: '11111111-1111-4111-8111-111111111111',
+            displayName: 'Мария Соколова',
+          },
+          unreadCount: 4,
+          updatedAt: '2026-07-16T15:05:00.000Z',
+          lastMessage: {
+            sequence: 9,
+            body: 'Кто идёт на выходных?',
+            createdAt: '2026-07-16T15:05:00.000Z',
+          },
+        },
+      ],
+    });
+    const listNotifications = vi.fn().mockResolvedValue({
+      unreadCount: 2,
+      items: [
+        {
+          id: '11111111-1111-4111-8111-111111111111',
+          category: 'MESSAGING',
+          title: 'Новое сообщение',
+          body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+          deepLink: `/chats/${conversationId}`,
+          createdAt: '2026-07-16T15:00:00.000Z',
+        },
+        {
+          id: '33333333-3333-4333-8333-333333333333',
+          category: 'MESSAGING',
+          title: 'Новое сообщение',
+          body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+          deepLink: `/chats/${conversationId}`,
+          createdAt: '2026-07-16T14:00:00.000Z',
+        },
+      ],
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations,
+      listNotifications,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    const chatRow = await screen.findByRole('link', { name: /Мария Соколова/u });
+    expect(chatRow).toHaveAttribute('href', `/chats/${conversationId}`);
+    expect(chatRow).toHaveTextContent('4 новых сообщения');
+    expect(chatRow).toHaveTextContent('Кто идёт на выходных?');
+    expect(screen.getAllByRole('link', { name: /Мария Соколова/u })).toHaveLength(1);
+  });
+
   it('marks an unread GAME notification before following its deep link', async () => {
     window.history.replaceState({}, '', '/notifications');
     const markNotificationsRead = vi.fn().mockResolvedValue({
@@ -1797,6 +1884,39 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByText('Лента недоступна')).toBeVisible();
     expect(screen.queryByText('Пока тихо')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Уведомления на устройстве' })).toBeVisible();
+  });
+
+  it('loads and applies notification preferences from the settings screen', async () => {
+    window.history.replaceState({}, '', '/notifications');
+    const updateNotificationPreferences = vi.fn().mockResolvedValue(notificationPreferences);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      updateNotificationPreferences,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByRole('heading', { name: 'Уведомления' })).toBeVisible();
+    expect(gateway.getNotificationPreferences).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
+    // A switch applies immediately through the replace-preferences command.
+    fireEvent.click(screen.getByRole('switch', { name: 'Чаты: показывать в приложении' }));
+
+    await waitFor(() => expect(updateNotificationPreferences).toHaveBeenCalledTimes(1));
+    const update = updateNotificationPreferences.mock.calls[0]?.[0] as {
+      readonly categories: readonly {
+        readonly category: string;
+        readonly channels: readonly {
+          readonly channel: string;
+          readonly enabled: boolean;
+        }[];
+      }[];
+    };
+    expect(
+      update.categories
+        .find((category) => category.category === 'MESSAGING')
+        ?.channels.find((channel) => channel.channel === 'IN_APP'),
+    ).toMatchObject({ enabled: false });
   });
 
   it('fails closed for an unknown section route instead of showing a placeholder', async () => {
@@ -2110,6 +2230,47 @@ describe('PadlHub web authentication', () => {
     await waitFor(() => expect(window.location.pathname).toBe(`/chats/${conversationId}`));
     expect(createDirectConversation).toHaveBeenCalledWith(recipientUserId, expect.any(String));
     await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
+  });
+
+  it('mutes the open conversation through the thread header and keeps the stored policy', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const setConversationNotificationPolicy = vi
+      .fn<AuthGateway['setConversationNotificationPolicy']>()
+      .mockResolvedValue({
+        outcome: 'ok',
+        policy: { level: 'NONE', muted: true, mutedUntil: '2026-08-04T02:00:00.000Z' },
+        changed: true,
+      });
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: conversationId,
+            kind: 'DIRECT' as const,
+            participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+            unreadCount: 0,
+            updatedAt: '2026-08-03T10:00:00.000Z',
+            notificationPolicy: { level: 'ALL' as const, muted: false },
+          },
+        ],
+      }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      setConversationNotificationPolicy,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    const bell = await screen.findByRole('button', { name: 'Уведомления включены' });
+    fireEvent.click(bell);
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Выключить' }));
+
+    await waitFor(() => expect(setConversationNotificationPolicy).toHaveBeenCalledTimes(1));
+    expect(setConversationNotificationPolicy.mock.calls[0]?.[0]).toBe(conversationId);
+    expect(setConversationNotificationPolicy.mock.calls[0]?.[1]).toEqual({ level: 'NONE' });
+    // The server answer is reflected without a full conversation reload.
+    expect(await screen.findByText(/уведомления выключены/)).toBeVisible();
   });
 
   it('opens the existing recoverable realtime path for a loaded GAME conversation', async () => {

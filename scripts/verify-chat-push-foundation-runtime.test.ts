@@ -186,7 +186,14 @@ describe('chat/push foundation runtime verifier', () => {
     expect(source).toContain('WEB_PUSH_ENABLED');
     expect(source).toContain('MESSAGING_USER_BLOCK_COMMANDS_ENABLED');
     expect(source).toContain('BOOKING_REMINDER_SCHEDULER_ENABLED');
-    expect(source).toContain('loadConfig(process.env, { profilePhotoStorage: true })');
+    // The worker branch must not use the API loader: a deployed worker may not receive API signing
+    // secrets, and `loadConfig` fails closed on their absence.
+    expect(source).toContain('loadWorkerConfig(workerEnvironment)');
+    expect(source).toContain('WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: "true"');
+    expect(source).toContain('delete workerEnvironment.JWT_ACCESS_SECRET');
+    expect(source).toContain('delete workerEnvironment.JWT_REFRESH_SECRET');
+    expect(source).toContain('config = loadConfig(process.env)');
+    expect(source).not.toContain('loadConfig(process.env, { profilePhotoStorage: true })');
     expect(source).toContain('config[key] !== undefined && config[key] !== false');
     expect(source).not.toMatch(/^\s*env\s*\|/m);
   });

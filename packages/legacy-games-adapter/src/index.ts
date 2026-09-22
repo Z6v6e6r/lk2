@@ -130,12 +130,18 @@ const LEGACY_GAME_PROJECTION = {
   'organizer.rating': 1,
   'organizer.ratingNumeric': 1,
   'organizer.photo': 1,
+  // The viewer-phone lookup matches these in memory and never copies them into a snapshot, so a
+  // projection without them silently disables the VIEWER_PHONE association proof on this source.
+  'organizer.phone': 1,
+  'organizer.phoneNorm': 1,
   'participants.id': 1,
   'participants.name': 1,
   'participants.rating': 1,
   'participants.ratingNumeric': 1,
   'participants.status': 1,
   'participants.photo': 1,
+  'participants.phone': 1,
+  'participants.phoneNorm': 1,
   'settings.isPrivate': 1,
   'settings.minRating': 1,
   'settings.maxRating': 1,
@@ -159,9 +165,29 @@ function stringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-function phoneDigits(value: unknown): string | undefined {
+/**
+ * Canonical comparison form for a legacy phone. Mirrors the viewer-scoped legacy community reader so
+ * both legacy contours accept the same stored values: `79990000001`, `+7 (999) 000-00-01`,
+ * `89990000001` and a bare 10-digit national number all resolve to `79990000001`.
+ */
+function normalizedPhoneKey(value: unknown): string | undefined {
   const digits = stringValue(value)?.replace(/\D/g, '');
-  return digits && /^\d{10,15}$/.test(digits) ? digits : undefined;
+  if (!digits) return undefined;
+  if (digits.length === 10) return `7${digits}`;
+  if (digits.length === 11 && digits.startsWith('8')) return `7${digits.slice(1)}`;
+  return digits.length >= 11 ? digits : undefined;
+}
+
+/**
+ * The candidate values the Mongo filter can select for one viewer phone. The mirror is documented to
+ * hold bare digits (`7XXXXXXXXXX`); these cover the canonical, plus-prefixed, `8`-prefixed, bare
+ * national and numeric BSON values, and each of them is resolved back by `normalizedPhoneKey`. A
+ * separator-formatted value is not selectable by an exact-match filter, so the beta runbook keeps the
+ * stored-shape check that would extend this list instead of silently disabling the proof.
+ */
+function phoneCandidateForms(phone: string): unknown[] {
+  const national = phone.slice(1);
+  return [...new Set([phone, `+${phone}`, `8${national}`, national, Number(phone)])];
 }
 
 function uuidValue(value: unknown): string | undefined {
@@ -475,12 +501,13 @@ function mapLegacyGame(
   const format = stringValue(raw.metadata?.gameFormat);
   const capacity: 2 | 4 = format === 'singles' ? 2 : 4;
   const participants = [...participantMap.values()].slice(0, capacity);
-  const viewerPhone = phoneDigits(viewerPhoneE164);
+  const viewerPhone = normalizedPhoneKey(viewerPhoneE164);
   const viewerParticipantExternalId = viewerPhone
     ? [raw.organizer, ...(raw.participants ?? [])].find(
         (item) =>
-          phoneDigits(item?.phoneNorm ?? item?.phone) === viewerPhone &&
-          stringValue(item?.id) !== undefined,
+          // An empty or unusable stored `phoneNorm` must fall through to the plain phone.
+          (normalizedPhoneKey(item?.phoneNorm) ?? normalizedPhoneKey(item?.phone)) ===
+            viewerPhone && stringValue(item?.id) !== undefined,
       )?.id
     : undefined;
   const minRating = playerLevel(raw.settings?.minRating);
@@ -741,6 +768,43 @@ export class LegacyGamesMongoAdapter {
       .map(normalizeMongoSnapshot);
   }
 
+  /**
+   * Reads the legacy Games that carry the authenticated viewer's own provider phone so the caller
+   * can prove that viewer's one-way player key. The phone is matched in memory and never enters the
+   * returned snapshot: only `viewerParticipantExternalId` leaves this method.
+   */
+  public async readByViewerPhone(input: {
+    readonly phoneE164: string;
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const phone = normalizedPhoneKey(input.phoneE164);
+    if (!phone) return [];
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    }
+    // The mirror stores the same number in more than one shape, so the candidate filter accepts every
+    // form the in-memory matcher resolves instead of only the canonical digits.
+    const phoneForms = phoneCandidateForms(phone);
+    const snapshots = await this.readMatching({
+      filter: {
+        archived: { $ne: true },
+        status: { $in: ['PAID', 'CANCELLED'] },
+        $or: [
+          { 'organizer.phoneNorm': { $in: phoneForms } },
+          { 'organizer.phone': { $in: phoneForms } },
+          { 'participants.phoneNorm': { $in: phoneForms } },
+          { 'participants.phone': { $in: phoneForms } },
+        ],
+      },
+      limit: input.limit,
+      sort: { updatedAt: -1, _id: 1 },
+      viewerPhoneE164: input.phoneE164,
+    });
+    return snapshots
+      .filter((snapshot) => Boolean(snapshot.viewerParticipantExternalId))
+      .map(normalizeMongoSnapshot);
+  }
+
   private async readMatching(input: {
     readonly filter: Filter<RawLegacyGame>;
     readonly limit: number;
@@ -917,6 +981,303 @@ function publicTournamentParticipantId(externalId: string): string {
   bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
   const hex = bytes.toString('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export interface LegacyTournamentResultStanding {
+  /** Private provider identity. It is consumed only by the API mapping boundary. */
+  readonly externalParticipantId: string;
+  readonly displayName: string;
+  readonly place: number;
+}
+
+export interface LegacyTournamentResult {
+  /** Stable PadlHub tournament UUID derived from the private legacy identity. */
+  readonly id: string;
+  readonly status: 'CONFIRMED';
+  readonly podium: readonly [
+    LegacyTournamentResultStanding,
+    LegacyTournamentResultStanding,
+    LegacyTournamentResultStanding,
+  ];
+  readonly standings: readonly LegacyTournamentResultStanding[];
+  readonly sourceUpdatedAt: string | null;
+}
+
+export interface LegacyTournamentResultSource {
+  readonly read: (exerciseExternalId: string) => Promise<LegacyTournamentResult | null>;
+}
+
+export interface LegacyTournamentResultAdapterOptions {
+  readonly baseUrl?: string;
+  readonly timeoutMs?: number;
+  readonly maxAttempts?: number;
+  readonly maxResponseBytes?: number;
+  readonly freshTtlMs?: number;
+  readonly staleTtlMs?: number;
+  readonly maxCacheEntries?: number;
+  readonly circuitFailureThreshold?: number;
+  readonly circuitResetMs?: number;
+  readonly fetchImplementation?: typeof fetch;
+  readonly now?: () => number;
+  readonly onMetric?: (metric: {
+    readonly operation: 'tournament_result';
+    readonly outcome: 'success' | 'failure' | 'cache_fresh' | 'cache_stale' | 'circuit_open';
+    readonly durationMs: number;
+  }) => void;
+}
+
+interface LegacyTournamentResultCacheEntry {
+  readonly fetchedAt: number;
+  readonly result: LegacyTournamentResult | null;
+}
+
+async function readTournamentResultBytes(
+  response: Response,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+  }
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('TOURNAMENT_RESULT_RESPONSE_TOO_LARGE');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function completedTournamentResult(
+  value: unknown,
+  exerciseExternalId: string,
+): LegacyTournamentResult | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const tournament = value as Record<string, unknown>;
+  if (stringValue(tournament.tournamentId) !== exerciseExternalId) return null;
+  const params =
+    typeof tournament.params === 'object' &&
+    tournament.params !== null &&
+    !Array.isArray(tournament.params)
+      ? (tournament.params as Record<string, unknown>)
+      : {};
+  const summary =
+    typeof tournament.summary === 'object' &&
+    tournament.summary !== null &&
+    !Array.isArray(tournament.summary)
+      ? (tournament.summary as Record<string, unknown>)
+      : {};
+  const paramsCompleted = stringValue(params.status)?.toLowerCase() === 'completed';
+  const summaryCompleted =
+    stringValue(summary.status)?.toLowerCase() === 'completed' &&
+    (summary.finished === true ||
+      Boolean(stringValue(summary.finishedAt)) ||
+      Boolean(stringValue(summary.completedAt)));
+  if (
+    !paramsCompleted ||
+    !summaryCompleted ||
+    !Array.isArray(tournament.standings) ||
+    tournament.standings.length > 200
+  ) {
+    return null;
+  }
+
+  const seenPlaces = new Set<number>();
+  const standings: LegacyTournamentResultStanding[] = [];
+  for (const value of tournament.standings) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+    const row = value as Record<string, unknown>;
+    const externalParticipantId = stringValue(row.id);
+    const displayName = stringValue(row.name)?.slice(0, 120);
+    const place = numericValue(row.rank);
+    if (
+      !externalParticipantId ||
+      externalParticipantId.length > 200 ||
+      !displayName ||
+      place === undefined ||
+      !Number.isInteger(place) ||
+      place < 1 ||
+      place > 10_000 ||
+      seenPlaces.has(place)
+    ) {
+      return null;
+    }
+    seenPlaces.add(place);
+    standings.push({ externalParticipantId, displayName, place });
+  }
+  standings.sort((left, right) => left.place - right.place);
+  const podium = standings.slice(0, 3);
+  if (podium.length !== 3 || podium.some((standing, index) => standing.place !== index + 1)) {
+    return null;
+  }
+  const sourceUpdatedAt = stringValue(tournament.updatedAt);
+  return {
+    id: publicTournamentId(exerciseExternalId),
+    status: 'CONFIRMED',
+    podium: [podium[0]!, podium[1]!, podium[2]!],
+    standings,
+    sourceUpdatedAt:
+      sourceUpdatedAt && !Number.isNaN(Date.parse(sourceUpdatedAt))
+        ? new Date(sourceUpdatedAt).toISOString()
+        : null,
+  };
+}
+
+export class LegacyTournamentResultAdapter implements LegacyTournamentResultSource {
+  private readonly cache = new Map<string, LegacyTournamentResultCacheEntry>();
+  private readonly pending = new Map<string, Promise<LegacyTournamentResult | null>>();
+  private consecutiveFailures = 0;
+  private circuitOpenedAt: number | undefined;
+
+  public constructor(private readonly options: LegacyTournamentResultAdapterOptions = {}) {}
+
+  private cacheResult(key: string, result: LegacyTournamentResult | null): void {
+    const maxEntries = Math.max(1, Math.min(this.options.maxCacheEntries ?? 256, 2_000));
+    this.cache.set(key, { fetchedAt: this.options.now?.() ?? Date.now(), result });
+    while (this.cache.size > maxEntries) {
+      const oldestKey = [...this.cache.entries()].reduce((oldest, entry) =>
+        entry[1].fetchedAt < oldest[1].fetchedAt ? entry : oldest,
+      )[0];
+      this.cache.delete(oldestKey);
+    }
+  }
+
+  private emit(
+    outcome: Parameters<
+      NonNullable<LegacyTournamentResultAdapterOptions['onMetric']>
+    >[0]['outcome'],
+    durationMs: number,
+  ): void {
+    try {
+      this.options.onMetric?.({ operation: 'tournament_result', outcome, durationMs });
+    } catch {
+      // Telemetry must never change history projection behavior.
+    }
+  }
+
+  private async fetch(exerciseExternalId: string): Promise<LegacyTournamentResult | null> {
+    const startedAt = Date.now();
+    const now = this.options.now?.() ?? Date.now();
+    if (
+      this.circuitOpenedAt !== undefined &&
+      now - this.circuitOpenedAt < (this.options.circuitResetMs ?? 30_000)
+    ) {
+      this.emit('circuit_open', 0);
+      throw new Error('TOURNAMENT_RESULT_CIRCUIT_OPEN');
+    }
+    const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
+    if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
+      throw new Error('TOURNAMENT_RESULT_BASE_URL_INVALID');
+    }
+    const url = new URL('/lk/tournaments/americano/history', baseUrl);
+    url.searchParams.set('tournamentId', exerciseExternalId);
+    const maxAttempts = Math.max(1, Math.min(this.options.maxAttempts ?? 2, 3));
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await (this.options.fetchImplementation ?? fetch)(url, {
+          headers: { Accept: 'application/json' },
+          signal: AbortSignal.timeout(this.options.timeoutMs ?? 5_000),
+        });
+        if (!response.ok) {
+          const error = new Error('TOURNAMENT_RESULT_SOURCE_UNAVAILABLE');
+          if (response.status < 500) {
+            lastError = error;
+            break;
+          }
+          if (attempt === maxAttempts) throw error;
+          lastError = error;
+          continue;
+        }
+        const maxBytes = Math.min(
+          this.options.maxResponseBytes ?? 1_024 * 1_024,
+          2 * 1_024 * 1_024,
+        );
+        const bytes = await readTournamentResultBytes(response, maxBytes);
+        let body: unknown;
+        try {
+          body = JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          throw new Error('TOURNAMENT_RESULT_RESPONSE_INVALID');
+        }
+        if (!Array.isArray(body) || body.length > 1) {
+          throw new Error('TOURNAMENT_RESULT_RESPONSE_INVALID');
+        }
+        const result =
+          body.length === 0 ? null : completedTournamentResult(body[0], exerciseExternalId);
+        this.consecutiveFailures = 0;
+        this.circuitOpenedAt = undefined;
+        this.emit('success', Date.now() - startedAt);
+        return result;
+      } catch (error) {
+        lastError = error;
+        if (attempt === maxAttempts) break;
+      }
+    }
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures >= (this.options.circuitFailureThreshold ?? 3)) {
+      this.circuitOpenedAt = now;
+    }
+    this.emit('failure', Date.now() - startedAt);
+    throw lastError instanceof Error
+      ? lastError
+      : new Error('TOURNAMENT_RESULT_SOURCE_UNAVAILABLE');
+  }
+
+  public read(exerciseExternalId: string): Promise<LegacyTournamentResult | null> {
+    const normalized = exerciseExternalId.trim();
+    if (!normalized || normalized.length > 200) {
+      return Promise.reject(new Error('TOURNAMENT_RESULT_ID_INVALID'));
+    }
+    const now = this.options.now?.() ?? Date.now();
+    const cached = this.cache.get(normalized);
+    if (cached && now - cached.fetchedAt <= (this.options.freshTtlMs ?? 60_000)) {
+      this.emit('cache_fresh', 0);
+      return Promise.resolve(cached.result);
+    }
+    const existing = this.pending.get(normalized);
+    if (existing) return existing;
+    const request = this.fetch(normalized)
+      .then((result) => {
+        this.cacheResult(normalized, result);
+        return result;
+      })
+      .catch((error) => {
+        if (cached && now - cached.fetchedAt <= (this.options.staleTtlMs ?? 600_000)) {
+          this.emit('cache_stale', 0);
+          return cached.result;
+        }
+        throw error;
+      })
+      .finally(() => {
+        if (this.pending.get(normalized) === request) this.pending.delete(normalized);
+      });
+    this.pending.set(normalized, request);
+    return request;
+  }
 }
 
 function tournamentLevelRange(value: unknown): PublicTournamentSummary['levelRange'] {
@@ -1575,6 +1936,49 @@ export class LegacyGamesPublicAdapter {
       return matches.slice(0, input.limit).map((snapshot) => sanitizeSnapshot(snapshot));
     }
   }
+
+  /**
+   * Counterpart of the Mongo viewer-phone read for the public legacy bridge: asks the clone for the
+   * authenticated viewer's own games by provider phone and keeps the snapshots whose one-way player
+   * key that lookup proved. The phone never enters a returned snapshot.
+   */
+  public async readByViewerPhone(input: {
+    readonly phoneE164: string;
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const phone = normalizedPhoneKey(input.phoneE164);
+    if (!phone) return [];
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    }
+    const baseUrl = new URL(this.options.baseUrl ?? 'https://padlhub.su');
+    if (baseUrl.protocol !== 'https:' && baseUrl.hostname !== 'localhost') {
+      throw new Error('LEGACY_GAMES_PUBLIC_BASE_URL_INVALID');
+    }
+    const matches: LegacyGameSourceSnapshot[] = [];
+    const pageSize = 500;
+    // The endpoint answers with the games of that phone only, so the first page already carries the
+    // proven player key; two pages bound the read while tolerating provider-side paging drift.
+    for (let pageIndex = 0; pageIndex < 2 && matches.length < input.limit; pageIndex += 1) {
+      const offset = pageIndex * pageSize;
+      const url = new URL('/lk/games/by-phone', baseUrl);
+      url.searchParams.set('phone', phone);
+      url.searchParams.set('includePast', 'true');
+      url.searchParams.set('limit', String(pageSize));
+      url.searchParams.set('offset', String(offset));
+      const page = await this.readMappedPage(url, input.phoneE164);
+      matches.push(
+        ...page.snapshots.filter((snapshot) => Boolean(snapshot.viewerParticipantExternalId)),
+      );
+      const hasMore =
+        page.hasMore ??
+        (page.total === undefined
+          ? page.rawCount === pageSize
+          : offset + page.rawCount < page.total);
+      if (!hasMore) break;
+    }
+    return matches.slice(0, input.limit).map((snapshot) => sanitizeSnapshot(snapshot));
+  }
 }
 
 export const testing = {
@@ -1585,4 +1989,6 @@ export const testing = {
   normalizeMongoParticipantPhoto,
   participantPhotoPipeline,
   matchesVivaExerciseOccurrence,
+  normalizedPhoneKey,
+  phoneCandidateForms,
 };

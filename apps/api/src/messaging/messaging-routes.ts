@@ -6,6 +6,8 @@ import { RealtimeTicketStoreError, type RealtimeTicketIssuer } from './realtime-
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9._:-]{16,128}$/;
+/** A temporary mute is bounded: the product offers hours, not an unbounded silence. */
+const MAX_NOTIFICATION_MUTE_MS = 30 * 24 * 60 * 60 * 1_000;
 
 function principal(
   request: FastifyRequest,
@@ -549,6 +551,62 @@ export function registerMessagingRoutes(
         );
       }
       if (result.outcome === 'idempotency_conflict') return conflict(request, reply);
+      return result;
+    },
+  );
+
+  app.put(
+    '/user/api/v1/:tenantKey/conversations/:conversationId/notification-policy',
+    { preHandler: [...options.commandHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      if (!options.repository) return unavailable(request, reply);
+      if (!(await requireMessagingGate(request, reply, options.repository, current.tenantId))) {
+        return;
+      }
+      const conversationId = (request.params as { conversationId?: string }).conversationId;
+      const body = request.body as Record<string, unknown> | null;
+      const level = body?.level;
+      const mutedUntil = body?.mutedUntil ?? null;
+      const allowedKeys = new Set(['level', 'mutedUntil']);
+      const mutedUntilEpoch =
+        typeof mutedUntil === 'string' && Number.isFinite(Date.parse(mutedUntil))
+          ? Date.parse(mutedUntil)
+          : undefined;
+      if (
+        !conversationId ||
+        !UUID_PATTERN.test(conversationId) ||
+        !body ||
+        Array.isArray(body) ||
+        Object.keys(body).some((key) => !allowedKeys.has(key)) ||
+        (level !== 'ALL' && level !== 'MENTIONS' && level !== 'NONE') ||
+        (mutedUntil !== null && mutedUntilEpoch === undefined) ||
+        (mutedUntilEpoch !== undefined &&
+          (mutedUntilEpoch <= Date.now() ||
+            mutedUntilEpoch > Date.now() + MAX_NOTIFICATION_MUTE_MS))
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'CONVERSATION_NOTIFICATION_POLICY_INVALID',
+          'Укажите уровень уведомлений и, при необходимости, будущее время отключения.',
+        );
+      }
+      const result = await options.repository.updateConversationNotificationPolicy({
+        tenantId: current.tenantId,
+        userId: current.userId,
+        conversationId,
+        level,
+        mutedUntil: mutedUntilEpoch === undefined ? null : new Date(mutedUntilEpoch).toISOString(),
+        idempotencyKey: request.headers['idempotency-key'] as string,
+        correlationId: request.id,
+      });
+      if (result.outcome === 'not_found') return notFound(request, reply);
       return result;
     },
   );

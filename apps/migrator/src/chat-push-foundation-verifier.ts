@@ -72,6 +72,7 @@ interface CatalogPostcheckRow extends QueryResultRow {
 export interface ChatPushFoundationVerificationResult {
   readonly tenantCount: number;
   readonly pendingFoundationCount: number;
+  readonly pendingTotalCount: number;
   readonly appliedFoundationCount: number;
   readonly runtimeSessionCount: number;
   readonly catalogDigest?: string;
@@ -253,7 +254,11 @@ export function assertFoundationLedger(input: {
   readonly applied: readonly MigrationLedgerEntry[];
   readonly packaged: readonly MigrationLedgerEntry[];
   readonly phase: ChatPushFoundationPhase;
-}): { readonly pendingFoundation: readonly string[]; readonly appliedFoundationCount: number } {
+}): {
+  readonly pendingFoundation: readonly string[];
+  readonly pendingTotalCount: number;
+  readonly appliedFoundationCount: number;
+} {
   assertMigrationLedgerCompatible({ applied: input.applied, packaged: input.packaged });
 
   const packagedNames = input.packaged.map((entry) => entry.filename);
@@ -267,10 +272,6 @@ export function assertFoundationLedger(input: {
 
   const appliedSet = new Set(input.applied.map((entry) => entry.filename));
   const pending = packagedNames.filter((filename) => !appliedSet.has(filename));
-  const foundationSet = new Set<string>(CHAT_PUSH_FOUNDATION_MIGRATION_FILENAMES);
-  if (pending.some((filename) => !foundationSet.has(filename))) {
-    fail('CHAT_PUSH_FOUNDATION_UNEXPECTED_PENDING');
-  }
 
   const appliedFoundation = CHAT_PUSH_FOUNDATION_MIGRATION_FILENAMES.filter((filename) =>
     appliedSet.has(filename),
@@ -289,7 +290,11 @@ export function assertFoundationLedger(input: {
   if ((input.phase === 'post' || input.phase === 'live') && pendingFoundation.length > 0) {
     fail('CHAT_PUSH_FOUNDATION_POST_MIGRATION_PENDING');
   }
-  return { pendingFoundation, appliedFoundationCount: appliedFoundation.length };
+  return {
+    pendingFoundation,
+    pendingTotalCount: pending.length,
+    appliedFoundationCount: appliedFoundation.length,
+  };
 }
 
 export function assertTenantInventory(input: {
@@ -659,7 +664,7 @@ export async function verifyChatPushFoundation(options: {
          select count(indexrelid)::integer as matched_indexes,
                 count(*) filter (where indisvalid and indisready)::integer as ready_indexes,
                 count(*) filter (
-                  where actual_columns = expected_columns
+                  where actual_columns::text[] = expected_columns
                     and actual_options = expected_options
                     and actual_predicate = expected_predicate
                     and indisunique = expected_unique
@@ -801,6 +806,7 @@ export async function verifyChatPushFoundation(options: {
   return {
     tenantCount: tenants.length,
     pendingFoundationCount: ledger.pendingFoundation.length,
+    pendingTotalCount: ledger.pendingTotalCount,
     appliedFoundationCount: ledger.appliedFoundationCount,
     runtimeSessionCount: sessionCount,
     ...(catalogDigest ? { catalogDigest } : {}),

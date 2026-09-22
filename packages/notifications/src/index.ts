@@ -1,4 +1,11 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
 
 import { z } from 'zod';
 
@@ -159,21 +166,23 @@ export type GameNotificationDefinition = (typeof GAME_NOTIFICATION_DEFINITIONS)[
  * Direct-chat notification ruleset. Messaging events stay on the generic source-event schema: ADR
  * 0022 keeps their payload identifier-only (tenant, conversation, message, sequence and recipient
  * identifiers), so the projector resolves recipients from `recipientUserIds` instead of a dedicated
- * payload contract, and the rendered text never quotes message content.
+ * payload contract, and the rendered text never quotes message content. Direct messages are the one
+ * conversation a person can be pulled back into, so the ruleset asks for both channels; the version
+ * moves to `messaging.ru-ru.v2` because a provisioned template version can never change its channels.
  */
 export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
-  rulesetVersion: 'messaging.ru-ru.v1',
+  rulesetVersion: 'messaging.ru-ru.v2',
   template: {
-    version: 1,
+    version: 2,
     locale: 'ru-RU',
     category: 'MESSAGING',
     deepLink: '/chats/{{conversationId}}',
-    channels: ['IN_APP'],
+    channels: ['IN_APP', 'PUSH'],
     active: true,
   },
   rule: {
     keySuffix: 'default',
-    channelOverride: ['IN_APP'],
+    channelOverride: ['IN_APP', 'PUSH'],
     active: true,
   },
   definitions: [
@@ -226,6 +235,67 @@ export const MESSAGING_NOTIFICATION_DEFINITIONS =
   MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.definitions;
 export type MessagingNotificationDefinition = (typeof MESSAGING_NOTIFICATION_DEFINITIONS)[number];
 
+/**
+ * Incoming friend-request ruleset. A request is addressed to one account, so the event carries that
+ * account in `recipientUserIds` and the rule resolves it from there; the rendered text names neither
+ * the requester nor any profile detail, and opens the notifications feed where the request can be
+ * answered. The channels include PUSH because a request is worthless if the addressed player only
+ * discovers it after opening the cabinet.
+ */
+export const FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT = {
+  rulesetVersion: 'friendship.ru-ru.v1',
+  template: {
+    version: 1,
+    locale: 'ru-RU',
+    category: 'FRIENDSHIP',
+    deepLink: '/notifications',
+    channels: ['IN_APP', 'PUSH'],
+    active: true,
+  },
+  rule: {
+    keySuffix: 'default',
+    channelOverride: ['IN_APP', 'PUSH'],
+    active: true,
+  },
+  definitions: [
+    {
+      key: 'profile.friend_request.created',
+      sourceEventType: 'profile.friend_request.created.v1',
+      title: 'Заявка в друзья',
+      body: 'Откройте ПадлХАБ, чтобы ответить.',
+      audienceSelector: {
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+      },
+      mandatory: false,
+    },
+  ],
+} as const;
+
+export const FRIENDSHIP_NOTIFICATION_RULESET_VERSION =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.rulesetVersion;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_VERSION =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.version;
+export const FRIENDSHIP_NOTIFICATION_LOCALE =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.locale;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_CATEGORY =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.category;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_DEEP_LINK =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.deepLink;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_CHANNELS =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.channels;
+export const FRIENDSHIP_NOTIFICATION_TEMPLATE_ACTIVE =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.template.active;
+export const FRIENDSHIP_NOTIFICATION_RULE_KEY_SUFFIX =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.rule.keySuffix;
+export const FRIENDSHIP_NOTIFICATION_RULE_CHANNEL_OVERRIDE =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.rule.channelOverride;
+export const FRIENDSHIP_NOTIFICATION_RULE_ACTIVE =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.rule.active;
+export const FRIENDSHIP_NOTIFICATION_DEFINITIONS =
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT.definitions;
+export type FriendshipNotificationDefinition = (typeof FRIENDSHIP_NOTIFICATION_DEFINITIONS)[number];
+
 export function bookingNotificationContractHash(contract: object): string {
   const serialized = JSON.stringify(contract);
   if (!serialized) throw new Error('BOOKING_NOTIFICATION_CONTRACT_NOT_SERIALIZABLE');
@@ -240,6 +310,9 @@ export const GAME_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
 );
 export const MESSAGING_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
   MESSAGING_NOTIFICATION_CANONICAL_CONTRACT,
+);
+export const FRIENDSHIP_NOTIFICATION_REQUEST_HASH = bookingNotificationContractHash(
+  FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT,
 );
 
 export const BOOKING_NOTIFICATION_EVENT_TYPES = [
@@ -259,6 +332,8 @@ export const MESSAGING_NOTIFICATION_EVENT_TYPES = [
   'messaging.conversation.created.v1',
   'messaging.message.created.v1',
 ] as const;
+
+export const FRIENDSHIP_NOTIFICATION_EVENT_TYPES = ['profile.friend_request.created.v1'] as const;
 
 export const MAX_NOTIFICATION_EVENT_RECIPIENTS = 50;
 
@@ -619,6 +694,42 @@ export function isWebPushEndpointOriginAllowed(
   return origin !== undefined && allowedOrigins.includes(origin);
 }
 
+/**
+ * Which push service backs a subscription. The origin already names the browser family: Chrome and every
+ * Chromium browser use FCM, while Safari and every browser on iOS use Apple. Deriving the value from the
+ * stored endpoint keeps the platform visible to operators without retaining anything new about a device
+ * and without a schema change.
+ */
+export type WebPushEndpointPlatform = 'CHROME' | 'SAFARI' | 'OTHER';
+
+export function webPushEndpointPlatform(endpoint: string): WebPushEndpointPlatform | undefined {
+  const origin = webPushEndpointOrigin(endpoint);
+  if (origin === undefined) return undefined;
+  if (origin === 'https://fcm.googleapis.com') return 'CHROME';
+  if (origin === 'https://web.push.apple.com') return 'SAFARI';
+  return 'OTHER';
+}
+
+/**
+ * The endpoint address inside the stored subscription payload. Registration encrypts
+ * `canonicalWebPushSubscription`, which is a JSON envelope holding the address and its keys, so a reader
+ * that expects a bare URL sees nothing at all — exactly the mistake that made every live endpoint look
+ * unreadable. A bare address is still accepted so the helper stays total for an older or future shape,
+ * and an unreadable payload is reported as absent instead of throwing.
+ */
+export function storedWebPushEndpoint(payload: string): string | undefined {
+  const trimmed = payload.trim();
+  if (!trimmed.startsWith('{')) return trimmed.length > 0 ? trimmed : undefined;
+  try {
+    const parsed = JSON.parse(trimmed) as { readonly endpoint?: unknown };
+    return typeof parsed.endpoint === 'string' && parsed.endpoint.length > 0
+      ? parsed.endpoint
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export const webPushSubscriptionSchema = z
   .object({
     endpoint: z
@@ -653,6 +764,78 @@ export function canonicalWebPushSubscription(subscription: WebPushSubscription):
   });
 }
 
+/**
+ * A display or click receipt is reported by the service worker, which has no session and often runs while
+ * the page is closed. The push therefore carries a token that authorises exactly one thing: recording a
+ * receipt for the one delivery it was sent for. The key is derived from the endpoint keyring, which both
+ * the API and the Worker already hold, so no new secret and no new configuration key appear anywhere.
+ */
+export const NOTIFICATION_RECEIPT_TOKEN_DOMAIN = 'phub:notification-receipt:v1';
+
+export function notificationReceiptSecret(input: {
+  readonly serializedKeys: string;
+  readonly activeKeyId: string;
+}): string {
+  const keys = parseEndpointKeyring(input.serializedKeys);
+  const key = keys.get(input.activeKeyId);
+  if (!key) throw new Error('NOTIFICATION_ENDPOINT_ACTIVE_KEY_MISSING');
+  return createHmac('sha256', key).update(NOTIFICATION_RECEIPT_TOKEN_DOMAIN).digest('base64url');
+}
+
+function receiptTokenSignature(secret: string, encodedPayload: string): Buffer {
+  return createHmac('sha256', secret).update(encodedPayload).digest();
+}
+
+export function createNotificationReceiptToken(input: {
+  readonly secret: string;
+  readonly tenantId: string;
+  readonly deliveryId: string;
+  readonly expiresAt: Date;
+}): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      t: input.tenantId,
+      d: input.deliveryId,
+      e: Math.floor(input.expiresAt.getTime() / 1000),
+    }),
+    'utf8',
+  ).toString('base64url');
+  return `${payload}.${receiptTokenSignature(input.secret, payload).toString('base64url')}`;
+}
+
+/**
+ * Returns the delivery a token authorises, or nothing. The tenant comes from the signed payload, so the
+ * capability fully describes what it may do and the client needs no tenant key of its own. Every failure
+ * — malformed token, expired, tampered signature — is the same answer, so a probe cannot tell them apart.
+ */
+export function verifyNotificationReceiptToken(input: {
+  readonly secret: string;
+  readonly token: string;
+  readonly now?: Date;
+}): { readonly tenantId: string; readonly deliveryId: string } | undefined {
+  const [payload, signature] = input.token.split('.');
+  if (!payload || !signature) return undefined;
+  let provided: Buffer;
+  try {
+    provided = Buffer.from(signature, 'base64url');
+  } catch {
+    return undefined;
+  }
+  const expected = receiptTokenSignature(input.secret, payload);
+  if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) return undefined;
+  let parsed: { readonly t?: unknown; readonly d?: unknown; readonly e?: unknown };
+  try {
+    parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as typeof parsed;
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed.t !== 'string' || typeof parsed.d !== 'string' || typeof parsed.e !== 'number')
+    return undefined;
+  const now = (input.now ?? new Date()).getTime() / 1000;
+  if (!Number.isFinite(parsed.e) || parsed.e <= now) return undefined;
+  return { tenantId: parsed.t, deliveryId: parsed.d };
+}
+
 export interface NotificationEndpointCipher {
   readonly activeKeyId: string;
   encrypt(plaintext: string): { readonly ciphertext: Buffer; readonly keyId: string };
@@ -685,6 +868,98 @@ function parseEndpointKeyring(serializedKeys: string): ReadonlyMap<string, Buffe
   }
   if (keys.size === 0) throw new Error('NOTIFICATION_ENDPOINT_KEYRING_EMPTY');
   return keys;
+}
+
+/**
+ * User-owned notification preferences. A preference is stored per tenant, user, category and
+ * channel (`notifications.user_preferences`); an absent row means the server default and therefore
+ * "enabled". Only IN_APP and PUSH are user-configurable today — EMAIL, SMS and CONNECTOR have no
+ * product surface — and a mandatory rule still bypasses the preference, so these settings can never
+ * silence a server-owned message such as a confirmed booking.
+ */
+export const USER_NOTIFICATION_PREFERENCE_CHANNELS = ['IN_APP', 'PUSH'] as const;
+
+export type UserNotificationPreferenceChannel =
+  (typeof USER_NOTIFICATION_PREFERENCE_CHANNELS)[number];
+
+export function isUserNotificationPreferenceChannel(
+  value: unknown,
+): value is UserNotificationPreferenceChannel {
+  return (
+    typeof value === 'string' &&
+    (USER_NOTIFICATION_PREFERENCE_CHANNELS as readonly string[]).includes(value)
+  );
+}
+
+const quietTime = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/);
+
+export const notificationPreferenceChannelUpdateSchema = z.object({
+  channel: z.enum(USER_NOTIFICATION_PREFERENCE_CHANNELS),
+  enabled: z.boolean(),
+  quietFrom: quietTime.nullish(),
+  quietUntil: quietTime.nullish(),
+  timezone: z.string().min(1).max(64).nullish(),
+});
+
+export const notificationPreferenceCategoryUpdateSchema = z.object({
+  category: z.string().regex(/^[A-Z][A-Z0-9_]{1,63}$/),
+  channels: z.array(notificationPreferenceChannelUpdateSchema).min(1).max(2),
+});
+
+export const NOTIFICATION_PREFERENCE_DEFAULT_TIMEZONE = 'Europe/Moscow';
+
+const MINUTES_PER_DAY = 24 * 60;
+
+export function isSupportedNotificationTimeZone(value: string): boolean {
+  if (value.length === 0 || value.length > 64 || /\s/.test(value)) return false;
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: value }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function localMinutesOfDay(now: Date, timezone: string): number | undefined {
+  if (!isSupportedNotificationTimeZone(timezone)) return undefined;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: timezone,
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(now);
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return undefined;
+  // `hour12: false` can render midnight as 24 in some ICU versions.
+  return ((hour % 24) * 60 + minute) % MINUTES_PER_DAY;
+}
+
+function minutesOfDay(value: string): number | undefined {
+  const match = /^([01][0-9]|2[0-3]):([0-5][0-9])$/.exec(value);
+  if (!match) return undefined;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+/**
+ * Whether the recipient's local clock sits inside their quiet window. `quietFrom === quietUntil`
+ * means "no quiet hours" rather than an all-day silence, and a window that crosses midnight
+ * (`23:00`–`07:00`) is honoured as one interval. An unreadable window is never quiet: a bad row must
+ * not silently swallow a notification.
+ */
+export function quietHoursActive(input: {
+  readonly now: Date;
+  readonly quietFrom: string;
+  readonly quietUntil: string;
+  readonly timezone: string;
+}): boolean {
+  const from = minutesOfDay(input.quietFrom);
+  const until = minutesOfDay(input.quietUntil);
+  const current = localMinutesOfDay(input.now, input.timezone);
+  if (from === undefined || until === undefined || current === undefined) return false;
+  if (from === until) return false;
+  if (from < until) return current >= from && current < until;
+  return current >= from || current < until;
 }
 
 export function createNotificationEndpointCipher(input: {

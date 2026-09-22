@@ -15,12 +15,20 @@ export interface MessagingParticipant {
   readonly displayName: string;
 }
 
+export interface ConversationNotificationPolicy {
+  readonly level: 'ALL' | 'MENTIONS' | 'NONE';
+  /** Server-computed: the level is not ALL, or the mute window is still open. */
+  readonly muted: boolean;
+  readonly mutedUntil?: string;
+}
+
 export interface ConversationSummary {
   readonly id: string;
   readonly kind: 'DIRECT';
   readonly participant: MessagingParticipant;
   readonly unreadCount: number;
   readonly updatedAt: string;
+  readonly notificationPolicy: ConversationNotificationPolicy;
   readonly lastMessage?: {
     readonly sequence: number;
     readonly body: string;
@@ -35,6 +43,7 @@ export interface GameConversationSummary {
   readonly title: string;
   readonly unreadCount: number;
   readonly updatedAt: string;
+  readonly notificationPolicy: ConversationNotificationPolicy;
   readonly lastMessage?: {
     readonly sequence: number;
     readonly body: string;
@@ -107,6 +116,14 @@ export type MarkConversationReadResult =
       readonly readThroughSequence: number;
       readonly changed: boolean;
       readonly replayed: boolean;
+    };
+
+export type UpdateConversationNotificationPolicyResult =
+  | { readonly outcome: 'not_found' }
+  | {
+      readonly outcome: 'ok';
+      readonly policy: ConversationNotificationPolicy;
+      readonly changed: boolean;
     };
 
 export type SetUserBlockResult =
@@ -193,6 +210,20 @@ export interface MessagingRepository {
     readonly idempotencyKey: string;
     readonly correlationId: string;
   }): Promise<MarkConversationReadResult>;
+  /**
+   * Sets the caller's own notification policy for one conversation. The command is idempotent by
+   * content — an unchanged request writes nothing, so a retried PUT neither duplicates the audit
+   * entry nor bumps the row.
+   */
+  updateConversationNotificationPolicy(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly conversationId: string;
+    readonly level: ConversationNotificationPolicy['level'];
+    readonly mutedUntil: string | null;
+    readonly idempotencyKey: string;
+    readonly correlationId: string;
+  }): Promise<UpdateConversationNotificationPolicyResult>;
   setUserBlock(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -243,6 +274,9 @@ interface ConversationRow extends QueryResultRow {
   readonly last_sequence: number | string | null;
   readonly last_body: string | null;
   readonly last_created_at: Date | string | null;
+  readonly notification_level: 'ALL' | 'MENTIONS' | 'NONE';
+  readonly muted_until: string | null;
+  readonly notifications_muted: boolean;
 }
 
 interface MessageRow extends QueryResultRow {
@@ -277,6 +311,9 @@ interface GameConversationRow extends QueryResultRow {
   readonly last_sequence?: number | string | null;
   readonly last_body?: string | null;
   readonly last_created_at?: Date | string | null;
+  readonly notification_level: 'ALL' | 'MENTIONS' | 'NONE';
+  readonly muted_until: string | null;
+  readonly notifications_muted: boolean;
 }
 
 interface MemberRow extends QueryResultRow {
@@ -289,6 +326,12 @@ interface ReadCommandRow extends QueryResultRow {
   readonly through_sequence: number | string;
   readonly result_sequence: number | string;
   readonly changed: boolean;
+}
+
+interface NotificationPolicyRow extends QueryResultRow {
+  readonly notification_level: 'ALL' | 'MENTIONS' | 'NONE';
+  readonly muted_until: string | null;
+  readonly notifications_muted: boolean;
 }
 
 interface UserBlockCommandRow extends QueryResultRow {
@@ -310,6 +353,18 @@ function sequence(value: number | string): number {
   return parsed;
 }
 
+function mapNotificationPolicy(row: {
+  readonly notification_level: 'ALL' | 'MENTIONS' | 'NONE';
+  readonly muted_until: string | null;
+  readonly notifications_muted: boolean;
+}): ConversationNotificationPolicy {
+  return {
+    level: row.notification_level,
+    muted: row.notifications_muted,
+    ...(row.muted_until ? { mutedUntil: timestamp(row.muted_until) } : {}),
+  };
+}
+
 function mapConversation(row: ConversationRow): ConversationSummary {
   return {
     id: row.id,
@@ -320,6 +375,7 @@ function mapConversation(row: ConversationRow): ConversationSummary {
     },
     unreadCount: sequence(row.unread_count),
     updatedAt: timestamp(row.updated_at),
+    notificationPolicy: mapNotificationPolicy(row),
     ...(row.last_sequence !== null && row.last_body !== null && row.last_created_at !== null
       ? {
           lastMessage: {
@@ -340,6 +396,7 @@ function mapGameConversation(row: GameConversationRow): GameConversationSummary 
     title: row.title,
     unreadCount: sequence(row.unread_count),
     updatedAt: timestamp(row.updated_at),
+    notificationPolicy: mapNotificationPolicy(row),
     ...(row.last_sequence != null && row.last_body != null && row.last_created_at != null
       ? {
           lastMessage: {
@@ -380,7 +437,13 @@ const CONVERSATION_SELECT = `
          conversation.updated_at::text as updated_at,
          last_message.sequence as last_sequence,
          last_message.body as last_body,
-         last_message.created_at::text as last_created_at
+         last_message.created_at::text as last_created_at,
+         current_member.notification_level as notification_level,
+         current_member.muted_until::text as muted_until,
+         (
+           current_member.notification_level <> 'ALL'
+           or (current_member.muted_until is not null and current_member.muted_until > now())
+         ) as notifications_muted
     from messaging.conversations conversation
     join messaging.conversation_members current_member
       on current_member.tenant_id = conversation.tenant_id
@@ -441,7 +504,13 @@ const GAME_CONVERSATION_SELECT = `
          conversation.updated_at::text as updated_at,
          last_message.sequence as last_sequence,
          last_message.body as last_body,
-         last_message.created_at::text as last_created_at
+         last_message.created_at::text as last_created_at,
+         member.notification_level as notification_level,
+         member.muted_until::text as muted_until,
+         (
+           member.notification_level <> 'ALL'
+           or (member.muted_until is not null and member.muted_until > now())
+         ) as notifications_muted
     from messaging.conversations conversation
     join messaging.conversation_members member
       on member.tenant_id = conversation.tenant_id
@@ -677,7 +746,15 @@ async function getMessage(
  * own tenant gate; in-app notification projection reuses the same membership, permission and block
  * gates without requiring realtime to be enabled.
  */
-function recipientUserIdsSql(options: { readonly requireRealtime: boolean }): string {
+function recipientUserIdsSql(options: {
+  readonly requireRealtime: boolean;
+  /**
+   * Notification fan-out honours the recipient's own per-conversation policy; realtime delivery does
+   * not, because a muted chat must still open live for someone who is looking at it. A message has no
+   * mentions yet, so only `ALL` receives a notification.
+   */
+  readonly respectNotificationPolicy: boolean;
+}): string {
   return `select member.user_id
              from messaging.tenant_runtime_settings settings
              join messaging.conversations conversation
@@ -757,7 +834,12 @@ function recipientUserIdsSql(options: { readonly requireRealtime: boolean }): st
                        and participation.state = 'ACTIVE'
                   )
                 )
-              )`;
+              )
+              ${
+                options.respectNotificationPolicy
+                  ? "and member.notification_level = 'ALL'\n              and (member.muted_until is null or member.muted_until <= now())\n"
+                  : ''
+              }`;
 }
 
 /**
@@ -784,7 +866,7 @@ async function listNotificationRecipientUserIds(
   },
 ): Promise<string[]> {
   const result = await client.query<{ user_id: string }>(
-    recipientUserIdsSql({ requireRealtime: false }),
+    recipientUserIdsSql({ requireRealtime: false, respectNotificationPolicy: true }),
     [input.tenantId, input.conversationId, input.messageId, input.sequence],
   );
   return result.rows
@@ -1699,6 +1781,88 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
       });
     },
 
+    updateConversationNotificationPolicy(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const member = await getAuthorizedMember(
+          client,
+          input.tenantId,
+          input.userId,
+          input.conversationId,
+          true,
+        );
+        if (!member) return { outcome: 'not_found' };
+
+        const readPolicy = (): Promise<NotificationPolicyRow | undefined> =>
+          queryOne<NotificationPolicyRow>(
+            client,
+            `select notification_level,
+                    muted_until::text as muted_until,
+                    (
+                      notification_level <> 'ALL'
+                      or (muted_until is not null and muted_until > now())
+                    ) as notifications_muted
+               from messaging.conversation_members
+              where tenant_id = $1 and conversation_id = $2 and id = $3`,
+            [input.tenantId, input.conversationId, member.member_id],
+          );
+
+        const current = await readPolicy();
+        if (!current) return { outcome: 'not_found' };
+        const currentMutedUntil = current.muted_until ? timestamp(current.muted_until) : undefined;
+        const requestedMutedUntil = input.mutedUntil ? timestamp(input.mutedUntil) : undefined;
+        const changed =
+          current.notification_level !== input.level ||
+          (currentMutedUntil === undefined) !== (requestedMutedUntil === undefined) ||
+          (currentMutedUntil !== undefined &&
+            requestedMutedUntil !== undefined &&
+            Date.parse(currentMutedUntil) !== Date.parse(requestedMutedUntil));
+
+        if (changed) {
+          await client.query(
+            `update messaging.conversation_members
+                set notification_level = $4,
+                    muted_until = $5::timestamptz
+              where tenant_id = $1 and conversation_id = $2 and id = $3`,
+            [input.tenantId, input.conversationId, member.member_id, input.level, input.mutedUntil],
+          );
+          await client.query(
+            `insert into audit.audit_log (
+               tenant_id, actor_id, action, resource_type, resource_id,
+               result, correlation_id, new_value
+             ) values ($1, $2, 'CONVERSATION_NOTIFICATION_POLICY_SET', 'CONVERSATION', $3,
+                       'SUCCESS', $4, $5::jsonb)`,
+            [
+              input.tenantId,
+              input.userId,
+              input.conversationId,
+              input.correlationId,
+              JSON.stringify({ level: input.level, mutedUntil: input.mutedUntil }),
+            ],
+          );
+          await client.query(
+            `insert into audit.outbox_events (
+               tenant_id, event_type, aggregate_id, correlation_id, payload
+             ) values ($1, 'messaging.notification-policy.updated.v1', $2, $3, $4::jsonb)`,
+            [
+              input.tenantId,
+              input.conversationId,
+              input.correlationId,
+              JSON.stringify({
+                conversationId: input.conversationId,
+                userId: input.userId,
+                level: input.level,
+                mutedUntil: input.mutedUntil,
+              }),
+            ],
+          );
+        }
+
+        const stored = changed ? await readPolicy() : current;
+        if (!stored) throw new Error('MESSAGING_NOTIFICATION_POLICY_READ_LOST');
+        return { outcome: 'ok', policy: mapNotificationPolicy(stored), changed };
+      });
+    },
+
     setUserBlock(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
@@ -1897,7 +2061,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
     listRealtimeRecipientUserIds(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const result = await client.query<{ user_id: string }>(
-          recipientUserIdsSql({ requireRealtime: true }),
+          recipientUserIdsSql({ requireRealtime: true, respectNotificationPolicy: false }),
           [input.tenantId, input.conversationId, input.messageId, input.sequence],
         );
         return result.rows.map((row) => row.user_id);

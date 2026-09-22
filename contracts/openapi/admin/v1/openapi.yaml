@@ -774,6 +774,41 @@ paths:
           $ref: '#/components/responses/ApiError'
         '403':
           $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/notifications/delivery-stats:
+    get:
+      tags: [Notifications]
+      operationId: getAdminNotificationDeliveryStats
+      summary: Read delivery outcomes, failures and endpoint health for a window
+      description: >
+        Read-only operational report. Web Push has no provider-side statistics and no delivery receipt
+        beyond the push service's acceptance, so the counters come from the delivery rows themselves:
+        what was queued, accepted, failed or suppressed, the stable error codes behind the failures, the
+        last campaigns with their counters and per-endpoint outcomes, and the current endpoint health
+        with the platform split derived from the stored endpoints.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: days
+          in: query
+          required: false
+          description: Length of the reporting window in days.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 90
+            default: 7
+      responses:
+        '200':
+          description: Delivery statistics for the requested window
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminNotificationDeliveryStats'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
   /admin/api/v1/{tenantKey}/notifications/campaigns:
     post:
       tags: [Notifications]
@@ -2399,7 +2434,8 @@ components:
       additionalProperties: false
       description: >
         An account that can receive a Web Push now. phoneMasked is present only when the account has a
-        verified phone.
+        verified phone. platforms names the push services behind the live endpoints, which is what tells
+        an operator whether the person is reachable from Chrome, from an installed iOS web app or both.
       required: [userId, displayName, endpointCount]
       properties:
         userId:
@@ -2415,6 +2451,187 @@ components:
         lastConfirmedAt:
           type: string
           format: date-time
+        platforms:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/AdminWebPushPlatform'
+    AdminWebPushPlatform:
+      type: string
+      description: >
+        The push service behind a subscription. Chrome and other Chromium browsers use FCM; Safari and
+        every browser on iOS use Apple. OTHER covers an origin a contour allowed explicitly.
+      enum: [CHROME, SAFARI, OTHER]
+    AdminNotificationDeliveryStats:
+      type: object
+      additionalProperties: false
+      description: >
+        Delivery outcomes for the requested window. Web Push has no provider-side dashboard and no
+        receipt beyond the push service's acceptance, so these counters are the operator's view of a
+        campaign: queued, accepted, failed, dead, suppressed and still pending, plus the failure codes.
+      required: [since, windowDays, channels, campaigns, failures, endpoints]
+      properties:
+        since:
+          type: string
+          format: date-time
+        windowDays:
+          type: integer
+          minimum: 1
+        channels:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminNotificationChannelDeliveryStats'
+        campaigns:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminNotificationCampaignDeliveryStats'
+        failures:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminNotificationDeliveryFailure'
+        endpoints:
+          $ref: '#/components/schemas/AdminNotificationEndpointStats'
+    AdminNotificationChannelDeliveryStats:
+      type: object
+      additionalProperties: false
+      required: [channel, queued, accepted, failed, dead, suppressed, pending, displayed, opened]
+      properties:
+        channel:
+          type: string
+          enum: [IN_APP, PUSH, EMAIL, SMS, CONNECTOR]
+        queued:
+          type: integer
+          minimum: 0
+        accepted:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        dead:
+          type: integer
+          minimum: 0
+        suppressed:
+          type: integer
+          minimum: 0
+        pending:
+          type: integer
+          minimum: 0
+        displayed:
+          type: integer
+          minimum: 0
+          description: Deliveries the client reported as shown; a floor, because a closed iOS web app may not run the worker.
+        opened:
+          type: integer
+          minimum: 0
+        medianAcceptSeconds:
+          type: integer
+          minimum: 0
+    AdminNotificationCampaignDeliveryStats:
+      type: object
+      additionalProperties: false
+      required:
+        - campaignId
+        - createdAt
+        - requestedChannels
+        - matchedCount
+        - pushQueuedCount
+        - suppressedCount
+        - inAppCreatedCount
+        - pushAccepted
+        - pushFailed
+        - pushDead
+        - pushDisplayed
+        - pushOpened
+      properties:
+        campaignId:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+        requestedChannels:
+          type: array
+          items:
+            type: string
+        matchedCount:
+          type: integer
+          minimum: 0
+        pushQueuedCount:
+          type: integer
+          minimum: 0
+        suppressedCount:
+          type: integer
+          minimum: 0
+        inAppCreatedCount:
+          type: integer
+          minimum: 0
+        pushAccepted:
+          type: integer
+          minimum: 0
+        pushFailed:
+          type: integer
+          minimum: 0
+        pushDead:
+          type: integer
+          minimum: 0
+        pushDisplayed:
+          type: integer
+          minimum: 0
+        pushOpened:
+          type: integer
+          minimum: 0
+    AdminNotificationDeliveryFailure:
+      type: object
+      additionalProperties: false
+      required: [channel, errorCode, count, lastOccurredAt]
+      properties:
+        channel:
+          type: string
+        errorCode:
+          type: string
+        count:
+          type: integer
+          minimum: 1
+        lastOccurredAt:
+          type: string
+          format: date-time
+    AdminNotificationEndpointStats:
+      type: object
+      additionalProperties: false
+      required: [active, invalid, revoked, suspendedPolicy, platforms, unreadableEndpoints]
+      properties:
+        active:
+          type: integer
+          minimum: 0
+        invalid:
+          type: integer
+          minimum: 0
+        revoked:
+          type: integer
+          minimum: 0
+        suspendedPolicy:
+          type: integer
+          minimum: 0
+        platforms:
+          type: object
+          additionalProperties: false
+          required: [CHROME, SAFARI, OTHER]
+          properties:
+            CHROME:
+              type: integer
+              minimum: 0
+            SAFARI:
+              type: integer
+              minimum: 0
+            OTHER:
+              type: integer
+              minimum: 0
+        unreadableEndpoints:
+          type: integer
+          minimum: 0
+          description: Live endpoints whose stored address could not be read with the current keyring.
     AdminWebPushSubscriberPage:
       type: object
       additionalProperties: false

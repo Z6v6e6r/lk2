@@ -269,7 +269,7 @@ test -r "$migrator_env" || fail 'migrator credential file is unreadable'
 test "$(stat -c %a "$migrator_env")" = 600 || fail 'migrator credential mode is not 0600'
 test ! "$runtime_env" -ef "$migrator_env" || fail 'runtime and migrator credential files alias'
 awk '
-  /^[[:space:]]*($|#)/ { next }
+  /^[ \t\r]*($|#)/ { next }
   /^DATABASE_URL=/ { next }
   { exit 1 }
 ' "$migrator_env" || fail 'migrator credential file contains an unexpected key'
@@ -290,9 +290,9 @@ test "$runtime_database_url" != "$migrator_database_url" || fail 'database roles
 
 role_verify() {
   role_phase="$1"
-  DATABASE_ROLE_BOUNDARY_PHASE="$role_phase" \
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
+  export DATABASE_ROLE_BOUNDARY_PHASE="$role_phase"
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ROLE_BOUNDARY_PHASE \
       --entrypoint node migrator apps/migrator/dist/verify-role-boundary.js
@@ -300,11 +300,11 @@ role_verify() {
 
 foundation_verify() {
   foundation_phase="$1"
-  CHAT_PUSH_FOUNDATION_PHASE="$foundation_phase" \
-  CHAT_PUSH_FOUNDATION_TENANT_KEYS="$tenant_keys" \
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  CHAT_PUSH_FOUNDATION_EXPECTED_CATALOG_DIGEST="$catalog_digest" \
+  export CHAT_PUSH_FOUNDATION_PHASE="$foundation_phase"
+  export CHAT_PUSH_FOUNDATION_TENANT_KEYS="$tenant_keys"
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export CHAT_PUSH_FOUNDATION_EXPECTED_CATALOG_DIGEST="$catalog_digest"
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL \
       -e CHAT_PUSH_FOUNDATION_PHASE -e CHAT_PUSH_FOUNDATION_TENANT_KEYS \
@@ -322,11 +322,11 @@ printf '%s' "$admin_system_identifier" | grep -Eq '^[0-9]+$' ||
   fail 'infrastructure system identifier is invalid'
 
 contour_verify() {
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  REALTIME_DATABASE_URL="$realtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  CHAT_PUSH_FOUNDATION_EXPECTED_DATABASE_NAME="$admin_database_name" \
-  CHAT_PUSH_FOUNDATION_EXPECTED_SYSTEM_IDENTIFIER="$admin_system_identifier" \
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export REALTIME_DATABASE_URL="$realtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export CHAT_PUSH_FOUNDATION_EXPECTED_DATABASE_NAME="$admin_database_name"
+  export CHAT_PUSH_FOUNDATION_EXPECTED_SYSTEM_IDENTIFIER="$admin_system_identifier"
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e REALTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL \
       -e CHAT_PUSH_FOUNDATION_EXPECTED_DATABASE_NAME \
@@ -353,6 +353,26 @@ select
 SQL
   ')"
   test "$admin_counts" = '0|0|0|0' || fail 'privileged foundation inventory is not empty'
+}
+
+# The gated migrations create schemas, and PostgreSQL's `create schema if not exists` requires
+# CREATE on the database even when the schema already exists. The bounded migrator role deliberately
+# holds no database-level CREATE, so the maintenance window grants it only around the one-shot
+# migration and revokes it before the post-migration role-boundary verification.
+set_migrator_database_create() {
+  grant_revoke="$1"
+  grant_preposition="$2"
+  infrastructure exec -T postgres sh -ec \
+    "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 \
+       -c '$grant_revoke create on database \"$admin_database_name\" $grant_preposition phub_migrator'" >/dev/null
+}
+
+grant_migrator_database_create() {
+  set_migrator_database_create grant to
+}
+
+revoke_migrator_database_create() {
+  set_migrator_database_create revoke from
 }
 
 service_is_healthy() {
@@ -434,12 +454,13 @@ verify_monitoring_ready() {
 verify_monitoring_worker_series() {
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --get \
     --data-urlencode "query=phub_worker_operational_collection_heartbeat_unixtime{service_instance_id=\"$candidate_worker_instance_id\"}" \
-    http://127.0.0.1:9090/api/v1/query |
-    CHAT_PUSH_FOUNDATION_MIN_HEARTBEAT_UNIXTIME="$candidate_worker_minimum_heartbeat" \
-    compose --profile migration run --rm --no-deps -T \
-      -e CHAT_PUSH_FOUNDATION_MIN_HEARTBEAT_UNIXTIME \
-      --entrypoint node migrator \
-      apps/migrator/dist/verify-chat-push-foundation-operational.js prometheus-heartbeat
+    http://127.0.0.1:9090/api/v1/query | (
+      export CHAT_PUSH_FOUNDATION_MIN_HEARTBEAT_UNIXTIME="$candidate_worker_minimum_heartbeat"
+      compose --profile migration run --rm --no-deps -T \
+        -e CHAT_PUSH_FOUNDATION_MIN_HEARTBEAT_UNIXTIME \
+        --entrypoint node migrator \
+        apps/migrator/dist/verify-chat-push-foundation-operational.js prometheus-heartbeat
+    )
   curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --get \
     --data-urlencode "query=phub_worker_operational_collection_success{service_instance_id=\"$candidate_worker_instance_id\"}" \
     http://127.0.0.1:9090/api/v1/query |
@@ -628,21 +649,23 @@ trap on_exit EXIT
 trap on_signal HUP INT TERM
 
 apply_foundation_migrations() {
+  grant_migrator_database_create
   write_phase_marker MIGRATION_STARTED
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS=30000 \
-  CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_MAINTENANCE_V1 \
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS=30000
+  export CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK=CHAT_PUSH_FOUNDATION_MAINTENANCE_V1
     compose --profile migration run --rm --no-deps -T \
       -e CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK \
       -e MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS migrator
 }
 
 verify_post_migration() {
+  revoke_migrator_database_create
   role_verify post
   foundation_verify post
   foundation_admin_verify
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS=30000 \
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS=30000
     compose --profile migration run --rm --no-deps -T \
       -e MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS migrator
   write_phase_marker POST_MIGRATION_VERIFIED
@@ -747,6 +770,7 @@ if test "$operation" = start; then
   foundation_admin_verify
   verify_rabbit_preflight_inventory
   verify_monitoring_digest
+  revoke_migrator_database_create
   role_verify pre
   pre_result="$(foundation_verify pre)"
   printf '%s\n' "$pre_result"

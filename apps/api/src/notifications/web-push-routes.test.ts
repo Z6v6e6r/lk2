@@ -2,7 +2,11 @@ import { createHash } from 'node:crypto';
 
 import { loadConfig } from '@phub/config';
 import type { NotificationEndpointRepository } from '@phub/database';
-import { createNotificationEndpointCipher } from '@phub/notifications';
+import {
+  createNotificationEndpointCipher,
+  createNotificationReceiptToken,
+  notificationReceiptSecret,
+} from '@phub/notifications';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
@@ -32,6 +36,7 @@ const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const installationId = '11111111-1111-4111-8111-111111111111';
 const endpointId = '22222222-2222-4222-8222-222222222222';
+const deliveryId = '33333333-3333-4333-8333-333333333333';
 const apps: Awaited<ReturnType<typeof buildApp>>[] = [];
 
 function fakePool(): Pool {
@@ -73,6 +78,7 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
+        recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
         getWebPushCapabilities,
         registerWebPush: vi.fn(),
         revokeWebPush: vi.fn(),
@@ -114,6 +120,7 @@ describe('Web Push endpoint User API', () => {
       replayed: false,
     });
     const repository: NotificationEndpointRepository = {
+      recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
       getWebPushCapabilities: vi.fn().mockResolvedValue({
         tenantEnabled: true,
         providerConfigured: true,
@@ -184,6 +191,7 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
+        recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
         getWebPushCapabilities: vi.fn(),
         registerWebPush: vi.fn(),
         revokeWebPush,
@@ -211,6 +219,7 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
+        recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
         getWebPushCapabilities: vi.fn().mockResolvedValue({
           tenantEnabled: true,
           providerConfigured: true,
@@ -271,6 +280,7 @@ describe('Web Push endpoint User API', () => {
       logger: createLogger('web-push-api-test', 'silent'),
       pool: fakePool(),
       notificationEndpointRepository: {
+        recordClientDeliveryReceipt: vi.fn().mockResolvedValue({ recorded: true }),
         getWebPushCapabilities: vi.fn().mockResolvedValue({
           tenantEnabled: true,
           providerConfigured: true,
@@ -304,5 +314,76 @@ describe('Web Push endpoint User API', () => {
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toMatchObject({ code: 'WEB_PUSH_ENDPOINT_LIMIT_REACHED' });
+  });
+
+  it('records a display the service worker reports without any session', async () => {
+    const secret = notificationReceiptSecret({
+      serializedKeys: endpointKeyring,
+      activeKeyId: 'v1',
+    });
+    const recordClientDeliveryReceipt = vi.fn().mockResolvedValue({ recorded: true });
+    const app = await buildApp({
+      config,
+      logger: createLogger('web-push-api-test', 'silent'),
+      pool: fakePool(),
+      notificationEndpointRepository: {
+        recordClientDeliveryReceipt,
+        getWebPushCapabilities: vi.fn(),
+        registerWebPush: vi.fn(),
+        revokeWebPush: vi.fn(),
+      },
+      notificationEndpointCipher: createNotificationEndpointCipher({
+        serializedKeys: endpointKeyring,
+        activeKeyId: 'v1',
+      }),
+      notificationReceiptSecret: secret,
+    });
+    apps.push(app);
+
+    const token = createNotificationReceiptToken({
+      secret,
+      tenantId,
+      deliveryId,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+    // A service worker holds no access token, so the signed token is the whole authorization.
+    const recorded = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/notifications/receipts',
+      payload: { token, type: 'DISPLAYED' },
+    });
+
+    expect(recorded.statusCode).toBe(202);
+    expect(recorded.json()).toEqual({ outcome: 'recorded' });
+    expect(recordClientDeliveryReceipt).toHaveBeenCalledWith({
+      tenantId,
+      deliveryId,
+      receiptType: 'DISPLAYED',
+    });
+
+    // A tampered or foreign token is one refusal, and nothing is written.
+    const tampered = `${token.slice(0, -4)}aaaa`;
+    const rejected = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/notifications/receipts',
+      payload: { token: tampered, type: 'OPENED' },
+    });
+    expect(rejected.statusCode).toBe(403);
+    expect(rejected.json()).toMatchObject({ code: 'NOTIFICATION_RECEIPT_INVALID' });
+    const expired = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/notifications/receipts',
+      payload: {
+        token: createNotificationReceiptToken({
+          secret,
+          tenantId,
+          deliveryId,
+          expiresAt: new Date(Date.now() - 1000),
+        }),
+        type: 'OPENED',
+      },
+    });
+    expect(expired.statusCode).toBe(403);
+    expect(recordClientDeliveryReceipt).toHaveBeenCalledTimes(1);
   });
 });

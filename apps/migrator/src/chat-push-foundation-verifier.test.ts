@@ -41,6 +41,7 @@ describe('chat/push foundation verifier', () => {
       }),
     ).toEqual({
       pendingFoundation: CHAT_PUSH_FOUNDATION_MIGRATION_FILENAMES,
+      pendingTotalCount: 5,
       appliedFoundationCount: 0,
     });
 
@@ -58,11 +59,12 @@ describe('chat/push foundation verifier', () => {
       }),
     ).toEqual({
       pendingFoundation: CHAT_PUSH_FOUNDATION_MIGRATION_FILENAMES.slice(2),
+      pendingTotalCount: 3,
       appliedFoundationCount: 2,
     });
   });
 
-  it('rejects a non-prefix recovery, a sixth pending file and post-migration gaps', () => {
+  it('rejects a non-prefix recovery and post-migration gaps but accepts a pending backlog', () => {
     expect(() =>
       assertFoundationLedger({
         applied: [
@@ -74,13 +76,17 @@ describe('chat/push foundation verifier', () => {
       }),
     ).toThrow('CHAT_PUSH_FOUNDATION_NON_PREFIX_LEDGER');
 
-    expect(() =>
+    expect(
       assertFoundationLedger({
         applied: [],
         packaged: [{ filename: '0068_existing.sql', checksum }, ...packaged.slice(1)],
         phase: 'pre',
       }),
-    ).toThrow('CHAT_PUSH_FOUNDATION_UNEXPECTED_PENDING');
+    ).toEqual({
+      pendingFoundation: CHAT_PUSH_FOUNDATION_MIGRATION_FILENAMES,
+      pendingTotalCount: 6,
+      appliedFoundationCount: 0,
+    });
 
     expect(() =>
       assertFoundationLedger({

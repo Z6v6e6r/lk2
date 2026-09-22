@@ -208,7 +208,10 @@ try {
             definition.title,
             definition.body,
             TEMPLATE_DEEP_LINK,
-            BOOKING_NOTIFICATION_TEMPLATE_ACTIVE,
+            // A new version always lands inactive: the schema keeps at most one active
+            // template per (template_key, locale), so the swap below retires the previous
+            // version before this one is activated.
+            false,
             actorId,
           ],
         );

@@ -50,7 +50,7 @@ test "${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE+x}" != x ||
   fail 'foundation overlay path override is forbidden'
 for interpolation_file in infrastructure.env "$compose_release_env"; do
   awk -F= '
-    /^[[:space:]]*($|#)/ { next }
+    /^[ \t\r]*($|#)/ { next }
     $1 == "RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE" { found = 1 }
     END { exit found ? 1 : 0 }
   ' "$interpolation_file" || fail "$interpolation_file redirects the foundation overlay"
@@ -91,10 +91,23 @@ verify_flags() {
         ? ["WEB_PUSH_ENABLED", "MESSAGING_USER_BLOCK_COMMANDS_ENABLED"]
         : ["WEB_PUSH_ENABLED", "BOOKING_REMINDER_SCHEDULER_ENABLED"];
       if (process.env.APP_ENV !== "staging") process.exit(1);
-      const { loadConfig } = await import("@phub/config");
-      const config = service === "worker"
-        ? loadConfig(process.env, { profilePhotoStorage: true })
-        : loadConfig(process.env);
+      const { loadConfig, loadWorkerConfig } = await import("@phub/config");
+      let config;
+      if (service === "worker") {
+        // A worker never issues API sessions. Its deployed contract forbids API signing secrets and
+        // requires the isolation attestation, while a legacy active worker may still receive those
+        // secrets. The foundation gates resolve identically in both contracts, so normalise the
+        // worker environment to the isolated shape and keep comparing the same code defaults.
+        const workerEnvironment = {
+          ...process.env,
+          WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED: "true",
+        };
+        delete workerEnvironment.JWT_ACCESS_SECRET;
+        delete workerEnvironment.JWT_REFRESH_SECRET;
+        config = loadWorkerConfig(workerEnvironment);
+      } else {
+        config = loadConfig(process.env);
+      }
       for (const key of required) {
         const value = process.env[key];
         if (value !== undefined && value !== "false") process.exit(1);

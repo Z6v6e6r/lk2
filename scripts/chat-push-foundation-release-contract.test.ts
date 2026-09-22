@@ -157,8 +157,17 @@ describe('chat/push staging foundation release contract', () => {
       releaseHelper.indexOf('available_kb="$(df -Pk /'),
     );
     const prepareRecovery = workflow.indexOf('prepare-recovery');
+    const startPostgres = workflow.indexOf(
+      'name: Start PostgreSQL for recovery evidence validation',
+    );
     const installDefinitions = workflow.indexOf('name: Install release and ingress definitions');
     expect(prepareRecovery).toBeGreaterThan(-1);
+    expect(startPostgres).toBeGreaterThan(-1);
+    expect(startPostgres).toBeLessThan(prepareRecovery);
+    expect(workflow).toContain('infrastructure up -d --no-deps postgres');
+    expect(workflow).toContain(
+      'PostgreSQL did not become healthy for recovery evidence validation.',
+    );
     expect(installDefinitions).toBeGreaterThan(prepareRecovery);
     expect(workflow).toContain(
       'compose_next="/opt/phub/.compose-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.next"',
@@ -177,6 +186,15 @@ describe('chat/push staging foundation release contract', () => {
     expect(composeActivation).toBeGreaterThan(composeValidation);
     expect(workflow).toContain('foundation.candidate-release.env');
     expect(workflow).toContain('candidate-active "$candidate_release"');
+    // Recovery resumes with the pinned candidate images from the original run's digest artifacts,
+    // while the deployment definitions it installs come from the dispatching main. Only `verify`
+    // keeps the original candidate checkout; `build` and `deploy` use the dispatch SHA.
+    expect(
+      workflow.split(
+        "ref: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' && inputs.foundation_expected_candidate_sha || github.sha }}",
+      ),
+    ).toHaveLength(2);
+    expect(workflow.split('ref: ${{ github.sha }}')).toHaveLength(3);
     expect(runtimeVerifier).toContain("'{{.State.Health.Status}}'");
     expect(runtimeVerifier).toContain("'{{.Config.Image}}'");
     expect(workflow).toContain('Contain a failed foundation recovery without starting old writers');
@@ -185,9 +203,11 @@ describe('chat/push staging foundation release contract', () => {
     expect(workflow).toContain('FOUNDATION_ORIGINAL_RUN_MISMATCH');
     expect(workflow).toContain('run.head_sha !== process.argv[4]');
     expect(workflow).toContain("run.path !== '.github/workflows/deploy-staging.yaml'");
-    expect(workflow).toContain(
-      "needs.verify.result == 'success' && inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY'",
-    );
+    // The build gate is a multi-line folded condition now; its exact terms are pinned by
+    // scripts/deploy-staging-foundation-job-graph.test.ts, so assert the two requirements without
+    // coupling to the formatting of the expression.
+    expect(workflow).toContain("needs.verify.result == 'success'");
+    expect(workflow).toContain("inputs.deployment_profile != 'CHAT_PUSH_FOUNDATION_RECOVERY'");
   });
 
   it('starts digest-pinned API, worker, realtime and web strictly in that order', () => {
@@ -236,6 +256,11 @@ describe('chat/push staging foundation release contract', () => {
     expect(releaseHelper).toContain('inert) rabbit_mode=rabbit-inert');
     expect(releaseHelper).toContain('verify_rabbit_preflight_inventory');
     expect(releaseHelper).toContain('verify_rabbit_inventory inert');
+    // The window installs the reviewed monitoring definition, so its rule file is actually loaded.
+    // Without the configuration the rule inventory can never match the foundation attestation.
+    expect(workflow).toContain('deploy/jetson/monitoring/prometheus.yaml');
+    expect(workflow).toContain('/opt/phub/monitoring/prometheus.yaml.next');
+    expect(workflow).toContain('/opt/phub/monitoring/prometheus.yaml');
     expect(releaseHelper).toContain('verify-chat-push-foundation-operational.js prometheus');
     expect(releaseHelper).toContain(
       'verify-chat-push-foundation-operational.js prometheus-targets',
@@ -276,6 +301,20 @@ describe('chat/push staging foundation release contract', () => {
     );
   });
 
+  it('runs the foundation monitoring commands from an absolute compose root', () => {
+    const start = workflow.indexOf('install -d -m 755 /opt/phub/monitoring');
+    const end = workflow.indexOf('foundation_env=/opt/phub/staging.chat-push-foundation.env');
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const block = workflow.slice(start, end);
+    expect(block).toContain('docker compose --env-file /opt/phub/infrastructure.env');
+    expect(block).toContain('-f /opt/phub/compose.infrastructure.yaml');
+    expect(block).toContain('--force-recreate prometheus');
+    expect(block).toContain('check rules /etc/prometheus/rules/padlhub-alerts.yaml');
+    expect(block).not.toContain('--env-file infrastructure.env');
+    expect(block).not.toContain('-f compose.infrastructure.yaml');
+  });
+
   it('uses a final API/worker-only kill-switch overlay and snapshots both states', () => {
     expect(stagingCompose.match(/RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE/g)).toHaveLength(2);
     const api = stagingCompose.slice(
@@ -286,16 +325,24 @@ describe('chat/push staging foundation release contract', () => {
       stagingCompose.indexOf('  realtime:'),
       stagingCompose.indexOf('  worker:'),
     );
-    const worker = stagingCompose.slice(
-      stagingCompose.indexOf('x-application-runtime:'),
-      stagingCompose.indexOf('x-realtime-runtime:'),
+    const workerAnchor = stagingCompose.slice(
+      stagingCompose.indexOf('x-worker-runtime:'),
+      stagingCompose.indexOf('x-object-storage:'),
+    );
+    const workerService = stagingCompose.slice(
+      stagingCompose.indexOf('  worker:'),
+      stagingCompose.indexOf('  migrator:'),
     );
     const migrator = stagingCompose.slice(stagingCompose.indexOf('  migrator:'));
 
     expect(api).toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
-    expect(worker).toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
+    expect(workerAnchor).toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
     expect(realtime).not.toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
     expect(migrator).not.toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
+    // The worker must read its derived signing-secret-free contract, never the API runtime env.
+    expect(workerAnchor).toContain('WORKER_RUNTIME_ENV_FILE');
+    expect(workerAnchor).not.toContain('${RUNTIME_ENV_FILE:-');
+    expect(workerService).toContain('<<: *worker-runtime');
     expect(runtimeVerifier).toContain('foundation overlay must contain exactly three lines');
     expect(backup).toContain('staging.chat-push-foundation.env.absent');
     expect(rollback).toContain('staging.chat-push-foundation.env.absent');
