@@ -387,6 +387,10 @@ function chatUiError(error: unknown, operation: ChatOperation): ChatUiError {
     code === 'FEATURE_UNAVAILABLE' ||
     code === 'MESSAGING_DISABLED' ||
     code === 'MESSAGING_HTTP_DISABLED' ||
+    // A switched-off direct or contextual contour also answers 404; without these codes the client
+    // would report a missing dialog and hide the real cause.
+    code === 'DIRECT_MESSAGING_DISABLED' ||
+    code === 'CONTEXTUAL_MESSAGING_DISABLED' ||
     (status === 404 && operation === 'list') ||
     status === 503
   ) {
@@ -395,13 +399,29 @@ function chatUiError(error: unknown, operation: ChatOperation): ChatUiError {
       message: 'Контур чатов ещё не включён для этой организации. Остальные разделы работают.',
     };
   }
-  if (status === 404 || code === 'CONVERSATION_NOT_FOUND' || code === 'USER_NOT_FOUND') {
+  // A refused peer is terminal for this chat: the server will neither create nor deliver it, so the
+  // generic "check your connection and retry" copy would only mislead the sender.
+  if (code === 'CHAT_PARTICIPANT_UNREACHABLE' || code === 'CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED') {
+    return {
+      kind: 'PARTICIPANT_UNAVAILABLE',
+      message:
+        code === 'CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED'
+          ? 'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.'
+          : 'Игрок ещё не входил в ПадлХАБ: он не увидит диалог, пока не войдёт в приложение.',
+    };
+  }
+  if (
+    status === 404 ||
+    code === 'CONVERSATION_NOT_FOUND' ||
+    code === 'CHAT_PARTICIPANT_NOT_FOUND' ||
+    code === 'USER_NOT_FOUND'
+  ) {
     return {
       kind: 'NOT_FOUND',
       message:
         operation === 'create'
           ? 'Получатель недоступен для личного чата.'
-          : 'Диалог не существует или больше не доступен текущему участнику.',
+          : 'Чат недоступен для этой учётной записи. Если список диалогов пуст, доступ к личным чатам ещё не открыт.',
     };
   }
   return {
