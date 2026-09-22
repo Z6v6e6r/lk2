@@ -1068,9 +1068,16 @@ jobs:
     env:
       STAGING_RELEASE_BACKUP_DIR: /opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      # Deployment definitions (Compose, release helper, foundation verifiers, monitoring rules) come
+      # from the dispatching main for every profile. A recovery resumes a partially applied window
+      # with the *pinned images* of the original candidate - their digests arrive through the
+      # original run's artifacts below, and the stored candidate release env is still compared byte
+      # for byte - while the definitions that install and verify them must be the reviewed ones,
+      # including any fix that made the recovery possible. `verify` still certifies the original
+      # candidate source, and `workflow_sha == sha` pins this tree to main.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' && inputs.foundation_expected_candidate_sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

@@ -246,8 +246,12 @@ archive size, SHA-256 and `pg_restore --list`, then atomically changes the old h
 `RECOVERY_DRAINING` and `RECOVERY_WRITERS_DRAINED`. It skips the
 image build and downloads the five digest artifacts from the exact original workflow run; those
 artifacts must still exist and match the stored candidate release byte-for-byte. The protected
-workflow definition still comes from the current `main`, while verify/deploy checkout the exact
-original candidate commit, so advancing `main` does not force a different runtime into recovery.
+workflow definition still comes from the current `main`, and so do the deployment definitions that
+the recovery installs - Compose, the release helper, the foundation verifiers and the monitoring
+rules. `verify` keeps certifying the original candidate commit, and the runtime stays pinned to that
+candidate because only its digest artifacts are accepted and rebuilt-image drift is rejected, so
+advancing `main` cannot change the images a recovery starts. Advance `main` with a reviewed fix to
+those definitions when the failed initial run was itself blocked by them.
 The candidate Compose definition is uploaded to a run-bound same-directory temporary file,
 structurally validated and atomically renamed, so an interrupted transfer cannot corrupt the
 known-good definition used by failure containment to stop the writers.
