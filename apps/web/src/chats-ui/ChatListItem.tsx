@@ -31,6 +31,7 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
           fallbackSeed={
             conversation.kind === 'DIRECT' ? conversation.participant.userId : conversation.id
           }
+          size={48}
         />
         <span className={styles.listCopy}>
           <span
