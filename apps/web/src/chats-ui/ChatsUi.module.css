@@ -1148,6 +1148,8 @@
 }
 
 .filterRail svg {
+  /* A compressed button must never squeeze the pictogram away: the label is the shrinkable part. */
+  flex: 0 0 20px;
   width: 20px;
   height: 20px;
 }
@@ -1273,6 +1275,20 @@
   .page {
     padding: 0 0 88px;
     overflow-x: hidden;
+  }
+
+  /* Seven labelled buttons do not fit a phone width without colliding: the rail keeps the icon set
+     and the accessible name, and the seven targets share the width evenly. */
+  .filterLabel {
+    display: none;
+  }
+
+  .filterRail button,
+  .filterRail a {
+    min-width: 0;
+    padding: 10px 4px;
+    flex: 1 1 0;
+    gap: 0;
   }
 
   .page :global(.fh-bottom-nav) {
