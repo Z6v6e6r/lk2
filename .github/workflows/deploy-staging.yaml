@@ -1124,12 +1124,25 @@ jobs:
           ssh -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
             "phub-deploy@$HOST" 'sh -s -- /etc/phub /opt/phub' \
             < deploy/jetson/verify-runtime-secret-transition-clear.sh
-      - name: Verify API and realtime secret isolation
+      - name: Derive the worker runtime contract without API signing secrets
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/derive-worker-runtime-env.sh \
+            "phub-deploy@$HOST:/opt/phub/derive-worker-runtime-env.sh.next"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            mv /opt/phub/derive-worker-runtime-env.sh.next /opt/phub/derive-worker-runtime-env.sh
+            chmod 0755 /opt/phub/derive-worker-runtime-env.sh
+            sh /opt/phub/derive-worker-runtime-env.sh \
+              /etc/phub/staging.env /opt/phub/staging.worker.env
+          '
+      - name: Verify API, realtime and worker secret isolation
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
           ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
-            'sh -s -- /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false' \
+            'sh -s -- /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false /opt/phub/staging.worker.env' \
             < deploy/jetson/verify-runtime-env-isolation.sh
       - name: Verify the active staging release and closed foundation gates before snapshot
         if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION' }}

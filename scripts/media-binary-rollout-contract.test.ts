@@ -408,7 +408,7 @@ printf ']},"Image":"image-%s"}]\n' "$2"
     expect(firstReattestation).toBeGreaterThan(-1);
     expect(backup).toBeGreaterThan(firstReattestation);
     const secretIsolation = deploy.slice(
-      deploy.indexOf('Verify API and realtime secret isolation'),
+      deploy.indexOf('Verify API, realtime and worker secret isolation'),
       firstReattestation,
     );
     expect(secretIsolation).not.toContain('scp ');

@@ -5,6 +5,7 @@ api_env=${1:-/etc/phub/staging.env}
 realtime_env=${2:-/etc/phub/realtime.env}
 expected_owner=${3:-phub-deploy}
 expected_realtime_enabled=${4:-false}
+worker_env=${5:-}
 
 fail() {
   echo "runtime env isolation failed: $1" >&2
@@ -62,6 +63,21 @@ done
 
 has_key "$realtime_env" JWT_ACCESS_SECRET && fail 'JWT_ACCESS_SECRET leaked into realtime'
 has_key "$realtime_env" JWT_REFRESH_SECRET && fail 'JWT_REFRESH_SECRET leaked into realtime'
+
+if [ -n "$worker_env" ]; then
+  # A deployed worker must never receive API signing secrets and must attest the isolated contract.
+  # It still has to reach the same runtime database role as the API, so compare that binding too.
+  check_file "$worker_env"
+  has_key "$worker_env" JWT_ACCESS_SECRET && fail 'JWT_ACCESS_SECRET leaked into worker'
+  has_key "$worker_env" JWT_REFRESH_SECRET && fail 'JWT_REFRESH_SECRET leaked into worker'
+  worker_isolation=$(read_key "$worker_env" WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED) ||
+    fail 'worker isolation attestation is missing'
+  [ "$worker_isolation" = 'true' ] || fail 'worker isolation attestation differs'
+  api_database_url=$(read_key "$api_env" DATABASE_URL) || fail 'API database URL is missing'
+  worker_database_url=$(read_key "$worker_env" DATABASE_URL) || fail 'worker database URL is missing'
+  [ "$worker_database_url" = "$api_database_url" ] || fail 'worker and API database URLs differ'
+  unset worker_isolation api_database_url worker_database_url
+fi
 
 api_realtime_secret=$(read_key "$api_env" JWT_REALTIME_SECRET) || fail 'API realtime key is missing'
 gateway_realtime_secret=$(read_key "$realtime_env" JWT_REALTIME_SECRET) || fail 'realtime key is missing'
