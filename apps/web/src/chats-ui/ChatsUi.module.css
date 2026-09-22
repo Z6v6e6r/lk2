@@ -317,10 +317,17 @@
   text-align: center;
 }
 
-.emptyState p,
-.threadEmpty {
+.emptyState p {
   margin: 8px 0 0;
   color: var(--comms-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* This copy sits on the conversation wallpaper, where the muted token only reaches ~3:1. */
+.threadEmpty {
+  margin: 8px 0 0;
+  color: var(--comms-ink);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -348,7 +355,14 @@
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  background: #fafafa;
+  /* A light veil keeps message bubbles and muted empty-state copy legible on the artwork. */
+  background-color: #f7f4fc;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 12%), rgb(255 255 255 / 12%)),
+    url('../assets/chats-background.webp');
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
+  background-size: cover, cover;
 }
 
 .threadBody {
@@ -442,7 +456,8 @@
   flex-direction: column;
   gap: 8px;
   overscroll-behavior: contain;
-  background: #fff;
+  /* The conversation wallpaper belongs to .thread and must stay visible behind the bubbles. */
+  background: transparent;
   list-style: none;
   scroll-behavior: smooth;
   scrollbar-width: thin;
@@ -963,8 +978,15 @@
   min-height: 0;
   place-content: center;
   padding: 32px;
-  background: #fcfbfd;
-  color: var(--comms-muted);
+  background-color: #f7f4fc;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 12%), rgb(255 255 255 / 12%)),
+    url('../assets/chats-background.webp');
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
+  background-size: cover, cover;
+  /* Placeholder copy sits directly on the artwork, so it uses the ink token for contrast. */
+  color: var(--comms-ink);
   text-align: center;
 }
 
