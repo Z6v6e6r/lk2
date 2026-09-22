@@ -1629,6 +1629,27 @@ export class PadlHubApiClient {
     );
   }
 
+  /**
+   * Chat attachment bytes. The route answers 302 to a short-lived signed URL and the fetch follows
+   * it with the bearer token; a browser cannot send that header from an `<img src>`, so a reader is
+   * handed a blob it turns into an object URL.
+   */
+  public downloadConversationMedia(
+    conversationId: string,
+    mediaId: string,
+    accept = 'application/octet-stream',
+  ): Promise<Blob> {
+    return this.downloadFromRoot(
+      this.apiRoot,
+      `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/content`,
+      'required',
+      'same-origin',
+      createCorrelationId(),
+      true,
+      accept,
+    );
+  }
+
   public editCommunityPost(
     communityId: string,
     postId: string,

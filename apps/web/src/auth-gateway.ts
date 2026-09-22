@@ -255,15 +255,66 @@ export interface ConversationPage {
   readonly items: readonly ConversationSummary[];
 }
 
+export interface ConversationMessageAttachment {
+  readonly mediaId: string;
+  readonly position: number;
+  readonly mediaType: 'IMAGE' | 'FILE';
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly byteSize: number;
+  readonly width?: number;
+  readonly height?: number;
+}
+
 export interface ConversationMessage {
   readonly id: string;
   readonly conversationId: string;
   readonly sequence: number;
   readonly clientMessageId?: string;
   readonly sender: MessagingParticipant;
-  readonly messageType: 'TEXT';
+  readonly messageType: 'TEXT' | 'IMAGE' | 'FILE';
   readonly body: string;
+  readonly attachments?: readonly ConversationMessageAttachment[];
   readonly createdAt: string;
+}
+
+export type MessagingMediaState =
+  'UPLOADING' | 'SCANNING' | 'READY' | 'REJECTED' | 'EXPIRED' | 'PURGED';
+
+export interface MessagingMediaAsset {
+  readonly id: string;
+  readonly conversationId: string;
+  readonly mediaType: 'IMAGE' | 'FILE';
+  readonly state: MessagingMediaState;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly byteSize: number;
+  readonly sha256: string;
+  readonly revision: number;
+  readonly readyAt?: string;
+  readonly rejectionCode?: string;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+}
+
+export interface MessagingMediaUploadRequest {
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly byteSize: number;
+  readonly sha256: string;
+}
+
+export interface MessagingMediaUploadGrant {
+  readonly method: 'PUT';
+  readonly url: string;
+  /** Send every entry verbatim; the storage origin rejects a modified or missing header. */
+  readonly requiredHeaders: Readonly<Record<string, string>>;
+  readonly expiresAt: string;
+}
+
+export interface MessagingMediaUploadResult {
+  readonly media: MessagingMediaAsset;
+  readonly upload: MessagingMediaUploadGrant;
 }
 
 export interface ConversationMessagePage {
@@ -304,7 +355,9 @@ export interface ConversationNotificationPolicyResult {
 
 export interface SendConversationMessageCommand {
   readonly clientMessageId: string;
+  /** Empty is allowed when `attachmentIds` is present. */
   readonly body: string;
+  readonly attachmentIds?: readonly string[];
 }
 
 export type ActivityHistoryQuery = ActivityHistoryFilters;
@@ -564,6 +617,27 @@ export interface AuthGateway {
     conversationId: string,
     command: SendConversationMessageCommand,
   ) => Promise<SendConversationMessageResult>;
+  readonly issueConversationMediaUpload: (
+    conversationId: string,
+    input: MessagingMediaUploadRequest,
+    idempotencyKey: string,
+  ) => Promise<MessagingMediaUploadResult>;
+  readonly finalizeConversationMediaUpload: (
+    conversationId: string,
+    mediaId: string,
+    declaredByteSize: number,
+    idempotencyKey: string,
+  ) => Promise<MessagingMediaAsset>;
+  readonly getConversationMedia: (
+    conversationId: string,
+    mediaId: string,
+  ) => Promise<MessagingMediaAsset>;
+  /**
+   * Attachment bytes for the active session. The API answers 302 to a short-lived signed URL, and a
+   * browser cannot attach the bearer token to an `<img src>`, so readers receive a blob they turn
+   * into an object URL and revoke again.
+   */
+  readonly loadConversationMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
   readonly markConversationRead: (
     conversationId: string,
     throughSequence: number,
@@ -2224,17 +2298,62 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     sendConversationMessage(conversationId, command) {
+      const payload: Record<string, unknown> = {
+        clientMessageId: command.clientMessageId,
+        body: command.body,
+      };
+      if (command.attachmentIds && command.attachmentIds.length > 0) {
+        payload.attachmentIds = command.attachmentIds;
+      }
       return retryMessagingCommand((signal) =>
         client.request<SendConversationMessageResult>(
           `/conversations/${encodeURIComponent(conversationId)}/messages`,
           {
             method: 'POST',
             idempotencyKey: command.clientMessageId,
-            body: JSON.stringify(command),
+            body: JSON.stringify(payload),
             signal,
           },
         ),
       );
+    },
+
+    issueConversationMediaUpload(conversationId, input, idempotencyKey) {
+      return retryMessagingCommand((signal) =>
+        client.request<MessagingMediaUploadResult>(
+          `/conversations/${encodeURIComponent(conversationId)}/media/uploads`,
+          {
+            method: 'POST',
+            idempotencyKey,
+            body: JSON.stringify(input),
+            signal,
+          },
+        ),
+      );
+    },
+
+    finalizeConversationMediaUpload(conversationId, mediaId, declaredByteSize, idempotencyKey) {
+      return retryMessagingCommand((signal) =>
+        client.request<MessagingMediaAsset>(
+          `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/finalize`,
+          {
+            method: 'POST',
+            idempotencyKey,
+            body: JSON.stringify({ declaredByteSize }),
+            signal,
+          },
+        ),
+      );
+    },
+
+    getConversationMedia(conversationId, mediaId) {
+      return client.request<MessagingMediaAsset>(
+        `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}`,
+      );
+    },
+
+    loadConversationMedia(conversationId, mediaId) {
+      return client.downloadConversationMedia(conversationId, mediaId);
     },
 
     markConversationRead(conversationId, throughSequence, idempotencyKey) {

@@ -23,7 +23,12 @@ const defaultProps = {
   hasEarlierMessages: false,
   canRetrySend: false,
   policyBusy: false,
+  attachments: [],
+  attachmentNotice: null,
+  loadMedia: () => Promise.resolve(new Blob(['attachment-bytes'])),
   onCreateDirect: vi.fn(),
+  onAttachFiles: vi.fn(),
+  onRemoveAttachment: vi.fn(),
   onSendMessage: vi.fn(),
   onRetrySend: vi.fn(),
   onRefresh: vi.fn(),
@@ -90,7 +95,7 @@ describe('ChatsPage', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
 
-    expect(onSendMessage).toHaveBeenCalledWith('Новое сообщение');
+    expect(onSendMessage).toHaveBeenCalledWith({ body: 'Новое сообщение', attachmentIds: [] });
   });
 
   it('groups consecutive sender messages only within a day and retains sender labels', () => {
@@ -371,10 +376,10 @@ describe('ChatsPage', () => {
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, isComposing: true });
     expect(onSendMessage).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
-    expect(onSendMessage).toHaveBeenCalledWith('Первая строка');
+    expect(onSendMessage).toHaveBeenCalledWith({ body: 'Первая строка', attachmentIds: [] });
     fireEvent.change(input, { target: { value: 'Вторая строка' } });
     fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
-    expect(onSendMessage).toHaveBeenLastCalledWith('Вторая строка');
+    expect(onSendMessage).toHaveBeenLastCalledWith({ body: 'Вторая строка', attachmentIds: [] });
     expect(onSendMessage).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole('button', { name: /микрофон|реакц|влож/iu })).not.toBeInTheDocument();
   });

@@ -203,6 +203,8 @@ export const ADMIN_ONLY_PERMISSIONS = [
   'communities.content.moderation.decide',
   'communities.invite.quota.override',
   'communities.create.quota.override',
+  'chat.moderation.read',
+  'chat.moderation.decide',
 ] as const;
 
 /**

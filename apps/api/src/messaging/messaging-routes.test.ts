@@ -126,6 +126,7 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
       changed: true,
     }),
     setUserBlock: vi.fn().mockResolvedValue({ outcome: 'ok', changed: true, replayed: false }),
+    getMessageMediaForViewer: vi.fn().mockResolvedValue({ outcome: 'not_found' }),
     authorizeRealtimeConnection: vi.fn().mockResolvedValue({ outcome: 'disabled' }),
     authorizeRealtimeSubscription: vi.fn().mockResolvedValue({ outcome: 'disabled' }),
     listRealtimeRecipientUserIds: vi.fn().mockResolvedValue([]),

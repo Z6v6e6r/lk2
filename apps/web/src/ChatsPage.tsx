@@ -10,6 +10,8 @@ import { ChatCategoryIcon } from './chats-ui/ChatCategoryIcon.js';
 import { ChatFilterHeading, ChatFilters, type ChatFilter } from './chats-ui/ChatFilters.js';
 import { ChatList } from './chats-ui/ChatList.js';
 import { ChatThread } from './chats-ui/ChatThread.js';
+import { type ChatComposerSend } from './chats-ui/ChatComposer.js';
+import type { ChatAttachmentDraft } from './chats-ui/chat-attachments.js';
 import styles from './chats-ui/ChatsUi.module.css';
 
 export type ChatRouteMode = 'list' | 'new' | 'thread';
@@ -22,6 +24,7 @@ export interface ChatUiError {
 export interface PendingChatMessage {
   readonly clientMessageId: string;
   readonly body: string;
+  readonly attachmentIds?: readonly string[];
   readonly state: 'sending' | 'failed';
 }
 
@@ -41,8 +44,13 @@ interface ChatsPageProps {
   readonly hasEarlierMessages: boolean;
   readonly canRetrySend: boolean;
   readonly policyBusy: boolean;
+  readonly attachments: readonly ChatAttachmentDraft[];
+  readonly attachmentNotice: string | null;
+  readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
   readonly onCreateDirect: () => void;
-  readonly onSendMessage: (body: string) => void;
+  readonly onAttachFiles: (files: readonly File[]) => void;
+  readonly onRemoveAttachment: (localId: string) => void;
+  readonly onSendMessage: (input: ChatComposerSend) => void;
   readonly onRetrySend: () => void;
   readonly onRefresh: () => void;
   readonly onLoadEarlier: () => void;
@@ -80,7 +88,12 @@ export function ChatsPage({
   hasEarlierMessages,
   canRetrySend,
   policyBusy,
+  attachments,
+  attachmentNotice,
+  loadMedia,
   onCreateDirect,
+  onAttachFiles,
+  onRemoveAttachment,
   onSendMessage,
   onRetrySend,
   onRefresh,
@@ -192,6 +205,11 @@ export function ChatsPage({
             hasEarlierMessages={hasEarlierMessages}
             canRetrySend={canRetrySend}
             policyBusy={policyBusy}
+            attachments={attachments}
+            attachmentNotice={attachmentNotice}
+            loadMedia={loadMedia}
+            onAttachFiles={onAttachFiles}
+            onRemoveAttachment={onRemoveAttachment}
             onSendMessage={onSendMessage}
             onRetrySend={onRetrySend}
             onRefresh={onRefresh}

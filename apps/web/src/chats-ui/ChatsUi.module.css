@@ -671,6 +671,7 @@
   flex-direction: column;
   justify-content: center;
   align-items: center;
+  gap: 8px;
   background: #fafafa;
   box-shadow: inset 0 0.5px #ededed;
 }
@@ -746,6 +747,11 @@
   background: #fafafa;
   color: #353436;
   opacity: 1;
+  cursor: pointer;
+}
+
+.composer .attachButton:disabled {
+  color: #b4b4b4;
   cursor: not-allowed;
 }
 
@@ -753,6 +759,203 @@
   font-size: 24px;
   font-weight: 400;
   line-height: 20px;
+}
+
+.attachmentChips {
+  display: flex;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+}
+
+.attachmentChip {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 6px 6px 10px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: inset 0 0 0 0.5px var(--comms-line);
+}
+
+.attachmentChipIcon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.attachmentChipBody {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.attachmentChipName {
+  max-width: min(180px, 40vw);
+  overflow: hidden;
+  color: var(--comms-ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentChipMeta {
+  color: var(--comms-muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.attachmentProgress {
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+}
+
+.attachmentProgress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: var(--comms-accent-soft);
+}
+
+.attachmentProgress::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--comms-accent);
+}
+
+.attachmentProgress::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--comms-accent);
+}
+
+.composer .attachmentRemove {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  flex: 0 0 24px;
+  border-radius: 50%;
+  background: var(--comms-accent-soft);
+  color: var(--comms-accent-ink);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.composer .attachmentRemove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.attachmentHint {
+  width: 100%;
+  margin: 0;
+  color: #8b3434;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.hasAttachmentsBubble {
+  padding-bottom: 22px;
+}
+
+.attachmentImages {
+  display: grid;
+  padding: 0;
+  margin: 0 0 6px;
+  gap: 4px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  list-style: none;
+}
+
+.attachmentImages li {
+  min-width: 0;
+}
+
+.attachmentImages img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  background: #ececec;
+  object-fit: cover;
+}
+
+.singleAttachmentImage {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.singleAttachmentImage img {
+  height: auto;
+  max-height: 280px;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
+
+.attachmentFiles {
+  display: grid;
+  padding: 0;
+  margin: 0 0 6px;
+  gap: 6px;
+  list-style: none;
+}
+
+.attachmentFiles li {
+  min-width: 0;
+}
+
+.attachmentFileCard {
+  display: flex;
+  min-width: 0;
+  padding: 8px 10px;
+  align-items: center;
+  gap: 10px;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--comms-ink);
+  text-decoration: none;
+}
+
+.attachmentFileCard:hover {
+  box-shadow: inset 0 0 0 1px var(--comms-accent);
+}
+
+.attachmentFileIcon {
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.attachmentFileBody {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+}
+
+.attachmentFileName {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentFileMeta {
+  color: var(--comms-muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.attachmentFileAction {
+  flex: 0 0 auto;
+  color: var(--comms-accent-ink);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .threadPlaceholder {
@@ -1118,4 +1321,12 @@
   display: flex;
   height: var(--chat-nav-height);
   padding-bottom: max(24px, env(safe-area-inset-bottom));
+}
+
+.attachmentPending,
+.attachmentUnavailable {
+  display: block;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  opacity: 0.75;
 }
