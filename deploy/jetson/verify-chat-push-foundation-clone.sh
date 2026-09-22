@@ -122,10 +122,10 @@ process.env.MIGRATOR_DATABASE_URL = rewrite(process.env.MIGRATOR_DATABASE_URL);'
 
 clone_role_verify() {
   role_phase="$1"
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database" \
-  DATABASE_ROLE_BOUNDARY_PHASE="$role_phase" \
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database"
+  export DATABASE_ROLE_BOUNDARY_PHASE="$role_phase"
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL \
       -e CHAT_PUSH_FOUNDATION_CLONE_DATABASE -e DATABASE_ROLE_BOUNDARY_PHASE \
@@ -136,12 +136,12 @@ clone_role_verify() {
 
 clone_foundation_verify() {
   foundation_phase="$1"
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database" \
-  CHAT_PUSH_FOUNDATION_PHASE="$foundation_phase" \
-  CHAT_PUSH_FOUNDATION_TENANT_KEYS="$tenant_keys" \
-  CHAT_PUSH_FOUNDATION_CAPTURE_CATALOG_BASELINE=true \
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database"
+  export CHAT_PUSH_FOUNDATION_PHASE="$foundation_phase"
+  export CHAT_PUSH_FOUNDATION_TENANT_KEYS="$tenant_keys"
+  export CHAT_PUSH_FOUNDATION_CAPTURE_CATALOG_BASELINE=true
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL \
       -e CHAT_PUSH_FOUNDATION_CLONE_DATABASE -e CHAT_PUSH_FOUNDATION_PHASE \
@@ -167,9 +167,9 @@ process.env.MIGRATOR_ADVISORY_LOCK_TIMEOUT_MS = '30000';
 delete process.env.CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK;
 await import('./apps/migrator/dist/main.js');"
   fi
-  RUNTIME_DATABASE_URL="$runtime_database_url" \
-  MIGRATOR_DATABASE_URL="$migrator_database_url" \
-  CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database" \
+  export RUNTIME_DATABASE_URL="$runtime_database_url"
+  export MIGRATOR_DATABASE_URL="$migrator_database_url"
+  export CHAT_PUSH_FOUNDATION_CLONE_DATABASE="$clone_database"
     compose --profile migration run --rm --no-deps -T \
       -e RUNTIME_DATABASE_URL -e MIGRATOR_DATABASE_URL -e CHAT_PUSH_FOUNDATION_CLONE_DATABASE \
       --entrypoint node migrator --input-type=module --eval "$migration_import"
@@ -178,12 +178,24 @@ await import('./apps/migrator/dist/main.js');"
 clone_role_verify pre
 pre_result="$(clone_foundation_verify pre)"
 printf '%s\n' "$pre_result"
+
+# The gated migrations create schemas, and PostgreSQL's `create schema if not exists` requires
+# CREATE on the database even when the schema exists. Grant it to the bounded migrator only for the
+# rehearsal run, after the pre role verification and before the post one, so both verifications
+# still see the unprivileged role.
+infrastructure exec -T postgres sh -ec \
+  "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 -c \
+     'grant create on database \"$clone_database\" to phub_migrator'" >/dev/null
+
 started_at="$(date +%s)"
 if printf '%s' "$pre_result" | grep -Fq '"pendingFoundationCount":0'; then
   clone_migrate false
 else
   clone_migrate true
 fi
+infrastructure exec -T postgres sh -ec \
+  "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Atv ON_ERROR_STOP=1 -c \
+     'revoke create on database \"$clone_database\" from phub_migrator'" >/dev/null
 clone_role_verify post
 post_result="$(clone_foundation_verify post)"
 printf '%s\n' "$post_result"

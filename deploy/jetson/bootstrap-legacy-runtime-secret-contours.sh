@@ -15,11 +15,15 @@ maybe_fail() {
 }
 
 verify_authenticated_smoke() {
+  if test "${smoke_session_mode:-required}" = waived; then
+    printf '%s\n' 'staging_realtime_smoke_session status=waived reason=synthetic_smoke_principal_absent'
+    return 0
+  fi
   sh "$bundle_path/verify-staging-realtime-smoke-session.sh" "$bundle_path"
 }
 
-test "$#" -eq 8 ||
-  fail 'usage: bootstrap-legacy-runtime-secret-contours.sh <start|finalize|recover> <expected-active-release> <candidate-release> <control-commit> <run-id> <run-attempt> <confirmation> <bundle-path>'
+test "$#" -eq 8 || test "$#" -eq 9 ||
+  fail 'usage: bootstrap-legacy-runtime-secret-contours.sh <start|finalize|recover> <expected-active-release> <candidate-release> <control-commit> <run-id> <run-attempt> <confirmation> <bundle-path> [required|waived]'
 
 operation=$1
 expected_active_release=$2
@@ -29,6 +33,14 @@ workflow_run_id=$5
 workflow_run_attempt=$6
 confirmation=$7
 bundle_path=$8
+smoke_session_mode=${9:-required}
+
+case "$smoke_session_mode" in
+  required | waived) ;;
+  *) fail 'smoke session mode must be required or waived' ;;
+esac
+test "$smoke_session_mode" = required || test "$operation" = start ||
+  fail 'the smoke session mode applies only to start'
 
 case "$operation:$confirmation" in
   start:BOOTSTRAP_STAGING_RUNTIME_SECRETS | finalize:FINALIZE_STAGING_RUNTIME_SECRETS | recover:RECOVER_STAGING_RUNTIME_SECRETS) ;;

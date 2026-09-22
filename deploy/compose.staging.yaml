@@ -5,10 +5,26 @@ x-runtime: &runtime
   networks:
     - application
 
-x-application-runtime: &application-runtime
+x-realtime-runtime: &realtime-runtime
   <<: *runtime
+  # Realtime deliberately receives no API access/refresh or integration secrets.
+  # loadRealtimeConfig fails closed if those keys leak into this process.
   env_file:
-    - path: ${RUNTIME_ENV_FILE:-/etc/phub/staging.env}
+    - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}
+
+x-worker-runtime: &worker-runtime
+  <<: *runtime
+  # The worker publishes outbox events but never issues API sessions, and loadWorkerConfig fails
+  # closed when a deployed worker receives JWT_ACCESS_SECRET or JWT_REFRESH_SECRET. It therefore
+  # reads a derived runtime contract that carries every API runtime key except those two signing
+  # secrets, plus the required WORKER_RUNTIME_SECRET_ISOLATION_REQUIRED=true attestation.
+  # deploy/jetson/derive-worker-runtime-env.sh derives that file from /etc/phub/staging.env, and
+  # the deploy job refuses the release when the derived contract is absent or wrong. The entry stays
+  # optional so an unrelated reviewed render (legacy contour tooling) does not depend on the file;
+  # a worker started without it still fails closed in loadWorkerConfig on the missing runtime keys.
+  env_file:
+    - path: ${WORKER_RUNTIME_ENV_FILE:-/opt/phub/staging.worker.env}
+      required: false
     - path: ${RUNTIME_AUTH_ENV_FILE:-/opt/phub/staging.auth.env}
       required: false
     - path: ${RUNTIME_OVERRIDE_ENV_FILE:-/opt/phub/staging.override.env}
@@ -17,13 +33,6 @@ x-application-runtime: &application-runtime
       required: false
     - path: ${RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE:-/opt/phub/staging.chat-push-foundation.env}
       required: false
-
-x-realtime-runtime: &realtime-runtime
-  <<: *runtime
-  # Realtime deliberately receives no API access/refresh or integration secrets.
-  # loadRealtimeConfig fails closed if those keys leak into this process.
-  env_file:
-    - path: ${REALTIME_RUNTIME_ENV_FILE:-/etc/phub/realtime.env}
 
 x-object-storage: &object-storage
   S3_ENDPOINT: http://minio:9000
@@ -100,7 +109,7 @@ services:
       start_period: 30s
 
   worker:
-    <<: *application-runtime
+    <<: *worker-runtime
     image: ${REGISTRY}/phub-worker@${WORKER_IMAGE_DIGEST}
     environment:
       <<: *object-storage

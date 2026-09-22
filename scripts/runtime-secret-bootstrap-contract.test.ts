@@ -69,6 +69,10 @@ const runAuthorityValidation = (overrides: Record<string, string>) =>
       ORIGINAL_CONTROL_SHA: '14e1b1ee3a3950bc2cbad9631728e8f0c96162f9',
       ORIGINAL_RUN_ID: '31959225494',
       ORIGINAL_RUN_ATTEMPT: '1',
+      SMOKE_SESSION_WAIVER: '',
+      RUN_ATTEMPT: '1',
+      ACTOR: 'Z6v6e6r',
+      REPOSITORY_OWNER: 'Z6v6e6r',
       REQUEST_REF: 'refs/heads/main',
       CONTROL_SHA: '14e1b1ee3a3950bc2cbad9631728e8f0c96162f9',
       WORKFLOW_SHA: '14e1b1ee3a3950bc2cbad9631728e8f0c96162f9',
@@ -528,10 +532,12 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(web).toBeGreaterThan(worker);
   });
 
-  it('keeps finalization behind isolation, public health and an authenticated WebSocket handshake', () => {
+  it('keeps finalization behind isolation, public health and the selected smoke proof', () => {
     const isolation = workflow.indexOf('Verify the isolated secret files');
     const publicManifest = workflow.indexOf('Attest the exact candidate through public ingress');
-    const finalize = workflow.indexOf('Finalize only after public and authenticated attestation');
+    const finalize = workflow.indexOf(
+      'Finalize after public attestation and the selected smoke proof',
+    );
     expect(isolation).toBeGreaterThan(0);
     expect(publicManifest).toBeGreaterThan(isolation);
     expect(finalize).toBeGreaterThan(publicManifest);
@@ -592,6 +598,137 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
     expect(controller).toContain('maybe_fail post-authenticated-smoke');
   });
 
+  it('waives the synthetic smoke session only for an owner-scoped first start attempt', () => {
+    expect(workflow).toContain('smoke_session_waiver:');
+    expect(workflow).toContain('WAIVE_STAGING_REALTIME_SMOKE_SESSION');
+    expect(workflow).toContain('RUN_ATTEMPT: ${{ github.run_attempt }}');
+    expect(workflow).toContain('ACTOR: ${{ github.actor }}');
+    expect(workflow).toContain('REPOSITORY_OWNER: ${{ github.repository_owner }}');
+    expect(workflow).toContain('smoke_mode: ${{ steps.request.outputs.smoke_mode }}');
+    expect(workflow).toContain('test "$OPERATION" = START');
+    expect(workflow).toContain('test "$RUN_ATTEMPT" = 1');
+    expect(workflow).toContain('test "$ACTOR" = "$REPOSITORY_OWNER"');
+    expect(workflow).toContain('Attest the waived synthetic smoke session');
+    expect(workflow).toContain('$GITHUB_STEP_SUMMARY');
+
+    const invocation = /bootstrap-legacy-runtime-secret-contours\.sh' (start|finalize|recover)\b/u;
+    const calls = workflow.split('\n').filter((line) => invocation.test(line));
+    expect(calls).toHaveLength(4);
+    expect(calls[0]).toContain("'$SMOKE_MODE'");
+    for (const line of calls.slice(1)) expect(line).not.toContain('SMOKE_MODE');
+
+    expect(controller).toContain('smoke_session_mode=${9:-required}');
+    expect(controller).toContain('smoke session mode must be required or waived');
+    expect(controller).toContain('the smoke session mode applies only to start');
+    expect(controller).toContain(
+      'staging_realtime_smoke_session status=waived reason=synthetic_smoke_principal_absent',
+    );
+
+    const functionSource = (name: string): string => {
+      const start = controller.indexOf(`${name}() {`);
+      const end = controller.indexOf('\n}\n', start);
+      expect(start).toBeGreaterThan(0);
+      expect(end).toBeGreaterThan(start);
+      return controller.slice(start, end + 3);
+    };
+    const run = (mode: string) =>
+      spawnSync(
+        '/bin/dash',
+        [
+          '-c',
+          [
+            'set -eu',
+            'bundle_path=/bundle',
+            `smoke_session_mode=${mode}`,
+            'fail() { printf "%s\\n" "$*" >&2; exit 71; }',
+            'sh() { printf "%s\\n" helper-invoked; }',
+            functionSource('verify_authenticated_smoke'),
+            'verify_authenticated_smoke',
+          ].join('\n'),
+        ],
+        { encoding: 'utf8' },
+      );
+    const waived = run('waived');
+    expect(waived.status).toBe(0);
+    expect(waived.stdout).toContain('staging_realtime_smoke_session status=waived');
+    expect(waived.stdout).not.toContain('helper-invoked');
+    const required = run('required');
+    expect(required.status).toBe(0);
+    expect(required.stdout).toContain('helper-invoked');
+
+    const startOverrides = {
+      OPERATION: 'START',
+      CONFIRMATION: 'BOOTSTRAP_STAGING_RUNTIME_SECRETS',
+      ORIGINAL_CONTROL_SHA: '',
+      ORIGINAL_RUN_ID: '',
+      ORIGINAL_RUN_ATTEMPT: '',
+      SMOKE_SESSION_WAIVER: 'WAIVE_STAGING_REALTIME_SMOKE_SESSION',
+    };
+    expect(runAuthorityValidation({ ...startOverrides, SMOKE_SESSION_WAIVER: '' }).status).toBe(0);
+    expect(runAuthorityValidation(startOverrides).status).toBe(0);
+    expect(runAuthorityValidation({ ...startOverrides, RUN_ATTEMPT: '2' }).status).not.toBe(0);
+    expect(runAuthorityValidation({ ...startOverrides, ACTOR: 'collaborator' }).status).not.toBe(0);
+    expect(
+      runAuthorityValidation({ ...startOverrides, REPOSITORY_OWNER: 'someone-else' }).status,
+    ).not.toBe(0);
+    expect(
+      runAuthorityValidation({
+        ...startOverrides,
+        OPERATION: 'RECOVER',
+        CONFIRMATION: 'RECOVER_STAGING_RUNTIME_SECRETS',
+      }).status,
+    ).not.toBe(0);
+    expect(
+      runAuthorityValidation({ ...startOverrides, SMOKE_SESSION_WAIVER: 'waive' }).status,
+    ).not.toBe(0);
+    expect(
+      runAuthorityValidation({
+        ...startOverrides,
+        SMOKE_SESSION_WAIVER: "WAIVE_STAGING_REALTIME_SMOKE_SESSION\n'; touch injected; '",
+      }).status,
+    ).not.toBe(0);
+  });
+
+  it('rejects an unknown or misplaced smoke-session mode before any host work', () => {
+    const releases = [
+      'e308181da5222645d9a87d03642923c6841be8d1',
+      'ffb12608fb16eae17096ab3ab3a7337cc5359c8a',
+      '14e1b1ee3a3950bc2cbad9631728e8f0c96162f9',
+      '1',
+      '1',
+    ];
+    const invoke = (operation: string, confirmation: string, mode: string) =>
+      spawnSync(
+        'sh',
+        [
+          'deploy/jetson/bootstrap-legacy-runtime-secret-contours.sh',
+          operation,
+          ...releases,
+          confirmation,
+          '/bundle',
+          mode,
+        ],
+        { encoding: 'utf8' },
+      );
+    const unknown = invoke('start', 'BOOTSTRAP_STAGING_RUNTIME_SECRETS', 'wavied');
+    expect(unknown.status).toBe(1);
+    expect(unknown.stderr).toContain('smoke session mode must be required or waived');
+    const emptyMode = invoke('start', 'BOOTSTRAP_STAGING_RUNTIME_SECRETS', '');
+    expect(emptyMode.status).toBe(1);
+    expect(emptyMode.stderr).not.toContain('smoke session mode');
+    for (const operation of ['finalize', 'recover']) {
+      const misplaced = invoke(
+        operation,
+        operation === 'finalize'
+          ? 'FINALIZE_STAGING_RUNTIME_SECRETS'
+          : 'RECOVER_STAGING_RUNTIME_SECRETS',
+        'waived',
+      );
+      expect(misplaced.status).toBe(1);
+      expect(misplaced.stderr).toContain('the smoke session mode applies only to start');
+    }
+  });
+
   it('executes post-smoke failure through the rollback trap without restoring the successor', () => {
     const functionSource = (name: string): string => {
       const start = controller.indexOf(`${name}() {`);
@@ -645,7 +782,9 @@ describe('legacy runtime-secret bootstrap delivery contract', () => {
   });
 
   it('retains a bounded redacted observation window after finalization', () => {
-    const finalize = workflow.indexOf('Finalize only after public and authenticated attestation');
+    const finalize = workflow.indexOf(
+      'Finalize after public attestation and the selected smoke proof',
+    );
     const observe = workflow.indexOf('Observe the finalized candidate for five minutes');
     expect(observe).toBeGreaterThan(finalize);
     expect(workflow).toContain('for sample in $(seq 0 10)');

@@ -1068,9 +1068,16 @@ jobs:
     env:
       STAGING_RELEASE_BACKUP_DIR: /opt/phub/backups/releases/pre-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
+      # Deployment definitions (Compose, release helper, foundation verifiers, monitoring rules) come
+      # from the dispatching main for every profile. A recovery resumes a partially applied window
+      # with the *pinned images* of the original candidate - their digests arrive through the
+      # original run's artifacts below, and the stored candidate release env is still compared byte
+      # for byte - while the definitions that install and verify them must be the reviewed ones,
+      # including any fix that made the recovery possible. `verify` still certifies the original
+      # candidate source, and `workflow_sha == sha` pins this tree to main.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' && inputs.foundation_expected_candidate_sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -1124,12 +1131,25 @@ jobs:
           ssh -o ConnectTimeout=10 -o ConnectionAttempts=1 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
             "phub-deploy@$HOST" 'sh -s -- /etc/phub /opt/phub' \
             < deploy/jetson/verify-runtime-secret-transition-clear.sh
-      - name: Verify API and realtime secret isolation
+      - name: Derive the worker runtime contract without API signing secrets
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          scp deploy/jetson/derive-worker-runtime-env.sh \
+            "phub-deploy@$HOST:/opt/phub/derive-worker-runtime-env.sh.next"
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            mv /opt/phub/derive-worker-runtime-env.sh.next /opt/phub/derive-worker-runtime-env.sh
+            chmod 0755 /opt/phub/derive-worker-runtime-env.sh
+            sh /opt/phub/derive-worker-runtime-env.sh \
+              /etc/phub/staging.env /opt/phub/staging.worker.env
+          '
+      - name: Verify API, realtime and worker secret isolation
         env:
           HOST: ${{ secrets.STAGING_HOST }}
         run: |
           ssh -o ServerAliveInterval=10 -o ServerAliveCountMax=2 "phub-deploy@$HOST" \
-            'sh -s -- /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false' \
+            'sh -s -- /etc/phub/staging.env /etc/phub/realtime.env phub-deploy false /opt/phub/staging.worker.env' \
             < deploy/jetson/verify-runtime-env-isolation.sh
       - name: Verify the active staging release and closed foundation gates before snapshot
         if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION' }}
@@ -1161,6 +1181,33 @@ jobs:
               const manifest = JSON.parse(input);
               if (manifest.release !== process.env.EXPECTED_ACTIVE_RELEASE) process.exit(1);
             });
+          '
+      - name: Start PostgreSQL for recovery evidence validation
+        if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            cd /opt/phub
+            infrastructure() {
+              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml "$@"
+            }
+            infrastructure up -d --no-deps postgres
+            attempt=0
+            while test "$attempt" -lt 30; do
+              postgres_id="$(infrastructure ps --status running -q postgres)"
+              if test -n "$postgres_id" &&
+                test "$(docker inspect --format "{{.State.Health.Status}}" "$postgres_id")" = healthy; then
+                exit 0
+              fi
+              attempt="$((attempt + 1))"
+              sleep 2
+            done
+            infrastructure ps postgres >&2 || true
+            docker logs --tail 80 "$postgres_id" >&2 2>/dev/null || true
+            echo "PostgreSQL did not become healthy for recovery evidence validation." >&2
+            exit 1
           '
       - name: Verify the exact recoverable foundation state
         if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
@@ -1358,6 +1405,8 @@ jobs:
               "phub-deploy@$HOST:/opt/phub/verify-chat-push-foundation-clone.sh.next"
             scp deploy/jetson/monitoring/padlhub-alerts.yaml \
               "phub-deploy@$HOST:/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml"
+            scp deploy/jetson/monitoring/prometheus.yaml \
+              "phub-deploy@$HOST:/opt/phub/monitoring/prometheus.yaml.next"
           fi
           if [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION ] && [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION_RECOVERY ]; then
             scp deploy/jetson/tls-ingress/Caddyfile \
@@ -1365,6 +1414,7 @@ jobs:
           fi
           ssh "phub-deploy@$HOST" '
             set -eu
+            cd /opt/phub
             deployment_profile="${{ inputs.deployment_profile }}"
             compose_next="/opt/phub/.compose-staging-${{ github.run_id }}-${{ github.run_attempt }}.next"
             test -f "$compose_next" && test ! -L "$compose_next"
@@ -1435,10 +1485,17 @@ jobs:
               install -m 644 "/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml" \
                 /opt/phub/monitoring/padlhub-alerts.yaml
               rm -f "/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml"
-              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml \
+              # The reviewed Prometheus configuration must load the rule file; without it the
+              # foundation runtime verification can never see the alert rules it attests.
+              install -m 644 /opt/phub/monitoring/prometheus.yaml.next \
+                /opt/phub/monitoring/prometheus.yaml
+              rm -f /opt/phub/monitoring/prometheus.yaml.next
+              docker compose --env-file /opt/phub/infrastructure.env \
+                -f /opt/phub/compose.infrastructure.yaml \
                 run --rm --no-deps -T --entrypoint promtool prometheus \
                 check rules /etc/prometheus/rules/padlhub-alerts.yaml
-              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml \
+              docker compose --env-file /opt/phub/infrastructure.env \
+                -f /opt/phub/compose.infrastructure.yaml \
                 up -d --no-deps --force-recreate prometheus
               foundation_env=/opt/phub/staging.chat-push-foundation.env
               foundation_env_tmp="${foundation_env}.$$"
@@ -1606,7 +1663,7 @@ jobs:
             test "$(stat -c %a "$migrator_env")" = 600
             test ! "$runtime_env" -ef "$migrator_env"
             awk '\''
-              /^[[:space:]]*($|#)/ { next }
+              /^[ \t\r]*($|#)/ { next }
               /^DATABASE_URL=/ { next }
               { exit 1 }
             '\'' "$migrator_env"

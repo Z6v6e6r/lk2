@@ -16,7 +16,7 @@ describe('Communities staging preflight operational boundary', () => {
       source('packages/database/src/migration-execution-policy.ts'),
     ]);
 
-    expect(communitiesRunbook).toContain('CHAT_PUSH_FOUNDATION_MAINTENANCE_UNEXPECTED_PENDING');
+    expect(communitiesRunbook).toContain('maintenance acknowledgement is supplied');
     expect(communitiesRunbook).toContain('chats-notifications-moderation.md');
     expect(communitiesRunbook).toContain('stop without invoking the migrator');
     expect(communitiesRunbook).toContain('whose `0069`–`0073` pending set is empty');
@@ -24,8 +24,9 @@ describe('Communities staging preflight operational boundary', () => {
     expect(communitiesRunbook).toContain('role postcheck');
     expect(communitiesRunbook).toContain('rolled-back runtime tenant DML/RLS probe');
     expect(communitiesRunbook).not.toContain('if only a subset of `0069`–`0073` is pending');
-    expect(chatRunbook).toContain('if any sixth file is pending');
-    expect(executionPolicy).toContain('CHAT_PUSH_FOUNDATION_MAINTENANCE_UNEXPECTED_PENDING');
+    expect(chatRunbook).toContain('may carry an additional backlog into the same window');
+    expect(executionPolicy).not.toContain('MAINTENANCE_UNEXPECTED_PENDING');
+    expect(executionPolicy).toContain('CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK');
   });
 
   it('is manual, exact-SHA pinned and uses separate restricted credentials', async () => {

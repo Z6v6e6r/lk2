@@ -67,7 +67,9 @@ digest and monitoring digest; it revalidates the backup's stored path, byte size
 `pg_restore --list`, but never restores the database, creates another clone or starts the old
 writers. Before installing candidate definitions, monitoring or the overlay, the workflow calls the
 already installed helper in compare-only `prepare-recovery` mode and invalidates any prior healthy
-phase. An external smoke
+phase. The definitions it then installs, like the workflow itself, come from the dispatching `main`,
+while the images stay pinned to the original candidate's digest artifacts; `verify` continues to
+certify that original candidate commit. An external smoke
 failure after candidate runtime verification leaves the candidate running and records
 `EXTERNAL_SMOKE_FAILED` only after the active release, health and immutable digest of API, worker,
 realtime and web are rechecked for this same protected recovery path.
@@ -240,7 +242,8 @@ the old cookie with that same key and receives the same deterministic successor.
 atomically written and directory-synchronized before the ticket/WebSocket handshake; application
 rollback never restores an old refresh credential.
 
-The B0 controller runs the host-only helper twice under the staging workflow lock: once after the
+The B0 controller runs the host-only helper twice under the staging workflow lock unless the run
+carries the deliberate smoke waiver documented below: once after the
 durable bundle is published but before marker/runtime-secret/service mutation, and once after the
 candidate public release and runtime checks but before the rollback trap is removed. It resolves
 `lk.nano.padlhub.su` to the staging host gateway, forbids redirects, and requests only one
@@ -258,6 +261,110 @@ run-scoped helper. The durable state records the last successful rotation and th
 expiry without logging either credential. The default refresh TTL is 30 days; a failed weekly job
 must be investigated before expiry, and an expired session fails closed until separately reviewed
 reprovisioning. `RECOVER` never rotates or requires the smoke credential.
+
+#### Deliberate synthetic-smoke waiver for `START`
+
+When no synthetic smoke principal can be provisioned (no dedicated non-personal SIM is available),
+`START` accepts `smoke_session_waiver=WAIVE_STAGING_REALTIME_SMOKE_SESSION`. The workflow refuses any
+other value and accepts this one only for `START`, only on run attempt 1, and only when
+`github.actor` equals `github.repository_owner`, so no collaborator account and no re-run can set it.
+The `staging` environment on the cutover job currently has no protection rules, so nothing pauses
+for approval: the binding gates for this waiver are the repository-owner actor check, run attempt 1,
+`START`-only and the exact value, together with merge authority over this workflow. Do not pin this to
+the
+`staging-foundation-maintenance` owner variable: that variable is environment-scoped, so it is not
+visible here and an empty value would refuse every waiver. `RECOVER` never needs the waiver.
+
+Waived mode skips both host-path smoke proofs (`staging_realtime_smoke_session status=waived
+reason=synthetic_smoke_principal_absent`), so the run produces no authenticated realtime ticket or
+WebSocket evidence. It bypasses every smoke outcome, not only an absent credential: an expired or
+revoked refresh token, a wrong session tenant or context, and a broadened permission set would all
+go unnoticed by a waived run. Everything else still gates the cutover: the offline
+`loadRealtimeConfig` proof of the candidate allowlist, the disabled-flag assertions, candidate image
+and health checks, the public release and ingress attestation, and the strict secret-isolation
+verification. The end state is unchanged and still leaves `COMMUNITIES_REALTIME_ENABLED=false`.
+
+Consequences to accept explicitly before dispatching a waived run:
+
+- the skipped proof cannot be produced afterwards through B0. `START` is one-shot: once the run
+  finalizes, the durable `/etc/phub/.runtime-secret-bootstrap.finalized.json` receipt makes every
+  later `START` fail with `unresolved transition artifact exists`, and `RECOVER` only attests the
+  already-finalized state. The compensating proof is the weekly
+  `Renew staging realtime smoke session` workflow, which exercises the same helper against the
+  now-serving candidate through public ingress, or the Communities realtime enablement gate;
+- the weekly `Renew staging realtime smoke session` workflow keeps failing until the principal
+  exists; a failed weekly job must not be treated as a regression of this transition;
+- enabling Communities realtime for real traffic (step C) still requires a provisioned principal and
+  a non-waived proof, because a waived run asserts nothing about ticket issuance or WebSocket
+  handshakes;
+- the waiver leaves no durable host-side trace of its own: it is recorded in the run warning, the
+  step summary and the 30-day `b0-evidence` artifact, while the host marker and finalized receipt
+  carry no smoke field;
+- the enforced property is only `github.actor == github.repository_owner`; if this repository is ever
+  transferred to an organization, no human actor can match it and the waiver becomes unusable until the
+  check is updated (fail-closed);
+- the waiver is a temporary escape hatch, not the default path. Delete the
+  `smoke_session_waiver` input and its attestation step once the principal is installed.
+
+### `CHAT_PUSH_FOUNDATION` window prerequisites
+
+`CHAT_PUSH_FOUNDATION` runs the chat/push foundation maintenance window. Its release script verifies
+every prerequisite below before it stops a writer or applies a migration, so a refused preflight
+leaves the running release untouched. Check the host and database state first anyway: the workflow
+spends a full arm64 build before the `deploy` job reaches those checks.
+
+1. `/etc/phub/staging.env`, `/etc/phub/realtime.env` and `/etc/phub/staging.migrator.env` are each
+   mode `0600`, owned by `phub-deploy`, readable by it, and are not hard links to one another. The
+   migrator file contains exactly one `DATABASE_URL` and no other key; comments and blank lines are
+   allowed. Its URL differs from the runtime URL in `staging.env`. `MEDIA_BINARY_ONLY` is the only
+   profile that skips this check.
+2. The runtime URL belongs to the DDL-free runtime role and the migrator URL to the bounded DDL
+   role. The immutable migrator image proves that boundary with
+   `apps/migrator/dist/verify-role-boundary.js` before the first write and again after migration. The
+   exact accepted privileges, owners, policies and default ACLs are in
+   [chat and notification moderation](chats-notifications-moderation.md).
+3. The privileged foundation inventory is empty. The window refuses to start unless this query
+   returns `0|0|0|0`: no `integration.notification_endpoints` row, no unpublished
+   `booking.confirmed.v1`, `booking.changed.v1` or `booking.cancelled.v1` outbox event, no
+   `notifications.tenant_runtime_settings` row with web push, booking reminders or a reminder
+   ruleset/contract, and no `messaging.tenant_runtime_settings` row with `http`, `direct`, `realtime`
+   or `contextual` enabled.
+4. `public.schema_migrations` lists every migration the candidate expects, and the migrator role owns
+   that ledger plus the endpoint table.
+5. The host has room for the database dump and the application snapshot and can pull every candidate
+   digest.
+
+Read-only check on the host, from `/opt/phub`, before dispatching:
+
+```sh
+stat -c '%n %U:%G %a' /etc/phub/staging.env /etc/phub/realtime.env /etc/phub/staging.migrator.env
+df -h /var/lib/docker /opt/phub | tail -3
+docker compose --env-file infrastructure.env -f compose.infrastructure.yaml exec -T postgres \
+  psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atv ON_ERROR_STOP=1 -c "
+select
+  (select count(*) from integration.notification_endpoints) || '|' ||
+  (select count(*) from audit.outbox_events where published_at is null
+     and event_type in ('booking.confirmed.v1', 'booking.changed.v1', 'booking.cancelled.v1')) || '|' ||
+  (select count(*) from notifications.tenant_runtime_settings setting
+     where setting.web_push_enabled
+        or coalesce((to_jsonb(setting) ->> 'booking_reminders_enabled')::boolean, false)
+        or (to_jsonb(setting) ->> 'booking_reminder_ruleset_version') is not null
+        or (to_jsonb(setting) ->> 'booking_reminder_contract_hash') is not null) || '|' ||
+  (select count(*) from messaging.tenant_runtime_settings setting
+     where setting.http_enabled or setting.direct_enabled
+        or setting.realtime_enabled or setting.contextual_enabled);
+select count(*), max(filename) from public.schema_migrations;"
+```
+
+The window leaves `COMMUNITIES_REALTIME_ENABLED=false` and keeps `WEB_PUSH_ENABLED`,
+`MESSAGING_USER_BLOCK_COMMANDS_ENABLED` and `BOOKING_REMINDER_SCHEDULER_ENABLED` false in
+`/opt/phub/staging.chat-push-foundation.env`. It enables no tenant runtime switch and provisions no
+notification ruleset; those are separate enablement steps.
+
+This path never executed end to end before 2026-09-20. The two green `CHAT_PUSH_FOUNDATION`
+dispatches on that date deployed nothing: both had `build` and `deploy` skipped, because a skipped
+`build` propagated its skip through `needs`. Treat a green run whose `deploy` job is `skipped` as no
+deployment at all.
 
 ### Temporary legacy OTP canary
 
