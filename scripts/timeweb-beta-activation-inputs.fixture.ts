@@ -124,6 +124,9 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // Local-only mock Home is not an acceptable beta state: the published legacy Home
     // endpoints must fail closed rather than serve fabricated data.
     HOME_READ_MODE: 'projection',
+    // The station support contour needs a real provider URL; a synthetic placeholder would fail the
+    // shared config schema before the provisioner contract checks even run.
+    SUPPORT_LEGACY_BASE_URL: 'https://support.internal/lk/support',
     HOME_BASE_SYNC_ENABLED: 'true',
     // The projection window must exceed both sync cadences (source and projector advance twenty users
     // every two minutes), otherwise a freshly synchronized section ages out to UNAVAILABLE between
