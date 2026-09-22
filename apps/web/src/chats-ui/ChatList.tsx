@@ -35,10 +35,10 @@ export function ChatList({
   if (!page || error) return <div className={styles.listSpacer} />;
 
   // These categories are planned UI destinations, not conversation kinds accepted by the API.
-  if (filter === 'TOURNAMENT' || filter === 'STATION' || filter === 'COMMUNITY') {
+  // The station destination is served by the provider-backed `StationDialogList` instead.
+  if (filter === 'TOURNAMENT' || filter === 'COMMUNITY') {
     const labels = {
       TOURNAMENT: 'Чаты турниров',
-      STATION: 'Чаты станций',
       COMMUNITY: 'Чаты сообществ',
     };
     return (

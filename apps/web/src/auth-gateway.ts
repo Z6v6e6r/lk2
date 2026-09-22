@@ -366,6 +366,51 @@ export interface SendConversationMessageCommand {
   readonly attachmentIds?: readonly string[];
 }
 
+/**
+ * Station support dialogs are provider-backed, so they stay a separate wire contract from PadlHub
+ * conversations: the ids are PadlHub-derived, the provider's own dialog and message identifiers
+ * never reach the browser, and the LK2 chat refresh cadence does not apply to them.
+ */
+export interface StationSupportStation {
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface StationSupportDialogLastMessage {
+  readonly preview: string;
+  readonly author: 'ME' | 'STATION' | 'SYSTEM';
+  readonly createdAt: string | null;
+}
+
+export interface StationSupportDialog {
+  readonly id: string;
+  readonly stationId: string | null;
+  readonly stationName: string;
+  readonly status: string;
+  readonly updatedAt: string | null;
+  readonly lastMessage: StationSupportDialogLastMessage | null;
+}
+
+export interface StationSupportMessage {
+  readonly id: string;
+  readonly body: string;
+  readonly author: 'ME' | 'STATION' | 'SYSTEM';
+  readonly createdAt: string | null;
+}
+
+export interface StationSupportSendCommand {
+  readonly clientMessageId: string;
+  readonly text: string;
+  readonly stationId?: string;
+  readonly dialogId?: string;
+}
+
+export interface StationSupportSendResult {
+  readonly dialogId: string;
+  readonly message: StationSupportMessage | null;
+  readonly replayed: boolean;
+}
+
 export type ActivityHistoryQuery = ActivityHistoryFilters;
 
 export type HomeBookingRecommendationPage = BookingRecommendationPage & {
@@ -608,6 +653,14 @@ export interface AuthGateway {
   ) => Promise<CompleteLevelAssessmentResponse>;
   readonly listConversations: () => Promise<ConversationPage>;
   readonly createRealtimeTicket: () => Promise<MessagingRealtimeTicket>;
+  readonly listStationSupportStations: () => Promise<readonly StationSupportStation[]>;
+  readonly listStationSupportDialogs: () => Promise<readonly StationSupportDialog[]>;
+  readonly listStationSupportMessages: (
+    dialogId: string,
+  ) => Promise<readonly StationSupportMessage[]>;
+  readonly sendStationSupportMessage: (
+    command: StationSupportSendCommand,
+  ) => Promise<StationSupportSendResult>;
   readonly createDirectConversation: (
     otherUserId: string,
     idempotencyKey: string,
@@ -2264,6 +2317,40 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     listConversations() {
       return client.request<ConversationPage>('/conversations?limit=50');
+    },
+
+    listStationSupportStations() {
+      return client
+        .request<{ readonly items: readonly StationSupportStation[] }>('/support/stations')
+        .then((page) => page.items);
+    },
+
+    listStationSupportDialogs() {
+      return client
+        .request<{ readonly items: readonly StationSupportDialog[] }>('/support/dialogs')
+        .then((page) => page.items);
+    },
+
+    listStationSupportMessages(dialogId: string) {
+      return client
+        .request<{ readonly items: readonly StationSupportMessage[] }>(
+          `/support/dialogs/${encodeURIComponent(dialogId)}/messages`,
+        )
+        .then((page) => page.items);
+    },
+
+    sendStationSupportMessage(command: StationSupportSendCommand) {
+      const payload: Record<string, unknown> = { text: command.text };
+      if (command.stationId) payload.stationId = command.stationId;
+      if (command.dialogId) payload.dialogId = command.dialogId;
+      return retryMessagingCommand((signal) =>
+        client.request<StationSupportSendResult>('/support/messages', {
+          method: 'POST',
+          idempotencyKey: command.clientMessageId,
+          body: JSON.stringify(payload),
+          signal,
+        }),
+      );
     },
 
     createRealtimeTicket() {

@@ -27,6 +27,7 @@ import {
   createLocationRepository,
   createLevelEligibilityPolicyRepository,
   createPlayerLevelRepository,
+  createStationSupportRepository,
   MESSAGING_MEDIA_MAX_BYTES,
   createMessagingMediaRepository,
   createMessagingModerationRepository,
@@ -94,6 +95,7 @@ import {
 } from './communities/community-runtime.js';
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 import { LegacyPromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
+import { LegacyStationSupportClient } from './support/station-support-provider.js';
 import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscription-runtime-actor-delegation-issuer.js';
 
@@ -309,6 +311,20 @@ const promotionEngagementSink = config.PROMOTIONS_ENGAGEMENT_SECRET
       circuitResetMs: config.PROMOTIONS_LEGACY_CIRCUIT_RESET_MS,
       onMetric: (metric) => logger.info({ metric }, 'promotion engagement delivery'),
     })
+  : undefined;
+const stationSupportProvider =
+  config.SUPPORT_STATIONS_ENABLED && config.SUPPORT_LEGACY_BASE_URL
+    ? new LegacyStationSupportClient({
+        baseUrl: config.SUPPORT_LEGACY_BASE_URL,
+        timeoutMs: config.SUPPORT_LEGACY_TIMEOUT_MS,
+        maxAttempts: config.SUPPORT_LEGACY_MAX_ATTEMPTS,
+        circuitFailureThreshold: config.SUPPORT_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
+        circuitResetMs: config.SUPPORT_LEGACY_CIRCUIT_RESET_MS,
+        onMetric: (metric) => logger.info({ metric }, 'station support provider operation'),
+      })
+    : undefined;
+const stationSupportRepository = config.SUPPORT_STATIONS_ENABLED
+  ? createStationSupportRepository(pool)
   : undefined;
 const activityHistoryGameBackfillSource = !config.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED
   ? undefined
@@ -604,6 +620,8 @@ const app = await buildApp({
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
   adminNotificationRepository: createAdminNotificationRepository(pool),
   locationRepository: createLocationRepository(pool),
+  ...(stationSupportProvider ? { stationSupportProvider } : {}),
+  ...(stationSupportRepository ? { stationSupportRepository } : {}),
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
   playerLevelRepository: createPlayerLevelRepository(pool),
   cupPlayerLevelProjectionRepository: createCupPlayerLevelProjectionRepository(pool),

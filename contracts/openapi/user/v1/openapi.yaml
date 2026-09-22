@@ -2059,6 +2059,140 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/stations:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [messaging]
+      operationId: listStationSupportStations
+      summary: List the stations the authenticated user can open a support dialog with
+      description: |
+        Returns the tenant's published PadlHub stations as chat destinations. The legacy provider
+        station key stays server-side; the response uses PadlHub station UUIDs only.
+      responses:
+        '200':
+          description: Published station destinations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationSupportStationList'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/StationSupportConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/dialogs:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [messaging]
+      operationId: listStationSupportDialogs
+      summary: List the authenticated user's station support dialogs
+      description: |
+        The dialogs CUP operators already answer for this viewer. Each dialog is addressed by a
+        PadlHub-derived UUID; the external provider dialog identifier is never returned. The viewer
+        identity is resolved server-side, so a caller can only ever read their own dialogs.
+      responses:
+        '200':
+          description: The caller's station dialogs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationSupportDialogList'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/StationSupportConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/dialogs/{dialogId}/messages:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: dialogId
+        in: path
+        required: true
+        description: PadlHub-derived station dialog identifier returned by the dialog list.
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [messaging]
+      operationId: listStationSupportMessages
+      summary: Read the message history of one station support dialog
+      responses:
+        '200':
+          description: Ordered message history.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationSupportMessagePage'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/StationSupportConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/messages:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [messaging]
+      operationId: sendStationSupportMessage
+      summary: Send a message to a station support dialog
+      description: |
+        Exactly one of `stationId` and `dialogId` selects the destination; a station destination
+        opens a dialog when none exists yet. The `Idempotency-Key` travels to the provider as the
+        message external identifier, so a retried command replays instead of duplicating, and an
+        ambiguous provider failure is recovered by reading the message back before failing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StationSupportSendRequest'
+      responses:
+        '200':
+          description: The stored message, or the replayed result of the same command.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationSupportSendResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/StationSupportConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/conversations:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -6855,6 +6989,146 @@ components:
         expiresAt:
           type: string
           format: date-time
+    StationSupportStation:
+      type: object
+      additionalProperties: false
+      required: [id, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+    StationSupportStationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/StationSupportStation'
+    StationSupportDialogLastMessage:
+      type: object
+      additionalProperties: false
+      required: [preview, author, createdAt]
+      properties:
+        preview:
+          type: string
+          maxLength: 500
+        author:
+          type: string
+          enum: [ME, STATION, SYSTEM]
+        createdAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+    StationSupportDialog:
+      type: object
+      additionalProperties: false
+      required: [id, stationId, stationName, status, updatedAt, lastMessage]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: PadlHub-derived dialog identifier; the provider dialog id is never exposed.
+        stationId:
+          description: PadlHub station UUID when the legacy station key resolves to a station.
+          oneOf:
+            - type: string
+              format: uuid
+            - type: 'null'
+        stationName:
+          type: string
+          minLength: 1
+          maxLength: 160
+        status:
+          type: string
+          minLength: 1
+          maxLength: 40
+        updatedAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        lastMessage:
+          oneOf:
+            - $ref: '#/components/schemas/StationSupportDialogLastMessage'
+            - type: 'null'
+    StationSupportDialogList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 200
+          items:
+            $ref: '#/components/schemas/StationSupportDialog'
+    StationSupportMessage:
+      type: object
+      additionalProperties: false
+      required: [id, body, author, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        body:
+          type: string
+          maxLength: 4000
+        author:
+          type: string
+          enum: [ME, STATION, SYSTEM]
+        createdAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+    StationSupportMessagePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/StationSupportMessage'
+    StationSupportSendRequest:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        stationId:
+          type: string
+          format: uuid
+          description: Destination station; exactly one of stationId and dialogId is required.
+        dialogId:
+          type: string
+          format: uuid
+          description: Existing dialog; exactly one of stationId and dialogId is required.
+        text:
+          type: string
+          minLength: 1
+          maxLength: 4000
+    StationSupportSendResult:
+      type: object
+      additionalProperties: false
+      required: [dialogId, message, replayed]
+      properties:
+        dialogId:
+          type: string
+          format: uuid
+        message:
+          oneOf:
+            - $ref: '#/components/schemas/StationSupportMessage'
+            - type: 'null'
+        replayed:
+          type: boolean
     CreateDirectConversationRequest:
       type: object
       additionalProperties: false
@@ -9081,6 +9355,17 @@ components:
             $ref: ../../common/components.yaml#/components/schemas/ApiError
     AuthIdentityConflict:
       description: The OAuth identity belongs to a different PadlHub user.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+    StationSupportConflict:
+      description: |
+        The command conflicts with current state: the idempotency key was already used for another
+        command, the viewer has no linked phone, or the station has no support binding yet.
       headers:
         X-Correlation-ID:
           $ref: ../../common/components.yaml#/components/headers/CorrelationId

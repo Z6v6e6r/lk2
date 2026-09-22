@@ -647,6 +647,23 @@ export function App({
       createSocket: (url) => new WebSocket(url) as unknown as CommunityRealtimeSocket,
     });
   }, [gateway, realtimeUrl]);
+  // Stable identity: the Chats screen keys the station-support loaders on this object, so a new
+  // object on every parent render would re-issue provider reads on the five-second chat tick.
+  const stationSupportSource = useMemo(
+    () => ({
+      loadStations: () => gateway.listStationSupportStations(),
+      loadDialogs: () => gateway.listStationSupportDialogs(),
+      loadMessages: (dialogId: string) => gateway.listStationSupportMessages(dialogId),
+      sendMessage: (command: {
+        readonly text: string;
+        readonly clientMessageId: string;
+        readonly stationId?: string;
+        readonly dialogId?: string;
+      }) => gateway.sendStationSupportMessage(command),
+      createMessageId: () => createMessagingCommandId(),
+    }),
+    [gateway],
+  );
   const [communityInviteToken] = useState(() =>
     typeof window === 'undefined'
       ? null
@@ -2476,6 +2493,7 @@ export function App({
           page={conversations}
           messages={conversationMessages}
           mode={protectedRoute.mode}
+          stationSupport={stationSupportSource}
           {...(requestedConversationId ? { selectedConversationId: requestedConversationId } : {})}
           hasExplicitRecipient={Boolean(validChatRecipientId)}
           currentUserId={context.user.id}

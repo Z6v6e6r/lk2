@@ -510,6 +510,10 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       ],
     }),
     listConversations: vi.fn().mockResolvedValue({ items: [] }),
+    listStationSupportStations: vi.fn().mockResolvedValue([]),
+    listStationSupportDialogs: vi.fn().mockResolvedValue([]),
+    listStationSupportMessages: vi.fn().mockResolvedValue([]),
+    sendStationSupportMessage: vi.fn().mockRejectedValue(new Error('SUPPORT_PROVIDER_UNAVAILABLE')),
     createRealtimeTicket: vi.fn().mockRejectedValue(new Error('REALTIME_MESSAGING_DISABLED')),
     createDirectConversation: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
     getOrCreateGameConversation: vi

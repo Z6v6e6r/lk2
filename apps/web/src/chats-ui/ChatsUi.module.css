@@ -1404,3 +1404,91 @@
   font-size: 0.8125rem;
   opacity: 0.75;
 }
+
+/* Station support dialogs reuse the chat shell, but they are provider-backed and text-only, so the
+   list pane needs its own start control and the thread has no attachments or notification policy. */
+.stationListPane {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.stationListPane .list {
+  flex: 1 1 auto;
+}
+
+.stationListPane .emptyState,
+.stationListPane .skeletonList {
+  flex: 1 1 auto;
+}
+
+.stationStart {
+  display: grid;
+  padding: 12px 16px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  border-bottom: 1px dashed var(--comms-line);
+}
+
+.stationStart select {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--comms-line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--comms-ink);
+  font: inherit;
+}
+
+.stationStart button {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--comms-accent);
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.stationStart button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.stationListButton {
+  width: 100%;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.stationListItemBody {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.stationListItemBody strong {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stationListItemBody small {
+  overflow: hidden;
+  color: var(--comms-ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stationListItemMeta {
+  color: var(--comms-ink);
+  font-size: 12px;
+  white-space: nowrap;
+}

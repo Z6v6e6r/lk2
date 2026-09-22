@@ -43,6 +43,7 @@ export * from './notification-endpoint-repository.js';
 export * from './admin-notification-repository.js';
 export * from './location-repository.js';
 export * from './location-media-repository.js';
+export * from './station-support-repository.js';
 export * from './migration-ledger-policy.js';
 export * from './migration-execution-policy.js';
 export * from './communities-staged-rehearsal-policy.js';

@@ -34,8 +34,24 @@ backward/selected-summary API.
 Следующий feature-gated slice реализует только `GAME`: canonical `games.games.id`, актуальная
 `games.participations(state='ACTIVE')` и `games.play` повторно проверяются перед list/history/send/
 read cursor. Tournament остаётся закрыт без identity-linked canonical roster; Station остаётся
-закрыт без утверждённой membership/privacy модели и не добавляется в enum разговоров. Матрица
+закрыт как **вид разговора PadlHub**: он не добавляется в enum разговоров без утверждённой
+membership/privacy модели. Матрица
 доказательств и открытые вопросы: [contextual-chats-evidence-2026-08-03.md](../plans/contextual-chats-evidence-2026-08-03.md).
+
+Отдельно от вида разговора вкладка «Станции» в Web уже показывает обращения к станциям, которые
+операторы отвечают в текущем ЦУП: `apps/api` проксирует контур поддержки LK1
+(`/lk/support/...`) через `GET /support/stations`, `GET /support/dialogs`,
+`GET /support/dialogs/{dialogId}/messages` и идемпотентный `POST /support/messages`
+([ADR 0024](../adr/0024-station-support-dialogs-bridge.md)). Границы среза: телефон зрителя
+резолвится на сервере из integration custody (первично подтверждённый телефон входа, затем
+провайдерский `legacy_viewer_phone`) и в браузер не попадает, провайдеру уходит ровно один номер,
+идентификаторы диалогов и сообщений провайдера заменяются производными PadlHub UUID, станция
+берётся из опубликованных `locations.profiles`, а её legacy-ключ — из
+`integration.external_entity_map` (`LK_LEGACY_SNAPSHOT`/`game_station`). Срез выключен по умолчанию
+(`SUPPORT_STATIONS_ENABLED=false`), живёт вне контракта разговоров (без realtime, политики
+уведомлений, вложений и курсора прочтения) и не пишет локальное бизнес-состояние: идемпотентность
+отправки держит сам провайдер по `externalMessageId`. Перенос станционных обращений в нативные
+`SUPPORT`-разговоры PadlHub с рабочим местом поддержки в ЦУП остаётся целью.
 
 Реализованный in-app срез включает rule/template consumer, транзакционные intent/inbox/delivery,
 RabbitMQ inbox-дедупликацию, tenant gate, `GET /notifications`, идемпотентный `PUT

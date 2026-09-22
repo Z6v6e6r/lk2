@@ -47,6 +47,7 @@ import type {
   MessagingMediaRepository,
   MessagingModerationRepository,
   MessagingRepository,
+  StationSupportRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
   NotificationPreferenceRepository,
@@ -146,6 +147,8 @@ import { registerMessagingReportRoutes } from './messaging/messaging-report-rout
 import { registerMessagingRoutes } from './messaging/messaging-routes.js';
 import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
+import { registerStationSupportRoutes } from './support/station-support-routes.js';
+import type { StationSupportProvider } from './support/station-support-provider.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
@@ -271,6 +274,9 @@ export interface BuildAppOptions {
   readonly messagingMediaObjectStore?: MessagingMediaObjectStore;
   readonly realtimeTicketIssuer?: RealtimeTicketIssuer;
   readonly locationRepository?: LocationRepository;
+  /** Proxies the legacy station-support dialogs CUP operators answer; absent means the tab is closed. */
+  readonly stationSupportProvider?: StationSupportProvider;
+  readonly stationSupportRepository?: StationSupportRepository;
   readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
   readonly playerLevelRepository?: PlayerLevelRepository;
   readonly cupPlayerLevelProjectionRepository?: CupPlayerLevelProjectionRepository;
@@ -1228,6 +1234,19 @@ export async function buildApp(options: BuildAppOptions) {
   registerLocationRoutes(app as unknown as FastifyInstance, {
     ...(options.locationRepository ? { repository: options.locationRepository } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
+  });
+  registerStationSupportRoutes(app as unknown as FastifyInstance, {
+    enabled: options.config.SUPPORT_STATIONS_ENABLED,
+    ...(options.stationSupportProvider ? { provider: options.stationSupportProvider } : {}),
+    ...(options.stationSupportRepository ? { repository: options.stationSupportRepository } : {}),
+    ...(options.locationRepository ? { locationRepository: options.locationRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [
+      authenticate,
+      authorizeMessagingCommand,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
   });
   registerGiftCertificateRoutes(app as unknown as FastifyInstance, {
     ...(options.giftCertificateCatalogRepository
