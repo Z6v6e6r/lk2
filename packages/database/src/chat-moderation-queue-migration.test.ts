@@ -11,7 +11,7 @@ describe('chat moderation queue migration', () => {
 
     expect(sql).toContain('phub:reviewed-new-table-index');
     expect(sql).toContain("set local lock_timeout = '5s'");
-    expect(sql).toContain("set statement_timeout = '30s'");
+    expect(sql).toContain("set local statement_timeout = '30s'");
     expect(sql).toContain('create index moderation_reports_queue_idx');
     expect(sql).toContain('on moderation.reports (tenant_id, state, created_at, id)');
     expect(sql).toContain('create index moderation_actions_case_idx');

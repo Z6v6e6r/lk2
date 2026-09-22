@@ -110,6 +110,7 @@ create table messaging.media_commands (
   result_payload jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   primary key (tenant_id, actor_user_id, idempotency_key),
+  foreign key (tenant_id) references identity.tenants(id),
   foreign key (tenant_id, actor_user_id) references identity.users(tenant_id, id),
   foreign key (tenant_id, media_id) references messaging.media_assets(tenant_id, id)
 );
@@ -156,10 +157,13 @@ alter table messaging.message_attachments
     check (position is null or position between 1 and 4);
 
 -- The attachment row is a READY snapshot, so the four-state upload machine of migration 0007 no
--- longer applies here; the row keeps only the terminal READY state.
+-- longer applies here; the row keeps only the terminal READY state. The constraint is added
+-- NOT VALID: an immediately validated CHECK would scan the existing table under ACCESS EXCLUSIVE
+-- and the 30-second statement timeout, which can roll this expand-only file back on a busy
+-- contour. Migration 0095 validates it separately.
 alter table messaging.message_attachments
   drop constraint if exists message_attachments_scan_state_check,
-  add constraint message_attachments_ready_scan_check check (scan_state = 'READY');
+  add constraint message_attachments_ready_scan_check check (scan_state = 'READY') not valid;
 
 create unique index message_attachments_message_media_idx
   on messaging.message_attachments (tenant_id, conversation_id, message_id, media_id);
@@ -222,11 +226,15 @@ alter table messaging.messages
   add column hidden_at timestamptz,
   add column hidden_by_action_id uuid;
 
+-- Both constraints are NOT VALID for the same reason as the READY scan state above: the pair check
+-- and the cross-schema foreign key enforce every new row immediately, while the existing rows are
+-- validated by migration 0095 instead of scanning messaging.messages inside this file.
 alter table messaging.messages
   add constraint messages_hidden_pair_check
-    check ((hidden_at is null) = (hidden_by_action_id is null)),
+    check ((hidden_at is null) = (hidden_by_action_id is null)) not valid,
   add constraint messages_hidden_by_action_fkey
-    foreign key (tenant_id, hidden_by_action_id) references moderation.actions(tenant_id, id);
+    foreign key (tenant_id, hidden_by_action_id) references moderation.actions(tenant_id, id)
+    not valid;
 
 create index messages_hidden_idx
   on messaging.messages (tenant_id, conversation_id, hidden_at)

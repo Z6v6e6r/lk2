@@ -4,7 +4,7 @@
 -- phub:reviewed-new-table-index
 
 set local lock_timeout = '5s';
-set statement_timeout = '30s';
+set local statement_timeout = '30s';
 
 -- Oldest-first review queue over pending reports, tenant-local.
 create index moderation_reports_queue_idx
