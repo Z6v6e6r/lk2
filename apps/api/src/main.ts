@@ -27,7 +27,6 @@ import {
   createLocationRepository,
   createLevelEligibilityPolicyRepository,
   createPlayerLevelRepository,
-  createStationSupportRepository,
   MESSAGING_MEDIA_MAX_BYTES,
   createMessagingMediaRepository,
   createMessagingModerationRepository,
@@ -96,6 +95,7 @@ import {
 import { PostgresAuthRepository } from './auth/postgres-auth-repository.js';
 import { LegacyPromotionEngagementSink } from './promotions/legacy-promotion-engagement-sink.js';
 import { LegacyStationSupportClient } from './support/station-support-provider.js';
+import { createStationSupportRepository } from './support/station-support-repository.js';
 import { S3TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscription-runtime-actor-delegation-issuer.js';
 

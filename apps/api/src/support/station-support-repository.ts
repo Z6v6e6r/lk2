@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
 
-import { withTenantTransaction } from './connection.js';
+import { withTenantTransaction } from '@phub/database';
 
 /**
  * Read-only bindings the station-support boundary needs. Nothing here is a PadlHub business

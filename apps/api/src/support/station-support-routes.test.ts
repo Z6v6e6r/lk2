@@ -1,4 +1,4 @@
-import type { LocationRepository, StationSupportRepository } from '@phub/database';
+import type { LocationRepository } from '@phub/database';
 import { loadConfig } from '@phub/config';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
@@ -12,6 +12,7 @@ import type {
   StationSupportProviderMessage,
 } from './station-support-provider.js';
 import { StationSupportProviderError } from './station-support-provider.js';
+import type { StationSupportRepository } from './station-support-repository.js';
 import { stationSupportExternalMessageId } from './station-support-routes.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';

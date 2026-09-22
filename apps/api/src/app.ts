@@ -47,7 +47,6 @@ import type {
   MessagingMediaRepository,
   MessagingModerationRepository,
   MessagingRepository,
-  StationSupportRepository,
   NotificationEndpointRepository,
   NotificationInboxRepository,
   NotificationPreferenceRepository,
@@ -149,6 +148,7 @@ import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerStationSupportRoutes } from './support/station-support-routes.js';
 import type { StationSupportProvider } from './support/station-support-provider.js';
+import type { StationSupportRepository } from './support/station-support-repository.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';

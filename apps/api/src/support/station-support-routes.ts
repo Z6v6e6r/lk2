@@ -1,8 +1,9 @@
-import type { LocationRepository, StationSupportRepository } from '@phub/database';
+import type { LocationRepository } from '@phub/database';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { createHash } from 'node:crypto';
 
 import { sendApiError } from '../http-errors.js';
+import type { StationSupportRepository } from './station-support-repository.js';
 import {
   StationSupportProviderError,
   normalizeSupportPhoneDigits,
