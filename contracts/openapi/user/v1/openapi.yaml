@@ -6778,6 +6778,16 @@ components:
           description: |
             Stable first-party profile photo delivery URL. Absent when the participant has no
             stored photo; the client then renders its own initials placeholder.
+        level:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 8
+          description: Current PadlHub player level label, when assessed.
+        levelValue:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 10
+          description: Current PadlHub numeric level value used for the avatar progress ring.
     ConversationLastMessage:
       type: object
       additionalProperties: false

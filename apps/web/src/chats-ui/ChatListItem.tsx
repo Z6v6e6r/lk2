@@ -24,6 +24,13 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
           isGame={conversation.kind === 'GAME'}
           title={title}
           photoUrl={conversation.kind === 'DIRECT' ? conversation.participant.avatarUrl : undefined}
+          level={conversation.kind === 'DIRECT' ? conversation.participant.level : undefined}
+          levelValue={
+            conversation.kind === 'DIRECT' ? conversation.participant.levelValue : undefined
+          }
+          fallbackSeed={
+            conversation.kind === 'DIRECT' ? conversation.participant.userId : conversation.id
+          }
         />
         <span className={styles.listCopy}>
           <span

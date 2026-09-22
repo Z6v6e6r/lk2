@@ -25,7 +25,7 @@ describe('ChatAvatar', () => {
   it('renders initials when the participant has no stored photo', () => {
     const { container } = render(<ChatAvatar isGame={false} title="Борис Кузнецов" />);
 
-    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('img')).toHaveAttribute('data-player-level-photo', 'fallback');
     expect(screen.getByText('БК')).toBeInTheDocument();
   });
 
@@ -41,7 +41,19 @@ describe('ChatAvatar', () => {
 
     fireEvent.error(container.querySelector('img')!);
 
-    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('img')).toHaveAttribute('data-player-level-photo', 'fallback');
     expect(screen.getByText('Б')).toBeInTheDocument();
+  });
+
+  it('renders the level badge and fractional progress for an assessed participant', () => {
+    const { container } = render(
+      <ChatAvatar isGame={false} title="Борис" photoUrl={photoUrl} level="C+" levelValue={3.44} />,
+    );
+
+    expect(container.querySelector('[data-player-level-badge]')).toHaveTextContent('C+');
+    expect(container.querySelector('[data-player-level-avatar]')).toHaveAttribute(
+      'data-progress',
+      '44',
+    );
   });
 });

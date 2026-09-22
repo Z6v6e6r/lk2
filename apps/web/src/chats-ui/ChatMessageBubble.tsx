@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 
 import type { ConversationMessage, ConversationMessageAttachment } from '../auth-gateway.js';
 import { formatAttachmentSize } from './chat-attachments.js';
-import { formatMessageTime, initials } from './chat-format.js';
+import { ChatAvatar } from './ChatAvatar.js';
+import { formatMessageTime } from './chat-format.js';
 import styles from './ChatsUi.module.css';
 
 /** Loads one attachment exactly once and hands the component a revocable object URL. */
@@ -130,11 +131,16 @@ export function ChatMessageBubble({
       className={`${styles.messageRow} ${own ? styles.ownMessageRow : ''} ${continuesGroup ? styles.continuedMessageRow : ''}`}
     >
       {!own ? (
-        <span
-          className={`${styles.senderAvatar} ${!endsGroup ? styles.hiddenAvatar : ''}`}
-          aria-hidden="true"
-        >
-          {initials(message.sender.displayName)}
+        <span className={!endsGroup ? styles.hiddenAvatar : undefined}>
+          <ChatAvatar
+            isGame={false}
+            title={message.sender.displayName}
+            photoUrl={message.sender.avatarUrl}
+            level={message.sender.level}
+            levelValue={message.sender.levelValue}
+            fallbackSeed={message.sender.userId}
+            size={36}
+          />
         </span>
       ) : null}
       <article

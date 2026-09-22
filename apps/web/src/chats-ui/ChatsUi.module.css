@@ -6,11 +6,13 @@
   --comms-muted: #737077;
   --comms-line: #ededed;
   --comms-surface: #fafafa;
+  --chat-font-family:
+    -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
   min-height: 100dvh;
-  padding: max(20px, env(safe-area-inset-top)) 20px 112px;
+  padding: 16px 16px 112px;
   background: var(--comms-surface);
   color: var(--comms-ink);
-  font-family: 'Inter Display', system-ui, sans-serif;
+  font-family: var(--chat-font-family);
 }
 
 .shell {
@@ -38,8 +40,8 @@
 
 .listHeader {
   display: flex;
-  min-height: 72px;
-  padding: 20px 20px 10px;
+  min-height: 48px;
+  padding: 0 16px;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
@@ -49,29 +51,14 @@
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.035em;
-}
-
-.notificationsShortcut {
-  display: inline-flex;
-  min-width: 44px;
-  min-height: 44px;
-  padding: 0 10px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 14px;
-  background: var(--comms-accent-soft);
-  color: var(--comms-accent-ink);
-  font-size: 11px;
-  font-weight: 700;
-  text-decoration: none;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 28px;
 }
 
 .filtersBlock {
   min-width: 0;
-  padding: 4px 16px 10px;
+  padding: 0 16px 8px;
 }
 
 .searchField {
@@ -99,7 +86,8 @@
   background: transparent;
   color: var(--comms-ink);
   font: inherit;
-  font-size: 14px;
+  font-size: 16px;
+  line-height: 20px;
 }
 
 .searchField input::-webkit-search-cancel-button {
@@ -128,7 +116,7 @@
 .clearSearch {
   position: absolute;
   right: 6px;
-  min-height: 32px;
+  min-height: 44px;
   padding: 0 8px;
   border: 0;
   background: transparent;
@@ -140,7 +128,7 @@
 .filterRail {
   display: flex;
   min-width: 0;
-  margin-top: 12px;
+  margin-top: 8px;
   padding: 4px;
   overflow-x: auto;
   border: 1px solid var(--comms-line);
@@ -159,7 +147,7 @@
   display: inline-flex;
   min-width: 36px;
   min-height: 44px;
-  padding: 10px 6px;
+  padding: 10px 8px;
   flex: 1 0 0;
   align-items: center;
   justify-content: center;
@@ -168,7 +156,19 @@
   background: transparent;
   color: #67636d;
   font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
   text-decoration: none;
+}
+
+.filterRail button,
+.filterRail a {
+  gap: 6px;
+}
+
+.filterLabel {
+  white-space: nowrap;
 }
 
 .filterRail button:hover,
@@ -199,7 +199,7 @@
   display: grid;
   min-width: 0;
   min-height: 74px;
-  padding: 15px 20px;
+  padding: 15px 16px;
   align-items: center;
   grid-template-columns: 44px minmax(0, 1fr) auto;
   gap: 12px;
@@ -219,8 +219,8 @@
 .selectedListLink:focus-visible,
 .filterRail button:focus-visible,
 .filterRail a:focus-visible,
-.notificationsShortcut:focus-visible,
-.unreadToggle:focus-visible,
+.headerMenuButton:focus-visible,
+.headerMenuItem:focus-visible,
 .thread button:focus-visible,
 .thread a:focus-visible {
   position: relative;
@@ -236,7 +236,7 @@
   flex: 0 0 44px;
   place-items: center;
   overflow: hidden;
-  border-radius: 15px;
+  border-radius: 50%;
   background: #ebe6f5;
   color: #4f397d;
   font-size: 13px;
@@ -244,15 +244,20 @@
 }
 
 .gameAvatar {
+  border-radius: 15px;
   background: var(--comms-accent-soft);
   color: var(--comms-accent-ink);
 }
 
-.avatarPhoto {
+.levelAvatarFrame {
+  height: 47px;
+  overflow: visible;
+  background: transparent;
+  border-radius: 0;
+}
+
+.levelAvatar {
   display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 .gameAvatar svg {
@@ -279,14 +284,16 @@
 }
 
 .listTitle {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 22px;
 }
 
 .listPreview {
   color: var(--comms-muted);
-  font-size: 12px;
-  line-height: 1.35;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 20px;
 }
 
 .listMeta {
@@ -298,7 +305,8 @@
 
 .listMeta time {
   color: var(--comms-muted);
-  font-size: 10px;
+  font-size: 12px;
+  line-height: 16px;
   white-space: nowrap;
 }
 
@@ -312,8 +320,9 @@
   border-radius: 999px;
   background: #7956d7;
   color: #fff;
-  font-size: 10px;
-  font-weight: 750;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
 }
 
 .emptyState,
@@ -377,7 +386,7 @@
 .threadHeader {
   flex: 0 0 auto;
   display: grid;
-  min-height: 74px;
+  min-height: 64px;
   padding: 10px 16px;
   align-items: center;
   grid-template-columns: 44px minmax(0, 1fr) auto auto;
@@ -409,8 +418,9 @@
 .threadHeading h2 {
   margin: 0;
   overflow: hidden;
-  font-size: 15px;
-  line-height: normal;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 22px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -419,7 +429,8 @@
 .threadHeading span {
   overflow: hidden;
   color: var(--comms-muted);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -435,15 +446,16 @@
   background: #fff;
   color: var(--comms-accent-ink);
   font: inherit;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
 }
 
 .messages {
   display: flex;
   min-height: 0;
   margin: 0;
-  padding: 16px 20px;
+  padding: 16px;
   flex: 1;
   overflow-y: auto;
   flex-direction: column;
@@ -485,6 +497,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
+  line-height: 16px;
   font-weight: 700;
 }
 
@@ -576,18 +589,18 @@
   overflow-wrap: anywhere;
   color: #8766eb;
   font-size: 12px;
-  font-weight: 500;
-  line-height: 1;
+  font-weight: 600;
+  line-height: 16px;
   letter-spacing: 0.01em;
 }
 
 .messageBubble p {
   margin: 0;
   overflow-wrap: anywhere;
-  font-family: 'RF Dewi', 'Inter Display', system-ui, sans-serif;
-  font-weight: 600;
-  font-size: 14px;
-  line-height: 1.28;
+  font-family: inherit;
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 20px;
   white-space: pre-wrap;
 }
 
@@ -607,16 +620,16 @@
   right: 10px;
   bottom: 10px;
   display: flex;
-  height: 12px;
+  height: 16px;
   align-items: center;
   gap: 1px;
   color: #b4b4b4;
 }
 
 .messageMeta time {
-  font-size: 8px;
-  font-weight: 500;
-  line-height: 1;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
   letter-spacing: 0.04em;
 }
 
@@ -627,7 +640,7 @@
 .messageMeta span {
   width: 12px;
   font-size: 12px;
-  line-height: 1;
+  line-height: 16px;
   text-align: center;
 }
 
@@ -686,7 +699,7 @@
 .composerLine {
   display: flex;
   width: 100%;
-  min-height: 48px;
+  min-height: 56px;
   padding: 8px;
   align-items: center;
   gap: 10px;
@@ -703,9 +716,9 @@
   display: block;
   width: 100%;
   min-width: 0;
-  min-height: 32px;
+  min-height: 36px;
   max-height: 136px;
-  padding: 9px 0;
+  padding: 8px 0;
   flex: 1;
   resize: none;
   border: 0;
@@ -716,19 +729,18 @@
   field-sizing: content;
   caret-color: var(--comms-accent);
   font: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 14px;
-  letter-spacing: 0.02em;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 20px;
 }
 
 .composer button {
   display: grid;
-  width: 32px;
-  height: 32px;
-  min-height: 32px;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
   padding: 0;
-  flex: 0 0 32px;
+  flex: 0 0 44px;
   place-items: center;
   border: 0;
   border-radius: 50%;
@@ -841,10 +853,10 @@
 }
 
 .composer .attachmentRemove {
-  width: 24px;
-  height: 24px;
-  min-height: 24px;
-  flex: 0 0 24px;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
   border-radius: 50%;
   background: var(--comms-accent-soft);
   color: var(--comms-accent-ink);
@@ -979,6 +991,8 @@
   margin: 0 0 8px;
   color: var(--comms-ink);
   font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
 }
 
 .errorBanner,
@@ -1042,41 +1056,77 @@
   color: var(--comms-accent-ink);
 }
 
-.listHeader h1,
-.listTitle,
-.threadHeading h2,
-.threadPlaceholder h2 {
-  font-family: 'RF Dewi', 'Inter Display', system-ui, sans-serif;
-  font-weight: 600;
-}
-
 .page :global(.fh-bottom-nav > a[aria-current='page']) {
   color: var(--comms-accent-ink);
 }
 
-.headerActions {
-  display: flex;
+.headerMenu {
+  position: relative;
   flex-shrink: 0;
-  gap: 4px;
 }
 
-.unreadToggle {
+.headerMenuButton {
   display: grid;
   width: 44px;
   height: 44px;
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 14px;
-  background: #f6f5f7;
+  border-radius: 12px;
+  background: transparent;
   color: var(--comms-muted);
   cursor: pointer;
+  font-size: 26px;
+  line-height: 1;
 }
 
-.unreadToggleActive {
+.headerMenuButton:hover,
+.headerMenuButton[aria-expanded='true'] {
   background: var(--comms-accent-soft);
   color: var(--comms-accent-ink);
-  box-shadow: inset 0 0 0 1px var(--comms-accent);
+}
+
+.headerMenuPanel {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 230px;
+  padding: 6px;
+  gap: 2px;
+  border: 1px solid var(--comms-line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgb(41 31 62 / 12%);
+}
+
+.headerMenuItem {
+  display: flex;
+  min-height: 44px;
+  padding: 0 10px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--comms-ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 18px;
+  text-decoration: none;
+  text-align: left;
+}
+
+.headerMenuItem:hover {
+  background: var(--comms-accent-soft);
+  color: var(--comms-accent-ink);
+}
+
+.headerMenuItem[aria-checked='true'] {
+  color: var(--comms-accent-ink);
+  font-weight: 600;
 }
 
 .filterRail svg {
@@ -1175,7 +1225,7 @@
 }
 
 .policyMenu button {
-  min-height: 38px;
+  min-height: 44px;
   padding: 0 12px;
   border: 0;
   border-radius: 10px;
@@ -1240,15 +1290,15 @@
   }
 
   .threadHeader {
-    min-height: calc(68px + env(safe-area-inset-top));
-    padding-top: max(10px, env(safe-area-inset-top));
-    grid-template-columns: 36px 36px minmax(0, 1fr) 44px 44px;
+    min-height: 64px;
+    padding-top: 10px;
+    grid-template-columns: 44px 36px minmax(0, 1fr) 44px 44px;
     gap: 8px;
   }
 
   .backLink {
     display: inline-flex;
-    width: 36px;
+    width: 44px;
   }
 
   .threadHeader .avatar {
@@ -1265,8 +1315,8 @@
   }
 
   .listHeader {
-    min-height: calc(68px + env(safe-area-inset-top));
-    padding-top: max(16px, env(safe-area-inset-top));
+    min-height: 48px;
+    padding-top: 0;
   }
 
   .errorBanner {

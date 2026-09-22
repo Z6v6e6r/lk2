@@ -235,9 +235,9 @@ describe('ChatsPage', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Все' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Чаты' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Личные' }));
-    expect(screen.getByRole('heading', { name: 'Личные' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Чаты' })).toBeInTheDocument();
     expect(screen.getByText('Мария Петрова')).toBeVisible();
     expect(screen.queryByText('Игра · Хаб Селигерская')).not.toBeInTheDocument();
 
@@ -281,9 +281,7 @@ describe('ChatsPage', () => {
     );
 
     await user.tab();
-    expect(screen.getByRole('button', { name: 'Только непрочитанные' })).toHaveFocus();
-    await user.tab();
-    expect(screen.getByRole('link', { name: 'События' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Действия с чатами' })).toHaveFocus();
     await user.tab();
     const search = screen.getByRole('searchbox', { name: 'Поиск по чатам' });
     expect(search).toHaveFocus();
@@ -552,9 +550,10 @@ describe('ChatsPage', () => {
       ],
     };
     render(<ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={page} />);
-    const unread = screen.getByRole('button', { name: 'Только непрочитанные' });
+    fireEvent.click(screen.getByRole('button', { name: 'Действия с чатами' }));
+    const unread = screen.getByRole('menuitemcheckbox', { name: 'Только непрочитанные' });
     fireEvent.click(unread);
-    expect(unread).toHaveAttribute('aria-pressed', 'true');
+    expect(unread).toHaveAttribute('aria-checked', 'true');
     expect(screen.queryByText('Анна')).not.toBeInTheDocument();
     expect(screen.getByText('Вечерняя игра')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Личные' }));

@@ -14,6 +14,8 @@ import type {
 afterEach(cleanup);
 
 const conversationId = '22222222-2222-4222-8222-222222222222';
+const conversationAvatarUrl =
+  '/public/api/v1/media/profile-photos/86afbe01-0318-4dd2-bc25-303b7bf0d430/f3d1c0e4-1111-4111-8111-111111111111';
 
 const conversations: readonly ConversationSummary[] = [
   {
@@ -22,6 +24,9 @@ const conversations: readonly ConversationSummary[] = [
     participant: {
       userId: '77777777-7777-4777-8777-777777777777',
       displayName: 'Мария Соколова',
+      avatarUrl: conversationAvatarUrl,
+      level: 'C',
+      levelValue: 3.44,
     },
     unreadCount: 3,
     updatedAt: '2026-08-29T10:05:00+03:00',
@@ -144,6 +149,11 @@ describe('NotificationsPage inbox', () => {
     expect(screen.getByLabelText('Непрочитанных событий: 3')).toHaveTextContent('3');
     // The second message of the same chat is part of the first row, not a row of its own.
     expect(screen.getAllByRole('link', { name: /Мария Соколова/u })).toHaveLength(1);
+    expect(document.querySelector('[data-player-level-photo="source"]')).toHaveAttribute(
+      'src',
+      conversationAvatarUrl,
+    );
+    expect(document.querySelector('[data-player-level-badge]')).toHaveTextContent('C');
   });
 
   it('renders mapped filters while preserving unknown categories in All', () => {
@@ -330,6 +340,15 @@ describe('NotificationsPage friend requests', () => {
 });
 
 describe('NotificationsPage settings', () => {
+  it('opens settings directly from the chats overflow menu link', () => {
+    window.history.replaceState({}, '', '/notifications?view=settings');
+    render(<NotificationsPage {...defaultProps} />);
+
+    expect(screen.getByRole('heading', { name: 'Настройки уведомлений' })).toBeVisible();
+
+    window.history.replaceState({}, '', '/notifications');
+  });
+
   it('opens the dedicated settings screen with a switch per notification type', () => {
     render(<NotificationsPage {...defaultProps} />);
 

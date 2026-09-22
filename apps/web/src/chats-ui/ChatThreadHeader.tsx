@@ -47,6 +47,11 @@ export function ChatThreadHeader({
         isGame={isGame}
         title={title}
         photoUrl={conversation?.kind === 'DIRECT' ? conversation.participant.avatarUrl : undefined}
+        level={conversation?.kind === 'DIRECT' ? conversation.participant.level : undefined}
+        levelValue={
+          conversation?.kind === 'DIRECT' ? conversation.participant.levelValue : undefined
+        }
+        fallbackSeed={conversation?.kind === 'DIRECT' ? conversation.participant.userId : undefined}
       />
       <div className={styles.threadHeading}>
         <h2>{title}</h2>
