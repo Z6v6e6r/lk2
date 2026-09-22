@@ -177,6 +177,15 @@ describe('chat/push staging foundation release contract', () => {
     expect(composeActivation).toBeGreaterThan(composeValidation);
     expect(workflow).toContain('foundation.candidate-release.env');
     expect(workflow).toContain('candidate-active "$candidate_release"');
+    // Recovery resumes with the pinned candidate images from the original run's digest artifacts,
+    // while the deployment definitions it installs come from the dispatching main. Only `verify`
+    // keeps the original candidate checkout; `build` and `deploy` use the dispatch SHA.
+    expect(
+      workflow.split(
+        "ref: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' && inputs.foundation_expected_candidate_sha || github.sha }}",
+      ),
+    ).toHaveLength(2);
+    expect(workflow.split('ref: ${{ github.sha }}')).toHaveLength(3);
     expect(runtimeVerifier).toContain("'{{.State.Health.Status}}'");
     expect(runtimeVerifier).toContain("'{{.Config.Image}}'");
     expect(workflow).toContain('Contain a failed foundation recovery without starting old writers');

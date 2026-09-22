@@ -67,7 +67,9 @@ digest and monitoring digest; it revalidates the backup's stored path, byte size
 `pg_restore --list`, but never restores the database, creates another clone or starts the old
 writers. Before installing candidate definitions, monitoring or the overlay, the workflow calls the
 already installed helper in compare-only `prepare-recovery` mode and invalidates any prior healthy
-phase. An external smoke
+phase. The definitions it then installs, like the workflow itself, come from the dispatching `main`,
+while the images stay pinned to the original candidate's digest artifacts; `verify` continues to
+certify that original candidate commit. An external smoke
 failure after candidate runtime verification leaves the candidate running and records
 `EXTERNAL_SMOKE_FAILED` only after the active release, health and immutable digest of API, worker,
 realtime and web are rechecked for this same protected recovery path.
