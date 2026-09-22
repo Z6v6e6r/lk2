@@ -10,7 +10,14 @@ import { ChatsPage } from './ChatsPage.js';
 const conversationId = '22222222-2222-4222-8222-222222222222';
 const currentUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  try {
+    window.sessionStorage.clear();
+  } catch {
+    // jsdom can expose an opaque storage origin in isolated test runs.
+  }
+});
 
 const defaultProps = {
   page: { items: [] },
@@ -476,7 +483,7 @@ describe('ChatsPage', () => {
     const { rerender } = render(
       <ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={{ items: [] }} />,
     );
-    expect(screen.getByText('Диалогов пока нет')).toBeVisible();
+    expect(screen.getByText('У вас пока нет чатов')).toBeVisible();
 
     rerender(
       <ChatsPage
@@ -496,10 +503,39 @@ describe('ChatsPage', () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByRole('button', { name: 'Игры' }));
+    expect(screen.getByText('В этой категории пока нет чатов')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Все' }));
     fireEvent.change(screen.getByRole('searchbox', { name: 'Поиск по чатам' }), {
       target: { value: 'несуществующий' },
     });
-    expect(screen.getByText('Ничего не найдено')).toBeVisible();
+    expect(screen.getByText('По запросу ничего не найдено')).toBeVisible();
+  });
+
+  it('restores the chat view filter and query within the current session', () => {
+    const page = {
+      items: [
+        {
+          id: conversationId,
+          kind: 'DIRECT' as const,
+          participant: { userId: currentUserId, displayName: 'Анна' },
+          unreadCount: 0,
+          updatedAt: '2026-09-17T09:00:00Z',
+        },
+      ],
+    };
+    const first = render(
+      <ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={page} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Личные' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Поиск по чатам' }), {
+      target: { value: 'Анна' },
+    });
+    first.unmount();
+
+    render(<ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={page} />);
+    expect(screen.getByRole('button', { name: 'Личные' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('searchbox', { name: 'Поиск по чатам' })).toHaveValue('Анна');
   });
   it.each([
     ['Турниры', 'Чаты турниров'],
@@ -525,7 +561,7 @@ describe('ChatsPage', () => {
       expect(screen.queryByRole('list', { name: 'Диалоги' })).not.toBeInTheDocument();
       expect(onCreateDirect).not.toHaveBeenCalled();
       fireEvent.click(screen.getByRole('button', { name: 'Все' }));
-      expect(screen.getByRole('status')).toHaveTextContent('Диалогов пока нет');
+      expect(screen.getByRole('status')).toHaveTextContent('У вас пока нет чатов');
     },
   );
 
@@ -560,7 +596,7 @@ describe('ChatsPage', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Нет непрочитанных чатов');
     fireEvent.click(screen.getByRole('button', { name: 'Игры' }));
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'утро' } });
-    expect(screen.getByRole('status')).toHaveTextContent('Ничего не найдено');
+    expect(screen.getByRole('status')).toHaveTextContent('По запросу ничего не найдено');
     fireEvent.click(screen.getByRole('button', { name: 'Очистить' }));
     expect(screen.getByText('Вечерняя игра')).toBeVisible();
     fireEvent.click(unread);

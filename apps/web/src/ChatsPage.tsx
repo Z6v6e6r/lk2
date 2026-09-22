@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type {
@@ -29,6 +29,46 @@ export interface PendingChatMessage {
 }
 
 export type ChatRealtimeUiState = 'connecting' | 'connected' | 'reconnecting' | 'polling';
+
+const CHAT_FILTERS: readonly ChatFilter[] = [
+  'ALL',
+  'DIRECT',
+  'GAME',
+  'TOURNAMENT',
+  'STATION',
+  'COMMUNITY',
+];
+
+interface ChatViewState {
+  readonly filter: ChatFilter;
+  readonly query: string;
+  readonly unreadOnly: boolean;
+}
+
+function chatViewStateKey(userId: string): string {
+  return `lk2:chats:view-state:${userId}`;
+}
+
+function readChatViewState(userId: string): Partial<ChatViewState> {
+  try {
+    const stored = window.sessionStorage.getItem(chatViewStateKey(userId));
+    if (!stored) return {};
+    const parsed: unknown = JSON.parse(stored);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const candidate = parsed as Record<string, unknown>;
+    return {
+      ...(typeof candidate.filter === 'string' &&
+      CHAT_FILTERS.includes(candidate.filter as ChatFilter)
+        ? { filter: candidate.filter as ChatFilter }
+        : {}),
+      ...(typeof candidate.query === 'string' ? { query: candidate.query.slice(0, 120) } : {}),
+      ...(typeof candidate.unreadOnly === 'boolean' ? { unreadOnly: candidate.unreadOnly } : {}),
+    };
+  } catch {
+    // Storage can be unavailable in private browsing and embedded previews.
+    return {};
+  }
+}
 
 interface ChatsPageProps {
   readonly page: ConversationPage | null;
@@ -100,11 +140,26 @@ export function ChatsPage({
   onLoadEarlier,
   onSetNotificationPolicy,
 }: ChatsPageProps): React.JSX.Element {
-  const [filter, setFilter] = useState<ChatFilter>('ALL');
-  const [query, setQuery] = useState('');
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [filter, setFilter] = useState<ChatFilter>(
+    () => readChatViewState(currentUserId).filter ?? 'ALL',
+  );
+  const [query, setQuery] = useState(() => readChatViewState(currentUserId).query ?? '');
+  const [unreadOnly, setUnreadOnly] = useState(
+    () => readChatViewState(currentUserId).unreadOnly ?? false,
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const selected = page?.items.find((conversation) => conversation.id === selectedConversationId);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(
+        chatViewStateKey(currentUserId),
+        JSON.stringify({ filter, query: query.slice(0, 120), unreadOnly } satisfies ChatViewState),
+      );
+    } catch {
+      // Storage can be unavailable in private browsing and embedded previews.
+    }
+  }, [currentUserId, filter, query, unreadOnly]);
 
   if (mode === 'new') {
     return (
