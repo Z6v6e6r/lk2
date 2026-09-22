@@ -1133,7 +1133,10 @@ beta; условие снятия — после полного раската),
 вне них обязателен `clamav`), `CHAT_MEDIA_CLAMAV_HOST/PORT/TIMEOUT_MS`,
 `CHAT_MEDIA_POLL_INTERVAL_MS`, `CHAT_MEDIA_BATCH_SIZE`, `CHAT_MEDIA_SCAN_MAX_ATTEMPTS`,
 `CHAT_MEDIA_GC_MAX_ATTEMPTS`, `CHAT_MEDIA_READ_URL_TTL_SECONDS`. Требуются те же S3-ключи и
-включённое versioning, что и для медиа сообществ.
+включённое versioning, что и для медиа сообществ. Контракт beta-таргета проверяет у
+`CHAT_MEDIA_ENABLED`/`CHAT_MEDIA_SCAN_MODE`/`CHAT_MEDIA_CLAMAV_HOST` наличие и `true` у флага;
+семантику значений (`clamav` вне local/ci и непустой host) проверяет `@phub/config` при старте
+контейнера, поэтому опечатка в значении останавливает релиз на health-гейте, а не на провижининге.
 
 Порядок включения:
 
@@ -1177,8 +1180,13 @@ beta; условие снятия — после полного раската),
   (повторное удаление объекта и сброс `dead_at`/`attempts`). Автоматического replay в срезе 1 нет —
   это follow-up; объекты лежат в приватном бакете и без ключа недостижимы.
 
-Отключение: `CHAT_MEDIA_ENABLED=false` закрывает и user-, и admin-маршруты вложений кодом
-`MESSAGING_MEDIA_DISABLED`; уже загруженные объекты остаются и удаляются по TTL/GC.
+Отключение: на beta-таргете `CHAT_MEDIA_ENABLED` объявлен `requiredTrueFlag`, поэтому просто
+выставить `false` в рантайм-файле больше нельзя — провижининг вернёт `required_true_flag`, а
+`prepare` и аттестация запущенного API — `env_<service>_flag`. Чтобы выключить вложения, нужен
+отдельный релиз, который убирает ключ из `requiredTrueFlags` контракта, и `false` в секретном
+входе; после этого маршруты вложений отвечают `MESSAGING_MEDIA_DISABLED`, а уже загруженные объекты
+остаются и удаляются по TTL/GC. Рантайм-гейта (per-tenant) у вложений нет: флаг читается один раз
+при старте процесса.
 
 Диагностика «вложения пропали из истории»: если `CHAT_MEDIA_ENABLED` отсутствует в рантайм-файле,
 он читается как `false` (default), маршруты вложений отвечают `404 MESSAGING_MEDIA_DISABLED`, но
