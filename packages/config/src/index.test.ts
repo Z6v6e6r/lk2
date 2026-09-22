@@ -721,6 +721,43 @@ describe('loadConfig', () => {
     ).toThrow('GIFT_CERTIFICATE_DELIVERY_MODE=sandbox is allowed only in local or ci');
   });
 
+  it('keeps station support dialogs default-off and requires an explicit provider URL', () => {
+    expect(loadConfig(validEnvironment)).toMatchObject({
+      SUPPORT_STATIONS_ENABLED: false,
+      SUPPORT_LEGACY_TIMEOUT_MS: 8_000,
+      SUPPORT_LEGACY_MAX_ATTEMPTS: 2,
+    });
+    expect(() => loadConfig({ ...validEnvironment, SUPPORT_STATIONS_ENABLED: 'true' })).toThrow(
+      'SUPPORT_STATIONS_ENABLED requires SUPPORT_LEGACY_BASE_URL',
+    );
+    // An insecure contour is accepted only for a loopback host, so the documented staging value
+    // cannot pass validation and then throw at client construction inside the API process.
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        SUPPORT_STATIONS_ENABLED: 'true',
+        SUPPORT_LEGACY_BASE_URL: 'http://localhost:3000/lk/support',
+      }),
+    ).toMatchObject({ SUPPORT_STATIONS_ENABLED: true });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        SUPPORT_STATIONS_ENABLED: 'true',
+        SUPPORT_LEGACY_BASE_URL: 'http://support.internal/lk/support',
+      }),
+    ).toThrow('SUPPORT_LEGACY_BASE_URL must use https outside localhost');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'ci',
+        SUPPORT_STATIONS_ENABLED: 'true',
+        SUPPORT_LEGACY_BASE_URL: 'https://support.padlhub.test/lk/support',
+      }),
+    ).toMatchObject({ SUPPORT_STATIONS_ENABLED: true });
+  });
+
   it('keeps Games reads off by default and staging-only during the rollout gate', () => {
     expect(
       loadConfig({ ...validEnvironment, APP_ENV: 'staging', GAMES_READ_ENABLED: 'true' }),

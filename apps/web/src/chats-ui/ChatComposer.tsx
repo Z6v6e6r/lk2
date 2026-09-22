@@ -21,6 +21,8 @@ interface ChatComposerProps {
   readonly forbidden: boolean;
   readonly attachments: readonly ChatAttachmentDraft[];
   readonly attachmentNotice?: string | null | undefined;
+  /** Station support dialogs are text-only, so the attach control stays out of that composer. */
+  readonly attachmentsEnabled?: boolean | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
   readonly onRemoveAttachment: (localId: string) => void;
   readonly onSendMessage: (input: ChatComposerSend) => void;
@@ -33,6 +35,7 @@ export function ChatComposer({
   forbidden,
   attachments,
   attachmentNotice,
+  attachmentsEnabled = true,
   onAttachFiles,
   onRemoveAttachment,
   onSendMessage,
@@ -47,7 +50,7 @@ export function ChatComposer({
   const attachmentsBusy = attachments.some(
     (attachment) => attachment.state === 'UPLOADING' || attachment.state === 'SCANNING',
   );
-  const hint = selectionHint ?? attachmentNotice ?? null;
+  const hint = attachmentsEnabled ? (selectionHint ?? attachmentNotice ?? null) : null;
   const atAttachmentLimit = attachments.length >= MAX_CHAT_ATTACHMENTS;
   const canSend =
     !busy &&
@@ -85,20 +88,24 @@ export function ChatComposer({
       <label className="sr-only" htmlFor="chat-message-body">
         Сообщение
       </label>
-      <input
-        ref={fileInputRef}
-        id="chat-attachment-input"
-        className="sr-only"
-        type="file"
-        multiple
-        accept={ATTACHMENT_ACCEPT}
-        tabIndex={-1}
-        onChange={onFilesChosen}
-      />
-      <label className="sr-only" htmlFor="chat-attachment-input">
-        Выбрать файлы для прикрепления
-      </label>
-      {attachments.length > 0 ? (
+      {attachmentsEnabled ? (
+        <>
+          <input
+            ref={fileInputRef}
+            id="chat-attachment-input"
+            className="sr-only"
+            type="file"
+            multiple
+            accept={ATTACHMENT_ACCEPT}
+            tabIndex={-1}
+            onChange={onFilesChosen}
+          />
+          <label className="sr-only" htmlFor="chat-attachment-input">
+            Выбрать файлы для прикрепления
+          </label>
+        </>
+      ) : null}
+      {attachmentsEnabled && attachments.length > 0 ? (
         <ul className={styles.attachmentChips} aria-label="Выбранные вложения">
           {attachments.map((attachment) => (
             <li key={attachment.localId} className={styles.attachmentChip}>
@@ -145,16 +152,18 @@ export function ChatComposer({
         </p>
       ) : null}
       <div className={styles.composerLine}>
-        <button
-          className={styles.attachButton}
-          type="button"
-          disabled={busy || forbidden || atAttachmentLimit}
-          aria-label="Прикрепить файл"
-          title={atAttachmentLimit ? 'Достигнут лимит вложений' : 'Прикрепить файл'}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <span aria-hidden="true">+</span>
-        </button>
+        {attachmentsEnabled ? (
+          <button
+            className={styles.attachButton}
+            type="button"
+            disabled={busy || forbidden || atAttachmentLimit}
+            aria-label="Прикрепить файл"
+            title={atAttachmentLimit ? 'Достигнут лимит вложений' : 'Прикрепить файл'}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <span aria-hidden="true">+</span>
+          </button>
+        ) : null}
         <textarea
           id="chat-message-body"
           rows={1}

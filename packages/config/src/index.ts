@@ -303,6 +303,25 @@ const environmentSchema = z.object({
   CHAT_MEDIA_SCAN_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
   CHAT_MEDIA_GC_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(8),
   CHAT_MEDIA_READ_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
+  /**
+   * Station support dialogs. Owner: chats vertical. Purpose: bridge the station dialogs that CUP
+   * operators already answer in the LK1 support contour into the Chats «Станции» tab behind one
+   * PadlHub API boundary, so the browser never calls the legacy support API directly.
+   * Activation criterion: SUPPORT_LEGACY_BASE_URL points at the live LK1 support contour and the
+   * slice is verified end to end. Removal/review condition: drop the flag when station dialogs move
+   * to the native PadlHub SUPPORT conversation kind.
+   */
+  SUPPORT_STATIONS_ENABLED: booleanFromEnvironment,
+  SUPPORT_LEGACY_BASE_URL: z.string().url().optional(),
+  SUPPORT_LEGACY_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(8_000),
+  SUPPORT_LEGACY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(2).default(2),
+  SUPPORT_LEGACY_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
+  SUPPORT_LEGACY_CIRCUIT_RESET_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(3_600_000)
+    .default(30_000),
   COMMUNITY_INVITE_TOKEN_KEYS: z.string().optional(),
   COMMUNITY_INVITE_ACTIVE_KEY_ID: z.string().min(1).max(64).optional(),
   COMMUNITIES_LEGACY_BASE_URL: z.string().url().default('https://padlhub.su'),
@@ -1410,6 +1429,17 @@ export function loadConfig(
     }
     if (!(parsed.data.COMMUNITY_INVITE_ACTIVE_KEY_ID in inviteTokenKeys)) {
       throw new Error('COMMUNITY_INVITE_ACTIVE_KEY_ID must select a configured token key');
+    }
+  }
+  if (parsed.data.SUPPORT_STATIONS_ENABLED && !parsed.data.SUPPORT_LEGACY_BASE_URL) {
+    throw new Error('SUPPORT_STATIONS_ENABLED requires SUPPORT_LEGACY_BASE_URL');
+  }
+  if (parsed.data.SUPPORT_LEGACY_BASE_URL) {
+    const supportUrl = new URL(parsed.data.SUPPORT_LEGACY_BASE_URL);
+    const supportLocalHost =
+      supportUrl.hostname === 'localhost' || supportUrl.hostname === '127.0.0.1';
+    if (supportUrl.protocol !== 'https:' && !supportLocalHost) {
+      throw new Error('SUPPORT_LEGACY_BASE_URL must use https outside localhost');
     }
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.PROMOTIONS_READ_MODE === 'mock') {

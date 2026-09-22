@@ -7,12 +7,14 @@ describe('telemetry URL privacy', () => {
     '/sms/authentication-code?phoneNumber=79990000000',
     '/lk/communities?view=summary&phone=79990000000',
     '/lk/communities/community-id/rating?clientId=legacy-client-id',
+    '/lk/support/dialogs?phone=79990000000&channel=WEB&includeClosed=1',
   ])('suppresses an auto-instrumented URL carrying legacy identity: %s', (path) => {
     expect(shouldIgnoreUndiciRequestPath(path)).toBe(true);
   });
 
   it.each([
     '/lk/communities?view=summary',
+    '/lk/support/dialogs/dialog-id/messages?limit=50&beforeTs=1',
     '/user/api/v1/local-padel/communities/mine?limit=20',
     '/health/ready',
   ])('keeps safe request paths observable: %s', (path) => {

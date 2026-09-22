@@ -93,6 +93,12 @@ export function recordLevelEligibilityBoundaryMetric(
 
 export function shouldIgnoreUndiciRequestPath(path: string): boolean {
   if (path.includes('/sms/authentication-code')) return true;
+  // Legacy contours put the viewer identity in their query string. Their adapters emit safe custom
+  // metrics instead of URL-bearing spans, so auto-instrumentation must not export those raw paths.
+  // The rule stays scoped to those contours so unrelated outbound calls keep their traces.
+  if (path.includes('/lk/support')) {
+    return /[?&](?:phone|phoneNumber|primaryPhone|clientId)=/u.test(path);
+  }
   if (!path.includes('/lk/communities')) return false;
   return /[?&](?:phone|clientId)=/u.test(path);
 }

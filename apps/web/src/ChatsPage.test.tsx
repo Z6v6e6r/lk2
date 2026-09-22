@@ -1,14 +1,27 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ChatsPage } from './ChatsPage.js';
+import { ChatsPage, type StationSupportSource } from './ChatsPage.js';
 
 const conversationId = '22222222-2222-4222-8222-222222222222';
 const currentUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
+const stationUuid = '9b993668-ff54-4cce-8dfd-cad84c4a06fa';
+const stationDialogId = '33333333-3333-4333-8333-333333333333';
+
+function stationSource(overrides: Partial<StationSupportSource> = {}): StationSupportSource {
+  return {
+    loadStations: vi.fn().mockResolvedValue([]),
+    loadDialogs: vi.fn().mockResolvedValue([]),
+    loadMessages: vi.fn().mockResolvedValue([]),
+    sendMessage: vi.fn().mockRejectedValue(new Error('SUPPORT_PROVIDER_UNAVAILABLE')),
+    createMessageId: () => 'station-message-000001',
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   cleanup();
@@ -539,7 +552,6 @@ describe('ChatsPage', () => {
   });
   it.each([
     ['Турниры', 'Чаты турниров'],
-    ['Станции', 'Чаты станций'],
     ['Сообщества', 'Чаты сообществ'],
   ])(
     'exposes %s without inventing conversations or an unsupported write action',
@@ -564,6 +576,282 @@ describe('ChatsPage', () => {
       expect(screen.getByRole('status')).toHaveTextContent('У вас пока нет чатов');
     },
   );
+
+  it('keeps the station tab unconnected when no station source is wired', () => {
+    render(<ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Чаты станций');
+    expect(screen.getByRole('status')).toHaveTextContent('ещё не подключён');
+  });
+
+  it('lists station dialogs, opens a thread and sends a text-only message', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      dialogId: stationDialogId,
+      message: {
+        id: '99999999-9999-4999-8999-999999999999',
+        body: 'Здравствуйте',
+        author: 'ME',
+        createdAt: '2026-09-22T12:00:00.000Z',
+      },
+      replayed: false,
+    });
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: '2026-09-22T10:00:00.000Z',
+          lastMessage: {
+            preview: 'Когда свободен корт?',
+            author: 'STATION',
+            createdAt: '2026-09-22T10:00:00.000Z',
+          },
+        },
+      ]),
+      loadMessages: vi.fn().mockResolvedValue([
+        {
+          id: '88888888-8888-4888-8888-888888888888',
+          body: 'Когда свободен корт?',
+          author: 'STATION',
+          createdAt: '2026-09-22T10:00:00.000Z',
+        },
+      ]),
+      sendMessage,
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    expect(await screen.findByRole('list', { name: 'Чаты станций' })).toBeVisible();
+    expect(screen.getByText('Когда свободен корт?')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /Ясенево/ }));
+    expect(await screen.findByText('Когда свободен корт?')).toBeVisible();
+    const composer = screen.getByLabelText('Сообщение');
+    await userEvent.type(composer, 'Здравствуйте');
+    fireEvent.submit(composer.closest('form') as HTMLFormElement);
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'Здравствуйте', dialogId: stationDialogId }),
+      ),
+    );
+    expect(screen.queryByRole('button', { name: 'Прикрепить файл' })).not.toBeInTheDocument();
+  });
+
+  it('retries a failed station send with the same command id instead of a new one', async () => {
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('SUPPORT_PROVIDER_UNAVAILABLE'))
+      .mockResolvedValueOnce({ dialogId: stationDialogId, message: null, replayed: true });
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: null,
+          lastMessage: null,
+        },
+      ]),
+      loadMessages: vi.fn().mockResolvedValue([]),
+      sendMessage,
+      createMessageId: () => 'station-message-000009',
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+    const composer = screen.getByLabelText('Сообщение');
+    await userEvent.type(composer, 'Здравствуйте');
+    fireEvent.submit(composer.closest('form') as HTMLFormElement);
+    const retry = await screen.findByRole('button', { name: 'Повторить отправку' });
+    fireEvent.click(retry);
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+    expect(sendMessage.mock.calls[0]?.[0]).toMatchObject({
+      clientMessageId: 'station-message-000009',
+    });
+    expect(sendMessage.mock.calls[1]?.[0]).toMatchObject({
+      clientMessageId: 'station-message-000009',
+      text: 'Здравствуйте',
+    });
+  });
+
+  it('closes the composer for a closed dialog and hides a pointless retry', async () => {
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'CLOSED',
+          updatedAt: null,
+          lastMessage: null,
+        },
+      ]),
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+    expect(await screen.findByText(/Обращение закрыто/)).toBeVisible();
+    expect(screen.getByLabelText('Сообщение')).toBeDisabled();
+  });
+
+  it('does not refetch station messages when the parent re-renders with the same source', async () => {
+    const loadMessages = vi.fn().mockResolvedValue([]);
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: null,
+          lastMessage: null,
+        },
+      ]),
+      loadMessages,
+    });
+    const { rerender } = render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+    await waitFor(() => expect(loadMessages).toHaveBeenCalledTimes(1));
+    rerender(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(loadMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a terminal station refusal without a retry action', async () => {
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: null,
+          lastMessage: null,
+        },
+      ]),
+      loadMessages: vi.fn().mockResolvedValue([]),
+      sendMessage: vi.fn().mockRejectedValue(
+        Object.assign(new Error('rejected'), {
+          status: 422,
+          code: 'SUPPORT_MESSAGE_REJECTED',
+        }),
+      ),
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+    const composer = screen.getByLabelText('Сообщение');
+    await userEvent.type(composer, 'Здравствуйте');
+    fireEvent.submit(composer.closest('form') as HTMLFormElement);
+    expect(await screen.findByText(/отклонила обращение/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Повторить отправку' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Обновить' })).not.toBeInTheDocument();
+  });
+
+  it('starts a new station dialog from the station picker', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      dialogId: stationDialogId,
+      message: null,
+      replayed: false,
+    });
+    const loadMessages = vi.fn().mockResolvedValue([]);
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([]),
+      loadMessages,
+      sendMessage,
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    expect(await screen.findByText('Обращений к станциям пока нет')).toBeVisible();
+    fireEvent.change(screen.getByLabelText('Станция'), { target: { value: stationUuid } });
+    fireEvent.click(screen.getByRole('button', { name: 'Написать' }));
+    const composer = screen.getByLabelText('Сообщение');
+    await userEvent.type(composer, 'Здравствуйте');
+    fireEvent.submit(composer.closest('form') as HTMLFormElement);
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: 'Здравствуйте', stationId: stationUuid }),
+      ),
+    );
+    await waitFor(() => expect(loadMessages).toHaveBeenCalledWith(stationDialogId));
+  });
+
+  it('reports a disabled station feature with the feature-unavailable copy', async () => {
+    const source = stationSource({
+      loadDialogs: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('disabled'), { status: 404, code: 'SUPPORT_STATIONS_DISABLED' }),
+        ),
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    expect(await screen.findByText(/ещё не включены для этой организации/)).toBeVisible();
+  });
 
   it('combines unread, type and search filters without altering the supplied conversation list', () => {
     const page = {
@@ -607,12 +895,22 @@ describe('ChatsPage', () => {
   });
 
   it('keeps loading and errors distinct from planned category and empty states', () => {
+    const source = stationSource({
+      loadStations: vi.fn().mockReturnValue(new Promise(() => undefined)),
+      loadDialogs: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    });
     const { rerender } = render(
-      <ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={null} />,
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        page={null}
+        stationSupport={source}
+      />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
-    expect(screen.getByRole('status', { name: 'Загружаем диалоги' })).toBeVisible();
-    expect(screen.queryByText('Чаты станций')).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Загружаем чаты станций' })).toBeVisible();
+    expect(screen.queryByText('Обращений к станциям пока нет')).not.toBeInTheDocument();
     rerender(
       <ChatsPage
         {...defaultProps}
@@ -623,7 +921,6 @@ describe('ChatsPage', () => {
       />,
     );
     expect(screen.getByRole('alert')).toHaveTextContent('Нет связи');
-    expect(screen.queryByText('Чаты станций')).not.toBeInTheDocument();
     const bottomNav = within(screen.getByRole('navigation', { name: 'Основная навигация' }));
     expect(bottomNav.queryByRole('link', { name: 'Уведомления' })).not.toBeInTheDocument();
     expect(bottomNav.getAllByRole('link')).toHaveLength(5);

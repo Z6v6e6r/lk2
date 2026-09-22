@@ -2946,6 +2946,102 @@ describe('browser auth gateway', () => {
     expect(urls.filter((url) => url.includes('/results/'))).toHaveLength(1);
   });
 
+  it('keeps station support reads and the idempotent send on PadlHub HTTP', async () => {
+    const userId = '00000000-0000-4000-8000-000000000001';
+    const stationId = '9b993668-ff54-4cce-8dfd-cad84c4a06fa';
+    const dialogId = '33333333-3333-4333-8333-333333333333';
+    const clientMessageId = 'station-message-000001';
+    const session = {
+      accessToken: 'short-lived-padlhub-token',
+      tokenType: 'Bearer',
+      expiresAt: '2099-07-11T12:10:00.000Z',
+      user: { id: userId, displayName: 'Анна' },
+      context: {
+        userId,
+        tenantId: '00000000-0000-4000-8000-000000000002',
+        displayName: 'Анна',
+        phoneLast4: '0001',
+        roles: ['client'],
+        permissions: ['chat.direct.create'],
+      },
+    };
+    const fetchImplementation = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+      if (url.endsWith('/support/stations')) {
+        return Promise.resolve(Response.json({ items: [{ id: stationId, name: 'Ясенево' }] }));
+      }
+      if (url.endsWith('/support/dialogs')) {
+        return Promise.resolve(
+          Response.json({
+            items: [
+              {
+                id: dialogId,
+                stationId,
+                stationName: 'Ясенево',
+                status: 'OPEN',
+                updatedAt: '2026-09-22T10:00:00.000Z',
+                lastMessage: null,
+              },
+            ],
+          }),
+        );
+      }
+      if (url.endsWith(`/support/dialogs/${dialogId}/messages`)) {
+        return Promise.resolve(
+          Response.json({
+            items: [
+              {
+                id: '44444444-4444-4444-8444-444444444444',
+                body: 'Здравствуйте',
+                author: 'STATION',
+                createdAt: '2026-09-22T10:05:00.000Z',
+              },
+            ],
+          }),
+        );
+      }
+      if (url.endsWith('/support/messages')) {
+        return Promise.resolve(Response.json({ dialogId, message: null, replayed: false }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.padlhub.test/',
+      tenantKey: 'padlhub',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+
+    await gateway.restoreSession();
+    await expect(gateway.listStationSupportStations()).resolves.toEqual([
+      { id: stationId, name: 'Ясенево' },
+    ]);
+    await expect(gateway.listStationSupportDialogs()).resolves.toMatchObject([
+      { id: dialogId, stationId, stationName: 'Ясенево' },
+    ]);
+    await expect(gateway.listStationSupportMessages(dialogId)).resolves.toMatchObject([
+      { body: 'Здравствуйте', author: 'STATION' },
+    ]);
+    await expect(
+      gateway.sendStationSupportMessage({
+        clientMessageId,
+        text: 'Здравствуйте',
+        stationId,
+      }),
+    ).resolves.toEqual({ dialogId, message: null, replayed: false });
+
+    const sendCall = fetchImplementation.mock.calls.find(([input]) =>
+      requestUrl(input).endsWith('/support/messages'),
+    );
+    expect(sendCall).toBeDefined();
+    expect(sendCall?.[1]?.method).toBe('POST');
+    expect(new Headers(sendCall?.[1]?.headers).get('Idempotency-Key')).toBe(clientMessageId);
+    const body = sendCall?.[1]?.body;
+    expect(typeof body).toBe('string');
+    expect(JSON.parse(body as string)).toEqual({ text: 'Здравствуйте', stationId });
+  });
+
   it('keeps direct-chat commands on PadlHub HTTP with stable idempotency across a network retry', async () => {
     const userId = '00000000-0000-4000-8000-000000000001';
     const conversationId = '22222222-2222-4222-8222-222222222222';
