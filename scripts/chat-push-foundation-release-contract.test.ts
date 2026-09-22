@@ -157,8 +157,17 @@ describe('chat/push staging foundation release contract', () => {
       releaseHelper.indexOf('available_kb="$(df -Pk /'),
     );
     const prepareRecovery = workflow.indexOf('prepare-recovery');
+    const startPostgres = workflow.indexOf(
+      'name: Start PostgreSQL for recovery evidence validation',
+    );
     const installDefinitions = workflow.indexOf('name: Install release and ingress definitions');
     expect(prepareRecovery).toBeGreaterThan(-1);
+    expect(startPostgres).toBeGreaterThan(-1);
+    expect(startPostgres).toBeLessThan(prepareRecovery);
+    expect(workflow).toContain('infrastructure up -d --no-deps postgres');
+    expect(workflow).toContain(
+      'PostgreSQL did not become healthy for recovery evidence validation.',
+    );
     expect(installDefinitions).toBeGreaterThan(prepareRecovery);
     expect(workflow).toContain(
       'compose_next="/opt/phub/.compose-staging-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.next"',
