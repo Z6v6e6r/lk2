@@ -188,6 +188,12 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://fcm.googleapis.com',
     NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: `{"v1":"${exact32ByteBase64Value('notification-endpoint-keyring')}"}`,
     NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: 'v1',
+    // Chat attachments are live on the target, so their activation keys are release inputs: a
+    // release that loses them keeps serving message history while the attachment route answers
+    // MESSAGING_MEDIA_DISABLED. Startup config insists on the scanner binding outside local/ci.
+    CHAT_MEDIA_ENABLED: 'true',
+    CHAT_MEDIA_SCAN_MODE: 'clamav',
+    CHAT_MEDIA_CLAMAV_HOST: 'clamav.internal',
   };
   const worker = {
     ...baseEnvironment('worker'),
@@ -240,6 +246,11 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS: 'https://fcm.googleapis.com',
     NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: `{"v1":"${exact32ByteBase64Value('notification-endpoint-keyring')}"}`,
     NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: 'v1',
+    // The Worker scans the uploaded object, so it carries the same chat media activation set as the
+    // API and the same scanner binding.
+    CHAT_MEDIA_ENABLED: 'true',
+    CHAT_MEDIA_SCAN_MODE: 'clamav',
+    CHAT_MEDIA_CLAMAV_HOST: 'clamav.internal',
   };
   const realtime = {
     ...baseEnvironment('realtime'),

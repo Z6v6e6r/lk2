@@ -246,6 +246,16 @@ round trip itself has no automated test: the provisioner unit tests cover the ac
 and the keyring shape, and the byte-exact delivery to a container is manual LOCAL evidence only, so
 repeat it on the target before the first activation.
 
+The API and Worker runtime additionally carry the chat media activation set: `CHAT_MEDIA_ENABLED=true`,
+`CHAT_MEDIA_SCAN_MODE=clamav` and `CHAT_MEDIA_CLAMAV_HOST` (the contour scanner address), with
+`CHAT_MEDIA_CLAMAV_PORT`, `CHAT_MEDIA_CLAMAV_TIMEOUT_MS` and the queue/retention keys left at their
+code defaults. Chat attachments are live on this target, so the three keys are `required` and
+`CHAT_MEDIA_ENABLED` is a `requiredTrueFlag`: the provisioner renders the runtime env files from the
+operator secret input on every release, and an input that lost them now fails closed instead of
+silently serving message history whose attachment route answers `404 MESSAGING_MEDIA_DISABLED`
+(the client shows «Изображение недоступно» while the objects stay in the bucket). The same keys are
+part of the running API container environment attested before public ingress.
+
 The default application model contains only web, API, and realtime. Worker is gated by profile
 `background`; migrator is gated by profile `migration`; neither is a dependency of a default
 service. Only ingress may bind host ports. Publication, deployment, Caddy activation, migration,

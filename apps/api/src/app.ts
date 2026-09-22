@@ -773,6 +773,7 @@ export async function buildApp(options: BuildAppOptions) {
         database: databaseReady,
         auth: authReady,
         communityMedia: communityMediaReady,
+        chatMedia: options.config.CHAT_MEDIA_ENABLED,
         ...(options.runtimeContourAttestation
           ? { runtimeContour: options.runtimeContourAttestation }
           : {}),
@@ -783,6 +784,10 @@ export async function buildApp(options: BuildAppOptions) {
       database: true,
       auth: true,
       communityMedia: true,
+      // Chat attachments are an activation input of this process, not a dependency probe: a release
+      // that loses `CHAT_MEDIA_ENABLED` keeps serving message history while every attachment route
+      // answers `MESSAGING_MEDIA_DISABLED`, so readiness states the effective flag explicitly.
+      chatMedia: options.config.CHAT_MEDIA_ENABLED,
       ...(options.runtimeContourAttestation
         ? { runtimeContour: options.runtimeContourAttestation }
         : {}),

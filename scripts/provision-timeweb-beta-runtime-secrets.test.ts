@@ -453,6 +453,20 @@ describe('Timeweb beta runtime secret provisioner', () => {
       },
       'signing_key_identity',
     ],
+    [
+      'a chat media activation key dropped from the API input',
+      (environments: ReturnType<typeof safeRuntimeEnvironments>) => {
+        delete environments.api!.CHAT_MEDIA_ENABLED;
+      },
+      'missing_key',
+    ],
+    [
+      'chat media disabled in the Worker input',
+      (environments: ReturnType<typeof safeRuntimeEnvironments>) => {
+        environments.worker!.CHAT_MEDIA_ENABLED = 'false';
+      },
+      'required_true_flag',
+    ],
   ])('rejects %s before provisioning', (_name, mutate, reason) => {
     const value = fixture();
     const environments = safeRuntimeEnvironments();

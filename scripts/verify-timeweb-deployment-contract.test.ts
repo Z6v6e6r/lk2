@@ -796,6 +796,33 @@ describe('Timeweb deployment contract', () => {
     expect(() => validateRuntimeEnvironments(input, runtime, target)).toThrow('env_worker_flag');
   });
 
+  // Chat attachments are live on the beta target: its runtime env files are re-rendered from the
+  // operator secret input on every release, so a release that dropped `CHAT_MEDIA_*` kept serving
+  // message history while the attachment route answered `MESSAGING_MEDIA_DISABLED`. The activation
+  // keys are therefore required inputs, and a missing or disabled flag fails closed before the
+  // running container is attested.
+  it('requires the chat media activation keys enabled on api and worker', () => {
+    const activationKeys = ['CHAT_MEDIA_ENABLED', 'CHAT_MEDIA_SCAN_MODE', 'CHAT_MEDIA_CLAMAV_HOST'];
+    for (const service of ['api', 'worker'] as const) {
+      const declared = runtime.services[service]!;
+      expect(declared.required).toEqual(expect.arrayContaining(activationKeys));
+      expect(declared.allowed).toEqual(expect.arrayContaining(activationKeys));
+      expect(declared.requiredTrueFlags).toContain('CHAT_MEDIA_ENABLED');
+
+      const missing = syntheticEnvironments();
+      delete missing[service]!.CHAT_MEDIA_ENABLED;
+      expect(() => validateRuntimeEnvironments(missing, runtime, target)).toThrow(
+        `env_${service}_missing_key`,
+      );
+
+      const disabled = syntheticEnvironments();
+      disabled[service]!.CHAT_MEDIA_ENABLED = 'false';
+      expect(() => validateRuntimeEnvironments(disabled, runtime, target)).toThrow(
+        `env_${service}_flag`,
+      );
+    }
+  });
+
   it.each([
     ['VIVA_OAUTH_ALLOWED_PROVIDERS', undefined],
     ['VIVA_OAUTH_ALLOWED_PROVIDERS', 'vkid,yandex'],

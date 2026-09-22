@@ -1133,7 +1133,10 @@ beta; условие снятия — после полного раската),
 вне них обязателен `clamav`), `CHAT_MEDIA_CLAMAV_HOST/PORT/TIMEOUT_MS`,
 `CHAT_MEDIA_POLL_INTERVAL_MS`, `CHAT_MEDIA_BATCH_SIZE`, `CHAT_MEDIA_SCAN_MAX_ATTEMPTS`,
 `CHAT_MEDIA_GC_MAX_ATTEMPTS`, `CHAT_MEDIA_READ_URL_TTL_SECONDS`. Требуются те же S3-ключи и
-включённое versioning, что и для медиа сообществ.
+включённое versioning, что и для медиа сообществ. Контракт beta-таргета проверяет у
+`CHAT_MEDIA_ENABLED`/`CHAT_MEDIA_SCAN_MODE`/`CHAT_MEDIA_CLAMAV_HOST` наличие и `true` у флага;
+семантику значений (`clamav` вне local/ci и непустой host) проверяет `@phub/config` при старте
+контейнера, поэтому опечатка в значении останавливает релиз на health-гейте, а не на провижининге.
 
 Порядок включения:
 
@@ -1149,8 +1152,14 @@ beta; условие снятия — после полного раската),
    client-токен их никогда не несёт. **Пока не исправлена очередь модерации (см. follow-up ниже),
    эти два permission на общем контуре не выдаются**: маршруты очереди закрыты, а вложения
    работают без них.
-4. Включить `CHAT_MEDIA_ENABLED=true` для api и worker и `CHAT_MEDIA_SCAN_MODE=clamav`,
-   перезапустить оба процесса, проверить `/ready` (worker сообщает `messagingMedia`).
+4. Включить `CHAT_MEDIA_ENABLED=true` для api и worker, `CHAT_MEDIA_SCAN_MODE=clamav` и
+   `CHAT_MEDIA_CLAMAV_HOST` **в секретном входе провижининга** (`--source-dir`
+   `scripts/provision-timeweb-beta-runtime-secrets.js`), а не правкой
+   `/etc/phub/timeweb-beta/*.env`: рантайм-файлы перерисовываются из этого входа на каждом релизе.
+   Для beta-таргета эти три ключа объявлены `required`, а `CHAT_MEDIA_ENABLED` ещё и
+   `requiredTrueFlags` в `deploy/timeweb/runtime-environment.contract.json`, поэтому провижининг и
+   `prepare` падают закрыто, если вход их потерял. Затем перезапустить оба процесса и проверить
+   `/ready` (worker сообщает `messagingMedia`).
 5. Проверить: загрузка изображения ≤15 МиБ доходит до `READY`, отправка с `attachmentIds`
    возвращает вложение, `GET .../media/{mediaId}/content` отвечает `302` только участнику
    разговора, жалоба создаёт case, `HIDE_MESSAGE` скрывает сообщение из истории и выдачи вложений,
@@ -1171,8 +1180,21 @@ beta; условие снятия — после полного раската),
   (повторное удаление объекта и сброс `dead_at`/`attempts`). Автоматического replay в срезе 1 нет —
   это follow-up; объекты лежат в приватном бакете и без ключа недостижимы.
 
-Отключение: `CHAT_MEDIA_ENABLED=false` закрывает и user-, и admin-маршруты вложений кодом
-`MESSAGING_MEDIA_DISABLED`; уже загруженные объекты остаются и удаляются по TTL/GC.
+Отключение: на beta-таргете `CHAT_MEDIA_ENABLED` объявлен `requiredTrueFlag`, поэтому просто
+выставить `false` в рантайм-файле больше нельзя — провижининг вернёт `required_true_flag`, а
+`prepare` и аттестация запущенного API — `env_<service>_flag`. Чтобы выключить вложения, нужен
+отдельный релиз, который убирает ключ из `requiredTrueFlags` контракта, и `false` в секретном
+входе; после этого маршруты вложений отвечают `MESSAGING_MEDIA_DISABLED`, а уже загруженные объекты
+остаются и удаляются по TTL/GC. Рантайм-гейта (per-tenant) у вложений нет: флаг читается один раз
+при старте процесса.
+
+Диагностика «вложения пропали из истории»: если `CHAT_MEDIA_ENABLED` отсутствует в рантайм-файле,
+он читается как `false` (default), маршруты вложений отвечают `404 MESSAGING_MEDIA_DISABLED`, но
+история сообщений продолжает отдавать дескрипторы вложений, поэтому клиент рисует сообщение с
+подписью «Изображение недоступно», а байты в бакете остаются целыми. Проверять: ключ в процессе
+(`docker exec … printenv CHAT_MEDIA_ENABLED`), состояние ассета
+(`messaging.media_assets.state = 'READY'` и `bound_message_id`) и код ответа
+`GET .../media/{mediaId}/content`, а не только клиент.
 
 Follow-up finding: очередь модерации чата не имеет optimistic-предиката по состоянию кейса.
 `HIDE_MESSAGE`/`RESTORE_MESSAGE` не меняют `moderation.reports.state`, поэтому решённая жалоба
