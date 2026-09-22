@@ -261,6 +261,46 @@ describe('health endpoints', () => {
     expect(checkReady).toHaveBeenCalledTimes(2);
   });
 
+  // A release that loses the chat media activation keys keeps answering message history while every
+  // attachment route returns MESSAGING_MEDIA_DISABLED; readiness states the effective flag so the
+  // loss is visible without shell access on the contour.
+  it('reports the effective chat attachment activation in readiness', async () => {
+    const disabled = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(disabled);
+    const off = await disabled.inject({ method: 'GET', url: '/health/ready' });
+    expect(off.statusCode).toBe(200);
+    expect(off.json()).toMatchObject({ chatMedia: false });
+
+    const activated = await buildApp({
+      config: loadConfig({
+        APP_ENV: 'ci',
+        DATABASE_URL: 'postgresql://phub:test@localhost:5432/phub',
+        REDIS_URL: 'redis://localhost:6379',
+        RABBITMQ_URL: 'amqp://phub:test@localhost:5672',
+        JWT_ISSUER: config.JWT_ISSUER,
+        JWT_AUDIENCE: config.JWT_AUDIENCE,
+        JWT_ACCESS_SECRET: config.JWT_ACCESS_SECRET,
+        JWT_REFRESH_SECRET: config.JWT_REFRESH_SECRET,
+        CHAT_MEDIA_ENABLED: 'true',
+        S3_ENDPOINT: 'http://minio.invalid:9000',
+        S3_PUBLIC_ENDPOINT: 'https://s3.invalid',
+        S3_BUCKET: 'phub-api-test',
+        S3_ACCESS_KEY: 'synthetic-access-key',
+        S3_SECRET_KEY: 'synthetic-secret-key',
+      }),
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+    });
+    apps.push(activated);
+    const on = await activated.inject({ method: 'GET', url: '/health/ready' });
+    expect(on.statusCode).toBe(200);
+    expect(on.json()).toMatchObject({ chatMedia: true });
+  });
+
   it('requires a PadlHub token before tenant resolution', async () => {
     const app = await buildApp({
       config,

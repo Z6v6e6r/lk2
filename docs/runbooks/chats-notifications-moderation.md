@@ -1149,8 +1149,14 @@ beta; условие снятия — после полного раската),
    client-токен их никогда не несёт. **Пока не исправлена очередь модерации (см. follow-up ниже),
    эти два permission на общем контуре не выдаются**: маршруты очереди закрыты, а вложения
    работают без них.
-4. Включить `CHAT_MEDIA_ENABLED=true` для api и worker и `CHAT_MEDIA_SCAN_MODE=clamav`,
-   перезапустить оба процесса, проверить `/ready` (worker сообщает `messagingMedia`).
+4. Включить `CHAT_MEDIA_ENABLED=true` для api и worker, `CHAT_MEDIA_SCAN_MODE=clamav` и
+   `CHAT_MEDIA_CLAMAV_HOST` **в секретном входе провижининга** (`--source-dir`
+   `scripts/provision-timeweb-beta-runtime-secrets.js`), а не правкой
+   `/etc/phub/timeweb-beta/*.env`: рантайм-файлы перерисовываются из этого входа на каждом релизе.
+   Для beta-таргета эти три ключа объявлены `required`, а `CHAT_MEDIA_ENABLED` ещё и
+   `requiredTrueFlags` в `deploy/timeweb/runtime-environment.contract.json`, поэтому провижининг и
+   `prepare` падают закрыто, если вход их потерял. Затем перезапустить оба процесса и проверить
+   `/ready` (worker сообщает `messagingMedia`).
 5. Проверить: загрузка изображения ≤15 МиБ доходит до `READY`, отправка с `attachmentIds`
    возвращает вложение, `GET .../media/{mediaId}/content` отвечает `302` только участнику
    разговора, жалоба создаёт case, `HIDE_MESSAGE` скрывает сообщение из истории и выдачи вложений,
@@ -1173,6 +1179,14 @@ beta; условие снятия — после полного раската),
 
 Отключение: `CHAT_MEDIA_ENABLED=false` закрывает и user-, и admin-маршруты вложений кодом
 `MESSAGING_MEDIA_DISABLED`; уже загруженные объекты остаются и удаляются по TTL/GC.
+
+Диагностика «вложения пропали из истории»: если `CHAT_MEDIA_ENABLED` отсутствует в рантайм-файле,
+он читается как `false` (default), маршруты вложений отвечают `404 MESSAGING_MEDIA_DISABLED`, но
+история сообщений продолжает отдавать дескрипторы вложений, поэтому клиент рисует сообщение с
+подписью «Изображение недоступно», а байты в бакете остаются целыми. Проверять: ключ в процессе
+(`docker exec … printenv CHAT_MEDIA_ENABLED`), состояние ассета
+(`messaging.media_assets.state = 'READY'` и `bound_message_id`) и код ответа
+`GET .../media/{mediaId}/content`, а не только клиент.
 
 Follow-up finding: очередь модерации чата не имеет optimistic-предиката по состоянию кейса.
 `HIDE_MESSAGE`/`RESTORE_MESSAGE` не меняют `moderation.reports.state`, поэтому решённая жалоба
