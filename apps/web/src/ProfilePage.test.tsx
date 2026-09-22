@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfilePage } from './ProfilePage.js';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  Reflect.deleteProperty(window.navigator, 'share');
+  Reflect.deleteProperty(window.navigator, 'clipboard');
+});
 
 function selfProfile(level: string): PlayerProfileView {
   return {
@@ -502,5 +506,65 @@ describe('ProfilePage', () => {
     expect(screen.getByText('Заявка сохранена')).toBeVisible();
     expect(screen.getByText('Отправим заявку, когда игрок войдёт в приложение')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Ожидает входа игрока' })).toBeDisabled();
+  });
+
+  it('shares the canonical profile deep link instead of the current address bar', async () => {
+    const share = vi.fn<(data: ShareData) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'share', { configurable: true, value: share });
+    window.history.replaceState(
+      {},
+      '',
+      `/profile/${otherProfile.profile.userId}#booking-preferences-title`,
+    );
+
+    render(<ProfilePage profile={otherProfile} logoutBusy={false} onLogout={() => undefined} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'поделиться' }));
+
+    expect(share).toHaveBeenCalledWith({
+      title: 'Мария Соколова',
+      url: new URL(`/profile/${otherProfile.profile.userId}`, window.location.origin).toString(),
+    });
+    expect(await screen.findByText('Профиль отправлен')).toBeVisible();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('opens a QR sheet for the same link and copies it', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    const link = new URL(
+      `/profile/${otherProfile.profile.userId}`,
+      window.location.origin,
+    ).toString();
+
+    render(<ProfilePage profile={otherProfile} logoutBusy={false} onLogout={() => undefined} />);
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'QR-код' }));
+
+    const sheet = screen.getByRole('dialog', { name: 'QR-код профиля' });
+    expect(
+      within(sheet).getByRole('img', { name: `QR-код ссылки на профиль: ${link}` }),
+    ).toBeVisible();
+    expect(within(sheet).getByText(link)).toBeVisible();
+
+    fireEvent.click(within(sheet).getByRole('button', { name: 'скопировать ссылку' }));
+    expect(writeText).toHaveBeenCalledWith(link);
+    expect(await within(sheet).findByText('Ссылка на профиль скопирована')).toBeVisible();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('closes the QR sheet from its own close control', () => {
+    render(<ProfilePage profile={otherProfile} logoutBusy={false} onLogout={() => undefined} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'QR-код' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть QR-код' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

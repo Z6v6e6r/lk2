@@ -11,13 +11,14 @@ import type {
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
 } from '@phub/api-sdk';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 
 import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
+import { QR_QUIET_ZONE_MODULES, qrCodePath, tryCreateQrCode } from './qr-code.js';
 import levelABackground from './assets/profile-levels/level-a.jpg';
 import levelBBackground from './assets/profile-levels/level-b.jpg';
 import levelBPlusBackground from './assets/profile-levels/level-b-plus.jpg';
@@ -504,7 +505,8 @@ function ProfileIcon({
     | 'eye'
     | 'city'
     | 'sport'
-    | 'crown';
+    | 'crown'
+    | 'qr';
 }): React.JSX.Element {
   const common = {
     width: 22,
@@ -639,7 +641,45 @@ function ProfileIcon({
           />
         </svg>
       );
+    case 'qr':
+      return (
+        <svg {...common}>
+          <path
+            d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M14 14h2.4v2.4H14zM17.6 17.6h2.4V20h-2.4zM14 17.6h2.4V20H14zM17.6 14h2.4v2.4h-2.4z"
+            fill="currentColor"
+          />
+        </svg>
+      );
   }
+}
+
+/**
+ * Renders the share link as a scannable QR symbol. The link itself is the same deep link the
+ * "поделиться" action sends, so a scanned profile opens behind the normal login flow.
+ */
+function ProfileShareQrCode({ value }: { readonly value: string }): React.JSX.Element | null {
+  const qr = useMemo(() => tryCreateQrCode(value), [value]);
+  if (!qr) return null;
+  const dimension = qr.size + QR_QUIET_ZONE_MODULES * 2;
+
+  return (
+    <svg
+      className="profile-qr-code"
+      viewBox={`0 0 ${dimension} ${dimension}`}
+      role="img"
+      aria-label={`QR-код ссылки на профиль: ${value}`}
+      shapeRendering="crispEdges"
+    >
+      <rect width={dimension} height={dimension} fill="#ffffff" />
+      <path d={qrCodePath(qr)} fill="#1f1e20" />
+    </svg>
+  );
 }
 
 function ProfileFacts({
@@ -1286,6 +1326,19 @@ function PrivacySettingsForm({
   );
 }
 
+/**
+ * Absolute deep link a recipient can open — and log in through — to reach this profile. Sharing
+ * the address bar instead would leak the sharer's current hash or query state.
+ */
+function profileShareUrl(userId: string): string {
+  const path = `/profile/${encodeURIComponent(userId)}`;
+  try {
+    return new URL(path, window.location.origin).toString();
+  } catch {
+    return path;
+  }
+}
+
 export function ProfilePage({
   profile: view,
   logoutBusy,
@@ -1321,10 +1374,13 @@ export function ProfilePage({
 }: ProfilePageProps): React.JSX.Element {
   const { profile, privateAccount, access } = view;
   const [shareNotice, setShareNotice] = useState<string | null>(null);
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrNotice, setQrNotice] = useState<string | null>(null);
   const [activeSettings, setActiveSettings] = useState<'preferences' | 'visibility' | null>(null);
   const [activeSport, setActiveSport] = useState<ProfileSport>('PADEL');
   const [sportPickerOpen, setSportPickerOpen] = useState(false);
   const isSelf = access.audience === 'SELF';
+  const profileLink = profileShareUrl(profile.userId);
   const independentSport: Exclude<ProfileSport, 'PADEL'> | null =
     activeSport === 'PADEL' ? null : activeSport;
   const isIndependentSport = independentSport !== null;
@@ -1384,21 +1440,42 @@ export function ProfilePage({
     return () => window.removeEventListener('hashchange', openDeepLinkedSettings);
   }, [isIndependentSport, isSelf]);
 
+  useEffect(() => {
+    if (!qrOpen) return;
+    const closeOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setQrOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [qrOpen]);
+
   async function shareProfile(): Promise<void> {
-    const url = window.location.href;
     try {
       if (navigator.share) {
-        await navigator.share({ title: profile.displayName, url });
+        await navigator.share({ title: profile.displayName, url: profileLink });
         setShareNotice('Профиль отправлен');
       } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(url);
-        setShareNotice('Ссылка скопирована');
+        await navigator.clipboard.writeText(profileLink);
+        setShareNotice('Ссылка на профиль скопирована');
       } else {
-        setShareNotice('Скопируйте адрес страницы из браузера');
+        setShareNotice(`Скопируйте ссылку: ${profileLink}`);
       }
     } catch (shareError: unknown) {
       if (shareError instanceof DOMException && shareError.name === 'AbortError') return;
       setShareNotice('Не удалось поделиться профилем');
+    }
+  }
+
+  async function copyProfileLink(): Promise<void> {
+    if (!navigator.clipboard) {
+      setQrNotice(`Скопируйте ссылку: ${profileLink}`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(profileLink);
+      setQrNotice('Ссылка на профиль скопирована');
+    } catch {
+      setQrNotice(`Скопируйте ссылку: ${profileLink}`);
     }
   }
 
@@ -1461,10 +1538,24 @@ export function ProfilePage({
 
           {!isIndependentSport ? (
             <>
-              <button className="profile-share" type="button" onClick={() => void shareProfile()}>
-                <ProfileIcon name="share" />
-                QR / поделиться профилем
-              </button>
+              <div className="profile-share-row">
+                <button className="profile-share" type="button" onClick={() => void shareProfile()}>
+                  <ProfileIcon name="share" />
+                  поделиться
+                </button>
+                <button
+                  aria-haspopup="dialog"
+                  className="profile-share"
+                  type="button"
+                  onClick={() => {
+                    setQrNotice(null);
+                    setQrOpen(true);
+                  }}
+                >
+                  <ProfileIcon name="qr" />
+                  QR-код
+                </button>
+              </div>
               {shareNotice ? (
                 <p className="profile-share-notice" role="status">
                   {shareNotice}
@@ -1473,6 +1564,50 @@ export function ProfilePage({
             </>
           ) : null}
         </section>
+
+        {qrOpen ? (
+          <div
+            className="profile-qr-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setQrOpen(false);
+            }}
+          >
+            <section
+              className="profile-qr-sheet"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="profile-qr-sheet-title"
+            >
+              <header>
+                <div>
+                  <span>Поделиться профилем</span>
+                  <h2 id="profile-qr-sheet-title">QR-код профиля</h2>
+                </div>
+                <button type="button" aria-label="Закрыть QR-код" onClick={() => setQrOpen(false)}>
+                  ×
+                </button>
+              </header>
+              <p>
+                Наведите камеру телефона — откроется профиль {profile.displayName}. После входа там
+                можно добавить игрока в друзья и написать ему.
+              </p>
+              <ProfileShareQrCode value={profileLink} />
+              <p className="profile-qr-link">{profileLink}</p>
+              <button
+                className="profile-qr-copy"
+                type="button"
+                onClick={() => void copyProfileLink()}
+              >
+                скопировать ссылку
+              </button>
+              {qrNotice ? (
+                <p className="profile-qr-notice" role="status">
+                  {qrNotice}
+                </p>
+              ) : null}
+            </section>
+          </div>
+        ) : null}
 
         <div className="profile-content">
           {access.audience === 'OTHER' ? (
