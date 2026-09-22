@@ -32,9 +32,7 @@ const serviceIcons: ReadonlyArray<ChatCategoryIconName> = [
 ];
 
 function geometryDigest(container: HTMLElement): string {
-  const paths = [...container.querySelectorAll('path')].map(
-    (path) => path.getAttribute('d') ?? '',
-  );
+  const paths = [...container.querySelectorAll('path')].map((path) => path.getAttribute('d') ?? '');
   return createHash('sha256').update(paths.sort().join('\n')).digest('hex').slice(0, 16);
 }
 
