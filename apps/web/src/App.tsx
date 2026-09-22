@@ -35,6 +35,8 @@ import type {
   ConversationNotificationPolicyUpdate,
   ConversationPage,
   ConversationSummary,
+  MessagingMediaAsset,
+  MessagingMediaUploadGrant,
   HomeBase,
   HomeDashboard,
   LocationDetail,
@@ -56,6 +58,14 @@ import type {
   WebPushConfiguration,
 } from './auth-gateway.js';
 import { createMessagingCommandId } from './auth-gateway.js';
+import {
+  attachmentMediaType,
+  normalizeAttachmentContentType,
+  normalizeAttachmentFileName,
+  sha256Hex,
+  type ChatAttachmentDraft,
+} from './chats-ui/chat-attachments.js';
+import type { ChatComposerSend } from './chats-ui/ChatComposer.js';
 import {
   CHATS_UNREAD_REFRESH_INTERVAL_MS,
   setChatsUnreadCount,
@@ -417,6 +427,96 @@ function mergeConversationMessages(
   return [...bySequence.values()].sort((left, right) => left.sequence - right.sequence);
 }
 
+const CHAT_ATTACHMENT_SCAN_POLL_MS = 1_500;
+const CHAT_ATTACHMENT_SCAN_TIMEOUT_MS = 60_000;
+
+/**
+ * Attachment drafts and their notice stay bound to the conversation that
+ * reserved them, so switching threads cannot leak a chip or an error into
+ * another chat.
+ */
+interface ChatAttachmentUiState {
+  readonly conversationId: string;
+  readonly drafts: readonly ChatAttachmentDraft[];
+  readonly notice: string | null;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function chatAttachmentUploadErrorMessage(error: unknown): string {
+  switch (errorCode(error)) {
+    case 'MESSAGING_MEDIA_DISABLED':
+    case 'FEATURE_UNAVAILABLE':
+      return 'Вложения в чате пока недоступны.';
+    case 'MESSAGING_MEDIA_REJECTED':
+      return 'Файл не прошёл проверку безопасности и не был прикреплён.';
+    case 'MESSAGING_MEDIA_EXPIRED':
+    case 'MESSAGING_MEDIA_SCAN_TIMEOUT':
+      return 'Время загрузки истекло. Прикрепите файл заново.';
+    case 'MESSAGING_MEDIA_LIMIT_EXCEEDED':
+      return 'Можно прикрепить не более 4 файлов.';
+    default:
+      return 'Не удалось загрузить файл. Проверьте связь и попробуйте ещё раз.';
+  }
+}
+
+/**
+ * `fetch` cannot report upload progress, so the raw bytes go to the signed
+ * quarantine URL through a dedicated XMLHttpRequest with the grant headers
+ * copied verbatim. The request stays abortable so leaving the conversation or
+ * removing the chip cancels the transfer.
+ */
+function putChatAttachmentBytes(
+  grant: MessagingMediaUploadGrant,
+  file: File,
+  onProgress: (progress: number) => void,
+): { readonly promise: Promise<void>; readonly abort: () => void } {
+  const request = new XMLHttpRequest();
+  const promise = new Promise<void>((resolve, reject) => {
+    request.open(grant.method, grant.url, true);
+    for (const [name, value] of Object.entries(grant.requiredHeaders)) {
+      request.setRequestHeader(name, value);
+    }
+    request.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable || event.total <= 0) return;
+      onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+    });
+    request.addEventListener('load', () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(100);
+        resolve();
+        return;
+      }
+      reject(new Error(`MESSAGING_MEDIA_UPLOAD_${request.status}`));
+    });
+    request.addEventListener('error', () => reject(new Error('MESSAGING_MEDIA_UPLOAD_FAILED')));
+    request.addEventListener('abort', () => reject(new Error('MESSAGING_MEDIA_UPLOAD_ABORTED')));
+    request.send(file);
+  });
+  return { promise, abort: () => request.abort() };
+}
+
+async function waitForChatAttachmentReady(
+  gateway: AuthGateway,
+  conversationId: string,
+  mediaId: string,
+  isActive: () => boolean,
+): Promise<MessagingMediaAsset> {
+  const deadline = Date.now() + CHAT_ATTACHMENT_SCAN_TIMEOUT_MS;
+  for (;;) {
+    const asset = await gateway.getConversationMedia(conversationId, mediaId);
+    if (asset.state === 'READY') return asset;
+    if (asset.state === 'REJECTED' || asset.state === 'EXPIRED' || asset.state === 'PURGED') {
+      throw new Error(asset.rejectionCode ?? `MESSAGING_MEDIA_${asset.state}`);
+    }
+    if (!isActive()) throw new Error('MESSAGING_MEDIA_UPLOAD_ABORTED');
+    if (Date.now() >= deadline) throw new Error('MESSAGING_MEDIA_SCAN_TIMEOUT');
+    await delay(CHAT_ATTACHMENT_SCAN_POLL_MS);
+  }
+}
+
 function userMessage(
   error: unknown,
   operation: 'restore' | 'request' | 'verify' | 'oauth' | 'logout',
@@ -617,6 +717,9 @@ export function App({
   const [pendingChatMessage, setPendingChatMessage] = useState<
     (PendingChatMessage & { readonly conversationId: string }) | null
   >(null);
+  const [chatAttachmentState, setChatAttachmentState] = useState<ChatAttachmentUiState | null>(
+    null,
+  );
   const [chatRealtimeState, setChatRealtimeState] = useState<ChatRealtimeUiState | null>(null);
   const [hasEarlierChatMessages, setHasEarlierChatMessages] = useState(false);
   const [notifications, setNotifications] = useState<NotificationInboxPage | null>(null);
@@ -692,10 +795,28 @@ export function App({
   const chatPendingMessageRef = useRef<
     (PendingChatMessage & { readonly conversationId: string }) | null
   >(null);
+  const chatAttachmentGenerationRef = useRef(0);
+  const chatAttachmentAbortRef = useRef(new Map<string, () => void>());
   const chatCreateCommandRef = useRef<{
     readonly recipientUserId: string;
     readonly idempotencyKey: string;
   } | null>(null);
+
+  // An attachment reservation is bound to one conversation. Switching threads
+  // aborts any in-flight transfer; the derived values below stop rendering the
+  // previous conversation's chips and notice immediately, without an effect
+  // writing state during the route change.
+  useEffect(() => {
+    chatAttachmentGenerationRef.current += 1;
+    for (const abort of chatAttachmentAbortRef.current.values()) abort();
+    chatAttachmentAbortRef.current.clear();
+  }, [requestedConversationId]);
+  const activeChatAttachmentState =
+    chatAttachmentState && chatAttachmentState.conversationId === requestedConversationId
+      ? chatAttachmentState
+      : null;
+  const chatAttachments = activeChatAttachmentState?.drafts ?? [];
+  const chatAttachmentNotice = activeChatAttachmentState?.notice ?? null;
 
   const realtimeSessionActive =
     state.view === 'home' &&
@@ -1661,6 +1782,10 @@ export function App({
           setChatsBusy(null);
           setPendingChatMessage(null);
           chatPendingMessageRef.current = null;
+          chatAttachmentGenerationRef.current += 1;
+          for (const abort of chatAttachmentAbortRef.current.values()) abort();
+          chatAttachmentAbortRef.current.clear();
+          setChatAttachmentState(null);
           chatGameNavigationRef.current = null;
           setChatRealtimeState(null);
           chatCreateCommandRef.current = null;
@@ -1704,10 +1829,131 @@ export function App({
     );
   }
 
+  function updateChatAttachment(localId: string, patch: Partial<ChatAttachmentDraft>): void {
+    setChatAttachmentState((current) =>
+      current
+        ? {
+            ...current,
+            drafts: current.drafts.map((attachment) =>
+              attachment.localId === localId ? { ...attachment, ...patch } : attachment,
+            ),
+          }
+        : current,
+    );
+  }
+
+  async function uploadChatAttachment(input: {
+    readonly conversationId: string;
+    readonly localId: string;
+    readonly fileName: string;
+    readonly contentType: string;
+    readonly file: File;
+    readonly generation: number;
+  }): Promise<void> {
+    const { conversationId, localId, fileName, contentType, file, generation } = input;
+    const isActive = (): boolean => chatAttachmentGenerationRef.current === generation;
+    try {
+      const sha256 = await sha256Hex(await file.arrayBuffer());
+      if (!isActive()) return;
+      const issued = await gateway.issueConversationMediaUpload(
+        conversationId,
+        { fileName, contentType, byteSize: file.size, sha256 },
+        createMessagingCommandId(),
+      );
+      if (!isActive()) return;
+      const mediaId = issued.media.id;
+      updateChatAttachment(localId, {
+        mediaId,
+        mediaType: issued.media.mediaType,
+        progress: 0,
+      });
+      const transfer = putChatAttachmentBytes(issued.upload, file, (progress) => {
+        if (isActive()) updateChatAttachment(localId, { progress });
+      });
+      chatAttachmentAbortRef.current.set(localId, transfer.abort);
+      try {
+        await transfer.promise;
+      } finally {
+        chatAttachmentAbortRef.current.delete(localId);
+      }
+      if (!isActive()) return;
+      updateChatAttachment(localId, { state: 'SCANNING', progress: 100 });
+      await gateway.finalizeConversationMediaUpload(
+        conversationId,
+        mediaId,
+        file.size,
+        createMessagingCommandId(),
+      );
+      if (!isActive()) return;
+      await waitForChatAttachmentReady(gateway, conversationId, mediaId, isActive);
+      if (!isActive()) return;
+      updateChatAttachment(localId, { state: 'READY', progress: 100 });
+    } catch (error: unknown) {
+      if (!isActive()) return;
+      updateChatAttachment(localId, {
+        state: 'FAILED',
+        errorMessage: chatAttachmentUploadErrorMessage(error),
+      });
+      setChatAttachmentState((current) =>
+        current ? { ...current, notice: chatAttachmentUploadErrorMessage(error) } : current,
+      );
+    }
+  }
+
+  function handleAttachChatFiles(files: readonly File[]): void {
+    const conversationId = requestedConversationId;
+    if (!conversationId || files.length === 0) return;
+    const generation = chatAttachmentGenerationRef.current;
+    const drafts = files.map((file) => {
+      const contentType = normalizeAttachmentContentType(file.type);
+      return {
+        localId: createMessagingCommandId(),
+        fileName: normalizeAttachmentFileName(file.name),
+        contentType,
+        byteSize: file.size,
+        mediaType: attachmentMediaType(contentType),
+        state: 'UPLOADING' as const,
+        progress: 0,
+      };
+    });
+    setChatAttachmentState((current) => ({
+      conversationId,
+      drafts: [...(current?.conversationId === conversationId ? current.drafts : []), ...drafts],
+      notice: null,
+    }));
+    for (const [index, draft] of drafts.entries()) {
+      const file = files[index];
+      if (!file) continue;
+      void uploadChatAttachment({
+        conversationId,
+        localId: draft.localId,
+        fileName: draft.fileName,
+        contentType: draft.contentType,
+        file,
+        generation,
+      });
+    }
+  }
+
+  function handleRemoveChatAttachment(localId: string): void {
+    chatAttachmentAbortRef.current.get(localId)?.();
+    chatAttachmentAbortRef.current.delete(localId);
+    setChatAttachmentState((current) =>
+      current
+        ? {
+            ...current,
+            drafts: current.drafts.filter((attachment) => attachment.localId !== localId),
+            notice: null,
+          }
+        : current,
+    );
+  }
+
   function sendChatCommand(command: {
     readonly conversationId: string;
     readonly clientMessageId: string;
     readonly body: string;
+    readonly attachmentIds?: readonly string[];
   }): void {
     setChatsBusy('send');
     setChatsError(null);
@@ -1718,6 +1964,9 @@ export function App({
       .sendConversationMessage(command.conversationId, {
         clientMessageId: command.clientMessageId,
         body: command.body,
+        ...(command.attachmentIds && command.attachmentIds.length > 0
+          ? { attachmentIds: command.attachmentIds }
+          : {}),
       })
       .then(
         (result) => {
@@ -1746,13 +1995,20 @@ export function App({
       );
   }
 
-  function handleSendConversationMessage(body: string): void {
+  function handleSendConversationMessage(input: ChatComposerSend): void {
     if (!requestedConversationId) return;
     const command = {
       conversationId: requestedConversationId,
       clientMessageId: createMessagingCommandId(),
-      body,
+      body: input.body,
+      ...(input.attachmentIds.length > 0 ? { attachmentIds: input.attachmentIds } : {}),
     };
+    // The composer blocks sending while anything is uploading or scanning, so
+    // every remaining chip is either READY (now part of the message) or FAILED
+    // (discarded together with the local draft).
+    for (const abort of chatAttachmentAbortRef.current.values()) abort();
+    chatAttachmentAbortRef.current.clear();
+    setChatAttachmentState(null);
     sendChatCommand(command);
   }
 
@@ -2237,6 +2493,11 @@ export function App({
             pendingChatMessage.conversationId === requestedConversationId
           }
           onCreateDirect={handleCreateDirectConversation}
+          attachments={chatAttachments}
+          attachmentNotice={chatAttachmentNotice}
+          loadMedia={gateway.loadConversationMedia}
+          onAttachFiles={handleAttachChatFiles}
+          onRemoveAttachment={handleRemoveChatAttachment}
           onSendMessage={handleSendConversationMessage}
           onRetrySend={handleRetryConversationMessage}
           onRefresh={handleRefreshChats}

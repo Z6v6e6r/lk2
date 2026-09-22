@@ -227,6 +227,8 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
         grant select, insert, update on
           messaging.conversations, messaging.conversation_members, messaging.messages
           to ${disposableRuntimeRole};
+        grant select, insert, update on messaging.media_assets to ${disposableRuntimeRole};
+        grant select, insert on messaging.message_attachments to ${disposableRuntimeRole};
         grant select, insert, update on games.games to ${disposableRuntimeRole};
         grant select, insert, update on games.participations to ${disposableRuntimeRole};
         grant insert on audit.outbox_events, audit.audit_log to ${disposableRuntimeRole};

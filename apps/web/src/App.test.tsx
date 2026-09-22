@@ -12,7 +12,7 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const realtimeMocks = vi.hoisted(() => ({
   connect: vi.fn(() => ({ stop: vi.fn() })),
@@ -517,6 +517,12 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       .mockRejectedValue(new Error('CONTEXTUAL_MESSAGING_DISABLED')),
     listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
     sendConversationMessage: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
+    issueConversationMediaUpload: vi.fn().mockRejectedValue(new Error('MESSAGING_MEDIA_DISABLED')),
+    finalizeConversationMediaUpload: vi
+      .fn()
+      .mockRejectedValue(new Error('MESSAGING_MEDIA_DISABLED')),
+    getConversationMedia: vi.fn().mockRejectedValue(new Error('MESSAGING_MEDIA_DISABLED')),
+    loadConversationMedia: vi.fn().mockResolvedValue(new Blob(['attachment-bytes'])),
     markConversationRead: vi.fn().mockResolvedValue({
       outcome: 'ok',
       readThroughSequence: 0,
@@ -555,13 +561,119 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
   };
 }
 
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => (values.has(key) ? (values.get(key) as string) : null),
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => {
+      values.delete(key);
+    },
+    setItem: (key, value) => {
+      values.set(key, String(value));
+    },
+  };
+}
+
+interface FakeXhrEvent {
+  readonly lengthComputable?: boolean;
+  readonly loaded?: number;
+  readonly total?: number;
+}
+
+type FakeXhrListener = (event: FakeXhrEvent) => void;
+
+class FakeXhrTarget {
+  private readonly listeners = new Map<string, FakeXhrListener[]>();
+
+  addEventListener(type: string, listener: FakeXhrListener): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  emit(type: string, event: FakeXhrEvent = {}): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+}
+
+/** Minimal XMLHttpRequest double so the upload progress path is exercised in jsdom. */
+class FakeXmlHttpRequest {
+  static readonly instances: FakeXmlHttpRequest[] = [];
+
+  method = '';
+  url = '';
+  status = 0;
+  sentBody: Document | XMLHttpRequestBodyInit | null = null;
+  readonly requestHeaders = new Map<string, string>();
+  readonly upload = new FakeXhrTarget();
+  private readonly listeners = new Map<string, FakeXhrListener[]>();
+
+  open(method: string, url: string): void {
+    this.method = method;
+    this.url = url;
+  }
+
+  setRequestHeader(name: string, value: string): void {
+    this.requestHeaders.set(name, value);
+  }
+
+  addEventListener(type: string, listener: FakeXhrListener): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  send(body: Document | XMLHttpRequestBodyInit | null): void {
+    this.sentBody = body;
+    FakeXmlHttpRequest.instances.push(this);
+  }
+
+  abort(): void {
+    this.emit('abort');
+  }
+
+  emitProgress(loaded: number, total: number): void {
+    this.upload.emit('progress', { lengthComputable: true, loaded, total });
+  }
+
+  finish(status: number): void {
+    this.status = status;
+    this.emit('load');
+  }
+
+  private emit(type: string, event: FakeXhrEvent = {}): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+}
+
+beforeEach(() => {
+  FakeXmlHttpRequest.instances.length = 0;
+  // Node 26 shadows jsdom's `localStorage` with a getter that stays undefined
+  // unless an explicit --localstorage-file is passed, and jsdom reports the
+  // property as undefined rather than missing. Install a browser-equivalent
+  // in-memory Storage so the recovery-draft tests exercise real behavior.
+  if (window.localStorage) return;
+  try {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+  } catch {
+    // A non-configurable host property would keep the limitation visible.
+  }
+});
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   realtimeMocks.connect.mockClear();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
-  window.localStorage.clear();
+  // Node 26 exposes a `localStorage` getter that stays undefined without an
+  // explicit storage file, so jsdom's implementation can be shadowed here.
+  window.localStorage?.clear();
   window.sessionStorage.clear();
   window.history.replaceState({}, '', '/');
 });
@@ -2696,6 +2808,120 @@ describe('PadlHub web authentication', () => {
     act(() => resolveSend?.({ outcome: 'ok', message: durableMessage, replayed: false }));
     await waitFor(() => expect(sendConversationMessage).toHaveBeenCalledOnce());
     expect(screen.getAllByText(durableMessage.body)).toHaveLength(1);
+  });
+
+  it('uploads an image through issue, PUT, finalize and READY polling, then sends its attachmentIds', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const mediaId = '55555555-5555-4555-8555-555555555555';
+    const directConversation = {
+      id: conversationId,
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const scanningAsset = {
+      id: mediaId,
+      conversationId,
+      mediaType: 'IMAGE' as const,
+      state: 'SCANNING' as const,
+      fileName: 'photo.png',
+      contentType: 'image/png',
+      byteSize: 3,
+      sha256: 'a'.repeat(64),
+      revision: 1,
+    };
+    const uploadResult = {
+      media: scanningAsset,
+      upload: {
+        method: 'PUT' as const,
+        url: 'https://storage.example/quarantine/photo',
+        requiredHeaders: { 'x-ms-blob-type': 'BlockBlob' },
+        expiresAt: '2026-09-20T12:05:00.000Z',
+      },
+    };
+    const issueConversationMediaUpload = vi
+      .fn<AuthGateway['issueConversationMediaUpload']>()
+      .mockResolvedValue(uploadResult);
+    const finalizeConversationMediaUpload = vi
+      .fn<AuthGateway['finalizeConversationMediaUpload']>()
+      .mockResolvedValue(scanningAsset);
+    const getConversationMedia = vi
+      .fn<AuthGateway['getConversationMedia']>()
+      .mockResolvedValue({ ...scanningAsset, state: 'READY' });
+    const sendConversationMessage = vi
+      .fn<AuthGateway['sendConversationMessage']>()
+      .mockResolvedValue({
+        outcome: 'ok',
+        replayed: false,
+        message: {
+          id: '33333333-3333-4333-8333-333333333333',
+          conversationId,
+          sequence: 1,
+          sender: { userId: session.context.user.id, displayName: 'Анна' },
+          messageType: 'IMAGE',
+          body: '',
+          attachments: [
+            {
+              mediaId,
+              position: 1,
+              mediaType: 'IMAGE',
+              fileName: 'photo.png',
+              contentType: 'image/png',
+              byteSize: 3,
+            },
+          ],
+          createdAt: '2026-08-03T10:00:00.000Z',
+        },
+      });
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      issueConversationMediaUpload,
+      finalizeConversationMediaUpload,
+      getConversationMedia,
+      sendConversationMessage,
+    });
+    vi.stubGlobal('XMLHttpRequest', FakeXmlHttpRequest);
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    await waitFor(() => expect(screen.getByLabelText('Сообщение')).toBeEnabled());
+
+    const file = new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText('Выбрать файлы для прикрепления'), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => expect(issueConversationMediaUpload).toHaveBeenCalledOnce());
+    expect(issueConversationMediaUpload.mock.calls[0]?.[1]).toMatchObject({
+      fileName: 'photo.png',
+      contentType: 'image/png',
+      byteSize: 3,
+    });
+
+    await waitFor(() => expect(FakeXmlHttpRequest.instances).toHaveLength(1));
+    const transfer = FakeXmlHttpRequest.instances[0]!;
+    expect(transfer.method).toBe('PUT');
+    expect(transfer.url).toBe(uploadResult.upload.url);
+    expect(transfer.requestHeaders.get('x-ms-blob-type')).toBe('BlockBlob');
+    act(() => transfer.emitProgress(1, 2));
+    expect(await screen.findByText(/50%/u)).toBeVisible();
+
+    act(() => transfer.finish(201));
+    await waitFor(() => expect(finalizeConversationMediaUpload).toHaveBeenCalledOnce());
+    expect(finalizeConversationMediaUpload.mock.calls[0]?.[2]).toBe(3);
+    await waitFor(() => expect(getConversationMedia).toHaveBeenCalledWith(conversationId, mediaId));
+    expect(await screen.findByText(/готово/u)).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() =>
+      expect(sendConversationMessage).toHaveBeenCalledWith(
+        conversationId,
+        expect.objectContaining({ body: '', attachmentIds: [mediaId] }),
+      ),
+    );
   });
 
   it('opens a GAME thread on its newest page and loads older history without boundary duplicates', async () => {

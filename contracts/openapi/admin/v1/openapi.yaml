@@ -19,6 +19,8 @@ tags:
     description: Versioned gift certificate catalog management for authorized CUP staff.
   - name: Communities
     description: Bounded CUP review of canonical community JOIN and REJOIN requests.
+  - name: ChatModeration
+    description: CUP review of reported chat messages with a reversible hide decision.
   - name: LevelEligibility
     description: Versioned tenant and sport participation eligibility policy management.
 paths:
@@ -1126,6 +1128,95 @@ paths:
           $ref: '#/components/responses/ApiError'
         '503':
           $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/messaging/moderation/reports:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+    get:
+      tags: [ChatModeration]
+      operationId: listMessagingModerationReports
+      summary: List the oldest-first queue of reported chat messages
+      description: |
+        CUP-only endpoint requiring `chat.moderation.read`. Tenant and operator are derived from the
+        phub-admin JWT. The queue joins each report to its shared case, its message and its reporter,
+        and returns the reported body because a moderator decides on the real content. Reports are
+        ordered oldest first and never cached.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: afterId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+            description: Report id of the last item of the previous page.
+      responses:
+        '200':
+          description: Reported messages ordered by report creation time and id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminMessagingReportQueue'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/messaging/moderation/reports/{reportId}/decision:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+      - name: reportId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      tags: [ChatModeration]
+      operationId: decideMessagingModerationReport
+      summary: Hide, restore or dismiss a reported chat message
+      description: |
+        CUP-only command requiring `chat.moderation.decide`. `HIDE_MESSAGE` writes a
+        `REDACT_MESSAGE` staff action against the shared case and sets `hidden_at` plus
+        `hidden_by_action_id` on the reported message; `RESTORE_MESSAGE` clears both columns and
+        reopens the case; `DISMISS` resolves the case without touching the message. The command is
+        idempotent through the action idempotency key, and every decision writes one audit row.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminMessagingReportDecisionRequest'
+      responses:
+        '200':
+          description: The stored decision for the report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminMessagingReportDecisionResult'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
   /admin/api/v1/{tenantKey}/level-eligibility:
     $ref: ./level-eligibility.yaml#/StatePath
   /admin/api/v1/{tenantKey}/level-eligibility/impact:
@@ -1547,6 +1638,104 @@ components:
         operation:
           type: string
           enum: [SCAN, GC]
+        replayed:
+          type: boolean
+    AdminMessagingReportQueueItem:
+      type: object
+      additionalProperties: false
+      required:
+        - reportId
+        - conversationId
+        - messageId
+        - messageBody
+        - messageCreatedAt
+        - reporterUserId
+        - reasonCode
+        - reportState
+        - createdAt
+      properties:
+        reportId:
+          type: string
+          format: uuid
+        conversationId:
+          type: string
+          format: uuid
+        messageId:
+          type: string
+          format: uuid
+        messageSenderUserId:
+          type: string
+          format: uuid
+          description: Absent when the sender membership row no longer resolves.
+        messageBody:
+          type: string
+          maxLength: 8000
+          description: Reported content, returned unredacted to the moderation reader only.
+        messageCreatedAt:
+          type: string
+          format: date-time
+        messageHiddenAt:
+          type: string
+          format: date-time
+          description: Present while the message is hidden by a moderation action.
+        reporterUserId:
+          type: string
+          format: uuid
+        reasonCode:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]*$'
+        details:
+          type: string
+          maxLength: 2000
+        reportState:
+          type: string
+          enum: [SUBMITTED, TRIAGED, DISMISSED]
+        caseId:
+          type: string
+          format: uuid
+        caseState:
+          type: string
+          enum: [OPEN, IN_REVIEW, RESOLVED, DISMISSED, REOPENED]
+        caseSeverity:
+          type: string
+          enum: [LOW, MEDIUM, HIGH, CRITICAL]
+        createdAt:
+          type: string
+          format: date-time
+    AdminMessagingReportQueue:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/AdminMessagingReportQueueItem'
+    AdminMessagingReportDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, reasonCode]
+      properties:
+        action:
+          type: string
+          enum: [HIDE_MESSAGE, RESTORE_MESSAGE, DISMISS]
+        reasonCode:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,63}$'
+    AdminMessagingReportDecisionResult:
+      type: object
+      additionalProperties: false
+      required: [outcome, action, hidden, replayed]
+      properties:
+        outcome:
+          type: string
+          const: decided
+        action:
+          type: string
+          enum: [HIDE_MESSAGE, RESTORE_MESSAGE, DISMISS]
+        hidden:
+          type: boolean
         replayed:
           type: boolean
     AdminCommunityPost:
