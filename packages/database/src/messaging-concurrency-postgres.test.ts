@@ -212,7 +212,7 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
            nosuperuser nobypassrls nocreatedb nocreaterole noinherit`,
       );
       await adminPool.query(
-        `grant usage on schema identity, profile, games, messaging, audit
+        `grant usage on schema identity, profile, games, messaging, audit, integration
            to ${disposableRuntimeRole}`,
       );
       await adminPool.query(`
@@ -221,6 +221,11 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
           to ${disposableRuntimeRole};
         grant select on profile.user_summaries, profile.privacy_settings
           to ${disposableRuntimeRole};
+        -- The real runtime role carries integration default DML
+        -- (apps/migrator/src/database-role-boundary.ts) and already reads this table for
+        -- friend and game participants, so the disposable role mirrors it and still proves
+        -- forced RLS on the new messaging avatar read.
+        grant select on integration.user_profile_photo_sync to ${disposableRuntimeRole};
         grant select, insert on messaging.tenant_runtime_settings to ${disposableRuntimeRole};
         grant select on messaging.user_blocks, messaging.direct_conversations
           to ${disposableRuntimeRole};

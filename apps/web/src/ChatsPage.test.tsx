@@ -235,9 +235,9 @@ describe('ChatsPage', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Все' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Чаты' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Личные' }));
-    expect(screen.getByRole('heading', { name: 'Личные' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Чаты' })).toBeInTheDocument();
     expect(screen.getByText('Мария Петрова')).toBeVisible();
     expect(screen.queryByText('Игра · Хаб Селигерская')).not.toBeInTheDocument();
 
@@ -281,9 +281,7 @@ describe('ChatsPage', () => {
     );
 
     await user.tab();
-    expect(screen.getByRole('button', { name: 'Только непрочитанные' })).toHaveFocus();
-    await user.tab();
-    expect(screen.getByRole('link', { name: 'События' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Действия с чатами' })).toHaveFocus();
     await user.tab();
     const search = screen.getByRole('searchbox', { name: 'Поиск по чатам' });
     expect(search).toHaveFocus();
@@ -325,6 +323,41 @@ describe('ChatsPage', () => {
     expect(link).toHaveAttribute('href', `/chats/${conversationId}`);
     expect(link).toHaveAttribute('aria-current', 'page');
     expect(screen.getByLabelText('Непрочитанных сообщений: 100')).toHaveTextContent('99+');
+  });
+
+  it('shows the stored participant photo in the list row and the thread header', () => {
+    const photoUrl =
+      '/public/api/v1/media/profile-photos/86afbe01-0318-4dd2-bc25-303b7bf0d430/f3d1c0e4-1111-4111-8111-111111111111';
+    const { container } = render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        page={{
+          items: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              participant: {
+                userId: '11111111-1111-4111-8111-111111111111',
+                displayName: 'Борис',
+                avatarUrl: photoUrl,
+              },
+              unreadCount: 0,
+              updatedAt: '2026-08-29T11:32:00+03:00',
+            },
+          ],
+        }}
+      />,
+    );
+
+    const photos = [...container.querySelectorAll('img')];
+    expect(photos).toHaveLength(2);
+    for (const photo of photos) {
+      expect(photo).toHaveAttribute('src', photoUrl);
+      expect(photo).toHaveAttribute('alt', '');
+    }
   });
 
   it('renders only known GAME context data and a safe game link', () => {
@@ -517,9 +550,10 @@ describe('ChatsPage', () => {
       ],
     };
     render(<ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={page} />);
-    const unread = screen.getByRole('button', { name: 'Только непрочитанные' });
+    fireEvent.click(screen.getByRole('button', { name: 'Действия с чатами' }));
+    const unread = screen.getByRole('menuitemcheckbox', { name: 'Только непрочитанные' });
     fireEvent.click(unread);
-    expect(unread).toHaveAttribute('aria-pressed', 'true');
+    expect(unread).toHaveAttribute('aria-checked', 'true');
     expect(screen.queryByText('Анна')).not.toBeInTheDocument();
     expect(screen.getByText('Вечерняя игра')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Личные' }));

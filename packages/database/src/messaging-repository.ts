@@ -1,3 +1,4 @@
+import { profilePhotoDeliveryUrl } from '@phub/domain';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
@@ -18,6 +19,11 @@ export interface MessagingRuntimeSettings {
 export interface MessagingParticipant {
   readonly userId: string;
   readonly displayName: string;
+  /**
+   * PadlHub-owned stable photo delivery URL. Absent when the participant has no synced local
+   * photo; the client then falls back to its generated initials avatar.
+   */
+  readonly avatarUrl?: string;
 }
 
 export interface ConversationNotificationPolicy {
@@ -322,6 +328,9 @@ interface ConversationRow extends QueryResultRow {
   readonly kind: 'DIRECT';
   readonly other_user_id: string;
   readonly other_display_name: string;
+  readonly other_photo_delivery_id: string | null;
+  readonly other_level_label: string | null;
+  readonly other_level_value: number | string | null;
   readonly unread_count: number | string;
   readonly updated_at: Date | string;
   readonly last_sequence: number | string | null;
@@ -338,6 +347,9 @@ interface MessageRow extends QueryResultRow {
   readonly sequence: number | string;
   readonly sender_user_id: string;
   readonly sender_display_name: string;
+  readonly sender_photo_delivery_id: string | null;
+  readonly sender_level_label: string | null;
+  readonly sender_level_value: number | string | null;
   readonly message_type: MessageType;
   readonly body: string | null;
   readonly created_at: Date | string;
@@ -418,13 +430,34 @@ function mapNotificationPolicy(row: {
   };
 }
 
-function mapConversation(row: ConversationRow): ConversationSummary {
+function mapConversation(row: ConversationRow, tenantId: string): ConversationSummary {
+  const numericLevelValue =
+    row.other_level_value === null
+      ? null
+      : typeof row.other_level_value === 'number'
+        ? row.other_level_value
+        : Number(row.other_level_value);
+  const levelValue =
+    numericLevelValue !== null &&
+    Number.isFinite(numericLevelValue) &&
+    numericLevelValue >= 0 &&
+    numericLevelValue <= 10
+      ? numericLevelValue
+      : null;
+
   return {
     id: row.id,
     kind: row.kind,
     participant: {
       userId: row.other_user_id,
       displayName: row.other_display_name,
+      // Only the PadlHub-owned delivery URL crosses the client boundary; a provider source URL
+      // stays inside integration storage.
+      ...(row.other_photo_delivery_id
+        ? { avatarUrl: profilePhotoDeliveryUrl(tenantId, row.other_photo_delivery_id) }
+        : {}),
+      ...(row.other_level_label ? { level: row.other_level_label } : {}),
+      ...(levelValue === null ? {} : { levelValue }),
     },
     unreadCount: sequence(row.unread_count),
     updatedAt: timestamp(row.updated_at),
@@ -466,8 +499,23 @@ function mapGameConversation(row: GameConversationRow): GameConversationSummary 
 
 function mapMessage(
   row: MessageRow,
+  tenantId: string,
   attachments: readonly ConversationMessageAttachment[] = [],
 ): ConversationMessage {
+  const numericLevelValue =
+    row.sender_level_value === null
+      ? null
+      : typeof row.sender_level_value === 'number'
+        ? row.sender_level_value
+        : Number(row.sender_level_value);
+  const levelValue =
+    numericLevelValue !== null &&
+    Number.isFinite(numericLevelValue) &&
+    numericLevelValue >= 0 &&
+    numericLevelValue <= 10
+      ? numericLevelValue
+      : null;
+
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -476,6 +524,11 @@ function mapMessage(
     sender: {
       userId: row.sender_user_id,
       displayName: row.sender_display_name,
+      ...(row.sender_photo_delivery_id
+        ? { avatarUrl: profilePhotoDeliveryUrl(tenantId, row.sender_photo_delivery_id) }
+        : {}),
+      ...(row.sender_level_label ? { level: row.sender_level_label } : {}),
+      ...(levelValue === null ? {} : { levelValue }),
     },
     messageType: row.message_type,
     // An image-only or file-only message carries no text at all.
@@ -528,6 +581,18 @@ const CONVERSATION_SELECT = `
          conversation.kind,
          other_member.user_id as other_user_id,
          coalesce(other_summary.display_name, 'Участник') as other_display_name,
+         case when other_privacy.user_id is null
+                    or (other_privacy.visibility_mode <> 'PRIVATE'
+                        and other_privacy.section_visibility->>'avatar' = 'true')
+              then other_photo.delivery_id end as other_photo_delivery_id,
+         case when other_privacy.user_id is null
+                    or (other_privacy.visibility_mode <> 'PRIVATE'
+                        and other_privacy.section_visibility->>'levelAndRating' = 'true')
+              then other_summary.level_label end as other_level_label,
+         case when other_privacy.user_id is null
+                    or (other_privacy.visibility_mode <> 'PRIVATE'
+                        and other_privacy.section_visibility->>'levelAndRating' = 'true')
+              then other_summary.level_value end as other_level_value,
          greatest(
            (conversation.next_sequence - 1) - current_member.last_read_sequence,
            0
@@ -573,6 +638,12 @@ const CONVERSATION_SELECT = `
     left join profile.user_summaries other_summary
       on other_summary.tenant_id = other_member.tenant_id
      and other_summary.user_id = other_member.user_id
+    left join integration.user_profile_photo_sync other_photo
+      on other_photo.tenant_id = other_member.tenant_id
+     and other_photo.user_id = other_member.user_id
+    left join profile.privacy_settings other_privacy
+      on other_privacy.tenant_id = other_member.tenant_id
+     and other_privacy.user_id = other_member.user_id
     left join lateral (
       select message.sequence, message.body, message.created_at
         from messaging.messages message
@@ -664,7 +735,7 @@ async function getConversation(
        and conversation.id = $3`,
     [tenantId, userId, conversationId],
   );
-  return row ? mapConversation(row) : undefined;
+  return row ? mapConversation(row, tenantId) : undefined;
 }
 
 async function getGameConversation(
@@ -814,6 +885,18 @@ async function getMessage(
     `select message.id, message.conversation_id, message.sequence,
             sender.user_id as sender_user_id,
             coalesce(summary.display_name, 'Участник') as sender_display_name,
+            case when sender_privacy.user_id is null
+                       or (sender_privacy.visibility_mode <> 'PRIVATE'
+                           and sender_privacy.section_visibility->>'avatar' = 'true')
+                 then photo.delivery_id end as sender_photo_delivery_id,
+            case when sender_privacy.user_id is null
+                       or (sender_privacy.visibility_mode <> 'PRIVATE'
+                           and sender_privacy.section_visibility->>'levelAndRating' = 'true')
+                 then summary.level_label end as sender_level_label,
+            case when sender_privacy.user_id is null
+                       or (sender_privacy.visibility_mode <> 'PRIVATE'
+                           and sender_privacy.section_visibility->>'levelAndRating' = 'true')
+                 then summary.level_value end as sender_level_value,
             message.message_type, message.body, message.created_at::text as created_at,
             message.client_message_id, message.idempotency_key
        from messaging.messages message
@@ -833,6 +916,12 @@ async function getMessage(
        left join profile.user_summaries summary
          on summary.tenant_id = sender.tenant_id
         and summary.user_id = sender.user_id
+       left join integration.user_profile_photo_sync photo
+         on photo.tenant_id = sender.tenant_id
+        and photo.user_id = sender.user_id
+       left join profile.privacy_settings sender_privacy
+         on sender_privacy.tenant_id = sender.tenant_id
+        and sender_privacy.user_id = sender.user_id
       where message.tenant_id = $1
         and message.conversation_id = $3
         and message.id = $4
@@ -1011,7 +1100,10 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             limit $3`,
           [input.tenantId, input.userId, input.limit],
         );
-        return [...direct.rows.map(mapConversation), ...games.rows.map(mapGameConversation)]
+        return [
+          ...direct.rows.map((row) => mapConversation(row, input.tenantId)),
+          ...games.rows.map(mapGameConversation),
+        ]
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
           .slice(0, input.limit);
       });
@@ -1546,6 +1638,18 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           `select message.id, message.conversation_id, message.sequence,
                   sender.user_id as sender_user_id,
                   coalesce(summary.display_name, 'Участник') as sender_display_name,
+                  case when sender_privacy.user_id is null
+                             or (sender_privacy.visibility_mode <> 'PRIVATE'
+                                 and sender_privacy.section_visibility->>'avatar' = 'true')
+                       then photo.delivery_id end as sender_photo_delivery_id,
+                  case when sender_privacy.user_id is null
+                             or (sender_privacy.visibility_mode <> 'PRIVATE'
+                                 and sender_privacy.section_visibility->>'levelAndRating' = 'true')
+                       then summary.level_label end as sender_level_label,
+                  case when sender_privacy.user_id is null
+                             or (sender_privacy.visibility_mode <> 'PRIVATE'
+                                 and sender_privacy.section_visibility->>'levelAndRating' = 'true')
+                       then summary.level_value end as sender_level_value,
                   message.client_message_id, message.message_type, message.body,
                   message.created_at::text as created_at
              from messaging.messages message
@@ -1556,6 +1660,12 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              left join profile.user_summaries summary
                on summary.tenant_id = sender.tenant_id
               and summary.user_id = sender.user_id
+             left join integration.user_profile_photo_sync photo
+               on photo.tenant_id = sender.tenant_id
+              and photo.user_id = sender.user_id
+             left join profile.privacy_settings sender_privacy
+               on sender_privacy.tenant_id = sender.tenant_id
+              and sender_privacy.user_id = sender.user_id
             where message.tenant_id = $1
               and message.conversation_id = $2
               and message.sequence > $3
@@ -1576,7 +1686,9 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         return {
           outcome: 'ok',
           page: {
-            messages: visible.map((row) => mapMessage(row, attachments.get(row.id) ?? [])),
+            messages: visible.map((row) =>
+              mapMessage(row, input.tenantId, attachments.get(row.id) ?? []),
+            ),
             ...(hasMore && last ? { nextAfterSequence: sequence(last.sequence) } : {}),
           },
         };
@@ -1669,6 +1781,18 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             `select message.id, message.conversation_id, message.sequence,
                   sender.user_id as sender_user_id,
                   coalesce(summary.display_name, 'Участник') as sender_display_name,
+                  case when sender_privacy.user_id is null
+                             or (sender_privacy.visibility_mode <> 'PRIVATE'
+                                 and sender_privacy.section_visibility->>'avatar' = 'true')
+                       then photo.delivery_id end as sender_photo_delivery_id,
+                  case when sender_privacy.user_id is null
+                             or (sender_privacy.visibility_mode <> 'PRIVATE'
+                                 and sender_privacy.section_visibility->>'levelAndRating' = 'true')
+                       then summary.level_label end as sender_level_label,
+                  case when sender_privacy.user_id is null
+                             or (sender_privacy.visibility_mode <> 'PRIVATE'
+                                 and sender_privacy.section_visibility->>'levelAndRating' = 'true')
+                       then summary.level_value end as sender_level_value,
                   message.message_type, message.body, message.created_at::text as created_at,
                   message.client_message_id, message.idempotency_key
              from messaging.messages message
@@ -1679,6 +1803,12 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              left join profile.user_summaries summary
                on summary.tenant_id = sender.tenant_id
               and summary.user_id = sender.user_id
+             left join integration.user_profile_photo_sync photo
+               on photo.tenant_id = sender.tenant_id
+              and photo.user_id = sender.user_id
+             left join profile.privacy_settings sender_privacy
+               on sender_privacy.tenant_id = sender.tenant_id
+              and sender_privacy.user_id = sender.user_id
             where message.tenant_id = $1
               and sender.user_id = $2
               and (message.idempotency_key = $3 or message.client_message_id = $4)`,
@@ -1703,7 +1833,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             });
             return {
               outcome: 'ok',
-              message: mapMessage(previous, replayedAttachments.get(previous.id) ?? []),
+              message: mapMessage(
+                previous,
+                input.tenantId,
+                replayedAttachments.get(previous.id) ?? [],
+              ),
               replayed: true,
             };
           }
@@ -1854,7 +1988,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           });
           return {
             outcome: 'ok',
-            message: mapMessage(message, readbackAttachments.get(message.id) ?? []),
+            message: mapMessage(message, input.tenantId, readbackAttachments.get(message.id) ?? []),
             replayed: false,
           };
         },

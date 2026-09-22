@@ -82,7 +82,12 @@ export function NotificationsPage({
   onRetryInbox,
   onOpenNotification,
 }: NotificationsPageProps): React.JSX.Element {
-  const [view, setView] = useState<NotificationView>('inbox');
+  const [view, setView] = useState<NotificationView>(() => {
+    if (typeof window === 'undefined') return 'inbox';
+    return new URLSearchParams(window.location.search).get('view') === 'settings'
+      ? 'settings'
+      : 'inbox';
+  });
   const [filter, setFilter] = useState<NotificationFilter>('ALL');
 
   // The draft follows the stored server view. React re-renders before committing the render-phase

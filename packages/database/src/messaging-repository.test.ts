@@ -449,6 +449,164 @@ describe('messaging repository', () => {
     expect(directQuery).not.toContain('target_privacy');
   });
 
+  it('projects the stored PadlHub photo delivery URL onto a direct participant', async () => {
+    const deliveryId = 'f3d1c0e4-1111-4111-8111-111111111111';
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'DIRECT'")) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              other_user_id: otherUserId,
+              other_display_name: 'Борис',
+              other_photo_delivery_id: deliveryId,
+              other_level_label: 'C+',
+              other_level_value: '3.44',
+              unread_count: '0',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+              notification_level: 'ALL',
+              muted_until: null,
+              notifications_muted: false,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes("conversation.kind = 'GAME'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(repository.listConversations({ tenantId, userId, limit: 20 })).resolves.toEqual([
+      {
+        id: conversationId,
+        kind: 'DIRECT',
+        participant: {
+          userId: otherUserId,
+          displayName: 'Борис',
+          avatarUrl: `/public/api/v1/media/profile-photos/${tenantId}/${deliveryId}`,
+          level: 'C+',
+          levelValue: 3.44,
+        },
+        unreadCount: 0,
+        updatedAt: '2026-08-03T12:00:00.000000+00:00',
+        notificationPolicy: { level: 'ALL', muted: false },
+      },
+    ]);
+    const directQuery = String(
+      query.mock.calls.find(([text]) => String(text).includes("conversation.kind = 'DIRECT'"))?.[0],
+    );
+    expect(directQuery).toContain('integration.user_profile_photo_sync other_photo');
+    expect(directQuery).toContain('then other_photo.delivery_id end as other_photo_delivery_id');
+    expect(directQuery).toContain("other_privacy.section_visibility->>'avatar' = 'true'");
+    expect(directQuery).toContain("other_privacy.section_visibility->>'levelAndRating' = 'true'");
+    expect(directQuery).toContain('left join profile.privacy_settings other_privacy');
+  });
+
+  it('omits the participant avatar when no local photo is stored', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'DIRECT'")) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              other_user_id: otherUserId,
+              other_display_name: 'Борис',
+              other_photo_delivery_id: null,
+              other_level_label: null,
+              other_level_value: null,
+              unread_count: '0',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+              notification_level: 'ALL',
+              muted_until: null,
+              notifications_muted: false,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes("conversation.kind = 'GAME'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    const [summary] = await repository.listConversations({ tenantId, userId, limit: 20 });
+    expect(summary).toMatchObject({
+      kind: 'DIRECT',
+      participant: { userId: otherUserId, displayName: 'Борис' },
+    });
+    expect(summary?.kind === 'DIRECT' && 'avatarUrl' in summary.participant).toBe(false);
+  });
+
+  it('keeps avatar and level fields hidden when the privacy projection denies them', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'DIRECT'")) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              other_user_id: otherUserId,
+              other_display_name: 'Борис',
+              // The SQL CASE projection must null these fields for PRIVATE or opted-out sections.
+              other_photo_delivery_id: null,
+              other_level_label: null,
+              other_level_value: null,
+              unread_count: '0',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+              notification_level: 'ALL',
+              muted_until: null,
+              notifications_muted: false,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes("conversation.kind = 'GAME'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    const [summary] = await repository.listConversations({ tenantId, userId, limit: 20 });
+
+    expect(summary?.kind === 'DIRECT' && summary.participant).toEqual({
+      userId: otherUserId,
+      displayName: 'Борис',
+    });
+    const directQuery = String(
+      query.mock.calls.find(([text]) => String(text).includes("conversation.kind = 'DIRECT'"))?.[0],
+    );
+    expect(directQuery).toContain("other_privacy.visibility_mode <> 'PRIVATE'");
+    expect(directQuery).toContain("other_privacy.section_visibility->>'avatar' = 'true'");
+    expect(directQuery).toContain("other_privacy.section_visibility->>'levelAndRating' = 'true'");
+  });
+
   it('issues a realtime authority result for a contextual-only games.play session', async () => {
     const query = vi.fn((text: string, values?: readonly unknown[]) => {
       if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {

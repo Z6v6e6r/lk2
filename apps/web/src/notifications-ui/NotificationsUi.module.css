@@ -245,6 +245,15 @@
   font-weight: 800;
 }
 
+.notificationAvatar {
+  width: 48px;
+  height: 51px;
+  flex-basis: 48px;
+  overflow: visible;
+  background: transparent;
+  border-radius: 0;
+}
+
 .toneAccent {
   background: #f0ebff;
   color: var(--notifications-accent);

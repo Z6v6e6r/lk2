@@ -1,8 +1,9 @@
 import { useState } from 'react';
 
 import type { ConversationNotificationPolicyUpdate, ConversationSummary } from '../auth-gateway.js';
+import { ChatAvatar } from './ChatAvatar.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
-import { conversationTitle, initials } from './chat-format.js';
+import { conversationTitle } from './chat-format.js';
 import styles from './ChatsUi.module.css';
 
 const TEMPORARY_MUTE_MS = 8 * 60 * 60 * 1_000;
@@ -42,9 +43,16 @@ export function ChatThreadHeader({
       <a className={styles.backLink} href="/chats" aria-label="Назад к чатам">
         <span aria-hidden="true">←</span>
       </a>
-      <span className={`${styles.avatar} ${isGame ? styles.gameAvatar : ''}`} aria-hidden="true">
-        {isGame ? <ChatCategoryIcon name="GAME" /> : initials(title)}
-      </span>
+      <ChatAvatar
+        isGame={isGame}
+        title={title}
+        photoUrl={conversation?.kind === 'DIRECT' ? conversation.participant.avatarUrl : undefined}
+        level={conversation?.kind === 'DIRECT' ? conversation.participant.level : undefined}
+        levelValue={
+          conversation?.kind === 'DIRECT' ? conversation.participant.levelValue : undefined
+        }
+        fallbackSeed={conversation?.kind === 'DIRECT' ? conversation.participant.userId : undefined}
+      />
       <div className={styles.threadHeading}>
         <h2>{title}</h2>
         <small>

@@ -212,6 +212,12 @@ export interface AuthenticatedSession {
 export interface MessagingParticipant {
   readonly userId: string;
   readonly displayName: string;
+  /** Stable first-party photo URL; absent when the participant has no stored photo. */
+  readonly avatarUrl?: string | null;
+  /** Current PadlHub level label used by the circular player avatar. */
+  readonly level?: string | null;
+  /** Fractional level value used to draw the level progress ring. */
+  readonly levelValue?: number | null;
 }
 
 export interface ConversationLastMessage {

@@ -1,11 +1,6 @@
-import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import type { ConversationSummary } from '../auth-gateway.js';
-import {
-  conversationTitle,
-  formatConversationTimestamp,
-  initials,
-  unreadLabel,
-} from './chat-format.js';
+import { ChatAvatar } from './ChatAvatar.js';
+import { conversationTitle, formatConversationTimestamp, unreadLabel } from './chat-format.js';
 import styles from './ChatsUi.module.css';
 
 interface ChatListItemProps {
@@ -25,12 +20,18 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
         href={`/chats/${encodeURIComponent(conversation.id)}`}
         aria-current={selected ? 'page' : undefined}
       >
-        <span
-          className={`${styles.avatar} ${conversation.kind === 'GAME' ? styles.gameAvatar : ''}`}
-          aria-hidden="true"
-        >
-          {conversation.kind === 'GAME' ? <ChatCategoryIcon name="GAME" /> : initials(title)}
-        </span>
+        <ChatAvatar
+          isGame={conversation.kind === 'GAME'}
+          title={title}
+          photoUrl={conversation.kind === 'DIRECT' ? conversation.participant.avatarUrl : undefined}
+          level={conversation.kind === 'DIRECT' ? conversation.participant.level : undefined}
+          levelValue={
+            conversation.kind === 'DIRECT' ? conversation.participant.levelValue : undefined
+          }
+          fallbackSeed={
+            conversation.kind === 'DIRECT' ? conversation.participant.userId : conversation.id
+          }
+        />
         <span className={styles.listCopy}>
           <span
             className={`${styles.listTitle} ${conversation.kind === 'GAME' ? styles.gameTitle : ''}`}

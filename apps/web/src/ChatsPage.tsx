@@ -103,6 +103,7 @@ export function ChatsPage({
   const [filter, setFilter] = useState<ChatFilter>('ALL');
   const [query, setQuery] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const selected = page?.items.find((conversation) => conversation.id === selectedConversationId);
 
   if (mode === 'new') {
@@ -160,22 +161,45 @@ export function ChatsPage({
       >
         <aside className={styles.listPane} aria-label="Список чатов">
           <header className={styles.listHeader}>
-            <ChatFilterHeading filter={filter} />
-            <div className={styles.headerActions}>
+            <ChatFilterHeading />
+            <div className={styles.headerMenu}>
               <button
                 type="button"
-                className={`${styles.unreadToggle} ${unreadOnly ? styles.unreadToggleActive : ''}`}
-                aria-label="Только непрочитанные"
-                title="Только непрочитанные"
-                aria-pressed={unreadOnly}
-                onClick={() => setUnreadOnly(!unreadOnly)}
+                className={styles.headerMenuButton}
+                aria-expanded={menuOpen}
+                aria-label="Действия с чатами"
+                title="Действия с чатами"
+                onClick={() => setMenuOpen(!menuOpen)}
               >
-                <ChatCategoryIcon name="UNREAD" />
+                ⋮
               </button>
-              <a className={styles.notificationsShortcut} href="/notifications">
-                <ChatCategoryIcon name="NOTIFICATIONS" />
-                <span className="sr-only">События</span>
-              </a>
+              {menuOpen ? (
+                <div className={styles.headerMenuPanel} role="menu" aria-label="Действия с чатами">
+                  <button
+                    type="button"
+                    className={styles.headerMenuItem}
+                    role="menuitemcheckbox"
+                    aria-label="Только непрочитанные"
+                    aria-checked={unreadOnly}
+                    onClick={() => setUnreadOnly(!unreadOnly)}
+                  >
+                    <ChatCategoryIcon name="UNREAD" />
+                    <span>Только непрочитанные</span>
+                  </button>
+                  <a className={styles.headerMenuItem} href="/notifications" role="menuitem">
+                    <ChatCategoryIcon name="NOTIFICATIONS" />
+                    <span>Уведомления</span>
+                  </a>
+                  <a
+                    className={styles.headerMenuItem}
+                    href="/notifications?view=settings"
+                    role="menuitem"
+                  >
+                    <ChatCategoryIcon name="SETTINGS" />
+                    <span>Настройки уведомлений</span>
+                  </a>
+                </div>
+              ) : null}
             </div>
           </header>
           <ChatFilters

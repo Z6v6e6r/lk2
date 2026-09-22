@@ -1,4 +1,5 @@
 import padlHubLogoUrl from '../assets/padlhub-logo.svg';
+import { ChatAvatar } from '../chats-ui/ChatAvatar.js';
 import { initials } from '../chats-ui/chat-format.js';
 import type { ConversationSummary } from '../auth-gateway.js';
 import type { NotificationGroup, NotificationItem } from './notification-format.js';
@@ -29,6 +30,10 @@ export function NotificationListItem({
     presentation.kind === 'conversation' && !presentation.markerKind
       ? initials(presentation.title)
       : presentation.marker;
+  const directConversation =
+    presentation.kind === 'conversation' && conversation?.kind === 'DIRECT'
+      ? conversation
+      : undefined;
 
   return (
     <li className={styles.listItem}>
@@ -54,7 +59,18 @@ export function NotificationListItem({
           className={`${styles.categoryMarker} ${TONE_CLASS[presentation.tone] ?? ''}`}
           aria-hidden="true"
         >
-          {presentation.markerKind === 'brand' ? (
+          {directConversation ? (
+            <ChatAvatar
+              isGame={false}
+              title={presentation.title}
+              photoUrl={directConversation.participant.avatarUrl}
+              level={directConversation.participant.level}
+              levelValue={directConversation.participant.levelValue}
+              fallbackSeed={directConversation.participant.userId}
+              size={48}
+              className={styles.notificationAvatar}
+            />
+          ) : presentation.markerKind === 'brand' ? (
             <img className={styles.brandMarkerLogo} src={padlHubLogoUrl} alt="" />
           ) : (
             marker
