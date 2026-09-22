@@ -6772,6 +6772,12 @@ components:
           type: string
           minLength: 1
           maxLength: 200
+        avatarUrl:
+          type: [string, 'null']
+          pattern: '^/public/api/v1/media/profile-photos/'
+          description: |
+            Stable first-party profile photo delivery URL. Absent when the participant has no
+            stored photo; the client then renders its own initials placeholder.
     ConversationLastMessage:
       type: object
       additionalProperties: false

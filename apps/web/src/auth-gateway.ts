@@ -212,6 +212,8 @@ export interface AuthenticatedSession {
 export interface MessagingParticipant {
   readonly userId: string;
   readonly displayName: string;
+  /** Stable first-party photo URL; absent when the participant has no stored photo. */
+  readonly avatarUrl?: string | null;
 }
 
 export interface ConversationLastMessage {

@@ -1,3 +1,4 @@
+import { profilePhotoDeliveryUrl } from '@phub/domain';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
@@ -18,6 +19,11 @@ export interface MessagingRuntimeSettings {
 export interface MessagingParticipant {
   readonly userId: string;
   readonly displayName: string;
+  /**
+   * PadlHub-owned stable photo delivery URL. Absent when the participant has no synced local
+   * photo; the client then falls back to its generated initials avatar.
+   */
+  readonly avatarUrl?: string;
 }
 
 export interface ConversationNotificationPolicy {
@@ -322,6 +328,7 @@ interface ConversationRow extends QueryResultRow {
   readonly kind: 'DIRECT';
   readonly other_user_id: string;
   readonly other_display_name: string;
+  readonly other_photo_delivery_id: string | null;
   readonly unread_count: number | string;
   readonly updated_at: Date | string;
   readonly last_sequence: number | string | null;
@@ -418,13 +425,18 @@ function mapNotificationPolicy(row: {
   };
 }
 
-function mapConversation(row: ConversationRow): ConversationSummary {
+function mapConversation(row: ConversationRow, tenantId: string): ConversationSummary {
   return {
     id: row.id,
     kind: row.kind,
     participant: {
       userId: row.other_user_id,
       displayName: row.other_display_name,
+      // Only the PadlHub-owned delivery URL crosses the client boundary; a provider source URL
+      // stays inside integration storage.
+      ...(row.other_photo_delivery_id
+        ? { avatarUrl: profilePhotoDeliveryUrl(tenantId, row.other_photo_delivery_id) }
+        : {}),
     },
     unreadCount: sequence(row.unread_count),
     updatedAt: timestamp(row.updated_at),
@@ -528,6 +540,7 @@ const CONVERSATION_SELECT = `
          conversation.kind,
          other_member.user_id as other_user_id,
          coalesce(other_summary.display_name, 'Участник') as other_display_name,
+         other_photo.delivery_id as other_photo_delivery_id,
          greatest(
            (conversation.next_sequence - 1) - current_member.last_read_sequence,
            0
@@ -573,6 +586,9 @@ const CONVERSATION_SELECT = `
     left join profile.user_summaries other_summary
       on other_summary.tenant_id = other_member.tenant_id
      and other_summary.user_id = other_member.user_id
+    left join integration.user_profile_photo_sync other_photo
+      on other_photo.tenant_id = other_member.tenant_id
+     and other_photo.user_id = other_member.user_id
     left join lateral (
       select message.sequence, message.body, message.created_at
         from messaging.messages message
@@ -664,7 +680,7 @@ async function getConversation(
        and conversation.id = $3`,
     [tenantId, userId, conversationId],
   );
-  return row ? mapConversation(row) : undefined;
+  return row ? mapConversation(row, tenantId) : undefined;
 }
 
 async function getGameConversation(
@@ -1011,7 +1027,10 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
             limit $3`,
           [input.tenantId, input.userId, input.limit],
         );
-        return [...direct.rows.map(mapConversation), ...games.rows.map(mapGameConversation)]
+        return [
+          ...direct.rows.map((row) => mapConversation(row, input.tenantId)),
+          ...games.rows.map(mapGameConversation),
+        ]
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
           .slice(0, input.limit);
       });

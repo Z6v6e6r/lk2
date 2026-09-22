@@ -327,6 +327,41 @@ describe('ChatsPage', () => {
     expect(screen.getByLabelText('Непрочитанных сообщений: 100')).toHaveTextContent('99+');
   });
 
+  it('shows the stored participant photo in the list row and the thread header', () => {
+    const photoUrl =
+      '/public/api/v1/media/profile-photos/86afbe01-0318-4dd2-bc25-303b7bf0d430/f3d1c0e4-1111-4111-8111-111111111111';
+    const { container } = render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        page={{
+          items: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              participant: {
+                userId: '11111111-1111-4111-8111-111111111111',
+                displayName: 'Борис',
+                avatarUrl: photoUrl,
+              },
+              unreadCount: 0,
+              updatedAt: '2026-08-29T11:32:00+03:00',
+            },
+          ],
+        }}
+      />,
+    );
+
+    const photos = [...container.querySelectorAll('img')];
+    expect(photos).toHaveLength(2);
+    for (const photo of photos) {
+      expect(photo).toHaveAttribute('src', photoUrl);
+      expect(photo).toHaveAttribute('alt', '');
+    }
+  });
+
   it('renders only known GAME context data and a safe game link', () => {
     render(
       <ChatsPage
