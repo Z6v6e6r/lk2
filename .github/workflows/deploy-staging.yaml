@@ -1182,6 +1182,33 @@ jobs:
               if (manifest.release !== process.env.EXPECTED_ACTIVE_RELEASE) process.exit(1);
             });
           '
+      - name: Start PostgreSQL for recovery evidence validation
+        if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
+        env:
+          HOST: ${{ secrets.STAGING_HOST }}
+        run: |
+          ssh "phub-deploy@$HOST" '
+            set -eu
+            cd /opt/phub
+            infrastructure() {
+              docker compose --env-file infrastructure.env -f compose.infrastructure.yaml "$@"
+            }
+            infrastructure up -d --no-deps postgres
+            attempt=0
+            while test "$attempt" -lt 30; do
+              postgres_id="$(infrastructure ps --status running -q postgres)"
+              if test -n "$postgres_id" &&
+                test "$(docker inspect --format "{{.State.Health.Status}}" "$postgres_id")" = healthy; then
+                exit 0
+              fi
+              attempt="$((attempt + 1))"
+              sleep 2
+            done
+            infrastructure ps postgres >&2 || true
+            docker logs --tail 80 "$postgres_id" >&2 2>/dev/null || true
+            echo "PostgreSQL did not become healthy for recovery evidence validation." >&2
+            exit 1
+          '
       - name: Verify the exact recoverable foundation state
         if: ${{ inputs.deployment_profile == 'CHAT_PUSH_FOUNDATION_RECOVERY' }}
         env:
