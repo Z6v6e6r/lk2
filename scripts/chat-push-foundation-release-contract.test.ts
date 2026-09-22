@@ -302,16 +302,24 @@ describe('chat/push staging foundation release contract', () => {
       stagingCompose.indexOf('  realtime:'),
       stagingCompose.indexOf('  worker:'),
     );
-    const worker = stagingCompose.slice(
-      stagingCompose.indexOf('x-application-runtime:'),
-      stagingCompose.indexOf('x-realtime-runtime:'),
+    const workerAnchor = stagingCompose.slice(
+      stagingCompose.indexOf('x-worker-runtime:'),
+      stagingCompose.indexOf('x-object-storage:'),
+    );
+    const workerService = stagingCompose.slice(
+      stagingCompose.indexOf('  worker:'),
+      stagingCompose.indexOf('  migrator:'),
     );
     const migrator = stagingCompose.slice(stagingCompose.indexOf('  migrator:'));
 
     expect(api).toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
-    expect(worker).toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
+    expect(workerAnchor).toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
     expect(realtime).not.toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
     expect(migrator).not.toContain('RUNTIME_CHAT_PUSH_FOUNDATION_ENV_FILE');
+    // The worker must read its derived signing-secret-free contract, never the API runtime env.
+    expect(workerAnchor).toContain('WORKER_RUNTIME_ENV_FILE');
+    expect(workerAnchor).not.toContain('${RUNTIME_ENV_FILE:-');
+    expect(workerService).toContain('<<: *worker-runtime');
     expect(runtimeVerifier).toContain('foundation overlay must contain exactly three lines');
     expect(backup).toContain('staging.chat-push-foundation.env.absent');
     expect(rollback).toContain('staging.chat-push-foundation.env.absent');
