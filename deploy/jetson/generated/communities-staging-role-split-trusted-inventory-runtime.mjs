@@ -37531,6 +37531,18 @@ function parseCommunitiesStagingRoleSplitTrustedInventoryReceipt(text) {
   return parseCanonical2(text, assertCommunitiesStagingRoleSplitTrustedInventoryReceipt);
 }
 
+// ../../packages/database/src/messaging-media-repository.ts
+init_esm_shims();
+import { randomUUID as randomUUID9 } from "crypto";
+var MESSAGING_MEDIA_MAX_BYTES = 15 * 1024 * 1024;
+var MESSAGING_MEDIA_MAX_DAILY_BYTES_PER_USER = 150 * 1024 * 1024;
+var MESSAGING_MEDIA_UPLOAD_TTL_MS = 15 * 60 * 1e3;
+var MESSAGING_MEDIA_UNATTACHED_TTL_MS = 24 * 60 * 60 * 1e3;
+
+// ../../packages/database/src/messaging-moderation-repository.ts
+init_esm_shims();
+import { randomUUID as randomUUID10 } from "crypto";
+
 // ../../packages/database/src/messaging-repository.ts
 init_esm_shims();
 
@@ -37549,7 +37561,7 @@ init_esm_shims();
 
 // ../../packages/database/src/profile-summary-repository.ts
 init_esm_shims();
-import { randomUUID as randomUUID9 } from "crypto";
+import { randomUUID as randomUUID11 } from "crypto";
 
 // ../../packages/database/src/realtime-authorization-repository.ts
 init_esm_shims();
