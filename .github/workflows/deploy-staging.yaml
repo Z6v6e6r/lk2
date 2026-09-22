@@ -1378,6 +1378,8 @@ jobs:
               "phub-deploy@$HOST:/opt/phub/verify-chat-push-foundation-clone.sh.next"
             scp deploy/jetson/monitoring/padlhub-alerts.yaml \
               "phub-deploy@$HOST:/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml"
+            scp deploy/jetson/monitoring/prometheus.yaml \
+              "phub-deploy@$HOST:/opt/phub/monitoring/prometheus.yaml.next"
           fi
           if [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION ] && [ "$DEPLOYMENT_PROFILE" != CHAT_PUSH_FOUNDATION_RECOVERY ]; then
             scp deploy/jetson/tls-ingress/Caddyfile \
@@ -1456,6 +1458,11 @@ jobs:
               install -m 644 "/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml" \
                 /opt/phub/monitoring/padlhub-alerts.yaml
               rm -f "/tmp/padlhub-alerts-foundation-${{ github.run_id }}.yaml"
+              # The reviewed Prometheus configuration must load the rule file; without it the
+              # foundation runtime verification can never see the alert rules it attests.
+              install -m 644 /opt/phub/monitoring/prometheus.yaml.next \
+                /opt/phub/monitoring/prometheus.yaml
+              rm -f /opt/phub/monitoring/prometheus.yaml.next
               docker compose --env-file /opt/phub/infrastructure.env \
                 -f /opt/phub/compose.infrastructure.yaml \
                 run --rm --no-deps -T --entrypoint promtool prometheus \

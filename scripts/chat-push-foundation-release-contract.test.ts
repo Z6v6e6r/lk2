@@ -247,6 +247,11 @@ describe('chat/push staging foundation release contract', () => {
     expect(releaseHelper).toContain('inert) rabbit_mode=rabbit-inert');
     expect(releaseHelper).toContain('verify_rabbit_preflight_inventory');
     expect(releaseHelper).toContain('verify_rabbit_inventory inert');
+    // The window installs the reviewed monitoring definition, so its rule file is actually loaded.
+    // Without the configuration the rule inventory can never match the foundation attestation.
+    expect(workflow).toContain('deploy/jetson/monitoring/prometheus.yaml');
+    expect(workflow).toContain('/opt/phub/monitoring/prometheus.yaml.next');
+    expect(workflow).toContain('/opt/phub/monitoring/prometheus.yaml');
     expect(releaseHelper).toContain('verify-chat-push-foundation-operational.js prometheus');
     expect(releaseHelper).toContain(
       'verify-chat-push-foundation-operational.js prometheus-targets',
