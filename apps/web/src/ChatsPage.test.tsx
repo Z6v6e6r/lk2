@@ -193,6 +193,47 @@ describe('ChatsPage', () => {
     expect(screen.getByRole('button', { name: 'Начать диалог' })).toBeDisabled();
   });
 
+  it('retries the failed direct start from its own banner instead of reloading chats', () => {
+    const onCreateDirect = vi.fn();
+    const onRefresh = vi.fn();
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="new"
+        hasExplicitRecipient
+        error={{
+          kind: 'PARTICIPANT_UNAVAILABLE',
+          message: 'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.',
+        }}
+        onCreateDirect={onCreateDirect}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Получатель недоступен');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    expect(onCreateDirect).toHaveBeenCalledOnce();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('names a refused recipient on the direct-start screen instead of a missing chat', () => {
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="new"
+        hasExplicitRecipient
+        error={{ kind: 'NOT_FOUND', message: 'Получатель недоступен для личного чата.' }}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Получатель недоступен');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Чат недоступен');
+  });
+
   it('keeps feature-unavailable and retryable failures distinct', () => {
     const { rerender } = render(
       <ChatsPage

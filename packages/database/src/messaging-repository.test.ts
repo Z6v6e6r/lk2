@@ -995,8 +995,8 @@ describe('messaging repository', () => {
       if (text.includes('from identity.users user_account')) {
         return Promise.resolve({
           rows: [
-            { id: userId, chat_policy: 'AUTHORIZED', reachable: true },
-            { id: otherUserId, chat_policy: 'NOBODY', reachable: true },
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
+            { id: otherUserId, chat_policy: 'NOBODY', reachable: true, can_direct_chat: true },
           ],
           rowCount: 2,
         });
@@ -1039,8 +1039,18 @@ describe('messaging repository', () => {
         if (text.includes('from identity.users user_account')) {
           return Promise.resolve({
             rows: [
-              { id: actorUserId, chat_policy: 'AUTHORIZED', reachable: true },
-              { id: blockedUserId, chat_policy: 'AUTHORIZED', reachable: true },
+              {
+                id: actorUserId,
+                chat_policy: 'AUTHORIZED',
+                reachable: true,
+                can_direct_chat: true,
+              },
+              {
+                id: blockedUserId,
+                chat_policy: 'AUTHORIZED',
+                reachable: true,
+                can_direct_chat: true,
+              },
             ],
             rowCount: 2,
           });
@@ -1083,7 +1093,13 @@ describe('messaging repository', () => {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
       if (text.includes('from identity.users user_account')) {
-        return Promise.resolve({ rows: [], rowCount: 0 });
+        return Promise.resolve({
+          rows: [
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: false },
+            { id: otherUserId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
+          ],
+          rowCount: 2,
+        });
       }
       throw new Error(`Unexpected query: ${text}`);
     });
@@ -1104,11 +1120,280 @@ describe('messaging repository', () => {
         String(text).includes('from identity.users user_account'),
       )?.[0],
     );
-    expect(authorizationQuery).toContain('identity.user_access_profiles current_access');
-    expect(authorizationQuery).toContain("'chat.direct.create' = any(current_access.permissions)");
+    expect(authorizationQuery).toContain('identity.user_access_profiles direct_access');
+    expect(authorizationQuery).toContain("'chat.direct.create' = any(direct_access.permissions)");
     expect(
       query.mock.calls.some(([text]) =>
         /from messaging\.direct_conversation_commands|insert into messaging\.(?:conversations|direct_conversation_commands)/.test(
+          String(text),
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses a new direct chat when the peer has no stored chat access', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select true as blocked')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.direct_conversation_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from identity.users user_account')) {
+        return Promise.resolve({
+          rows: [
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
+            { id: otherUserId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: false },
+          ],
+          rowCount: 2,
+        });
+      }
+      if (text.includes('from messaging.direct_conversations')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`An ineligible peer must not reach a mutation query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.createDirectConversation({
+        tenantId,
+        actorUserId: userId,
+        otherUserId,
+        idempotencyKey: 'direct-command-no-chat-access-0001',
+        correlationId: 'direct-correlation-no-chat-access-0001',
+      }),
+    ).resolves.toEqual({ outcome: 'target_chat_access_required' });
+
+    // No thread and, above all, no "new chat" notification for a peer who cannot open it.
+    expect(
+      query.mock.calls.some(([text]) =>
+        /insert into messaging\.(?:conversations|direct_conversations|conversation_members)|insert into audit\.(?:outbox_events|audit_log)|insert into messaging\.direct_conversation_commands/.test(
+          String(text),
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('addresses the created-chat notification to exactly the eligible peer', async () => {
+    let createdChatEventValues: readonly unknown[] | undefined;
+    const query = vi.fn((text: string, values?: readonly unknown[]) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from identity.users user_account')) {
+        return Promise.resolve({
+          rows: [
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
+            { id: otherUserId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
+          ],
+          rowCount: 2,
+        });
+      }
+      if (text.includes('select true as blocked')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.direct_conversation_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.direct_conversations')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('insert into messaging.conversations')) {
+        return Promise.resolve({ rows: [{ id: conversationId }], rowCount: 1 });
+      }
+      if (
+        text.includes('insert into messaging.direct_conversations') ||
+        text.includes('insert into messaging.conversation_members') ||
+        text.includes('insert into messaging.direct_conversation_commands') ||
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log')
+      ) {
+        if (text.includes('insert into audit.outbox_events')) createdChatEventValues = values;
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('from messaging.conversations conversation')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              other_user_id: otherUserId,
+              other_display_name: 'Борис',
+              unread_count: '0',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.createDirectConversation({
+        tenantId,
+        actorUserId: userId,
+        otherUserId,
+        idempotencyKey: 'direct-command-eligible-peer-0001',
+        correlationId: 'direct-correlation-eligible-peer-0001',
+      }),
+    ).resolves.toMatchObject({ outcome: 'ok', created: true, replayed: false });
+
+    // The sender is never notified about the chat they just opened; the eligible peer is.
+    const outboxPayload = String(createdChatEventValues?.[3]);
+    expect(outboxPayload).toContain(`"recipientUserIds":["${otherUserId}"]`);
+    expect(outboxPayload).not.toContain(userId);
+  });
+
+  it('keeps an existing direct conversation reachable when the peer lost chat access', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from identity.users user_account')) {
+        return Promise.resolve({
+          rows: [
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
+            { id: otherUserId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: false },
+          ],
+          rowCount: 2,
+        });
+      }
+      if (text.includes('select true as blocked')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.direct_conversation_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.direct_conversations')) {
+        return Promise.resolve({ rows: [{ conversation_id: conversationId }], rowCount: 1 });
+      }
+      if (text.includes('insert into messaging.direct_conversation_commands')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('from messaging.conversations conversation')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              other_user_id: otherUserId,
+              other_display_name: 'Борис',
+              unread_count: '0',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.createDirectConversation({
+        tenantId,
+        actorUserId: userId,
+        otherUserId,
+        idempotencyKey: 'direct-command-existing-peer-0001',
+        correlationId: 'direct-correlation-existing-peer-0001',
+      }),
+    ).resolves.toMatchObject({ outcome: 'ok', created: false, replayed: false });
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('insert into messaging.conversations'),
+      ),
+    ).toBe(false);
+  });
+
+  it('honours a committed create replay even after the peer lost chat access', async () => {
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from identity.users user_account')) {
+        return Promise.resolve({
+          rows: [
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
+            { id: otherUserId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: false },
+          ],
+          rowCount: 2,
+        });
+      }
+      if (text.includes('select true as blocked')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from messaging.direct_conversation_commands')) {
+        return Promise.resolve({
+          rows: [{ other_user_id: otherUserId, conversation_id: conversationId }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from messaging.conversations conversation')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              kind: 'DIRECT',
+              other_user_id: otherUserId,
+              other_display_name: 'Борис',
+              unread_count: '0',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`A committed replay must not reach a mutation query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.createDirectConversation({
+        tenantId,
+        actorUserId: userId,
+        otherUserId,
+        idempotencyKey: 'direct-command-0001',
+        correlationId: 'direct-correlation-0001',
+      }),
+    ).resolves.toMatchObject({ outcome: 'ok', created: false, replayed: true });
+    expect(
+      query.mock.calls.some(([text]) =>
+        /insert into messaging\.(?:conversations|direct_conversations|conversation_members)|insert into audit\./.test(
           String(text),
         ),
       ),
@@ -1134,8 +1419,8 @@ describe('messaging repository', () => {
       if (text.includes('from identity.users user_account')) {
         return Promise.resolve({
           rows: [
-            { id: userId, chat_policy: 'AUTHORIZED', reachable: true },
-            { id: otherUserId, chat_policy: 'AUTHORIZED', reachable: true },
+            { id: userId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
+            { id: otherUserId, chat_policy: 'AUTHORIZED', reachable: true, can_direct_chat: true },
           ],
           rowCount: 2,
         });
