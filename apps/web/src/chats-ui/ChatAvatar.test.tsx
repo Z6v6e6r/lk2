@@ -56,4 +56,14 @@ describe('ChatAvatar', () => {
       '44',
     );
   });
+
+  it('uses the shared participant avatar variant so the level accent reaches the ring', () => {
+    const { container } = render(
+      <ChatAvatar isGame={false} title="Борис" photoUrl={photoUrl} level="C+" levelValue={3.44} />,
+    );
+
+    const avatar = container.querySelector<HTMLElement>('[data-player-level-avatar]');
+    // The accent and the participant frame are applied only for variant="participant".
+    expect(avatar?.style.getPropertyValue('--player-level-avatar-accent')).toBe('#f0925f');
+  });
 });

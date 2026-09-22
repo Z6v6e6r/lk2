@@ -67,6 +67,7 @@ export function ChatAvatar({
           fallbackSeed={fallbackSeed ?? title}
           accentColor={levelAccent(level)}
           showLevelRing
+          variant="participant"
         />
       )}
     </span>
