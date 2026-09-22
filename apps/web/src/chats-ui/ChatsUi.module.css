@@ -10,7 +10,14 @@
     -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Roboto, Arial, sans-serif;
   min-height: 100dvh;
   padding: 16px 16px 112px;
-  background: var(--comms-surface);
+  /* The wallpaper covers the whole chats screen; every pane below stays transparent over it. */
+  background-color: #f7f4fc;
+  background-image:
+    linear-gradient(rgb(255 255 255 / 12%), rgb(255 255 255 / 12%)),
+    url('../assets/chats-background.webp');
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
+  background-size: cover, cover;
   color: var(--comms-ink);
   font-family: var(--chat-font-family);
 }
@@ -25,7 +32,7 @@
   grid-template-columns: minmax(340px, 390px) minmax(0, 1fr);
   border: 1px solid var(--comms-line);
   border-radius: 22px;
-  background: #fff;
+  background: transparent;
   box-shadow: 0 8px 32px rgb(41 31 62 / 4%);
 }
 
@@ -35,7 +42,7 @@
   min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
   border-right: 1px solid var(--comms-line);
-  background: #fff;
+  background: transparent;
 }
 
 .listHeader {
@@ -333,10 +340,17 @@
   text-align: center;
 }
 
-.emptyState p,
+.emptyState p {
+  margin: 8px 0 0;
+  color: var(--comms-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* This copy sits on the wallpaper, where the muted token only reaches ~3:1. */
 .threadEmpty {
   margin: 8px 0 0;
-  color: var(--comms-muted);
+  color: var(--comms-ink);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -364,7 +378,8 @@
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  background: #fafafa;
+  /* The page wallpaper shows through the whole conversation column. */
+  background: transparent;
 }
 
 .threadBody {
@@ -377,7 +392,7 @@
   flex-direction: column;
   border: 0;
   border-radius: 28px 28px 0 0;
-  background: #fff;
+  background: transparent;
   box-shadow:
     inset 0 0 0 0.5px #ededed,
     0 0 8px rgb(0 0 0 / 2%);
@@ -461,7 +476,8 @@
   flex-direction: column;
   gap: 8px;
   overscroll-behavior: contain;
-  background: #fff;
+  /* The conversation wallpaper belongs to .thread and must stay visible behind the bubbles. */
+  background: transparent;
   list-style: none;
   scroll-behavior: smooth;
   scrollbar-width: thin;
@@ -692,7 +708,8 @@
   justify-content: center;
   align-items: center;
   gap: 8px;
-  background: #fafafa;
+  /* Telegram-like bar: readable, but the wallpaper still reads through. */
+  background: rgb(255 255 255 / 78%);
   box-shadow: inset 0 0.5px #ededed;
 }
 
@@ -982,8 +999,9 @@
   min-height: 0;
   place-content: center;
   padding: 32px;
-  background: #fcfbfd;
-  color: var(--comms-muted);
+  /* The page wallpaper shows through the placeholder pane as well. */
+  background: transparent;
+  color: var(--comms-ink);
   text-align: center;
 }
 
@@ -1255,7 +1273,6 @@
   .page {
     padding: 0 0 88px;
     overflow-x: hidden;
-    background: #fff;
   }
 
   .page :global(.fh-bottom-nav) {
@@ -1290,8 +1307,8 @@
   }
 
   .threadHeader {
-    min-height: 64px;
-    padding-top: 10px;
+    min-height: calc(64px + env(safe-area-inset-top));
+    padding-top: max(10px, env(safe-area-inset-top));
     grid-template-columns: 44px 36px minmax(0, 1fr) 44px 44px;
     gap: 8px;
   }
@@ -1315,8 +1332,8 @@
   }
 
   .listHeader {
-    min-height: 48px;
-    padding-top: 0;
+    min-height: calc(48px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
   }
 
   .errorBanner {
