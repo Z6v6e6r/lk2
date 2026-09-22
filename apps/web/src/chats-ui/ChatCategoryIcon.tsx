@@ -1,5 +1,4 @@
-import { ChatIcon } from '../HomeDashboardPage.js';
-import { TrainingPeopleIcon } from '../TrainingPeopleIcon.js';
+import { HeaderCategoryIcon } from './HeaderCategoryIcon.js';
 
 export type ChatCategoryIconName =
   | 'ALL'
@@ -20,8 +19,18 @@ export function ChatCategoryIcon({
 }: {
   readonly name: ChatCategoryIconName;
 }): React.JSX.Element {
-  if (name === 'ALL') return <ChatIcon />;
-  if (name === 'COMMUNITY') return <TrainingPeopleIcon />;
+  switch (name) {
+    case 'ALL':
+    case 'DIRECT':
+    case 'GAME':
+    case 'TOURNAMENT':
+    case 'STATION':
+    case 'COMMUNITY':
+    case 'NOTIFICATIONS':
+      return <HeaderCategoryIcon name={name} />;
+    default:
+      break;
+  }
   return (
     <svg
       width="20"
@@ -34,34 +43,6 @@ export function ChatCategoryIcon({
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {name === 'DIRECT' ? (
-        <>
-          <circle cx="12" cy="8" r="3.5" />
-          <path d="M5 21v-2a7 7 0 0 1 14 0v2" />
-        </>
-      ) : null}
-      {name === 'GAME' ? (
-        <>
-          <rect x="4" y="3" width="16" height="18" rx="3" />
-          <path d="M4 12h16M8 3v18M16 3v18" />
-        </>
-      ) : null}
-      {name === 'TOURNAMENT' ? (
-        <>
-          <path d="M8 3h8v6a4 4 0 0 1-8 0V3ZM8 5H4v2a4 4 0 0 0 4 4M16 5h4v2a4 4 0 0 1-4 4M12 13v7M8 21h8" />
-        </>
-      ) : null}
-      {name === 'STATION' ? (
-        <>
-          <path d="M19 10c0 5-7 11-7 11S5 15 5 10a7 7 0 0 1 14 0Z" />
-          <circle cx="12" cy="10" r="2.5" />
-        </>
-      ) : null}
-      {name === 'NOTIFICATIONS' ? (
-        <>
-          <path d="M6 9a6 6 0 0 1 12 0c0 6 2 7 2 8H4c0-1 2-2 2-8ZM10 21h4" />
-        </>
-      ) : null}
       {name === 'BELL_OFF' ? (
         <>
           <path d="M6 9a6 6 0 0 1 9.3-5.1M18 11c0 6 2 7 2 8H6M10 21h4M4 4l16 16" />

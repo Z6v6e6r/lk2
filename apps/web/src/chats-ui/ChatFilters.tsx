@@ -57,6 +57,7 @@ export function ChatFilters({
             key={item.value}
             className={filter === item.value ? styles.activeFilter : undefined}
             aria-pressed={filter === item.value}
+            aria-label={item.label}
             title={item.label}
             onClick={() => onFilterChange(item.value)}
           >
@@ -64,7 +65,7 @@ export function ChatFilters({
             <span className={styles.filterLabel}>{item.label}</span>
           </button>
         ))}
-        <a href="/notifications" title="Уведомления">
+        <a href="/notifications" aria-label="Уведомления" title="Уведомления">
           <ChatCategoryIcon name="NOTIFICATIONS" />
           <span className={styles.filterLabel}>Уведомления</span>
         </a>

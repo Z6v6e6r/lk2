@@ -1479,6 +1479,48 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getProfileFriendship).toHaveBeenCalledWith(targetUserId);
   });
 
+  it('opens the shared profile link after the recipient logs in', async () => {
+    const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
+    window.history.replaceState({}, '', `/profile/${targetUserId}`);
+    const sharedProfile: PlayerProfileView = {
+      profile: {
+        userId: targetUserId,
+        displayName: 'Мария Соколова',
+        avatarUrl: null,
+        level: { label: 'C', assessmentRequired: false },
+      },
+      reachable: true,
+      access: {
+        audience: 'OTHER',
+        tier: 'INTERACTION',
+        visibleSections: ['BASIC', 'PLAYER_LEVEL'],
+        contact: { status: 'AVAILABLE', route: `/chats/new?recipientUserId=${targetUserId}` },
+        chat: { status: 'AVAILABLE', route: `/chats/new?recipientUserId=${targetUserId}` },
+      },
+    };
+    const gateway = createGateway({
+      getPlayerProfile: vi.fn().mockResolvedValue(sharedProfile),
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(screen.queryByRole('heading', { name: 'Мария Соколова' })).not.toBeInTheDocument();
+    await openPhoneLogin(user);
+    const phone = await screen.findByRole('textbox', { name: 'Номер телефона' });
+    await user.clear(phone);
+    await user.type(phone, '+79990000001');
+    await user.click(screen.getByRole('button', { name: 'Получить код' }));
+    const code = await screen.findByRole('textbox', { name: 'Код из СМС' });
+    await user.type(code, '0000');
+    await user.click(screen.getByRole('button', { name: 'Войти' }));
+
+    expect(await screen.findByRole('heading', { name: 'Мария Соколова' })).toBeVisible();
+    expect(gateway.getPlayerProfile).toHaveBeenCalledWith(targetUserId);
+    expect(window.location.pathname).toBe(`/profile/${targetUserId}`);
+    window.history.replaceState({}, '', '/');
+  });
+
   it('sends a friend request from the viewer-filtered profile', async () => {
     const targetUserId = '6a81e965-c508-4321-812c-4be323606a70';
     window.history.replaceState({}, '', `/profile/${targetUserId}`);

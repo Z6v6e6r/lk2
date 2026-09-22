@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react';
+
 import type { ConversationPage } from '../auth-gateway.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import type { ChatFilter } from './ChatFilters.js';
@@ -22,6 +24,37 @@ export function ChatList({
   unreadOnly,
   selectedConversationId,
 }: ChatListProps): React.JSX.Element {
+  const normalizedQuery = query.trim().toLocaleLowerCase('ru-RU');
+  const scrollStorageKey = `lk2:chats:list-scroll:${filter}:${unreadOnly ? 'unread' : 'all'}:${normalizedQuery}`;
+  const listRef = useRef<HTMLUListElement>(null);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    try {
+      const savedScrollTop = Number(window.sessionStorage.getItem(scrollStorageKey));
+      if (Number.isFinite(savedScrollTop) && savedScrollTop > 0) list.scrollTop = savedScrollTop;
+    } catch {
+      // Storage can be unavailable in private browsing and embedded previews.
+    }
+    return () => {
+      if (!list) return;
+      try {
+        window.sessionStorage.setItem(scrollStorageKey, String(list.scrollTop));
+      } catch {
+        // Storage can be unavailable in private browsing and embedded previews.
+      }
+    };
+  }, [scrollStorageKey, page?.items.length]);
+
+  const handleScroll = (event: React.UIEvent<HTMLUListElement>): void => {
+    try {
+      window.sessionStorage.setItem(scrollStorageKey, String(event.currentTarget.scrollTop));
+    } catch {
+      // Storage can be unavailable in private browsing and embedded previews.
+    }
+  };
+
   if (!page && !error) {
     return (
       <div className={styles.skeletonList} role="status" aria-label="Загружаем диалоги">
@@ -52,7 +85,6 @@ export function ChatList({
     );
   }
 
-  const normalizedQuery = query.trim().toLocaleLowerCase('ru-RU');
   const conversations = page.items.filter((conversation) => {
     if (unreadOnly && conversation.unreadCount <= 0) return false;
     if (filter !== 'ALL' && conversation.kind !== filter) return false;
@@ -65,13 +97,22 @@ export function ChatList({
   if (page.items.length === 0) {
     return (
       <div className={styles.emptyState} role="status">
-        <strong>Диалогов пока нет</strong>
+        <strong>У вас пока нет чатов</strong>
         <p>Начните общение из профиля игрока или откройте чат в карточке своей игры.</p>
       </div>
     );
   }
 
-  if (conversations.length === 0 && unreadOnly && !normalizedQuery) {
+  if (conversations.length === 0 && normalizedQuery) {
+    return (
+      <div className={styles.emptyState} role="status">
+        <strong>По запросу ничего не найдено</strong>
+        <p>Измените запрос или очистите поле поиска.</p>
+      </div>
+    );
+  }
+
+  if (conversations.length === 0 && unreadOnly) {
     return (
       <div className={styles.emptyState} role="status">
         <strong>Нет непрочитанных чатов</strong>
@@ -83,14 +124,14 @@ export function ChatList({
   if (conversations.length === 0) {
     return (
       <div className={styles.emptyState} role="status">
-        <strong>Ничего не найдено</strong>
-        <p>Измените запрос или выберите другой тип чатов.</p>
+        <strong>В этой категории пока нет чатов</strong>
+        <p>Выберите другую категорию или начните новый диалог из профиля игрока.</p>
       </div>
     );
   }
 
   return (
-    <ul className={styles.list} aria-label="Диалоги">
+    <ul className={styles.list} aria-label="Диалоги" ref={listRef} onScroll={handleScroll}>
       {conversations.map((conversation) => (
         <ChatListItem
           key={conversation.id}
