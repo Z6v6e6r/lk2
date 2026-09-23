@@ -157,13 +157,19 @@
   display: none;
 }
 
+/* Seven labelled chips need roughly 850px, and the rail gets only 340–390px in the desktop layout as
+   well: the list pane is the same width a phone already collapses for. The icon set and the
+   accessible name therefore stay the rail's only layout, so a chip can never spill its text over the
+   pictogram of its neighbour, whatever the viewport width. */
 .filterRail button,
 .filterRail a {
   display: inline-flex;
-  min-width: 36px;
+  box-sizing: border-box;
+  min-width: 44px;
   min-height: 44px;
-  padding: 10px 8px;
-  flex: 1 0 0;
+  padding: 10px 4px;
+  flex: 1 1 0;
+  gap: 0;
   align-items: center;
   justify-content: center;
   border: 1px solid transparent;
@@ -177,12 +183,8 @@
   text-decoration: none;
 }
 
-.filterRail button,
-.filterRail a {
-  gap: 6px;
-}
-
 .filterLabel {
+  display: none;
   white-space: nowrap;
 }
 
@@ -1310,20 +1312,8 @@
     overflow-x: hidden;
   }
 
-  /* Seven labelled buttons do not fit a phone width without colliding: the rail keeps the icon set
-     and the accessible name, except “Все”; targets share the width with a 44px minimum. */
-  .filterLabel {
-    display: none;
-  }
-
-  .filterRail button,
-  .filterRail a {
-    min-width: 44px;
-    padding: 10px 4px;
-    flex: 1 1 0;
-    gap: 0;
-  }
-
+  /* The rail is compact in every layout (see the filter rail rule above), so the phone block only
+     owns the phone shell. */
   .page :global(.fh-bottom-nav) {
     right: 0;
     left: 0;
