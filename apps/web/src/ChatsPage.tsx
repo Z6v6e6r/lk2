@@ -621,13 +621,15 @@ export function ChatsPage({
               <StationDialogList
                 stations={stationState.stations}
                 dialogs={stationDialogs}
+                query={query}
                 selectedDialogId={stationState.selectedDialogId}
+                selectedStationId={stationState.pendingStationId}
                 busy={stationListBusy}
                 error={
                   stationSelectedDialog || stationState.pendingStationId ? null : stationState.error
                 }
                 onSelectDialog={selectStationDialog}
-                onStartDialog={startStationDialog}
+                onSelectStation={startStationDialog}
                 onSendMessage={sendStationMessage}
                 onRetry={loadStationSupport}
               />

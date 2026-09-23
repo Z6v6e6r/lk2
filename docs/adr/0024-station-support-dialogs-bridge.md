@@ -67,6 +67,12 @@ legacy contour directly:
 - The provider receives the PadlHub user UUID (`externalUserId`, `externalChatId`) so it can link the
   CUP client to a PadlHub account. That value is a pseudonymous internal identifier, not PII, and it
   is the only PadlHub identifier shared with the legacy contour.
+- The Chats «Станции» tab lists every published station as a chat destination, not only the
+  stations the viewer already wrote to. Tapping a station opens the viewer's own thread with it and
+  the first message creates that dialog at the provider, so each viewer has exactly one dialog per
+  station; a station without history shows an empty thread, and a dialog whose station the published
+  list cannot map stays visible so its history is never hidden. The API contract is unchanged: the
+  client joins the published station list it already reads with its own dialog list.
 - The station tab is provider-backed and deliberately outside the LK2 conversation contract: it has
   no realtime subscription, no notification policy, no attachments and no unread cursor. Its list is
   loaded lazily on that tab, not by the five-second LK2 refresh, so the provider is not polled.

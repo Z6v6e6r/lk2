@@ -8,11 +8,12 @@ import type {
   StationSupportMessage,
   StationSupportStation,
 } from '../auth-gateway.js';
+import { stationChatRows } from './station-chat-rows.js';
 import styles from './ChatsUi.module.css';
 
 export interface StationChatsHandlers {
   readonly onSelectDialog: (dialogId: string) => void;
-  readonly onStartDialog: (stationId: string) => void;
+  readonly onSelectStation: (stationId: string) => void;
   readonly onSendMessage: (text: string) => void;
   readonly onRetry: () => void;
 }
@@ -20,7 +21,9 @@ export interface StationChatsHandlers {
 interface StationDialogListProps extends StationChatsHandlers {
   readonly stations: readonly StationSupportStation[];
   readonly dialogs: readonly StationSupportDialog[];
+  readonly query: string;
   readonly selectedDialogId: string | null;
+  readonly selectedStationId: string | null;
   readonly busy: 'load' | 'send' | null;
   readonly error: ChatUiError | null;
 }
@@ -34,13 +37,23 @@ function authorLabel(author: StationSupportMessage['author']): string {
 export function StationDialogList({
   stations,
   dialogs,
+  query,
   selectedDialogId,
+  selectedStationId,
   busy,
   error,
   onSelectDialog,
-  onStartDialog,
+  onSelectStation,
   onRetry,
 }: StationDialogListProps): React.JSX.Element {
+  const rows = stationChatRows({
+    stations,
+    dialogs,
+    query,
+    selectedDialogId,
+    selectedStationId,
+  });
+  const loading = busy === 'load' && stations.length === 0;
   return (
     <div className={styles.stationListPane}>
       {error ? (
@@ -53,73 +66,53 @@ export function StationDialogList({
           )}
         </div>
       ) : null}
-      {stations.length > 0 ? (
-        <form
-          className={styles.stationStart}
-          onSubmit={(event) => {
-            event.preventDefault();
-            const select = event.currentTarget.elements.namedItem('station');
-            if (select instanceof HTMLSelectElement && select.value) onStartDialog(select.value);
-          }}
-        >
-          <label className="sr-only" htmlFor="station-support-station">
-            Станция
-          </label>
-          <select id="station-support-station" name="station" defaultValue="">
-            <option value="" disabled>
-              Выберите станцию
-            </option>
-            {stations.map((station) => (
-              <option key={station.id} value={station.id}>
-                {station.name}
-              </option>
-            ))}
-          </select>
-          <button type="submit" disabled={busy !== null}>
-            Написать
-          </button>
-        </form>
-      ) : null}
-      {busy === 'load' && dialogs.length === 0 ? (
+      {loading ? (
         <div className={styles.skeletonList} role="status" aria-label="Загружаем чаты станций">
           {Array.from({ length: 3 }, (_, index) => (
             <span key={index} className={styles.skeletonRow} aria-hidden="true" />
           ))}
         </div>
       ) : null}
-      {busy !== 'load' && dialogs.length === 0 ? (
+      {!loading && stations.length === 0 ? (
         <div className={styles.emptyState} role="status">
           <span className={styles.emptyIcon} aria-hidden="true">
             <ChatCategoryIcon name="STATION" />
           </span>
-          <strong>Обращений к станциям пока нет</strong>
-          <p>
-            {stations.length > 0
-              ? 'Выберите станцию и напишите — сообщение попадёт в ЦУП.'
-              : 'Станции появятся после публикации площадок.'}
-          </p>
+          <strong>Станции готовятся к публикации</strong>
+          <p>Как только площадки опубликуют, с каждой можно будет начать переписку.</p>
         </div>
       ) : null}
-      {dialogs.length > 0 ? (
+      {!loading && stations.length > 0 && rows.length === 0 ? (
+        <div className={styles.emptyState} role="status">
+          <strong>Ничего не найдено</strong>
+          <p>Измените запрос или выберите другую станцию.</p>
+        </div>
+      ) : null}
+      {rows.length > 0 ? (
         <ul className={styles.list} aria-label="Чаты станций">
-          {dialogs.map((dialog) => (
-            <li key={dialog.id}>
+          {rows.map((row) => (
+            <li key={row.key}>
               <button
                 type="button"
                 className={`${styles.listLink} ${styles.stationListButton} ${
-                  dialog.id === selectedDialogId ? styles.selectedListLink : ''
+                  row.selected ? styles.selectedListLink : ''
                 }`}
-                aria-current={dialog.id === selectedDialogId ? 'true' : undefined}
-                onClick={() => onSelectDialog(dialog.id)}
+                aria-current={row.selected ? 'true' : undefined}
+                onClick={() => {
+                  if (row.dialogId) onSelectDialog(row.dialogId);
+                  else if (row.stationId) onSelectStation(row.stationId);
+                }}
               >
-                <ChatAvatar isGame={false} title={dialog.stationName} />
+                <ChatAvatar isGame={false} title={row.title} />
                 <span className={styles.stationListItemBody}>
-                  <strong>{dialog.stationName}</strong>
-                  <small>{dialog.lastMessage?.preview ?? 'Новый диалог'}</small>
+                  <strong>{row.title}</strong>
+                  <small className={row.hasHistory ? undefined : styles.stationListEmptyPreview}>
+                    {row.preview}
+                  </small>
                 </span>
                 <span className={styles.stationListItemMeta}>
-                  {dialog.updatedAt ? (
-                    <time dateTime={dialog.updatedAt}>{formatMessageTime(dialog.updatedAt)}</time>
+                  {row.updatedAt ? (
+                    <time dateTime={row.updatedAt}>{formatMessageTime(row.updatedAt)}</time>
                   ) : null}
                 </span>
               </button>
