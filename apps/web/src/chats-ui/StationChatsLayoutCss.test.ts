@@ -39,3 +39,23 @@ describe('station thread phone layout', () => {
     );
   });
 });
+
+describe('station logo frame', () => {
+  it('keeps the squared-off station frame instead of the round participant avatar', () => {
+    const start = styles.indexOf('.stationAvatar {');
+    expect(start, 'the .stationAvatar block must exist').toBeGreaterThan(-1);
+    const body = styles.slice(start, styles.indexOf('}', start));
+
+    // The design frame is a 36px square with an 8px corner radius, so the radius stays proportional.
+    expect(body).toMatch(/border-radius:\s*22\.222%\s*;/);
+    expect(body).not.toMatch(/border-radius:\s*50%\s*;/);
+    expect(body).toMatch(/overflow:\s*hidden\s*;/);
+  });
+
+  it('narrows the logo frame to the 36px phone header column', () => {
+    const phone = atRule('@media (max-width: 767px)');
+
+    expect(phone).toMatch(/\.stationThreadHeader \.stationAvatar\s*\{[^}]*width:\s*36px\s*;/);
+    expect(phone).toMatch(/\.stationThreadHeader \.stationAvatar\s*\{[^}]*height:\s*36px\s*;/);
+  });
+});
