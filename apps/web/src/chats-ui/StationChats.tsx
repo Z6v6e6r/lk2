@@ -157,7 +157,7 @@ export function StationThread({
   });
   return (
     <section className={styles.thread} aria-label={`Диалог со станцией ${stationName}`}>
-      <header className={styles.threadHeader}>
+      <header className={`${styles.threadHeader} ${styles.stationThreadHeader}`}>
         <a className={styles.backLink} href="/chats" aria-label="Назад к чатам">
           <span aria-hidden="true">←</span>
         </a>

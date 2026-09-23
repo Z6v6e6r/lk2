@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatsPage, type StationSupportSource } from './ChatsPage.js';
+import styles from './chats-ui/ChatsUi.module.css';
 
 const conversationId = '22222222-2222-4222-8222-222222222222';
 const currentUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -13,6 +14,17 @@ const stationUuid = '9b993668-ff54-4cce-8dfd-cad84c4a06fa';
 const stationDialogId = '33333333-3333-4333-8333-333333333333';
 const otherStationUuid = '11111111-1111-4111-8111-111111111111';
 const unmappedDialogId = '44444444-4444-4444-8444-444444444444';
+
+/**
+ * `noUncheckedIndexedAccess` widens every CSS module lookup to `string | undefined`, so the lookup
+ * is guarded here: a renamed or deleted layout class must fail the test instead of comparing
+ * `undefined` against the shell and passing by accident.
+ */
+function layoutClass(name: string): string {
+  const value = styles[name];
+  if (!value) throw new Error(`the chats CSS module has no ${name} class`);
+  return value;
+}
 
 function stationSource(overrides: Partial<StationSupportSource> = {}): StationSupportSource {
   return {
@@ -880,6 +892,37 @@ describe('ChatsPage', () => {
       ),
     );
     await waitFor(() => expect(loadMessages).toHaveBeenCalledWith(stationDialogId));
+  });
+
+  it('swaps the phone shell onto the station thread once a station is picked', async () => {
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([]),
+      loadMessages: vi.fn().mockResolvedValue([]),
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    const shell = screen.getByRole('region', { name: 'Чаты' });
+    expect(shell).toHaveClass(layoutClass('listMode'));
+
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+
+    // On a phone `.listMode .thread` is `display: none`, so a station picked from the list only
+    // becomes visible when the shell itself leaves list mode.
+    await waitFor(() => expect(shell).toHaveClass(layoutClass('threadMode')));
+    expect(shell).not.toHaveClass(layoutClass('listMode'));
+    expect(screen.getByRole('region', { name: 'Диалог со станцией Ясенево' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Назад к чатам' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: 'Диалог со станцией Ясенево' }).querySelector('header'),
+    ).toHaveClass(layoutClass('stationThreadHeader'));
   });
 
   it('filters the station list and keeps an unmapped dialog visible', async () => {
