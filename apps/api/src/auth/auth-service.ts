@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 import {
+  FULL_CLIENT_PERMISSIONS,
   IdentityProviderError,
   isAdminOnlyPermission,
   normalizePhoneE164,
@@ -119,6 +120,19 @@ export interface AuthRepository {
   ): Promise<RefreshSessionIdentity | undefined>;
   getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined>;
   getUserAccessProfile?(tenantId: string, userId: string): Promise<UserAccessProfile | undefined>;
+  /**
+   * Adds `permissions` to the account's durable `identity.user_access_profiles` row and returns the
+   * profile the account now holds. Existing roles and permissions are never removed, so an operator
+   * grant is never taken away. Used to make the closed-beta client catalog durable before it is
+   * written into a client token: every messaging and communities gate reads the stored profile, so a
+   * token may not carry a right the profile below it lacks.
+   */
+  ensureClientPermissions?(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly permissions: readonly string[];
+    readonly correlationId: string;
+  }): Promise<UserAccessProfile | undefined>;
   getUserByPhone?(tenantId: string, phoneE164: string): Promise<AuthUser | undefined>;
   getRefreshSessionPrincipal?(
     tenantKey: string,
@@ -246,6 +260,17 @@ export interface AuthServiceOptions {
    * keys. Optional so environments without the provider profile read stay unchanged.
    */
   readonly legacyViewerIdentityLink?: LegacyViewerIdentityLink;
+  /**
+   * Reports a beta client-access convergence that could not be written. The token is still issued
+   * from the stored profile, so this is the only trace of a divergence that will be retried on the
+   * account's next token issuance.
+   */
+  readonly onClientAccessConvergenceFailure?: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly correlationId: string;
+    readonly error: unknown;
+  }) => void;
   readonly now?: () => Date;
 }
 
@@ -792,6 +817,7 @@ export class AuthService {
     const session = await this.sessionResult(
       { sessionId, tenantId: binding.tenantId, tenantKey: binding.tenantKey, user },
       refreshToken,
+      input.correlationId,
     );
     return { ...session, vivaHandoffCode, vivaRecovery: false };
   }
@@ -993,6 +1019,7 @@ export class AuthService {
   private async issueAccessToken(
     identity: RefreshSessionIdentity,
     audience: AccessTokenAudience,
+    correlationId: string,
   ): Promise<{
     accessToken: string;
     expiresAt: string;
@@ -1003,13 +1030,7 @@ export class AuthService {
     const expiresAt = new Date(
       issuedAt.getTime() + this.options.config.AUTH_ACCESS_TTL_SECONDS * 1000,
     );
-    const storedAccess = (await this.options.repository.getUserAccessProfile?.(
-      identity.tenantId,
-      identity.user.id,
-    )) ?? {
-      roles: ['client'],
-      permissions: DEFAULT_CLIENT_PERMISSIONS,
-    };
+    const storedAccess = await this.resolveStoredAccess(identity, audience, correlationId);
     this.assertAudienceAccess(audience, storedAccess);
     const roles =
       audience === 'admin'
@@ -1042,6 +1063,54 @@ export class AuthService {
     return { accessToken, expiresAt: expiresAt.toISOString(), roles, permissions };
   }
 
+  /**
+   * Reads the profile a token is issued from. Under the closed-beta switch the client catalog is
+   * added to every client token, but the stored profile stays the source of truth for every
+   * messaging and communities gate. A peer who registered after the last operator backfill therefore
+   * held an empty stored profile while their token claimed `chat.direct.create`, and the sender got a
+   * stable `CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED` for a thread the peer could never open.
+   *
+   * The convergence is best effort: the refresh token has already rotated by the time a token is
+   * signed, so a write failure must not cost the caller a login. The token is then issued from the
+   * stored profile exactly as it was before the convergence existed — the same divergence, retried on
+   * the next issuance — instead of failing the request.
+   */
+  private async resolveStoredAccess(
+    identity: RefreshSessionIdentity,
+    audience: AccessTokenAudience,
+    correlationId: string,
+  ): Promise<UserAccessProfile> {
+    const repository = this.options.repository;
+    if (
+      audience === 'client' &&
+      this.options.config.BETA_FULL_CLIENT_ACCESS_ENABLED &&
+      repository.ensureClientPermissions
+    ) {
+      try {
+        const stored = await repository.ensureClientPermissions({
+          tenantId: identity.tenantId,
+          userId: identity.user.id,
+          permissions: FULL_CLIENT_PERMISSIONS,
+          correlationId,
+        });
+        if (stored) return stored;
+      } catch (error) {
+        this.options.onClientAccessConvergenceFailure?.({
+          tenantId: identity.tenantId,
+          userId: identity.user.id,
+          correlationId,
+          error,
+        });
+      }
+    }
+    return (
+      (await repository.getUserAccessProfile?.(identity.tenantId, identity.user.id)) ?? {
+        roles: ['client'],
+        permissions: DEFAULT_CLIENT_PERMISSIONS,
+      }
+    );
+  }
+
   private assertAudienceAccess(audience: AccessTokenAudience, access: UserAccessProfile): void {
     if (
       audience === 'admin' &&
@@ -1068,9 +1137,10 @@ export class AuthService {
   private async sessionResult(
     identity: RefreshSessionIdentity,
     refreshToken: string,
+    correlationId: string,
     audience: AccessTokenAudience = 'client',
   ): Promise<AuthSessionResult> {
-    const access = await this.issueAccessToken(identity, audience);
+    const access = await this.issueAccessToken(identity, audience, correlationId);
     return {
       ...access,
       refreshToken,
@@ -1192,6 +1262,7 @@ export class AuthService {
           input.challengeId,
           input.idempotencyKey,
         ]),
+        input.correlationId,
         input.accessAudience,
       );
     }
@@ -1342,6 +1413,7 @@ export class AuthService {
       return this.sessionResult(
         { sessionId, tenantId: challenge.tenantId, tenantKey: challenge.tenantKey, user },
         refreshToken,
+        input.correlationId,
         input.accessAudience,
       );
     } catch (error) {
@@ -1389,7 +1461,7 @@ export class AuthService {
     });
     if (rotation.outcome === 'race') throw new AuthServiceError('AUTH_REFRESH_RACE');
     if (rotation.outcome === 'invalid') throw new AuthServiceError('AUTH_SESSION_REVOKED');
-    return this.sessionResult(rotation.identity, nextRefreshToken, accessAudience);
+    return this.sessionResult(rotation.identity, nextRefreshToken, correlationId, accessAudience);
   }
 
   public async revokeSession(

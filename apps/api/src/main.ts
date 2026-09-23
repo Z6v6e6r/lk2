@@ -225,6 +225,11 @@ const authService = new AuthService({
   vivaOAuthProvider: vivaIdentityProvider,
   vivaOAuthStateStore: new RedisVivaOAuthStateStore(redis),
   providers,
+  onClientAccessConvergenceFailure: ({ tenantId, userId, correlationId }) =>
+    logger.warn(
+      { tenantId, userId, correlationId },
+      'beta client access convergence could not be written; the token keeps the stored profile',
+    ),
   ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
 });
 const activityHistoryRepository = config.ACTIVITY_HISTORY_ENABLED

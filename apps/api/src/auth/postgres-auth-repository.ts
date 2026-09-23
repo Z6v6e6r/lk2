@@ -229,6 +229,79 @@ export class PostgresAuthRepository implements AuthRepository {
     });
   }
 
+  /**
+   * Adds permissions to the stored profile and returns the profile the account now holds. The
+   * advisory lock is the one both operator writers (`scripts/grant-beta-full-client-access.ts` and
+   * `scripts/set-user-access.ts`) already take for the same key, so the read-union-write below cannot
+   * silently drop a concurrent operator grant. Roles and permissions are only ever added, and an
+   * account that is not `ACTIVE` keeps the non-enumerating `undefined`.
+   */
+  public ensureClientPermissions(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly permissions: readonly string[];
+    readonly correlationId: string;
+  }): Promise<UserAccessProfile | undefined> {
+    return this.withTenant(input.tenantId, async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `user-access:${input.tenantId}:${input.userId}`,
+      ]);
+      const result = await client.query<{
+        roles: string[];
+        permissions: string[];
+        has_profile: boolean;
+      }>(
+        `select
+           coalesce(a.roles, array['client']::text[]) as roles,
+           coalesce(a.permissions, array['profile.read']::text[]) as permissions,
+           a.user_id is not null as has_profile
+         from identity.users u
+         left join identity.user_access_profiles a
+           on a.tenant_id = u.tenant_id and a.user_id = u.id
+        where u.tenant_id = $1 and u.id = $2 and u.status = 'ACTIVE'`,
+        [input.tenantId, input.userId],
+      );
+      const row = result.rows[0];
+      if (!row) return undefined;
+      const roles = [...new Set(row.roles)].sort();
+      const permissions = [...new Set([...row.permissions, ...input.permissions])].sort();
+      const stored = new Set(row.permissions);
+      if (row.has_profile && !input.permissions.some((permission) => !stored.has(permission))) {
+        return { roles, permissions };
+      }
+      await client.query(
+        `insert into identity.user_access_profiles (
+           tenant_id, user_id, roles, permissions, updated_by
+         ) values ($1, $2, $3::text[], $4::text[], null)
+         on conflict (tenant_id, user_id) do update set
+           roles = excluded.roles,
+           permissions = excluded.permissions,
+           updated_by = excluded.updated_by,
+           updated_at = now()`,
+        [input.tenantId, input.userId, roles, permissions],
+      );
+      await client.query(
+        `insert into audit.audit_log (
+           tenant_id, actor_id, action, resource_type, resource_id,
+           result, reason, correlation_id, old_value, new_value
+         ) values ($1, null, 'USER_ACCESS_CHANGED', 'USER_ACCESS', $2,
+                   'SUCCESS', 'BETA_CLIENT_ACCESS_CONVERGENCE', $3, $4::jsonb, $5::jsonb)`,
+        [
+          input.tenantId,
+          input.userId,
+          input.correlationId,
+          // An account without a row had no stored grant, not the read fallback's defaults.
+          JSON.stringify({
+            roles: row.has_profile ? row.roles : [],
+            permissions: row.has_profile ? row.permissions : [],
+          }),
+          JSON.stringify({ roles, permissions }),
+        ],
+      );
+      return { roles, permissions };
+    });
+  }
+
   public getUserByPhone(tenantId: string, phoneE164: string): Promise<AuthUser | undefined> {
     return this.withTenant(tenantId, async (client) => {
       const result = await client.query<{
