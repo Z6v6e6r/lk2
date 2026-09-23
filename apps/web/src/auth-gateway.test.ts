@@ -3017,8 +3017,13 @@ describe('browser auth gateway', () => {
         );
       }
       if (url.endsWith(`/support/attachments/${attachmentId}/content`)) {
+        // A byte body, not a Blob: `Response.blob()` forwards the underlying stream and the Node
+        // runtime used by CI rejects a Blob-wrapped body there.
         return Promise.resolve(
-          new Response(new Blob(['webp-bytes'], { type: 'image/webp' }), { status: 200 }),
+          new Response(new Uint8Array([0x52, 0x49, 0x46, 0x46]), {
+            status: 200,
+            headers: { 'Content-Type': 'image/webp' },
+          }),
         );
       }
       return Promise.resolve(new Response(null, { status: 404 }));
