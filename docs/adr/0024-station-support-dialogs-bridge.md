@@ -13,7 +13,8 @@ Two facts constrain the answer:
 - LK1 (`SupportChatWidget`) writes those dialogs into the shared support store through the LK1
   support contour (`/lk/support/dialogs`, `/lk/support/dialogs/{id}/messages`,
   `POST /lk/support/dialogs/events`). CUP operators answer them in the existing ЦУП; a client is
-  identified by the viewer's phone number and keeps one dialog per station.
+  identified by the viewer's phone number and keeps one open dialog per client and connector, whose
+  station the latest explicit selection replaces.
 - PadlHub has no station conversation model. `docs/domains/chats-and-notifications.md` keeps the
   `STATION` conversation kind closed until a station membership/privacy model is approved, and the
   database kind `SUPPORT` is modelled but unused. Building that model now would move every operator
@@ -53,6 +54,14 @@ legacy contour directly:
   counts towards the shared circuit breaker nor pretends to be an outage.
 - The dialog list is bounded to the newest 200 dialogs, matching the published `maxItems`, and a
   write into a `CLOSED` dialog is refused with `SUPPORT_DIALOG_CLOSED`.
+- The event body carries only properties the CUP ingest DTO declares. The ingest validates with
+  `whitelist: true, forbidNonWhitelisted: true`, so one undeclared property refuses the entire
+  command with HTTP 400: an earlier body sent `phoneNumber`, which that DTO does not declare (it
+  declares `phone` and `primaryPhone`), and every station message was rejected before the station
+  was read. `kind: 'TEXT'` keeps the message an actionable client text; without it the ingest reads
+  a station-carrying event as a `STATION_SELECTION` system event, which the operator inbox does not
+  treat as a message waiting for an answer. The station itself is routed by `selectedStationId`,
+  which the web connector derives from the event's `stationId`.
 - `SUPPORT_STATIONS_ENABLED` is default-off and requires `SUPPORT_LEGACY_BASE_URL`. The provider
   client is bounded (timeout, at most two attempts with backoff, per-operation circuit breaker,
   bounded response body, `redirect: 'error'`, HTTPS-only base URL outside localhost) and emits only
@@ -60,7 +69,7 @@ legacy contour directly:
 
 ## Consequences
 
-- CUP keeps one support inbox and one dialog per viewer and station. Existing LK1 dialogs stay
+- CUP keeps one support inbox and one open dialog per client and connector. Existing LK1 dialogs stay
   visible when the viewer's verified phone is the number CUP already stored; when the two phones
   differ, the verified identity wins and older dialogs under the provider-asserted number are not
   enumerated. That trade is deliberate: reading a recycled number's history is the worse failure.
@@ -69,10 +78,13 @@ legacy contour directly:
   is the only PadlHub identifier shared with the legacy contour.
 - The Chats «Станции» tab lists every published station as a chat destination, not only the
   stations the viewer already wrote to. Tapping a station opens the viewer's own thread with it and
-  the first message creates that dialog at the provider, so each viewer has exactly one dialog per
-  station; a station without history shows an empty thread, and a dialog whose station the published
-  list cannot map stays visible so its history is never hidden. The API contract is unchanged: the
-  client joins the published station list it already reads with its own dialog list.
+  the first message sends that station to the provider; a station without history shows an empty
+  thread, and a dialog whose station the published list cannot map stays visible so its history is
+  never hidden. The API contract is unchanged: the client joins the published station list it
+  already reads with its own dialog list. The provider keeps one open dialog per client and
+  connector rather than one per station, so an explicitly selected station moves that dialog's
+  station (and the CUP client's current station), exactly as the LK1 widget does; per-station
+  threads remain the provider's behaviour to change.
 - The station tab is provider-backed and deliberately outside the LK2 conversation contract: it has
   no realtime subscription, no notification policy, no attachments and no unread cursor. Its list is
   loaded lazily on that tab, not by the five-second LK2 refresh, so the provider is not polled.
@@ -88,9 +100,10 @@ legacy contour directly:
 
 ## Known limitations
 
-- The provider's real response shape is unverified: the message page (`beforeTs` + `limit`) is
-  assumed to return the newest messages, so replay and recovery can miss a write if the provider
-  pages the other way. History is capped at 50 messages with no pagination.
+- The ingest request contract is verified against the live CUP backend, but the message page
+  (`beforeTs` + `limit`) is still assumed to return the newest messages, so replay and recovery can
+  miss a write if the provider pages the other way. History is capped at 50 messages with no
+  pagination.
 - `SUPPORT_LEGACY_BASE_URL` is only accepted with HTTPS outside localhost; an operator must configure
   the live contour before the flag can be enabled.
 - Provider attempts are logged as metrics only; a counter for circuit state is a follow-up.

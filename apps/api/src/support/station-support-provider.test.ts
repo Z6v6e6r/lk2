@@ -135,7 +135,37 @@ describe('legacy station support client', () => {
       stationId: 'Yasenevo',
       externalMessageId: 'station-message-000001',
     });
-    expect(body).not.toHaveProperty('phoneNumbers');
+    // The CUP ingest validates with `forbidNonWhitelisted`, so the body may carry only properties
+    // that DTO declares: an extra one refuses the whole command with HTTP 400. `phoneNumber` was
+    // exactly that extra property and every station message was rejected by it.
+    expect(body).not.toHaveProperty('phoneNumber');
+    expect(Object.keys(body).sort()).toEqual([
+      'authStatus',
+      'authorType',
+      'channel',
+      'connector',
+      'direction',
+      'displayName',
+      'eventType',
+      'externalChatId',
+      'externalMessageId',
+      'externalUserId',
+      'kind',
+      'phone',
+      'primaryPhone',
+      'stationId',
+      'stationName',
+      'text',
+    ]);
+    // An explicit `kind` keeps the message an actionable client text; without it the ingest reads
+    // the station-carrying event as a `STATION_SELECTION` system event.
+    expect(body).toMatchObject({
+      kind: 'TEXT',
+      direction: 'INBOUND',
+      authorType: 'CLIENT',
+    });
+    // Exactly one viewer number: the provider asked never to merge two numbers into one client.
+    expect(body.primaryPhone).toBe(body.phone);
   });
 
   it('retries a bounded transient failure and reports only redacted metrics', async () => {

@@ -302,14 +302,21 @@ export class LegacyStationSupportClient implements StationSupportProvider {
       method: 'POST',
       correlationId: input.correlationId,
       retryable: false,
+      // The event body carries only properties the CUP ingest DTO declares. That DTO is validated
+      // with `whitelist: true, forbidNonWhitelisted: true`, so one undeclared property refuses the
+      // whole command with HTTP 400: `phoneNumber` was exactly that property (the DTO declares
+      // `phone` and `primaryPhone` only), and every station message was rejected before the station
+      // was even read. `kind: 'TEXT'` keeps the message an actionable client text: without it the
+      // ingest classifies an event that carries a station as `STATION_SELECTION`, which the operator
+      // inbox does not treat as a message waiting for an answer.
       body: {
         connector: 'WEB_LK',
         channel: 'WEB',
         direction: 'INBOUND',
         authorType: 'CLIENT',
         eventType: 'MESSAGE',
+        kind: 'TEXT',
         phone: input.phoneDigits,
-        phoneNumber: input.phoneDigits,
         primaryPhone: input.phoneDigits,
         externalUserId: input.externalUserId,
         externalChatId: input.externalChatId,
