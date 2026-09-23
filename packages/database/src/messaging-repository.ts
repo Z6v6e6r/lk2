@@ -96,6 +96,7 @@ export interface ConversationMessagePage {
 export type CreateDirectConversationResult =
   | { readonly outcome: 'target_not_found' }
   | { readonly outcome: 'target_unreachable' }
+  | { readonly outcome: 'target_chat_access_required' }
   | { readonly outcome: 'idempotency_conflict' }
   | {
       readonly outcome: 'ok';
@@ -212,6 +213,12 @@ export interface MessagingRepository {
     readonly userId: string;
     readonly limit: number;
   }): Promise<readonly MessagingConversationSummary[]>;
+  /**
+   * Opens or reads back the canonical DIRECT pair. Creating a new conversation additionally requires
+   * the peer to hold the stored `chat.direct.create` grant, because a peer without it can never open
+   * the thread; an already existing pair is returned unchanged so an accepted membership is never
+   * taken away by that guard.
+   */
   createDirectConversation(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -1122,25 +1129,33 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
           id: string;
           chat_policy: string;
           reachable: boolean;
+          can_direct_chat: boolean;
         }>(
           `select user_account.id,
                   coalesce(privacy.chat_policy, 'AUTHORIZED') as chat_policy,
-                  ${profileReachableSql({ tenantParam: '$1', userParam: 'user_account.id' })} as reachable
+                  ${profileReachableSql({ tenantParam: '$1', userParam: 'user_account.id' })} as reachable,
+                  exists (
+                    select 1
+                      from identity.user_access_profiles direct_access
+                     where direct_access.tenant_id = user_account.tenant_id
+                       and direct_access.user_id = user_account.id
+                       and 'chat.direct.create' = any(direct_access.permissions)
+                  ) as can_direct_chat
              from identity.users user_account
-             join identity.user_access_profiles current_access
-               on current_access.tenant_id = user_account.tenant_id
-              and current_access.user_id = $3
-              and 'chat.direct.create' = any(current_access.permissions)
              left join profile.privacy_settings privacy
                on privacy.tenant_id = user_account.tenant_id
               and privacy.user_id = user_account.id
             where user_account.tenant_id = $1
               and user_account.id = any($2::uuid[])
               and user_account.status = 'ACTIVE'`,
-          [input.tenantId, [input.actorUserId, input.otherUserId], input.actorUserId],
+          [input.tenantId, [input.actorUserId, input.otherUserId]],
         );
-        if (activeUsers.rows.length !== 2) return { outcome: 'target_not_found' };
+        const actor = activeUsers.rows.find((user) => user.id === input.actorUserId);
         const target = activeUsers.rows.find((user) => user.id === input.otherUserId);
+        // An actor without the stored direct-chat grant keeps the existing non-enumerating refusal.
+        if (activeUsers.rows.length !== 2 || actor?.can_direct_chat !== true) {
+          return { outcome: 'target_not_found' };
+        }
         if (!target || target.chat_policy !== 'AUTHORIZED') {
           return { outcome: 'target_not_found' };
         }
@@ -1189,6 +1204,11 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         let conversationId = existing?.conversation_id;
         const created = !conversationId;
         if (!conversationId) {
+          // A peer without the stored direct-chat grant can never open a new conversation: the
+          // thread and its "new chat" notification would be dead on arrival for its owner. Refuse
+          // the command instead of writing that thread. Only creation is gated here — the canonical
+          // pair above stays returnable, so an already accepted membership is never taken away.
+          if (target.can_direct_chat !== true) return { outcome: 'target_chat_access_required' };
           const inserted = await queryOne<{ id: string }>(
             client,
             `insert into messaging.conversations (
@@ -1222,6 +1242,10 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               JSON.stringify({
                 conversationId,
                 kind: 'DIRECT',
+                // The creation gate above proves this peer held the stored direct-chat grant when the
+                // thread was opened, so this event is never published for a peer who could not open
+                // it then. A grant revoked before the projection is not re-checked here: the
+                // notification projector revalidates only the recipient's account status.
                 recipientUserIds: [input.otherUserId],
               }),
             ],

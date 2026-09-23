@@ -357,6 +357,18 @@ Before rolling any tenant back to an image that predates block enforcement, set
 `messaging.user_blocks`. If any row exists, turn both DIRECT HTTP and realtime off for that tenant
 before the old image starts. Preserve the rows; an old reader must never bypass an active block.
 
+A direct chat is created only when the peer also holds the _stored_ `chat.direct.create` in
+`identity.user_access_profiles`. The beta-only token catalog (`BETA_FULL_CLIENT_ACCESS_ENABLED`) is not
+sufficient: every messaging gate reads the stored profile, so a peer without the durable grant would
+receive a "new chat" notification for a thread they can never open. Creating one now answers
+`CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED` and writes no conversation; keep the durable grant current for
+the tenant with `npm run user:access:beta-full` (`--confirm=APPLY_USER_ACCESS` after a dry run),
+otherwise newly registered beta accounts keep failing that way while the UI still shows chats. Before
+calling a chat-access incident resolved, verify the stored grant for every active account of the tenant
+(`npm run identity:phone-anomalies:report` plus this section's checks) and define the path that grants
+it to accounts registered after the last backfill; refusing creation means the sender's intent is no
+longer stored, so provisioning the grant is the only way back to a conversation that was never opened.
+
 ### Direct chat realtime M2 gate
 
 Realtime включается только после HTTP/direct M1. До apply проверьте, что

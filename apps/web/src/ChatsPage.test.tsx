@@ -11,6 +11,8 @@ const conversationId = '22222222-2222-4222-8222-222222222222';
 const currentUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const stationUuid = '9b993668-ff54-4cce-8dfd-cad84c4a06fa';
 const stationDialogId = '33333333-3333-4333-8333-333333333333';
+const otherStationUuid = '11111111-1111-4111-8111-111111111111';
+const unmappedDialogId = '44444444-4444-4444-8444-444444444444';
 
 function stationSource(overrides: Partial<StationSupportSource> = {}): StationSupportSource {
   return {
@@ -191,6 +193,47 @@ describe('ChatsPage', () => {
       />,
     );
     expect(screen.getByRole('button', { name: 'Начать диалог' })).toBeDisabled();
+  });
+
+  it('retries the failed direct start from its own banner instead of reloading chats', () => {
+    const onCreateDirect = vi.fn();
+    const onRefresh = vi.fn();
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="new"
+        hasExplicitRecipient
+        error={{
+          kind: 'PARTICIPANT_UNAVAILABLE',
+          message: 'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.',
+        }}
+        onCreateDirect={onCreateDirect}
+        onRefresh={onRefresh}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Получатель недоступен');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    expect(onCreateDirect).toHaveBeenCalledOnce();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('names a refused recipient on the direct-start screen instead of a missing chat', () => {
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="new"
+        hasExplicitRecipient
+        error={{ kind: 'NOT_FOUND', message: 'Получатель недоступен для личного чата.' }}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Получатель недоступен');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Чат недоступен');
   });
 
   it('keeps feature-unavailable and retryable failures distinct', () => {
@@ -797,7 +840,7 @@ describe('ChatsPage', () => {
     expect(screen.queryByRole('button', { name: 'Обновить' })).not.toBeInTheDocument();
   });
 
-  it('starts a new station dialog from the station picker', async () => {
+  it('lists every published station and starts a dialog by tapping it', async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       dialogId: stationDialogId,
       message: null,
@@ -805,7 +848,10 @@ describe('ChatsPage', () => {
     });
     const loadMessages = vi.fn().mockResolvedValue([]);
     const source = stationSource({
-      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadStations: vi.fn().mockResolvedValue([
+        { id: stationUuid, name: 'Ясенево' },
+        { id: otherStationUuid, name: 'Нагатинская' },
+      ]),
       loadDialogs: vi.fn().mockResolvedValue([]),
       loadMessages,
       sendMessage,
@@ -819,9 +865,12 @@ describe('ChatsPage', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
-    expect(await screen.findByText('Обращений к станциям пока нет')).toBeVisible();
-    fireEvent.change(screen.getByLabelText('Станция'), { target: { value: stationUuid } });
-    fireEvent.click(screen.getByRole('button', { name: 'Написать' }));
+    const list = await screen.findByRole('list', { name: 'Чаты станций' });
+    expect(within(list).getByText('Ясенево')).toBeVisible();
+    expect(within(list).getByText('Нагатинская')).toBeVisible();
+    expect(within(list).getAllByText('Начните переписку')).toHaveLength(2);
+
+    fireEvent.click(within(list).getByRole('button', { name: /Ясенево/ }));
     const composer = screen.getByLabelText('Сообщение');
     await userEvent.type(composer, 'Здравствуйте');
     fireEvent.submit(composer.closest('form') as HTMLFormElement);
@@ -831,6 +880,62 @@ describe('ChatsPage', () => {
       ),
     );
     await waitFor(() => expect(loadMessages).toHaveBeenCalledWith(stationDialogId));
+  });
+
+  it('filters the station list and keeps an unmapped dialog visible', async () => {
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([
+        { id: stationUuid, name: 'Ясенево' },
+        { id: otherStationUuid, name: 'Нагатинская' },
+      ]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: '2026-09-22T10:00:00.000Z',
+          lastMessage: {
+            preview: 'Когда свободен корт?',
+            author: 'STATION',
+            createdAt: '2026-09-22T10:00:00.000Z',
+          },
+        },
+        {
+          id: unmappedDialogId,
+          stationId: null,
+          stationName: 'Без станции',
+          status: 'OPEN',
+          updatedAt: null,
+          lastMessage: null,
+        },
+      ]),
+      loadMessages: vi.fn().mockResolvedValue([]),
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    const list = await screen.findByRole('list', { name: 'Чаты станций' });
+    expect(within(list).getByText('Когда свободен корт?')).toBeVisible();
+    expect(within(list).getByText('Без станции')).toBeVisible();
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Поиск по чатам' }), {
+      target: { value: 'нагат' },
+    });
+    expect(within(list).getByText('Нагатинская')).toBeVisible();
+    expect(within(list).queryByText('Ясенево')).not.toBeInTheDocument();
+    expect(within(list).queryByText('Без станции')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Поиск по чатам' }), {
+      target: { value: 'ничего' },
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Ничего не найдено');
   });
 
   it('reports a disabled station feature with the feature-unavailable copy', async () => {

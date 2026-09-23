@@ -12,6 +12,7 @@ import {
   within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { ApiClientError } from '@phub/api-sdk';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const realtimeMocks = vi.hoisted(() => ({
@@ -2629,6 +2630,98 @@ describe('PadlHub web authentication', () => {
 
     expect(await screen.findByText('Проверьте соединение и повторите запрос.')).toBeVisible();
     expect(realtimeMocks.connect).not.toHaveBeenCalled();
+  });
+
+  it('explains an unavailable dialog as an account access problem, not a lost chat', async () => {
+    const directConversation = {
+      id: '22222222-2222-4222-8222-222222222222',
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    window.history.replaceState({}, '', `/chats/${directConversation.id}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages: vi
+        .fn()
+        .mockRejectedValue(
+          new ApiClientError(
+            'Диалог не найден.',
+            404,
+            'CONVERSATION_NOT_FOUND',
+            'correlation-history-404',
+          ),
+        ),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    expect(await screen.findByText('Чат недоступен')).toBeVisible();
+    expect(
+      screen.getByText(
+        'Чат недоступен для этой учётной записи. Если список диалогов пуст, доступ к личным чатам ещё не открыт.',
+      ),
+    ).toBeVisible();
+  });
+
+  it('reports a switched-off direct contour instead of an unreachable recipient', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    window.history.replaceState({}, '', `/chats/new?recipientUserId=${recipientUserId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createDirectConversation: vi
+        .fn()
+        .mockRejectedValue(
+          new ApiClientError(
+            'Личные диалоги не включены.',
+            404,
+            'DIRECT_MESSAGING_DISABLED',
+            'correlation-create-404',
+          ),
+        ),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Начать диалог' }));
+
+    expect(await screen.findByText('Чаты пока недоступны')).toBeVisible();
+    expect(
+      screen.getByText(
+        'Контур чатов ещё не включён для этой организации. Остальные разделы работают.',
+      ),
+    ).toBeVisible();
+  });
+
+  it('names the refused peer instead of asking to retry a terminal chat refusal', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    window.history.replaceState({}, '', `/chats/new?recipientUserId=${recipientUserId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [] }),
+      createDirectConversation: vi
+        .fn()
+        .mockRejectedValue(
+          new ApiClientError(
+            'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.',
+            409,
+            'CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED',
+            'correlation-create-409',
+          ),
+        ),
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Начать диалог' }));
+
+    expect(await screen.findByText('Получатель недоступен')).toBeVisible();
+    expect(
+      screen.getByText('У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.'),
+    ).toBeVisible();
   });
 
   it('opens realtime only after the selected DIRECT conversation is loaded', async () => {

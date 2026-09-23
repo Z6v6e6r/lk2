@@ -337,6 +337,15 @@ export function registerMessagingRoutes(
           'Игрок ещё не входил в ПадлХАБ: он не увидит диалог, пока не войдёт в приложение.',
         );
       }
+      if (result.outcome === 'target_chat_access_required') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED',
+          'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.',
+        );
+      }
       if (result.outcome === 'idempotency_conflict') return conflict(request, reply);
       return result;
     },

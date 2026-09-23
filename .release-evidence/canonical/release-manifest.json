@@ -1,0 +1,115 @@
+{
+  "schemaVersion": "PHUB_TIMEWEB_RELEASE_MANIFEST_V2",
+  "repository": "Z6v6e6r/lk2",
+  "gitCommit": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+  "gitTree": "2208423eabc11cb41c8909e01112a308d591eaf3",
+  "platform": "linux/amd64",
+  "publication": {
+    "workflow": ".github/workflows/publish-timeweb-amd64-images.yaml",
+    "workflowSha": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+    "runId": "35819583790",
+    "runAttempt": "1"
+  },
+  "baseLock": {
+    "schema": "PHUB_TIMEWEB_BASE_IMAGES_V2",
+    "sha256": "9478142ad4755b65bf4a9e10138be18c0586f90af53b63e0668cea488e2a84e2"
+  },
+  "baseImages": [
+    {
+      "id": "buildkit-syft-scanner",
+      "registry": "docker.io",
+      "repository": "docker/buildkit-syft-scanner",
+      "tag": "stable-1",
+      "indexDigest": "sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9",
+      "manifestDigest": "sha256:187e1892a7752c9384c59aba9517dd8e40610b748c72773e87b63720514463c2"
+    },
+    {
+      "id": "nginx-web-runtime",
+      "registry": "docker.io",
+      "repository": "library/nginx",
+      "tag": "1.27-alpine",
+      "indexDigest": "sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",
+      "manifestDigest": "sha256:62223d644fa234c3a1cc785ee14242ec47a77364226f1c811d2f669f96dc2ac8"
+    },
+    {
+      "id": "node-runtime-build-base",
+      "registry": "docker.io",
+      "repository": "library/node",
+      "tag": "22-bookworm-slim",
+      "indexDigest": "sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436",
+      "manifestDigest": "sha256:a17d50af28002a160548bd4225b3cfcb12c5efcb171f79e68758f2885fb1b066"
+    }
+  ],
+  "images": [
+    {
+      "component": "web",
+      "repository": "ghcr.io/z6v6e6r/phub-web",
+      "digest": "sha256:54ef75265f358426e37614f9b33043b56f63e6dae355f7a5f0887f0a2bbe8ef9",
+      "runtimeDigest": "sha256:9ce510258456c16a258119f35a1458fa007292836e4238ab52ee883d3a2556df",
+      "architecture": "amd64",
+      "revision": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "provenance": true,
+      "provenanceSubject": "sha256:9ce510258456c16a258119f35a1458fa007292836e4238ab52ee883d3a2556df",
+      "sbom": true,
+      "sbomSubject": "sha256:9ce510258456c16a258119f35a1458fa007292836e4238ab52ee883d3a2556df",
+      "sourceMaterialSha": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "publication": true
+    },
+    {
+      "component": "api",
+      "repository": "ghcr.io/z6v6e6r/phub-api",
+      "digest": "sha256:851eff9ce8a80dd8190d6d0647ada2c51cdc9a58115a68851a9eb396ccd292fa",
+      "runtimeDigest": "sha256:7e640984664d69f9def486cf34423433b2fed4adc19f282c256f7ce49162ec10",
+      "architecture": "amd64",
+      "revision": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "provenance": true,
+      "provenanceSubject": "sha256:7e640984664d69f9def486cf34423433b2fed4adc19f282c256f7ce49162ec10",
+      "sbom": true,
+      "sbomSubject": "sha256:7e640984664d69f9def486cf34423433b2fed4adc19f282c256f7ce49162ec10",
+      "sourceMaterialSha": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "publication": true
+    },
+    {
+      "component": "worker",
+      "repository": "ghcr.io/z6v6e6r/phub-worker",
+      "digest": "sha256:9ce07e0ee2703948563152c6510b9e6139329b3ce4e0110e0b6788c7ef6c1fbb",
+      "runtimeDigest": "sha256:c0ea29159f2983c7779b05fbac3a8979ba710607ca80318ab1a9ebaf82190ac6",
+      "architecture": "amd64",
+      "revision": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "provenance": true,
+      "provenanceSubject": "sha256:c0ea29159f2983c7779b05fbac3a8979ba710607ca80318ab1a9ebaf82190ac6",
+      "sbom": true,
+      "sbomSubject": "sha256:c0ea29159f2983c7779b05fbac3a8979ba710607ca80318ab1a9ebaf82190ac6",
+      "sourceMaterialSha": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "publication": true
+    },
+    {
+      "component": "realtime",
+      "repository": "ghcr.io/z6v6e6r/phub-realtime",
+      "digest": "sha256:ea369c3f00af2573c75c761652d9399359c9f60a0092e5f99cd7e1b63bd800f7",
+      "runtimeDigest": "sha256:f0a30d71daf3899c8ee312b93f61ccef5c80bc743091f0921f8abd039919722c",
+      "architecture": "amd64",
+      "revision": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "provenance": true,
+      "provenanceSubject": "sha256:f0a30d71daf3899c8ee312b93f61ccef5c80bc743091f0921f8abd039919722c",
+      "sbom": true,
+      "sbomSubject": "sha256:f0a30d71daf3899c8ee312b93f61ccef5c80bc743091f0921f8abd039919722c",
+      "sourceMaterialSha": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "publication": true
+    },
+    {
+      "component": "migrator",
+      "repository": "ghcr.io/z6v6e6r/phub-migrator",
+      "digest": "sha256:a1b5ff69385642aaffd41b31aa7933df9c7670b2d1aea55cf09b38fbc6b21827",
+      "runtimeDigest": "sha256:cb62551c4fe7995b32c031cbf4f3dbca45bf2ea671c8a567ea9e6ac7d96792ed",
+      "architecture": "amd64",
+      "revision": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "provenance": true,
+      "provenanceSubject": "sha256:cb62551c4fe7995b32c031cbf4f3dbca45bf2ea671c8a567ea9e6ac7d96792ed",
+      "sbom": true,
+      "sbomSubject": "sha256:cb62551c4fe7995b32c031cbf4f3dbca45bf2ea671c8a567ea9e6ac7d96792ed",
+      "sourceMaterialSha": "1096adf8dd9694585f93d81bb22a1d0aaa147e79",
+      "publication": true
+    }
+  ]
+}

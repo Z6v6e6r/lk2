@@ -51,6 +51,8 @@ export interface ChatUiError {
     | 'FORBIDDEN'
     | 'NOT_FOUND'
     | 'RETRYABLE'
+    /** The peer of a new or existing direct chat cannot use chats at all: retrying cannot help. */
+    | 'PARTICIPANT_UNAVAILABLE'
     /** A terminal server refusal: retrying the same command cannot succeed. */
     | 'REJECTED';
   readonly message: string;
@@ -105,6 +107,9 @@ function readChatViewState(userId: string): Partial<ChatViewState> {
   }
 }
 
+/** The single busy slot of the chats screen, shared by the page and its error banner. */
+type ChatBusy = 'create' | 'send' | 'refresh' | 'load-earlier' | null;
+
 interface ChatsPageProps {
   readonly page: ConversationPage | null;
   readonly messages: readonly ConversationMessage[];
@@ -112,7 +117,7 @@ interface ChatsPageProps {
   readonly selectedConversationId?: string;
   readonly hasExplicitRecipient: boolean;
   readonly currentUserId: string;
-  readonly busy: 'create' | 'send' | 'refresh' | 'load-earlier' | null;
+  readonly busy: ChatBusy;
   readonly error: ChatUiError | null;
   readonly pendingMessage: PendingChatMessage | null;
   readonly realtimeState: ChatRealtimeUiState | null;
@@ -222,13 +227,56 @@ function stationSupportError(error: unknown): ChatUiError {
   };
 }
 
-function errorTitle(kind: ChatUiError['kind']): string {
+/**
+ * The title names the failed operation: opening a new chat and refreshing the inbox fail for
+ * different reasons and the same code must not be described as "could not update chats" when the
+ * person was starting a dialog.
+ */
+function errorTitle(kind: ChatUiError['kind'], creating: boolean): string {
   if (kind === 'FEATURE_UNAVAILABLE') return 'Чаты пока недоступны';
   if (kind === 'AUTH') return 'Нужно войти снова';
   if (kind === 'FORBIDDEN') return 'Нет доступа к диалогу';
-  if (kind === 'NOT_FOUND') return 'Диалог не найден';
+  if (kind === 'PARTICIPANT_UNAVAILABLE' || (creating && kind === 'NOT_FOUND')) {
+    return 'Получатель недоступен';
+  }
+  if (kind === 'NOT_FOUND') return 'Чат недоступен';
   if (kind === 'REJECTED') return 'Обращение отклонено';
-  return 'Не удалось обновить чаты';
+  return creating ? 'Не удалось открыть чат' : 'Не удалось обновить чаты';
+}
+
+/**
+ * The same refusal is reachable from the list, the thread and the "new chat" screen, so it renders in
+ * both layouts. A silent failure is not an option here: a refused peer or a switched-off contour only
+ * ever retries into the same answer, and the person needs to know that. `onRefresh` is the action that
+ * failed, so "Повторить" repeats that action instead of an unrelated reload.
+ */
+function ChatErrorBanner({
+  error,
+  creating = false,
+  busy,
+  onRefresh,
+}: {
+  readonly error: ChatUiError | null;
+  readonly creating?: boolean;
+  readonly busy: ChatBusy;
+  readonly onRefresh: () => void;
+}): React.JSX.Element | null {
+  if (!error) return null;
+  return (
+    <section className={styles.errorBanner} role="alert">
+      <span>
+        <strong>{errorTitle(error.kind, creating)}</strong>
+        <small>{error.message}</small>
+      </span>
+      {error.kind === 'AUTH' ? (
+        <a href="/">Перейти ко входу</a>
+      ) : error.kind === 'FEATURE_UNAVAILABLE' ? null : (
+        <button type="button" disabled={busy !== null} onClick={onRefresh}>
+          Повторить
+        </button>
+      )}
+    </section>
+  );
 }
 
 function realtimeLabel(state: ChatRealtimeUiState | null): string | null {
@@ -482,6 +530,12 @@ export function ChatsPage({
   if (mode === 'new') {
     return (
       <main className={styles.page}>
+        <ChatErrorBanner
+          error={error}
+          creating
+          busy={busy}
+          onRefresh={hasExplicitRecipient ? onCreateDirect : onRefresh}
+        />
         <section className={styles.directStart} aria-labelledby="chat-direct-start-title">
           <a href="/chats">← К диалогам</a>
           <h1 id="chat-direct-start-title">Новый личный чат</h1>
@@ -513,21 +567,7 @@ export function ChatsPage({
 
   return (
     <main className={`${styles.page} ${mode === 'thread' ? styles.threadPage : ''}`}>
-      {error ? (
-        <section className={styles.errorBanner} role="alert">
-          <span>
-            <strong>{errorTitle(error.kind)}</strong>
-            <small>{error.message}</small>
-          </span>
-          {error.kind === 'AUTH' ? (
-            <a href="/">Перейти ко входу</a>
-          ) : error.kind === 'FEATURE_UNAVAILABLE' ? null : (
-            <button type="button" disabled={busy !== null} onClick={onRefresh}>
-              Повторить
-            </button>
-          )}
-        </section>
-      ) : null}
+      <ChatErrorBanner error={error} busy={busy} onRefresh={onRefresh} />
       <section
         className={`${styles.shell} ${mode === 'thread' ? styles.threadMode : styles.listMode}`}
         aria-label="Чаты"
@@ -582,13 +622,15 @@ export function ChatsPage({
               <StationDialogList
                 stations={stationState.stations}
                 dialogs={stationDialogs}
+                query={query}
                 selectedDialogId={stationState.selectedDialogId}
+                selectedStationId={stationState.pendingStationId}
                 busy={stationListBusy}
                 error={
                   stationSelectedDialog || stationState.pendingStationId ? null : stationState.error
                 }
                 onSelectDialog={selectStationDialog}
-                onStartDialog={startStationDialog}
+                onSelectStation={startStationDialog}
                 onSendMessage={sendStationMessage}
                 onRetry={loadStationSupport}
               />

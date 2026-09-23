@@ -546,6 +546,33 @@ describe('messaging User API', () => {
     expect(response.json()).toMatchObject({ code: 'CHAT_PARTICIPANT_UNREACHABLE' });
   });
 
+  it('refuses a new direct chat with an account that has no chat access', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-api-test', 'silent'),
+      pool: fakePool(),
+      messagingRepository: repository({
+        createDirectConversation: vi
+          .fn()
+          .mockResolvedValue({ outcome: 'target_chat_access_required' }),
+      }),
+    });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/conversations/direct',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'direct-command-no-chat-access-0001',
+      },
+      payload: { otherUserId },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED' });
+  });
+
   it('does not reveal whether a direct-chat target is missing, inactive or privacy-restricted', async () => {
     const app = await buildApp({
       config,

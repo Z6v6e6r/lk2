@@ -99,6 +99,12 @@ MESSAGING_SMOKE_PLAYER_A_TOKEN=<short-lived-existing-session-token>
 MESSAGING_SMOKE_PLAYER_B_TOKEN=<short-lived-existing-session-token>
 ```
 
+Both accounts must carry the _stored_ `chat.direct.create` in `identity.user_access_profiles`
+(`npm run user:access:beta-full`). The beta token catalog alone is not enough: the harness creates a
+conversation, and a recipient without the durable grant now answers
+`CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED` instead of receiving a thread they could never open. Prove the
+grant before spending the approved mutation window.
+
 Then provide every non-credential input explicitly. The message must be non-sensitive, at most 200
 characters and begin with `PADLHUB_CHAT_SMOKE `:
 
