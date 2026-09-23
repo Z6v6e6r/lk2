@@ -4,7 +4,12 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
 import { createBrowserAuthGateway } from './auth-gateway.js';
 import { buildCommunityRealtimeUrl } from './community-realtime-url.js';
+import { installStaleChunkReload } from './stale-chunk-reload.js';
 import './styles.css';
+
+// Registered before the first lazy route can be requested: a tab that outlived a deploy would
+// otherwise fail to open a section whose hashed chunk belongs to the previous release.
+installStaleChunkReload(window);
 
 const mount = document.getElementById('phub-app');
 if (!mount) throw new Error('PadlHub mount element #phub-app was not found');
