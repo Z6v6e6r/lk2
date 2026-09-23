@@ -3074,7 +3074,10 @@ describe('browser auth gateway', () => {
       contentType: 'image/png',
       data: 'AAAA',
     });
-    await expect(gateway.loadStationSupportAttachment(attachmentId)).resolves.toBeInstanceOf(Blob);
+    // The runtime that answers the fetch owns the Blob constructor, so assert on the bytes.
+    const picture = await gateway.loadStationSupportAttachment(attachmentId);
+    expect(picture.size).toBe(4);
+    expect(picture.type).toBe('image/webp');
 
     const sendCall = fetchImplementation.mock.calls.find(([input]) =>
       requestUrl(input).endsWith('/support/messages'),
