@@ -5,9 +5,7 @@ export type ChatFilter = 'ALL' | 'DIRECT' | 'GAME' | 'TOURNAMENT' | 'STATION' | 
 
 interface ChatFiltersProps {
   readonly filter: ChatFilter;
-  readonly query: string;
   readonly onFilterChange: (filter: ChatFilter) => void;
-  readonly onQueryChange: (query: string) => void;
 }
 
 const filters = [
@@ -19,37 +17,49 @@ const filters = [
   { value: 'COMMUNITY', label: 'Сообщества' },
 ] as const;
 
-export function ChatFilterHeading(): React.JSX.Element {
-  return <h1>Чаты</h1>;
+export function ChatFilterHeading({ filter }: { readonly filter: ChatFilter }): React.JSX.Element {
+  const label = filters.find((item) => item.value === filter)?.label ?? 'Все';
+  return <h1 title={label}>{label}</h1>;
 }
 
-export function ChatFilters({
-  filter,
+export function ChatSearch({
   query,
-  onFilterChange,
   onQueryChange,
-}: ChatFiltersProps): React.JSX.Element {
+}: {
+  readonly query: string;
+  readonly onQueryChange: (query: string) => void;
+}): React.JSX.Element {
+  return (
+    <div className={styles.searchField}>
+      <label className="sr-only" htmlFor="chat-search">
+        Поиск по чатам
+      </label>
+      <span className={styles.searchIcon} aria-hidden="true" />
+      <input
+        id="chat-search"
+        type="search"
+        value={query}
+        placeholder="Поиск по чатам"
+        autoComplete="off"
+        onChange={(event) => onQueryChange(event.target.value)}
+      />
+      {query ? (
+        <button
+          type="button"
+          className={styles.clearSearch}
+          aria-label="Очистить"
+          onClick={() => onQueryChange('')}
+        >
+          <span aria-hidden="true">×</span>
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+export function ChatFilters({ filter, onFilterChange }: ChatFiltersProps): React.JSX.Element {
   return (
     <div className={styles.filtersBlock}>
-      <div className={styles.searchField}>
-        <label className="sr-only" htmlFor="chat-search">
-          Поиск по чатам
-        </label>
-        <span className={styles.searchIcon} aria-hidden="true" />
-        <input
-          id="chat-search"
-          type="search"
-          value={query}
-          placeholder="Поиск по чатам"
-          autoComplete="off"
-          onChange={(event) => onQueryChange(event.target.value)}
-        />
-        {query ? (
-          <button type="button" className={styles.clearSearch} onClick={() => onQueryChange('')}>
-            Очистить
-          </button>
-        ) : null}
-      </div>
       <nav className={styles.filterRail} aria-label="Типы чатов">
         {filters.map((item) => (
           <button
@@ -61,8 +71,14 @@ export function ChatFilters({
             title={item.label}
             onClick={() => onFilterChange(item.value)}
           >
-            <ChatCategoryIcon name={item.value} />
-            <span className={styles.filterLabel}>{item.label}</span>
+            {item.value === 'ALL' ? (
+              <span>Все</span>
+            ) : (
+              <>
+                <ChatCategoryIcon name={item.value} />
+                <span className={styles.filterLabel}>{item.label}</span>
+              </>
+            )}
           </button>
         ))}
         <a href="/notifications" aria-label="Уведомления" title="Уведомления">

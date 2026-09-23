@@ -46,19 +46,21 @@
 }
 
 .listHeader {
-  display: flex;
+  display: grid;
+  grid-template-columns: fit-content(40%) minmax(0, 1fr) 44px;
   min-height: 48px;
-  padding: 0 16px;
+  padding: 4px 16px 0;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 8px;
 }
 
 .listHeader h1 {
   min-width: 0;
   margin: 0;
-  overflow-wrap: anywhere;
-  font-size: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 1.375rem;
   font-weight: 600;
   line-height: 28px;
 }
@@ -69,6 +71,7 @@
 }
 
 .searchField {
+  min-width: 0;
   position: relative;
   display: flex;
   min-height: 44px;
@@ -87,7 +90,7 @@
   width: 100%;
   min-width: 0;
   min-height: 42px;
-  padding: 0 78px 0 42px;
+  padding: 0 8px 0 32px;
   border: 0;
   outline: 0;
   background: transparent;
@@ -97,13 +100,17 @@
   line-height: 20px;
 }
 
+.searchField:has(.clearSearch) input {
+  padding-right: 44px;
+}
+
 .searchField input::-webkit-search-cancel-button {
   display: none;
 }
 
 .searchIcon {
   position: absolute;
-  left: 16px;
+  left: 12px;
   width: 12px;
   height: 12px;
   border: 1.5px solid #9b999e;
@@ -122,14 +129,15 @@
 
 .clearSearch {
   position: absolute;
-  right: 6px;
+  right: 0;
+  min-width: 44px;
   min-height: 44px;
   padding: 0 8px;
   border: 0;
   background: transparent;
   color: var(--comms-accent-ink);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 1.25rem;
+  font-weight: 400;
 }
 
 .filterRail {
@@ -201,6 +209,22 @@
   border-top: 1px dashed var(--comms-line);
 }
 
+.chatRow {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  padding-left: 16px;
+  gap: 12px;
+}
+
+.profileAvatarLink {
+  display: grid;
+  min-height: 52px;
+  place-items: center;
+  border-radius: 50%;
+  text-decoration: none;
+}
+
 .listLink,
 .selectedListLink {
   display: grid;
@@ -214,14 +238,23 @@
   text-decoration: none;
 }
 
-.selectedListLink {
+.chatRow > .listLink,
+.chatRow > .selectedListLink {
+  padding-left: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.selectedListLink,
+.selectedChatRow {
   background: var(--comms-accent-soft);
 }
 
-.listLink:hover {
+.stationListButton:hover,
+.chatRow:hover {
   background: #fbfaff;
 }
 
+.profileAvatarLink:focus-visible,
 .listLink:focus-visible,
 .selectedListLink:focus-visible,
 .filterRail button:focus-visible,
@@ -1278,14 +1311,14 @@
   }
 
   /* Seven labelled buttons do not fit a phone width without colliding: the rail keeps the icon set
-     and the accessible name, and the seven targets share the width evenly. */
+     and the accessible name, except “Все”; targets share the width with a 44px minimum. */
   .filterLabel {
     display: none;
   }
 
   .filterRail button,
   .filterRail a {
-    min-width: 0;
+    min-width: 44px;
     padding: 10px 4px;
     flex: 1 1 0;
     gap: 0;

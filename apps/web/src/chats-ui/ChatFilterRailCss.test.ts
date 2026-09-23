@@ -35,11 +35,11 @@ describe('chat filter rail on a phone', () => {
     expect(ruleBody('.filterRail svg')).toMatch(/flex:\s*0 0 20px\s*;/);
   });
 
-  it('shows the icon set on a phone instead of seven colliding labels', () => {
+  it('keeps the compact phone rail with accessible touch targets', () => {
     const phone = phoneMediaQuery();
 
     expect(phone).toMatch(/\.filterLabel\s*\{[^}]*display:\s*none\s*;/);
-    expect(phone).toMatch(/min-width:\s*0\s*;/);
+    expect(phone).toMatch(/min-width:\s*44px\s*;/);
     expect(phone).toMatch(/flex:\s*1 1 0\s*;/);
   });
 });

@@ -10,9 +10,7 @@ afterEach(cleanup);
 
 describe('chat filter rail accessibility', () => {
   it('keeps an accessible name on every control while the phone layout hides the label', () => {
-    render(
-      <ChatFilters filter="ALL" query="" onFilterChange={() => {}} onQueryChange={() => {}} />,
-    );
+    render(<ChatFilters filter="ALL" onFilterChange={() => {}} />);
 
     for (const name of [
       'Все',
