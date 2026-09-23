@@ -1,7 +1,7 @@
 import { formatMessageDay, formatMessageTime } from './chat-format.js';
-import { ChatAvatar } from './ChatAvatar.js';
 import { ChatComposer } from './ChatComposer.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
+import { StationAvatar } from './StationAvatar.js';
 import type { ChatUiError } from '../ChatsPage.js';
 import type {
   StationSupportDialog,
@@ -103,7 +103,7 @@ export function StationDialogList({
                   else if (row.stationId) onSelectStation(row.stationId);
                 }}
               >
-                <ChatAvatar isGame={false} title={row.title} />
+                <StationAvatar title={row.title} />
                 <span className={styles.stationListItemBody}>
                   <strong>{row.title}</strong>
                   <small className={row.hasHistory ? undefined : styles.stationListEmptyPreview}>
@@ -161,7 +161,7 @@ export function StationThread({
         <a className={styles.backLink} href="/chats" aria-label="Назад к чатам">
           <span aria-hidden="true">←</span>
         </a>
-        <ChatAvatar isGame={false} title={stationName} />
+        <StationAvatar title={stationName} />
         <div className={styles.threadHeading}>
           <h2>{stationName}</h2>
           <small>Чат со станцией · обращение обрабатывает ЦУП</small>

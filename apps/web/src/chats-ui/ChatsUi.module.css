@@ -307,6 +307,33 @@
   height: 20px;
 }
 
+/* A station keeps the squared-off logo frame from the design (a 36px square with an 8px corner
+   radius) instead of the round participant avatar. The soft accent stays visible behind artwork
+   that is drawn on transparency and behind the marker of a station without artwork. */
+.stationAvatar {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 22.222%;
+  background: var(--comms-accent-soft);
+  color: var(--comms-accent-ink);
+}
+
+.stationAvatarImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.stationAvatar svg {
+  width: 20px;
+  height: 20px;
+}
+
 .listCopy,
 .listMeta,
 .threadHeading {
@@ -1367,6 +1394,13 @@
     width: 36px;
     height: 36px;
     border-radius: 12px;
+  }
+
+  /* The station header column is 36px wide on a phone, so the logo frame follows it. */
+  .stationThreadHeader .stationAvatar {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
   }
 
   .refreshButton {
