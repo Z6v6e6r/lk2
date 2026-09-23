@@ -2,7 +2,14 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `interactive-widget=resizes-content` makes the on-screen keyboard shrink the layout viewport,
+         so the composer keeps sitting on the bottom edge instead of leaving a band above the keyboard
+         where the fixed navigation used to be. Engines that ignore the hint get the CSS fallback in
+         `src/chats-ui/ChatsUi.module.css`. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+    />
     <meta name="theme-color" content="#f4f7f2" />
     <!-- iOS delivers Web Push only to a Home Screen web app, so the manifest and the touch icon are
          functional requirements there, not decoration. -->
