@@ -267,6 +267,89 @@ describe('legacy station support client', () => {
     ).resolves.toMatchObject([{ dialogId: '42', stationId: '7' }]);
   });
 
+  it('carries the operator name and only the pictures the API may materialize', async () => {
+    const support = client({
+      fetchImplementation: vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({
+          messages: [
+            {
+              id: 'm1',
+              dialogId: 'd1',
+              direction: 'OUTBOUND',
+              authorType: 'ADMIN',
+              text: '',
+              sender: { id: 'operator-1', name: 'ПадлХАБ • Супервайзер' },
+              createdTs: 1_758_532_800_000,
+              attachments: [
+                {
+                  type: 'IMAGE',
+                  url: 'data:image/png;base64,AAAA',
+                  name: 'мяч.png',
+                  mimeType: 'image/png',
+                  size: 12,
+                },
+                { type: 'IMAGE', url: 'https://padlhub.su/uploads/photo.png', name: 'фото.png' },
+                // A non-image and an unaddressed scheme never reach the materializer.
+                { type: 'FILE', url: 'https://padlhub.su/uploads/смета.pdf' },
+                { type: 'IMAGE', url: 'javascript:alert(1)' },
+              ],
+            },
+          ],
+        }),
+      ),
+    });
+    const messages = await support.listMessages({
+      dialogId: 'd1',
+      limit: 50,
+      beforeTs: 1,
+      correlationId: 'correlation-1',
+    });
+    expect(messages[0]?.senderName).toBe('ПадлХАБ • Супервайзер');
+    expect(messages[0]?.attachments).toEqual([
+      expect.objectContaining({ type: 'IMAGE', name: 'мяч.png', mimeType: 'image/png', size: 12 }),
+      expect.objectContaining({ type: 'IMAGE', name: 'фото.png', mimeType: null, size: null }),
+    ]);
+  });
+
+  it('adds the attachment array only when a picture is actually attached', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ ok: true, dialog: { id: 'd1' } }));
+    const support = client({ fetchImplementation });
+    await support.sendEvent({
+      phoneDigits: '79990000001',
+      externalUserId: 'user-1',
+      externalChatId: 'lk2:user-1',
+      displayName: 'Игрок ПадлХАБ',
+      text: 'Фото: корт.png',
+      stationId: 'Yasenevo',
+      stationName: 'Ясенево',
+      attachments: [
+        {
+          type: 'IMAGE',
+          url: 'data:image/webp;base64,AAAA',
+          name: 'корт.png',
+          mimeType: 'image/webp',
+          size: 4,
+        },
+      ],
+      externalMessageId: 'station-message-000002',
+      correlationId: 'correlation-1',
+    });
+    expect(requestBody(fetchImplementation.mock.calls[0]?.[1])).toMatchObject({
+      text: 'Фото: корт.png',
+      attachments: [
+        {
+          type: 'IMAGE',
+          url: 'data:image/webp;base64,AAAA',
+          name: 'корт.png',
+          mimeType: 'image/webp',
+          size: 4,
+        },
+      ],
+    });
+  });
+
   it('opens the circuit after repeated failures and stops calling the provider', async () => {
     const fetchImplementation = vi
       .fn<typeof fetch>()

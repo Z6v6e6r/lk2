@@ -1,20 +1,24 @@
+import { useCallback } from 'react';
+
 import { formatMessageDay, formatMessageTime } from './chat-format.js';
-import { ChatComposer } from './ChatComposer.js';
+import { ChatComposer, type ChatComposerSend } from './ChatComposer.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import { StationAvatar } from './StationAvatar.js';
+import type { ChatAttachmentDraft } from './chat-attachments.js';
 import type { ChatUiError } from '../ChatsPage.js';
 import type {
+  StationSupportAttachment,
   StationSupportDialog,
   StationSupportMessage,
   StationSupportStation,
 } from '../auth-gateway.js';
 import { stationChatRows } from './station-chat-rows.js';
 import styles from './ChatsUi.module.css';
+import { useAttachmentObjectUrl } from './useAttachmentObjectUrl.js';
 
 export interface StationChatsHandlers {
   readonly onSelectDialog: (dialogId: string) => void;
   readonly onSelectStation: (stationId: string) => void;
-  readonly onSendMessage: (text: string) => void;
   readonly onRetry: () => void;
 }
 
@@ -28,10 +32,35 @@ interface StationDialogListProps extends StationChatsHandlers {
   readonly error: ChatUiError | null;
 }
 
-function authorLabel(author: StationSupportMessage['author']): string {
-  if (author === 'ME') return 'Вы';
-  if (author === 'STATION') return 'Станция';
+/**
+ * The station answer belongs to the CUP operator who wrote it, so the thread shows that name and
+ * only falls back to the station when the provider stored none.
+ */
+function authorLabel(message: StationSupportMessage): string {
+  if (message.author === 'ME') return 'Вы';
+  if (message.author === 'STATION') return message.authorName?.trim() || 'Станция';
   return 'Система';
+}
+
+function StationAttachmentImage({
+  attachment,
+  loadAttachment,
+}: {
+  readonly attachment: StationSupportAttachment;
+  readonly loadAttachment: (attachmentId: string) => Promise<Blob>;
+}): React.JSX.Element {
+  const load = useCallback(() => loadAttachment(attachment.id), [attachment.id, loadAttachment]);
+  const { url, failed } = useAttachmentObjectUrl(`station:${attachment.id}`, load);
+
+  if (failed) return <span className={styles.attachmentUnavailable}>Изображение недоступно</span>;
+  if (!url) {
+    return (
+      <span className={styles.attachmentPending} aria-live="polite">
+        Загружаем изображение…
+      </span>
+    );
+  }
+  return <img src={url} alt={attachment.fileName} loading="lazy" />;
 }
 
 export function StationDialogList({
@@ -132,9 +161,16 @@ interface StationThreadProps {
   readonly error: ChatUiError | null;
   readonly closed: boolean;
   readonly canRetrySend: boolean;
-  readonly onSendMessage: (text: string) => void;
+  readonly attachments: readonly ChatAttachmentDraft[];
+  readonly attachmentNotice?: string | null | undefined;
+  /** Absent when the deployment has no media bucket: the composer then stays text-only. */
+  readonly attachmentsEnabled: boolean;
+  readonly onAttachFiles: (files: readonly File[]) => void;
+  readonly onRemoveAttachment: (localId: string) => void;
+  readonly onSendMessage: (input: ChatComposerSend) => void;
   readonly onRetrySend: () => void;
   readonly onRetry: () => void;
+  readonly loadAttachment: (attachmentId: string) => Promise<Blob>;
 }
 
 export function StationThread({
@@ -145,9 +181,15 @@ export function StationThread({
   error,
   closed,
   canRetrySend,
+  attachments,
+  attachmentNotice,
+  attachmentsEnabled,
+  onAttachFiles,
+  onRemoveAttachment,
   onSendMessage,
   onRetrySend,
   onRetry,
+  loadAttachment,
 }: StationThreadProps): React.JSX.Element {
   const rows = messages.map((message, index) => {
     const day = message.createdAt ? formatMessageDay(message.createdAt) : null;
@@ -199,8 +241,25 @@ export function StationThread({
                       own ? styles.ownMessageBubble : ''
                     }`}
                   >
-                    <strong>{authorLabel(message.author)}</strong>
-                    <p>{message.body}</p>
+                    <strong>{authorLabel(message)}</strong>
+                    {message.attachments.length > 0 ? (
+                      <ul
+                        className={`${styles.attachmentImages} ${
+                          message.attachments.length === 1 ? styles.singleAttachmentImage : ''
+                        }`}
+                        aria-label="Изображения в сообщении"
+                      >
+                        {message.attachments.map((attachment) => (
+                          <li key={attachment.id}>
+                            <StationAttachmentImage
+                              attachment={attachment}
+                              loadAttachment={loadAttachment}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {message.body ? <p>{message.body}</p> : null}
                     {message.createdAt ? (
                       <time dateTime={message.createdAt}>
                         {formatMessageTime(message.createdAt)}
@@ -239,11 +298,12 @@ export function StationThread({
       <ChatComposer
         busy={busy === 'send'}
         forbidden={closed || error?.kind === 'FEATURE_UNAVAILABLE'}
-        attachments={[]}
-        attachmentsEnabled={false}
-        onAttachFiles={() => undefined}
-        onRemoveAttachment={() => undefined}
-        onSendMessage={(input) => onSendMessage(input.body)}
+        attachments={attachments}
+        attachmentNotice={attachmentNotice}
+        attachmentsEnabled={attachmentsEnabled}
+        onAttachFiles={onAttachFiles}
+        onRemoveAttachment={onRemoveAttachment}
+        onSendMessage={onSendMessage}
       />
     </section>
   );

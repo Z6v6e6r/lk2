@@ -148,6 +148,7 @@ import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerStationSupportRoutes } from './support/station-support-routes.js';
 import type { StationSupportProvider } from './support/station-support-provider.js';
+import type { StationSupportMediaStore } from './support/station-support-media.js';
 import type { StationSupportRepository } from './support/station-support-repository.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
@@ -277,6 +278,13 @@ export interface BuildAppOptions {
   /** Proxies the legacy station-support dialogs CUP operators answer; absent means the tab is closed. */
   readonly stationSupportProvider?: StationSupportProvider;
   readonly stationSupportRepository?: StationSupportRepository;
+  /**
+   * Chat pictures for that contour. Absent when the deployment has no media bucket; the tab then
+   * keeps working as text-only instead of failing.
+   */
+  readonly stationSupportMediaStore?: StationSupportMediaStore;
+  /** Hosts a provider-stored picture may be downloaded from; the legacy origin is the default. */
+  readonly stationSupportMediaAllowedHosts?: readonly string[];
   readonly levelEligibilityPolicyRepository?: LevelEligibilityPolicyRepository;
   readonly playerLevelRepository?: PlayerLevelRepository;
   readonly cupPlayerLevelProjectionRepository?: CupPlayerLevelProjectionRepository;
@@ -1240,6 +1248,10 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.stationSupportProvider ? { provider: options.stationSupportProvider } : {}),
     ...(options.stationSupportRepository ? { repository: options.stationSupportRepository } : {}),
     ...(options.locationRepository ? { locationRepository: options.locationRepository } : {}),
+    ...(options.stationSupportMediaStore ? { mediaStore: options.stationSupportMediaStore } : {}),
+    ...(options.stationSupportMediaAllowedHosts
+      ? { mediaAllowedHosts: options.stationSupportMediaAllowedHosts }
+      : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [
       authenticate,

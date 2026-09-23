@@ -75,6 +75,10 @@ import { S3LocationMediaStore } from './locations/location-media-store.js';
 import { S3ProfilePhotoMediaStore } from './profile/profile-photo-media-store.js';
 import { S3CommunityMediaObjectStore } from './communities/community-media-object-store.js';
 import { S3MessagingMediaObjectStore } from './messaging/messaging-media-object-store.js';
+import {
+  STATION_SUPPORT_MEDIA_MAX_BYTES,
+  S3StationSupportMediaStore,
+} from './support/station-support-media.js';
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
@@ -331,6 +335,36 @@ const stationSupportProvider =
 const stationSupportRepository = config.SUPPORT_STATIONS_ENABLED
   ? createStationSupportRepository(pool)
   : undefined;
+/**
+ * Station chat pictures are stored in the same media bucket every other chat contour uses, so they
+ * are wired from the shared S3 settings instead of a flag of their own. A deployment without a
+ * bucket keeps the station tab text-only.
+ */
+const stationSupportMediaStore =
+  config.SUPPORT_STATIONS_ENABLED &&
+  config.S3_ENDPOINT &&
+  config.S3_PUBLIC_ENDPOINT &&
+  config.S3_BUCKET &&
+  config.S3_ACCESS_KEY &&
+  config.S3_SECRET_KEY
+    ? new S3StationSupportMediaStore({
+        endpoint: config.S3_ENDPOINT,
+        publicEndpoint: config.S3_PUBLIC_ENDPOINT,
+        region: config.S3_REGION,
+        bucket: config.S3_BUCKET,
+        accessKey: config.S3_ACCESS_KEY,
+        secretKey: config.S3_SECRET_KEY,
+        forcePathStyle: config.S3_FORCE_PATH_STYLE,
+        maxBytes: STATION_SUPPORT_MEDIA_MAX_BYTES,
+      })
+    : undefined;
+/**
+ * A provider picture normally arrives inline, but the legacy contour may also link one from its own
+ * origin, so that exact host is the only host the bridge is allowed to download from.
+ */
+const stationSupportMediaAllowedHosts = config.SUPPORT_LEGACY_BASE_URL
+  ? [new URL(config.SUPPORT_LEGACY_BASE_URL).hostname]
+  : [];
 const activityHistoryGameBackfillSource = !config.ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED
   ? undefined
   : config.LEGACY_GAMES_ROSTER_SYNC_SOURCE === 'public'
@@ -627,6 +661,8 @@ const app = await buildApp({
   locationRepository: createLocationRepository(pool),
   ...(stationSupportProvider ? { stationSupportProvider } : {}),
   ...(stationSupportRepository ? { stationSupportRepository } : {}),
+  ...(stationSupportMediaStore ? { stationSupportMediaStore } : {}),
+  ...(stationSupportMediaAllowedHosts.length > 0 ? { stationSupportMediaAllowedHosts } : {}),
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
   playerLevelRepository: createPlayerLevelRepository(pool),
   cupPlayerLevelProjectionRepository: createCupPlayerLevelProjectionRepository(pool),

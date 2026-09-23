@@ -121,6 +121,86 @@ export function formatAttachmentSize(byteSize: number): string {
   return `${String(rounded).replace('.', ',')} ${units[unitIndex]}`;
 }
 
+/**
+ * The CUP operator workspace accepts pictures only, so a station message carries images and nothing
+ * else; the limits mirror the API route that re-encodes them to WebP.
+ */
+export const MAX_STATION_ATTACHMENTS = 4;
+export const MAX_STATION_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
+export type StationAttachmentRejectionReason = 'COUNT' | 'NOT_IMAGE' | 'SIZE' | 'EMPTY';
+
+export interface StationAttachmentRejection {
+  readonly fileName: string;
+  readonly reason: StationAttachmentRejectionReason;
+}
+
+export function validateStationAttachmentSelection(
+  existingCount: number,
+  files: readonly File[],
+): {
+  readonly accepted: readonly File[];
+  readonly rejections: readonly StationAttachmentRejection[];
+} {
+  const accepted: File[] = [];
+  const rejections: StationAttachmentRejection[] = [];
+  for (const file of files) {
+    if (existingCount + accepted.length >= MAX_STATION_ATTACHMENTS) {
+      rejections.push({ fileName: file.name, reason: 'COUNT' });
+      continue;
+    }
+    if (
+      !(CHAT_IMAGE_CONTENT_TYPES as readonly string[]).includes(
+        normalizeAttachmentContentType(file.type),
+      )
+    ) {
+      rejections.push({ fileName: file.name, reason: 'NOT_IMAGE' });
+      continue;
+    }
+    if (file.size > MAX_STATION_ATTACHMENT_BYTES) {
+      rejections.push({ fileName: file.name, reason: 'SIZE' });
+      continue;
+    }
+    if (file.size <= 0) {
+      rejections.push({ fileName: file.name, reason: 'EMPTY' });
+      continue;
+    }
+    accepted.push(file);
+  }
+  return { accepted, rejections };
+}
+
+export function describeStationAttachmentRejections(
+  rejections: readonly StationAttachmentRejection[],
+): string | null {
+  if (rejections.length === 0) return null;
+  const parts: string[] = rejections.some((rejection) => rejection.reason === 'COUNT')
+    ? ['К обращению можно приложить не более 4 фотографий.']
+    : [];
+  for (const rejection of rejections) {
+    if (rejection.reason === 'COUNT') continue;
+    const reason =
+      rejection.reason === 'NOT_IMAGE'
+        ? 'можно приложить только фотографию'
+        : rejection.reason === 'SIZE'
+          ? 'фото больше 8 МБ'
+          : 'файл пустой';
+    parts.push(`«${rejection.fileName}»: ${reason}.`);
+  }
+  return parts.join(' ');
+}
+
+/** The upload command carries the picture inline, so one file becomes one base64 string. */
+export async function readFileAsBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
 export async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');

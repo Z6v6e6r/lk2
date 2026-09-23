@@ -1,41 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback } from 'react';
 
 import type { ConversationMessage, ConversationMessageAttachment } from '../auth-gateway.js';
 import { formatAttachmentSize } from './chat-attachments.js';
 import { ChatAvatar } from './ChatAvatar.js';
 import { formatMessageTime } from './chat-format.js';
 import styles from './ChatsUi.module.css';
-
-/** Loads one attachment exactly once and hands the component a revocable object URL. */
-function useAttachmentObjectUrl(
-  conversationId: string,
-  mediaId: string,
-  loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>,
-): { readonly url?: string; readonly failed: boolean } {
-  const [url, setUrl] = useState<string>();
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    let objectUrl: string | undefined;
-    void loadMedia(conversationId, mediaId).then(
-      (blob) => {
-        if (!active) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      },
-      () => {
-        if (active) setFailed(true);
-      },
-    );
-    return () => {
-      active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [conversationId, mediaId, loadMedia]);
-
-  return { ...(url ? { url } : {}), failed };
-}
+import { useAttachmentObjectUrl } from './useAttachmentObjectUrl.js';
 
 function AttachmentImage({
   conversationId,
@@ -46,7 +16,11 @@ function AttachmentImage({
   readonly attachment: ConversationMessageAttachment;
   readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
 }): React.JSX.Element {
-  const { url, failed } = useAttachmentObjectUrl(conversationId, attachment.mediaId, loadMedia);
+  const load = useCallback(
+    () => loadMedia(conversationId, attachment.mediaId),
+    [conversationId, attachment.mediaId, loadMedia],
+  );
+  const { url, failed } = useAttachmentObjectUrl(`${conversationId}:${attachment.mediaId}`, load);
 
   if (failed) return <span className={styles.attachmentUnavailable}>Изображение недоступно</span>;
   if (!url) {
@@ -68,7 +42,11 @@ function AttachmentFile({
   readonly attachment: ConversationMessageAttachment;
   readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
 }): React.JSX.Element {
-  const { url, failed } = useAttachmentObjectUrl(conversationId, attachment.mediaId, loadMedia);
+  const load = useCallback(
+    () => loadMedia(conversationId, attachment.mediaId),
+    [conversationId, attachment.mediaId, loadMedia],
+  );
+  const { url, failed } = useAttachmentObjectUrl(`${conversationId}:${attachment.mediaId}`, load);
   const body = (
     <>
       <span className={styles.attachmentFileIcon} aria-hidden="true">

@@ -21,7 +21,10 @@ interface ChatComposerProps {
   readonly forbidden: boolean;
   readonly attachments: readonly ChatAttachmentDraft[];
   readonly attachmentNotice?: string | null | undefined;
-  /** Station support dialogs are text-only, so the attach control stays out of that composer. */
+  /**
+   * Station support dialogs accept pictures, but a deployment without a media bucket serves them
+   * text-only, so the attach control can be switched off per thread.
+   */
   readonly attachmentsEnabled?: boolean | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
   readonly onRemoveAttachment: (localId: string) => void;

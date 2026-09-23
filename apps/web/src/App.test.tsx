@@ -515,6 +515,12 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
     listStationSupportDialogs: vi.fn().mockResolvedValue([]),
     listStationSupportMessages: vi.fn().mockResolvedValue([]),
     sendStationSupportMessage: vi.fn().mockRejectedValue(new Error('SUPPORT_PROVIDER_UNAVAILABLE')),
+    uploadStationSupportAttachment: vi
+      .fn()
+      .mockRejectedValue(new Error('SUPPORT_ATTACHMENTS_UNAVAILABLE')),
+    loadStationSupportAttachment: vi
+      .fn()
+      .mockRejectedValue(new Error('SUPPORT_ATTACHMENT_NOT_FOUND')),
     createRealtimeTicket: vi.fn().mockRejectedValue(new Error('REALTIME_MESSAGING_DISABLED')),
     createDirectConversation: vi.fn().mockRejectedValue(new Error('MESSAGING_HTTP_DISABLED')),
     getOrCreateGameConversation: vi

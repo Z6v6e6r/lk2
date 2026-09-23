@@ -5,6 +5,7 @@ import type {
   ConversationMessage,
   ConversationNotificationPolicyUpdate,
   ConversationPage,
+  StationSupportAttachment,
   StationSupportDialog,
   StationSupportMessage,
   StationSupportSendResult,
@@ -21,7 +22,14 @@ import { ChatList } from './chats-ui/ChatList.js';
 import { ChatThread } from './chats-ui/ChatThread.js';
 import { StationDialogList, StationThread } from './chats-ui/StationChats.js';
 import { type ChatComposerSend } from './chats-ui/ChatComposer.js';
-import type { ChatAttachmentDraft } from './chats-ui/chat-attachments.js';
+import {
+  describeStationAttachmentRejections,
+  normalizeAttachmentContentType,
+  normalizeAttachmentFileName,
+  readFileAsBase64,
+  validateStationAttachmentSelection,
+  type ChatAttachmentDraft,
+} from './chats-ui/chat-attachments.js';
 import styles from './chats-ui/ChatsUi.module.css';
 
 /**
@@ -38,7 +46,15 @@ export interface StationSupportSource {
     readonly clientMessageId: string;
     readonly stationId?: string;
     readonly dialogId?: string;
+    readonly attachmentIds?: readonly string[];
   }) => Promise<StationSupportSendResult>;
+  /** Stores one picture in the PadlHub media bucket before the message exists. */
+  readonly uploadAttachment: (input: {
+    readonly fileName: string;
+    readonly contentType: string;
+    readonly data: string;
+  }) => Promise<StationSupportAttachment>;
+  readonly loadAttachment: (attachmentId: string) => Promise<Blob>;
   readonly createMessageId: () => string;
 }
 
@@ -152,7 +168,11 @@ interface StationSupportState {
   readonly sending: boolean;
   readonly error: ChatUiError | null;
   /** A failed send keeps its command id so the retry replays the same command. */
-  readonly failedMessage: { readonly clientMessageId: string; readonly text: string } | null;
+  readonly failedMessage: {
+    readonly clientMessageId: string;
+    readonly text: string;
+    readonly attachmentIds: readonly string[];
+  } | null;
 }
 
 const EMPTY_STATION_STATE: StationSupportState = {
@@ -168,6 +188,12 @@ const EMPTY_STATION_STATE: StationSupportState = {
   error: null,
   failedMessage: null,
 };
+
+function stationAttachmentsUnavailable(error: unknown): boolean {
+  const record =
+    typeof error === 'object' && error !== null ? (error as { readonly code?: unknown }) : null;
+  return record?.code === 'SUPPORT_ATTACHMENTS_UNAVAILABLE';
+}
 
 function stationSupportError(error: unknown): ChatUiError {
   const record =
@@ -325,6 +351,10 @@ export function ChatsPage({
   const [menuOpen, setMenuOpen] = useState(false);
   const [stationState, setStationState] = useState<StationSupportState>(EMPTY_STATION_STATE);
   const [stationReloadToken, setStationReloadToken] = useState(0);
+  const [stationAttachments, setStationAttachments] = useState<readonly ChatAttachmentDraft[]>([]);
+  const [stationAttachmentNotice, setStationAttachmentNotice] = useState<string | null>(null);
+  /** A deployment without a media bucket keeps the composer text-only instead of failing sends. */
+  const [stationAttachmentsEnabled, setStationAttachmentsEnabled] = useState(true);
   const stationRequestRef = useRef(0);
   const selected = page?.items.find((conversation) => conversation.id === selectedConversationId);
   const stationSource = stationSupport ?? null;
@@ -418,7 +448,87 @@ export function ChatsPage({
   function retryStationMessage(): void {
     const failed = stationState.failedMessage;
     if (!failed) return;
-    sendStationMessage(failed.text, failed.clientMessageId);
+    sendStationMessage(
+      { body: failed.text, attachmentIds: failed.attachmentIds },
+      failed.clientMessageId,
+    );
+  }
+
+  /**
+   * Each picture is stored by PadlHub before the message exists, so a rejected upload can be
+   * retried on its own and a sent command only carries ids.
+   */
+  function handleAttachStationFiles(files: readonly File[]): void {
+    if (!stationSource || files.length === 0) return;
+    const selection = validateStationAttachmentSelection(stationAttachments.length, files);
+    setStationAttachmentNotice(describeStationAttachmentRejections(selection.rejections));
+    if (selection.accepted.length === 0) return;
+    const drafts: readonly ChatAttachmentDraft[] = selection.accepted.map((file) => {
+      const contentType = normalizeAttachmentContentType(file.type);
+      return {
+        localId: stationSource.createMessageId(),
+        fileName: normalizeAttachmentFileName(file.name),
+        contentType,
+        byteSize: file.size,
+        mediaType: 'IMAGE' as const,
+        state: 'UPLOADING' as const,
+        progress: 0,
+      };
+    });
+    setStationAttachments((current) => [...current, ...drafts]);
+    selection.accepted.forEach((file, index) => {
+      const draft = drafts[index];
+      if (!draft) return;
+      void readFileAsBase64(file)
+        .then((data) =>
+          stationSource.uploadAttachment({
+            fileName: draft.fileName,
+            contentType: draft.contentType,
+            data,
+          }),
+        )
+        .then(
+          (attachment) => {
+            setStationAttachments((current) =>
+              current.map((item) =>
+                item.localId === draft.localId
+                  ? {
+                      ...item,
+                      state: 'READY' as const,
+                      progress: 100,
+                      mediaId: attachment.id,
+                      fileName: attachment.fileName,
+                      contentType: attachment.contentType,
+                      byteSize: attachment.byteSize,
+                    }
+                  : item,
+              ),
+            );
+          },
+          (error: unknown) => {
+            if (stationAttachmentsUnavailable(error)) {
+              setStationAttachmentsEnabled(false);
+              setStationAttachmentNotice('Фотографии временно недоступны.');
+            } else {
+              setStationAttachmentNotice('Фото не загрузилось. Попробуйте ещё раз.');
+            }
+            setStationAttachments((current) =>
+              current.map((item) =>
+                item.localId === draft.localId
+                  ? { ...item, state: 'FAILED' as const, errorMessage: 'не загрузилось' }
+                  : item,
+              ),
+            );
+          },
+        );
+    });
+  }
+
+  function handleRemoveStationAttachment(localId: string): void {
+    setStationAttachments((current) =>
+      current.filter((attachment) => attachment.localId !== localId),
+    );
+    setStationAttachmentNotice(null);
   }
 
   function reloadStationThread(): void {
@@ -456,19 +566,40 @@ export function ChatsPage({
     }));
   }
 
-  function sendStationMessage(text: string, retryClientMessageId?: string): void {
+  function sendStationMessage(input: ChatComposerSend, retryClientMessageId?: string): void {
     if (!stationSource || stationState.sending) return;
     const dialogId = stationState.selectedDialogId;
     const stationId = stationState.pendingStationId;
     if (!dialogId && !stationId) return;
+    const text = input.body;
+    const attachmentIds = [...input.attachmentIds];
+    if (text.length === 0 && attachmentIds.length === 0) return;
     // A retry reuses the original command id so the provider replays instead of duplicating.
     const clientMessageId = retryClientMessageId ?? stationSource.createMessageId();
+    // The upload already stored every picture, so the optimistic bubble can load it back through
+    // the same authorized route the history uses.
+    const optimisticAttachments: readonly StationSupportAttachment[] = stationAttachments
+      .filter(
+        (draft): draft is ChatAttachmentDraft & { mediaId: string } =>
+          typeof draft.mediaId === 'string' && attachmentIds.includes(draft.mediaId),
+      )
+      .map((draft) => ({
+        id: draft.mediaId,
+        fileName: draft.fileName,
+        contentType: draft.contentType,
+        byteSize: draft.byteSize,
+        url: '',
+      }));
     const optimistic: StationSupportMessage = {
       id: `pending:${clientMessageId}`,
       body: text,
       author: 'ME',
+      authorName: null,
       createdAt: new Date().toISOString(),
+      attachments: optimisticAttachments,
     };
+    // The drafts survive a failed send: the retry has to show the same pictures again, and the
+    // stored uploads are still addressable by the same ids.
     setStationState((current) => ({
       ...current,
       sending: true,
@@ -480,10 +611,13 @@ export function ChatsPage({
       .sendMessage({
         text,
         clientMessageId,
+        ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
         ...(dialogId ? { dialogId } : { stationId: stationId as string }),
       })
       .then(
         (result) => {
+          setStationAttachments([]);
+          setStationAttachmentNotice(null);
           setStationState((current) => ({
             ...current,
             sending: false,
@@ -516,7 +650,7 @@ export function ChatsPage({
             sending: false,
             messages: current.messages.filter((message) => message.id !== optimistic.id),
             error: stationSupportError(error),
-            failedMessage: { clientMessageId, text },
+            failedMessage: { clientMessageId, text, attachmentIds },
           }));
         },
       );
@@ -639,7 +773,6 @@ export function ChatsPage({
                 }
                 onSelectDialog={selectStationDialog}
                 onSelectStation={startStationDialog}
-                onSendMessage={sendStationMessage}
                 onRetry={loadStationSupport}
               />
             ) : (
@@ -676,9 +809,15 @@ export function ChatsPage({
               canRetrySend={
                 stationState.failedMessage !== null && stationState.error?.kind === 'RETRYABLE'
               }
+              attachments={stationAttachments}
+              attachmentNotice={stationAttachmentNotice}
+              attachmentsEnabled={stationAttachmentsEnabled}
+              onAttachFiles={handleAttachStationFiles}
+              onRemoveAttachment={handleRemoveStationAttachment}
               onSendMessage={sendStationMessage}
               onRetrySend={retryStationMessage}
               onRetry={reloadStationThread}
+              loadAttachment={stationSource.loadAttachment}
             />
           ) : (
             <section className={styles.threadPlaceholder} aria-label="Обращения к станциям">

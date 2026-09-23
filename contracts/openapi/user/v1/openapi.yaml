@@ -2193,6 +2193,90 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/attachments:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [messaging]
+      operationId: uploadStationSupportAttachment
+      summary: Upload one picture for a station support message
+      description: |
+        The bytes are validated, re-encoded to WebP and stored under the caller's own
+        content-addressed key in the shared PadlHub media bucket; the returned id is what
+        `sendStationSupportMessage` references. Nothing reaches the legacy provider here, so an
+        abandoned upload leaves no operator-visible state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StationSupportAttachmentUploadRequest'
+      responses:
+        '200':
+          description: The stored picture.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StationSupportAttachment'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '422':
+          description: The uploaded image cannot be decoded as a picture.
+          headers:
+            X-Correlation-ID:
+              $ref: '../../common/components.yaml#/components/headers/CorrelationId'
+          content:
+            application/json:
+              schema:
+                $ref: '../../common/components.yaml#/components/schemas/ApiError'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/attachments/{attachmentId}/content:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - name: attachmentId
+        in: path
+        required: true
+        description: Attachment id returned by the upload or by a message read.
+        schema:
+          type: string
+          minLength: 43
+          maxLength: 43
+    get:
+      tags: [messaging]
+      operationId: readStationSupportAttachment
+      summary: Read one station support picture as WebP
+      description: |
+        Answers a redirect to a short-lived signed URL in the private media bucket. The object key is
+        rebuilt from the caller's own verified identity, so a viewer can only ever read a picture
+        stored for them.
+      responses:
+        '302':
+          description: Short-lived signed storage URL.
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/conversations:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -7069,10 +7153,50 @@ components:
           maxItems: 200
           items:
             $ref: '#/components/schemas/StationSupportDialog'
+    StationSupportAttachment:
+      type: object
+      additionalProperties: false
+      required: [id, fileName, contentType, byteSize, url]
+      properties:
+        id:
+          type: string
+          minLength: 43
+          maxLength: 43
+          description: Opaque content digest of the stored WebP object.
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        contentType:
+          type: string
+          const: image/webp
+        byteSize:
+          type: integer
+          minimum: 1
+        url:
+          type: string
+          minLength: 1
+          description: PadlHub route that streams the picture; never a provider or bucket URL.
+    StationSupportAttachmentUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [fileName, contentType, data]
+      properties:
+        fileName:
+          type: string
+          minLength: 1
+          maxLength: 200
+        contentType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+        data:
+          type: string
+          minLength: 1
+          description: Base64 payload of at most 8 MiB decoded; it is re-encoded to a WebP of at most 3 MiB.
     StationSupportMessage:
       type: object
       additionalProperties: false
-      required: [id, body, author, createdAt]
+      required: [id, body, author, authorName, createdAt, attachments]
       properties:
         id:
           type: string
@@ -7083,11 +7207,23 @@ components:
         author:
           type: string
           enum: [ME, STATION, SYSTEM]
+        authorName:
+          description: Operator name the provider stored, so the viewer sees who is answering.
+          oneOf:
+            - type: string
+              minLength: 1
+              maxLength: 160
+            - type: 'null'
         createdAt:
           oneOf:
             - type: string
               format: date-time
             - type: 'null'
+        attachments:
+          type: array
+          maxItems: 4
+          items:
+            $ref: '#/components/schemas/StationSupportAttachment'
     StationSupportMessagePage:
       type: object
       additionalProperties: false
@@ -7101,7 +7237,9 @@ components:
     StationSupportSendRequest:
       type: object
       additionalProperties: false
-      required: [text]
+      description: |
+        At least one of `text` and `attachmentIds` is required. A picture-only message carries the
+        preview text the CUP workspace itself writes, so the operator inbox still reads one line.
       properties:
         stationId:
           type: string
@@ -7113,8 +7251,16 @@ components:
           description: Existing dialog; exactly one of stationId and dialogId is required.
         text:
           type: string
-          minLength: 1
+          minLength: 0
           maxLength: 4000
+        attachmentIds:
+          type: array
+          maxItems: 4
+          description: Ids returned by the attachment upload; each one must belong to the caller.
+          items:
+            type: string
+            minLength: 43
+            maxLength: 43
     StationSupportSendResult:
       type: object
       additionalProperties: false

@@ -172,6 +172,18 @@ export type GetOrCreateGameConversationResult =
   components['schemas']['GetOrCreateGameConversationResult'];
 export type SendConversationMessageResult = components['schemas']['SendConversationMessageResult'];
 export type ConversationReadCursorResult = components['schemas']['ConversationReadCursorResult'];
+
+/**
+ * One picture of a station-support dialog. The station contour is a provider bridge rather than a
+ * PadlHub conversation, so its attachment travels as its own small type instead of a media asset.
+ */
+export interface StationSupportAttachment {
+  readonly id: string;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly byteSize: number;
+  readonly url: string;
+}
 export type MessagingRealtimeTicket = components['schemas']['MessagingRealtimeTicket'];
 export type NotificationInboxPage = components['schemas']['NotificationInboxPage'];
 export type NotificationReadCursorResult = components['schemas']['NotificationReadCursorResult'];
@@ -1871,6 +1883,38 @@ export class PadlHubApiClient {
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
     return this.request<ConversationMessagePage>(
       `/conversations/${encodeURIComponent(conversationId)}/messages${suffix}`,
+    );
+  }
+
+  /**
+   * Station-support pictures are stored by PadlHub before the message exists, so the command itself
+   * only carries the id of an object the caller already uploaded.
+   */
+  public uploadStationSupportAttachment(input: {
+    readonly fileName: string;
+    readonly contentType: string;
+    /** Base64 payload, the `data` property the upload route declares. */
+    readonly data: string;
+  }): Promise<StationSupportAttachment> {
+    const idempotencyKey = createCorrelationId();
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<StationSupportAttachment>('/support/attachments', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public downloadStationSupportAttachment(attachmentId: string): Promise<Blob> {
+    return this.downloadFromRoot(
+      this.apiRoot,
+      `/support/attachments/${encodeURIComponent(attachmentId)}/content`,
+      'required',
+      'same-origin',
+      createCorrelationId(),
+      true,
+      'image/webp',
     );
   }
 

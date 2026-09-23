@@ -7,6 +7,11 @@
  * the phone number or the message body.
  */
 
+import { STATION_SUPPORT_MEDIA_MAX_ATTACHMENTS } from './station-support-media.js';
+
+/** The CUP ingest declares one attachment URL up to 8 000 000 characters (an inline base64 image). */
+const STATION_SUPPORT_ATTACHMENT_URL_MAX_LENGTH = 8_000_000;
+
 export interface StationSupportProviderDialog {
   readonly dialogId: string;
   readonly stationId: string | null;
@@ -23,15 +28,39 @@ export interface StationSupportProviderDialog {
   } | null;
 }
 
+/**
+ * One provider picture. The provider mixes inline base64 with hosted links, so the raw value is
+ * carried unchanged and only the route decides which forms are safe to materialize.
+ */
+export interface StationSupportProviderAttachment {
+  readonly type: 'IMAGE';
+  readonly url: string;
+  readonly name: string | null;
+  readonly mimeType: string | null;
+  readonly size: number | null;
+}
+
 export interface StationSupportProviderMessage {
   readonly messageId: string;
   readonly dialogId: string;
   readonly direction: 'INBOUND' | 'OUTBOUND' | 'SYSTEM';
   readonly authorType: string;
+  /** The operator (or client) name the provider stored; the browser shows it as the answer author. */
+  readonly senderName: string | null;
   readonly text: string;
+  readonly attachments: readonly StationSupportProviderAttachment[];
   readonly createdAt: string | null;
   readonly createdTs: number;
   readonly externalMessageId: string | null;
+}
+
+/** The outbound attachment shape the CUP ingest DTO declares. */
+export interface StationSupportEventAttachment {
+  readonly type: 'IMAGE';
+  readonly url: string;
+  readonly name?: string;
+  readonly mimeType?: string;
+  readonly size?: number;
 }
 
 export interface StationSupportEventInput {
@@ -42,6 +71,7 @@ export interface StationSupportEventInput {
   readonly text: string;
   readonly stationId: string;
   readonly stationName: string;
+  readonly attachments?: readonly StationSupportEventAttachment[];
   readonly externalMessageId: string;
   readonly correlationId: string;
 }
@@ -197,6 +227,32 @@ function normalizeDialog(row: Record<string, unknown>): StationSupportProviderDi
   };
 }
 
+/**
+ * The provider stores `attachments` as plain objects and only ever declares `IMAGE`. A value that is
+ * neither an inline base64 picture nor a bounded link is kept out of the message instead of being
+ * handed to the browser.
+ */
+function normalizeAttachments(value: unknown): readonly StationSupportProviderAttachment[] {
+  if (!Array.isArray(value)) return [];
+  const attachments: StationSupportProviderAttachment[] = [];
+  for (const row of value) {
+    if (!isRecord(row)) continue;
+    const url = text(row.url);
+    if (!url || url.length > STATION_SUPPORT_ATTACHMENT_URL_MAX_LENGTH) continue;
+    if (text(row.type)?.toUpperCase() !== 'IMAGE') continue;
+    if (!/^(?:https?:\/\/|data:image\/)/i.test(url)) continue;
+    attachments.push({
+      type: 'IMAGE',
+      url,
+      name: text(row.name)?.slice(0, 240) ?? null,
+      mimeType: text(row.mimeType)?.slice(0, 120) ?? null,
+      size: number(row.size) ?? null,
+    });
+    if (attachments.length >= STATION_SUPPORT_MEDIA_MAX_ATTACHMENTS) break;
+  }
+  return attachments;
+}
+
 function normalizeMessage(row: Record<string, unknown>): StationSupportProviderMessage | null {
   const mongoId = isRecord(row._id) ? identifier(row._id.$oid) : null;
   const messageId = identifier(row.id) ?? mongoId;
@@ -205,12 +261,15 @@ function normalizeMessage(row: Record<string, unknown>): StationSupportProviderM
   const createdAt = text(row.createdAt);
   const createdTs =
     number(row.createdTs) ?? number(row.timestamp) ?? (createdAt ? Date.parse(createdAt) : 0);
+  const sender = isRecord(row.sender) ? row.sender : null;
   return {
     messageId,
     dialogId,
     direction: direction(row.direction),
     authorType: text(row.authorType) ?? 'CLIENT',
+    senderName: (text(row.senderName) ?? text(sender?.name))?.slice(0, 160) ?? null,
     text: text(row.text) ?? text(row.message) ?? text(row.content) ?? '',
+    attachments: normalizeAttachments(row.attachments),
     createdAt,
     createdTs: Number.isFinite(createdTs) ? createdTs : 0,
     externalMessageId: text(row.externalMessageId),
@@ -308,7 +367,9 @@ export class LegacyStationSupportClient implements StationSupportProvider {
       // `phone` and `primaryPhone` only), and every station message was rejected before the station
       // was even read. `kind: 'TEXT'` keeps the message an actionable client text: without it the
       // ingest classifies an event that carries a station as `STATION_SELECTION`, which the operator
-      // inbox does not treat as a message waiting for an answer.
+      // inbox does not treat as a message waiting for an answer. `attachments` is declared as an
+      // optional image array, and it is omitted entirely for a text-only message so the existing
+      // request stays byte-identical.
       body: {
         connector: 'WEB_LK',
         channel: 'WEB',
@@ -326,6 +387,9 @@ export class LegacyStationSupportClient implements StationSupportProvider {
         stationId: input.stationId,
         stationName: input.stationName,
         authStatus: 'AUTHORIZED',
+        ...(input.attachments && input.attachments.length > 0
+          ? { attachments: input.attachments }
+          : {}),
       },
     });
     if (payload === null) {
