@@ -9,7 +9,9 @@ describe('station logo lookup', () => {
       ['Нагатинская Премиум', 'nagatinskaya-premium.webp'],
       ['Питер', 'piter.webp'],
       ['Селигерская', 'seligerskaya.webp'],
+      ['Сириус', 'sirius.webp'],
       ['Сколково', 'skolkovo.webp'],
+      ['Сочи', 'sirius.webp'],
       ['Терехово', 'terehovo.webp'],
       ['Ясенево', 'yasenevo.webp'],
     ] as const;
@@ -31,8 +33,15 @@ describe('station logo lookup', () => {
     expect(stationLogoUrl('Санкт-Петербург-2')).toBe(stationLogoUrl('Питер'));
   });
 
+  it('maps both published spellings of the Сочи court onto the same artwork', () => {
+    expect(stationLogoUrl('Сириус')).toBe(stationLogoUrl('Сочи'));
+    expect(stationLogoUrl('Сириус Сочи')).toBe(stationLogoUrl('Сириус'));
+    expect(stationLogoUrl('  СОЧИ ')).toBe(stationLogoUrl('Сочи'));
+  });
+
   it('returns null for a station without artwork instead of borrowing another logo', () => {
-    expect(stationLogoUrl('Сочи')).toBeNull();
+    expect(stationLogoUrl('Фестивальный парк')).toBeNull();
+    expect(stationLogoUrl('Точка сбора')).toBeNull();
     expect(stationLogoUrl('Тестовая станция')).toBeNull();
     expect(stationLogoUrl('')).toBeNull();
   });

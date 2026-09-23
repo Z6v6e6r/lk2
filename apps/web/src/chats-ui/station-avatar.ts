@@ -2,6 +2,7 @@ import nagatinskayaPremiumUrl from '../assets/stations/nagatinskaya-premium.webp
 import nagatinskayaUrl from '../assets/stations/nagatinskaya.webp';
 import piterUrl from '../assets/stations/piter.webp';
 import seligerskayaUrl from '../assets/stations/seligerskaya.webp';
+import siriusUrl from '../assets/stations/sirius.webp';
 import skolkovoUrl from '../assets/stations/skolkovo.webp';
 import terehovoUrl from '../assets/stations/terehovo.webp';
 import yasenevoUrl from '../assets/stations/yasenevo.webp';
@@ -20,7 +21,12 @@ const STATION_LOGO_URLS: Readonly<Record<string, string>> = {
   'санкт-петербург': piterUrl,
   'санкт-петербург-2': piterUrl,
   селигерская: seligerskayaUrl,
+  // The same court is published as «Сириус» in the station list and as «Сочи» in the CUP station
+  // table, so both titles resolve to its artwork.
+  сириус: siriusUrl,
+  'сириус сочи': siriusUrl,
   сколково: skolkovoUrl,
+  сочи: siriusUrl,
   терехово: terehovoUrl,
   ясенево: yasenevoUrl,
 };

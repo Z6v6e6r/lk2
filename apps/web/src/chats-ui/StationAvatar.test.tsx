@@ -20,7 +20,7 @@ describe('StationAvatar', () => {
   });
 
   it('keeps the frame and falls back to the station marker for a title without artwork', () => {
-    const { container } = render(<StationAvatar title="Сочи" />);
+    const { container } = render(<StationAvatar title="Фестивальный парк" />);
 
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('svg')).not.toBeNull();
