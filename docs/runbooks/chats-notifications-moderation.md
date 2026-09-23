@@ -361,13 +361,29 @@ A direct chat is created only when the peer also holds the _stored_ `chat.direct
 `identity.user_access_profiles`. The beta-only token catalog (`BETA_FULL_CLIENT_ACCESS_ENABLED`) is not
 sufficient: every messaging gate reads the stored profile, so a peer without the durable grant would
 receive a "new chat" notification for a thread they can never open. Creating one now answers
-`CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED` and writes no conversation; keep the durable grant current for
-the tenant with `npm run user:access:beta-full` (`--confirm=APPLY_USER_ACCESS` after a dry run),
-otherwise newly registered beta accounts keep failing that way while the UI still shows chats. Before
-calling a chat-access incident resolved, verify the stored grant for every active account of the tenant
-(`npm run identity:phone-anomalies:report` plus this section's checks) and define the path that grants
-it to accounts registered after the last backfill; refusing creation means the sender's intent is no
-longer stored, so provisioning the grant is the only way back to a conversation that was never opened.
+`CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED` and writes no conversation.
+
+The path for accounts registered after a backfill is now automatic: while
+`BETA_FULL_CLIENT_ACCESS_ENABLED=true`, issuing a client token converges the stored profile with the
+client catalog (`ensureClientPermissions`) — permissions are only added, roles and admin-only
+permissions are preserved, an account without a row gets one, and the change is audited as
+`USER_ACCESS_CHANGED` with reason `BETA_CLIENT_ACCESS_CONVERGENCE` and a null actor. A peer therefore
+becomes reachable as soon as they open the app or refresh their session; until that happens the refusal
+is the correct description of their grant. The switch has two operational consequences: turning it off
+stops the automatic convergence, so the durable grants must then be maintained with the operator
+backfill, and while it is on, narrowing one of the seven beta permissions with
+`scripts/set-user-access.ts` is undone on that account's next client token issuance, because the stored
+profile is what every chat and communities gate reads. The operator backfill
+`npm run user:access:beta-full` (`--confirm=APPLY_USER_ACCESS` after a dry run) remains the way to
+converge a whole tenant at once, for example before a demo or a two-player smoke, without waiting for
+each account to re-authenticate. A convergence that cannot be written is logged and the token is issued
+from the stored profile instead, so the divergence survives one more token lifetime rather than costing
+the account a login. Before calling a chat-access incident resolved, verify the stored grant for every
+active account of the tenant (`npm run identity:phone-anomalies:report` plus this section's checks) and
+that the runtime role may write the grant at all
+(`select has_table_privilege('<runtime-role>', 'identity.user_access_profiles', 'insert,update')`);
+refusing creation means the sender's intent is not stored, so the sender has to repeat the create after
+the peer's grant is durable.
 
 ### Direct chat realtime M2 gate
 

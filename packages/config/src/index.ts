@@ -103,8 +103,11 @@ const environmentSchema = z.object({
   AUTH_COOKIE_SECURE: booleanFromEnvironment,
   /**
    * Closed-beta testing switch: every client access token additionally carries
-   * `FULL_CLIENT_PERMISSIONS`. Owner: LK2 beta testing. Remove once the beta is over or once
-   * `scripts/grant-beta-full-client-access.ts` has made the grants durable in the database.
+   * `FULL_CLIENT_PERMISSIONS`, and issuing a client token converges the stored
+   * `identity.user_access_profiles` row with the same catalog. Owner: LK2 beta testing. Remove once
+   * the beta is over. While the switch is on it is the automatic path for accounts registered after
+   * the last backfill; turning it off stops that convergence, so the durable grants must then be kept
+   * current with `scripts/grant-beta-full-client-access.ts`.
    */
   BETA_FULL_CLIENT_ACCESS_ENABLED: booleanFromEnvironment,
   AUTH_DEV_PHONE_E164: z

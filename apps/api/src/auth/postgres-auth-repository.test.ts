@@ -197,3 +197,183 @@ describe('PostgresAuthRepository Viva delegations', () => {
     expect(statements.filter((text) => text === 'commit')).toHaveLength(2);
   });
 });
+
+describe('PostgresAuthRepository durable client access', () => {
+  function repositoryWithProfile(profile: {
+    readonly roles: string[];
+    readonly permissions: string[];
+    readonly hasProfile?: boolean;
+  }) {
+    const query = vi.fn().mockImplementation((text: string) => {
+      if (text.includes('from identity.users u')) {
+        return Promise.resolve({
+          rows: [{ ...profile, has_profile: profile.hasProfile ?? true }],
+          rowCount: 1,
+        });
+      }
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+    const repository = new PostgresAuthRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+    return { repository, query };
+  }
+
+  it('creates the missing row for an account registered after the last backfill', async () => {
+    const { repository, query } = repositoryWithProfile({
+      // What the coalesce returns when `identity.user_access_profiles` has no row for the account.
+      roles: ['client'],
+      permissions: ['profile.read'],
+      hasProfile: false,
+    });
+
+    await expect(
+      repository.ensureClientPermissions({
+        tenantId,
+        userId,
+        permissions: ['profile.read', 'chat.direct.create'],
+        correlationId: 'beta-access-new-account-correlation',
+      }),
+    ).resolves.toEqual({ roles: ['client'], permissions: ['chat.direct.create', 'profile.read'] });
+
+    const statements = query.mock.calls.map(([text]) => String(text));
+    const upsertIndex = statements.findIndex((text) =>
+      text.includes('insert into identity.user_access_profiles'),
+    );
+    const auditIndex = statements.findIndex((text) => text.includes("'USER_ACCESS_CHANGED'"));
+    expect(upsertIndex).toBeGreaterThan(-1);
+    expect(auditIndex).toBeGreaterThan(upsertIndex);
+    const auditValues = query.mock.calls[auditIndex]?.[1] as readonly unknown[];
+    // The audit must not claim the read fallback's defaults were an existing stored grant.
+    expect(auditValues[3]).toBe(JSON.stringify({ roles: [], permissions: [] }));
+    expect(auditValues[4]).toBe(
+      JSON.stringify({ roles: ['client'], permissions: ['chat.direct.create', 'profile.read'] }),
+    );
+  });
+
+  it('adds the beta catalog without dropping an operator grant and audits the change', async () => {
+    const { repository, query } = repositoryWithProfile({
+      roles: ['client', 'admin'],
+      permissions: ['profile.read', 'notifications.manage'],
+    });
+
+    await expect(
+      repository.ensureClientPermissions({
+        tenantId,
+        userId,
+        permissions: ['profile.read', 'chat.direct.create', 'games.play'],
+        correlationId: 'beta-access-correlation',
+      }),
+    ).resolves.toEqual({
+      roles: ['admin', 'client'],
+      permissions: ['chat.direct.create', 'games.play', 'notifications.manage', 'profile.read'],
+    });
+
+    const statements = query.mock.calls.map(([text]) => String(text));
+    const lockIndex = statements.findIndex((text) =>
+      text.includes('select pg_advisory_xact_lock(hashtextextended($1, 0))'),
+    );
+    expect(lockIndex).toBeGreaterThan(-1);
+    const readIndex = statements.findIndex((text) => text.includes('from identity.users u'));
+    expect(readIndex).toBeGreaterThan(lockIndex);
+    // The lock key is the one both operator writers use for the same account.
+    const lockValues = query.mock.calls[lockIndex]?.[1] as readonly unknown[];
+    expect(lockValues).toEqual([`user-access:${tenantId}:${userId}`]);
+    const read = statements[readIndex] ?? '';
+    expect(read).toContain('left join identity.user_access_profiles a');
+    expect(read).toContain("u.status = 'ACTIVE'");
+    expect(read).toContain("coalesce(a.permissions, array['profile.read']::text[])");
+    const upsertIndex = statements.findIndex((text) =>
+      text.includes('insert into identity.user_access_profiles'),
+    );
+    expect(upsertIndex).toBeGreaterThan(readIndex);
+    expect(statements[upsertIndex]).toContain('on conflict (tenant_id, user_id) do update set');
+    const auditIndex = statements.findIndex((text) => text.includes("'USER_ACCESS_CHANGED'"));
+    expect(auditIndex).toBeGreaterThan(upsertIndex);
+    const upsertValues = query.mock.calls[upsertIndex]?.[1] as readonly unknown[];
+    expect(upsertValues[2]).toEqual(['admin', 'client']);
+    expect(upsertValues[3]).toEqual([
+      'chat.direct.create',
+      'games.play',
+      'notifications.manage',
+      'profile.read',
+    ]);
+    // The convergence is a system action, not the account granting itself a right.
+    expect(upsertValues[4]).toBeUndefined();
+    const auditValues = query.mock.calls[auditIndex]?.[1] as readonly unknown[];
+    expect(auditValues[0]).toBe(tenantId);
+    expect(auditValues[1]).toBe(userId);
+    expect(auditValues[2]).toBe('beta-access-correlation');
+    expect(auditValues[3]).toBe(
+      JSON.stringify({
+        roles: ['client', 'admin'],
+        permissions: ['profile.read', 'notifications.manage'],
+      }),
+    );
+    expect(auditValues[4]).toBe(
+      JSON.stringify({
+        roles: ['admin', 'client'],
+        permissions: ['chat.direct.create', 'games.play', 'notifications.manage', 'profile.read'],
+      }),
+    );
+  });
+
+  it('writes nothing when the stored profile already holds every permission', async () => {
+    const { repository, query } = repositoryWithProfile({
+      roles: ['client'],
+      permissions: ['chat.direct.create', 'profile.read'],
+    });
+
+    await expect(
+      repository.ensureClientPermissions({
+        tenantId,
+        userId,
+        permissions: ['profile.read', 'chat.direct.create'],
+        correlationId: 'beta-access-noop-correlation',
+      }),
+    ).resolves.toEqual({ roles: ['client'], permissions: ['chat.direct.create', 'profile.read'] });
+
+    const statements = query.mock.calls.map(([text]) => String(text));
+    expect(
+      statements.some((text) => text.includes('insert into identity.user_access_profiles')),
+    ).toBe(false);
+    expect(statements.some((text) => text.includes('audit.audit_log'))).toBe(false);
+    expect(statements).toContain('commit');
+
+    // A repeat for the same account is a pure read of the row the previous call left behind.
+    const opens = statements.filter((text) => text === 'begin').length;
+    await repository.ensureClientPermissions({
+      tenantId,
+      userId,
+      permissions: ['profile.read', 'chat.direct.create'],
+      correlationId: 'beta-access-noop-correlation-2',
+    });
+    const after = query.mock.calls.map(([text]) => String(text));
+    expect(after.filter((text) => text === 'begin')).toHaveLength(opens + 1);
+    expect(after.some((text) => text.includes('audit.audit_log'))).toBe(false);
+  });
+
+  it('does not invent a profile for an account that is not active', async () => {
+    const query = vi.fn().mockImplementation((text: string) => {
+      if (text.includes('from identity.users u')) return Promise.resolve({ rows: [], rowCount: 0 });
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+    const repository = new PostgresAuthRepository({
+      connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    } as never);
+
+    await expect(
+      repository.ensureClientPermissions({
+        tenantId,
+        userId,
+        permissions: ['chat.direct.create'],
+        correlationId: 'beta-access-inactive-correlation',
+      }),
+    ).resolves.toBeUndefined();
+
+    const statements = query.mock.calls.map(([text]) => String(text));
+    expect(
+      statements.some((text) => text.includes('insert into identity.user_access_profiles')),
+    ).toBe(false);
+  });
+});

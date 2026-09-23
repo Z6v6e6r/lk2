@@ -11,10 +11,10 @@ function ruleBody(selector: string): string {
   return found?.[1] ?? '';
 }
 
-/** Extracts the body of the phone media query by brace matching, so nested rules stay intact. */
-function phoneMediaQuery(): string {
-  const start = styles.indexOf('@media (max-width: 767px)');
-  expect(start, 'the phone layout media query must exist').toBeGreaterThan(-1);
+/** Extracts an at-rule body by brace matching, so nested rules stay intact. */
+function atRule(marker: string): string {
+  const start = styles.indexOf(marker);
+  expect(start, `the ${marker} block must exist`).toBeGreaterThan(-1);
   const open = styles.indexOf('{', start);
   let depth = 0;
   for (let index = open; index < styles.length; index += 1) {
@@ -25,21 +25,37 @@ function phoneMediaQuery(): string {
       if (depth === 0) return styles.slice(open + 1, index);
     }
   }
-  throw new Error('unterminated media query');
+  throw new Error(`unterminated ${marker} block`);
 }
 
-describe('chat filter rail on a phone', () => {
+describe('chat filter rail layout', () => {
   it('never squeezes the pictogram away inside a compressed button', () => {
     // A label cannot shrink, so without a floor the icon collapses to zero width and the rail reads
     // as text only, with labels overlapping their neighbours.
     expect(ruleBody('.filterRail svg')).toMatch(/flex:\s*0 0 20px\s*;/);
   });
 
-  it('keeps the compact phone rail with accessible touch targets', () => {
-    const phone = phoneMediaQuery();
+  it('keeps the compact icon rail in every layout the app ships', () => {
+    // The list pane is 340–390px wide on desktop too — the same width a phone already collapses for —
+    // while seven labelled chips need roughly 850px. A viewport-gated collapse left the desktop rail
+    // squeezing every label over its neighbour's pictogram.
+    expect(ruleBody('.filterLabel')).toMatch(/display:\s*none\s*;/);
+    expect(styles).not.toMatch(/\.filterLabel\s*\{[^}]*display:\s*inline/);
+  });
 
-    expect(phone).toMatch(/\.filterLabel\s*\{[^}]*display:\s*none\s*;/);
-    expect(phone).toMatch(/min-width:\s*44px\s*;/);
-    expect(phone).toMatch(/flex:\s*1 1 0\s*;/);
+  it('keeps accessible touch targets that a squeezed chip cannot undercut', () => {
+    const chips = ruleBody('.filterRail button,\n.filterRail a');
+
+    expect(chips).toMatch(/min-width:\s*44px\s*;/);
+    expect(chips).toMatch(/min-height:\s*44px\s*;/);
+    expect(chips).toMatch(/box-sizing:\s*border-box\s*;/);
+    expect(chips).toMatch(/flex:\s*1 1 0\s*;/);
+  });
+
+  it('leaves the rail layout to the filter rail rule alone', () => {
+    const phone = atRule('@media (max-width: 767px)');
+
+    expect(phone).not.toMatch(/\.filterLabel/);
+    expect(phone).not.toMatch(/\.filterRail/);
   });
 });
