@@ -408,6 +408,12 @@ export function ChatsPage({
     : stationThreadLoading
       ? 'load'
       : null;
+  // A station thread opens in place instead of navigating to `/chats/<id>`, so a phone has no route
+  // change to swap panes with: the shell itself must leave list mode or the thread stays hidden.
+  const stationThreadOpen =
+    filter === 'STATION' &&
+    stationSource !== null &&
+    (stationSelectedDialog !== null || stationState.pendingStationId !== null);
 
   function retryStationMessage(): void {
     const failed = stationState.failedMessage;
@@ -569,7 +575,9 @@ export function ChatsPage({
     <main className={`${styles.page} ${mode === 'thread' ? styles.threadPage : ''}`}>
       <ChatErrorBanner error={error} busy={busy} onRefresh={onRefresh} />
       <section
-        className={`${styles.shell} ${mode === 'thread' ? styles.threadMode : styles.listMode}`}
+        className={`${styles.shell} ${
+          mode === 'thread' || stationThreadOpen ? styles.threadMode : styles.listMode
+        }`}
         aria-label="Чаты"
       >
         <aside className={styles.listPane} aria-label="Список чатов">

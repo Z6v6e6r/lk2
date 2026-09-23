@@ -1362,6 +1362,12 @@
     gap: 8px;
   }
 
+  /* A station thread has no notification control, so it fills four header columns instead of the five
+     a personal thread reserves; otherwise its update button floats one empty column off the edge. */
+  .stationThreadHeader {
+    grid-template-columns: 44px 36px minmax(0, 1fr) 44px;
+  }
+
   .backLink {
     display: inline-flex;
     width: 44px;
