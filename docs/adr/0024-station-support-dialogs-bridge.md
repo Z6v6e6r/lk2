@@ -2,6 +2,11 @@
 
 Status: Accepted
 
+Extended by [ADR 0025](0025-lk2-station-scoped-support-dialogs.md) (proposed): one dialog per station for
+LK2, with the CUP operator answering in their own station and reading the client's other stations
+read-only. That proposal changes the one-dialog-per-client identity recorded below; it does not change
+this ADR's contract for the bridge surface.
+
 ## Context
 
 The Chats screen ships a `Станции` filter that today renders only a "not connected" state. The
