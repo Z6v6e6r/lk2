@@ -20,9 +20,10 @@ Facts verified against the live contour and the two implementations before writi
   `SupportService`, and the Node-RED `pickDialog` is not the live resolution path.
 - The live ingest rejects an undeclared property
   (`{"message":["property <name> should not exist"],"error":"Bad Request","statusCode":400}`), so a new
-  event field must be declared server-side before any client sends it. The live DTO also requires
-  `connector`, while the local checkout marks it optional: the deployed revision must be aligned with the
-  source before the contract changes.
+  event field must be declared server-side before any client sends it. The endpoint also answers
+  `connector is required` (400) for a body without one; that check is enforced in the service
+  (`resolveIncomingConnector`), not by the DTO, which keeps `connector` optional. It is an intentional
+  contract of the contour, not a source drift to reconcile.
 - `SupportConnectorRegistry.resolveRoute` resolves only declared routes, and the Mongo read path falls
   back to `LK_WEB_MESSENGER` for an unknown value. The bridge sends `connector: 'WEB_LK'`, so LK2 traffic
   is currently indistinguishable from LK1 traffic in CUP.
@@ -54,7 +55,8 @@ LK1 keeps `(tenant, client, connector)`. The target state:
 
 Each slice is independently reversible and ordered expand first. No slice requires a data migration.
 
-**Slice 0 — contract expand, no behaviour change (the safe first slice).**
+**Slice 0 — contract expand, no behaviour change (the safe first slice).** Implemented in
+[ph-admin#30](https://github.com/Z6v6e6r/ph-admin/pull/30) (Draft).
 Declare `dialogScope?: 'CLIENT' | 'STATION'` (optional, default `CLIENT`) on the ingest DTO of the
 deployed support API, carry it through connector normalization into `SupportDialog.dialogScope`, and
 persist it. Nothing reads it yet, so LK1 and LK2 behaviour is byte-for-byte identical.
@@ -108,8 +110,9 @@ left alone; the cutover starts the scoped model going forward.
 
 ## Known limitations and open questions
 
-- The deployed support API revision must be inspected before slice 0: the live DTO requires `connector`
-  while the local source marks it optional, so the contract change has to start from the deployed shape.
+- Slice 0 creates a dialog with the declared scope and never re-scopes an existing one, so a client
+  dialog that already exists as `CLIENT` stays that way until slice 2 decides how scoped and legacy
+  dialogs coexist.
 - Whether LK2 should later get its own connector route (`LK2_WEB_MESSENGER`) instead of sharing
   `LK_WEB_MESSENGER` is deferred. A separate connector gives a clean operator queue, metrics and quick
   replies, but it also means connector configuration and operator ACL work; the scope field delivers the
