@@ -233,6 +233,25 @@
   color: #777579;
 }
 
+/* The avatar is its own profile link, so the row is a grid of two links instead of one anchor. */
+.itemAvatarLink {
+  display: block;
+  grid-column: 1;
+  border-radius: 50%;
+  text-decoration: none;
+}
+
+.itemLink {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  grid-column: 2 / -1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
 .categoryMarker {
   display: grid;
   width: 48px;
@@ -421,69 +440,26 @@
   }
 }
 
-.friendRequests {
+/* A friend request is a feed row, not a separate block: the same avatar/copy rhythm as a chat row,
+   with the two commands that answer it. */
+.friendRequestRow {
   display: grid;
-  margin: 0 18px 18px;
-  padding: 14px;
+  min-width: 0;
+  padding: 14px 18px;
+  align-items: start;
+  grid-template-columns: 48px minmax(0, 1fr);
   gap: 12px;
-  border: 1px solid #e7defc;
-  border-radius: 18px;
-  background: #faf7ff;
 }
 
-.friendRequests .listHeader {
-  margin: 0;
-}
-
-.friendRequestCount {
-  display: inline-grid;
-  min-width: 28px;
-  height: 28px;
-  padding: 0 8px;
-  place-items: center;
-  border-radius: 999px;
-  background: #f0ebff;
-  color: var(--notifications-accent);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.friendRequestList {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  gap: 10px;
-  list-style: none;
-}
-
-.friendRequestCard {
-  display: grid;
-  padding: 12px 14px;
-  gap: 10px;
-  border: 1px solid var(--notifications-line);
-  border-radius: 14px;
-  background: #fff;
-}
-
-.friendRequestPerson {
-  display: grid;
-  gap: 2px;
-  color: var(--notifications-ink);
+.friendRequestAvatarLink {
+  display: block;
+  border-radius: 50%;
   text-decoration: none;
-}
-
-.friendRequestPerson strong {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.friendRequestPerson small {
-  color: var(--notifications-muted);
-  font-size: 13px;
 }
 
 .friendRequestActions {
   display: flex;
+  margin-top: 4px;
   gap: 8px;
 }
 

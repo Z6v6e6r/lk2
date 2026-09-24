@@ -241,6 +241,34 @@ describe('ProfilePage', () => {
     expect(screen.getByText('Соколова')).toBeVisible();
   });
 
+  it('keeps every friend in the swipeable row instead of truncating it at four', () => {
+    const items = Array.from({ length: 6 }, (_, index) => ({
+      userId: `6a81e965-c508-4321-812c-4be323606a7${index}`,
+      displayName: `Друг ${index + 1}`,
+      avatarUrl: null,
+      levelLabel: 'C',
+      addedAt: '2026-07-26T10:00:00.000Z',
+      route: `/profile/6a81e965-c508-4321-812c-4be323606a7${index}`,
+    }));
+
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        logoutBusy={false}
+        communities={{ items: [] }}
+        friends={{ items }}
+        onLogout={() => undefined}
+      />,
+    );
+
+    for (const friend of items) {
+      expect(screen.getByRole('link', { name: `${friend.displayName} · C` })).toHaveAttribute(
+        'href',
+        friend.route,
+      );
+    }
+  });
+
   it('shows the authenticated player position on a community card', () => {
     render(
       <ProfilePage

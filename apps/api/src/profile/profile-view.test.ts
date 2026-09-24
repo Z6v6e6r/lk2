@@ -93,7 +93,7 @@ describe('player profile view policy', () => {
 
     expect(view.access.chat).toEqual({
       status: 'AVAILABLE',
-      route: `/chats/new?recipientUserId=${source.userId}`,
+      route: `/chats/new?recipientUserId=${source.userId}&open=1`,
     });
   });
 

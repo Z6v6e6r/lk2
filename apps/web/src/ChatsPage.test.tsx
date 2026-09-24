@@ -367,6 +367,9 @@ describe('ChatsPage', () => {
     expect(screen.getByRole('button', { name: 'Действия с чатами' })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole('button', { name: 'Все' })).toHaveFocus();
+    // Станции sits right after "Все" in the rail, so the keyboard order follows the visual order.
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Станции' })).toHaveFocus();
     await user.tab();
     const directFilter = screen.getByRole('button', { name: 'Личные' });
     expect(directFilter).toHaveFocus();

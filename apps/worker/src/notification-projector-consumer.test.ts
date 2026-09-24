@@ -143,7 +143,10 @@ describe('notification projector topology', () => {
     expect(MESSAGING_NOTIFICATION_SOURCE_ROUTING_KEYS).toEqual(MESSAGING_NOTIFICATION_EVENT_TYPES);
     // Every notification-producing vertical owns its queue, so an older worker can never consume a
     // source event whose ruleset it does not know.
-    expect(FRIENDSHIP_NOTIFICATION_EVENT_TYPES).toEqual(['profile.friend_request.created.v1']);
+    expect(FRIENDSHIP_NOTIFICATION_EVENT_TYPES).toEqual([
+      'profile.friend_request.created.v1',
+      'profile.friendship.created.v1',
+    ]);
     expect(
       channel.bindQueue.mock.calls
         .filter((call) => call[0] === FRIENDSHIP_NOTIFICATION_PROJECTOR_QUEUE)

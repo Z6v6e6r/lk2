@@ -39,3 +39,16 @@ describe('Profile recommendation preferences', () => {
     expect(ruleBody('.profile-recommendation-toggles')).toMatch(/gap:\s*4px\s*;/);
   });
 });
+
+describe('Profile friends row', () => {
+  it('scrolls sideways instead of clipping the friends beyond the first screenful', () => {
+    const row = ruleBody('.profile-friend-list');
+
+    expect(row).toMatch(/display:\s*flex\s*;/);
+    expect(row).toMatch(/overflow-x:\s*auto\s*;/);
+    expect(row).toMatch(/scroll-snap-type:\s*x\s+proximity\s*;/);
+    expect(row).not.toMatch(/grid-template-columns/);
+    // A fixed basis is what makes the swipe stop on a friend instead of squeezing every avatar.
+    expect(ruleBody('.profile-friend-list > a')).toMatch(/flex:\s*0 0 68px\s*;/);
+  });
+});

@@ -361,6 +361,9 @@ async function announceFriendshipCreated(
       JSON.stringify({
         actorUserId: input.actorUserId,
         targetUserId: input.targetUserId,
+        // Acceptance is news for the player who sent the request, so the notification ruleset
+        // addresses them through the same `recipientUserIds` field every trigger event uses.
+        recipientUserIds: [input.targetUserId],
         createdAt: input.createdAt,
       }),
     ],

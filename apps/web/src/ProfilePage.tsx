@@ -968,7 +968,9 @@ function ProfileFriends({
   readonly onAcceptRequest?: (requestId: string) => void;
   readonly onDeclineRequest?: (requestId: string) => void;
 }): React.JSX.Element {
-  const friends = page?.items.slice(0, 4) ?? [];
+  // The row scrolls horizontally, so every friend is reachable by swiping instead of being cut off
+  // after the first four.
+  const friends = page?.items ?? [];
   const incoming = requests ?? [];
   return (
     <section className="profile-friends" aria-labelledby="profile-friends-title">

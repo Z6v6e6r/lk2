@@ -131,16 +131,17 @@ function repository(overrides: Partial<StationSupportRepository> = {}): StationS
   };
 }
 
-function locations(): Pick<LocationRepository, 'listPublished'> {
+function locations(
+  items: readonly { readonly id: string; readonly title: string; readonly slug: string }[] = [
+    {
+      id: stationId,
+      title: 'Ясенево',
+      slug: 'yasenevo',
+    },
+  ],
+): Pick<LocationRepository, 'listPublished'> {
   return {
-    listPublished: vi.fn().mockResolvedValue([
-      {
-        id: stationId,
-        title: 'Ясенево',
-        slug: 'yasenevo',
-        city: 'Москва',
-      },
-    ]),
+    listPublished: vi.fn().mockResolvedValue(items.map((item) => ({ ...item, city: 'Москва' }))),
   };
 }
 
@@ -156,6 +157,7 @@ async function build(overrides: {
   readonly config?: typeof baseConfig;
   readonly mediaStore?: StationSupportMediaStore;
   readonly mediaAllowedHosts?: readonly string[];
+  readonly locations?: Pick<LocationRepository, 'listPublished'>;
 }) {
   const app = await buildApp({
     config: overrides.config ?? baseConfig,
@@ -163,7 +165,7 @@ async function build(overrides: {
     pool: fakePool(),
     stationSupportProvider: overrides.provider ?? provider(),
     stationSupportRepository: overrides.repository ?? repository(),
-    locationRepository: locations() as LocationRepository,
+    locationRepository: (overrides.locations ?? locations()) as LocationRepository,
     ...(overrides.mediaStore ? { stationSupportMediaStore: overrides.mediaStore } : {}),
     ...(overrides.mediaAllowedHosts
       ? { stationSupportMediaAllowedHosts: overrides.mediaAllowedHosts }
@@ -274,6 +276,32 @@ describe('station support routes', () => {
     expect(stations.statusCode).toBe(404);
     expect(stations.json()).toMatchObject({ code: 'SUPPORT_STATIONS_DISABLED' });
     expect(listDialogs).not.toHaveBeenCalled();
+  });
+
+  it('keeps harness courts out of the station picker without hiding real ones', async () => {
+    const app = await build({
+      locations: locations([
+        { id: stationId, title: 'Ясенево', slug: 'yasenevo' },
+        {
+          id: '11111111-2222-4333-8444-555555555555',
+          title: 'Тестовая станция',
+          slug: 'games-verify-station',
+        },
+        {
+          id: '66666666-7777-4888-8999-000000000000',
+          title: 'Load station',
+          slug: 'games-load-station',
+        },
+      ]),
+    });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/support/stations',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [{ id: stationId, name: 'Ясенево' }] });
   });
 
   it('requires the chat permission and an idempotency key for a station message', async () => {

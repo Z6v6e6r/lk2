@@ -25,4 +25,14 @@ describe('chat filter rail accessibility', () => {
       expect(control).toHaveAttribute('aria-label', name);
     }
   });
+
+  it('keeps stations as the second destination right after "Все"', () => {
+    render(<ChatFilters filter="ALL" onFilterChange={() => {}} />);
+
+    const labels = screen
+      .getAllByRole('button')
+      .map((control) => control.getAttribute('aria-label'));
+
+    expect(labels.slice(0, 3)).toEqual(['Все', 'Станции', 'Личные']);
+  });
 });

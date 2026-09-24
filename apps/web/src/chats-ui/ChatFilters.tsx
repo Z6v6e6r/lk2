@@ -8,12 +8,16 @@ interface ChatFiltersProps {
   readonly onFilterChange: (filter: ChatFilter) => void;
 }
 
+/**
+ * The rail is ordered by how often the destination is used, not by the API enum: stations sit right
+ * after "Все" because a player with a pending station question has to reach it without a swipe.
+ */
 const filters = [
   { value: 'ALL', label: 'Все' },
+  { value: 'STATION', label: 'Станции' },
   { value: 'DIRECT', label: 'Личные' },
   { value: 'GAME', label: 'Игры' },
   { value: 'TOURNAMENT', label: 'Турниры' },
-  { value: 'STATION', label: 'Станции' },
   { value: 'COMMUNITY', label: 'Сообщества' },
 ] as const;
 

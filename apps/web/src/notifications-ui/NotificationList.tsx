@@ -1,14 +1,28 @@
-import type { ConversationSummary, NotificationInboxPage } from '../auth-gateway.js';
+import type {
+  ConversationSummary,
+  NotificationInboxPage,
+  ProfileFriendRequestSummary,
+} from '../auth-gateway.js';
+import { FriendRequestListItem } from './FriendRequestListItem.js';
 import { NotificationListItem } from './NotificationListItem.js';
-import type { NotificationFilter, NotificationGroup } from './notification-format.js';
-import { notificationGroupsForFilter } from './notification-format.js';
+import type {
+  NotificationFeedEntry,
+  NotificationFilter,
+  NotificationGroup,
+} from './notification-format.js';
+import { notificationFeedEntries, notificationFeedMatchesFilter } from './notification-format.js';
 import styles from './NotificationsUi.module.css';
 
 interface NotificationListProps {
-  readonly page: NotificationInboxPage;
   readonly groups: readonly NotificationGroup[];
   readonly conversations: ReadonlyMap<string, ConversationSummary>;
   readonly filter: NotificationFilter;
+  readonly incomingFriendRequests: readonly ProfileFriendRequestSummary[];
+  readonly outgoingFriendRequests: readonly ProfileFriendRequestSummary[];
+  readonly friendRequestBusyId: string | null;
+  readonly busy: boolean;
+  readonly onAcceptFriendRequest: (requestId: string) => void;
+  readonly onDeclineFriendRequest: (requestId: string) => void;
   readonly onOpen: (
     item: NotificationInboxPage['items'][number],
     href: string,
@@ -17,15 +31,25 @@ interface NotificationListProps {
 }
 
 export function NotificationList({
-  page,
   groups,
   conversations,
   filter,
+  incomingFriendRequests,
+  outgoingFriendRequests,
+  friendRequestBusyId,
+  busy,
+  onAcceptFriendRequest,
+  onDeclineFriendRequest,
   onOpen,
 }: NotificationListProps): React.JSX.Element {
-  const visible = notificationGroupsForFilter(groups, filter);
+  const allEntries: readonly NotificationFeedEntry[] = notificationFeedEntries({
+    groups,
+    incomingFriendRequests,
+    outgoingFriendRequests,
+  });
+  const visible = allEntries.filter((entry) => notificationFeedMatchesFilter(entry, filter));
 
-  if (page.items.length === 0) {
+  if (allEntries.length === 0) {
     return (
       <div className={styles.emptyState} role="status">
         <strong>Пока тихо</strong>
@@ -45,15 +69,28 @@ export function NotificationList({
 
   return (
     <ul className={styles.list} aria-label="Лента уведомлений">
-      {visible.map((group) => {
+      {visible.map((entry) => {
+        if (entry.kind === 'friend-request') {
+          return (
+            <FriendRequestListItem
+              key={entry.key}
+              request={entry.request}
+              direction={entry.direction}
+              busyRequestId={friendRequestBusyId}
+              busy={busy}
+              onAccept={onAcceptFriendRequest}
+              onDecline={onDeclineFriendRequest}
+            />
+          );
+        }
         const conversation =
-          group.kind === 'conversation' && group.sourceId
-            ? conversations.get(group.sourceId)
+          entry.group.kind === 'conversation' && entry.group.sourceId
+            ? conversations.get(entry.group.sourceId)
             : undefined;
         return (
           <NotificationListItem
-            key={group.key}
-            group={group}
+            key={entry.key}
+            group={entry.group}
             conversation={conversation}
             onOpen={onOpen}
           />

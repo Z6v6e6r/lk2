@@ -1,4 +1,8 @@
-import type { ConversationSummary, NotificationInboxPage } from '../auth-gateway.js';
+import type {
+  ConversationSummary,
+  NotificationInboxPage,
+  ProfileFriendRequestSummary,
+} from '../auth-gateway.js';
 import { conversationTitle } from '../chats-ui/chat-format.js';
 
 export type NotificationItem = NotificationInboxPage['items'][number];
@@ -89,6 +93,30 @@ export function notificationCategory(category: string): NotificationCategoryPres
       tone: 'neutral',
     }
   );
+}
+
+/**
+ * The projector writes one prompt row per incoming friend request. The feed answers a request with
+ * an actionable row built from the authoritative pending-request list, so the prompt itself is
+ * dropped instead of showing the same request twice. The title mirrors the canonical FRIENDSHIP
+ * ruleset in `@phub/notifications`; that package is server-only, so the copy is repeated here and
+ * covered by a test that fails loudly if the row ever stops matching.
+ */
+export const FRIEND_REQUEST_PROMPT_TITLE = 'Заявка в друзья';
+
+export function isFriendRequestPrompt(item: NotificationItem): boolean {
+  return item.category === 'FRIENDSHIP' && item.title === FRIEND_REQUEST_PROMPT_TITLE;
+}
+
+/** Keeps the "Друзья" tab reachable when the only friend-request row comes from the request list. */
+export function withFriendRequestFilter(
+  filters: readonly { readonly value: NotificationFilter; readonly label: string }[],
+  friendRequestCount: number,
+): readonly { readonly value: NotificationFilter; readonly label: string }[] {
+  if (friendRequestCount === 0 || filters.some((filter) => filter.value === 'FRIENDSHIP')) {
+    return filters;
+  }
+  return [...filters, { value: 'FRIENDSHIP', label: 'Друзья' }];
 }
 
 export function notificationFilters(items: readonly NotificationItem[]): readonly {
@@ -341,4 +369,71 @@ export function notificationConversationIndex(
   const index = new Map<string, ConversationSummary>();
   for (const conversation of conversations ?? []) index.set(conversation.id, conversation);
   return index;
+}
+
+/**
+ * One row of the "Последние события" feed. A friend request is not a projection row: it is live
+ * state with its own commands, so it is modelled separately from the grouped notification rows while
+ * sharing their layout and their single newest-first ordering.
+ */
+export type NotificationFeedEntry =
+  | {
+      readonly kind: 'group';
+      readonly key: string;
+      readonly createdAt: string;
+      readonly group: NotificationGroup;
+    }
+  | {
+      readonly kind: 'friend-request';
+      readonly key: string;
+      readonly createdAt: string;
+      readonly request: ProfileFriendRequestSummary;
+      readonly direction: 'incoming' | 'outgoing';
+    };
+
+export function notificationFeedEntries(input: {
+  readonly groups: readonly NotificationGroup[];
+  readonly incomingFriendRequests: readonly ProfileFriendRequestSummary[];
+  readonly outgoingFriendRequests: readonly ProfileFriendRequestSummary[];
+}): readonly NotificationFeedEntry[] {
+  const entries: NotificationFeedEntry[] = [
+    ...input.groups.map((group) => ({
+      kind: 'group' as const,
+      key: `group:${group.key}`,
+      createdAt: group.items[0]?.createdAt ?? '',
+      group,
+    })),
+    ...[
+      ...input.incomingFriendRequests.map((request) => ({
+        request,
+        direction: 'incoming' as const,
+      })),
+      ...input.outgoingFriendRequests.map((request) => ({
+        request,
+        direction: 'outgoing' as const,
+      })),
+    ].map(({ request, direction }) => ({
+      kind: 'friend-request' as const,
+      key: `friend-request:${request.requestId}`,
+      createdAt: request.createdAt,
+      request,
+      direction,
+    })),
+  ];
+  // Newest first, matching the inbox page itself. `sort` is stable, so the incoming request keeps
+  // its place ahead of the outgoing one when both carry the same instant.
+  return [...entries].sort((left, right) => feedEntryTimestamp(right) - feedEntryTimestamp(left));
+}
+
+function feedEntryTimestamp(entry: NotificationFeedEntry): number {
+  const parsed = Date.parse(entry.createdAt);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function notificationFeedMatchesFilter(
+  entry: NotificationFeedEntry,
+  filter: NotificationFilter,
+): boolean {
+  if (entry.kind === 'friend-request') return filter === 'ALL' || filter === 'FRIENDSHIP';
+  return notificationGroupMatchesFilter(entry.group, filter);
 }

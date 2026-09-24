@@ -132,6 +132,8 @@ interface ChatsPageProps {
   readonly mode: ChatRouteMode;
   readonly selectedConversationId?: string;
   readonly hasExplicitRecipient: boolean;
+  /** The `/chats/new?open=1` deep link from a profile: create the conversation without a second tap. */
+  readonly autoOpenDirect?: boolean | undefined;
   readonly currentUserId: string;
   readonly busy: ChatBusy;
   readonly error: ChatUiError | null;
@@ -320,6 +322,7 @@ export function ChatsPage({
   mode,
   selectedConversationId,
   hasExplicitRecipient,
+  autoOpenDirect,
   currentUserId,
   busy,
   error,
@@ -667,6 +670,19 @@ export function ChatsPage({
     }
   }, [currentUserId, filter, query, unreadOnly]);
 
+  /**
+   * A profile link carries `open=1`, so the conversation is created as soon as the screen mounts.
+   * The ref keeps the command single-shot across the re-renders the create call itself causes; the
+   * page keeps the idempotency key in `App`, so a retry after a failure replays the same command.
+   */
+  const autoOpenStarted = useRef(false);
+  useEffect(() => {
+    if (!autoOpenDirect || mode !== 'new' || !hasExplicitRecipient) return;
+    if (autoOpenStarted.current) return;
+    autoOpenStarted.current = true;
+    onCreateDirect();
+  }, [autoOpenDirect, mode, hasExplicitRecipient, onCreateDirect]);
+
   if (mode === 'new') {
     return (
       <main className={styles.page}>
@@ -676,30 +692,37 @@ export function ChatsPage({
           busy={busy}
           onRefresh={hasExplicitRecipient ? onCreateDirect : onRefresh}
         />
-        <section className={styles.directStart} aria-labelledby="chat-direct-start-title">
-          <a href="/chats">← К диалогам</a>
-          <h1 id="chat-direct-start-title">Новый личный чат</h1>
-          {hasExplicitRecipient ? (
-            <>
-              <p>
-                Получатель выбран безопасной ссылкой ПадлХАБ. Контактные идентификаторы остаются
-                скрыты.
-              </p>
-              <button
-                type="button"
-                disabled={busy !== null || error?.kind === 'FEATURE_UNAVAILABLE'}
-                onClick={onCreateDirect}
-              >
-                {busy === 'create' ? 'Открываем диалог…' : 'Начать диалог'}
-              </button>
-            </>
-          ) : (
-            <div role="note">
-              <strong>Получатель не выбран</strong>
-              <p>Откройте чат из профиля игрока по поддерживаемой безопасной ссылке.</p>
-            </div>
-          )}
-        </section>
+        {autoOpenDirect && hasExplicitRecipient && !error ? (
+          <section className={styles.directStart} role="status" aria-live="polite">
+            <h1>Открываем диалог…</h1>
+            <p>Создаём личный чат ПадлХАБ с выбранным игроком.</p>
+          </section>
+        ) : (
+          <section className={styles.directStart} aria-labelledby="chat-direct-start-title">
+            <a href="/chats">← К диалогам</a>
+            <h1 id="chat-direct-start-title">Новый личный чат</h1>
+            {hasExplicitRecipient ? (
+              <>
+                <p>
+                  Получатель выбран безопасной ссылкой ПадлХАБ. Контактные идентификаторы остаются
+                  скрыты.
+                </p>
+                <button
+                  type="button"
+                  disabled={busy !== null || error?.kind === 'FEATURE_UNAVAILABLE'}
+                  onClick={onCreateDirect}
+                >
+                  {busy === 'create' ? 'Открываем диалог…' : 'Начать диалог'}
+                </button>
+              </>
+            ) : (
+              <div role="note">
+                <strong>Получатель не выбран</strong>
+                <p>Откройте чат из профиля игрока по поддерживаемой безопасной ссылке.</p>
+              </div>
+            )}
+          </section>
+        )}
         <MainBottomNavigation active="chats" />
       </main>
     );

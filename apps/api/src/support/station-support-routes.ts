@@ -36,6 +36,19 @@ const PHONE_UNLINKED_MESSAGE =
   'К станции можно написать только с привязанным номером телефона. Привяжите номер в профиле.';
 
 /**
+ * The games load/roster harnesses (`scripts/verify-games-read-load.ts`,
+ * `scripts/verify-games-roster-concurrency.ts`) publish a synthetic court into whatever tenant they
+ * run against, and that row survives the run. A published court is real business data, so the
+ * station picker keeps the harness rows out by their machine-owned slug instead of by editorial copy,
+ * which the tenant can rename at any time. Removal condition: drop this list once the harnesses
+ * clean up after themselves or run against a disposable database.
+ */
+const SYNTHETIC_STATION_SLUGS: ReadonlySet<string> = new Set([
+  'games-verify-station',
+  'games-load-station',
+]);
+
+/**
  * The provider's dialog and message identifiers stay inside this module. Clients address a dialog by
  * a stable PadlHub UUID derived from the provider id, and the server resolves it by enumerating the
  * caller's own dialogs, so an opaque external id never becomes a public identifier and a caller can
@@ -415,6 +428,7 @@ export function registerStationSupportRoutes(
       });
       return {
         items: locations
+          .filter((location) => !SYNTHETIC_STATION_SLUGS.has(location.slug))
           .map((location) => ({ id: location.id, name: location.title }))
           .sort((left, right) => left.name.localeCompare(right.name, 'ru-RU')),
       };

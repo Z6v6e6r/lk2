@@ -122,6 +122,75 @@ describe('profile friend request repository', () => {
     expect(statements.some((text) => text.includes('insert into profile.friendships'))).toBe(false);
   });
 
+  it('announces acceptance to the player who sent the request', async () => {
+    const outboxEvents: { readonly sql: string; readonly payload: unknown }[] = [];
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text === 'rollback' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      ) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('from profile.friend_request_responses')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes('select requester_user_id, target_user_id')) {
+        return Promise.resolve({
+          rows: [{ requester_user_id: actorUserId, target_user_id: targetUserId }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('from profile.friend_requests') && text.includes('for update')) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: requestId,
+              requester_user_id: actorUserId,
+              target_user_id: targetUserId,
+              state: 'PENDING',
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into profile.friendships')) {
+        return Promise.resolve({
+          rows: [{ created_at: '2026-08-29T10:00:00.000Z' }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('insert into audit.outbox_events')) {
+        outboxEvents.push({ sql: text, payload: JSON.parse(String(values[3])) });
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      if (text.includes('insert into')) return Promise.resolve({ rows: [], rowCount: 1 });
+      if (text.startsWith('update profile.friend_requests')) {
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      }
+      return undefined;
+    });
+    const repository = createProfileFriendshipRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.respond({
+        tenantId,
+        actorUserId: targetUserId,
+        requestId,
+        action: 'ACCEPT',
+        idempotencyKey: 'friend-response-accept-0001',
+        correlationId: 'friend-response-accept-correlation-0001',
+      }),
+    ).resolves.toMatchObject({ outcome: 'applied', friendship: { status: 'FRIEND' } });
+
+    // The acceptor already sees the new friendship; only the waiting requester is notified.
+    expect(outboxEvents).toHaveLength(1);
+    expect(outboxEvents[0]?.sql).toContain('profile.friendship.created.v1');
+    expect(outboxEvents[0]?.payload).toMatchObject({ recipientUserIds: [actorUserId] });
+  });
+
   it('answers the reciprocal request immediately instead of leaving two pending rows', async () => {
     const statements: string[] = [];
     const query = baseQuery((text) => {
