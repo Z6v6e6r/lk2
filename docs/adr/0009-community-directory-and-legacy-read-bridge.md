@@ -30,7 +30,8 @@ identity-free normalized cache and continuation pages are cut from that cache.
 During migration, `COMMUNITIES_READ_MODE=legacy` lets the API call the current LK summary endpoint.
 The adapter derives identity only from verified PadlHub JWT/tenant context and server-side
 integration mappings. The only phone allowed to act as a legacy viewer key is the verified
-phone-login value in `profile.user_summaries.phone_e164`, or the provider-asserted phone held by the
+value in `profile.user_summaries.phone_e164` (proved by a phone login or by the authenticated profile
+confirmation), or the provider-asserted phone held by the
 integration contour as `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`); the verified
 value always wins. A provider-asserted phone is never written into the auth-owned profile column, is
 never a PadlHub login key and is never proof for payment, participation or activity-history guards.

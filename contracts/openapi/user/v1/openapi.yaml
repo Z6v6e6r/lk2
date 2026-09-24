@@ -1004,6 +1004,96 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/phone/challenges:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    post:
+      tags: [profiles]
+      operationId: startProfilePhoneConfirmation
+      summary: Send a one-time code that confirms a phone for the authenticated account
+      description: |
+        Confirms a phone for the account behind the access JWT instead of authenticating a session. The
+        challenge is bound to that account and to the phone it named, so verifying it can never create,
+        switch or re-link an account: the login challenge stays the only path that establishes a session.
+        The response, the audit event and the stored profile expose at most the last four digits.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePhoneChallengeRequest'
+      responses:
+        '202':
+          description: The confirmation challenge was accepted and the code was requested.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePhoneChallenge'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/phone/challenges/{challengeId}/verify:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/ChallengeId'
+    post:
+      tags: [profiles]
+      operationId: verifyProfilePhoneConfirmation
+      summary: Verify the code and attach the confirmed phone to the authenticated account
+      description: |
+        Fail-closed order: the challenge must belong to the caller, the provider subject behind the code
+        must not belong to another account, and the phone must not be held by another account either as
+        its verified phone or as its provider viewer phone. Only then is the phone written together with
+        one audit event. No session is created, no provider delegation is persisted and a number that is
+        already attached to another account is reported instead of moved.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfilePhoneVerifyRequest'
+      responses:
+        '200':
+          description: The phone is attached to the authenticated account.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfilePhoneConfirmation'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/ProfilePhoneConfirmationConflict'
+        '410':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/provider-phone:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -5234,6 +5324,62 @@ components:
           description: Provider-asserted viewer phone in russian E.164 form, re-validated by the server.
           minLength: 4
           maxLength: 32
+    ProfilePhoneChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [phone]
+      properties:
+        phone:
+          type: string
+          pattern: '^\+7[0-9]{10}$'
+          description: Phone to confirm for the authenticated account, in E.164 format.
+          example: '+79991234567'
+    ProfilePhoneChallenge:
+      type: object
+      additionalProperties: false
+      required: [challengeId, expiresAt, resendAfterSeconds, phoneMasked]
+      properties:
+        challengeId:
+          type: string
+          format: uuid
+        expiresAt:
+          type: string
+          format: date-time
+        resendAfterSeconds:
+          type: integer
+          minimum: 0
+          maximum: 3600
+        phoneMasked:
+          type: string
+          description: Masked phone the code was sent to; the full number is never returned.
+          example: '•••• 4567'
+    ProfilePhoneVerifyRequest:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: '^[0-9]{4}$'
+          description: One-time code supplied to the account owner.
+    ProfilePhoneConfirmation:
+      type: object
+      additionalProperties: false
+      required: [phoneMasked, confirmedAt]
+      properties:
+        phoneMasked:
+          type: string
+          description: Masked phone now attached to the account.
+          example: '•••• 4567'
+        confirmedAt:
+          type: string
+          format: date-time
+        releasedPhoneLast4:
+          type: string
+          pattern: '^[0-9]{4}$'
+          description: |
+            Last four digits of the phone this account held before the change, so the owner can be told
+            which number was released. Absent when the account had no confirmed phone.
     ProfileProviderPhoneResult:
       type: object
       additionalProperties: false
@@ -9521,6 +9667,19 @@ components:
             $ref: ../../common/components.yaml#/components/schemas/ApiError
     CommandConflict:
       description: The idempotency key was already used for another command.
+      headers:
+        X-Correlation-ID:
+          $ref: ../../common/components.yaml#/components/headers/CorrelationId
+      content:
+        application/json:
+          schema:
+            $ref: ../../common/components.yaml#/components/schemas/ApiError
+    ProfilePhoneConfirmationConflict:
+      description: |
+        The command conflicts with existing state: the Idempotency-Key was already used for another
+        command (`IDEMPOTENCY_KEY_CONFLICT`), another confirmation for this account is still being
+        verified (`AUTH_CHALLENGE_IN_PROGRESS`), or the number is already attached to a different
+        account (`AUTH_PHONE_ALREADY_BOUND`). Nothing is written in any of these cases.
       headers:
         X-Correlation-ID:
           $ref: ../../common/components.yaml#/components/headers/CorrelationId

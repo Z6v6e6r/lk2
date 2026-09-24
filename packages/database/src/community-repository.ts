@@ -106,8 +106,9 @@ export function createCommunityLegacyBridgeRepository(
             [tenantId, userId],
           )
         ).rows[0];
-        // A verified phone-login value always wins; the provider-asserted integration link is the
-        // fallback that lets an OAuth-only account reach its own legacy viewer identity.
+        // An attested value always wins (a phone login or the authenticated profile confirmation); the
+        // provider-asserted integration link is the fallback that lets an OAuth-only account reach its
+        // own legacy viewer identity.
         const viewerPhone = row?.phone_e164 ?? row?.provider_phone_e164 ?? undefined;
         return {
           ...(viewerPhone ? { phoneE164: viewerPhone } : {}),

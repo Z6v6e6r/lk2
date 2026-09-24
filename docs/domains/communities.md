@@ -194,7 +194,8 @@ PadlHub user to server-only phone/Viva profile identity, calls the fixed
 selects only rows whose single summary member matches that server-resolved identity. Open catalog
 rows and other members are discarded.
 
-That identity is the verified phone-login value in `profile.user_summaries.phone_e164` when present,
+That identity is the verified value in `profile.user_summaries.phone_e164` when present (a phone
+proved either by a phone login or by the authenticated profile confirmation),
 otherwise the provider-asserted phone the integration contour keeps as
 `integration.external_entity_map` (`VIVA`/`legacy_viewer_phone`). The provider copy never enters the
 auth-owned profile column, never becomes a PadlHub login key and never serves as proof for payment,

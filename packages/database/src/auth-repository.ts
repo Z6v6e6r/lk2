@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 
-// `profile.user_summaries (tenant_id, phone_e164)` is unique since migration 0091: a phone that a
-// phone login verified can belong to one account per tenant. The provider profile sync is the only
-// writer, so its violation is mapped to a stable code instead of leaking a raw 23505 to the caller.
+// `profile.user_summaries (tenant_id, phone_e164)` is unique since migration 0091: a verified phone can
+// belong to one account per tenant. Two attested writers own that column — the phone-login exchange and
+// the authenticated profile confirmation — so either violation is mapped to a stable code instead of
+// leaking a raw 23505 to the caller.
 const VERIFIED_PHONE_INDEX = 'user_summaries_phone_lookup_idx';
 
 function isVerifiedPhoneConflict(error: unknown): boolean {
@@ -93,6 +94,37 @@ export type RefreshSessionRotationResult =
   | { readonly outcome: 'invalid' }
   | { readonly outcome: 'reuse_detected' };
 
+export interface FindExternalSubjectUserInput {
+  readonly tenantId: string;
+  readonly provider: TenantAuthProvider;
+  readonly issuer: string;
+  readonly subject: string;
+}
+
+export type ConfirmProfilePhoneOutcome =
+  | { readonly outcome: 'confirmed'; readonly releasedPhoneLast4?: string }
+  | { readonly outcome: 'already_confirmed' }
+  | { readonly outcome: 'phone_taken' };
+
+export interface ConfirmProfilePhoneInput {
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly phoneE164: string;
+  readonly challengeId: string;
+  readonly correlationId: string;
+}
+
+/**
+ * The durable replay record of one confirmation: the audit row that the write itself produced. A retried
+ * verify command finds it through the deterministic challenge id and returns the original outcome instead
+ * of reporting an expired code for a phone that was already attached.
+ */
+export interface ProfilePhoneConfirmation {
+  readonly confirmedAt: string;
+  readonly phoneLast4: string;
+  readonly releasedPhoneLast4?: string;
+}
+
 export interface IdentityAuthRepository {
   resolveTenantAuthConfig(tenantKey: string): Promise<TenantAuthContext | undefined>;
   getAuthUser(tenantId: string, userId: string): Promise<AuthUser | undefined>;
@@ -100,6 +132,27 @@ export interface IdentityAuthRepository {
     input: ResolveExistingExternalUserInput,
   ): Promise<AuthUser | undefined>;
   upsertExternalUser(input: UpsertExternalUserInput): Promise<AuthUser>;
+  /**
+   * Read-only: which account already owns this provider subject, if any. Phone confirmation uses it to
+   * stop before writing when the code exchange lands on an account other than the caller.
+   */
+  findExternalSubjectUser(input: FindExternalSubjectUserInput): Promise<AuthUser | undefined>;
+  /**
+   * Read-only: the recorded outcome of an already applied confirmation, addressed by the caller's own
+   * account and the deterministic challenge id. This is the ambiguous-write recovery path: a client that
+   * lost the response retries the same command and reads back what actually happened.
+   */
+  findProfilePhoneConfirmation(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly challengeId: string;
+  }): Promise<ProfilePhoneConfirmation | undefined>;
+  /**
+   * Writes an attested phone on one account inside one transaction: refuses when another account in the
+   * tenant already holds the phone (verified or as its provider viewer phone), audits a real change
+   * once, and reports the previous masked tail so the caller can tell the person what was released.
+   */
+  confirmProfilePhone(input: ConfirmProfilePhoneInput): Promise<ConfirmProfilePhoneOutcome>;
   createRefreshSession(input: CreateRefreshSessionInput): Promise<RefreshSession>;
   findActiveRefreshSession(input: {
     readonly tenantId: string;
@@ -233,16 +286,17 @@ async function writeSecurityAudit(
     readonly tenantId: string;
     readonly actorId: string;
     readonly action: string;
-    readonly resourceType?: 'AUTH_SESSION' | 'EXTERNAL_IDENTITY';
+    readonly resourceType?: 'AUTH_SESSION' | 'EXTERNAL_IDENTITY' | 'PROFILE_PHONE';
     readonly resourceId: string;
     readonly correlationId: string;
+    readonly newValue?: unknown;
   },
 ): Promise<void> {
   await client.query(
     `
       insert into audit.audit_log (
-        tenant_id, actor_id, action, resource_type, resource_id, result, correlation_id
-      ) values ($1, $2, $3, $4, $5, 'SUCCESS', $6)
+        tenant_id, actor_id, action, resource_type, resource_id, result, correlation_id, new_value
+      ) values ($1, $2, $3, $4, $5, 'SUCCESS', $6, $7::jsonb)
     `,
     [
       input.tenantId,
@@ -251,6 +305,7 @@ async function writeSecurityAudit(
       input.resourceType ?? 'AUTH_SESSION',
       input.resourceId,
       input.correlationId,
+      input.newValue === undefined ? null : JSON.stringify(input.newValue),
     ],
   );
 }
@@ -531,6 +586,146 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
           correlationId: input.correlationId,
         });
         return created;
+      });
+    },
+
+    findExternalSubjectUser(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<AuthUserStatusRow>(
+          client,
+          `
+            select
+              u.id,
+              u.tenant_id,
+              u.status,
+              p.display_name,
+              case when p.phone_e164 is null then null else right(p.phone_e164, 4) end as phone_last_4
+            from integration.external_identity_map e
+            join identity.users u
+              on u.tenant_id = e.tenant_id and u.id = e.user_id
+            join profile.user_summaries p
+              on p.tenant_id = u.tenant_id and p.user_id = u.id
+            where e.tenant_id = $1
+              and e.provider = $2
+              and e.issuer = $3
+              and e.subject = $4
+          `,
+          [input.tenantId, input.provider, input.issuer, input.subject],
+        );
+        return row ? mapAuthUser(row) : undefined;
+      });
+    },
+
+    findProfilePhoneConfirmation(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<{
+          readonly occurred_at: Date | string;
+          readonly new_value: {
+            readonly phoneLast4?: string | null;
+            readonly releasedPhoneLast4?: string | null;
+          } | null;
+        }>(
+          client,
+          `
+            select occurred_at, new_value
+            from audit.audit_log
+            where tenant_id = $1
+              and actor_id = $2
+              and action = 'PROFILE_PHONE_CONFIRMED'
+              and new_value->>'challengeId' = $3
+            order by occurred_at
+            limit 1
+          `,
+          [input.tenantId, input.userId, input.challengeId],
+        );
+        const phoneLast4 = row?.new_value?.phoneLast4;
+        if (!row || typeof phoneLast4 !== 'string') return undefined;
+        const releasedPhoneLast4 = row.new_value?.releasedPhoneLast4;
+        const occurredAt =
+          row.occurred_at instanceof Date ? row.occurred_at : new Date(String(row.occurred_at));
+        return {
+          confirmedAt: occurredAt.toISOString(),
+          phoneLast4,
+          ...(typeof releasedPhoneLast4 === 'string' ? { releasedPhoneLast4 } : {}),
+        };
+      });
+    },
+
+    confirmProfilePhone(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        // A confirmation may only rotate the phone of an account that can still authenticate; a stale
+        // access token for a disabled account must not keep writing the strongest phone claim.
+        const current = await queryOne<{ readonly phone_e164: string | null }>(
+          client,
+          `
+            select s.phone_e164
+            from profile.user_summaries s
+            join identity.users u on u.tenant_id = s.tenant_id and u.id = s.user_id
+            where s.tenant_id = $1 and s.user_id = $2 and u.status = 'ACTIVE'
+            for update of s
+          `,
+          [input.tenantId, input.userId],
+        );
+        if (!current) throw new Error('AUTH_USER_NOT_ACTIVE');
+        if (current.phone_e164 === input.phoneE164) return { outcome: 'already_confirmed' };
+
+        // Another account may hold the number either as its verified phone or as the provider viewer
+        // phone the CUP resolver falls back to; both make the number unavailable.
+        const taken = await queryOne<{ readonly holder: string }>(
+          client,
+          `
+            select holder from (
+              select user_id as holder
+                from profile.user_summaries
+               where tenant_id = $1 and phone_e164 = $2 and user_id <> $3
+              union all
+              select internal_id as holder
+                from integration.external_entity_map
+               where tenant_id = $1
+                 and external_system = 'VIVA'
+                 and entity_type = 'legacy_viewer_phone'
+                 and external_id = $2
+                 and internal_id <> $3
+            ) holders
+            limit 1
+          `,
+          [input.tenantId, input.phoneE164, input.userId],
+        );
+        if (taken) return { outcome: 'phone_taken' };
+
+        try {
+          await client.query(
+            `
+              update profile.user_summaries
+              set phone_e164 = $3, updated_at = now()
+              where tenant_id = $1 and user_id = $2
+            `,
+            [input.tenantId, input.userId, input.phoneE164],
+          );
+        } catch (error) {
+          // The unique index is the atomic guard against a concurrent claim.
+          if (isVerifiedPhoneConflict(error)) return { outcome: 'phone_taken' };
+          throw error;
+        }
+        await writeSecurityAudit(client, {
+          tenantId: input.tenantId,
+          actorId: input.userId,
+          action: 'PROFILE_PHONE_CONFIRMED',
+          resourceType: 'PROFILE_PHONE',
+          resourceId: input.userId,
+          correlationId: input.correlationId,
+          newValue: {
+            challengeId: input.challengeId,
+            // The confirmation path is not a login, so the audit must not claim a login attestation.
+            source: 'PROFILE_PHONE_CONFIRMATION',
+            phoneLast4: input.phoneE164.slice(-4),
+            releasedPhoneLast4: current.phone_e164 ? current.phone_e164.slice(-4) : null,
+          },
+        });
+        return {
+          outcome: 'confirmed',
+          ...(current.phone_e164 ? { releasedPhoneLast4: current.phone_e164.slice(-4) } : {}),
+        };
       });
     },
 
