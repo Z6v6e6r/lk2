@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatsPage, type StationSupportSource } from './ChatsPage.js';
+import type { StationSupportMessage, StationSupportMessagePage } from './auth-gateway.js';
 import styles from './chats-ui/ChatsUi.module.css';
 
 const conversationId = '22222222-2222-4222-8222-222222222222';
@@ -26,11 +27,26 @@ function layoutClass(name: string): string {
   return value;
 }
 
+/**
+ * One chronological page: the server states whether older messages remain and issues the cursor for
+ * them, so a page that claims more history always carries a `nextBefore`.
+ */
+function stationMessagesPage(
+  items: readonly StationSupportMessage[] = [],
+  nextBefore?: string,
+): StationSupportMessagePage {
+  return {
+    items,
+    hasMore: nextBefore !== undefined,
+    ...(nextBefore ? { nextBefore } : {}),
+  };
+}
+
 function stationSource(overrides: Partial<StationSupportSource> = {}): StationSupportSource {
   return {
     loadStations: vi.fn().mockResolvedValue([]),
     loadDialogs: vi.fn().mockResolvedValue([]),
-    loadMessages: vi.fn().mockResolvedValue([]),
+    loadMessages: vi.fn().mockResolvedValue(stationMessagesPage()),
     sendMessage: vi.fn().mockRejectedValue(new Error('SUPPORT_PROVIDER_UNAVAILABLE')),
     uploadAttachment: vi.fn().mockRejectedValue(new Error('SUPPORT_ATTACHMENTS_UNAVAILABLE')),
     loadAttachment: vi.fn().mockRejectedValue(new Error('SUPPORT_ATTACHMENT_NOT_FOUND')),
@@ -364,7 +380,7 @@ describe('ChatsPage', () => {
     await user.tab();
     expect(screen.getByRole('button', { name: 'Очистить' })).toHaveFocus();
     await user.tab();
-    expect(screen.getByRole('button', { name: 'Действия с чатами' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Только непрочитанные' })).toHaveFocus();
     await user.tab();
     expect(screen.getByRole('button', { name: 'Все' })).toHaveFocus();
     // Станции sits right after "Все" in the rail, so the keyboard order follows the visual order.
@@ -673,16 +689,18 @@ describe('ChatsPage', () => {
           },
         },
       ]),
-      loadMessages: vi.fn().mockResolvedValue([
-        {
-          id: '88888888-8888-4888-8888-888888888888',
-          body: 'Когда свободен корт?',
-          author: 'STATION',
-          authorName: 'Поддержка ПадлХАБ',
-          createdAt: '2026-09-22T10:00:00.000Z',
-          attachments: [],
-        },
-      ]),
+      loadMessages: vi.fn().mockResolvedValue(
+        stationMessagesPage([
+          {
+            id: '88888888-8888-4888-8888-888888888888',
+            body: 'Когда свободен корт?',
+            author: 'STATION',
+            authorName: 'Поддержка ПадлХАБ',
+            createdAt: '2026-09-22T10:00:00.000Z',
+            attachments: [],
+          },
+        ]),
+      ),
       sendMessage,
     });
     render(
@@ -694,7 +712,7 @@ describe('ChatsPage', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
-    expect(await screen.findByRole('list', { name: 'Чаты станций' })).toBeVisible();
+    expect(await screen.findByRole('list', { name: 'Станции и каналы ПадлХАБ' })).toBeVisible();
     expect(screen.getByText('Когда свободен корт?')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Ясенево/ }));
     expect(await screen.findByText('Когда свободен корт?')).toBeVisible();
@@ -709,6 +727,186 @@ describe('ChatsPage', () => {
     // The station composer accepts pictures now, and the answer names the operator who wrote it.
     expect(screen.getByRole('button', { name: 'Прикрепить файл' })).toBeVisible();
     expect(screen.getByText('Поддержка ПадлХАБ')).toBeVisible();
+  });
+
+  it('shows a station dialog with correspondence in the unfiltered tab and opens it from there', async () => {
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: '2026-09-22T10:00:00.000Z',
+          lastMessage: {
+            preview: 'Когда свободен корт?',
+            author: 'STATION',
+            createdAt: '2026-09-22T10:00:00.000Z',
+          },
+        },
+      ]),
+      loadMessages: vi.fn().mockResolvedValue(
+        stationMessagesPage([
+          {
+            id: '88888888-8888-4888-8888-888888888888',
+            body: 'Корт свободен в 19:00.',
+            author: 'STATION',
+            authorName: 'Поддержка ПадлХАБ',
+            createdAt: '2026-09-22T10:00:00.000Z',
+            attachments: [],
+          },
+        ]),
+      ),
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+
+    const list = await screen.findByRole('list', { name: 'Диалоги' });
+    const row = await within(list).findByRole('button', { name: /Ясенево/ });
+    expect(within(row).getByText('Когда свободен корт?')).toBeVisible();
+
+    fireEvent.click(row);
+    // The thread lives in the station block, so opening the row switches the rail to it.
+    expect(screen.getByRole('button', { name: 'Станции' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByText('Корт свободен в 19:00.')).toBeVisible();
+  });
+
+  it('reads a station thread backwards page by page and keeps older messages above the newest', async () => {
+    const cursor = '2026-09-22T10:00:00.000Z';
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(
+        stationMessagesPage(
+          [
+            {
+              id: '88888888-8888-4888-8888-888888888888',
+              body: 'Новое сообщение',
+              author: 'STATION',
+              authorName: null,
+              createdAt: '2026-09-22T10:00:00.000Z',
+              attachments: [],
+            },
+          ],
+          cursor,
+        ),
+      )
+      .mockResolvedValueOnce(
+        stationMessagesPage([
+          {
+            id: '99999999-9999-4999-8999-999999999999',
+            body: 'Старое сообщение',
+            author: 'ME',
+            authorName: null,
+            createdAt: '2026-09-21T10:00:00.000Z',
+            attachments: [],
+          },
+        ]),
+      );
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: '2026-09-22T10:00:00.000Z',
+          lastMessage: {
+            preview: 'Новое сообщение',
+            author: 'STATION',
+            createdAt: '2026-09-22T10:00:00.000Z',
+          },
+        },
+      ]),
+      loadMessages,
+    });
+    const { container } = render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+    expect(await screen.findByText('Новое сообщение')).toBeVisible();
+    expect(loadMessages).toHaveBeenNthCalledWith(1, stationDialogId);
+
+    // Reaching the top of the history pulls the page before the oldest message already read, using
+    // the cursor the server issued rather than a display timestamp.
+    const timeline = container.querySelector('ol');
+    expect(timeline).not.toBeNull();
+    fireEvent.scroll(timeline as HTMLOListElement);
+    await waitFor(() => expect(loadMessages).toHaveBeenNthCalledWith(2, stationDialogId, cursor));
+
+    expect(await screen.findByText('Старое сообщение')).toBeVisible();
+    const bodies = [...(timeline as HTMLOListElement).querySelectorAll('p')].map(
+      (node) => node.textContent,
+    );
+    expect(bodies).toEqual(['Старое сообщение', 'Новое сообщение']);
+    // A short page ends the walk, so the control disappears instead of promising more history.
+    expect(screen.queryByRole('button', { name: 'Показать предыдущие сообщения' })).toBeNull();
+  });
+
+  it('stops walking a station history whose page adds nothing new', async () => {
+    const repeated = {
+      id: '88888888-8888-4888-8888-888888888888',
+      body: 'Новое сообщение',
+      author: 'STATION' as const,
+      authorName: null,
+      createdAt: '2026-09-22T10:00:00.000Z',
+      attachments: [],
+    };
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(stationMessagesPage([repeated], '2026-09-22T10:00:00.000Z'))
+      .mockResolvedValue(stationMessagesPage([repeated], '2026-09-21T10:00:00.000Z'));
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: '2026-09-22T10:00:00.000Z',
+          lastMessage: {
+            preview: 'Новое сообщение',
+            author: 'STATION',
+            createdAt: '2026-09-22T10:00:00.000Z',
+          },
+        },
+      ]),
+      loadMessages,
+    });
+    const { container } = render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+    expect(await screen.findByText('Новое сообщение')).toBeVisible();
+
+    const timeline = container.querySelector('ol') as HTMLOListElement;
+    fireEvent.scroll(timeline);
+    await waitFor(() => expect(loadMessages).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('button', { name: 'Показать предыдущие сообщения' })).toBeNull();
+    // The repeated page is not rendered twice: the row preview and the one bubble stay the only ones.
+    expect(within(timeline).getAllByText('Новое сообщение')).toHaveLength(1);
   });
 
   it('uploads a picture, sends it with its id and renders the operator picture', async () => {
@@ -741,24 +939,26 @@ describe('ChatsPage', () => {
           lastMessage: null,
         },
       ]),
-      loadMessages: vi.fn().mockResolvedValue([
-        {
-          id: '88888888-8888-4888-8888-888888888888',
-          body: '',
-          author: 'STATION',
-          authorName: 'ПадлХАБ • Супервайзер',
-          createdAt: '2026-09-22T10:00:00.000Z',
-          attachments: [
-            {
-              id: operatorAttachmentId,
-              fileName: 'мяч.webp',
-              contentType: 'image/webp',
-              byteSize: 4096,
-              url: `/user/api/v1/tenant/support/attachments/${operatorAttachmentId}/content`,
-            },
-          ],
-        },
-      ]),
+      loadMessages: vi.fn().mockResolvedValue(
+        stationMessagesPage([
+          {
+            id: '88888888-8888-4888-8888-888888888888',
+            body: '',
+            author: 'STATION',
+            authorName: 'ПадлХАБ • Супервайзер',
+            createdAt: '2026-09-22T10:00:00.000Z',
+            attachments: [
+              {
+                id: operatorAttachmentId,
+                fileName: 'мяч.webp',
+                contentType: 'image/webp',
+                byteSize: 4096,
+                url: `/user/api/v1/tenant/support/attachments/${operatorAttachmentId}/content`,
+              },
+            ],
+          },
+        ]),
+      ),
       sendMessage,
       uploadAttachment,
       loadAttachment,
@@ -821,7 +1021,7 @@ describe('ChatsPage', () => {
           lastMessage: null,
         },
       ]),
-      loadMessages: vi.fn().mockResolvedValue([]),
+      loadMessages: vi.fn().mockResolvedValue(stationMessagesPage()),
       sendMessage,
       createMessageId: () => 'station-message-000009',
     });
@@ -879,7 +1079,7 @@ describe('ChatsPage', () => {
   });
 
   it('does not refetch station messages when the parent re-renders with the same source', async () => {
-    const loadMessages = vi.fn().mockResolvedValue([]);
+    const loadMessages = vi.fn().mockResolvedValue(stationMessagesPage());
     const source = stationSource({
       loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
       loadDialogs: vi.fn().mockResolvedValue([
@@ -930,7 +1130,7 @@ describe('ChatsPage', () => {
           lastMessage: null,
         },
       ]),
-      loadMessages: vi.fn().mockResolvedValue([]),
+      loadMessages: vi.fn().mockResolvedValue(stationMessagesPage()),
       sendMessage: vi.fn().mockRejectedValue(
         Object.assign(new Error('rejected'), {
           status: 422,
@@ -962,7 +1162,7 @@ describe('ChatsPage', () => {
       message: null,
       replayed: false,
     });
-    const loadMessages = vi.fn().mockResolvedValue([]);
+    const loadMessages = vi.fn().mockResolvedValue(stationMessagesPage());
     const source = stationSource({
       loadStations: vi.fn().mockResolvedValue([
         { id: stationUuid, name: 'Ясенево' },
@@ -981,7 +1181,7 @@ describe('ChatsPage', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
-    const list = await screen.findByRole('list', { name: 'Чаты станций' });
+    const list = await screen.findByRole('list', { name: 'Станции и каналы ПадлХАБ' });
     expect(within(list).getByText('Ясенево')).toBeVisible();
     expect(within(list).getByText('Нагатинская')).toBeVisible();
     expect(within(list).getAllByText('Начните переписку')).toHaveLength(2);
@@ -1002,7 +1202,7 @@ describe('ChatsPage', () => {
     const source = stationSource({
       loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
       loadDialogs: vi.fn().mockResolvedValue([]),
-      loadMessages: vi.fn().mockResolvedValue([]),
+      loadMessages: vi.fn().mockResolvedValue(stationMessagesPage()),
     });
     render(
       <ChatsPage
@@ -1057,7 +1257,7 @@ describe('ChatsPage', () => {
           lastMessage: null,
         },
       ]),
-      loadMessages: vi.fn().mockResolvedValue([]),
+      loadMessages: vi.fn().mockResolvedValue(stationMessagesPage()),
     });
     render(
       <ChatsPage
@@ -1068,7 +1268,7 @@ describe('ChatsPage', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
-    const list = await screen.findByRole('list', { name: 'Чаты станций' });
+    const list = await screen.findByRole('list', { name: 'Станции и каналы ПадлХАБ' });
     expect(within(list).getByText('Когда свободен корт?')).toBeVisible();
     expect(within(list).getByText('Без станции')).toBeVisible();
 
@@ -1126,10 +1326,9 @@ describe('ChatsPage', () => {
       ],
     };
     render(<ChatsPage {...defaultProps} mode="list" hasExplicitRecipient={false} page={page} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Действия с чатами' }));
-    const unread = screen.getByRole('menuitemcheckbox', { name: 'Только непрочитанные' });
+    const unread = screen.getByRole('button', { name: 'Только непрочитанные' });
     fireEvent.click(unread);
-    expect(unread).toHaveAttribute('aria-checked', 'true');
+    expect(unread).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByText('Анна')).not.toBeInTheDocument();
     expect(screen.getByText('Вечерняя игра')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: 'Личные' }));

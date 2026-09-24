@@ -91,6 +91,10 @@ function providerDialog(
   };
 }
 
+const MESSAGE_CREATED_AT = '2026-09-22T10:05:00.000Z';
+/** The provider's own ordering instant of the same message; the two must not drift apart in a fixture. */
+const messageCreatedTs = Date.parse(MESSAGE_CREATED_AT);
+
 function providerMessage(
   overrides: Partial<StationSupportProviderMessage> = {},
 ): StationSupportProviderMessage {
@@ -102,8 +106,8 @@ function providerMessage(
     senderName: 'Поддержка ПадлХАБ',
     text: 'Добрый день! Корт свободен в 19:00.',
     attachments: [],
-    createdAt: '2026-09-22T10:05:00.000Z',
-    createdTs: 1_758_532_800_001,
+    createdAt: MESSAGE_CREATED_AT,
+    createdTs: messageCreatedTs,
     externalMessageId: null,
     ...overrides,
   };
@@ -356,6 +360,114 @@ describe('station support routes', () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
     expect(JSON.stringify(body)).not.toContain(dialogId);
+  });
+
+  it('reads the thread backwards from the newest page and hands back its own cursor', async () => {
+    const listMessages = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Array.from({ length: 50 }, (_, index) =>
+          providerMessage({
+            messageId: `newest-${index}`,
+            text: `Сообщение ${index}`,
+            createdAt: new Date(messageCreatedTs + index).toISOString(),
+            createdTs: messageCreatedTs + index,
+          }),
+        ),
+      )
+      .mockResolvedValueOnce([
+        providerMessage({
+          messageId: 'older-1',
+          text: 'Более раннее сообщение',
+          createdAt: new Date(messageCreatedTs - 86_400_000).toISOString(),
+          createdTs: messageCreatedTs - 86_400_000,
+        }),
+      ]);
+    const app = await build({ provider: provider({ listMessages }) });
+    const url = `/user/api/v1/local-padel/support/dialogs/${await publicDialogId(app)}/messages`;
+
+    const newest = await app.inject({
+      method: 'GET',
+      url,
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+    expect(newest.statusCode).toBe(200);
+    const newestBody = newest.json<{
+      items: unknown[];
+      hasMore: boolean;
+      nextBefore: string;
+    }>();
+    expect(newestBody.items).toHaveLength(50);
+    expect(newestBody.hasMore).toBe(true);
+    // The cursor is the provider's ordering instant of the oldest item, so the next page can neither
+    // repeat nor skip the message the cursor came from.
+    expect(newestBody.nextBefore).toBe(new Date(messageCreatedTs).toISOString());
+    // Without a cursor the page is "everything up to now", so the provider is asked for the newest.
+    const messageQueries = listMessages.mock.calls as unknown as readonly [
+      { readonly limit: number; readonly beforeTs: number },
+    ][];
+    expect(messageQueries[0]?.[0]?.beforeTs).toBeGreaterThan(messageCreatedTs);
+
+    const older = await app.inject({
+      method: 'GET',
+      url: `${url}?before=${encodeURIComponent(newestBody.nextBefore)}`,
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+    expect(older.statusCode).toBe(200);
+    expect(messageQueries[1]?.[0]).toMatchObject({
+      beforeTs: messageCreatedTs,
+      limit: 50,
+    });
+    const olderBody = older.json<{
+      items: { body: string }[];
+      hasMore: boolean;
+      nextBefore?: string;
+    }>();
+    expect(olderBody.items.map((item) => item.body)).toEqual(['Более раннее сообщение']);
+    expect(olderBody.hasMore).toBe(false);
+    expect(olderBody.nextBefore).toBeUndefined();
+  });
+
+  it('keeps a page paginable when its oldest message has no readable display timestamp', async () => {
+    const listMessages = vi.fn().mockResolvedValue(
+      Array.from({ length: 50 }, (_, index) =>
+        providerMessage({
+          messageId: `newest-${index}`,
+          text: `Сообщение ${index}`,
+          // The provider may order on `createdTs` while storing no `createdAt` at all.
+          createdAt: null,
+          createdTs: messageCreatedTs + index,
+        }),
+      ),
+    );
+    const app = await build({ provider: provider({ listMessages }) });
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/support/dialogs/${await publicDialogId(app)}/messages`,
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ hasMore: boolean; nextBefore: string }>();
+    expect(body.hasMore).toBe(true);
+    expect(body.nextBefore).toBe(new Date(messageCreatedTs).toISOString());
+  });
+
+  it('refuses a history cursor that is not an ISO-8601 instant instead of reading the newest page', async () => {
+    const listMessages = vi.fn().mockResolvedValue([providerMessage()]);
+    const app = await build({ provider: provider({ listMessages }) });
+    const url = `/user/api/v1/local-padel/support/dialogs/${await publicDialogId(app)}/messages`;
+
+    for (const cursor of ['вчера', '2026', '1', '2026-09-22']) {
+      const response = await app.inject({
+        method: 'GET',
+        url: `${url}?before=${encodeURIComponent(cursor)}`,
+        headers: { authorization: `Bearer ${await accessToken()}` },
+      });
+      expect(response.statusCode, `cursor ${cursor}`).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+    }
+    expect(listMessages).not.toHaveBeenCalled();
   });
 
   it('maps an unassigned provider station to a null PadlHub station', async () => {

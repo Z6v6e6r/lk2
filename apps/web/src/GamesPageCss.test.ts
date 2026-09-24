@@ -87,4 +87,17 @@ describe('Games page multi-select filters', () => {
     expect(cardActionRule).toMatch(/position:\s*relative\s*;/);
     expect(cardActionRule).toMatch(/z-index:\s*1\s*;/);
   });
+
+  it('sizes the fixed bottom navigation from the page it belongs to', () => {
+    // The shared bar is fixed and takes both its width and its centered offset from the page width.
+    // A page that never declares it leaves the bar to shrink-wrap its five buttons on top of each
+    // other, which is what the games and bookings screens used to show.
+    const navRule = ruleBody('.fh-bottom-nav');
+    expect(navRule).toMatch(/width:\s*var\(--fh-page-width\)\s*;/);
+    expect(navRule).toMatch(/left:\s*calc\(\(100% - var\(--fh-page-width\)\) \/ 2\)\s*;/);
+
+    for (const selector of ['.games-page', '.bookings-page']) {
+      expect(ruleBody(selector)).toMatch(/--fh-page-width:\s*min\(100vw,\s*375px\)\s*;/);
+    }
+  });
 });

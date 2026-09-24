@@ -2129,10 +2129,26 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: before
+        in: query
+        required: false
+        description: |
+          Return only messages older than this instant. Omit it for the newest page and then send the
+          `nextBefore` of the page just read to walk the thread backwards. Timestamps are never an
+          identity: the page is still delimited by `hasMore`.
+        schema:
+          type: string
+          format: date-time
     get:
       tags: [messaging]
       operationId: listStationSupportMessages
       summary: Read the message history of one station support dialog
+      description: |
+        One chronological page of the thread. The newest page is returned when `before` is absent,
+        and `hasMore` says whether older messages remain, so a long dialog is read backwards
+        without loading the whole history at once. `nextBefore` is the only cursor a client sends
+        back: it is the ordering instant the provider bounds on, which is not necessarily the
+        display timestamp of the oldest message.
       responses:
         '200':
           description: Ordered message history.
@@ -7234,6 +7250,17 @@ components:
           maxItems: 100
           items:
             $ref: '#/components/schemas/StationSupportMessage'
+        hasMore:
+          type: boolean
+          default: false
+          description: True when older messages exist before the oldest item of this page.
+        nextBefore:
+          type: string
+          format: date-time
+          description: |
+            Cursor for the page before this one, sent back as `before`. Present only when the page
+            reports `hasMore`, and derived from the provider's own ordering instant, so a page whose
+            oldest message carries no display timestamp is still paginable.
     StationSupportSendRequest:
       type: object
       additionalProperties: false

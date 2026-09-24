@@ -1,11 +1,14 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 import { formatMessageDay, formatMessageTime } from './chat-format.js';
 import { ChatComposer, type ChatComposerSend } from './ChatComposer.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import { ChatImageViewer } from './ChatImageViewer.js';
+import { ExternalChatListItem } from './ExternalChatListItem.js';
+import { StationChatRowItem } from './StationChatRowItem.js';
 import { StationAvatar } from './StationAvatar.js';
 import type { ChatAttachmentDraft } from './chat-attachments.js';
+import { externalChatRows } from './external-chats.js';
 import type { ChatUiError } from '../ChatsPage.js';
 import type {
   StationSupportAttachment,
@@ -98,6 +101,10 @@ export function StationDialogList({
     selectedDialogId,
     selectedStationId,
   });
+  // The outbound channels are not station dialogs, but they are the same kind of destination: one
+  // fixed set of PadlHub addresses a player reaches from the community. They close the block so the
+  // station list keeps the top of the screen and the channels stay a stable, expected last stop.
+  const externalChats = externalChatRows(query);
   const loading = busy === 'load' && stations.length === 0;
   return (
     <div className={styles.stationListPane}>
@@ -127,41 +134,26 @@ export function StationDialogList({
           <p>Как только площадки опубликуют, с каждой можно будет начать переписку.</p>
         </div>
       ) : null}
-      {!loading && stations.length > 0 && rows.length === 0 ? (
+      {!loading && stations.length > 0 && rows.length === 0 && externalChats.length === 0 ? (
         <div className={styles.emptyState} role="status">
           <strong>Ничего не найдено</strong>
           <p>Измените запрос или выберите другую станцию.</p>
         </div>
       ) : null}
-      {rows.length > 0 ? (
-        <ul className={styles.list} aria-label="Чаты станций">
+      {rows.length > 0 || externalChats.length > 0 ? (
+        <ul className={styles.list} aria-label="Станции и каналы ПадлХАБ">
           {rows.map((row) => (
-            <li key={row.key}>
-              <button
-                type="button"
-                className={`${styles.listLink} ${styles.stationListButton} ${
-                  row.selected ? styles.selectedListLink : ''
-                }`}
-                aria-current={row.selected ? 'true' : undefined}
-                onClick={() => {
-                  if (row.dialogId) onSelectDialog(row.dialogId);
-                  else if (row.stationId) onSelectStation(row.stationId);
-                }}
-              >
-                <StationAvatar title={row.title} />
-                <span className={styles.stationListItemBody}>
-                  <strong>{row.title}</strong>
-                  <small className={row.hasHistory ? undefined : styles.stationListEmptyPreview}>
-                    {row.preview}
-                  </small>
-                </span>
-                <span className={styles.stationListItemMeta}>
-                  {row.updatedAt ? (
-                    <time dateTime={row.updatedAt}>{formatMessageTime(row.updatedAt)}</time>
-                  ) : null}
-                </span>
-              </button>
-            </li>
+            <StationChatRowItem
+              key={row.key}
+              row={row}
+              onOpen={() => {
+                if (row.dialogId) onSelectDialog(row.dialogId);
+                else if (row.stationId) onSelectStation(row.stationId);
+              }}
+            />
+          ))}
+          {externalChats.map((destination) => (
+            <ExternalChatListItem key={destination.key} destination={destination} />
           ))}
         </ul>
       ) : null}
@@ -173,10 +165,11 @@ interface StationThreadProps {
   readonly dialog: StationSupportDialog | null;
   readonly stationName: string;
   readonly messages: readonly StationSupportMessage[];
-  readonly busy: 'load' | 'send' | null;
+  readonly busy: 'load' | 'load-earlier' | 'send' | null;
   readonly error: ChatUiError | null;
   readonly closed: boolean;
   readonly canRetrySend: boolean;
+  readonly hasEarlierMessages: boolean;
   readonly attachments: readonly ChatAttachmentDraft[];
   readonly attachmentNotice?: string | null | undefined;
   /** Absent when the deployment has no media bucket: the composer then stays text-only. */
@@ -186,8 +179,12 @@ interface StationThreadProps {
   readonly onSendMessage: (input: ChatComposerSend) => void;
   readonly onRetrySend: () => void;
   readonly onRetry: () => void;
+  readonly onLoadEarlier: () => void;
   readonly loadAttachment: (attachmentId: string) => Promise<Blob>;
 }
+
+/** How close to the top edge counts as "the person wants the rest of the history". */
+const EARLIER_PAGE_TRIGGER_PX = 96;
 
 export function StationThread({
   dialog,
@@ -197,6 +194,7 @@ export function StationThread({
   error,
   closed,
   canRetrySend,
+  hasEarlierMessages,
   attachments,
   attachmentNotice,
   attachmentsEnabled,
@@ -205,6 +203,7 @@ export function StationThread({
   onSendMessage,
   onRetrySend,
   onRetry,
+  onLoadEarlier,
   loadAttachment,
 }: StationThreadProps): React.JSX.Element {
   const rows = messages.map((message, index) => {
@@ -213,6 +212,68 @@ export function StationThread({
     const previousDay = previous?.createdAt ? formatMessageDay(previous.createdAt) : null;
     return { message, day, startsDay: day !== null && day !== previousDay };
   });
+  const listRef = useRef<HTMLOListElement>(null);
+  const dialogKey = dialog?.id ?? null;
+  /**
+   * The scroll position is measured against the previous render, because an older page arrives above
+   * the current view and must not throw the reader to the top of the thread.
+   */
+  const snapshotRef = useRef<{
+    readonly dialogKey: string | null;
+    readonly oldestId: string | null;
+    readonly newestId: string | null;
+    readonly scrollHeight: number;
+    readonly nearBottom: boolean;
+  } | null>(null);
+  /** One request per gesture: a scroll stream must not fire a page per scroll event. */
+  const requestedEarlierRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const oldestId = messages[0]?.id ?? null;
+    const newestId = messages.at(-1)?.id ?? null;
+    const previous = snapshotRef.current;
+    const sameDialog = previous?.dialogKey === dialogKey;
+    if (!previous || !sameDialog) {
+      // A station thread is opened at its end: the newest answer is why the person came back, and
+      // the rest of the history is pulled in only when they scroll up.
+      list.scrollTop = list.scrollHeight;
+    } else if (oldestId !== previous.oldestId && previous.oldestId !== null) {
+      list.scrollTop += list.scrollHeight - previous.scrollHeight;
+    } else if (newestId !== previous.newestId && previous.nearBottom) {
+      list.scrollTop = list.scrollHeight;
+    }
+    snapshotRef.current = {
+      dialogKey,
+      oldestId,
+      newestId,
+      scrollHeight: list.scrollHeight,
+      nearBottom: list.scrollHeight - list.scrollTop - list.clientHeight < 72,
+    };
+  }, [dialogKey, messages]);
+
+  useLayoutEffect(() => {
+    requestedEarlierRef.current = false;
+  }, [busy, hasEarlierMessages, messages]);
+
+  function handleScroll(): void {
+    const list = listRef.current;
+    if (!list || !snapshotRef.current) return;
+    const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 72;
+    snapshotRef.current = { ...snapshotRef.current, nearBottom };
+    if (
+      list.scrollTop > EARLIER_PAGE_TRIGGER_PX ||
+      !hasEarlierMessages ||
+      busy !== null ||
+      requestedEarlierRef.current
+    ) {
+      return;
+    }
+    requestedEarlierRef.current = true;
+    onLoadEarlier();
+  }
+
   return (
     <section className={styles.thread} aria-label={`Диалог со станцией ${stationName}`}>
       <header className={`${styles.threadHeader} ${styles.stationThreadHeader}`}>
@@ -236,7 +297,14 @@ export function StationThread({
         </button>
       </header>
       <div className={styles.threadBody}>
-        <ol className={styles.messages}>
+        <ol className={styles.messages} ref={listRef} onScroll={handleScroll}>
+          {hasEarlierMessages ? (
+            <li className={styles.loadEarlierRow} role="presentation">
+              <button type="button" disabled={busy !== null} onClick={onLoadEarlier}>
+                {busy === 'load-earlier' ? 'Загружаем…' : 'Показать предыдущие сообщения'}
+              </button>
+            </li>
+          ) : null}
           {messages.length === 0 && busy !== 'load' ? (
             <li className={styles.threadEmpty}>
               {dialog ? 'Сообщений пока нет. Напишите первым.' : 'Начните обращение к станции.'}

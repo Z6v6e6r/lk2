@@ -17,6 +17,12 @@ function matchesQuery(title: string, preview: string, normalizedQuery: string): 
   );
 }
 
+/** Timestamps arrive as ISO strings from the provider and can be absent, so unreadable means oldest. */
+function recency(value: string | null): number {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 /**
  * Every published station is a chat destination from the start: the client picks a station and the
  * first message opens their own dialog with it. A station that already has a dialog shows that
@@ -71,4 +77,40 @@ export function stationChatRows(input: {
     });
   }
   return rows;
+}
+
+export interface StationHistoryRow {
+  readonly key: string;
+  readonly dialogId: string;
+  readonly title: string;
+  readonly preview: string;
+  readonly updatedAt: string | null;
+}
+
+/**
+ * The station dialogs that already carry correspondence, newest first. The unfiltered "Все" tab
+ * shows them next to the LK2 conversations, so an answer that is already waiting is never hidden
+ * behind the station tab; a station without history stays a station-tab destination where the first
+ * message can still be started.
+ */
+export function stationHistoryRows(input: {
+  readonly dialogs: readonly StationSupportDialog[];
+  readonly query: string;
+}): readonly StationHistoryRow[] {
+  const normalizedQuery = input.query.trim().toLocaleLowerCase('ru-RU');
+  return input.dialogs
+    .filter((dialog) => dialog.lastMessage != null)
+    .filter(
+      (dialog) =>
+        !normalizedQuery ||
+        matchesQuery(dialog.stationName, dialog.lastMessage?.preview ?? '', normalizedQuery),
+    )
+    .map((dialog) => ({
+      key: dialog.id,
+      dialogId: dialog.id,
+      title: dialog.stationName,
+      preview: dialog.lastMessage?.preview ?? '',
+      updatedAt: dialog.updatedAt,
+    }))
+    .sort((left, right) => recency(right.updatedAt) - recency(left.updatedAt));
 }

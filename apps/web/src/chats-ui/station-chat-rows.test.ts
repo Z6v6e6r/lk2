@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { StationSupportDialog } from '../auth-gateway.js';
-import { stationChatRows } from './station-chat-rows.js';
+import { stationChatRows, stationHistoryRows } from './station-chat-rows.js';
 
 const yasenevo = '9b993668-ff54-4cce-8dfd-cad84c4a06fa';
 const nagatinskaya = '11111111-1111-4111-8111-111111111111';
@@ -119,5 +119,77 @@ describe('station chat rows', () => {
       'Сочи',
     ]);
     expect(rows({ dialogs, query: 'ничего' })).toEqual([]);
+  });
+});
+
+describe('station history rows for the unfiltered tab', () => {
+  it('keeps only the dialogs that already have correspondence', () => {
+    const result = stationHistoryRows({
+      dialogs: [dialog(), dialog({ id: unmappedDialog, stationId: null, lastMessage: null })],
+      query: '',
+    });
+
+    expect(result.map((row) => row.dialogId)).toEqual([yasenevoDialog]);
+    expect(result[0]).toMatchObject({
+      title: 'Ясенево',
+      preview: 'Когда свободен корт?',
+      updatedAt: '2026-09-22T10:00:00.000Z',
+    });
+  });
+
+  it('orders the newest answer first so the tab reads like the conversation list', () => {
+    const result = stationHistoryRows({
+      dialogs: [
+        dialog({ id: yasenevoDialog, updatedAt: '2026-09-20T10:00:00.000Z' }),
+        dialog({
+          id: unmappedDialog,
+          stationId: null,
+          stationName: 'Сочи',
+          updatedAt: '2026-09-23T10:00:00.000Z',
+        }),
+      ],
+      query: '',
+    });
+
+    expect(result.map((row) => row.title)).toEqual(['Сочи', 'Ясенево']);
+  });
+
+  it('searches the same fields the station list searches', () => {
+    const dialogs = [
+      dialog(),
+      dialog({
+        id: unmappedDialog,
+        stationId: null,
+        stationName: 'Сочи',
+        lastMessage: {
+          preview: 'Нужен тренер',
+          author: 'STATION',
+          createdAt: '2026-09-22T11:00:00.000Z',
+        },
+      }),
+    ];
+
+    expect(stationHistoryRows({ dialogs, query: 'ЯСЕН' }).map((row) => row.title)).toEqual([
+      'Ясенево',
+    ]);
+    expect(stationHistoryRows({ dialogs, query: 'корт' }).map((row) => row.title)).toEqual([
+      'Ясенево',
+    ]);
+    expect(stationHistoryRows({ dialogs, query: 'тренер' }).map((row) => row.title)).toEqual([
+      'Сочи',
+    ]);
+    expect(stationHistoryRows({ dialogs, query: 'ничего' })).toEqual([]);
+  });
+
+  it('sinks a dialog without a readable timestamp instead of hiding it', () => {
+    const result = stationHistoryRows({
+      dialogs: [
+        dialog({ id: unmappedDialog, updatedAt: null }),
+        dialog({ id: yasenevoDialog, updatedAt: '2026-09-22T10:00:00.000Z' }),
+      ],
+      query: '',
+    });
+
+    expect(result.map((row) => row.dialogId)).toEqual([yasenevoDialog, unmappedDialog]);
   });
 });

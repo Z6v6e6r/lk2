@@ -4,9 +4,9 @@ import type { ConversationPage } from '../auth-gateway.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import type { ChatFilter } from './ChatFilters.js';
 import { ChatListItem } from './ChatListItem.js';
-import { ExternalChatListItem } from './ExternalChatListItem.js';
+import { StationChatRowItem } from './StationChatRowItem.js';
 import { conversationTitle } from './chat-format.js';
-import { externalChatRows } from './external-chats.js';
+import type { StationHistoryRow } from './station-chat-rows.js';
 import styles from './ChatsUi.module.css';
 
 interface ChatListProps {
@@ -15,7 +15,19 @@ interface ChatListProps {
   readonly filter: ChatFilter;
   readonly query: string;
   readonly unreadOnly: boolean;
+  /**
+   * Station dialogs that already carry correspondence. They belong to the unfiltered tab, because a
+   * waiting station answer is a chat like any other; the station block still owns their thread.
+   */
+  readonly stationRows: readonly StationHistoryRow[];
+  readonly onOpenStation: (dialogId: string) => void;
   readonly selectedConversationId?: string;
+}
+
+/** An unreadable or absent timestamp sorts last instead of jumping the row to the top. */
+function recency(value: string | null | undefined): number {
+  const parsed = value ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export function ChatList({
@@ -24,6 +36,8 @@ export function ChatList({
   filter,
   query,
   unreadOnly,
+  stationRows,
+  onOpenStation,
   selectedConversationId,
 }: ChatListProps): React.JSX.Element {
   const normalizedQuery = query.trim().toLocaleLowerCase('ru-RU');
@@ -95,11 +109,10 @@ export function ChatList({
       value.toLocaleLowerCase('ru-RU').includes(normalizedQuery),
     );
   });
-  // The outbound channels belong to the whole list, not to a category, and they carry no unread
-  // state, so they only join the unfiltered "Все" tab.
-  const externalChats = filter === 'ALL' && !unreadOnly ? externalChatRows(query) : [];
+  // A station dialog carries no unread marker of its own, so a read-state filter cannot judge it.
+  const stationHistory = filter === 'ALL' && !unreadOnly ? stationRows : [];
 
-  if (conversations.length === 0 && externalChats.length === 0) {
+  if (conversations.length === 0 && stationHistory.length === 0) {
     if (page.items.length === 0) {
       return (
         <div className={styles.emptyState} role="status">
@@ -132,9 +145,35 @@ export function ChatList({
     );
   }
 
-  // A brand-new account has no dialogs but should still find the outbound channels, so the
-  // explanation is the first row of the same list instead of replacing it.
+  // A brand-new account has no dialogs yet, so the explanation is the first row of the same list
+  // instead of replacing it.
   const showNoChatsNotice = conversations.length === 0 && page.items.length === 0;
+
+  // One list, one reading order: a station answer that arrived five minutes ago belongs above a
+  // conversation from yesterday. Ties keep the LK2 order the server already decided.
+  const entries = [
+    ...conversations.map((conversation) => ({
+      sortAt: recency(conversation.lastMessage?.createdAt ?? conversation.updatedAt),
+      node: (
+        <ChatListItem
+          key={conversation.id}
+          conversation={conversation}
+          selected={conversation.id === selectedConversationId}
+        />
+      ),
+    })),
+    ...stationHistory.map((row) => ({
+      sortAt: recency(row.updatedAt),
+      node: (
+        <StationChatRowItem
+          key={`station:${row.key}`}
+          row={{ ...row, hasHistory: true, selected: false }}
+          relativeTime
+          onOpen={() => onOpenStation(row.dialogId)}
+        />
+      ),
+    })),
+  ].sort((left, right) => right.sortAt - left.sortAt);
 
   return (
     <ul className={styles.list} aria-label="Диалоги" ref={listRef} onScroll={handleScroll}>
@@ -144,16 +183,7 @@ export function ChatList({
           <p>Начните общение из профиля игрока или откройте чат в карточке своей игры.</p>
         </li>
       ) : null}
-      {externalChats.map((destination) => (
-        <ExternalChatListItem key={destination.key} destination={destination} />
-      ))}
-      {conversations.map((conversation) => (
-        <ChatListItem
-          key={conversation.id}
-          conversation={conversation}
-          selected={conversation.id === selectedConversationId}
-        />
-      ))}
+      {entries.map((entry) => entry.node)}
     </ul>
   );
 }
