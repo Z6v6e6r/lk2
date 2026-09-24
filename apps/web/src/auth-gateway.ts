@@ -12,6 +12,7 @@ import type {
   BookingScreenScheduleReadCommand,
   EventCatalogPage,
   EventCatalogQuery,
+  StationSupportAttachment,
   TrainingSchedulePage,
   ClientRoutingPlan,
   CommunityMembershipPage,
@@ -371,6 +372,8 @@ export interface SendConversationMessageCommand {
  * conversations: the ids are PadlHub-derived, the provider's own dialog and message identifiers
  * never reach the browser, and the LK2 chat refresh cadence does not apply to them.
  */
+export type { StationSupportAttachment };
+
 export interface StationSupportStation {
   readonly id: string;
   readonly name: string;
@@ -395,7 +398,10 @@ export interface StationSupportMessage {
   readonly id: string;
   readonly body: string;
   readonly author: 'ME' | 'STATION' | 'SYSTEM';
+  /** The operator name the provider stored, so the viewer can see who is answering. */
+  readonly authorName: string | null;
   readonly createdAt: string | null;
+  readonly attachments: readonly StationSupportAttachment[];
 }
 
 export interface StationSupportSendCommand {
@@ -403,6 +409,8 @@ export interface StationSupportSendCommand {
   readonly text: string;
   readonly stationId?: string;
   readonly dialogId?: string;
+  /** Ids of pictures uploaded through `uploadStationSupportAttachment` first. */
+  readonly attachmentIds?: readonly string[];
 }
 
 export interface StationSupportSendResult {
@@ -661,6 +669,12 @@ export interface AuthGateway {
   readonly sendStationSupportMessage: (
     command: StationSupportSendCommand,
   ) => Promise<StationSupportSendResult>;
+  readonly uploadStationSupportAttachment: (input: {
+    readonly fileName: string;
+    readonly contentType: string;
+    readonly data: string;
+  }) => Promise<StationSupportAttachment>;
+  readonly loadStationSupportAttachment: (attachmentId: string) => Promise<Blob>;
   readonly createDirectConversation: (
     otherUserId: string,
     idempotencyKey: string,
@@ -2343,6 +2357,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       const payload: Record<string, unknown> = { text: command.text };
       if (command.stationId) payload.stationId = command.stationId;
       if (command.dialogId) payload.dialogId = command.dialogId;
+      if (command.attachmentIds && command.attachmentIds.length > 0) {
+        payload.attachmentIds = [...command.attachmentIds];
+      }
       return retryMessagingCommand((signal) =>
         client.request<StationSupportSendResult>('/support/messages', {
           method: 'POST',
@@ -2351,6 +2368,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
           signal,
         }),
       );
+    },
+
+    uploadStationSupportAttachment(input) {
+      return client.uploadStationSupportAttachment(input);
+    },
+
+    loadStationSupportAttachment(attachmentId) {
+      return client.downloadStationSupportAttachment(attachmentId);
     },
 
     createRealtimeTicket() {

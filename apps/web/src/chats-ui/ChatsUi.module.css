@@ -1447,33 +1447,55 @@
   }
 }
 
-/* Keep the thread and composer above the shared navigation at every viewport height. */
-.threadPage {
-  --chat-nav-height: calc(64px + max(24px, env(safe-area-inset-bottom)));
-  --fh-page-width: min(100vw, 375px);
-  display: flex;
-  height: 100dvh;
-  min-height: 0;
-  padding-bottom: var(--chat-nav-height);
-  flex-direction: column;
-}
+/* The thread owns the viewport above the shared navigation, so the composer's bottom edge is the
+   navigation's top edge. The reservation belongs to the phone shell only: the navigation is hidden
+   from 768px up, where the desktop `.shell` height decides the page. */
+@media (max-width: 767px) {
+  .threadPage {
+    --chat-nav-height: calc(64px + max(24px, env(safe-area-inset-bottom)));
+    --fh-page-width: min(100vw, 375px);
+    display: flex;
+    height: 100dvh;
+    min-height: 0;
+    padding-bottom: var(--chat-nav-height);
+    flex-direction: column;
+  }
 
-.threadPage .shell {
-  height: auto;
-  min-height: 0;
-  flex: 1;
-}
+  .threadPage .shell {
+    height: auto;
+    min-height: 0;
+    flex: 1;
+  }
 
-.threadPage .errorBanner {
-  max-height: 30dvh;
-  flex: 0 0 auto;
-  overflow-y: auto;
-}
+  .threadPage .errorBanner {
+    max-height: 30dvh;
+    flex: 0 0 auto;
+    overflow-y: auto;
+  }
 
-.threadPage :global(.fh-bottom-nav) {
-  display: flex;
-  height: var(--chat-nav-height);
-  padding-bottom: max(24px, env(safe-area-inset-bottom));
+  .threadPage :global(.fh-bottom-nav) {
+    display: flex;
+    height: var(--chat-nav-height);
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+
+  /* While the on-screen keyboard is open the composer owns the bottom edge and the navigation gets
+     out of the way. The strip that reserves the bar would otherwise stay behind as an empty band
+     between the composer and the keyboard, because the bar is fixed to the layout viewport while
+     the keyboard shrinks the visual one. The `interactive-widget=resizes-content` viewport in
+     `index.html` shrinks the layout viewport on the engines that honour it; this rule keeps the
+     geometry right on the engines that do not. */
+  .page:has(.composer:focus-within) {
+    padding-bottom: 0;
+  }
+
+  .page:has(.composer:focus-within) .shell {
+    height: 100dvh;
+  }
+
+  .page:has(.composer:focus-within) :global(.fh-bottom-nav) {
+    display: none;
+  }
 }
 
 .attachmentPending,
@@ -1484,8 +1506,8 @@
   opacity: 0.75;
 }
 
-/* Station support dialogs reuse the chat shell, but they are provider-backed and text-only, so the
-   list pane needs its own start control and the thread has no attachments or notification policy. */
+/* Station support dialogs reuse the chat shell, but they are provider-backed, so the list pane needs
+   its own start control and the thread has no notification policy or realtime subscription. */
 .stationListPane {
   display: flex;
   min-height: 0;

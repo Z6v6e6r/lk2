@@ -62,6 +62,28 @@ legacy contour directly:
   a station-carrying event as a `STATION_SELECTION` system event, which the operator inbox does not
   treat as a message waiting for an answer. The station itself is routed by `selectedStationId`,
   which the web connector derives from the event's `stationId`.
+- `POST .../support/attachments` uploads one picture: the bytes are validated, re-encoded to WebP
+  (bounded dimension and quality, 8 MiB in, 3 MiB out, which keeps the forwarded inline data URL
+  inside the 4 MiB the CUP workspace itself already sends) and stored under the caller's own
+  content-addressed key in the same PadlHub media bucket the native chat contour uses. The command
+  carries base64 inside the JSON body so no extra body parser is registered and the smaller existing
+  parser limits stay untouched. Nothing is written to the provider here, so an abandoned upload is
+  invisible to an operator. `GET .../support/attachments/{attachmentId}/content` rebuilds the object
+  key from the caller's verified identity before answering a redirect to a short-lived signed URL,
+  which needs the bearer token for exactly that reason.
+- A provider picture is materialized on the history read: an inline base64 image is decoded locally
+  and a linked image is downloaded only from the host `SUPPORT_LEGACY_BASE_URL` names, bounded by
+  timeout and byte budget, then converted to the same WebP form and stored under the caller's own
+  key. A picture the deployment refuses leaves the message text-only, and the provider's raw value
+  never reaches the browser.
+- `POST .../support/messages` accepts up to four `attachmentIds` belonging to the caller. Each one is
+  read from storage and forwarded to the CUP ingest as an inline WebP data URL, because the provider
+  stores the URL in its own message record and a signed link would expire inside the operator's
+  history. A picture-only message carries the preview text the CUP workspace itself writes
+  (`Фото: <name>`), and a replay must match both the text and the attachment signature, otherwise the
+  reused key is refused with `IDEMPOTENCY_KEY_REUSED`.
+- The message view exposes the operator name the provider stored (`authorName`), so the viewer sees
+  who answered instead of a generic station label.
 - `SUPPORT_STATIONS_ENABLED` is default-off and requires `SUPPORT_LEGACY_BASE_URL`. The provider
   client is bounded (timeout, at most two attempts with backoff, per-operation circuit breaker,
   bounded response body, `redirect: 'error'`, HTTPS-only base URL outside localhost) and emits only
@@ -86,7 +108,10 @@ legacy contour directly:
   station (and the CUP client's current station), exactly as the LK1 widget does; per-station
   threads remain the provider's behaviour to change.
 - The station tab is provider-backed and deliberately outside the LK2 conversation contract: it has
-  no realtime subscription, no notification policy, no attachments and no unread cursor. Its list is
+  no realtime subscription, no notification policy and no unread cursor. It carries pictures through
+  the shared media bucket, but it is not the messaging media pipeline: there is no quarantine scan, no
+  attachment row and no per-message lifecycle, because the provider's own message record stays the
+  canonical object. Its list is
   loaded lazily on that tab, not by the five-second LK2 refresh, so the provider is not polled.
 - Reading the message history requires no new database object and no migration; the provider's own
   message record is the idempotency ledger, so a command that cannot be confirmed is reported as
@@ -107,6 +132,26 @@ legacy contour directly:
 - `SUPPORT_LEGACY_BASE_URL` is only accepted with HTTPS outside localhost; an operator must configure
   the live contour before the flag can be enabled.
 - Provider attempts are logged as metrics only; a counter for circuit state is a follow-up.
+- Stored station pictures are immutable and content-addressed with no retention job, so they are kept
+  as long as the operator's own record of the message exists. Deleting a provider message does not
+  delete the PadlHub copy. Nothing is reused from the messaging media contour here because that
+  pipeline is defined over `messaging.media_assets` rows tied to a PadlHub conversation: a station
+  dialog has no conversation, and giving it one needs the membership model that stays open. The
+  shared client/presign plumbing is therefore duplicated deliberately; extracting one S3 helper for
+  every store is a follow-up, not part of this slice.
+- The public attachment id is the digest of the stored WebP, so identical bytes produce the same id
+  for any caller. Delivery rebuilds the object key from the caller's own identity, so the id is not a
+  capability; it is a content fingerprint only, and it is deliberately not treated as a secret.
+- The forwarded inline payload is bounded by the 4 MiB data URL the CUP workspace itself sends, and
+  duplicate ids plus an aggregate that would exceed that budget are refused instead of being split
+  across one oversized event.
+- Follow-up finding: the composer still allows 8000 characters while the station route refuses more
+  than 4000, so a long station message fails only on submit. Pre-existing, out of this slice.
+- Materialization re-encodes on every history read even when the object already exists; the bounded
+  page (50 messages, 4 pictures each) and the absent polling make that acceptable today.
+- The provider ingest accepts an 8 000 000-character URL, so the outbound budget is bounded by the
+  3 MiB stored WebP rather than by the provider contract; the live ingest body limit was not
+  measured, and the CUP workspace's own 4 MiB dialog-photo cap is the only observed envelope.
 
 ## Alternatives considered
 
@@ -129,8 +174,23 @@ legacy contour directly:
 - `apps/api/src/support/station-support-provider.test.ts`: request shape, exactly one phone, bounded
   retry of reads, no retry of the write, terminal 4xx without circuit impact, circuit breaker,
   timeout, oversized body, malformed success body, numeric provider ids, insecure base URL, redacted
-  metrics.
+  metrics, operator name and picture normalization, attachment array only when a picture is attached.
+- `apps/api/src/support/station-support-routes.test.ts` picture cases: WebP materialization without a
+  leaked provider value, refused source host, owner-scoped delivery redirect, refused uploads,
+  inline WebP forwarding with a preview text, unknown attachment id, replay with a different picture
+  set, and the text-only surface when the deployment has no media bucket.
 - `packages/observability/src/index.test.ts`: a provider URL carrying `phone=` is never exported to
   telemetry.
-- `apps/web/src/ChatsPage.test.tsx` and `apps/web/src/auth-gateway.test.ts`: station list, thread,
-  text-only composer, start dialog, disabled feature, and the exact HTTP request shapes.
+- `apps/web/src/ChatsPage.test.tsx`: station list, thread, picture upload and send with its
+  attachment id, operator picture rendering through an authorized blob, operator name, start dialog,
+  disabled feature, and the exact HTTP request shapes.
+- `apps/web/src/auth-gateway.test.ts`: the station upload request the browser actually sends; the
+  earlier gap between the browser field name and the route contract is exactly what this test pins.
+- `apps/api/src/support/station-support-media.test.ts`: object-key ownership, public id round trip,
+  data-url and upload size bounds, the inline data-url budget, and the host allow-list with an
+  untruthful chunked response.
+- `apps/web/src/chats-ui/station-attachments.test.ts`: picture-only selection limits and the base64
+  encoding the upload command carries.
+- `apps/web/src/chats-ui/ChatsThreadKeyboardCss.test.ts`: the phone thread reserves the navigation
+  strip, drops it while the composer is focused, and the reservation never applies to the desktop
+  shell.

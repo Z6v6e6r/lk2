@@ -2951,6 +2951,7 @@ describe('browser auth gateway', () => {
     const stationId = '9b993668-ff54-4cce-8dfd-cad84c4a06fa';
     const dialogId = '33333333-3333-4333-8333-333333333333';
     const clientMessageId = 'station-message-000001';
+    const attachmentId = 'c'.repeat(43);
     const session = {
       accessToken: 'short-lived-padlhub-token',
       tokenType: 'Bearer',
@@ -3004,6 +3005,27 @@ describe('browser auth gateway', () => {
       if (url.endsWith('/support/messages')) {
         return Promise.resolve(Response.json({ dialogId, message: null, replayed: false }));
       }
+      if (url.endsWith('/support/attachments')) {
+        return Promise.resolve(
+          Response.json({
+            id: attachmentId,
+            fileName: 'корт.png',
+            contentType: 'image/webp',
+            byteSize: 4,
+            url: `/user/api/v1/padlhub/support/attachments/${attachmentId}/content`,
+          }),
+        );
+      }
+      if (url.endsWith(`/support/attachments/${attachmentId}/content`)) {
+        // A byte body, not a Blob: `Response.blob()` forwards the underlying stream and the Node
+        // runtime used by CI rejects a Blob-wrapped body there.
+        return Promise.resolve(
+          new Response(new Uint8Array([0x52, 0x49, 0x46, 0x46]), {
+            status: 200,
+            headers: { 'Content-Type': 'image/webp' },
+          }),
+        );
+      }
       return Promise.resolve(new Response(null, { status: 404 }));
     });
     const gateway = createBrowserAuthGateway({
@@ -3028,8 +3050,34 @@ describe('browser auth gateway', () => {
         clientMessageId,
         text: 'Здравствуйте',
         stationId,
+        attachmentIds: [attachmentId],
       }),
     ).resolves.toEqual({ dialogId, message: null, replayed: false });
+
+    // The upload is the seam between the browser and the route: the property names must match the
+    // upload command exactly, or every picture is refused with SUPPORT_ATTACHMENT_INVALID.
+    await expect(
+      gateway.uploadStationSupportAttachment({
+        fileName: 'корт.png',
+        contentType: 'image/png',
+        data: 'AAAA',
+      }),
+    ).resolves.toMatchObject({ id: attachmentId, contentType: 'image/webp' });
+    const uploadCall = fetchImplementation.mock.calls.find(([input]) =>
+      requestUrl(input).endsWith('/support/attachments'),
+    );
+    expect(uploadCall?.[1]?.method).toBe('POST');
+    const uploadBody: unknown = uploadCall?.[1]?.body;
+    expect(typeof uploadBody).toBe('string');
+    expect(JSON.parse(uploadBody as string)).toEqual({
+      fileName: 'корт.png',
+      contentType: 'image/png',
+      data: 'AAAA',
+    });
+    // The runtime that answers the fetch owns the Blob constructor, so assert on the bytes.
+    const picture = await gateway.loadStationSupportAttachment(attachmentId);
+    expect(picture.size).toBe(4);
+    expect(picture.type).toBe('image/webp');
 
     const sendCall = fetchImplementation.mock.calls.find(([input]) =>
       requestUrl(input).endsWith('/support/messages'),
@@ -3039,7 +3087,11 @@ describe('browser auth gateway', () => {
     expect(new Headers(sendCall?.[1]?.headers).get('Idempotency-Key')).toBe(clientMessageId);
     const body = sendCall?.[1]?.body;
     expect(typeof body).toBe('string');
-    expect(JSON.parse(body as string)).toEqual({ text: 'Здравствуйте', stationId });
+    expect(JSON.parse(body as string)).toEqual({
+      text: 'Здравствуйте',
+      stationId,
+      attachmentIds: [attachmentId],
+    });
   });
 
   it('keeps direct-chat commands on PadlHub HTTP with stable idempotency across a network retry', async () => {

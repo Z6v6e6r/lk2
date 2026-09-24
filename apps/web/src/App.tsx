@@ -679,7 +679,14 @@ export function App({
         readonly clientMessageId: string;
         readonly stationId?: string;
         readonly dialogId?: string;
+        readonly attachmentIds?: readonly string[];
       }) => gateway.sendStationSupportMessage(command),
+      uploadAttachment: (input: {
+        readonly fileName: string;
+        readonly contentType: string;
+        readonly data: string;
+      }) => gateway.uploadStationSupportAttachment(input),
+      loadAttachment: (attachmentId: string) => gateway.loadStationSupportAttachment(attachmentId),
       createMessageId: () => createMessagingCommandId(),
     }),
     [gateway],

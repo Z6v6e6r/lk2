@@ -32,6 +32,8 @@ function stationSource(overrides: Partial<StationSupportSource> = {}): StationSu
     loadDialogs: vi.fn().mockResolvedValue([]),
     loadMessages: vi.fn().mockResolvedValue([]),
     sendMessage: vi.fn().mockRejectedValue(new Error('SUPPORT_PROVIDER_UNAVAILABLE')),
+    uploadAttachment: vi.fn().mockRejectedValue(new Error('SUPPORT_ATTACHMENTS_UNAVAILABLE')),
+    loadAttachment: vi.fn().mockRejectedValue(new Error('SUPPORT_ATTACHMENT_NOT_FOUND')),
     createMessageId: () => 'station-message-000001',
     ...overrides,
   };
@@ -639,14 +641,16 @@ describe('ChatsPage', () => {
     expect(screen.getByRole('status')).toHaveTextContent('ещё не подключён');
   });
 
-  it('lists station dialogs, opens a thread and sends a text-only message', async () => {
+  it('lists station dialogs, opens a thread and sends a message', async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       dialogId: stationDialogId,
       message: {
         id: '99999999-9999-4999-8999-999999999999',
         body: 'Здравствуйте',
         author: 'ME',
+        authorName: null,
         createdAt: '2026-09-22T12:00:00.000Z',
+        attachments: [],
       },
       replayed: false,
     });
@@ -671,7 +675,9 @@ describe('ChatsPage', () => {
           id: '88888888-8888-4888-8888-888888888888',
           body: 'Когда свободен корт?',
           author: 'STATION',
+          authorName: 'Поддержка ПадлХАБ',
           createdAt: '2026-09-22T10:00:00.000Z',
+          attachments: [],
         },
       ]),
       sendMessage,
@@ -697,7 +703,102 @@ describe('ChatsPage', () => {
         expect.objectContaining({ text: 'Здравствуйте', dialogId: stationDialogId }),
       ),
     );
-    expect(screen.queryByRole('button', { name: 'Прикрепить файл' })).not.toBeInTheDocument();
+    // The station composer accepts pictures now, and the answer names the operator who wrote it.
+    expect(screen.getByRole('button', { name: 'Прикрепить файл' })).toBeVisible();
+    expect(screen.getByText('Поддержка ПадлХАБ')).toBeVisible();
+  });
+
+  it('uploads a picture, sends it with its id and renders the operator picture', async () => {
+    const attachmentId = 'c'.repeat(43);
+    const operatorAttachmentId = 'd'.repeat(43);
+    const uploadAttachment = vi.fn().mockResolvedValue({
+      id: attachmentId,
+      fileName: 'корт.png',
+      contentType: 'image/webp',
+      byteSize: 2048,
+      url: `/user/api/v1/tenant/support/attachments/${attachmentId}/content`,
+    });
+    const loadAttachment = vi
+      .fn()
+      .mockResolvedValue(new Blob(['webp-bytes'], { type: 'image/webp' }));
+    const sendMessage = vi.fn().mockResolvedValue({
+      dialogId: stationDialogId,
+      message: null,
+      replayed: false,
+    });
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: '2026-09-22T10:00:00.000Z',
+          lastMessage: null,
+        },
+      ]),
+      loadMessages: vi.fn().mockResolvedValue([
+        {
+          id: '88888888-8888-4888-8888-888888888888',
+          body: '',
+          author: 'STATION',
+          authorName: 'ПадлХАБ • Супервайзер',
+          createdAt: '2026-09-22T10:00:00.000Z',
+          attachments: [
+            {
+              id: operatorAttachmentId,
+              fileName: 'мяч.webp',
+              contentType: 'image/webp',
+              byteSize: 4096,
+              url: `/user/api/v1/tenant/support/attachments/${operatorAttachmentId}/content`,
+            },
+          ],
+        },
+      ]),
+      sendMessage,
+      uploadAttachment,
+      loadAttachment,
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+
+    // The picture the operator sent arrives as an authorized blob, never as a raw provider URL.
+    const operatorImage = await screen.findByAltText('мяч.webp');
+    expect(loadAttachment).toHaveBeenCalledWith(operatorAttachmentId);
+    expect(operatorImage.getAttribute('src')).toMatch(/^blob:/u);
+
+    const file = new File([new Uint8Array([1, 2, 3, 4])], 'корт.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText('Выбрать файлы для прикрепления'), {
+      target: { files: [file] },
+    });
+    await waitFor(() =>
+      expect(uploadAttachment).toHaveBeenCalledWith(
+        expect.objectContaining({ fileName: 'корт.png', contentType: 'image/png' }),
+      ),
+    );
+    await screen.findByText('корт.png');
+
+    const composer = screen.getByLabelText('Сообщение');
+    await userEvent.type(composer, 'Смотрите корт');
+    fireEvent.submit(composer.closest('form') as HTMLFormElement);
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: 'Смотрите корт',
+          attachmentIds: [attachmentId],
+          dialogId: stationDialogId,
+        }),
+      ),
+    );
   });
 
   it('retries a failed station send with the same command id instead of a new one', async () => {
