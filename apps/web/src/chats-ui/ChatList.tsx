@@ -4,7 +4,9 @@ import type { ConversationPage } from '../auth-gateway.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import type { ChatFilter } from './ChatFilters.js';
 import { ChatListItem } from './ChatListItem.js';
+import { ExternalChatListItem } from './ExternalChatListItem.js';
 import { conversationTitle } from './chat-format.js';
+import { externalChatRows } from './external-chats.js';
 import styles from './ChatsUi.module.css';
 
 interface ChatListProps {
@@ -93,35 +95,35 @@ export function ChatList({
       value.toLocaleLowerCase('ru-RU').includes(normalizedQuery),
     );
   });
+  // The outbound channels belong to the whole list, not to a category, and they carry no unread
+  // state, so they only join the unfiltered "Все" tab.
+  const externalChats = filter === 'ALL' && !unreadOnly ? externalChatRows(query) : [];
 
-  if (page.items.length === 0) {
-    return (
-      <div className={styles.emptyState} role="status">
-        <strong>У вас пока нет чатов</strong>
-        <p>Начните общение из профиля игрока или откройте чат в карточке своей игры.</p>
-      </div>
-    );
-  }
-
-  if (conversations.length === 0 && normalizedQuery) {
-    return (
-      <div className={styles.emptyState} role="status">
-        <strong>По запросу ничего не найдено</strong>
-        <p>Измените запрос или очистите поле поиска.</p>
-      </div>
-    );
-  }
-
-  if (conversations.length === 0 && unreadOnly) {
-    return (
-      <div className={styles.emptyState} role="status">
-        <strong>Нет непрочитанных чатов</strong>
-        <p>Все сообщения в этой категории прочитаны.</p>
-      </div>
-    );
-  }
-
-  if (conversations.length === 0) {
+  if (conversations.length === 0 && externalChats.length === 0) {
+    if (page.items.length === 0) {
+      return (
+        <div className={styles.emptyState} role="status">
+          <strong>У вас пока нет чатов</strong>
+          <p>Начните общение из профиля игрока или откройте чат в карточке своей игры.</p>
+        </div>
+      );
+    }
+    if (normalizedQuery) {
+      return (
+        <div className={styles.emptyState} role="status">
+          <strong>По запросу ничего не найдено</strong>
+          <p>Измените запрос или очистите поле поиска.</p>
+        </div>
+      );
+    }
+    if (unreadOnly) {
+      return (
+        <div className={styles.emptyState} role="status">
+          <strong>Нет непрочитанных чатов</strong>
+          <p>Все сообщения в этой категории прочитаны.</p>
+        </div>
+      );
+    }
     return (
       <div className={styles.emptyState} role="status">
         <strong>В этой категории пока нет чатов</strong>
@@ -130,8 +132,21 @@ export function ChatList({
     );
   }
 
+  // A brand-new account has no dialogs but should still find the outbound channels, so the
+  // explanation is the first row of the same list instead of replacing it.
+  const showNoChatsNotice = conversations.length === 0 && page.items.length === 0;
+
   return (
     <ul className={styles.list} aria-label="Диалоги" ref={listRef} onScroll={handleScroll}>
+      {showNoChatsNotice ? (
+        <li className={styles.emptyState} role="status">
+          <strong>У вас пока нет чатов</strong>
+          <p>Начните общение из профиля игрока или откройте чат в карточке своей игры.</p>
+        </li>
+      ) : null}
+      {externalChats.map((destination) => (
+        <ExternalChatListItem key={destination.key} destination={destination} />
+      ))}
       {conversations.map((conversation) => (
         <ChatListItem
           key={conversation.id}

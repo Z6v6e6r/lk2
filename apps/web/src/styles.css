@@ -13079,18 +13079,33 @@ button.participant-avatar-stack__open-slot:focus-visible {
   font-size: 10px;
 }
 
+/* A swipeable rail: every friend stays reachable on a phone instead of stopping at the fourth. */
 .profile-friend-list {
-  display: grid;
+  display: flex;
   min-height: 72px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  align-items: start;
   margin-top: 10px;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
   gap: 7px;
+}
+
+.profile-friend-list::-webkit-scrollbar {
+  height: 3px;
+}
+
+.profile-friend-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgb(135 102 235 / 35%);
 }
 
 .profile-friend-list > a {
   min-width: 0;
+  flex: 0 0 68px;
   color: #29252f;
+  scroll-snap-align: start;
   text-align: center;
   text-decoration: none;
 }

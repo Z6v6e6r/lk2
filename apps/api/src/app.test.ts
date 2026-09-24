@@ -1404,7 +1404,7 @@ describe('health endpoints', () => {
       access: {
         chat: {
           status: 'AVAILABLE',
-          route: `/chats/new?recipientUserId=${targetUserId}`,
+          route: `/chats/new?recipientUserId=${targetUserId}&open=1`,
         },
       },
     });

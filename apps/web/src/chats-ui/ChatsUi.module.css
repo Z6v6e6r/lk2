@@ -291,6 +291,34 @@
   color: var(--comms-accent-ink);
 }
 
+/* An outbound channel keeps the conversation avatar slot but states its own brand. */
+.externalAvatar {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 15px;
+  background: var(--comms-accent-soft);
+  color: var(--comms-accent-ink);
+}
+
+.externalAvatar svg {
+  width: 26px;
+  height: 26px;
+}
+
+.externalGlyph {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--comms-accent-soft);
+  color: var(--comms-accent-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .levelAvatarFrame {
   height: 47px;
   overflow: visible;
@@ -485,6 +513,13 @@
   border-radius: 50%;
   color: var(--comms-ink);
   font-size: 20px;
+  text-decoration: none;
+}
+
+/* The direct participant's picture is the way into their profile, exactly like a list row. */
+.threadAvatarLink {
+  display: block;
+  border-radius: 50%;
   text-decoration: none;
 }
 
@@ -974,6 +1009,16 @@
   min-width: 0;
 }
 
+/* The picture is also the control that enlarges it, so the button must not add a box of its own. */
+.attachmentImageButton {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+
 .attachmentImages img {
   display: block;
   width: 100%;
@@ -1239,6 +1284,56 @@
 
 .hiddenAvatar {
   visibility: hidden;
+}
+
+/* Above the bottom navigation (z-index 4) and the thread menus (z-index 10). */
+.imageViewer {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  inset: 0;
+  padding: 16px;
+  place-items: center;
+}
+
+.imageViewerBackdrop {
+  position: fixed;
+  inset: 0;
+  border: 0;
+  background: rgb(14 10 22 / 90%);
+  cursor: zoom-out;
+}
+
+.imageViewerImage {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+  object-fit: contain;
+}
+
+.imageViewerClose {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 88%);
+  color: #29252f;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.messageSenderLink {
+  display: block;
+  flex: 0 0 auto;
+  border-radius: 50%;
 }
 
 .placeholderIcon,

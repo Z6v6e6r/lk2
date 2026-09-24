@@ -97,9 +97,11 @@ function chatAction(input: {
   if (input.policy === 'NOBODY') return { status: 'LOCKED', reason: 'PROFILE_RESTRICTED' };
   if (!input.granted) return { status: 'LOCKED', reason: 'ACCESS_REQUIRED' };
   if (!input.enabled) return { status: 'HIDDEN' };
+  // `open=1` asks the chats screen to run the create command on arrival instead of showing the
+  // intermediate "Новый личный чат" confirmation: the button already says what it does.
   return {
     status: 'AVAILABLE',
-    route: `/chats/new?recipientUserId=${encodeURIComponent(input.targetUserId)}`,
+    route: `/chats/new?recipientUserId=${encodeURIComponent(input.targetUserId)}&open=1`,
   };
 }
 

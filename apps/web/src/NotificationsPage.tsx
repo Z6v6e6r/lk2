@@ -18,6 +18,8 @@ import {
   notificationConversationIndex,
   notificationFilters,
   groupNotifications,
+  isFriendRequestPrompt,
+  withFriendRequestFilter,
   type NotificationItem,
   type NotificationFilter,
 } from './notifications-ui/notification-format.js';
@@ -109,12 +111,21 @@ export function NotificationsPage({
   }
   const draft = draftState.draft;
 
-  const groups = useMemo(() => groupNotifications(page.items), [page.items]);
+  // The request prompt written by the projector is replaced by the actionable row built from the
+  // pending-request list below, so it never reaches the feed twice.
+  const feedItems = useMemo(
+    () => page.items.filter((item) => !isFriendRequestPrompt(item)),
+    [page.items],
+  );
+  const groups = useMemo(() => groupNotifications(feedItems), [feedItems]);
   const conversationIndex = useMemo(
     () => notificationConversationIndex(conversations),
     [conversations],
   );
-  const filters = notificationFilters(page.items);
+  const filters = withFriendRequestFilter(
+    notificationFilters(feedItems),
+    friendRequests.length + outgoingFriendRequests.length,
+  );
   const selectedFilter = filters.some((item) => item.value === filter) ? filter : 'ALL';
   const subscribed = browserState === 'subscribed';
   const canEnablePush = canToggleNotificationPush(webPush, browserState);
@@ -218,64 +229,6 @@ export function NotificationsPage({
           </p>
         ) : null}
 
-        {friendRequests.length > 0 ? (
-          <section className={styles.friendRequests} aria-labelledby="friend-requests-title">
-            <header className={styles.listHeader}>
-              <h2 id="friend-requests-title">Заявки в друзья</h2>
-              <span className={styles.friendRequestCount}>{friendRequests.length}</span>
-            </header>
-            <ul className={styles.friendRequestList}>
-              {friendRequests.map((request) => (
-                <li className={styles.friendRequestCard} key={request.requestId}>
-                  <a className={styles.friendRequestPerson} href={request.route}>
-                    <strong>{request.displayName}</strong>
-                    <small>хочет добавить вас в друзья</small>
-                  </a>
-                  <div className={styles.friendRequestActions}>
-                    <button
-                      type="button"
-                      disabled={busy || friendRequestBusyId !== null}
-                      onClick={() => onAcceptFriendRequest(request.requestId)}
-                    >
-                      {friendRequestBusyId === request.requestId ? 'Добавляем…' : 'Добавить'}
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.friendRequestDecline}
-                      disabled={busy || friendRequestBusyId !== null}
-                      onClick={() => onDeclineFriendRequest(request.requestId)}
-                    >
-                      Отказаться
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-
-        {outgoingFriendRequests.length > 0 ? (
-          <section
-            className={styles.friendRequests}
-            aria-labelledby="outgoing-friend-requests-title"
-          >
-            <header className={styles.listHeader}>
-              <h2 id="outgoing-friend-requests-title">Отправленные заявки</h2>
-              <span className={styles.friendRequestCount}>{outgoingFriendRequests.length}</span>
-            </header>
-            <ul className={styles.friendRequestList}>
-              {outgoingFriendRequests.map((request) => (
-                <li className={styles.friendRequestCard} key={request.requestId}>
-                  <a className={styles.friendRequestPerson} href={request.route}>
-                    <strong>{request.displayName}</strong>
-                    <small>ожидает ответа</small>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-
         {inboxUnavailable ? (
           <div className={styles.emptyState} role="status">
             <strong>Лента недоступна</strong>
@@ -306,10 +259,15 @@ export function NotificationsPage({
               ) : null}
             </header>
             <NotificationList
-              page={page}
               groups={groups}
               conversations={conversationIndex}
               filter={selectedFilter}
+              incomingFriendRequests={friendRequests}
+              outgoingFriendRequests={outgoingFriendRequests}
+              friendRequestBusyId={friendRequestBusyId}
+              busy={busy}
+              onAcceptFriendRequest={onAcceptFriendRequest}
+              onDeclineFriendRequest={onDeclineFriendRequest}
               onOpen={onOpenNotification}
             />
           </>

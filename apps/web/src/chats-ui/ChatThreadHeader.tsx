@@ -43,16 +43,24 @@ export function ChatThreadHeader({
       <a className={styles.backLink} href="/chats" aria-label="Назад к чатам">
         <span aria-hidden="true">←</span>
       </a>
-      <ChatAvatar
-        isGame={isGame}
-        title={title}
-        photoUrl={conversation?.kind === 'DIRECT' ? conversation.participant.avatarUrl : undefined}
-        level={conversation?.kind === 'DIRECT' ? conversation.participant.level : undefined}
-        levelValue={
-          conversation?.kind === 'DIRECT' ? conversation.participant.levelValue : undefined
-        }
-        fallbackSeed={conversation?.kind === 'DIRECT' ? conversation.participant.userId : undefined}
-      />
+      {conversation?.kind === 'DIRECT' ? (
+        <a
+          className={styles.threadAvatarLink}
+          href={`/profile/${encodeURIComponent(conversation.participant.userId)}`}
+          aria-label={`Профиль игрока ${title}`}
+        >
+          <ChatAvatar
+            isGame={false}
+            title={title}
+            photoUrl={conversation.participant.avatarUrl}
+            level={conversation.participant.level}
+            levelValue={conversation.participant.levelValue}
+            fallbackSeed={conversation.participant.userId}
+          />
+        </a>
+      ) : (
+        <ChatAvatar isGame={isGame} title={title} />
+      )}
       <div className={styles.threadHeading}>
         <h2>{title}</h2>
         <small>

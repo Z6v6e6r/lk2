@@ -1,8 +1,9 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 
 import type { ConversationMessage, ConversationMessageAttachment } from '../auth-gateway.js';
 import { formatAttachmentSize } from './chat-attachments.js';
 import { ChatAvatar } from './ChatAvatar.js';
+import { ChatImageViewer } from './ChatImageViewer.js';
 import { formatMessageTime } from './chat-format.js';
 import styles from './ChatsUi.module.css';
 import { useAttachmentObjectUrl } from './useAttachmentObjectUrl.js';
@@ -16,6 +17,7 @@ function AttachmentImage({
   readonly attachment: ConversationMessageAttachment;
   readonly loadMedia: (conversationId: string, mediaId: string) => Promise<Blob>;
 }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
   const load = useCallback(
     () => loadMedia(conversationId, attachment.mediaId),
     [conversationId, attachment.mediaId, loadMedia],
@@ -30,7 +32,21 @@ function AttachmentImage({
       </span>
     );
   }
-  return <img src={url} alt={attachment.fileName} loading="lazy" />;
+  return (
+    <>
+      <button
+        type="button"
+        className={styles.attachmentImageButton}
+        aria-label={`Открыть изображение ${attachment.fileName}`}
+        onClick={() => setExpanded(true)}
+      >
+        <img src={url} alt={attachment.fileName} loading="lazy" />
+      </button>
+      {expanded ? (
+        <ChatImageViewer src={url} alt={attachment.fileName} onClose={() => setExpanded(false)} />
+      ) : null}
+    </>
+  );
 }
 
 function AttachmentFile({
@@ -109,7 +125,11 @@ export function ChatMessageBubble({
       className={`${styles.messageRow} ${own ? styles.ownMessageRow : ''} ${continuesGroup ? styles.continuedMessageRow : ''}`}
     >
       {!own ? (
-        <span className={!endsGroup ? styles.hiddenAvatar : undefined}>
+        <a
+          className={`${styles.messageSenderLink} ${!endsGroup ? styles.hiddenAvatar : ''}`}
+          href={`/profile/${encodeURIComponent(message.sender.userId)}`}
+          aria-label={`Профиль игрока ${message.sender.displayName}`}
+        >
           <ChatAvatar
             isGame={false}
             title={message.sender.displayName}
@@ -119,7 +139,7 @@ export function ChatMessageBubble({
             fallbackSeed={message.sender.userId}
             size={36}
           />
-        </span>
+        </a>
       ) : null}
       <article
         className={`${styles.messageBubble} ${own ? styles.ownMessageBubble : ''} ${endsGroup ? styles.messageTail : ''} ${attachments.length > 0 ? styles.hasAttachmentsBubble : ''}`}

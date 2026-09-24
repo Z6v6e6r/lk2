@@ -5,12 +5,16 @@ import type { NotificationItem } from './notification-format.js';
 import {
   formatNotificationTime,
   groupNotifications,
+  isFriendRequestPrompt,
   notificationCategory,
+  notificationFeedEntries,
+  notificationFeedMatchesFilter,
   notificationFilters,
   notificationGroupPresentation,
   notificationGroupsForFilter,
   pluralRu,
   safeNotificationDeepLink,
+  withFriendRequestFilter,
 } from './notification-format.js';
 
 function notification(overrides: Partial<NotificationItem> & { readonly id: string }) {
@@ -250,5 +254,98 @@ describe('notification grouping', () => {
     expect(notificationGroupsForFilter(groups, 'SYSTEM')).toHaveLength(1);
     expect(notificationGroupsForFilter(groups, 'FRIENDSHIP')).toHaveLength(0);
     expect(notificationGroupsForFilter(groups, 'ALL')).toHaveLength(2);
+  });
+});
+
+describe('notification feed entries', () => {
+  const friendRequest = {
+    requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
+    userId: '6a81e965-c508-4321-812c-4be323606a70',
+    displayName: 'Ирина Кузнецова',
+    avatarUrl: null,
+    levelLabel: 'C',
+    createdAt: '2026-09-20T10:30:00+03:00',
+    route: '/profile/6a81e965-c508-4321-812c-4be323606a70',
+  } as const;
+
+  it('recognises the projector prompt by the canonical category and title', () => {
+    expect(
+      isFriendRequestPrompt(
+        notification({
+          id: '11111111-1111-4111-8111-111111111111',
+          category: 'FRIENDSHIP',
+          title: 'Заявка в друзья',
+          body: 'Откройте ПадлХАБ, чтобы ответить.',
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isFriendRequestPrompt(
+        notification({
+          id: '22222222-2222-4222-8222-222222222222',
+          category: 'FRIENDSHIP',
+          title: 'Заявка принята',
+          body: 'Теперь вы друзья в ПадлХАБ.',
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isFriendRequestPrompt(
+        notification({ id: '33333333-3333-4333-8333-333333333333', category: 'MESSAGING' }),
+      ),
+    ).toBe(false);
+  });
+
+  it('keeps the "Друзья" tab while the only friend-request row is not an inbox item', () => {
+    const base = notificationFilters([
+      notification({ id: '11111111-1111-4111-8111-111111111111', category: 'GAME', title: 'Игра' }),
+    ]);
+
+    expect(withFriendRequestFilter(base, 0)).toEqual(base);
+    expect(withFriendRequestFilter(base, 2)).toEqual([
+      ...base,
+      { value: 'FRIENDSHIP', label: 'Друзья' },
+    ]);
+    // A projected friendship category already contributes the tab; it must not be added twice.
+    const withFriendship = notificationFilters([
+      notification({
+        id: '22222222-2222-4222-8222-222222222222',
+        category: 'FRIENDSHIP',
+        title: 'Заявка принята',
+      }),
+    ]);
+    expect(withFriendRequestFilter(withFriendship, 1)).toEqual(withFriendship);
+  });
+
+  it('orders requests and notifications together, newest first', () => {
+    const groups = groupNotifications([
+      notification({
+        id: '11111111-1111-4111-8111-111111111111',
+        category: 'ADMIN_MESSAGE',
+        title: 'Рейтинг обновился',
+        deepLink: '/profile',
+        createdAt: '2026-09-20T09:00:00+03:00',
+      }),
+    ]);
+    const entries = notificationFeedEntries({
+      groups,
+      incomingFriendRequests: [friendRequest],
+      outgoingFriendRequests: [],
+    });
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['friend-request', 'group']);
+    expect(entries[0]?.key).toBe(`friend-request:${friendRequest.requestId}`);
+  });
+
+  it('shows friend requests under "Все" and "Друзья" only', () => {
+    const [entry] = notificationFeedEntries({
+      groups: [],
+      incomingFriendRequests: [friendRequest],
+      outgoingFriendRequests: [],
+    });
+    expect(entry).toBeDefined();
+    expect(notificationFeedMatchesFilter(entry!, 'ALL')).toBe(true);
+    expect(notificationFeedMatchesFilter(entry!, 'FRIENDSHIP')).toBe(true);
+    expect(notificationFeedMatchesFilter(entry!, 'MESSAGING')).toBe(false);
   });
 });

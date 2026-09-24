@@ -269,6 +269,20 @@ export const FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT = {
       },
       mandatory: false,
     },
+    {
+      // The other half of the request: the player who sent it waits for an answer, so acceptance is
+      // addressed to that account and the acceptor, who already sees the new friendship, gets no echo
+      // of their own command.
+      key: 'profile.friendship.created',
+      sourceEventType: 'profile.friendship.created.v1',
+      title: 'Заявка принята',
+      body: 'Теперь вы друзья в ПадлХАБ. Откройте профиль игрока, чтобы написать сообщение.',
+      audienceSelector: {
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+      },
+      mandatory: false,
+    },
   ],
 } as const;
 
@@ -333,7 +347,10 @@ export const MESSAGING_NOTIFICATION_EVENT_TYPES = [
   'messaging.message.created.v1',
 ] as const;
 
-export const FRIENDSHIP_NOTIFICATION_EVENT_TYPES = ['profile.friend_request.created.v1'] as const;
+export const FRIENDSHIP_NOTIFICATION_EVENT_TYPES = [
+  'profile.friend_request.created.v1',
+  'profile.friendship.created.v1',
+] as const;
 
 export const MAX_NOTIFICATION_EVENT_RECIPIENTS = 50;
 

@@ -142,13 +142,18 @@ describe('NotificationsPage inbox', () => {
   it('collapses every event of one chat into a single row named after the conversation', () => {
     render(<NotificationsPage {...defaultProps} />);
 
-    const chatRow = screen.getByRole('link', { name: /Мария Соколова/u });
+    const chatRow = screen.getByRole('link', { name: /^Мария Соколова/u });
     expect(chatRow).toHaveAttribute('href', `/chats/${conversationId}`);
     expect(chatRow).toHaveTextContent('3 новых сообщения');
     expect(chatRow).toHaveTextContent('Кто идёт на выходных?');
     expect(screen.getByLabelText('Непрочитанных событий: 3')).toHaveTextContent('3');
+    // The picture is a second, profile-bound link next to the row itself.
+    expect(screen.getByRole('link', { name: 'Профиль игрока Мария Соколова' })).toHaveAttribute(
+      'href',
+      '/profile/77777777-7777-4777-8777-777777777777',
+    );
     // The second message of the same chat is part of the first row, not a row of its own.
-    expect(screen.getAllByRole('link', { name: /Мария Соколова/u })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: /^Мария Соколова/u })).toHaveLength(1);
     expect(document.querySelector('[data-player-level-photo="source"]')).toHaveAttribute(
       'src',
       conversationAvatarUrl,
@@ -166,7 +171,7 @@ describe('NotificationsPage inbox', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Системные' }));
     expect(screen.getByText('Рейтинг обновился')).toBeVisible();
-    expect(screen.queryByRole('link', { name: /Мария Соколова/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^Мария Соколова/u })).not.toBeInTheDocument();
     expect(screen.queryByText('Неизвестная категория')).not.toBeInTheDocument();
   });
 
@@ -186,7 +191,7 @@ describe('NotificationsPage inbox', () => {
     );
     expect(screen.getAllByLabelText('Непрочитанное уведомление')).toHaveLength(1);
 
-    fireEvent.click(screen.getByRole('link', { name: /Мария Соколова/u }));
+    fireEvent.click(screen.getByRole('link', { name: /^Мария Соколова/u }));
     expect(onOpenNotification).toHaveBeenCalledWith(items[0], `/chats/${conversationId}`, true);
 
     fireEvent.click(screen.getByRole('button', { name: 'Прочитать все' }));
@@ -269,31 +274,42 @@ describe('NotificationsPage inbox', () => {
 });
 
 describe('NotificationsPage friend requests', () => {
-  it('renders an incoming friend request with accept and decline commands', () => {
+  const incoming = {
+    requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
+    userId: '6a81e965-c508-4321-812c-4be323606a70',
+    displayName: 'Ирина Кузнецова',
+    avatarUrl: null,
+    levelLabel: 'C',
+    createdAt: '2026-08-29T10:00:00+03:00',
+    route: '/profile/6a81e965-c508-4321-812c-4be323606a70',
+  } as const;
+  const outgoing = {
+    requestId: 'd0a3bd8e-1d4a-4d3a-9d21-2a1a8f9c4b77',
+    userId: 'b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
+    displayName: 'Пётр Волков',
+    avatarUrl: null,
+    levelLabel: 'B',
+    createdAt: '2026-08-30T09:00:00+03:00',
+    route: '/profile/b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
+  } as const;
+
+  it('shows an incoming request inside the shared feed with both commands', () => {
     const onAcceptFriendRequest = vi.fn();
     const onDeclineFriendRequest = vi.fn();
     render(
       <NotificationsPage
         {...defaultProps}
-        friendRequests={[
-          {
-            requestId: '18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91',
-            userId: '6a81e965-c508-4321-812c-4be323606a70',
-            displayName: 'Ирина Кузнецова',
-            avatarUrl: null,
-            levelLabel: 'C',
-            createdAt: '2026-08-29T10:00:00+03:00',
-            route: '/profile/6a81e965-c508-4321-812c-4be323606a70',
-          },
-        ]}
+        friendRequests={[incoming]}
         onAcceptFriendRequest={onAcceptFriendRequest}
         onDeclineFriendRequest={onDeclineFriendRequest}
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Заявки в друзья' })).toBeVisible();
-    expect(screen.getByText('хочет добавить вас в друзья')).toBeVisible();
-    expect(screen.getByRole('link', { name: /Ирина Кузнецова/u })).toHaveAttribute(
+    // One list, not a block of its own: the request sits under the same heading as the inbox rows.
+    expect(screen.getByRole('heading', { name: 'Последние события' })).toBeVisible();
+    expect(screen.getByText('Этот игрок хочет добавить вас в друзья.')).toBeVisible();
+    expect(screen.getByText('Заявка в друзья')).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Профиль игрока Ирина Кузнецова' })).toHaveAttribute(
       'href',
       '/profile/6a81e965-c508-4321-812c-4be323606a70',
     );
@@ -305,33 +321,71 @@ describe('NotificationsPage friend requests', () => {
     expect(onDeclineFriendRequest).toHaveBeenCalledWith('18f7c9a6-8a1b-4c27-9d0e-3e34bb4c2b91');
   });
 
-  it('hides the friend request section when there is nothing to answer', () => {
-    render(<NotificationsPage {...defaultProps} />);
-    expect(screen.queryByRole('heading', { name: 'Заявки в друзья' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Отправленные заявки' })).not.toBeInTheDocument();
-  });
-
-  it('shows sent requests as read-only cards with the addressed peer', () => {
+  it('replaces the projector prompt of the same request instead of showing it twice', () => {
     render(
       <NotificationsPage
         {...defaultProps}
-        outgoingFriendRequests={[
-          {
-            requestId: 'd0a3bd8e-1d4a-4d3a-9d21-2a1a8f9c4b77',
-            userId: 'b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
-            displayName: 'Пётр Волков',
-            avatarUrl: null,
-            levelLabel: 'B',
-            createdAt: '2026-08-30T09:00:00+03:00',
-            route: '/profile/b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
-          },
-        ]}
+        page={{
+          unreadCount: 1,
+          items: [
+            {
+              id: '55555555-5555-4555-8555-555555555555',
+              category: 'FRIENDSHIP',
+              title: 'Заявка в друзья',
+              body: 'Откройте ПадлХАБ, чтобы ответить.',
+              deepLink: '/notifications',
+              createdAt: '2026-08-29T10:00:00+03:00',
+            },
+            ...items,
+          ],
+        }}
+        friendRequests={[incoming]}
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Отправленные заявки' })).toBeVisible();
-    expect(screen.getByText('ожидает ответа')).toBeVisible();
-    expect(screen.getByRole('link', { name: /Пётр Волков/u })).toHaveAttribute(
+    expect(screen.getByText('Ирина Кузнецова')).toBeVisible();
+    expect(screen.queryByText('Откройте ПадлХАБ, чтобы ответить.')).not.toBeInTheDocument();
+    // The tab stays reachable even though the only friend-request row is not an inbox item.
+    expect(screen.getByRole('button', { name: 'Друзья' })).toBeVisible();
+  });
+
+  it('keeps the accepted-request notification, which is not a prompt to answer', () => {
+    render(
+      <NotificationsPage
+        {...defaultProps}
+        page={{
+          unreadCount: 1,
+          items: [
+            {
+              id: '66666666-6666-4666-8666-666666666666',
+              category: 'FRIENDSHIP',
+              title: 'Заявка принята',
+              body: 'Теперь вы друзья в ПадлХАБ.',
+              deepLink: '/profile/6a81e965-c508-4321-812c-4be323606a70',
+              createdAt: '2026-08-30T10:00:00+03:00',
+            },
+            ...items,
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Заявка принята')).toBeVisible();
+    expect(screen.getByText('Теперь вы друзья в ПадлХАБ.')).toBeVisible();
+  });
+
+  it('renders nothing request-shaped when there is nothing to answer', () => {
+    render(<NotificationsPage {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: 'Добавить' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Отказаться' })).not.toBeInTheDocument();
+  });
+
+  it('shows a sent request as a read-only feed row addressed to the peer', () => {
+    render(<NotificationsPage {...defaultProps} outgoingFriendRequests={[outgoing]} />);
+
+    expect(screen.getByText('Отправленная заявка')).toBeVisible();
+    expect(screen.getByText('Ожидает ответа игрока.')).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Профиль игрока Пётр Волков' })).toHaveAttribute(
       'href',
       '/profile/b7f0d3a2-5c6e-4c1f-9a0e-1d2c3b4a5f60',
     );

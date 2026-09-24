@@ -1,8 +1,9 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 
 import { formatMessageDay, formatMessageTime } from './chat-format.js';
 import { ChatComposer, type ChatComposerSend } from './ChatComposer.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
+import { ChatImageViewer } from './ChatImageViewer.js';
 import { StationAvatar } from './StationAvatar.js';
 import type { ChatAttachmentDraft } from './chat-attachments.js';
 import type { ChatUiError } from '../ChatsPage.js';
@@ -49,6 +50,7 @@ function StationAttachmentImage({
   readonly attachment: StationSupportAttachment;
   readonly loadAttachment: (attachmentId: string) => Promise<Blob>;
 }): React.JSX.Element {
+  const [expanded, setExpanded] = useState(false);
   const load = useCallback(() => loadAttachment(attachment.id), [attachment.id, loadAttachment]);
   const { url, failed } = useAttachmentObjectUrl(`station:${attachment.id}`, load);
 
@@ -60,7 +62,21 @@ function StationAttachmentImage({
       </span>
     );
   }
-  return <img src={url} alt={attachment.fileName} loading="lazy" />;
+  return (
+    <>
+      <button
+        type="button"
+        className={styles.attachmentImageButton}
+        aria-label={`Открыть изображение ${attachment.fileName}`}
+        onClick={() => setExpanded(true)}
+      >
+        <img src={url} alt={attachment.fileName} loading="lazy" />
+      </button>
+      {expanded ? (
+        <ChatImageViewer src={url} alt={attachment.fileName} onClose={() => setExpanded(false)} />
+      ) : null}
+    </>
+  );
 }
 
 export function StationDialogList({

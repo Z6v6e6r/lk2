@@ -37,66 +37,81 @@ export function NotificationListItem({
 
   return (
     <li className={styles.listItem}>
-      <a
-        className={presentation.unread ? styles.unreadItem : styles.readItem}
-        href={presentation.href}
-        onClick={(event) => {
-          if (
-            event.button !== 0 ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey ||
-            event.altKey
-          ) {
-            onOpen(latest, presentation.href, false);
-            return;
-          }
-          event.preventDefault();
-          onOpen(latest, presentation.href, true);
-        }}
-      >
-        <span
-          className={`${styles.categoryMarker} ${TONE_CLASS[presentation.tone] ?? ''}`}
-          aria-hidden="true"
-        >
-          {directConversation ? (
-            <ChatAvatar
-              isGame={false}
-              title={presentation.title}
-              photoUrl={directConversation.participant.avatarUrl}
-              level={directConversation.participant.level}
-              levelValue={directConversation.participant.levelValue}
-              fallbackSeed={directConversation.participant.userId}
-              size={48}
-              className={styles.notificationAvatar}
-            />
-          ) : presentation.markerKind === 'brand' ? (
-            <img className={styles.brandMarkerLogo} src={padlHubLogoUrl} alt="" />
-          ) : (
-            marker
-          )}
-        </span>
-        <span className={styles.itemCopy}>
-          <span className={styles.itemTitle}>{presentation.title}</span>
-          <span className={styles.itemSubtitle}>{presentation.meta}</span>
-          <span className={styles.itemBody}>{presentation.preview}</span>
-          <time dateTime={presentation.createdAt}>
-            {formatNotificationTime(presentation.createdAt)}
-          </time>
-        </span>
-        <span className={styles.itemSide}>
-          {presentation.badge ? (
+      <div className={presentation.unread ? styles.unreadItem : styles.readItem}>
+        {directConversation ? (
+          <a
+            className={styles.itemAvatarLink}
+            href={`/profile/${encodeURIComponent(directConversation.participant.userId)}`}
+            aria-label={`Профиль игрока ${presentation.title}`}
+          >
             <span
-              className={styles.itemBadge}
-              aria-label={`Непрочитанных событий: ${presentation.badge}`}
+              className={`${styles.categoryMarker} ${TONE_CLASS[presentation.tone] ?? ''}`}
+              aria-hidden="true"
             >
-              {presentation.badge}
+              <ChatAvatar
+                isGame={false}
+                title={presentation.title}
+                photoUrl={directConversation.participant.avatarUrl}
+                level={directConversation.participant.level}
+                levelValue={directConversation.participant.levelValue}
+                fallbackSeed={directConversation.participant.userId}
+                size={48}
+                className={styles.notificationAvatar}
+              />
             </span>
-          ) : presentation.unread ? (
-            <i aria-label="Непрочитанное уведомление" />
-          ) : null}
-        </span>
-      </a>
+          </a>
+        ) : (
+          <span
+            className={`${styles.categoryMarker} ${TONE_CLASS[presentation.tone] ?? ''}`}
+            aria-hidden="true"
+          >
+            {presentation.markerKind === 'brand' ? (
+              <img className={styles.brandMarkerLogo} src={padlHubLogoUrl} alt="" />
+            ) : (
+              marker
+            )}
+          </span>
+        )}
+        <a
+          className={styles.itemLink}
+          href={presentation.href}
+          onClick={(event) => {
+            if (
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            ) {
+              onOpen(latest, presentation.href, false);
+              return;
+            }
+            event.preventDefault();
+            onOpen(latest, presentation.href, true);
+          }}
+        >
+          <span className={styles.itemCopy}>
+            <span className={styles.itemTitle}>{presentation.title}</span>
+            <span className={styles.itemSubtitle}>{presentation.meta}</span>
+            <span className={styles.itemBody}>{presentation.preview}</span>
+            <time dateTime={presentation.createdAt}>
+              {formatNotificationTime(presentation.createdAt)}
+            </time>
+          </span>
+          <span className={styles.itemSide}>
+            {presentation.badge ? (
+              <span
+                className={styles.itemBadge}
+                aria-label={`Непрочитанных событий: ${presentation.badge}`}
+              >
+                {presentation.badge}
+              </span>
+            ) : presentation.unread ? (
+              <i aria-label="Непрочитанное уведомление" />
+            ) : null}
+          </span>
+        </a>
+      </div>
     </li>
   );
 }

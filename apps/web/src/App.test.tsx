@@ -1502,7 +1502,7 @@ describe('PadlHub web authentication', () => {
         tier: 'INTERACTION',
         visibleSections: ['BASIC', 'PLAYER_LEVEL'],
         contact: { status: 'AVAILABLE', route: `/chats/new?recipientUserId=${targetUserId}` },
-        chat: { status: 'AVAILABLE', route: `/chats/new?recipientUserId=${targetUserId}` },
+        chat: { status: 'AVAILABLE', route: `/chats/new?recipientUserId=${targetUserId}&open=1` },
       },
     };
     const gateway = createGateway({
@@ -1921,11 +1921,12 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    const chatRow = await screen.findByRole('link', { name: /Мария Соколова/u });
+    const chatRow = await screen.findByRole('link', { name: /^Мария Соколова/u });
     expect(chatRow).toHaveAttribute('href', `/chats/${conversationId}`);
     expect(chatRow).toHaveTextContent('4 новых сообщения');
     expect(chatRow).toHaveTextContent('Кто идёт на выходных?');
-    expect(screen.getAllByRole('link', { name: /Мария Соколова/u })).toHaveLength(1);
+    // The row link and the profile-bound picture link are the only two mentions of the peer.
+    expect(screen.getAllByRole('link', { name: /Мария Соколова/u })).toHaveLength(2);
   });
 
   it('marks an unread GAME notification before following its deep link', async () => {
@@ -2342,7 +2343,7 @@ describe('PadlHub web authentication', () => {
         contact: { status: 'LOCKED', reason: 'ACCESS_REQUIRED' },
         chat: {
           status: 'AVAILABLE',
-          route: `/chats/new?recipientUserId=${recipientUserId}`,
+          route: `/chats/new?recipientUserId=${recipientUserId}&open=1`,
         },
       },
     };
@@ -2355,7 +2356,7 @@ describe('PadlHub web authentication', () => {
 
     expect(await screen.findByRole('link', { name: /Открыть чат/ })).toHaveAttribute(
       'href',
-      `/chats/new?recipientUserId=${recipientUserId}`,
+      `/chats/new?recipientUserId=${recipientUserId}&open=1`,
     );
   });
 
@@ -2395,6 +2396,49 @@ describe('PadlHub web authentication', () => {
     await waitFor(() => expect(window.location.pathname).toBe(`/chats/${conversationId}`));
     expect(createDirectConversation).toHaveBeenCalledWith(recipientUserId, expect.any(String));
     await waitFor(() => expect(listConversationMessages).toHaveBeenCalledWith(conversationId, 0));
+  });
+
+  it('opens the conversation immediately when the profile link asks for it', async () => {
+    const recipientUserId = '11111111-1111-4111-8111-111111111111';
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    window.history.replaceState({}, '', `/chats/new?recipientUserId=${recipientUserId}&open=1`);
+    // The command is held open so the intermediate screen is observable instead of racing the
+    // route change it triggers.
+    let settleCreate: ((value: unknown) => void) | undefined;
+    const createDirectConversation = vi.fn<AuthGateway['createDirectConversation']>(
+      () => new Promise((resolve) => (settleCreate = resolve)) as never,
+    );
+    const listConversationMessages = vi
+      .fn<AuthGateway['listConversationMessages']>()
+      .mockResolvedValue({ messages: [] });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      createDirectConversation,
+      listConversationMessages,
+    });
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    // No second confirmation: the create command runs on arrival and the screen never offers
+    // "Начать диалог" for this deep link.
+    expect(await screen.findByText('Открываем диалог…')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Начать диалог' })).not.toBeInTheDocument();
+    await waitFor(() => expect(createDirectConversation).toHaveBeenCalledTimes(1));
+    expect(createDirectConversation).toHaveBeenCalledWith(recipientUserId, expect.any(String));
+
+    settleCreate?.({
+      outcome: 'ok',
+      conversation: {
+        id: conversationId,
+        kind: 'DIRECT',
+        participant: { userId: recipientUserId, displayName: 'Борис' },
+        unreadCount: 0,
+        updatedAt: '2026-08-03T10:00:00.000Z',
+      },
+      created: true,
+      replayed: false,
+    });
+    await waitFor(() => expect(window.location.pathname).toBe(`/chats/${conversationId}`));
   });
 
   it('mutes the open conversation through the thread header and keeps the stored policy', async () => {

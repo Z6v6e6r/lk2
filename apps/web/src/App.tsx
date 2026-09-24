@@ -819,6 +819,14 @@ export function App({
     requestedChatRecipientId && PADLHUB_UUID_PATTERN.test(requestedChatRecipientId)
       ? requestedChatRecipientId
       : undefined;
+  // The profile's "Открыть чат" action carries `open=1` and asks this screen to run the create
+  // command on arrival instead of asking the person to confirm a second time.
+  const chatRecipientAutoOpen =
+    validChatRecipientId !== undefined &&
+    protectedRoute.kind === 'chats' &&
+    protectedRoute.mode === 'new' &&
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('open') === '1';
   const isHomeRoute =
     protectedRoute.kind === 'home' ||
     protectedRoute.kind === 'home-v2' ||
@@ -2523,6 +2531,7 @@ export function App({
           stationSupport={stationSupportSource}
           {...(requestedConversationId ? { selectedConversationId: requestedConversationId } : {})}
           hasExplicitRecipient={Boolean(validChatRecipientId)}
+          autoOpenDirect={chatRecipientAutoOpen}
           currentUserId={context.user.id}
           busy={chatsBusy}
           error={chatsError}
