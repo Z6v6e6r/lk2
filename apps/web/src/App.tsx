@@ -673,7 +673,8 @@ export function App({
     () => ({
       loadStations: () => gateway.listStationSupportStations(),
       loadDialogs: () => gateway.listStationSupportDialogs(),
-      loadMessages: (dialogId: string) => gateway.listStationSupportMessages(dialogId),
+      loadMessages: (dialogId: string, before?: string) =>
+        gateway.listStationSupportMessages(dialogId, before),
       sendMessage: (command: {
         readonly text: string;
         readonly clientMessageId: string;

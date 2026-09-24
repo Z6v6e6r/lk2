@@ -8,6 +8,7 @@ import type {
   StationSupportAttachment,
   StationSupportDialog,
   StationSupportMessage,
+  StationSupportMessagePage,
   StationSupportSendResult,
   StationSupportStation,
 } from './auth-gateway.js';
@@ -21,6 +22,7 @@ import {
 import { ChatList } from './chats-ui/ChatList.js';
 import { ChatThread } from './chats-ui/ChatThread.js';
 import { StationDialogList, StationThread } from './chats-ui/StationChats.js';
+import { stationHistoryRows } from './chats-ui/station-chat-rows.js';
 import { type ChatComposerSend } from './chats-ui/ChatComposer.js';
 import {
   describeStationAttachmentRejections,
@@ -40,7 +42,8 @@ import styles from './chats-ui/ChatsUi.module.css';
 export interface StationSupportSource {
   readonly loadStations: () => Promise<readonly StationSupportStation[]>;
   readonly loadDialogs: () => Promise<readonly StationSupportDialog[]>;
-  readonly loadMessages: (dialogId: string) => Promise<readonly StationSupportMessage[]>;
+  /** One chronological page; `before` walks the thread backwards from an already read timestamp. */
+  readonly loadMessages: (dialogId: string, before?: string) => Promise<StationSupportMessagePage>;
   readonly sendMessage: (command: {
     readonly text: string;
     readonly clientMessageId: string;
@@ -165,6 +168,11 @@ interface StationSupportState {
   readonly selectedDialogId: string | null;
   /** Which dialog the loaded `messages` belong to; a mismatch means the thread is still loading. */
   readonly messagesDialogId: string | null;
+  /** True while the server says older pages are still unread. */
+  readonly hasEarlierMessages: boolean;
+  readonly loadingEarlier: boolean;
+  /** The server-issued cursor of the page before the oldest message on screen. */
+  readonly olderCursor: string | null;
   readonly pendingStationId: string | null;
   readonly pendingStationName: string | null;
   readonly sending: boolean;
@@ -184,12 +192,29 @@ const EMPTY_STATION_STATE: StationSupportState = {
   messages: [],
   selectedDialogId: null,
   messagesDialogId: null,
+  hasEarlierMessages: false,
+  loadingEarlier: false,
+  olderCursor: null,
   pendingStationId: null,
   pendingStationName: null,
   sending: false,
   error: null,
   failedMessage: null,
 };
+
+/**
+ * The cursor of the next older page is issued by the server (`nextBefore`), never derived here from
+ * a message timestamp: the provider pages on its own ordering instant, and a message may carry no
+ * readable timestamp at all. A page that claims more history without a cursor is not paginable, so
+ * the control is not offered for it.
+ */
+function stationPageCursor(page: StationSupportMessagePage): {
+  readonly hasEarlierMessages: boolean;
+  readonly olderCursor: string | null;
+} {
+  const olderCursor = page.nextBefore ?? null;
+  return { hasEarlierMessages: page.hasMore && olderCursor !== null, olderCursor };
+}
 
 function stationAttachmentsUnavailable(error: unknown): boolean {
   const record =
@@ -351,7 +376,6 @@ export function ChatsPage({
   const [unreadOnly, setUnreadOnly] = useState(
     () => readChatViewState(currentUserId).unreadOnly ?? false,
   );
-  const [menuOpen, setMenuOpen] = useState(false);
   const [stationState, setStationState] = useState<StationSupportState>(EMPTY_STATION_STATE);
   const [stationReloadToken, setStationReloadToken] = useState(0);
   const [stationAttachments, setStationAttachments] = useState<readonly ChatAttachmentDraft[]>([]);
@@ -393,8 +417,12 @@ export function ChatsPage({
     );
   }, [stationSource]);
 
+  // The unfiltered tab shows the station dialogs that already have correspondence next to the LK2
+  // conversations, so the provider read belongs to "Все" as well as to the station tab. It stays a
+  // single read per screen: both effects are gated on the `idle` status.
   useEffect(() => {
-    if (filter !== 'STATION' || !stationSource || stationState.status !== 'idle') return;
+    if (filter !== 'STATION' && filter !== 'ALL') return;
+    if (!stationSource || stationState.status !== 'idle') return;
     loadStationSupport();
   }, [filter, stationSource, stationState.status, loadStationSupport]);
 
@@ -403,13 +431,15 @@ export function ChatsPage({
     if (filter !== 'STATION' || !stationSource || !dialogId) return;
     let active = true;
     void stationSource.loadMessages(dialogId).then(
-      (messages) => {
+      (page) => {
         if (!active) return;
         setStationState((current) => ({
           ...current,
           status: 'ready',
-          messages,
+          messages: page.items,
           messagesDialogId: dialogId,
+          ...stationPageCursor(page),
+          loadingEarlier: false,
           error: null,
         }));
       },
@@ -419,6 +449,9 @@ export function ChatsPage({
           ...current,
           status: 'ready',
           messagesDialogId: dialogId,
+          hasEarlierMessages: false,
+          olderCursor: null,
+          loadingEarlier: false,
           error: stationSupportError(error),
         }));
       },
@@ -428,6 +461,47 @@ export function ChatsPage({
     };
   }, [filter, stationSource, stationState.selectedDialogId, stationReloadToken]);
 
+  /**
+   * Walking the thread backwards is the only read that is appended above the current view, so a page
+   * that repeats what is already on screen ends the walk instead of leaving a "load more" control
+   * that can never make progress.
+   */
+  function loadOlderStationMessages(): void {
+    const dialogId = stationState.selectedDialogId;
+    const before = stationState.olderCursor;
+    if (!stationSource || !dialogId || !before || stationState.loadingEarlier) return;
+    const generation = stationRequestRef.current;
+    setStationState((current) => ({ ...current, loadingEarlier: true, error: null }));
+    void stationSource.loadMessages(dialogId, before).then(
+      (page) => {
+        setStationState((current) => {
+          if (current.selectedDialogId !== dialogId || stationRequestRef.current !== generation) {
+            // The thread moved on; the page is dropped, but the flag must not stay stuck true or the
+            // control would never be usable again.
+            return current.loadingEarlier ? { ...current, loadingEarlier: false } : current;
+          }
+          const known = new Set(current.messages.map((message) => message.id));
+          const older = page.items.filter((message) => !known.has(message.id));
+          const cursor = older.length > 0 ? stationPageCursor(page) : null;
+          return {
+            ...current,
+            loadingEarlier: false,
+            hasEarlierMessages: cursor?.hasEarlierMessages ?? false,
+            olderCursor: cursor?.olderCursor ?? null,
+            messages: older.length > 0 ? [...older, ...current.messages] : current.messages,
+          };
+        });
+      },
+      (error: unknown) => {
+        setStationState((current) =>
+          current.selectedDialogId === dialogId
+            ? { ...current, loadingEarlier: false, error: stationSupportError(error) }
+            : current,
+        );
+      },
+    );
+  }
+
   const stationThreadLoading =
     stationState.selectedDialogId !== null &&
     stationState.messagesDialogId !== stationState.selectedDialogId;
@@ -436,11 +510,13 @@ export function ChatsPage({
     : stationState.status === 'idle' && stationDialogs.length === 0
       ? 'load'
       : null;
-  const stationThreadBusy: 'load' | 'send' | null = stationState.sending
+  const stationThreadBusy: 'load' | 'load-earlier' | 'send' | null = stationState.sending
     ? 'send'
     : stationThreadLoading
       ? 'load'
-      : null;
+      : stationState.loadingEarlier
+        ? 'load-earlier'
+        : null;
   // A station thread opens in place instead of navigating to `/chats/<id>`, so a phone has no route
   // change to swap panes with: the shell itself must leave list mode or the thread stays hidden.
   const stationThreadOpen =
@@ -544,11 +620,24 @@ export function ChatsPage({
       ...current,
       selectedDialogId: dialogId,
       messagesDialogId: null,
+      hasEarlierMessages: false,
+      loadingEarlier: false,
+      olderCursor: null,
       pendingStationId: null,
       pendingStationName: null,
       messages: [],
       error: null,
     }));
+  }
+
+  /**
+   * "Все" carries the station dialogs that already have correspondence, but their thread is rendered
+   * by the station block. Opening one from the unfiltered list therefore switches to that block
+   * instead of keeping a second copy of the same thread alive.
+   */
+  function openStationDialogFromList(dialogId: string): void {
+    selectStationDialog(dialogId);
+    setFilter('STATION');
   }
 
   function startStationDialog(stationId: string): void {
@@ -562,6 +651,9 @@ export function ChatsPage({
       ...current,
       selectedDialogId: null,
       messagesDialogId: null,
+      hasEarlierMessages: false,
+      loadingEarlier: false,
+      olderCursor: null,
       pendingStationId: stationId,
       pendingStationName: station?.name ?? 'Станция',
       messages: [],
@@ -632,13 +724,15 @@ export function ChatsPage({
             stationSource.loadDialogs(),
             stationSource.loadMessages(result.dialogId),
           ]).then(
-            ([dialogs, messages]) => {
+            ([dialogs, page]) => {
               setStationState((current) => ({
                 ...current,
                 status: 'ready',
                 dialogs,
-                messages,
+                messages: page.items,
                 messagesDialogId: result.dialogId,
+                ...stationPageCursor(page),
+                loadingEarlier: false,
                 error: null,
               }));
             },
@@ -741,45 +835,18 @@ export function ChatsPage({
           <header className={styles.listHeader}>
             <ChatFilterHeading filter={filter} />
             <ChatSearch query={query} onQueryChange={setQuery} />
-            <div className={styles.headerMenu}>
-              <button
-                type="button"
-                className={styles.headerMenuButton}
-                aria-expanded={menuOpen}
-                aria-label="Действия с чатами"
-                title="Действия с чатами"
-                onClick={() => setMenuOpen(!menuOpen)}
-              >
-                ⋮
-              </button>
-              {menuOpen ? (
-                <div className={styles.headerMenuPanel} role="menu" aria-label="Действия с чатами">
-                  <button
-                    type="button"
-                    className={styles.headerMenuItem}
-                    role="menuitemcheckbox"
-                    aria-label="Только непрочитанные"
-                    aria-checked={unreadOnly}
-                    onClick={() => setUnreadOnly(!unreadOnly)}
-                  >
-                    <ChatCategoryIcon name="UNREAD" />
-                    <span>Только непрочитанные</span>
-                  </button>
-                  <a className={styles.headerMenuItem} href="/notifications" role="menuitem">
-                    <ChatCategoryIcon name="NOTIFICATIONS" />
-                    <span>Уведомления</span>
-                  </a>
-                  <a
-                    className={styles.headerMenuItem}
-                    href="/notifications?view=settings"
-                    role="menuitem"
-                  >
-                    <ChatCategoryIcon name="SETTINGS" />
-                    <span>Настройки уведомлений</span>
-                  </a>
-                </div>
-              ) : null}
-            </div>
+            {/* One tap on the marker itself is the whole filter: the previous three-dot panel hid the
+                only unread control behind a menu and needed two taps for the same result. */}
+            <button
+              type="button"
+              className={`${styles.unreadToggle} ${unreadOnly ? styles.unreadToggleOn : ''}`}
+              aria-pressed={unreadOnly}
+              aria-label="Только непрочитанные"
+              title="Только непрочитанные"
+              onClick={() => setUnreadOnly(!unreadOnly)}
+            >
+              <ChatCategoryIcon name="UNREAD" />
+            </button>
           </header>
           <ChatFilters filter={filter} onFilterChange={setFilter} />
           {filter === 'STATION' ? (
@@ -814,6 +881,8 @@ export function ChatsPage({
               unreadOnly={unreadOnly}
               filter={filter}
               query={query}
+              stationRows={stationHistoryRows({ dialogs: stationDialogs, query })}
+              onOpenStation={openStationDialogFromList}
               {...(selectedConversationId ? { selectedConversationId } : {})}
             />
           )}
@@ -840,6 +909,8 @@ export function ChatsPage({
               onSendMessage={sendStationMessage}
               onRetrySend={retryStationMessage}
               onRetry={reloadStationThread}
+              hasEarlierMessages={stationState.hasEarlierMessages}
+              onLoadEarlier={loadOlderStationMessages}
               loadAttachment={stationSource.loadAttachment}
             />
           ) : (

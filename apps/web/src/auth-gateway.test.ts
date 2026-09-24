@@ -2988,7 +2988,7 @@ describe('browser auth gateway', () => {
           }),
         );
       }
-      if (url.endsWith(`/support/dialogs/${dialogId}/messages`)) {
+      if (url.includes(`/support/dialogs/${dialogId}/messages`)) {
         return Promise.resolve(
           Response.json({
             items: [
@@ -2999,6 +2999,8 @@ describe('browser auth gateway', () => {
                 createdAt: '2026-09-22T10:05:00.000Z',
               },
             ],
+            hasMore: true,
+            nextBefore: '2026-09-22T10:05:00.000Z',
           }),
         );
       }
@@ -3042,9 +3044,17 @@ describe('browser auth gateway', () => {
     await expect(gateway.listStationSupportDialogs()).resolves.toMatchObject([
       { id: dialogId, stationId, stationName: 'Ясенево' },
     ]);
-    await expect(gateway.listStationSupportMessages(dialogId)).resolves.toMatchObject([
-      { body: 'Здравствуйте', author: 'STATION' },
-    ]);
+    await expect(gateway.listStationSupportMessages(dialogId)).resolves.toMatchObject({
+      items: [{ body: 'Здравствуйте', author: 'STATION' }],
+      hasMore: true,
+      nextBefore: '2026-09-22T10:05:00.000Z',
+    });
+    // The cursor travels back as the `before` query parameter, encoded once.
+    await gateway.listStationSupportMessages(dialogId, '2026-09-22T10:05:00.000Z');
+    const messageCall = fetchImplementation.mock.calls
+      .map(([input]) => requestUrl(input))
+      .find((url) => url.includes('before='));
+    expect(messageCall).toContain(`before=${encodeURIComponent('2026-09-22T10:05:00.000Z')}`);
     await expect(
       gateway.sendStationSupportMessage({
         clientMessageId,

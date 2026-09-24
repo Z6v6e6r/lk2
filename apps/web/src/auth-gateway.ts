@@ -404,6 +404,17 @@ export interface StationSupportMessage {
   readonly attachments: readonly StationSupportAttachment[];
 }
 
+/**
+ * One chronological page of a station thread. `hasMore` is the server's answer about older
+ * messages, so the client never guesses from the page size, and `nextBefore` is the cursor that asks
+ * for the page before this one — the server's own ordering instant, not a display timestamp.
+ */
+export interface StationSupportMessagePage {
+  readonly items: readonly StationSupportMessage[];
+  readonly hasMore: boolean;
+  readonly nextBefore?: string | undefined;
+}
+
 export interface StationSupportSendCommand {
   readonly clientMessageId: string;
   readonly text: string;
@@ -665,7 +676,8 @@ export interface AuthGateway {
   readonly listStationSupportDialogs: () => Promise<readonly StationSupportDialog[]>;
   readonly listStationSupportMessages: (
     dialogId: string,
-  ) => Promise<readonly StationSupportMessage[]>;
+    before?: string,
+  ) => Promise<StationSupportMessagePage>;
   readonly sendStationSupportMessage: (
     command: StationSupportSendCommand,
   ) => Promise<StationSupportSendResult>;
@@ -2345,12 +2357,19 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         .then((page) => page.items);
     },
 
-    listStationSupportMessages(dialogId: string) {
+    listStationSupportMessages(dialogId: string, before?: string) {
+      const suffix = before ? `?before=${encodeURIComponent(before)}` : '';
       return client
-        .request<{ readonly items: readonly StationSupportMessage[] }>(
-          `/support/dialogs/${encodeURIComponent(dialogId)}/messages`,
-        )
-        .then((page) => page.items);
+        .request<{
+          readonly items: readonly StationSupportMessage[];
+          readonly hasMore?: boolean;
+          readonly nextBefore?: string;
+        }>(`/support/dialogs/${encodeURIComponent(dialogId)}/messages${suffix}`)
+        .then((page) => ({
+          items: page.items,
+          hasMore: page.hasMore ?? false,
+          ...(page.nextBefore ? { nextBefore: page.nextBefore } : {}),
+        }));
     },
 
     sendStationSupportMessage(command: StationSupportSendCommand) {

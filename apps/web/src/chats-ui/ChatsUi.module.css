@@ -261,8 +261,7 @@
 .selectedListLink:focus-visible,
 .filterRail button:focus-visible,
 .filterRail a:focus-visible,
-.headerMenuButton:focus-visible,
-.headerMenuItem:focus-visible,
+.unreadToggle:focus-visible,
 .thread button:focus-visible,
 .thread a:focus-visible {
   position: relative;
@@ -291,20 +290,22 @@
   color: var(--comms-accent-ink);
 }
 
-/* An outbound channel keeps the conversation avatar slot but states its own brand. */
+/* An outbound channel keeps the conversation avatar slot, but the slot shows the owner's own
+   official logo instead of a PadlHub-colored tile with a lookalike glyph. */
 .externalAvatar {
   display: grid;
   width: 48px;
   height: 48px;
   place-items: center;
   border-radius: 15px;
-  background: var(--comms-accent-soft);
   color: var(--comms-accent-ink);
 }
 
-.externalAvatar svg {
-  width: 26px;
-  height: 26px;
+.externalAvatarImage {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
 }
 
 .externalGlyph {
@@ -1185,73 +1186,30 @@
   color: var(--comms-accent-ink);
 }
 
-.headerMenu {
-  position: relative;
-  flex-shrink: 0;
-}
-
-.headerMenuButton {
+/* The read-state filter sits in the header as its own marker: pressed means "only unread", and the
+   icon is the same one the filter used to carry inside the actions menu. */
+.unreadToggle {
   display: grid;
   width: 44px;
   height: 44px;
   padding: 0;
   place-items: center;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
+  border: 1px solid var(--comms-line);
+  border-radius: 50%;
+  background: #fff;
   color: var(--comms-muted);
   cursor: pointer;
-  font-size: 26px;
-  line-height: 1;
 }
 
-.headerMenuButton:hover,
-.headerMenuButton[aria-expanded='true'] {
+.unreadToggle:hover {
+  color: var(--comms-accent-ink);
+}
+
+.unreadToggleOn {
+  border-color: transparent;
   background: var(--comms-accent-soft);
   color: var(--comms-accent-ink);
-}
-
-.headerMenuPanel {
-  position: absolute;
-  z-index: 10;
-  top: calc(100% + 4px);
-  right: 0;
-  display: grid;
-  min-width: 230px;
-  padding: 6px;
-  gap: 2px;
-  border: 1px solid var(--comms-line);
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 10px 24px rgb(41 31 62 / 12%);
-}
-
-.headerMenuItem {
-  display: flex;
-  min-height: 44px;
-  padding: 0 10px;
-  align-items: center;
-  gap: 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--comms-ink);
-  cursor: pointer;
-  font: inherit;
-  font-size: 14px;
-  line-height: 18px;
-  text-decoration: none;
-  text-align: left;
-}
-
-.headerMenuItem:hover {
-  background: var(--comms-accent-soft);
-  color: var(--comms-accent-ink);
-}
-
-.headerMenuItem[aria-checked='true'] {
-  color: var(--comms-accent-ink);
-  font-weight: 600;
+  box-shadow: inset 0 0 0 1px rgb(135 102 235 / 16%);
 }
 
 .filterRail svg {

@@ -112,7 +112,8 @@ legacy contour directly:
   the shared media bucket, but it is not the messaging media pipeline: there is no quarantine scan, no
   attachment row and no per-message lifecycle, because the provider's own message record stays the
   canonical object. Its list is
-  loaded lazily on that tab, not by the five-second LK2 refresh, so the provider is not polled.
+  loaded on demand — by the station tab and by the unfiltered tab, which shows the dialogs that
+  already have correspondence — and not by the five-second LK2 refresh, so the provider is not polled.
 - Reading the message history requires no new database object and no migration; the provider's own
   message record is the idempotency ledger, so a command that cannot be confirmed is reported as
   unavailable rather than duplicating a message.
@@ -127,8 +128,12 @@ legacy contour directly:
 
 - The ingest request contract is verified against the live CUP backend, but the message page
   (`beforeTs` + `limit`) is still assumed to return the newest messages, so replay and recovery can
-  miss a write if the provider pages the other way. History is capped at 50 messages with no
-  pagination.
+  miss a write if the provider pages the other way. One history page stays capped at 50 messages. The
+  history read walks backwards with the `nextBefore` cursor the server derives from the provider's
+  ordering instant of the oldest message in the page — never from that message's display timestamp,
+  which may be absent — and reports `hasMore` for a full page, so a provider that pages the other way
+  ends the walk on the repeated page instead of looping, and an incomplete provider page silently
+  ends the history at that point.
 - `SUPPORT_LEGACY_BASE_URL` is only accepted with HTTPS outside localhost; an operator must configure
   the live contour before the flag can be enabled.
 - Provider attempts are logged as metrics only; a counter for circuit state is a follow-up.

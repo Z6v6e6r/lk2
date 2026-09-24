@@ -75,6 +75,34 @@ function author(input: {
     : 'STATION';
 }
 
+/**
+ * The backwards cursor is the ordering instant of the oldest message in the page, so it stays a
+ * public PadlHub timestamp instead of a provider identifier. The provider matches strictly older
+ * messages, so this instant is exclusive on both sides and the next page can neither repeat nor skip
+ * the message it came from. `null` means the page carries no usable instant at all.
+ */
+function oldestOrderingInstant(messages: readonly StationSupportProviderMessage[]): string | null {
+  const oldest = messages[0];
+  if (!oldest) return null;
+  const instant = new Date(oldest.createdTs);
+  return Number.isFinite(instant.getTime()) ? instant.toISOString() : null;
+}
+
+/**
+ * The cursor is the `nextBefore` of the page before, so it is always an ISO-8601 instant emitted by
+ * this API. The check is deliberately stricter than `Date.parse`, which also accepts `2026` or `1`
+ * and would answer an arbitrary window for a value the contract declares as a date-time. `null`
+ * means the caller sent something that is not a timestamp.
+ */
+const MESSAGE_BEFORE_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function parseMessageBefore(value: unknown): number | null {
+  if (typeof value !== 'string' || !MESSAGE_BEFORE_PATTERN.test(value)) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 interface Principal {
   readonly tenantId: string;
   readonly userId: string;
@@ -482,6 +510,17 @@ export function registerStationSupportRoutes(
       }
       const phone = await resolvePhone(request, reply, current, options.repository!);
       if (!phone) return reply;
+      const before = (request.query as { readonly before?: unknown }).before;
+      const beforeTs = before === undefined ? Date.now() + 1 : parseMessageBefore(before);
+      if (beforeTs === null) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Некорректная метка времени истории.',
+        );
+      }
       try {
         const { dialogs } = await loadDialogs(
           current,
@@ -499,14 +538,23 @@ export function registerStationSupportRoutes(
         const messages = await options.provider!.listMessages({
           dialogId: dialog.dialogId,
           limit: MESSAGE_PAGE_LIMIT,
-          beforeTs: Date.now() + 1,
+          beforeTs,
           correlationId: request.id,
         });
         const tenantKey = (request.params as { tenantKey: string }).tenantKey;
+        // A full page is the only signal the provider page had more: the provider contract has no
+        // total. The client stops as soon as a page is short or adds nothing new.
+        const hasMore = messages.length >= MESSAGE_PAGE_LIMIT;
+        // The next cursor is the provider's own bound of the oldest item, not its display timestamp:
+        // the provider pages on `createdTs` and a message may carry no readable `createdAt` at all,
+        // so handing the client a display value would either repeat a page or skip one.
+        const nextBefore = hasMore ? oldestOrderingInstant(messages) : undefined;
         return {
           items: await mapWithConcurrency(messages, 3, (message) =>
             viewMessage(tenantKey, current, message, options.mediaStore, mediaOptions),
           ),
+          hasMore,
+          ...(nextBefore ? { nextBefore } : {}),
         };
       } catch (error) {
         if (error instanceof StationSupportProviderError)

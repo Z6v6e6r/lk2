@@ -3079,6 +3079,9 @@
   --games-faint: #aaa7ad;
   --games-line: #e2e0e5;
   --games-accent: #7253d8;
+  /* The shared bottom navigation is fixed and sized from this page width. Without it the nav falls
+     back to its own content width, so its five buttons collapse onto each other. */
+  --fh-page-width: min(100vw, 375px);
   width: min(100%, 375px);
   min-height: 100dvh;
   padding: 0 20px 112px;
@@ -5931,6 +5934,8 @@
 }
 
 .bookings-page {
+  /* The shared bottom navigation is fixed and sized from this page width; see `.games-page`. */
+  --fh-page-width: min(100vw, 375px);
   width: min(100%, 375px);
   min-height: 100svh;
   margin: 0 auto;
