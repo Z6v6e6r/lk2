@@ -127,6 +127,24 @@ describe('evaluateLevelEligibility', () => {
     expect(actual).toMatchObject({ outcome: 'WARN', reasonCode: 'LEGACY_LEVEL_CONSTRAINT' });
   });
 
+  it.each(['ALLOW', 'WARN', 'BLOCK'] as const)(
+    'does not treat an invalid partial range as missing when missing ranges %s',
+    (missingActivityConstraintAction) => {
+      const actual = evaluateLevelEligibility(
+        context({
+          activityLevelConstraint: {
+            mode: 'RANGE',
+            minRank: 3,
+            source: 'CANONICAL',
+            dataQuality: 'INVALID',
+          },
+        }),
+        { ...policy, missingActivityConstraintAction },
+      );
+      expect(actual).toMatchObject({ outcome: 'FAIL', reasonCode: 'ACTIVITY_LEVEL_INVALID' });
+    },
+  );
+
   it('fails closed for invalid policy, sport/scale mismatch and inverted range', () => {
     expect(
       evaluateLevelEligibility(context(), { ...policy, lowerToleranceSteps: -1 }).reasonCode,

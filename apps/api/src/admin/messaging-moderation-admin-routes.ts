@@ -94,13 +94,16 @@ export function registerMessagingModerationAdminRoutes(
           'Проверьте параметры очереди жалоб.',
         );
       }
-      return {
-        items: await options.repository.listReportQueue({
-          tenantId: current.tenantId,
-          limit: query.data.limit,
-          ...(query.data.afterId ? { afterId: query.data.afterId } : {}),
-        }),
-      };
+      const items = await options.repository.listReportQueue({
+        tenantId: current.tenantId,
+        moderatorUserId: current.actorUserId,
+        limit: query.data.limit,
+        ...(query.data.afterId ? { afterId: query.data.afterId } : {}),
+      });
+      if (!items) {
+        return sendApiError(request, reply, 403, 'FORBIDDEN', 'Недостаточно прав.');
+      }
+      return { items };
     },
   );
 
@@ -136,6 +139,9 @@ export function registerMessagingModerationAdminRoutes(
         idempotencyKey,
         correlationId: request.id,
       });
+      if (result.outcome === 'forbidden') {
+        return sendApiError(request, reply, 403, 'FORBIDDEN', 'Недостаточно прав.');
+      }
       if (result.outcome === 'not_found') {
         return sendApiError(
           request,

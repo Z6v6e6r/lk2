@@ -67,6 +67,7 @@ export type MessagingReportSubmitResult =
   | { readonly outcome: 'duplicate' };
 
 export type MessagingReportDecisionResult =
+  | { readonly outcome: 'forbidden' }
   | {
       readonly outcome: 'decided';
       readonly action: MessagingModerationAction;
@@ -89,9 +90,10 @@ export interface MessagingModerationRepository {
   }): Promise<MessagingReportSubmitResult>;
   listReportQueue(input: {
     readonly tenantId: string;
+    readonly moderatorUserId: string;
     readonly limit: number;
     readonly afterId?: string;
-  }): Promise<readonly MessagingReportQueueItem[]>;
+  }): Promise<readonly MessagingReportQueueItem[] | undefined>;
   decideReport(input: {
     readonly tenantId: string;
     readonly moderatorUserId: string;
@@ -233,6 +235,27 @@ async function recordModerationAudit(
   );
 }
 
+async function moderatorAuthorized(
+  client: PoolClient,
+  input: { readonly tenantId: string; readonly moderatorUserId: string },
+  permission: 'chat.moderation.read' | 'chat.moderation.decide',
+): Promise<boolean> {
+  const access = await queryOne<{ readonly authorized: boolean } & QueryResultRow>(
+    client,
+    `select exists (
+       select 1 from identity.user_access_profiles access
+        where access.tenant_id = actor.tenant_id
+          and access.user_id = actor.id
+          and 'admin' = any(access.roles)
+          and $3 = any(access.permissions)
+     ) as authorized
+       from identity.users actor
+      where actor.tenant_id = $1 and actor.id = $2 and actor.status = 'ACTIVE'`,
+    [input.tenantId, input.moderatorUserId, permission],
+  );
+  return access?.authorized === true;
+}
+
 export function createMessagingModerationRepository(pool: Pool): MessagingModerationRepository {
   return {
     submitReport(input) {
@@ -339,6 +362,7 @@ export function createMessagingModerationRepository(pool: Pool): MessagingModera
 
     listReportQueue(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        if (!(await moderatorAuthorized(client, input, 'chat.moderation.read'))) return undefined;
         const cursor = input.afterId
           ? await queryOne<{ readonly created_at: Date | string } & QueryResultRow>(
               client,
@@ -389,6 +413,9 @@ export function createMessagingModerationRepository(pool: Pool): MessagingModera
 
     decideReport(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        if (!(await moderatorAuthorized(client, input, 'chat.moderation.decide'))) {
+          return { outcome: 'forbidden' } as const;
+        }
         await lockCommand(client, 'messaging-moderation-decision', [
           `${input.tenantId}:${input.moderatorUserId}:${input.idempotencyKey}`,
           `${input.tenantId}:${input.reportId}`,

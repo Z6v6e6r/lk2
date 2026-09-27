@@ -106,6 +106,75 @@ afterEach(async () => {
 });
 
 describe('level eligibility admin routes', () => {
+  it('rolls back a historical false recheck as true without rewriting history', async () => {
+    const repo = repository();
+    const historical = { ...policy, recheckWaitlistPromotion: false };
+    repo.value.getVersion.mockResolvedValue(historical);
+    repo.value.listHistory.mockResolvedValue([historical]);
+    const app = await buildApp({
+      config,
+      logger: createLogger('level-policy-admin-test', 'silent'),
+      pool: fakePool(),
+      levelEligibilityPolicyRepository: repo.value,
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await token(['eligibility.publish', 'eligibility.read'])}`,
+      'x-app-platform': 'cup-admin',
+      'idempotency-key': 'level-policy-rollback-0001',
+    };
+    const response = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/level-eligibility/GAME/rollback',
+      headers,
+      payload: { targetVersion: 1, expectedVersion: 2, changeComment: 'Restore historical policy' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(repo.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ recheckWaitlistPromotion: true }),
+    );
+    const history = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/level-eligibility/GAME/history',
+      headers,
+    });
+    expect(history.statusCode).toBe(200);
+    expect(JSON.stringify(history.json())).toContain('"recheckWaitlistPromotion":false');
+    expect(historical.recheckWaitlistPromotion).toBe(false);
+  });
+
+  it('refuses to disable the mandatory waitlist promotion recheck', async () => {
+    const repo = repository();
+    const app = await buildApp({
+      config,
+      logger: createLogger('level-policy-admin-test', 'silent'),
+      pool: fakePool(),
+      levelEligibilityPolicyRepository: repo.value,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/admin/api/v1/local-padel/level-eligibility/GAME?sportCode=PADEL',
+      headers: {
+        authorization: `Bearer ${await token(['eligibility.publish'])}`,
+        'x-app-platform': 'cup-admin',
+        'idempotency-key': 'level-policy-no-recheck-0001',
+      },
+      payload: {
+        expectedVersion: 1,
+        mode: 'SHADOW',
+        lowerToleranceSteps: 0,
+        upperToleranceSteps: 0,
+        missingActivityConstraintAction: 'ALLOW',
+        legacyTextConstraintAction: 'ALLOW',
+        recheckWaitlistPromotion: false,
+        changeComment: 'Disable recheck',
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(repo.publish).not.toHaveBeenCalled();
+  });
+
   it('publishes an explicit optimistic policy command with CUP RBAC and idempotency', async () => {
     const repo = repository();
     const app = await buildApp({

@@ -37,7 +37,7 @@ function draft(policy: LevelEligibilityPolicyAdminView): LevelEligibilityPolicyI
     upperToleranceSteps: policy.upperToleranceSteps,
     missingActivityConstraintAction: policy.missingActivityConstraintAction,
     legacyTextConstraintAction: policy.legacyTextConstraintAction,
-    recheckWaitlistPromotion: policy.recheckWaitlistPromotion,
+    recheckWaitlistPromotion: true,
     changeComment: '',
   };
 }
@@ -335,15 +335,10 @@ export function LevelEligibilityWorkspace({
                   </select>
                 </label>
                 <label className="checkbox-row">
-                  <input
-                    type="checkbox"
-                    checked={input.recheckWaitlistPromotion}
-                    onChange={(event) =>
-                      change(activity.id, { recheckWaitlistPromotion: event.target.checked })
-                    }
-                  />
+                  <input type="checkbox" checked disabled />
                   Повторять проверку при продвижении из очереди
                 </label>
+                <p className="muted">Обязательная серверная проверка: отключить её нельзя.</p>
                 <label>
                   Комментарий к публикации
                   <textarea

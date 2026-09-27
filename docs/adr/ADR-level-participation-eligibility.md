@@ -94,6 +94,15 @@ No existing participant is deleted, no payment/refund is triggered, and complete
 
 Join is checked. Promotion rechecks in the final transaction. A denied candidate leaves the active queue with a durable reason and processing continues. A saved personal invitation is revalidated, not trusted from the earlier result.
 
+`recheckWaitlistPromotion` is a mandatory invariant, not a switch: CUP displays it read-only,
+publication accepts only `true`, and rollback retains `true` even when copying an older version
+that stored `false`. Historical policy reads remain unchanged. Existing `false` rows never disabled
+the server check. A valid invitation reference is saved even if the initial decision does not need
+a level bypass (including OFF); it is consumed only when a final join/promotion actually uses it.
+
+A constraint explicitly marked `INVALID` must not fall through to the missing-constraint policy
+merely because one or both bounds are absent. BLOCK rejects it with `ACTIVITY_LEVEL_INVALID`.
+
 ### Rollout and compatibility
 
 Modes are OFF, SHADOW, WARN and BLOCK. Initial rows are OFF/zero. Old clients remain compatible because `invitationId` is optional and structured reason codes are additive. Activation is independent per tenant/sport/activity and rollback requires no application release.

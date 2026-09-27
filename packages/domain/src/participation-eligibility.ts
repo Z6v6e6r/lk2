@@ -174,6 +174,9 @@ export function evaluateLevelEligibility(
       constraintScaleVersion: constraint.scaleVersion,
     });
   }
+  if (constraint.dataQuality === 'INVALID') {
+    return result(nonMatchingOutcome(policy.mode), 'ACTIVITY_LEVEL_INVALID');
+  }
   if (
     constraint.dataQuality === 'MISSING' ||
     constraint.minRank === undefined ||
@@ -182,7 +185,6 @@ export function evaluateLevelEligibility(
     return missingConstraint(policy);
   }
   if (
-    constraint.dataQuality === 'INVALID' ||
     !Number.isSafeInteger(constraint.minRank) ||
     !Number.isSafeInteger(constraint.maxRank) ||
     constraint.minRank > constraint.maxRank

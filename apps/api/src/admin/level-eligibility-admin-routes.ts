@@ -26,7 +26,7 @@ const policyInputSchema = z
     upperToleranceSteps: z.number().int().nonnegative(),
     missingActivityConstraintAction: z.enum(['ALLOW', 'WARN', 'BLOCK']),
     legacyTextConstraintAction: z.enum(['ALLOW', 'WARN']),
-    recheckWaitlistPromotion: z.boolean(),
+    recheckWaitlistPromotion: z.literal(true),
     changeComment: z.string().trim().min(3).max(500),
   })
   .strict();
@@ -364,7 +364,7 @@ export function registerLevelEligibilityAdminRoutes(
         upperToleranceSteps: target.upperToleranceSteps,
         missingActivityConstraintAction: target.missingActivityConstraintAction,
         legacyTextConstraintAction: target.legacyTextConstraintAction,
-        recheckWaitlistPromotion: target.recheckWaitlistPromotion,
+        recheckWaitlistPromotion: true,
         changeComment: parsed.data.changeComment,
         idempotencyKey: idempotencyKey(request),
         requestHash: requestHash({ sport, type, ...parsed.data }),
