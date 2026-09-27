@@ -17,15 +17,43 @@ export function communityMessageKey(message: CommunityChatMessage): string {
   return `${message.sentAt}|${message.author.displayName}|${message.body}`;
 }
 
+/** An unreadable instant sorts as the oldest message, the way the rest of the block treats it. */
+function communityInstant(message: CommunityChatMessage): number {
+  const parsed = Date.parse(message.sentAt);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 /**
- * The provider pages a community chat newest first, because "earlier" walks backwards from the end
- * of the thread. A conversation reads the other way round, so every arriving page is turned around
- * before it is placed above the messages that are already on screen.
+ * The chat reads chronologically: the newest message sits at the bottom and earlier pages are pulled
+ * in above it. The projection exposes a send instant for every message, so the reading order comes
+ * from that instant rather than from the direction the provider happened to use for the page — a page
+ * that arrives oldest-first would otherwise be shown upside down. Equal instants keep provider order.
  */
 export function communityThreadPage(
   page: CommunityReadExperienceChatPage,
 ): readonly CommunityChatMessage[] {
-  return [...page.items].reverse();
+  return [...page.items].sort((left, right) => communityInstant(left) - communityInstant(right));
+}
+
+/**
+ * An "earlier" page is merged into the same chronological order instead of being trusted to arrive in
+ * it, and a message the viewer already sees is never added twice.
+ */
+export function mergeCommunityThreadPage(
+  current: readonly CommunityChatMessage[],
+  page: CommunityReadExperienceChatPage,
+): { readonly messages: readonly CommunityChatMessage[]; readonly added: number } {
+  const known = new Set(current.map(communityMessageKey));
+  const added = communityThreadPage(page).filter(
+    (message) => !known.has(communityMessageKey(message)),
+  );
+  if (added.length === 0) return { messages: current, added: 0 };
+  return {
+    messages: [...current, ...added].sort(
+      (left, right) => communityInstant(left) - communityInstant(right),
+    ),
+    added: added.length,
+  };
 }
 
 /**
