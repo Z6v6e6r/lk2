@@ -85,4 +85,69 @@ describe('Android native bridge adapter', () => {
     });
     await expect(fetch(`${root}/profile`)).rejects.toThrow('Native network unavailable');
   });
+
+  it('reports stale data with its saved time and clears only the same successful resource', async () => {
+    const native = plugin();
+    const observe = vi.fn();
+    const fetch = createNativeApiFetch(config, native, undefined, observe);
+    native.request.mockResolvedValueOnce({
+      ...result(),
+      cache: { state: 'stale', savedAt: 1_790_530_000_000 },
+    });
+    await fetch(`${root}/home/base`);
+    expect(observe).toHaveBeenLastCalledWith({
+      path: '/user/api/v1/local-padel/home/base',
+      state: 'stale',
+      savedAt: 1_790_530_000_000,
+    });
+    await fetch(`${root}/profile`);
+    expect(observe).toHaveBeenCalledOnce();
+    await fetch(`${root}/home/base`);
+    expect(observe).toHaveBeenLastCalledWith({
+      path: '/user/api/v1/local-padel/home/base',
+      state: 'live',
+    });
+    native.request.mockResolvedValueOnce(result(403));
+    await fetch(`${root}/home/base`);
+    expect(observe).toHaveBeenLastCalledWith({
+      path: '/user/api/v1/local-padel/home/base',
+      state: 'unavailable',
+      invalidate: true,
+    });
+    await fetch(`${root}/home/base`);
+    native.request.mockResolvedValueOnce(result(404));
+    await fetch(`${root}/home/base`);
+    expect(observe).toHaveBeenLastCalledWith(expect.objectContaining({ invalidate: true }));
+    native.request.mockResolvedValueOnce(result(404));
+    await fetch(`${root}/home/base`);
+    expect(observe).toHaveBeenLastCalledWith(expect.objectContaining({ invalidate: false }));
+  });
+
+  it('ignores spoofed HTTP cache metadata and late observations after logout starts', async () => {
+    const native = plugin();
+    const observe = vi.fn();
+    const fetch = createNativeApiFetch(config, native, undefined, observe);
+    native.request.mockResolvedValueOnce({
+      ...result(),
+      headers: { 'x-phub-cache-state': 'stale' },
+    });
+    await fetch(`${root}/locations`);
+    expect(observe).toHaveBeenLastCalledWith({
+      path: '/user/api/v1/local-padel/locations',
+      state: 'live',
+    });
+    observe.mockClear();
+    let finish!: (value: Awaited<ReturnType<AndroidSessionPlugin['request']>>) => void;
+    native.request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = fetch(`${root}/home/base`);
+    await fetch(`${root}/auth/session`, { method: 'DELETE' });
+    finish({ ...result(), cache: { state: 'stale', savedAt: 1_790_530_000_000 } });
+    await pending;
+    expect(observe).not.toHaveBeenCalled();
+  });
 });

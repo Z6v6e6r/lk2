@@ -14,10 +14,20 @@ export interface AndroidSessionPlugin {
     readonly headers: Record<string, string>;
     /** Base64; Set-Cookie is consumed only by the native session engine. */
     readonly body: string;
+    /** Native cache metadata, never read from server-supplied headers. */
+    readonly cache?: { readonly state: 'fresh-cache' | 'stale'; readonly savedAt: number };
   }>;
 }
 
 export const androidSessionPlugin = registerPlugin<AndroidSessionPlugin>('PadlHubAndroidSession');
+
+export interface NativeCacheObservation {
+  readonly path: string;
+  readonly state: 'fresh-cache' | 'stale' | 'live' | 'unavailable';
+  readonly savedAt?: number;
+  /** The shared App retains loaded screen state on errors; discard it after a failed read. */
+  readonly invalidate?: boolean;
+}
 
 function rejected(): ApiClientError {
   return new ApiClientError('Запрос недоступен.', 403, 'NATIVE_REQUEST_REJECTED', 'native');
@@ -28,8 +38,11 @@ export function createNativeApiFetch(
   config: MobileRuntimeConfig,
   plugin: AndroidSessionPlugin = androidSessionPlugin,
   onSessionExpired?: () => void,
+  onCacheObservation?: (observation: NativeCacheObservation) => void,
 ): typeof fetch {
   let active = false;
+  let generation = 0;
+  const displayedReads = new Set<string>();
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
     const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}/`;
@@ -44,7 +57,22 @@ export function createNativeApiFetch(
     if ('cookie' in headers || 'set-cookie' in headers || 'origin' in headers) throw rejected();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
     const refresh = url.pathname.endsWith('/auth/session/refresh');
-    if (method === 'DELETE' && url.pathname.endsWith('/auth/session')) active = false;
+    if (method === 'DELETE' && url.pathname.endsWith('/auth/session')) {
+      active = false;
+      generation += 1;
+      displayedReads.clear();
+    }
+    const requestGeneration = generation;
+    const cacheRead = method === 'GET' && [root + 'home/base', root + 'locations'].includes(value);
+    const unavailable = (): void => {
+      if (!cacheRead || requestGeneration !== generation) return;
+      const invalidate = displayedReads.has(url.pathname);
+      if (invalidate) {
+        displayedReads.clear();
+        generation += 1;
+      }
+      onCacheObservation?.({ path: url.pathname, state: 'unavailable', invalidate });
+    };
     try {
       const result = await plugin.request({
         path: url.pathname + url.search,
@@ -56,7 +84,20 @@ export function createNativeApiFetch(
       if (result.status === 200 && (refresh || url.pathname.endsWith('/verify'))) active = true;
       if (result.status === 401 && refresh && active) {
         active = false;
+        generation += 1;
         onSessionExpired?.();
+      }
+      if (requestGeneration === generation && cacheRead) {
+        if (result.status === 200) {
+          displayedReads.add(url.pathname);
+          onCacheObservation?.({
+            path: url.pathname,
+            state: result.cache?.state ?? 'live',
+            ...(result.cache ? { savedAt: result.cache.savedAt } : {}),
+          });
+        } else {
+          unavailable();
+        }
       }
       const safeHeaders = Object.fromEntries(
         Object.entries(result.headers).filter(([name]) =>
@@ -70,6 +111,7 @@ export function createNativeApiFetch(
       });
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
+      unavailable();
       const code =
         typeof error === 'object' && error !== null && 'code' in error ? error.code : null;
       if (code === 'NATIVE_NETWORK_UNAVAILABLE') {

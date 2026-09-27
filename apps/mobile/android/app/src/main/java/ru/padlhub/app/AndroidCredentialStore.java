@@ -68,7 +68,12 @@ final class AndroidCredentialStore implements AndroidSessionEngine.Store {
             if (!scope.equals(json.getString("scope")) || !json.getString("value").matches("[A-Za-z0-9_-]{32,512}")) throw unavailable();
             String refresh = json.isNull("refreshKey") ? null : validKey(json.getString("refreshKey"));
             String logout = json.isNull("logoutKey") ? null : validKey(json.getString("logoutKey"));
-            return new Credential(scope, json.getString("value"), json.getLong("expiresAt"), refresh, logout);
+            AndroidSessionEngine.Principal identity = null;
+            if (!json.isNull("identity")) {
+                JSONObject savedIdentity = json.getJSONObject("identity");
+                identity = new AndroidSessionEngine.Principal(savedIdentity.getString("userId"), savedIdentity.getString("tenantId"));
+            }
+            return new Credential(scope, json.getString("value"), json.getLong("expiresAt"), refresh, logout, identity);
         } catch (Exception ignored) {
             // A locked/invalidated Keystore or damaged record must never become a false signed-out state.
             throw unavailable();
@@ -81,7 +86,9 @@ final class AndroidCredentialStore implements AndroidSessionEngine.Store {
             if (!scope.equals(value.scope)) throw unavailable();
             JSONObject json = new JSONObject().put("scope", scope).put("value", value.value).put("expiresAt", value.expiresAt)
                 .put("refreshKey", value.refreshKey == null ? JSONObject.NULL : value.refreshKey)
-                .put("logoutKey", value.logoutKey == null ? JSONObject.NULL : value.logoutKey);
+                .put("logoutKey", value.logoutKey == null ? JSONObject.NULL : value.logoutKey)
+                .put("identity", value.identity == null ? JSONObject.NULL : new JSONObject()
+                    .put("userId", value.identity.userId).put("tenantId", value.identity.tenantId));
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, key(true));
             cipher.updateAAD(aad);

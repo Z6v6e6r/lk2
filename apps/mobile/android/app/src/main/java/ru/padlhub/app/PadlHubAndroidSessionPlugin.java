@@ -28,7 +28,8 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
             policy = new AndroidSessionPolicy(getConfig().getString("apiBaseUrl", ""), getConfig().getString("tenantKey", ""),
                 BuildConfig.VERSION_NAME, String.valueOf(BuildConfig.VERSION_CODE), BuildConfig.DEBUG);
             sender = new AndroidHttpSender(policy.origin);
-            engine = new AndroidSessionEngine(policy, new AndroidCredentialStore(getContext(), policy.scope), sender);
+            engine = new AndroidSessionEngine(policy, new AndroidCredentialStore(getContext(), policy.scope), sender,
+                new AndroidReadCache(policy.userRoot, new AndroidReadCacheStore(getContext(), policy.scope)));
         } catch (Failure ignored) { /* No credential, phone, OTP or raw native exception logging. */ }
     }
 
@@ -83,6 +84,8 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                         JSObject result = new JSObject().put("status", response.status)
                             .put("headers", safeHeaders)
                             .put("body", Base64.encodeToString(response.body, Base64.NO_WRAP));
+                        if (response.cache != null) result.put("cache", new JSObject()
+                            .put("state", response.cache.stale ? "stale" : "fresh-cache").put("savedAt", response.cache.savedAt));
                         getActivity().runOnUiThread(() -> {
                             if (trustedPage()) call.resolve(result);
                             else call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");

@@ -21,7 +21,8 @@ remote debugging are disabled. External HTTPS navigation opens the system browse
 The refresh cookie never enters JavaScript. A package/origin/tenant-scoped Android Keystore
 AES-GCM key encrypts one atomic record in `noBackupFilesDir`. The record contains the credential,
 expiry and refresh/revocation journals. A separate non-secret atomic logout intent survives a
-failed encrypted-record write. Access JWTs remain in JS memory. Refresh journals precede the
+failed encrypted-record write. Access JWTs remain in process memory (JS and native cache guard).
+Refresh journals precede the
 network write and replay the same predecessor idempotency key after a lost response/restart.
 Logout hides account data immediately, journals intent, reconciles any pending rotation, then
 revokes the successor. Credentials are cleared before the logout marker, only after confirmed
@@ -34,6 +35,10 @@ notification preference/read-cursor commands. New routes require an explicit nat
 Web retains its existing transport; persistent Android mode requires an injected native fetch.
 Internal links use same-document history; Android Back uses WebView history then backgrounds
 the task at its root.
+
+Version 1.2 adds an encrypted, identity-bound local read cache for HomeBase and the location
+directory. See [storage and retention rules](android-local-storage.md) for TTLs, byte limits,
+logout erasure, stale-data indicators and the explicit offline-login/command limits.
 
 ## Reproducible local build
 
@@ -49,8 +54,8 @@ VITE_PHUB_API_BASE_URL=https://lk2.padlhub.su VITE_PHUB_TENANT_KEY=local-padel n
 ```
 
 `android:debug` bundles local assets, syncs the same public configuration into Android, then
-builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.1/code 2 replaces
-the earlier offline version 1.0/code 1 using the existing local debug signature. No release keys
+builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.2/code 3 replaces
+version 1.1/code 2 using the existing local debug signature. No release keys
 are created. Always inspect the packaged `capacitor.config.json`, manifest and signature.
 
 Builds have **no implicit API target**. Missing configuration displays a setup message. The native
