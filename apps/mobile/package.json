@@ -15,7 +15,9 @@
     "android:sync": "npm run build && cap sync android",
     "android:debug": "npm run android:sync && cd android && ./gradlew assembleDebug",
     "typecheck": "tsc -p ../../tsconfig.mobile.json --noEmit",
-    "test": "vitest run src"
+    "test": "vitest run src",
+    "ios:prepare": "npm run contracts:generate --prefix ../.. && npm run build && cap sync ios",
+    "ios:build:simulator": "npm run ios:prepare && xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/DerivedData CODE_SIGNING_ALLOWED=NO build"
   },
   "dependencies": {
     "@capacitor/core": "8.4.1",

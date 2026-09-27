@@ -28,8 +28,7 @@ npm-debug.log*
 playwright-report/
 test-results/
 
-# Mobile generated platforms and signing material
-apps/mobile/ios/
+# Mobile signing material (native sources have platform-local ignores)
 *.keystore
 *.jks
 *.p12
