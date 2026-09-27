@@ -637,6 +637,7 @@ function VivaProviderIcon({
 }
 
 export interface AppProps {
+  readonly clientPlatform?: 'web' | 'android';
   readonly gateway: AuthGateway;
   readonly tenantKey: string;
   readonly realtimeBaseUrl?: string;
@@ -653,6 +654,7 @@ const HOME_INITIAL_RETRY_DELAYS_MS = [
 ] as const;
 
 export function App({
+  clientPlatform = 'web',
   gateway,
   tenantKey,
   realtimeBaseUrl,
@@ -702,7 +704,9 @@ export function App({
   const localPreview = import.meta.env.DEV && import.meta.env.VITE_LK2_LOCAL_PREVIEW === '1';
   const realAccountPreview = import.meta.env.DEV && import.meta.env.VITE_LK2_REAL_ACCOUNT === '1';
   const entryView =
-    localPreview || realAccountPreview ? 'phone' : preferredAuthEntryView(browserNavigator);
+    clientPlatform === 'android' || localPreview || realAccountPreview
+      ? 'phone'
+      : preferredAuthEntryView(browserNavigator);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [homeBase, setHomeBase] = useState<HomeBase | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
@@ -799,11 +803,30 @@ export function App({
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
-  const protectedRoute = resolveProtectedRoute(
+  const requestedRoute = resolveProtectedRoute(
     typeof window === 'undefined' ? '/' : window.location.pathname,
   );
+  // The first native increment exposes canonical API screens. Browser-only provider, payment
+  // and upload routes stay unavailable until their native handoff contracts are implemented.
+  const nativeSections = new Set([
+    'home',
+    'home-v2',
+    'home-v3',
+    'profile',
+    'profile-level-history',
+    'bookings',
+    'notifications',
+    'locations',
+    'location',
+  ]);
+  const protectedRoute: ProtectedRoute =
+    clientPlatform === 'android' && !nativeSections.has(requestedRoute.kind)
+      ? { kind: 'section', title: 'Раздел появится в следующей версии приложения' }
+      : requestedRoute;
   const publicGiftRoute =
-    typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/giftcard';
+    clientPlatform === 'web' &&
+    typeof window !== 'undefined' &&
+    window.location.pathname.replace(/\/+$/, '') === '/giftcard';
   const requestedProfileUserId =
     protectedRoute.kind === 'profile' ? protectedRoute.userId : undefined;
   const requestedLocationId =
@@ -2915,6 +2938,11 @@ export function App({
       <section className="auth-panel">
         <div className="auth-card">
           <Brand />
+          {clientPlatform === 'android' ? (
+            <p className="auth-description" role="note">
+              В тестовой версии после закрытия приложения потребуется войти снова.
+            </p>
+          ) : null}
           {state.view === 'oauth' ? (
             <>
               <h1 id="auth-title" className="auth-badge">
@@ -3005,7 +3033,7 @@ export function App({
                   : 'Мы отправим короткий код для подтверждения.'}
               </p>
 
-              {iosBrowser && !localPreview && !realAccountPreview ? (
+              {clientPlatform === 'web' && iosBrowser && !localPreview && !realAccountPreview ? (
                 <div className="ios-auth-guidance ios-auth-guidance--phone" role="note">
                   <strong>Для iPhone выбран надёжный способ входа</strong>
                   <span>
@@ -3096,7 +3124,7 @@ export function App({
               {import.meta.env.DEV && !realAccountPreview ? (
                 <p className="dev-hint">Тестовый вход: +79990000001 / 0000</p>
               ) : null}
-              {!localPreview && !realAccountPreview ? (
+              {clientPlatform === 'web' && !localPreview && !realAccountPreview ? (
                 <button
                   className="text-button auth-alternative"
                   type="button"
