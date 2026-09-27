@@ -1,5 +1,6 @@
 import styles from './CommunitiesReadOnly.module.css';
 import { Avatar } from './CommunityFeedList.js';
+import { LinkedMessageText } from '../chats-ui/LinkedMessageText.js';
 import type { CommunityReadOnlyMessage } from './types.js';
 
 export function CommunityChatTranscript({
@@ -24,7 +25,9 @@ export function CommunityChatTranscript({
               <div className={styles.messageAuthor}>
                 {message.isCurrentUser ? 'Вы' : message.author.displayName}
               </div>
-              <div className={styles.messageBody}>{message.body}</div>
+              <div className={styles.messageBody}>
+                <LinkedMessageText text={message.body} linkClassName={styles.messageLink} />
+              </div>
               <time className={styles.messageTime}>{message.sentLabel}</time>
             </div>
           </article>

@@ -138,3 +138,37 @@ describe('ChatMessageBubble attachments', () => {
     expect(await screen.findByText('Скачать')).toBeVisible();
   });
 });
+
+describe('ChatMessageBubble links', () => {
+  it('renders a pasted address as a clickable external link', () => {
+    render(
+      <ChatMessageBubble
+        message={messageWith([], 'Корт тут: https://padlhub.ru/games, до встречи')}
+        own={false}
+        showSender
+        loadMedia={loadMedia}
+      />,
+    );
+
+    const anchor = screen.getByRole('link', { name: 'https://padlhub.ru/games' });
+    expect(anchor).toHaveAttribute('href', 'https://padlhub.ru/games');
+    expect(anchor).toHaveAttribute('target', '_blank');
+    expect(anchor).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(anchor.className).toMatch(/messageLink/u);
+    expect(anchor.closest('p')).toHaveTextContent('Корт тут: https://padlhub.ru/games, до встречи');
+  });
+
+  it('leaves a message without an address link-free', () => {
+    render(
+      <ChatMessageBubble
+        message={messageWith([], 'Корт свободен в 19:00')}
+        own
+        showSender
+        loadMedia={loadMedia}
+      />,
+    );
+
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByText('Корт свободен в 19:00')).toBeVisible();
+  });
+});
