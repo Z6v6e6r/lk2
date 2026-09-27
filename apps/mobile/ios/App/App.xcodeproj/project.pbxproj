@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10B0000000000000000000D /* PadlHubBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0000000000000000000E /* PadlHubBridgeTests.swift */; };
+		A10B0000000000000000000F /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
+		A10B00000000000000000001 /* SessionTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B00000000000000000002 /* SessionTransportTests.swift */; };
+		A10B00000000000000000003 /* PadlHubSession in Frameworks */ = {isa = PBXBuildFile; productRef = A10A00000000000000000004 /* PadlHubSession */; };
+		A10A00000000000000000001 /* PadlHubSessionPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10A00000000000000000002 /* PadlHubSessionPlugin.swift */; };
+		A10A00000000000000000003 /* PadlHubSession in Frameworks */ = {isa = PBXBuildFile; productRef = A10A00000000000000000004 /* PadlHubSession */; };
 		2FAD9763203C412B000D30F8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 2FAD9762203C412B000D30F8 /* config.xml */; };
 		4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		50379B232058CBB4000EE86E /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 50379B222058CBB4000EE86E /* capacitor.config.json */; };
@@ -18,6 +24,10 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A10B0000000000000000000E /* PadlHubBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PadlHubBridgeTests.swift; path = AppTests/PadlHubBridgeTests.swift; sourceTree = SOURCE_ROOT; };
+		A10B00000000000000000002 /* SessionTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SessionTransportTests.swift; path = ../PadlHubSession/Tests/PadlHubSessionTests/SessionTransportTests.swift; sourceTree = SOURCE_ROOT; };
+		A10B00000000000000000004 /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10A00000000000000000002 /* PadlHubSessionPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadlHubSessionPlugin.swift; sourceTree = "<group>"; };
 		2FAD9762203C412B000D30F8 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		50379B222058CBB4000EE86E /* capacitor.config.json */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		504EC3041FED79650016851F /* App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -31,11 +41,13 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		A10B00000000000000000005 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A10B00000000000000000003, A10B0000000000000000000F,); runOnlyForDeploymentPostprocessing = 0; };
 		504EC3011FED79650016851F /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				4D22ABE92AF431CB00220026 /* CapApp-SPM in Frameworks */,
+				A10A00000000000000000003 /* PadlHubSession in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -48,6 +60,8 @@
 				958DCC722DB07C7200EA8C5F /* debug.xcconfig */,
 				504EC3061FED79650016851F /* App */,
 				504EC3051FED79650016851F /* Products */,
+				A10B00000000000000000002 /* SessionTransportTests.swift */,
+				A10B0000000000000000000E /* PadlHubBridgeTests.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -55,6 +69,7 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* App.app */,
+				A10B00000000000000000004 /* AppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -64,6 +79,7 @@
 			children = (
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
+				A10A00000000000000000002 /* PadlHubSessionPlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -77,6 +93,18 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		A10B00000000000000000006 /* AppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10B00000000000000000007;
+			buildPhases = (A10B00000000000000000008, A10B00000000000000000005,);
+			buildRules = ();
+			dependencies = (A10B00000000000000000009,);
+			name = AppTests;
+			packageProductDependencies = (A10A00000000000000000004, 4D22ABE82AF431CB00220026,);
+			productName = AppTests;
+			productReference = A10B00000000000000000004;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		504EC3031FED79650016851F /* App */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 504EC3161FED79650016851F /* Build configuration list for PBXNativeTarget "App" */;
@@ -92,6 +120,7 @@
 			name = App;
 			packageProductDependencies = (
 				4D22ABE82AF431CB00220026 /* CapApp-SPM */,
+				A10A00000000000000000004 /* PadlHubSession */,
 			);
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
@@ -106,6 +135,7 @@
 				LastSwiftUpdateCheck = 0920;
 				LastUpgradeCheck = 0920;
 				TargetAttributes = {
+					A10B00000000000000000006 = {CreatedOnToolsVersion = 26.6; TestTargetID = 504EC3031FED79650016851F; };
 					504EC3031FED79650016851F = {
 						CreatedOnToolsVersion = 9.2;
 						LastSwiftMigration = 1100;
@@ -124,12 +154,14 @@
 			mainGroup = 504EC2FB1FED79650016851F;
 			packageReferences = (
 				D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */,
+				A10A00000000000000000005 /* XCLocalSwiftPackageReference "PadlHubSession" */,
 			);
 			productRefGroup = 504EC3051FED79650016851F /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* App */,
+				A10B00000000000000000006 /* AppTests */,
 			);
 		};
 /* End PBXProject section */
@@ -151,11 +183,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		A10B00000000000000000008 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10B00000000000000000001, A10B0000000000000000000D,); runOnlyForDeploymentPostprocessing = 0; };
 		504EC3001FED79650016851F /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
+				A10A00000000000000000001 /* PadlHubSessionPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -180,7 +214,25 @@
 		};
 /* End PBXVariantGroup section */
 
+/* Begin PBXContainerItemProxy section */
+		A10B0000000000000000000A = {isa = PBXContainerItemProxy; containerPortal = 504EC2FC1FED79650016851F; proxyType = 1; remoteGlobalIDString = 504EC3031FED79650016851F; remoteInfo = App; };
+/* End PBXContainerItemProxy section */
+/* Begin PBXTargetDependency section */
+		A10B00000000000000000009 = {isa = PBXTargetDependency; target = 504EC3031FED79650016851F; targetProxy = A10B0000000000000000000A; };
+/* End PBXTargetDependency section */
 /* Begin XCBuildConfiguration section */
+		A10B0000000000000000000B /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {
+			BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES;
+			IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = ru.padlhub.app.tests;
+			PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";
+			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+		}; name = Debug; };
+		A10B0000000000000000000C /* Release */ = {isa = XCBuildConfiguration; buildSettings = {
+			BUNDLE_LOADER = "$(TEST_HOST)"; CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES;
+			IPHONEOS_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = ru.padlhub.app.tests;
+			PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";
+			TEST_HOST = "$(BUILT_PRODUCTS_DIR)/App.app/App";
+		}; name = Release; };
 		504EC3141FED79650016851F /* Debug */ = {
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = 958DCC722DB07C7200EA8C5F /* debug.xcconfig */;
@@ -337,6 +389,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		A10B00000000000000000007 = {isa = XCConfigurationList; buildConfigurations = (A10B0000000000000000000B, A10B0000000000000000000C,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		504EC2FF1FED79650016851F /* Build configuration list for PBXProject "App" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -358,6 +411,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		A10A00000000000000000005 /* XCLocalSwiftPackageReference "PadlHubSession" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../PadlHubSession";
+		};
 		D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "CapApp-SPM";
@@ -365,6 +422,11 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A10A00000000000000000004 /* PadlHubSession */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10A00000000000000000005 /* XCLocalSwiftPackageReference "PadlHubSession" */;
+			productName = "PadlHubSession";
+		};
 		4D22ABE82AF431CB00220026 /* CapApp-SPM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */;

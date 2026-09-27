@@ -74,6 +74,21 @@ link; it must not infer equivalence from an unverified phone number.
 - API rate limits use shared Redis state. Production must explicitly trust only configured
   load-balancer proxy CIDRs; phone and challenge rate keys are keyed HMACs, never raw identifiers.
 
+## Native iOS client transport
+
+The Capacitor iOS client uses the same OTP and cookie-backed session endpoints with
+`X-App-Platform: ios`. Its first-party URLSession bridge retains `phub_refresh` exclusively
+in namespaced, non-synchronizing Keychain storage (`WhenUnlockedThisDeviceOnly`); the access
+JWT stays in JS memory. Refresh credentials and `Set-Cookie` never enter the WebView or a
+shared cookie jar. This adds no refresh-token JSON contract or per-platform backend service.
+
+The bridge permits only fixed HTTPS origins and named OTP/session/context operations, blocks
+redirects and provider/OAuth operations, and serializes lifecycle requests. It durably journals
+the predecessor/key before refresh, stores the successor before returning access, and completes
+pending revocation before restoration after a relaunch. Network failures remain retryable;
+they do not count as completed logout. See [iOS development](../../apps/mobile/README.md) for
+configuration, simulator tests, integration ownership and the remaining app-return boundary.
+
 ## Viva call policy
 
 All Viva authentication calls use a three-second timeout and propagate `X-Correlation-ID` where the

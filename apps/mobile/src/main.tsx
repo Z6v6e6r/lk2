@@ -349,8 +349,19 @@ function MobileApp(): React.JSX.Element {
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Mobile mount element was not found');
-createRoot(root).render(
-  <StrictMode>
-    <MobileApp />
-  </StrictMode>,
-);
+const applicationRoot = createRoot(root);
+if (Capacitor.getPlatform() === 'ios') {
+  void import('./ios/IOSAuthApp.js').then(({ IOSAuthApp }) => {
+    applicationRoot.render(
+      <StrictMode>
+        <IOSAuthApp />
+      </StrictMode>,
+    );
+  });
+} else {
+  applicationRoot.render(
+    <StrictMode>
+      <MobileApp />
+    </StrictMode>,
+  );
+}

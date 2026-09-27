@@ -5,7 +5,14 @@ const config: CapacitorConfig = {
   appName: 'PadlHub',
   webDir: 'dist',
   server: { androidScheme: 'https' },
-  ios: { contentInset: 'automatic' },
+  // Capacitor's debug bridge logs response bodies, including the short-lived access JWT.
+  ios: { contentInset: 'automatic', loggingBehavior: 'none' },
+  plugins: {
+    PadlHubSession: {
+      apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',
+      tenantKey: process.env.VITE_PHUB_TENANT_KEY ?? '',
+    },
+  },
 };
 
 export default config;
