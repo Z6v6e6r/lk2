@@ -170,6 +170,8 @@ interface StationThreadProps {
   readonly error: ChatUiError | null;
   readonly closed: boolean;
   readonly canRetrySend: boolean;
+  /** Buffered messages are on screen while a fresh page is replacing them. */
+  readonly refreshing: boolean;
   readonly hasEarlierMessages: boolean;
   readonly attachments: readonly ChatAttachmentDraft[];
   readonly attachmentNotice?: string | null | undefined;
@@ -195,6 +197,7 @@ export function StationThread({
   error,
   closed,
   canRetrySend,
+  refreshing,
   hasEarlierMessages,
   attachments,
   attachmentNotice,
@@ -298,6 +301,12 @@ export function StationThread({
         </button>
       </header>
       <div className={styles.threadBody}>
+        {refreshing ? (
+          // The buffered history stays readable while the fresh page replaces it.
+          <p className={styles.refreshNotice} role="status">
+            Обновляем переписку…
+          </p>
+        ) : null}
         <ol className={styles.messages} ref={listRef} onScroll={handleScroll}>
           {hasEarlierMessages ? (
             <li className={styles.loadEarlierRow} role="presentation">

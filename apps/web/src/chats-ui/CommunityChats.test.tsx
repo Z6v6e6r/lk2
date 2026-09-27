@@ -59,6 +59,7 @@ function thread(overrides: Partial<Parameters<typeof CommunityThread>[0]> = {}) 
       messages={[message('2026-09-27T11:00:00.000Z', 'Корт свободен')]}
       busy={null}
       error={null}
+      refreshing={false}
       hasEarlierMessages={false}
       onRetry={vi.fn()}
       onLoadEarlier={vi.fn()}
@@ -218,6 +219,13 @@ describe('community chat thread', () => {
     expect(screen.getByText('Вы')).toBeVisible();
     // The projection is read-only, so the block must not offer a composer for it.
     expect(screen.queryByLabelText('Сообщение')).toBeNull();
+  });
+
+  it('announces a background refresh without taking the open chat off screen', () => {
+    render(thread({ refreshing: true }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Обновляем переписку…');
+    expect(screen.getByText('Корт свободен')).toBeVisible();
   });
 
   it('opens at the newest message and keeps the reading position when older history arrives', () => {

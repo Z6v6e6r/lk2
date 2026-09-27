@@ -1,70 +1,83 @@
-# Android LK2: shared-client development
+# Android LK2: shared client and native session
 
-The first Android increment reuses `apps/web/src/App.tsx`, its existing screens, navigation,
-assets and CSS in `apps/mobile`. The checked-in Android project is based on the earlier
-Capacitor 8.4.1 shell at `9c3b3dd0`; the current product source comes from this task's
-`origin/main` base `61a69291`. No separate Kotlin product UI or backend contract is introduced.
+Android reuses `apps/web/src/App.tsx`, existing product screens, navigation, assets and CSS.
+The native shell uses the repository's Capacitor 8.4.1, Java, JDK 21 and Android SDK 36.
 
 ## Current increment
 
-Native mode enables the existing Home, profile, profile-level history, bookings/history,
-notifications and location screens. Other sections display an explicit unavailable screen.
-This is an implementation stage toward the complete LK2 product, not a reduced product scope.
+The existing Home, profile/level history, bookings/history, notifications and location screens
+are enabled. Other sections display an explicit unavailable screen. This is an implementation
+stage toward the complete LK2 product, not a reduced product scope. The inherited icon/splash
+assets remain Capacitor placeholders.
 
-The API SDK's opt-in `sessionMode: 'memory'` keeps the access token in process memory, omits
-cookies, disables refresh/retry on 401 and clears the token on local logout. A 401 belonging
-to an old token cannot invalidate a newer session. Web retains its existing cookie mode.
-Internal links use same-document history so navigation does not discard the process session;
-Android Back uses WebView history, then backgrounds the task at its root.
+Phone OTP uses the existing PadlHub challenge, verify, refresh and revoke endpoints. Android
+requests go through `PadlHubAndroidSession` and system HTTPS, without browser fetch, shared cookie
+jars, CORS changes, provider access or redirects. Native code independently validates the exact
+origin, tenant, method, positive route list, headers and auth bodies. Only the bundled
+`https://localhost` main document can use the modern Capacitor bridge; the legacy all-frame
+JavaScript interface is removed, frames/objects are disallowed, bridge logging and WebView
+remote debugging are disabled. External HTTPS navigation opens the system browser.
 
-Native mode does not initiate Viva delegation, provider reads/jobs, OAuth/recovery, browser
-Web Push, payment creation/handoffs or attachment upload/download flows. Browser-only routes
-and native gateway calls are both guarded. A server refresh session created by OTP is not
-revoked by local native logout; a reviewed native session lifecycle remains required.
+The refresh cookie never enters JavaScript. A package/origin/tenant-scoped Android Keystore
+AES-GCM key encrypts one atomic record in `noBackupFilesDir`. The record contains the credential,
+expiry and refresh/revocation journals. A separate non-secret atomic logout intent survives a
+failed encrypted-record write. Access JWTs remain in JS memory. Refresh journals precede the
+network write and replay the same predecessor idempotency key after a lost response/restart.
+Logout hides account data immediately, journals intent, reconciles any pending rotation, then
+revokes the successor. Credentials are cleared before the logout marker, only after confirmed
+revocation, session expiry or refresh 401. Network/5xx/storage errors retain recovery state and
+show retry, never a false successful logout or a new login over an uncertain saved session.
+
+Native mode does not initiate Viva delegation/provider jobs, OAuth/recovery, browser Web Push,
+payment creation/handoffs or attachment flows. Java permits only current canonical reads and
+notification preference/read-cursor commands. New routes require an explicit native review.
+Web retains its existing transport; persistent Android mode requires an injected native fetch.
+Internal links use same-document history; Android Back uses WebView history then backgrounds
+the task at its root.
 
 ## Reproducible local build
 
-Use the installed Node/npm versions allowed by the root engines, the committed lockfile,
-JDK 21 and Android SDK 36. The Gradle 8.14.3 wrapper pins its distribution checksum.
+Use the committed lockfile and installed toolchain; the Gradle wrapper pins its distribution
+checksum. Set `JAVA_HOME` and `ANDROID_HOME` to existing installations, without committing paths.
 
 ```sh
 npm ci
 npm run contracts:generate
 npm run typecheck -w @phub/mobile
 npm run test -w @phub/mobile
-npm run android:debug -w @phub/mobile
+VITE_PHUB_API_BASE_URL=https://lk2.padlhub.su VITE_PHUB_TENANT_KEY=local-padel npm run android:debug -w @phub/mobile
 ```
 
-Set `JAVA_HOME` and `ANDROID_HOME` to the developer machine's existing installations. Do not
-commit these paths. `android:debug` builds local web assets, runs `cap sync android`, then
-`assembleDebug`. Do not run `cap add` for an existing project. Output:
-`apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`.
+`android:debug` bundles local assets, syncs the same public configuration into Android, then
+builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.1/code 2 replaces
+the earlier offline version 1.0/code 1 using the existing local debug signature. No release keys
+are created. Always inspect the packaged `capacitor.config.json`, manifest and signature.
 
-The default build has **no API target**. It displays a configuration message and sends no
-startup network requests on Android. `VITE_PHUB_API_BASE_URL` and `VITE_PHUB_TENANT_KEY` are
-public build inputs, never credentials. The native origin allowlist currently contains only
-the repository's existing staging origin `https://lk.nano.padlhub.su`; a new target requires a
-reviewed source change. Values with credentials, paths, query, fragments, lookalike hosts or
-non-default ports fail startup. Do not embed Basic Auth, API keys or account tokens.
+Builds have **no implicit API target**. Missing configuration displays a setup message. The native
+release allowlist is exactly `https://lk2.padlhub.su`; debug also allows the existing
+`https://lk.nano.padlhub.su`. Credentials, paths, query, fragments and noncanonical ports fail
+configuration. Origin and tenant are public build inputs, never keys or account credentials.
+Native bundle configuration is authoritative over Vite values. No `server.url` is shipped.
 
-**Device-to-API login is not yet implemented end to end.** Android's local WebView origin is
-`https://localhost`, whereas the current staging ingress has a browser-origin contract. Passing
-the allowlisted API origin at build time does not establish CORS, cookie or native transport
-support. This change does not modify ingress/CORS or claim a live Android login. The default
-APK is a source-review shell, not an authenticated user testing or store release build.
+## Verification and limitations
 
-## Verification and next boundary
+Run the full `npm run check` for this auth boundary. Native instrumentation uses synthetic
+senders/credentials and the real emulator Keystore; it never sends SMS or touches a live account.
+It covers origin/route/cookie rejection, refresh response loss, persisted logout recovery,
+credential-write failure followed by process recreation, expiry/revocation, ciphertext scope
+and corruption. Run `:app:connectedDebugAndroidTest` with an owned emulator. Keep a read-only AVD
+run without snapshot saving when preserving the user's existing emulator state.
 
-Tests cover origin/tenant rejection, cookie omission, no provider/OAuth/payment/media calls,
-process-session expiry/logout, stale-401 isolation, same-document navigation and phone-only
-native rendering. Browser UI checks use intercepted synthetic responses and a simulated native
-platform; they are distinct from an emulator/device run. Keep APK build, browser rendering,
-CI and live-backend evidence separate.
+Check the packaged app on Android: initial phone form, keyboard, Back/background and relaunch.
+An empty native store must open the form without a network request. A real phone/OTP flow and
+account reads on the user's device remain a separate acceptance step. Report `LOCAL`, `CI`,
+`STAGING` and `PRODUCTION` evidence separately; synthetic lifecycle proof is not live login proof.
 
-Before enabling account testing on a device, implement/review the exact native first-party
-transport and refresh/revoke contract, then its Android Keystore storage and lifecycle tests.
-After that, integrate games/tournaments/training, chats/media, payment return navigation,
-App Links and FCM as separate complete increments using existing product/API blocks.
-Run owned device/emulator checks for Back, rotation, process restart, keyboard, system insets,
-expiry, logout and reconnect. The inherited icon/splash assets remain Capacitor placeholders.
-Release signing, store publication, live SMS, payments, merge and deployment are separate actions.
+A debug APK is for controlled testing, not store or broad distribution. Keystore/bridge controls
+do not remove Android's debuggable application flag. Use a test account, then log out. If both
+intent and credential storage cannot be written, the app blocks the current session and reports
+failure; no successful logout is claimed. Corrupt/unavailable secure storage fails closed.
+
+Games/tournaments/training, chats/media, payment return navigation, App Links and FCM remain
+subsequent complete increments using existing APIs. Release signing, store publication, live SMS,
+payments, merge and deployment require their applicable authority and delivery gates.
