@@ -89,4 +89,27 @@ describe('CommunityDetailShell', () => {
     });
     expect(screen.getByText('Игроки не найдены.')).toBeInTheDocument();
   });
+
+  it('makes an address in a read-only chat message clickable', () => {
+    render(
+      <CommunityDetailShell
+        model={{
+          ...model,
+          messages: [
+            {
+              author: { displayName: 'Илья Смирнов' },
+              body: 'Подробности: padlhub.ru/tournaments',
+              sentLabel: '18:42',
+            },
+          ],
+        }}
+        initialTab="chat"
+      />,
+    );
+
+    const anchor = screen.getByRole('link', { name: 'padlhub.ru/tournaments' });
+    expect(anchor).toHaveAttribute('href', 'https://padlhub.ru/tournaments');
+    expect(anchor).toHaveAttribute('target', '_blank');
+    expect(anchor).toHaveAttribute('rel', 'noopener noreferrer');
+  });
 });

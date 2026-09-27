@@ -207,6 +207,7 @@ export function getIOSSession(): Promise<IOSSession> {
       baseUrl: configuration.apiBaseUrl,
       tenantKey: configuration.tenantKey,
       platform: 'ios',
+      sessionMode: 'cookie',
       appVersion: configuration.appVersion,
       appBuild: configuration.appBuild,
       fetchImplementation: createIOSFetch(configuration, plugin),

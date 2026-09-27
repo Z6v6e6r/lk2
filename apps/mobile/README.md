@@ -122,12 +122,12 @@ separate **LOCAL** evidence. The manually triggered iOS workflow is still a sign
 
 ## Integration order and remaining scope
 
-The parallel branch `codex/lk2-android-existing-blocks-20260927` owns shared cabinet UI and
-the Android memory-session SDK/gateway changes. This branch owns `ios/**` and `src/ios/**`;
-its only shared entry change selects `IOSAuthApp` when `Capacitor.getPlatform() === 'ios'`.
-Integration order: Android shared UI first, then this iOS transport/entry. One integration
-owner must resolve `main.tsx` once and keep platform selection explicit. Do not apply the
-Android memory-only/no-refresh policy to the iOS Keychain client or duplicate shared SDK edits.
+Android shared UI was merged in PR #313 (`7fcdc53d`) and is included in this branch. The
+entry selects iOS before loading platform styles/session policy. `shared-app-entry.tsx`
+preserves the Android/Web entry; `src/ios/styles.css` preserves the prior iOS login styles.
+The iOS SDK explicitly selects cookie mode, while Android retains its memory-only policy.
+Common cabinet screens are not yet enabled through the bounded iOS transport; additional
+read operations need review before connecting those screens.
 
 Remaining work: connect the shared cabinet screens to reviewed native read routes; validate
 legal-document return, keyboard/safe areas and a physical device; implement system-browser

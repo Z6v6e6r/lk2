@@ -449,6 +449,109 @@ describe('messaging repository', () => {
     expect(directQuery).not.toContain('target_privacy');
   });
 
+  it('reads GAME conversation cards through the same roster, access and runtime gates', async () => {
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      void values;
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'GAME'")) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              context_id: gameId,
+              title: 'Игра',
+              unread_count: '2',
+              updated_at: '2026-08-03 12:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+              notification_level: 'ALL',
+              muted_until: null,
+              notifications_muted: false,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.listGameConversationSummaries({
+        tenantId,
+        userId,
+        gameIds: [gameId, gameId, 'not-a-game-id'],
+      }),
+    ).resolves.toEqual([
+      {
+        id: conversationId,
+        kind: 'GAME',
+        contextId: gameId,
+        title: 'Игра',
+        unreadCount: 2,
+        updatedAt: '2026-08-03T12:00:00.000000+00:00',
+        notificationPolicy: { level: 'ALL', muted: false },
+      },
+    ]);
+    const gameQuery = query.mock.calls.find(([text]) =>
+      String(text).includes("conversation.kind = 'GAME'"),
+    );
+    const gameSql = String(gameQuery?.[0]);
+    expect(gameSql).toContain("participation.state = 'ACTIVE'");
+    expect(gameSql).toContain("'games.play' = any(current_access.permissions)");
+    expect(gameSql).toContain('runtime.contextual_enabled');
+    expect(gameSql).toContain('conversation.context_id = any($3::uuid[])');
+    // Only the requested canonical game ids reach PostgreSQL, deduplicated and validated.
+    expect(gameQuery?.[1]).toEqual([tenantId, userId, [gameId]]);
+  });
+
+  it('skips the GAME conversation read when no usable game id was requested', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.listGameConversationSummaries({ tenantId, userId, gameIds: [] }),
+    ).resolves.toEqual([]);
+    await expect(
+      repository.listGameConversationSummaries({ tenantId, userId, gameIds: ['not-a-game-id'] }),
+    ).resolves.toEqual([]);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('bounds one game-card conversation read to fifty canonical games', async () => {
+    const gameIds = Array.from(
+      { length: 60 },
+      (_value, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      void values;
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'GAME'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(
+      repository.listGameConversationSummaries({ tenantId, userId, gameIds }),
+    ).resolves.toEqual([]);
+    const gameQuery = query.mock.calls.find(([text]) =>
+      String(text).includes("conversation.kind = 'GAME'"),
+    );
+    expect(gameQuery?.[1]?.[2]).toHaveLength(50);
+  });
+
   it('projects the stored PadlHub photo delivery URL onto a direct participant', async () => {
     const deliveryId = 'f3d1c0e4-1111-4111-8111-111111111111';
     const query = vi.fn((text: string) => {

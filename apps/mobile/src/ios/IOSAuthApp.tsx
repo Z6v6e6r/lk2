@@ -4,6 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 import logo from '../assets/padlhub-logo.svg';
+import './styles.css';
 import { getIOSSession } from './session.js';
 import type { IOSSession } from './session.js';
 

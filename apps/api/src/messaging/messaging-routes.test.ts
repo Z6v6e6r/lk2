@@ -70,6 +70,7 @@ function repository(overrides: Partial<MessagingRepository> = {}): MessagingRepo
         notificationPolicy: { level: 'ALL', muted: false },
       },
     ]),
+    listGameConversationSummaries: vi.fn().mockResolvedValue([]),
     createDirectConversation: vi.fn().mockResolvedValue({
       outcome: 'ok',
       conversation: {
