@@ -32,6 +32,10 @@ import {
   type CommunityRow,
 } from './chats-ui/community-chat-rows.js';
 import { StationDialogList, StationThread } from './chats-ui/StationChats.js';
+import {
+  readCommunityChatsCache,
+  writeCommunityChatsCache,
+} from './chats-ui/community-chats-cache.js';
 import { stationHistoryRows } from './chats-ui/station-chat-rows.js';
 import { type ChatComposerSend } from './chats-ui/ChatComposer.js';
 import {
@@ -233,6 +237,10 @@ interface CommunityChatsState {
   readonly status: 'idle' | 'ready';
   readonly communities: readonly CommunityRow[];
   readonly nextCursor: string | null;
+  /** A first-page read is in flight: with rows on screen this is the background refresh. */
+  readonly loading: boolean;
+  /** The rows on screen came from the session cache and have not been confirmed by a fresh read. */
+  readonly stale: boolean;
   readonly loadingMore: boolean;
   readonly selectedCommunityId: string | null;
   readonly messages: readonly CommunityChatMessage[];
@@ -252,6 +260,8 @@ const EMPTY_COMMUNITY_STATE: CommunityChatsState = {
   status: 'idle',
   communities: [],
   nextCursor: null,
+  loading: false,
+  stale: false,
   loadingMore: false,
   selectedCommunityId: null,
   messages: [],
@@ -262,6 +272,27 @@ const EMPTY_COMMUNITY_STATE: CommunityChatsState = {
   listRetry: null,
   threadError: null,
 };
+
+/**
+ * The Сообщества tab opens on the rows the person saw last: the legacy directory answers in seconds,
+ * so the cached copy is painted immediately and the fresh read replaces it in the background. A
+ * runtime without the community source has nothing to buffer and keeps its "not connected" copy.
+ */
+function initialCommunityState(
+  userId: string,
+  source: CommunityChatsSource | null,
+): CommunityChatsState {
+  if (!source) return EMPTY_COMMUNITY_STATE;
+  const cached = readCommunityChatsCache(userId);
+  if (!cached) return EMPTY_COMMUNITY_STATE;
+  return {
+    ...EMPTY_COMMUNITY_STATE,
+    status: 'ready',
+    communities: cached.communities,
+    nextCursor: cached.nextCursor,
+    stale: true,
+  };
+}
 
 /**
  * The community read experience answers with the community envelope: a community the viewer is not
@@ -473,11 +504,17 @@ export function ChatsPage({
   /** A deployment without a media bucket keeps the composer text-only instead of failing sends. */
   const [stationAttachmentsEnabled, setStationAttachmentsEnabled] = useState(true);
   const stationRequestRef = useRef(0);
-  const [communityState, setCommunityState] = useState<CommunityChatsState>(EMPTY_COMMUNITY_STATE);
+  const [communityState, setCommunityState] = useState<CommunityChatsState>(() =>
+    initialCommunityState(currentUserId, communityChats ?? null),
+  );
   const [communityReloadToken, setCommunityReloadToken] = useState(0);
   /** Directory pages and chat pages are read independently, so they count generations separately. */
   const communityListRequestRef = useRef(0);
   const communityRequestRef = useRef(0);
+  /** One directory read at a time: the screen prefetch and the tab refresh must not both fire. */
+  const communityListLoadingRef = useRef(false);
+  /** The tab refresh reads state without making it a dependency, which would loop on a failure. */
+  const communityStateRef = useRef(communityState);
   const selected = page?.items.find((conversation) => conversation.id === selectedConversationId);
   const stationSource = stationSupport ?? null;
   const stationDialogs = stationState.dialogs;
@@ -631,9 +668,11 @@ export function ChatsPage({
     communityState.messagesCommunityId !== communityState.selectedCommunityId;
   const communityListBusy: 'load' | 'more' | null = communityState.loadingMore
     ? 'more'
-    : communityState.status === 'idle' && communityState.communities.length === 0
+    : communityState.loading && communityState.communities.length === 0
       ? 'load'
       : null;
+  /** Rows are already on screen, so the read is a refresh rather than the first paint. */
+  const communityListRefreshing = communityState.loading && communityState.communities.length > 0;
   const communityThreadBusy: 'load' | 'load-earlier' | null = communityThreadLoading
     ? 'load'
     : communityState.loadingEarlier
@@ -880,40 +919,95 @@ export function ChatsPage({
    * late page cannot rewind the cursor of the list that replaced it.
    */
   const loadCommunityChats = useCallback((): void => {
-    if (!communitySource) return;
+    if (!communitySource || communityListLoadingRef.current) return;
+    communityListLoadingRef.current = true;
     const generation = communityListRequestRef.current + 1;
     communityListRequestRef.current = generation;
+    // The refresh owns the list while it runs: a stale failure notice would otherwise sit above rows
+    // that are already being replaced.
+    setCommunityState((current) => ({
+      ...current,
+      loading: true,
+      listError: null,
+      listRetry: null,
+    }));
     void communitySource.loadCommunities().then(
       (page) => {
+        communityListLoadingRef.current = false;
         if (communityListRequestRef.current !== generation) return;
-        setCommunityState((current) => ({
-          ...current,
-          status: 'ready',
-          communities: appendCommunityPage([], page.items),
-          nextCursor: page.nextCursor ?? null,
-          loadingMore: false,
-          listError: null,
-          listRetry: null,
-        }));
+        const communities = appendCommunityPage([], page.items);
+        const nextCursor = page.nextCursor ?? null;
+        writeCommunityChatsCache(currentUserId, communities, nextCursor);
+        setCommunityState((current) => {
+          // A refresh can drop a community the person has left while its chat is open; the thread
+          // would otherwise keep a selection the list no longer offers.
+          const selectionSurvives =
+            current.selectedCommunityId === null ||
+            communities.some((community) => community.id === current.selectedCommunityId);
+          return {
+            ...current,
+            status: 'ready',
+            loading: false,
+            stale: false,
+            communities,
+            nextCursor,
+            loadingMore: false,
+            listError: null,
+            listRetry: null,
+            ...(selectionSurvives
+              ? {}
+              : {
+                  selectedCommunityId: null,
+                  messages: [],
+                  messagesCommunityId: null,
+                  olderCursor: null,
+                  loadingEarlier: false,
+                  threadError: null,
+                }),
+          };
+        });
       },
       (error: unknown) => {
+        communityListLoadingRef.current = false;
         if (communityListRequestRef.current !== generation) return;
         setCommunityState((current) => ({
           ...current,
           status: 'ready',
+          loading: false,
           loadingMore: false,
           listError: communityChatsError(error, 'list'),
           listRetry: 'first',
         }));
       },
     );
-  }, [communitySource]);
+  }, [communitySource, currentUserId]);
 
   useEffect(() => {
-    if (filter !== 'COMMUNITY') return;
-    if (!communitySource || communityState.status !== 'idle') return;
+    communityStateRef.current = communityState;
+  }, [communityState]);
+
+  /**
+   * The directory is read when the chats screen opens, not when the tab is tapped: the legacy
+   * projection answers in seconds, so a person who taps Сообщества should already see rows. The read
+   * runs once per mount and replaces whatever the cache painted.
+   */
+  useEffect(() => {
+    if (!communitySource) return;
     loadCommunityChats();
-  }, [filter, communitySource, communityState.status, loadCommunityChats]);
+  }, [communitySource, loadCommunityChats]);
+
+  /**
+   * Re-opening the tab refreshes the list behind the rows that are already on screen. The state is
+   * read through a ref on purpose: a dependency on `stale` would re-enter this effect after a failed
+   * refresh and retry in a loop. The retry bar owns that failure instead.
+   */
+  useEffect(() => {
+    if (filter !== 'COMMUNITY' || !communitySource) return;
+    const current = communityStateRef.current;
+    if (current.listError !== null || current.loading) return;
+    if (current.status === 'ready' && !current.stale) return;
+    loadCommunityChats();
+  }, [filter, communitySource, loadCommunityChats]);
 
   // The thread belongs to the selected community: `messagesCommunityId` is what makes a thread that
   // is still arriving render as loading instead of rendering the previous community's history, and
@@ -968,14 +1062,19 @@ export function ChatsPage({
       });
     void communitySource.loadCommunities(cursor).then(
       (page) =>
-        settle((current) => ({
-          ...current,
-          loadingMore: false,
-          communities: appendCommunityPage(current.communities, page.items),
-          nextCursor: page.nextCursor ?? null,
-          listError: null,
-          listRetry: null,
-        })),
+        settle((current) => {
+          const communities = appendCommunityPage(current.communities, page.items);
+          const nextCursor = page.nextCursor ?? null;
+          writeCommunityChatsCache(currentUserId, communities, nextCursor);
+          return {
+            ...current,
+            loadingMore: false,
+            communities,
+            nextCursor,
+            listError: null,
+            listRetry: null,
+          };
+        }),
       (error: unknown) =>
         settle((current) => ({
           ...current,
@@ -1196,6 +1295,7 @@ export function ChatsPage({
                 query={query}
                 unreadOnly={unreadOnly}
                 hasMore={communityState.nextCursor !== null}
+                refreshing={communityListRefreshing}
                 selectedCommunityId={communityState.selectedCommunityId}
                 busy={communityListBusy}
                 error={communityState.listError}
