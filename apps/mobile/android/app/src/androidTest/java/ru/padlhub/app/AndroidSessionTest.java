@@ -21,7 +21,7 @@ public class AndroidSessionTest {
     static final String KEY = "00000000-0000-4000-8000-000000000001";
     static final String NEXT_KEY = "00000000-0000-4000-8000-000000000002";
     static final String JWT = "eyJ0ZXN0Ijp0cnVlfQ.eyJpZCI6InN5bnRoZXRpYyJ9.c3ludGhldGlj";
-    static final String SESSION = "{\"accessToken\":\"" + JWT + "\",\"tokenType\":\"Bearer\",\"expiresAt\":\"2099-01-01T00:00:00Z\",\"user\":{},\"context\":{}}";
+    static final String SESSION = "{\"accessToken\":\"" + JWT + "\",\"tokenType\":\"Bearer\",\"expiresAt\":\"2099-01-01T00:00:00Z\",\"user\":{\"id\":\"" + KEY + "\"},\"context\":{\"userId\":\"" + KEY + "\",\"tenantId\":\"" + NEXT_KEY + "\"}}";
     static final String VERIFY = ROOT + "/auth/challenges/" + KEY + "/verify";
     static final String VERIFY_BODY = "{\"code\":\"0000\",\"acceptance\":{\"publicOfferAccepted\":true,\"personalDataPolicyAccepted\":true}}";
 

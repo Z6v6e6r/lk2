@@ -76,6 +76,7 @@ final class AndroidHttpSender implements AndroidSessionEngine.Sender {
             }
             return new Response(status, headers, cookies, body.toByteArray());
         } catch (Failure error) { throw error; }
+        catch (javax.net.ssl.SSLException ignored) { throw new Failure("NATIVE_TLS_REJECTED"); }
         catch (Exception ignored) { throw new Failure("NATIVE_NETWORK_UNAVAILABLE"); }
         finally {
             if (deadline != null) deadline.cancel(false);

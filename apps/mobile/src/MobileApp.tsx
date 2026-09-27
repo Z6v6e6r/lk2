@@ -4,6 +4,12 @@ import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
 import { createNativeApiFetch } from './native-api-fetch.js';
 import { installMobileNavigation } from './navigation.js';
 import type { MobileRuntimeConfig } from './runtime-config.js';
+import { MobileCacheNotice } from './MobileCacheNotice.js';
+import {
+  createMobileReadState,
+  observeMobileCache,
+  type StaleMobileReads,
+} from './mobile-read-cache.js';
 
 interface MobileAppProps {
   readonly config: MobileRuntimeConfig;
@@ -17,8 +23,18 @@ function MobileSession({
 }: MobileAppProps & { readonly onSessionExpired: () => void }): React.JSX.Element {
   const [blocked, setBlocked] = useState<'restore' | 'logout' | null>(null);
   const [pending, setPending] = useState(false);
+  const [staleReads, setStaleReads] = useState<StaleMobileReads>({});
+  const [dataGeneration, setDataGeneration] = useState(0);
   const gateway = useMemo(() => {
     let expired = false;
+    const root = `/user/api/v1/${config.tenantKey}`;
+    const reads = createMobileReadState(
+      (observation) => setStaleReads((current) => observeMobileCache(current, observation)),
+      () => {
+        setStaleReads({});
+        setDataGeneration((current) => current + 1);
+      },
+    );
     const expire = (): void => {
       if (expired) return;
       expired = true;
@@ -31,11 +47,17 @@ function MobileSession({
       appVersion: config.appVersion,
       platform: native ? 'android' : 'web',
       nativeSessionTransport: native,
-      ...(native ? { fetchImplementation: createNativeApiFetch(config, undefined, expire) } : {}),
+      ...(native
+        ? {
+            fetchImplementation: createNativeApiFetch(config, undefined, expire, reads.observe),
+          }
+        : {}),
     });
     if (!native) return service;
     return {
       ...service,
+      getHomeBase: () => reads.read(root + '/home/base', () => service.getHomeBase()),
+      listLocations: () => reads.read(root + '/locations', () => service.listLocations()),
       async restoreSession() {
         try {
           return await service.restoreSession();
@@ -82,11 +104,15 @@ function MobileSession({
     );
   }
   return (
-    <App
-      gateway={gateway}
-      tenantKey={config.tenantKey}
-      clientPlatform={native ? 'android' : 'web'}
-    />
+    <>
+      <MobileCacheNotice stale={staleReads} />
+      <App
+        key={dataGeneration}
+        gateway={gateway}
+        tenantKey={config.tenantKey}
+        clientPlatform={native ? 'android' : 'web'}
+      />
+    </>
   );
 }
 
