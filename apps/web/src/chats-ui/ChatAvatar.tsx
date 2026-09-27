@@ -1,4 +1,6 @@
+import { ParticipantAvatarStack } from '../ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from '../PlayerLevelAvatar.js';
+import type { GameConversationParticipant } from '../auth-gateway.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import styles from './ChatsUi.module.css';
 
@@ -11,6 +13,8 @@ interface ChatAvatarProps {
   readonly fallbackSeed?: string | null | undefined;
   readonly size?: number | undefined;
   readonly className?: string | undefined;
+  /** Active game roster; the game avatar shows it instead of the category marker. */
+  readonly participants?: readonly GameConversationParticipant[] | undefined;
 }
 
 function levelProgress(levelValue: number | null | undefined): number {
@@ -27,8 +31,9 @@ function levelAccent(level: string | null | undefined): string {
 
 /**
  * One avatar for a chat list row, message sender, notification row, or chat thread header. Direct
- * participants use the shared circular level avatar; game and other group destinations keep their
- * category marker.
+ * participants use the shared circular level avatar; a game shows its active roster as a compact
+ * avatar stack, exactly like the game card, and falls back to the category marker while the roster
+ * is unknown.
  */
 export function ChatAvatar({
   isGame,
@@ -39,6 +44,7 @@ export function ChatAvatar({
   fallbackSeed,
   size = 44,
   className,
+  participants,
 }: ChatAvatarProps): React.JSX.Element {
   const url = isGame ? undefined : photoUrl;
   const frameStyle = {
@@ -46,15 +52,40 @@ export function ChatAvatar({
     height: `${(size * 51) / 48}px`,
     flexBasis: `${size}px`,
   };
+  const gameRoster = isGame ? (participants ?? []).slice(0, 4) : [];
 
   return (
     <span
-      className={`${styles.avatar} ${isGame ? styles.gameAvatar : styles.levelAvatarFrame} ${className ?? ''}`}
+      className={`${styles.avatar} ${
+        isGame
+          ? gameRoster.length > 0
+            ? styles.gameRosterAvatar
+            : styles.gameAvatar
+          : styles.levelAvatarFrame
+      } ${className ?? ''}`}
       style={isGame ? undefined : frameStyle}
       aria-hidden="true"
     >
       {isGame ? (
-        <ChatCategoryIcon name="GAME" />
+        gameRoster.length > 0 ? (
+          <span className="chat-game-stack">
+            <ParticipantAvatarStack
+              ariaLabel={`Участники игры ${title}`}
+              capacity={gameRoster.length}
+              participants={gameRoster.map((participant) => ({
+                key: participant.userId,
+                displayName: participant.displayName,
+                ...(participant.avatarUrl ? { avatarUrl: participant.avatarUrl } : {}),
+                ...(participant.level ? { level: participant.level } : {}),
+                ...(typeof participant.levelValue === 'number'
+                  ? { levelValue: participant.levelValue }
+                  : {}),
+              }))}
+            />
+          </span>
+        ) : (
+          <ChatCategoryIcon name="GAME" />
+        )
       ) : (
         <PlayerLevelAvatar
           alt={title}

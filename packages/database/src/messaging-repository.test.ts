@@ -449,6 +449,148 @@ describe('messaging repository', () => {
     expect(directQuery).not.toContain('target_privacy');
   });
 
+  it('identifies a game conversation by station, schedule and active roster', async () => {
+    const deliveryId = 'f3d1c0e4-1111-4111-8111-111111111111';
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'DIRECT'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'GAME'")) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              context_id: gameId,
+              title: 'Пятничная игра',
+              unread_count: '0',
+              updated_at: '2026-09-22 10:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+              notification_level: 'ALL',
+              muted_until: null,
+              notifications_muted: false,
+              starts_at: '2026-09-28 06:00:00.000000+00',
+              timezone: 'Europe/Moscow',
+              station_name: 'Терехово',
+              participants: [
+                {
+                  userId,
+                  displayName: 'Анна',
+                  role: 'ORGANIZER',
+                  avatarDeliveryId: deliveryId,
+                  level: 'C+',
+                  levelValue: '3.44',
+                },
+                {
+                  userId: otherUserId,
+                  displayName: 'Участник',
+                  role: 'PLAYER',
+                  avatarDeliveryId: null,
+                  level: null,
+                  levelValue: null,
+                },
+              ],
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(repository.listConversations({ tenantId, userId, limit: 20 })).resolves.toEqual([
+      {
+        id: conversationId,
+        kind: 'GAME',
+        contextId: gameId,
+        title: 'Пятничная игра',
+        unreadCount: 0,
+        updatedAt: '2026-09-22T10:00:00.000000+00:00',
+        notificationPolicy: { level: 'ALL', muted: false },
+        stationName: 'Терехово',
+        startsAt: '2026-09-28T06:00:00.000000+00:00',
+        timezone: 'Europe/Moscow',
+        participants: [
+          {
+            userId,
+            displayName: 'Анна',
+            role: 'ORGANIZER',
+            avatarUrl: `/public/api/v1/media/profile-photos/${tenantId}/${deliveryId}`,
+            level: 'C+',
+            levelValue: 3.44,
+          },
+          { userId: otherUserId, displayName: 'Участник', role: 'PLAYER' },
+        ],
+      },
+    ]);
+
+    const gameQuery = String(
+      query.mock.calls.find(([text]) => String(text).includes("conversation.kind = 'GAME'"))?.[0],
+    );
+    // The row reuses the game card presentation source and never reads the provider namespace.
+    expect(gameQuery).toContain('games.card_projections');
+    expect(gameQuery).toContain("participant.state = 'ACTIVE'");
+    // Only an active account reaches another participant's row, and the roster is capped by contract.
+    expect(gameQuery).toContain("participant_user.status = 'ACTIVE'");
+    expect(gameQuery).toContain('participant_photo.delivery_id');
+    expect(gameQuery).toContain("order by (participant.role = 'ORGANIZER') desc");
+    expect(gameQuery).toContain('limit 4');
+  });
+
+  it('omits the game context when the projection and roster are absent', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'DIRECT'")) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      if (text.includes("conversation.kind = 'GAME'")) {
+        return Promise.resolve({
+          rows: [
+            {
+              id: conversationId,
+              context_id: gameId,
+              title: 'Игра без проекции',
+              unread_count: '1',
+              updated_at: '2026-09-22 10:00:00.000000+00',
+              last_sequence: null,
+              last_body: null,
+              last_created_at: null,
+              notification_level: 'ALL',
+              muted_until: null,
+              notifications_muted: false,
+              starts_at: null,
+              timezone: null,
+              station_name: null,
+              participants: null,
+            },
+          ],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createMessagingRepository(poolWithQuery(query) as never);
+
+    await expect(repository.listConversations({ tenantId, userId, limit: 20 })).resolves.toEqual([
+      {
+        id: conversationId,
+        kind: 'GAME',
+        contextId: gameId,
+        title: 'Игра без проекции',
+        unreadCount: 1,
+        updatedAt: '2026-09-22T10:00:00.000000+00:00',
+        notificationPolicy: { level: 'ALL', muted: false },
+      },
+    ]);
+  });
+
   it('reads GAME conversation cards through the same roster, access and runtime gates', async () => {
     const query = vi.fn((text: string, values: readonly unknown[] = []) => {
       void values;

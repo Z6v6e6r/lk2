@@ -36,6 +36,37 @@ describe('ChatAvatar', () => {
     expect(container.querySelector('svg')).not.toBeNull();
   });
 
+  it('shows the game roster as an avatar stack, never an open join slot', () => {
+    const { container } = render(
+      <ChatAvatar
+        isGame
+        title="Игра"
+        participants={[
+          {
+            userId: '11111111-1111-4111-8111-111111111111',
+            displayName: 'Анна',
+            role: 'ORGANIZER',
+            avatarUrl: photoUrl,
+            level: 'C+',
+            levelValue: 3.44,
+          },
+          {
+            userId: '22222222-2222-4222-8222-222222222222',
+            displayName: 'Борис Кузнецов',
+            role: 'PLAYER',
+          },
+        ]}
+      />,
+    );
+
+    const stack = container.querySelector('.chat-game-stack');
+    expect(stack).not.toBeNull();
+    expect(stack?.querySelectorAll('.participant-avatar-stack__item')).toHaveLength(2);
+    expect(stack?.querySelector('img')).toHaveAttribute('src', photoUrl);
+    expect(stack?.querySelector('.participant-avatar-stack__open-slot')).toBeNull();
+    expect(screen.getByText('БК')).toBeInTheDocument();
+  });
+
   it('falls back to initials when the delivery URL fails to load', () => {
     const { container } = render(<ChatAvatar isGame={false} title="Борис" photoUrl={photoUrl} />);
 

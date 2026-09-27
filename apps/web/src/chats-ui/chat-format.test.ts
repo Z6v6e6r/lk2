@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   formatConversationTimestamp,
+  formatGameSchedule,
   formatMessageDay,
   safeGameHref,
   unreadLabel,
@@ -31,5 +32,38 @@ describe('chat formatting', () => {
     );
     expect(safeGameHref('not-a-game')).toBeNull();
     expect(safeGameHref(undefined)).toBeNull();
+  });
+
+  it('identifies a game chat by station and the game-zone start time', () => {
+    expect(
+      formatGameSchedule({
+        id: '11111111-1111-4111-8111-111111111111',
+        kind: 'GAME',
+        contextId: '22222222-2222-4222-8222-222222222222',
+        title: 'Игра',
+        unreadCount: 0,
+        updatedAt: '2026-09-22T10:00:00Z',
+        stationName: 'Терехово',
+        startsAt: '2026-09-28T06:00:00.000Z',
+        timezone: 'Europe/Moscow',
+      }),
+    ).toBe('Терехово · 28 сентября, 09:00');
+  });
+
+  it('keeps the parts the summary actually carries and ignores unusable values', () => {
+    const base = {
+      id: '11111111-1111-4111-8111-111111111111',
+      kind: 'GAME' as const,
+      contextId: '22222222-2222-4222-8222-222222222222',
+      title: 'Игра',
+      unreadCount: 0,
+      updatedAt: '2026-09-22T10:00:00Z',
+    };
+
+    expect(formatGameSchedule({ ...base, stationName: 'Терехово' })).toBe('Терехово');
+    expect(formatGameSchedule({ ...base, startsAt: 'not-a-date', timezone: 'Nowhere/Zone' })).toBe(
+      null,
+    );
+    expect(formatGameSchedule(base)).toBeNull();
   });
 });

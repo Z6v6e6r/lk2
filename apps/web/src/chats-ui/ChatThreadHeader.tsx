@@ -59,7 +59,13 @@ export function ChatThreadHeader({
           />
         </a>
       ) : (
-        <ChatAvatar isGame={isGame} title={title} />
+        <ChatAvatar
+          isGame={isGame}
+          title={title}
+          {...(conversation?.kind === 'GAME' && conversation.participants
+            ? { participants: conversation.participants }
+            : {})}
+        />
       )}
       <div className={styles.threadHeading}>
         <h2>{title}</h2>
