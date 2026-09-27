@@ -20,7 +20,7 @@ import type {
   UserUpcomingBookings,
 } from './auth-gateway.js';
 import { ActivityHistoryModal } from './ActivityHistory.js';
-import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
+import { ChatIcon, EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import { BookingRecommendations } from './BookingRecommendations.js';
 import { useChatsUnreadCount } from './chats-unread.js';
 import { GameTypeBadge } from './GameTypeBadge.js';
@@ -202,17 +202,6 @@ function WalletIcon(): React.JSX.Element {
 }
 
 type BottomNavIconName = 'home' | 'games' | 'create' | 'chat' | 'notifications' | 'profile';
-
-export function ChatIcon(): React.JSX.Element {
-  return (
-    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <path
-        d="M9.99935 19.0079C9.42435 19.0079 8.88268 18.7163 8.49935 18.2079L7.24935 16.5413C7.22435 16.5079 7.12435 16.4663 7.08268 16.4579H6.66602C3.19102 16.4579 1.04102 15.5163 1.04102 10.8329V6.66626C1.04102 2.98293 2.98268 1.04126 6.66602 1.04126H13.3327C17.016 1.04126 18.9577 2.98293 18.9577 6.66626V10.8329C18.9577 14.5163 17.016 16.4579 13.3327 16.4579H12.916C12.8493 16.4579 12.791 16.4913 12.7493 16.5413L11.4993 18.2079C11.116 18.7163 10.5743 19.0079 9.99935 19.0079ZM6.66602 2.29126C3.68268 2.29126 2.29102 3.68293 2.29102 6.66626V10.8329C2.29102 14.5996 3.58268 15.2079 6.66602 15.2079H7.08268C7.50768 15.2079 7.99101 15.4496 8.24935 15.7913L9.49935 17.4579C9.79101 17.8413 10.2077 17.8413 10.4993 17.4579L11.7493 15.7913C12.0243 15.4246 12.4577 15.2079 12.916 15.2079H13.3327C16.316 15.2079 17.7077 13.8163 17.7077 10.8329V6.66626C17.7077 3.68293 16.316 2.29126 13.3327 2.29126H6.66602Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
 
 function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JSX.Element {
   switch (name) {

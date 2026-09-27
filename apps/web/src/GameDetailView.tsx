@@ -3,8 +3,7 @@ import { useState } from 'react';
 import { GameResultEditor } from './GameResultEditor.js';
 import { GameScoreSummary } from './GameScoreSummary.js';
 import { EventGameTypeIcon } from './GameTypeBadge.js';
-import { EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
-import { ChatIcon } from './HomeDashboardPage.js';
+import { ChatIcon, EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { avatarBackgroundUrl, playerInitials } from './avatar-backgrounds.js';
 import type { GameCard, SubmitGameResultRequest } from './auth-gateway.js';
@@ -304,6 +303,7 @@ function GameTab(props: {
   readonly lineupUserIdsByPair: readonly (readonly string[])[];
   readonly onAction: (action: GameCardAction) => void;
   readonly onChatOpen: () => void;
+  readonly onChatNavigate?: (conversationId: string) => void;
   readonly onAssignParticipant: (pairIndex: number, userId: string) => void;
   readonly onRemoveParticipant: (userId: string) => void;
   readonly onReplaceParticipant: (currentUserId: string, nextUserId: string) => void;
@@ -315,12 +315,14 @@ function GameTab(props: {
     lineupUserIdsByPair,
     onAction,
     onChatOpen,
+    onChatNavigate,
     onAssignParticipant,
     onRemoveParticipant,
     onReplaceParticipant,
     onResultOpen,
   } = props;
   const [lineupPicker, setLineupPicker] = useState<LineupPickerState | null>(null);
+  const gameConversation = game.conversation;
   const primaryAction = gamePrimaryAction(game);
   const primaryLabel =
     primaryAction && RESULT_ACTIONS.has(primaryAction) && primaryAction !== 'SUBMIT_RESULT'
@@ -533,14 +535,17 @@ function GameTab(props: {
           <p className="game-detail-state">{gameStateLabel(game.displayState)}</p>
         )}
 
-        {game.conversation && game.allowedActions.includes('OPEN_CHAT') ? (
+        {gameConversation && game.allowedActions.includes('OPEN_CHAT') ? (
           <a
             className="game-detail-chat"
-            href={`/chats/${game.conversation.conversationId}`}
+            href={`/chats/${gameConversation.conversationId}`}
             aria-label="Чат игры"
+            onClick={
+              onChatNavigate ? () => onChatNavigate(gameConversation.conversationId) : undefined
+            }
           >
             <ChatIcon />
-            {game.conversation.unreadCount ? <span>{game.conversation.unreadCount}</span> : null}
+            {gameConversation.unreadCount ? <span>{gameConversation.unreadCount}</span> : null}
           </a>
         ) : game.viewerRelation === 'ORGANIZER' || game.viewerRelation === 'PARTICIPANT' ? (
           <button
@@ -675,10 +680,12 @@ export function GameDetailView(props: {
   readonly game: GameCard;
   readonly onAction: (action: GameCardAction) => void;
   readonly onChatOpen: () => void;
+  readonly onChatNavigate?: (conversationId: string) => void;
   readonly onSubmit: (input: SubmitGameResultRequest) => Promise<void>;
   readonly onTabChange: (tab: GameDetailTab) => void;
 }): React.JSX.Element {
-  const { activeTab, busy, game, onAction, onChatOpen, onSubmit, onTabChange } = props;
+  const { activeTab, busy, game, onAction, onChatOpen, onChatNavigate, onSubmit, onTabChange } =
+    props;
   const [lineupByGame, setLineupByGame] = useState<LineupByGame>(loadStoredLineups);
   const lineupUserIdsByPair = normalizeLineup(game, lineupByGame[game.id]);
 
@@ -766,6 +773,7 @@ export function GameDetailView(props: {
             lineupUserIdsByPair={lineupUserIdsByPair}
             onAction={onAction}
             onChatOpen={onChatOpen}
+            {...(onChatNavigate ? { onChatNavigate } : {})}
             onAssignParticipant={assignParticipant}
             onRemoveParticipant={removeParticipant}
             onReplaceParticipant={replaceParticipant}

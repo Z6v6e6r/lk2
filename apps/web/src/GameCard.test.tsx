@@ -432,7 +432,45 @@ describe('GameCard lifecycle template', () => {
     const chat = screen.getByRole('link', { name: 'Чат игры, непрочитанных сообщений: 3' });
     expect(chat).toHaveAttribute('href', `/chats/${conversationId}`);
     expect(within(chat).getByText('3')).toBeInTheDocument();
-    // A public discovery card never carries a game conversation, so it never offers this entry.
+  });
+
+  it('renders the card chat entry without a badge for a read conversation', () => {
+    const conversationId = '0f8a2c1e-1111-4111-8111-111111111111';
+    render(
+      <GameCard
+        game={viewerHistoryGame({
+          displayState: 'IN_PROGRESS',
+          resultSummary: null,
+          allowedActions: ['OPEN_DETAILS', 'OPEN_CHAT'],
+          conversation: { conversationId, unreadCount: 0 },
+        })}
+      />,
+    );
+
+    const chat = screen.getByRole('link', { name: 'Чат игры' });
+    expect(chat).toHaveAttribute('href', `/chats/${conversationId}`);
+    expect(chat.querySelector('span')).toBeNull();
+  });
+
+  it('reports the card chat navigation before the link leaves the games screen', () => {
+    const conversationId = '0f8a2c1e-1111-4111-8111-111111111111';
+    const game = viewerHistoryGame({
+      displayState: 'IN_PROGRESS',
+      resultSummary: null,
+      allowedActions: ['OPEN_DETAILS', 'OPEN_CHAT'],
+      conversation: { conversationId, unreadCount: 0 },
+    });
+    const onChatOpen = vi.fn();
+    render(<GameCard game={game} onChatOpen={onChatOpen} />);
+
+    fireEvent.click(screen.getByRole('link', { name: 'Чат игры' }));
+
+    expect(onChatOpen).toHaveBeenCalledWith(game, conversationId);
+  });
+
+  it('keeps public discovery cards without a chat entry', () => {
+    render(<GameCard game={publicGame} />);
+
     expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
   });
 
@@ -447,6 +485,6 @@ describe('GameCard lifecycle template', () => {
       />,
     );
 
-    expect(screen.queryByRole('link', { name: /Чат игры/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
   });
 });

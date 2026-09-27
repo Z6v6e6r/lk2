@@ -388,6 +388,23 @@ describe('Games read APIs', () => {
     });
   });
 
+  it('keeps the games list available when the chat read fails', async () => {
+    const listGameConversationSummaries = vi
+      .fn<MessagingRepository['listGameConversationSummaries']>()
+      .mockRejectedValue(new Error('MESSAGING_STORE_UNAVAILABLE'));
+    const app = await appWith(repository(), undefined, { listGameConversationSummaries });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/games?scope=UPCOMING',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ items: { conversation: unknown; allowedActions: string[] }[] }>();
+    expect(body.items[0]?.conversation).toBeNull();
+    expect(body.items[0]?.allowedActions).not.toContain('OPEN_CHAT');
+  });
+
   it('drops a stale viewer projection after its relation has expired', async () => {
     const staleProjection = projection(
       snapshot({

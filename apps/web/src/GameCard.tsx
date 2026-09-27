@@ -6,11 +6,15 @@ import {
   type GameCardAction,
   type GameCardModel,
 } from './game-card-policy.js';
-import { EventCalendarIcon, EventLevelIcon, EventLocationIcon } from './ActivityCardIcons.js';
+import {
+  ChatIcon,
+  EventCalendarIcon,
+  EventLevelIcon,
+  EventLocationIcon,
+} from './ActivityCardIcons.js';
 import { CreateGameButtonIcon } from './CreateGameButtonIcon.js';
 import { GameScoreSummary, type GameScoreSummarySet } from './GameScoreSummary.js';
 import { GameTypeBadge } from './GameTypeBadge.js';
-import { ChatIcon } from './HomeDashboardPage.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { avatarBackgroundUrl, playerInitials } from './avatar-backgrounds.js';
 
@@ -152,6 +156,11 @@ export interface GameCardProps {
   readonly showCompactMetadata?: boolean;
   readonly showCompactLevel?: boolean;
   readonly onAction?: (action: GameCardAction, game: GameCardModel) => void;
+  /**
+   * Runs before the chat link navigates, so the caller can leave the one-shot navigation hint the
+   * chat screen uses when the thread is not among its newest conversations yet.
+   */
+  readonly onChatOpen?: (game: GameCardModel, conversationId: string) => void;
   readonly onParticipantProfileRequest?: (
     game: GameCardModel,
     participant: GameCardModel['participants'][number],
@@ -170,6 +179,7 @@ export function GameCard({
   showCompactMetadata = false,
   showCompactLevel = false,
   onAction,
+  onChatOpen,
   onParticipantProfileRequest,
   unsupportedActionBehavior = 'DETAILS',
 }: GameCardProps) {
@@ -444,6 +454,9 @@ export function GameCard({
                       conversation.unreadCount > 0
                         ? `Чат игры, непрочитанных сообщений: ${conversation.unreadCount}`
                         : 'Чат игры'
+                    }
+                    onClick={
+                      onChatOpen ? () => onChatOpen(game, conversation.conversationId) : undefined
                     }
                   >
                     <ChatIcon />

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GamesPage } from './GamesPage.js';
 import type { BookingRecommendationActivity } from './booking-activity-kind.js';
+import { consumeGameChatNavigation } from './game-chat-navigation.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
 import type {
   AuthGateway,
@@ -471,8 +472,15 @@ describe('GamesPage discovery', () => {
       ...gateway(),
       listMyGames: vi.fn().mockResolvedValue({ items: [viewerGame], nextCursor: null }),
     };
+    const chatUserId = '00000000-0000-4000-8000-00000000000f';
+    window.sessionStorage.clear();
     const user = userEvent.setup();
-    render(<GamesPage gateway={api} />);
+    render(
+      <GamesPage
+        chatNavigationScope={{ tenantKey: 'local-padel', userId: chatUserId }}
+        gateway={api}
+      />,
+    );
 
     const tabs = await screen.findByRole('navigation', { name: 'Разделы игр' });
     await user.click(within(tabs).getByRole('button', { name: 'Для меня' }));
@@ -482,6 +490,17 @@ describe('GamesPage discovery', () => {
     });
     expect(chat).toHaveAttribute('href', `/chats/${conversationId}`);
     expect(within(chat).getByText('4')).toBeInTheDocument();
+
+    await user.click(chat);
+
+    // The chat screen receives the game context even while the thread is not in its newest page.
+    expect(
+      consumeGameChatNavigation({ tenantKey: 'local-padel', userId: chatUserId }, conversationId),
+    ).toMatchObject({
+      conversationId,
+      contextId: viewerGame.id,
+      title: viewerGame.title,
+    });
   });
 
   it('uses the shared main navigation and exposes the MVP create-game call to action', async () => {

@@ -117,11 +117,18 @@ async function gameConversationsByGameId(input: {
 }): Promise<ReadonlyMap<string, GameConversationSummary>> {
   const gameIds = [...new Set(input.gameIds)];
   if (!input.reader || gameIds.length === 0) return new Map();
-  const summaries = await input.reader.listGameConversationSummaries({
-    tenantId: input.tenantId,
-    userId: input.viewerUserId,
-    gameIds,
-  });
+  let summaries: readonly GameConversationSummary[];
+  try {
+    summaries = await input.reader.listGameConversationSummaries({
+      tenantId: input.tenantId,
+      userId: input.viewerUserId,
+      gameIds,
+    });
+  } catch {
+    // The chat entry is an addition to the games read, never a precondition of it: a messaging
+    // failure degrades to cards without a conversation instead of failing list and detail.
+    return new Map();
+  }
   return new Map(summaries.map((summary) => [summary.contextId, summary]));
 }
 
