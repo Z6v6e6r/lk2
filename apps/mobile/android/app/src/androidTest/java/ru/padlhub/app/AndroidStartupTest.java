@@ -63,6 +63,9 @@ public class AndroidStartupTest {
 
     private void capture(String name) throws Exception {
         if (!"true".equals(InstrumentationRegistry.getArguments().getString("captureCacheUi"))) return;
+        // DOM conditions can settle before WebView's next compositor frame or rotation animation.
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        Thread.sleep(1000);
         android.graphics.Bitmap bitmap = InstrumentationRegistry.getInstrumentation().getUiAutomation().takeScreenshot();
         java.io.File target = new java.io.File(InstrumentationRegistry.getInstrumentation().getTargetContext().getExternalFilesDir(null), name);
         try (java.io.FileOutputStream output = new java.io.FileOutputStream(target)) { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output); }
