@@ -12,7 +12,7 @@ import type {
   ProfilePrivacyUpdateRequest,
 } from '@phub/api-sdk';
 import { useEffect, useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
@@ -41,6 +41,11 @@ import squashLevelDBackground from './assets/profile-sports/squash/squash-level-
 import squashLevelDPlusBackground from './assets/profile-sports/squash/squash-level-d-plus.webp';
 
 interface ProfilePageProps {
+  readonly navigation?: ReactNode;
+  readonly publicProfileOrigin?: string;
+  readonly notificationsAvailable?: boolean;
+  readonly friendsAvailable?: boolean;
+  readonly subscriptionRenewalAvailable?: boolean;
   readonly profile: PlayerProfileView;
   readonly logoutBusy: boolean;
   readonly notificationUnreadCount?: number;
@@ -258,7 +263,7 @@ function BookingPreferencesForm({
         });
       }}
     >
-      <fieldset disabled={busy}>
+      <fieldset disabled={busy || !onSave}>
         <legend>Отображение рекомендаций</legend>
         <div className="profile-recommendation-display">
           {(
@@ -294,7 +299,7 @@ function BookingPreferencesForm({
         </div>
       </fieldset>
 
-      <fieldset disabled={busy}>
+      <fieldset disabled={busy || !onSave}>
         <legend>Любимые станции</legend>
         {stations.length === 0 && selectedStations.length === 0 ? (
           <p>Станции появятся после загрузки доступных игр.</p>
@@ -328,7 +333,12 @@ function BookingPreferencesForm({
                 className="profile-station-select"
                 aria-label="Добавить любимую станцию"
                 value=""
-                disabled={busy || favoriteStationIds.length >= 3 || availableStations.length === 0}
+                disabled={
+                  busy ||
+                  !onSave ||
+                  favoriteStationIds.length >= 3 ||
+                  availableStations.length === 0
+                }
                 onChange={(event) => {
                   const stationId = event.currentTarget.value;
                   if (!stationId) return;
@@ -351,7 +361,7 @@ function BookingPreferencesForm({
         )}
       </fieldset>
 
-      <fieldset disabled={busy}>
+      <fieldset disabled={busy || !onSave}>
         <legend>Удобное время</legend>
         <div className="profile-time-windows">
           {preferredTimeWindows.map((window, index) => (
@@ -420,7 +430,7 @@ function BookingPreferencesForm({
         <button
           className="profile-add-time-window"
           type="button"
-          disabled={busy || preferredTimeWindows.length >= 14}
+          disabled={busy || !onSave || preferredTimeWindows.length >= 14}
           onClick={() =>
             setPreferredTimeWindows((current) => [
               ...current,
@@ -444,7 +454,7 @@ function BookingPreferencesForm({
           <input
             type="checkbox"
             checked={useHistory}
-            disabled={busy}
+            disabled={busy || !onSave}
             onChange={(event) => setUseHistory(event.currentTarget.checked)}
           />
         </label>
@@ -457,14 +467,16 @@ function BookingPreferencesForm({
           <input
             type="checkbox"
             checked={recommendFriends}
-            disabled={busy}
+            disabled={busy || !onSave}
             onChange={(event) => setRecommendFriends(event.currentTarget.checked)}
           />
         </label>
       </div>
 
       <div className="profile-privacy-save-row">
-        <p role={error ? 'alert' : notice ? 'status' : undefined}>{error ?? notice}</p>
+        <p role={error ? 'alert' : notice ? 'status' : undefined}>
+          {error ?? notice ?? (!onSave ? 'Настройки доступны для просмотра.' : null)}
+        </p>
         <button type="submit" disabled={busy || serialized === initial || !onSave}>
           {busy ? 'Сохраняем…' : 'Сохранить'}
         </button>
@@ -839,9 +851,11 @@ function remainingVisitsLabel(value: number): string {
 function ProfileSubscriptions({
   subscriptions,
   error,
+  renewalAvailable = true,
 }: {
   readonly subscriptions?: HomeDashboard['subscriptions'] | null;
   readonly error?: string | null;
+  readonly renewalAvailable?: boolean;
 }): React.JSX.Element {
   const current =
     subscriptions
@@ -885,7 +899,7 @@ function ProfileSubscriptions({
                     {validUntil ? ` · до ${validUntil}` : ''}
                   </small>
                 </span>
-                <a href={subscription.route}>продлить</a>
+                <a href={subscription.route}>{renewalAvailable ? 'продлить' : 'подробнее'}</a>
               </article>
             );
           })}
@@ -1302,7 +1316,7 @@ function PrivacySettingsForm({
         <input
           type="checkbox"
           checked={contactAllowed}
-          disabled={busy}
+          disabled={busy || !onSave}
           onChange={(event) => setContactAllowed(event.currentTarget.checked)}
         />
       </label>
@@ -1314,12 +1328,14 @@ function PrivacySettingsForm({
         <input
           type="checkbox"
           checked={chatAllowed}
-          disabled={busy}
+          disabled={busy || !onSave}
           onChange={(event) => setChatAllowed(event.currentTarget.checked)}
         />
       </label>
       <div className="profile-privacy-save-row">
-        <p role={error ? 'alert' : notice ? 'status' : undefined}>{error ?? notice}</p>
+        <p role={error ? 'alert' : notice ? 'status' : undefined}>
+          {error ?? notice ?? (!onSave ? 'Настройки доступны для просмотра.' : null)}
+        </p>
         <button type="submit" disabled={busy || !changed || !onSave}>
           {busy ? 'Сохраняем…' : 'Сохранить'}
         </button>
@@ -1332,16 +1348,21 @@ function PrivacySettingsForm({
  * Absolute deep link a recipient can open — and log in through — to reach this profile. Sharing
  * the address bar instead would leak the sharer's current hash or query state.
  */
-function profileShareUrl(userId: string): string {
+function profileShareUrl(userId: string, origin = window.location.origin): string {
   const path = `/profile/${encodeURIComponent(userId)}`;
   try {
-    return new URL(path, window.location.origin).toString();
+    return new URL(path, origin).toString();
   } catch {
     return path;
   }
 }
 
 export function ProfilePage({
+  navigation,
+  publicProfileOrigin,
+  notificationsAvailable = true,
+  friendsAvailable = true,
+  subscriptionRenewalAvailable = true,
   profile: view,
   logoutBusy,
   notificationUnreadCount = 0,
@@ -1382,7 +1403,7 @@ export function ProfilePage({
   const [activeSport, setActiveSport] = useState<ProfileSport>('PADEL');
   const [sportPickerOpen, setSportPickerOpen] = useState(false);
   const isSelf = access.audience === 'SELF';
-  const profileLink = profileShareUrl(profile.userId);
+  const profileLink = profileShareUrl(profile.userId, publicProfileOrigin);
   const independentSport: Exclude<ProfileSport, 'PADEL'> | null =
     activeSport === 'PADEL' ? null : activeSport;
   const isIndependentSport = independentSport !== null;
@@ -1494,10 +1515,12 @@ export function ProfilePage({
             <ProfileIcon name="back" />
           </button>
           <span>{productLabel}</span>
-          <NotificationBellLink
-            className="profile-toolbar__bell"
-            unreadCount={notificationUnreadCount}
-          />
+          {notificationsAvailable ? (
+            <NotificationBellLink
+              className="profile-toolbar__bell"
+              unreadCount={notificationUnreadCount}
+            />
+          ) : null}
         </header>
 
         <section className="profile-identity" aria-labelledby="profile-name">
@@ -1655,13 +1678,14 @@ export function ProfilePage({
           {isSelf && !isIndependentSport ? (
             <>
               <ProfileSubscriptions
+                renewalAvailable={subscriptionRenewalAvailable}
                 {...(subscriptions !== undefined ? { subscriptions } : {})}
                 {...(subscriptionsError !== undefined ? { error: subscriptionsError } : {})}
               />
             </>
           ) : null}
 
-          {isSelf && !isIndependentSport ? (
+          {isSelf && !isIndependentSport && friendsAvailable ? (
             <ProfileFriends
               {...(friends !== undefined ? { page: friends } : {})}
               {...(friendsError !== undefined ? { error: friendsError } : {})}
@@ -1706,16 +1730,18 @@ export function ProfilePage({
                 </span>
                 <i aria-hidden="true">›</i>
               </button>
-              <a href="/notifications">
-                <span className="profile-inline-icon">
-                  <ProfileIcon name="bell" />
-                </span>
-                <span>
-                  <strong>Уведомления</strong>
-                  <small>push и лента оповещений</small>
-                </span>
-                <i aria-hidden="true">›</i>
-              </a>
+              {notificationsAvailable ? (
+                <a href="/notifications">
+                  <span className="profile-inline-icon">
+                    <ProfileIcon name="bell" />
+                  </span>
+                  <span>
+                    <strong>Уведомления</strong>
+                    <small>push и лента оповещений</small>
+                  </span>
+                  <i aria-hidden="true">›</i>
+                </a>
+              ) : null}
             </section>
           ) : null}
 
@@ -1830,7 +1856,7 @@ export function ProfilePage({
           />
         ) : null}
 
-        <MainBottomNavigation active="profile" gamesDestination="games" />
+        {navigation ?? <MainBottomNavigation active="profile" gamesDestination="games" />}
       </main>
     </div>
   );

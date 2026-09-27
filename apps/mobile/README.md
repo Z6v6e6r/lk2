@@ -45,9 +45,10 @@ contracts, not a claim about live server health or deployed native support.
 
 The iOS entry uses the existing SDK through `src/ios/session.ts`. The native plugin in
 `ios/App/App/PadlHubSessionPlugin.swift` registers a small first-party transport backed by
-the dependency-free `ios/PadlHubSession` Swift package. Only OTP challenge, four-digit OTP
-verification, session refresh/revoke and authenticated context are enabled. The screen ends
-at an authenticated greeting and a context check; full cabinet screens remain the next slice.
+the dependency-free `ios/PadlHubSession` Swift package. OTP challenge, four-digit OTP
+verification, session refresh/revoke, context and the reviewed cabinet reads below are enabled.
+After sign-in/restoration, `IOSCabinet` reuses the existing Home, Profile, location and game-card
+components with the same SDK/session instance. It does not instantiate the browser gateway.
 
 - The access JWT stays in process memory. The `phub_refresh` cookie never crosses the JS
   bridge, enters browser storage, a shared cookie jar, a log or an API response body.
@@ -125,12 +126,48 @@ separate **LOCAL** evidence. The manually triggered iOS workflow is still a sign
 Android shared UI was merged in PR #313 (`7fcdc53d`) and is included in this branch. The
 entry selects iOS before loading platform styles/session policy. `shared-app-entry.tsx`
 preserves the Android/Web entry; `src/ios/styles.css` preserves the prior iOS login styles.
-The iOS SDK explicitly selects cookie mode, while Android retains its memory-only policy.
-Common cabinet screens are not yet enabled through the bounded iOS transport; additional
-read operations need review before connecting those screens.
+The iOS SDK explicitly selects cookie mode. Android native sessions were merged in PR #318
+(`9af8d13e`). This increment does not modify `App.tsx`, `auth-gateway.ts`, the shared entry,
+runtime configuration or Android native transport. Shared leaf-component options preserve
+Web defaults.
 
-Remaining work: connect the shared cabinet screens to reviewed native read routes; validate
-legal-document return, keyboard/safe areas and a physical device; implement system-browser
+### Cabinet read increment
+
+The native allowlist constructs GETs under the bundle-selected origin and tenant:
+
+| Scope  | Existing routes                                                                  |
+| ------ | -------------------------------------------------------------------------------- |
+| User   | `home`, `home/base`, `profile`, `profile/privacy`, `profile/booking-preferences` |
+| User   | `bookings/upcoming`, `bookings/history`, `recommendations/bookings`              |
+| User   | `locations`, `locations/{uuid}`, `games/{uuid}`, `communities/mine`              |
+| Public | `games` (no bearer or cookie)                                                    |
+
+IDs, query keys, enum/range values and request bodies are checked natively. Only bounded
+SDK pagination/filter queries are accepted. In particular, the recommendations GET has no
+selected-day contract: its calendar is hidden instead of showing unfiltered rows as a date
+result. History and public games retain their existing query contracts. There is no provider
+read-job POST, arbitrary URL fetch, browser-cookie fallback or new backend endpoint.
+
+Home, upcoming bookings, history, public games, own profile/subscriptions and locations are
+available for viewing. Settings are disabled without save callbacks; game/payment/chat commands,
+friends and notifications are not connected yet. Unsupported links show an explicit unavailable
+screen with navigation back. This is an implementation stage toward the full cabinet, not a
+permanent reduction of the mobile product.
+
+Private reads require an active native credential. Session generations discard obsolete UI
+responses; logout and the next authentication wait for pending SDK reads/refreshes. Final 401s
+use durable logout before offering a new login. Private DTOs remain in process memory, and
+profile/home IDs must match the current viewer. Relative media fields resolve against the API
+origin; navigation stays in the application, while profile sharing uses canonical HTTPS.
+A native opaque shield covers windows before iOS captures an inactive/background snapshot.
+
+`src/ios/testing/cabinet-preview.tsx` is a synthetic Playwright interception entry, never imported
+by the production entry or used as an API fallback. Block non-loopback network in that preview.
+Its browser evidence proves rendering/navigation, not live API/Keychain end-to-end behavior.
+
+Remaining work: connect booking/payment commands and the remaining cabinet modules through
+their reviewed native contracts; validate legal-document return, keyboard/safe areas and a
+physical device; implement system-browser
 OAuth, app links, native push and payment return through their existing contracts. Replace
 the template icon/splash before distribution. A verify response followed by a failed first
 Keychain write releases no access, but can leave an inaccessible server session until its TTL.

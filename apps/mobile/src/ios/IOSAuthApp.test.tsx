@@ -5,6 +5,12 @@ import { PadlHubApiClient } from '@phub/api-sdk';
 import { IOSAuthApp } from './IOSAuthApp.js';
 import { IOSSession } from './session.js';
 
+vi.mock('./IOSCabinet.js', () => ({
+  IOSCabinet: ({ session }: { readonly session: IOSSession }) => (
+    <button onClick={() => void session.logout()}>Выйти</button>
+  ),
+}));
+
 afterEach(cleanup);
 const config = {
   apiBaseUrl: 'https://lk2.padlhub.su',
@@ -92,7 +98,7 @@ describe('iOS phone sign-in', () => {
     await session.restore();
     render(<IOSAuthApp session={session} />);
     fetcher.mockResolvedValueOnce(Response.json({ code: 'UNAVAILABLE' }, { status: 503 }));
-    fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Выйти' }));
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toContain('Выход ещё не завершён'),
     );

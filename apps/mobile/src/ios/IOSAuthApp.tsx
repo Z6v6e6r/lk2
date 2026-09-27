@@ -1,12 +1,16 @@
 import { ApiClientError } from '@phub/api-sdk';
 import { maskPhone, normalizePhoneE164 } from '@phub/auth';
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 
 import logo from '../assets/padlhub-logo.svg';
 import './styles.css';
 import { getIOSSession } from './session.js';
 import type { IOSSession } from './session.js';
+
+const IOSCabinet = lazy(() =>
+  import('./IOSCabinet.js').then((module) => ({ default: module.IOSCabinet })),
+);
 
 function errorMessage(error: unknown): string {
   if (error instanceof ApiClientError) {
@@ -19,35 +23,37 @@ function errorMessage(error: unknown): string {
 
 function Frame({ children }: { readonly children: ReactNode }): React.JSX.Element {
   return (
-    <div className="login-page">
-      <main className="login-layout">
-        <section className="login-layout__intro" aria-label="ПадлХАБ">
-          <div className="login-layout__intro-inner">
-            <div className="desktop-logo">
-              <img className="ph-logo" src={logo} alt="ПадлХАБ" />
+    <div className="ios-auth-surface">
+      <div className="login-page">
+        <main className="login-layout">
+          <section className="login-layout__intro" aria-label="ПадлХАБ">
+            <div className="login-layout__intro-inner">
+              <div className="desktop-logo">
+                <img className="ph-logo" src={logo} alt="ПадлХАБ" />
+              </div>
+              <h1 className="intro-title">
+                Играй.
+                <br />
+                Записывайся.
+                <br />
+                Участвуй.
+              </h1>
+              <p className="intro-text">
+                игры, турниры и тренировки
+                <br />в одном кабинете.
+              </p>
             </div>
-            <h1 className="intro-title">
-              Играй.
-              <br />
-              Записывайся.
-              <br />
-              Участвуй.
-            </h1>
-            <p className="intro-text">
-              игры, турниры и тренировки
-              <br />в одном кабинете.
-            </p>
-          </div>
-        </section>
-        <section className="login-layout__auth" aria-label="Личный кабинет">
-          <div className="auth-card">
-            <div className="mobile-logo">
-              <img className="ph-logo" src={logo} alt="ПадлХАБ" />
+          </section>
+          <section className="login-layout__auth" aria-label="Личный кабинет">
+            <div className="auth-card">
+              <div className="mobile-logo">
+                <img className="ph-logo" src={logo} alt="ПадлХАБ" />
+              </div>
+              {children}
             </div>
-            {children}
-          </div>
-        </section>
-      </main>
+          </section>
+        </main>
+      </div>
     </div>
   );
 }
@@ -203,65 +209,41 @@ function SignedOutForm({ session }: { readonly session: IOSSession }): React.JSX
 
 function SessionScreen({ session }: { readonly session: IOSSession }): React.JSX.Element {
   const state = useSyncExternalStore(session.subscribe, session.getSnapshot);
-  const [contextMessage, setContextMessage] = useState<string | null>(null);
-  const [checkingContext, setCheckingContext] = useState(false);
-
-  async function checkContext(): Promise<void> {
-    setCheckingContext(true);
-    setContextMessage(null);
-    try {
-      await session.checkContext();
-      setContextMessage('Подключение к личному кабинету работает.');
-    } catch (error) {
-      setContextMessage(errorMessage(error));
-    } finally {
-      setCheckingContext(false);
-    }
-  }
-
-  if (state.status === 'checking') return <p role="status">Проверяем сессию…</p>;
-  if (state.status === 'signed-out') return <SignedOutForm session={session} />;
-  if (state.status === 'offline')
+  if (state.status === 'signed-in')
     return (
-      <>
-        <h1 className="auth-badge">Нет подключения</h1>
-        <p className="auth-step__description" role="alert">
-          {state.retry === 'logout'
-            ? 'Выход ещё не завершён. Восстановите связь, чтобы завершить его.'
-            : 'Не удалось проверить сохранённую сессию. Попробуйте ещё раз.'}
-        </p>
-        <button
-          className="form-button"
-          onClick={() => void (state.retry === 'logout' ? session.logout() : session.restore())}
-        >
-          Повторить
-        </button>
-      </>
+      <Suspense
+        fallback={
+          <div className="mobile-status" role="status">
+            Открываем кабинет…
+          </div>
+        }
+      >
+        <IOSCabinet key={state.session.user.id} session={session} auth={state.session} />
+      </Suspense>
     );
   return (
-    <>
-      <h1 className="auth-badge">Вы вошли</h1>
-      <p className="auth-success">Здравствуйте, {state.session.user.displayName}.</p>
-      <button
-        className="form-button"
-        disabled={checkingContext}
-        onClick={() => void checkContext()}
-      >
-        Проверить подключение
-      </button>
-      <button
-        className="back-button"
-        disabled={checkingContext}
-        onClick={() => void session.logout()}
-      >
-        Выйти
-      </button>
-      {contextMessage ? (
-        <p className="auth-step__description" role="status">
-          {contextMessage}
-        </p>
-      ) : null}
-    </>
+    <Frame>
+      {state.status === 'checking' ? (
+        <p role="status">Проверяем сессию…</p>
+      ) : state.status === 'signed-out' ? (
+        <SignedOutForm session={session} />
+      ) : (
+        <>
+          <h1 className="auth-badge">Нет подключения</h1>
+          <p className="auth-step__description" role="alert">
+            {state.retry === 'logout'
+              ? 'Выход ещё не завершён. Восстановите связь, чтобы завершить его.'
+              : 'Не удалось проверить сохранённую сессию. Попробуйте ещё раз.'}
+          </p>
+          <button
+            className="form-button"
+            onClick={() => void (state.retry === 'logout' ? session.logout() : session.restore())}
+          >
+            Повторить
+          </button>
+        </>
+      )}
+    </Frame>
   );
 }
 
@@ -287,11 +269,10 @@ export function IOSAuthApp({
       active = false;
     };
   }, [initial]);
+  if (session) return <SessionScreen session={session} />;
   return (
     <Frame>
-      {session ? (
-        <SessionScreen session={session} />
-      ) : failed ? (
+      {failed ? (
         <>
           <h1 className="auth-badge">Подключение пока недоступно</h1>
           <p className="auth-step__description" role="alert">

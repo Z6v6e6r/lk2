@@ -5,6 +5,25 @@ import Capacitor
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     var window: UIWindow?
+    private var privacyShields: [UIView] = []
+
+    private func coverPrivateContent(_ application: UIApplication) {
+        guard privacyShields.isEmpty else { return }
+        var windows = application.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        if let window, !windows.contains(where: { $0 === window }) { windows.append(window) }
+        for window in windows {
+            let shield = UIView(frame: window.bounds)
+            shield.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            shield.backgroundColor = UIColor(red: 0.984, green: 0.984, blue: 0.98, alpha: 1)
+            shield.isOpaque = true
+            shield.accessibilityIdentifier = "padlhub-privacy-shield"
+            shield.isAccessibilityElement = true
+            shield.accessibilityLabel = "ПадлХАБ"
+            shield.accessibilityViewIsModal = true
+            window.addSubview(shield)
+            privacyShields.append(shield)
+        }
+    }
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         // Override point for customization after application launch.
@@ -12,13 +31,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationWillResignActive(_ application: UIApplication) {
-        // Sent when the application is about to move from active to inactive state. This can occur for certain types of temporary interruptions (such as an incoming phone call or SMS message) or when the user quits the application and it begins the transition to the background state.
-        // Use this method to pause ongoing tasks, disable timers, and invalidate graphics rendering callbacks. Games should use this method to pause the game.
+        // Hide account content before iOS captures the app-switcher snapshot.
+        coverPrivateContent(application)
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
-        // Use this method to release shared resources, save user data, invalidate timers, and store enough application state information to restore your application to its current state in case it is terminated later.
-        // If your application supports background execution, this method is called instead of applicationWillTerminate: when the user quits.
+        coverPrivateContent(application)
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
@@ -26,7 +44,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
-        // Restart any tasks that were paused (or not yet started) while the application was inactive. If the application was previously in the background, optionally refresh the user interface.
+        privacyShields.forEach { $0.removeFromSuperview() }
+        privacyShields.removeAll()
     }
 
     func applicationWillTerminate(_ application: UIApplication) {

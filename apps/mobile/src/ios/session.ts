@@ -1,6 +1,7 @@
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type { AuthenticatedSession, UserContext } from '@phub/api-sdk';
+import { cabinetReadRequest } from './cabinet-routes.js';
 
 export interface IOSConfiguration {
   readonly apiBaseUrl: string;
@@ -10,8 +11,11 @@ export interface IOSConfiguration {
 }
 
 interface NativeRequest {
-  readonly operation: 'challenge' | 'verify' | 'refresh' | 'logout' | 'context';
+  readonly operation: 'challenge' | 'verify' | 'refresh' | 'logout' | 'context' | 'read';
   readonly challengeId?: string;
+  readonly resource?: string;
+  readonly resourceId?: string;
+  readonly query?: Record<string, string>;
   readonly headers: Record<string, string>;
   readonly body?: string;
 }
@@ -33,13 +37,16 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
   const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}`;
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
+    const read = (init?.method ?? 'GET') === 'GET' ? cabinetReadRequest(value, config) : null;
     // Do not normalize traversal/encoded delimiters into an allowlisted endpoint.
-    if (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)) throw rejectedRequest();
+    if (!read && (!value.startsWith(`${root}/`) || /[%?#\\]|\.\./.test(value)))
+      throw rejectedRequest();
     const path = value.slice(root.length);
     const method = init?.method ?? 'GET';
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
-    if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
+    if (read) operation = 'read';
+    else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
     else if (path === '/auth/session' && method === 'DELETE') operation = 'logout';
     else if (path === '/context' && method === 'GET') operation = 'context';
@@ -50,10 +57,12 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
       challengeId = match[1];
     }
     if (init?.body != null && typeof init.body !== 'string') throw rejectedRequest();
+    if (read && init?.body != null) throw rejectedRequest();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
     try {
       const result = await plugin.request({
         operation,
+        ...(read ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),
@@ -98,6 +107,8 @@ export class IOSSession {
   private readonly listeners = new Set<() => void>();
   private busy = false;
   private restoration: Promise<void> | undefined;
+  private generation = 0;
+  private readonly reads = new Set<Promise<unknown>>();
 
   public constructor(
     public readonly configuration: IOSConfiguration,
@@ -111,6 +122,7 @@ export class IOSSession {
   };
 
   private update(state: IOSSessionState): void {
+    this.generation++;
     this.state = state;
     this.listeners.forEach((listener) => listener());
   }
@@ -130,6 +142,7 @@ export class IOSSession {
     const operation = this.exclusive(async () => {
       this.update({ status: 'checking' });
       try {
+        await Promise.allSettled([...this.reads]);
         const session = await this.api.refreshSession();
         this.update({ status: 'signed-in', session });
       } catch (error) {
@@ -156,6 +169,7 @@ export class IOSSession {
   public verify(challengeId: string, code: string): Promise<void> {
     return this.exclusive(async () => {
       if (this.state.status !== 'signed-out' || !/^\d{4}$/.test(code)) throw rejectedRequest();
+      await Promise.allSettled([...this.reads]);
       const session = await this.api.verifyAuthChallenge(challengeId, {
         code,
         acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
@@ -169,7 +183,17 @@ export class IOSSession {
       this.api.clearAccessToken();
       this.update({ status: 'checking' });
       try {
-        await this.api.revokeSession();
+        // Start native revocation immediately: it journals the intent even behind a slow
+        // GET. Then drain SDK retries before allowing another login or releasing access.
+        const revocation = this.api.revokeSession();
+        const outcome = revocation.then(
+          () => null,
+          (error: unknown) => ({ error }),
+        );
+        await Promise.allSettled([...this.reads]);
+        this.api.clearAccessToken();
+        const result = await outcome;
+        if (result) throw result.error;
         this.update({ status: 'signed-out' });
       } catch {
         // Native Keychain retains a pending revocation. Relaunch must finish it,
@@ -194,6 +218,35 @@ export class IOSSession {
         throw error;
       }
     });
+  }
+
+  /** One SDK owns auth and cabinet reads. Discard responses from a previous account/lifecycle. */
+  public read<T>(load: (api: PadlHubApiClient) => Promise<T>): Promise<T> {
+    const generation = this.generation;
+    const operation = this.readCurrent(load);
+    this.reads.add(operation);
+    return operation
+      .finally(() => this.reads.delete(operation))
+      .catch(async (error: unknown) => {
+        if (
+          generation === this.generation &&
+          error instanceof ApiClientError &&
+          error.status === 401
+        ) {
+          // A final GET 401 can follow a successful refresh. Revoke the remaining native
+          // credential before offering another login, using the same pending-logout journal.
+          await this.logout();
+        }
+        throw error;
+      });
+  }
+
+  private async readCurrent<T>(load: (api: PadlHubApiClient) => Promise<T>): Promise<T> {
+    if (this.state.status !== 'signed-in') throw rejectedRequest();
+    const generation = this.generation;
+    const result = await load(this.api);
+    if (generation !== this.generation) throw new DOMException('Session changed', 'AbortError');
+    return result;
   }
 }
 
