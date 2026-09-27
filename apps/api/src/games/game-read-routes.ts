@@ -8,6 +8,7 @@ import {
   getViewerGameCard,
   listPublicGameCards,
   listViewerGameCards,
+  type GameConversationReader,
   type PublicGameFilters,
 } from './game-card-queries.js';
 
@@ -174,6 +175,11 @@ export function registerGameReadRoutes(
     readonly repository?: CardReadRepository;
     readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
       Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
+    /**
+     * Attaches the authorized game chat reference to viewer cards. Omitted (or disabled per tenant)
+     * cards keep `conversation: null` and no `OPEN_CHAT`, which is the pre-chat card contract.
+     */
+    readonly conversationReader?: GameConversationReader;
     readonly publicTenantHandlers: readonly preHandlerHookHandler[];
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
   },
@@ -242,6 +248,7 @@ export function registerGameReadRoutes(
         return await listViewerGameCards({
           repository: options.repository,
           ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
+          ...(options.conversationReader ? { conversationReader: options.conversationReader } : {}),
           tenantId: current.tenantId,
           viewerUserId: current.userId,
           scope: query.scope,
@@ -270,6 +277,7 @@ export function registerGameReadRoutes(
       const game = await getViewerGameCard({
         repository: options.repository,
         ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
+        ...(options.conversationReader ? { conversationReader: options.conversationReader } : {}),
         tenantId: current.tenantId,
         viewerUserId: current.userId,
         gameId: currentGameId,

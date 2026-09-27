@@ -42,8 +42,11 @@ const publicGame: PublicGameCard = {
 };
 
 function viewerHistoryGame(
-  overrides: Pick<ViewerGameCard, 'displayState' | 'resultSummary' | 'allowedActions'>,
+  overrides: Pick<ViewerGameCard, 'displayState' | 'resultSummary' | 'allowedActions'> & {
+    readonly conversation?: ViewerGameCard['conversation'];
+  },
 ): ViewerGameCard {
+  const { conversation = null, ...rest } = overrides;
   return {
     ...publicGame,
     surface: 'HISTORY',
@@ -58,8 +61,8 @@ function viewerHistoryGame(
           : '8c70d632-d6ac-4b4b-9cf7-b8f71a5b9a43',
     })),
     viewerRelation: 'PARTICIPANT',
-    conversation: null,
-    ...overrides,
+    conversation,
+    ...rest,
   };
 }
 
@@ -411,5 +414,39 @@ describe('GameCard lifecycle template', () => {
       'href',
       `/profile/${participantId}`,
     );
+  });
+
+  it('opens the authorized game chat from the card and shows its unread count', () => {
+    const conversationId = '0f8a2c1e-1111-4111-8111-111111111111';
+    render(
+      <GameCard
+        game={viewerHistoryGame({
+          displayState: 'IN_PROGRESS',
+          resultSummary: null,
+          allowedActions: ['OPEN_DETAILS', 'OPEN_CHAT'],
+          conversation: { conversationId, unreadCount: 3 },
+        })}
+      />,
+    );
+
+    const chat = screen.getByRole('link', { name: 'Чат игры, непрочитанных сообщений: 3' });
+    expect(chat).toHaveAttribute('href', `/chats/${conversationId}`);
+    expect(within(chat).getByText('3')).toBeInTheDocument();
+    // A public discovery card never carries a game conversation, so it never offers this entry.
+    expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
+  });
+
+  it('keeps the card without a chat entry until the server authorizes a conversation', () => {
+    render(
+      <GameCard
+        game={viewerHistoryGame({
+          displayState: 'RESULT_REQUIRED',
+          resultSummary: null,
+          allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT'],
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole('link', { name: /Чат игры/ })).toBeNull();
   });
 });

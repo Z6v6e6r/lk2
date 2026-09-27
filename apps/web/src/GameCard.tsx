@@ -10,6 +10,7 @@ import { EventCalendarIcon, EventLevelIcon, EventLocationIcon } from './Activity
 import { CreateGameButtonIcon } from './CreateGameButtonIcon.js';
 import { GameScoreSummary, type GameScoreSummarySet } from './GameScoreSummary.js';
 import { GameTypeBadge } from './GameTypeBadge.js';
+import { ChatIcon } from './HomeDashboardPage.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { avatarBackgroundUrl, playerInitials } from './avatar-backgrounds.js';
 
@@ -213,6 +214,8 @@ export function GameCard({
   const showFooterStatus = compact && hasConfirmedResult;
   const showFooter = showFooterParticipants || showFooterActions || showFooterStatus;
   const detailsUrl = `/games/${encodeURIComponent(game.id)}`;
+  // Only a server-authorized viewer card carries a game conversation; a public card never does.
+  const conversation = 'conversation' in game ? game.conversation : null;
 
   return (
     <article
@@ -432,37 +435,55 @@ export function GameCard({
                   {compact ? gameHistoryStateLabel(game) : gameStateLabel(game.displayState)}
                 </span>
               ) : null}
-              {action && actionLabels[action] ? (
-                onAction && commandActions.has(action) ? (
-                  <button type="button" disabled={busy} onClick={() => onAction(action, game)}>
-                    {busy ? 'Обновляем…' : actionLabels[action]}
-                  </button>
-                ) : unsupportedActionBehavior === 'DISABLED' ? (
-                  <button
-                    type="button"
-                    disabled
-                    title="Для этого действия нужен отдельный серверный сценарий"
-                  >
-                    {actionLabels[action]}
-                  </button>
-                ) : (
+              <div className="game-card__cta">
+                {conversation ? (
                   <a
-                    className={`game-card__button${
-                      usesMiniCreateAction
-                        ? ' game-card__button--mini-create game-card__button--static'
-                        : ''
-                    }`}
-                    href={detailsUrl}
-                    aria-label={usesMiniCreateAction ? actionLabels[action] : undefined}
+                    className="game-card__chat"
+                    href={`/chats/${encodeURIComponent(conversation.conversationId)}`}
+                    aria-label={
+                      conversation.unreadCount > 0
+                        ? `Чат игры, непрочитанных сообщений: ${conversation.unreadCount}`
+                        : 'Чат игры'
+                    }
                   >
-                    {usesMiniCreateAction ? <CreateGameButtonIcon /> : actionLabels[action]}
+                    <ChatIcon />
+                    {conversation.unreadCount > 0 ? (
+                      <span aria-hidden="true">{conversation.unreadCount}</span>
+                    ) : null}
                   </a>
-                )
-              ) : !compact ? (
-                <a className="game-card__details" href={detailsUrl}>
-                  Подробнее
-                </a>
-              ) : null}
+                ) : null}
+                {action && actionLabels[action] ? (
+                  onAction && commandActions.has(action) ? (
+                    <button type="button" disabled={busy} onClick={() => onAction(action, game)}>
+                      {busy ? 'Обновляем…' : actionLabels[action]}
+                    </button>
+                  ) : unsupportedActionBehavior === 'DISABLED' ? (
+                    <button
+                      type="button"
+                      disabled
+                      title="Для этого действия нужен отдельный серверный сценарий"
+                    >
+                      {actionLabels[action]}
+                    </button>
+                  ) : (
+                    <a
+                      className={`game-card__button${
+                        usesMiniCreateAction
+                          ? ' game-card__button--mini-create game-card__button--static'
+                          : ''
+                      }`}
+                      href={detailsUrl}
+                      aria-label={usesMiniCreateAction ? actionLabels[action] : undefined}
+                    >
+                      {usesMiniCreateAction ? <CreateGameButtonIcon /> : actionLabels[action]}
+                    </a>
+                  )
+                ) : !compact ? (
+                  <a className="game-card__details" href={detailsUrl}>
+                    Подробнее
+                  </a>
+                ) : null}
+              </div>
             </div>
           ) : null}
         </div>

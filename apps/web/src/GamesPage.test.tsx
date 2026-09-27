@@ -449,6 +449,41 @@ describe('GamesPage discovery', () => {
     );
   });
 
+  it('opens the game chat from the games list card with its unread count', async () => {
+    const conversationId = '0f8a2c1e-1111-4111-8111-111111111111';
+    const viewerGame: ViewerGameCard = {
+      ...game,
+      surface: 'MY_UPCOMING',
+      levelRange: game.levelRange ?? null,
+      capacity: { ...game.capacity, total: 4 },
+      priceSummary: game.priceSummary ?? null,
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      viewerRelation: 'PARTICIPANT',
+      viewerPaymentState: 'PAID',
+      resultSummary: null,
+      allowedActions: ['OPEN_DETAILS', 'OPEN_CHAT'],
+      conversation: { conversationId, unreadCount: 4 },
+    };
+    const api: AuthGateway = {
+      ...gateway(),
+      listMyGames: vi.fn().mockResolvedValue({ items: [viewerGame], nextCursor: null }),
+    };
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+
+    const tabs = await screen.findByRole('navigation', { name: 'Разделы игр' });
+    await user.click(within(tabs).getByRole('button', { name: 'Для меня' }));
+
+    const chat = await screen.findByRole('link', {
+      name: 'Чат игры, непрочитанных сообщений: 4',
+    });
+    expect(chat).toHaveAttribute('href', `/chats/${conversationId}`);
+    expect(within(chat).getByText('4')).toBeInTheDocument();
+  });
+
   it('uses the shared main navigation and exposes the MVP create-game call to action', async () => {
     const api = gateway();
     render(<GamesPage gateway={api} />);

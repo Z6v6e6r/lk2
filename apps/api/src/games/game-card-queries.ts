@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
 
 import type {
+  GameConversationSummary,
   GameRepository,
+  MessagingRepository,
   ProfileSummaryRepository,
   StoredGameCardProjection,
 } from '@phub/database';
 import {
+  GAME_ALLOWED_ACTIONS,
   GAME_PLAYER_LEVELS,
   projectGameCard,
   projectPublicGameCard,
@@ -84,7 +87,62 @@ export interface PublicGameFilters {
 }
 
 export interface ViewerGameCard extends GameCardView {
-  readonly conversation: null;
+  readonly conversation: GameConversationReference | null;
+}
+
+/**
+ * The games interface renders only the entry point of the game chat: the authorized conversation id
+ * and the viewer's unread count. The thread itself stays a messaging read.
+ */
+export interface GameConversationReference {
+  readonly conversationId: string;
+  readonly unreadCount: number;
+}
+
+/**
+ * The messaging repository is the only source of game conversations, so the games read path takes
+ * the narrow port it actually needs instead of the whole messaging surface.
+ */
+export type GameConversationReader = Pick<MessagingRepository, 'listGameConversationSummaries'>;
+
+/**
+ * One batched messaging read per card page. Missing entries mean "no authorized conversation", so a
+ * card never exposes a thread the viewer could not open.
+ */
+async function gameConversationsByGameId(input: {
+  readonly reader?: GameConversationReader;
+  readonly tenantId: string;
+  readonly viewerUserId: string;
+  readonly gameIds: readonly string[];
+}): Promise<ReadonlyMap<string, GameConversationSummary>> {
+  const gameIds = [...new Set(input.gameIds)];
+  if (!input.reader || gameIds.length === 0) return new Map();
+  const summaries = await input.reader.listGameConversationSummaries({
+    tenantId: input.tenantId,
+    userId: input.viewerUserId,
+    gameIds,
+  });
+  return new Map(summaries.map((summary) => [summary.contextId, summary]));
+}
+
+/**
+ * `OPEN_CHAT` is the card action for an existing conversation, so it is added only together with the
+ * server-authorized reference and in the canonical action order.
+ */
+function cardWithConversation(
+  card: GameCardView,
+  conversation: GameConversationSummary | undefined,
+): ViewerGameCard {
+  if (!conversation) return { ...card, conversation: null };
+  return {
+    ...card,
+    conversation: { conversationId: conversation.id, unreadCount: conversation.unreadCount },
+    allowedActions: card.allowedActions.includes('OPEN_CHAT')
+      ? card.allowedActions
+      : GAME_ALLOWED_ACTIONS.filter(
+          (action) => action === 'OPEN_CHAT' || card.allowedActions.includes(action),
+        ),
+  };
 }
 
 interface CursorPayload {
@@ -256,6 +314,7 @@ export async function getPublicGameCard(input: {
 export async function listViewerGameCards(input: {
   readonly repository: CardReadRepository;
   readonly photoRepository?: CardProfileRepository;
+  readonly conversationReader?: GameConversationReader;
   readonly tenantId: string;
   readonly viewerUserId: string;
   readonly scope: 'UPCOMING' | 'HISTORY';
@@ -287,11 +346,14 @@ export async function listViewerGameCards(input: {
       }),
     )
     .filter((card) => card.viewerRelation !== 'NONE' && card.viewerRelation !== 'ANONYMOUS');
+  const conversations = await gameConversationsByGameId({
+    ...(input.conversationReader ? { reader: input.conversationReader } : {}),
+    tenantId: input.tenantId,
+    viewerUserId: input.viewerUserId,
+    gameIds: cards.map((card) => card.id),
+  });
   return {
-    items: cards.map((card) => ({
-      ...card,
-      conversation: null,
-    })),
+    items: cards.map((card) => cardWithConversation(card, conversations.get(card.id))),
     nextCursor: page.next ? encodeCursor({ v: 1, queryHash: hash, ...page.next }) : null,
   };
 }
@@ -299,6 +361,7 @@ export async function listViewerGameCards(input: {
 export async function getViewerGameCard(input: {
   readonly repository: CardReadRepository;
   readonly photoRepository?: CardProfileRepository;
+  readonly conversationReader?: GameConversationReader;
   readonly tenantId: string;
   readonly viewerUserId: string;
   readonly gameId: string;
@@ -332,7 +395,13 @@ export async function getViewerGameCard(input: {
     now: input.now,
     viewerUserId: input.viewerUserId,
   });
-  return { ...card, conversation: null };
+  const conversations = await gameConversationsByGameId({
+    ...(input.conversationReader ? { reader: input.conversationReader } : {}),
+    tenantId: input.tenantId,
+    viewerUserId: input.viewerUserId,
+    gameIds: [input.gameId],
+  });
+  return cardWithConversation(card, conversations.get(input.gameId));
 }
 
 /** Reuse detail visibility decisions over one bounded batch of roster snapshots. */

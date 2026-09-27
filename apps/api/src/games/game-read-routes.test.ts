@@ -1,6 +1,7 @@
 import { loadConfig } from '@phub/config';
 import type {
   GameRepository,
+  MessagingRepository,
   ProfileSummaryRepository,
   StoredGameCardProjection,
 } from '@phub/database';
@@ -147,6 +148,7 @@ async function appWith(
   repositoryValue: CardReadRepository,
   photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoObjectKey' | 'getPhotoDeliveryIds'> &
     Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>,
+  conversationReader?: Pick<MessagingRepository, 'listGameConversationSummaries'>,
 ) {
   const app = await buildApp({
     config,
@@ -154,6 +156,9 @@ async function appWith(
     pool: fakePool(),
     gameReadRepository: repositoryValue,
     ...(photoRepository ? { profilePhotoMediaRepository: photoRepository } : {}),
+    ...(conversationReader
+      ? { messagingRepository: conversationReader as unknown as MessagingRepository }
+      : {}),
   });
   apps.push(app);
   return app;
@@ -316,6 +321,71 @@ describe('Games read APIs', () => {
     expect(listViewerCardProjections).toHaveBeenCalledWith(
       expect.objectContaining({ tenantId, viewerUserId: userId, scope: 'UPCOMING' }),
     );
+  });
+
+  it('attaches the authorized game chat reference and OPEN_CHAT to a viewer card', async () => {
+    const conversationId = '9d1de0e0-5f24-4a37-9e35-0d3f1f2a4a4f';
+    const listGameConversationSummaries = vi
+      .fn<MessagingRepository['listGameConversationSummaries']>()
+      .mockResolvedValue([
+        {
+          id: conversationId,
+          kind: 'GAME',
+          contextId: gameId,
+          title: 'Игра в Сколково',
+          unreadCount: 2,
+          updatedAt: '2026-07-17T20:05:00.000Z',
+          notificationPolicy: { level: 'ALL', muted: false },
+        },
+      ]);
+    const app = await appWith(repository(), undefined, { listGameConversationSummaries });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/games?scope=UPCOMING',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      items: [
+        {
+          id: gameId,
+          viewerRelation: 'ORGANIZER',
+          conversation: { conversationId, unreadCount: 2 },
+        },
+      ],
+    });
+    expect(
+      response.json<{ items: { allowedActions: string[] }[] }>().items[0]?.allowedActions,
+    ).toEqual(expect.arrayContaining(['OPEN_CHAT', 'INVITE', 'EDIT', 'CANCEL']));
+    // The card asks for exactly the games it rendered, never for the whole tenant conversation list.
+    expect(listGameConversationSummaries).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      gameIds: [gameId],
+    });
+  });
+
+  it('keeps a viewer card without conversation when no game chat is authorized', async () => {
+    const listGameConversationSummaries = vi
+      .fn<MessagingRepository['listGameConversationSummaries']>()
+      .mockResolvedValue([]);
+    const app = await appWith(repository(), undefined, { listGameConversationSummaries });
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/games/${gameId}`,
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ game: { conversation: unknown; allowedActions: string[] } }>();
+    expect(body.game.conversation).toBeNull();
+    expect(body.game.allowedActions).not.toContain('OPEN_CHAT');
+    expect(listGameConversationSummaries).toHaveBeenCalledWith({
+      tenantId,
+      userId,
+      gameIds: [gameId],
+    });
   });
 
   it('drops a stale viewer projection after its relation has expired', async () => {
