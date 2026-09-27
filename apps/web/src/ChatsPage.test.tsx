@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -13,6 +13,10 @@ import type {
   StationSupportMessage,
   StationSupportMessagePage,
 } from './auth-gateway.js';
+import {
+  readCommunityChatsCache,
+  writeCommunityChatsCache,
+} from './chats-ui/community-chats-cache.js';
 import styles from './chats-ui/ChatsUi.module.css';
 
 const conversationId = '22222222-2222-4222-8222-222222222222';
@@ -1538,6 +1542,171 @@ describe('ChatsPage', () => {
 });
 
 describe('ChatsPage communities tab', () => {
+  it('paints the cached directory while the fresh read is still in flight', async () => {
+    writeCommunityChatsCache(
+      currentUserId,
+      [communitySummary(communityId, 'Клуб на Соколе')],
+      null,
+    );
+    const loadCommunities = vi.fn().mockResolvedValue({
+      items: [
+        communitySummary(communityId, 'Клуб на Соколе'),
+        communitySummary(otherCommunityId, 'Падел на ВДНХ'),
+      ],
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+
+    // The cached rows are on screen before the legacy directory answers.
+    const list = screen.getByRole('list', { name: 'Чаты сообществ' });
+    expect(within(list).getByText('Клуб на Соколе')).toBeVisible();
+    expect(screen.getByText('Обновляем список…')).toBeVisible();
+
+    expect(await within(list).findByText('Падел на ВДНХ')).toBeVisible();
+    await waitFor(() => expect(screen.queryByText('Обновляем список…')).toBeNull());
+    // The fresh read replaces the buffer for the next open of the tab.
+    expect(readCommunityChatsCache(currentUserId)?.communities).toHaveLength(2);
+  });
+
+  it('reads the member directory when the chats screen opens, before the tab is tapped', async () => {
+    const loadCommunities = vi
+      .fn()
+      .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities })}
+      />,
+    );
+
+    await waitFor(() => expect(loadCommunities).toHaveBeenCalledTimes(1));
+    // The read is a background warm-up: the unfiltered tab is still the one on screen.
+    expect(screen.queryByRole('list', { name: 'Чаты сообществ' })).toBeNull();
+    expect(readCommunityChatsCache(currentUserId)?.communities).toHaveLength(1);
+  });
+
+  it('refreshes the buffered directory every time the tab is opened', async () => {
+    const loadCommunities = vi
+      .fn()
+      .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities })}
+      />,
+    );
+    await waitFor(() => expect(loadCommunities).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    await waitFor(() => expect(loadCommunities).toHaveBeenCalledTimes(2));
+    await screen.findByRole('list', { name: 'Чаты сообществ' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Личные' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+
+    await waitFor(() => expect(loadCommunities).toHaveBeenCalledTimes(3));
+    // Every one of those reads replaces the rows behind the same on-screen list.
+    const refreshed = await screen.findByRole('list', { name: 'Чаты сообществ' });
+    expect(within(refreshed).getByText('Клуб на Соколе')).toBeVisible();
+  });
+
+  it('keeps the cached list when the refresh fails and retries on demand', async () => {
+    writeCommunityChatsCache(
+      currentUserId,
+      [communitySummary(communityId, 'Клуб на Соколе')],
+      null,
+    );
+    const loadCommunities = vi
+      .fn()
+      .mockRejectedValueOnce({ status: 503 })
+      .mockResolvedValueOnce({
+        items: [
+          communitySummary(communityId, 'Клуб на Соколе'),
+          communitySummary(otherCommunityId, 'Падел на ВДНХ'),
+        ],
+      });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    const list = screen.getByRole('list', { name: 'Чаты сообществ' });
+    expect(within(list).getByText('Клуб на Соколе')).toBeVisible();
+
+    expect(await screen.findByText('Не удалось загрузить чаты сообществ.')).toBeVisible();
+    // A failed refresh never takes the buffered rows away.
+    expect(within(list).getByText('Клуб на Соколе')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    expect(await within(list).findByText('Падел на ВДНХ')).toBeVisible();
+    expect(loadCommunities).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a selection the refreshed directory no longer lists', async () => {
+    writeCommunityChatsCache(
+      currentUserId,
+      [communitySummary(communityId, 'Клуб на Соколе')],
+      null,
+    );
+    let resolvePage: (page: CommunityMembershipPage) => void = () => undefined;
+    const loadCommunities = vi.fn().mockImplementation(
+      () =>
+        new Promise<CommunityMembershipPage>((resolve) => {
+          resolvePage = resolve;
+        }),
+    );
+    const loadMessages = vi.fn().mockResolvedValue(
+      communityChatPage([
+        {
+          body: 'Корт свободен',
+          sentAt: '2026-09-27T12:00:00.000Z',
+          author: { displayName: 'Анна' },
+          isViewer: false,
+        },
+      ]),
+    );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities, loadMessages })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+    await screen.findByText('Корт свободен');
+
+    await act(async () => {
+      // The viewer left the community while its chat was open.
+      resolvePage({ items: [communitySummary(otherCommunityId, 'Падел на ВДНХ')] });
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText('Выберите чат сообщества')).toBeVisible();
+    expect(screen.queryByText('Корт свободен')).toBeNull();
+    expect(screen.queryByText('Клуб на Соколе')).toBeNull();
+  });
+
   it('lists every community the viewer was added to and reads its chat', async () => {
     const loadCommunities = vi.fn().mockResolvedValue({
       items: [

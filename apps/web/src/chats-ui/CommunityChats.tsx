@@ -20,6 +20,8 @@ interface CommunityChatListProps {
   readonly unreadOnly: boolean;
   /** True while the directory says that a further page of member communities exists. */
   readonly hasMore: boolean;
+  /** True while a fresh directory read is replacing the rows that are already on screen. */
+  readonly refreshing: boolean;
   readonly selectedCommunityId: string | null;
   readonly busy: 'load' | 'more' | null;
   readonly error: ChatUiError | null;
@@ -38,6 +40,7 @@ export function CommunityChatList({
   query,
   unreadOnly,
   hasMore,
+  refreshing,
   selectedCommunityId,
   busy,
   error,
@@ -51,6 +54,13 @@ export function CommunityChatList({
 
   return (
     <div className={styles.communityListPane}>
+      {refreshing ? (
+        // The cached rows stay readable while the fresh directory read runs; the status line is the
+        // only visible sign that they may still change.
+        <p className={styles.refreshNotice} role="status">
+          Обновляем список…
+        </p>
+      ) : null}
       {error ? (
         <div className={styles.retryBar} role="status">
           <span>{error.message}</span>
