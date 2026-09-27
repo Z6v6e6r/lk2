@@ -53,6 +53,17 @@ public actor SessionTransport {
   }
 
   public func request(_ input: SessionRequest) async throws -> SessionResponse {
+    // Journal logout before waiting behind an in-flight read/rotation. A process death
+    // during that wait must still finish revocation on the next launch.
+    if input.operation == .logout {
+      let request = try input.urlRequest(configuration: configuration)
+      // A refresh sent before expiry can still return a valid successor. Preserve
+      // intent on that predecessor even if its local expiry passed while waiting.
+      if var credential = try store.read(), credential.scope == configuration.keychainScope {
+        credential.logoutKey = credential.logoutKey ?? request.value(forHTTPHeaderField: "Idempotency-Key")
+        try store.write(credential)
+      }
+    }
     // An actor alone is reentrant at await. Explicit FIFO also prevents an older
     // verify/refresh response from recreating the credential after logout.
     let previous = tail
@@ -88,7 +99,7 @@ public actor SessionTransport {
         try acceptCookie(response, previous: nil)
       }
       return try bridgeResponse(data, response)
-    case .context:
+    case .context, .read:
       guard let credential = try currentCredential(), credential.logoutKey == nil else {
         return .signedOut
       }
@@ -179,10 +190,12 @@ public actor SessionTransport {
       try store.clear()
       throw SessionFailure.response
     }
+    let pendingLogout = try store.read()?.logoutKey
     try store.write(
       RefreshCredential(
         version: 1, scope: configuration.keychainScope,
-        value: cookie.value, expiresAt: expiry, refreshKey: nil, logoutKey: previous?.logoutKey))
+        value: cookie.value, expiresAt: expiry, refreshKey: nil,
+        logoutKey: previous?.logoutKey ?? pendingLogout))
   }
 
   private func validateSessionBody(_ data: Data) throws {

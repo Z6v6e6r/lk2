@@ -8,17 +8,129 @@ private final class MemoryStore: CredentialStore {
   var value: RefreshCredential?
   var rejectWrites = false
   var rejectSuccessor = false
+  var didWrite: ((RefreshCredential) -> Void)?
   func read() throws -> RefreshCredential? { value }
   func write(_ credential: RefreshCredential) throws {
     if rejectWrites || (rejectSuccessor && credential.refreshKey == nil) {
       throw SessionFailure.storage
     }
     value = credential
+    didWrite?(credential)
   }
   func clear() throws { value = nil }
 }
 
 final class SessionTransportTests: XCTestCase {
+  func testLogoutIntentSurvivesProcessDeathWhileCabinetReadIsPending() async throws {
+    let store = try stored()
+    let started = expectation(description: "read started")
+    let journaled = expectation(description: "logout journaled before read finishes")
+    journaled.assertForOverFulfill = false
+    store.didWrite = { credential in if credential.logoutKey != nil { journaled.fulfill() } }
+    var resume: CheckedContinuation<Void, Never>?
+    let client = SessionTransport(configuration: try configuration(), store: store) { request in
+      if request.httpMethod == "GET" {
+        await withCheckedContinuation { resume = $0; started.fulfill() }
+        return self.response(request, body: "{}")
+      }
+      return self.response(request, status: 204, body: "")
+    }
+    let read = Task { try await client.request(SessionRequest(operation: .read,
+      headers: ["Authorization": "Bearer synthetic"], read: CabinetRead(resource: .home))) }
+    await fulfillment(of: [started], timeout: 2)
+    let logout = Task { try await client.request(input(.logout)) }
+    await fulfillment(of: [journaled], timeout: 2)
+    XCTAssertEqual(store.value?.logoutKey, key)
+    // The saved state is enough for a fresh process to revoke instead of restore.
+    let restarted = SessionTransport(configuration: try configuration(), store: store) { request in
+      XCTAssertEqual(request.httpMethod, "DELETE")
+      return self.response(request, status: 204, body: "")
+    }
+    let restoration = try await restarted.request(input(.refresh))
+    XCTAssertEqual(restoration.status, 401)
+    XCTAssertNil(store.value)
+    resume?.resume()
+    _ = try await read.value
+    _ = try await logout.value
+  }
+
+  func testCabinetReadsConstructExactFirstPartyGETRoutesWithoutCookies() throws {
+    let routes: [(CabinetResource, String)] = [
+      (.home, "/home"), (.homeBase, "/home/base"), (.profile, "/profile"),
+      (.preferences, "/profile/booking-preferences"), (.privacy, "/profile/privacy"),
+      (.bookings, "/bookings/upcoming"), (.history, "/bookings/history"),
+      (.recommendations, "/recommendations/bookings"), (.locations, "/locations"),
+      (.communities, "/communities/mine"), (.location, "/locations/\(key)"), (.game, "/games/\(key)"),
+    ]
+    for (resource, path) in routes {
+      let request = try SessionRequest(
+        operation: .read, headers: ["Authorization": "Bearer synthetic-access"],
+        read: CabinetRead(resource: resource, id: resource == .location || resource == .game ? key : nil)
+      ).urlRequest(configuration: configuration())
+      XCTAssertEqual(request.url?.absoluteString, origin + "/user/api/v1/" + tenant + path)
+      XCTAssertEqual(request.httpMethod, "GET")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer synthetic-access")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "X-App-Platform"), "ios")
+      XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+      XCTAssertNil(request.httpBody)
+    }
+    let catalog = try SessionRequest(operation: .read, read: CabinetRead(resource: .publicGames,
+      query: ["levelFrom": "C+", "kind": "RATING", "startsFrom": "2026-09-27T10:00:00+03:00", "limit": "20"]
+    )).urlRequest(configuration: configuration())
+    XCTAssertEqual(catalog.url?.path, "/public/api/v1/\(tenant)/games")
+    XCTAssertNil(catalog.value(forHTTPHeaderField: "Authorization"))
+    XCTAssertNil(catalog.value(forHTTPHeaderField: "Cookie"))
+    XCTAssertTrue(catalog.url!.absoluteString.contains("levelFrom=C%2B"))
+  }
+
+  func testCabinetReadIDsQueriesBodiesAndHeadersAreDefaultDeny() throws {
+    let invalid: [CabinetRead] = [
+      CabinetRead(resource: .location, id: "../profile"), CabinetRead(resource: .game),
+      CabinetRead(resource: .profile, id: key), CabinetRead(resource: .home, query: ["url": "https://evil.test"]),
+      CabinetRead(resource: .recommendations, query: ["localDate": "2026-09-27"]),
+      CabinetRead(resource: .recommendations, query: ["limit": "21"]),
+      CabinetRead(resource: .history, query: ["cursor": "short"]),
+      CabinetRead(resource: .history, query: ["cursor": String(repeating: "a", count: 16) + "\n"]),
+      CabinetRead(resource: .history, query: ["kind": "ALL"]),
+      CabinetRead(resource: .history, query: ["status": "UNKNOWN"]),
+      CabinetRead(resource: .publicGames, query: ["limit": "0"]),
+      CabinetRead(resource: .publicGames, query: ["limit": "51"]),
+      CabinetRead(resource: .publicGames, query: ["stationId": "other"]),
+      CabinetRead(resource: .publicGames, query: ["startsFrom": "yesterday"]),
+      CabinetRead(resource: .publicGames, query: ["levelFrom": "C "]),
+      CabinetRead(resource: .publicGames, query: ["kind": "TOURNAMENT"]),
+      CabinetRead(resource: .publicGames, query: ["availability": "ANY"]),
+    ]
+    for read in invalid { XCTAssertThrowsError(try read.url(configuration: configuration())) }
+    for name in ["Authorization", "Cookie", "Origin", "X-Session-Intent", "Idempotency-Key"] {
+      XCTAssertThrowsError(try SessionRequest(operation: .read, headers: [name: "synthetic"],
+        read: CabinetRead(resource: .publicGames)).urlRequest(configuration: configuration()))
+    }
+    XCTAssertThrowsError(try SessionRequest(operation: .read,
+      read: CabinetRead(resource: .profile)).urlRequest(configuration: configuration()))
+    XCTAssertThrowsError(try SessionRequest(operation: .read, body: "{}",
+      read: CabinetRead(resource: .publicGames)).urlRequest(configuration: configuration()))
+    XCTAssertThrowsError(try SessionRequest(operation: .logout,
+      read: CabinetRead(resource: .publicGames)).urlRequest(configuration: configuration()))
+  }
+
+  func testCabinetDoesNotReadAfterSignoutOrWhileLogoutIsPending() async throws {
+    let store = try stored()
+    let client = SessionTransport(configuration: try configuration(), store: store) { _ in
+      XCTFail("A pending logout or signed-out cabinet must not read private/public resources")
+      throw SessionFailure.network
+    }
+    store.value?.logoutKey = key
+    let input = SessionRequest(operation: .read, headers: ["Authorization": "Bearer synthetic"], read: CabinetRead(resource: .home))
+    let pending = try await client.request(input)
+    XCTAssertEqual(pending.status, 401)
+    store.value = nil
+    let signedOut = try await client.request(input)
+    XCTAssertEqual(signedOut.status, 401)
+    let catalog = try await client.request(SessionRequest(operation: .read, read: CabinetRead(resource: .publicGames)))
+    XCTAssertEqual(catalog.status, 401)
+  }
+
   private let origin = "https://lk2.padlhub.su"
   private let tenant = "local-padel"
   private let oldToken = String(repeating: "a", count: 43)
@@ -376,6 +488,9 @@ final class SessionTransportTests: XCTestCase {
     let store = try stored()
     var resume: CheckedContinuation<Void, Never>?
     let started = expectation(description: "refresh started")
+    let journaled = expectation(description: "logout journaled during rotation")
+    journaled.assertForOverFulfill = false
+    store.didWrite = { credential in if credential.logoutKey != nil { journaled.fulfill() } }
     let client = SessionTransport(configuration: try configuration(), store: store) { request in
       if request.httpMethod == "POST" {
         await withCheckedContinuation {
@@ -385,15 +500,65 @@ final class SessionTransportTests: XCTestCase {
         return self.response(request, cookie: self.cookie(self.nextToken))
       }
       XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "phub_refresh=\(self.nextToken)")
+      XCTAssertEqual(store.value?.logoutKey, self.anotherKey)
       return self.response(request, status: 204, body: "")
     }
     let refresh = Task { try await client.request(input(.refresh)) }
     await fulfillment(of: [started], timeout: 2)
     let logout = Task { try await client.request(input(.logout, key: anotherKey)) }
+    await fulfillment(of: [journaled], timeout: 2)
     resume?.resume()
     _ = try await refresh.value
     _ = try await logout.value
     XCTAssertNil(store.value)
+  }
+
+  func testLogoutSurvivesExpiryDuringInflightRotationAndRestart() async throws {
+    let store = try stored()
+    let started = expectation(description: "refresh started before expiry")
+    let journaled = expectation(description: "logout journaled after predecessor expires")
+    let deleting = expectation(description: "successor awaits revocation")
+    journaled.assertForOverFulfill = false
+    store.didWrite = { credential in if credential.logoutKey != nil { journaled.fulfill() } }
+    var resumeRefresh: CheckedContinuation<Void, Never>?
+    var resumeDelete: CheckedContinuation<Void, Never>?
+    let client = SessionTransport(configuration: try configuration(), store: store) { request in
+      if request.httpMethod == "POST" {
+        await withCheckedContinuation { resumeRefresh = $0; started.fulfill() }
+        return self.response(request, cookie: self.cookie(self.nextToken))
+      }
+      await withCheckedContinuation { resumeDelete = $0; deleting.fulfill() }
+      return self.response(request, status: 204, body: "")
+    }
+    let refresh = Task { try await client.request(input(.refresh)) }
+    await fulfillment(of: [started], timeout: 2)
+    let predecessor = try XCTUnwrap(store.value)
+    store.value = RefreshCredential(
+      version: predecessor.version, scope: predecessor.scope, value: predecessor.value,
+      expiresAt: .distantPast, refreshKey: predecessor.refreshKey, logoutKey: predecessor.logoutKey)
+    let logout = Task { try await client.request(input(.logout, key: anotherKey)) }
+    await fulfillment(of: [journaled], timeout: 2)
+    XCTAssertEqual(store.value?.logoutKey, anotherKey)
+    resumeRefresh?.resume()
+    await fulfillment(of: [deleting], timeout: 2)
+
+    // Simulate process death after rotation persists but before DELETE completes.
+    let reopened = MemoryStore()
+    reopened.value = store.value
+    XCTAssertEqual(reopened.value?.value, nextToken)
+    XCTAssertEqual(reopened.value?.logoutKey, anotherKey)
+    let restarted = SessionTransport(configuration: try configuration(), store: reopened) { request in
+      XCTAssertEqual(request.httpMethod, "DELETE")
+      XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), self.anotherKey)
+      XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "phub_refresh=\(self.nextToken)")
+      return self.response(request, status: 204, body: "")
+    }
+    let restoration = try await restarted.request(input(.refresh))
+    XCTAssertEqual(restoration.status, 401)
+    XCTAssertNil(reopened.value)
+    resumeDelete?.resume()
+    _ = try await refresh.value
+    _ = try await logout.value
   }
 
   func testRealIOSKeychainPersistsAcrossInstancesAndClearsAfterReinstallMarker() throws {

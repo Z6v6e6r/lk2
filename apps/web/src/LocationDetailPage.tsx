@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 
 import type { LocationDetail } from './auth-gateway.js';
 import { LocationNavigation } from './LocationsPage.js';
@@ -110,8 +111,10 @@ function GalleryMoreIcon(): React.JSX.Element {
 
 export function LocationDetailPage({
   location,
+  navigation,
 }: {
   readonly location: LocationDetail;
+  readonly navigation?: ReactNode;
 }): React.JSX.Element {
   const [activeImage, setActiveImage] = useState(0);
   const [favorite, setFavorite] = useState(false);
@@ -288,7 +291,7 @@ export function LocationDetailPage({
           </div>
         </section>
       </section>
-      <LocationNavigation />
+      {navigation ?? <LocationNavigation />}
     </main>
   );
 }

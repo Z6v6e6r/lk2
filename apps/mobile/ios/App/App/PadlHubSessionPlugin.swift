@@ -59,9 +59,19 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       call.reject("Native request is unavailable", SessionFailure.request.rawValue)
       return
     }
+    var read: CabinetRead?
+    if operation == .read {
+      guard let name = call.getString("resource"), let resource = CabinetResource(rawValue: name),
+        let query = call.getObject("query") as? [String: String]
+      else {
+        call.reject("Native read is unavailable", SessionFailure.request.rawValue)
+        return
+      }
+      read = CabinetRead(resource: resource, id: call.getString("resourceId"), query: query)
+    }
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"))
+      headers: headers, body: call.getString("body"), read: read)
     Task {
       do {
         let response = try await transport.request(request)

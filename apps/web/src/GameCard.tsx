@@ -149,6 +149,7 @@ function resultSets(game: GameCardModel): readonly GameScoreSummarySet[] {
 
 export interface GameCardProps {
   readonly game: GameCardModel;
+  readonly readOnly?: boolean;
   readonly busy?: boolean;
   readonly compact?: boolean;
   readonly compactActionVariant?: 'default' | 'mini-create';
@@ -177,6 +178,7 @@ export interface GameCardProps {
 
 export function GameCard({
   game,
+  readOnly = false,
   busy = false,
   compact = false,
   compactActionVariant = 'default',
@@ -194,8 +196,9 @@ export function GameCard({
   const dateBadge = formatDateBadge(game);
   const usesStationTimeMetadata =
     compact && showCompactMetadata && compactMetadataVariant === 'station-time';
-  const action =
-    compact && compactActionVariant === 'default'
+  const action = readOnly
+    ? undefined
+    : compact && compactActionVariant === 'default'
       ? gameHistoryPrimaryAction(game)
       : gamePrimaryAction(game);
   const usesMiniCreateAction =
@@ -233,7 +236,7 @@ export function GameCard({
   const detailsUrl = `/games/${encodeURIComponent(game.id)}`;
   // Only a server-authorized viewer card carries a game conversation; a public card never does.
   const conversation = 'conversation' in game ? game.conversation : null;
-  const chatEntry = gameChatEntry(game);
+  const chatEntry = readOnly ? 'NONE' : gameChatEntry(game);
 
   return (
     <article

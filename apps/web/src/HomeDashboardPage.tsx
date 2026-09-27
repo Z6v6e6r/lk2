@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent, UIEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, ReactNode, UIEvent } from 'react';
 import {
   recommendationCalendarDays,
   recommendationLocalDateKey,
@@ -34,6 +34,9 @@ import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 
 interface HomeDashboardPageProps {
+  readonly navigation?: ReactNode;
+  readonly notificationsAvailable?: boolean;
+  readonly dateRecommendationsAvailable?: boolean;
   readonly dashboard: HomeBase;
   readonly viewerFallback: {
     readonly id: string;
@@ -336,11 +339,13 @@ function BottomNavIcon({ name }: { readonly name: BottomNavIconName }): React.JS
 export type MainNavigationSection = 'home' | 'games' | 'chats' | 'notifications' | 'profile';
 
 interface MainBottomNavigationProps {
+  readonly readOnly?: boolean;
   readonly active?: MainNavigationSection;
   readonly gamesDestination?: 'bookings' | 'games';
 }
 
 export function MainBottomNavigation({
+  readOnly = false,
   active,
   gamesDestination = 'bookings',
 }: MainBottomNavigationProps): React.JSX.Element {
@@ -360,25 +365,29 @@ export function MainBottomNavigation({
       >
         <BottomNavIcon name="games" />
       </a>
-      <a className="fh-create" href="/games/new?new=1" aria-label="Создать игру">
-        <span className="fh-create-button">
-          <BottomNavIcon name="create" />
-        </span>
-      </a>
-      <a
-        href="/chats"
-        aria-current={active === 'chats' || active === 'notifications' ? 'page' : undefined}
-        aria-label={
-          chatsUnreadCount > 0 ? `Чаты, непрочитанных сообщений: ${chatsUnreadCount}` : 'Чаты'
-        }
-      >
-        <BottomNavIcon name="chat" />
-        {chatsUnreadCount > 0 ? (
-          <span className="fh-nav-badge" aria-hidden="true">
-            {chatsUnreadCount > 99 ? '99+' : chatsUnreadCount}
-          </span>
-        ) : null}
-      </a>
+      {!readOnly ? (
+        <>
+          <a className="fh-create" href="/games/new?new=1" aria-label="Создать игру">
+            <span className="fh-create-button">
+              <BottomNavIcon name="create" />
+            </span>
+          </a>
+          <a
+            href="/chats"
+            aria-current={active === 'chats' || active === 'notifications' ? 'page' : undefined}
+            aria-label={
+              chatsUnreadCount > 0 ? `Чаты, непрочитанных сообщений: ${chatsUnreadCount}` : 'Чаты'
+            }
+          >
+            <BottomNavIcon name="chat" />
+            {chatsUnreadCount > 0 ? (
+              <span className="fh-nav-badge" aria-hidden="true">
+                {chatsUnreadCount > 99 ? '99+' : chatsUnreadCount}
+              </span>
+            ) : null}
+          </a>
+        </>
+      ) : null}
       <a
         href="/profile"
         aria-current={active === 'profile' ? 'page' : undefined}
@@ -1104,11 +1113,13 @@ export function UpcomingBookingCard({
 
 function HomeViewerHeader({
   fallback,
+  notificationsAvailable,
   notificationUnreadCount,
   onRetry,
   viewer,
 }: {
   readonly fallback: HomeDashboardPageProps['viewerFallback'];
+  readonly notificationsAvailable: boolean;
   readonly notificationUnreadCount: number;
   readonly onRetry: () => void;
   readonly viewer: HomeSectionEnvelope<UserProfile> | null;
@@ -1163,7 +1174,9 @@ function HomeViewerHeader({
           <span aria-hidden="true">↻</span>
         </button>
       ) : null}
-      <NotificationBellLink unreadCount={notificationUnreadCount} />
+      {notificationsAvailable ? (
+        <NotificationBellLink unreadCount={notificationUnreadCount} />
+      ) : null}
     </header>
   );
 }
@@ -1236,6 +1249,9 @@ function HomeDateCalendar({
 }
 
 export function HomeDashboardPage({
+  navigation,
+  notificationsAvailable = true,
+  dateRecommendationsAvailable = true,
   dashboard,
   viewerFallback,
   viewer,
@@ -1476,6 +1492,7 @@ export function HomeDashboardPage({
         >
           <HeroBackgroundX />
           <HomeViewerHeader
+            notificationsAvailable={notificationsAvailable}
             fallback={viewerFallback}
             notificationUnreadCount={notificationUnreadCount}
             onRetry={onRetryViewer}
@@ -1632,16 +1649,18 @@ export function HomeDashboardPage({
               )
             ) : (
               <div className="fh-for-me">
-                <div
-                  className="fh-recommendation-calendar"
-                  aria-label="Фильтр рекомендаций по дате"
-                >
-                  <HomeDateCalendar
-                    moscow
-                    selectedKey={recommendationDateKey}
-                    onSelect={setRecommendationDateKey}
-                  />
-                </div>
+                {dateRecommendationsAvailable ? (
+                  <div
+                    className="fh-recommendation-calendar"
+                    aria-label="Фильтр рекомендаций по дате"
+                  >
+                    <HomeDateCalendar
+                      moscow
+                      selectedKey={recommendationDateKey}
+                      onSelect={setRecommendationDateKey}
+                    />
+                  </div>
+                ) : null}
                 {recommendationDateKey && dateSearchError ? (
                   <p role="alert">
                     Не удалось загрузить события.{' '}
@@ -1763,7 +1782,7 @@ export function HomeDashboardPage({
           )}
         </section>
 
-        <MainBottomNavigation active="home" />
+        {navigation ?? <MainBottomNavigation active="home" />}
 
         <button
           className="fh-logout-accessible"

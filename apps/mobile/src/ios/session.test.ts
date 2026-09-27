@@ -53,7 +53,7 @@ describe('iOS first-party session adapter', () => {
     `${root}/context?token=secret`,
     `${root}/context#x`,
     `${root}/auth/viva/authorize`,
-    `${root}/profile`,
+    `${root}/profile/photo`,
     `${root}/games`,
     `${root}/context/`,
   ])('rejects non-allowlisted URL %s without a bridge call', async (url) => {

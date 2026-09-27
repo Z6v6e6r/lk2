@@ -34,7 +34,7 @@ public struct SessionConfiguration: Sendable {
 }
 
 public enum SessionOperation: String, Sendable {
-  case challenge, verify, refresh, logout, context
+  case challenge, verify, refresh, logout, context, read
 }
 
 public struct SessionRequest: Sendable {
@@ -42,15 +42,17 @@ public struct SessionRequest: Sendable {
   public let challengeID: String?
   public let headers: [String: String]
   public let body: String?
+  public let read: CabinetRead?
 
   public init(
     operation: SessionOperation, challengeID: String? = nil,
-    headers: [String: String] = [:], body: String? = nil
+    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil
   ) {
     self.operation = operation
     self.challengeID = challengeID
     self.headers = headers
     self.body = body
+    self.read = read
   }
 
   func urlRequest(configuration: SessionConfiguration) throws -> URLRequest {
@@ -73,9 +75,13 @@ public struct SessionRequest: Sendable {
     case .context:
       path = "/user/api/v1/\(configuration.tenant)/context"
       method = "GET"
+    case .read:
+      guard read != nil else { throw SessionFailure.request }
+      method = "GET"
     }
     guard challengeID == nil || operation == .verify,
-      let url = URL(string: configuration.origin + path)
+      read == nil || operation == .read,
+      let url = try read?.url(configuration: configuration) ?? URL(string: configuration.origin + path)
     else { throw SessionFailure.request }
     var request = URLRequest(
       url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
@@ -93,11 +99,15 @@ public struct SessionRequest: Sendable {
       else { throw SessionFailure.request }
       normalized[name] = value
     }
-    if operation == .context {
+    if operation == .context || (operation == .read && read?.resource.isPublic == false) {
       guard let authorization = normalized["authorization"], authorization.hasPrefix("Bearer "),
         authorization.count > 7
       else { throw SessionFailure.request }
       request.setValue(authorization, forHTTPHeaderField: "Authorization")
+      guard normalized["idempotency-key"] == nil else { throw SessionFailure.request }
+    } else if operation == .read {
+      guard normalized["authorization"] == nil, normalized["idempotency-key"] == nil
+      else { throw SessionFailure.request }
     } else {
       guard normalized["authorization"] == nil,
         let key = normalized["idempotency-key"],
