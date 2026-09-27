@@ -40,6 +40,7 @@ function list(overrides: Partial<Parameters<typeof CommunityChatList>[0]> = {}) 
       query=""
       unreadOnly={false}
       hasMore={false}
+      refreshing={false}
       selectedCommunityId={null}
       busy={null}
       error={null}
@@ -160,6 +161,13 @@ describe('community chat list', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       'Вы пока не вступили ни в одно сообщество',
     );
+  });
+
+  it('announces a background refresh without taking the cached rows off screen', () => {
+    render(list({ refreshing: true }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Обновляем список…');
+    expect(screen.getByText('Клуб на Соколе')).toBeVisible();
   });
 
   it('walks further directory pages from the end of the list', () => {

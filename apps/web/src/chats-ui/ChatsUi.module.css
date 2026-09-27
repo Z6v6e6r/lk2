@@ -1746,3 +1746,13 @@
   line-height: 16px;
   text-align: center;
 }
+
+/* The cached directory stays on screen while it refreshes, so the read is announced in a thin line
+   above the rows instead of taking their place with a skeleton. */
+.refreshNotice {
+  margin: 0;
+  padding: 8px 16px 0;
+  color: var(--comms-muted);
+  font-size: 12px;
+  line-height: 16px;
+}
