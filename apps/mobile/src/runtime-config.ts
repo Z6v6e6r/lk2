@@ -1,10 +1,14 @@
 // Existing staging origin. Adding a native API target requires review; builds have no default target.
-export const ANDROID_API_ORIGINS = ['https://lk.nano.padlhub.su'] as const;
+export const ANDROID_API_ORIGINS = [
+  'https://lk2.padlhub.su',
+  'https://lk.nano.padlhub.su',
+] as const;
 
 export interface MobileRuntimeConfig {
   readonly apiBaseUrl: string;
   readonly tenantKey: string;
   readonly appVersion: string;
+  readonly appBuild?: string;
 }
 
 export function resolveMobileRuntimeConfig(input: {
@@ -31,7 +35,7 @@ export function resolveMobileRuntimeConfig(input: {
     throw new Error('MOBILE_API_ORIGIN_INVALID');
   }
   const tenantKey = input.tenantKey?.trim() || 'local-padel';
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(tenantKey)) {
+  if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(tenantKey)) {
     throw new Error('MOBILE_TENANT_INVALID');
   }
   return { apiBaseUrl: url.origin, tenantKey, appVersion: input.appVersion || 'development' };

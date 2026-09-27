@@ -748,8 +748,9 @@ export interface AuthGateway {
 }
 
 interface BrowserAuthGatewayOptions {
-  /** Android currently uses only a process-local bearer session and PadlHub API transport. */
+  /** Native callers must explicitly provide the reviewed persistent session transport. */
   readonly platform?: 'web' | 'android';
+  readonly nativeSessionTransport?: boolean;
   readonly onSessionExpired?: () => void;
   readonly baseUrl: string;
   readonly tenantKey: string;
@@ -867,11 +868,21 @@ function buildSelfPlayerProfileView(profile: UserProfile): PlayerProfileView {
  * it remains in memory for the lifetime of this gateway instance.
  */
 export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): AuthGateway {
+  if (
+    options.platform === 'android' &&
+    options.nativeSessionTransport &&
+    !options.fetchImplementation
+  ) {
+    throw new Error('NATIVE_TRANSPORT_REQUIRED');
+  }
   const clientOptions = {
     baseUrl: options.baseUrl.replace(/\/$/, ''),
     tenantKey: options.tenantKey,
     platform: options.platform ?? ('web' as const),
-    sessionMode: options.platform === 'android' ? ('memory' as const) : ('cookie' as const),
+    sessionMode:
+      options.platform === 'android' && !options.nativeSessionTransport
+        ? ('memory' as const)
+        : ('cookie' as const),
     ...(options.onSessionExpired ? { onSessionExpired: options.onSessionExpired } : {}),
     appVersion: options.appVersion,
     ...(options.appBuild ? { appBuild: options.appBuild } : {}),
@@ -1729,9 +1740,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   }
 
   async function restore(): Promise<AuthenticatedSession | null> {
-    if (nativeClient) return null;
+    if (nativeClient && !options.nativeSessionTransport) return null;
     try {
       const session = normalizeSession(await client.refreshSession());
+      if (nativeClient) return session;
       const handoffKind = await consumeVivaHandoff().catch(() => false);
       if (handoffKind === 'recovery') restoreVivaReauthorizationReturnPath();
       else if (handoffKind === 'normal') {
@@ -2625,10 +2637,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async logout() {
-      // No native refresh credential is issued by the current contract. Local logout discards
-      // the process bearer; it does not claim server-side refresh-session revocation.
-      if (nativeClient) client.clearAccessToken();
-      else await client.revokeSession();
+      if (nativeClient) {
+        client.clearAccessToken();
+        if (options.nativeSessionTransport) await client.revokeSession();
+      } else await client.revokeSession();
       vivaAccessToken = undefined;
       vivaProfilePhotoGrant = undefined;
       vivaProfilePhotoCommandIdempotencyKey = undefined;
