@@ -718,6 +718,20 @@
   white-space: pre-wrap;
 }
 
+/* A pasted link stays readable on both bubble tones; #5b35c9 clears AA on the own purple bubble. */
+.messageLink {
+  color: #5b35c9;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.messageLink:hover,
+.messageLink:focus-visible {
+  color: #43259e;
+}
+
 /* Reserve the end of the last line for time/status, including long messages. */
 .messageTail p::after {
   display: inline-block;

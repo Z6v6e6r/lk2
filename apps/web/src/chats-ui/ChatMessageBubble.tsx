@@ -4,6 +4,7 @@ import type { ConversationMessage, ConversationMessageAttachment } from '../auth
 import { formatAttachmentSize } from './chat-attachments.js';
 import { ChatAvatar } from './ChatAvatar.js';
 import { ChatImageViewer } from './ChatImageViewer.js';
+import { LinkedMessageText } from './LinkedMessageText.js';
 import { formatMessageTime } from './chat-format.js';
 import styles from './ChatsUi.module.css';
 import { useAttachmentObjectUrl } from './useAttachmentObjectUrl.js';
@@ -177,7 +178,11 @@ export function ChatMessageBubble({
             ))}
           </ul>
         ) : null}
-        {message.body ? <p>{message.body}</p> : null}
+        {message.body ? (
+          <p>
+            <LinkedMessageText text={message.body} linkClassName={styles.messageLink} />
+          </p>
+        ) : null}
         <footer className={endsGroup ? styles.messageMeta : 'sr-only'}>
           <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
           {own ? <span aria-label="Отправлено">✓</span> : null}

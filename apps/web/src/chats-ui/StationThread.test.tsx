@@ -186,3 +186,25 @@ describe('station thread older history', () => {
     }
   });
 });
+
+describe('station thread links', () => {
+  it('makes an address from the operator clickable', () => {
+    render(
+      thread({
+        messages: [{ ...message(1), body: 'Инструкция: https://padlhub.ru/docs' }],
+      }),
+    );
+
+    const anchor = screen.getByRole('link', { name: 'https://padlhub.ru/docs' });
+    expect(anchor).toHaveAttribute('href', 'https://padlhub.ru/docs');
+    expect(anchor).toHaveAttribute('target', '_blank');
+    expect(anchor).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.getByText('Инструкция:')).toBeInTheDocument();
+  });
+
+  it('keeps a message without an address link-free', () => {
+    const { container } = render(thread({ messages: [{ ...message(1), body: 'Корт свободен' }] }));
+
+    expect(timeline(container).querySelector('a')).toBeNull();
+  });
+});

@@ -10,6 +10,7 @@ import { ChatComposer, type ChatComposerSend } from './ChatComposer.js';
 import { ChatContextCard } from './ChatContextCard.js';
 import { ChatMessageBubble } from './ChatMessageBubble.js';
 import { ChatThreadHeader } from './ChatThreadHeader.js';
+import { LinkedMessageText } from './LinkedMessageText.js';
 import type { ChatAttachmentDraft } from './chat-attachments.js';
 import { formatMessageDay, messageDayKey } from './chat-format.js';
 import styles from './ChatsUi.module.css';
@@ -195,7 +196,16 @@ export function ChatThread({
                 }`}
               >
                 <p>
-                  {pendingMessage.body || (pendingMessage.attachmentIds?.length ? 'Вложение' : '')}
+                  {pendingMessage.body ? (
+                    <LinkedMessageText
+                      text={pendingMessage.body}
+                      linkClassName={styles.messageLink}
+                    />
+                  ) : pendingMessage.attachmentIds?.length ? (
+                    'Вложение'
+                  ) : (
+                    ''
+                  )}
                 </p>
                 <span role="status">
                   {pendingMessage.state === 'sending' ? 'Отправляется…' : 'Не отправлено'}

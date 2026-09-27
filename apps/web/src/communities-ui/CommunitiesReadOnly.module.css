@@ -577,6 +577,18 @@
   font-size: 14px;
   line-height: 1.45;
 }
+/* Same tone as the chat threads; #5b35c9 clears AA on the light purple own-message bubble. */
+.messageLink {
+  color: #5b35c9;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.messageLink:hover,
+.messageLink:focus-visible {
+  color: #43259e;
+}
 .messageTime {
   display: block;
   margin-top: 6px;

@@ -5,6 +5,7 @@ import { ChatComposer, type ChatComposerSend } from './ChatComposer.js';
 import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import { ChatImageViewer } from './ChatImageViewer.js';
 import { ExternalChatListItem } from './ExternalChatListItem.js';
+import { LinkedMessageText } from './LinkedMessageText.js';
 import { StationChatRowItem } from './StationChatRowItem.js';
 import { StationAvatar } from './StationAvatar.js';
 import type { ChatAttachmentDraft } from './chat-attachments.js';
@@ -343,7 +344,11 @@ export function StationThread({
                         ))}
                       </ul>
                     ) : null}
-                    {message.body ? <p>{message.body}</p> : null}
+                    {message.body ? (
+                      <p>
+                        <LinkedMessageText text={message.body} linkClassName={styles.messageLink} />
+                      </p>
+                    ) : null}
                     {message.createdAt ? (
                       <time dateTime={message.createdAt}>
                         {formatMessageTime(message.createdAt)}
