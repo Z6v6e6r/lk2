@@ -1231,6 +1231,21 @@ export function GamesPage({
     });
   }
 
+  /** Viewer cards carry the conversation field; a public catalogue card never does. */
+  function isViewerGame(game: GameCardModel): game is ViewerGameCard {
+    return 'conversation' in game;
+  }
+
+  /**
+   * A roster member can reach the game chat from the list before anybody opened the thread, exactly
+   * like the detail screen: the messaging command creates or reads it back, then the browser moves
+   * to the returned conversation.
+   */
+  function requestGameChat(game: GameCardModel): void {
+    if (!isViewerGame(game)) return;
+    void openGameChat(game);
+  }
+
   if (gameId) {
     return (
       <main className="games-page games-page--detail">
@@ -1667,6 +1682,7 @@ export function GamesPage({
               onChatOpen={(selectedGame, conversationId) =>
                 rememberCardGameChat(selectedGame, conversationId)
               }
+              onChatRequest={requestGameChat}
               onParticipantProfileRequest={(selectedGame, participant, participantIndex) =>
                 void handleParticipantProfileRequest(selectedGame, participant, participantIndex)
               }

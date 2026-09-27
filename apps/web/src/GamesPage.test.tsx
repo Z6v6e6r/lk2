@@ -503,6 +503,45 @@ describe('GamesPage discovery', () => {
     });
   });
 
+  it('creates the game chat from a roster card that has no conversation yet', async () => {
+    const viewerGame: ViewerGameCard = {
+      ...game,
+      surface: 'MY_UPCOMING',
+      levelRange: game.levelRange ?? null,
+      capacity: { ...game.capacity, total: 4 },
+      priceSummary: game.priceSummary ?? null,
+      participants: game.participants.map((participant, index) => ({
+        ...participant,
+        userId: `00000000-0000-4000-8000-00000000000${index}`,
+      })),
+      viewerRelation: 'PARTICIPANT',
+      viewerPaymentState: 'PAID',
+      resultSummary: null,
+      allowedActions: ['OPEN_DETAILS'],
+      conversation: null,
+    };
+    const getOrCreateGameConversation = vi
+      .fn<AuthGateway['getOrCreateGameConversation']>()
+      .mockRejectedValue(new Error('CONTEXTUAL_MESSAGING_DISABLED'));
+    const api: AuthGateway = {
+      ...gateway(),
+      listMyGames: vi.fn().mockResolvedValue({ items: [viewerGame], nextCursor: null }),
+      getOrCreateGameConversation,
+    };
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+
+    const tabs = await screen.findByRole('navigation', { name: 'Разделы игр' });
+    await user.click(within(tabs).getByRole('button', { name: 'Для меня' }));
+    await user.click(await screen.findByRole('button', { name: 'Открыть чат игры' }));
+
+    await waitFor(() => expect(getOrCreateGameConversation).toHaveBeenCalledWith(viewerGame.id));
+    expect(getOrCreateGameConversation).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Не удалось выполнить действие. Проверьте связь и повторите.',
+    );
+  });
+
   it('uses the shared main navigation and exposes the MVP create-game call to action', async () => {
     const api = gateway();
     render(<GamesPage gateway={api} />);
