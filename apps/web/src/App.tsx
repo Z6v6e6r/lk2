@@ -694,6 +694,32 @@ export function App({
     }),
     [gateway],
   );
+  /**
+   * The Сообщества tab reads the same member directory the profile shows, so its loaders share the
+   * stable-identity rule above: a new object per render would re-issue the read on every chat tick.
+   * A runtime that publishes the directory without the read-only chat projection keeps the rows and
+   * leaves the thread to its "not connected" state.
+   */
+  const communityDirectoryAvailable =
+    state.session !== null &&
+    state.session.context.runtimeCapabilities?.communityDirectory !== false;
+  const communityChatReadAvailable =
+    state.session !== null && state.session.context.runtimeCapabilities?.communityReadChat === true;
+  const communityChatsSource = useMemo(
+    () =>
+      communityDirectoryAvailable
+        ? {
+            loadCommunities: (cursor?: string) => gateway.listMyCommunities(cursor, 50),
+            ...(communityChatReadAvailable
+              ? {
+                  loadMessages: (communityId: string, cursor?: string) =>
+                    gateway.listCommunityReadExperienceChat(communityId, cursor),
+                }
+              : {}),
+          }
+        : null,
+    [gateway, communityDirectoryAvailable, communityChatReadAvailable],
+  );
   const [communityInviteToken] = useState(() =>
     typeof window === 'undefined'
       ? null
@@ -2553,6 +2579,7 @@ export function App({
           messages={conversationMessages}
           mode={protectedRoute.mode}
           stationSupport={stationSupportSource}
+          communityChats={communityChatsSource}
           {...(requestedConversationId ? { selectedConversationId: requestedConversationId } : {})}
           hasExplicitRecipient={Boolean(validChatRecipientId)}
           autoOpenDirect={chatRecipientAutoOpen}

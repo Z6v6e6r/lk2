@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type {
+  CommunityMembershipPage,
+  CommunityReadExperienceChatPage,
   ConversationMessage,
   ConversationNotificationPolicyUpdate,
   ConversationPage,
@@ -21,6 +23,14 @@ import {
 } from './chats-ui/ChatFilters.js';
 import { ChatList } from './chats-ui/ChatList.js';
 import { ChatThread } from './chats-ui/ChatThread.js';
+import { CommunityChatList, CommunityThread } from './chats-ui/CommunityChats.js';
+import {
+  appendCommunityPage,
+  communityMessageKey,
+  communityThreadPage,
+  type CommunityChatMessage,
+  type CommunityRow,
+} from './chats-ui/community-chat-rows.js';
 import { StationDialogList, StationThread } from './chats-ui/StationChats.js';
 import { stationHistoryRows } from './chats-ui/station-chat-rows.js';
 import { type ChatComposerSend } from './chats-ui/ChatComposer.js';
@@ -59,6 +69,21 @@ export interface StationSupportSource {
   }) => Promise<StationSupportAttachment>;
   readonly loadAttachment: (attachmentId: string) => Promise<Blob>;
   readonly createMessageId: () => string;
+}
+
+/**
+ * Community chats live in the community projection rather than in the LK2 conversation page, so the
+ * Сообщества tab lists the communities the viewer was added to and reads one community chat at a
+ * time. `loadMessages` is optional because a runtime can publish the member directory without
+ * enabling the read-only chat projection.
+ */
+export interface CommunityChatsSource {
+  /** One page of the member directory; `cursor` walks to the next page. */
+  readonly loadCommunities: (cursor?: string) => Promise<CommunityMembershipPage>;
+  /** One chat page, newest first, with `nextCursor` pointing at the older messages. */
+  readonly loadMessages?:
+    | ((communityId: string, cursor?: string) => Promise<CommunityReadExperienceChatPage>)
+    | undefined;
 }
 
 export type ChatRouteMode = 'list' | 'new' | 'thread';
@@ -158,6 +183,8 @@ interface ChatsPageProps {
   readonly onSetNotificationPolicy: (update: ConversationNotificationPolicyUpdate) => void;
   /** Absent means the station tab is not wired in this runtime and keeps its "not connected" copy. */
   readonly stationSupport?: StationSupportSource | null | undefined;
+  /** Absent means the communities tab is not wired in this runtime and keeps its "not connected" copy. */
+  readonly communityChats?: CommunityChatsSource | null | undefined;
 }
 
 interface StationSupportState {
@@ -201,6 +228,68 @@ const EMPTY_STATION_STATE: StationSupportState = {
   error: null,
   failedMessage: null,
 };
+
+interface CommunityChatsState {
+  readonly status: 'idle' | 'ready';
+  readonly communities: readonly CommunityRow[];
+  readonly nextCursor: string | null;
+  readonly loadingMore: boolean;
+  readonly selectedCommunityId: string | null;
+  readonly messages: readonly CommunityChatMessage[];
+  /** Which community the loaded `messages` belong to; a mismatch means the thread is still loading. */
+  readonly messagesCommunityId: string | null;
+  /** The server-issued cursor of the page before the oldest message on screen. */
+  readonly olderCursor: string | null;
+  readonly loadingEarlier: boolean;
+  /** The member directory and the chat thread fail independently and are retried independently. */
+  readonly listError: ChatUiError | null;
+  /** Which directory read failed, so the retry repeats that read instead of restarting the chain. */
+  readonly listRetry: 'first' | 'more' | null;
+  readonly threadError: ChatUiError | null;
+}
+
+const EMPTY_COMMUNITY_STATE: CommunityChatsState = {
+  status: 'idle',
+  communities: [],
+  nextCursor: null,
+  loadingMore: false,
+  selectedCommunityId: null,
+  messages: [],
+  messagesCommunityId: null,
+  olderCursor: null,
+  loadingEarlier: false,
+  listError: null,
+  listRetry: null,
+  threadError: null,
+};
+
+/**
+ * The community read experience answers with the community envelope: a community the viewer is not
+ * a member of is reported as not found, and `COMMUNITY_EXPERIENCE_UNAVAILABLE` (503) covers both a
+ * projection that is switched off and a failed read of it. The two are indistinguishable here, so a
+ * 503 stays retryable instead of telling a person that chats do not exist for their organization.
+ * The runtime capabilities already decide whether the tab is wired at all.
+ */
+function communityChatsError(error: unknown, scope: 'list' | 'thread'): ChatUiError {
+  const record =
+    typeof error === 'object' && error !== null
+      ? (error as { readonly status?: unknown; readonly code?: unknown })
+      : {};
+  const status = typeof record.status === 'number' ? record.status : undefined;
+  const code = typeof record.code === 'string' ? record.code : undefined;
+  if (status === 401) return { kind: 'AUTH', message: 'Нужно войти снова.' };
+  if (status === 403) return { kind: 'FORBIDDEN', message: 'Нет доступа к чату сообщества.' };
+  if (code === 'COMMUNITY_EXPERIENCE_NOT_FOUND' || status === 404) {
+    // A missing chat is actionable for the open community; on the directory read the same 404 has no
+    // community to name, so it is reported as a failed read of the list.
+    return scope === 'thread'
+      ? { kind: 'NOT_FOUND', message: 'Чат сообщества недоступен.' }
+      : { kind: 'RETRYABLE', message: 'Не удалось загрузить чаты сообществ.' };
+  }
+  return scope === 'thread'
+    ? { kind: 'RETRYABLE', message: 'Чат сообщества временно недоступен. Попробуйте ещё раз.' }
+    : { kind: 'RETRYABLE', message: 'Не удалось загрузить чаты сообществ.' };
+}
 
 /**
  * The cursor of the next older page is issued by the server (`nextBefore`), never derived here from
@@ -368,6 +457,7 @@ export function ChatsPage({
   onLoadEarlier,
   onSetNotificationPolicy,
   stationSupport,
+  communityChats,
 }: ChatsPageProps): React.JSX.Element {
   const [filter, setFilter] = useState<ChatFilter>(
     () => readChatViewState(currentUserId).filter ?? 'ALL',
@@ -383,11 +473,24 @@ export function ChatsPage({
   /** A deployment without a media bucket keeps the composer text-only instead of failing sends. */
   const [stationAttachmentsEnabled, setStationAttachmentsEnabled] = useState(true);
   const stationRequestRef = useRef(0);
+  const [communityState, setCommunityState] = useState<CommunityChatsState>(EMPTY_COMMUNITY_STATE);
+  const [communityReloadToken, setCommunityReloadToken] = useState(0);
+  /** Directory pages and chat pages are read independently, so they count generations separately. */
+  const communityListRequestRef = useRef(0);
+  const communityRequestRef = useRef(0);
   const selected = page?.items.find((conversation) => conversation.id === selectedConversationId);
   const stationSource = stationSupport ?? null;
   const stationDialogs = stationState.dialogs;
   const stationSelectedDialog =
     stationDialogs.find((dialog) => dialog.id === stationState.selectedDialogId) ?? null;
+  const communitySource = communityChats ?? null;
+  const communityMessages = communitySource?.loadMessages;
+  /** The read-only chat projection is optional, so a directory-only runtime has no thread to open. */
+  const communityMessagesEnabled = communityMessages !== undefined;
+  const communitySelected =
+    communityState.communities.find(
+      (community) => community.id === communityState.selectedCommunityId,
+    ) ?? null;
 
   // Loading state is derived from the data, so the effect never sets state synchronously: `idle`
   // means "not loaded yet" and a dialog/messages id mismatch means "this thread is still loading".
@@ -523,6 +626,23 @@ export function ChatsPage({
     filter === 'STATION' &&
     stationSource !== null &&
     (stationSelectedDialog !== null || stationState.pendingStationId !== null);
+  const communityThreadLoading =
+    communityState.selectedCommunityId !== null &&
+    communityState.messagesCommunityId !== communityState.selectedCommunityId;
+  const communityListBusy: 'load' | 'more' | null = communityState.loadingMore
+    ? 'more'
+    : communityState.status === 'idle' && communityState.communities.length === 0
+      ? 'load'
+      : null;
+  const communityThreadBusy: 'load' | 'load-earlier' | null = communityThreadLoading
+    ? 'load'
+    : communityState.loadingEarlier
+      ? 'load-earlier'
+      : null;
+  // A community chat opens in place instead of navigating to `/chats/<id>`, so a phone has no route
+  // change to swap panes with: the shell itself must leave list mode or the thread stays hidden.
+  const communityThreadOpen =
+    filter === 'COMMUNITY' && communityMessagesEnabled && communitySelected !== null;
 
   function retryStationMessage(): void {
     const failed = stationState.failedMessage;
@@ -753,6 +873,199 @@ export function ChatsPage({
       );
   }
 
+  /**
+   * The Сообщества tab reads the member directory lazily, exactly like the station tab: a person who
+   * never opens it pays nothing, and every page it has loaded stays on screen across re-renders of
+   * the five-second chat tick. A full read invalidates a page read that is still in flight, so a
+   * late page cannot rewind the cursor of the list that replaced it.
+   */
+  const loadCommunityChats = useCallback((): void => {
+    if (!communitySource) return;
+    const generation = communityListRequestRef.current + 1;
+    communityListRequestRef.current = generation;
+    void communitySource.loadCommunities().then(
+      (page) => {
+        if (communityListRequestRef.current !== generation) return;
+        setCommunityState((current) => ({
+          ...current,
+          status: 'ready',
+          communities: appendCommunityPage([], page.items),
+          nextCursor: page.nextCursor ?? null,
+          loadingMore: false,
+          listError: null,
+          listRetry: null,
+        }));
+      },
+      (error: unknown) => {
+        if (communityListRequestRef.current !== generation) return;
+        setCommunityState((current) => ({
+          ...current,
+          status: 'ready',
+          loadingMore: false,
+          listError: communityChatsError(error, 'list'),
+          listRetry: 'first',
+        }));
+      },
+    );
+  }, [communitySource]);
+
+  useEffect(() => {
+    if (filter !== 'COMMUNITY') return;
+    if (!communitySource || communityState.status !== 'idle') return;
+    loadCommunityChats();
+  }, [filter, communitySource, communityState.status, loadCommunityChats]);
+
+  // The thread belongs to the selected community: `messagesCommunityId` is what makes a thread that
+  // is still arriving render as loading instead of rendering the previous community's history, and
+  // the generation drops a page of a community the person has already left.
+  useEffect(() => {
+    const communityId = communityState.selectedCommunityId;
+    if (filter !== 'COMMUNITY' || !communityMessages || !communityId) return;
+    const generation = communityRequestRef.current + 1;
+    communityRequestRef.current = generation;
+    void communityMessages(communityId).then(
+      (page) => {
+        if (communityRequestRef.current !== generation) return;
+        setCommunityState((current) => ({
+          ...current,
+          messages: communityThreadPage(page),
+          messagesCommunityId: communityId,
+          olderCursor: page.nextCursor ?? null,
+          loadingEarlier: false,
+          threadError: null,
+        }));
+      },
+      (error: unknown) => {
+        if (communityRequestRef.current !== generation) return;
+        setCommunityState((current) => ({
+          ...current,
+          messages: [],
+          messagesCommunityId: communityId,
+          olderCursor: null,
+          loadingEarlier: false,
+          threadError: communityChatsError(error, 'thread'),
+        }));
+      },
+    );
+  }, [filter, communityMessages, communityState.selectedCommunityId, communityReloadToken]);
+
+  /**
+   * A failed page keeps its cursor, so repeating this read repeats exactly the page that failed and
+   * never rewinds the chain to page one.
+   */
+  function loadMoreCommunities(): void {
+    const cursor = communityState.nextCursor;
+    if (!communitySource || !cursor || communityState.loadingMore) return;
+    const generation = communityListRequestRef.current;
+    setCommunityState((current) => ({ ...current, loadingMore: true }));
+    const settle = (update: (current: CommunityChatsState) => CommunityChatsState): void =>
+      setCommunityState((current) => {
+        if (communityListRequestRef.current !== generation) {
+          // A full refresh owns the list now; this page must not rewind its cursor.
+          return current.loadingMore ? { ...current, loadingMore: false } : current;
+        }
+        return update(current);
+      });
+    void communitySource.loadCommunities(cursor).then(
+      (page) =>
+        settle((current) => ({
+          ...current,
+          loadingMore: false,
+          communities: appendCommunityPage(current.communities, page.items),
+          nextCursor: page.nextCursor ?? null,
+          listError: null,
+          listRetry: null,
+        })),
+      (error: unknown) =>
+        settle((current) => ({
+          ...current,
+          loadingMore: false,
+          listError: communityChatsError(error, 'list'),
+          listRetry: 'more',
+        })),
+    );
+  }
+
+  /** The retry bar repeats the read that failed: a whole page or the page after the loaded ones. */
+  function retryCommunityList(): void {
+    if (communityState.listRetry === 'more') loadMoreCommunities();
+    else loadCommunityChats();
+  }
+
+  /**
+   * Walking a community chat backwards is the only read that is appended above the current view, so
+   * a page that repeats what is already on screen ends the walk instead of leaving a control that
+   * can never make progress.
+   */
+  function loadOlderCommunityMessages(): void {
+    const communityId = communityState.selectedCommunityId;
+    const cursor = communityState.olderCursor;
+    if (!communityMessages || !communityId || !cursor || communityState.loadingEarlier) return;
+    const generation = communityRequestRef.current;
+    setCommunityState((current) => ({ ...current, loadingEarlier: true, threadError: null }));
+    void communityMessages(communityId, cursor).then(
+      (page) => {
+        setCommunityState((current) => {
+          if (
+            current.selectedCommunityId !== communityId ||
+            communityRequestRef.current !== generation
+          ) {
+            // The thread moved on; the page is dropped, but the flag must not stay stuck true or the
+            // control would never be usable again.
+            return current.loadingEarlier ? { ...current, loadingEarlier: false } : current;
+          }
+          const known = new Set(current.messages.map(communityMessageKey));
+          const older = communityThreadPage(page).filter(
+            (message) => !known.has(communityMessageKey(message)),
+          );
+          return {
+            ...current,
+            loadingEarlier: false,
+            olderCursor: older.length > 0 ? (page.nextCursor ?? null) : null,
+            messages: older.length > 0 ? [...older, ...current.messages] : current.messages,
+          };
+        });
+      },
+      (error: unknown) => {
+        setCommunityState((current) =>
+          current.selectedCommunityId === communityId
+            ? {
+                ...current,
+                loadingEarlier: false,
+                threadError: communityChatsError(error, 'thread'),
+              }
+            : current,
+        );
+      },
+    );
+  }
+
+  /**
+   * Re-tapping the community that is already open is not a reason to throw its history away: the
+   * effect would not run again, and the person would be left with an empty thread and a disabled
+   * refresh button. The row is `aria-current` anyway, so the tap is a no-op.
+   */
+  function selectCommunity(communityId: string): void {
+    setCommunityState((current) =>
+      current.selectedCommunityId === communityId
+        ? current
+        : {
+            ...current,
+            selectedCommunityId: communityId,
+            messages: [],
+            messagesCommunityId: null,
+            olderCursor: null,
+            loadingEarlier: false,
+            threadError: null,
+          },
+    );
+  }
+
+  function reloadCommunityThread(): void {
+    setCommunityState((current) => ({ ...current, threadError: null }));
+    setCommunityReloadToken((token) => token + 1);
+  }
+
   useEffect(() => {
     try {
       window.sessionStorage.setItem(
@@ -827,7 +1140,9 @@ export function ChatsPage({
       <ChatErrorBanner error={error} busy={busy} onRefresh={onRefresh} />
       <section
         className={`${styles.shell} ${
-          mode === 'thread' || stationThreadOpen ? styles.threadMode : styles.listMode
+          mode === 'thread' || stationThreadOpen || communityThreadOpen
+            ? styles.threadMode
+            : styles.listMode
         }`}
         aria-label="Чаты"
       >
@@ -874,6 +1189,29 @@ export function ChatsPage({
                 <p>Этот тип чатов ещё не подключён. Здесь появятся обсуждения с участниками.</p>
               </div>
             )
+          ) : filter === 'COMMUNITY' ? (
+            communitySource ? (
+              <CommunityChatList
+                communities={communityState.communities}
+                query={query}
+                unreadOnly={unreadOnly}
+                hasMore={communityState.nextCursor !== null}
+                selectedCommunityId={communityState.selectedCommunityId}
+                busy={communityListBusy}
+                error={communityState.listError}
+                onSelectCommunity={selectCommunity}
+                onRetry={retryCommunityList}
+                onLoadMore={loadMoreCommunities}
+              />
+            ) : (
+              <div className={styles.emptyState} role="status">
+                <span className={styles.emptyIcon} aria-hidden="true">
+                  <ChatCategoryIcon name="COMMUNITY" />
+                </span>
+                <strong>Чаты сообществ</strong>
+                <p>Этот тип чатов ещё не подключён. Здесь появятся обсуждения с участниками.</p>
+              </div>
+            )
           ) : (
             <ChatList
               page={page}
@@ -887,7 +1225,32 @@ export function ChatsPage({
             />
           )}
         </aside>
-        {filter === 'STATION' && stationSource ? (
+        {/* An explicit `/chats/<id>` route is the strongest statement of what the person wants to
+            read, so it wins over a chat-type filter restored from an earlier visit. */}
+        {mode === 'thread' && selectedConversationId ? (
+          <ChatThread
+            conversation={selected}
+            messages={messages}
+            currentUserId={currentUserId}
+            busy={busy}
+            forbidden={error?.kind === 'FORBIDDEN'}
+            pendingMessage={pendingMessage}
+            connectionStatus={realtimeLabel(realtimeState)}
+            hasEarlierMessages={hasEarlierMessages}
+            canRetrySend={canRetrySend}
+            policyBusy={policyBusy}
+            attachments={attachments}
+            attachmentNotice={attachmentNotice}
+            loadMedia={loadMedia}
+            onAttachFiles={onAttachFiles}
+            onRemoveAttachment={onRemoveAttachment}
+            onSendMessage={onSendMessage}
+            onRetrySend={onRetrySend}
+            onRefresh={onRefresh}
+            onLoadEarlier={onLoadEarlier}
+            onSetNotificationPolicy={onSetNotificationPolicy}
+          />
+        ) : filter === 'STATION' && stationSource ? (
           stationSelectedDialog || stationState.pendingStationId ? (
             <StationThread
               dialog={stationSelectedDialog}
@@ -926,29 +1289,30 @@ export function ChatsPage({
               </p>
             </section>
           )
-        ) : mode === 'thread' && selectedConversationId ? (
-          <ChatThread
-            conversation={selected}
-            messages={messages}
-            currentUserId={currentUserId}
-            busy={busy}
-            forbidden={error?.kind === 'FORBIDDEN'}
-            pendingMessage={pendingMessage}
-            connectionStatus={realtimeLabel(realtimeState)}
-            hasEarlierMessages={hasEarlierMessages}
-            canRetrySend={canRetrySend}
-            policyBusy={policyBusy}
-            attachments={attachments}
-            attachmentNotice={attachmentNotice}
-            loadMedia={loadMedia}
-            onAttachFiles={onAttachFiles}
-            onRemoveAttachment={onRemoveAttachment}
-            onSendMessage={onSendMessage}
-            onRetrySend={onRetrySend}
-            onRefresh={onRefresh}
-            onLoadEarlier={onLoadEarlier}
-            onSetNotificationPolicy={onSetNotificationPolicy}
+        ) : filter === 'COMMUNITY' && communityMessagesEnabled && communitySelected ? (
+          <CommunityThread
+            community={communitySelected}
+            messages={communityState.messages}
+            busy={communityThreadBusy}
+            error={communityState.threadError}
+            hasEarlierMessages={communityState.olderCursor !== null}
+            onRetry={reloadCommunityThread}
+            onLoadEarlier={loadOlderCommunityMessages}
           />
+        ) : filter === 'COMMUNITY' ? (
+          <section className={styles.threadPlaceholder} aria-label="Чат сообщества">
+            <span className={styles.placeholderIcon} aria-hidden="true">
+              <ChatCategoryIcon name="COMMUNITY" />
+            </span>
+            <h2>{communitySelected ? 'Чат сообщества' : 'Выберите чат сообщества'}</h2>
+            <p>
+              {communitySelected
+                ? 'Чтение чата сообщества ещё не подключено для этой организации.'
+                : communitySource
+                  ? 'Чаты сообществ, в которые вы вступили, собраны слева.'
+                  : 'Обсуждения сообществ появятся здесь после подключения.'}
+            </p>
+          </section>
         ) : (
           <section className={styles.threadPlaceholder} aria-label="История сообщений">
             <span className={styles.placeholderIcon} aria-hidden="true">

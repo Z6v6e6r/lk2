@@ -3425,4 +3425,101 @@ describe('PadlHub web authentication', () => {
     expect(await screen.findByRole('heading', { name: 'Подарочная карта' })).toBeVisible();
     expect(gateway.restoreSession).toHaveBeenCalledTimes(1);
   });
+
+  it('opens the communities tab of the chats block on the member chats the runtime publishes', async () => {
+    window.history.replaceState({}, '', '/chats');
+    const communityId = '55555555-5555-4555-8555-555555555555';
+    const listMyCommunities = vi.fn<AuthGateway['listMyCommunities']>().mockResolvedValue({
+      items: [
+        {
+          id: communityId,
+          title: 'Клуб на Соколе',
+          logoUrl: null,
+          isVerified: false,
+          unreadChatCount: 2,
+          route: `/communities/${communityId}`,
+        },
+      ],
+    });
+    const listCommunityReadExperienceChat = vi
+      .fn<AuthGateway['listCommunityReadExperienceChat']>()
+      .mockResolvedValue({
+        items: [
+          {
+            body: 'Корт свободен в 19:00',
+            sentAt: '2026-09-27T12:00:00.000Z',
+            author: { displayName: 'Анна' },
+            isViewer: false,
+          },
+        ],
+      });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue({
+        ...session,
+        context: {
+          ...session.context,
+          runtimeCapabilities: {
+            communityDirectory: true,
+            communityReadDetail: true,
+            communityReadFeed: false,
+            communityReadChat: true,
+            communityReadRating: false,
+            communityCanonical: false,
+            communityDirectInvites: false,
+            communityRealtime: false,
+          },
+        },
+      }),
+      listMyCommunities,
+      listCommunityReadExperienceChat,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Сообщества' }));
+    const list = await screen.findByRole('list', { name: 'Чаты сообществ' });
+    expect(within(list).getByText('Клуб на Соколе')).toBeVisible();
+    // The tab reads the member directory in its largest published page size.
+    expect(listMyCommunities).toHaveBeenCalledWith(undefined, 50);
+
+    await user.click(within(list).getByRole('button', { name: /Клуб на Соколе/ }));
+
+    expect(await screen.findByText('Корт свободен в 19:00')).toBeVisible();
+    expect(listCommunityReadExperienceChat).toHaveBeenCalledWith(communityId, undefined);
+  });
+
+  it('keeps the communities tab unconnected when the runtime publishes no community directory', async () => {
+    window.history.replaceState({}, '', '/chats');
+    const listCommunityReadExperienceChat = vi.fn<AuthGateway['listCommunityReadExperienceChat']>();
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue({
+        ...session,
+        context: {
+          ...session.context,
+          runtimeCapabilities: {
+            communityDirectory: false,
+            communityReadDetail: false,
+            communityReadFeed: false,
+            communityReadChat: false,
+            communityReadRating: false,
+            communityCanonical: false,
+            communityDirectInvites: false,
+            communityRealtime: false,
+          },
+        },
+      }),
+      listCommunityReadExperienceChat,
+    });
+    const user = userEvent.setup();
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Сообщества' }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Чаты сообществ');
+    expect(screen.getByRole('status')).toHaveTextContent('ещё не подключён');
+    expect(screen.queryByRole('list', { name: 'Чаты сообществ' })).toBeNull();
+    expect(listCommunityReadExperienceChat).not.toHaveBeenCalled();
+  });
 });

@@ -5,8 +5,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ChatsPage, type StationSupportSource } from './ChatsPage.js';
-import type { StationSupportMessage, StationSupportMessagePage } from './auth-gateway.js';
+import { ChatsPage, type CommunityChatsSource, type StationSupportSource } from './ChatsPage.js';
+import type {
+  AuthGateway,
+  CommunityMembershipPage,
+  CommunityReadExperienceChatPage,
+  StationSupportMessage,
+  StationSupportMessagePage,
+} from './auth-gateway.js';
 import styles from './chats-ui/ChatsUi.module.css';
 
 const conversationId = '22222222-2222-4222-8222-222222222222';
@@ -51,6 +57,43 @@ function stationSource(overrides: Partial<StationSupportSource> = {}): StationSu
     uploadAttachment: vi.fn().mockRejectedValue(new Error('SUPPORT_ATTACHMENTS_UNAVAILABLE')),
     loadAttachment: vi.fn().mockRejectedValue(new Error('SUPPORT_ATTACHMENT_NOT_FOUND')),
     createMessageId: () => 'station-message-000001',
+    ...overrides,
+  };
+}
+
+const communityId = '55555555-5555-4555-8555-555555555555';
+const otherCommunityId = '66666666-6666-4666-8666-666666666666';
+
+function communitySummary(
+  id: string,
+  title: string,
+  unreadChatCount = 0,
+): CommunityMembershipPage['items'][number] {
+  return {
+    id,
+    title,
+    logoUrl: null,
+    isVerified: false,
+    unreadChatCount,
+    route: `/communities/${id}`,
+  };
+}
+
+/**
+ * The read-only community chat is paged by its own cursor, so a fixture states whether the provider
+ * has older messages exactly the way the projection does.
+ */
+function communityChatPage(
+  items: readonly CommunityReadExperienceChatPage['items'][number][] = [],
+  nextCursor?: string,
+): CommunityReadExperienceChatPage {
+  return { items: [...items], ...(nextCursor ? { nextCursor } : {}) };
+}
+
+function communitySource(overrides: Partial<CommunityChatsSource> = {}): CommunityChatsSource {
+  return {
+    loadCommunities: vi.fn().mockResolvedValue({ items: [] }),
+    loadMessages: vi.fn().mockResolvedValue(communityChatPage()),
     ...overrides,
   };
 }
@@ -1491,5 +1534,479 @@ describe('ChatsPage', () => {
     expect(
       screen.getByRole('button', { name: 'Уведомления в этом чате ещё не загружены' }),
     ).toBeDisabled();
+  });
+});
+
+describe('ChatsPage communities tab', () => {
+  it('lists every community the viewer was added to and reads its chat', async () => {
+    const loadCommunities = vi.fn().mockResolvedValue({
+      items: [
+        communitySummary(communityId, 'Клуб на Соколе', 3),
+        communitySummary(otherCommunityId, 'Падел на ВДНХ'),
+      ],
+    });
+    const loadMessages = vi.fn().mockResolvedValue(
+      communityChatPage([
+        {
+          body: 'Новое сообщение',
+          sentAt: '2026-09-27T12:00:00.000Z',
+          author: { displayName: 'Анна' },
+          isViewer: false,
+        },
+        {
+          body: 'Старое сообщение',
+          sentAt: '2026-09-27T11:00:00.000Z',
+          author: { displayName: 'Борис' },
+          isViewer: false,
+        },
+      ]),
+    );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities, loadMessages })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    const list = await screen.findByRole('list', { name: 'Чаты сообществ' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(list).getByText('Клуб на Соколе')).toBeVisible();
+    expect(within(list).getByText('Падел на ВДНХ')).toBeVisible();
+    expect(within(list).getByLabelText('Непрочитанных сообщений: 3')).toHaveTextContent('3');
+    expect(loadCommunities).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(within(list).getByRole('button', { name: /Клуб на Соколе/ }));
+
+    const thread = await screen.findByRole('region', { name: 'Чат сообщества Клуб на Соколе' });
+    expect(loadMessages).toHaveBeenCalledWith(communityId);
+    // The provider delivers the newest messages first, the thread reads them the other way round.
+    expect([...thread.querySelectorAll('article p')].map((node) => node.textContent)).toEqual([
+      'Старое сообщение',
+      'Новое сообщение',
+    ]);
+    expect(screen.getByText('Чат сообщества доступен только для чтения.')).toBeVisible();
+    expect(screen.queryByLabelText('Сообщение')).toBeNull();
+  });
+
+  it('swaps the phone shell onto the community thread once a community is picked', async () => {
+    const source = communitySource({
+      loadCommunities: vi.fn().mockResolvedValue({
+        items: [communitySummary(communityId, 'Клуб на Соколе')],
+      }),
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={source}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    const shell = screen.getByRole('region', { name: 'Чаты' });
+    expect(shell).toHaveClass(layoutClass('listMode'));
+
+    fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+
+    await waitFor(() => expect(shell).toHaveClass(layoutClass('threadMode')));
+    expect(shell).not.toHaveClass(layoutClass('listMode'));
+    expect(
+      screen.getByRole('region', { name: 'Чат сообщества Клуб на Соколе' }).querySelector('header'),
+    ).toHaveClass(layoutClass('communityThreadHeader'));
+  });
+
+  it('opens a conversation deep link even when the communities filter was restored', () => {
+    window.sessionStorage.setItem(
+      `lk2:chats:view-state:${currentUserId}`,
+      JSON.stringify({ filter: 'COMMUNITY', query: '', unreadOnly: false }),
+    );
+    const loadMessages = vi.fn().mockResolvedValue(communityChatPage());
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="thread"
+        selectedConversationId={conversationId}
+        hasExplicitRecipient={false}
+        messages={[
+          {
+            id: '77777777-7777-4777-8777-777777777777',
+            conversationId,
+            sequence: 1,
+            sender: { userId: currentUserId, displayName: 'Анна' },
+            messageType: 'TEXT',
+            body: 'Привет из игры',
+            createdAt: '2026-07-26T12:00:00.000Z',
+          },
+        ]}
+        page={{
+          items: [
+            {
+              id: conversationId,
+              kind: 'GAME',
+              contextId: '33333333-3333-4333-8333-333333333333',
+              title: 'Игра в среду',
+              unreadCount: 0,
+              updatedAt: '2026-07-26T12:00:00.000Z',
+            },
+          ],
+        }}
+        communityChats={communitySource({ loadMessages })}
+      />,
+    );
+
+    // The route is the stronger statement: the restored tab must not take the conversation's place.
+    expect(screen.getByRole('region', { name: 'История сообщений' })).toBeVisible();
+    expect(screen.getByText('Привет из игры')).toBeVisible();
+    expect(screen.queryByText('Выберите чат сообщества')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Чаты' })).toHaveClass(layoutClass('threadMode'));
+  });
+
+  it('keeps the open community chat when the selected row is tapped again', async () => {
+    const loadMessages = vi.fn().mockResolvedValue(
+      communityChatPage([
+        {
+          body: 'Корт свободен',
+          sentAt: '2026-09-27T12:00:00.000Z',
+          author: { displayName: 'Анна' },
+          isViewer: false,
+        },
+      ]),
+    );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi
+            .fn()
+            .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] }),
+          loadMessages,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    const row = await screen.findByRole('button', { name: /Клуб на Соколе/ });
+    fireEvent.click(row);
+    await screen.findByText('Корт свободен');
+
+    fireEvent.click(row);
+
+    // A second tap has no new dependency to fetch against, so it must not blank the history.
+    expect(screen.getByText('Корт свободен')).toBeVisible();
+    expect(loadMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('never shows one community the chat of another', async () => {
+    const loadMessages = vi.fn((requestedCommunityId: string) =>
+      Promise.resolve(
+        communityChatPage([
+          {
+            body:
+              requestedCommunityId === communityId ? 'Чат клуба на Соколе' : 'Чат клуба на ВДНХ',
+            sentAt: '2026-09-27T12:00:00.000Z',
+            author: { displayName: 'Анна' },
+            isViewer: false,
+          },
+        ]),
+      ),
+    );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi.fn().mockResolvedValue({
+            items: [
+              communitySummary(communityId, 'Клуб на Соколе'),
+              communitySummary(otherCommunityId, 'Падел на ВДНХ'),
+            ],
+          }),
+          loadMessages,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+    await screen.findByText('Чат клуба на Соколе');
+
+    fireEvent.click(screen.getByRole('button', { name: /Падел на ВДНХ/ }));
+
+    expect(await screen.findByText('Чат клуба на ВДНХ')).toBeVisible();
+    expect(screen.queryByText('Чат клуба на Соколе')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /Клуб на Соколе/ }));
+
+    expect(await screen.findByText('Чат клуба на Соколе')).toBeVisible();
+    expect(screen.queryByText('Чат клуба на ВДНХ')).toBeNull();
+    expect(loadMessages.mock.calls.map(([id]) => id)).toEqual([
+      communityId,
+      otherCommunityId,
+      communityId,
+    ]);
+  });
+
+  it('classifies a missing chat and a failed directory read separately', async () => {
+    const missingMessages = vi.fn().mockRejectedValue({
+      status: 404,
+      code: 'COMMUNITY_EXPERIENCE_NOT_FOUND',
+    });
+    const { unmount } = render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi
+            .fn()
+            .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] }),
+          loadMessages: missingMessages,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+
+    expect(await screen.findByText('Чат сообщества недоступен.')).toBeVisible();
+    unmount();
+
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi.fn().mockRejectedValue({
+            status: 404,
+            code: 'COMMUNITY_EXPERIENCE_NOT_FOUND',
+          }),
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+
+    // A directory read has no single community to name, so the same 404 has to read as a list
+    // failure instead of claiming that one chat is missing.
+    expect(await screen.findByText('Не удалось загрузить чаты сообществ.')).toBeVisible();
+    expect(screen.queryByText('Чат сообщества недоступен.')).toBeNull();
+  });
+
+  it('walks the community chat backwards page by page and keeps older messages above the newest', async () => {
+    const olderCursor = 'cursor-0000000000000001';
+    const loadMessages = vi
+      .fn()
+      .mockResolvedValueOnce(
+        communityChatPage(
+          [
+            {
+              body: 'Новое сообщение',
+              sentAt: '2026-09-27T12:00:00.000Z',
+              author: { displayName: 'Анна' },
+              isViewer: false,
+            },
+          ],
+          olderCursor,
+        ),
+      )
+      .mockResolvedValueOnce(
+        communityChatPage([
+          {
+            body: 'Старое сообщение',
+            sentAt: '2026-09-26T12:00:00.000Z',
+            author: { displayName: 'Борис' },
+            isViewer: false,
+          },
+        ]),
+      );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi
+            .fn()
+            .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] }),
+          loadMessages,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+    await screen.findByText('Новое сообщение');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+
+    await screen.findByText('Старое сообщение');
+    expect(loadMessages).toHaveBeenLastCalledWith(communityId, olderCursor);
+    const thread = screen.getByRole('region', { name: 'Чат сообщества Клуб на Соколе' });
+    expect([...thread.querySelectorAll('article p')].map((node) => node.textContent)).toEqual([
+      'Старое сообщение',
+      'Новое сообщение',
+    ]);
+  });
+
+  it('loads the next page of member communities on demand', async () => {
+    const nextCursor = 'cursor-0000000000000002';
+    const loadCommunities = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [communitySummary(communityId, 'Клуб на Соколе')],
+        nextCursor,
+      })
+      .mockResolvedValueOnce({ items: [communitySummary(otherCommunityId, 'Падел на ВДНХ')] });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    const list = await screen.findByRole('list', { name: 'Чаты сообществ' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Показать ещё сообщества' }));
+
+    await within(list).findByText('Падел на ВДНХ');
+    expect(loadCommunities).toHaveBeenLastCalledWith(nextCursor);
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('repeats the page that failed instead of rewinding the directory', async () => {
+    const nextCursor = 'cursor-0000000000000003';
+    const loadCommunities = vi
+      .fn<AuthGateway['listMyCommunities']>()
+      .mockResolvedValueOnce({
+        items: [communitySummary(communityId, 'Клуб на Соколе')],
+        nextCursor,
+      })
+      .mockRejectedValueOnce({ status: 500 })
+      .mockResolvedValueOnce({ items: [communitySummary(otherCommunityId, 'Падел на ВДНХ')] });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    const list = await screen.findByRole('list', { name: 'Чаты сообществ' });
+    fireEvent.click(within(list).getByRole('button', { name: 'Показать ещё сообщества' }));
+    expect(await screen.findByText('Не удалось загрузить чаты сообществ.')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    await within(list).findByText('Падел на ВДНХ');
+    // The failed page keeps its cursor, so the retry reads page two again and never page one.
+    expect(loadCommunities.mock.calls.map(([cursor]) => cursor)).toEqual([
+      undefined,
+      nextCursor,
+      nextCursor,
+    ]);
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('lists communities without a chat projection and keeps the thread unconnected', async () => {
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={{
+          loadCommunities: vi
+            .fn()
+            .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] }),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+
+    expect(
+      await screen.findByText('Чтение чата сообщества ещё не подключено для этой организации.'),
+    ).toBeVisible();
+    expect(screen.queryByRole('region', { name: /Чат сообщества Клуб на Соколе/ })).toBeNull();
+  });
+
+  it('retries a failed community chat read without losing the selected community', async () => {
+    // The projection answers 503 both for a switched-off read and for a failed one, so the client
+    // keeps the failure retryable instead of telling the person the tab does not exist.
+    const loadMessages = vi
+      .fn()
+      .mockRejectedValueOnce({ status: 503, code: 'COMMUNITY_EXPERIENCE_UNAVAILABLE' })
+      .mockResolvedValueOnce(
+        communityChatPage([
+          {
+            body: 'Корт свободен',
+            sentAt: '2026-09-27T12:00:00.000Z',
+            author: { displayName: 'Анна' },
+            isViewer: false,
+          },
+        ]),
+      );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi
+            .fn()
+            .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] }),
+          loadMessages,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+
+    expect(
+      await screen.findByText('Чат сообщества временно недоступен. Попробуйте ещё раз.'),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+
+    expect(await screen.findByText('Корт свободен')).toBeVisible();
+    expect(loadMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a failed community directory read without inventing communities', async () => {
+    const loadCommunities = vi
+      .fn()
+      .mockRejectedValueOnce({ status: 503, code: 'COMMUNITY_EXPERIENCE_UNAVAILABLE' })
+      .mockResolvedValueOnce({ items: [communitySummary(communityId, 'Клуб на Соколе')] });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+
+    expect(await screen.findByText('Не удалось загрузить чаты сообществ.')).toBeVisible();
+    expect(screen.queryByRole('list', { name: 'Чаты сообществ' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+    const list = await screen.findByRole('list', { name: 'Чаты сообществ' });
+    expect(within(list).getByText('Клуб на Соколе')).toBeVisible();
+    expect(loadCommunities).toHaveBeenCalledTimes(2);
   });
 });
