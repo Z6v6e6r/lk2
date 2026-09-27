@@ -10882,6 +10882,41 @@ label {
   isolation: isolate;
 }
 
+/* The chat row reuses the game-card roster stack in its 48px avatar slot: four 22px circles with an
+   8px step stay inside the slot and its gap, so the row text never shifts. */
+.chat-game-stack {
+  display: inline-flex;
+  width: 48px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-game-stack .participant-avatar-stack {
+  width: max-content;
+  min-width: 0;
+  height: 22px;
+}
+
+.chat-game-stack .participant-avatar-stack__item {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  margin: 0 -7px;
+}
+
+.chat-game-stack .participant-avatar-stack__item:first-child {
+  margin-left: 0;
+}
+
+.chat-game-stack .participant-avatar-stack__item:last-child {
+  margin-right: 0;
+}
+
+.chat-game-stack .participant-avatar-stack__item > [data-player-level-avatar] {
+  transform: scale(0.4583333);
+}
+
 .participant-avatar-stack__item {
   display: inline-flex;
   width: 48px;

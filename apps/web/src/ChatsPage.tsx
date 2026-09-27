@@ -26,7 +26,7 @@ import { ChatThread } from './chats-ui/ChatThread.js';
 import { CommunityChatList, CommunityThread } from './chats-ui/CommunityChats.js';
 import {
   appendCommunityPage,
-  communityMessageKey,
+  mergeCommunityThreadPage,
   communityThreadPage,
   type CommunityChatMessage,
   type CommunityRow,
@@ -36,6 +36,7 @@ import {
   readCommunityChatsCache,
   writeCommunityChatsCache,
 } from './chats-ui/community-chats-cache.js';
+import { communityThreadCache, stationThreadCache } from './chats-ui/thread-page-cache.js';
 import { stationHistoryRows } from './chats-ui/station-chat-rows.js';
 import { type ChatComposerSend } from './chats-ui/ChatComposer.js';
 import {
@@ -207,6 +208,8 @@ interface StationSupportState {
   readonly pendingStationId: string | null;
   readonly pendingStationName: string | null;
   readonly sending: boolean;
+  /** Buffered messages are on screen and a fresh page is replacing them. */
+  readonly messagesRefreshing: boolean;
   readonly error: ChatUiError | null;
   /** A failed send keeps its command id so the retry replays the same command. */
   readonly failedMessage: {
@@ -229,6 +232,7 @@ const EMPTY_STATION_STATE: StationSupportState = {
   pendingStationId: null,
   pendingStationName: null,
   sending: false,
+  messagesRefreshing: false,
   error: null,
   failedMessage: null,
 };
@@ -247,6 +251,8 @@ interface CommunityChatsState {
   /** The server-issued cursor of the page before the oldest message on screen. */
   readonly olderCursor: string | null;
   readonly loadingEarlier: boolean;
+  /** Buffered messages are on screen and a fresh page is replacing them. */
+  readonly threadRefreshing: boolean;
   /** The member directory and the chat thread fail independently and are retried independently. */
   readonly listError: ChatUiError | null;
   /** Which directory read failed, so the retry repeats that read instead of restarting the chain. */
@@ -265,6 +271,7 @@ const EMPTY_COMMUNITY_STATE: CommunityChatsState = {
   messagesCommunityId: null,
   olderCursor: null,
   loadingEarlier: false,
+  threadRefreshing: false,
   listError: null,
   listRetry: null,
   threadError: null,
@@ -569,6 +576,7 @@ export function ChatsPage({
     void stationSource.loadMessages(dialogId).then(
       (page) => {
         if (!active) return;
+        stationThreadCache.write(currentUserId, dialogId, page.items);
         setStationState((current) => ({
           ...current,
           status: 'ready',
@@ -576,6 +584,7 @@ export function ChatsPage({
           messagesDialogId: dialogId,
           ...stationPageCursor(page),
           loadingEarlier: false,
+          messagesRefreshing: false,
           error: null,
         }));
       },
@@ -588,6 +597,7 @@ export function ChatsPage({
           hasEarlierMessages: false,
           olderCursor: null,
           loadingEarlier: false,
+          messagesRefreshing: false,
           error: stationSupportError(error),
         }));
       },
@@ -595,7 +605,7 @@ export function ChatsPage({
     return () => {
       active = false;
     };
-  }, [filter, stationSource, stationState.selectedDialogId, stationReloadToken]);
+  }, [filter, stationSource, stationState.selectedDialogId, stationReloadToken, currentUserId]);
 
   /**
    * Walking the thread backwards is the only read that is appended above the current view, so a page
@@ -648,11 +658,14 @@ export function ChatsPage({
       : null;
   const stationThreadBusy: 'load' | 'load-earlier' | 'send' | null = stationState.sending
     ? 'send'
-    : stationThreadLoading
+    : stationThreadLoading || stationState.messagesRefreshing
       ? 'load'
       : stationState.loadingEarlier
         ? 'load-earlier'
         : null;
+  /** Buffered messages are on screen while the fresh page is on its way. */
+  const stationThreadRefreshing =
+    stationState.messagesRefreshing && stationState.messages.length > 0 && !stationThreadLoading;
   // A station thread opens in place instead of navigating to `/chats/<id>`, so a phone has no route
   // change to swap panes with: the shell itself must leave list mode or the thread stays hidden.
   const stationThreadOpen =
@@ -669,11 +682,17 @@ export function ChatsPage({
       : null;
   /** Rows are already on screen, so the read is a refresh rather than the first paint. */
   const communityListRefreshing = communityState.loading && communityState.communities.length > 0;
-  const communityThreadBusy: 'load' | 'load-earlier' | null = communityThreadLoading
-    ? 'load'
-    : communityState.loadingEarlier
-      ? 'load-earlier'
-      : null;
+  const communityThreadBusy: 'load' | 'load-earlier' | null =
+    communityThreadLoading || communityState.threadRefreshing
+      ? 'load'
+      : communityState.loadingEarlier
+        ? 'load-earlier'
+        : null;
+  /** Buffered messages are on screen while the fresh page is on its way. */
+  const communityThreadRefreshing =
+    communityState.threadRefreshing &&
+    communityState.messages.length > 0 &&
+    !communityThreadLoading;
   // A community chat opens in place instead of navigating to `/chats/<id>`, so a phone has no route
   // change to swap panes with: the shell itself must leave list mode or the thread stays hidden.
   const communityThreadOpen =
@@ -766,21 +785,29 @@ export function ChatsPage({
   }
 
   function reloadStationThread(): void {
-    setStationState((current) => ({ ...current, error: null }));
+    setStationState((current) => ({
+      ...current,
+      error: null,
+      messagesRefreshing: current.messages.length > 0,
+    }));
     setStationReloadToken((token) => token + 1);
   }
 
   function selectStationDialog(dialogId: string): void {
+    const buffered = stationThreadCache.read(currentUserId, dialogId);
     setStationState((current) => ({
       ...current,
       selectedDialogId: dialogId,
-      messagesDialogId: null,
+      // A buffered dialog paints at once; its id match keeps the pane from showing "loading" while
+      // the fresh page replaces it.
+      messagesDialogId: buffered ? dialogId : null,
       hasEarlierMessages: false,
       loadingEarlier: false,
       olderCursor: null,
       pendingStationId: null,
       pendingStationName: null,
-      messages: [],
+      messages: buffered ?? [],
+      messagesRefreshing: buffered !== null,
       error: null,
     }));
   }
@@ -880,6 +907,7 @@ export function ChatsPage({
             stationSource.loadMessages(result.dialogId),
           ]).then(
             ([dialogs, page]) => {
+              stationThreadCache.write(currentUserId, result.dialogId, page.items);
               setStationState((current) => ({
                 ...current,
                 status: 'ready',
@@ -888,6 +916,7 @@ export function ChatsPage({
                 messagesDialogId: result.dialogId,
                 ...stationPageCursor(page),
                 loadingEarlier: false,
+                messagesRefreshing: false,
                 error: null,
               }));
             },
@@ -1015,12 +1044,15 @@ export function ChatsPage({
     void communityMessages(communityId).then(
       (page) => {
         if (communityRequestRef.current !== generation) return;
+        const messages = communityThreadPage(page);
+        communityThreadCache.write(currentUserId, communityId, messages);
         setCommunityState((current) => ({
           ...current,
-          messages: communityThreadPage(page),
+          messages,
           messagesCommunityId: communityId,
           olderCursor: page.nextCursor ?? null,
           loadingEarlier: false,
+          threadRefreshing: false,
           threadError: null,
         }));
       },
@@ -1028,15 +1060,22 @@ export function ChatsPage({
         if (communityRequestRef.current !== generation) return;
         setCommunityState((current) => ({
           ...current,
-          messages: [],
+          messages: current.messagesCommunityId === communityId ? current.messages : [],
           messagesCommunityId: communityId,
           olderCursor: null,
           loadingEarlier: false,
+          threadRefreshing: false,
           threadError: communityChatsError(error, 'thread'),
         }));
       },
     );
-  }, [filter, communityMessages, communityState.selectedCommunityId, communityReloadToken]);
+  }, [
+    filter,
+    communityMessages,
+    communityState.selectedCommunityId,
+    communityReloadToken,
+    currentUserId,
+  ]);
 
   /**
    * A failed page keeps its cursor, so repeating this read repeats exactly the page that failed and
@@ -1108,15 +1147,14 @@ export function ChatsPage({
             // control would never be usable again.
             return current.loadingEarlier ? { ...current, loadingEarlier: false } : current;
           }
-          const known = new Set(current.messages.map(communityMessageKey));
-          const older = communityThreadPage(page).filter(
-            (message) => !known.has(communityMessageKey(message)),
-          );
+          const merged = mergeCommunityThreadPage(current.messages, page);
+          if (merged.added > 0)
+            communityThreadCache.write(currentUserId, communityId, merged.messages);
           return {
             ...current,
             loadingEarlier: false,
-            olderCursor: older.length > 0 ? (page.nextCursor ?? null) : null,
-            messages: older.length > 0 ? [...older, ...current.messages] : current.messages,
+            olderCursor: merged.added > 0 ? (page.nextCursor ?? null) : null,
+            messages: merged.messages,
           };
         });
       },
@@ -1140,23 +1178,31 @@ export function ChatsPage({
    * refresh button. The row is `aria-current` anyway, so the tap is a no-op.
    */
   function selectCommunity(communityId: string): void {
+    const buffered = communityThreadCache.read(currentUserId, communityId);
     setCommunityState((current) =>
       current.selectedCommunityId === communityId
         ? current
         : {
             ...current,
             selectedCommunityId: communityId,
-            messages: [],
-            messagesCommunityId: null,
+            // The buffered page paints immediately; its id match keeps the pane from showing the
+            // loading state while the fresh page is on its way.
+            messagesCommunityId: buffered ? communityId : null,
+            messages: buffered ?? [],
             olderCursor: null,
             loadingEarlier: false,
+            threadRefreshing: buffered !== null,
             threadError: null,
           },
     );
   }
 
   function reloadCommunityThread(): void {
-    setCommunityState((current) => ({ ...current, threadError: null }));
+    setCommunityState((current) => ({
+      ...current,
+      threadError: null,
+      threadRefreshing: current.messages.length > 0,
+    }));
     setCommunityReloadToken((token) => token + 1);
   }
 
@@ -1367,6 +1413,7 @@ export function ChatsPage({
               onSendMessage={sendStationMessage}
               onRetrySend={retryStationMessage}
               onRetry={reloadStationThread}
+              refreshing={stationThreadRefreshing}
               hasEarlierMessages={stationState.hasEarlierMessages}
               onLoadEarlier={loadOlderStationMessages}
               loadAttachment={stationSource.loadAttachment}
@@ -1390,6 +1437,7 @@ export function ChatsPage({
             messages={communityState.messages}
             busy={communityThreadBusy}
             error={communityState.threadError}
+            refreshing={communityThreadRefreshing}
             hasEarlierMessages={communityState.olderCursor !== null}
             onRetry={reloadCommunityThread}
             onLoadEarlier={loadOlderCommunityMessages}

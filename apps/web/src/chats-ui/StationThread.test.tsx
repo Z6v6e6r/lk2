@@ -64,6 +64,7 @@ function thread(overrides: Partial<Parameters<typeof StationThread>[0]> = {}) {
       error={null}
       closed={false}
       canRetrySend={false}
+      refreshing={false}
       hasEarlierMessages={false}
       attachments={[]}
       attachmentsEnabled

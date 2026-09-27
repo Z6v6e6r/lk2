@@ -1,0 +1,86 @@
+.ios-cabinet {
+  --fh-page-width: min(100vw, 430px);
+  min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+}
+.ios-cabinet,
+.ios-cabinet * {
+  box-sizing: border-box;
+}
+.ios-cabinet .fh-bottom-nav {
+  left: 50%;
+  transform: translateX(-50%);
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+}
+.ios-cabinet-page {
+  max-width: 760px;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: 24px 20px calc(100px + env(safe-area-inset-bottom));
+}
+.ios-cabinet-page .fh-bookings-list,
+.ios-cabinet-page .fh-event {
+  width: 100%;
+}
+.ios-cabinet-heading {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.ios-cabinet-heading h1 {
+  margin: 0;
+  font-size: 26px;
+}
+.ios-cabinet-heading a {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  font-size: 24px;
+  text-decoration: none;
+}
+.ios-cabinet-links,
+.ios-cabinet-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.ios-cabinet-cards {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.ios-cabinet-note {
+  color: #68676a;
+  line-height: 1.5;
+}
+.ios-cabinet-subscription {
+  padding: 20px;
+  border-radius: 20px;
+  background: #fff;
+  border: 1px solid #eeeeed;
+}
+.ios-cabinet-subscription h2 {
+  margin-top: 0;
+  font-size: 20px;
+}
+.ios-cabinet-page button,
+.ios-cabinet-page select,
+.ios-cabinet-error button {
+  min-height: 44px;
+}
+.ios-cabinet-error {
+  padding: 24px;
+}
+
+.ios-cabinet-filter select {
+  border: 1px solid var(--games-line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: var(--games-surface);
+  color: inherit;
+  font: inherit;
+}

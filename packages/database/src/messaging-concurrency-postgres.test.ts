@@ -235,6 +235,9 @@ describePostgres('GAME messaging real PostgreSQL concurrency and forced-RLS inva
         grant select, insert, update on messaging.media_assets to ${disposableRuntimeRole};
         grant select, insert on messaging.message_attachments to ${disposableRuntimeRole};
         grant select, insert, update on games.games to ${disposableRuntimeRole};
+        -- The GAME conversation summary reads the projected station name through this table, exactly
+        -- like the game card read the same role already serves.
+        grant select on games.card_projections to ${disposableRuntimeRole};
         grant select, insert, update on games.participations to ${disposableRuntimeRole};
         grant insert on audit.outbox_events, audit.audit_log to ${disposableRuntimeRole};
       `);

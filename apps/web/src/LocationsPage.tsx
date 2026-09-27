@@ -1,4 +1,5 @@
 import type { LocationList } from './auth-gateway.js';
+import type { ReactNode } from 'react';
 import { locationCourtLabel } from './location-court-label.js';
 
 function LocationNavigation(): React.JSX.Element {
@@ -22,8 +23,10 @@ function LocationNavigation(): React.JSX.Element {
 
 export function LocationsPage({
   locations,
+  navigation,
 }: {
   readonly locations: LocationList;
+  readonly navigation?: ReactNode;
 }): React.JSX.Element {
   return (
     <main className="location-directory-shell">
@@ -70,7 +73,7 @@ export function LocationsPage({
           </div>
         ) : null}
       </section>
-      <LocationNavigation />
+      {navigation ?? <LocationNavigation />}
     </main>
   );
 }

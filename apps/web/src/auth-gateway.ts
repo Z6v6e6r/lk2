@@ -244,6 +244,16 @@ export interface DirectConversationSummary {
   readonly lastMessage?: ConversationLastMessage;
 }
 
+export interface GameConversationParticipant {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly role: 'ORGANIZER' | 'PLAYER';
+  /** Stable first-party photo URL; absent when the participant has no stored photo. */
+  readonly avatarUrl?: string;
+  readonly level?: string;
+  readonly levelValue?: number;
+}
+
 export interface GameConversationSummary {
   readonly id: string;
   readonly kind: 'GAME';
@@ -254,6 +264,12 @@ export interface GameConversationSummary {
   /** Absent only on the local one-shot navigation hint, never on an HTTP summary. */
   readonly notificationPolicy?: ConversationNotificationPolicy;
   readonly lastMessage?: ConversationLastMessage;
+  /** Game place and time of the thread, rendered like the game card metadata. */
+  readonly stationName?: string;
+  readonly startsAt?: string;
+  readonly timezone?: string;
+  /** Active roster with photos, organizer first; absent when the roster is empty. */
+  readonly participants?: readonly GameConversationParticipant[];
 }
 
 export type ConversationSummary = DirectConversationSummary | GameConversationSummary;

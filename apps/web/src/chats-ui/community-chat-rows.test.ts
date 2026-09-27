@@ -5,6 +5,7 @@ import {
   communityMessageKey,
   communityRows,
   communityThreadPage,
+  mergeCommunityThreadPage,
   type CommunityChatMessage,
   type CommunityRow,
 } from './community-chat-rows.js';
@@ -88,6 +89,52 @@ describe('community chat paging', () => {
     };
 
     expect(communityThreadPage(page).map((item) => item.body)).toEqual(['Старое', 'Новое']);
+  });
+
+  it('reads a page that arrives oldest-first in the same chronological order', () => {
+    const page = {
+      items: [
+        message('2026-09-27T11:00:00.000Z', 'Старое'),
+        message('2026-09-27T12:00:00.000Z', 'Новое'),
+      ],
+    };
+
+    // The projection exposes a send instant, so the reading order never depends on the page
+    // direction: the newest message belongs at the bottom of the thread either way.
+    expect(communityThreadPage(page).map((item) => item.body)).toEqual(['Старое', 'Новое']);
+  });
+
+  it('merges an earlier page into the same order whatever order it arrives in', () => {
+    const current = [message('2026-09-27T12:00:00.000Z', 'Новое')];
+    const ascending = {
+      items: [
+        message('2026-09-26T10:00:00.000Z', 'Старейшее'),
+        message('2026-09-26T11:00:00.000Z', 'Старое'),
+      ],
+    };
+    const descending = { items: [...ascending.items].reverse() };
+
+    expect(mergeCommunityThreadPage(current, ascending).messages.map((item) => item.body)).toEqual([
+      'Старейшее',
+      'Старое',
+      'Новое',
+    ]);
+    expect(mergeCommunityThreadPage(current, descending).messages.map((item) => item.body)).toEqual(
+      ['Старейшее', 'Старое', 'Новое'],
+    );
+  });
+
+  it('counts only the messages an earlier page actually adds', () => {
+    const current = [message('2026-09-27T12:00:00.000Z', 'Новое')];
+
+    expect(mergeCommunityThreadPage(current, { items: [...current] })).toEqual({
+      messages: current,
+      added: 0,
+    });
+    expect(
+      mergeCommunityThreadPage(current, { items: [message('2026-09-26T10:00:00.000Z', 'Старое')] })
+        .added,
+    ).toBe(1);
   });
 
   it('keys a message by what the projection exposes', () => {

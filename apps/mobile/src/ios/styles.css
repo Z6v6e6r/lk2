@@ -1,4 +1,10 @@
-:root {
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+.ios-auth-surface {
   --bg: #f6f7f4;
   --surface: rgba(255, 255, 255, 0.76);
   --text: #131313;
@@ -16,33 +22,33 @@
   font-family: var(--font);
 }
 
-* {
+.ios-auth-surface * {
   box-sizing: border-box;
 }
 
-html,
-body,
-#root {
+.ios-auth-surface,
+.ios-auth-surface,
+.ios-auth-surface {
   min-height: 100%;
   margin: 0;
 }
-body {
+.ios-auth-surface {
   min-width: 320px;
   min-height: 100vh;
 }
-button,
-input,
-a {
+.ios-auth-surface button,
+.ios-auth-surface input,
+.ios-auth-surface a {
   font: inherit;
 }
-button {
+.ios-auth-surface button {
   -webkit-tap-highlight-color: transparent;
 }
-a {
+.ios-auth-surface a {
   color: var(--accent-dark);
 }
 
-.login-page {
+.ios-auth-surface .login-page {
   position: relative;
   min-height: 100dvh;
   overflow: hidden;
@@ -50,30 +56,30 @@ a {
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.8), transparent 35%),
     linear-gradient(180deg, #f7f7f5 0%, #f3f4f1 100%);
 }
-.login-page__bg {
+.ios-auth-surface .login-page__bg {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
-.ring {
+.ios-auth-surface .ring {
   position: absolute;
   border: 1px solid rgba(115, 130, 96, 0.12);
   border-radius: 50%;
 }
-.ring--top {
+.ios-auth-surface .ring--top {
   top: -120px;
   left: 50%;
   width: 320px;
   height: 320px;
   transform: translateX(-50%);
 }
-.ring--bottom {
+.ios-auth-surface .ring--bottom {
   right: -170px;
   bottom: -170px;
   width: 420px;
   height: 420px;
 }
-.racket-outline {
+.ios-auth-surface .racket-outline {
   position: absolute;
   top: 58px;
   right: 80px;
@@ -81,7 +87,7 @@ a {
   height: 300px;
   opacity: 0.28;
 }
-.racket-outline__head {
+.ios-auth-surface .racket-outline__head {
   position: absolute;
   top: 0;
   right: 0;
@@ -90,7 +96,7 @@ a {
   border: 1px solid rgba(19, 19, 19, 0.09);
   border-radius: 48% 48% 44% 44%;
 }
-.racket-outline__head::before {
+.ios-auth-surface .racket-outline__head::before {
   position: absolute;
   inset: 24px;
   background-image: radial-gradient(circle, rgba(19, 19, 19, 0.08) 2px, transparent 2px);
@@ -98,7 +104,7 @@ a {
   background-size: 22px 22px;
   content: '';
 }
-.racket-outline__handle {
+.ios-auth-surface .racket-outline__handle {
   position: absolute;
   top: 178px;
   right: 45px;
@@ -109,7 +115,7 @@ a {
   transform: rotate(28deg);
   transform-origin: top center;
 }
-.ball-hero {
+.ios-auth-surface .ball-hero {
   position: absolute;
   top: 230px;
   right: 140px;
@@ -122,29 +128,29 @@ a {
   box-shadow: 0 18px 26px rgba(0, 0, 0, 0.05);
   opacity: 0.82;
 }
-.ball-hero::before,
-.ball-hero::after {
+.ios-auth-surface .ball-hero::before,
+.ios-auth-surface .ball-hero::after {
   position: absolute;
   border: 2px solid transparent;
   border-top-color: rgba(255, 255, 255, 0.85);
   border-radius: 50%;
   content: '';
 }
-.ball-hero::before {
+.ios-auth-surface .ball-hero::before {
   top: 8px;
   left: -8px;
   width: 88px;
   height: 88px;
   transform: rotate(20deg);
 }
-.ball-hero::after {
+.ios-auth-surface .ball-hero::after {
   right: -8px;
   bottom: 8px;
   width: 88px;
   height: 88px;
   transform: rotate(200deg);
 }
-.court-net {
+.ios-auth-surface .court-net {
   position: absolute;
   bottom: 105px;
   left: -30px;
@@ -161,7 +167,7 @@ a {
   opacity: 0.4;
   transform: perspective(700px) rotateX(68deg);
 }
-.court-perspective {
+.ios-auth-surface .court-perspective {
   position: absolute;
   top: 110px;
   right: 40px;
@@ -173,7 +179,7 @@ a {
   transform: skewX(-28deg);
 }
 
-.login-layout {
+.ios-auth-surface .login-layout {
   position: relative;
   z-index: 1;
   display: grid;
@@ -182,16 +188,16 @@ a {
   min-height: 100dvh;
   margin: 0 auto;
 }
-.login-layout__intro,
-.login-layout__auth {
+.ios-auth-surface .login-layout__intro,
+.ios-auth-surface .login-layout__auth {
   position: relative;
 }
-.login-layout__intro {
+.ios-auth-surface .login-layout__intro {
   display: flex;
   align-items: center;
   padding: 52px 28px 52px 72px;
 }
-.login-layout__intro::after {
+.ios-auth-surface .login-layout__intro::after {
   position: absolute;
   top: 0;
   right: 0;
@@ -200,41 +206,41 @@ a {
   background: var(--line);
   content: '';
 }
-.login-layout__intro-inner {
+.ios-auth-surface .login-layout__intro-inner {
   max-width: 520px;
 }
-.desktop-logo {
+.ios-auth-surface .desktop-logo {
   margin-bottom: 78px;
 }
-.mobile-logo {
+.ios-auth-surface .mobile-logo {
   display: none;
 }
-.intro-title {
+.ios-auth-surface .intro-title {
   margin: 0 0 28px;
   font-size: clamp(48px, 6vw, 76px);
   font-weight: 800;
   letter-spacing: -0.04em;
   line-height: 0.94;
 }
-.intro-text {
+.ios-auth-surface .intro-text {
   margin: 0;
   color: var(--muted);
   font-size: 18px;
   line-height: 1.55;
 }
-.login-layout__auth {
+.ios-auth-surface .login-layout__auth {
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 52px 72px 52px 28px;
 }
-.auth-card {
+.ios-auth-surface .auth-card {
   display: flex;
   flex-direction: column;
   align-items: center;
   width: min(100%, 470px);
 }
-.auth-badge {
+.ios-auth-surface .auth-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -247,12 +253,12 @@ a {
   font-size: 18px;
   font-weight: 600;
 }
-.auth-actions {
+.ios-auth-surface .auth-actions {
   display: grid;
   width: 100%;
   gap: 20px;
 }
-.social-button {
+.ios-auth-surface .social-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -275,35 +281,35 @@ a {
     box-shadow 0.2s ease;
   backdrop-filter: blur(8px);
 }
-.social-button:hover:not(:disabled),
-.social-button:focus-visible:not(:disabled) {
+.ios-auth-surface .social-button:hover:not(:disabled),
+.ios-auth-surface .social-button:focus-visible:not(:disabled) {
   border-color: rgba(19, 19, 19, 0.18);
   background: rgba(255, 255, 255, 0.9);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.07);
   outline: none;
   transform: translateY(-1px);
 }
-button:disabled {
+.ios-auth-surface button:disabled {
   cursor: wait;
   opacity: 0.66;
 }
-.social-icon {
+.ios-auth-surface .social-icon {
   flex: 0 0 38px;
   width: 38px;
   height: 38px;
 }
-.social-icon--yandex {
+.ios-auth-surface .social-icon--yandex {
   width: 32px;
   height: 32px;
   margin: 3px;
 }
-.auth-consents {
+.ios-auth-surface .auth-consents {
   display: grid;
   width: 100%;
   gap: 18px;
   margin-top: 34px;
 }
-.consent-row {
+.ios-auth-surface .consent-row {
   display: flex;
   align-items: flex-start;
   gap: 14px;
@@ -312,7 +318,7 @@ button:disabled {
   font-size: 17px;
   line-height: 1.5;
 }
-.consent-row input {
+.ios-auth-surface .consent-row input {
   width: 24px;
   height: 24px;
   margin-top: 1px;
@@ -320,13 +326,13 @@ button:disabled {
   border-radius: 6px;
   flex: 0 0 auto;
 }
-.consent-row a {
+.ios-auth-surface .consent-row a {
   font-weight: 500;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-.phone-login,
-.back-button {
+.ios-auth-surface .phone-login,
+.ios-auth-surface .back-button {
   border: 0;
   background: transparent;
   color: #76876a;
@@ -334,43 +340,43 @@ button:disabled {
   font-weight: 700;
   transition: color 0.2s ease;
 }
-.phone-login {
+.ios-auth-surface .phone-login {
   margin-top: 38px;
   font-size: 18px;
 }
-.phone-login:hover:not(:disabled),
-.phone-login:focus-visible:not(:disabled),
-.back-button:hover:not(:disabled),
-.back-button:focus-visible:not(:disabled) {
+.ios-auth-surface .phone-login:hover:not(:disabled),
+.ios-auth-surface .phone-login:focus-visible:not(:disabled),
+.ios-auth-surface .back-button:hover:not(:disabled),
+.ios-auth-surface .back-button:focus-visible:not(:disabled) {
   color: #5d6b52;
   outline: none;
   text-decoration: underline;
   text-underline-offset: 4px;
 }
-.ph-logo {
+.ios-auth-surface .ph-logo {
   display: block;
   width: 166px;
   height: auto;
   user-select: none;
 }
-.auth-step {
+.ios-auth-surface .auth-step {
   display: grid;
   width: 100%;
   gap: 16px;
   text-align: left;
 }
-.auth-step__description {
+.ios-auth-surface .auth-step__description {
   margin: 0 0 10px;
   color: var(--muted);
   font-size: 17px;
   line-height: 1.5;
 }
-.field-label {
+.ios-auth-surface .field-label {
   color: var(--text);
   font-size: 15px;
   font-weight: 700;
 }
-.auth-input {
+.ios-auth-surface .auth-input {
   width: 100%;
   min-height: 56px;
   padding: 12px 16px;
@@ -380,15 +386,15 @@ button:disabled {
   color: var(--text);
   outline: none;
 }
-.auth-input:focus {
+.ios-auth-surface .auth-input:focus {
   border-color: var(--accent-dark);
   box-shadow: 0 0 0 3px rgba(102, 117, 88, 0.12);
 }
-.auth-input--code {
+.ios-auth-surface .auth-input--code {
   letter-spacing: 0.3em;
   text-align: center;
 }
-.form-button {
+.ios-auth-surface .form-button {
   min-height: 54px;
   border: 0;
   border-radius: 16px;
@@ -397,8 +403,8 @@ button:disabled {
   cursor: pointer;
   font-weight: 700;
 }
-.auth-success,
-.auth-error {
+.ios-auth-surface .auth-success,
+.ios-auth-surface .auth-error {
   width: 100%;
   margin: 22px 0 0;
   border-radius: 14px;
@@ -406,140 +412,140 @@ button:disabled {
   font-size: 15px;
   line-height: 1.45;
 }
-.auth-success {
+.ios-auth-surface .auth-success {
   background: #e8ece2;
   color: #526044;
 }
-.auth-error {
+.ios-auth-surface .auth-error {
   background: #f9e9e7;
   color: #9c3b31;
 }
 
 @media (max-width: 1100px) {
-  .login-layout {
+  .ios-auth-surface .login-layout {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
   }
-  .login-layout__intro {
+  .ios-auth-surface .login-layout__intro {
     align-items: flex-start;
     padding: 48px 28px 18px;
   }
-  .login-layout__intro::after {
+  .ios-auth-surface .login-layout__intro::after {
     display: none;
   }
-  .login-layout__intro-inner {
+  .ios-auth-surface .login-layout__intro-inner {
     max-width: 100%;
   }
-  .desktop-logo {
+  .ios-auth-surface .desktop-logo {
     margin-bottom: 40px;
   }
-  .intro-title {
+  .ios-auth-surface .intro-title {
     margin-bottom: 18px;
     font-size: clamp(42px, 7vw, 64px);
   }
-  .intro-text {
+  .ios-auth-surface .intro-text {
     font-size: 17px;
   }
-  .login-layout__auth {
+  .ios-auth-surface .login-layout__auth {
     justify-content: flex-start;
     padding: 24px 28px 56px;
   }
-  .auth-card {
+  .ios-auth-surface .auth-card {
     max-width: 480px;
   }
-  .racket-outline {
+  .ios-auth-surface .racket-outline {
     top: 40px;
     right: 30px;
     transform: scale(0.9);
   }
-  .ball-hero {
+  .ios-auth-surface .ball-hero {
     top: 210px;
     right: 60px;
   }
 }
 @media (max-width: 767px) {
-  .login-page {
+  .ios-auth-surface .login-page {
     background: #f9f8f7 url('../assets/login-mobile-background.webp') center top / cover no-repeat;
   }
-  .login-page__bg {
+  .ios-auth-surface .login-page__bg {
     display: none;
   }
-  .login-layout {
+  .ios-auth-surface .login-layout {
     display: block;
     min-height: 100dvh;
   }
-  .login-layout__intro {
+  .ios-auth-surface .login-layout__intro {
     display: none;
   }
-  .login-layout__auth {
+  .ios-auth-surface .login-layout__auth {
     min-height: 100dvh;
     padding: max(36px, calc(env(safe-area-inset-top) + 24px)) 20px
       max(32px, calc(env(safe-area-inset-bottom) + 24px));
     justify-content: flex-start;
   }
-  .auth-card {
+  .ios-auth-surface .auth-card {
     width: 100%;
   }
-  .mobile-logo {
+  .ios-auth-surface .mobile-logo {
     display: block;
     margin-bottom: clamp(76px, 16vh, 130px);
   }
-  .auth-badge {
+  .ios-auth-surface .auth-badge {
     min-height: 40px;
     margin-bottom: 34px;
     padding: 10px 16px;
     font-size: 16px;
   }
-  .social-button {
+  .ios-auth-surface .social-button {
     min-height: 72px;
     gap: 14px;
     padding: 16px 18px;
     border-radius: 20px;
     font-size: 17px;
   }
-  .auth-consents {
+  .ios-auth-surface .auth-consents {
     gap: 14px;
     margin-top: 28px;
   }
-  .consent-row {
+  .ios-auth-surface .consent-row {
     gap: 12px;
     font-size: 16px;
   }
-  .consent-row input {
+  .ios-auth-surface .consent-row input {
     width: 22px;
     height: 22px;
   }
-  .phone-login {
+  .ios-auth-surface .phone-login {
     margin-top: 32px;
     font-size: 17px;
   }
-  .ph-logo {
+  .ios-auth-surface .ph-logo {
     width: 132px;
   }
-  .racket-outline {
+  .ios-auth-surface .racket-outline {
     top: 54px;
     right: 10px;
     transform: scale(0.72);
   }
-  .ball-hero {
+  .ios-auth-surface .ball-hero {
     top: 182px;
     right: 28px;
     transform: scale(0.78);
   }
-  .court-net {
+  .ios-auth-surface .court-net {
     bottom: 42px;
     left: -180px;
     transform: perspective(700px) rotateX(68deg) scale(0.72);
   }
-  .court-perspective {
+  .ios-auth-surface .court-perspective {
     top: 130px;
     right: -150px;
     transform: skewX(-28deg) scale(0.72);
   }
-  .auth-step {
+  .ios-auth-surface .auth-step {
     gap: 14px;
   }
-  .auth-step__description {
+  .ios-auth-surface .auth-step__description {
     font-size: 16px;
   }
 }
