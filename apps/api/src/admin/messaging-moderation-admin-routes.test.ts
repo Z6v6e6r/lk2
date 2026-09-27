@@ -90,6 +90,39 @@ function repository(
 afterEach(async () => Promise.all(apps.splice(0).map((app) => app.close())));
 
 describe('messaging moderation admin routes', () => {
+  it('rejects stale read and decide claims when current database access is revoked', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('messaging-moderation-admin-test', 'silent'),
+      pool: fakePool(),
+      messagingModerationRepository: repository({
+        listReportQueue: vi.fn().mockResolvedValue(undefined),
+        decideReport: vi.fn().mockResolvedValue({ outcome: 'forbidden' }),
+      }),
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await token(['chat.moderation.read', 'chat.moderation.decide'])}`,
+      'x-app-platform': 'cup-admin',
+      'idempotency-key': 'revoked-moderator-command-0001',
+    };
+    const read = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/messaging/moderation/reports',
+      headers,
+    });
+    const decide = await app.inject({
+      method: 'POST',
+      url: `/admin/api/v1/local-padel/messaging/moderation/reports/${reportId}/decision`,
+      headers,
+      payload: { action: 'HIDE_MESSAGE', reasonCode: 'SPAM' },
+    });
+    expect(read.statusCode).toBe(403);
+    expect(decide.statusCode).toBe(403);
+    expect(read.json()).toMatchObject({ code: 'FORBIDDEN' });
+    expect(decide.json()).toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('requires an admin token before reading the queue', async () => {
     const listReportQueue = vi.fn();
     const app = await buildApp({
@@ -187,7 +220,11 @@ describe('messaging moderation admin routes', () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
     expect(response.json()).toEqual({ items: [] });
-    expect(listReportQueue).toHaveBeenCalledWith({ tenantId, limit: 10 });
+    expect(listReportQueue).toHaveBeenCalledWith({
+      tenantId,
+      moderatorUserId: actorUserId,
+      limit: 10,
+    });
   });
 
   it('rejects a malformed queue query without calling the repository', async () => {

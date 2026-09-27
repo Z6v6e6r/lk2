@@ -249,7 +249,10 @@ LevelEligibilityPolicyFields:
     upperToleranceSteps: { type: integer, minimum: 0 }
     missingActivityConstraintAction: { type: string, enum: [ALLOW, WARN, BLOCK] }
     legacyTextConstraintAction: { type: string, enum: [ALLOW, WARN] }
-    recheckWaitlistPromotion: { type: boolean }
+    recheckWaitlistPromotion:
+      type: boolean
+      enum: [true]
+      description: Mandatory final-transaction recheck; cannot be disabled.
 LevelEligibilityPolicyInput:
   allOf:
     - $ref: '#/LevelEligibilityPolicyFields'

@@ -61,7 +61,11 @@ function policy(activityType: LevelEligibilityActivityType): LevelEligibilityPol
 
 describe('LevelEligibilityWorkspace', () => {
   it('requires an explicit commented publish and shows immutable system exceptions', async () => {
-    const policies = [policy('GAME'), policy('TOURNAMENT'), policy('TRAINING')];
+    const policies = [
+      { ...policy('GAME'), recheckWaitlistPromotion: false },
+      policy('TOURNAMENT'),
+      policy('TRAINING'),
+    ];
     const publishLevelEligibilityPolicy = vi.fn().mockResolvedValue({
       policy: { ...policies[0], mode: 'SHADOW', version: 2 },
       replayed: false,
@@ -82,6 +86,9 @@ describe('LevelEligibilityWorkspace', () => {
     const games = screen.getByRole('heading', { name: 'Игры' }).closest('section');
     expect(games).not.toBeNull();
     const controls = within(games!);
+    const recheck = controls.getByLabelText('Повторять проверку при продвижении из очереди');
+    expect(recheck).toBeChecked();
+    expect(recheck).toBeDisabled();
     const publish = controls.getByRole('button', { name: 'Опубликовать настройки' });
     expect(publish).toBeDisabled();
     fireEvent.change(controls.getByLabelText('Режим'), { target: { value: 'SHADOW' } });
@@ -96,6 +103,7 @@ describe('LevelEligibilityWorkspace', () => {
         expect.objectContaining({
           expectedVersion: 1,
           mode: 'SHADOW',
+          recheckWaitlistPromotion: true,
           changeComment: 'Shadow для проверки данных',
         }),
       ),

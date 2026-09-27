@@ -62,6 +62,13 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
         );
       }
       await client.query(
+        `update identity.user_access_profiles
+            set roles = array['admin']::text[],
+                permissions = array['chat.moderation.read', 'chat.moderation.decide']::text[]
+          where tenant_id = $1 and user_id = $2`,
+        [tenantId, moderatorUserId],
+      );
+      await client.query(
         `insert into messaging.tenant_runtime_settings (tenant_id, http_enabled, direct_enabled)
          values ($1, true, true)`,
         [tenantId],
@@ -94,6 +101,119 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
     if (pool) await pool.end();
   });
 
+  it.each([
+    {
+      name: 'missing profile',
+      profile: false,
+      roles: ['admin'],
+      permissions: ['chat.moderation.read', 'chat.moderation.decide'],
+      status: 'ACTIVE',
+      read: false,
+      decide: false,
+    },
+    {
+      name: 'revoked admin role',
+      profile: true,
+      roles: ['client'],
+      permissions: ['chat.moderation.read', 'chat.moderation.decide'],
+      status: 'ACTIVE',
+      read: false,
+      decide: false,
+    },
+    {
+      name: 'disabled actor',
+      profile: true,
+      roles: ['admin'],
+      permissions: ['chat.moderation.read', 'chat.moderation.decide'],
+      status: 'DISABLED',
+      read: false,
+      decide: false,
+    },
+    {
+      name: 'read only',
+      profile: true,
+      roles: ['admin'],
+      permissions: ['chat.moderation.read'],
+      status: 'ACTIVE',
+      read: true,
+      decide: false,
+    },
+    {
+      name: 'decide only',
+      profile: true,
+      roles: ['admin'],
+      permissions: ['chat.moderation.decide'],
+      status: 'ACTIVE',
+      read: false,
+      decide: true,
+    },
+  ])('checks current SQL authorization: $name', async (scenario) => {
+    const actorId = randomUUID();
+    await withTenantTransaction(pool, tenantId, async (client) => {
+      await client.query('insert into identity.users (tenant_id, id, status) values ($1, $2, $3)', [
+        tenantId,
+        actorId,
+        scenario.status,
+      ]);
+      if (scenario.profile) {
+        await client.query(
+          'insert into identity.user_access_profiles (tenant_id, user_id, roles, permissions) values ($1, $2, $3::text[], $4::text[])',
+          [tenantId, actorId, scenario.roles, scenario.permissions],
+        );
+      }
+    });
+    const queue = await moderation.listReportQueue({
+      tenantId,
+      moderatorUserId: actorId,
+      limit: 50,
+    });
+    expect(Array.isArray(queue)).toBe(scenario.read);
+    await expect(
+      moderation.decideReport({
+        tenantId,
+        moderatorUserId: actorId,
+        reportId: randomUUID(),
+        action: 'HIDE_MESSAGE',
+        reasonCode: 'SPAM',
+        idempotencyKey: command(),
+        correlationId: command(),
+      }),
+    ).resolves.toEqual({ outcome: scenario.decide ? 'not_found' : 'forbidden' });
+  });
+
+  it('does not borrow an admin grant from another tenant', async () => {
+    const otherTenantId = randomUUID();
+    const actorId = randomUUID();
+    await pool.query(
+      'insert into identity.tenants (id, tenant_key, display_name) values ($1, $2, $3)',
+      [otherTenantId, `moderation-other-${otherTenantId}`, 'Other tenant'],
+    );
+    await withTenantTransaction(pool, otherTenantId, async (client) => {
+      await client.query(
+        "insert into identity.users (tenant_id, id, status) values ($1, $2, 'ACTIVE')",
+        [otherTenantId, actorId],
+      );
+      await client.query(
+        "insert into identity.user_access_profiles (tenant_id, user_id, roles, permissions) values ($1, $2, array['admin'], array['chat.moderation.read', 'chat.moderation.decide'])",
+        [otherTenantId, actorId],
+      );
+    });
+    await expect(
+      moderation.listReportQueue({ tenantId, moderatorUserId: actorId, limit: 50 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      moderation.decideReport({
+        tenantId,
+        moderatorUserId: actorId,
+        reportId: randomUUID(),
+        action: 'HIDE_MESSAGE',
+        reasonCode: 'SPAM',
+        idempotencyKey: command(),
+        correlationId: command(),
+      }),
+    ).resolves.toEqual({ outcome: 'forbidden' });
+  });
+
   it('runs report, case, hide and restore against a real database', async () => {
     const sent = await messaging.sendMessage({
       tenantId,
@@ -120,8 +240,8 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
     });
     expect(first).toMatchObject({ outcome: 'submitted', replayed: false });
 
-    const queue = await moderation.listReportQueue({ tenantId, limit: 50 });
-    const queued = queue.find(
+    const queue = await moderation.listReportQueue({ tenantId, moderatorUserId, limit: 50 });
+    const queued = queue?.find(
       (item) => item.reportId === (first as { report: { id: string } }).report.id,
     );
     expect(queued).toMatchObject({
@@ -131,13 +251,14 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
       caseState: 'OPEN',
     });
 
+    const decisionKey = `decision-${command()}`;
     const hidden = await moderation.decideReport({
       tenantId,
       moderatorUserId,
       reportId: (first as { report: { id: string } }).report.id,
       action: 'HIDE_MESSAGE',
       reasonCode: 'ABUSE',
-      idempotencyKey: `decision-${command()}`,
+      idempotencyKey: decisionKey,
       correlationId: `correlation-decision-${command()}`,
     });
     expect(hidden).toEqual({
@@ -146,6 +267,36 @@ describePostgres('chat message moderation PostgreSQL flow', () => {
       hidden: true,
       replayed: false,
     });
+
+    await withTenantTransaction(pool, tenantId, (client) =>
+      client.query(
+        "update identity.user_access_profiles set roles = array['client']::text[] where tenant_id = $1 and user_id = $2",
+        [tenantId, moderatorUserId],
+      ),
+    );
+    try {
+      await expect(
+        moderation.listReportQueue({ tenantId, moderatorUserId, limit: 50 }),
+      ).resolves.toBeUndefined();
+      await expect(
+        moderation.decideReport({
+          tenantId,
+          moderatorUserId,
+          reportId: (first as { report: { id: string } }).report.id,
+          action: 'HIDE_MESSAGE',
+          reasonCode: 'ABUSE',
+          idempotencyKey: decisionKey,
+          correlationId: command(),
+        }),
+      ).resolves.toEqual({ outcome: 'forbidden' });
+    } finally {
+      await withTenantTransaction(pool, tenantId, (client) =>
+        client.query(
+          "update identity.user_access_profiles set roles = array['admin']::text[] where tenant_id = $1 and user_id = $2",
+          [tenantId, moderatorUserId],
+        ),
+      );
+    }
 
     const hiddenRow = await withTenantTransaction(pool, tenantId, (client) =>
       client.query<{ hidden_at: Date | null; hidden_by_action_id: string | null }>(

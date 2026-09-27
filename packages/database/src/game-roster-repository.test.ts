@@ -665,6 +665,39 @@ describe('game roster repository', () => {
     ).toBe(false);
   });
 
+  it.each(['OFF', 'NO_RANGE'] as const)(
+    'retains a validated invitation in the waitlist without consuming it when %s',
+    async (scenario) => {
+      const invitationId = '95a76d36-d8a7-4ff5-a988-84f33c0fd05a';
+      const { pool, query } = poolWithHandler((text) => {
+        if (text.includes('eligibility.level_policies')) {
+          return {
+            rows: [
+              eligibilityFacts({
+                mode: scenario === 'OFF' ? 'OFF' : 'BLOCK',
+                valid_invitation_id: invitationId,
+              }),
+            ],
+          };
+        }
+        if (text.includes('insert into games.waitlist_entries')) {
+          return { rows: [{ id: waitlistEntryId, position: 1 }] };
+        }
+        return baseHandler(text, { facts: { active_participant_count: 2 } });
+      });
+      await expect(
+        createGameRosterRepository(pool as never).joinWaitlist(input({ invitationId })),
+      ).resolves.toMatchObject({ outcome: 'applied' });
+      const stored = query.mock.calls.find(([text]) =>
+        text.includes('insert into games.waitlist_entries'),
+      );
+      expect(stored?.[1]?.[4]).toBe(invitationId);
+      expect(
+        query.mock.calls.some(([text]) => text.includes('update eligibility.personal_invitations')),
+      ).toBe(false);
+    },
+  );
+
   it('persists a replayable capacity rejection without a roster write or outbox event', async () => {
     const { pool, query } = poolWithHandler((text) =>
       baseHandler(text, {

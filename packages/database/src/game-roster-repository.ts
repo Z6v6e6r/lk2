@@ -606,6 +606,7 @@ async function evaluateGameParticipationEligibility(
   readonly decisionId: string;
   readonly deniedCode?: LevelEligibilityReasonCode;
   readonly validatedInvitationId?: string;
+  readonly waitlistInvitationId?: string;
 }> {
   const facts = await queryOne<EligibilityFactsRow>(
     client,
@@ -811,6 +812,9 @@ async function evaluateGameParticipationEligibility(
     decisionId,
     ...(decision.outcome === 'FAIL' ? { deniedCode: decision.reasonCode } : {}),
     ...(usedInvitationId ? { validatedInvitationId: usedInvitationId } : {}),
+    // Keep the validated reference for promotion even when today's policy needs no bypass.
+    // Only a bypass actually used by a final join/promotion consumes the invitation.
+    ...(facts.valid_invitation_id ? { waitlistInvitationId: facts.valid_invitation_id } : {}),
   };
 }
 
@@ -1541,7 +1545,7 @@ export function createGameRosterRepository(
             input.gameId,
             input.actorUserId,
             eligibility.decisionId ?? null,
-            eligibility.validatedInvitationId ?? null,
+            eligibility.waitlistInvitationId ?? null,
           ],
         );
         if (!entry) throw new Error('GAME_WAITLIST_WRITE_LOST');

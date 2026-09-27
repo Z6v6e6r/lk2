@@ -26,9 +26,26 @@ const reportRow = {
   created_at: '2026-09-20T12:00:00.000Z',
 };
 
-function poolWithQuery(query: ReturnType<typeof vi.fn>) {
+function poolWithQuery(
+  query: (text: string, values: readonly unknown[]) => unknown,
+  authorized = true,
+) {
   return {
-    connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+    connect: vi.fn().mockResolvedValue({
+      query: (text: string, values: readonly unknown[] = []) => {
+        if (text.includes('identity.user_access_profiles')) {
+          expect(values[0]).toBe(tenantId);
+          expect(values[1]).toBe(moderatorUserId);
+          expect(['chat.moderation.read', 'chat.moderation.decide']).toContain(values[2]);
+          expect(text).toContain("actor.status = 'ACTIVE'");
+          expect(text).toContain('access.tenant_id = actor.tenant_id');
+          expect(text).toContain("'admin' = any(access.roles)");
+          return Promise.resolve({ rows: [{ authorized }], rowCount: 1 });
+        }
+        return query(text, values);
+      },
+      release: vi.fn(),
+    }),
   };
 }
 
@@ -53,6 +70,31 @@ function scaffolding(text: string): { rows: readonly unknown[]; rowCount: number
 }
 
 describe('messaging moderation repository', () => {
+  it('denies a revoked moderator before reading reports or replaying a decision', async () => {
+    const query = vi.fn((text: string) => {
+      if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('identity.user_access_profiles')) {
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      }
+      throw new Error(`Revoked moderator must not access reports: ${text}`);
+    });
+    const repository = createMessagingModerationRepository(poolWithQuery(query, false) as never);
+    await expect(
+      repository.listReportQueue({ tenantId, moderatorUserId, limit: 50 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      repository.decideReport({
+        tenantId,
+        moderatorUserId,
+        reportId,
+        action: 'HIDE_MESSAGE',
+        reasonCode: 'SPAM',
+        idempotencyKey,
+        correlationId,
+      }),
+    ).resolves.toEqual({ outcome: 'forbidden' });
+  });
+
   it('treats a non-member as not_found and writes nothing', async () => {
     const query = vi.fn((text: string) => {
       if (scaffolding(text)) return Promise.resolve({ rows: [], rowCount: 0 });
@@ -375,7 +417,9 @@ describe('messaging moderation repository', () => {
     });
     const repository = createMessagingModerationRepository(poolWithQuery(query) as never);
 
-    await expect(repository.listReportQueue({ tenantId, limit: 50 })).resolves.toEqual([
+    await expect(
+      repository.listReportQueue({ tenantId, moderatorUserId, limit: 50 }),
+    ).resolves.toEqual([
       {
         reportId,
         conversationId,
