@@ -389,6 +389,9 @@ export type ApiRequestInit = RequestInit & {
 };
 
 export interface ApiClientOptions {
+  /** Process-local clients do not hold a browser refresh credential. */
+  readonly sessionMode?: 'cookie' | 'memory';
+  readonly onSessionExpired?: () => void;
   readonly baseUrl: string;
   readonly tenantKey: string;
   readonly initialAccessToken?: string;
@@ -637,6 +640,12 @@ export class PadlHubApiClient {
   }
 
   public refreshSession(): Promise<AuthenticatedSession> {
+    if (this.options.sessionMode === 'memory') {
+      this.clearAccessToken();
+      return Promise.reject(
+        new ApiClientError('Войдите заново.', 401, 'AUTH_SESSION_REVOKED', createCorrelationId()),
+      );
+    }
     if (this.refreshInFlight) return this.refreshInFlight;
 
     const refresh = this.performSessionRefresh().finally(() => {
@@ -666,6 +675,10 @@ export class PadlHubApiClient {
   }
 
   public async revokeSession(): Promise<void> {
+    if (this.options.sessionMode === 'memory') {
+      this.clearAccessToken();
+      return;
+    }
     const idempotencyKey = createCorrelationId();
     await this.retryOnceOnNetworkFailure(() =>
       this.request<void>('/auth/session', {
@@ -2252,9 +2265,13 @@ export class PadlHubApiClient {
     }
 
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    const requestAccessToken = this.accessToken;
     const response = await this.fetchImplementation(`${apiRoot}${normalizedPath}`, {
       ...policy.requestInit,
-      credentials: policy.requestInit.credentials ?? 'same-origin',
+      credentials:
+        this.options.sessionMode === 'memory'
+          ? 'omit'
+          : (policy.requestInit.credentials ?? 'same-origin'),
       headers,
     });
 
@@ -2262,6 +2279,7 @@ export class PadlHubApiClient {
       response.status === 401 &&
       policy.auth === 'required' &&
       policy.retryOnUnauthorized &&
+      this.options.sessionMode !== 'memory' &&
       allowRefresh
     ) {
       const signal = policy.requestInit.signal;
@@ -2270,6 +2288,8 @@ export class PadlHubApiClient {
       return this.requestWithPolicy<TResponse>(path, policy, correlationId, false, apiRoot);
     }
 
+    if (response.status === 401 && policy.auth === 'required')
+      this.expireMemorySession(requestAccessToken);
     if (!response.ok) throw await this.toApiClientError(response, correlationId);
     if (response.status === 204) return undefined as TResponse;
     return (await response.json()) as TResponse;
@@ -2315,17 +2335,36 @@ export class PadlHubApiClient {
     if (auth === 'required' && this.accessToken) {
       setHeader(headers, 'Authorization', `Bearer ${this.accessToken}`);
     }
+    const requestAccessToken = this.accessToken;
     const response = await this.fetchImplementation(`${apiRoot}${path}`, {
       method: 'GET',
-      credentials,
+      credentials: this.options.sessionMode === 'memory' ? 'omit' : credentials,
       headers,
     });
-    if (response.status === 401 && auth === 'required' && allowRefresh) {
+    if (
+      response.status === 401 &&
+      auth === 'required' &&
+      this.options.sessionMode !== 'memory' &&
+      allowRefresh
+    ) {
       await this.refreshSession();
       return this.downloadFromRoot(apiRoot, path, auth, credentials, correlationId, false, accept);
     }
+    if (response.status === 401 && auth === 'required')
+      this.expireMemorySession(requestAccessToken);
     if (!response.ok) throw await this.toApiClientError(response, correlationId);
     return response.blob();
+  }
+
+  private expireMemorySession(requestAccessToken: string | undefined): void {
+    if (
+      this.options.sessionMode !== 'memory' ||
+      !requestAccessToken ||
+      requestAccessToken !== this.accessToken
+    )
+      return;
+    this.clearAccessToken();
+    this.options.onSessionExpired?.();
   }
 
   private async toApiClientError(
