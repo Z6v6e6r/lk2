@@ -1851,7 +1851,11 @@ export function App({
     dispatch({ type: 'logout-started' });
     const serviceWorkerUrl =
       window.__PHUB_BOOTSTRAP__?.serviceWorkerUrl ?? '/phub-notification-sw.js';
-    void disableWebPush({ gateway, serviceWorkerUrl })
+    void (
+      clientPlatform === 'android'
+        ? Promise.resolve()
+        : disableWebPush({ gateway, serviceWorkerUrl })
+    )
       .catch(() => undefined)
       .then(() => gateway.logout())
       .then(
@@ -2965,11 +2969,6 @@ export function App({
       <section className="auth-panel">
         <div className="auth-card">
           <Brand />
-          {clientPlatform === 'android' ? (
-            <p className="auth-description" role="note">
-              В тестовой версии после закрытия приложения потребуется войти снова.
-            </p>
-          ) : null}
           {state.view === 'oauth' ? (
             <>
               <h1 id="auth-title" className="auth-badge">

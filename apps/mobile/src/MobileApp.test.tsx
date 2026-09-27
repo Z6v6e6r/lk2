@@ -19,15 +19,15 @@ afterEach(() => {
 });
 
 describe('shared LK2 Android UI', () => {
-  it('opens the existing phone screen without OAuth and explains session lifetime', async () => {
+  it('opens the existing phone screen without OAuth or obsolete session instructions', async () => {
     render(<App gateway={createGateway()} tenantKey="local-padel" clientPlatform="android" />);
     expect(await screen.findByRole('button', { name: 'Получить код' })).toBeInTheDocument();
     expect(screen.queryByText('VK ID или Mail.ru')).not.toBeInTheDocument();
     expect(screen.queryByText('Yandex')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Войти через Viva/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('note')).toHaveTextContent(
-      'после закрытия приложения потребуется войти снова',
-    );
+    expect(
+      screen.queryByText(/после закрытия приложения потребуется войти снова/),
+    ).not.toBeInTheDocument();
   });
   it.each(['/giftcard', '/gift-certificates', '/games/new', '/chats', '/communities'])(
     'does not expose browser-only commerce/provider/upload controls at %s',

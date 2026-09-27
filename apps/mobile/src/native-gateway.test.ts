@@ -153,3 +153,35 @@ it('does not let an old in-flight 401 invalidate a later Android session', async
   expect(client.getAccessToken()).toBe('new-synthetic-token');
   expect(expire).not.toHaveBeenCalled();
 });
+
+it('requires an explicit transport before enabling a durable Android session', () => {
+  expect(() => createBrowserAuthGateway({ ...options, nativeSessionTransport: true })).toThrow(
+    'NATIVE_TRANSPORT_REQUIRED',
+  );
+});
+
+it('restores and revokes a durable Android session through the injected native transport only', async () => {
+  const transport = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      Promise.resolve(
+        url(input).endsWith('/auth/session')
+          ? new Response(null, { status: 204 })
+          : Response.json(session),
+      ),
+    );
+  const gateway = createBrowserAuthGateway({
+    ...options,
+    nativeSessionTransport: true,
+    fetchImplementation: transport,
+  });
+  expect((await gateway.restoreSession())?.context.user.id).toBe(userId);
+  expect(transport).toHaveBeenCalledOnce();
+  expect(url(transport.mock.calls[0]![0])).toMatch(/\/auth\/session\/refresh$/);
+  await gateway.logout();
+  expect(transport).toHaveBeenCalledTimes(2);
+  expect(transport.mock.calls[1]![1]?.method).toBe('DELETE');
+  expect(new Headers(transport.mock.calls[1]![1]?.headers).get('X-Session-Intent')).toBe('logout');
+  expect(new Headers(transport.mock.calls[1]![1]?.headers).has('Authorization')).toBe(false);
+  await expect(gateway.getSelfProfile()).rejects.toThrow('AUTH_REQUIRED');
+});
