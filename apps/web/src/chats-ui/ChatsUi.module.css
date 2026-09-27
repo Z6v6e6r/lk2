@@ -252,6 +252,7 @@
 }
 
 .stationListButton:hover,
+.communityListButton:hover,
 .chatRow:hover {
   background: #fbfaff;
 }
@@ -1452,6 +1453,12 @@
     grid-template-columns: 44px 36px minmax(0, 1fr) 44px;
   }
 
+  /* A community thread is read-only and has no notification control either, so it uses the same four
+     columns: back, logo frame, title, update. */
+  .communityThreadHeader {
+    grid-template-columns: 44px 36px minmax(0, 1fr) 44px;
+  }
+
   .backLink {
     display: inline-flex;
     width: 44px;
@@ -1465,6 +1472,13 @@
 
   /* The station header column is 36px wide on a phone, so the logo frame follows it. */
   .stationThreadHeader .stationAvatar {
+    width: 36px;
+    height: 36px;
+    flex-basis: 36px;
+  }
+
+  /* The community logo frame follows its own 36px header column the same way. */
+  .communityThreadHeader .communityAvatar {
     width: 36px;
     height: 36px;
     flex-basis: 36px;
@@ -1630,4 +1644,105 @@
   color: var(--comms-ink);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* The Сообщества tab is the second provider-backed destination list in the block, so it repeats the
+   station row primitive: a squared logo frame, a two-line body and a meta column on one row. */
+.communityListPane {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.communityListPane .list {
+  flex: 1 1 auto;
+}
+
+.communityListPane .emptyState,
+.communityListPane .skeletonList {
+  flex: 1 1 auto;
+}
+
+.communityListButton {
+  width: 100%;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.communityListItemBody {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.communityListItemBody strong {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.communityListItemBody small {
+  overflow: hidden;
+  color: var(--comms-ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.communityListEmptyPreview {
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.communityListItemMeta {
+  color: var(--comms-ink);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* A community is a group, not a participant: the artwork keeps the squared frame the station rows
+   use. The initials stay underneath the picture, so a failed load reveals them instead of a
+   broken-image marker. */
+.communityAvatar {
+  position: relative;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 22.222%;
+  background: var(--comms-accent-soft);
+  color: var(--comms-accent-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.communityAvatarInitials {
+  line-height: 1;
+}
+
+.communityAvatarImage {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The read-only projection has no composer, so the thread states why the field is missing. */
+.threadReadOnlyNote {
+  margin: 0;
+  padding: 10px 16px max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--comms-line);
+  color: var(--comms-muted);
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
 }

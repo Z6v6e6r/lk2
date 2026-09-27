@@ -83,19 +83,15 @@ export function ChatList({
 
   if (!page || error) return <div className={styles.listSpacer} />;
 
-  // These categories are planned UI destinations, not conversation kinds accepted by the API.
-  // The station destination is served by the provider-backed `StationDialogList` instead.
-  if (filter === 'TOURNAMENT' || filter === 'COMMUNITY') {
-    const labels = {
-      TOURNAMENT: 'Чаты турниров',
-      COMMUNITY: 'Чаты сообществ',
-    };
+  // A tournament chat is a planned UI destination, not a conversation kind the API accepts. The
+  // station and community destinations are provider-backed and own their own lists instead.
+  if (filter === 'TOURNAMENT') {
     return (
       <div className={styles.emptyState} role="status">
         <span className={styles.emptyIcon} aria-hidden="true">
           <ChatCategoryIcon name={filter} />
         </span>
-        <strong>{labels[filter]}</strong>
+        <strong>Чаты турниров</strong>
         <p>Этот тип чатов ещё не подключён. Здесь появятся обсуждения с участниками.</p>
       </div>
     );
