@@ -1,4 +1,4 @@
-import type { ConversationSummary } from '../auth-gateway.js';
+import type { ConversationSummary, GameConversationSummary } from '../auth-gateway.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -66,6 +66,52 @@ export function safeGameHref(contextId: string | undefined): string | null {
   return contextId && UUID_PATTERN.test(contextId)
     ? `/games/${encodeURIComponent(contextId)}`
     : null;
+}
+
+/**
+ * A game chat is identified by place and time, like the game card metadata. The game's own timezone
+ * wins so a viewer in another zone still reads the canonical start time; an unusable timezone falls
+ * back to the browser zone. Returns null when the summary has neither place nor schedule.
+ */
+export function formatGameSchedule(conversation: GameConversationSummary): string | null {
+  const parts: string[] = [];
+  if (conversation.stationName) parts.push(conversation.stationName);
+  if (conversation.startsAt) {
+    const start = new Date(conversation.startsAt);
+    if (Number.isFinite(start.getTime())) {
+      const { date, time } = gameScheduleFormatters(conversation.timezone);
+      parts.push(`${date.format(start)}, ${time.format(start)}`);
+    }
+  }
+  return parts.length === 0 ? null : parts.join(' · ');
+}
+
+interface GameScheduleFormatters {
+  readonly date: Intl.DateTimeFormat;
+  readonly time: Intl.DateTimeFormat;
+}
+
+const gameScheduleFormattersByTimezone = new Map<string, GameScheduleFormatters>();
+
+function gameScheduleFormatters(timezone: string | undefined): GameScheduleFormatters {
+  const key = timezone ?? '';
+  const cached = gameScheduleFormattersByTimezone.get(key);
+  if (cached) return cached;
+  const zone: Intl.DateTimeFormatOptions = timezone ? { timeZone: timezone } : {};
+  let formatters: GameScheduleFormatters;
+  try {
+    formatters = {
+      date: new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', ...zone }),
+      time: new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit', ...zone }),
+    };
+  } catch {
+    formatters = {
+      date: new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }),
+      time: new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+    };
+  }
+  gameScheduleFormattersByTimezone.set(key, formatters);
+  return formatters;
 }
 
 export function initials(value: string): string {

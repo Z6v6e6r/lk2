@@ -7365,6 +7365,52 @@ components:
           $ref: '#/components/schemas/ConversationNotificationPolicy'
         lastMessage:
           $ref: '#/components/schemas/ConversationLastMessage'
+        stationName:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Projected station name of the game; absent while the game has no card projection.
+        startsAt:
+          type: string
+          format: date-time
+          description: Canonical game start instant used to identify the chat by date.
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Game timezone used to render startsAt for the viewer.
+        participants:
+          type: array
+          maxItems: 4
+          description: Active game roster with first-party photo URLs, organizer first; omitted when the roster is empty.
+          items:
+            $ref: '#/components/schemas/GameConversationParticipant'
+    GameConversationParticipant:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, role]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 160
+        role:
+          type: string
+          enum: [ORGANIZER, PLAYER]
+        avatarUrl:
+          type: string
+          maxLength: 2000
+          description: Stable first-party photo URL; absent when the participant has no stored photo.
+        level:
+          type: string
+          maxLength: 8
+        levelValue:
+          type: number
+          minimum: 0
+          maximum: 10
     ConversationNotificationPolicy:
       type: object
       additionalProperties: false

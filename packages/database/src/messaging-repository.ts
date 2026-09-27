@@ -47,6 +47,15 @@ export interface ConversationSummary {
   };
 }
 
+export interface GameConversationParticipant {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly role: 'ORGANIZER' | 'PLAYER';
+  readonly avatarUrl?: string;
+  readonly level?: string;
+  readonly levelValue?: number;
+}
+
 export interface GameConversationSummary {
   readonly id: string;
   readonly kind: 'GAME';
@@ -60,6 +69,16 @@ export interface GameConversationSummary {
     readonly body: string;
     readonly createdAt: string;
   };
+  /**
+   * Game schedule context of the conversation. The chat list identifies a game by place and time, so
+   * these fields reuse the game card presentation source: the active roster with first-party photo
+   * URLs and the projected station name. Every field stays optional so the summary is additive for
+   * existing readers.
+   */
+  readonly stationName?: string;
+  readonly startsAt?: string;
+  readonly timezone?: string;
+  readonly participants?: readonly GameConversationParticipant[];
 }
 
 export type MessagingConversationSummary = ConversationSummary | GameConversationSummary;
@@ -386,6 +405,15 @@ interface GameCommandRow extends QueryResultRow {
   readonly conversation_id: string;
 }
 
+interface GameConversationParticipantRow {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly role: 'ORGANIZER' | 'PLAYER';
+  readonly avatarDeliveryId: string | null;
+  readonly level: string | null;
+  readonly levelValue: number | string | null;
+}
+
 interface GameConversationRow extends QueryResultRow {
   readonly id: string;
   readonly context_id: string;
@@ -398,6 +426,10 @@ interface GameConversationRow extends QueryResultRow {
   readonly notification_level: 'ALL' | 'MENTIONS' | 'NONE';
   readonly muted_until: string | null;
   readonly notifications_muted: boolean;
+  readonly starts_at?: Date | string | null;
+  readonly timezone?: string | null;
+  readonly station_name?: string | null;
+  readonly participants?: readonly GameConversationParticipantRow[] | null;
 }
 
 interface MemberRow extends QueryResultRow {
@@ -495,7 +527,43 @@ function mapConversation(row: ConversationRow, tenantId: string): ConversationSu
   };
 }
 
-function mapGameConversation(row: GameConversationRow): GameConversationSummary {
+function mapGameConversationParticipant(
+  row: GameConversationParticipantRow,
+  tenantId: string,
+): GameConversationParticipant {
+  const numericLevelValue =
+    row.levelValue === null
+      ? null
+      : typeof row.levelValue === 'number'
+        ? row.levelValue
+        : Number(row.levelValue);
+  const levelValue =
+    numericLevelValue !== null &&
+    Number.isFinite(numericLevelValue) &&
+    numericLevelValue >= 0 &&
+    numericLevelValue <= 10
+      ? numericLevelValue
+      : null;
+
+  return {
+    userId: row.userId,
+    displayName: row.displayName,
+    role: row.role,
+    // Only the PadlHub-owned delivery URL crosses the client boundary; a provider source URL stays
+    // inside integration storage.
+    ...(row.avatarDeliveryId
+      ? { avatarUrl: profilePhotoDeliveryUrl(tenantId, row.avatarDeliveryId) }
+      : {}),
+    ...(row.level ? { level: row.level } : {}),
+    ...(levelValue === null ? {} : { levelValue }),
+  };
+}
+
+function mapGameConversation(row: GameConversationRow, tenantId: string): GameConversationSummary {
+  const participants = (row.participants ?? []).map((participant) =>
+    mapGameConversationParticipant(participant, tenantId),
+  );
+
   return {
     id: row.id,
     kind: 'GAME',
@@ -513,6 +581,10 @@ function mapGameConversation(row: GameConversationRow): GameConversationSummary 
           },
         }
       : {}),
+    ...(row.station_name ? { stationName: row.station_name } : {}),
+    ...(row.starts_at == null ? {} : { startsAt: timestamp(row.starts_at) }),
+    ...(row.timezone ? { timezone: row.timezone } : {}),
+    ...(participants.length === 0 ? {} : { participants }),
   };
 }
 
@@ -699,7 +771,11 @@ const GAME_CONVERSATION_SELECT = `
          (
            member.notification_level <> 'ALL'
            or (member.muted_until is not null and member.muted_until > now())
-         ) as notifications_muted
+         ) as notifications_muted,
+         game.starts_at::text as starts_at,
+         game.timezone as timezone,
+         station.station_name,
+         roster.participants
     from messaging.conversations conversation
     join messaging.conversation_members member
       on member.tenant_id = conversation.tenant_id
@@ -727,6 +803,50 @@ const GAME_CONVERSATION_SELECT = `
       on runtime.tenant_id = conversation.tenant_id
      and runtime.http_enabled
      and runtime.contextual_enabled
+    left join games.card_projections projection
+      on projection.tenant_id = game.tenant_id
+     and projection.game_id = game.id
+    left join lateral (
+      select projection.base_payload #>> '{station,name}' as station_name
+    ) station on true
+    left join lateral (
+      select json_agg(
+               json_build_object(
+                 'userId', roster_entry.user_id,
+                 'displayName', roster_entry.display_name,
+                 'role', roster_entry.role,
+                 'avatarDeliveryId', roster_entry.delivery_id,
+                 'level', roster_entry.level_label,
+                 'levelValue', roster_entry.level_value
+               )
+             ) as participants
+        from (
+          select participant.user_id,
+                 participant.role,
+                 coalesce(participant_summary.display_name, 'Участник') as display_name,
+                 participant_photo.delivery_id,
+                 participant_summary.level_label,
+                 participant_summary.level_value
+            from games.participations participant
+            join identity.users participant_user
+              on participant_user.tenant_id = participant.tenant_id
+             and participant_user.id = participant.user_id
+             and participant_user.status = 'ACTIVE'
+            left join profile.user_summaries participant_summary
+              on participant_summary.tenant_id = participant.tenant_id
+             and participant_summary.user_id = participant.user_id
+            left join integration.user_profile_photo_sync participant_photo
+              on participant_photo.tenant_id = participant.tenant_id
+             and participant_photo.user_id = participant.user_id
+           where participant.tenant_id = game.tenant_id
+             and participant.game_id = game.id
+             and participant.state = 'ACTIVE'
+           order by (participant.role = 'ORGANIZER') desc,
+                    participant.joined_at,
+                    participant.id
+           limit 4
+        ) roster_entry
+    ) roster on true
     left join lateral (
       select message.sequence, message.body, message.created_at
         from messaging.messages message
@@ -765,47 +885,11 @@ async function getGameConversation(
 ): Promise<GameConversationSummary | undefined> {
   const row = await queryOne<GameConversationRow>(
     client,
-    `select conversation.id,
-            conversation.context_id,
-            game.title,
-            greatest((conversation.next_sequence - 1) - member.last_read_sequence, 0)
-              as unread_count,
-            conversation.updated_at::text as updated_at
-       from messaging.conversations conversation
-       join messaging.conversation_members member
-         on member.tenant_id = conversation.tenant_id
-        and member.conversation_id = conversation.id
-        and member.user_id = $2
-        and member.state = 'ACTIVE'
-       join identity.users viewer_user
-         on viewer_user.tenant_id = member.tenant_id
-        and viewer_user.id = member.user_id
-        and viewer_user.status = 'ACTIVE'
-       join identity.user_access_profiles current_access
-         on current_access.tenant_id = viewer_user.tenant_id
-        and current_access.user_id = viewer_user.id
-        and 'games.play' = any(current_access.permissions)
-       join games.games game
-         on game.tenant_id = conversation.tenant_id
-        and game.id = conversation.context_id
-        and game.lifecycle_state <> 'CANCELLED'
-       join games.participations participation
-         on participation.tenant_id = game.tenant_id
-        and participation.game_id = game.id
-        and participation.user_id = viewer_user.id
-        and participation.state = 'ACTIVE'
-       join messaging.tenant_runtime_settings runtime
-         on runtime.tenant_id = conversation.tenant_id
-        and runtime.http_enabled
-        and runtime.contextual_enabled
-      where conversation.tenant_id = $1
-        and conversation.id = $3
-        and conversation.kind = 'GAME'
-        and conversation.context_type = 'GAME'
-        and conversation.state = 'OPEN'`,
+    `${GAME_CONVERSATION_SELECT}
+       and conversation.id = $3`,
     [tenantId, userId, conversationId],
   );
-  return row ? mapGameConversation(row) : undefined;
+  return row ? mapGameConversation(row, tenantId) : undefined;
 }
 
 async function getAuthorizedMember(
@@ -1130,7 +1214,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         );
         return [
           ...direct.rows.map((row) => mapConversation(row, input.tenantId)),
-          ...games.rows.map(mapGameConversation),
+          ...games.rows.map((row) => mapGameConversation(row, input.tenantId)),
         ]
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
           .slice(0, input.limit);
@@ -1148,7 +1232,7 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
              and conversation.context_id = any($3::uuid[])`,
           [input.tenantId, input.userId, gameIds],
         );
-        return games.rows.map(mapGameConversation);
+        return games.rows.map((row) => mapGameConversation(row, input.tenantId));
       });
     },
 

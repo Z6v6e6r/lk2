@@ -55,4 +55,70 @@ describe('chat row destinations', () => {
     expect(screen.queryByRole('link', { name: /Профиль игрока/ })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { current: 'page' })).toHaveAttribute('href', `/chats/${id}`);
   });
+
+  it('identifies a game chat by its roster, station and date instead of the last message', () => {
+    const { container } = render(
+      <ChatListItem
+        selected={false}
+        conversation={{
+          id,
+          kind: 'GAME',
+          contextId: userId,
+          title: 'Пятничная игра',
+          unreadCount: 2,
+          updatedAt: '2026-09-22T10:00:00Z',
+          lastMessage: {
+            sequence: 4,
+            body: 'Я возьму мячи',
+            createdAt: '2026-09-22T09:59:00Z',
+          },
+          stationName: 'Терехово',
+          startsAt: '2026-09-28T06:00:00.000Z',
+          timezone: 'Europe/Moscow',
+          participants: [
+            {
+              userId,
+              displayName: 'Анна',
+              role: 'ORGANIZER',
+              avatarUrl: '/public/api/v1/media/profile-photos/tenant/photo',
+              level: 'C+',
+              levelValue: 3.44,
+            },
+            { userId: id, displayName: 'Борис', role: 'PLAYER' },
+          ],
+        }}
+      />,
+    );
+
+    // Four overlapping roster circles, never an open "join" slot.
+    expect(
+      container.querySelectorAll('.chat-game-stack .participant-avatar-stack__item'),
+    ).toHaveLength(2);
+    expect(container.querySelector('.participant-avatar-stack__open-slot')).toBeNull();
+    expect(screen.getByText('Терехово · 28 сентября, 09:00')).toBeInTheDocument();
+    expect(screen.queryByText('Я возьму мячи')).not.toBeInTheDocument();
+  });
+
+  it('keeps the last message preview for a game chat without schedule data', () => {
+    render(
+      <ChatListItem
+        selected={false}
+        conversation={{
+          id,
+          kind: 'GAME',
+          contextId: userId,
+          title: 'Игра без проекции',
+          unreadCount: 0,
+          updatedAt: '2026-09-22T10:00:00Z',
+          lastMessage: {
+            sequence: 2,
+            body: 'Плюс один',
+            createdAt: '2026-09-22T09:30:00Z',
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Плюс один')).toBeInTheDocument();
+  });
 });

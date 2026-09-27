@@ -1,6 +1,11 @@
 import type { ConversationSummary } from '../auth-gateway.js';
 import { ChatAvatar } from './ChatAvatar.js';
-import { conversationTitle, formatConversationTimestamp, unreadLabel } from './chat-format.js';
+import {
+  conversationTitle,
+  formatConversationTimestamp,
+  formatGameSchedule,
+  unreadLabel,
+} from './chat-format.js';
 import styles from './ChatsUi.module.css';
 
 interface ChatListItemProps {
@@ -12,6 +17,10 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
   const title = conversationTitle(conversation);
   const unread = unreadLabel(conversation.unreadCount);
   const activityAt = conversation.lastMessage?.createdAt ?? conversation.updatedAt;
+  // A game is identified by place and time, so its row shows the schedule instead of repeating the
+  // last message; direct and other group chats keep their message preview.
+  const gameSchedule = conversation.kind === 'GAME' ? formatGameSchedule(conversation) : null;
+  const preview = gameSchedule ?? conversation.lastMessage?.body ?? 'Новый диалог';
 
   const avatar = (
     <ChatAvatar
@@ -23,6 +32,9 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
       fallbackSeed={
         conversation.kind === 'DIRECT' ? conversation.participant.userId : conversation.id
       }
+      {...(conversation.kind === 'GAME' && conversation.participants
+        ? { participants: conversation.participants }
+        : {})}
       size={48}
     />
   );
@@ -59,9 +71,7 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
           >
             {title}
           </span>
-          <span className={styles.listPreview}>
-            {conversation.lastMessage?.body ?? 'Новый диалог'}
-          </span>
+          <span className={styles.listPreview}>{preview}</span>
         </span>
         <span className={styles.listMeta}>
           <time dateTime={activityAt}>{formatConversationTimestamp(activityAt)}</time>

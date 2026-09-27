@@ -51,6 +51,13 @@ realtime для загруженных DIRECT и GAME; GAME subscription/fanout 
 authoritative newest-sequence lookup в текущем контракте и остаётся вне beta closure до появления
 backward/selected-summary API.
 
+GAME summary несёт игровой контекст строки списка: `stationName` из проекции карточки,
+`startsAt`/`timezone` канонической игры и `participants` — действующий состав с ролями и
+first-party URL фото, организатор первым. Строка чата игры показывает этот состав как компактный
+стек аватаров и подпись «станция · дата» вместо превью последнего сообщения, поэтому игру узнают по
+месту и времени; поля опциональны, а роли/состав повторно проверяются теми же gates, что list,
+history и send. Реплики и тело сообщений остаются в `messaging`.
+
 Следующий feature-gated slice реализует только `GAME`: canonical `games.games.id`, актуальная
 `games.participations(state='ACTIVE')` и `games.play` повторно проверяются перед list/history/send/
 read cursor. Tournament остаётся закрыт без identity-linked canonical roster; Station остаётся
