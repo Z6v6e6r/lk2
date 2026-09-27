@@ -870,7 +870,7 @@ components:
           pattern: '^/(?!/)'
           maxLength: 2000
         conversation:
-          description: Server-authorized game conversation reference; null until the conversation route is mounted and membership is active.
+          description: Server-authorized game conversation reference with the viewer's unread count. Null when the viewer has no active game participation, the game is cancelled, the viewer account or games.play access is inactive, a contextual game conversation was never opened, or contextual chats are disabled for the tenant.
           oneOf:
             - $ref: '#/components/schemas/GameConversationSummary'
             - type: 'null'

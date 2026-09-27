@@ -1085,6 +1085,7 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
       : {}),
+    ...(options.messagingRepository ? { conversationReader: options.messagingRepository } : {}),
     publicTenantHandlers: [resolvePublicTenant],
     authenticatedTenantHandlers: [authenticate, resolveTenant],
   });

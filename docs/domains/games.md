@@ -344,7 +344,16 @@ levelRange, capacity { total, occupied, reserved, open, waitlistCount }
 participants[] { userId, displayName, avatarUrl, level, role }
 priceSummary, viewerRelation, viewerPaymentState
 resultSummary?, badges[], allowedActions[], deepLink
+conversation { conversationId, unreadCount } | null
 ```
+
+`conversation` is the game chat reference of the authenticated viewer, and it is the only chat data a
+card carries: the thread body stays in the messaging aggregate. It is `null` (and `OPEN_CHAT` is
+absent from `allowedActions`) whenever the viewer has no active game participation, the viewer
+account or `games.play` access is inactive, the game is cancelled, or the tenant contextual-chat
+runtime gate is off. The card never creates a conversation; the games interface opens or creates one
+through the messaging command and then links to the returned thread. The chat entry is rendered on
+the viewer card next to the primary action, and the same reference drives the unread counter.
 
 It never contains phone, provider/Viva ID, provider payment URL, booking ID, raw metadata or audit
 history. A public card may use a stricter `PublicGameCardView` and omit stable user IDs when product
@@ -362,6 +371,8 @@ One component family is used on all surfaces:
 - `GamePriceSummary`;
 - `GameResultSummary`;
 - `GameCardActions` — renders only server-provided allowed actions;
+- `GameChatAction` — renders the server-authorized `conversation` entry and its unread counter next
+  to the primary action; absent whenever the card has no conversation;
 - `GameCardSkeleton`, `GameCardError` and `GameCardUnavailable`.
 
 Supported surfaces are `DISCOVER`, `MY_UPCOMING`, `HISTORY`, `INVITE` and `ADMIN_PREVIEW`. They are

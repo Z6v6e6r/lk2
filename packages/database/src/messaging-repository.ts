@@ -214,6 +214,18 @@ export interface MessagingRepository {
     readonly limit: number;
   }): Promise<readonly MessagingConversationSummary[]>;
   /**
+   * Reads the caller's open GAME conversations for one bounded page of canonical games, so a game
+   * card can show the same authorized thread the chat list shows. The query repeats the roster,
+   * access and runtime predicates of {@link getOrCreateGameConversation}: a game without an active
+   * participation, an inactive viewer or a disabled contextual gate yields no summary instead of a
+   * reference a card could not open.
+   */
+  listGameConversationSummaries(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly gameIds: readonly string[];
+  }): Promise<readonly GameConversationSummary[]>;
+  /**
    * Opens or reads back the canonical DIRECT pair. Creating a new conversation additionally requires
    * the peer to hold the stored `chat.direct.create` grant, because a peer without it can never open
    * the thread; an already existing pair is returned unchanged so an accepted membership is never
@@ -1049,6 +1061,15 @@ function recipientUserIdsSql(options: {
 const MAX_NOTIFICATION_RECIPIENT_USER_IDS = 50;
 
 /**
+ * A game-card page never exceeds fifty cards, and the batch reader is bounded to the same size. The
+ * cap keeps one card read from turning into an unbounded `any()` scan if a caller passes more.
+ */
+const MAX_GAME_CONVERSATION_GAME_IDS = 50;
+
+const GAME_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
  * Recipients of an in-app notification about a conversation event. Uses the same membership,
  * permission and block gates as realtime without requiring the realtime tenant gate, and never
  * notifies the actor that produced the event.
@@ -1113,6 +1134,21 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
         ]
           .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
           .slice(0, input.limit);
+      });
+    },
+
+    listGameConversationSummaries(input) {
+      const gameIds = [
+        ...new Set(input.gameIds.filter((gameId) => GAME_ID_PATTERN.test(gameId))),
+      ].slice(0, MAX_GAME_CONVERSATION_GAME_IDS);
+      if (gameIds.length === 0) return Promise.resolve([]);
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const games = await client.query<GameConversationRow>(
+          `${GAME_CONVERSATION_SELECT}
+             and conversation.context_id = any($3::uuid[])`,
+          [input.tenantId, input.userId, gameIds],
+        );
+        return games.rows.map(mapGameConversation);
       });
     },
 

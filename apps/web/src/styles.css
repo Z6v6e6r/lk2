@@ -4281,6 +4281,50 @@
   gap: 7px;
 }
 
+/* The game chat entry shares the CTA row with the primary action, so it adds no second line. */
+.game-card__cta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.game-card__chat {
+  position: relative;
+  display: inline-flex;
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 24px;
+  background: #f0ebff;
+  color: #7253d8 !important;
+  text-decoration: none;
+}
+
+.game-card__chat svg {
+  width: 16px;
+  height: 16px;
+}
+
+.game-card__chat span {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: grid;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  place-items: center;
+  border-radius: 999px;
+  background: #7253d8;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+}
+
 .game-state {
   position: relative;
   padding-left: 11px;

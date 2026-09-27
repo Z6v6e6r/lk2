@@ -1216,6 +1216,21 @@ export function GamesPage({
     }
   }
 
+  /**
+   * A card already knows its authorized conversation, so it can leave the same one-shot hint the
+   * create-and-open path leaves. Without it the chat screen shows a generic header while the game
+   * thread is not yet among its newest conversations.
+   */
+  function rememberCardGameChat(game: GameCardModel, conversationId: string): void {
+    if (!chatNavigationScope) return;
+    rememberGameChatNavigation(chatNavigationScope, {
+      id: conversationId,
+      contextId: game.id,
+      title: game.title,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   if (gameId) {
     return (
       <main className="games-page games-page--detail">
@@ -1267,6 +1282,7 @@ export function GamesPage({
             game={detail}
             onAction={(action) => void handleAction(action, detail)}
             onChatOpen={() => void openGameChat(detail)}
+            onChatNavigate={(conversationId) => rememberCardGameChat(detail, conversationId)}
             onSubmit={submitResult}
             onTabChange={setDetailTab}
           />
@@ -1648,6 +1664,9 @@ export function GamesPage({
               busy={busyGameId === event.game.id}
               key={`game-${event.game.id}`}
               onAction={(action, selectedGame) => void handleAction(action, selectedGame)}
+              onChatOpen={(selectedGame, conversationId) =>
+                rememberCardGameChat(selectedGame, conversationId)
+              }
               onParticipantProfileRequest={(selectedGame, participant, participantIndex) =>
                 void handleParticipantProfileRequest(selectedGame, participant, participantIndex)
               }
