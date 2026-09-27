@@ -363,4 +363,33 @@ describe('community chat thread', () => {
     expect(screen.getByRole('region', { name: /Клуб на Соколе/ }).querySelector('img')).toBeNull();
     expect(screen.getByText('КН')).toBeVisible();
   });
+
+  it('keeps showing artwork after another community logo failed to load', () => {
+    const { rerender } = render(
+      thread({
+        community: community('1', 'Клуб на Соколе', {
+          logoUrl: 'https://media.padlhub.ru/broken.png',
+        }),
+      }),
+    );
+    fireEvent.error(
+      screen
+        .getByRole('region', { name: /Клуб на Соколе/ })
+        .querySelector('img') as HTMLImageElement,
+    );
+
+    // The avatar instance is reused when the thread switches community, so the failure must belong to
+    // the artwork that failed, not to the component.
+    rerender(
+      thread({
+        community: community('2', 'Падел на ВДНХ', {
+          logoUrl: 'https://media.padlhub.ru/wdnh.png',
+        }),
+      }),
+    );
+
+    const image = screen.getByRole('region', { name: /Падел на ВДНХ/ }).querySelector('img');
+    expect(image).not.toBeNull();
+    expect(image?.getAttribute('src')).toBe('https://media.padlhub.ru/wdnh.png');
+  });
 });

@@ -16,17 +16,20 @@ export function CommunityAvatar({
   readonly title: string;
   readonly logoUrl: string | null | undefined;
 }): React.JSX.Element {
-  const [failed, setFailed] = useState(false);
+  // The failure belongs to one artwork, not to this component instance: the list and the thread
+  // header reuse the avatar across communities, so a broken logo must not hide the next one.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const showArtwork = Boolean(logoUrl) && failedUrl !== logoUrl;
   return (
     <span className={styles.communityAvatar} aria-hidden="true">
       <span className={styles.communityAvatarInitials}>{initials(title)}</span>
-      {logoUrl && !failed ? (
+      {showArtwork && logoUrl ? (
         <img
           className={styles.communityAvatarImage}
           src={logoUrl}
           alt=""
           loading="lazy"
-          onError={() => setFailed(true)}
+          onError={() => setFailedUrl(logoUrl)}
         />
       ) : null}
     </span>
