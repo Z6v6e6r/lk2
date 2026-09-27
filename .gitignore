@@ -29,7 +29,6 @@ playwright-report/
 test-results/
 
 # Mobile generated platforms and signing material
-apps/mobile/android/
 apps/mobile/ios/
 *.keystore
 *.jks
