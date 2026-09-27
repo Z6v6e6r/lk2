@@ -1595,6 +1595,33 @@ describe('ChatsPage communities tab', () => {
     expect(readCommunityChatsCache(currentUserId)?.communities).toHaveLength(1);
   });
 
+  it('refreshes the buffered directory every time the tab is opened', async () => {
+    const loadCommunities = vi
+      .fn()
+      .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({ loadCommunities })}
+      />,
+    );
+    await waitFor(() => expect(loadCommunities).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    await waitFor(() => expect(loadCommunities).toHaveBeenCalledTimes(2));
+    await screen.findByRole('list', { name: 'Чаты сообществ' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Личные' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+
+    await waitFor(() => expect(loadCommunities).toHaveBeenCalledTimes(3));
+    // Every one of those reads replaces the rows behind the same on-screen list.
+    const refreshed = await screen.findByRole('list', { name: 'Чаты сообществ' });
+    expect(within(refreshed).getByText('Клуб на Соколе')).toBeVisible();
+  });
+
   it('keeps the cached list when the refresh fails and retries on demand', async () => {
     writeCommunityChatsCache(
       currentUserId,

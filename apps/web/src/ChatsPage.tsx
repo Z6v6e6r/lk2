@@ -239,8 +239,6 @@ interface CommunityChatsState {
   readonly nextCursor: string | null;
   /** A first-page read is in flight: with rows on screen this is the background refresh. */
   readonly loading: boolean;
-  /** The rows on screen came from the session cache and have not been confirmed by a fresh read. */
-  readonly stale: boolean;
   readonly loadingMore: boolean;
   readonly selectedCommunityId: string | null;
   readonly messages: readonly CommunityChatMessage[];
@@ -261,7 +259,6 @@ const EMPTY_COMMUNITY_STATE: CommunityChatsState = {
   communities: [],
   nextCursor: null,
   loading: false,
-  stale: false,
   loadingMore: false,
   selectedCommunityId: null,
   messages: [],
@@ -290,7 +287,6 @@ function initialCommunityState(
     status: 'ready',
     communities: cached.communities,
     nextCursor: cached.nextCursor,
-    stale: true,
   };
 }
 
@@ -948,7 +944,6 @@ export function ChatsPage({
             ...current,
             status: 'ready',
             loading: false,
-            stale: false,
             communities,
             nextCursor,
             loadingMore: false,
@@ -997,15 +992,15 @@ export function ChatsPage({
   }, [communitySource, loadCommunityChats]);
 
   /**
-   * Re-opening the tab refreshes the list behind the rows that are already on screen. The state is
-   * read through a ref on purpose: a dependency on `stale` would re-enter this effect after a failed
-   * refresh and retry in a loop. The retry bar owns that failure instead.
+   * Opening the tab refreshes the list behind the rows that are already on screen, which is the same
+   * one read per tab open this screen always made. The state is read through a ref on purpose: a
+   * dependency on it would re-enter the effect after a failed refresh and retry in a loop. The retry
+   * bar owns that failure instead.
    */
   useEffect(() => {
     if (filter !== 'COMMUNITY' || !communitySource) return;
     const current = communityStateRef.current;
     if (current.listError !== null || current.loading) return;
-    if (current.status === 'ready' && !current.stale) return;
     loadCommunityChats();
   }, [filter, communitySource, loadCommunityChats]);
 
