@@ -170,6 +170,15 @@ describe('GameDetailView', () => {
     const outsider = renderState({ conversation: null, viewerRelation: 'NONE' });
     expect(screen.queryByRole('button', { name: 'Открыть чат игры' })).toBeNull();
     outsider.unmount();
+
+    // A cancelled game can never open a conversation, so the entry stays absent for its roster too.
+    const cancelled = renderState({
+      conversation: null,
+      displayState: 'CANCELLED',
+      viewerRelation: 'PARTICIPANT',
+    });
+    expect(screen.queryByRole('button', { name: 'Открыть чат игры' })).toBeNull();
+    cancelled.unmount();
   });
 
   it('restores the lineup after remount and lets players be swapped or removed', async () => {

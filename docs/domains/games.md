@@ -352,8 +352,12 @@ card carries: the thread body stays in the messaging aggregate. It is `null` (an
 absent from `allowedActions`) whenever the viewer has no active game participation, the viewer
 account or `games.play` access is inactive, the game is cancelled, or the tenant contextual-chat
 runtime gate is off. The card never creates a conversation; the games interface opens or creates one
-through the messaging command and then links to the returned thread. The chat entry is rendered on
-the viewer card next to the primary action, and the same reference drives the unread counter.
+through the messaging command and then links to the returned thread.
+
+The chat entry follows one decision shared by the card and the detail screen: an authorized
+conversation is opened with the unread counter; a viewer who is on the roster of a non-cancelled game
+gets a create-or-open entry even before anybody has opened the thread; everyone else, including a
+cancelled game, gets no entry at all and therefore never learns an unauthorized conversation id.
 
 It never contains phone, provider/Viva ID, provider payment URL, booking ID, raw metadata or audit
 history. A public card may use a stricter `PublicGameCardView` and omit stable user IDs when product

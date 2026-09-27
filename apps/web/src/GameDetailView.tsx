@@ -7,7 +7,12 @@ import { ChatIcon, EventCalendarIcon, EventLocationIcon } from './ActivityCardIc
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { avatarBackgroundUrl, playerInitials } from './avatar-backgrounds.js';
 import type { GameCard, SubmitGameResultRequest } from './auth-gateway.js';
-import { gamePrimaryAction, gameStateLabel, type GameCardAction } from './game-card-policy.js';
+import {
+  gameChatEntry,
+  gamePrimaryAction,
+  gameStateLabel,
+  type GameCardAction,
+} from './game-card-policy.js';
 
 export type GameDetailTab = 'GAME' | 'RESULT';
 
@@ -323,6 +328,7 @@ function GameTab(props: {
   } = props;
   const [lineupPicker, setLineupPicker] = useState<LineupPickerState | null>(null);
   const gameConversation = game.conversation;
+  const chatEntry = gameChatEntry(game);
   const primaryAction = gamePrimaryAction(game);
   const primaryLabel =
     primaryAction && RESULT_ACTIONS.has(primaryAction) && primaryAction !== 'SUBMIT_RESULT'
@@ -535,7 +541,7 @@ function GameTab(props: {
           <p className="game-detail-state">{gameStateLabel(game.displayState)}</p>
         )}
 
-        {gameConversation && game.allowedActions.includes('OPEN_CHAT') ? (
+        {chatEntry === 'OPEN' && gameConversation ? (
           <a
             className="game-detail-chat"
             href={`/chats/${gameConversation.conversationId}`}
@@ -547,7 +553,7 @@ function GameTab(props: {
             <ChatIcon />
             {gameConversation.unreadCount ? <span>{gameConversation.unreadCount}</span> : null}
           </a>
-        ) : game.viewerRelation === 'ORGANIZER' || game.viewerRelation === 'PARTICIPANT' ? (
+        ) : chatEntry === 'CREATE' ? (
           <button
             className="game-detail-chat"
             type="button"

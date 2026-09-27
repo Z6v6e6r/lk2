@@ -3,6 +3,30 @@ import type { GameCard as ViewerGameCard, PublicGameCard } from './auth-gateway.
 export type GameCardModel = ViewerGameCard | PublicGameCard;
 export type GameCardAction = GameCardModel['allowedActions'][number];
 
+/** How a card or the detail screen reaches the game chat, if at all. */
+export type GameChatEntry = 'OPEN' | 'CREATE' | 'NONE';
+
+/**
+ * The card and the detail screen must agree on the game chat entry: an authorized conversation is
+ * always openable; a viewer who is on the roster can create or open the thread on demand, except for
+ * a cancelled game, where the messaging command cannot open a conversation at all. Everyone else —
+ * an anonymous discovery card, an outsider, a waitlisted or merely reserved viewer — gets no entry,
+ * because the server never sends them a conversation reference.
+ */
+export function gameChatEntry(game: GameCardModel): GameChatEntry {
+  // Only a viewer card carries a conversation reference at all; a public card never does.
+  if ('conversation' in game && game.conversation && game.allowedActions.includes('OPEN_CHAT')) {
+    return 'OPEN';
+  }
+  if (
+    game.displayState !== 'CANCELLED' &&
+    (game.viewerRelation === 'ORGANIZER' || game.viewerRelation === 'PARTICIPANT')
+  ) {
+    return 'CREATE';
+  }
+  return 'NONE';
+}
+
 const stateLabels: Record<GameCardModel['displayState'], string> = {
   FINDING_PLAYERS: 'Ищем игроков',
   ONE_SPOT_LEFT: 'Осталось одно место',

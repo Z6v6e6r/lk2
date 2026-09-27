@@ -472,9 +472,25 @@ describe('GameCard lifecycle template', () => {
     render(<GameCard game={publicGame} />);
 
     expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Открыть чат игры' })).toBeNull();
   });
 
-  it('keeps the card without a chat entry until the server authorizes a conversation', () => {
+  it('asks the games page for the game chat before a roster member has a conversation', () => {
+    const game = viewerHistoryGame({
+      displayState: 'RESULT_REQUIRED',
+      resultSummary: null,
+      allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT'],
+    });
+    const onChatRequest = vi.fn();
+    render(<GameCard game={game} busy={false} onChatRequest={onChatRequest} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть чат игры' }));
+
+    expect(onChatRequest).toHaveBeenCalledWith(game);
+    expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
+  });
+
+  it('disables the pending game chat request while the card is busy', () => {
     render(
       <GameCard
         game={viewerHistoryGame({
@@ -482,9 +498,27 @@ describe('GameCard lifecycle template', () => {
           resultSummary: null,
           allowedActions: ['OPEN_DETAILS', 'SUBMIT_RESULT'],
         })}
+        busy
+        onChatRequest={() => undefined}
       />,
     );
 
+    expect(screen.getByRole('button', { name: 'Открываем чат игры…' })).toBeDisabled();
+  });
+
+  it('keeps a cancelled game without any chat entry', () => {
+    render(
+      <GameCard
+        game={viewerHistoryGame({
+          displayState: 'CANCELLED',
+          resultSummary: null,
+          allowedActions: ['OPEN_DETAILS'],
+        })}
+        onChatRequest={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByRole('button', { name: 'Открыть чат игры' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
   });
 });

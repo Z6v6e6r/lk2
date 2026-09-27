@@ -1,4 +1,5 @@
 import {
+  gameChatEntry,
   gameHistoryPrimaryAction,
   gameHistoryStateLabel,
   gamePrimaryAction,
@@ -161,6 +162,11 @@ export interface GameCardProps {
    * chat screen uses when the thread is not among its newest conversations yet.
    */
   readonly onChatOpen?: (game: GameCardModel, conversationId: string) => void;
+  /**
+   * Asks the caller to create or open the game conversation for a roster member whose card carries
+   * no authorized conversation yet; the messaging command stays in the games page, never here.
+   */
+  readonly onChatRequest?: (game: GameCardModel) => void;
   readonly onParticipantProfileRequest?: (
     game: GameCardModel,
     participant: GameCardModel['participants'][number],
@@ -180,6 +186,7 @@ export function GameCard({
   showCompactLevel = false,
   onAction,
   onChatOpen,
+  onChatRequest,
   onParticipantProfileRequest,
   unsupportedActionBehavior = 'DETAILS',
 }: GameCardProps) {
@@ -226,6 +233,7 @@ export function GameCard({
   const detailsUrl = `/games/${encodeURIComponent(game.id)}`;
   // Only a server-authorized viewer card carries a game conversation; a public card never does.
   const conversation = 'conversation' in game ? game.conversation : null;
+  const chatEntry = gameChatEntry(game);
 
   return (
     <article
@@ -446,7 +454,7 @@ export function GameCard({
                 </span>
               ) : null}
               <div className="game-card__cta">
-                {conversation ? (
+                {chatEntry === 'OPEN' && conversation ? (
                   <a
                     className="game-card__chat"
                     href={`/chats/${encodeURIComponent(conversation.conversationId)}`}
@@ -464,6 +472,16 @@ export function GameCard({
                       <span aria-hidden="true">{conversation.unreadCount}</span>
                     ) : null}
                   </a>
+                ) : chatEntry === 'CREATE' ? (
+                  <button
+                    className="game-card__chat"
+                    type="button"
+                    disabled={busy}
+                    aria-label={busy ? 'Открываем чат игры…' : 'Открыть чат игры'}
+                    onClick={onChatRequest ? () => onChatRequest(game) : undefined}
+                  >
+                    <ChatIcon />
+                  </button>
                 ) : null}
                 {action && actionLabels[action] ? (
                   onAction && commandActions.has(action) ? (

@@ -4298,10 +4298,17 @@
   padding: 0;
   align-items: center;
   justify-content: center;
+  border: 0;
   border-radius: 24px;
   background: #f0ebff;
   color: #7253d8 !important;
+  cursor: pointer;
   text-decoration: none;
+}
+
+.game-card__chat:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .game-card__chat svg {
