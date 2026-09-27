@@ -17,6 +17,7 @@ import {
   readCommunityChatsCache,
   writeCommunityChatsCache,
 } from './chats-ui/community-chats-cache.js';
+import { communityThreadCache, stationThreadCache } from './chats-ui/thread-page-cache.js';
 import styles from './chats-ui/ChatsUi.module.css';
 
 const conversationId = '22222222-2222-4222-8222-222222222222';
@@ -1705,6 +1706,161 @@ describe('ChatsPage communities tab', () => {
     expect(await screen.findByText('Выберите чат сообщества')).toBeVisible();
     expect(screen.queryByText('Корт свободен')).toBeNull();
     expect(screen.queryByText('Клуб на Соколе')).toBeNull();
+  });
+
+  it('paints the buffered community chat before the fresh page arrives', async () => {
+    writeCommunityChatsCache(
+      currentUserId,
+      [communitySummary(communityId, 'Клуб на Соколе')],
+      null,
+    );
+    communityThreadCache.write(currentUserId, communityId, [
+      {
+        body: 'Буферизованное сообщение',
+        sentAt: '2026-09-27T11:00:00.000Z',
+        author: { displayName: 'Анна' },
+        isViewer: false,
+      },
+    ]);
+    let resolvePage: (page: CommunityReadExperienceChatPage) => void = () => undefined;
+    const loadMessages = vi.fn().mockImplementation(
+      () =>
+        new Promise<CommunityReadExperienceChatPage>((resolve) => {
+          resolvePage = resolve;
+        }),
+    );
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        communityChats={communitySource({
+          loadCommunities: vi
+            .fn()
+            .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] }),
+          loadMessages,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+
+    // The buffered history is on screen before the legacy projection answers.
+    expect(screen.getByText('Буферизованное сообщение')).toBeVisible();
+    expect(screen.getByText('Обновляем переписку…')).toBeVisible();
+
+    await act(async () => {
+      resolvePage(
+        communityChatPage([
+          {
+            body: 'Свежее сообщение',
+            sentAt: '2026-09-27T12:00:00.000Z',
+            author: { displayName: 'Анна' },
+            isViewer: false,
+          },
+        ]),
+      );
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText('Свежее сообщение')).toBeVisible();
+    expect(screen.queryByText('Обновляем переписку…')).toBeNull();
+    // The fresh page becomes the buffer for the next open.
+    expect(communityThreadCache.read(currentUserId, communityId)?.map((item) => item.body)).toEqual(
+      ['Свежее сообщение'],
+    );
+  });
+
+  it.each([
+    ['newest-first', ['Новое сообщение', 'Старое сообщение']],
+    ['oldest-first', ['Старое сообщение', 'Новое сообщение']],
+  ])(
+    'reads a %s provider page chronologically, newest at the bottom',
+    async (_label: string, bodies: readonly string[]) => {
+      const sentAtFor: Record<string, string> = {
+        'Новое сообщение': '2026-09-27T12:00:00.000Z',
+        'Старое сообщение': '2026-09-27T11:00:00.000Z',
+      };
+      const loadMessages = vi.fn().mockResolvedValue(
+        communityChatPage(
+          bodies.map((body) => ({
+            body,
+            sentAt: sentAtFor[body] as string,
+            author: { displayName: 'Анна' },
+            isViewer: false,
+          })),
+        ),
+      );
+      render(
+        <ChatsPage
+          {...defaultProps}
+          mode="list"
+          hasExplicitRecipient={false}
+          communityChats={communitySource({
+            loadCommunities: vi
+              .fn()
+              .mockResolvedValue({ items: [communitySummary(communityId, 'Клуб на Соколе')] }),
+            loadMessages,
+          })}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Сообщества' }));
+      fireEvent.click(await screen.findByRole('button', { name: /Клуб на Соколе/ }));
+      await screen.findByText('Новое сообщение');
+
+      const thread = screen.getByRole('region', { name: 'Чат сообщества Клуб на Соколе' });
+      expect([...thread.querySelectorAll('article p')].map((node) => node.textContent)).toEqual([
+        'Старое сообщение',
+        'Новое сообщение',
+      ]);
+    },
+  );
+
+  it('paints the buffered station chat before the fresh page arrives', async () => {
+    stationThreadCache.write(currentUserId, stationDialogId, [
+      {
+        id: '99999999-9999-4999-8999-999999999999',
+        body: 'Буферизованный ответ станции',
+        author: 'STATION',
+        authorName: 'Поддержка ПадлХАБ',
+        createdAt: '2026-09-27T11:00:00.000Z',
+        attachments: [],
+      },
+    ]);
+    const source = stationSource({
+      loadStations: vi.fn().mockResolvedValue([{ id: stationUuid, name: 'Ясенево' }]),
+      loadDialogs: vi.fn().mockResolvedValue([
+        {
+          id: stationDialogId,
+          stationId: stationUuid,
+          stationName: 'Ясенево',
+          status: 'OPEN',
+          updatedAt: '2026-09-27T11:00:00.000Z',
+          lastMessage: {
+            preview: 'Ответ',
+            author: 'STATION',
+            createdAt: '2026-09-27T11:00:00.000Z',
+          },
+        },
+      ]),
+      loadMessages: vi.fn().mockImplementation(() => new Promise(() => undefined)),
+    });
+    render(
+      <ChatsPage
+        {...defaultProps}
+        mode="list"
+        hasExplicitRecipient={false}
+        stationSupport={source}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ясенево/ }));
+
+    expect(screen.getByText('Буферизованный ответ станции')).toBeVisible();
+    expect(screen.getByText('Обновляем переписку…')).toBeVisible();
   });
 
   it('lists every community the viewer was added to and reads its chat', async () => {
