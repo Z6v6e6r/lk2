@@ -21,6 +21,12 @@ import {
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import {
+  auditGameTestCourtDenial,
+  hasGameTestCourtAccess,
+  isExactGameTestCourtPair,
+  isRestrictedGameTestCourt,
+} from './game-test-courts.js';
 import type { GamePaymentMode } from './game-repository.js';
 
 export type GameRosterCommandErrorCode =
@@ -181,6 +187,8 @@ interface OperationRow extends CommandRow {
 
 interface LockedGameRow extends QueryResultRow {
   readonly id: string;
+  readonly station_id: string;
+  readonly court_id: string | null;
   readonly revision: string | number;
   readonly lifecycle_state: GameLifecycleState;
   readonly starts_at: Date | string;
@@ -480,7 +488,7 @@ async function lockGame(
 ): Promise<LockedGameRow | undefined> {
   return queryOne<LockedGameRow>(
     client,
-    `select id, revision, lifecycle_state, starts_at, join_cutoff_at,
+    `select id, station_id, court_id, revision, lifecycle_state, starts_at, join_cutoff_at,
             capacity, waitlist_enabled, payment_mode, sport_code, level_from, level_to,
             min_level_id, max_level_id, now()::text as database_now
        from games.games
@@ -496,7 +504,7 @@ async function lockProcessGame(
 ): Promise<LockedGameRow | undefined> {
   return queryOne<LockedGameRow>(
     client,
-    `select id, revision, lifecycle_state, starts_at, join_cutoff_at,
+    `select id, station_id, court_id, revision, lifecycle_state, starts_at, join_cutoff_at,
             capacity, waitlist_enabled, payment_mode, sport_code, level_from, level_to,
             min_level_id, max_level_id, now()::text as database_now
        from games.games
@@ -1027,6 +1035,7 @@ async function prepareCommand(
   client: PoolClient,
   input: GameRosterUserCommandInput,
   commandType: string,
+  testCourtsEnabled = false,
 ): Promise<
   | {
       readonly ready: true;
@@ -1051,6 +1060,20 @@ async function prepareCommand(
     };
   }
   const currentRevision = positiveInteger(game.revision);
+  if (
+    (commandType === 'game.join.v1' || commandType === 'game.waitlist.join.v1') &&
+    isRestrictedGameTestCourt(input.tenantId, game.court_id) &&
+    (!testCourtsEnabled ||
+      !isExactGameTestCourtPair(input.tenantId, game.station_id, game.court_id) ||
+      game.payment_mode !== 'NO_PAYMENT' ||
+      !(await hasGameTestCourtAccess(client, input.tenantId, input.actorUserId)))
+  ) {
+    await auditGameTestCourtDenial(client, { ...input, commandType });
+    return {
+      ready: false,
+      result: { outcome: 'rejected', code: 'GAME_NOT_FOUND', replayed: false },
+    };
+  }
   if (input.expectedRevision !== undefined && input.expectedRevision !== currentRevision) {
     return {
       ready: false,
@@ -1121,13 +1144,19 @@ export function createGameRosterRepository(
   pool: Pool,
   options: {
     readonly onEligibilityDecision?: (event: LevelEligibilityDecisionTelemetry) => void;
+    readonly testCourtsEnabled?: boolean;
   } = {},
 ): GameRosterRepository {
   return {
     join(input) {
       const commandType = 'game.join.v1';
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const prepared = await prepareCommand(client, input, commandType);
+        const prepared = await prepareCommand(
+          client,
+          input,
+          commandType,
+          options.testCourtsEnabled,
+        );
         if (!prepared.ready) return prepared.result;
         if (
           prepared.game.payment_mode === 'SPLIT' ||
@@ -1495,7 +1524,12 @@ export function createGameRosterRepository(
     joinWaitlist(input) {
       const commandType = 'game.waitlist.join.v1';
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        const prepared = await prepareCommand(client, input, commandType);
+        const prepared = await prepareCommand(
+          client,
+          input,
+          commandType,
+          options.testCourtsEnabled,
+        );
         if (!prepared.ready) return prepared.result;
         const now = timestamp(prepared.game.database_now);
         const rejected = await policyRejection(
@@ -1838,19 +1872,32 @@ export function createGameRosterRepository(
           return result;
         }
 
-        const eligibility = await evaluateGameParticipationEligibility(
-          client,
-          {
-            tenantId: input.tenantId,
-            gameId: input.gameId,
-            playerId: entry.user_id,
-            ...(entry.personal_invitation_id ? { invitationId: entry.personal_invitation_id } : {}),
-            action: 'PROMOTE_WAITLIST',
-            correlationId: input.correlationId,
-          },
-          game,
-          options.onEligibilityDecision,
-        );
+        const testCourtAccessDenied =
+          isRestrictedGameTestCourt(input.tenantId, game.court_id) &&
+          (!options.testCourtsEnabled ||
+            !isExactGameTestCourtPair(input.tenantId, game.station_id, game.court_id) ||
+            !(await hasGameTestCourtAccess(client, input.tenantId, entry.user_id)));
+        const eligibility = testCourtAccessDenied
+          ? {
+              deniedCode: 'GAME_NOT_FOUND' as const,
+              decisionId: undefined,
+              validatedInvitationId: undefined,
+            }
+          : await evaluateGameParticipationEligibility(
+              client,
+              {
+                tenantId: input.tenantId,
+                gameId: input.gameId,
+                playerId: entry.user_id,
+                ...(entry.personal_invitation_id
+                  ? { invitationId: entry.personal_invitation_id }
+                  : {}),
+                action: 'PROMOTE_WAITLIST',
+                correlationId: input.correlationId,
+              },
+              game,
+              options.onEligibilityDecision,
+            );
         if (eligibility.deniedCode) {
           await client.query(
             `update games.waitlist_entries

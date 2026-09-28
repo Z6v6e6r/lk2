@@ -116,7 +116,9 @@ const workerMetrics = createWorkerMetricRecorder({
 });
 const pool = createDatabasePool(config.DATABASE_URL);
 const gameRepository = createGameRepository(pool);
-const gameRosterRepository = createGameRosterRepository(pool);
+const gameRosterRepository = createGameRosterRepository(pool, {
+  testCourtsEnabled: config.GAMES_TEST_COURTS_ENABLED,
+});
 const messagingRepository = createMessagingRepository(pool);
 const participationCommandRepository = createParticipationCommandRepository(pool);
 const profileFriendshipRepository = createProfileFriendshipRepository(pool);

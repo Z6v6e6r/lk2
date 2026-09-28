@@ -11,6 +11,7 @@ import {
   createDatabasePool,
   warmDatabasePool,
   createGameRepository,
+  createGameTestCourtRepository,
   createGameResultRepository,
   createGiftCertificateCatalogRepository,
   createGiftCertificateIssuanceRepository,
@@ -243,10 +244,14 @@ const activityHistoryRepository = config.ACTIVITY_HISTORY_ENABLED
   : undefined;
 const gameRepository =
   config.GAMES_READ_ENABLED || config.GAMES_COMMANDS_ENABLED
-    ? createGameRepository(pool)
+    ? createGameRepository(pool, { testCourtsEnabled: config.GAMES_TEST_COURTS_ENABLED })
     : undefined;
 const gameReadRepository = config.GAMES_READ_ENABLED ? gameRepository : undefined;
 const gameCommandRepository = config.GAMES_COMMANDS_ENABLED ? gameRepository : undefined;
+const gameTestCourtRepository = createGameTestCourtRepository(
+  pool,
+  config.GAMES_TEST_COURTS_ENABLED,
+);
 const tournamentSummarySource = config.GAMES_READ_ENABLED
   ? new LegacyTournamentSummaryAdapter({
       baseUrl: config.LEGACY_GAMES_PUBLIC_BASE_URL,
@@ -261,6 +266,7 @@ const tournamentSummarySource = config.GAMES_READ_ENABLED
 const profileSummaryRepository = createProfileSummaryRepository(pool);
 const gameRosterRepository = config.GAMES_COMMANDS_ENABLED
   ? createGameRosterRepository(pool, {
+      testCourtsEnabled: config.GAMES_TEST_COURTS_ENABLED,
       onEligibilityDecision: (decision) => {
         recordLevelEligibilityMetrics({
           tenant: decision.tenantId,
@@ -714,6 +720,7 @@ const app = await buildApp({
   ...(activityHistoryProjector ? { activityHistoryProjector } : {}),
   ...(gameReadRepository ? { gameReadRepository } : {}),
   ...(gameCommandRepository ? { gameCommandRepository } : {}),
+  gameTestCourtRepository,
   ...(tournamentSummarySource ? { tournamentSummarySource } : {}),
   ...(gameRosterRepository
     ? {

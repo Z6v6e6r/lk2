@@ -6,6 +6,7 @@ import type {
   CreateStoredGameInput,
   CreateStoredGameResult,
   GameRepository,
+  GameTestCourtRepository,
   GameRosterCommandErrorCode,
   GameRosterCommandResult,
   GameRosterOperation,
@@ -440,10 +441,24 @@ export function registerGameRoutes(
   options: {
     readonly repository?: UserRosterRepository;
     readonly managementRepository?: UserManagementRepository;
+    readonly testCourtRepository?: GameTestCourtRepository;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
+  app.get(
+    '/user/api/v1/:tenantKey/games/test-courts',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store');
+      const current = principal(request);
+      if (!current)
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      return {
+        items: (await options.testCourtRepository?.list(current.tenantId, current.userId)) ?? [],
+      };
+    },
+  );
   app.post(
     '/user/api/v1/:tenantKey/games',
     { preHandler: [...options.commandHandlers] },
@@ -571,6 +586,22 @@ export function registerGameRoutes(
         if (!options.repository) return unavailable(request, reply);
         const payload = parseBody ? parseJoinBody(request, reply) : {};
         if (!payload) return reply;
+        // Check current stored access before repository replay as well as new admission.
+        if (
+          (type === 'JOIN_GAME' || type === 'JOIN_WAITLIST') &&
+          options.testCourtRepository &&
+          !(await options.testCourtRepository.canJoin(
+            current.tenantId,
+            current.userId,
+            currentGameId,
+            {
+              commandType: type === 'JOIN_GAME' ? 'game.join.v1' : 'game.waitlist.join.v1',
+              correlationId: request.id,
+            },
+          ))
+        ) {
+          return sendApiError(request, reply, 404, 'GAME_NOT_FOUND', 'Игра не найдена.');
+        }
         const result = await execute(options.repository, {
           tenantId: current.tenantId,
           actorUserId: current.userId,

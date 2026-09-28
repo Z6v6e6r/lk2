@@ -1,10 +1,12 @@
 import { loadConfig } from '@phub/config';
 import type {
   GameRepository,
+  GameTestCourtRepository,
   MessagingRepository,
   ProfileSummaryRepository,
   StoredGameCardProjection,
 } from '@phub/database';
+import { GAME_TEST_COURT_SCOPE as testScope } from '@phub/database';
 import type { GameCardProjectionInput } from '@phub/games';
 import { createLogger } from '@phub/observability';
 import { SignJWT } from 'jose';
@@ -24,7 +26,7 @@ const config = loadConfig({
   JWT_REFRESH_SECRET: 'test-refresh-secret-at-least-32-characters',
 });
 
-const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
+const tenantId = testScope.tenantId;
 const userId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
 const playerId = '47b10c0e-2d9f-4775-96dc-2941adae4968';
 const stationId = 'bd35543d-c565-443a-bd3d-eea68eb2fbe6';
@@ -149,12 +151,14 @@ async function appWith(
   photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoObjectKey' | 'getPhotoDeliveryIds'> &
     Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>,
   conversationReader?: Pick<MessagingRepository, 'listGameConversationSummaries'>,
+  testCourtRepository?: GameTestCourtRepository,
 ) {
   const app = await buildApp({
     config,
     logger: createLogger('games-read-api-test', 'silent'),
     pool: fakePool(),
     gameReadRepository: repositoryValue,
+    ...(testCourtRepository ? { gameTestCourtRepository: testCourtRepository } : {}),
     ...(photoRepository ? { profilePhotoMediaRepository: photoRepository } : {}),
     ...(conversationReader
       ? { messagingRepository: conversationReader as unknown as MessagingRepository }
@@ -166,6 +170,71 @@ async function appWith(
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+});
+
+describe('test-court read isolation', () => {
+  it('hides imported PUBLIC test games from public list/detail and ungranted participant reads', async () => {
+    const restricted = projection(
+      snapshot({ court: { id: testScope.courts[0].id, name: 'Тестовый корт' } }),
+    );
+    const app = await appWith(
+      repository({
+        getCardProjection: vi.fn().mockResolvedValue(restricted),
+        listPublicCardProjections: vi.fn().mockResolvedValue({ items: [restricted] }),
+        listViewerCardProjections: vi.fn().mockResolvedValue({ items: [restricted] }),
+      }),
+    );
+    const publicList = await app.inject('/public/api/v1/local-padel/games');
+    expect(publicList.statusCode).toBe(200);
+    expect(publicList.json<{ items: unknown[] }>().items).toEqual([]);
+    expect((await app.inject(`/public/api/v1/local-padel/games/${gameId}`)).statusCode).toBe(404);
+    const headers = { authorization: `Bearer ${await accessToken()}` };
+    expect(
+      (await app.inject({ url: `/user/api/v1/local-padel/games/${gameId}`, headers })).statusCode,
+    ).toBe(404);
+    const mine = await app.inject({ url: '/user/api/v1/local-padel/games', headers });
+    expect(mine.statusCode).toBe(200);
+    expect(mine.json<{ items: unknown[] }>().items).toEqual([]);
+  });
+
+  it('allows a granted tester to open a private test game by link but still hides its public route', async () => {
+    const restricted = projection(
+      snapshot({
+        visibility: 'PRIVATE',
+        organizerUserId: playerId,
+        participants: [
+          {
+            userId: playerId,
+            displayName: 'Тестовый организатор',
+            avatarUrl: null,
+            level: 'C',
+            role: 'ORGANIZER',
+            paymentState: 'NOT_REQUIRED',
+          },
+        ],
+        court: { id: testScope.courts[1].id, name: 'Тестовый корт 2' },
+      }),
+    );
+    const hasAccess = vi.fn().mockResolvedValue(true);
+    const app = await appWith(
+      repository({ getCardProjection: vi.fn().mockResolvedValue(restricted) }),
+      undefined,
+      undefined,
+      { hasAccess, list: vi.fn().mockResolvedValue([]), canJoin: vi.fn().mockResolvedValue(true) },
+    );
+    const headers = { authorization: `Bearer ${await accessToken()}` };
+    const allowed = await app.inject({ url: `/user/api/v1/local-padel/games/${gameId}`, headers });
+    expect(allowed.statusCode).toBe(200);
+    expect(allowed.json<{ game: { allowedActions: string[] } }>().game.allowedActions).toContain(
+      'JOIN',
+    );
+    expect(hasAccess).toHaveBeenCalledWith(tenantId, userId);
+    hasAccess.mockResolvedValue(false);
+    expect(
+      (await app.inject({ url: `/user/api/v1/local-padel/games/${gameId}`, headers })).statusCode,
+    ).toBe(404);
+    expect((await app.inject(`/public/api/v1/local-padel/games/${gameId}`)).statusCode).toBe(404);
+  });
 });
 
 describe('Games read APIs', () => {

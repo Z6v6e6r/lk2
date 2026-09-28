@@ -3313,6 +3313,31 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/games:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games
+  /{tenantKey}/games/test-courts:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      tags: [games]
+      operationId: listGameTestCourts
+      summary: List the two beta courts available to an explicitly granted tester
+      description: |
+        Returns internal PadlHub identities only. Disabled beta or missing stored games.test-courts
+        permission returns an empty list. Broad beta client access and admin roles do not grant it.
+        Creation on these courts requires PRIVATE, FRIENDLY and NO_PAYMENT; it makes no Viva booking.
+      responses:
+        '200':
+          description: Tester-scoped catalogue, never cached.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameTestCourtList'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
   /{tenantKey}/recommendations/bookings:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1recommendations~1bookings
   /{tenantKey}/promotions/{promotionId}/engagements:
@@ -8278,6 +8303,28 @@ components:
         route:
           type: string
           pattern: '^/'
+    GameTestCourtList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 2
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, title, stationId]
+            properties:
+              id:
+                type: string
+                format: uuid
+              title:
+                type: string
+                maxLength: 120
+              stationId:
+                type: string
+                format: uuid
     LocationList:
       type: object
       additionalProperties: false

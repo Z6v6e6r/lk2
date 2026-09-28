@@ -13,6 +13,14 @@ import {
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import {
+  GAME_TEST_COURT_SCOPE,
+  GAME_TEST_COURT_PUBLIC_FILTER,
+  auditGameTestCourtDenial,
+  hasGameTestCourtAccess,
+  isExactGameTestCourtPair,
+  isRestrictedGameTestCourt,
+} from './game-test-courts.js';
 
 export type GamePaymentMode = 'ORGANIZER_PAYS' | 'SPLIT' | 'SUBSCRIPTION' | 'NO_PAYMENT';
 export type GameCancellationReason =
@@ -644,7 +652,10 @@ function mapScheduledCommand(row: ScheduledCommandRow): ClaimedGameScheduledComm
   };
 }
 
-export function createGameRepository(pool: Pool): GameRepository {
+export function createGameRepository(
+  pool: Pool,
+  options: { readonly testCourtsEnabled?: boolean } = {},
+): GameRepository {
   return {
     get(tenantId, gameId) {
       return withTenantTransaction(pool, tenantId, async (client) => {
@@ -666,6 +677,18 @@ export function createGameRepository(pool: Pool): GameRepository {
 
     create(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        if (
+          isRestrictedGameTestCourt(input.tenantId, input.courtId) &&
+          (!options.testCourtsEnabled ||
+            !isExactGameTestCourtPair(input.tenantId, input.stationId, input.courtId) ||
+            input.visibility !== 'PRIVATE' ||
+            input.paymentMode !== 'NO_PAYMENT' ||
+            input.kind !== 'FRIENDLY' ||
+            !(await hasGameTestCourtAccess(client, input.tenantId, input.actorUserId)))
+        ) {
+          await auditGameTestCourtDenial(client, { ...input, commandType: 'game.create.v1' });
+          return { outcome: 'rejected', code: 'GAME_LOCATION_INVALID' };
+        }
         const principalKey = `user:${input.actorUserId}`;
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `game-command:${input.tenantId}:${principalKey}:${input.idempotencyKey}`,
@@ -1206,6 +1229,7 @@ export function createGameRepository(pool: Pool): GameRepository {
               )
               and lifecycle_state = 'SCHEDULED'
               and visibility = 'PUBLIC'
+              and ${GAME_TEST_COURT_PUBLIC_FILTER}
               and starts_at > now()
               and (
                 $2::timestamptz is null
@@ -1272,6 +1296,9 @@ export function createGameRepository(pool: Pool): GameRepository {
         : 'or (starts_at, game_id) > ($3::timestamptz, $4::uuid)';
       const order = history ? 'starts_at desc, game_id desc' : 'starts_at, game_id';
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const includeTestCourts =
+          Boolean(options.testCourtsEnabled) &&
+          (await hasGameTestCourtAccess(client, input.tenantId, input.viewerUserId));
         const result = await client.query<ProjectionRow>(
           `select game_id, aggregate_revision, projection_revision, lifecycle_state,
                   visibility, starts_at, ends_at, base_payload, projected_at
@@ -1284,6 +1311,7 @@ export function createGameRepository(pool: Pool): GameRepository {
                    and redirect.source_game_id = games.card_projections.game_id
               )
               and ${lifecyclePredicate}
+              and (${GAME_TEST_COURT_PUBLIC_FILTER} or $6::boolean)
               and (
                 base_payload ->> 'organizerUserId' = $2
                 or base_payload @> jsonb_build_object(
@@ -1310,6 +1338,7 @@ export function createGameRepository(pool: Pool): GameRepository {
             input.after?.startsAt ?? null,
             input.after?.gameId ?? null,
             limit + 1,
+            includeTestCourts,
           ],
         );
         const visible = result.rows.slice(0, limit).map(mapProjection);
@@ -1341,6 +1370,7 @@ export function createGameRepository(pool: Pool): GameRepository {
                 )
                 and lifecycle_state = 'SCHEDULED'
                 and visibility = 'PUBLIC'
+                and ${GAME_TEST_COURT_PUBLIC_FILTER}
                 and starts_at > now()
                 and ($5::date is null or (
                   starts_at >= ($5::date::timestamp at time zone 'Europe/Moscow')
@@ -1586,7 +1616,12 @@ export function createGameRepository(pool: Pool): GameRepository {
           court: game.courtId
             ? {
                 id: game.courtId,
-                name: source.court_name,
+                name:
+                  source.court_name ??
+                  (isRestrictedGameTestCourt(input.tenantId, game.courtId)
+                    ? (GAME_TEST_COURT_SCOPE.courts.find((court) => court.id === game.courtId)
+                        ?.title ?? null)
+                    : null),
               }
             : null,
           levelRange:

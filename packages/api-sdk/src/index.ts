@@ -11,6 +11,7 @@ export type RealtimeTicket = components['schemas']['RealtimeTicket'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
 export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
+export type GameTestCourtList = components['schemas']['GameTestCourtList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
 export type CommunityReadExperienceDetail = components['schemas']['CommunityReadExperienceDetail'];
@@ -1407,6 +1408,10 @@ export class PadlHubApiClient {
 
   public getGameOperation(operationId: string): Promise<GameCommandResult> {
     return this.request<GameCommandResult>(`/game-operations/${encodeURIComponent(operationId)}`);
+  }
+
+  public listGameTestCourts(): Promise<GameTestCourtList> {
+    return this.request<GameTestCourtList>('/games/test-courts', { cache: 'no-store' });
   }
 
   public async listLocations(): Promise<LocationList> {

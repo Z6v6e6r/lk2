@@ -126,6 +126,10 @@ export function CreateGamePage({
   const [locationsError, setLocationsError] = useState<string | null>(null);
   const [title, setTitle] = useState(restoredPayload?.title ?? 'Открытая игра');
   const [stationId, setStationId] = useState(restoredPayload?.stationId ?? '');
+  const [courtId, setCourtId] = useState(restoredPayload?.courtId ?? '');
+  const [testCourts, setTestCourts] = useState<
+    Awaited<ReturnType<NonNullable<AuthGateway['listGameTestCourts']>>>['items']
+  >([]);
   const [startsAt, setStartsAt] = useState(defaults.startsAt);
   const [endsAt, setEndsAt] = useState(defaults.endsAt);
   const [capacity, setCapacity] = useState<2 | 4>(restoredPayload?.capacity ?? 4);
@@ -166,6 +170,14 @@ export function CreateGamePage({
 
   useEffect(() => {
     let active = true;
+    void gateway.listGameTestCourts?.().then(
+      (result) => {
+        if (active) setTestCourts(result.items);
+      },
+      () => {
+        if (active) setTestCourts([]);
+      },
+    );
     void gateway.listLocations().then(
       (result) => {
         if (!active) return;
@@ -232,6 +244,7 @@ export function CreateGamePage({
       kind: 'FRIENDLY',
       visibility,
       stationId,
+      ...(courtId ? { courtId } : {}),
       startsAt: start.toISOString(),
       endsAt: end.toISOString(),
       timezone:
@@ -341,6 +354,8 @@ export function CreateGamePage({
     Boolean(stationId) &&
     locations.length > 0 &&
     !locations.some((location) => location.id === stationId);
+  const stationTestCourts = testCourts.filter((court) => court.stationId === stationId);
+  const selectedTestCourt = stationTestCourts.some((court) => court.id === courtId);
 
   return (
     <main className="games-page games-page--create">
@@ -393,7 +408,10 @@ export function CreateGamePage({
             value={stationId}
             required
             disabled={locations.length === 0}
-            onChange={(event) => setStationId(event.target.value)}
+            onChange={(event) => {
+              setStationId(event.target.value);
+              setCourtId('');
+            }}
           >
             {restoredStationUnavailable ? (
               <option value={stationId}>Сохранённая станция (нет в списке)</option>
@@ -405,6 +423,34 @@ export function CreateGamePage({
             ))}
           </select>
         </label>
+        {stationTestCourts.length > 0 ? (
+          <label>
+            <span>Тестовый корт</span>
+            <select
+              value={courtId}
+              onChange={(event) => {
+                setCourtId(event.target.value);
+                if (event.target.value) setVisibility('PRIVATE');
+              }}
+            >
+              <option value="">Без выбора корта</option>
+              {stationTestCourts.map((court) => (
+                <option key={court.id} value={court.id}>
+                  {court.title}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : courtId && activeAttempt ? (
+          <p className="games-message" role="status">
+            Сохранённый корт оставлен для восстановления прежней попытки.
+          </p>
+        ) : null}
+        {selectedTestCourt ? (
+          <p className="games-message">
+            Игра доступна только тестовым аккаунтам. Бронь корта в Viva не создаётся.
+          </p>
+        ) : null}
         <div className="game-create-form__row">
           <label>
             <span>Начало</span>
@@ -440,6 +486,7 @@ export function CreateGamePage({
             <span>Доступ</span>
             <select
               value={visibility}
+              disabled={selectedTestCourt}
               onChange={(event) => setVisibility(event.target.value as 'PUBLIC' | 'PRIVATE')}
             >
               <option value="PUBLIC">Открытая</option>

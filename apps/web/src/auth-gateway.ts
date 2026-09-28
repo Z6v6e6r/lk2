@@ -50,6 +50,7 @@ import type {
   GiftCertificatePaymentIntent,
   LocationDetail,
   LocationList,
+  GameTestCourtList,
   NotificationInboxPage,
   NotificationPreferencesUpdateRequest,
   NotificationPreferencesView,
@@ -592,6 +593,7 @@ export interface AuthGateway {
   ) => Promise<GameCommandResult>;
   readonly getGameOperation: (operationId: string) => Promise<GameCommandResult>;
   readonly listLocations: () => Promise<LocationList>;
+  readonly listGameTestCourts?: () => Promise<GameTestCourtList>;
   readonly getLocation: (locationId: string) => Promise<LocationDetail>;
   readonly listMyCommunities: (cursor?: string, limit?: number) => Promise<CommunityMembershipPage>;
   readonly getCommunityReadExperienceDetail: (
@@ -2233,6 +2235,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       });
       locationsPromise = request;
       return request;
+    },
+
+    listGameTestCourts() {
+      return client.listGameTestCourts();
     },
 
     getLocation(locationId) {
