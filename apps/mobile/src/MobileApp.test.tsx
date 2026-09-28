@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
@@ -28,6 +28,24 @@ describe('shared LK2 Android UI', () => {
     expect(
       screen.queryByText(/после закрытия приложения потребуется войти снова/),
     ).not.toBeInTheDocument();
+  });
+  it('offers native Yandex only with the dedicated gateway and requires both legal acceptances', async () => {
+    const gateway = createGateway();
+    const start = vi.spyOn(gateway, 'startVivaOAuth').mockResolvedValue(undefined);
+    render(
+      <App gateway={gateway} tenantKey="local-padel" clientPlatform="android" androidYandexLogin />,
+    );
+    const button = await screen.findByRole('button', { name: 'Войти через Яндекс' });
+    fireEvent.click(button);
+    expect(start).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Подтвердите публичную оферту');
+    for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
+    fireEvent.click(button);
+    expect(start).toHaveBeenCalledWith({
+      provider: 'yandex',
+      acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+    });
+    expect(screen.getByRole('button', { name: 'Получить код' })).toBeDisabled();
   });
   it.each(['/giftcard', '/gift-certificates', '/games/new', '/chats', '/communities'])(
     'does not expose browser-only commerce/provider/upload controls at %s',

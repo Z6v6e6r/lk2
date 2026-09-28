@@ -429,6 +429,125 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/BadRequest
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/viva/android/start:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: startAndroidYandexLogin
+      summary: Prepare browser login bound to the Android native PKCE verifier
+      description: |
+        Creates a five-minute, one-use browser launch ticket. The same idempotency key and
+        body replay the same ticket without extending its TTL. No credentials or cookies
+        are returned. Only Yandex is supported; the native bundle owns the redirect target.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AndroidOAuthStart'
+      responses:
+        '200':
+          description: Relative launch path on the configured PadlHub API origin; no-store.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [launchPath]
+                properties:
+                  launchPath:
+                    type: string
+                    pattern: '^/user/api/v1/[a-z0-9-]+/auth/viva/android/launch\?code=[A-Za-z0-9_-]{43}$'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/viva/android/launch:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: launchAndroidYandexLogin
+      summary: Consume a native launch ticket in the system browser
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/AndroidOAuthOpaqueValue'
+      responses:
+        '302':
+          description: Sets a state-scoped browser nonce cookie and redirects to server-owned Viva OAuth. No-store, no-referrer.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/OAuthBrowserCookie'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '410':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/viva/android/exchange:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: exchangeAndroidYandexLogin
+      summary: Exchange an Android handoff for a PadlHub session using native PKCE proof
+      description: |
+        Requires the exact native state and S256 verifier. The 120-second handoff binds tenant,
+        principal and session. Only the first idempotency key may retry, without extending TTL;
+        revoked, expired or rotated sessions cannot be replayed. The refresh cookie belongs to
+        native HTTPS/Keystore custody, not the WebView. No Viva credentials are returned.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AndroidOAuthExchange'
+      responses:
+        '200':
+          description: PadlHub session, no-store. Native verifies the echoed attempt before atomic custody.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/RefreshCookie'
+            X-Android-OAuth-State:
+              schema:
+                $ref: '#/components/schemas/AndroidOAuthOpaqueValue'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticatedSession'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '410':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/auth/viva/authorize:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -521,7 +640,10 @@ paths:
         The callback must carry the short-lived HttpOnly cookie set for the initiating browser.
         Initial sign-in creates a PadlHub session. Authenticated recovery is bound to the active
         PadlHub session family and replaces only the Viva delegation; it does not create or rotate
-        the PadlHub session.
+        the PadlHub session. An Android launch instead returns a verified HTTPS App Link:
+        https://lk2.padlhub.su/android/oauth/yandex#code=...&state=...
+        Its fragment contains only an opaque handoff and native state. It sets no PadlHub refresh
+        cookie in the browser and creates no Viva access-token handoff.
       security: []
       parameters:
         - name: state
@@ -539,6 +661,8 @@ paths:
           description: |
             The browser is redirected to the configured cabinet URL. Initial sign-in sets the
             PadlHub refresh cookie; authenticated recovery preserves the existing refresh cookie.
+            Android launches redirect to the fixed verified App Link, clear only the browser-binding
+            nonce cookie, and never expose a session or provider credential in the browser.
           headers:
             Set-Cookie:
               $ref: '#/components/headers/OAuthCallbackCookies'
@@ -5887,6 +6011,32 @@ components:
             personalDataPolicyAccepted:
               type: boolean
               const: true
+    AndroidOAuthOpaqueValue:
+      type: string
+      pattern: '^[A-Za-z0-9_-]{43}$'
+    AndroidOAuthStart:
+      type: object
+      additionalProperties: false
+      required: [codeChallenge, clientState, acceptance]
+      properties:
+        codeChallenge:
+          $ref: '#/components/schemas/AndroidOAuthOpaqueValue'
+        clientState:
+          $ref: '#/components/schemas/AndroidOAuthOpaqueValue'
+        acceptance:
+          $ref: '#/components/schemas/VivaOAuthAuthorizationRequest/properties/acceptance'
+    AndroidOAuthExchange:
+      type: object
+      additionalProperties: false
+      required: [code, codeVerifier, clientState]
+      properties:
+        code:
+          $ref: '#/components/schemas/AndroidOAuthOpaqueValue'
+        codeVerifier:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43,128}$'
+        clientState:
+          $ref: '#/components/schemas/AndroidOAuthOpaqueValue'
     VivaOAuthAuthorizationRequest:
       type: object
       additionalProperties: false

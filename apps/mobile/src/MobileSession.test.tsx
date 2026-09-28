@@ -5,6 +5,12 @@ import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type { NativeCacheObservation } from './native-api-fetch.js';
+import type { ReactNode } from 'react';
+import type { StartAndroidYandexLogin } from './AndroidLoginGate.js';
+vi.mock('./AndroidLoginGate.js', () => ({
+  AndroidLoginGate: ({ children }: { children: (start: StartAndroidYandexLogin) => ReactNode }) =>
+    children(() => Promise.resolve()),
+}));
 const calls = vi.hoisted(() => ({
   restore: vi.fn(),
   logout: vi.fn(),

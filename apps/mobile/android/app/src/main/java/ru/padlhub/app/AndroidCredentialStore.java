@@ -73,7 +73,9 @@ final class AndroidCredentialStore implements AndroidSessionEngine.Store {
                 JSONObject savedIdentity = json.getJSONObject("identity");
                 identity = new AndroidSessionEngine.Principal(savedIdentity.getString("userId"), savedIdentity.getString("tenantId"));
             }
-            return new Credential(scope, json.getString("value"), json.getLong("expiresAt"), refresh, logout, identity);
+            String oauthState = json.isNull("oauthState") ? null : json.getString("oauthState");
+            if (oauthState != null && !oauthState.matches("[A-Za-z0-9_-]{43}")) throw unavailable();
+            return new Credential(scope, json.getString("value"), json.getLong("expiresAt"), refresh, logout, identity, oauthState);
         } catch (Exception ignored) {
             // A locked/invalidated Keystore or damaged record must never become a false signed-out state.
             throw unavailable();
@@ -87,6 +89,7 @@ final class AndroidCredentialStore implements AndroidSessionEngine.Store {
             JSONObject json = new JSONObject().put("scope", scope).put("value", value.value).put("expiresAt", value.expiresAt)
                 .put("refreshKey", value.refreshKey == null ? JSONObject.NULL : value.refreshKey)
                 .put("logoutKey", value.logoutKey == null ? JSONObject.NULL : value.logoutKey)
+                .put("oauthState", value.oauthState == null ? JSONObject.NULL : value.oauthState)
                 .put("identity", value.identity == null ? JSONObject.NULL : new JSONObject()
                     .put("userId", value.identity.userId).put("tenantId", value.identity.tenantId));
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");

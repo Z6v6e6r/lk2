@@ -2,6 +2,7 @@ import type Redis from 'ioredis';
 
 import type { VivaOAuthProvider } from '@phub/auth';
 import { vivaRefreshLockRedisKey } from '@phub/auth/viva-delegation';
+import type { AndroidOAuthBinding } from './android-oauth-store.js';
 
 export interface VivaOAuthState {
   readonly state: string;
@@ -14,6 +15,8 @@ export interface VivaOAuthState {
   readonly personalDataPolicyVersion: string;
   /** Hash of the short-lived HttpOnly browser nonce that initiated this OAuth flow. */
   readonly browserNonceHash: string;
+  /** Set only by the server's one-time Android browser launch, never by web authorize. */
+  readonly android?: AndroidOAuthBinding;
   /** Binds a consent-preserving recovery flow to its already authenticated user. */
   readonly recoveryUserId?: string;
   /** Binds recovery to the active PadlHub refresh-session family that initiated it. */

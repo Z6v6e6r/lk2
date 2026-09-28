@@ -82,6 +82,7 @@ import {
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
+import { RedisAndroidOAuthStore } from './auth/android-oauth-store.js';
 import {
   createCommunityContentModerationRuntime,
   createCommunityContentRuntime,
@@ -228,6 +229,7 @@ const authService = new AuthService({
   challengeStore: new RedisAuthChallengeStore(redis),
   vivaOAuthProvider: vivaIdentityProvider,
   vivaOAuthStateStore: new RedisVivaOAuthStateStore(redis),
+  androidOAuthStore: new RedisAndroidOAuthStore(redis),
   providers,
   onClientAccessConvergenceFailure: ({ tenantId, userId, correlationId }) =>
     logger.warn(

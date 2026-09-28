@@ -22,6 +22,9 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
     private AndroidSessionPolicy policy;
     private AndroidSessionEngine engine;
     private AndroidHttpSender sender;
+    private AndroidYandexLogin oauth;
+    private volatile boolean callbackStorageFailed;
+    private String failedCallback;
 
     @Override public void load() {
         try {
@@ -30,6 +33,8 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
             sender = new AndroidHttpSender(policy.origin);
             engine = new AndroidSessionEngine(policy, new AndroidCredentialStore(getContext(), policy.scope), sender,
                 new AndroidReadCache(policy.userRoot, new AndroidReadCacheStore(getContext(), policy.scope)));
+            oauth = new AndroidYandexLogin(policy, engine, sender, new AndroidOAuthStore(getContext(), policy.scope));
+            receiveOAuthIntent(getActivity().getIntent());
         } catch (Failure ignored) { /* No credential, phone, OTP or raw native exception logging. */ }
     }
 
@@ -78,6 +83,10 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                 policy.request(path, method, headers, body);
                 queue.execute(() -> {
                     try {
+                        if (oauth == null || callbackStorageFailed) throw new Failure("NATIVE_STORAGE_UNAVAILABLE");
+                        AndroidSessionPolicy.Request checked = policy.request(path, method, headers, body);
+                        if (checked.operation == AndroidSessionPolicy.Operation.LOGOUT) engine.prepareLogout(checked.headers.get("idempotency-key"));
+                        oauth.beforeRequest(checked.operation);
                         AndroidSessionEngine.Response response = engine.request(path, method, headers, body);
                         JSObject safeHeaders = new JSObject();
                         for (Map.Entry<String, String> entry : response.headers.entrySet()) safeHeaders.put(entry.getKey(), entry.getValue());
@@ -98,6 +107,70 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                 call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
             }
         });
+    }
+
+    @PluginMethod public void startYandexLogin(PluginCall call) { oauthCall(call, "start"); }
+    @PluginMethod public void yandexLoginStatus(PluginCall call) { oauthCall(call, "status"); }
+    @PluginMethod public void cancelYandexLogin(PluginCall call) { oauthCall(call, "cancel"); }
+
+    private void oauthCall(PluginCall call, String operation) {
+        getActivity().runOnUiThread(() -> {
+            if (!trustedPage() || oauth == null) { call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED"); return; }
+            try {
+                queue.execute(() -> {
+                    try {
+                        if (callbackStorageFailed) {
+                            oauth.callback(failedCallback);
+                            callbackStorageFailed = false; failedCallback = null;
+                        }
+                        if ("start".equals(operation)) {
+                            String launch = oauth.start(Boolean.TRUE.equals(call.getBoolean("publicOfferAccepted")), Boolean.TRUE.equals(call.getBoolean("personalDataPolicyAccepted")));
+                            getActivity().runOnUiThread(() -> {
+                                if (!trustedPage()) { call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED"); return; }
+                                try {
+                                    getActivity().startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(launch)).addCategory(Intent.CATEGORY_BROWSABLE));
+                                    call.resolve(new JSObject().put("state", "waiting"));
+                                } catch (android.content.ActivityNotFoundException ignored) { call.reject("Browser unavailable", "NATIVE_BROWSER_UNAVAILABLE"); }
+                            });
+                        } else {
+                            if ("cancel".equals(operation)) oauth.cancel();
+                            String state = "cancel".equals(operation) ? "idle" : oauth.status();
+                            getActivity().runOnUiThread(() -> {
+                                if (trustedPage()) call.resolve(new JSObject().put("state", state));
+                                else call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
+                            });
+                        }
+                    } catch (Failure failure) { call.reject("Yandex login unavailable", failure.code); }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException ignored) { call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED"); }
+        });
+    }
+
+    private void receiveOAuthIntent(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null || oauth == null) return;
+        String raw = intent.getDataString();
+        if (raw == null || !raw.startsWith("https://lk2.padlhub.su/android/oauth/yandex")) return;
+        try {
+            queue.execute(() -> {
+                try {
+                    if (oauth.callback(raw)) {
+                        callbackStorageFailed = false;
+                        getActivity().runOnUiThread(() -> { intent.setData(null); notifyListeners("yandexLoginChanged", new JSObject()); });
+                    }
+                } catch (Failure ignored) {
+                    // Keep the intent for an explicit status retry if durable callback custody failed.
+                    failedCallback = raw;
+                    callbackStorageFailed = true;
+                    getActivity().runOnUiThread(() -> notifyListeners("yandexLoginChanged", new JSObject()));
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) { /* Activity is being destroyed. */ }
+    }
+
+    @Override protected void handleOnNewIntent(Intent intent) { receiveOAuthIntent(intent); }
+    @Override protected void handleOnResume() {
+        receiveOAuthIntent(getActivity().getIntent());
+        notifyListeners("yandexLoginChanged", new JSObject());
     }
 
     @Override public Boolean shouldOverrideLoad(Uri url) {

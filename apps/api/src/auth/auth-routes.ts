@@ -33,6 +33,23 @@ const vivaOAuthStartBodySchema = z.object({
   }),
 });
 const vivaOAuthRecoveryBodySchema = z.object({ provider: z.literal('yandex') });
+const androidOpaqueSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+const androidOAuthStartBodySchema = z
+  .object({
+    codeChallenge: androidOpaqueSchema,
+    clientState: androidOpaqueSchema,
+    acceptance: z
+      .object({ publicOfferAccepted: z.literal(true), personalDataPolicyAccepted: z.literal(true) })
+      .strict(),
+  })
+  .strict();
+const androidOAuthExchangeBodySchema = z
+  .object({
+    code: androidOpaqueSchema,
+    codeVerifier: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/),
+    clientState: androidOpaqueSchema,
+  })
+  .strict();
 const vivaOAuthCallbackQuerySchema = z.object({
   state: z.string().min(20).max(512),
   code: z.string().min(1).max(4096),
@@ -279,6 +296,99 @@ export function registerAuthRoutes(
       ? await runtimeCapabilities()
       : runtimeCapabilities),
   });
+  for (const operation of ['start', 'exchange'] as const) {
+    app.post(
+      `/user/api/v1/:tenantKey/auth/viva/android/${operation}`,
+      {
+        config: {
+          rateLimit: {
+            max: operation === 'start' ? 5 : 20,
+            timeWindow: '1 minute',
+            groupId: `auth-android-${operation}`,
+            keyGenerator: (request) => protectedRateKey(request, config, 'viva-authorize'),
+          },
+        },
+        preHandler: requireAuthIdempotency,
+      },
+      async (request, reply) => {
+        preventCredentialCaching(reply);
+        reply.header('Referrer-Policy', 'no-referrer');
+        if (!isAllowedBrowserOrigin(request, config))
+          return sendApiError(
+            request,
+            reply,
+            403,
+            'AUTH_ORIGIN_REJECTED',
+            'Недопустимый источник запроса.',
+          );
+        try {
+          const { tenantKey } = paramsSchema.parse(request.params);
+          if (operation === 'start') {
+            const body = androidOAuthStartBodySchema.parse(request.body);
+            return reply.send(
+              await authService.startAndroidOAuth({
+                tenantKey,
+                codeChallenge: body.codeChallenge,
+                clientState: body.clientState,
+                ...body.acceptance,
+                idempotencyKey: idempotencyKey(request),
+              }),
+            );
+          }
+          const body = androidOAuthExchangeBodySchema.parse(request.body);
+          const session = await authService.exchangeAndroidOAuth({
+            ...body,
+            tenantKey,
+            idempotencyKey: idempotencyKey(request),
+            correlationId: request.id,
+          });
+          const capabilities = await resolveRuntimeCapabilities();
+          setRefreshCookie(reply, config, tenantKey, session);
+          reply.header('X-Android-OAuth-State', body.clientState);
+          request.log.info(
+            { authEvent: 'ANDROID_OAUTH_EXCHANGED', tenantKey },
+            'Android session issued after PKCE verification',
+          );
+          return reply.send(publicSession(session, capabilities));
+        } catch (error) {
+          request.log.info(
+            {
+              authEvent: 'ANDROID_OAUTH_REJECTED',
+              operation,
+              code: error instanceof AuthServiceError ? error.code : 'AUTH_UNAVAILABLE',
+            },
+            'Android authentication did not complete',
+          );
+          return handleAuthError(error, request, reply);
+        }
+      },
+    );
+  }
+
+  app.get(
+    '/user/api/v1/:tenantKey/auth/viva/android/launch',
+    {
+      config: { rateLimit: { max: 10, timeWindow: '1 minute', groupId: 'auth-android-launch' } },
+    },
+    async (request, reply) => {
+      preventCredentialCaching(reply);
+      reply.header('Referrer-Policy', 'no-referrer');
+      try {
+        const { tenantKey } = paramsSchema.parse(request.params);
+        const query = z.object({ code: androidOpaqueSchema }).strict().parse(request.query);
+        const result = await authService.launchAndroidOAuth({
+          tenantKey,
+          code: query.code,
+          correlationId: request.id,
+        });
+        setOAuthBrowserCookie(reply, config, tenantKey, result.state, result.browserNonce);
+        return reply.redirect(result.redirectUrl);
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
   app.post(
     '/user/api/v1/:tenantKey/auth/viva/authorize',
     {
@@ -365,6 +475,11 @@ export function registerAuthRoutes(
       if (shouldClearOAuthBrowserCookie) {
         clearOAuthBrowserCookie(reply, config, tenantKey, query.state);
         shouldClearOAuthBrowserCookie = false;
+      }
+      if ('androidRedirectUrl' in completion) {
+        preventCredentialCaching(reply);
+        reply.header('Referrer-Policy', 'no-referrer');
+        return reply.redirect(completion.androidRedirectUrl);
       }
       if (!completion.vivaRecovery) {
         setRefreshCookie(reply, config, tenantKey, completion);

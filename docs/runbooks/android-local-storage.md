@@ -104,3 +104,19 @@ crash between key deletion and file cleanup. `native-api-fetch.test.ts` checks m
 and late observations after logout; `MobileCacheNotice.test.tsx` checks scoped accessible warnings.
 Run the full repository gate and native instrumentation for this privacy/session boundary. Emulator
 synthetic checks do not prove real-device login, production reachability or provider behavior.
+
+## Native Yandex attempt journal
+
+`AndroidOAuthStore` owns one additional package/origin/tenant/schema-scoped AES-GCM record in
+`noBackupFilesDir`, with a separate Keystore alias and AAD purpose. It contains a random state,
+PKCE verifier, start/exchange idempotency keys, optional one-time callback code and absolute expiry.
+Maximum lifetime is 10 minutes from start (the server independently expires launch at 5 minutes
+and handoff at 120 seconds). No proof, code or provider credential enters Preferences, localStorage,
+IndexedDB, WebView events, browser query parameters or logs. UI events carry no authentication data.
+
+The record is removed on confirmed credential custody, pre-callback cancellation, expiry, terminal
+exchange rejection or logout. Network/5xx/write failures retain recovery. A credential's optional
+server-echoed OAuth attempt marker survives refresh journals and is erased with that credential;
+it identifies a crash after storage and before pending-journal deletion. Missing/invalid encrypted
+storage never becomes a false signed-out state. The read cache still requires online session
+restoration and validated PadlHub UUID identity before activation; OAuth does not enable offline login.

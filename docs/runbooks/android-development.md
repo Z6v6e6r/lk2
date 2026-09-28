@@ -29,7 +29,7 @@ revokes the successor. Credentials are cleared before the logout marker, only af
 revocation, session expiry or refresh 401. Network/5xx/storage errors retain recovery state and
 show retry, never a false successful logout or a new login over an uncertain saved session.
 
-Native mode does not initiate Viva delegation/provider jobs, OAuth/recovery, browser Web Push,
+Native mode does not initiate Viva delegation/provider jobs, web OAuth recovery, browser Web Push,
 payment creation/handoffs or attachment flows. Java permits only current canonical reads and
 notification preference/read-cursor commands. New routes require an explicit native review.
 Web retains its existing transport; persistent Android mode requires an injected native fetch.
@@ -39,6 +39,68 @@ the task at its root.
 Version 1.2 adds an encrypted, identity-bound local read cache for HomeBase and the location
 directory. See [storage and retention rules](android-local-storage.md) for TTLs, byte limits,
 logout erasure, stale-data indicators and the explicit offline-login/command limits.
+
+## Yandex login (1.3/code 4)
+
+The phone screen also offers **Войти через Яндекс**, using the same two legal acceptances.
+`AndroidLoginGate` prevents account restoration or parallel phone login while a native attempt
+needs resolution. The system browser performs the existing server-owned Viva/Yandex flow.
+No client secret, Viva token, browser refresh cookie, WebView OAuth page or new dependency is used.
+
+1. Native code generates a 256-bit client state and S256 verifier, then atomically encrypts its
+   attempt before POST `/auth/viva/android/start`. Only the challenge and consent go to this endpoint.
+   A five-minute, one-use launch ticket is stable for the same idempotency key/body.
+2. Native opens the exact configured HTTPS origin and returned fixed `/auth/viva/android/launch`
+   path. The browser consumes the ticket, receives the existing state-scoped HttpOnly nonce cookie,
+   and follows server-generated provider OAuth. Provider state/verifier are independent of native PKCE.
+3. The existing provider callback validates its browser nonce, resolves identity and legal consent,
+   saves encrypted delegation and creates an audited PadlHub session. Android flows create a
+   metadata-only, 120-second handoff; they never create a Viva access handoff or browser refresh cookie.
+4. The callback redirects to the verified App Link
+   `https://lk2.padlhub.su/android/oauth/yandex#code=…&state=…`. The fragment does not reach HTTP logs.
+   There is no custom-scheme fallback. If Android does not claim the link, the static page removes
+   its fragment from history and explains how to enable supported links and restart login.
+5. Native validates the exact URI/attempt and persists the callback before exchange. POST
+   `/auth/viva/android/exchange` proves PKCE and binds the first exchange key atomically. The same
+   key recovers a lost response only while the exact session is active, unrotated and unrevoked.
+   Native verifies the server-echoed attempt and existing session/cookie contract, writes the
+   credential plus attempt marker atomically, then removes the journal. JS sees only login status.
+
+Returning from the browser triggers recovery; **Проверить вход** also retries explicitly. Before
+callback receipt, **Отменить вход** erases the proof. After an ambiguous exchange, only recovery or
+expiry is allowed. Process recreation retains the same verifier, callback and idempotency key;
+crash after credential storage uses its matching attempt marker and does not repeat exchange.
+Logout durably records intent before clearing OAuth state, then uses existing revocation recovery.
+Old, cancelled, foreign, malformed or duplicate callbacks cannot replace an account or pending code.
+
+### Deployment and certificate prerequisites
+
+This increment requires the API and Web source together. Preparing an APK or merging source does
+not deploy those endpoints. The provider callback configuration is unchanged. Publish only through
+the existing approved delivery process; no provider registration, signing key or live setting is
+changed by development.
+
+The checked-in `apps/web/public/.well-known/assetlinks.json` delegates the host to `ru.padlhub.app`
+with the **existing controlled-test debug certificate** SHA-256
+`22:07:BD:6E:B9:0A:EF:E4:4D:BD:04:3A:9C:FA:CD:17:54:13:13:BE:C3:A5:95:8D:05:1B:E8:07:E0:0B:EF:93`.
+It contains no signing key. A debug APK signed by another developer/CI key will not verify.
+Before store/release distribution, replace this association with the approved release certificate
+and remove the debug fingerprint; do not publish a release-signed APK under this test association.
+
+After an approved Web/API rollout, require `/.well-known/assetlinks.json` to return HTTPS 200,
+JSON and the exact packaged APK certificate without redirects. On a controlled Android device,
+reverify App Links and read back `pm get-app-links ru.padlhub.app`; require `lk2.padlhub.su` to be
+`verified` before the real provider acceptance test. A shell-forced test association is not live
+verification evidence. Check success, browser cancellation, network loss, process recreation,
+logout and the existing phone path using an authorized test account. No live login was implied
+by synthetic tests or APK assembly.
+
+Rollback the APK to the previous compatible phone-login version; existing phone/session and web
+OAuth contracts remain compatible. New Redis records expire in 2/5 minutes; no schema migration
+is needed. A callback crash before handoff publication may leave an undisclosed session that
+expires normally; handoff write failure attempts exact-session revocation. Do not revoke another
+session or the user's shared Viva delegation as compensation. API logs record redacted exchange
+success/rejection plus correlation, without code/verifier/token/query values.
 
 ## Reproducible local build
 
@@ -54,8 +116,8 @@ VITE_PHUB_API_BASE_URL=https://lk2.padlhub.su VITE_PHUB_TENANT_KEY=local-padel n
 ```
 
 `android:debug` bundles local assets, syncs the same public configuration into Android, then
-builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.2/code 3 replaces
-version 1.1/code 2 using the existing local debug signature. No release keys
+builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.3/code 4 replaces
+version 1.2/code 3 using the existing local debug signature. No release keys
 are created. Always inspect the packaged `capacitor.config.json`, manifest and signature.
 
 Builds have **no implicit API target**. Missing configuration displays a setup message. The native
@@ -83,6 +145,6 @@ do not remove Android's debuggable application flag. Use a test account, then lo
 intent and credential storage cannot be written, the app blocks the current session and reports
 failure; no successful logout is claimed. Corrupt/unavailable secure storage fails closed.
 
-Games/tournaments/training, chats/media, payment return navigation, App Links and FCM remain
+Games/tournaments/training, chats/media, payment return navigation, additional App Links and FCM remain
 subsequent complete increments using existing APIs. Release signing, store publication, live SMS,
 payments, merge and deployment require their applicable authority and delivery gates.
