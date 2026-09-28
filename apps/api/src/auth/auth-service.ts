@@ -23,6 +23,11 @@ import { SignJWT } from 'jose';
 
 import type { AuthChallenge, AuthChallengeStore } from './challenge-store.js';
 import type { VivaOAuthStart, VivaOAuthStateStore } from './oauth-state-store.js';
+import {
+  ANDROID_OAUTH_REDIRECT,
+  type AndroidOAuthBinding,
+  type AndroidOAuthStore,
+} from './android-oauth-store.js';
 
 const TENANT_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const OTP_PATTERN = /^\d{4}$/;
@@ -255,6 +260,7 @@ export interface AuthServiceOptions {
   readonly providers: ReadonlyMap<IdentityProviderKey, IdentityProviderPort>;
   readonly vivaOAuthProvider?: VivaOAuthProviderPort;
   readonly vivaOAuthStateStore?: VivaOAuthStateStore;
+  readonly androidOAuthStore?: AndroidOAuthStore;
   /**
    * Server-side link between a PadlHub account and the legacy (CUP) viewer identity its provider phone
    * keys. Optional so environments without the provider profile read stay unchanged.
@@ -413,13 +419,138 @@ export class AuthService {
     }
   }
 
-  public async startVivaOAuth(input: {
+  public async startAndroidOAuth(input: {
     readonly tenantKey: string;
-    readonly provider: VivaOAuthProvider;
+    readonly codeChallenge: string;
+    readonly clientState: string;
     readonly publicOfferAccepted: boolean;
     readonly personalDataPolicyAccepted: boolean;
+    readonly idempotencyKey: string;
+  }): Promise<{ launchPath: string }> {
+    const store = this.options.androidOAuthStore;
+    if (
+      !store ||
+      !this.options.config.VIVA_OAUTH_ENABLED ||
+      !this.options.vivaOAuthProvider ||
+      !this.options.vivaOAuthStateStore ||
+      !this.vivaOAuthProviderAllowed('yandex')
+    ) {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    if (!input.publicOfferAccepted || !input.personalDataPolicyAccepted)
+      throw new AuthServiceError('LEGAL_ACCEPTANCE_REQUIRED');
+    const binding = await this.binding(input.tenantKey);
+    if (binding.provider !== 'VIVA') throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const launch = {
+      client: 'ANDROID_NATIVE' as const,
+      code: randomBytes(32).toString('base64url'),
+      tenantKey: binding.tenantKey,
+      codeChallenge: input.codeChallenge,
+      clientState: input.clientState,
+    };
+    const reservation = await store.reserveStart({
+      commandKey: `${binding.tenantKey}:${input.idempotencyKey}`,
+      requestHash: createHash('sha256')
+        .update(JSON.stringify([input.codeChallenge, input.clientState]))
+        .digest('hex'),
+      launch,
+    });
+    if ('conflict' in reservation) throw new AuthServiceError('IDEMPOTENCY_KEY_CONFLICT');
+    return {
+      launchPath: `/user/api/v1/${binding.tenantKey}/auth/viva/android/launch?code=${reservation.launch.code}`,
+    };
+  }
+
+  public async launchAndroidOAuth(input: {
+    readonly tenantKey: string;
+    readonly code: string;
     readonly correlationId: string;
-  }): Promise<{ redirectUrl: string; state: string; browserNonce: string }> {
+  }) {
+    const launch = await this.options.androidOAuthStore?.takeLaunch(input.code, input.tenantKey);
+    if (!launch || launch.client !== 'ANDROID_NATIVE')
+      throw new AuthServiceError('AUTH_CODE_EXPIRED');
+    return this.startVivaOAuth(
+      {
+        tenantKey: input.tenantKey,
+        provider: 'yandex',
+        publicOfferAccepted: true,
+        personalDataPolicyAccepted: true,
+        correlationId: input.correlationId,
+      },
+      {
+        client: 'ANDROID_NATIVE',
+        codeChallenge: launch.codeChallenge,
+        clientState: launch.clientState,
+      },
+    );
+  }
+
+  public async exchangeAndroidOAuth(input: {
+    readonly tenantKey: string;
+    readonly code: string;
+    readonly codeVerifier: string;
+    readonly clientState: string;
+    readonly idempotencyKey: string;
+    readonly correlationId: string;
+  }): Promise<AuthSessionResult> {
+    if (!this.options.config.VIVA_OAUTH_ENABLED || !this.options.androidOAuthStore)
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    const claim = await this.options.androidOAuthStore.claimHandoff({
+      code: input.code,
+      tenantKey: input.tenantKey,
+      clientState: input.clientState,
+      codeChallenge: createHash('sha256').update(input.codeVerifier).digest('base64url'),
+      idempotencyKey: createHash('sha256').update(input.idempotencyKey).digest('hex'),
+    });
+    if ('rejected' in claim)
+      throw new AuthServiceError(
+        claim.rejected === 'conflict' ? 'IDEMPOTENCY_KEY_CONFLICT' : 'AUTH_CODE_EXPIRED',
+      );
+    const handoff = claim.handoff;
+    const active = await this.options.repository.findRefreshSessionById(
+      input.tenantKey,
+      handoff.sessionId,
+    );
+    if (
+      handoff.client !== 'ANDROID_NATIVE' ||
+      !active ||
+      active.sessionId !== handoff.sessionId ||
+      active.tenantId !== handoff.tenantId ||
+      active.tenantKey !== handoff.tenantKey ||
+      active.user.id !== handoff.userId
+    ) {
+      throw new AuthServiceError('AUTH_SESSION_REVOKED');
+    }
+    const session = await this.sessionResult(
+      active,
+      this.deriveRefreshToken('android-oauth-refresh', [input.tenantKey, input.code]),
+      input.correlationId,
+    );
+    // Access-profile resolution can await external storage. Recheck before disclosing any credential.
+    const stillActive = await this.options.repository.findRefreshSessionById(
+      input.tenantKey,
+      handoff.sessionId,
+    );
+    if (
+      !stillActive ||
+      stillActive.sessionId !== active.sessionId ||
+      stillActive.tenantId !== active.tenantId ||
+      stillActive.user.id !== active.user.id
+    )
+      throw new AuthServiceError('AUTH_SESSION_REVOKED');
+    return session;
+  }
+
+  public async startVivaOAuth(
+    input: {
+      readonly tenantKey: string;
+      readonly provider: VivaOAuthProvider;
+      readonly publicOfferAccepted: boolean;
+      readonly personalDataPolicyAccepted: boolean;
+      readonly correlationId: string;
+    },
+    android?: AndroidOAuthBinding,
+  ): Promise<{ redirectUrl: string; state: string; browserNonce: string }> {
     if (
       !this.options.config.VIVA_OAUTH_ENABLED ||
       !this.options.vivaOAuthProvider ||
@@ -459,6 +590,7 @@ export class AuthService {
         publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
         personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
         browserNonceHash: this.oauthBrowserNonceHash(browserNonce),
+        ...(android ? { android } : {}),
       },
       this.options.config.AUTH_CHALLENGE_TTL_SECONDS,
     );
@@ -653,6 +785,7 @@ export class AuthService {
     readonly idempotencyKey: string;
     readonly oauthBrowserNonce?: string;
   }): Promise<
+    | { readonly androidRedirectUrl: string }
     | (AuthSessionResult & { readonly vivaHandoffCode: string; readonly vivaRecovery: false })
     | {
         readonly user: AuthUser;
@@ -778,6 +911,51 @@ export class AuthService {
       correlationId: input.correlationId,
       providerTenantKey: binding.providerTenantKey,
     });
+    if (pending.android) {
+      if (
+        pending.android.client !== 'ANDROID_NATIVE' ||
+        pending.provider !== 'yandex' ||
+        pending.recoveryUserId ||
+        !this.options.androidOAuthStore
+      )
+        throw new AuthServiceError('AUTH_CODE_EXPIRED');
+      const code = randomBytes(32).toString('base64url');
+      const sessionId = this.deriveUuid('android-oauth-session', [input.tenantKey, input.state]);
+      const refreshToken = this.deriveRefreshToken('android-oauth-refresh', [
+        input.tenantKey,
+        code,
+      ]);
+      await this.options.repository.createRefreshSession({
+        sessionId,
+        tenantId: binding.tenantId,
+        userId: user.id,
+        tokenHash: this.refreshTokenHash(refreshToken),
+        expiresAt: new Date(
+          this.now().getTime() + this.options.config.AUTH_REFRESH_TTL_SECONDS * 1000,
+        ),
+        correlationId: input.correlationId,
+      });
+      try {
+        await this.options.androidOAuthStore.putHandoff(code, {
+          ...pending.android,
+          tenantKey: binding.tenantKey,
+          tenantId: binding.tenantId,
+          userId: user.id,
+          sessionId,
+        });
+      } catch {
+        // The browser never receives a credential; revoke only this newly created session.
+        await this.options.repository.revokeRefreshSession(
+          input.tenantKey,
+          this.refreshTokenHash(refreshToken),
+          input.correlationId,
+        );
+        throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+      }
+      return {
+        androidRedirectUrl: `${ANDROID_OAUTH_REDIRECT}#code=${code}&state=${pending.android.clientState}`,
+      };
+    }
     const vivaHandoffCode = randomBytes(24).toString('base64url');
     await this.options.vivaOAuthStateStore.putHandoff(
       {

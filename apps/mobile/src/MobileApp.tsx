@@ -5,6 +5,7 @@ import { createNativeApiFetch } from './native-api-fetch.js';
 import { installMobileNavigation } from './navigation.js';
 import type { MobileRuntimeConfig } from './runtime-config.js';
 import { MobileCacheNotice } from './MobileCacheNotice.js';
+import { AndroidLoginGate, type StartAndroidYandexLogin } from './AndroidLoginGate.js';
 import {
   createMobileReadState,
   observeMobileCache,
@@ -20,7 +21,11 @@ function MobileSession({
   config,
   native,
   onSessionExpired,
-}: MobileAppProps & { readonly onSessionExpired: () => void }): React.JSX.Element {
+  startYandexLogin,
+}: MobileAppProps & {
+  readonly onSessionExpired: () => void;
+  readonly startYandexLogin?: StartAndroidYandexLogin;
+}): React.JSX.Element {
   const [blocked, setBlocked] = useState<'restore' | 'logout' | null>(null);
   const [pending, setPending] = useState(false);
   const [staleReads, setStaleReads] = useState<StaleMobileReads>({});
@@ -56,6 +61,15 @@ function MobileSession({
     if (!native) return service;
     return {
       ...service,
+      ...(startYandexLogin
+        ? {
+            startVivaOAuth: async (input: Parameters<typeof service.startVivaOAuth>[0]) => {
+              if (input.provider !== 'yandex')
+                throw new Error('Native identity provider unavailable');
+              await startYandexLogin(input.acceptance);
+            },
+          }
+        : {}),
       getHomeBase: () => reads.read(root + '/home/base', () => service.getHomeBase()),
       listLocations: () => reads.read(root + '/locations', () => service.listLocations()),
       async restoreSession() {
@@ -78,7 +92,7 @@ function MobileSession({
         }
       },
     };
-  }, [config, native, onSessionExpired]);
+  }, [config, native, onSessionExpired, startYandexLogin]);
   if (blocked) {
     return (
       <main className="mobile-status">
@@ -111,6 +125,7 @@ function MobileSession({
         gateway={gateway}
         tenantKey={config.tenantKey}
         clientPlatform={native ? 'android' : 'web'}
+        androidYandexLogin={native && Boolean(startYandexLogin)}
       />
     </>
   );
@@ -128,7 +143,19 @@ export function MobileApp(props: MobileAppProps): React.JSX.Element {
         </main>
       }
     >
-      <MobileSession key={sessionGeneration} {...props} onSessionExpired={expire} />
+      {props.native ? (
+        <AndroidLoginGate key={sessionGeneration}>
+          {(startYandexLogin) => (
+            <MobileSession
+              {...props}
+              startYandexLogin={startYandexLogin}
+              onSessionExpired={expire}
+            />
+          )}
+        </AndroidLoginGate>
+      ) : (
+        <MobileSession key={sessionGeneration} {...props} onSessionExpired={expire} />
+      )}
     </Suspense>
   );
 }

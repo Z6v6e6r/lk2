@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "ru.padlhub.app",
+      "sha256_cert_fingerprints": [
+        "22:07:BD:6E:B9:0A:EF:E4:4D:BD:04:3A:9C:FA:CD:17:54:13:13:BE:C3:A5:95:8D:05:1B:E8:07:E0:0B:EF:93"
+      ]
+    }
+  }
+]

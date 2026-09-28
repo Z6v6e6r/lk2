@@ -29,6 +29,24 @@ body {
   line-height: 1.45;
 }
 
+.mobile-oauth-status {
+  width: min(100%, 560px);
+  margin-inline: auto;
+}
+
+.mobile-oauth-status button {
+  min-height: 48px;
+}
+
+.mobile-oauth-status .text-button {
+  font-size: 16px;
+}
+
+.mobile-oauth-status button:focus-visible {
+  outline: 3px solid #2f7d3f;
+  outline-offset: 3px;
+}
+
 .mobile-cache-notice ul {
   margin: 4px 0 0;
   padding-inline-start: 20px;

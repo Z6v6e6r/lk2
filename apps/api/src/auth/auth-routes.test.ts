@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 import type {
   IdentityProviderPort,
@@ -20,6 +20,7 @@ import {
   type TenantAuthBinding,
 } from './auth-service.js';
 import { MemoryAuthChallengeStore } from './challenge-store.js';
+import { MemoryAndroidOAuthStore } from './android-oauth-store.js';
 import {
   MemoryVivaOAuthStateStore,
   type VivaOAuthState,
@@ -444,6 +445,7 @@ describe('provider-neutral authentication routes', () => {
       idempotencyKey: 'oauth-complete-idempotency',
       oauthBrowserNonce: started.browserNonce,
     });
+    if ('androidRedirectUrl' in completed) throw new Error('Unexpected native callback');
     expect(identityModes).toEqual(['STANDARD']);
     const padlHubSessionId = repository.activeSessionId;
     if (!padlHubSessionId) throw new Error('Expected an active PadlHub session');
@@ -564,6 +566,7 @@ describe('provider-neutral authentication routes', () => {
       idempotencyKey: 'oauth-recovery-complete-idempotency',
       oauthBrowserNonce: recovery.browserNonce,
     });
+    if ('androidRedirectUrl' in completedRecovery) throw new Error('Unexpected native callback');
     expect(completedRecovery.vivaRecovery).toBe(true);
     expect(identityModes).toEqual(['STANDARD', 'RECOVERY_SUBJECT_ONLY']);
     expect(repository.legalAcceptances).toBe(beforeRecoveryAcceptances);
@@ -995,6 +998,7 @@ describe('provider-neutral authentication routes', () => {
       idempotencyKey: 'subject-provisioning-idempotency',
       oauthBrowserNonce: started.browserNonce,
     });
+    if ('androidRedirectUrl' in completed) throw new Error('Unexpected native callback');
 
     expect(completed.user.id).toBe(user.id);
     expect(repository.identityUpserts).toBe(1);
@@ -1135,6 +1139,7 @@ describe('provider-neutral authentication routes', () => {
       idempotencyKey: 'mixed-oauth-complete-idempotency',
       oauthBrowserNonce: started.browserNonce,
     });
+    if ('androidRedirectUrl' in completed) throw new Error('Unexpected native callback');
 
     expect(completed.user.id).toBe(user.id);
     expect(repository.identityUpserts).toBe(0);
@@ -1945,6 +1950,7 @@ describe('provider-neutral authentication routes', () => {
       idempotencyKey: 'delegation-link-idempotency',
       oauthBrowserNonce: started.browserNonce,
     });
+    if ('androidRedirectUrl' in completed) throw new Error('Unexpected native callback');
     const sessionId = repository.activeSessionId;
     if (!sessionId) throw new Error('Expected an active PadlHub session');
 
@@ -1970,5 +1976,231 @@ describe('provider-neutral authentication routes', () => {
     expect(tokens).toEqual(['initial-viva-access-token', 'refreshed-viva-access-token']);
     expect(linked).toEqual(['+79104303190']);
     expect(outcomes).toEqual(['absent', 'linked']);
+  });
+});
+
+async function androidOAuthFixture() {
+  let now = Date.now();
+  const oauthConfig = { ...loadVivaPhoneConfig(), AUTH_COOKIE_SECURE: true };
+  const repository = new FakeRepository();
+  const store = new MemoryAndroidOAuthStore(() => now);
+  const stateStore = new MemoryVivaOAuthStateStore();
+  const providerHandoff = vi.spyOn(stateStore, 'putHandoff');
+  const authService = new AuthService({
+    config: oauthConfig,
+    repository,
+    challengeStore: new MemoryAuthChallengeStore(),
+    providers: new Map([['VIVA', provider]]),
+    vivaOAuthProvider: oauthProvider,
+    vivaOAuthStateStore: stateStore,
+    androidOAuthStore: store,
+  });
+  const app = await buildApp({
+    config: oauthConfig,
+    logger: createLogger('android-oauth-test', 'silent'),
+    authService,
+  });
+  apps.push(app);
+  const root = '/user/api/v1/local-padel/auth/viva/android';
+  const verifier = 'v'.repeat(43);
+  const clientState = 's'.repeat(43);
+  const startBody = {
+    codeChallenge: createHash('sha256').update(verifier).digest('base64url'),
+    clientState,
+    acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
+  };
+  const start = () =>
+    app.inject({
+      method: 'POST',
+      url: root + '/start',
+      headers: { 'idempotency-key': 'android-start-synthetic-001' },
+      payload: startBody,
+    });
+  const launch = async () => {
+    const started = await start();
+    expect(started.statusCode).toBe(200);
+    expect(started.cookies).toHaveLength(0);
+    const launchPath = started.json<{ launchPath: string }>().launchPath;
+    const launched = await app.inject({ method: 'GET', url: launchPath });
+    expect(launched.statusCode).toBe(302);
+    const providerState = new URL(String(launched.headers.location)).searchParams.get('state');
+    const cookie = launched.cookies.map((value) => value.name + '=' + value.value).join('; ');
+    return {
+      launchPath,
+      cookie,
+      callback:
+        '/user/api/v1/local-padel/auth/viva/callback?code=synthetic-provider-code&state=' +
+        providerState,
+    };
+  };
+  const complete = async () => {
+    const launched = await launch();
+    const callback = await app.inject({
+      method: 'GET',
+      url: launched.callback,
+      headers: { cookie: launched.cookie },
+    });
+    expect(callback.statusCode).toBe(302);
+    const target = new URL(String(callback.headers.location));
+    expect(target.origin + target.pathname).toBe('https://lk2.padlhub.su/android/oauth/yandex');
+    expect(target.search).toBe('');
+    expect(target.hash).not.toContain('viva_handoff');
+    expect(callback.cookies.some((value) => value.name === 'phub_refresh')).toBe(false);
+    expect(callback.headers['referrer-policy']).toBe('no-referrer');
+    expect(providerHandoff).not.toHaveBeenCalled();
+    const fragment = new URLSearchParams(target.hash.slice(1));
+    return {
+      code: fragment.get('code') ?? '',
+      codeVerifier: verifier,
+      clientState: fragment.get('state') ?? '',
+    };
+  };
+  return {
+    app,
+    root,
+    store,
+    repository,
+    start,
+    startBody,
+    launch,
+    complete,
+    advance: (ms: number) => {
+      now += ms;
+    },
+  };
+}
+
+describe('Android Yandex login', () => {
+  it('requires consent, strict S256 input, a fixed redirect and an idempotent native start', async () => {
+    const f = await androidOAuthFixture();
+    const send = (payload: Record<string, unknown>, key = 'android-invalid-start-001') =>
+      f.app.inject({
+        method: 'POST',
+        url: f.root + '/start',
+        headers: { 'idempotency-key': key },
+        payload,
+      });
+    expect((await send({ ...f.startBody, redirectUri: 'https://evil.invalid' })).statusCode).toBe(
+      400,
+    );
+    expect((await send({ ...f.startBody, codeChallenge: 'plain' })).statusCode).toBe(400);
+    expect(
+      (
+        await send({
+          ...f.startBody,
+          acceptance: { publicOfferAccepted: false, personalDataPolicyAccepted: true },
+        })
+      ).statusCode,
+    ).toBe(400);
+    const first = await f.start();
+    const replay = await f.start();
+    expect(first.statusCode).toBe(200);
+    expect(replay.json()).toEqual(first.json());
+    expect(first.headers['cache-control']).toBe('no-store');
+  });
+
+  it('does not consume launch or provider state on wrong tenant/browser, and launches only once', async () => {
+    const f = await androidOAuthFixture();
+    const start = await f.start();
+    const path = start.json<{ launchPath: string }>().launchPath;
+    expect(
+      (await f.app.inject({ method: 'GET', url: path.replace('local-padel', 'another-tenant') }))
+        .statusCode,
+    ).toBe(410);
+    const launched = await f.launch();
+    expect((await f.app.inject({ method: 'GET', url: launched.launchPath })).statusCode).toBe(410);
+    const mismatch = await f.app.inject({ method: 'GET', url: launched.callback });
+    expect(mismatch.statusCode).toBe(401);
+    expect(f.repository.refreshSessionCreations).toBe(0);
+    const accepted = await f.app.inject({
+      method: 'GET',
+      url: launched.callback,
+      headers: { cookie: launched.cookie },
+    });
+    expect(accepted.statusCode).toBe(302);
+    expect(accepted.cookies.some((value) => value.name === 'phub_refresh')).toBe(false);
+    expect(
+      (
+        await f.app.inject({
+          method: 'GET',
+          url: launched.callback,
+          headers: { cookie: launched.cookie },
+        })
+      ).statusCode,
+    ).toBe(410);
+  });
+
+  it('rejects swapped proofs, recovers a lost response using only the first exchange key, and fences revocation', async () => {
+    const f = await androidOAuthFixture();
+    const payload = await f.complete();
+    const exchange = (
+      body = payload,
+      key = 'android-exchange-synthetic-001',
+      tenant = 'local-padel',
+    ) =>
+      f.app.inject({
+        method: 'POST',
+        url: f.root.replace('local-padel', tenant) + '/exchange',
+        headers: { 'idempotency-key': key },
+        payload: body,
+      });
+    for (const changed of [
+      { ...payload, codeVerifier: 'x'.repeat(43) },
+      { ...payload, clientState: 'x'.repeat(43) },
+      { ...payload, code: 'x'.repeat(43) },
+    ]) {
+      expect((await exchange(changed)).statusCode).toBe(410);
+    }
+    expect(
+      (await exchange(payload, 'android-exchange-synthetic-001', 'another-tenant')).statusCode,
+    ).toBe(410);
+    const [first, retry] = await Promise.all([exchange(), exchange()]);
+    expect(first.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(200);
+    expect(first.cookies.find((value) => value.name === 'phub_refresh')?.value).toBe(
+      retry.cookies.find((value) => value.name === 'phub_refresh')?.value,
+    );
+    expect(first.headers['x-android-oauth-state']).toBe(payload.clientState);
+    expect(first.json()).not.toHaveProperty('refreshToken');
+    expect(first.body).not.toContain('viva-access');
+    expect(f.repository.refreshSessionCreations).toBe(1);
+    expect((await exchange(payload, 'different-exchange-synthetic-002')).statusCode).toBe(409);
+    f.repository.setActiveSessionId(undefined);
+    const revoked = await exchange();
+    expect(revoked.statusCode).toBe(401);
+    expect(revoked.cookies).toHaveLength(0);
+  });
+
+  it('expires the handoff without sliding TTL on retries', async () => {
+    const f = await androidOAuthFixture();
+    const payload = await f.complete();
+    const exchange = () =>
+      f.app.inject({
+        method: 'POST',
+        url: f.root + '/exchange',
+        headers: { 'idempotency-key': 'android-expiry-exchange-001' },
+        payload,
+      });
+    f.advance(119_000);
+    expect((await exchange()).statusCode).toBe(200);
+    f.advance(1_001);
+    const expired = await exchange();
+    expect(expired.statusCode).toBe(410);
+    expect(expired.cookies).toHaveLength(0);
+  });
+
+  it('revokes the exact newly created session when durable handoff storage fails', async () => {
+    const f = await androidOAuthFixture();
+    vi.spyOn(f.store, 'putHandoff').mockRejectedValueOnce(new Error('synthetic Redis failure'));
+    const launched = await f.launch();
+    const failed = await f.app.inject({
+      method: 'GET',
+      url: launched.callback,
+      headers: { cookie: launched.cookie },
+    });
+    expect(failed.statusCode).toBe(503);
+    expect(failed.cookies.some((value) => value.name === 'phub_refresh')).toBe(false);
+    expect(f.repository.revocationOrder).toEqual(['session']);
+    expect(f.repository.vivaDelegationRevocations).toBe(0);
   });
 });

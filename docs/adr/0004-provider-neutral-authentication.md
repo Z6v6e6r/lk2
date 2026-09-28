@@ -74,6 +74,20 @@ link; it must not infer equivalence from an unverified phone number.
 - API rate limits use shared Redis state. Production must explicitly trust only configured
   load-balancer proxy CIDRs; phone and challenge rate keys are keyed HMACs, never raw identifiers.
 
+## Native Android Yandex transport
+
+Android uses the existing server-owned Viva/Yandex provider flow through a one-use browser launch.
+An additional independent native S256 challenge binds the provider result to its initiating APK.
+The browser callback issues only a metadata-backed 120-second code in a verified HTTPS App Link
+fragment; it never discloses PadlHub/Viva credentials or sets the PadlHub refresh cookie in the browser.
+Only the native HTTPS exchange, with the verifier/state and first idempotency key, receives the
+existing session response. Same-key recovery requires the exact active, unrotated session on every
+attempt. The encrypted native attempt journal is cleared only after atomic Keystore credential
+custody (including the server-echoed attempt marker), cancellation before callback, terminal expiry,
+or durable logout intent. Web OAuth and iOS OTP contracts are unchanged. Certificate association,
+retention, negative tests and release prerequisites are in the
+[Android runbook](../runbooks/android-development.md#yandex-login-13code-4).
+
 ## Native iOS client transport
 
 The Capacitor iOS client uses the same OTP and cookie-backed session endpoints with

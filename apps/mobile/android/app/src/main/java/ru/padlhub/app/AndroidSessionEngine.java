@@ -32,16 +32,21 @@ final class AndroidSessionEngine {
         final String refreshKey;
         final String logoutKey;
         final Principal identity;
+        final String oauthState;
         Credential(String scope, String value, long expiresAt, String refreshKey, String logoutKey) {
             this(scope, value, expiresAt, refreshKey, logoutKey, null);
         }
         Credential(String scope, String value, long expiresAt, String refreshKey, String logoutKey, Principal identity) {
+            this(scope, value, expiresAt, refreshKey, logoutKey, identity, null);
+        }
+        Credential(String scope, String value, long expiresAt, String refreshKey, String logoutKey, Principal identity, String oauthState) {
             this.scope = scope; this.value = value; this.expiresAt = expiresAt;
             this.refreshKey = refreshKey; this.logoutKey = logoutKey;
             this.identity = identity;
+            this.oauthState = oauthState;
         }
         Credential journal(String refreshKey, String logoutKey) {
-            return new Credential(scope, value, expiresAt, refreshKey, logoutKey, identity);
+            return new Credential(scope, value, expiresAt, refreshKey, logoutKey, identity, oauthState);
         }
     }
 
@@ -115,9 +120,7 @@ final class AndroidSessionEngine {
     synchronized Response request(String path, String method, Map<String, String> headers, String body) throws Failure {
         Request request = policy.request(path, method, headers, body);
         if (request.operation == Operation.LOGOUT) {
-            requestedLogoutKey = request.headers.get("idempotency-key");
-            suspendCache();
-            store.beginLogout(requestedLogoutKey);
+            prepareLogout(request.headers.get("idempotency-key"));
         }
         String durableLogoutKey = store.logoutIntent();
         if (durableLogoutKey != null) requestedLogoutKey = durableLogoutKey;
@@ -170,6 +173,33 @@ final class AndroidSessionEngine {
             clearSession(); return null;
         }
         return value;
+    }
+
+    synchronized void prepareLogout(String key) throws Failure {
+        requestedLogoutKey = key;
+        suspendCache();
+        store.beginLogout(key);
+    }
+
+    synchronized boolean hasPendingLogout() throws Failure {
+        return requestedLogoutKey != null || store.logoutIntent() != null;
+    }
+
+    synchronized void requireOAuthSignedOut() throws Failure {
+        if (requestedLogoutKey != null || store.logoutIntent() != null || current() != null) throw AndroidSessionPolicy.rejected();
+    }
+
+    synchronized boolean hasOAuthSession(String state) throws Failure {
+        if (requestedLogoutKey != null || store.logoutIntent() != null) throw AndroidSessionPolicy.rejected();
+        Credential saved = current();
+        if (saved == null) return false;
+        if (saved.logoutKey != null || !state.equals(saved.oauthState)) throw AndroidSessionPolicy.rejected();
+        return true;
+    }
+
+    synchronized void acceptOAuthSession(Response response, String state) throws Failure {
+        requireOAuthSignedOut();
+        acceptSession(response, null, state);
     }
 
     private Response refresh(Credential value, Request original) throws Failure {
@@ -277,6 +307,10 @@ final class AndroidSessionEngine {
     }
 
     private void acceptSession(Response response, Credential previous) throws Failure {
+        acceptSession(response, previous, previous == null ? null : previous.oauthState);
+    }
+
+    private void acceptSession(Response response, Credential previous, String oauthState) throws Failure {
         // Validate everything before replacing the predecessor journal or releasing an access JWT.
         try {
             JSONObject json = new JSONObject(new String(response.body, StandardCharsets.UTF_8));
@@ -315,7 +349,7 @@ final class AndroidSessionEngine {
             if (matched.size() != 1) throw new Failure("NATIVE_RESPONSE_REJECTED");
             HttpCookie cookie = matched.get(0);
             store.write(new Credential(policy.scope, cookie.getValue(), clock.wall() + cookie.getMaxAge() * 1000,
-                null, previous == null ? null : previous.logoutKey, identity));
+                null, previous == null ? null : previous.logoutKey, identity, oauthState));
             if (requestedLogoutKey == null && (previous == null || previous.logoutKey == null)) {
                 activeIdentity = identity;
                 activeBearer = "Bearer " + json.getString("accessToken");

@@ -638,6 +638,7 @@ function VivaProviderIcon({
 
 export interface AppProps {
   readonly clientPlatform?: 'web' | 'android';
+  readonly androidYandexLogin?: boolean;
   readonly gateway: AuthGateway;
   readonly tenantKey: string;
   readonly realtimeBaseUrl?: string;
@@ -655,6 +656,7 @@ const HOME_INITIAL_RETRY_DELAYS_MS = [
 
 export function App({
   clientPlatform = 'web',
+  androidYandexLogin = false,
   gateway,
   tenantKey,
   realtimeBaseUrl,
@@ -3069,7 +3071,11 @@ export function App({
                 </div>
               ) : null}
 
-              <form onSubmit={handlePhoneSubmit} noValidate aria-busy={isRequesting}>
+              <form
+                onSubmit={handlePhoneSubmit}
+                noValidate
+                aria-busy={isRequesting || isStartingViva}
+              >
                 <label htmlFor="phone">Номер телефона</label>
                 <input
                   ref={phoneInput}
@@ -3083,7 +3089,7 @@ export function App({
                   placeholder="+7 999 000-00-01"
                   aria-describedby={`phone-help${errorId ? ` ${errorId}` : ''}`}
                   aria-invalid={Boolean(state.error)}
-                  disabled={isRequesting}
+                  disabled={isRequesting || isStartingViva}
                   required
                   onChange={handlePhoneChange}
                 />
@@ -3096,7 +3102,7 @@ export function App({
                     <input
                       type="checkbox"
                       checked={state.publicOfferAccepted}
-                      disabled={isRequesting}
+                      disabled={isRequesting || isStartingViva}
                       onChange={() =>
                         dispatch({ type: 'acceptance-toggled', acceptance: 'public-offer' })
                       }
@@ -3112,7 +3118,7 @@ export function App({
                     <input
                       type="checkbox"
                       checked={state.personalDataPolicyAccepted}
-                      disabled={isRequesting}
+                      disabled={isRequesting || isStartingViva}
                       onChange={() =>
                         dispatch({ type: 'acceptance-toggled', acceptance: 'personal-data' })
                       }
@@ -3140,12 +3146,26 @@ export function App({
                 <PrimaryButton
                   className="primary-button"
                   type="submit"
-                  disabled={isRequesting}
-                  aria-busy={isRequesting}
+                  disabled={isRequesting || isStartingViva}
+                  aria-busy={isRequesting || isStartingViva}
                 >
                   {isRequesting ? 'Отправляем…' : 'Получить код'}
                 </PrimaryButton>
               </form>
+
+              {clientPlatform === 'android' && androidYandexLogin ? (
+                <div className="viva-login-options" aria-label="Другой способ входа">
+                  <button
+                    className="viva-login-button"
+                    type="button"
+                    disabled={isRequesting || isStartingViva}
+                    onClick={() => startVivaOAuth('yandex')}
+                  >
+                    <VivaProviderIcon provider="yandex" />
+                    <span>{isStartingViva ? 'Открываем Яндекс…' : 'Войти через Яндекс'}</span>
+                  </button>
+                </div>
+              ) : null}
 
               {import.meta.env.DEV && !realAccountPreview ? (
                 <p className="dev-hint">Тестовый вход: +79990000001 / 0000</p>

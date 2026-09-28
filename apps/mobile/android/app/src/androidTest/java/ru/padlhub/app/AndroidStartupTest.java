@@ -39,6 +39,20 @@ public class AndroidStartupTest {
             assertEquals("true", evaluate(activity, "typeof CapacitorCookiesAndroidInterface === 'undefined' && typeof CapacitorHttpAndroidInterface === 'undefined'"));
             assertEquals("true", evaluate(activity, "document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]').content.includes(\"frame-src 'none'\")"));
             assertEquals("false", evaluate(activity, "document.body.innerText.includes('ещё не подключена')"));
+            assertEquals("true", evaluate(activity, "Array.from(document.querySelectorAll('button')).some(b => b.textContent.includes('Войти через Яндекс'))"));
+            evaluate(activity, "Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Войти через Яндекс')).click(); true");
+            awaitJs(activity, "document.querySelector('[role=alert]')?.textContent.includes('Подтвердите публичную оферту')");
+            evaluate(activity, "document.querySelector('.viva-login-button').scrollIntoView({block: 'center'}); true");
+            awaitJs(activity, "document.querySelector('.viva-login-button').getBoundingClientRect().bottom <= window.innerHeight");
+            assertEquals("true", evaluate(activity, "document.documentElement.scrollWidth <= window.innerWidth"));
+            capture("yandex-phone-portrait.png");
+            activity.runOnUiThread(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+            awaitJs(activity, "window.innerWidth > window.innerHeight");
+            evaluate(activity, "document.querySelector('.viva-login-button').focus(); document.querySelector('.viva-login-button').scrollIntoView({block: 'center'}); true");
+            awaitJs(activity, "document.querySelector('.viva-login-button').getBoundingClientRect().bottom <= window.innerHeight");
+            assertEquals("true", evaluate(activity, "document.documentElement.scrollWidth <= window.innerWidth"));
+            capture("yandex-phone-landscape.png");
+            activity.runOnUiThread(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED));
         } finally { activity.runOnUiThread(activity::finish); }
     }
 
@@ -70,6 +84,58 @@ public class AndroidStartupTest {
         java.io.File target = new java.io.File(InstrumentationRegistry.getInstrumentation().getTargetContext().getExternalFilesDir(null), name);
         try (java.io.FileOutputStream output = new java.io.FileOutputStream(target)) { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output); }
         bitmap.recycle();
+    }
+
+    @Test public void appLinkResumesNativeCustodyAndOpensTheCabinetWithoutExposingProofToWebView() throws Exception {
+        org.junit.Assume.assumeTrue("true".equals(InstrumentationRegistry.getArguments().getString("configuredApp")));
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        MainActivity activity = (MainActivity) instrumentation.startActivitySync(
+            new Intent(instrumentation.getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            awaitJs(activity, "document.body.innerText.includes('Получить код')");
+            AndroidSessionPolicy policy = new AndroidSessionPolicy(AndroidSessionTest.ORIGIN, "local-padel", "test", "4", false);
+            AndroidSessionTest.MemoryStore credentials = new AndroidSessionTest.MemoryStore();
+            AndroidYandexLoginTest.Journal journal = new AndroidYandexLoginTest.Journal();
+            org.json.JSONObject sessionJson = new org.json.JSONObject(AndroidSessionTest.SESSION);
+            sessionJson.getJSONObject("user").put("displayName", "Тестовый игрок");
+            sessionJson.getJSONObject("context").put("displayName", "Тестовый игрок").put("roles", new org.json.JSONArray().put("client"))
+                .put("permissions", new org.json.JSONArray());
+            String body = sessionJson.toString();
+            java.util.List<AndroidSessionPolicy.Request> requests = new java.util.concurrent.CopyOnWriteArrayList<>();
+            AndroidSessionEngine.Sender sender = request -> {
+                requests.add(request);
+                if (request.path.endsWith("/start")) return AndroidSessionTest.response(200,
+                    "{\"launchPath\":\"" + policy.authRoot + "/viva/android/launch?code=" + AndroidYandexLoginTest.CODE + "\"}", Collections.emptyList());
+                if (request.path.endsWith("/exchange") || request.operation == AndroidSessionPolicy.Operation.REFRESH) {
+                    java.util.Map<String, String> headers = new java.util.HashMap<>(); headers.put("content-type", "application/json");
+                    if (journal.value != null) headers.put("x-android-oauth-state", journal.value.state);
+                    return new AndroidSessionEngine.Response(200, headers, Collections.singletonList(AndroidSessionTest.cookie(AndroidSessionTest.REFRESH)), body.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+                return AndroidSessionTest.response(200, "{\"items\":[]}", Collections.emptyList());
+            };
+            AndroidSessionEngine engine = new AndroidSessionEngine(policy, credentials, sender);
+            AndroidYandexLogin oauth = new AndroidYandexLogin(policy, engine, sender, journal);
+            PadlHubAndroidSessionPlugin plugin = (PadlHubAndroidSessionPlugin) activity.getBridge().getPlugin("PadlHubAndroidSession").getInstance();
+            for (String name : new String[] { "engine", "oauth" }) {
+                java.lang.reflect.Field field = PadlHubAndroidSessionPlugin.class.getDeclaredField(name); field.setAccessible(true);
+                field.set(plugin, name.equals("engine") ? engine : oauth);
+            }
+            oauth.start(true, true); // Synthetic sender; deliberately never launch a live browser/provider.
+            String state = journal.value.state;
+            activity.runOnUiThread(() -> activity.getBridge().getWebView().loadUrl("https://localhost/locations"));
+            awaitJs(activity, "document.body.innerText.includes('Отменить вход')");
+            assertEquals("true", evaluate(activity, "Array.from(document.querySelectorAll('.mobile-oauth-status button')).every(b => b.getBoundingClientRect().height >= 48)"));
+            capture("yandex-awaiting-return.png");
+            Intent callback = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(AndroidYandexLoginTest.TARGET + "#code=" + AndroidYandexLoginTest.CODE + "&state=" + state));
+            activity.runOnUiThread(() -> plugin.handleOnNewIntent(callback));
+            awaitJs(activity, "document.body.innerText.includes('Локации') && !document.body.innerText.includes('Отменить вход')");
+            assertNotNull(credentials.value); assertEquals(state, credentials.value.oauthState);
+            assertNull(journal.value); assertNull(callback.getData());
+            assertEquals(1, requests.stream().filter(request -> request.path.endsWith("/exchange")).count());
+            assertEquals("true", evaluate(activity, "!location.href.includes('code=') && !JSON.stringify(localStorage).includes('synthetic_refresh') && !JSON.stringify(sessionStorage).includes('synthetic_refresh')"));
+            assertEquals("true", evaluate(activity, "document.documentElement.scrollWidth <= window.innerWidth"));
+            capture("yandex-return-cabinet.png");
+        } finally { activity.runOnUiThread(activity::finish); }
     }
 
     @Test public void staleDirectoryNoticeRendersAndDenialDiscardsRetainedBody() throws Exception {
