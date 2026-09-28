@@ -1,22 +1,43 @@
 import { execFileSync } from 'node:child_process';
 import { isPresentationPath, verifyPresentationRange } from './presentation-boundary.js';
+import { isSafeWebPath, verifySafeWebRange } from './safe-web-boundary.js';
 
-export function standardReleasePlan({ paths, presentationVerified, backendUnchanged }) {
+/**
+ * Two delivery classes share the standard Web route: proven presentation edits, and the allowlisted
+ * safe-Web modules of `safe-web-boundary.js`. Both must be verified on the exact range, because the
+ * controller runs this against the installed baseline and the candidate; an unverified class fails
+ * closed, and every other path keeps the critical/manual component release route.
+ */
+export function standardReleasePlan({
+  paths,
+  presentationVerified,
+  safeWebVerified = false,
+  backendUnchanged,
+}) {
   if (!Array.isArray(paths) || paths.length === 0) return { eligible: false, reason: 'empty' };
   const docs = (path) => /^(?:docs\/.+|AGENTS|README)\.md$/.test(path);
-  if (
-    !backendUnchanged ||
-    !presentationVerified ||
-    paths.some((path) => !docs(path) && !isPresentationPath(path))
-  ) {
+  const unknown = (path) => !docs(path) && !isPresentationPath(path) && !isSafeWebPath(path);
+  if (!backendUnchanged || paths.some(unknown)) {
     return { eligible: false, reason: 'cumulative-critical-shared-or-unknown' };
   }
-  if (paths.every(docs)) return { eligible: false, reason: 'docs-no-runtime-release' };
+  // Each class is verified on its own: a verified safe-Web range never vouches for a presentation
+  // path, and vice versa.
+  if (paths.some(isPresentationPath) && !presentationVerified) {
+    return { eligible: false, reason: 'cumulative-critical-shared-or-unknown' };
+  }
+  if (paths.some(isSafeWebPath) && !safeWebVerified) {
+    return { eligible: false, reason: 'cumulative-critical-shared-or-unknown' };
+  }
+  // A range that ships no runtime code (documentation only, or only test files of an allowlisted
+  // module) is not a Web release: publishing and restarting Web for it would create production work
+  // and a receipt with no deployed change.
+  const runtimePath = (path) => !docs(path) && !/\.test\.(?:ts|tsx)$/.test(path);
+  if (!paths.some(runtimePath)) return { eligible: false, reason: 'docs-no-runtime-release' };
   return {
     eligible: true,
     component: 'web',
     stages: ['source', 'publication', 'artifact-smoke', 'web-up', 'observe', 'receipt'],
-    reason: 'presentation',
+    reason: paths.some(isSafeWebPath) ? 'safe-web' : 'presentation',
   };
 }
 
@@ -32,6 +53,7 @@ export function standardRange(base, head) {
   return standardReleasePlan({
     paths,
     presentationVerified: verifyPresentationRange(paths, base, head),
+    safeWebVerified: verifySafeWebRange(paths, base, head),
     backendUnchanged: true,
   });
 }

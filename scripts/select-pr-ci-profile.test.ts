@@ -58,6 +58,26 @@ describe('PR CI profile planner', () => {
     expect(select(paths)).toMatchObject({ profile, dockerServices });
   });
 
+  it.each([
+    'apps/web/src/chats-ui/chat-image-webp.ts',
+    'apps/web/src/chats-ui/chat-image-webp.test.ts',
+    'apps/web/src/App.tsx',
+  ])('allowlisted safe-Web module %s runs the Web contour without a Docker rebuild', (path) => {
+    expect(select([path])).toMatchObject({ profile: 'leaf-web', dockerServices: [] });
+  });
+
+  it.each([
+    'scripts/safe-web-boundary.js',
+    'scripts/timeweb-standard-policy.js',
+    'scripts/run-timeweb-standard-delivery.js',
+  ])('treats delivery control surface %s as a deployment contract', (path) => {
+    expect(select([path])).toMatchObject({
+      profile: 'full',
+      deploymentContract: true,
+      provenanceProbe: true,
+    });
+  });
+
   it('marks policy validation without escalating safe policy Markdown', () => {
     expect(select(['AGENTS.md', '.github/PULL_REQUEST_TEMPLATE.md'])).toMatchObject({
       profile: 'docs',

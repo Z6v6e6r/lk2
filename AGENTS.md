@@ -296,8 +296,16 @@ zero traffic is not successful acceptance. Code rollback never reverses payments
 external writes and must remain compatible with persisted data.
 
 CI presentation boundaries cover existing subscription display, tournament/game cards and participant
-empty states. Literal JSX copy/style changes are checked against the base syntax; command handlers,
-price/entitlement expressions, links, imports and mixed critical changes take full checks. The
-`leaf-web` machine profile is presentation: Web tests, lint/typecheck/build, no PR Docker rebuild.
-Unknown/shared/critical inputs retain the expanded contour. Integrated main is checked before
+empty states. Literal JSX copy/style changes are checked against the base syntax; price/entitlement
+expressions, links, imports outside the safe-Web allowlist and mixed critical changes take full
+checks. The `leaf-web` machine profile covers presentation plus the bounded tuning of the
+already-installed safe-Web modules of `scripts/safe-web-boundary.js`: their syntax is frozen so only
+literal values may change, an existing dependency declaration may only be edited in place and only
+to an allowlisted module, and for
+`apps/web/src/App.tsx` only literals inside the named attachment-upload functions may change — Web
+tests, lint/typecheck/build, no PR Docker rebuild. A changed literal value — including a declared
+media content type or a decode budget — stays a review responsibility. Those two command handlers and
+the tunable constants of the safe-Web photo module are the only Web surface outside the full contour,
+a new module keeps the critical route, they reach the standard delivery route only through
+`standardReleasePlan`, and adding an allowlist entry is itself a reviewed change. Unknown/shared/critical inputs retain the expanded contour. Integrated main is checked before
 publication; identical successful exact-source CI can be reused by publication.

@@ -34,10 +34,14 @@ feature owner's work. No product UI is changed by this infrastructure task.
 - Target: existing Timeweb beta Compose project and network from target.json. The enrolled operator
   runs on that host, with fixed local Docker socket; no arbitrary SSH host, shell command or target
   is accepted by the launcher. API must already be healthy; Realtime may remain absent, or must retain its existing healthy identity. Worker/Migrator stay off.
-- Pilot component: only Web presentation (FAST, or a SAFE feature whose deployed portion is entirely
-  within the same presentation boundary). General SAFE backend business logic retains its relevant
-  full tests and the critical/manual component release route until separately enrolled. A tier or
-  PR label alone never widens the pilot component set.
+- Pilot components: Web presentation and the bounded tuning of the already-installed safe-Web
+  modules listed in `scripts/safe-web-boundary.js`. Presentation is proven copy/ARIA/bounded styling;
+  safe-Web is proven structurally: its syntax is frozen and only literal values may change, with
+  dependencies restricted to allowlisted modules and, for `apps/web/src/App.tsx`, only literals
+  inside the named attachment-upload command functions. Everything else — general SAFE backend
+  logic, API/SDK, contracts, migrations, auth, payment, deployment files — retains its relevant full
+  tests and the critical/manual component release route until separately enrolled. A tier, a path or
+  a PR label alone never widens the pilot component set.
 - Risk is the complete no-renames diff from each of installed API, installed previous Web and
   enrolled controller source to candidate. A later safe PR cannot conceal accumulated critical,
   shared, deployment, auth, payment or migration changes. Installed release IDs come from running
@@ -52,6 +56,48 @@ feature owner's work. No product UI is changed by this infrastructure task.
   No live provider transaction, migration, secret provisioning, API/Realtime/Worker restart, ingress
   activation or runtime flag mutation is a stage of this Web route.
 
+### Delivery classes and their owner
+
+| Class                     | Source of proof                                                                                                         | Owner                           | Review condition                                                                   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
+| Presentation              | `scripts/presentation-boundary.js`: literal JSX copy/`aria-label`/`title`, bounded `presentation-*` styling             | enrolled owner (`config.owner`) | re-review when a surface is added or the syntactic rule changes                    |
+| Safe Web (bounded tuning) | `scripts/safe-web-boundary.js`: syntax frozen, only literal values may change, dependencies only to allowlisted modules | enrolled owner (`config.owner`) | re-review at least every 90 days, and on every allowlist entry or invariant change |
+
+The safe-Web class is structural rather than a capability denylist:
+
+- the printed syntax tree with literal values replaced by placeholders must be identical; a new
+  statement, call, property, helper, alias, control-flow branch or API use changes it and fails
+  closed, so an added capability cannot ride along with a "tuning" change;
+- an existing dependency declaration may only be edited in place, and only when its resolved target
+  is an allowlisted module; adding or removing a declaration fails closed. A new dependency, SDK
+  entry or network client therefore keeps the full contour;
+- in `apps/web/src/App.tsx` only literals inside `handleAttachChatFiles` and `uploadChatAttachment`
+  may change. That path does call the API gateway (`issueConversationMediaUpload`,
+  `finalizeConversationMediaUpload`); it is an explicit, named, owner-reviewed entry, and every other
+  part of the shell is compared;
+- a module that is absent at the installed baseline is a first landing: new modules keep the
+  critical/manual component release route;
+- a range that ships no runtime code (documentation only, or only test files of an allowlisted
+  module) is not a Web release and never starts a publication.
+
+What the class does not prove, and what a review must therefore still check:
+
+- a changed literal value is trusted by construction, and literal values can be security-relevant:
+  the declared upload content type, the decode and pixel budgets, the encode quality, a selector or a
+  call target that a later revision introduces. The media API re-validates the content type, but the
+  constant itself is a review responsibility;
+- whitespace and comments are not compared, so a directive such as `@ts-nocheck` can ride along with
+  a legitimate literal change. It cannot add runtime code, and the mandatory typecheck still runs;
+- literals are neutralised by value, not by position, so once a revision introduces a literal-driven
+  call target, MIME type or element tag into an allowlisted module, later deliveries can retarget it
+  without a structural signal. Introducing such a literal is an invariant change and needs explicit
+  re-review;
+- a module's existing capabilities are not re-argued on every delivery. Adding an allowlist entry or relaxing an invariant is a reviewable
+  change of `scripts/safe-web-boundary.js`; both it and a removal or hardening reach the operator only
+  through a new critical review and enrollment of the controller source (`controllerSha`). The full Web
+  quality contour stays mandatory for both classes, and the entire main-push CI must still pass before
+  the controller publishes anything.
+
 ## One-time owner activation checklist
 
 Complete this as one bounded activation decision after this infrastructure PR's checks/reviews.
@@ -61,8 +107,9 @@ These steps are intentionally not executed by the implementation task.
    installed baseline from that reviewed source through the current critical Timeweb procedure;
    retain its root-only release.env, API/Web release labels, runtime identity, backup/restore and
    existing monitoring. Enrollment must not invent a baseline or waive accumulated critical code.
-2. Install a dedicated root-owned clone at `/opt/phub/timeweb-beta/standard/source`, detached at
-   that exact reviewed source. Install its pinned npm dependencies with `npm ci --ignore-scripts`
+2. Install a dedicated root-owned, full-history clone (never `--depth`) at
+   `/opt/phub/timeweb-beta/standard/source`, detached at that exact reviewed source: the controller
+   needs `git merge-base --is-ancestor` between the installed baseline and the candidate. Install its pinned npm dependencies with `npm ci --ignore-scripts`
    during enrollment (never from candidate code during a run). Require root ownership and no
    group/world write for controller, dependencies, Git metadata and all parent paths. Keep the
    controller checkout unchanged; updates to it require a new critical review and enrollment.
