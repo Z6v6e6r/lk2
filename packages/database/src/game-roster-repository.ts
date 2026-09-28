@@ -26,7 +26,7 @@ import {
   hasGameTestCourtAccess,
   isExactGameTestCourtPair,
   isRestrictedGameTestCourt,
-} from './game-test-courts.js';
+} from './game-repository.js';
 import type { GamePaymentMode } from './game-repository.js';
 
 export type GameRosterCommandErrorCode =

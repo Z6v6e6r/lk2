@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GAME_TEST_COURT_SCOPE as testScope } from './game-test-courts.js';
+import { GAME_TEST_COURT_SCOPE as testScope } from './game-repository.js';
 
 import { createGameRosterRepository } from './game-roster-repository.js';
 

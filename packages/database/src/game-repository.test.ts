@@ -4,7 +4,7 @@ import { createGameRepository } from './game-repository.js';
 import {
   GAME_TEST_COURT_SCOPE as testScope,
   GAME_TEST_COURT_PUBLIC_FILTER,
-} from './game-test-courts.js';
+} from './game-repository.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const actorUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';

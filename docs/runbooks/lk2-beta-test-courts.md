@@ -8,7 +8,7 @@
 
 ## Идентичность и доступ
 
-`packages/database/src/game-test-courts.ts` содержит только проверенные 2026-09-28 внутренние
+`GAME_TEST_COURT_SCOPE` в `packages/database/src/game-repository.ts` содержит проверенные 2026-09-28 внутренние
 PadlHub UUID существующих beta tenant, станции и двух кортов. Соответствия уже присутствуют
 в `integration.external_entity_map`; новые ресурсы или альтернативные UUID не создаются.
 Классификация ограниченного ресурса использует tenant и конкретный court UUID. Остальные

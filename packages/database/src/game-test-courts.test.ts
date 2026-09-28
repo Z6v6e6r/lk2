@@ -8,7 +8,7 @@ import {
   createGameTestCourtRepository,
   isExactGameTestCourtPair,
   isRestrictedGameTestCourt,
-} from './game-test-courts.js';
+} from './game-repository.js';
 
 const userId = '33333333-3333-4333-8333-333333333333';
 const audit = { commandType: 'game.join.v1', correlationId: 'test-court-admission' } as const;

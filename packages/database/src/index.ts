@@ -21,7 +21,6 @@ export * from './home-dashboard-repository.js';
 export * from './home-base-repository.js';
 export * from './home-base-projector.js';
 export * from './game-repository.js';
-export * from './game-test-courts.js';
 export * from './game-result-repository.js';
 export * from './game-result-projection-repository.js';
 export * from './game-roster-repository.js';
