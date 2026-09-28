@@ -532,10 +532,12 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
     if (cached) {
       if (cached.value && cached.expiresAt > now) return Promise.resolve(cached.value);
       if (cached.value && cached.staleUntil > now) {
-        this.revalidateMemberships(cacheKey, input);
+        this.revalidateMemberships(cacheKey, cached, input);
         return Promise.resolve(cached.value);
       }
-      if (!cached.value && cached.pending) return cached.pending;
+      // A shared in-flight read answers only inside its lease: a source that never settles must not
+      // pin the viewer forever, so an expired lease starts a fresh read instead.
+      if (!cached.value && cached.pending && cached.expiresAt > now) return cached.pending;
     }
 
     const pending = this.loadMemberships(input).then(
@@ -577,10 +579,14 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
   /**
    * Refreshes a stale page without holding the caller. The failure path is deliberately silent here:
    * the legacy fetch already reported its metric and opened the circuit, and the stale page keeps
-   * answering until its window closes, at which point a reader blocks and sees the error.
+   * answering until its window closes, at which point a reader blocks and sees the error. The result
+   * is stored only while the entry that triggered it is still the current one, so a page that another
+   * read already replaced — or that the bound evicted and reloaded — is never overwritten with older
+   * data.
    */
   private revalidateMemberships(
     cacheKey: string,
+    expected: CacheEntry,
     input: { readonly tenantId: string; readonly userId: string; readonly correlationId: string },
   ): void {
     if (this.revalidating.has(cacheKey)) return;
@@ -588,6 +594,7 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
     void this.loadMemberships(input)
       .then(
         (value) => {
+          if (this.cache.get(cacheKey) !== expected) return;
           this.storeMemberships(cacheKey, value);
         },
         () => undefined,

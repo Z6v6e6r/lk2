@@ -624,7 +624,7 @@ describe('legacy community read repository', () => {
       maxAttempts: 1,
       circuitFailureThreshold: 3,
       circuitResetMs: 30_000,
-      cacheTtlMs: 0,
+      cacheTtlMs: 20,
       staleTtlMs: 0,
       bridge: bridge(),
       fetchImplementation,
@@ -636,6 +636,9 @@ describe('legacy community read repository', () => {
       correlationId: 'swr-disabled-first',
       limit: 20,
     });
+    // The freshness window is over and no stale window was configured, so the next reader waits for
+    // the source instead of being answered from the expired page.
+    await new Promise((resolve) => setTimeout(resolve, 40));
 
     let settled = false;
     const pending = repository.listMemberships({
@@ -649,10 +652,86 @@ describe('legacy community read repository', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(settled).toBe(false);
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
 
     slowRead.resolve(jsonResponse(payload()));
     await expect(pending).resolves.toMatchObject({
       items: [expect.objectContaining({ title: 'Моё сообщество' })],
     });
+  });
+
+  it('retries the source once a shared in-flight read outlives its lease', async () => {
+    const hungRead = new Promise<Response>(() => undefined);
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(() => hungRead)
+      .mockResolvedValueOnce(jsonResponse(payload()));
+    const repository = new LegacyCommunityReadRepository({
+      baseUrl: 'https://legacy.padlhub.test',
+      // The lease is max(cacheTtlMs, timeoutMs * maxAttempts + 500), so a small budget keeps the test
+      // quick while still proving that a source which never settles cannot pin the viewer forever.
+      timeoutMs: 200,
+      maxAttempts: 1,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      cacheTtlMs: 0,
+      staleTtlMs: 0,
+      bridge: bridge(),
+      fetchImplementation,
+    });
+
+    // The first read is left hanging on a source that never answers.
+    void repository.listMemberships({
+      tenantId,
+      userId,
+      correlationId: 'swr-lease-hung',
+      limit: 20,
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(0);
+    await vi.waitFor(() => expect(fetchImplementation).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    await expect(
+      repository.listMemberships({
+        tenantId,
+        userId,
+        correlationId: 'swr-lease-retry',
+        limit: 20,
+      }),
+    ).resolves.toMatchObject({
+      items: [expect.objectContaining({ title: 'Моё сообщество' })],
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a directory page inside its own viewer', async () => {
+    const otherUserId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() => Promise.resolve(jsonResponse(payload())));
+    const repository = new LegacyCommunityReadRepository({
+      baseUrl: 'https://legacy.padlhub.test',
+      timeoutMs: 1_000,
+      maxAttempts: 1,
+      circuitFailureThreshold: 3,
+      circuitResetMs: 30_000,
+      cacheTtlMs: 30_000,
+      staleTtlMs: 300_000,
+      bridge: bridge(),
+      fetchImplementation,
+    });
+
+    await repository.listMemberships({ tenantId, userId, correlationId: 'swr-first', limit: 20 });
+    await repository.listMemberships({ tenantId, userId, correlationId: 'swr-second', limit: 20 });
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+
+    // Another viewer of the same tenant is a different cache key and reads the source itself.
+    await repository.listMemberships({
+      tenantId,
+      userId: otherUserId,
+      correlationId: 'swr-other-viewer',
+      limit: 20,
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 });

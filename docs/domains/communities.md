@@ -231,11 +231,13 @@ window (five minutes by default) is still open answers immediately and is revali
 most once per viewer, so the seconds-long legacy read is paid by the first reader instead of every
 cold session. A failed revalidation keeps the last good page and stays silent — the fetch metric and
 the circuit breaker already record it — until the window closes; the next reader then blocks on the
-source and receives `COMMUNITY_DIRECTORY_UNAVAILABLE` on failure. `0` disables the stale window and
-restores a purely blocking expiry, and a `0` freshness window with no stale window disables caching.
-Because every read past the freshness window starts a revalidation, only the reads inside one legacy
-round-trip can see the older page; the client still repaints from its own session buffer and applies
-the response it receives. The legacy projection is never the source of truth for a command: this cache
+source and receives `COMMUNITY_DIRECTORY_UNAVAILABLE` on failure. While the source answers, only the
+reads inside one legacy round-trip see the older page; while it fails, the last good page answers for
+the rest of the window, so a membership removal, an identity relink or a new membership is visible
+within one freshness plus stale window (about five and a half minutes by default) at worst. `0`
+disables the stale window and restores a purely blocking expiry, and a `0` freshness window with no
+stale window disables caching. The client still repaints from its own session buffer and applies the
+response it receives. The legacy projection is never the source of truth for a command: this cache
 serves reads only and never supplies a write decision.
 
 The same normalized repository feeds the Home projector in the background. The worker persists at
