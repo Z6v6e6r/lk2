@@ -65,6 +65,7 @@ import {
   sha256Hex,
   type ChatAttachmentDraft,
 } from './chats-ui/chat-attachments.js';
+import { prepareChatPhotoForUpload } from './chats-ui/chat-image-webp.js';
 import type { ChatComposerSend } from './chats-ui/ChatComposer.js';
 import {
   CHATS_UNREAD_REFRESH_INTERVAL_MS,
@@ -1951,14 +1952,26 @@ export function App({
   async function uploadChatAttachment(input: {
     readonly conversationId: string;
     readonly localId: string;
-    readonly fileName: string;
-    readonly contentType: string;
     readonly file: File;
     readonly generation: number;
   }): Promise<void> {
-    const { conversationId, localId, fileName, contentType, file, generation } = input;
+    const { conversationId, localId, generation } = input;
     const isActive = (): boolean => chatAttachmentGenerationRef.current === generation;
     try {
+      // Storage serves the exact uploaded bytes, so re-encoding here is the only place a chat photo
+      // can get smaller for both this upload and every later open of the message.
+      const file = await prepareChatPhotoForUpload(input.file);
+      if (!isActive()) return;
+      const fileName = normalizeAttachmentFileName(file.name);
+      const contentType = normalizeAttachmentContentType(file.type);
+      if (file !== input.file) {
+        updateChatAttachment(localId, {
+          fileName,
+          contentType,
+          byteSize: file.size,
+          mediaType: attachmentMediaType(contentType),
+        });
+      }
       const sha256 = await sha256Hex(await file.arrayBuffer());
       if (!isActive()) return;
       const issued = await gateway.issueConversationMediaUpload(
@@ -2033,8 +2046,6 @@ export function App({
       void uploadChatAttachment({
         conversationId,
         localId: draft.localId,
-        fileName: draft.fileName,
-        contentType: draft.contentType,
         file,
         generation,
       });

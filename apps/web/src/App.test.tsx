@@ -610,6 +610,25 @@ class FakeXhrTarget {
   }
 }
 
+/**
+ * Minimal canvas double for the photo re-encode: jsdom offers drawing and encoding primitives that
+ * answer with a fixed WebP payload, while the decoder itself is stubbed separately.
+ */
+class FakeOffscreenCanvas {
+  constructor(
+    readonly width: number,
+    readonly height: number,
+  ) {}
+
+  getContext(): { drawImage: () => void } {
+    return { drawImage: () => undefined };
+  }
+
+  convertToBlob(input: { readonly type: string }): Promise<Blob> {
+    return Promise.resolve(new Blob([new Uint8Array(128)], { type: input.type }));
+  }
+}
+
 /** Minimal XMLHttpRequest double so the upload progress path is exercised in jsdom. */
 class FakeXmlHttpRequest {
   static readonly instances: FakeXmlHttpRequest[] = [];
@@ -3111,6 +3130,94 @@ describe('PadlHub web authentication', () => {
         expect.objectContaining({ body: '', attachmentIds: [mediaId] }),
       ),
     );
+  });
+
+  it('re-encodes a photo to WebP before issuing the upload, so the stored picture is smaller', async () => {
+    const conversationId = '22222222-2222-4222-8222-222222222222';
+    const mediaId = '66666666-6666-4666-8666-666666666666';
+    const directConversation = {
+      id: conversationId,
+      kind: 'DIRECT' as const,
+      participant: { userId: '11111111-1111-4111-8111-111111111111', displayName: 'Борис' },
+      unreadCount: 0,
+      updatedAt: '2026-08-03T10:00:00.000Z',
+    };
+    const convertedAsset = {
+      id: mediaId,
+      conversationId,
+      mediaType: 'IMAGE' as const,
+      state: 'SCANNING' as const,
+      fileName: 'IMG_1234.webp',
+      contentType: 'image/webp',
+      byteSize: 128,
+      sha256: 'b'.repeat(64),
+      revision: 1,
+    };
+    const issueConversationMediaUpload = vi
+      .fn<AuthGateway['issueConversationMediaUpload']>()
+      .mockResolvedValue({
+        media: convertedAsset,
+        upload: {
+          method: 'PUT' as const,
+          url: 'https://storage.example/quarantine/photo',
+          requiredHeaders: { 'Content-Type': 'image/webp' },
+          expiresAt: '2026-09-20T12:05:00.000Z',
+        },
+      });
+    const finalizeConversationMediaUpload = vi
+      .fn<AuthGateway['finalizeConversationMediaUpload']>()
+      .mockResolvedValue(convertedAsset);
+    const getConversationMedia = vi
+      .fn<AuthGateway['getConversationMedia']>()
+      .mockResolvedValue({ ...convertedAsset, state: 'READY' });
+    window.history.replaceState({}, '', `/chats/${conversationId}`);
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      listConversations: vi.fn().mockResolvedValue({ items: [directConversation] }),
+      listConversationMessages: vi.fn().mockResolvedValue({ messages: [] }),
+      issueConversationMediaUpload,
+      finalizeConversationMediaUpload,
+      getConversationMedia,
+    });
+    // 2000x1500 JPEG. jsdom has neither a decoder nor a canvas, so the two browser primitives the
+    // re-encode uses are stubbed: the codec answers with a picture well under the source size.
+    const photo = new Uint8Array(4096);
+    photo.set(
+      [
+        0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x05, 0xdc, 0x07, 0xd0, 0x03,
+        0x01, 0x11, 0x00,
+      ],
+      0,
+    );
+    vi.stubGlobal('XMLHttpRequest', FakeXmlHttpRequest);
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn().mockResolvedValue({ width: 2000, height: 1500, close: () => undefined }),
+    );
+
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    await waitFor(() => expect(screen.getByLabelText('Сообщение')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Выбрать файлы для прикрепления'), {
+      target: { files: [new File([photo], 'IMG_1234.jpg', { type: 'image/jpeg' })] },
+    });
+
+    await waitFor(() => expect(issueConversationMediaUpload).toHaveBeenCalledOnce());
+    expect(issueConversationMediaUpload.mock.calls[0]?.[1]).toMatchObject({
+      fileName: 'IMG_1234.webp',
+      contentType: 'image/webp',
+      byteSize: 128,
+    });
+
+    await waitFor(() => expect(FakeXmlHttpRequest.instances).toHaveLength(1));
+    const sent = FakeXmlHttpRequest.instances[0]?.sentBody as Blob;
+    expect(sent.type).toBe('image/webp');
+    expect(sent.size).toBe(128);
+
+    act(() => FakeXmlHttpRequest.instances[0]?.finish(201));
+    await waitFor(() => expect(finalizeConversationMediaUpload).toHaveBeenCalledOnce());
+    expect(finalizeConversationMediaUpload.mock.calls[0]?.[2]).toBe(128);
   });
 
   it('opens a GAME thread on its newest page and loads older history without boundary duplicates', async () => {
