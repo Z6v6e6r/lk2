@@ -10917,6 +10917,36 @@ label {
   transform: scale(0.4583333);
 }
 
+/* The chat list doubles the roster circles: four 44px avatars with a 16px step read as faces rather
+   than dots, and the row gives the stack its own column instead of the 48px avatar slot. */
+.chat-game-stack-wide {
+  width: max-content;
+  min-width: 48px;
+}
+
+.chat-game-stack-wide .participant-avatar-stack {
+  height: 44px;
+}
+
+.chat-game-stack-wide .participant-avatar-stack__item {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  margin: 0 -14px;
+}
+
+.chat-game-stack-wide .participant-avatar-stack__item:first-child {
+  margin-left: 0;
+}
+
+.chat-game-stack-wide .participant-avatar-stack__item:last-child {
+  margin-right: 0;
+}
+
+.chat-game-stack-wide .participant-avatar-stack__item > [data-player-level-avatar] {
+  transform: scale(0.9166667);
+}
+
 .participant-avatar-stack__item {
   display: inline-flex;
   width: 48px;

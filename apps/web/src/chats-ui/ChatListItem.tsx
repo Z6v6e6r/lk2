@@ -21,6 +21,9 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
   // last message; direct and other group chats keep their message preview.
   const gameSchedule = conversation.kind === 'GAME' ? formatGameSchedule(conversation) : null;
   const preview = gameSchedule ?? conversation.lastMessage?.body ?? 'Новый диалог';
+  // The list doubles the roster circles, so a game row gives the stack its own column instead of the
+  // shared 48px avatar slot.
+  const gameRoster = conversation.kind === 'GAME' ? (conversation.participants ?? []) : [];
 
   const avatar = (
     <ChatAvatar
@@ -32,16 +35,16 @@ export function ChatListItem({ conversation, selected }: ChatListItemProps): Rea
       fallbackSeed={
         conversation.kind === 'DIRECT' ? conversation.participant.userId : conversation.id
       }
-      {...(conversation.kind === 'GAME' && conversation.participants
-        ? { participants: conversation.participants }
-        : {})}
+      {...(gameRoster.length > 0 ? { participants: gameRoster, wideStack: true } : {})}
       size={48}
     />
   );
 
   return (
     <li
-      className={`${styles.listItem} ${styles.chatRow} ${selected ? styles.selectedChatRow : ''}`}
+      className={`${styles.listItem} ${styles.chatRow} ${
+        gameRoster.length > 0 ? styles.rosterChatRow : ''
+      } ${selected ? styles.selectedChatRow : ''}`}
     >
       {conversation.kind === 'DIRECT' ? (
         <a

@@ -90,10 +90,11 @@ describe('chat row destinations', () => {
       />,
     );
 
-    // Four overlapping roster circles, never an open "join" slot.
+    // Overlapping roster circles, never an open "join" slot, and the chat list paints them doubled.
     expect(
-      container.querySelectorAll('.chat-game-stack .participant-avatar-stack__item'),
+      container.querySelectorAll('.chat-game-stack-wide .participant-avatar-stack__item'),
     ).toHaveLength(2);
+    expect(container.querySelector('.chat-game-stack')).not.toBeNull();
     expect(container.querySelector('.participant-avatar-stack__open-slot')).toBeNull();
     expect(screen.getByText('Терехово · 28 сентября, 09:00')).toBeInTheDocument();
     expect(screen.queryByText('Я возьму мячи')).not.toBeInTheDocument();
