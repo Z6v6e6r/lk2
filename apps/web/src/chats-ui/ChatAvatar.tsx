@@ -15,6 +15,11 @@ interface ChatAvatarProps {
   readonly className?: string | undefined;
   /** Active game roster; the game avatar shows it instead of the category marker. */
   readonly participants?: readonly GameConversationParticipant[] | undefined;
+  /**
+   * Doubles the roster circles for the chat list, where the row gives the stack a wider column. The
+   * thread header keeps the compact stack, so its 44px slot and the title stay where they are.
+   */
+  readonly wideStack?: boolean | undefined;
 }
 
 function levelProgress(levelValue: number | null | undefined): number {
@@ -45,6 +50,7 @@ export function ChatAvatar({
   size = 44,
   className,
   participants,
+  wideStack = false,
 }: ChatAvatarProps): React.JSX.Element {
   const url = isGame ? undefined : photoUrl;
   const frameStyle = {
@@ -59,7 +65,9 @@ export function ChatAvatar({
       className={`${styles.avatar} ${
         isGame
           ? gameRoster.length > 0
-            ? styles.gameRosterAvatar
+            ? wideStack
+              ? `${styles.gameRosterAvatar} ${styles.gameRosterAvatarWide}`
+              : styles.gameRosterAvatar
             : styles.gameAvatar
           : styles.levelAvatarFrame
       } ${className ?? ''}`}
@@ -68,7 +76,7 @@ export function ChatAvatar({
     >
       {isGame ? (
         gameRoster.length > 0 ? (
-          <span className="chat-game-stack">
+          <span className={wideStack ? 'chat-game-stack chat-game-stack-wide' : 'chat-game-stack'}>
             <ParticipantAvatarStack
               ariaLabel={`Участники игры ${title}`}
               capacity={gameRoster.length}

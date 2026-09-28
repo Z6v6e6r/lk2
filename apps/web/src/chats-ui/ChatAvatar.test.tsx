@@ -67,6 +67,30 @@ describe('ChatAvatar', () => {
     expect(screen.getByText('БК')).toBeInTheDocument();
   });
 
+  it('doubles the roster stack only where the row asks for it', () => {
+    const participants = [
+      {
+        userId: '11111111-1111-4111-8111-111111111111',
+        displayName: 'Анна',
+        role: 'ORGANIZER' as const,
+      },
+      {
+        userId: '22222222-2222-4222-8222-222222222222',
+        displayName: 'Борис',
+        role: 'PLAYER' as const,
+      },
+    ];
+    const compact = render(<ChatAvatar isGame title="Игра" participants={participants} />);
+    expect(compact.container.querySelector('.chat-game-stack')).not.toBeNull();
+    expect(compact.container.querySelector('.chat-game-stack-wide')).toBeNull();
+    compact.unmount();
+
+    // The chat list asks for the doubled circles; the thread header keeps the compact stack.
+    const wide = render(<ChatAvatar isGame title="Игра" participants={participants} wideStack />);
+    expect(wide.container.querySelector('.chat-game-stack-wide')).not.toBeNull();
+    expect(wide.container.querySelectorAll('.participant-avatar-stack__item')).toHaveLength(2);
+  });
+
   it('falls back to initials when the delivery URL fails to load', () => {
     const { container } = render(<ChatAvatar isGame={false} title="Борис" photoUrl={photoUrl} />);
 

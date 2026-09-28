@@ -301,6 +301,20 @@
   background: transparent;
 }
 
+/* The chat list paints the doubled roster stack, so the wrapper follows the stack's width and the
+   row's avatar column grows with it instead of the 48px slot. The thread header keeps the compact
+   stack and its fixed slot. */
+.gameRosterAvatarWide {
+  width: max-content;
+  min-width: 48px;
+}
+
+/* The doubled roster stack needs its own column, so the game row grows it to the stack's width while
+   every other row keeps the 48px avatar slot. */
+.rosterChatRow {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
 /* An outbound channel keeps the conversation avatar slot, but the slot shows the owner's own
    official logo instead of a PadlHub-colored tile with a lookalike glyph. */
 .externalAvatar {
