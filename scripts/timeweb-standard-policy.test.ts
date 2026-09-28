@@ -24,6 +24,50 @@ describe('standard Timeweb release behavior', () => {
       console.log(JSON.stringify(standardReleasePlan({paths:${JSON.stringify(['apps/web/src/TournamentSummaryCard.tsx', path])}, presentationVerified:true, backendUnchanged:true})));`),
     ).toMatchObject({ eligible: false });
   });
+  it('delivers an allowlisted safe-Web module only when the range verifies it', () => {
+    expect(
+      scenario(`import { standardReleasePlan } from './scripts/timeweb-standard-policy.js';
+      console.log(JSON.stringify([true,false].map(safeWebVerified=>standardReleasePlan({paths:['apps/web/src/chats-ui/chat-image-webp.ts'],presentationVerified:false,safeWebVerified,backendUnchanged:true}))));`),
+    ).toEqual([
+      {
+        eligible: true,
+        component: 'web',
+        stages: ['source', 'publication', 'artifact-smoke', 'web-up', 'observe', 'receipt'],
+        reason: 'safe-web',
+      },
+      { eligible: false, reason: 'cumulative-critical-shared-or-unknown' },
+    ]);
+  });
+  it('does not plan a Web release for a range that ships no runtime code', () => {
+    expect(
+      scenario(`import { standardReleasePlan } from './scripts/timeweb-standard-policy.js';
+      console.log(JSON.stringify(standardReleasePlan({paths:['apps/web/src/chats-ui/chat-image-webp.test.ts'],presentationVerified:false,safeWebVerified:true,backendUnchanged:true})));`),
+    ).toEqual({ eligible: false, reason: 'docs-no-runtime-release' });
+    expect(
+      scenario(`import { standardReleasePlan } from './scripts/timeweb-standard-policy.js';
+      console.log(JSON.stringify(standardReleasePlan({paths:['docs/product-notes.md'],presentationVerified:false,safeWebVerified:false,backendUnchanged:true})));`),
+    ).toEqual({ eligible: false, reason: 'docs-no-runtime-release' });
+  });
+  it('never lets one verified class vouch for the other class', () => {
+    expect(
+      scenario(`import { standardReleasePlan } from './scripts/timeweb-standard-policy.js';
+      console.log(JSON.stringify(standardReleasePlan({paths:['apps/web/src/chats-ui/chat-image-webp.ts','apps/web/src/TournamentSummaryCard.tsx'],presentationVerified:false,safeWebVerified:true,backendUnchanged:true})));`),
+    ).toMatchObject({ eligible: false });
+    expect(
+      scenario(`import { standardReleasePlan } from './scripts/timeweb-standard-policy.js';
+      console.log(JSON.stringify(standardReleasePlan({paths:['apps/web/src/chats-ui/chat-image-webp.ts','apps/web/src/TournamentSummaryCard.tsx'],presentationVerified:true,safeWebVerified:false,backendUnchanged:true})));`),
+    ).toMatchObject({ eligible: false });
+  });
+  it.each([
+    'apps/api/src/payments/purchase.ts',
+    'apps/web/src/auth-gateway.ts',
+    'scripts/safe-web-boundary.js',
+  ])('cumulative %s stays outside the safe-Web class', (path) => {
+    expect(
+      scenario(`import { standardReleasePlan } from './scripts/timeweb-standard-policy.js';
+      console.log(JSON.stringify(standardReleasePlan({paths:${JSON.stringify(['apps/web/src/chats-ui/chat-image-webp.ts', path])},presentationVerified:false,safeWebVerified:true,backendUnchanged:true})));`),
+    ).toMatchObject({ eligible: false });
+  });
   it('requires verified syntax and backend compatibility, and plans actual stages', () => {
     expect(
       scenario(`import { standardReleasePlan } from './scripts/timeweb-standard-policy.js';

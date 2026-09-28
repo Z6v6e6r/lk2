@@ -56,7 +56,7 @@ export function parseAndValidateCiPlan(text) {
     throw new Error('Docs profile cannot select Docker services');
   }
   if (plan.profile === 'leaf-web' && plan.dockerServices.length !== 0) {
-    throw new Error('Presentation profile does not rebuild the release image in PR CI');
+    throw new Error('Presentation or safe-Web profile does not rebuild the release image in PR CI');
   }
   if (plan.provenanceProbe && !plan.deploymentContract) {
     throw new Error('Provenance probe requires deployment contract');

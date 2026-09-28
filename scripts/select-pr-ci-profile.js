@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isPresentationPath, verifyPresentationRange } from './presentation-boundary.js';
+import { isSafeWebPath, verifySafeWebRange } from './safe-web-boundary.js';
 import { selectPrDockerServices } from './select-pr-docker-services.js';
 
 const ALL_SERVICES = ['web', 'api', 'worker', 'realtime', 'migrator'];
@@ -38,7 +39,7 @@ function isSafeDocumentationPath(path) {
 }
 
 function isLeafWebPath(path) {
-  return isPresentationPath(path);
+  return isPresentationPath(path) || isSafeWebPath(path);
 }
 
 function needsDeploymentContract(path) {
@@ -91,7 +92,12 @@ function makePlan({
 
 export function selectPrCiProfile(
   paths,
-  { eventName = 'pull_request', ref = '', presentationVerified = false } = {},
+  {
+    eventName = 'pull_request',
+    ref = '',
+    presentationVerified = false,
+    safeWebVerified = false,
+  } = {},
 ) {
   if (eventName === 'push') {
     if (ref !== 'refs/heads/main' && !ref.startsWith('refs/heads/integration/')) {
@@ -130,7 +136,9 @@ export function selectPrCiProfile(
   const ciControl = uniquePaths.some(
     (path) =>
       path.startsWith('.github/workflows/') ||
-      /^scripts\/(?:select-pr-|verify-ci-plan|verify-source-ci|presentation-boundary)/.test(path),
+      /^scripts\/(?:select-pr-|verify-ci-plan|verify-source-ci|presentation-boundary|safe-web-boundary|timeweb-standard-policy|run-timeweb-standard-delivery)/.test(
+        path,
+      ),
   );
   const deploymentContract = ciControl || uniquePaths.some(needsDeploymentContract);
   const provenanceProbe = ciControl || uniquePaths.some(needsProvenanceProbe);
@@ -155,10 +163,18 @@ export function selectPrCiProfile(
       reason: 'policy mixed with non-documentation changes requires full closure',
     });
   }
-  if (
-    presentationVerified &&
-    uniquePaths.every((path) => isLeafWebPath(path) || isSafeDocumentationPath(path))
-  ) {
+  // Each verified class covers only its own paths: a verified safe-Web range cannot lift a
+  // presentation path (or the other way round) out of the full contour.
+  const leafWebVerified = uniquePaths.every(
+    (path) =>
+      isSafeDocumentationPath(path) ||
+      (isPresentationPath(path)
+        ? presentationVerified
+        : isSafeWebPath(path)
+          ? safeWebVerified
+          : false),
+  );
+  if (leafWebVerified && uniquePaths.some((path) => isLeafWebPath(path))) {
     return makePlan({
       profile: 'leaf-web',
       deploymentContract,
@@ -190,6 +206,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const plan = selectPrCiProfile(paths, {
     eventName: process.argv[eventIndex + 1],
     presentationVerified: verifyPresentationRange(paths, base, head),
+    safeWebVerified: verifySafeWebRange(paths, base, head),
     ref: process.argv[refIndex + 1] ?? '',
   });
   process.stdout.write(`${JSON.stringify(plan)}\n`);
