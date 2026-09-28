@@ -269,6 +269,7 @@ export function createCommunityDirectoryRuntime(input: {
         circuitFailureThreshold: input.config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
         circuitResetMs: input.config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
         cacheTtlMs: input.config.COMMUNITIES_LEGACY_CACHE_TTL_MS,
+        staleTtlMs: input.config.COMMUNITIES_LEGACY_STALE_TTL_MS,
         bridge: createCommunityLegacyBridgeRepository(input.pool, {
           stableLogoDeliveryEnabled: input.config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
         }),

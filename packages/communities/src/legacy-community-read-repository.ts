@@ -64,7 +64,10 @@ export interface LegacyCommunityMetric {
 }
 
 interface CacheEntry {
+  /** Freshness of `value`; on a value-less entry, when the shared in-flight read lease ends. */
   readonly expiresAt: number;
+  /** End of the window in which `value` may still answer while it is revalidated. */
+  readonly staleUntil: number;
   readonly value?: readonly CommunityDirectoryItem[];
   readonly pending?: Promise<readonly CommunityDirectoryItem[]>;
 }
@@ -91,6 +94,7 @@ interface LegacyCommunityReadRepositoryOptions {
   readonly circuitFailureThreshold: number;
   readonly circuitResetMs: number;
   readonly cacheTtlMs: number;
+  readonly staleTtlMs: number;
   readonly bridge: CommunityLegacyBridgeRepository;
   readonly fetchImplementation?: typeof fetch;
   readonly onMetric?: (metric: LegacyCommunityMetric) => void;
@@ -294,6 +298,7 @@ function wait(milliseconds: number): Promise<void> {
 export class LegacyCommunityReadRepository implements CommunityDirectoryRepository {
   private readonly fetchImplementation: typeof fetch;
   private readonly cache = new Map<string, CacheEntry>();
+  private readonly revalidating = new Set<string>();
   private readonly rankCache = new Map<string, RankCacheEntry>();
   private readonly externalCommunityIds = new Map<string, string>();
   private consecutiveFailures = 0;
@@ -508,6 +513,14 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
     }
   }
 
+  /**
+   * The legacy projection answers in seconds, so letting an expired entry block the next reader made
+   * every cold reader — a new session, a pause longer than the TTL, another API process — wait for it
+   * again. A fresh entry answers directly; an entry inside the stale window answers immediately and is
+   * revalidated out of band, so only the first read of a user pays the legacy latency. One revalidation
+   * per key runs at a time, a failed revalidation keeps the last good page until the window closes, and
+   * a reader that must block (no page, or past the window) still sees the legacy error.
+   */
   private getMemberships(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -515,22 +528,19 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
   }): Promise<readonly CommunityDirectoryItem[]> {
     const cacheKey = `${input.tenantId}:${input.userId}`;
     const cached = this.cache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      if (cached.value) return Promise.resolve(cached.value);
-      if (cached.pending) return cached.pending;
+    const now = Date.now();
+    if (cached) {
+      if (cached.value && cached.expiresAt > now) return Promise.resolve(cached.value);
+      if (cached.value && cached.staleUntil > now) {
+        this.revalidateMemberships(cacheKey, input);
+        return Promise.resolve(cached.value);
+      }
+      if (!cached.value && cached.pending) return cached.pending;
     }
 
     const pending = this.loadMemberships(input).then(
       (value) => {
-        if (this.options.cacheTtlMs > 0) {
-          this.cache.set(cacheKey, {
-            expiresAt: Date.now() + this.options.cacheTtlMs,
-            value,
-          });
-          this.trimCache();
-        } else {
-          this.cache.delete(cacheKey);
-        }
+        this.storeMemberships(cacheKey, value);
         return value;
       },
       (error: unknown) => {
@@ -538,13 +548,53 @@ export class LegacyCommunityReadRepository implements CommunityDirectoryReposito
         throw error;
       },
     );
+    // A value-less entry only holds the shared in-flight read; `staleUntil` stays closed because
+    // there is no page to serve while the reader waits.
     this.cache.set(cacheKey, {
       expiresAt:
         Date.now() +
         Math.max(this.options.cacheTtlMs, this.options.timeoutMs * this.options.maxAttempts + 500),
+      staleUntil: Date.now(),
       pending,
     });
     return pending;
+  }
+
+  private storeMemberships(cacheKey: string, value: readonly CommunityDirectoryItem[]): void {
+    if (this.options.cacheTtlMs <= 0 && this.options.staleTtlMs <= 0) {
+      this.cache.delete(cacheKey);
+      return;
+    }
+    const now = Date.now();
+    this.cache.set(cacheKey, {
+      expiresAt: now + this.options.cacheTtlMs,
+      staleUntil: now + this.options.cacheTtlMs + this.options.staleTtlMs,
+      value,
+    });
+    this.trimCache();
+  }
+
+  /**
+   * Refreshes a stale page without holding the caller. The failure path is deliberately silent here:
+   * the legacy fetch already reported its metric and opened the circuit, and the stale page keeps
+   * answering until its window closes, at which point a reader blocks and sees the error.
+   */
+  private revalidateMemberships(
+    cacheKey: string,
+    input: { readonly tenantId: string; readonly userId: string; readonly correlationId: string },
+  ): void {
+    if (this.revalidating.has(cacheKey)) return;
+    this.revalidating.add(cacheKey);
+    void this.loadMemberships(input)
+      .then(
+        (value) => {
+          this.storeMemberships(cacheKey, value);
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        this.revalidating.delete(cacheKey);
+      });
   }
 
   private trimCache(): void {
