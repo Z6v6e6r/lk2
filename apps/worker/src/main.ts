@@ -236,6 +236,7 @@ const communityHome = (() => {
       circuitFailureThreshold: config.COMMUNITIES_LEGACY_CIRCUIT_FAILURE_THRESHOLD,
       circuitResetMs: config.COMMUNITIES_LEGACY_CIRCUIT_RESET_MS,
       cacheTtlMs: config.COMMUNITIES_LEGACY_CACHE_TTL_MS,
+      staleTtlMs: config.COMMUNITIES_LEGACY_STALE_TTL_MS,
       bridge: createCommunityLegacyBridgeRepository(pool, {
         stableLogoDeliveryEnabled: config.COMMUNITY_LOGO_STABLE_DELIVERY_ENABLED,
       }),

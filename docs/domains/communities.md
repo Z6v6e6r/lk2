@@ -225,6 +225,21 @@ circuit breaker, redacted metrics and a short in-process coalescing cache. Cache
 and contains no source identity. A missing identity, invalid payload, timeout or open circuit fails
 closed with `COMMUNITY_DIRECTORY_UNAVAILABLE`; the API never substitutes mock or mixed-source data.
 
+The cache carries two windows per viewer. A page read within `COMMUNITIES_LEGACY_CACHE_TTL_MS` is
+fresh and answers directly. A page whose freshness ended but whose `COMMUNITIES_LEGACY_STALE_TTL_MS`
+window (five minutes by default) is still open answers immediately and is revalidated out of band, at
+most once per viewer, so the seconds-long legacy read is paid by the first reader instead of every
+cold session. A failed revalidation keeps the last good page and stays silent — the fetch metric and
+the circuit breaker already record it — until the window closes; the next reader then blocks on the
+source and receives `COMMUNITY_DIRECTORY_UNAVAILABLE` on failure. While the source answers, only the
+reads inside one legacy round-trip see the older page; while it fails, the last good page answers for
+the rest of the window, so a membership removal, an identity relink or a new membership is visible
+within one freshness plus stale window (about five and a half minutes by default) at worst. `0`
+disables the stale window and restores a purely blocking expiry, and a `0` freshness window with no
+stale window disables caching. The client still repaints from its own session buffer and applies the
+response it receives. The legacy projection is never the source of truth for a command: this cache
+serves reads only and never supplies a write decision.
+
 The same normalized repository feeds the Home projector in the background. The worker persists at
 most ten summaries in `integration.community_home_source_components` and emits a versioned
 `home.projection.component.changed.v1` event in the same transaction. Revisions advance beyond any

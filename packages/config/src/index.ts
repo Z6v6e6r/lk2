@@ -338,6 +338,13 @@ const environmentSchema = z.object({
     .max(3_600_000)
     .default(30_000),
   COMMUNITIES_LEGACY_CACHE_TTL_MS: z.coerce.number().int().min(0).max(300_000).default(30_000),
+  /**
+   * How long a stale member directory may still answer while it is revalidated in the background.
+   * The legacy projection answers in seconds, so a plain TTL made every cold reader wait for it
+   * again; within this window the previous page is served immediately and refreshed out of band.
+   * `0` keeps the previous behaviour (an expired entry blocks the next reader).
+   */
+  COMMUNITIES_LEGACY_STALE_TTL_MS: z.coerce.number().int().min(0).max(3_600_000).default(300_000),
   COMMUNITY_LOGO_ALLOWED_HOSTS: z
     .string()
     .min(1)
