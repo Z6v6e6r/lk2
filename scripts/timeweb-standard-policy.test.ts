@@ -205,6 +205,10 @@ describe('standard Timeweb release behavior', () => {
     expect(entry).toContain('IFS= read -r GH_TOKEN');
     expect(entry).toContain('case "$RUN_ID" in \'\'|*[!0-9]*)');
     expect(entry).toContain('exec /usr/bin/sudo -n --preserve-env=GH_TOKEN,PHUB_SOURCE_CI_RUN_ID');
+    // The token is an opaque printable string: an assumed alphabet rejected real GitHub tokens,
+    // while whitespace and control bytes remain the actual line-smuggling boundary.
+    expect(entry).toContain("''|*[![:graph:]]*");
+    expect(entry).toContain('invalid token: unexpected bytes');
     // The launcher takes the run id from the environment and rejects any argument.
     const launcher = readFileSync('deploy/timeweb/run-standard-delivery.sh', 'utf8');
     expect(launcher).toContain('[ "$#" -eq 0 ]');
