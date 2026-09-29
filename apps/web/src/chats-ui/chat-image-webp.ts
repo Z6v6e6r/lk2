@@ -133,7 +133,13 @@ function readJpegDimensions(bytes: Uint8Array): RasterImageDimensions | undefine
   return undefined;
 }
 
-/** Reads the stored pixel size of the two formats this contour converts. */
+/**
+ * Reads the stored pixel size of the two formats this contour converts.
+ *
+ * Only headers are parsed: a PNG `IHDR` chunk and a JPEG `SOF` marker. Anything else — an unsupported
+ * type, a truncated header, a progressive JPEG whose marker never appears — returns `undefined` and
+ * the caller keeps the original file, so a header oddity can never lose a picture.
+ */
 export function readRasterImageDimensions(
   bytes: Uint8Array,
   contentType: string,
