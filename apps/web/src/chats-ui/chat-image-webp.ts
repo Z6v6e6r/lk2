@@ -16,7 +16,14 @@
 /** Only these two are re-encoded; a WebP upload already is the target format and stays untouched. */
 export const CHAT_IMAGE_WEBP_SOURCE_CONTENT_TYPES = ['image/jpeg', 'image/png'] as const;
 
-/** The station-support photo contour uses the same bound, so one product shrinks pictures alike. */
+/**
+ * The station-support photo contour uses the same bound, so one product shrinks pictures alike.
+ *
+ * Both literals below are the tuned values of the first landing: 1600 px keeps a retina phone photo
+ * readable in the chat while staying well under the upload budget, and 0.82 keeps the WebP smaller
+ * than the source JPEG without visible banding. They are the only surface the bounded tuning class
+ * may move, so a later change to either value travels the Web-only route.
+ */
 export const CHAT_IMAGE_WEBP_MAX_DIMENSION = 1_600;
 export const CHAT_IMAGE_WEBP_QUALITY = 0.82;
 
