@@ -26,7 +26,10 @@ import {
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
-const CONFIG = '/etc/phub/timeweb-beta/standard-delivery.json';
+// Deliberately outside /etc/phub/timeweb-beta: the critical runtime-secret provisioner requires
+// that directory to contain exactly its four service env files plus the release identity, so any
+// extra entry there would stop every future critical release.
+const CONFIG = '/etc/phub/timeweb-beta-standard-delivery.json';
 const REPOSITORY = 'Z6v6e6r/lk2';
 const PUBLISHER = 'publish-timeweb-amd64-images.yaml';
 const COMPOSE = `${SOURCE}/deploy/timeweb/compose.beta.yaml`;

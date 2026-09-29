@@ -126,8 +126,12 @@ These steps are intentionally not executed by the implementation task.
    Install `deploy/timeweb/run-standard-delivery.sh` as root-owned 0755
    `/usr/local/sbin/phub-standard-delivery`. Required fixed commands are `/usr/bin/node` (22), git,
    Docker, gh and unzip. Enroll the existing root Docker read credential for immutable GHCR pulls.
-   Configure `/etc/phub/timeweb-beta/standard-delivery.json` (root:root 0600) from the example with
-   enabled=true, named owner and exact controllerSha. This config is standing authority.
+   Configure `/etc/phub/timeweb-beta-standard-delivery.json` (root:root 0600) from the example with
+   enabled=true, named owner and exact controllerSha. This config is standing authority. It lives
+   **outside** `/etc/phub/timeweb-beta` on purpose: the critical runtime-secret provisioner requires
+   that directory to contain exactly its four service env files plus `.release-identity.json`, so any
+   extra entry there — including this config — would stop every future critical release with
+   `target_file_set`.
 3. Enroll the SSH operator transport instead of any privileged runner, in this order, before any
    key is installed. Create an unprivileged account named `phub-operator` (never the distro
    `operator` group) with no Docker group and no general sudo. Install

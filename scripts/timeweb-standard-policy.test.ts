@@ -208,5 +208,15 @@ describe('standard Timeweb release behavior', () => {
     const launcher = readFileSync('deploy/timeweb/run-standard-delivery.sh', 'utf8');
     expect(launcher).toContain('[ "$#" -eq 0 ]');
     expect(launcher).toContain('PHUB_SOURCE_CI_RUN_ID');
+    // The standing config must never live inside the critical provisioner's exact-file-set target
+    // directory, or every future critical release would fail with `target_file_set`.
+    const controller = readFileSync('scripts/run-timeweb-standard-delivery.js', 'utf8');
+    const provisioner = readFileSync('scripts/provision-timeweb-beta-runtime-secrets.js', 'utf8');
+    const configPath = /const CONFIG = '([^']+)'/.exec(controller)?.[1] ?? '';
+    const targetDir = /const TARGET_DIR = '([^']+)'/.exec(provisioner)?.[1] ?? '';
+    expect(targetDir).not.toBe('');
+    expect(configPath).not.toBe('');
+    expect(configPath.startsWith(`${targetDir}/`)).toBe(false);
+    expect(runbook).toContain(configPath);
   });
 });
