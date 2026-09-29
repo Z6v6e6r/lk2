@@ -37,9 +37,12 @@ feature owner's work. No product UI is changed by this infrastructure task.
   over stdin to a forced SSH entry, and that entry may only invoke the fixed launcher, which accepts
   nothing but the run id. No arbitrary SSH host, shell command or target is accepted. API must
   already be healthy; Realtime may remain absent, or must retain its existing healthy identity. The
-  migrator never runs, and a worker is only accepted when the installed `release.env` declares it,
-  its image is exactly the declared `WORKER_IMAGE_DIGEST`, and it stays identical through the whole
-  transition (the receipt records it as unchanged backend).
+  migrator never runs. A worker may run or not: Compose keeps it behind its own profile while the
+  renderer always declares it, so presence is the baseline's business. A running worker must however
+  use exactly the declared `WORKER_IMAGE_DIGEST`, and its identity (container id, image, restart
+  count and start time) is asserted at preflight, in every observation round, and after activation
+  or rollback, so it cannot appear, disappear or restart while a release is delivered; the receipt
+  records it as unchanged backend.
 - Pilot components: Web presentation and the bounded tuning of the already-installed safe-Web
   modules listed in `scripts/safe-web-boundary.js`. Presentation is proven copy/ARIA/bounded styling;
   safe-Web is proven structurally: its syntax is frozen and only literal values may change, with
@@ -134,17 +137,23 @@ These steps are intentionally not executed by the implementation task.
    not enough: sshd still starts the account's login shell (with `-c`), so a `nologin` shell would
    refuse the delivery, and any shell would be a real shell. With the entry as the login shell every
    connection — with or without a forced command, and with any requested remote command — ends in the
-   entry, which ignores arguments and reads only stdin. Only then add the `authorized_keys` entry, as
-   defence in depth, with
-   `command="/home/phub-operator/bin/operator-entry",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding`.
+   entry, which ignores arguments and reads only stdin. Set the shell with `usermod -s` (or `vipw`);
+   `chsh` refuses a shell that is not listed in `/etc/shells`, and this one is not. Confirm the sshd
+   PAM stack does not load `pam_shells` (stock Ubuntu does not), otherwise the login shell must be
+   listed there too. Only then add the `authorized_keys` entry, as defence in depth, with
+   `command="/home/phub-operator/bin/operator-entry",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-user-rc`.
    The entry reads the token and the run id as two stdin lines, validates both, exports `GH_TOKEN`
    and `PHUB_SOURCE_CI_RUN_ID`, and `exec`s
    `sudo -n --preserve-env=GH_TOKEN,PHUB_SOURCE_CI_RUN_ID /usr/local/sbin/phub-standard-delivery`
    with **no arguments**: sudoers cannot express a wildcard argument safely, and the launcher
    validates the decimal run id itself. sudoers grants exactly
    `phub-operator ALL=(root) NOPASSWD:SETENV: /usr/local/sbin/phub-standard-delivery` and nothing
-   else. `TIMEWEB_OPERATOR_KNOWN_HOSTS` must contain exactly the ed25519 key whose fingerprint
-   `deploy/timeweb/target.json` pins, and all four transport secrets
+   else. `TIMEWEB_OPERATOR_KNOWN_HOSTS` must be a complete `known_hosts` line whose host field
+   matches `TIMEWEB_OPERATOR_HOST` (for example
+   `phub-timeweb-staging.<tailnet>.ts.net,100.77.212.57` followed by the ed25519 `ssh-ed25519` key
+   whose fingerprint `deploy/timeweb/target.json` pins), because the delivery uses
+   `StrictHostKeyChecking=yes` without a merge of the runner's own known-hosts. All four transport
+   secrets
    (`TAILSCALE_AUTHKEY`, `TIMEWEB_OPERATOR_SSH_KEY`, `TIMEWEB_OPERATOR_KNOWN_HOSTS`,
    `TIMEWEB_OPERATOR_HOST`) must be environment secrets of `timeweb-standard-delivery` — never
    repository secrets, because `pull-request.yaml` executes branch code on `pull_request`. The operator key, the pinned host key, the tailnet host name and the tailnet auth

@@ -193,6 +193,9 @@ function inspect(service) {
     image: value.Config.Image,
     releaseId: value.Config.Labels['phub.release-id'] ?? null,
     restarts: value.RestartCount,
+    // A stop/start of the same container keeps its id and increments no restart-policy counter, so
+    // the start time is what makes such a swap visible to `assertBackend`.
+    startedAt: value.State.StartedAt,
   };
 }
 function parseEnv(bytes) {
@@ -359,8 +362,9 @@ async function main(ciRunId) {
   const baselineEnv = `${ROOT}/releases/${baselineId}/release.env`;
   const baselineBytes = readSecure(baselineEnv);
   const values = parseEnv(baselineBytes);
-  // The baseline has to describe itself truthfully: the declared worker state must match reality,
-  // and a running worker must be exactly the image this release declared.
+  // A running worker must be exactly the image this release declared. Whether the baseline runs one
+  // at all is its own business: the canonical renderer always declares it while Compose keeps it
+  // behind a profile, so presence is not an assertion this route may make.
   if (
     values.PHUB_RELEASE_ID !== baselineId ||
     api.image !== `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}` ||

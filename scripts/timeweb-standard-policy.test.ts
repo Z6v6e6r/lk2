@@ -118,7 +118,13 @@ describe('standard Timeweb release behavior', () => {
           environment: string;
           'runs-on': string;
           permissions: Record<string, string>;
-          steps: { name?: string; run?: string }[];
+          steps: {
+            name?: string;
+            run?: string;
+            uses?: string;
+            with?: Record<string, string>;
+            env?: Record<string, string>;
+          }[];
         }
       >;
     };
@@ -132,7 +138,29 @@ describe('standard Timeweb release behavior', () => {
     expect(source).not.toContain('actions/checkout');
     expect(source).not.toContain('pull_request_target');
     expect(source).not.toContain('secrets: inherit');
-    const delivery = (job?.steps ?? []).filter((step) => (step.run ?? '').includes('ssh -i'));
+    // The inventory is pinned: one job, exactly these three steps, and third-party action code only
+    // from the pinned tailnet action. An extra step could otherwise ship the operator key or run
+    // fetched code in the same job and still satisfy every content check below.
+    expect(Object.keys(workflow.jobs)).toEqual(['standard-web']);
+    const steps = job?.steps ?? [];
+    expect(steps.map((step) => step.name)).toEqual([
+      'Join the operator tailnet',
+      'Configure the audited operator SSH account',
+      'Deliver the eligible integrated source through the enrolled controller',
+    ]);
+    const used = steps.filter((step) => typeof step.uses === 'string');
+    expect(used).toHaveLength(1);
+    expect(used[0]?.uses).toBe('tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8');
+    for (const step of steps) {
+      expect(step.run === undefined || typeof step.run === 'string').toBe(true);
+      expect(step.uses === undefined || typeof step.uses === 'string').toBe(true);
+      expect(Object.keys(step).sort()).toEqual(
+        Object.keys(step)
+          .filter((key) => ['name', 'uses', 'with', 'env', 'run'].includes(key))
+          .sort(),
+      );
+    }
+    const delivery = steps.filter((step) => (step.run ?? '').includes('ssh -i'));
     expect(delivery).toHaveLength(1);
     const command = delivery[0]?.run ?? '';
     expect(command).toContain('[[ "$SOURCE_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]');
@@ -175,7 +203,7 @@ describe('standard Timeweb release behavior', () => {
     const entry = readFileSync('deploy/timeweb/operator-entry.sh', 'utf8');
     expect(entry).toContain('IFS= read -r GH_TOKEN');
     expect(entry).toContain('case "$RUN_ID" in \'\'|*[!0-9]*)');
-    expect(entry).toContain('exec sudo -n --preserve-env=GH_TOKEN,PHUB_SOURCE_CI_RUN_ID');
+    expect(entry).toContain('exec /usr/bin/sudo -n --preserve-env=GH_TOKEN,PHUB_SOURCE_CI_RUN_ID');
     // The launcher takes the run id from the environment and rejects any argument.
     const launcher = readFileSync('deploy/timeweb/run-standard-delivery.sh', 'utf8');
     expect(launcher).toContain('[ "$#" -eq 0 ]');

@@ -7,7 +7,7 @@
 # the decimal run id is validated here. GH_TOKEN and the run id are the only values preserved across
 # sudo; the controller still receives the run id as its one positional argument.
 set -eu
-[ "$#" -eq 0 ]
+[ "$#" -eq 0 ] || { printf '%s\n' 'this launcher accepts no arguments' >&2; exit 64; }
 run_id="${PHUB_SOURCE_CI_RUN_ID:?}"
 case "$run_id" in ''|*[!0-9]*) exit 64 ;; esac
 exec /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
