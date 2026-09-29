@@ -31,9 +31,15 @@ feature owner's work. No product UI is changed by this infrastructure task.
 - Repository: Z6v6e6r/lk2; trusted source is exact successful first-attempt main push CI, with the
   stable pr-gate and both static and integration-quality jobs successful. The publisher still
   independently checks exact current main before building. PR-head CI is never reusable main proof.
-- Target: existing Timeweb beta Compose project and network from target.json. The enrolled operator
-  runs on that host, with fixed local Docker socket; no arbitrary SSH host, shell command or target
-  is accepted by the launcher. API must already be healthy; Realtime may remain absent, or must retain its existing healthy identity. Worker/Migrator stay off.
+- Target: existing Timeweb beta Compose project and network from target.json. The enrolled
+  controller runs on that host against the fixed local Docker socket. The delivery workflow never
+  addresses the host directly: it joins the operator tailnet, sends one token and one numeric run id
+  over stdin to a forced SSH entry, and that entry may only invoke the fixed launcher, which accepts
+  nothing but the run id. No arbitrary SSH host, shell command or target is accepted. API must
+  already be healthy; Realtime may remain absent, or must retain its existing healthy identity. The
+  migrator never runs, and a worker is only accepted when the installed `release.env` declares it,
+  its image is exactly the declared `WORKER_IMAGE_DIGEST`, and it stays identical through the whole
+  transition (the receipt records it as unchanged backend).
 - Pilot components: Web presentation and the bounded tuning of the already-installed safe-Web
   modules listed in `scripts/safe-web-boundary.js`. Presentation is proven copy/ARIA/bounded styling;
   safe-Web is proven structurally: its syntax is frozen and only literal values may change, with
@@ -110,7 +116,8 @@ These steps are intentionally not executed by the implementation task.
 2. Install a dedicated root-owned, full-history clone (never `--depth`) at
    `/opt/phub/timeweb-beta/standard/source`, detached at that exact reviewed source: the controller
    needs `git merge-base --is-ancestor` between the installed baseline and the candidate. Install its pinned npm dependencies with `npm ci --ignore-scripts`
-   during enrollment (never from candidate code during a run). Require root ownership and no
+   during enrollment (never from candidate code during a run); this requires npm on the host
+   alongside `/usr/bin/node`. Require root ownership and no
    group/world write for controller, dependencies, Git metadata and all parent paths. Keep the
    controller checkout unchanged; updates to it require a new critical review and enrollment.
    Install `deploy/timeweb/run-standard-delivery.sh` as root-owned 0755
@@ -118,14 +125,21 @@ These steps are intentionally not executed by the implementation task.
    Docker, gh and unzip. Enroll the existing root Docker read credential for immutable GHCR pulls.
    Configure `/etc/phub/timeweb-beta/standard-delivery.json` (root:root 0600) from the example with
    enabled=true, named owner and exact controllerSha. This config is standing authority.
-3. Enroll a dedicated trusted self-hosted Linux x64 Actions runner with label
-   `lk2-standard-operator`, restricted by runner group to **only** this repository's
-   `timeweb-standard-delivery.yaml` on protected main. Do not use it for PR code or other workflows.
-   Its account gets sudo only for the fixed launcher, with `GH_TOKEN` preservation; never generic
-   root shell/node/git/Docker rights. The controller always executes installed code, never checks
-   out or runs a candidate on this runner. Workflow token grants are actions write for publisher
-   dispatch, contents read and packages read; the token expires with the run and no production
-   secrets are passed into PR execution. Existing one-shot human reader-token policy is unchanged.
+3. Enroll the SSH operator transport instead of any privileged runner. Create an unprivileged
+   `operator` account on the host with no Docker group, no general sudo and no interactive shell.
+   Its `authorized_keys` entry forces `/home/operator/bin/operator-entry` (root-owned 0755,
+   `command="…",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding`). That entry reads
+   the token and the run id as two stdin lines, validates the id as decimal, and `exec`s
+   `sudo -n --preserve-env=GH_TOKEN /usr/local/sbin/phub-standard-delivery <run-id>`; sudoers grants
+   exactly `operator ALL=(root) NOPASSWD:SETENV: /usr/local/sbin/phub-standard-delivery *` and
+   nothing else. The operator key, the pinned host key, the tailnet host name and the tailnet auth
+   key live only in the `timeweb-standard-delivery` environment (`TIMEWEB_OPERATOR_SSH_KEY`,
+   `TIMEWEB_OPERATOR_KNOWN_HOSTS`, `TIMEWEB_OPERATOR_HOST`, `TAILSCALE_AUTHKEY`), so the job runs on
+   a GitHub-hosted runner and no self-hosted surface exists to be reached by another workflow. The
+   controller always executes installed code; the transport never checks out or runs a candidate.
+   Workflow token grants are actions write for publisher dispatch, contents read and packages read;
+   the token expires with the run and no production secrets are passed into PR execution. Existing
+   one-shot human reader-token policy is unchanged.
 4. Preserve required `pr-gate`, main protection and review of critical workflow/deploy/policy paths.
    Enable native auto-merge for eligible ready PRs and grant the named outcome owner standing
    authority to queue those merges. No arbitrary PR label grants production authority. Configure
@@ -135,9 +149,10 @@ These steps are intentionally not executed by the implementation task.
    `LK2_STANDARD_DELIVERY_ENABLED=true` last. Rehearse one synthetic eligible change and a forced
    Web-health failure on an isolated fixture before live enrollment, then observe the first pilot.
 
-GitHub settings, runner registration, sudo/host installation, baseline deployment and actual enable
-are external owner actions. Adding source files does none of them. If repository/plan capabilities
-cannot restrict runner workflow access, do not enroll a broadly accessible privileged runner.
+GitHub settings, sudo/host installation, baseline deployment and actual enable are external owner
+actions. Adding source files does none of them. This SSH transport exists precisely because a
+user-owned repository cannot scope a self-hosted runner to a single workflow: never enroll a broadly
+accessible privileged runner as a shortcut.
 
 ## Failure, observation and compatible recovery
 

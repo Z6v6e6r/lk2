@@ -114,20 +114,41 @@ function releaseId(value) {
   if (!/^[a-f0-9]{40}-[1-9][0-9]*-1$/.test(value ?? '')) fail('Invalid installed release identity');
   return value;
 }
-function assertInactiveWriters() {
-  for (const service of ['worker', 'migrator']) {
-    if (
-      docker([
-        'ps',
-        '-q',
-        '--filter',
-        'label=com.docker.compose.project=phub-timeweb-beta',
-        '--filter',
-        `label=com.docker.compose.service=${service}`,
-      ]).trim()
-    )
-      fail('Unexpected active writer');
-  }
+function runningServiceIds(service) {
+  return docker([
+    'ps',
+    '-q',
+    '--filter',
+    'label=com.docker.compose.project=phub-timeweb-beta',
+    '--filter',
+    `label=com.docker.compose.service=${service}`,
+  ]).trim();
+}
+
+/**
+ * The migrator is a migration writer and never runs while a Web release is delivered. A worker may
+ * run: this route installs nothing but Web, and the baseline check below binds a running worker to
+ * the installed release image and requires it to stay identical through the whole transition.
+ */
+function assertNoMigrator() {
+  if (runningServiceIds('migrator')) fail('Unexpected active writer');
+}
+
+export function inspectOptionalWorker(
+  readRunningIds = () => runningServiceIds('worker'),
+  inspectRunning = inspect,
+) {
+  return readRunningIds().trim() ? inspectRunning('worker') : null;
+}
+
+/**
+ * The baseline must describe itself truthfully: a worker may run only when the installed release
+ * declared `PHUB_WORKER_ENABLED=true`, and a running worker must be exactly the image that release
+ * declared. A declared-but-stopped or undeclared-but-running worker is drift and stops the release.
+ */
+export function workerBaselineIsConsistent(values, worker) {
+  if ((values.PHUB_WORKER_ENABLED === 'true') !== Boolean(worker)) return false;
+  return !worker || worker.image === `ghcr.io/z6v6e6r/phub-worker@${values.WORKER_IMAGE_DIGEST}`;
 }
 
 export function inspectOptionalRealtime(
@@ -321,10 +342,11 @@ async function main(ciRunId) {
   git(['fetch', '--no-tags', 'https://github.com/Z6v6e6r/lk2.git', 'main']);
   if (git(['rev-parse', 'FETCH_HEAD']) !== sha)
     fail('Main moved; next successful main run owns the release');
-  assertInactiveWriters();
+  assertNoMigrator();
   const api = inspect('api');
   const web = inspect('web');
   const realtime = inspectOptionalRealtime();
+  const worker = inspectOptionalWorker();
   const baselineId = releaseId(api.releaseId);
   const previousWebId = releaseId(web.releaseId);
   if (previousWebId.startsWith(`${sha}-`))
@@ -336,20 +358,23 @@ async function main(ciRunId) {
   const baselineEnv = `${ROOT}/releases/${baselineId}/release.env`;
   const baselineBytes = readSecure(baselineEnv);
   const values = parseEnv(baselineBytes);
+  // The baseline has to describe itself truthfully: the declared worker state must match reality,
+  // and a running worker must be exactly the image this release declared.
   if (
     values.PHUB_RELEASE_ID !== baselineId ||
     api.image !== `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}` ||
     (realtime &&
       realtime.image !== `ghcr.io/z6v6e6r/phub-realtime@${values.REALTIME_IMAGE_DIGEST}`) ||
-    values.PHUB_WORKER_ENABLED !== 'false' ||
-    values.PHUB_MIGRATOR_ENABLED !== 'false'
+    values.PHUB_MIGRATOR_ENABLED !== 'false' ||
+    !workerBaselineIsConsistent(values, worker)
   )
     fail('Installed baseline drift');
   const assertBackend = () => {
-    assertInactiveWriters();
+    assertNoMigrator();
     if (
       JSON.stringify(inspect('api')) !== JSON.stringify(api) ||
       JSON.stringify(inspectOptionalRealtime()) !== JSON.stringify(realtime) ||
+      JSON.stringify(inspectOptionalWorker()) !== JSON.stringify(worker) ||
       !readSecure(baselineEnv).equals(baselineBytes)
     )
       fail('Backend/configuration changed');
@@ -446,6 +471,9 @@ async function main(ciRunId) {
               installedBackend: {
                 api,
                 realtime,
+                // A running worker is attested too, so the receipt states what actually stayed
+                // unchanged instead of implying an all-off baseline.
+                worker,
                 baselineId,
                 baselineEnvSha256: sha256(baselineBytes),
               },

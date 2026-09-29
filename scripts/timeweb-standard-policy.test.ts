@@ -109,19 +109,37 @@ describe('standard Timeweb release behavior', () => {
       console.log(JSON.stringify(calls));`),
     ).toEqual(['pending', 'rollback-failed', 'STOP']);
   });
-  it('runs only the installed controller on the protected runner, never PR code', () => {
+  it('hands one validated run id to the enrolled controller without running candidate code', () => {
     const source = readFileSync('.github/workflows/timeweb-standard-delivery.yaml', 'utf8');
     const workflow = parse(source) as {
-      jobs: Record<string, { environment: string; steps: { run: string }[] }>;
+      jobs: Record<
+        string,
+        { environment: string; 'runs-on': string; steps: { name?: string; run?: string }[] }
+      >;
     };
-    expect(workflow.jobs['standard-web']?.environment).toBe('timeweb-standard-delivery');
+    const job = workflow.jobs['standard-web'];
+    expect(job?.environment).toBe('timeweb-standard-delivery');
+    // A GitHub-hosted transport: there is no privileged self-hosted surface left to protect.
+    expect(job?.['runs-on']).toBe('ubuntu-latest');
+    expect(source).not.toContain('self-hosted');
     expect(source).toContain("github.event.workflow_run.event == 'push'");
     expect(source).toContain('LK2_STANDARD_DELIVERY_ENABLED');
     expect(source).not.toContain('actions/checkout');
     expect(source).not.toContain('pull_request_target');
     expect(source).not.toContain('secrets: inherit');
-    expect(workflow.jobs['standard-web']?.steps[0]?.run).toContain(
-      '/usr/local/sbin/phub-standard-delivery',
+    const delivery = (job?.steps ?? []).filter((step) => (step.run ?? '').includes('ssh -i'));
+    expect(delivery).toHaveLength(1);
+    const command = delivery[0]?.run ?? '';
+    expect(command).toContain('[[ "$SOURCE_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]');
+    // The token and the run id travel over stdin: no inline secret, no remote command of its own.
+    expect(command).toContain(
+      `printf '%s\\n%s\\n' "$GH_TOKEN" "$SOURCE_CI_RUN_ID" | ssh -i ~/.ssh/operator`,
     );
+    expect(command).not.toMatch(/GH_TOKEN=\S/);
+    expect(command).not.toMatch(/ssh[^\n]*\b(node|npm|sh -c|bash -c)\b/);
+    // The forced operator entry and the fixed launcher are the host-side contract of this transport.
+    const runbook = readFileSync('docs/runbooks/timeweb-standard-delivery.md', 'utf8');
+    expect(runbook).toContain('/usr/local/sbin/phub-standard-delivery');
+    expect(runbook).toContain('operator-entry');
   });
 });
