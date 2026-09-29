@@ -1,4 +1,9 @@
 name: Standard Timeweb Web delivery
+# Transport only: a GitHub-hosted runner joins the operator tailnet and hands one validated run id to
+# the root-owned enrolled controller on the host. The job never checks out the repository, no
+# candidate or PR code runs anywhere in it, the delivery token travels over stdin, and the SSH
+# account is pinned to one forced entry that may only invoke the fixed launcher. Every source,
+# manifest, digest, readiness and rollback gate stays inside the enrolled controller.
 on:
   workflow_run:
     workflows: [Pull request checks]
@@ -18,20 +23,39 @@ jobs:
           github.event.workflow_run.conclusion == 'success' &&
           github.event.workflow_run.run_attempt == 1 }}
     environment: timeweb-standard-delivery
-    runs-on: [self-hosted, linux, x64, lk2-standard-operator]
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
       actions: write
       packages: read
     steps:
-      # No checkout or PR code runs on this privileged surface. The root-owned enrolled
-      # launcher/controller is independently installed after review, outside the workflow.
+      - name: Join the operator tailnet
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ping: ${{ secrets.TIMEWEB_OPERATOR_HOST }}
+      - name: Configure the audited operator SSH account
+        env:
+          OPERATOR_KEY: ${{ secrets.TIMEWEB_OPERATOR_SSH_KEY }}
+          OPERATOR_KNOWN_HOSTS: ${{ secrets.TIMEWEB_OPERATOR_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$OPERATOR_KEY" > ~/.ssh/operator
+          chmod 600 ~/.ssh/operator
+          printf '%s\n' "$OPERATOR_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
       - name: Deliver the eligible integrated source through the enrolled controller
         env:
           GH_TOKEN: ${{ github.token }}
+          OPERATOR_HOST: ${{ secrets.TIMEWEB_OPERATOR_HOST }}
           SOURCE_CI_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
           [[ "$SOURCE_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          sudo --preserve-env=GH_TOKEN /usr/local/sbin/phub-standard-delivery "$SOURCE_CI_RUN_ID"
+          # The two stdin lines are the token and the run id. No remote command is requested: the
+          # operator key has a forced entry, and the token never appears in an argument list, in the
+          # requested command or in a process table. It only travels over stdin.
+          printf '%s\n%s\n' "$GH_TOKEN" "$SOURCE_CI_RUN_ID" | ssh -i ~/.ssh/operator \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "phub-operator@$OPERATOR_HOST"
