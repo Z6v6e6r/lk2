@@ -169,6 +169,11 @@ export function chatWebpFileName(fileName: string): string {
  */
 let conversionChain: Promise<unknown> = Promise.resolve();
 
+/**
+ * Conversions run one at a time. A gallery selection would otherwise start as many full-size decodes
+ * as it has photos on one thread, and the sender would feel that as a stalled composer rather than as
+ * faster uploads.
+ */
 function serializeConversion<T>(task: () => Promise<T>): Promise<T> {
   // A failed conversion must not poison the chain for the next picture.
   const result = conversionChain.then(task, task);
