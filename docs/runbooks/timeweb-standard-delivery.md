@@ -151,8 +151,10 @@ These steps are intentionally not executed by the implementation task.
    PAM stack does not load `pam_shells` (stock Ubuntu does not), otherwise the login shell must be
    listed there too. Only then add the `authorized_keys` entry, as defence in depth, with
    `command="/home/phub-operator/bin/operator-entry",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-user-rc`.
-   The entry reads the token and the run id as two stdin lines, validates both, exports `GH_TOKEN`
-   and `PHUB_SOURCE_CI_RUN_ID`, and `exec`s
+   The entry reads the token and the run id as two stdin lines. It accepts the token as any printable
+   non-space byte string (an assumed alphabet rejected real GitHub tokens) and rejects whitespace or
+   control bytes with their byte codes; the run id must be decimal. It then exports `GH_TOKEN`
+   and `PHUB_SOURCE_CI_RUN_ID` and `exec`s
    `sudo -n --preserve-env=GH_TOKEN,PHUB_SOURCE_CI_RUN_ID /usr/local/sbin/phub-standard-delivery`
    with **no arguments**: sudoers cannot express a wildcard argument safely, and the launcher
    validates the decimal run id itself. sudoers grants exactly
