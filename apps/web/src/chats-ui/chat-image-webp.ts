@@ -31,6 +31,11 @@ export const CHAT_IMAGE_WEBP_QUALITY = 0.82;
  * Decoding happens on the sender's device, so an absurd header must never cause an unbounded
  * allocation. A picture above this budget is uploaded untouched instead of being converted; the
  * value mirrors the station-support `limitInputPixels` guard.
+ *
+ * The three exported literals above are the module's tuned surface: the Web-only delivery class
+ * freezes this file's structure and verifies that only literal values moved, so retuning upload size
+ * or quality stays a bounded Web release while a new function, import or branch returns the change to
+ * the full critical route.
  */
 export const CHAT_IMAGE_WEBP_MAX_PIXELS = 40_000_000;
 
