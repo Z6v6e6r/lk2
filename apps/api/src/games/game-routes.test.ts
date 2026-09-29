@@ -2,6 +2,7 @@ import { loadConfig } from '@phub/config';
 import type {
   CreateStoredGameInput,
   GameRepository,
+  GameTestCourtRepository,
   GameRosterRepository,
   GameRosterUserCommandInput,
 } from '@phub/database';
@@ -131,12 +132,14 @@ function managementRepository(
 async function appWith(
   repositoryValue: UserRosterRepository,
   managementRepositoryValue?: UserManagementRepository,
+  testCourtRepository?: GameTestCourtRepository,
 ) {
   const app = await buildApp({
     config,
     logger: createLogger('games-api-test', 'silent'),
     pool: fakePool(),
     gameRosterRepository: repositoryValue,
+    ...(testCourtRepository ? { gameTestCourtRepository: testCourtRepository } : {}),
     ...(managementRepositoryValue ? { gameCommandRepository: managementRepositoryValue } : {}),
   });
   apps.push(app);
@@ -148,6 +151,47 @@ afterEach(async () => {
 });
 
 describe('Games management User API', () => {
+  it('returns an empty tester catalogue by default with no public cache', async () => {
+    const app = await appWith(repository());
+    const response = await app.inject({
+      url: '/user/api/v1/local-padel/games/test-courts',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [] });
+    expect(response.headers['cache-control']).toBe('private, no-store');
+    expect((await app.inject('/user/api/v1/local-padel/games/test-courts')).statusCode).toBe(401);
+  });
+
+  it.each(['join', 'waitlist'])(
+    'checks current stored test access before %s, including repository replays',
+    async (endpoint) => {
+      const roster = repository();
+      const canJoin = vi.fn().mockResolvedValue(false);
+      const app = await appWith(roster, undefined, {
+        canJoin,
+        hasAccess: vi.fn().mockResolvedValue(false),
+        list: vi.fn().mockResolvedValue([]),
+      });
+      const response = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/games/${gameId}/${endpoint}`,
+        headers: {
+          authorization: `Bearer ${await accessToken()}`,
+          'idempotency-key': 'test-court-replayed-0001',
+          'x-correlation-id': '71587e84-6fbe-4419-84ef-f915909c64f1',
+        },
+        payload: {},
+      });
+      expect(response.statusCode).toBe(404);
+      expect(canJoin).toHaveBeenCalledWith(tenantId, userId, gameId, {
+        commandType: endpoint === 'join' ? 'game.join.v1' : 'game.waitlist.join.v1',
+        correlationId: '71587e84-6fbe-4419-84ef-f915909c64f1',
+      });
+      expect(roster.join).not.toHaveBeenCalled();
+      expect(roster.joinWaitlist).not.toHaveBeenCalled();
+    },
+  );
   it('creates only a free game and derives actor, tenant and cutoff at the API boundary', async () => {
     const create = vi.fn().mockResolvedValue({
       outcome: 'applied',

@@ -23,6 +23,22 @@ const validEnvironment = {
 } as const;
 
 describe('loadConfig', () => {
+  it('enables test courts only in staging with Games commands, and defaults to disabled', () => {
+    expect(loadConfig(validEnvironment).GAMES_TEST_COURTS_ENABLED).toBe(false);
+    const enabled = {
+      ...validEnvironment,
+      GAMES_TEST_COURTS_ENABLED: 'true',
+      GAMES_READ_ENABLED: 'true',
+      GAMES_COMMANDS_ENABLED: 'true',
+    };
+    expect(loadConfig({ ...enabled, APP_ENV: 'staging' }).GAMES_TEST_COURTS_ENABLED).toBe(true);
+    for (const APP_ENV of ['local', 'ci', 'production']) {
+      expect(() => loadConfig({ ...enabled, APP_ENV })).toThrow();
+    }
+    expect(() =>
+      loadConfig({ ...enabled, APP_ENV: 'staging', GAMES_COMMANDS_ENABLED: 'false' }),
+    ).toThrow('GAMES_TEST_COURTS_ENABLED requires');
+  });
   it('parses safe defaults', () => {
     expect(loadConfig(validEnvironment)).toMatchObject({
       APP_ENV: 'ci',

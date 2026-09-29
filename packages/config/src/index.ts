@@ -143,6 +143,7 @@ const environmentSchema = z.object({
   HOME_READ_MODE: z.enum(['mock', 'projection']).default('mock'),
   GAMES_READ_ENABLED: booleanFromEnvironment,
   GAMES_COMMANDS_ENABLED: booleanFromEnvironment,
+  GAMES_TEST_COURTS_ENABLED: booleanFromEnvironment,
   SUBSCRIPTION_RUNTIME_WARN_MODE: z.enum(['OFF', 'WARN']).default('OFF'),
   SUBSCRIPTION_RUNTIME_BASE_URL: z.string().url().optional(),
   SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: z.string().min(32).optional(),
@@ -683,6 +684,12 @@ export function loadConfig(
 
   if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_READ_ENABLED) {
     throw new Error('GAMES_READ_ENABLED is staging-only until the Games production gate passes');
+  }
+  if (
+    parsed.data.GAMES_TEST_COURTS_ENABLED &&
+    (parsed.data.APP_ENV !== 'staging' || !parsed.data.GAMES_COMMANDS_ENABLED)
+  ) {
+    throw new Error('GAMES_TEST_COURTS_ENABLED requires staging and GAMES_COMMANDS_ENABLED=true');
   }
   if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_COMMANDS_ENABLED) {
     throw new Error(

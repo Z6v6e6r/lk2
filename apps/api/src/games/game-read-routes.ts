@@ -1,5 +1,6 @@
 import type { GameRepository, ProfileSummaryRepository } from '@phub/database';
 import { GAME_KINDS, GAME_PLAYER_LEVELS, type GameKind, type GamePlayerLevel } from '@phub/games';
+import type { GameTestCourtRepository } from '@phub/database';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
@@ -173,6 +174,7 @@ export function registerGameReadRoutes(
   app: FastifyInstance,
   options: {
     readonly repository?: CardReadRepository;
+    readonly testCourtRepository?: GameTestCourtRepository;
     readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'> &
       Partial<Pick<ProfileSummaryRepository, 'getDisplayNames' | 'getLevelValues'>>;
     /**
@@ -246,6 +248,9 @@ export function registerGameReadRoutes(
       if (!current || !options.repository) return unavailable(request, reply);
       try {
         return await listViewerGameCards({
+          ...(options.testCourtRepository
+            ? { testCourtRepository: options.testCourtRepository }
+            : {}),
           repository: options.repository,
           ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
           ...(options.conversationReader ? { conversationReader: options.conversationReader } : {}),
@@ -275,6 +280,9 @@ export function registerGameReadRoutes(
       if (!currentGameId) return reply;
       if (!current || !options.repository) return unavailable(request, reply);
       const game = await getViewerGameCard({
+        ...(options.testCourtRepository
+          ? { testCourtRepository: options.testCourtRepository }
+          : {}),
         repository: options.repository,
         ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
         ...(options.conversationReader ? { conversationReader: options.conversationReader } : {}),

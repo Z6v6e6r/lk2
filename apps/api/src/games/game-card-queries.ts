@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isRestrictedGameTestCourt, type GameTestCourtRepository } from '@phub/database';
 
 import type {
   GameConversationSummary,
@@ -263,6 +264,7 @@ export async function listPublicGameCards(input: {
     });
     for (const projection of page.items) {
       lastScanned = projection;
+      if (isRestrictedGameTestCourt(input.tenantId, projection.basePayload.court?.id)) continue;
       const card = projectPublicGameCard(
         enrichGameCardProfiles(projection, input.tenantId, profileData),
         {
@@ -304,7 +306,11 @@ export async function getPublicGameCard(input: {
   readonly now: string;
 }): Promise<PublicGameCardView | undefined> {
   const projection = await input.repository.getCardProjection(input.tenantId, input.gameId);
-  if (!projection || projection.visibility !== 'PUBLIC') {
+  if (
+    !projection ||
+    projection.visibility !== 'PUBLIC' ||
+    isRestrictedGameTestCourt(input.tenantId, projection.basePayload.court?.id)
+  ) {
     return undefined;
   }
   const profileData = await profileDataForProjections({
@@ -319,6 +325,7 @@ export async function getPublicGameCard(input: {
 }
 
 export async function listViewerGameCards(input: {
+  readonly testCourtRepository?: GameTestCourtRepository;
   readonly repository: CardReadRepository;
   readonly photoRepository?: CardProfileRepository;
   readonly conversationReader?: GameConversationReader;
@@ -339,12 +346,21 @@ export async function listViewerGameCards(input: {
     ...(after ? { after: { startsAt: after.startsAt, gameId: after.gameId } } : {}),
   });
   const surface = input.scope === 'HISTORY' ? 'HISTORY' : 'MY_UPCOMING';
+  const hasRestricted = page.items.some((p) =>
+    isRestrictedGameTestCourt(input.tenantId, p.basePayload.court?.id),
+  );
+  const testAccess =
+    hasRestricted &&
+    (await input.testCourtRepository?.hasAccess(input.tenantId, input.viewerUserId)) === true;
   const profileData = await profileDataForProjections({
     ...(input.photoRepository ? { repository: input.photoRepository } : {}),
     tenantId: input.tenantId,
     projections: page.items,
   });
   const cards = page.items
+    .filter(
+      (p) => !isRestrictedGameTestCourt(input.tenantId, p.basePayload.court?.id) || testAccess,
+    )
     .map((projection) =>
       projectGameCard(enrichGameCardProfiles(projection, input.tenantId, profileData), {
         surface,
@@ -366,6 +382,7 @@ export async function listViewerGameCards(input: {
 }
 
 export async function getViewerGameCard(input: {
+  readonly testCourtRepository?: GameTestCourtRepository;
   readonly repository: CardReadRepository;
   readonly photoRepository?: CardProfileRepository;
   readonly conversationReader?: GameConversationReader;
@@ -376,6 +393,12 @@ export async function getViewerGameCard(input: {
 }): Promise<ViewerGameCard | undefined> {
   const projection = await input.repository.getCardProjection(input.tenantId, input.gameId);
   if (!projection) return undefined;
+  const restricted = isRestrictedGameTestCourt(input.tenantId, projection.basePayload.court?.id);
+  if (
+    restricted &&
+    !(await input.testCourtRepository?.hasAccess(input.tenantId, input.viewerUserId))
+  )
+    return undefined;
   const history =
     projection.lifecycleState === 'FINISHED' || projection.lifecycleState === 'CANCELLED';
   const profileData = await profileDataForProjections({
@@ -392,11 +415,18 @@ export async function getViewerGameCard(input: {
   if (
     relation === 'ANONYMOUS' ||
     (relation === 'NONE' &&
-      (projection.visibility !== 'PUBLIC' || projection.lifecycleState !== 'SCHEDULED'))
+      ((!restricted && projection.visibility !== 'PUBLIC') ||
+        projection.lifecycleState !== 'SCHEDULED'))
   ) {
     return undefined;
   }
-  const surface = history ? 'HISTORY' : relation === 'NONE' ? 'DISCOVER' : 'MY_UPCOMING';
+  const surface = history
+    ? 'HISTORY'
+    : relation === 'NONE'
+      ? restricted
+        ? 'INVITE'
+        : 'DISCOVER'
+      : 'MY_UPCOMING';
   const card = projectGameCard(payload, {
     surface,
     now: input.now,

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createGameRepository } from './game-repository.js';
+import {
+  GAME_TEST_COURT_SCOPE as testScope,
+  GAME_TEST_COURT_PUBLIC_FILTER,
+} from './game-repository.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const actorUserId = '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca';
@@ -37,7 +41,7 @@ const gameRow = {
   updated_at: '2026-07-17T12:00:00.000Z',
 } as const;
 
-function createInput() {
+function createInput(includeLevels = true) {
   return {
     tenantId,
     actorUserId,
@@ -55,8 +59,7 @@ function createInput() {
     waitlistEnabled: true,
     joinCutoffAt: gameRow.join_cutoff_at,
     paymentMode: 'SPLIT' as const,
-    levelFrom: 'C' as const,
-    levelTo: 'B' as const,
+    ...(includeLevels ? { levelFrom: 'C' as const, levelTo: 'B' as const } : {}),
   };
 }
 
@@ -100,6 +103,93 @@ function poolWithHandler(
 }
 
 describe('game repository', () => {
+  it.each(['disabled', 'ungranted', 'wrong-station', 'public', 'paid', 'rating'] as const)(
+    'rejects test-court creation without any business write: %s',
+    async (scenario) => {
+      const { pool, query } = poolWithHandler((sql) => ({
+        rows:
+          sql.includes('identity.user_access_profiles') && scenario !== 'ungranted'
+            ? [{ granted: 1 }]
+            : [],
+      }));
+      const result = await createGameRepository(pool as never, {
+        testCourtsEnabled: scenario !== 'disabled',
+      }).create({
+        ...createInput(),
+        tenantId: testScope.tenantId,
+        stationId: scenario === 'wrong-station' ? gameRow.station_id : testScope.stationId,
+        courtId: testScope.courts[0].id,
+        visibility: scenario === 'public' ? 'PUBLIC' : 'PRIVATE',
+        paymentMode: scenario === 'paid' ? 'SUBSCRIPTION' : 'NO_PAYMENT',
+        kind: scenario === 'rating' ? 'RATING' : 'FRIENDLY',
+      });
+      expect(result).toEqual({ outcome: 'rejected', code: 'GAME_LOCATION_INVALID' });
+      expect(
+        query.mock.calls.some(
+          ([sql]) =>
+            /\b(insert|update|delete)\b/i.test(sql) && !sql.includes('insert into audit.audit_log'),
+        ),
+      ).toBe(false);
+      expect(
+        query.mock.calls.filter(([sql]) => sql.includes('insert into audit.audit_log')),
+      ).toHaveLength(1);
+    },
+  );
+
+  it('creates the exact granted private test-court pair without provider provisioning', async () => {
+    const { pool, query } = poolWithHandler((sql) => {
+      if (sql.includes('identity.user_access_profiles')) return { rows: [{ granted: 1 }] };
+      if (sql.includes('insert into games.games'))
+        return {
+          rows: [
+            {
+              ...gameRow,
+              tenant_id: testScope.tenantId,
+              station_id: testScope.stationId,
+              court_id: testScope.courts[0].id,
+              visibility: 'PRIVATE',
+              lifecycle_state: 'SCHEDULED',
+              payment_mode: 'NO_PAYMENT',
+              level_from: null,
+              level_to: null,
+            },
+          ],
+        };
+      return { rows: [] };
+    });
+    const request = createInput(false);
+    expect(
+      await createGameRepository(pool as never, { testCourtsEnabled: true }).create({
+        ...request,
+        tenantId: testScope.tenantId,
+        stationId: testScope.stationId,
+        courtId: testScope.courts[0].id,
+        visibility: 'PRIVATE',
+        paymentMode: 'NO_PAYMENT',
+      }),
+    ).toMatchObject({ outcome: 'applied' });
+    expect(query.mock.calls.some(([sql]) => sql.includes("'game.provisioning.advance.v1'"))).toBe(
+      false,
+    );
+  });
+
+  it('excludes test courts before public and recommendation limits even with the pilot disabled', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }));
+    const repo = createGameRepository(pool as never);
+    await repo.listPublicCardProjections({ tenantId: testScope.tenantId, limit: 10 });
+    await repo.listRecommendationCardProjections({
+      tenantId: testScope.tenantId,
+      viewerUserId: actorUserId,
+      candidateLimit: 10,
+      historyLimit: 10,
+    });
+    const reads = query.mock.calls.filter(([sql]) => sql.includes("visibility = 'PUBLIC'"));
+    expect(reads).toHaveLength(2);
+    for (const [sql] of reads) {
+      expect(sql).toContain(GAME_TEST_COURT_PUBLIC_FILTER);
+      expect(sql.indexOf(GAME_TEST_COURT_PUBLIC_FILTER)).toBeLessThan(sql.indexOf('limit'));
+    }
+  });
   it.each([undefined, '2026-07-31'])(
     'bounds recommendation candidates by Moscow date before LIMIT: %s',
     async (localDate) => {
@@ -643,7 +733,7 @@ describe('game repository', () => {
     expect(call?.[0]).toContain('::timestamptz > now()');
     expect(call?.[0]).toContain('(starts_at, game_id) <');
     expect(call?.[0]).toContain('order by starts_at desc, game_id desc');
-    expect(call?.[1]).toEqual([tenantId, actorUserId, gameRow.starts_at, gameId, 21]);
+    expect(call?.[1]).toEqual([tenantId, actorUserId, gameRow.starts_at, gameId, 21, false]);
   });
 
   it('reports projection lag through a bounded tenant-scoped read-only scan', async () => {

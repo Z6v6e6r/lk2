@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { GAME_TEST_COURT_SCOPE as testScope } from './game-repository.js';
 
 import { createGameRosterRepository } from './game-roster-repository.js';
 
@@ -147,6 +148,38 @@ function baseHandler(
 }
 
 describe('game roster repository', () => {
+  it.each(['join', 'joinWaitlist'] as const)(
+    'denies a known test game through %s without the stored grant',
+    async (command) => {
+      const { pool, query } = poolWithHandler((sql) => {
+        if (sql.includes('from games.games') && sql.includes('for update'))
+          return {
+            rows: [
+              {
+                ...lockedGame(),
+                station_id: testScope.stationId,
+                court_id: testScope.courts[0].id,
+              },
+            ],
+          };
+        return baseHandler(sql);
+      });
+      const result = await createGameRosterRepository(pool as never, { testCourtsEnabled: true })[
+        command
+      ](input({ tenantId: testScope.tenantId }));
+      expect(result).toEqual({ outcome: 'rejected', code: 'GAME_NOT_FOUND', replayed: false });
+      expect(
+        query.mock.calls.some(
+          ([sql]) =>
+            /\b(insert|update|delete)\s+(into|games\.|outbox\.|audit\.)/i.test(sql) &&
+            !sql.includes('insert into audit.audit_log'),
+        ),
+      ).toBe(false);
+      expect(
+        query.mock.calls.filter(([sql]) => sql.includes('insert into audit.audit_log')),
+      ).toHaveLength(1);
+    },
+  );
   it('confirms a no-payment join and emits roster completion under one locked transaction', async () => {
     const { pool, query } = poolWithHandler((text) => {
       if (text.includes('insert into games.participations')) {
@@ -911,6 +944,79 @@ describe('game roster repository', () => {
       ),
     ).toBe(true);
   });
+
+  it.each(['revoked', 'disabled', 'mispaired', 'allowed'] as const)(
+    'rechecks test-court access under locks before waitlist promotion: %s',
+    async (scenario) => {
+      const nextEntryId = '8527d5e1-da33-464a-94c7-ace34a11e295';
+      const { pool, query } = poolWithHandler((sql) => {
+        if (sql.includes('from games.games') && sql.includes('for update')) {
+          expect(sql).toContain('station_id, court_id');
+          return {
+            rows: [
+              {
+                ...lockedGame(),
+                station_id: scenario === 'mispaired' ? gameId : testScope.stationId,
+                court_id: testScope.courts[0].id,
+              },
+            ],
+          };
+        }
+        if (sql.includes('identity.user_access_profiles'))
+          return { rows: scenario === 'revoked' ? [] : [{ granted: 1 }] };
+        if (sql.includes('from games.waitlist_entries') && sql.includes('min(position)'))
+          return {
+            rows: [
+              {
+                id: waitlistEntryId,
+                user_id: playerId,
+                position: '1',
+                state: 'ACTIVE',
+                personal_invitation_id: null,
+              },
+            ],
+          };
+        if (sql.includes('from games.waitlist_entries') && sql.includes('skip locked'))
+          return { rows: [{ id: nextEntryId }] };
+        if (sql.includes('insert into games.participations'))
+          return { rows: [{ id: participationId }] };
+        if (sql.includes('array_agg(user_id'))
+          return { rows: [{ user_ids: [organizerId, playerId] }] };
+        return baseHandler(sql);
+      });
+      await expect(
+        createGameRosterRepository(pool as never, {
+          testCourtsEnabled: scenario !== 'disabled',
+        }).promoteWaitlist({
+          tenantId: testScope.tenantId,
+          gameId,
+          commandId: '5c495f29-c3e6-426f-a855-28301b447152',
+          idempotencyKey: 'test-court-promote-0001',
+          requestHash: 'd'.repeat(64),
+          correlationId: 'corr-test-court-promote-0001',
+          waitlistEntryId,
+        }),
+      ).resolves.toMatchObject({ outcome: 'applied', revision: 2 });
+      expect(
+        query.mock.calls.some(([sql]) => sql.includes('insert into games.participations')),
+      ).toBe(scenario === 'allowed');
+      expect(query.mock.calls.some(([sql]) => sql.includes("set state = 'EXPIRED'"))).toBe(
+        scenario !== 'allowed',
+      );
+      if (scenario !== 'allowed') {
+        expect(
+          query.mock.calls.find(([sql]) =>
+            sql.includes('insert into games.scheduled_commands'),
+          )?.[1],
+        ).toEqual([
+          testScope.tenantId,
+          gameId,
+          2,
+          JSON.stringify({ waitlistEntryId: nextEntryId }),
+        ]);
+      }
+    },
+  );
 
   it('promotes only the selected first waitlist entry into the available seat', async () => {
     const commandId = '5c495f29-c3e6-426f-a855-28301b447152';

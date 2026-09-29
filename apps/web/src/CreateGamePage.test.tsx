@@ -123,6 +123,65 @@ afterEach(() => {
 });
 
 describe('CreateGamePage durable create recovery', () => {
+  it('offers only server-returned test courts and creates a private game on the selected court', async () => {
+    const createGame = vi.fn<AuthGateway['createGame']>().mockResolvedValue(result());
+    const user = userEvent.setup();
+    const courtId = '55555555-5555-4555-8555-555555555555';
+    const api = {
+      ...gateway(createGame),
+      listGameTestCourts: vi
+        .fn()
+        .mockResolvedValue({ items: [{ id: courtId, stationId, title: 'Тестовый корт 1' }] }),
+    };
+    page(createGame, { api, navigate: vi.fn() });
+    await user.selectOptions(await screen.findByLabelText('Тестовый корт'), courtId);
+    expect(screen.getByLabelText('Доступ')).toHaveValue('PRIVATE');
+    expect(screen.getByLabelText('Доступ')).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await waitFor(() => expect(createGame).toHaveBeenCalledOnce());
+    expect(createGame.mock.calls[0]?.[0]).toMatchObject({
+      courtId,
+      stationId,
+      visibility: 'PRIVATE',
+      paymentMode: 'NO_PAYMENT',
+    });
+  });
+
+  it('retains the exact court and idempotency key when a saved attempt outlives catalogue access', async () => {
+    const courtId = '55555555-5555-4555-8555-555555555555';
+    const payload = { ...savedPayload(), courtId, visibility: 'PRIVATE' as const };
+    const pending = await prepareCreateGameAttempt(
+      principal,
+      payload,
+      window.localStorage,
+      locks(),
+      {
+        createIdempotencyKey: () => 'test-court-recovery-key-0001',
+      },
+    );
+    if (pending.state !== 'PENDING') throw new Error('expected pending attempt');
+    const createGame = vi
+      .fn<AuthGateway['createGame']>()
+      .mockRejectedValue(new TypeError('offline'));
+    const user = userEvent.setup();
+    page(createGame, {
+      api: { ...gateway(createGame), listGameTestCourts: vi.fn().mockResolvedValue({ items: [] }) },
+    });
+    expect(await screen.findByText(/Сохранённый корт оставлен/)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await waitFor(() => expect(createGame).toHaveBeenCalledOnce());
+    expect(createGame.mock.calls[0]?.[0]).toEqual(payload);
+    expect(createGame.mock.calls[0]?.[1]?.idempotencyKey).toBe(pending.idempotencyKey);
+  });
+
+  it('does not show the test-court picker when the server grants no courts', async () => {
+    const createGame = vi.fn<AuthGateway['createGame']>();
+    const listGameTestCourts = vi.fn().mockResolvedValue({ items: [] });
+    page(createGame, { api: { ...gateway(createGame), listGameTestCourts } });
+    await screen.findByRole('option', { name: 'Селигерская' });
+    expect(listGameTestCourts).toHaveBeenCalledOnce();
+    expect(screen.queryByLabelText('Тестовый корт')).not.toBeInTheDocument();
+  });
   it('submits once, resolves the attempt and opens a normally created game', async () => {
     const command = deferred<GameCommandResult>();
     const createGame = vi.fn<AuthGateway['createGame']>().mockReturnValue(command.promise);

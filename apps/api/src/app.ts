@@ -35,6 +35,7 @@ import type {
   GameResultRepository,
   GameRosterRepository,
   GameRepository,
+  GameTestCourtRepository,
   GiftCertificateCatalogRepository,
   GiftCertificateIssuanceRepository,
   GiftCertificateMediaRepository,
@@ -256,6 +257,7 @@ export interface BuildAppOptions {
     GameRepository,
     'create' | 'cancel' | 'getManagementOperation'
   >;
+  readonly gameTestCourtRepository?: GameTestCourtRepository;
   readonly gameReadRepository?: Pick<
     GameRepository,
     'getCardProjection' | 'listPublicCardProjections' | 'listViewerCardProjections'
@@ -1003,6 +1005,9 @@ export async function buildApp(options: BuildAppOptions) {
     },
   });
   registerGameRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameTestCourtRepository
+      ? { testCourtRepository: options.gameTestCourtRepository }
+      : {}),
     ...(options.gameRosterRepository ? { repository: options.gameRosterRepository } : {}),
     ...(options.gameCommandRepository
       ? { managementRepository: options.gameCommandRepository }
@@ -1081,6 +1086,9 @@ export async function buildApp(options: BuildAppOptions) {
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });
   registerGameReadRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameTestCourtRepository
+      ? { testCourtRepository: options.gameTestCourtRepository }
+      : {}),
     ...(options.gameReadRepository ? { repository: options.gameReadRepository } : {}),
     ...(options.profilePhotoMediaRepository
       ? { photoRepository: options.profilePhotoMediaRepository }
