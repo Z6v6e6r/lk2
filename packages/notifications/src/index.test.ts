@@ -10,10 +10,10 @@ import {
   GAME_NOTIFICATION_EVENT_TYPES,
   GAME_NOTIFICATION_REQUEST_HASH,
   MAX_NOTIFICATION_EVENT_RECIPIENTS,
+  MESSAGING_NOTIFICATION_CATEGORIES,
   MESSAGING_NOTIFICATION_DEFINITIONS,
   MESSAGING_NOTIFICATION_EVENT_TYPES,
   MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE,
-  MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY,
   MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS,
   MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
   MESSAGING_NOTIFICATION_TEMPLATE_VERSION,
@@ -459,6 +459,7 @@ describe('notification domain contracts', () => {
       correlationId: 'messaging-notification-test',
       payload: {
         conversationId,
+        conversationKind: 'DIRECT',
         messageId: '66666666-6666-4666-8666-666666666666',
         sequence: 4,
         recipientUserIds: [firstRecipient, secondRecipient, firstRecipient],
@@ -487,22 +488,114 @@ describe('notification domain contracts', () => {
       body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
       deepLink: `/chats/${conversationId}`,
     });
-    expect(MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY).toBe('MESSAGING');
   });
 
-  it('keeps one ruleset definition per direct-chat source event', () => {
-    expect(
-      MESSAGING_NOTIFICATION_DEFINITIONS.map((definition) => definition.sourceEventType),
-    ).toEqual([...MESSAGING_NOTIFICATION_EVENT_TYPES]);
+  it('routes every chat source event into a per-context category', () => {
+    expect(MESSAGING_NOTIFICATION_CATEGORIES).toEqual(['CHAT_DIRECT', 'CHAT_GAME']);
+    // One definition per context and source event: two contexts times two chat facts.
+    expect(MESSAGING_NOTIFICATION_DEFINITIONS).toHaveLength(4);
     for (const definition of MESSAGING_NOTIFICATION_DEFINITIONS) {
-      expect(definition.audienceSelector).toEqual({
+      expect(MESSAGING_NOTIFICATION_EVENT_TYPES).toContain(definition.sourceEventType);
+      expect(MESSAGING_NOTIFICATION_CATEGORIES).toContain(definition.category);
+      expect(definition.audienceSelector).toMatchObject({
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
       });
-      // Chat notifications are optional: a player can mute the category.
+      expect(definition.audienceSelector.match.oneOf).toHaveLength(1);
+      // Chat notifications are optional: a player can mute one context.
       expect(definition.mandatory).toBe(false);
     }
     expect(MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
+    const categoriesByEvent = new Map<string, string[]>();
+    for (const definition of MESSAGING_NOTIFICATION_DEFINITIONS) {
+      categoriesByEvent.set(definition.sourceEventType, [
+        ...(categoriesByEvent.get(definition.sourceEventType) ?? []),
+        definition.category,
+      ]);
+    }
+    expect([...categoriesByEvent.entries()]).toEqual([
+      ['messaging.conversation.created.v1', ['CHAT_DIRECT', 'CHAT_GAME']],
+      ['messaging.message.created.v1', ['CHAT_DIRECT', 'CHAT_GAME']],
+    ]);
+  });
+
+  it('withholds recipients when the payload does not carry the configured chat context', () => {
+    const firstRecipient = '44444444-4444-4444-8444-444444444444';
+    const directMessage = notificationSourceEventSchema.parse({
+      id: '11111111-1111-4111-8111-111111111111',
+      type: 'messaging.message.created.v1',
+      aggregateId: '22222222-2222-4222-8222-222222222222',
+      tenantId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: '2026-09-17T12:00:00.000Z',
+      correlationId: 'messaging-context-match-test',
+      payload: {
+        conversationId: '22222222-2222-4222-8222-222222222222',
+        conversationKind: 'DIRECT',
+        messageId: '66666666-6666-4666-8666-666666666666',
+        sequence: 4,
+        recipientUserIds: [firstRecipient],
+      },
+    });
+    const gameSelector = notificationAudienceSelectorSchema.parse({
+      type: 'EVENT_USERS',
+      field: 'recipientUserIds',
+      match: { field: 'conversationKind', oneOf: ['GAME'] },
+    });
+    const directSelector = notificationAudienceSelectorSchema.parse({
+      type: 'EVENT_USERS',
+      field: 'recipientUserIds',
+      match: { field: 'conversationKind', oneOf: ['DIRECT'] },
+    });
+
+    expect(resolveNotificationRecipients(directMessage, gameSelector)).toEqual([]);
+    expect(resolveNotificationRecipients(directMessage, directSelector)).toEqual([firstRecipient]);
+
+    // A rule whose fact is absent, of the wrong type or outside the configured list resolves nobody:
+    // a notification must never reach a context the rule was not provisioned for.
+    const withoutKind = notificationSourceEventSchema.parse({
+      id: '11111111-1111-4111-8111-111111111112',
+      type: 'messaging.message.created.v1',
+      aggregateId: '22222222-2222-4222-8222-222222222222',
+      tenantId: '33333333-3333-4333-8333-333333333333',
+      occurredAt: '2026-09-17T12:00:01.000Z',
+      correlationId: 'messaging-context-match-without-kind',
+      payload: {
+        conversationId: '22222222-2222-4222-8222-222222222222',
+        messageId: '66666666-6666-4666-8666-666666666666',
+        sequence: 5,
+        recipientUserIds: [firstRecipient],
+      },
+    });
+    expect(resolveNotificationRecipients(withoutKind, gameSelector)).toEqual([]);
+    const numericKind = notificationSourceEventSchema.parse({
+      ...directMessage,
+      payload: { ...directMessage.payload, conversationKind: 7 },
+    });
+    expect(resolveNotificationRecipients(numericKind, gameSelector)).toEqual([]);
+  });
+
+  it('rejects an audience match that is not a field/oneOf pair', () => {
+    expect(
+      notificationAudienceSelectorSchema.safeParse({
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+        match: { field: 'conversationKind', oneOf: [] },
+      }).success,
+    ).toBe(false);
+    expect(
+      notificationAudienceSelectorSchema.safeParse({
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+        match: { field: 'conversationKind', oneOf: ['DIRECT'], extra: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      notificationAudienceSelectorSchema.safeParse({
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+        match: { field: '1invalid', oneOf: ['DIRECT'] },
+      }).success,
+    ).toBe(false);
   });
 
   it('addresses an incoming friend request to the player who has to answer it', () => {
@@ -562,8 +655,10 @@ describe('notification domain contracts', () => {
     }
   });
 
-  it('requests the durable inbox item and the optional push for a direct-chat event', () => {
-    expect(MESSAGING_NOTIFICATION_TEMPLATE_VERSION).toBe(2);
+  it('requests the durable inbox item and the optional push for a chat event', () => {
+    // v3 moves the template version with the split into per-context categories: a provisioned
+    // template version can never change its category, and v2 templates were all `MESSAGING`.
+    expect(MESSAGING_NOTIFICATION_TEMPLATE_VERSION).toBe(3);
     expect(MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS).toEqual(['IN_APP', 'PUSH']);
     expect(MESSAGING_NOTIFICATION_RULE_CHANNEL_OVERRIDE).toEqual(['IN_APP', 'PUSH']);
     // The push payload is rendered from the same snapshot; no message text is part of it.

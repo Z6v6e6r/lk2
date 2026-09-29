@@ -45,7 +45,7 @@ enabling chats.
 7. Enable in-app notification intents/inbox, then one trigger rule with a synthetic audience.
 8. Enable push one platform at a time: Web Push sandbox, APNs sandbox, FCM test project, then the
    corresponding production account. Never switch all platforms in one change window. Chat push needs
-   the `messaging.ru-ru.v2` ruleset as well; follow
+   the `messaging.ru-ru.v3` ruleset as well; follow
    [Messaging chat push prerequisites and acceptance](#messaging-chat-push-prerequisites-and-acceptance)
    after the Web Push sandbox gate.
 9. Enable one messaging connector in sandbox; verify inbound/outbound deduplication and DLQ replay.
@@ -1218,24 +1218,42 @@ durable в `moderation.reports` и разбираются SQL-запросом.
 
 ### Messaging chat push prerequisites and acceptance
 
-Version 2 (`messaging.ru-ru.v2`) adds the optional `PUSH` channel to the same two direct-chat rules;
-the source events, the identifier-only payload and the `/chats/{{conversationId}}` deep link do not
-change, and both rules stay `mandatory = false`. The provisioning procedure, the request-hash rule
-and the inactive-first template ordering are described with the other rulesets above.
+Version 3 (`messaging.ru-ru.v3`) keeps the `PUSH` channel of v2 and splits the single `MESSAGING`
+category into one category per conversation kind: `CHAT_DIRECT` for `DIRECT` and `CHAT_GAME` for
+`GAME`. The source events, the identifier-only payload and the `/chats/{{conversationId}}` deep link
+do not change, every rule stays `mandatory = false`, and each rule matches its own conversation kind
+through the audience selector (`match: { field: 'kind' | 'conversationKind', oneOf: [...] }`), which
+resolves no recipients when the field is absent or different. `messaging.message.created.v1` carries
+`conversationKind` since this version; the field is an identifier, never message text.
+
+Deploy every API replica that writes chat messages and every worker replica that projects notification
+rules **before** provisioning v3: an older producer omits `conversationKind` and an older projector
+rejects the unknown `match` key when it parses the stored selector, so a provisioned v3 ruleset must
+never meet a mixed-version fleet.
+
+Applying v3 also supersedes and deactivates every other active `messaging.*` rule and template
+(deactivated, never deleted), so the v2 `MESSAGING` rules cannot fire twice for the same message, and
+copies an existing `MESSAGING` preference row of a recipient into both new categories when that
+category/channel has no row yet. That copy preserves an explicit opt-out and quiet hours without ever
+overwriting a later choice. The provisioning procedure, the request-hash rule and the inactive-first
+template ordering are described with the other rulesets above.
 
 Provisioning a version never enables a transport by itself. Chat push starts only while all of these
 hold for the tenant: `WEB_PUSH_ENABLED` on every API and worker replica, an `ACTIVE` Web Push provider
 account, the recipient has an `ACTIVE` endpoint registered, and the tenant gate
 `notifications.tenant_runtime_settings.web_push_enabled` is on. The recipient's own settings still
-decide each message: category `MESSAGING` + channel `PUSH` must not be disabled, the quiet window
-must be closed, and the conversation policy must not be muted (`ALL` with no open `muted_until`).
-Realtime delivery and the inbox item are unaffected by that policy.
+decide each message: the row of that chat context (`CHAT_DIRECT` or `CHAT_GAME`) with channel `PUSH`
+must not be disabled, the quiet window must be closed, and the conversation policy must not be muted
+(`ALL` with no open `muted_until`). Realtime delivery and the inbox item are unaffected by that policy.
 
-Acceptance: one chat message yields one inbox item and at most one push per active endpoint;
-disabling `MESSAGING/PUSH` or entering quiet hours removes the push while the item still lands; a
-muted conversation produces no push but still delivers realtime; RabbitMQ payloads, logs and metrics
-contain no message body and no endpoint address. Rollback turns `web_push_enabled` off and leaves the
-in-app item; provisioning never rewrites an older version's templates, so the previous rows remain
+Acceptance: one chat message yields exactly one inbox item, in the category of its conversation kind,
+and at most one push per active endpoint; a game message produces no `CHAT_DIRECT` row and vice versa;
+disabling `CHAT_GAME/PUSH` or entering quiet hours removes that context's push while a private message
+still pushes and both items still land; a muted conversation produces no push but still delivers
+realtime; RabbitMQ payloads, logs and metrics contain no message body and no endpoint address.
+Rollback turns `web_push_enabled` off and leaves the in-app item; a ruleset rollback redeploys the
+previous image and re-provisions the previous ruleset version, which deactivates the v3 artifacts the
+same way. Provisioning never rewrites an older version's templates, so the previous rows remain
 inactive history.
 
 ### Booking notification ruleset M1
