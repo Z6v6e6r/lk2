@@ -36,11 +36,11 @@ it('accepts a running worker only as the declared baseline image and fails close
     assert.equal(inspectOptionalWorker(()=>'',()=>{throw Error('must not inspect absent service')}),null);
     assert.equal(inspectOptionalWorker(()=>'id',()=>worker),worker);
     assert.equal(workerBaselineIsConsistent(values,worker),true);
-    // Declared but not running, running but not declared, or a different image are all drift.
-    assert.equal(workerBaselineIsConsistent(values,null),false);
-    assert.equal(workerBaselineIsConsistent({...values,PHUB_WORKER_ENABLED:'false'},worker),false);
+    // Either baseline shape is accepted; only a running worker with a foreign image is drift.
+    assert.equal(workerBaselineIsConsistent(values,null),true);
+    assert.equal(workerBaselineIsConsistent({...values,PHUB_WORKER_ENABLED:'false'},worker),true);
     assert.equal(workerBaselineIsConsistent({...values,WORKER_IMAGE_DIGEST:'sha256:'+'b'.repeat(64)},worker),false);
-    assert.equal(workerBaselineIsConsistent({PHUB_WORKER_ENABLED:'false'},null),true);
+    assert.equal(workerBaselineIsConsistent({PHUB_WORKER_ENABLED:'true'},null),true);
   `,
     ],
     { encoding: 'utf8' },

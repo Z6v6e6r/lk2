@@ -31,11 +31,11 @@ jobs:
       packages: read
     steps:
       - name: Join the operator tailnet
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           ping: ${{ secrets.TIMEWEB_OPERATOR_HOST }}
-      - name: Configure audited SSH
+      - name: Configure the audited operator SSH account
         env:
           OPERATOR_KEY: ${{ secrets.TIMEWEB_OPERATOR_SSH_KEY }}
           OPERATOR_KNOWN_HOSTS: ${{ secrets.TIMEWEB_OPERATOR_KNOWN_HOSTS }}
@@ -54,7 +54,8 @@ jobs:
           set -euo pipefail
           [[ "$SOURCE_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
           # The two stdin lines are the token and the run id. No remote command is requested: the
-          # operator key has a forced entry, and the token never appears in an argument list, an
-          # environment assignment or a process table.
+          # operator key has a forced entry, and the token never appears in an argument list, in the
+          # requested command or in a process table. It only travels over stdin.
           printf '%s\n%s\n' "$GH_TOKEN" "$SOURCE_CI_RUN_ID" | ssh -i ~/.ssh/operator \
-            -o BatchMode=yes -o StrictHostKeyChecking=yes "operator@$OPERATOR_HOST"
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "phub-operator@$OPERATOR_HOST"

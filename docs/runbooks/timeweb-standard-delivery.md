@@ -125,14 +125,26 @@ These steps are intentionally not executed by the implementation task.
    Docker, gh and unzip. Enroll the existing root Docker read credential for immutable GHCR pulls.
    Configure `/etc/phub/timeweb-beta/standard-delivery.json` (root:root 0600) from the example with
    enabled=true, named owner and exact controllerSha. This config is standing authority.
-3. Enroll the SSH operator transport instead of any privileged runner. Create an unprivileged
-   `operator` account on the host with no Docker group, no general sudo and no interactive shell.
-   Its `authorized_keys` entry forces `/home/operator/bin/operator-entry` (root-owned 0755,
-   `command="…",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding`). That entry reads
-   the token and the run id as two stdin lines, validates the id as decimal, and `exec`s
-   `sudo -n --preserve-env=GH_TOKEN /usr/local/sbin/phub-standard-delivery <run-id>`; sudoers grants
-   exactly `operator ALL=(root) NOPASSWD:SETENV: /usr/local/sbin/phub-standard-delivery *` and
-   nothing else. The operator key, the pinned host key, the tailnet host name and the tailnet auth
+3. Enroll the SSH operator transport instead of any privileged runner, in this order, before any
+   key is installed. Create an unprivileged account named `phub-operator` (never the distro
+   `operator` group) with no Docker group, no general sudo and the non-shell login shell
+   `/usr/sbin/nologin`, so a connection that somehow arrives without the forced command cannot read
+   the piped token. Install `deploy/timeweb/operator-entry.sh` — reviewed verbatim in this repository
+   — as root-owned 0755 `/home/phub-operator/bin/operator-entry`, with its directory root-owned and
+   traversable (`0755`) and the home directory owned by the account. Only then add the
+   `authorized_keys` entry, with
+   `command="/home/phub-operator/bin/operator-entry",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding`.
+   The entry reads the token and the run id as two stdin lines, validates both, exports `GH_TOKEN`
+   and `PHUB_SOURCE_CI_RUN_ID`, and `exec`s
+   `sudo -n --preserve-env=GH_TOKEN,PHUB_SOURCE_CI_RUN_ID /usr/local/sbin/phub-standard-delivery`
+   with **no arguments**: sudoers cannot express a wildcard argument safely, and the launcher
+   validates the decimal run id itself. sudoers grants exactly
+   `phub-operator ALL=(root) NOPASSWD:SETENV: /usr/local/sbin/phub-standard-delivery` and nothing
+   else. `TIMEWEB_OPERATOR_KNOWN_HOSTS` must contain exactly the ed25519 key whose fingerprint
+   `deploy/timeweb/target.json` pins, and all four transport secrets
+   (`TAILSCALE_AUTHKEY`, `TIMEWEB_OPERATOR_SSH_KEY`, `TIMEWEB_OPERATOR_KNOWN_HOSTS`,
+   `TIMEWEB_OPERATOR_HOST`) must be environment secrets of `timeweb-standard-delivery` — never
+   repository secrets, because `pull-request.yaml` executes branch code on `pull_request`. The operator key, the pinned host key, the tailnet host name and the tailnet auth
    key live only in the `timeweb-standard-delivery` environment (`TIMEWEB_OPERATOR_SSH_KEY`,
    `TIMEWEB_OPERATOR_KNOWN_HOSTS`, `TIMEWEB_OPERATOR_HOST`, `TAILSCALE_AUTHKEY`), so the job runs on
    a GitHub-hosted runner and no self-hosted surface exists to be reached by another workflow. The

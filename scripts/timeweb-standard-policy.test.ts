@@ -114,7 +114,12 @@ describe('standard Timeweb release behavior', () => {
     const workflow = parse(source) as {
       jobs: Record<
         string,
-        { environment: string; 'runs-on': string; steps: { name?: string; run?: string }[] }
+        {
+          environment: string;
+          'runs-on': string;
+          permissions: Record<string, string>;
+          steps: { name?: string; run?: string }[];
+        }
       >;
     };
     const job = workflow.jobs['standard-web'];
@@ -136,10 +141,42 @@ describe('standard Timeweb release behavior', () => {
       `printf '%s\\n%s\\n' "$GH_TOKEN" "$SOURCE_CI_RUN_ID" | ssh -i ~/.ssh/operator`,
     );
     expect(command).not.toMatch(/GH_TOKEN=\S/);
-    expect(command).not.toMatch(/ssh[^\n]*\b(node|npm|sh -c|bash -c)\b/);
+    // No interpreter or package manager is invoked anywhere in the delivery step.
+    expect(command).not.toMatch(/\b(node|npm|npx|sh -c|bash -c)\b/);
+    expect(command).toContain('"phub-operator@$OPERATOR_HOST"');
+    for (const option of [
+      'BatchMode=yes',
+      'IdentitiesOnly=yes',
+      'StrictHostKeyChecking=yes',
+      'ConnectTimeout=15',
+    ]) {
+      expect(command).toContain(option);
+    }
+    // The trigger and the job token stay fail-closed.
+    expect(source).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(source).toContain('github.event.workflow_run.run_attempt == 1');
+    expect(job?.permissions).toMatchObject({
+      contents: 'read',
+      actions: 'write',
+      packages: 'read',
+    });
+    // sudoers cannot wildcard an argument, so the run id reaches the launcher through the
+    // environment and the launcher validates it as decimal.
+    expect(readFileSync('deploy/timeweb/run-standard-delivery.sh', 'utf8')).toContain(
+      'PHUB_SOURCE_CI_RUN_ID',
+    );
     // The forced operator entry and the fixed launcher are the host-side contract of this transport.
     const runbook = readFileSync('docs/runbooks/timeweb-standard-delivery.md', 'utf8');
     expect(runbook).toContain('/usr/local/sbin/phub-standard-delivery');
     expect(runbook).toContain('operator-entry');
+    // The security-critical host half is reviewed source, not operator prose.
+    const entry = readFileSync('deploy/timeweb/operator-entry.sh', 'utf8');
+    expect(entry).toContain('IFS= read -r GH_TOKEN');
+    expect(entry).toContain('case "$RUN_ID" in \'\'|*[!0-9]*)');
+    expect(entry).toContain('exec sudo -n --preserve-env=GH_TOKEN,PHUB_SOURCE_CI_RUN_ID');
+    // The launcher takes the run id from the environment and rejects any argument.
+    const launcher = readFileSync('deploy/timeweb/run-standard-delivery.sh', 'utf8');
+    expect(launcher).toContain('[ "$#" -eq 0 ]');
+    expect(launcher).toContain('PHUB_SOURCE_CI_RUN_ID');
   });
 });

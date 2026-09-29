@@ -142,12 +142,13 @@ export function inspectOptionalWorker(
 }
 
 /**
- * The baseline must describe itself truthfully: a worker may run only when the installed release
- * declared `PHUB_WORKER_ENABLED=true`, and a running worker must be exactly the image that release
- * declared. A declared-but-stopped or undeclared-but-running worker is drift and stops the release.
+ * The canonical renderer always declares the worker while Compose keeps it behind its own profile,
+ * so whether a baseline runs it is a property of that baseline, not of this Web-only route. What the
+ * route does require is that a running worker is exactly the image the installed release declared:
+ * any other image is drift, and `assertBackend` additionally rejects a worker that appears,
+ * disappears or restarts while the release is delivered.
  */
 export function workerBaselineIsConsistent(values, worker) {
-  if ((values.PHUB_WORKER_ENABLED === 'true') !== Boolean(worker)) return false;
   return !worker || worker.image === `ghcr.io/z6v6e6r/phub-worker@${values.WORKER_IMAGE_DIGEST}`;
 }
 
