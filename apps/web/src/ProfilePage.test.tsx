@@ -298,7 +298,7 @@ describe('ProfilePage', () => {
     expect(screen.getByText('12 место')).toBeVisible();
   });
 
-  it('marks the player as outside the community rating when no snapshot row exists', () => {
+  it('omits the place when the ranking source published none for the community', () => {
     render(
       <ProfilePage
         profile={selfProfile('D+')}
@@ -319,8 +319,9 @@ describe('ProfilePage', () => {
       />,
     );
 
-    expect(screen.getByRole('link', { name: 'хАБ Терехово, вне рейтинга' })).toBeVisible();
-    expect(screen.getByText('вне рейтинга')).toBeVisible();
+    // The preview never triggers a per-community ranking read, so absence is "unknown", not a place.
+    expect(screen.getByRole('link', { name: 'хАБ Терехово' })).toBeVisible();
+    expect(screen.queryByText('вне рейтинга')).not.toBeInTheDocument();
   });
 
   const otherProfile: PlayerProfileView = {
