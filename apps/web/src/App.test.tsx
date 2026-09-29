@@ -1331,7 +1331,7 @@ describe('PadlHub web authentication', () => {
     ).toBeVisible();
     expect(screen.queryByText('Действующих подписок пока нет.')).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Сообщества' })).toBeVisible();
-    expect(screen.getByRole('link', { name: 'Padel Friends, вне рейтинга' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Padel Friends' })).toBeVisible();
     expect(
       screen.queryByRole('heading', { name: 'Когда и где мне удобно' }),
     ).not.toBeInTheDocument();

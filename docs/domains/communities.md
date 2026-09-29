@@ -202,13 +202,18 @@ participation or activity-history guards; the mapping table is unique per tenant
 entity type and external id, so a phone already linked to another active user is skipped rather than
 sharing one legacy viewer identity.
 
-When the summary member does not already contain a rank, the bridge enriches only the visible page
-(at most eight communities) from the current
-`/lk/communities/{communityId}/rating?tab=overall&period=30d` snapshot. The request carries the
-server-resolved identity, uses the same fixed legacy origin and never exposes that identity to the
-browser. A missing, stale or unavailable rating snapshot leaves `memberRank` absent without failing
-the membership directory. Successful and negative enrichments use a short coalescing cache to keep
-the fan-out bounded.
+A directory read performs exactly one legacy call — `/lk/communities?view=summary` — and passes
+through a place only when that projection already publishes one. The bridge never requests
+`/lk/communities/{communityId}/rating` or `/ranking` for a page.
+
+The earlier per-page enrichment fetched up to eight rating snapshots per list read. Each snapshot is
+a multi-megabyte ranking table for a whole community, its in-flight request outlived the 150 ms page
+budget and the closed client connection, and the resulting concurrency multiplied every directory
+view by several heavy legacy requests. The viewer's place is therefore a PadlHub-owned read instead:
+`communities.memberships.ranking_position`, nullable and positive when present, served by the
+canonical `local` read model for the directory and the community detail view. Until a PadlHub
+ranking producer publishes that column, `memberRank` stays absent on legacy-mode pages, and the API
+and UI omit the place rather than synthesize one.
 
 Legacy community IDs are mapped to PadlHub UUIDs in `integration.external_entity_map` under
 `LK_LEGACY/community`. The response drops members, phones, client IDs, connections, invite data and

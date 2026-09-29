@@ -939,26 +939,29 @@ function ProfileCommunities({
         <p>Вы пока не вступили ни в одно сообщество.</p>
       ) : (
         <div className="profile-community-list">
-          {communities.map((community) => (
-            <a
-              href={community.route}
-              key={community.id}
-              aria-label={`${community.title}, ${
-                community.memberRank ? `${community.memberRank} место` : 'вне рейтинга'
-              }`}
-            >
-              <span>
-                {community.logoUrl ? (
-                  <img src={community.logoUrl} alt="" />
-                ) : (
-                  communityInitials(community.title)
-                )}
-              </span>
-              <small>{community.title}</small>
-              <em>{community.memberRank ? `${community.memberRank} место` : 'вне рейтинга'}</em>
-              {community.unreadChatCount > 0 ? <b>{community.unreadChatCount}</b> : null}
-            </a>
-          ))}
+          {communities.map((community) => {
+            // The ranking source is queried for one community at a time, never for the whole
+            // preview, so an absent place means "not published", not "outside the rating".
+            const rankLabel = community.memberRank ? `${community.memberRank} место` : null;
+            return (
+              <a
+                href={community.route}
+                key={community.id}
+                aria-label={rankLabel ? `${community.title}, ${rankLabel}` : community.title}
+              >
+                <span>
+                  {community.logoUrl ? (
+                    <img src={community.logoUrl} alt="" />
+                  ) : (
+                    communityInitials(community.title)
+                  )}
+                </span>
+                <small>{community.title}</small>
+                {rankLabel ? <em>{rankLabel}</em> : null}
+                {community.unreadChatCount > 0 ? <b>{community.unreadChatCount}</b> : null}
+              </a>
+            );
+          })}
         </div>
       )}
     </section>

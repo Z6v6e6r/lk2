@@ -179,142 +179,47 @@ describe('legacy community read repository', () => {
     expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
 
-  it('enriches the visible membership from the current community rating snapshot', async () => {
+  it('never fans a directory page out into legacy rating reads', async () => {
     const source = payload({ embeddedRank: false });
-    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
-      if (url.pathname.endsWith('/rating')) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              communityId: 'community_legacy_mine',
-              calculationVersion: 'community-rating-v1.3.0',
-              items: [
-                {
-                  rank: 12,
-                  playerId: 'legacy-client-1',
-                  playerName: 'Скрытое имя',
-                },
-              ],
-            }),
-            { status: 200 },
-          ),
-        );
-      }
-      return Promise.resolve(new Response(JSON.stringify(source), { status: 200 }));
-    });
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockImplementation(() =>
+        Promise.resolve(new Response(JSON.stringify(source), { status: 200 })),
+      );
+    const onMetric = vi.fn();
     const repository = new LegacyCommunityReadRepository({
       baseUrl: 'https://legacy.padlhub.test',
       timeoutMs: 1_000,
       maxAttempts: 2,
       circuitFailureThreshold: 3,
       circuitResetMs: 30_000,
-      cacheTtlMs: 30_000,
+      cacheTtlMs: 0,
       staleTtlMs: 0,
       bridge: bridge(),
       fetchImplementation,
+      onMetric,
     });
 
     const page = await repository.listMemberships({
       tenantId,
       userId,
-      correlationId: 'community-rating-test',
+      correlationId: 'community-rank-isolation',
       limit: 4,
     });
 
-    expect(page.items[0]).toEqual(expect.objectContaining({ memberRank: 12 }));
-    expect(fetchImplementation).toHaveBeenCalledTimes(2);
-    const rankingRequest = fetchImplementation.mock.calls[1]?.[0];
-    const rankingUrl =
-      typeof rankingRequest === 'string'
-        ? rankingRequest
-        : rankingRequest instanceof URL
-          ? rankingRequest.href
-          : rankingRequest?.url;
-    expect(rankingUrl).toContain('/lk/communities/community_legacy_mine/rating');
-  });
-
-  it('accepts a large rating snapshot instead of treating it as invalid', async () => {
-    // Large communities return ranking rows for every member: live responses reach ~7 MB, so both
-    // the original 512 KB bound and the later 4 MB bound discarded them as
-    // COMMUNITY_LEGACY_RESPONSE_INVALID. This snapshot is deliberately larger than 4 MB.
-    const source = payload({ embeddedRank: false });
-    const filler = Array.from({ length: 24_000 }, (_value, index) => ({
-      rank: index + 100,
-      playerId: `legacy-filler-${index}`,
-      playerName: 'Заполнитель',
-      note: 'x'.repeat(120),
-    }));
-    const ratingSnapshot = JSON.stringify({
-      communityId: 'community_legacy_mine',
-      calculationVersion: 'community-rating-v1.3.0',
-      items: [{ rank: 12, playerId: 'legacy-client-1', playerName: 'Скрытое имя' }, ...filler],
-    });
-    expect(ratingSnapshot.length).toBeGreaterThan(4 * 1024 * 1024);
-    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
-      if (url.pathname.endsWith('/rating')) {
-        return Promise.resolve(new Response(ratingSnapshot, { status: 200 }));
-      }
-      return Promise.resolve(new Response(JSON.stringify(source), { status: 200 }));
-    });
-    const repository = new LegacyCommunityReadRepository({
-      baseUrl: 'https://legacy.padlhub.test',
-      timeoutMs: 5_000,
-      maxAttempts: 1,
-      circuitFailureThreshold: 3,
-      circuitResetMs: 30_000,
-      cacheTtlMs: 30_000,
-      staleTtlMs: 0,
-      bridge: bridge(),
-      fetchImplementation,
-    });
-
-    const page = await repository.listMemberships({
-      tenantId,
-      userId,
-      correlationId: 'community-rating-large',
-      limit: 4,
-    });
-
-    expect(page.items[0]).toEqual(expect.objectContaining({ memberRank: 12 }));
-  });
-
-  it('does not hold the membership page open for a slow optional rank lookup', async () => {
-    const source = payload({ embeddedRank: false });
-    let resolveRank: ((response: Response) => void) | undefined;
-    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation((input) => {
-      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
-      if (url.pathname.endsWith('/rating')) {
-        return new Promise<Response>((resolve) => {
-          resolveRank = resolve;
-        });
-      }
-      return Promise.resolve(new Response(JSON.stringify(source), { status: 200 }));
-    });
-    const repository = new LegacyCommunityReadRepository({
-      baseUrl: 'https://legacy.padlhub.test',
-      timeoutMs: 1_000,
-      maxAttempts: 1,
-      circuitFailureThreshold: 3,
-      circuitResetMs: 30_000,
-      cacheTtlMs: 30_000,
-      staleTtlMs: 0,
-      bridge: bridge(),
-      fetchImplementation,
-    });
-
-    const startedAt = Date.now();
-    const page = await repository.listMemberships({
-      tenantId,
-      userId,
-      correlationId: 'community-rank-budget-test',
-      limit: 4,
-    });
-
-    expect(Date.now() - startedAt).toBeLessThan(500);
+    // A summary that publishes no rank leaves the place absent instead of paying one legacy rating
+    // read per visible community.
     expect(page.items[0]).not.toHaveProperty('memberRank');
-    resolveRank?.(new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+    const requested = fetchImplementation.mock.calls.map((call) => {
+      const input = call[0];
+      return input instanceof URL ? input.href : typeof input === 'string' ? input : input.url;
+    });
+    expect(requested.every((url) => url.includes('/lk/communities?view=summary'))).toBe(true);
+    expect(requested.some((url) => url.includes('/rating') || url.includes('/ranking'))).toBe(
+      false,
+    );
+    expect(JSON.stringify(onMetric.mock.calls)).not.toContain('community-rating');
   });
 
   it('retries a bounded transient failure and reports only redacted metrics', async () => {
