@@ -127,12 +127,15 @@ These steps are intentionally not executed by the implementation task.
    enabled=true, named owner and exact controllerSha. This config is standing authority.
 3. Enroll the SSH operator transport instead of any privileged runner, in this order, before any
    key is installed. Create an unprivileged account named `phub-operator` (never the distro
-   `operator` group) with no Docker group, no general sudo and the non-shell login shell
-   `/usr/sbin/nologin`, so a connection that somehow arrives without the forced command cannot read
-   the piped token. Install `deploy/timeweb/operator-entry.sh` — reviewed verbatim in this repository
-   — as root-owned 0755 `/home/phub-operator/bin/operator-entry`, with its directory root-owned and
-   traversable (`0755`) and the home directory owned by the account. Only then add the
-   `authorized_keys` entry, with
+   `operator` group) with no Docker group and no general sudo. Install
+   `deploy/timeweb/operator-entry.sh` — reviewed verbatim in this repository — as root-owned 0755
+   `/home/phub-operator/bin/operator-entry`, with its directory root-owned and traversable (`0755`),
+   and then set that file as the account's login shell. A forced `authorized_keys` command alone is
+   not enough: sshd still starts the account's login shell (with `-c`), so a `nologin` shell would
+   refuse the delivery, and any shell would be a real shell. With the entry as the login shell every
+   connection — with or without a forced command, and with any requested remote command — ends in the
+   entry, which ignores arguments and reads only stdin. Only then add the `authorized_keys` entry, as
+   defence in depth, with
    `command="/home/phub-operator/bin/operator-entry",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding`.
    The entry reads the token and the run id as two stdin lines, validates both, exports `GH_TOKEN`
    and `PHUB_SOURCE_CI_RUN_ID`, and `exec`s

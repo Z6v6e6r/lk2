@@ -169,6 +169,8 @@ describe('standard Timeweb release behavior', () => {
     const runbook = readFileSync('docs/runbooks/timeweb-standard-delivery.md', 'utf8');
     expect(runbook).toContain('/usr/local/sbin/phub-standard-delivery');
     expect(runbook).toContain('operator-entry');
+    // The entry is the account's login shell: a forced command alone still starts that shell.
+    expect(runbook).toContain("set that file as the account's login shell");
     // The security-critical host half is reviewed source, not operator prose.
     const entry = readFileSync('deploy/timeweb/operator-entry.sh', 'utf8');
     expect(entry).toContain('IFS= read -r GH_TOKEN');
