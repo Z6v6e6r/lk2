@@ -131,7 +131,12 @@ These steps are intentionally not executed by the implementation task.
    **outside** `/etc/phub/timeweb-beta` on purpose: the critical runtime-secret provisioner requires
    that directory to contain exactly its four service env files plus `.release-identity.json`, so any
    extra entry there — including this config — would stop every future critical release with
-   `target_file_set`.
+   `target_file_set`. A legacy `standard-delivery.json` at the old inside path **must be removed from
+   `/etc/phub/timeweb-beta`** before the next critical provision, and the post-condition is that the
+   directory holds exactly `api.env`, `worker.env`, `realtime.env`, `migrator.env` and
+   `.release-identity.json` (root:root, directory 0700, files 0600). The one intended transient extra
+   entry there is the short-lived `github-release-reader.token`, which the critical procedure moves
+   out before provisioning and removes afterwards.
 3. Enroll the SSH operator transport instead of any privileged runner, in this order, before any
    key is installed. Create an unprivileged account named `phub-operator` (never the distro
    `operator` group) with no Docker group and no general sudo. Install

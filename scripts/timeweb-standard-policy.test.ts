@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { isAbsolute, normalize, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -209,14 +210,22 @@ describe('standard Timeweb release behavior', () => {
     expect(launcher).toContain('[ "$#" -eq 0 ]');
     expect(launcher).toContain('PHUB_SOURCE_CI_RUN_ID');
     // The standing config must never live inside the critical provisioner's exact-file-set target
-    // directory, or every future critical release would fail with `target_file_set`.
+    // directory, or every future critical release would fail with `target_file_set`. The path is
+    // compared after normalization, and the controller must not even mention a path inside it.
     const controller = readFileSync('scripts/run-timeweb-standard-delivery.js', 'utf8');
     const provisioner = readFileSync('scripts/provision-timeweb-beta-runtime-secrets.js', 'utf8');
     const configPath = /const CONFIG = '([^']+)'/.exec(controller)?.[1] ?? '';
     const targetDir = /const TARGET_DIR = '([^']+)'/.exec(provisioner)?.[1] ?? '';
     expect(targetDir).not.toBe('');
     expect(configPath).not.toBe('');
-    expect(configPath.startsWith(`${targetDir}/`)).toBe(false);
+    const relativeConfig = relative(normalize(targetDir), normalize(configPath));
+    const insideTarget = relativeConfig === '' || !relativeConfig.startsWith('..');
+    expect(insideTarget).toBe(false);
+    expect(isAbsolute(relativeConfig)).toBe(false);
+    expect(controller).toContain('readSecure(CONFIG)');
+    expect(controller).not.toContain(`${normalize(targetDir)}/`);
     expect(runbook).toContain(configPath);
+    // The runbook must also require removing a legacy config from the inside path.
+    expect(runbook).toContain('must be removed from');
   });
 });
