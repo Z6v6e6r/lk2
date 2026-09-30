@@ -19,11 +19,11 @@
 | --- | --- | --- |
 | Существующий клиент с Viva session | Подтвердить текущий PadlHub UUID и provider mapping, получить свежий proof, привязать LOCAL method транзакционно и аудировать; сохранить UUID | Иной subject/UUID, shared contact или race → quarantine/409, без merge |
 | Новый клиент без Viva | Создать `identity.users` и local profile, подтвердить выбранный login method/контакт; Viva mapping не нужен | Не создавать Viva record/fallback; legal versions до session |
-| Общий контакт | Хранить как contact у нескольких, для входа требовать отдельный однозначный verified login binding или account selection с сильным proof | Никакого auto-link по телефону/email; старый unique `user_summaries.phone_e164` меняется expand/contract |
-| Сессия утрачена | Recovery с доказательством по заранее связанному method либо контролируемая staff-initiated процедура, которую завершает клиент | Staff не видит пароль, код или постоянный секрет; нейтральный ответ unknown account |
+| Общий контакт | Хранить как contact у нескольких; вход только по заранее связанному однозначному login method | Общий номер/email не выбирает аккаунт, не даёт link или recovery; старый unique `user_summaries.phone_e164` меняется отдельно expand/contract |
+| Сессия утрачена | Recovery по заранее связанному уникальному методу, recovery code/passkey либо отдельно рассмотренным доказательствам личности конкретного аккаунта; staff может только открыть проверяемую процедуру, которую завершает клиент | Контроль общего контакта сам по себе недостаточен; staff не видит пароль/код/постоянный секрет; нейтральный ответ unknown account |
 | Viva недоступна | Уже enrolled LOCAL user входит, восстанавливает session и открывает локальный профиль/архивные копии | Viva-only user получает понятный ограниченный recovery flow, не новый duplicate account |
 
-Один OTP challenge связан с выбранным provider в момент выдачи. Проверять его только у него, без параллельного Viva/LOCAL verify или скрытого fallback. Прямые внешние ID не наследуют Viva subject; каждую привязку доказывать отдельно.
+Один OTP challenge связан с выбранным provider в момент выдачи. Проверять его только у него, без параллельного Viva/LOCAL verify или скрытого fallback. Прямые внешние ID не наследуют Viva subject; каждую привязку доказывать отдельно. Password reset/recovery атомарно меняет credential, отзывает все прежние refresh families и admin-capable delegation/session по утверждённой policy, затем выпускает новую family. Проверка действительности access token обязана учитывать revoke/session generation: старый access/refresh не выполняет команду сразу после reset, даже при concurrent refresh.
 
 ## Stop, восстановление и наблюдаемость
 
@@ -37,12 +37,12 @@
 
 | Gate | Минимальный сценарий и доказательство |
 | --- | --- |
-| Identity | Старый UUID совпадает до/после link; новый клиент без Viva не получает второй ID; две гонки import/login/link дают одну запись; конфликт subject/phone fail closed. |
-| Isolation | Два tenant с одинаковым внешним ID/контактом разделены; staff без нужной station/permission не читает и не пишет; browser `userId/roles` игнорируются. |
+| Identity | Старый UUID совпадает до/после link; новый клиент без Viva не получает второй ID; две гонки import/login/link дают одну запись; конфликт subject/phone fail closed. Два аккаунта с общим контактом: proof лишь этого контакта не входит, не связывает и не восстанавливает соседний аккаунт даже через staff-инициированную процедуру. |
+| Isolation | Два tenant с одинаковым внешним ID/контактом разделены; station A не находит/не читает клиента только станции B, shared customer показывает лишь разрешённые блоки, unmapped/stale/withdrawn grant deny; browser `userId/roles` и spoofed `X-App-Platform` не дают `customers.*` или staff token. |
 | Import | Full → два delta → replay/late/out-of-order/tombstone; checkpoint resume; counts/checksums и обязательства давно не входивших совпадают; локально подтверждённое поле не перезаписано. |
-| Auth | LOCAL setup/login/recovery при заблокированной Viva; expiry, attempts, idempotency replay/conflict, step-up, revoke current/other/all, cookie/CSRF/audience negative tests; ЦУП недоступен, consumer login работает. |
+| Auth | LOCAL setup/login/recovery при заблокированной Viva; expiry, attempts, idempotency replay/conflict, step-up уже привязанным методом перед link/unlink, revoke current/other/all, cookie/CSRF/audience negative tests. После reset старые access/refresh и concurrent rotate отклонены. ЦУП недоступен, consumer login работает. |
 | Profile/commerce | Profile одна версия; отдельные read blocks имеют source/asOf; unknown balance не ноль и не позволяет purchase/write-off; приватность и consent versions сохранены. |
-| Recovery | Полный encrypted backup PG + архив старых обязательств восстановлены в отдельной среде; сверка UUID/links/sessions/consents, RPO/RTO измерены; forward repair работает. |
+| Recovery | Полный encrypted backup PG + архив старых обязательств восстановлены в изолированном restore-контуре: нет provider egress и production signing/decryption keys, credentials scrubbed/revoked до доступа приложений, PII ACL ограничены, удаление контура аудировано. Сверка UUID/links/sessions/consents, RPO/RTO измерены; forward repair работает. |
 | Evidence | `LOCAL` tests и source review, затем отдельно `CI`, `STAGING`, `PROVIDER` контракт/экспорт, `PRODUCTION` пилот/readback. 14 дней расписания не критерий ядра. |
 
 Перед live переходом нужны отдельные target authority, backup/readiness/rollback и проверенный неизменный image digest по runbooks. Этот документ не разрешает миграции, flags, provider calls или деплой.
