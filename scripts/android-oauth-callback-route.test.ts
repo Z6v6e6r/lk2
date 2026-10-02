@@ -89,13 +89,16 @@ it.skipIf(process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')(
       expect(direct.stderr).toMatch(/Referrer-Policy: no-referrer/i);
       expect(direct.stderr).toMatch(/X-Content-Type-Options: nosniff/i);
       expect(direct.stdout).toBe(readFileSync(fallback, 'utf8'));
-      const head = docker([
-        'exec',
-        containerId,
-        'sh',
-        '-c',
-        "printf 'HEAD /android/oauth/yandex HTTP/1.1\\r\\nHost: lk2.padlhub.su\\r\\nX-Forwarded-Proto: https\\r\\nConnection: close\\r\\n\\r\\n' | nc 127.0.0.1 8080",
-      ]);
+      // Unlike BusyBox wget, a raw HEAD retains all response headers on HTTP errors too.
+      const callbackHead = () =>
+        docker([
+          'exec',
+          containerId!,
+          'sh',
+          '-c',
+          "printf 'HEAD /android/oauth/yandex HTTP/1.1\\r\\nHost: lk2.padlhub.su\\r\\nX-Forwarded-Proto: https\\r\\nConnection: close\\r\\n\\r\\n' | nc 127.0.0.1 8080",
+        ]);
+      const head = callbackHead();
       expect(head.status, head.stderr).toBe(0);
       expect(head.stdout).toMatch(/HTTP\/1\.1 200/);
       expect(head.stdout).not.toMatch(/Location:/i);
@@ -121,9 +124,12 @@ it.skipIf(process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')(
       const missing = request('/android/oauth/yandex');
       expect(missing.status).not.toBe(0);
       expect(missing.stderr).toMatch(/404 Not Found/);
-      expect(missing.stderr).toMatch(/Cache-Control: no-store/i);
-      expect(missing.stderr).toMatch(/Referrer-Policy: no-referrer/i);
-      expect(missing.stderr).not.toMatch(/Location:/i);
+      const missingHead = callbackHead();
+      expect(missingHead.status, missingHead.stderr).toBe(0);
+      expect(missingHead.stdout).toMatch(/HTTP\/1\.1 404/);
+      expect(missingHead.stdout).toMatch(/Cache-Control: no-store/i);
+      expect(missingHead.stdout).toMatch(/Referrer-Policy: no-referrer/i);
+      expect(missingHead.stdout).not.toMatch(/Location:/i);
     } finally {
       if (containerId) {
         const removed = docker(['rm', '-f', containerId]);
