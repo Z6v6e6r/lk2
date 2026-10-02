@@ -340,6 +340,20 @@ function validateMonitorEvidence(monitor, definition, contract, observedAt) {
     reject('observability_abort_active_incident');
 }
 
+// Reuse the unchanged monitoring/alert policy for image-only component upgrades, whose
+// transaction receipt replaces the historical public-beta rollback floor.
+export function validateTimewebMonitoringEvidence(monitoring, contractInput, observedAtInput) {
+  const contract = validateTimewebObservabilityContract(contractInput);
+  const observedAt = timestamp(observedAtInput, 'observability_observed_at');
+  exactKeys(monitoring, ['monitors', 'alertTest'], 'observability_evidence_monitoring');
+  if (!Array.isArray(monitoring.monitors) || monitoring.monitors.length !== 2)
+    reject('observability_evidence_monitors');
+  monitoring.monitors.forEach((monitor, index) =>
+    validateMonitorEvidence(monitor, contract.monitoring.monitors[index], contract, observedAt),
+  );
+  validateAlertTest(monitoring.alertTest, contract, observedAt);
+  return true;
+}
 function validateDeliveries(deliveries, expectedChannels, triggerAt, deadline, code) {
   if (!Array.isArray(deliveries) || deliveries.length !== expectedChannels.length) reject(code);
   const byChannel = new Map();

@@ -4,6 +4,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runWebTransition, standardWebComposeArgs } from './timeweb-standard-policy.js';
+import {
+  apiWebComposeArgs,
+  runApiWebTransition,
+  recoverApiWebTransition,
+} from './timeweb-api-web-upgrade.js';
 
 if (process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')
   throw new Error('Explicit fixture opt-in required');
@@ -21,7 +26,12 @@ writeFileSync(
   JSON.stringify({
     name: project,
     services: {
-      api: { image, labels: { 'fixture.owner': project } },
+      api: {
+        image,
+        labels: { 'fixture.owner': project, 'phub.release-id': '${API_RELEASE:-api-previous}' },
+      },
+      worker: { image, labels: { 'fixture.owner': project } },
+      realtime: { image, labels: { 'fixture.owner': project } },
       web: { image, labels: { 'fixture.owner': project, 'phub.release-id': '${RELEASE}' } },
     },
     networks: { default: { internal: true } },
@@ -103,6 +113,100 @@ try {
   )
     throw Error('Wrong transition result');
   await attestBackend();
+  const criticalPrevious = join(directory, 'critical-previous.env');
+  const criticalCandidate = join(directory, 'critical-candidate.env');
+  writeFileSync(criticalPrevious, 'RELEASE=web-previous\nAPI_RELEASE=api-previous\n');
+  writeFileSync(criticalCandidate, 'RELEASE=web-candidate\nAPI_RELEASE=api-candidate\n');
+  const criticalCompose = (env, action, service) => {
+    const args = apiWebComposeArgs(baseline, env, action, service);
+    args[args.indexOf('-f') + 1] = composeFile;
+    return docker(args);
+  };
+  for (const service of ['web', 'api']) criticalCompose(criticalPrevious, 'up', service);
+  const outside = Object.fromEntries(
+    ['worker', 'realtime'].map((service) => [service, inspect(service).Id]),
+  );
+  const unchanged = async () => {
+    for (const service of ['worker', 'realtime'])
+      if (inspect(service).Id !== outside[service]) throw Error('Excluded service changed');
+  };
+  const criticalJournal = [];
+  const criticalOps = {
+    preflight: unchanged,
+    pullAndSmoke: async () => {
+      await unchanged();
+    },
+    journal: async (status) => criticalJournal.push(status),
+    activate: async (service) => {
+      criticalCompose(criticalCandidate, 'up', service);
+      if (inspect(service).Config.Labels['phub.release-id'] !== `${service}-candidate`)
+        throw Error('Wrong candidate');
+      await unchanged();
+    },
+    observe: async () => {
+      for (const service of ['api', 'web'])
+        docker(['exec', inspect(service).Id, 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/']);
+    },
+    attest: unchanged,
+    abort: async () => {
+      for (const service of ['api', 'web'])
+        if (inspect(service).Config.Labels['phub.release-id'] !== `${service}-previous`)
+          throw Error('Unsafe abort');
+      await unchanged();
+    },
+    installBaseline: async () => {},
+    restore: async (service) => {
+      criticalCompose(criticalPrevious, 'up', service);
+      const value = inspect(service);
+      if (
+        value.Image !== previousImage ||
+        value.Config.Labels['phub.release-id'] !== `${service}-previous`
+      )
+        throw Error('Wrong independent rollback');
+    },
+  };
+  await runApiWebTransition(criticalOps);
+  await recoverApiWebTransition(criticalOps);
+  for (const failure of ['preflight', 'pullAndSmoke', 'api', 'web', 'observe', 'installBaseline']) {
+    let rejected = false;
+    try {
+      await runApiWebTransition({
+        ...criticalOps,
+        ...(failure === 'api' || failure === 'web'
+          ? {
+              activate: async (service) => {
+                await criticalOps.activate(service);
+                if (service === failure) throw Error('Injected after up');
+              },
+            }
+          : {
+              [failure]: async () => {
+                throw Error('Injected boundary failure');
+              },
+            }),
+      });
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw Error('Failure was not rejected');
+    for (const service of ['api', 'web'])
+      if (inspect(service).Config.Labels['phub.release-id'] !== `${service}-previous`)
+        throw Error('Previous pair not restored');
+    await unchanged();
+  }
+  // Simulate abrupt process loss with an activated pair, then converge using only previous inputs.
+  await criticalOps.activate('api');
+  await criticalOps.activate('web');
+  await recoverApiWebTransition(criticalOps);
+  if (
+    !criticalJournal.includes('ABORTED') ||
+    !criticalJournal.includes('ROLLED_BACK') ||
+    !criticalJournal.includes('SUCCESS')
+  )
+    throw Error('Missing recovery phases');
+  process.stdout.write(
+    'API_WEB_COMPOSE_REHEARSAL_PASS independent_previous_labels=true partial_activation_and_crash_recovery=true excluded_unchanged=true\n',
+  );
   process.stdout.write(
     'STANDARD_COMPOSE_REHEARSAL_PASS success_and_forced_rollback=true backend_unchanged=true same_digest_rollback=true\n',
   );
