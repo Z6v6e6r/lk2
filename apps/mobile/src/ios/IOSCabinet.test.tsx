@@ -6,6 +6,7 @@ import { IOSAuthApp } from './IOSAuthApp.js';
 import type { IOSSessionPlugin } from './session.js';
 import {
   fixtureReply,
+  homeDashboard,
   game,
   nativeResult,
   syntheticSession,
@@ -24,9 +25,21 @@ afterEach(() => {
 
 describe('iOS cabinet with the real shared screens and one native session', () => {
   it('restores home, navigates profile/bookings/games/location, and logs out without browser or provider commands', async () => {
-    const request = vi.fn<IOSSessionPlugin['request']>(
-      async (input) => await Promise.resolve(fixtureReply(input)),
-    );
+    let markDashboardRequested!: () => void;
+    const dashboardRequested = new Promise<void>((resolve) => {
+      markDashboardRequested = resolve;
+    });
+    let resolveDashboard!: (reply: ReturnType<typeof nativeResult>) => void;
+    const dashboardReply = new Promise<ReturnType<typeof nativeResult>>((resolve) => {
+      resolveDashboard = resolve;
+    });
+    const request = vi.fn<IOSSessionPlugin['request']>(async (input) => {
+      if (input.operation === 'read' && input.resource === 'home') {
+        markDashboardRequested();
+        return await dashboardReply;
+      }
+      return await Promise.resolve(fixtureReply(input));
+    });
     const session = syntheticSession(request);
     await session.restore();
     render(<IOSAuthApp session={session} />);
@@ -36,7 +49,16 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     expect(screen.queryByRole('link', { name: 'Чаты' })).toBeNull();
     fireEvent.click(within(nav).getByRole('link', { name: 'Профиль' }));
     await screen.findByRole('heading', { name: 'Анна Петрова' });
-    await screen.findByText('Лето · Падел · Спорт');
+    const subscriptions = screen.getByRole('region', { name: 'Подписки и абонементы' });
+    expect(within(subscriptions).getByRole('status')).toHaveTextContent(
+      'Загружаем действующие подписки…',
+    );
+    await act(async () => {
+      await dashboardRequested;
+      resolveDashboard(nativeResult(homeDashboard));
+      await dashboardReply;
+    });
+    expect(within(subscriptions).getByText('Лето · Падел · Спорт')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Предпочтения/ }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('button', { name: 'Сохранить' })).toBeDisabled();
