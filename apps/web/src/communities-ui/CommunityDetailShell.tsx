@@ -1,5 +1,7 @@
 import { useId, useState, type KeyboardEvent } from 'react';
 
+import { MainBottomNavigation } from '../HomeDashboardPage.js';
+
 import styles from './CommunitiesReadOnly.module.css';
 import { CommunityChatTranscript } from './CommunityChatTranscript.js';
 import { CommunityFeedList } from './CommunityFeedList.js';
@@ -169,44 +171,7 @@ export function CommunityDetailShell({
           )}
         </div>
       ) : null}
-      <nav className={styles.bottomNav} aria-label="Навигация сообщества">
-        <button className={styles.bottomNavItem} type="button" disabled aria-label="Главная">
-          <span aria-hidden="true">⌂</span>
-          <small>Главная</small>
-        </button>
-        <button
-          type="button"
-          className={styles.bottomNavItem}
-          aria-current={activeTab === 'feed' ? 'page' : undefined}
-          disabled={!visibleTabs.some((tab) => tab.id === 'feed')}
-          onClick={() => selectTab('feed')}
-        >
-          <span aria-hidden="true">◒</span>
-          <small>Сообщества</small>
-        </button>
-        <button
-          className={`${styles.bottomNavItem} ${styles.bottomNavCreate}`}
-          type="button"
-          disabled
-          aria-label="Создать недоступно в режиме просмотра"
-        >
-          <span aria-hidden="true">+</span>
-        </button>
-        <button
-          type="button"
-          className={styles.bottomNavItem}
-          aria-current={activeTab === 'chat' ? 'page' : undefined}
-          disabled={!visibleTabs.some((tab) => tab.id === 'chat')}
-          onClick={() => selectTab('chat')}
-        >
-          <span aria-hidden="true">◌</span>
-          <small>Чат</small>
-        </button>
-        <button className={styles.bottomNavItem} type="button" disabled aria-label="Профиль">
-          <span aria-hidden="true">♙</span>
-          <small>Профиль</small>
-        </button>
-      </nav>
+      <MainBottomNavigation />
     </section>
   );
 }
