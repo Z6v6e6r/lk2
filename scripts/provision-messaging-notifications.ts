@@ -8,6 +8,7 @@
  */
 import { createDatabasePool, queryOne, withTenantTransaction } from '@phub/database';
 import {
+  MESSAGING_NOTIFICATION_CATEGORIES,
   MESSAGING_NOTIFICATION_DEFINITIONS,
   MESSAGING_NOTIFICATION_LOCALE,
   MESSAGING_NOTIFICATION_REQUEST_HASH,
@@ -16,7 +17,6 @@ import {
   MESSAGING_NOTIFICATION_RULE_KEY_SUFFIX,
   MESSAGING_NOTIFICATION_RULESET_VERSION,
   MESSAGING_NOTIFICATION_TEMPLATE_ACTIVE,
-  MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY,
   MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS,
   MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
   MESSAGING_NOTIFICATION_TEMPLATE_VERSION,
@@ -67,12 +67,24 @@ function templateMatches(
   definition: (typeof MESSAGING_NOTIFICATION_DEFINITIONS)[number],
 ): boolean {
   return (
-    row.category === MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY &&
+    row.category === definition.category &&
     JSON.stringify(row.channels) === JSON.stringify(MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS) &&
     row.title_template === definition.title &&
     row.body_template === definition.body &&
     row.deep_link_template === MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK
   );
+}
+
+/**
+ * The ruleset owns every active `messaging.*` artifact, so a new version supersedes the definitions
+ * it replaces instead of leaving them active. When v3 split one `MESSAGING` category into
+ * `CHAT_DIRECT`/`CHAT_GAME`, a still-active v2 rule would otherwise fire for the same event and
+ * notify twice — once under a category the settings screen no longer offers. Templates and rules
+ * are deactivated, never deleted, so the previous version stays inspectable and the rollback is a
+ * redeploy of the previous image with the previous ruleset re-provisioned.
+ */
+function ownedRuleKey(definition: (typeof MESSAGING_NOTIFICATION_DEFINITIONS)[number]): string {
+  return `${definition.key}.${MESSAGING_NOTIFICATION_RULE_KEY_SUFFIX}`;
 }
 
 async function assertNotificationAdminAccess(
@@ -151,6 +163,7 @@ try {
     actorId,
     rulesetVersion: MESSAGING_NOTIFICATION_RULESET_VERSION,
     locale: MESSAGING_NOTIFICATION_LOCALE,
+    categories: [...MESSAGING_NOTIFICATION_CATEGORIES],
     idempotencyKey,
     replay: Boolean(current.previous),
     inAppRuntimeEnabled: current.runtime?.in_app_enabled ?? false,
@@ -158,6 +171,7 @@ try {
     definitions: MESSAGING_NOTIFICATION_DEFINITIONS.map((definition) => ({
       key: definition.key,
       sourceEventType: definition.sourceEventType,
+      category: definition.category,
       audienceSelector: definition.audienceSelector,
       mandatory: definition.mandatory,
     })),
@@ -206,7 +220,7 @@ try {
             definition.key,
             MESSAGING_NOTIFICATION_TEMPLATE_VERSION,
             MESSAGING_NOTIFICATION_LOCALE,
-            MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY,
+            definition.category,
             [...MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS],
             definition.title,
             definition.body,
@@ -266,7 +280,7 @@ try {
           returning id`,
           [
             tenantId,
-            `${definition.key}.${MESSAGING_NOTIFICATION_RULE_KEY_SUFFIX}`,
+            ownedRuleKey(definition),
             definition.sourceEventType,
             template.id,
             JSON.stringify(definition.audienceSelector),
@@ -280,12 +294,61 @@ try {
         ruleIds.push(rule.id);
       }
 
+      const retiredRuleKeys = MESSAGING_NOTIFICATION_DEFINITIONS.map(ownedRuleKey);
+      const retiredTemplateKeys = MESSAGING_NOTIFICATION_DEFINITIONS.map(
+        (definition) => definition.key,
+      );
+      const retiredRules = await client.query<{ readonly rule_key: string }>(
+        `update notifications.trigger_rules
+            set active = false, updated_at = now()
+          where tenant_id = $1
+            and rule_key like 'messaging.%'
+            and active = true
+            and not (rule_key = any($2::text[]))
+          returning rule_key`,
+        [tenantId, retiredRuleKeys],
+      );
+      const retiredTemplates = await client.query<{ readonly template_key: string }>(
+        `update notifications.templates
+            set active = false
+          where tenant_id = $1
+            and template_key like 'messaging.%'
+            and active = true
+            and not (template_key = any($2::text[]))
+          returning template_key`,
+        [tenantId, retiredTemplateKeys],
+      );
+
+      // A recipient who switched the old aggregated `MESSAGING` category off, or gave it quiet
+      // hours, keeps that decision per new context instead of silently regaining the channel. The
+      // copy only fills a category/channel the recipient has never set, so a later explicit choice
+      // is never overwritten by re-running this command.
+      const carriedPreferences = await client.query<{ readonly user_id: string }>(
+        `insert into notifications.user_preferences (
+           tenant_id, user_id, category, channel, enabled, quiet_from, quiet_until, timezone
+         )
+         select legacy.tenant_id, legacy.user_id, target.category, legacy.channel,
+                legacy.enabled, legacy.quiet_from, legacy.quiet_until, legacy.timezone
+           from notifications.user_preferences legacy
+           cross join unnest($2::text[]) as target(category)
+          where legacy.tenant_id = $1
+            and legacy.category = 'MESSAGING'
+            and legacy.channel in ('IN_APP', 'PUSH')
+         on conflict (tenant_id, user_id, category, channel) do nothing
+         returning user_id`,
+        [tenantId, [...MESSAGING_NOTIFICATION_CATEGORIES]],
+      );
+
       const appliedResult = {
         rulesetVersion: MESSAGING_NOTIFICATION_RULESET_VERSION,
         templateVersion: MESSAGING_NOTIFICATION_TEMPLATE_VERSION,
         locale: MESSAGING_NOTIFICATION_LOCALE,
+        categories: [...MESSAGING_NOTIFICATION_CATEGORIES],
         templateIds,
         ruleIds,
+        retiredRuleKeys: retiredRules.rows.map((row) => row.rule_key),
+        retiredTemplateKeys: retiredTemplates.rows.map((row) => row.template_key),
+        carriedPreferenceRows: carriedPreferences.rowCount ?? 0,
         runtimeChanged: false,
       };
       await client.query(
