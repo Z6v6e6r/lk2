@@ -702,6 +702,92 @@ export function validateRuntimeDelta(paths) {
   )
     fail('runtime_definition_changed');
 }
+// Closed compatibility proof for an already-reviewed application release. The generic
+// runtime validator stays default-deny; this bridge cannot follow later main drift.
+export const CALLBACK_RUNTIME_BRIDGE = {
+  previousSha: 'c43e9dc8da3eb19a1684ed28e989aafacdb5d8bf',
+  candidateSha: '0d6078be7a50ed3f5761d66071527be003bd568f',
+  candidateTree: '5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
+  transitions: [
+    {
+      path: 'packages/database/migrations/0096_profile_contacts.sql',
+      status: 'A',
+      oldMode: '000000',
+      newMode: '100644',
+      oldOid: '0000000000000000000000000000000000000000',
+      newOid: 'dc9171185f0a7b75d80ecde64c6b08b4f3baa4c1',
+      oldType: null,
+      newType: 'blob',
+    },
+    {
+      path: 'scripts/verify-timeweb-api-web-observability.d.ts',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'd282e352bc8cba454302bbaf5665b8341f67f78a',
+      newOid: 'b6146afd73c86210bb1799dcd42a0e1760b346e1',
+      oldType: 'blob',
+      newType: 'blob',
+    },
+    {
+      path: 'scripts/verify-timeweb-api-web-observability.js',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '84b77275876866a14c3da9983d6d965a26c0f3e5',
+      newOid: 'e7f8d4bbc520a459b1d389b4ee9fd87aee04a7bd',
+      oldType: 'blob',
+      newType: 'blob',
+    },
+  ],
+};
+export function parseRuntimeDelta(raw) {
+  if (raw === '') return [];
+  const parts = raw.split('\0');
+  if (parts.pop() !== '' || parts.length % 2) fail('invalid_runtime_delta');
+  return Array.from({ length: parts.length / 2 }, (_, i) => {
+    const match = /^:(\d{6}) (\d{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([AMDT])$/.exec(parts[i * 2]);
+    const path = parts[i * 2 + 1];
+    if (!match || !path) fail('invalid_runtime_delta');
+    return {
+      path,
+      oldMode: match[1],
+      newMode: match[2],
+      oldOid: match[3],
+      newOid: match[4],
+      status: match[5],
+    };
+  });
+}
+export function validateRuntimeUpgrade(identity, entries) {
+  if (!Array.isArray(entries) || new Set(entries.map((v) => v.path)).size !== entries.length)
+    fail('invalid_runtime_delta');
+  const paths = entries.map((v) => v.path);
+  try {
+    validateRuntimeDelta(paths);
+    return;
+  } catch (error) {
+    if (error.message !== 'runtime_definition_changed') throw error;
+  }
+  const bridge = CALLBACK_RUNTIME_BRIDGE;
+  if (
+    identity.previousSha !== bridge.previousSha ||
+    identity.candidateSha !== bridge.candidateSha ||
+    identity.candidateTree !== bridge.candidateTree
+  )
+    fail('callback_runtime_bridge');
+  const permitted = new Map(bridge.transitions.map((v) => [v.path, v]));
+  const exceptional = entries.filter((v) => permitted.has(v.path));
+  if (
+    exceptional.length !== permitted.size ||
+    exceptional.some((v) => {
+      const expected = permitted.get(v.path);
+      return Object.keys(expected).some((key) => v[key] !== expected[key]);
+    })
+  )
+    fail('callback_runtime_bridge');
+  validateRuntimeDelta(entries.filter((v) => !permitted.has(v.path)).map((v) => v.path));
+}
 export function validateUpgradeReceipt(receipt, planSha256) {
   const keys = ['schema', 'status', 'planSha256', 'observedAt'];
   if (
@@ -964,17 +1050,28 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     await verifyCi(op.sourceCiRunId, op.candidateSha);
     for (const previous of [previousApi, previousWeb]) {
       git(['merge-base', '--is-ancestor', previous.releaseId.slice(0, 40), op.candidateSha]);
-      validateRuntimeDelta(
+      const entries = parseRuntimeDelta(
         git([
           'diff',
+          '--raw',
+          '--no-abbrev',
           '--no-renames',
-          '--name-only',
           '-z',
           previous.releaseId.slice(0, 40),
           op.candidateSha,
-        ])
-          .split('\0')
-          .filter(Boolean),
+        ]),
+      ).map((v) => ({
+        ...v,
+        oldType: v.oldOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.oldOid]),
+        newType: v.newOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.newOid]),
+      }));
+      validateRuntimeUpgrade(
+        {
+          previousSha: previous.releaseId.slice(0, 40),
+          candidateSha: op.candidateSha,
+          candidateTree: op.candidateTree,
+        },
+        entries,
       );
     }
     const manifest = await candidateAuthority(op, directory);

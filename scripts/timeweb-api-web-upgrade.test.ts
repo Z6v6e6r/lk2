@@ -10,7 +10,7 @@ function scenario(body: string) {
       '-e',
       `
     import assert from 'node:assert/strict';
-    import {validateApiWebOperation,validateControllerDelta,apiWebComposeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge} from './scripts/timeweb-api-web-upgrade.js';
+    import {validateApiWebOperation,validateControllerDelta,apiWebComposeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade} from './scripts/timeweb-api-web-upgrade.js';
     ${body}
   `,
     ],
@@ -80,6 +80,52 @@ describe('explicit API/Web upgrade boundary', () => {
   it('protects runtime definition even when candidate image references are unchanged', () => {
     scenario(`validateRuntimeDelta(['apps/web/src/App.tsx','package-lock.json']);
       for(const path of ['deploy/timeweb/compose.beta.yaml','deploy/timeweb/runtime-environment.contract.json','apps/api/Dockerfile','contracts/openapi/user/v1/openapi.yaml','packages/database/migrations/0097.sql','scripts/produce-timeweb-api-web-observability-evidence.js','scripts/verify-timeweb-api-web-observability.js'])assert.throws(()=>validateRuntimeDelta([path]));
+    `);
+  });
+  it('accepts only the reviewed callback runtime bridge and rejects every changed trust field', () => {
+    scenario(`const bridge=CALLBACK_RUNTIME_BRIDGE;
+      const identity={previousSha:bridge.previousSha,candidateSha:bridge.candidateSha,candidateTree:bridge.candidateTree};
+      const entries=structuredClone(bridge.transitions);
+      validateRuntimeUpgrade(identity,entries);
+      for(const key of Object.keys(identity))assert.throws(()=>validateRuntimeUpgrade({...identity,[key]:'f'.repeat(40)},entries));
+      for(let i=0;i<entries.length;i++)for(const [key,value] of Object.entries({path:'other',status:'D',oldMode:'120000',newMode:'100755',oldOid:'f'.repeat(40),newOid:'f'.repeat(40),oldType:'tree',newType:'commit'})){
+        const altered=structuredClone(entries);altered[i][key]=value;
+        assert.throws(()=>validateRuntimeUpgrade(identity,altered),i+':'+key);
+      }
+      for(let i=0;i<entries.length;i++)assert.throws(()=>validateRuntimeUpgrade(identity,entries.filter((_,j)=>i!==j)));
+      assert.throws(()=>validateRuntimeUpgrade(identity,[...entries,entries[0]]));
+      for(const path of ['packages/database/migrations/0097.sql','contracts/openapi/user/v1/openapi.yaml','apps/api/Dockerfile','deploy/timeweb/compose.beta.yaml','scripts/produce-timeweb-api-web-observability-evidence.js'])
+        assert.throws(()=>validateRuntimeUpgrade(identity,[...entries,{path}]),/runtime_definition_changed/);
+      validateRuntimeUpgrade(identity,[...entries,{path:'apps/web/nginx.conf'}]);
+      // API and Web baselines are validated independently before either can activate.
+      for(const changed of ['api','web'])for(const service of ['api','web']){
+        if(service===changed)assert.throws(()=>validateRuntimeUpgrade({...identity,previousSha:'f'.repeat(40)},entries));
+        else validateRuntimeUpgrade(identity,entries);
+      }
+      for(const path of ['apps/api/src/app.ts','apps/api/src/main.ts','packages/database/package.json','packages/database/src/contact-reader.ts','contracts/openapi/user/v1/openapi.yaml','tsconfig.json'])
+        assert.throws(()=>validateControllerDelta([{status:'M',path}]));
+    `);
+  });
+  it('reads the actual reviewed Git range, including full modes and both blob types', () => {
+    scenario(`const {execFileSync}=await import('node:child_process');
+      const bridge=CALLBACK_RUNTIME_BRIDGE;
+      const git=args=>execFileSync('git',args,{encoding:'utf8'}).trim();
+      assert.equal(git(['rev-parse',bridge.candidateSha+'^{tree}']),bridge.candidateTree);
+      const raw=git(['diff','--raw','--no-abbrev','--no-renames','-z',bridge.previousSha,bridge.candidateSha]);
+      const entries=parseRuntimeDelta(raw).map(v=>({...v,oldType:v.oldOid==='0'.repeat(40)?null:git(['cat-file','-t',v.oldOid]),newType:v.newOid==='0'.repeat(40)?null:git(['cat-file','-t',v.newOid])}));
+      validateRuntimeUpgrade(bridge,entries);
+      assert.throws(()=>validateRuntimeDelta(entries.map(v=>v.path)),/runtime_definition_changed/);
+      const identityPaths=['apps/api/src/app.ts','apps/api/src/main.ts','apps/api/Dockerfile','apps/migrator/Dockerfile','packages/database/package.json','packages/database/src/index.ts'];
+      assert.equal(git(['diff','--name-only',bridge.previousSha,bridge.candidateSha,'--',...identityPaths]),'');
+      const index=git(['show',bridge.candidateSha+':packages/database/src/index.ts']);
+      assert(!index.includes('contact-repository'));
+    `);
+  });
+  it('fails closed on malformed or renamed raw Git transitions', () => {
+    scenario(`const header=':100644 100644 '+'a'.repeat(40)+' '+'b'.repeat(40)+' M';
+      assert.deepEqual(parseRuntimeDelta(''),[]);
+      assert.equal(parseRuntimeDelta(header+'\\0path\\0')[0].path,'path');
+      for(const raw of [header+'\\0path',header+'\\0\\0',header+'\\0path\\0extra\\0',header.replace(' M',' R100')+'\\0old\\0new\\0',header.replace('a'.repeat(40),'a'.repeat(7))+'\\0path\\0'])assert.throws(()=>parseRuntimeDelta(raw));
     `);
   });
   it('derives independent previous overlay bytes and detects changed command inputs', () => {

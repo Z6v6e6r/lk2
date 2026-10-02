@@ -254,9 +254,40 @@ The sole closed exception is candidate `5429a69c` through bridge
 `9bbe61d63ba078f54d683d561ff097e96b59274e`: exactly nine reviewed additions from PRs #340/#342,
 with pinned `100644 blob` identities. They are never imported or executed by the controller.
 The bridge-to-controller range remains controller-only; subsequent changes to these files reject.
-Actual candidate runtime validation continues to reject migrations. This exception does not apply
-0096, publish a different image, or authorize another bridge.
-Any product, dependency, workflow, Compose, manifest validator or runtime-contract drift stops the
+This ancestry exception does not alter runtime validation, admit 0096, publish a different image
+or authorize another bridge. The separate exact runtime proof below is the sole 0096 allowance.
+A second, independent one-time runtime compatibility proof is closed to previous API and Web
+source `c43e9dc8da3eb19a1684ed28e989aafacdb5d8bf`, candidate
+`0d6078be7a50ed3f5761d66071527be003bd568f`, tree `5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`.
+It checks the full old/new Git mode, object type, blob identity, status and unique path for exactly
+three otherwise-prohibited transitions: addition of `0096_profile_contacts.sql` blob
+`dc9171185f0a7b75d80ecde64c6b08b4f3baa4c1`, and the reviewed observability verifier `.d.ts`
+`d282e352bc8cba454302bbaf5665b8341f67f78a` to `b6146afd73c86210bb1799dcd42a0e1760b346e1`
+and `.js` `84b77275876866a14c3da9983d6d965a26c0f3e5` to
+`e7f8d4bbc520a459b1d389b4ee9fd87aee04a7bd`. Every remaining path passes the unchanged runtime
+validator. Any altered or missing transition, duplicate path, additional migration or runtime
+contract change rejects. Each prior service identity is checked separately; the proof expires
+naturally once either prior source differs.
+
+The candidate API entrypoints, API/migrator Dockerfiles, database package exports/build and index
+are byte-identical to the prior source. Contact SQL/source is physically copied into the API image
+but unreachable from this fixed runtime entrypoint: only tests import the contact repository.
+The controller still requires `PHUB_MIGRATOR_ENABLED=false`, refuses an active migrator and can
+activate only API/Web with `--no-deps`. No migration is executed. The verifier scripts are operator
+control-plane code, absent from candidate API/Web final images; the executing verifier is always
+from the reviewed, pinned root-owned controller checkout. This exception does not relax provider
+monitoring, alert delivery, backup, rollback, excluded component or secret-lineage checks.
+
+Publish the exact candidate while it is current main, then merge and enroll the reviewed
+controller-only compatibility change. Candidate-to-controller ancestry must still contain only
+`CONTROLLER_FILES`; a later active contact reader (including PR #344), package export, API contract
+or any unrelated product change stops this rollout. The controller change has its own full CI and
+review; source publication and controller enrollment remain distinct authorized transitions.
+The candidate also contains the reviewed runtime `@grpc/grpc-js` patch, so full API CI and the
+900-second API/Web observation are required. Worker/Realtime, secrets, ingress and provider
+configuration remain outside this operation.
+
+Any other product, dependency, workflow, Compose, manifest validator or runtime-contract drift stops the
 operation. Source main CI and canonical publication custody are checked independently.
 
 The operator installs the original archive at the fixed candidate release path
