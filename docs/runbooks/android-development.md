@@ -40,9 +40,13 @@ Version 1.2 adds an encrypted, identity-bound local read cache for HomeBase and 
 directory. See [storage and retention rules](android-local-storage.md) for TTLs, byte limits,
 logout erasure, stale-data indicators and the explicit offline-login/command limits.
 
-## Yandex login (1.3/code 4)
+## Yandex login (1.4/code 5)
 
-The phone screen also offers **Войти через Яндекс**, using the same two legal acceptances.
+The connected native app opens **Войти с Яндекс ID** as its primary login screen.
+**Войти по СМС** opens the existing phone/code flow as an explicit alternative; its secondary
+**← Войти с Яндекс ID** action returns to the primary screen. Both methods require the same two
+legal acceptances. Opening the screen or switching methods does not initiate OAuth or send a code.
+Phone-only builds and synthetic/real-account phone previews retain their existing entry.
 `AndroidLoginGate` prevents account restoration or parallel phone login while a native attempt
 needs resolution. The system browser performs the existing server-owned Viva/Yandex flow.
 No client secret, Viva token, browser refresh cookie, WebView OAuth page or new dependency is used.
@@ -116,8 +120,8 @@ VITE_PHUB_API_BASE_URL=https://lk2.padlhub.su VITE_PHUB_TENANT_KEY=local-padel n
 ```
 
 `android:debug` bundles local assets, syncs the same public configuration into Android, then
-builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.3/code 4 replaces
-version 1.2/code 3 using the existing local debug signature. No release keys
+builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.4/code 5 replaces
+version 1.3/code 4 using the existing local debug signature. No release keys
 are created. Always inspect the packaged `capacitor.config.json`, manifest and signature.
 
 Builds have **no implicit API target**. Missing configuration displays a setup message. The native
