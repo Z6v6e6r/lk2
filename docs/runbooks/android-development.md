@@ -91,6 +91,14 @@ It contains no signing key. A debug APK signed by another developer/CI key will 
 Before store/release distribution, replace this association with the approved release certificate
 and remove the debug fingerprint; do not publish a release-signed APK under this test association.
 
+The exact callback path `/android/oauth/yandex` must return the static fallback HTML directly
+with HTTPS 200 and no `Location` header. nginx must select its `index.html` explicitly: directory
+canonicalization behind the TLS ingress otherwise redirects to its internal HTTP port 8080.
+The response is `no-store` and `no-referrer`; a missing fallback file must return 404 rather than
+the SPA shell. Also check HEAD, the trailing-slash path and the unchanged association file.
+The Docker-enabled CI fixture exercises the shipped nginx configuration; the browser test executes
+the fallback's fragment cleanup with synthetic values. Neither proves device App Link dispatch.
+
 After an approved Web/API rollout, require `/.well-known/assetlinks.json` to return HTTPS 200,
 JSON and the exact packaged APK certificate without redirects. On a controlled Android device,
 reverify App Links and read back `pm get-app-links ru.padlhub.app`; require `lk2.padlhub.su` to be
