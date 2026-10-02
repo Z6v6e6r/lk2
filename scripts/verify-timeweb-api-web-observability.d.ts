@@ -59,3 +59,9 @@ export function verifyTimewebObservabilityEvidenceForActivation(input: {
   releaseId: string;
   receiptPath: string;
 }): Record<string, unknown>;
+
+export function validateTimewebMonitoringEvidence(
+  monitoring: unknown,
+  contractInput: unknown,
+  observedAtInput: string,
+): true;

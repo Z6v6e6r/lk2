@@ -18,6 +18,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
+import { readInstalledApiBaseline, runManualApiWebUpgrade } from './timeweb-api-web-upgrade.js';
 import {
   runWebTransition,
   standardRange,
@@ -362,8 +363,9 @@ async function main(ciRunId) {
     const plan = standardRange(base, sha);
     if (!plan.eligible) fail(`Standard release ineligible: ${plan.reason}`);
   }
-  const baselineEnv = `${ROOT}/releases/${baselineId}/release.env`;
-  const baselineBytes = readSecure(baselineEnv);
+  const installedBaseline = readInstalledApiBaseline(baselineId);
+  const baselineEnv = installedBaseline.path;
+  const baselineBytes = installedBaseline.bytes;
   const values = parseEnv(baselineBytes);
   // A running worker must be exactly the image this release declared. Whether the baseline runs one
   // at all is its own business: the canonical renderer always declares it while Compose keeps it
@@ -533,7 +535,27 @@ async function main(ciRunId) {
   }
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main(process.argv[2]).catch(() => {
+  const args = process.argv.slice(2);
+  const manual =
+    args.length === 2 &&
+    ['--critical-api-web', '--critical-api-web-recover', '--critical-api-web-reconcile'].includes(
+      args[0],
+    );
+  const operation = manual
+    ? runManualApiWebUpgrade(
+        args[0] === '--critical-api-web'
+          ? 'deploy'
+          : args[0] === '--critical-api-web-recover'
+            ? 'recover'
+            : 'reconcile',
+        args[1],
+      ).then((receipt) => {
+        process.stdout.write(JSON.stringify(receipt) + '\n');
+      })
+    : args.length === 1
+      ? main(args[0])
+      : Promise.reject(new Error('Invalid controller arguments'));
+  operation.catch(() => {
     // External command errors may contain runtime environment; never print raw error/stdout.
     process.stderr.write(
       'STANDARD_WEB_DELIVERY_STOP: inspect the root-only receipt and workflow status; no automatic retry\n',

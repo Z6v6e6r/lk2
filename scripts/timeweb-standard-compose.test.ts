@@ -10,6 +10,7 @@ it.skipIf(process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')(
     });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('STANDARD_COMPOSE_REHEARSAL_PASS');
+    expect(result.stdout).toContain('API_WEB_COMPOSE_REHEARSAL_PASS');
   },
   180000,
 );

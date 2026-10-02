@@ -237,3 +237,130 @@ It uses the pinned nginx base, verifies a successful Web transition, injects obs
 restores the previous release label even when the digest is identical, and proves the unrelated API
 container ID stayed unchanged. The full CI integration job opts into this rehearsal. This is LOCAL
 Compose/rollback evidence, not canonical publication or production evidence.
+
+## Explicit critical API/Web upgrade
+
+The automatic numeric CI-run entry remains Web-only and uses the same eligibility rules above.
+Authentication, lockfile and deployment changes do not become eligible for that automatic route.
+An explicitly approved API/Web deployment may instead invoke the root-only manual mode in the
+same enrolled controller. This mode consumes an existing canonical first-attempt publication;
+it never publishes, reruns a workflow, renders a candidate secret set or runs candidate scripts.
+
+The controller is reviewed, merged, passes full main CI and is installed as a clean root-owned
+checkout at `/opt/phub/timeweb-beta/standard/source`; its enrolled `controllerSha` must match HEAD.
+The published candidate may precede the controller only when it is an ancestor and every intervening
+change is an addition/modification of the controller, its focused tests/rehearsal or this runbook.
+The sole closed exception is candidate `5429a69c` through bridge
+`9bbe61d63ba078f54d683d561ff097e96b59274e`: exactly nine reviewed additions from PRs #340/#342,
+with pinned `100644 blob` identities. They are never imported or executed by the controller.
+The bridge-to-controller range remains controller-only; subsequent changes to these files reject.
+Actual candidate runtime validation continues to reject migrations. This exception does not apply
+0096, publish a different image, or authorize another bridge.
+Any product, dependency, workflow, Compose, manifest validator or runtime-contract drift stops the
+operation. Source main CI and canonical publication custody are checked independently.
+
+The operator installs the original archive at the fixed candidate release path
+`releases/<candidate-sha>-<publication-run>-1/artifact/canonical-artifact.zip` under the beta root,
+with root-owned non-writable parents and a single-link `0600` file. The controller reads public
+GitHub metadata without credentials, verifies the exact run/artifact identity and archive digest,
+and accepts exactly `release-manifest.json` plus `release-manifest.sha256`. All five canonical
+image entries remain required. No GitHub token is provisioned on the host. GHCR pulls use the
+existing Docker configuration or anonymous access; missing access stops before activation.
+
+The fixed root-only request `/opt/phub/timeweb-beta/operator/api-web-upgrade.json` contains exactly:
+
+- `schema`: `PHUB_TIMEWEB_API_WEB_OPERATION_V1`;
+- `target`: `lk2.padlhub.su`;
+- `controllerSha`, `candidateSha`, `candidateTree`: full Git identities;
+- `sourceCiRunId`, `publicationRunId`, `artifactId`: decimal strings;
+- `artifactDigest`: GitHub archive `sha256:` digest; `manifestSha256`: manifest checksum;
+- `expectedApi` and `expectedWeb`: each actual prior container `id`, immutable `image`, and `releaseId`;
+- `confirmation`: `DEPLOY_API_WEB_<CANDIDATE12>_FROM_<API12>_<WEB12>` using uppercase SHA prefixes.
+
+The previous API and Web releases are independent. Success installs a root-only
+`installed-components.env` descriptor bound by checksum to the successful rollout receipt. It records
+the updated API/Web and actual unchanged Worker/Realtime digests plus `PHUB_RUNTIME_SECRET_SET_RELEASE_ID`
+for the existing secret set. Both automatic and manual controllers validate this descriptor on the
+next release. The original five-image canonical manifest remains untouched and separate; the descriptor
+never represents itself as that manifest. The current API release environment supplies
+unchanged runtime paths and excluded component declarations. Separate previous overlays preserve
+each service's actual release label and digest. The runtime-secret files and `.release-identity.json`
+remain byte-identical and bound to that baseline secret set; a successful component update does not
+claim to have rotated the complete runtime secret set.
+
+Before activation, create root-owned `0700`
+`backups/<candidate-sha>-<publication-run>-1-api-web` under the beta root. Required inputs are:
+
+- `database.pgcustom` (`0600`) and `database-backup-receipt.json` (`0600`), with schema
+  `PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1`, `baselineReleaseId`, fresh `completedAt` (at most one hour),
+  exact `backupFile`, `backupSha256`, `restoreVerified: true`, immutable PostgreSQL `restoreImage`,
+  and identical `restoredLedgerSha256`/`sourceLedgerSha256`. The backup must have been independently
+  restored into an isolated disposable database. Backup hashing streams files up to 64 GiB in
+  bounded memory and rejects descriptor changes during the read. Binary rollback never restores the live database.
+- The existing canonical provider inputs under `observability/timeweb-monitor-readback.json` and
+  `observability/alert-test-readback.json` (root-only `0600`). The controller reuses their original
+  strict validators: project `262717`, exact intended API/Web monitor IDs, configuration, at least
+  two regions, three healthy rounds, no incident, fresh provider capture (at most 30s), and recent
+  real email/Telegram delivery, release-owner acknowledgement and recovery proof. All prior alert
+  deadlines remain enforced. No alternate timestamp-only PASS schema is accepted.
+
+The shared `standard/active` path excludes all standard/manual releases: the automatic route owns a
+directory; this manual route atomically installs a single-link root-only pointer file. Each route
+refuses an existing path of either type. The operation copy is durable before atomic lock acquisition; the plan, overlays, backup marker and
+`PREPARING` journal are written only by its winner and must be complete before activation. A losing
+contender writes no plan/journal. A crash during preparation is recoverable from the operation copy:
+verify the exact unchanged previous pair, remove only the incomplete controller metadata, record
+`preparation-aborted.json` and fsync release of the owned pointer, without restarting a service. The controller writes an
+immutable `plan.json`, previous overlays, baseline/configuration hashes and `backup.complete`, then
+journals `PREPARED` before the first container change. A pre-activation failure attests the exact
+unchanged previous pair, writes `ABORTED` and releases the manual lock; it never restarts a service. It pulls and smokes API/Web, starts API with
+`--no-deps`, waits for exact identity/readiness, then starts Web with `--no-deps`. Durable intent
+phases bracket both actions. Every boundary attests unchanged non-target containers and runtime
+files. No profile, dependency restart, migration, ingress or provider write is available.
+
+After startup, the controller observes both private readiness and public HTTPS routes for 900s with
+61 samples/service. Any failed probe, container restart/replacement, excluded-state drift, missing
+fresh canonical provider readback or API p95 above 1500ms/Web p95 above 1000ms triggers restoration. This
+mode stops on the first failed probe, which is stricter than the existing error/readiness thresholds.
+`SUCCESS` is written only after final attestation; the successful receipt then releases the lock.
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-web /opt/phub/timeweb-beta/operator/api-web-upgrade.json
+```
+
+On handled failure the controller restores previous Web first, then previous API, proves their
+exact image/label/health and unchanged runtime files/non-target services, and records `ROLLED_BACK`.
+A failed restore records `ROLLBACK_FAILED`. Both retain the exclusion lock for reconciliation.
+Interrupted transactions cannot start a new candidate. The shared lock points to the transaction-owned
+operation copy and durable plan, so rotating the live request cannot remove recovery custody. They
+permit only explicit convergence to the recorded previous pair:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
+  /usr/bin/node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-web-recover /opt/phub/timeweb-beta/operator/api-web-upgrade.json
+```
+
+Recovery consumes locally retained previous images and never republishes or replaces the archive.
+A foreign runtime image, altered request/plan/overlays, secret drift or incomplete journal is STOP.
+Keep the lock and root-only evidence until the release owner reconciles them; do not delete the
+lock to make a retry pass. A successful API/Web receipt does not attest Worker/Realtime promotion,
+new identity enrollment, provider login, APK installation on a physical phone or any migration.
+
+Terminal `SUCCESS`/`ROLLED_BACK`/`ABORTED` receipts with a surviving lock use
+`--critical-api-web-reconcile` with the same fixed request path. This readback-only mode validates
+receipt/plan/overlay hashes, exact healthy terminal pair, runtime-secret lineage and excluded states,
+then durably records `RECONCILED` and removes/fsyncs only its own pointer. It runs no `up`, and permits
+retrying reconciliation after a crash between terminal journal and lock removal. Unknown or nonterminal
+states require recovery and retain their lock.
+
+The existing provider inputs must be maintained by the release owner's approved readback collector:
+read current authenticated monitor results at least every 15s, write a root-only temporary file in
+the canonical observability directory, fsync and atomically replace the existing readback. No
+monitor/alert configuration or provider mutation is performed by the deployment controller. Without
+available approved readback tooling and real current alert proof, stop before activation; never
+keep `readAt` fresh by merely changing its timestamp. Final canonical input snapshots and the raw
+observation are stored under the transaction and checksum-bound into `SUCCESS`, together with the
+installed descriptor.
