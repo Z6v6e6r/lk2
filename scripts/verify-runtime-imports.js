@@ -36,3 +36,12 @@ if (!(providerError instanceof IdentityProviderError)) {
 if (providerError.code !== 'AUTH_CODE_INVALID') {
   throw new Error(`Unexpected Viva adapter runtime error: ${providerError.code}`);
 }
+
+const { createContactReader } = await import('@phub/database/contacts');
+if (typeof createContactReader !== 'function') {
+  throw new Error('Contact reader runtime export is missing');
+}
+const contactReader = createContactReader({});
+if (Object.keys(contactReader).join(',') !== 'listForUser') {
+  throw new Error('Contact runtime capability must expose only listForUser');
+}

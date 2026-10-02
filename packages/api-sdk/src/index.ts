@@ -78,6 +78,9 @@ export type ClientRoutingPlan = components['schemas']['ClientRoutingPlan'];
 export type UserProfile = components['schemas']['UserProfile'];
 export type PlayerProfileView = components['schemas']['PlayerProfileView'];
 export type ProfileActionCapability = components['schemas']['ProfileActionCapability'];
+export type ProfileContacts = components['schemas']['ProfileContacts'];
+export type ProfileContact = components['schemas']['ProfileContact'];
+export type ProfileContactProvenance = components['schemas']['ProfileContactProvenance'];
 export type ProfilePrivacySettings = components['schemas']['ProfilePrivacySettings'];
 export type ProfilePrivacyUpdateRequest = components['schemas']['ProfilePrivacyUpdateRequest'];
 export type ProfileFriendship = components['schemas']['ProfileFriendship'];
@@ -793,6 +796,10 @@ export class PadlHubApiClient {
 
   public getPlayerProfile(userId: string): Promise<PlayerProfileView> {
     return this.request<PlayerProfileView>(`/profiles/${encodeURIComponent(userId)}`);
+  }
+
+  public getProfileContacts(): Promise<ProfileContacts> {
+    return this.request<ProfileContacts>('/profile/contacts');
   }
 
   public getProfilePrivacySettings(): Promise<ProfilePrivacySettings> {

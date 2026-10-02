@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { withTenantTransaction } from './connection.js';
 import { createContactRepository } from './contact-repository.js';
+import { createContactReader } from './contact-reader.js';
 
 function disposableAdminUrl(): string | undefined {
   const explicit = process.env.CONTACT_TEST_ADMIN_DATABASE_URL;
@@ -179,6 +180,76 @@ describePostgres('profile contacts with a separate non-bypass runtime role', () 
       'select rolsuper, rolbypassrls from pg_roles where rolname = current_user',
     );
     expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+  });
+
+  it('reads contacts through a SELECT-only non-bypass capability with no command/audit privileges', async () => {
+    for (const [tenant, subject] of [
+      [tenantId, userId],
+      [tenantId, sharedUserId],
+      [otherTenantId, otherUserId],
+    ]) {
+      await createContactRepository(runtime).create({
+        ...context(tenant),
+        userId: subject!,
+        type: 'EMAIL',
+        normalizedValue: 'shared-reader@example.test',
+        sourceKind: 'LOCAL',
+      });
+    }
+    const readRole = `contact_reader_${randomUUID().replaceAll('-', '')}`;
+    const password = randomUUID().replaceAll('-', '');
+    let readPool: Pool | undefined;
+    await admin.query(`create role ${readRole} login password '${password}'
+      nosuperuser nobypassrls nocreatedb nocreaterole noinherit`);
+    try {
+      await admin.query(`grant usage on schema profile to ${readRole}`);
+      await admin.query(`grant select on profile.contacts to ${readRole}`);
+      const url = new URL(adminUrl!);
+      url.username = readRole;
+      url.password = password;
+      readPool = new Pool({ connectionString: url.toString(), max: 2 });
+      const role = await readPool.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
+        'select rolsuper, rolbypassrls from pg_roles where rolname = current_user',
+      );
+      expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+      const reader = createContactReader(readPool);
+      const own = await reader.listForUser(tenantId, userId);
+      expect(own.length).toBeGreaterThan(0);
+      expect(own.every((contact) => contact.userId === userId)).toBe(true);
+      expect(await reader.listForUser(tenantId, otherUserId)).toEqual([]);
+      expect(await reader.listForUser(otherTenantId, userId)).toEqual([]);
+      expect(await reader.listForUser(tenantId, randomUUID())).toEqual([]);
+      expect(
+        (await reader.listForUser(tenantId, sharedUserId)).every(
+          (contact) => contact.userId === sharedUserId,
+        ),
+      ).toBe(true);
+      // Local tenant context was reset after releasing the pooled connection.
+      const noContext = await readPool.query('select id from profile.contacts');
+      expect(noContext.rows).toEqual([]);
+      const acl = await readPool.query<{
+        writes: boolean;
+        commands: boolean;
+        audit: boolean;
+        outbox: boolean;
+      }>(
+        `select has_table_privilege(current_user, (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'profile' and c.relname = 'contacts'), 'INSERT,UPDATE,DELETE') as writes,
+                has_table_privilege(current_user, (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'profile' and c.relname = 'contact_commands'), 'SELECT,INSERT,UPDATE,DELETE') as commands,
+                has_table_privilege(current_user, (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'audit' and c.relname = 'audit_log'), 'INSERT') as audit,
+                has_table_privilege(current_user, (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'audit' and c.relname = 'outbox_events'), 'INSERT') as outbox`,
+      );
+      expect(acl.rows[0]).toEqual({ writes: false, commands: false, audit: false, outbox: false });
+      await expect(
+        readPool.query('update profile.contacts set version = version + 1'),
+      ).rejects.toMatchObject({ code: '42501' });
+      await expect(readPool.query('select * from profile.contact_commands')).rejects.toMatchObject({
+        code: '42501',
+      });
+    } finally {
+      if (readPool) await readPool.end();
+      await admin.query(`drop owned by ${readRole}`);
+      await admin.query(`drop role ${readRole}`);
+    }
   });
 
   it('deduplicates sequential and concurrent create without duplicate audit or outbox', async () => {

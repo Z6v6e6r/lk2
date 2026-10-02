@@ -1018,6 +1018,45 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/profile/contacts:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getProfileContacts
+      summary: Read the authenticated user's own unverified contacts
+      description: |
+        LOCAL_ONLY contact addresses for the verified session subject in an authorized tenant.
+        Requires profile.read and a current ACTIVE account. No user, tenant or contact selector query parameters are accepted.
+        Provenance describes where the address was recorded; it proves no ownership or login rights.
+        This read never calls Viva, resolves accounts, changes contacts or returns verification claims.
+        The existing profile aggregate remains unchanged. Responses use Cache-Control: private, no-store.
+      responses:
+        '200':
+          description: Own contact list, including an empty list when no contacts are recorded.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Cache-Control:
+              schema:
+                type: string
+                enum: ['private, no-store']
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileContacts'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/profile/photo:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -5427,6 +5466,43 @@ components:
           description: True means the authoritative no-photo state is durably recorded.
         replayed:
           type: boolean
+    ProfileContacts:
+      type: object
+      additionalProperties: false
+      required: [contacts]
+      properties:
+        contacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProfileContact'
+    ProfileContact:
+      type: object
+      additionalProperties: false
+      required: [id, type, normalizedValue, provenance]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [PHONE, EMAIL]
+        normalizedValue:
+          type: string
+          description: Unverified address; phone uses E.164 and email uses stored lowercase normalization.
+        provenance:
+          $ref: '#/components/schemas/ProfileContactProvenance'
+    ProfileContactProvenance:
+      type: object
+      additionalProperties: false
+      required: [sourceKind, sourceUpdatedAt]
+      properties:
+        sourceKind:
+          type: string
+          enum: [LOCAL, VIVA]
+        sourceUpdatedAt:
+          type: [string, 'null']
+          format: date-time
+          description: Recorded source timestamp, not a verification or ownership proof.
     ProfilePrivacySettings:
       type: object
       additionalProperties: false

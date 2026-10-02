@@ -9,3 +9,13 @@
 Перед подключением первого runtime consumer добавить необходимый package export, проверить закреплённый runtime bundle и явно определить минимальные ACL для `profile.contacts` и связанных audit/outbox операций под фактической runtime-ролью. КЯ-01a не экспортирует repository из корня пакета и не предоставляет live-роли новые права.
 
 Никакой contact value не должен становиться ключом выбора аккаунта. КЯ-01b не меняет normal auth lookup по `(issuer,subject)`/provider profile ID, не создаёт login binding, verifier, восстановление, importer или staff-доступ. Изменение resolver-а допускается только в отдельной задаче после доказанной необходимости. Новый write API и UI также требуют отдельного решения. Для public contract нужны compatibility и security reviews, синтетические negative tests и фактические CI результаты.
+
+## Реализация КЯ-01b
+
+В инкременте выбран отдельный `GET /profile/contacts`, чтобы не менять существующий профиль.
+SDK предоставляет `getProfileContacts()`, API получает reader из `@phub/database/contacts` и
+проверяет текущий ACTIVE аккаунт через AuthService. Минимальная ACL и условия активации описаны в
+[домене profiles](../../domains/profiles.md#own-unverified-contacts-кя-01b).
+Фактические LOCAL/CI результаты фиксируются в Draft PR; эта запись не означает merge, деплой,
+применение `0096` или изменение прав на реальном target. Следующий продуктовый инкремент требует
+отдельного выбора: подтверждение контактов нельзя добавлять без trusted proof path.

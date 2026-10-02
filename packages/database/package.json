@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --sourcemap --clean"
+    "build": "tsup src/index.ts src/contact-reader.ts --format esm --dts --sourcemap --clean"
   },
   "dependencies": {
     "@phub/communities": "0.1.0",
@@ -17,5 +17,15 @@
     "@phub/locations": "0.1.0",
     "pg": "8.22.0",
     "zod": "4.4.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./contacts": {
+      "types": "./src/contact-reader.ts",
+      "import": "./dist/contact-reader.js"
+    }
   }
 }

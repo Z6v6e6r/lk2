@@ -101,6 +101,47 @@ relevant API and worker instance sets the provenance marker and remains a safe r
 Until that second phase, initializing a previously missing snapshot-only summary may still create
 one technical baseline point at import time.
 
+## Own unverified contacts (КЯ-01b)
+
+`GET /user/api/v1/{tenantKey}/profile/contacts` is a separate `LOCAL_ONLY` read of
+`profile.contacts`. It requires a signed client-audience JWT, an authorized tenant,
+`profile.read` and a current ACTIVE account from the existing AuthService. The server derives the
+user UUID from `sub` and the tenant from the resolved, authorized tenant key. Every query parameter
+is rejected. There is no other-user, staff, value-search or write route for this aggregate.
+
+The response is `{ contacts: [...] }`; an empty list means no recorded contacts. Each item contains
+only PadlHub contact `id`, `type`, `normalizedValue` and `provenance` with `sourceKind` and nullable
+`sourceUpdatedAt`. These are unverified addresses. Provenance proves neither ownership nor a login,
+linking or recovery right. The existing `GET /profile`, public player DTO and provider-phone flows
+are unchanged. There is no Viva call or fallback to legacy profile phone/email.
+
+All responses from this route use `Cache-Control: private, no-store`. Failed account/contact reads
+return stable errors without values, database errors or raw provider payloads in the response or
+log. The endpoint inherits the existing bounded API rate limit. ACTIVE account checking does not
+add a new per-request `sid` revocation mechanism; existing access-token expiry/session semantics
+continue to govern logout and token revocation.
+
+The API imports `createContactReader` from the separately built package entry
+`@phub/database/contacts`. That capability exposes only `listForUser`; contact commands stay
+internal. A transaction sets `app.tenant_id` locally, and SQL filters both tenant and user. The
+root package export and frozen trusted-inventory bundles remain unchanged.
+
+### Runtime prerequisites and rollback
+
+Before enabling this read on a real target, apply migration `0096_profile_contacts.sql` through its
+separately approved migration gate and inventory the **actual API database role** from its configured
+pool. The read adds only `USAGE` on `profile` and `SELECT` on `profile.contacts` to that role's existing
+privileges. It needs no privileges on `profile.contact_commands`, audit or outbox, no contact DML and
+no verifier permission. Do not widen grants because another command repository requires them.
+Verify non-owner, `NOSUPERUSER`, `NOBYPASSRLS`, effective membership/default grants and FORCE RLS with
+own/wrong/missing tenant probes. The TypeScript capability alone does not narrow the shared pool's
+credentials. Tests prove a synthetic SELECT-only non-bypass role; they do not prove live ACL.
+
+No API startup migration, live grant, backfill or provider write is part of КЯ-01b. Missing table,
+ACL or account checker causes `503 PROFILE_CONTACTS_UNAVAILABLE`, rather than a fabricated empty
+list or provider fallback. Application rollback restores the previous API/SDK; the expand-only
+contact tables can remain in place. No table/data deletion is required.
+
 ## Visibility tiers
 
 | Tier          | Visible data                                                 | Contact/chat                     |
