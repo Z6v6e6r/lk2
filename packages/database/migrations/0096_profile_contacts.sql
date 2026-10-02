@@ -17,6 +17,7 @@ create table profile.contacts (
   ),
   source_kind text not null check (source_kind in ('LOCAL', 'VIVA')),
   source_updated_at timestamptz,
+  check (source_kind <> 'VIVA' or source_updated_at is not null),
   version integer not null default 1 check (version > 0),
   created_by_actor_id uuid not null,
   updated_by_actor_id uuid not null,

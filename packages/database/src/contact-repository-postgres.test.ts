@@ -1,4 +1,9 @@
-import { randomUUID } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -218,6 +223,119 @@ describePostgres('profile contacts with a separate non-bypass runtime role', () 
     expect(evidence).not.toContain('shared@example.test');
   });
 
+  it('serializes a first-insert race and rejects reuse of its command key', async () => {
+    const repo = createContactRepository(runtime);
+    const input = {
+      ...context(),
+      userId,
+      type: 'EMAIL' as const,
+      normalizedValue: 'first-race@example.test',
+      sourceKind: 'LOCAL' as const,
+    };
+    const results = await Promise.all([
+      repo.create(input),
+      repo.create(input),
+      ...Array.from({ length: 4 }, () => repo.create({ ...input, ...context() })),
+    ]);
+    const created = results.find((result) => result.outcome === 'created' && !result.replayed);
+    if (!created || created.outcome !== 'created') throw new Error('CONTACT_TEST_SETUP_FAILED');
+    expect(
+      results.filter((result) => result.outcome === 'created' && !result.replayed),
+    ).toHaveLength(1);
+    expect(results.filter((result) => 'replayed' in result && result.replayed)).toHaveLength(1);
+    expect(
+      results.filter((result) => result.outcome === 'existing' && !result.replayed),
+    ).toHaveLength(4);
+    expect(await count(tenantId, 'audit.audit_log', created.contactId)).toBe(1);
+    expect(await count(tenantId, 'audit.outbox_events', created.contactId)).toBe(1);
+    expect(await repo.create({ ...input, normalizedValue: 'other-race@example.test' })).toEqual({
+      outcome: 'idempotency_conflict',
+    });
+    expect(
+      await repo.updateProvenance({
+        tenantId,
+        actorId,
+        correlationId: input.correlationId,
+        idempotencyKey: input.idempotencyKey,
+        contactId: created.contactId,
+        expectedVersion: 1,
+        sourceKind: 'LOCAL',
+      }),
+    ).toEqual({ outcome: 'idempotency_conflict' });
+    const evidence = await withTenantTransaction(admin, tenantId, async (client) => {
+      const rows = await client.query(
+        'select new_value from audit.audit_log where tenant_id = $1 and resource_id = $2',
+        [tenantId, created.contactId],
+      );
+      return JSON.stringify(rows.rows);
+    });
+    expect(evidence).not.toContain(input.normalizedValue);
+  });
+
+  it('forces tenant isolation on command receipts and rejects invalid direct provenance', async () => {
+    const repo = createContactRepository(runtime);
+    const input = {
+      ...context(),
+      userId,
+      type: 'EMAIL' as const,
+      normalizedValue: 'receipt-rls@example.test',
+      sourceKind: 'LOCAL' as const,
+    };
+    const created = await repo.create(input);
+    if (created.outcome !== 'created') throw new Error('CONTACT_TEST_SETUP_FAILED');
+    const catalogs = await admin.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `select relname, relrowsecurity, relforcerowsecurity from pg_class
+       where oid in ('profile.contacts'::regclass, 'profile.contact_commands'::regclass) order by relname`,
+    );
+    expect(catalogs.rows).toEqual([
+      { relname: 'contact_commands', relrowsecurity: true, relforcerowsecurity: true },
+      { relname: 'contacts', relrowsecurity: true, relforcerowsecurity: true },
+    ]);
+    const missing = await runtime.query<{ count: number }>(
+      'select count(*)::integer as count from profile.contact_commands',
+    );
+    expect(missing.rows[0]?.count).toBe(0);
+    await withTenantTransaction(runtime, otherTenantId, async (client) => {
+      const rows = await client.query(
+        'select * from profile.contact_commands where tenant_id = $1',
+        [tenantId],
+      );
+      expect(rows.rows).toHaveLength(0);
+    });
+    const insertReceipt = (client: Pool) =>
+      client.query(
+        `insert into profile.contact_commands
+       (tenant_id, actor_id, idempotency_key, request_hash, operation, contact_id, outcome, result_version)
+       values ($1, $2, $3, $4, 'CREATE', $5, 'created', 1)`,
+        [tenantId, actorId, context().idempotencyKey, '0'.repeat(64), created.contactId],
+      );
+    await expect(insertReceipt(runtime)).rejects.toMatchObject({ code: '42501' });
+    await expect(
+      withTenantTransaction(runtime, otherTenantId, (client) =>
+        client.query(
+          `insert into profile.contact_commands
+       (tenant_id, actor_id, idempotency_key, request_hash, operation, contact_id, outcome, result_version)
+       values ($1, $2, $3, $4, 'CREATE', $5, 'created', 1)`,
+          [tenantId, actorId, context().idempotencyKey, '0'.repeat(64), created.contactId],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '42501' });
+    await expect(
+      withTenantTransaction(runtime, tenantId, (client) =>
+        client.query(
+          `insert into profile.contacts
+       (tenant_id, user_id, type, normalized_value, source_kind, created_by_actor_id, updated_by_actor_id)
+       values ($1, $2, 'EMAIL', 'missing-source-date@example.test', 'VIVA', $3, $3)`,
+          [tenantId, userId, actorId],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+  });
+
   it('enforces composite FK, FORCE RLS, and a missing tenant context at the runtime role', async () => {
     const repo = createContactRepository(runtime);
     await expect(
@@ -372,26 +490,155 @@ describePostgres('profile contacts with a separate non-bypass runtime role', () 
     expect(await count(tenantId, 'audit.outbox_events', created.contactId)).toBe(2);
   });
 
-  it('rolls contact and receipt back if mandatory audit insertion fails', async () => {
-    const repo = createContactRepository(runtime);
-    await admin.query(`revoke insert on audit.audit_log from ${roleName}`);
-    const input = {
-      ...context(),
-      userId,
-      type: 'EMAIL' as const,
-      normalizedValue: 'rollback@example.test',
-      sourceKind: 'LOCAL' as const,
-    };
+  it.each(['audit.audit_log', 'audit.outbox_events'] as const)(
+    'rolls contact, receipt and earlier evidence back when %s insertion fails',
+    async (table) => {
+      const repo = createContactRepository(runtime);
+      await admin.query(`revoke insert on ${table} from ${roleName}`);
+      const input = {
+        ...context(),
+        userId,
+        type: 'EMAIL' as const,
+        normalizedValue:
+          table === 'audit.audit_log'
+            ? 'audit-rollback@example.test'
+            : 'outbox-rollback@example.test',
+        sourceKind: 'LOCAL' as const,
+      };
+      try {
+        await expect(repo.create(input)).rejects.toMatchObject({ code: '42501' });
+      } finally {
+        await admin.query(`grant insert on ${table} to ${roleName}`);
+      }
+      expect(await repo.listForUser(tenantId, userId)).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ normalizedValue: input.normalizedValue }),
+        ]),
+      );
+      await withTenantTransaction(admin, tenantId, async (client) => {
+        expect(
+          (
+            await client.query(
+              'select * from profile.contact_commands where tenant_id = $1 and idempotency_key = $2',
+              [tenantId, input.idempotencyKey],
+            )
+          ).rows,
+        ).toHaveLength(0);
+        for (const evidenceTable of ['audit.audit_log', 'audit.outbox_events']) {
+          expect(
+            (
+              await client.query(
+                `select * from ${evidenceTable} where tenant_id = $1 and correlation_id = $2`,
+                [tenantId, input.correlationId],
+              )
+            ).rows,
+          ).toHaveLength(0);
+        }
+      });
+      expect(await repo.create(input)).toMatchObject({ outcome: 'created', replayed: false });
+    },
+  );
+
+  it('upgrades 0095 with the canonical migrator, reapplies as no-op and rolls failed DDL back', async () => {
+    // The connection is already restricted to the explicit local task fixture or Actions service.
+    // Every destructive operation below names only this test-created random database.
+    const database = `kya01a_rehearsal_${randomUUID().replaceAll('-', '')}`;
+    const directory = await mkdtemp(resolve(tmpdir(), 'kya01a-migrations-'));
+    const migrationDirectory = resolve(directory, 'packages/database/migrations');
+    const url = new URL(adminUrl!);
+    url.pathname = `/${database}`;
+    let fixture: Pool | undefined;
+    let created = false;
+    const migration = '0096_profile_contacts.sql';
     try {
-      await expect(repo.create(input)).rejects.toMatchObject({ code: '42501' });
+      await admin.query(`create database ${database}`);
+      created = true;
+      fixture = new Pool({ connectionString: url.toString(), max: 2 });
+      await mkdir(migrationDirectory, { recursive: true });
+      const sourceDirectory = resolve(process.cwd(), 'packages/database/migrations');
+      const predecessorFiles = (await readdir(sourceDirectory))
+        .filter((name) => /^\d+.*\.sql$/.test(name) && name < migration)
+        .sort();
+      expect(predecessorFiles.at(-1)).toBe('0095_chat_media_constraint_validation.sql');
+      for (const filename of predecessorFiles) {
+        await copyFile(resolve(sourceDirectory, filename), resolve(migrationDirectory, filename));
+      }
+      const migrate = () =>
+        promisify(execFile)(
+          process.execPath,
+          [
+            '--import',
+            resolve(process.cwd(), 'node_modules/tsx/dist/loader.mjs'),
+            resolve(process.cwd(), 'scripts/migrate.ts'),
+          ],
+          {
+            cwd: directory,
+            timeout: 120_000,
+            maxBuffer: 1_000_000,
+            env: {
+              PATH: process.env.PATH ?? '',
+              DATABASE_URL: url.toString(),
+              TSX_TSCONFIG_PATH: resolve(process.cwd(), 'tsconfig.json'),
+              CHAT_PUSH_FOUNDATION_MAINTENANCE_ACK: 'CHAT_PUSH_FOUNDATION_EMPTY_DATABASE_V1',
+            },
+          },
+        );
+      await migrate();
+      expect(
+        (
+          await fixture.query<{ contacts: string | null }>(
+            "select to_regclass('profile.contacts') as contacts",
+          )
+        ).rows[0]?.contacts,
+      ).toBeNull();
+      const before = (
+        await fixture.query(
+          'select filename, checksum, applied_at from schema_migrations order by filename',
+        )
+      ).rows;
+      await copyFile(resolve(sourceDirectory, migration), resolve(migrationDirectory, migration));
+      expect((await migrate()).stdout.trim()).toBe(`Applied ${migration}`);
+      const checksum = createHash('sha256')
+        .update(await readFile(resolve(sourceDirectory, migration)))
+        .digest('hex');
+      const after = (
+        await fixture.query(
+          'select filename, checksum, applied_at from schema_migrations order by filename',
+        )
+      ).rows;
+      expect(after.slice(0, -1)).toEqual(before);
+      expect(after.at(-1)).toMatchObject({ filename: migration, checksum });
+      expect((await migrate()).stdout.trim()).toBe('');
+      expect(
+        (
+          await fixture.query(
+            'select filename, checksum, applied_at from schema_migrations order by filename',
+          )
+        ).rows,
+      ).toEqual(after);
+      await writeFile(
+        resolve(migrationDirectory, '9999_kya01a_failure.sql'),
+        'create table profile.kya01a_failure_probe (id integer); select 1 / 0;',
+      );
+      await expect(migrate()).rejects.toMatchObject({ code: 1 });
+      expect(
+        (
+          await fixture.query<{ probe: string | null }>(
+            "select to_regclass('profile.kya01a_failure_probe') as probe",
+          )
+        ).rows[0]?.probe,
+      ).toBeNull();
+      expect(
+        (
+          await fixture.query(
+            'select filename, checksum, applied_at from schema_migrations order by filename',
+          )
+        ).rows,
+      ).toEqual(after);
     } finally {
-      await admin.query(`grant insert on audit.audit_log to ${roleName}`);
+      if (fixture) await fixture.end();
+      if (created) await admin.query(`drop database ${database}`);
+      await rm(directory, { recursive: true, force: true });
     }
-    expect(await repo.listForUser(tenantId, userId)).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ normalizedValue: 'rollback@example.test' }),
-      ]),
-    );
-    expect(await repo.create(input)).toMatchObject({ outcome: 'created', replayed: false });
-  });
+  }, 180_000);
 });
