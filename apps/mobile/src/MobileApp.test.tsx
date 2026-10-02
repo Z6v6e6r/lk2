@@ -29,13 +29,16 @@ describe('shared LK2 Android UI', () => {
       screen.queryByText(/после закрытия приложения потребуется войти снова/),
     ).not.toBeInTheDocument();
   });
-  it('offers native Yandex only with the dedicated gateway and requires both legal acceptances', async () => {
+  it('starts with Yandex ID when the native gateway is available and requires both legal acceptances', async () => {
     const gateway = createGateway();
     const start = vi.spyOn(gateway, 'startVivaOAuth').mockResolvedValue(undefined);
     render(
       <App gateway={gateway} tenantKey="local-padel" clientPlatform="android" androidYandexLogin />,
     );
-    const button = await screen.findByRole('button', { name: 'Войти через Яндекс' });
+    const button = await screen.findByRole('button', { name: 'Войти с Яндекс ID' });
+    expect(screen.queryByRole('textbox', { name: 'Номер телефона' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Войти по СМС' })).toBeEnabled();
+    expect(start).not.toHaveBeenCalled();
     fireEvent.click(button);
     expect(start).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toHaveTextContent('Подтвердите публичную оферту');
@@ -45,7 +48,56 @@ describe('shared LK2 Android UI', () => {
       provider: 'yandex',
       acceptance: { publicOfferAccepted: true, personalDataPolicyAccepted: true },
     });
-    expect(screen.getByRole('button', { name: 'Получить код' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Войти по СМС' })).toBeDisabled();
+  });
+  it('keeps SMS as an explicit alternative and preserves consent when switching methods', async () => {
+    const gateway = createGateway();
+    const start = vi.spyOn(gateway, 'startVivaOAuth').mockResolvedValue(undefined);
+    const request = vi.spyOn(gateway, 'requestCode').mockResolvedValue({
+      challengeId: '00000000-0000-4000-8000-000000000003',
+      maskedPhone: '+7 *** ***-**-01',
+      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      resendAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    render(
+      <App gateway={gateway} tenantKey="local-padel" clientPlatform="android" androidYandexLogin />,
+    );
+    await screen.findByRole('button', { name: 'Войти с Яндекс ID' });
+    for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole('button', { name: 'Войти по СМС' }));
+    const phone = screen.getByRole('textbox', { name: 'Номер телефона' });
+    expect(
+      screen.getAllByRole('checkbox').every((checkbox) => (checkbox as HTMLInputElement).checked),
+    ).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '← Войти с Яндекс ID' }));
+    expect(screen.queryByRole('textbox', { name: 'Номер телефона' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Войти по СМС' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Номер телефона' }), {
+      target: { value: '+79990000001' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Получить код' }));
+    expect(await screen.findByRole('textbox', { name: 'Код из СМС' })).toBeInTheDocument();
+    expect(request).toHaveBeenCalledExactlyOnceWith('+79990000001');
+    expect(start).not.toHaveBeenCalled();
+    expect(phone).not.toBeInTheDocument();
+  });
+  it('keeps SMS available after a failed Yandex launch without starting it automatically', async () => {
+    const gateway = createGateway();
+    vi.spyOn(gateway, 'startVivaOAuth').mockRejectedValue(new Error('launch unavailable'));
+    const request = vi.spyOn(gateway, 'requestCode');
+    render(
+      <App gateway={gateway} tenantKey="local-padel" clientPlatform="android" androidYandexLogin />,
+    );
+    const button = await screen.findByRole('button', { name: 'Войти с Яндекс ID' });
+    for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
+    fireEvent.click(button);
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Войти по СМС' }));
+    expect(screen.getByRole('textbox', { name: 'Номер телефона' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(request).not.toHaveBeenCalled();
   });
   it.each(['/giftcard', '/gift-certificates', '/games/new', '/chats', '/communities'])(
     'does not expose browser-only commerce/provider/upload controls at %s',

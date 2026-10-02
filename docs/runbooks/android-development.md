@@ -42,7 +42,11 @@ logout erasure, stale-data indicators and the explicit offline-login/command lim
 
 ## Yandex login (1.3/code 4)
 
-The phone screen also offers **Войти через Яндекс**, using the same two legal acceptances.
+The connected native app opens **Войти с Яндекс ID** as its primary login screen.
+**Войти по СМС** opens the existing phone/code flow as an explicit alternative; its secondary
+**← Войти с Яндекс ID** action returns to the primary screen. Both methods require the same two
+legal acceptances. Opening the screen or switching methods does not initiate OAuth or send a code.
+Phone-only builds and synthetic/real-account phone previews retain their existing entry.
 `AndroidLoginGate` prevents account restoration or parallel phone login while a native attempt
 needs resolution. The system browser performs the existing server-owned Viva/Yandex flow.
 No client secret, Viva token, browser refresh cookie, WebView OAuth page or new dependency is used.
