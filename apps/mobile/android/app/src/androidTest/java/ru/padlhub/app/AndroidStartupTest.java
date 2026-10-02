@@ -22,7 +22,7 @@ public class AndroidStartupTest {
         return result.get();
     }
 
-    @Test public void configuredBundledAppUsesModernBridgeAndOpensPhoneForm() throws Exception {
+    @Test public void configuredBundledAppUsesModernBridgeAndOpensYandexWithSmsAlternative() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         // This UI check explicitly requires the configured test APK, never default/offline assets.
         org.junit.Assume.assumeTrue("true".equals(InstrumentationRegistry.getArguments().getString("configuredApp")));
@@ -32,26 +32,32 @@ public class AndroidStartupTest {
             assertNull(java.net.CookieHandler.getDefault());
             boolean form = false;
             for (int i = 0; i < 120; i++) {
-                if ("true".equals(evaluate(activity, "document.body.innerText.includes('Получить код')"))) { form = true; break; }
+                if ("true".equals(evaluate(activity, "document.body.innerText.includes('Войти по СМС')"))) { form = true; break; }
                 Thread.sleep(250);
             }
-            assertTrue("Phone form must replace the offline placeholder", form);
+            assertTrue("Yandex entry must replace the offline placeholder", form);
             assertEquals("true", evaluate(activity, "typeof CapacitorCookiesAndroidInterface === 'undefined' && typeof CapacitorHttpAndroidInterface === 'undefined'"));
             assertEquals("true", evaluate(activity, "document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]').content.includes(\"frame-src 'none'\")"));
             assertEquals("false", evaluate(activity, "document.body.innerText.includes('ещё не подключена')"));
-            assertEquals("true", evaluate(activity, "Array.from(document.querySelectorAll('button')).some(b => b.textContent.includes('Войти через Яндекс'))"));
-            evaluate(activity, "Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Войти через Яндекс')).click(); true");
+            assertEquals("true", evaluate(activity, "Array.from(document.querySelectorAll('button')).some(b => b.textContent.includes('Войти с Яндекс ID'))"));
+            evaluate(activity, "Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Войти с Яндекс ID')).click(); true");
             awaitJs(activity, "document.querySelector('[role=alert]')?.textContent.includes('Подтвердите публичную оферту')");
+            assertEquals("true", evaluate(activity, "document.querySelector('input[type=tel]') === null"));
+            evaluate(activity, "Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Войти по СМС').click(); true");
+            awaitJs(activity, "!!document.querySelector('input[type=tel]') && document.body.innerText.includes('Получить код')");
+            capture("sms-alternative-portrait.png");
+            evaluate(activity, "Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('← Войти с Яндекс ID')).click(); true");
+            awaitJs(activity, "!!document.querySelector('.viva-login-button') && document.querySelector('input[type=tel]') === null");
             evaluate(activity, "document.querySelector('.viva-login-button').scrollIntoView({block: 'center'}); true");
             awaitJs(activity, "document.querySelector('.viva-login-button').getBoundingClientRect().bottom <= window.innerHeight");
             assertEquals("true", evaluate(activity, "document.documentElement.scrollWidth <= window.innerWidth"));
-            capture("yandex-phone-portrait.png");
+            capture("yandex-primary-portrait.png");
             activity.runOnUiThread(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
             awaitJs(activity, "window.innerWidth > window.innerHeight");
             evaluate(activity, "document.querySelector('.viva-login-button').focus(); document.querySelector('.viva-login-button').scrollIntoView({block: 'center'}); true");
             awaitJs(activity, "document.querySelector('.viva-login-button').getBoundingClientRect().bottom <= window.innerHeight");
             assertEquals("true", evaluate(activity, "document.documentElement.scrollWidth <= window.innerWidth"));
-            capture("yandex-phone-landscape.png");
+            capture("yandex-primary-landscape.png");
             activity.runOnUiThread(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED));
         } finally { activity.runOnUiThread(activity::finish); }
     }
@@ -92,7 +98,7 @@ public class AndroidStartupTest {
         MainActivity activity = (MainActivity) instrumentation.startActivitySync(
             new Intent(instrumentation.getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
-            awaitJs(activity, "document.body.innerText.includes('Получить код')");
+            awaitJs(activity, "document.body.innerText.includes('Войти по СМС')");
             AndroidSessionPolicy policy = new AndroidSessionPolicy(AndroidSessionTest.ORIGIN, "local-padel", "test", "4", false);
             AndroidSessionTest.MemoryStore credentials = new AndroidSessionTest.MemoryStore();
             AndroidYandexLoginTest.Journal journal = new AndroidYandexLoginTest.Journal();
@@ -144,7 +150,7 @@ public class AndroidStartupTest {
         MainActivity activity = (MainActivity) instrumentation.startActivitySync(
             new Intent(instrumentation.getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         try {
-            awaitJs(activity, "typeof Capacitor !== 'undefined' && document.body.innerText.includes('Получить код')");
+            awaitJs(activity, "typeof Capacitor !== 'undefined' && document.body.innerText.includes('Войти по СМС')");
             AndroidReadCacheTest.Fixture fixture = new AndroidReadCacheTest.Fixture();
             org.json.JSONObject session = new org.json.JSONObject(AndroidSessionTest.SESSION);
             session.getJSONObject("user").put("displayName", "Тестовый игрок");
