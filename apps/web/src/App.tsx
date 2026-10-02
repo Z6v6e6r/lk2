@@ -732,10 +732,15 @@ export function App({
   const iosBrowser = isIOSBrowser(browserNavigator);
   const localPreview = import.meta.env.DEV && import.meta.env.VITE_LK2_LOCAL_PREVIEW === '1';
   const realAccountPreview = import.meta.env.DEV && import.meta.env.VITE_LK2_REAL_ACCOUNT === '1';
+  const nativeYandexLogin = clientPlatform === 'android' && androidYandexLogin;
   const entryView =
-    clientPlatform === 'android' || localPreview || realAccountPreview
+    localPreview || realAccountPreview
       ? 'phone'
-      : preferredAuthEntryView(browserNavigator);
+      : clientPlatform === 'android'
+        ? nativeYandexLogin
+          ? 'oauth'
+          : 'phone'
+        : preferredAuthEntryView(browserNavigator);
   const [currentTime, setCurrentTime] = useState(() => Date.now());
   const [homeBase, setHomeBase] = useState<HomeBase | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
@@ -2988,7 +2993,7 @@ export function App({
                 Войти в личный кабинет
               </h1>
 
-              {iosBrowser ? (
+              {clientPlatform === 'web' && iosBrowser ? (
                 <div id="ios-oauth-guidance" className="ios-auth-guidance" role="note">
                   <strong>На iPhone откройте сайт в Safari</strong>
                   <span>
@@ -3002,12 +3007,14 @@ export function App({
                 <button
                   className="viva-login-button"
                   type="button"
-                  aria-describedby={iosBrowser ? 'ios-oauth-guidance' : undefined}
+                  aria-describedby={
+                    clientPlatform === 'web' && iosBrowser ? 'ios-oauth-guidance' : undefined
+                  }
                   disabled={isStartingViva}
                   onClick={() => startVivaOAuth('yandex')}
                 >
                   <VivaProviderIcon provider="yandex" />
-                  <span>Yandex</span>
+                  <span>{nativeYandexLogin ? 'Войти с Яндекс ID' : 'Yandex'}</span>
                 </button>
               </div>
 
@@ -3051,14 +3058,14 @@ export function App({
                   {state.error}
                 </p>
               ) : null}
-              {!iosBrowser ? (
+              {!iosBrowser || nativeYandexLogin ? (
                 <button
                   className="text-button auth-alternative"
                   type="button"
                   disabled={isStartingViva}
                   onClick={() => dispatch({ type: 'edit-phone' })}
                 >
-                  Войти по номеру телефона
+                  {nativeYandexLogin ? 'Войти по СМС' : 'Войти по номеру телефона'}
                 </button>
               ) : null}
             </>
@@ -3164,18 +3171,15 @@ export function App({
                 </PrimaryButton>
               </form>
 
-              {clientPlatform === 'android' && androidYandexLogin ? (
-                <div className="viva-login-options" aria-label="Другой способ входа">
-                  <button
-                    className="viva-login-button"
-                    type="button"
-                    disabled={isRequesting || isStartingViva}
-                    onClick={() => startVivaOAuth('yandex')}
-                  >
-                    <VivaProviderIcon provider="yandex" />
-                    <span>{isStartingViva ? 'Открываем Яндекс…' : 'Войти через Яндекс'}</span>
-                  </button>
-                </div>
+              {nativeYandexLogin && !localPreview && !realAccountPreview ? (
+                <button
+                  className="text-button auth-alternative"
+                  type="button"
+                  disabled={isRequesting || isStartingViva}
+                  onClick={() => dispatch({ type: 'oauth-view' })}
+                >
+                  ← Войти с Яндекс ID
+                </button>
               ) : null}
 
               {import.meta.env.DEV && !realAccountPreview ? (

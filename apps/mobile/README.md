@@ -90,6 +90,14 @@ tenant keys outside the OpenAPI pattern `[a-z0-9][a-z0-9-]{1,62}` are rejected. 
 actual target tenant from authorized configuration before live account testing. No real OTP,
 live authenticated API call or provider operation is part of local synthetic verification.
 
+## Login roadmap
+
+The connected Android entry uses Yandex ID through VIVA as the primary method and exposes SMS
+as an explicit alternative. iOS remains OTP-only until its system OAuth/app-return contract is
+implemented. The [local-auth enrollment plan](../../docs/plans/mobile-local-auth-enrollment.md)
+prepares verified phone plus verified email/password on one existing PadlHub UUID; it does not
+enable LOCAL login or change provider/session contracts.
+
 ## Session verification
 
 Run JS adapter, lifecycle and rendered form tests from the repository root:
