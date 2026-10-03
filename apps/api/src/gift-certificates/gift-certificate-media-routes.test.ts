@@ -6,7 +6,7 @@ import type { Pool } from 'pg';
 import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApp } from '../app.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 import type { GiftCertificateMediaStore } from './gift-certificate-media-store.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';

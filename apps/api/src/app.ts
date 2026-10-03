@@ -219,6 +219,11 @@ export interface BuildAppOptions {
   readonly logger: Logger;
   readonly pool?: Pool;
   readonly authService?: AuthService;
+  readonly accessSessionChecker?: (input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly sessionId: string;
+  }) => Promise<boolean>;
   readonly authDependencyReady?: () => Promise<boolean>;
   readonly runtimeContourAttestation?: RuntimeContourAttestation;
   readonly communityDirectory?: CommunityDirectoryService;
@@ -498,7 +503,7 @@ async function authenticateForAudience(
     const result = await jwtVerify(
       authorization.slice('Bearer '.length),
       new TextEncoder().encode(config.JWT_ACCESS_SECRET),
-      { issuer: config.JWT_ISSUER, audience, algorithms: ['HS256'] },
+      { issuer: config.JWT_ISSUER, audience, algorithms: ['HS256'], requiredClaims: ['exp'] },
     );
     const payload = result.payload as Partial<PadlHubClaims>;
     if (
@@ -619,6 +624,38 @@ async function resolveTenant(request: FastifyRequest, reply: FastifyReply): Prom
     sendApiError(request, reply, 403, 'TENANT_ACCESS_DENIED', 'Доступ к организации запрещён.');
     return;
   }
+  const checker = request.server.accessSessionChecker;
+  if (!checker) {
+    sendApiError(
+      request,
+      reply,
+      503,
+      'AUTH_SESSION_CHECK_UNAVAILABLE',
+      'Проверка сессии недоступна.',
+    );
+    return;
+  }
+  try {
+    const active = await checker({
+      tenantId,
+      userId: request.padlHubClaims.sub,
+      sessionId: request.padlHubClaims.sid,
+    });
+    if (active !== true) {
+      sendApiError(request, reply, 401, 'AUTH_SESSION_REVOKED', 'Сессия недействительна.');
+      return;
+    }
+  } catch {
+    // Do not log database errors or credentials from the authorization dependency.
+    sendApiError(
+      request,
+      reply,
+      503,
+      'AUTH_SESSION_CHECK_UNAVAILABLE',
+      'Проверка сессии недоступна.',
+    );
+    return;
+  }
   request.tenantId = tenantId;
 }
 
@@ -660,6 +697,7 @@ async function resolvePublicTenant(request: FastifyRequest, reply: FastifyReply)
 
 declare module 'fastify' {
   interface FastifyInstance {
+    accessSessionChecker: BuildAppOptions['accessSessionChecker'] | null;
     config: AppConfig;
     pool?: Pool;
   }
@@ -728,6 +766,12 @@ export async function buildApp(options: BuildAppOptions) {
   } as const;
 
   app.decorate('config', options.config);
+  const accessSessionChecker =
+    options.accessSessionChecker ??
+    (typeof options.authService?.isAccessSessionActive === 'function'
+      ? options.authService.isAccessSessionActive.bind(options.authService)
+      : undefined);
+  app.decorate('accessSessionChecker', accessSessionChecker ?? null);
   if (options.pool) app.decorate('pool', options.pool);
 
   await app.register(cookie);

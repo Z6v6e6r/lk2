@@ -104,7 +104,10 @@ describe('PostgresAuthRepository Viva delegations', () => {
     expect(activeCheck).toContain('rs.family_id = $2');
     expect(activeCheck).toContain("e.provider = 'VIVA'");
     expect(activeCheck).toContain("u.status = 'ACTIVE'");
-    expect(activeCheck).toContain('for update of rs, u, e');
+    expect(activeCheck).toContain('for update of rs, e');
+    const userLock = statements.findIndex((text) => text.includes('from identity.users where'));
+    expect(userLock).toBeGreaterThan(-1);
+    expect(userLock).toBeLessThan(statements.indexOf(activeCheck!));
     expect(
       statements.some((text) => text.includes('insert into integration.user_delegations')),
     ).toBe(true);
@@ -191,6 +194,10 @@ describe('PostgresAuthRepository Viva delegations', () => {
     const delegationUpdate = statements.findIndex((text) =>
       text.includes('update integration.user_delegations'),
     );
+    const userLock = statements.findIndex((text) => text.includes('for update of u'));
+    const sessionLock = statements.findIndex((text) => text.includes('select family_id, user_id'));
+    expect(userLock).toBeGreaterThan(-1);
+    expect(userLock).toBeLessThan(sessionLock);
     expect(sessionUpdate).toBeGreaterThan(-1);
     expect(delegationUpdate).toBeGreaterThan(sessionUpdate);
     expect(statements.filter((text) => text === 'begin')).toHaveLength(2);
@@ -375,5 +382,49 @@ describe('PostgresAuthRepository durable client access', () => {
     expect(
       statements.some((text) => text.includes('insert into identity.user_access_profiles')),
     ).toBe(false);
+  });
+});
+
+describe('PostgresAuthRepository access session checks', () => {
+  it.each([true, false, undefined])(
+    'returns only a strict authoritative active result %s',
+    async (active) => {
+      const query = vi.fn().mockResolvedValue({ rows: [{ active }], rowCount: 1 });
+      const release = vi.fn();
+      const repository = new PostgresAuthRepository({
+        connect: () => Promise.resolve({ query, release }),
+      } as never);
+      const sessionId = '55555555-5555-4555-8555-555555555555';
+      expect(await repository.isAccessSessionActive({ tenantId, userId, sessionId })).toBe(
+        active === true,
+      );
+      expect(query).toHaveBeenCalledWith("select set_config('app.tenant_id', $1, true)", [
+        tenantId,
+      ]);
+      expect(query).toHaveBeenCalledWith("set local statement_timeout = '3s'");
+      expect(query).toHaveBeenCalledWith(expect.stringContaining('original.id = $3'), [
+        tenantId,
+        userId,
+        sessionId,
+      ]);
+      expect(query).toHaveBeenCalledWith('commit');
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+  it('rolls back and releases its connection when the authorization query fails', async () => {
+    const query = vi.fn((sql: string) =>
+      sql.includes('select exists')
+        ? Promise.reject(new Error('unavailable'))
+        : Promise.resolve({ rows: [], rowCount: 0 }),
+    );
+    const release = vi.fn();
+    const repository = new PostgresAuthRepository({
+      connect: () => Promise.resolve({ query, release }),
+    } as never);
+    await expect(
+      repository.isAccessSessionActive({ tenantId, userId, sessionId: sessionFamilyId }),
+    ).rejects.toThrow('unavailable');
+    expect(query).toHaveBeenCalledWith('rollback');
+    expect(release).toHaveBeenCalledOnce();
   });
 });

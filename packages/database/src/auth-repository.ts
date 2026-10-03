@@ -619,6 +619,12 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
       assertTokenHash(input.nextTokenHash);
       assertFutureExpiry(input.nextExpiresAt);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query(
+          `select u.id from identity.users u
+           join identity.refresh_sessions rs on rs.tenant_id = u.tenant_id and rs.user_id = u.id
+           where rs.tenant_id = $1 and rs.token_hash = $2 for update of u`,
+          [input.tenantId, input.currentTokenHash],
+        );
         const current = await queryOne<RefreshSessionRow>(
           client,
           `
@@ -731,6 +737,12 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
     revokeRefreshSession(input) {
       assertTokenHash(input.tokenHash);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query(
+          `select u.id from identity.users u
+           join identity.refresh_sessions rs on rs.tenant_id = u.tenant_id and rs.user_id = u.id
+           where rs.tenant_id = $1 and rs.token_hash = $2 for update of u`,
+          [input.tenantId, input.tokenHash],
+        );
         const current = await queryOne<{ family_id: string; user_id: string } & QueryResultRow>(
           client,
           `

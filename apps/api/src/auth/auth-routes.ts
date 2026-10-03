@@ -95,6 +95,7 @@ function errorMessage(code: string): string {
     AUTH_CHALLENGE_IN_PROGRESS: 'Код уже проверяется. Подождите и повторите.',
     AUTH_RATE_LIMITED: 'Слишком много попыток. Повторите позже.',
     AUTH_PROVIDER_UNAVAILABLE: 'Вход временно недоступен. Повторите позже.',
+    AUTH_SESSION_CHECK_UNAVAILABLE: 'Проверка сессии недоступна.',
     AUTH_OAUTH_BROWSER_MISMATCH: 'Сессия входа открыта в другом браузере. Начните вход заново.',
     AUTH_ADMIN_ACCESS_DENIED: 'Для этой учётной записи доступ в ЦУП не выдан.',
     AUTH_SESSION_REVOKED: 'Сессия завершена. Войдите снова.',

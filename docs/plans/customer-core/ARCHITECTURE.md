@@ -73,3 +73,31 @@ flowchart LR
 | `PATCH .../{userId}`, `POST .../{userId}/recovery`, `POST .../{userId}/sessions/revoke`, `GET .../{userId}/conflicts/history` (предложение)   | Staff отдельные `customers.correct/recovery/session-revoke/audit.read`, reason/ticket, проверенная station relation и step-up                                                              | key + expectedVersion, audit actor/reason/old-new redacted, CAS 409, 403 scope, 422 forbidden; recovery запускает доказательство конкретного аккаунта, независимое от общего контакта, staff не видит пароль/код; read history bounded.                                                                                                              |
 
 Никакого параллельного подтверждения одного кода у Viva и LOCAL и скрытого fallback. Владение телефоном не доказывает владение ранее созданным аккаунтом (решение review PR #242); link требует доказательства старого аккаунта и нового метода, а merge двух аккаунтов — отдельного проекта. Прямые Яндекс ID, Сбер ID, Т-ID — отдельные будущие provider integrations: сначала договор/протокол, issuer/audience/subject/claims, кнопка, условия и recovery; Viva-обёртка Яндекса не доказывает переносимость subject. Один рабочий LOCAL способ входа достаточен для первого независимого релиза.
+
+## КЯ-02a: отзыв access-сессии на API
+
+Первый consumer security инкремент проверяет signed `sid` на каждом authenticated tenant request,
+включая существующий admin audience. После проверки подписи, обязательного `exp` и tenant claims
+API сверяет `(tenant_id, user_id, sid)` с `identity.refresh_sessions` и ACTIVE аккаунтом.
+Обычная rotation сохраняет старый access JWT до его `exp`, пока исходный sid не отозван и
+семья имеет живой не rotated leaf. Любая отозванная строка семьи закрывает её access JWT.
+JWT claims и public session/refresh DTO не меняются; обязательная `exp` уже выпускается AuthService.
+
+Отзыв даёт `401 AUTH_SESSION_REVOKED`; отсутствующая/недоступная проверка —
+`503 AUTH_SESSION_CHECK_UNAVAILABLE`, без fallback и без кеша положительных решений. Запрос к БД
+выполняется с transaction-local tenant context и statement timeout 3 секунды; ошибки БД не
+попадают в ответ/логи этого guard. Проверка фиксирует состояние на момент SQL snapshot: уже
+допущенный запрос не отменяется задним числом. Realtime сохраняет собственные существующие
+проверки; этот инкремент не меняет их протокол.
+
+Refresh, reuse revoke, оба logout пути и сохранение Viva recovery delegation сначала блокируют строку identity.users, затем session
+rows. Это сериализует операции одного аккаунта и не позволяет logout через ancestor пропустить
+новый successor, вставленный concurrent refresh. Schema и данные не меняются; текущему API role
+нужны существующие SELECT на sessions/users и UPDATE users для row lock (у auth writer это уже
+требуется). Реальные grants и memberships проверяются отдельно перед активацией; CI role не
+доказывает runtime ACL. Результаты LOCAL/CI и security review фиксируются в PR.
+
+Это предпосылка КЯ-04, не реализация credential reset/recovery: атомарная смена credential,
+revoke-all, step-up, независимые account-specific proofs, staff delegation и notification policy
+остаются в своих следующих инкрементах. Rollback источника возвращает прежнюю проверку JWT до
+TTL и ослабляет мгновенный отзыв; оператор должен учитывать это при отдельном release решении.

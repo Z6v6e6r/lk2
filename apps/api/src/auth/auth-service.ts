@@ -81,7 +81,14 @@ export type RefreshSessionRotation =
   | { readonly outcome: 'race' }
   | { readonly outcome: 'invalid' };
 
+export interface AccessSessionIdentity {
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly sessionId: string;
+}
+
 export interface AuthRepository {
+  isAccessSessionActive?(input: AccessSessionIdentity): Promise<boolean>;
   resolveTenantAuthBinding(tenantKey: string): Promise<TenantAuthBinding | undefined>;
   resolveExistingExternalIdentity(input: {
     readonly binding: TenantAuthBinding;
@@ -195,6 +202,7 @@ export type AuthServiceErrorCode =
   | 'AUTH_CODE_EXPIRED'
   | 'AUTH_CHALLENGE_IN_PROGRESS'
   | 'AUTH_RATE_LIMITED'
+  | 'AUTH_SESSION_CHECK_UNAVAILABLE'
   | 'AUTH_PROVIDER_UNAVAILABLE'
   | 'AUTH_OAUTH_BROWSER_MISMATCH'
   | 'AUTH_ADMIN_ACCESS_DENIED'
@@ -217,6 +225,7 @@ const errorStatus: Readonly<Record<AuthServiceErrorCode, number>> = {
   AUTH_CHALLENGE_IN_PROGRESS: 409,
   AUTH_RATE_LIMITED: 429,
   AUTH_PROVIDER_UNAVAILABLE: 503,
+  AUTH_SESSION_CHECK_UNAVAILABLE: 503,
   AUTH_OAUTH_BROWSER_MISMATCH: 401,
   AUTH_ADMIN_ACCESS_DENIED: 403,
   AUTH_SESSION_REVOKED: 401,
@@ -1659,6 +1668,13 @@ export class AuthService {
       return;
     }
     await this.options.repository.revokeRefreshSession(tenantKey, tokenHash, correlationId);
+  }
+
+  public isAccessSessionActive(input: AccessSessionIdentity): Promise<boolean> {
+    if (!this.options.repository.isAccessSessionActive) {
+      throw new AuthServiceError('AUTH_SESSION_CHECK_UNAVAILABLE');
+    }
+    return this.options.repository.isAccessSessionActive(input);
   }
 
   public getUserContext(tenantId: string, userId: string): Promise<AuthUser | undefined> {
