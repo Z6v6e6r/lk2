@@ -255,6 +255,70 @@ async function writeSecurityAudit(
   );
 }
 
+export interface RevokeAllRefreshSessionsInput {
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly reason: 'CREDENTIAL_RESET' | 'SECURITY_REVOKE_ALL';
+  readonly correlationId: string;
+}
+
+export type RevokeAllRefreshSessionsResult =
+  | { readonly outcome: 'revoked'; readonly revokedSessionCount: number }
+  | { readonly outcome: 'not_found' };
+
+/**
+ * Internal self/recovered-account persistence primitive, NOT an authorization boundary or command.
+ * Caller owns verified account-specific proof, idempotency and the surrounding tenant transaction.
+ * Never begin/commit here: future proof consumption and credential changes must share this client.
+ */
+export async function revokeAllRefreshSessionsForUserInTransaction(
+  client: PoolClient,
+  input: RevokeAllRefreshSessionsInput,
+): Promise<RevokeAllRefreshSessionsResult> {
+  if (!['CREDENTIAL_RESET', 'SECURITY_REVOKE_ALL'].includes(input.reason)) {
+    throw new Error('AUTH_SESSION_REVOKE_REASON_INVALID');
+  }
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(input.correlationId)) {
+    throw new Error('AUTH_SESSION_CORRELATION_INVALID');
+  }
+  // SAVEPOINT fails outside an explicit transaction; it prevents accidental autocommit use.
+  await client.query('savepoint phub_revoke_all_sessions');
+  const context = await queryOne<{ tenant_id: string | null } & QueryResultRow>(
+    client,
+    "select current_setting('app.tenant_id', true) as tenant_id",
+  );
+  if (context?.tenant_id !== input.tenantId) {
+    throw new Error('AUTH_SESSION_TRANSACTION_CONTEXT_INVALID');
+  }
+  // Disabled accounts also need revocation. Never take a session lock before this user lock.
+  const user = await queryOne<{ id: string } & QueryResultRow>(
+    client,
+    'select id from identity.users where tenant_id = $1 and id = $2 for update',
+    [input.tenantId, input.userId],
+  );
+  if (!user) {
+    await client.query('release savepoint phub_revoke_all_sessions');
+    return { outcome: 'not_found' };
+  }
+  const changed = await client.query(
+    `update identity.refresh_sessions
+     set revoked_at = now(), revoke_reason = $3
+     where tenant_id = $1 and user_id = $2 and revoked_at is null`,
+    [input.tenantId, input.userId, input.reason],
+  );
+  const revokedSessionCount = changed.rowCount ?? 0;
+  if (revokedSessionCount > 0) {
+    await client.query(
+      `insert into audit.audit_log (
+         tenant_id, actor_id, action, resource_type, resource_id, result, reason, correlation_id
+       ) values ($1, null, 'AUTH_ALL_SESSIONS_REVOKED', 'AUTH_USER_SESSIONS', $2, 'SUCCESS', $3, $4)`,
+      [input.tenantId, input.userId, input.reason, input.correlationId],
+    );
+  }
+  await client.query('release savepoint phub_revoke_all_sessions');
+  return { outcome: 'revoked', revokedSessionCount };
+}
+
 async function selectExternalUserForUpdate(
   client: PoolClient,
   input: Pick<UpsertExternalUserInput, 'tenantId' | 'provider' | 'issuer' | 'subject'>,
@@ -540,6 +604,11 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
       const sessionId = input.sessionId ?? randomUUID();
       const familyId = input.familyId ?? sessionId;
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        // Serialize new logins with account-wide revocation, before any session insert/FK lock.
+        await client.query(
+          'select id from identity.users where tenant_id = $1 and id = $2 for update',
+          [input.tenantId, input.userId],
+        );
         const row = await queryOne<RefreshSessionRow>(
           client,
           `
@@ -619,6 +688,12 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
       assertTokenHash(input.nextTokenHash);
       assertFutureExpiry(input.nextExpiresAt);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query(
+          `select u.id from identity.users u
+           join identity.refresh_sessions rs on rs.tenant_id = u.tenant_id and rs.user_id = u.id
+           where rs.tenant_id = $1 and rs.token_hash = $2 for update of u`,
+          [input.tenantId, input.currentTokenHash],
+        );
         const current = await queryOne<RefreshSessionRow>(
           client,
           `
@@ -731,6 +806,12 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
     revokeRefreshSession(input) {
       assertTokenHash(input.tokenHash);
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query(
+          `select u.id from identity.users u
+           join identity.refresh_sessions rs on rs.tenant_id = u.tenant_id and rs.user_id = u.id
+           where rs.tenant_id = $1 and rs.token_hash = $2 for update of u`,
+          [input.tenantId, input.tokenHash],
+        );
         const current = await queryOne<{ family_id: string; user_id: string } & QueryResultRow>(
           client,
           `

@@ -73,3 +73,91 @@ flowchart LR
 | `PATCH .../{userId}`, `POST .../{userId}/recovery`, `POST .../{userId}/sessions/revoke`, `GET .../{userId}/conflicts/history` (предложение)   | Staff отдельные `customers.correct/recovery/session-revoke/audit.read`, reason/ticket, проверенная station relation и step-up                                                              | key + expectedVersion, audit actor/reason/old-new redacted, CAS 409, 403 scope, 422 forbidden; recovery запускает доказательство конкретного аккаунта, независимое от общего контакта, staff не видит пароль/код; read history bounded.                                                                                                              |
 
 Никакого параллельного подтверждения одного кода у Viva и LOCAL и скрытого fallback. Владение телефоном не доказывает владение ранее созданным аккаунтом (решение review PR #242); link требует доказательства старого аккаунта и нового метода, а merge двух аккаунтов — отдельного проекта. Прямые Яндекс ID, Сбер ID, Т-ID — отдельные будущие provider integrations: сначала договор/протокол, issuer/audience/subject/claims, кнопка, условия и recovery; Viva-обёртка Яндекса не доказывает переносимость subject. Один рабочий LOCAL способ входа достаточен для первого независимого релиза.
+
+## КЯ-02a: отзыв access-сессии на API
+
+Первый consumer security инкремент проверяет signed `sid` на каждом authenticated tenant request,
+включая существующий admin audience. После проверки подписи, обязательного `exp` и tenant claims
+API сверяет `(tenant_id, user_id, sid)` с `identity.refresh_sessions` и ACTIVE аккаунтом.
+Обычная rotation сохраняет старый access JWT до его `exp`, пока исходный sid не отозван и
+семья имеет живой не rotated leaf. Любая отозванная строка семьи закрывает её access JWT.
+JWT claims и public session/refresh DTO не меняются; обязательная `exp` уже выпускается AuthService.
+
+Отзыв даёт `401 AUTH_SESSION_REVOKED`; отсутствующая/недоступная проверка —
+`503 AUTH_SESSION_CHECK_UNAVAILABLE`, без fallback и без кеша положительных решений. Запрос к БД
+выполняется с transaction-local tenant context и statement timeout 3 секунды; ошибки БД не
+попадают в ответ/логи этого guard. Проверка фиксирует состояние на момент SQL snapshot: уже
+допущенный запрос не отменяется задним числом. Realtime сохраняет собственные существующие
+проверки; этот инкремент не меняет их протокол.
+
+Создание сессии, refresh, reuse revoke, оба logout пути и сохранение Viva recovery delegation сначала блокируют строку identity.users, затем session
+rows. Это сериализует операции одного аккаунта и не позволяет logout через ancestor пропустить
+новый successor, вставленный concurrent refresh. Schema и данные не меняются; текущему API role
+нужны существующие SELECT на sessions/users и UPDATE users для row lock (у auth writer это уже
+требуется). Реальные grants и memberships проверяются отдельно перед активацией; CI role не
+доказывает runtime ACL. Результаты LOCAL/CI и security review фиксируются в PR.
+
+Это предпосылка КЯ-04, не реализация credential reset/recovery. Внутренний revoke-all primitive
+описан ниже; атомарная смена credential, trusted step-up/recovery proof, staff delegation и
+notification policy остаются в своих следующих инкрементах. Rollback источника возвращает прежнюю проверку JWT до
+TTL и ослабляет мгновенный отзыв; оператор должен учитывать это при отдельном release решении.
+
+## КЯ-02a: внутренний массовый отзыв и proof contract
+
+`revokeAllRefreshSessionsForUserInTransaction(client, input)` — внутренний persistence primitive
+в `packages/database/src/auth-repository.ts`. Это не public command и не проверка полномочий:
+вызывать его можно только из server-owned self/recovered-account transition после проверки
+account-specific proof. Нет route, SDK entry, AuthService public command или UI для этого вызова.
+Он не подтверждает контакт, не меняет credential, не отзывает provider-сессию/`user_delegations`
+и не создаёт replacement family. Схема и реальные ACL не меняются.
+
+Caller передаёт тот же PostgreSQL client своей явной tenant-транзакции. SAVEPOINT отвергает
+случайный autocommit, текущий `app.tenant_id` обязан совпадать с input; helper не выбирает tenant
+сам. Exact `(tenant_id,user_id)` user row блокируется первой, в том числе для DISABLED аккаунта.
+Затем отзываются все ещё не отозванные refresh rows аккаунта — current, rotated, expired и
+все families, которыми могут пользоваться оба audiences. Исходные причины уже отозванных rows
+сохраняются. Разрешены только server-owned `CREDENTIAL_RESET` / `SECURITY_REVOKE_ALL`.
+При фактическом изменении пишется один `AUTH_ALL_SESSIONS_REVOKED` с resource type
+`AUTH_USER_SESSIONS`, target UUID и reason/correlation; без sid, token, contact или credential.
+`actor_id=NULL`: helper не знает проверенного actor и не приписывает действие target user;
+реального actor сохраняет будущий trusted caller/command ledger. Нулевой повтор не создаёт ложный audit
+об изменении; audit самой команды и стабильный receipt — обязанность будущего caller ledger.
+Internal outcome/count не являются public response или гарантией command idempotency.
+Helper не открывает и не commits transaction; ошибка должна выйти в caller и вызвать общий
+ROLLBACK вместе с его proof/credential/receipt изменениями. Это проверяется на synthetic caller
+update; реальный credential reset ещё не реализован.
+
+Создание сессии теперь берёт тот же user lock, что rotation/revoke. Сессии, созданные до
+linearization массового отзыва, входят в его UPDATE; rotation после него получает invalid.
+Создание после отзыва — новый login и требует свежего независимого proof. User lock не заменяет
+credential generation: старый proof, начатый до reset, нельзя считать свежим, даже если его ответ
+пришёл позже. Проверка этого fence относится к будущему credential/proof writer.
+
+### Обязательный контракт будущего step-up/reset
+
+- Доказательство относится к одному PadlHub UUID/tenant и конкретной цели
+  `REVOKE_ALL_SESSIONS` либо `RESET_LOCAL_CREDENTIAL`, command digest/idempotency key и verified
+  method/version. Self step-up также связан с actor/session; lost-session recovery требует
+  независимого доказательства этого аккаунта, без предположения о наличии active session.
+- Current JWT/refresh, staff browser role/header и владение общим phone/email не являются proof.
+  Для self step-up нужен уже привязанный фактор; новый phone/email сам по себе недостаточен.
+  Контакт/legacy import provenance не превращаются в login/recovery authorization.
+- Issuer выполняет проверку доверенного уже привязанного метода, bounded TTL/attempts/rate limits,
+  защищает code/nonce и выдаёт одноразовый purpose-bound proof. В PG хранится digest/ledger;
+  proof consume CAS, replay/conflict, expiry и account/method generation проверяются server-side.
+  TypeScript type/boolean `verified` или browser body не заменяют trusted issuer.
+- Reset transaction: tenant context → user row lock → exact command replay/digest check →
+  current proof/credential generation checks и single consume → credential change/generation
+  increment → этот revoke-all helper → при согласованной policy ровно одна новая consumer family
+  **на том же client** → безопасный audit + stable receipt → COMMIT. Нельзя вызывать pool-owned
+  `createRefreshSession()` из этого transaction: это отдельный transaction/client; для КЯ-04 нужен
+  конкретный creation path на уже удерживаемом client, а не произвольный callback из запроса.
+- Старые proof/generation и отозванные refresh/access не воскресают после reset, в том числе при
+  concurrent refresh/login, replay и lost response. Consumer recovery не выдаёт admin audience
+  и не восстанавливает staff delegation; её policy и уведомления определяются отдельно.
+
+Текущий Viva `/auth/viva/reauthorize` предназначен для delegation recovery. Exact issuer/subject,
+PKCE/nonce и active family не доказывают свежую user presence: сейчас нет обязательных
+`prompt`/`max_age` и проверяемых `auth_time`/`acr`. Поэтому он не используется здесь как step-up
+или lost-session recovery. Выбор LOCAL proof/delivery provider, credential model, stale-proof
+fence и policy для provider delegation/replacement family обязательны до public activation КЯ-04.

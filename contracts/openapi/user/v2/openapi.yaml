@@ -83,3 +83,9 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: >-
+        PadlHub-issued JWT; audience phub-api, UUID subject, authorized tenant UUIDs and exp.
+        Authenticated tenant routes verify signed sid against the active server-side session
+        family and ACTIVE account. Revocation returns AUTH_SESSION_REVOKED (401); unavailable
+        verification returns AUTH_SESSION_CHECK_UNAVAILABLE (503). Ordinary refresh preserves
+        earlier access JWTs until exp while their session family remains active.

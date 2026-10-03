@@ -2,6 +2,7 @@ import { createIdentityAuthRepository, type IdentityAuthRepository } from '@phub
 import type { Pool, PoolClient } from 'pg';
 
 import type {
+  AccessSessionIdentity,
   AuthRepository,
   AuthUser,
   RefreshSessionRotation,
@@ -160,6 +161,14 @@ export class PostgresAuthRepository implements AuthRepository {
     const context = await this.repository.resolveTenantAuthConfig(tenantKey);
     if (!context) return false;
     return this.withTenant(context.tenantId, async (client) => {
+      // Same user lock as refresh rotation, acquired before any session row lock.
+      // This prevents logout through an ancestor from missing a concurrently inserted successor.
+      await client.query(
+        `select u.id from identity.users u
+         join identity.refresh_sessions rs on rs.tenant_id = u.tenant_id and rs.user_id = u.id
+         where rs.tenant_id = $1 and rs.token_hash = $2 for update of u`,
+        [context.tenantId, tokenHash],
+      );
       const current = await client.query<{ family_id: string; user_id: string }>(
         `select family_id, user_id
            from identity.refresh_sessions
@@ -199,6 +208,35 @@ export class PostgresAuthRepository implements AuthRepository {
         );
       }
       return true;
+    });
+  }
+
+  public isAccessSessionActive(input: AccessSessionIdentity): Promise<boolean> {
+    return this.withTenant(input.tenantId, async (client) => {
+      await client.query("set local statement_timeout = '3s'");
+      const result = await client.query<{ active: boolean }>(
+        `select exists (
+           select 1 from identity.refresh_sessions original
+           join identity.users u on u.tenant_id = original.tenant_id and u.id = original.user_id
+           where original.tenant_id = $1 and original.user_id = $2 and original.id = $3
+             and original.revoked_at is null
+             and u.status = 'ACTIVE'
+             and exists (
+               select 1 from identity.refresh_sessions current
+               where current.tenant_id = original.tenant_id and current.user_id = original.user_id
+                 and current.family_id = original.family_id
+                 and current.revoked_at is null and current.rotated_at is null
+                 and current.expires_at > now()
+             )
+             and not exists (
+               select 1 from identity.refresh_sessions revoked
+               where revoked.tenant_id = original.tenant_id and revoked.family_id = original.family_id
+                 and revoked.revoked_at is not null
+             )
+         ) as active`,
+        [input.tenantId, input.userId, input.sessionId],
+      );
+      return result.rows[0]?.active === true;
     });
   }
 
@@ -427,6 +465,10 @@ export class PostgresAuthRepository implements AuthRepository {
     input: SaveVivaDelegationInput & { readonly sessionFamilyId: string },
   ): Promise<boolean> {
     return this.withTenant(input.tenantId, async (client) => {
+      await client.query(
+        'select id from identity.users where tenant_id = $1 and id = $2 for update',
+        [input.tenantId, input.userId],
+      );
       const active = await client.query(
         `select 1
            from identity.refresh_sessions rs
@@ -444,7 +486,7 @@ export class PostgresAuthRepository implements AuthRepository {
             and e.provider = 'VIVA'
             and e.issuer = $4
             and e.subject = $5
-          for update of rs, u, e`,
+          for update of rs, e`,
         [input.tenantId, input.sessionFamilyId, input.userId, input.issuer, input.subject],
       );
       if (active.rowCount !== 1) return false;

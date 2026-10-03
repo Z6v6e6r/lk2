@@ -5,7 +5,7 @@ import type { CommunityLogoMediaRepository } from '@phub/database';
 import { createLogger } from '@phub/observability';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApp } from '../app.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 import type { ProfilePhotoMediaStore } from '../profile/profile-photo-media-store.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';

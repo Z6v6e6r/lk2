@@ -12,7 +12,7 @@ import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApp } from '../app.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 
 const endpointKeyring = JSON.stringify({ v1: Buffer.alloc(32, 9).toString('base64') });
 const config = loadConfig({
