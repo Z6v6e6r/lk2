@@ -10,7 +10,7 @@ function scenario(body: string) {
       '-e',
       `
     import assert from 'node:assert/strict';
-    import {validateApiWebOperation,validateControllerDelta,apiWebComposeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade} from './scripts/timeweb-api-web-upgrade.js';
+    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade} from './scripts/timeweb-api-web-upgrade.js';
     ${body}
   `,
     ],
@@ -41,8 +41,51 @@ const operation = {
   },
   confirmation: 'DEPLOY_API_WEB_AAAAAAAAAAAA_FROM_222222222222_555555555555',
 };
+const directOperation = {
+  schema: 'PHUB_TIMEWEB_API_WEB_OPERATION_V2',
+  target: 'lk2.padlhub.su',
+  controllerSha: 'c'.repeat(40),
+  candidateSha: '0d6078be7a50ed3f5761d66071527be003bd568f',
+  candidateTree: '5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
+  sourceCiRunId: '37034485776',
+  publicationRunId: '37038298584',
+  artifactId: '11241473445',
+  artifactDigest: 'sha256:64b2cbf7f6613d62f3aa08d6da6c65c6d5ff50ebc88e19c5bcbd2239237913e9',
+  manifestSha256: '9d631c9adf4ffce0ab68527bcf99828faa72ee1c51f655bf5325c97f435d042e',
+  expectedApi: {
+    id: 'a'.repeat(64),
+    image:
+      'ghcr.io/z6v6e6r/phub-api@sha256:c798c0f881daecca72500d0e3e2d525f77ee4df500c2f662a346b521fa9d1681',
+    releaseId: 'c43e9dc8da3eb19a1684ed28e989aafacdb5d8bf-36629104876-1',
+  },
+  expectedWeb: {
+    id: 'b'.repeat(64),
+    image:
+      'ghcr.io/z6v6e6r/phub-web@sha256:887455ea273abc6138bdb176f4af82295c37d56ac9a7a96b83c006e5f4d72b9e',
+    releaseId: 'c43e9dc8da3eb19a1684ed28e989aafacdb5d8bf-36629104876-1',
+  },
+  evidencePolicy: 'CALLBACK_DIRECT_OBSERVATION_V1',
+  expiresAt: '2026-10-04T00:00:00.000Z',
+  confirmation:
+    'DEPLOY_API_WEB_0D6078BE7A50_FROM_C43E9DC8DA3E_C43E9DC8DA3E_DIRECT_15M_NO_PROVIDER_EVIDENCE',
+};
 
 describe('explicit API/Web upgrade boundary', () => {
+  it('admits the one bounded direct-observation operation and no V1 fallback', () => {
+    scenario(
+      `const op=${JSON.stringify(directOperation)}; assert.equal(validateDirectApiWebOperation(op),op); for(const change of [v=>v.candidateSha='a'.repeat(40),v=>v.candidateTree='a'.repeat(40),v=>v.sourceCiRunId='1',v=>v.artifactDigest='sha256:'+'a'.repeat(64),v=>v.expectedApi.image=v.expectedWeb.image,v=>v.expectedWeb.releaseId='a'.repeat(40)+'-1-1',v=>v.evidencePolicy='OTHER',v=>v.confirmation='yes',v=>delete v.expiresAt]){const x=structuredClone(op);change(x);assert.throws(()=>validateApiWebOperation(x));} const v1=${JSON.stringify(operation)};assert.throws(()=>validateDirectApiWebOperation(v1));`,
+    );
+  });
+  it('requires 61 real-shape rounds and threshold-safe direct observation', () => {
+    scenario(
+      `let now=Date.parse('2026-10-03T00:00:00.000Z'); const evidence=await observeDirectApiWeb({inspectService:()=>{},probeService:async()=>10,attest:async()=>{},now:()=>now,sleep:async ms=>{now+=ms;}});assert.equal(evidence.elapsedSeconds,900);assert.equal(evidence.samples.api.privateMs.length,61);validateDirectObservation(evidence);for(const [name,change] of Object.entries({short:v=>v.elapsedSeconds=1,count:v=>v.samples.api.privateMs.pop(),nan:v=>v.samples.web.publicMs[0]=NaN,p95:v=>v.samples.api.p95PublicMs=1501,tail:v=>v.samples.api.privateMs.splice(57,4,2000,2000,2000,2000),provider:v=>v.providerEvidence='PASS',expiry:v=>v.completedAt='2026-10-05T00:00:00.000Z'})){const x=structuredClone(evidence);change(x);assert.throws(()=>validateDirectObservation(x),name);}`,
+    );
+  });
+  it('keeps V1 provider receipts and V2 owner receipts mutually exclusive', () => {
+    scenario(
+      `const plan='a'.repeat(64);const base={schema:'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',status:'SUCCESS',planSha256:plan,evidencePolicy:'CALLBACK_DIRECT_OBSERVATION_V1',providerEvidenceStatus:'NOT_COLLECTED_EXPLICIT_OVERRIDE',observedAt:new Date().toISOString(),installedBaselineSha256:'b'.repeat(64),observationSha256:'c'.repeat(64),ownerObservationSha256:'d'.repeat(64),evidencePolicySha256:'e'.repeat(64)};validateUpgradeReceipt(base,plan);for(const change of [v=>v.providerReadbackSha256='f'.repeat(64),v=>delete v.ownerObservationSha256,v=>v.schema='PHUB_TIMEWEB_API_WEB_RECEIPT_V1']){const x=structuredClone(base);change(x);assert.throws(()=>validateUpgradeReceipt(x,plan));}`,
+    );
+  });
   it('requires exact target, candidate, independent previous identities and confirmation', () => {
     scenario(`const op=${JSON.stringify(operation)}; assert.equal(validateApiWebOperation(op),op);
       for(const change of [v=>v.target='elsewhere',v=>v.controllerSha='main',v=>v.publicationRunId='1;id',v=>v.expectedApi.image='latest',v=>v.expectedWeb.releaseId=v.expectedApi.releaseId,v=>v.confirmation='yes',v=>v.extra=true]) {
@@ -287,4 +330,76 @@ it('hashes backups above 1 GiB with bounded memory and rejects invalid size', ()
       assert.equal(hashUpgradeDescriptor(fd),expected.digest('hex'));
     }finally{closeSync(fd);rmSync(root,{recursive:true,force:true});}
   `);
+});
+
+function directScenario(body: string) {
+  scenario(`
+    const {createHash}=await import('node:crypto');
+    const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+    const bytes=value=>Buffer.from(JSON.stringify(value)+'\\n');
+    const op=${JSON.stringify(directOperation)};
+    const operationBytes=bytes(op);
+    const ownerBytes=directOwnerBytes(op,sha(operationBytes));
+    const owner=JSON.parse(ownerBytes);
+    let clock=Date.parse('2026-10-03T00:00:00.000Z');
+    const probes={inspectService:()=>{},probeService:async()=>10,attest:async()=>{},now:()=>clock,sleep:async ms=>{clock+=ms;}};
+    const observation=await observeDirectApiWeb(probes);
+    const observationBytes=bytes(observation);
+    const releaseId=op.candidateSha+'-'+op.publicationRunId+'-1';
+    const images={api:'ghcr.io/z6v6e6r/phub-api@sha256:'+'7'.repeat(64),web:'ghcr.io/z6v6e6r/phub-web@sha256:'+'8'.repeat(64)};
+    const plan={schema:'PHUB_TIMEWEB_API_WEB_PLAN_V2',controllerSha:op.controllerSha,operationSha256:sha(operationBytes),evidencePolicy:op.evidencePolicy,evidencePolicySha256:owner.policySha256,ownerObservationSha256:sha(ownerBytes),manifestSha256:op.manifestSha256,artifactDigest:op.artifactDigest,previous:{api:op.expectedApi,web:op.expectedWeb},candidate:{api:{releaseId,image:images.api},web:{releaseId,image:images.web}}};
+    const planBytes=bytes(plan);
+    const receipt={schema:'PHUB_TIMEWEB_API_WEB_RECEIPT_V2',status:'SUCCESS',planSha256:sha(planBytes),observedAt:observation.completedAt,evidencePolicy:op.evidencePolicy,providerEvidenceStatus:'NOT_COLLECTED_EXPLICIT_OVERRIDE',installedBaselineSha256:'b'.repeat(64),observationSha256:sha(observationBytes),ownerObservationSha256:sha(ownerBytes),evidencePolicySha256:owner.policySha256};
+    ${body}
+  `);
+}
+
+describe('direct observation custody and failure recovery', () => {
+  it('binds contextual receipts to persisted plan bytes including the newline', () => {
+    directScenario(`validateUpgradeReceipt(receipt,sha(planBytes),op,plan,planBytes);
+      assert.throws(()=>validateUpgradeReceipt(receipt,sha(planBytes),op,plan,Buffer.from(JSON.stringify(plan))),/receipt_context/);
+      assert.throws(()=>validateUpgradeReceipt(receipt,sha(planBytes),op,{...plan,controllerSha:'f'.repeat(40)},planBytes),/receipt_context/);
+      assert.throws(()=>validateUpgradeReceipt(receipt,sha(planBytes),${JSON.stringify(operation)},plan,planBytes),/receipt_context/);
+      assert.throws(()=>validateUpgradeReceipt({...receipt,evidencePolicy:'OTHER'},sha(planBytes),op,plan,planBytes));`);
+  });
+  it('accepts historical evidence after current-time expiry but refuses a new deployment', () => {
+    directScenario(`const original=Date.now;Date.now=()=>Date.parse('2026-10-05T00:00:00.000Z');try{
+      assert.throws(()=>validateDirectApiWebOperation(op,true));
+      validateDirectApiWebOperation(op);
+      validateDirectInstalledEvidence(receipt,planBytes,operationBytes,ownerBytes,observationBytes,releaseId,images);
+      const late=structuredClone(observation);late.completedAt='2026-10-05T00:00:00.000Z';late.elapsedSeconds=(Date.parse(late.completedAt)-Date.parse(late.startedAt))/1000;
+      assert.throws(()=>validateDirectObservation(late));
+      const calls=[];await recoverApiWebPhase('OBSERVING',{journal:async s=>calls.push(s),restore:async s=>calls.push(s),attest:async()=>{}});
+      assert.deepEqual(calls,['ROLLBACK_INTENT','web','api','ROLLED_BACK']);
+    }finally{Date.now=original;}`);
+  });
+  it('rejects changed exact scope, policy and prior service identities', () => {
+    directScenario(`for(const change of [v=>v.controllerSha='main',v=>v.target='other',v=>v.publicationRunId='1',v=>v.artifactId='1',v=>v.manifestSha256='f'.repeat(64),v=>v.expectedApi.releaseId='f'.repeat(40)+'-1-1',v=>v.expectedWeb.image=v.expectedApi.image,v=>v.expiresAt='2026-10-06T00:00:00.000Z',v=>v.confirmation=v.confirmation.replace('_DIRECT_15M_NO_PROVIDER_EVIDENCE',''),v=>delete v.evidencePolicy]){
+      const altered=structuredClone(op);change(altered);assert.throws(()=>validateApiWebOperation(altered));
+    }`);
+  });
+  it.each(['private', 'public', 'identity', 'attest'])(
+    'rolls back a %s direct-observation failure',
+    (point) => {
+      directScenario(`const point=${JSON.stringify(point)};const calls=[];
+      const failing={...probes,inspectService:s=>{if(point==='identity')throw Error('restart');},probeService:async(s,publicProbe)=>{if((point==='public'&&publicProbe)||(point==='private'&&!publicProbe))throw Error('readiness');return 10;},attest:async()=>{if(point==='attest')throw Error('owner_drift');}};
+      await assert.rejects(()=>runApiWebTransition({preflight:async()=>{},pullAndSmoke:async()=>{},journal:async s=>calls.push(s),activate:async()=>{},observe:()=>observeDirectApiWeb(failing),attest:async()=>{},installBaseline:async()=>{},restore:async s=>calls.push('restore-'+s),abort:async()=>{}}));
+      assert(!calls.includes('SUCCESS'));assert(calls.includes('ROLLED_BACK'));assert(calls.indexOf('restore-web')<calls.indexOf('restore-api'));`);
+    },
+  );
+  it('derives latency and timing evidence from raw samples', () => {
+    directScenario(`for(const change of [v=>v.samples.api.privateMs[0]=-1,v=>v.elapsedSeconds=NaN,v=>v.samples.api.p95PrivateMs=0,v=>v.samples.api.timestamps[1]=v.samples.api.timestamps[0],v=>v.samples.web.timestamps[0]='2026-09-01T00:00:00.000Z']){const altered=structuredClone(observation);change(altered);assert.throws(()=>validateDirectObservation(altered));}
+      const split=structuredClone(observation);split.samples.api.privateMs.splice(0,3,1600,1600,1600);split.samples.api.publicMs.splice(3,3,1600,1600,1600);assert.throws(()=>validateDirectObservation(split));
+      await assert.rejects(()=>observeDirectApiWeb({...probes,sleep:async()=>{}}));`);
+  });
+  it('binds historical operation, plan, owner and component descriptors', () => {
+    directScenario(`validateDirectInstalledEvidence(receipt,planBytes,operationBytes,ownerBytes,observationBytes,releaseId,images);
+      for(const change of [v=>v.operationSha256='f'.repeat(64),v=>v.ownerObservationSha256='f'.repeat(64),v=>v.controllerSha='f'.repeat(40),v=>v.schema='PHUB_TIMEWEB_API_WEB_PLAN_V1',v=>v.evidencePolicy='OTHER',v=>v.candidate.api.image=images.web,v=>v.candidate.web.releaseId='f'.repeat(40)+'-1-1',v=>v.previous.api.id='f'.repeat(64),v=>v.manifestSha256='f'.repeat(64)]){
+        const altered=structuredClone(plan);change(altered);const alteredBytes=bytes(altered);const alteredReceipt={...receipt,planSha256:sha(alteredBytes)};
+        assert.throws(()=>validateDirectInstalledEvidence(alteredReceipt,alteredBytes,operationBytes,ownerBytes,observationBytes,releaseId,images));
+      }
+      assert.throws(()=>validateDirectInstalledEvidence(receipt,planBytes,operationBytes,Buffer.from('tampered'),observationBytes,releaseId,images));
+      assert.throws(()=>validateDirectInstalledEvidence(receipt,planBytes,operationBytes,ownerBytes,Buffer.from('tampered'),releaseId,images));
+      assert.throws(()=>validateDirectInstalledEvidence(receipt,planBytes,operationBytes,ownerBytes,observationBytes,'f'.repeat(40)+'-1-1',images));`);
+  });
 });
