@@ -36,7 +36,8 @@
       "@phub/testing": ["packages/testing/src/index.ts"],
       "@phub/ui": ["packages/ui/src/index.tsx"],
       "@phub/viva-adapter": ["packages/viva-adapter/src/index.ts"],
-      "@phub/viva-client-adapter": ["packages/viva-client-adapter/src/index.ts"]
+      "@phub/viva-client-adapter": ["packages/viva-client-adapter/src/index.ts"],
+      "@phub/database/contacts": ["packages/database/src/contact-reader.ts"]
     },
     "types": ["node", "vitest/globals"]
   },

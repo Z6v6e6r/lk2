@@ -48,6 +48,7 @@ import {
   createSubscriptionRuntimeActorContextRepository,
   projectHomeBaseUser,
 } from '@phub/database';
+import { createContactReader } from '@phub/database/contacts';
 import {
   LegacyGamesMongoAdapter,
   LegacyGamesPublicAdapter,
@@ -696,6 +697,7 @@ const app = await buildApp({
       }
     : {}),
   ...(giftCertificateArtifactStore ? { giftCertificateArtifactStore } : {}),
+  profileContactReader: createContactReader(pool),
   profilePrivacyRepository: createProfilePrivacyRepository(pool),
   profileFriendshipRepository: createProfileFriendshipRepository(pool),
   profileReachabilityRepository: createProfileReachabilityRepository(pool),

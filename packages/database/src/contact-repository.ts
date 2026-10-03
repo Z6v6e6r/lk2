@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { queryOne, withTenantTransaction } from './connection.js';
+import { createContactReader } from './contact-reader.js';
 
 export type ContactType = 'PHONE' | 'EMAIL';
 export type ContactSourceKind = 'LOCAL' | 'VIVA';
@@ -133,20 +134,6 @@ function digest(parts: readonly unknown[]): string {
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
 
-function toContact(row: ContactRow): Contact {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    type: row.type,
-    normalizedValue: row.normalized_value,
-    sourceKind: row.source_kind,
-    sourceUpdatedAt: row.source_updated_at,
-    version: row.version,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
 async function lockCommand(client: PoolClient, input: ContactCommandContext): Promise<void> {
   await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
     `contact-command:${input.tenantId}:${input.actorId}:${input.idempotencyKey}`,
@@ -235,17 +222,7 @@ async function recordChange(
 
 export function createContactRepository(pool: Pool) {
   return {
-    /** Callers must authorize the requested user before using this internal, tenant-scoped read. */
-    listForUser(tenantId: string, userId: string): Promise<readonly Contact[]> {
-      return withTenantTransaction(pool, tenantId, async (client) => {
-        const rows = await client.query<ContactRow>(
-          `select ${CONTACT_COLUMNS} from profile.contacts
-            where tenant_id = $1 and user_id = $2 order by created_at, id`,
-          [tenantId, userId],
-        );
-        return rows.rows.map(toContact);
-      });
-    },
+    ...createContactReader(pool),
 
     async create(input: CreateContactInput): Promise<CreateContactResult> {
       assertKeys(input, [

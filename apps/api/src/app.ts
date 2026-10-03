@@ -21,6 +21,7 @@ import type {
   CommunityReadExperienceService,
 } from '@phub/communities';
 import { checkDatabaseReady } from '@phub/database';
+import type { ContactReader } from '@phub/database/contacts';
 import type {
   ClientRoutingPlanRepository,
   CommunityLogoMediaRepository,
@@ -170,6 +171,7 @@ import {
   stabilizeHomeProfilePhotos,
   stableProfilePhotoUrl,
 } from './profile/profile-photo-url.js';
+import { registerProfileContactRoutes } from './profile/profile-contact-routes.js';
 import { buildPlayerProfileView } from './profile/profile-view.js';
 import { buildClientRoutingPlan, canUseDirectViva } from './routing/client-routing-plan.js';
 import { registerRealtimeRoutes } from './realtime/realtime-routes.js';
@@ -299,6 +301,7 @@ export interface BuildAppOptions {
   readonly giftCertificateMediaStore?: GiftCertificateMediaStore;
   readonly locationMediaStore?: LocationMediaStore;
   readonly giftCertificateArtifactStore?: GiftCertificateArtifactReadStore;
+  readonly profileContactReader?: ContactReader;
   readonly profilePrivacyRepository?: ProfilePrivacyRepository;
   readonly profileFriendshipRepository?: ProfileFriendshipRepository;
   readonly profileReachabilityRepository?: ProfileReachabilityRepository;
@@ -1354,6 +1357,13 @@ export async function buildApp(options: BuildAppOptions) {
     publicCommandHandlers: [resolvePublicTenant, requireIdempotencyKey],
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     authenticatedCommandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerProfileContactRoutes(app as unknown as FastifyInstance, {
+    ...(typeof options.authService?.getUserContext === 'function'
+      ? { getUserContext: options.authService.getUserContext.bind(options.authService) }
+      : {}),
+    ...(options.profileContactReader ? { reader: options.profileContactReader } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
   registerProfilePrivacyRoutes(app as unknown as FastifyInstance, {
     ...(options.profilePrivacyRepository ? { repository: options.profilePrivacyRepository } : {}),
