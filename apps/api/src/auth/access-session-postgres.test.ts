@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { createIdentityAuthRepository, withTenantTransaction } from '@phub/database';
+import {
+  createIdentityAuthRepository,
+  revokeAllRefreshSessionsForUserInTransaction,
+  withTenantTransaction,
+} from '@phub/database';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -33,6 +37,7 @@ suite('access sessions on PostgreSQL with a non-owner, non-bypass role', () => {
   const otherTenantId = randomUUID();
   const userId = randomUUID();
   const otherUserId = randomUUID();
+  const emptyUserId = randomUUID();
   const role = `session_test_${randomUUID().replaceAll('-', '')}`;
   const password = randomUUID();
   let runtime: Pool;
@@ -51,6 +56,7 @@ suite('access sessions on PostgreSQL with a non-owner, non-bypass role', () => {
     await admin.query(`grant select, update on identity.users to ${role}`);
     await admin.query(`grant select, insert, update on identity.refresh_sessions to ${role}`);
     await admin.query(`grant insert on audit.audit_log to ${role}`);
+    await admin.query(`grant update (display_name) on profile.user_summaries to ${role}`);
     const runtimeUrl = new URL(url!);
     runtimeUrl.username = role;
     runtimeUrl.password = password;
@@ -62,14 +68,13 @@ suite('access sessions on PostgreSQL with a non-owner, non-bypass role', () => {
       [tenantId, `session-${tenantId}`, otherTenantId, `session-${otherTenantId}`],
     );
     await withTenantTransaction(admin, tenantId, async (client) => {
-      await client.query(`insert into identity.users (tenant_id, id) values ($1, $2), ($1, $3)`, [
-        tenantId,
-        userId,
-        otherUserId,
-      ]);
       await client.query(
-        `insert into profile.user_summaries (tenant_id, user_id, display_name) values ($1, $2, 'Synthetic'), ($1, $3, 'Other')`,
-        [tenantId, userId, otherUserId],
+        `insert into identity.users (tenant_id, id) values ($1, $2), ($1, $3), ($1, $4)`,
+        [tenantId, userId, otherUserId, emptyUserId],
+      );
+      await client.query(
+        `insert into profile.user_summaries (tenant_id, user_id, display_name) values ($1, $2, 'Synthetic'), ($1, $3, 'Other'), ($1, $4, 'Empty')`,
+        [tenantId, userId, otherUserId, emptyUserId],
       );
     });
   });
@@ -255,6 +260,215 @@ suite('access sessions on PostgreSQL with a non-owner, non-bypass role', () => {
       );
       expect(active.rows).toEqual([]);
       expect((await rotate(nextHash)).outcome).toBe('invalid');
+    },
+  );
+  const revokeAllInput = {
+    tenantId,
+    userId,
+    reason: 'CREDENTIAL_RESET' as const,
+    correlationId,
+  };
+  const revokeAll = () =>
+    withTenantTransaction(runtime, tenantId, (client) =>
+      revokeAllRefreshSessionsForUserInTransaction(client, revokeAllInput),
+    );
+  async function auditCount() {
+    return withTenantTransaction(admin, tenantId, async (client) => {
+      const result = await client.query<{ count: number }>(
+        "select count(*)::integer as count from audit.audit_log where tenant_id = $1 and action = 'AUTH_ALL_SESSIONS_REVOKED'",
+        [tenantId],
+      );
+      return result.rows[0]!.count;
+    });
+  }
+  it('revokes multiple account families, preserves another account, and repeat has no false audit', async () => {
+    const one = await family();
+    const two = await family();
+    const peer = randomUUID();
+    await identity.createRefreshSession({
+      tenantId,
+      userId: otherUserId,
+      sessionId: peer,
+      tokenHash: hash(),
+      expiresAt: expiresAt(),
+      correlationId,
+    });
+    const auditBefore = await auditCount();
+    const result = await revokeAll();
+    expect(result.outcome).toBe('revoked');
+    if (result.outcome !== 'revoked') throw new Error('REVOKE_REQUIRED');
+    expect(result.revokedSessionCount).toBeGreaterThanOrEqual(2);
+    expect(await check(one.sessionId)).toBe(false);
+    expect(await check(two.sessionId)).toBe(false);
+    expect(await check(peer, tenantId, otherUserId)).toBe(true);
+    expect(await auditCount()).toBe(auditBefore + 1);
+    expect(await revokeAll()).toEqual({ outcome: 'revoked', revokedSessionCount: 0 });
+    expect(await auditCount()).toBe(auditBefore + 1);
+  });
+  it('handles no sessions, missing account and disabled account without granting access', async () => {
+    const before = await auditCount();
+    expect(
+      await withTenantTransaction(runtime, tenantId, (client) =>
+        revokeAllRefreshSessionsForUserInTransaction(client, {
+          ...revokeAllInput,
+          userId: emptyUserId,
+        }),
+      ),
+    ).toEqual({ outcome: 'revoked', revokedSessionCount: 0 });
+    expect(
+      await withTenantTransaction(runtime, tenantId, (client) =>
+        revokeAllRefreshSessionsForUserInTransaction(client, {
+          ...revokeAllInput,
+          userId: randomUUID(),
+        }),
+      ),
+    ).toEqual({ outcome: 'not_found' });
+    expect(await auditCount()).toBe(before);
+    await withTenantTransaction(admin, tenantId, (client) =>
+      client.query(
+        "update identity.users set status = 'DISABLED' where tenant_id = $1 and id = $2",
+        [tenantId, otherUserId],
+      ),
+    );
+    expect(
+      await withTenantTransaction(runtime, tenantId, (client) =>
+        revokeAllRefreshSessionsForUserInTransaction(client, {
+          ...revokeAllInput,
+          userId: otherUserId,
+        }),
+      ),
+    ).toEqual({ outcome: 'revoked', revokedSessionCount: 1 });
+    await withTenantTransaction(admin, tenantId, (client) =>
+      client.query("update identity.users set status = 'ACTIVE' where tenant_id = $1 and id = $2", [
+        tenantId,
+        otherUserId,
+      ]),
+    );
+  });
+  it('rejects mismatched tenant transaction and autocommit usage before mutations', async () => {
+    const original = await family();
+    await expect(
+      withTenantTransaction(runtime, otherTenantId, (client) =>
+        revokeAllRefreshSessionsForUserInTransaction(client, revokeAllInput),
+      ),
+    ).rejects.toThrow('AUTH_SESSION_TRANSACTION_CONTEXT_INVALID');
+    expect(
+      await withTenantTransaction(runtime, otherTenantId, (client) =>
+        revokeAllRefreshSessionsForUserInTransaction(client, {
+          ...revokeAllInput,
+          tenantId: otherTenantId,
+        }),
+      ),
+    ).toEqual({ outcome: 'not_found' });
+    const client = await runtime.connect();
+    try {
+      await expect(
+        revokeAllRefreshSessionsForUserInTransaction(client, revokeAllInput),
+      ).rejects.toMatchObject({ code: '25P01' });
+    } finally {
+      client.release();
+    }
+    expect(await check(original.sessionId)).toBe(true);
+  });
+  it('rolls back a synthetic caller update, session revocation and audit together', async () => {
+    const original = await family();
+    const before = await auditCount();
+    await expect(
+      withTenantTransaction(runtime, tenantId, async (client) => {
+        await client.query(
+          "update profile.user_summaries set display_name = 'Synthetic caller update' where tenant_id = $1 and user_id = $2",
+          [tenantId, userId],
+        );
+        await revokeAllRefreshSessionsForUserInTransaction(client, revokeAllInput);
+        throw new Error('synthetic-caller-failure');
+      }),
+    ).rejects.toThrow('synthetic-caller-failure');
+    expect(await check(original.sessionId)).toBe(true);
+    expect(await auditCount()).toBe(before);
+    const profile = await withTenantTransaction(runtime, tenantId, (client) =>
+      client.query(
+        'select display_name from profile.user_summaries where tenant_id = $1 and user_id = $2',
+        [tenantId, userId],
+      ),
+    );
+    expect(profile.rows[0]).toEqual({ display_name: 'Synthetic' });
+  });
+  it('rolls back revocation when the non-owner role cannot persist audit', async () => {
+    const original = await family();
+    const before = await auditCount();
+    await admin.query(`revoke insert on audit.audit_log from ${role}`);
+    try {
+      await expect(revokeAll()).rejects.toMatchObject({ code: '42501' });
+    } finally {
+      await admin.query(`grant insert on audit.audit_log to ${role}`);
+    }
+    expect(await check(original.sessionId)).toBe(true);
+    expect(await auditCount()).toBe(before);
+  });
+  it.each(['rotate-first', 'revoke-first'])(
+    'serializes account-wide revoke with rotation: %s',
+    async (order) => {
+      const original = await family();
+      const blocker = await admin.connect();
+      await blocker.query('begin');
+      await blocker.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
+      await blocker.query(
+        'select id from identity.users where tenant_id = $1 and id = $2 for update',
+        [tenantId, userId],
+      );
+      let rotation;
+      try {
+        const first = order === 'rotate-first' ? rotate(original.tokenHash) : revokeAll();
+        await waitForUserLocks(1);
+        const second = order === 'rotate-first' ? revokeAll() : rotate(original.tokenHash);
+        await waitForUserLocks(2);
+        await blocker.query('commit');
+        const results = await Promise.all([first, second]);
+        rotation = results[order === 'rotate-first' ? 0 : 1];
+      } finally {
+        await blocker.query('rollback');
+        blocker.release();
+      }
+      expect(rotation?.outcome).toBe(order === 'rotate-first' ? 'rotated' : 'invalid');
+      expect(await check(original.sessionId)).toBe(false);
+      if (rotation?.outcome === 'rotated') expect(await check(rotation.session.id)).toBe(false);
+    },
+  );
+  it.each(['create-first', 'revoke-first'])(
+    'serializes account-wide revoke with a fresh login: %s',
+    async (order) => {
+      const old = await family();
+      const newId = randomUUID();
+      const create = () =>
+        identity.createRefreshSession({
+          tenantId,
+          userId,
+          sessionId: newId,
+          tokenHash: hash(),
+          expiresAt: expiresAt(),
+          correlationId,
+        });
+      const blocker = await admin.connect();
+      await blocker.query('begin');
+      await blocker.query("select set_config('app.tenant_id', $1, true)", [tenantId]);
+      await blocker.query(
+        'select id from identity.users where tenant_id = $1 and id = $2 for update',
+        [tenantId, userId],
+      );
+      try {
+        const first = order === 'create-first' ? create() : revokeAll();
+        await waitForUserLocks(1);
+        const second = order === 'create-first' ? revokeAll() : create();
+        await waitForUserLocks(2);
+        await blocker.query('commit');
+        await Promise.all([first, second]);
+      } finally {
+        await blocker.query('rollback');
+        blocker.release();
+      }
+      expect(await check(old.sessionId)).toBe(false);
+      // Post-revoke creation is a NEW login; the future caller must supply fresh proof/generation.
+      expect(await check(newId)).toBe(order === 'revoke-first');
     },
   );
   it('has no owner/bypass role and RLS denies reads without tenant context', async () => {

@@ -130,6 +130,16 @@ describe('access JWT server session check', () => {
     expect(checker).not.toHaveBeenCalled();
     expect(reader).not.toHaveBeenCalled();
   });
+  it('does not expose account-wide revoke to a bearer session or browser verified flag', async () => {
+    const { app } = await setup(vi.fn().mockResolvedValue(true));
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/sessions/revoke-all',
+      headers: { authorization: await bearer(), 'idempotency-key': 'synthetic-revoke-all-key' },
+      payload: { userId, verified: true, reason: 'SECURITY_REVOKE_ALL' },
+    });
+    expect(response.statusCode).toBe(404);
+  });
   it('uses the production AuthService checker binding when no override is supplied', async () => {
     const isAccessSessionActive = vi.fn().mockResolvedValue(false);
     const { app } = await setup(undefined, { isAccessSessionActive } as unknown as AuthService);

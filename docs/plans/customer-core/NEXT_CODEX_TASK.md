@@ -26,6 +26,11 @@ SDK предоставляет `getProfileContacts()`, API получает read
 access-сессии на защищённых API маршрутах и сериализация refresh/logout. Контракт и пределы
 описаны в [ARCHITECTURE.md](ARCHITECTURE.md#кя-02a-отзыв-access-сессии-на-api).
 Новые login/recovery/contact verification/staff API не входят в этот результат.
-Перед реализацией КЯ-04 следующий инкремент КЯ-02a должен закрепить атомарный revoke-all/reset и
-step-up/proof требования; для самого LOCAL login/recovery нужен отдельный подтверждённый
-договор о способе аутентификации и доставке доказательства. Разработка не означает деплой.
+В той же task branch/Draft PR следующий инкремент добавляет внутренний revoke-all persistence
+primitive и выравнивает user-lock при создании сессии. Он вызывается на client уже открытого
+tenant transaction и может войти в будущий atomic reset; сам reset и public command не выпущены.
+[Proof/reset contract](ARCHITECTURE.md#кя-02a-внутренний-массовый-отзыв-и-proof-contract) фиксирует
+account/method/purpose/generation binding, single consume и общий transaction/receipt.
+Для КЯ-04 остаётся выбрать trusted LOCAL proof/delivery contract и реализовать конкретные
+credential/proof writers с generation fence, same-client replacement policy и negative tests.
+До этого public reset/revoke-all остаются недоступны. Разработка не означает merge или деплой.
