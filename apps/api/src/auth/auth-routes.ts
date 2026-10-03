@@ -8,6 +8,7 @@ import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
 import { AuthServiceError, type AuthService, type AuthSessionResult } from './auth-service.js';
+import { normalizeLoginEmail } from './local-password.js';
 
 export const REFRESH_COOKIE_NAME = 'phub_refresh';
 export const OAUTH_BROWSER_COOKIE_NAME = 'phub_oauth_browser';
@@ -16,6 +17,12 @@ const challengeBodySchema = z.object({
   method: z.literal('phone_otp'),
   phone: z.string().min(5).max(32),
 });
+const passwordLoginBodySchema = z
+  .object({
+    email: z.string().min(3).max(254),
+    password: z.string().min(1).max(512),
+  })
+  .strict();
 const verifyBodySchema = z.object({
   code: z.string().regex(/^\d{4}$/),
   acceptance: z
@@ -63,16 +70,18 @@ const verifyParamsSchema = paramsSchema.extend({ challengeId: z.string().uuid() 
 function protectedRateKey(
   request: FastifyRequest,
   config: AppConfig,
-  operation: 'challenge' | 'verify' | 'viva-authorize',
+  operation: 'challenge' | 'verify' | 'viva-authorize' | 'password',
 ): string {
   const params = request.params as { tenantKey?: string; challengeId?: string };
-  const body = request.body as { phone?: unknown } | undefined;
+  const body = request.body as { phone?: unknown; email?: unknown } | undefined;
   const discriminator =
-    operation === 'challenge'
-      ? (normalizePhoneE164(typeof body?.phone === 'string' ? body.phone : '') ?? 'invalid-phone')
-      : operation === 'verify'
-        ? (params.challengeId ?? 'invalid-challenge')
-        : 'oauth-start';
+    operation === 'password'
+      ? (normalizeLoginEmail(typeof body?.email === 'string' ? body.email : '') ?? 'invalid-email')
+      : operation === 'challenge'
+        ? (normalizePhoneE164(typeof body?.phone === 'string' ? body.phone : '') ?? 'invalid-phone')
+        : operation === 'verify'
+          ? (params.challengeId ?? 'invalid-challenge')
+          : 'oauth-start';
   const digest = createHmac('sha256', config.JWT_REFRESH_SECRET)
     .update(discriminator)
     .digest('base64url');
@@ -89,6 +98,7 @@ function isAllowedBrowserOrigin(request: FastifyRequest, config: AppConfig): boo
 
 function errorMessage(code: string): string {
   const messages: Readonly<Record<string, string>> = {
+    AUTH_CREDENTIAL_INVALID: 'Email или пароль не подошли.',
     AUTH_PHONE_INVALID: 'Введите корректный номер телефона.',
     AUTH_CODE_INVALID: 'Код не подошёл. Проверьте его и попробуйте ещё раз.',
     AUTH_CODE_EXPIRED: 'Код истёк. Запросите новый код.',
@@ -563,6 +573,77 @@ export function registerAuthRoutes(
           ...access,
           ...(profilePhoto !== undefined ? { profilePhoto } : {}),
         });
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/auth/password/login',
+    {
+      bodyLimit: 4096,
+      errorHandler: (error, request, reply) => {
+        if (error.code === 'RATE_LIMIT_EXCEEDED') {
+          sendApiError(
+            request,
+            reply,
+            429,
+            'RATE_LIMIT_EXCEEDED',
+            'Слишком много запросов. Повторите позже.',
+          );
+          return;
+        }
+        app.errorHandler(error, request, reply);
+      },
+      onSend: (_request, reply, payload, done) => {
+        reply.header('Cache-Control', 'private, no-store');
+        done(null, payload);
+      },
+      onRequest: async (_request, reply) => {
+        preventCredentialCaching(reply);
+      },
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: '1 minute',
+          groupId: 'auth-password',
+          keyGenerator: (request) => protectedRateKey(request, config, 'password'),
+        },
+      },
+      preHandler: requireAuthIdempotency,
+    },
+    async (request, reply) => {
+      preventCredentialCaching(reply);
+      try {
+        if (!isAllowedBrowserOrigin(request, config))
+          return sendApiError(
+            request,
+            reply,
+            403,
+            'ORIGIN_NOT_ALLOWED',
+            'Источник запроса не разрешён.',
+          );
+        if (request.headers['x-session-intent'] !== 'password-login')
+          return sendApiError(
+            request,
+            reply,
+            400,
+            'SESSION_INTENT_REQUIRED',
+            'Некорректный запрос.',
+          );
+        const { tenantKey } = paramsSchema.parse(request.params);
+        const body = passwordLoginBodySchema.parse(request.body);
+        // This is exclusively a consumer method. A platform header never selects staff audience.
+        const session = await authService.loginWithPassword({
+          ...body,
+          tenantKey,
+          clientIp: request.ip,
+          correlationId: request.id,
+          idempotencyKey: idempotencyKey(request),
+        });
+        setRefreshCookie(reply, config, tenantKey, session);
+        return reply.send(publicSession(session, await resolveRuntimeCapabilities()));
       } catch (error) {
         return handleAuthError(error, request, reply);
       }

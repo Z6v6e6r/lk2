@@ -1,4 +1,5 @@
 export * from './auth-repository.js';
+export * from './local-password-login-repository.js';
 export * from './activity-history-repository.js';
 export * from './booking-preferences-repository.js';
 export * from './booking-screen-mapping-repository.js';

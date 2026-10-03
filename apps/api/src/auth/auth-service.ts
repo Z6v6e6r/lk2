@@ -19,9 +19,16 @@ import {
   encryptVivaDelegationToken,
 } from '@phub/auth/viva-delegation';
 import type { AppConfig } from '@phub/config';
+import type { LocalPasswordLoginRepository } from '@phub/database';
 import { SignJWT } from 'jose';
 
 import type { AuthChallenge, AuthChallengeStore } from './challenge-store.js';
+import {
+  normalizeLoginEmail,
+  reservePasswordLoginSlot,
+  verifyLocalPassword,
+} from './local-password.js';
+import type { PasswordLoginLimiter } from './password-login-limiter.js';
 import type { VivaOAuthStart, VivaOAuthStateStore } from './oauth-state-store.js';
 import {
   ANDROID_OAUTH_REDIRECT,
@@ -197,6 +204,7 @@ export interface AuthRepository {
 }
 
 export type AuthServiceErrorCode =
+  | 'AUTH_CREDENTIAL_INVALID'
   | 'AUTH_PHONE_INVALID'
   | 'AUTH_CODE_INVALID'
   | 'AUTH_CODE_EXPIRED'
@@ -219,6 +227,7 @@ export type AuthServiceErrorCode =
   | 'TENANT_NOT_FOUND';
 
 const errorStatus: Readonly<Record<AuthServiceErrorCode, number>> = {
+  AUTH_CREDENTIAL_INVALID: 401,
   AUTH_PHONE_INVALID: 400,
   AUTH_CODE_INVALID: 401,
   AUTH_CODE_EXPIRED: 410,
@@ -265,6 +274,8 @@ export interface AuthSessionResult {
 export interface AuthServiceOptions {
   readonly config: AppConfig;
   readonly repository: AuthRepository;
+  readonly localPasswordRepository?: LocalPasswordLoginRepository;
+  readonly passwordLoginLimiter?: PasswordLoginLimiter;
   readonly challengeStore: AuthChallengeStore;
   readonly providers: ReadonlyMap<IdentityProviderKey, IdentityProviderPort>;
   readonly vivaOAuthProvider?: VivaOAuthProviderPort;
@@ -1337,6 +1348,121 @@ export class AuthService {
       tokenType: 'Bearer',
       user: identity.user,
     };
+  }
+
+  public async loginWithPassword(input: {
+    readonly tenantKey: string;
+    readonly email: string;
+    readonly password: string;
+    readonly clientIp: string;
+    readonly idempotencyKey: string;
+    readonly correlationId: string;
+  }): Promise<AuthSessionResult> {
+    let release: () => void;
+    try {
+      release = reservePasswordLoginSlot();
+    } catch {
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    }
+    try {
+      const binding = await this.binding(input.tenantKey);
+      const repository = this.options.localPasswordRepository;
+      if (
+        !repository ||
+        !this.options.passwordLoginLimiter ||
+        !this.options.repository.isAccessSessionActive
+      )
+        throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+      const emailKey = normalizeLoginEmail(input.email);
+      if (!emailKey) throw new AuthServiceError('AUTH_CREDENTIAL_INVALID');
+      if (
+        !(await this.options.passwordLoginLimiter.allow(binding.tenantId, emailKey, input.clientIp))
+      )
+        throw new AuthServiceError('AUTH_RATE_LIMITED');
+      const credential = await repository.findCredential(binding.tenantId, emailKey);
+      const verified = await verifyLocalPassword(input.password, credential?.passwordHash);
+      if (!verified || !credential) throw new AuthServiceError('AUTH_CREDENTIAL_INVALID');
+      if (
+        !(await this.options.repository.hasCurrentLegalAcceptances({
+          tenantId: binding.tenantId,
+          userId: credential.userId,
+          publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
+          personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+        }))
+      )
+        throw new AuthServiceError('LEGAL_ACCEPTANCE_REQUIRED');
+      const values = [
+        binding.tenantId,
+        credential.id,
+        String(credential.generation),
+        emailKey,
+        input.idempotencyKey,
+      ];
+      const refreshToken = this.deriveRefreshToken('local-password-refresh-v1', values);
+      const result = await repository.commitLogin({
+        tenantId: binding.tenantId,
+        emailKey,
+        credential,
+        // Stable across a signing/refresh key rotation so an old receipt is found and denied.
+        // The opaque command key is not a password/contact verifier.
+        commandKeyHash: createHash('sha256')
+          .update(
+            JSON.stringify(['local-password-command-v1', binding.tenantId, input.idempotencyKey]),
+          )
+          .digest('hex'),
+        requestHash: createHash('sha256')
+          .update(
+            JSON.stringify({
+              contract: 'LOCAL_PASSWORD_V1',
+              tenantId: binding.tenantId,
+              emailKey,
+              credentialId: credential.id,
+              generation: credential.generation,
+              audience: 'client',
+              publicOfferVersion: this.options.config.PUBLIC_OFFER_VERSION,
+              personalDataPolicyVersion: this.options.config.PERSONAL_DATA_POLICY_VERSION,
+            }),
+          )
+          .digest('hex'),
+        sessionId: this.deriveUuid('local-password-session-v1', values),
+        tokenHash: this.refreshTokenHash(refreshToken),
+        expiresAt: new Date(
+          this.now().getTime() + this.options.config.AUTH_REFRESH_TTL_SECONDS * 1000,
+        ),
+        correlationId: input.correlationId,
+      });
+      if (!('user' in result))
+        throw new AuthServiceError(
+          result.outcome === 'conflict' ? 'IDEMPOTENCY_KEY_CONFLICT' : 'AUTH_CREDENTIAL_INVALID',
+        );
+      const session = await this.sessionResult(
+        {
+          sessionId: result.sessionId,
+          familyId: result.sessionId,
+          tenantId: binding.tenantId,
+          tenantKey: binding.tenantKey,
+          user: result.user,
+        },
+        refreshToken,
+        input.correlationId,
+        'client',
+      );
+      if (
+        !(await this.options.repository.isAccessSessionActive({
+          tenantId: binding.tenantId,
+          userId: result.user.id,
+          sessionId: result.sessionId,
+        }))
+      )
+        throw new AuthServiceError('AUTH_SESSION_REVOKED');
+      return { ...session, refreshExpiresAt: result.expiresAt };
+    } catch (error) {
+      if (error instanceof AuthServiceError) throw error;
+      // Never expose a DB exception containing an email, credential hash or connection context.
+      throw new AuthServiceError('AUTH_PROVIDER_UNAVAILABLE');
+    } finally {
+      release();
+    }
   }
 
   public async startPhoneChallenge(input: {
