@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { runWebTransition, standardWebComposeArgs } from './timeweb-standard-policy.js';
 import {
   apiWebComposeArgs,
+  observeDirectApiWeb,
   runApiWebTransition,
   recoverApiWebTransition,
 } from './timeweb-api-web-upgrade.js';
@@ -166,7 +167,73 @@ try {
     },
   };
   await runApiWebTransition(criticalOps);
+  // A virtual clock verifies the controller's 61-round shape without representing production's
+  // required wall-clock observation; the real path has no injected clock or probe.
+  let virtualNow = Date.parse('2026-10-03T00:00:00.000Z');
+  const direct = await observeDirectApiWeb({
+    inspectService: (service) => {
+      if (inspect(service).Config.Labels['phub.release-id'] !== `${service}-candidate`)
+        throw Error('Direct observation saw changed candidate');
+    },
+    probeService: async (service) => {
+      docker(['exec', inspect(service).Id, 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/']);
+      return 1;
+    },
+    attest: unchanged,
+    now: () => virtualNow,
+    sleep: async (ms) => {
+      virtualNow += ms;
+    },
+  });
+  if (direct.elapsedSeconds !== 900 || direct.samples.api.privateMs.length !== 61)
+    throw Error('Wrong direct observation shape');
   await recoverApiWebTransition(criticalOps);
+  const directRestoreOrder = [];
+  let directRejected = false;
+  try {
+    await runApiWebTransition({
+      ...criticalOps,
+      observe: () =>
+        observeDirectApiWeb({
+          inspectService: (service) => {
+            if (inspect(service).Config.Labels['phub.release-id'] !== `${service}-candidate`)
+              throw Error('changed candidate');
+          },
+          probeService: async (service) => {
+            docker([
+              'exec',
+              inspect(service).Id,
+              'wget',
+              '-q',
+              '-O',
+              '/dev/null',
+              'http://127.0.0.1/',
+            ]);
+            return 1;
+          },
+          attest: async () => {
+            await unchanged();
+            throw Error('Injected direct owner observation drift');
+          },
+          now: () => virtualNow,
+          sleep: async (ms) => {
+            virtualNow += ms;
+          },
+        }),
+      restore: async (service) => {
+        directRestoreOrder.push(service);
+        await criticalOps.restore(service);
+      },
+    });
+  } catch {
+    directRejected = true;
+  }
+  if (!directRejected || JSON.stringify(directRestoreOrder) !== JSON.stringify(['web', 'api']))
+    throw Error('Direct failure did not restore exact previous pair');
+  for (const service of ['api', 'web'])
+    if (inspect(service).Config.Labels['phub.release-id'] !== `${service}-previous`)
+      throw Error('Direct previous pair not restored');
+  await unchanged();
   for (const failure of ['preflight', 'pullAndSmoke', 'api', 'web', 'observe', 'installBaseline']) {
     let rejected = false;
     try {

@@ -40,6 +40,22 @@ const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const ID = /^[a-f0-9]{40}-[1-9][0-9]*-1$/;
 const NUMBER = /^[1-9][0-9]*$/;
+const CALLBACK_DIRECT_POLICY = 'CALLBACK_DIRECT_OBSERVATION_V1';
+const CALLBACK_DIRECT_EXPIRY = '2026-10-04T00:00:00.000Z';
+const CALLBACK_DIRECT_CANDIDATE = {
+  candidateSha: '0d6078be7a50ed3f5761d66071527be003bd568f',
+  candidateTree: '5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
+  sourceCiRunId: '37034485776',
+  publicationRunId: '37038298584',
+  artifactId: '11241473445',
+  artifactDigest: 'sha256:64b2cbf7f6613d62f3aa08d6da6c65c6d5ff50ebc88e19c5bcbd2239237913e9',
+  manifestSha256: '9d631c9adf4ffce0ab68527bcf99828faa72ee1c51f655bf5325c97f435d042e',
+  previousReleaseId: 'c43e9dc8da3eb19a1684ed28e989aafacdb5d8bf-36629104876-1',
+  apiImage:
+    'ghcr.io/z6v6e6r/phub-api@sha256:c798c0f881daecca72500d0e3e2d525f77ee4df500c2f662a346b521fa9d1681',
+  webImage:
+    'ghcr.io/z6v6e6r/phub-web@sha256:887455ea273abc6138bdb176f4af82295c37d56ac9a7a96b83c006e5f4d72b9e',
+};
 const SECRET_NAMES = [
   'api.env',
   'worker.env',
@@ -114,6 +130,8 @@ function exact(value, keys) {
     fail('invalid_keys');
 }
 export function validateApiWebOperation(value) {
+  if (value?.schema === 'PHUB_TIMEWEB_API_WEB_OPERATION_V2')
+    return validateDirectApiWebOperation(value);
   exact(value, [
     'schema',
     'target',
@@ -160,6 +178,106 @@ export function validateApiWebOperation(value) {
   )
     fail('invalid_confirmation');
   return value;
+}
+export function validateDirectApiWebOperation(value, requireUnexpired = false) {
+  exact(value, [
+    'schema',
+    'target',
+    'controllerSha',
+    'candidateSha',
+    'candidateTree',
+    'sourceCiRunId',
+    'publicationRunId',
+    'artifactId',
+    'artifactDigest',
+    'manifestSha256',
+    'expectedApi',
+    'expectedWeb',
+    'evidencePolicy',
+    'expiresAt',
+    'confirmation',
+  ]);
+  if (
+    value.schema !== 'PHUB_TIMEWEB_API_WEB_OPERATION_V2' ||
+    value.target !== 'lk2.padlhub.su' ||
+    !SHA.test(value.controllerSha ?? '') ||
+    value.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
+    value.expiresAt !== CALLBACK_DIRECT_EXPIRY ||
+    (requireUnexpired && Date.now() > Date.parse(value.expiresAt)) ||
+    Object.entries(CALLBACK_DIRECT_CANDIDATE).some(([key, expected]) =>
+      ['apiImage', 'webImage', 'previousReleaseId'].includes(key) ? false : value[key] !== expected,
+    )
+  )
+    fail('direct_operation_identity');
+  for (const [service, image] of [
+    ['Api', CALLBACK_DIRECT_CANDIDATE.apiImage],
+    ['Web', CALLBACK_DIRECT_CANDIDATE.webImage],
+  ]) {
+    const expected = value[`expected${service}`];
+    exact(expected, ['id', 'image', 'releaseId']);
+    if (
+      !HASH.test(expected.id ?? '') ||
+      expected.image !== image ||
+      expected.releaseId !== CALLBACK_DIRECT_CANDIDATE.previousReleaseId
+    )
+      fail('direct_previous_identity');
+  }
+  const suffix = `_DIRECT_15M_NO_PROVIDER_EVIDENCE`;
+  if (
+    value.confirmation !==
+    `DEPLOY_API_WEB_${value.candidateSha.slice(0, 12).toUpperCase()}_FROM_${value.expectedApi.releaseId.slice(0, 12).toUpperCase()}_${value.expectedWeb.releaseId.slice(0, 12).toUpperCase()}${suffix}`
+  )
+    fail('direct_confirmation');
+  return value;
+}
+function isDirectOperation(op) {
+  return op.schema === 'PHUB_TIMEWEB_API_WEB_OPERATION_V2';
+}
+function policyHash(op) {
+  return hash(
+    Buffer.from(
+      JSON.stringify({
+        evidencePolicy: op.evidencePolicy,
+        expiresAt: op.expiresAt,
+        confirmation: op.confirmation,
+      }),
+    ),
+  );
+}
+export function validateDirectOwnerObservation(value, op, operationSha256) {
+  exact(value, [
+    'schema',
+    'evidencePolicy',
+    'authorization',
+    'operationSha256',
+    'policySha256',
+    'candidateSha',
+    'target',
+  ]);
+  if (
+    value.schema !== 'PHUB_TIMEWEB_API_WEB_OWNER_OBSERVATION_V1' ||
+    value.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
+    value.authorization !== 'NOT_COLLECTED_EXPLICIT_OVERRIDE' ||
+    value.operationSha256 !== operationSha256 ||
+    value.policySha256 !== policyHash(op) ||
+    value.candidateSha !== op.candidateSha ||
+    value.target !== op.target
+  )
+    fail('direct_owner_observation');
+  return value;
+}
+export function directOwnerBytes(op, operationSha256) {
+  const value = {
+    schema: 'PHUB_TIMEWEB_API_WEB_OWNER_OBSERVATION_V1',
+    evidencePolicy: CALLBACK_DIRECT_POLICY,
+    authorization: 'NOT_COLLECTED_EXPLICIT_OVERRIDE',
+    operationSha256,
+    policySha256: policyHash(op),
+    candidateSha: op.candidateSha,
+    target: op.target,
+  };
+  validateDirectOwnerObservation(value, op, operationSha256);
+  return Buffer.from(`${JSON.stringify(value)}\n`);
 }
 export function validateControllerDelta(entries) {
   if (
@@ -594,6 +712,67 @@ async function probe(service, publicProbe = false) {
     fail('probe_failed');
   return performance.now() - started;
 }
+// The production route deliberately has no request/env overrides: it observes a real 15-minute
+// window. Tests may inject a virtual clock and probes to cover all failure paths without claiming
+// wall-clock evidence.
+export async function observeDirectApiWeb({
+  inspectService,
+  probeService,
+  attest,
+  now = () => Date.now(),
+  sleep = delay,
+}) {
+  const started = now();
+  const samples = Object.fromEntries(
+    ['api', 'web'].map((service) => [service, { privateMs: [], publicMs: [], timestamps: [] }]),
+  );
+  for (let round = 0; round < 61; round++) {
+    for (const service of ['api', 'web']) {
+      inspectService(service);
+      const privateMs = await probeService(service, false);
+      const publicMs = await probeService(service, true);
+      if (![privateMs, publicMs].every(Number.isFinite)) fail('direct_probe_latency');
+      samples[service].privateMs.push(privateMs);
+      samples[service].publicMs.push(publicMs);
+      samples[service].timestamps.push(new Date(now()).toISOString());
+    }
+    await attest();
+    if (round < 60) await sleep(15000);
+  }
+  const completed = now();
+  for (const service of ['api', 'web']) {
+    const percentile = (values) =>
+      [...values].sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1];
+    samples[service].p95PrivateMs = percentile(samples[service].privateMs);
+    samples[service].p95PublicMs = percentile(samples[service].publicMs);
+  }
+  const evidence = {
+    schema: 'PHUB_TIMEWEB_API_WEB_DIRECT_OBSERVATION_V1',
+    evidencePolicy: CALLBACK_DIRECT_POLICY,
+    authorization: 'NOT_COLLECTED_EXPLICIT_OVERRIDE',
+    startedAt: new Date(started).toISOString(),
+    completedAt: new Date(completed).toISOString(),
+    elapsedSeconds: (completed - started) / 1000,
+    samples,
+    providerEvidence: 'NOT_COLLECTED_EXPLICIT_OVERRIDE',
+    candidateSha: CALLBACK_DIRECT_CANDIDATE.candidateSha,
+  };
+  validateDirectObservation(evidence, evidence.completedAt);
+  return evidence;
+}
+async function callbackProbe() {
+  const response = await fetch('https://lk2.padlhub.su/android/oauth/yandex', {
+    redirect: 'manual',
+    signal: AbortSignal.timeout(10000),
+  });
+  const body = await response.text();
+  if (
+    response.status !== 200 ||
+    response.headers.has('location') ||
+    !body.includes('history.replaceState(null')
+  )
+    fail('callback_probe_failed');
+}
 async function wait(service, expected) {
   for (let attempt = 0; attempt < 45; attempt++) {
     try {
@@ -788,8 +967,16 @@ export function validateRuntimeUpgrade(identity, entries) {
     fail('callback_runtime_bridge');
   validateRuntimeDelta(entries.filter((v) => !permitted.has(v.path)).map((v) => v.path));
 }
-export function validateUpgradeReceipt(receipt, planSha256) {
+export function validateUpgradeReceipt(
+  receipt,
+  planSha256,
+  op = undefined,
+  plan = undefined,
+  planBytes = undefined,
+) {
   const keys = ['schema', 'status', 'planSha256', 'observedAt'];
+  const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+  if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
   if (
     receipt.status === 'SUCCESS' ||
     (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
@@ -797,13 +984,16 @@ export function validateUpgradeReceipt(receipt, planSha256) {
     keys.push(
       'installedBaselineSha256',
       'observationSha256',
-      'providerReadbackSha256',
-      'alertReadbackSha256',
+      ...(direct
+        ? ['ownerObservationSha256', 'evidencePolicySha256']
+        : ['providerReadbackSha256', 'alertReadbackSha256']),
     );
   if (receipt.status === 'RECONCILED') keys.push('reconciledStatus');
   exact(receipt, keys);
   if (
-    receipt.schema !== 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1' ||
+    !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
+      receipt.schema,
+    ) ||
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
@@ -823,16 +1013,149 @@ export function validateUpgradeReceipt(receipt, planSha256) {
     ].includes(receipt.status) ||
     (receipt.status === 'RECONCILED' &&
       !['SUCCESS', 'ROLLED_BACK', 'ABORTED'].includes(receipt.reconciledStatus)) ||
+    (direct &&
+      (receipt.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
+        receipt.providerEvidenceStatus !== 'NOT_COLLECTED_EXPLICIT_OVERRIDE')) ||
     (keys.includes('installedBaselineSha256') &&
       [
         'installedBaselineSha256',
         'observationSha256',
-        'providerReadbackSha256',
-        'alertReadbackSha256',
+        ...(direct
+          ? ['ownerObservationSha256', 'evidencePolicySha256']
+          : ['providerReadbackSha256', 'alertReadbackSha256']),
       ].some((key) => !HASH.test(receipt[key] ?? '')))
   )
     fail('invalid_receipt');
+  if (op || plan) {
+    if (
+      !op ||
+      !plan ||
+      isDirectOperation(op) !== direct ||
+      !Buffer.isBuffer(planBytes) ||
+      hash(planBytes) !== planSha256 ||
+      !equal(JSON.parse(planBytes), plan) ||
+      plan.controllerSha !== op.controllerSha ||
+      plan.schema !== (direct ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2' : 'PHUB_TIMEWEB_API_WEB_PLAN_V1')
+    )
+      fail('receipt_context');
+    if (
+      direct &&
+      (plan.evidencePolicy !== receipt.evidencePolicy ||
+        plan.evidencePolicySha256 !== policyHash(op))
+    )
+      fail('receipt_policy_context');
+  }
   return receipt;
+}
+export function validateDirectObservation(value, completedAt = undefined) {
+  exact(value, [
+    'schema',
+    'evidencePolicy',
+    'authorization',
+    'startedAt',
+    'completedAt',
+    'elapsedSeconds',
+    'samples',
+    'providerEvidence',
+    'candidateSha',
+  ]);
+  if (
+    value.schema !== 'PHUB_TIMEWEB_API_WEB_DIRECT_OBSERVATION_V1' ||
+    value.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
+    value.authorization !== 'NOT_COLLECTED_EXPLICIT_OVERRIDE' ||
+    value.candidateSha !== CALLBACK_DIRECT_CANDIDATE.candidateSha ||
+    value.providerEvidence !== 'NOT_COLLECTED_EXPLICIT_OVERRIDE' ||
+    !Number.isFinite(Date.parse(value.startedAt)) ||
+    !Number.isFinite(Date.parse(value.completedAt)) ||
+    !Number.isFinite(value.elapsedSeconds) ||
+    value.elapsedSeconds < 900 ||
+    (Date.parse(value.completedAt) - Date.parse(value.startedAt)) / 1000 !== value.elapsedSeconds ||
+    Date.parse(value.completedAt) > Date.parse(CALLBACK_DIRECT_EXPIRY) ||
+    (completedAt && value.completedAt !== completedAt) ||
+    !value.samples ||
+    Object.keys(value.samples).sort().join(',') !== 'api,web'
+  )
+    fail('direct_observation_identity');
+  for (const service of ['api', 'web']) {
+    const v = value.samples[service];
+    exact(v, ['privateMs', 'publicMs', 'timestamps', 'p95PrivateMs', 'p95PublicMs']);
+    if (
+      ![v.privateMs, v.publicMs, v.timestamps].every(Array.isArray) ||
+      v.privateMs.length !== 61 ||
+      v.publicMs.length !== 61 ||
+      v.timestamps.length !== 61 ||
+      ![...v.privateMs, ...v.publicMs, v.p95PrivateMs, v.p95PublicMs].every(
+        (n) => Number.isFinite(n) && n >= 0,
+      ) ||
+      v.timestamps.some(
+        (t, i) =>
+          !Number.isFinite(Date.parse(t)) ||
+          Date.parse(t) < Date.parse(value.startedAt) ||
+          Date.parse(t) > Date.parse(value.completedAt) ||
+          (i && Date.parse(t) - Date.parse(v.timestamps[i - 1]) < 15000),
+      ) ||
+      (() => {
+        const p = (xs) => [...xs].sort((a, b) => a - b)[Math.ceil(xs.length * 0.95) - 1];
+        return (
+          v.p95PrivateMs !== p(v.privateMs) ||
+          v.p95PublicMs !== p(v.publicMs) ||
+          Math.max(
+            v.privateMs.map((n, i) => Math.max(n, v.publicMs[i])).sort((a, b) => a - b)[
+              Math.ceil(v.privateMs.length * 0.95) - 1
+            ],
+          ) > (service === 'api' ? 1500 : 1000)
+        );
+      })()
+    )
+      fail('direct_observation_samples');
+  }
+  return value;
+}
+// Validate historical V2 custody from exact bytes. Current time is intentionally irrelevant;
+// the measured observation must still have completed inside the original authorization window.
+export function validateDirectInstalledEvidence(
+  receipt,
+  planBytes,
+  operationBytes,
+  ownerBytes,
+  observationBytes,
+  releaseId,
+  installedImages,
+) {
+  const op = validateDirectApiWebOperation(JSON.parse(operationBytes));
+  const plan = JSON.parse(planBytes);
+  validateUpgradeReceipt(receipt, hash(planBytes), op, plan, planBytes);
+  const ownerHash = hash(ownerBytes);
+  if (
+    plan.operationSha256 !== hash(operationBytes) ||
+    plan.ownerObservationSha256 !== ownerHash ||
+    receipt.ownerObservationSha256 !== ownerHash ||
+    receipt.evidencePolicySha256 !== policyHash(op) ||
+    receipt.observationSha256 !== hash(observationBytes) ||
+    releaseId !== `${op.candidateSha}-${op.publicationRunId}-1` ||
+    plan.manifestSha256 !== op.manifestSha256 ||
+    plan.artifactDigest !== op.artifactDigest ||
+    !(
+      receipt.status === 'SUCCESS' ||
+      (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
+    )
+  )
+    fail('installed_direct_evidence_drift');
+  for (const service of ['api', 'web']) {
+    const expected = op[service === 'api' ? 'expectedApi' : 'expectedWeb'];
+    if (
+      !plan.candidate?.[service] ||
+      plan.candidate[service].releaseId !== releaseId ||
+      plan.candidate[service].image !== installedImages[service] ||
+      !plan.previous?.[service] ||
+      ['id', 'image', 'releaseId'].some((key) => plan.previous[service][key] !== expected[key])
+    )
+      fail('installed_direct_component_drift');
+  }
+  if (!ownerBytes.equals(directOwnerBytes(op, hash(operationBytes))))
+    fail('installed_direct_owner_drift');
+  validateDirectOwnerObservation(JSON.parse(ownerBytes), op, hash(operationBytes));
+  validateDirectObservation(JSON.parse(observationBytes));
 }
 export function readInstalledApiBaseline(releaseId) {
   if (!ID.test(releaseId)) fail('baseline_release_id');
@@ -850,17 +1173,39 @@ export function readInstalledApiBaseline(releaseId) {
     )
       fail('installed_baseline_identity');
     const receipt = JSON.parse(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT));
-    const plan = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
-    validateUpgradeReceipt(receipt, hash(plan));
+    const planBytes = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
+    const plan = JSON.parse(planBytes);
+    validateUpgradeReceipt(receipt, hash(planBytes));
     const transaction = `${ROOT}/backups/${releaseId}-api-web`;
-    for (const [file, key] of [
-      ['observation.json', 'observationSha256'],
-      ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-      ['alert-test-readback.json', 'alertReadbackSha256'],
-    ])
+    const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+    for (const [file, key] of direct
+      ? [
+          ['observation.json', 'observationSha256'],
+          ['release-owner-observation.json', 'ownerObservationSha256'],
+        ]
+      : [
+          ['observation.json', 'observationSha256'],
+          ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+          ['alert-test-readback.json', 'alertReadbackSha256'],
+        ])
       if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
+    if (direct)
+      validateDirectInstalledEvidence(
+        receipt,
+        planBytes,
+        read(`${transaction}/operation.json`),
+        read(`${transaction}/release-owner-observation.json`),
+        read(`${transaction}/observation.json`),
+        releaseId,
+        {
+          api: `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}`,
+          web: `ghcr.io/z6v6e6r/phub-web@${values.WEB_IMAGE_DIGEST}`,
+        },
+      );
     if (
-      receipt.schema !== 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1' ||
+      !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
+        receipt.schema,
+      ) ||
       !(
         receipt.status === 'SUCCESS' ||
         (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
@@ -900,6 +1245,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   }
   const opBytes = read(recoveredTransaction ? `${recoveredTransaction}/operation.json` : REQUEST);
   const op = validateApiWebOperation(JSON.parse(opBytes));
+  if (mode === 'deploy' && isDirectOperation(op)) validateDirectApiWebOperation(op, true);
   if (
     config.schema !== 1 ||
     config.enabled !== true ||
@@ -995,6 +1341,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         'candidate.env',
         'previous-api.env',
         'previous-web.env',
+        'release-owner-observation.json',
         'backup.complete',
         'rollout-receipt.json',
       ]) {
@@ -1022,11 +1369,20 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       };
     }
     plan = JSON.parse(read(planPath));
-    const receipt = validateUpgradeReceipt(JSON.parse(read(journalPath)), hash(read(planPath)));
+    const receipt = validateUpgradeReceipt(
+      JSON.parse(read(journalPath)),
+      hash(read(planPath)),
+      op,
+      plan,
+      read(planPath),
+    );
     if (
       plan.operationSha256 !== hash(opBytes) ||
       receipt.planSha256 !== hash(read(planPath)) ||
-      receipt.schema !== 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1' ||
+      receipt.schema !==
+        (isDirectOperation(op)
+          ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
+          : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1') ||
       ![
         'PREPARING',
         'PREPARED',
@@ -1090,9 +1446,14 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         fail('baseline_drift');
     }
     const backup = validateBackupProof(transaction, previousApi);
-    validateMonitoring(transaction);
+    const direct = isDirectOperation(op);
+    let ownerBytes;
+    if (!direct) validateMonitoring(transaction);
+    if (direct) {
+      ownerBytes = directOwnerBytes(op, hash(opBytes));
+    }
     plan = {
-      schema: 'PHUB_TIMEWEB_API_WEB_PLAN_V1',
+      schema: direct ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2' : 'PHUB_TIMEWEB_API_WEB_PLAN_V1',
       operationSha256: hash(opBytes),
       controllerSha: op.controllerSha,
       manifestSha256: op.manifestSha256,
@@ -1120,6 +1481,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       secretHashes: secretHashes(),
       backup,
       createdAt: new Date().toISOString(),
+      ...(direct
+        ? {
+            evidencePolicy: op.evidencePolicy,
+            evidencePolicySha256: policyHash(op),
+            ownerObservationSha256: hash(ownerBytes),
+          }
+        : {}),
     };
     validateUnchangedImages(plan.unchangedServiceImages);
     for (const service of ['api', 'web'])
@@ -1133,18 +1501,20 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       if (!read(operationCopy).equals(opBytes)) fail('operation_copy_drift');
     } else durable(operationCopy, opBytes, true);
     durable(LOCK, `${planPath}\n`, true);
+    if (direct) durable(`${transaction}/release-owner-observation.json`, ownerBytes, true);
     durable(planPath, `${JSON.stringify(plan)}\n`, true);
     for (const name of ['candidate', 'previous-api', 'previous-web'])
       durable(`${transaction}/${name}.env`, overlayBytes(plan, name), true);
     durable(`${transaction}/backup.complete`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1', status: 'PREPARING', planSha256: hash(read(planPath)), observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: direct ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1', status: 'PREPARING', planSha256: hash(read(planPath)), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
   if (
-    plan.schema !== 'PHUB_TIMEWEB_API_WEB_PLAN_V1' ||
+    plan.schema !==
+      (isDirectOperation(op) ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2' : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
     plan.controllerSha !== op.controllerSha ||
     !equal(plan.previous.api.image, previousApi.image) ||
     plan.previous.api.releaseId !== previousApi.releaseId ||
@@ -1168,6 +1538,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     'secretHashes',
     'backup',
     'createdAt',
+    ...(isDirectOperation(op)
+      ? ['evidencePolicy', 'evidencePolicySha256', 'ownerObservationSha256']
+      : []),
   ]);
   for (const service of ['api', 'web']) {
     exact(plan.candidate[service], ['image', 'releaseId']);
@@ -1185,6 +1558,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     plan.artifactDigest !== op.artifactDigest
   )
     fail('plan_identity');
+  if (
+    isDirectOperation(op) &&
+    (plan.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
+      plan.evidencePolicySha256 !== policyHash(op) ||
+      plan.ownerObservationSha256 !== hash(directOwnerBytes(op, hash(opBytes))))
+  )
+    fail('direct_plan_identity');
   validateUnchangedImages(plan.unchangedServiceImages);
   for (const service of ['api', 'web'])
     if (
@@ -1223,15 +1603,32 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     durable(
       journalPath,
       `${JSON.stringify({
-        schema: 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
+        schema: isDirectOperation(op)
+          ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
+          : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
         status,
         planSha256,
+        ...(isDirectOperation(op)
+          ? {
+              evidencePolicy: CALLBACK_DIRECT_POLICY,
+              providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE',
+            }
+          : {}),
         ...(status === 'SUCCESS'
           ? {
               installedBaselineSha256,
               observationSha256: hash(read(`${transaction}/observation.json`)),
-              providerReadbackSha256: hash(read(`${transaction}/timeweb-monitor-readback.json`)),
-              alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)),
+              ...(isDirectOperation(op)
+                ? {
+                    ownerObservationSha256: plan.ownerObservationSha256,
+                    evidencePolicySha256: plan.evidencePolicySha256,
+                  }
+                : {
+                    providerReadbackSha256: hash(
+                      read(`${transaction}/timeweb-monitor-readback.json`),
+                    ),
+                    alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)),
+                  }),
             }
           : {}),
         observedAt: new Date().toISOString(),
@@ -1331,6 +1728,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       attest();
     },
     activate: async (s) => {
+      if (isDirectOperation(op)) validateDirectApiWebOperation(op, true);
       attest();
       compose('candidate', 'up', s);
       active[s] = await wait(s, plan.candidate[s]);
@@ -1340,6 +1738,27 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       if (s === 'web' && !equal(inspect('api'), active.api)) fail('api_changed_during_activation');
     },
     observe: async () => {
+      if (isDirectOperation(op)) {
+        await callbackProbe();
+        const direct = await observeDirectApiWeb({
+          inspectService: (service) => {
+            if (!equal(inspect(service), active[service])) fail('candidate_restarted');
+          },
+          probeService: probe,
+          attest: async () => {
+            validateDirectApiWebOperation(op, true);
+            const owner = read(`${transaction}/release-owner-observation.json`);
+            if (
+              !owner.equals(directOwnerBytes(op, hash(opBytes))) ||
+              hash(owner) !== plan.ownerObservationSha256
+            )
+              fail('direct_owner_observation_drift');
+            attest();
+          },
+        });
+        durable(`${transaction}/observation.json`, `${JSON.stringify(direct)}\n`, true);
+        return;
+      }
       const times = { api: [], web: [] };
       for (let round = 0; round <= 60; round++) {
         for (const s of ['api', 'web']) {
@@ -1394,7 +1813,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     },
   };
   const active = {};
-  const receipt = validateUpgradeReceipt(JSON.parse(read(journalPath)), planSha256);
+  const receipt = validateUpgradeReceipt(
+    JSON.parse(read(journalPath)),
+    planSha256,
+    op,
+    plan,
+    read(planPath),
+  );
   if (mode === 'reconcile') {
     await reconcileApiWebPhase(receipt, {
       attestTerminal: async (terminal) => {

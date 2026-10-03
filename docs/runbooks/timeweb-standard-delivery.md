@@ -275,8 +275,9 @@ but unreachable from this fixed runtime entrypoint: only tests import the contac
 The controller still requires `PHUB_MIGRATOR_ENABLED=false`, refuses an active migrator and can
 activate only API/Web with `--no-deps`. No migration is executed. The verifier scripts are operator
 control-plane code, absent from candidate API/Web final images; the executing verifier is always
-from the reviewed, pinned root-owned controller checkout. This exception does not relax provider
-monitoring, alert delivery, backup, rollback, excluded component or secret-lineage checks.
+from the reviewed, pinned root-owned controller checkout. This runtime exception itself does not relax provider monitoring, alert delivery, backup,
+rollback, excluded component or secret-lineage checks. The separate owner-approved callback
+observation policy below changes only its two explicitly named provider evidence requirements.
 
 Publish the exact candidate while it is current main, then merge and enroll the reviewed
 controller-only compatibility change. Candidate-to-controller ancestry must still contain only
@@ -328,7 +329,7 @@ Before activation, create root-owned `0700`
   and identical `restoredLedgerSha256`/`sourceLedgerSha256`. The backup must have been independently
   restored into an isolated disposable database. Backup hashing streams files up to 64 GiB in
   bounded memory and rejects descriptor changes during the read. Binary rollback never restores the live database.
-- The existing canonical provider inputs under `observability/timeweb-monitor-readback.json` and
+- For V1, the existing canonical provider inputs under `observability/timeweb-monitor-readback.json` and
   `observability/alert-test-readback.json` (root-only `0600`). The controller reuses their original
   strict validators: project `262717`, exact intended API/Web monitor IDs, configuration, at least
   two regions, three healthy rounds, no incident, fresh provider capture (at most 30s), and recent
@@ -351,7 +352,7 @@ files. No profile, dependency restart, migration, ingress or provider write is a
 
 After startup, the controller observes both private readiness and public HTTPS routes for 900s with
 61 samples/service. Any failed probe, container restart/replacement, excluded-state drift, missing
-fresh canonical provider readback or API p95 above 1500ms/Web p95 above 1000ms triggers restoration. This
+fresh canonical provider readback in V1 or API p95 above 1500ms/Web p95 above 1000ms triggers restoration. This
 mode stops on the first failed probe, which is stricter than the existing error/readiness thresholds.
 `SUCCESS` is written only after final attestation; the successful receipt then releases the lock.
 
@@ -387,7 +388,7 @@ then durably records `RECONCILED` and removes/fsyncs only its own pointer. It ru
 retrying reconciliation after a crash between terminal journal and lock removal. Unknown or nonterminal
 states require recovery and retain their lock.
 
-The existing provider inputs must be maintained by the release owner's approved readback collector:
+For V1, the existing provider inputs must be maintained by the release owner's approved readback collector:
 read current authenticated monitor results at least every 15s, write a root-only temporary file in
 the canonical observability directory, fsync and atomically replace the existing readback. No
 monitor/alert configuration or provider mutation is performed by the deployment controller. Without
@@ -395,3 +396,69 @@ available approved readback tooling and real current alert proof, stop before ac
 keep `readAt` fresh by merely changing its timestamp. Final canonical input snapshots and the raw
 observation are stored under the transaction and checksum-bound into `SUCCESS`, together with the
 installed descriptor.
+
+## One-time callback direct observation
+
+On 2026-10-03 the release owner explicitly approved replacing the unavailable automatic Timeweb
+monitor readback and recent Email/Telegram delivery/recovery test for the already-published Android
+callback fix. This is an explicit selection, never a fallback when a V1 readback is absent, invalid
+or stale. Timeweb monitoring and Email/Telegram configuration stay enabled and the owner watches
+them; this context is not a provider PASS and does not prove notification delivery or regional
+availability. Every other V1/automatic eligibility and evidence requirement remains unchanged.
+
+The same root-only request uses `PHUB_TIMEWEB_API_WEB_OPERATION_V2`, adds `evidencePolicy:
+CALLBACK_DIRECT_OBSERVATION_V1` and fixed `expiresAt: 2026-10-04T00:00:00.000Z`, and extends
+confirmation with
+`_DIRECT_15M_NO_PROVIDER_EVIDENCE`. It is closed to all of these identities:
+
+- candidate `0d6078be7a50ed3f5761d66071527be003bd568f`, tree
+  `5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`, source CI `37034485776`;
+- publication `37038298584`, artifact `11241473445`, archive SHA-256
+  `64b2cbf7f6613d62f3aa08d6da6c65c6d5ff50ebc88e19c5bcbd2239237913e9`, manifest SHA-256
+  `9d631c9adf4ffce0ab68527bcf99828faa72ee1c51f655bf5325c97f435d042e`;
+- both previous releases `c43e9dc8da3eb19a1684ed28e989aafacdb5d8bf-36629104876-1`, previous API
+  digest `sha256:c798c0f881daecca72500d0e3e2d525f77ee4df500c2f662a346b521fa9d1681` and Web digest
+  `sha256:887455ea273abc6138bdb176f4af82295c37d56ac9a7a96b83c006e5f4d72b9e`.
+
+Fresh expected container IDs, no restarts, exact target and all canonical custody checks still
+apply. Deployment and the complete observation must finish before `2026-10-04T00:00:00.000Z`.
+This permission expires naturally after the previous pair changes; no other artifact, candidate,
+previous source or target can use it. Expiry never prevents restoration of the recorded previous
+pair or verification of historically successful evidence.
+
+The controller durably creates a transaction-owned root-only `release-owner-observation.json`
+attestation bound to the operation bytes, exact controller/candidate/tree/publication/previous pair
+and explicit override. V2 plan and receipts identify the policy; SUCCESS additionally binds that
+attestation, real direct observation and installed descriptor by checksum. They honestly record
+`NOT_COLLECTED_EXPLICIT_OVERRIDE`; no provider/alert readback files or fake provider hashes are
+created. Legacy V1 SUCCESS continues to require its original provider files/hashes. Mixed receipt
+shapes, policy swaps and changed attestation/observation bytes reject. Shared installed-baseline
+validation understands both shapes, preserving secret lineage and later standard Web compatibility.
+Rollback does not depend on availability or freshness of the owner attestation.
+
+API/Web activation still requires a fresh independently restored database backup, immutable
+rollback images, unchanged runtime secrets/excluded services, no migrator, shared lock and durable
+intent. After Web startup, require the code-free HTTPS `/android/oauth/yandex` response to be 200,
+without Location/redirect and with the expected history-clearing fallback HTML. Then measure at
+least 900 real seconds and 61 rounds/service of private readiness and public HTTPS probes, recording
+individual timestamps and both latencies. API/Web p95 use the slower of those probes (limits
+1500/1000 ms). Any probe, identity/restart, attestation, policy-window or latency failure follows
+the existing Web-then-API rollback. No env/request setting can shorten the production window.
+
+### Pin the reviewed controller after unrelated main drift
+
+For this one-time policy, active contact reads from PR #344 are outside the candidate runtime.
+Prepare the controller task commit T from exact reviewed `a351052475c00387a1c12eabedef71b1e28ad583`.
+Merge normally so T remains an ancestor of main, but enroll detached T, never the containing merge
+or newer main. Candidate 0d must be an ancestor of T; its entire no-renames delta must remain within
+the existing CONTROLLER_FILES set. Do not widen that set or admit PR #344 through another bridge.
+
+Before enrollment, independently verify first-attempt full automatic PR-head CI for exact T and
+first-attempt full main CI for current containing merge M. Verify T is an ancestor of M, T descends
+from exact a351, and every controller/test/rehearsal/runbook blob changed by the task is identical
+in T and M. Record T, M, both CI runs and these identity checks in a root-only enrollment receipt.
+Install a clean root-owned detached checkout at T; config `controllerSha` must equal T, preserving
+owner/enabled fields. Drift requires a fresh containing-main check; it never changes the controller
+pin or the application candidate. All original candidate/controller and runtime delta validators
+continue to run before any pull/up. No image republication, migration, contact-reader activation,
+Worker/Realtime promotion, provider write, secret, signing or ingress change is authorized here.
