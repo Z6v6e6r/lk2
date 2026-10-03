@@ -52,6 +52,12 @@ describe('internal account-wide refresh revocation in caller transaction', () =>
       calls.findIndex((sql) => sql.startsWith('update identity.refresh_sessions')),
     );
     expect(calls.filter((sql) => sql.includes('insert into audit.audit_log'))).toHaveLength(1);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "values ($1, null, 'AUTH_ALL_SESSIONS_REVOKED', 'AUTH_USER_SESSIONS', $2",
+      ),
+      [input.tenantId, input.userId, input.reason, input.correlationId],
+    );
     expect(calls.join(' ')).not.toMatch(/token_hash|family_id|phone|email|status = 'ACTIVE'/);
     expect(calls).not.toContain('begin');
     expect(calls).not.toContain('commit');

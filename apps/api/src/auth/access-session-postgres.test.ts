@@ -302,6 +302,20 @@ suite('access sessions on PostgreSQL with a non-owner, non-bypass role', () => {
     expect(await check(two.sessionId)).toBe(false);
     expect(await check(peer, tenantId, otherUserId)).toBe(true);
     expect(await auditCount()).toBe(auditBefore + 1);
+    const audit = await withTenantTransaction(admin, tenantId, (client) =>
+      client.query(
+        "select actor_id, resource_type, resource_id, reason from audit.audit_log where tenant_id = $1 and action = 'AUTH_ALL_SESSIONS_REVOKED' and resource_id = $2",
+        [tenantId, userId],
+      ),
+    );
+    expect(audit.rows).toEqual([
+      {
+        actor_id: null,
+        resource_type: 'AUTH_USER_SESSIONS',
+        resource_id: userId,
+        reason: 'CREDENTIAL_RESET',
+      },
+    ]);
     expect(await revokeAll()).toEqual({ outcome: 'revoked', revokedSessionCount: 0 });
     expect(await auditCount()).toBe(auditBefore + 1);
   });

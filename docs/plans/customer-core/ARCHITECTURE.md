@@ -117,8 +117,10 @@ Caller передаёт тот же PostgreSQL client своей явной tena
 Затем отзываются все ещё не отозванные refresh rows аккаунта — current, rotated, expired и
 все families, которыми могут пользоваться оба audiences. Исходные причины уже отозванных rows
 сохраняются. Разрешены только server-owned `CREDENTIAL_RESET` / `SECURITY_REVOKE_ALL`.
-При фактическом изменении пишется один `AUTH_ALL_SESSIONS_REVOKED` с UUID пользователя,
-reason/correlation; без sid, token, contact или credential. Нулевой повтор не создаёт ложный audit
+При фактическом изменении пишется один `AUTH_ALL_SESSIONS_REVOKED` с resource type
+`AUTH_USER_SESSIONS`, target UUID и reason/correlation; без sid, token, contact или credential.
+`actor_id=NULL`: helper не знает проверенного actor и не приписывает действие target user;
+реального actor сохраняет будущий trusted caller/command ledger. Нулевой повтор не создаёт ложный audit
 об изменении; audit самой команды и стабильный receipt — обязанность будущего caller ledger.
 Internal outcome/count не являются public response или гарантией command idempotency.
 Helper не открывает и не commits transaction; ошибка должна выйти в caller и вызвать общий

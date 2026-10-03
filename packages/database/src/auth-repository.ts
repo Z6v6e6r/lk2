@@ -311,7 +311,7 @@ export async function revokeAllRefreshSessionsForUserInTransaction(
     await client.query(
       `insert into audit.audit_log (
          tenant_id, actor_id, action, resource_type, resource_id, result, reason, correlation_id
-       ) values ($1, $2, 'AUTH_ALL_SESSIONS_REVOKED', 'AUTH_SESSION', $2, 'SUCCESS', $3, $4)`,
+       ) values ($1, null, 'AUTH_ALL_SESSIONS_REVOKED', 'AUTH_USER_SESSIONS', $2, 'SUCCESS', $3, $4)`,
       [input.tenantId, input.userId, input.reason, input.correlationId],
     );
   }
