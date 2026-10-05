@@ -190,3 +190,68 @@ account enrollment, reset/recovery, incident response, receipt-retention/key lif
 memory capacity are accepted and verified. There is no setup/register/recovery route, credential
 write export, seeded credential, staff grant, contact backfill or email provider write. LOCAL tests
 exercise only synthetic fixtures; production users cannot enroll through this increment.
+
+## КЯ-04: internal enrolled-email recovery proof and reset
+
+The next bounded increment implements `LocalPasswordResetService` and the separate internal
+`@phub/database/password-reset` capability. It has no public route, SDK entry, UI, `main.ts`
+wiring or production sender. It cannot enroll a credential, change an email, choose an account
+from contacts/profile/imports or create a user. Initial enrollment still requires a fresh already
+bound factor plus proof of the new email; a current consumer session alone is insufficient.
+
+Issuance resolves only an ACTIVE, already verified dedicated login credential in the exact tenant.
+Under the account lock it rechecks the binding/generation, reserves a command-specific challenge,
+and enforces a one-minute cooldown and five issuances per account per hour. Independent Redis
+account/IP/service admission and the existing two whole-operation/KDF slots bound the service.
+This is an internal dependency contract; a future caller must provide the reviewed distributed
+limiter namespace and trusted sender. Missing sender denies issuance before lookup. No mail service,
+key, runtime grant or external delivery has been configured by this increment.
+
+The sender receives only the stored binding address and a random 256-bit reset token, proof UUID,
+technical idempotency key and ten-minute TTL. The technical key must accompany the token in the
+future mail flow so another browser can complete the same command. Only a SHA256 token digest is
+persisted, bound to tenant/user/credential/generation, `RESET_LOCAL_CREDENTIAL` and command key.
+There is no six-digit code, raw token store, password HMAC or key fingerprint. Email delivery
+acceptance does not itself prove ownership: only returning the token can authorize consumption.
+PENDING becomes DELIVERED only after bounded sender acceptance (five-second deadline). Ambiguous
+failure cancels an unconsumed PENDING/DELIVERED proof under the account lock and never retries its
+email; a late message cannot authorize reset. Cancellation never undoes an already consumed reset.
+Five wrong token attempts block an unconsumed challenge. TTL uses server/DB time and is not renewed.
+Consumed challenges cannot be blocked by later guesses; all replay still requires the matching
+high-entropy token, command and unexpired proof.
+
+Reset locks the ACTIVE user first, rechecks exact credential/hash/generation and proof, consumes
+once, writes a fixed scrypt hash with generation+1, invokes same-client revoke-all, revokes local
+Viva delegation custody, inserts a technical receipt and writes a redacted audit in one transaction.
+Failure anywhere rolls everything back. Provider SSO sessions are not remotely revoked. Prior
+local delegation ciphertext remains revoked and is never restored by this recovery. The reset
+issues no replacement family or access token: the user must log in again. This also prevents
+recovery from issuing admin audience or restoring staff access. Requests already admitted before
+revocation are not retrospectively cancelled.
+
+Lost-response replay changes nothing. It requires the same token/key/proof, the current resulting
+credential generation and the submitted new password verified against the canonical current
+credential hash. The transaction rechecks that exact snapshot. A concurrent first commit gets one
+bounded reinspection; a different submitted password, expired proof, disabled account/method or
+later credential generation fails closed. No additional durable password verifier is introduced.
+Internal persistence methods are trusted service capabilities, not browser inputs or attestation
+booleans. Proof consumption cannot be authorized merely by passing `verified: true`.
+
+0098 is an empty expand migration with plain CREATE, bounded lock/statement timeouts, FORCE tenant
+RLS, exact composite proof/receipt ownership and command constraints, and an index only over the
+new table. It does not grant rights or modify existing users/credentials/sessions/delegations.
+Binary rollback leaves the ledger/schema in place; use forward repair, never drop proof or receipt
+data. Cleanup must delete expired receipts before their proof rows; no cleanup job is enabled here.
+Before activation, review retention/capacity, backup/ledger/locks, actual/default ACL and source
+compatibility. The login role stays credential-read-only. A separate trusted reset owner may need
+SELECT credentials and UPDATE only password_hash/generation/updated_at; proof INSERT and bounded
+state-column UPDATE; receipt INSERT; session/delegation revocation-column UPDATE; user SELECT and
+UPDATE(updated_at) only for row-lock capability; audit INSERT. It must have no credential
+INSERT/DELETE, email/status update or account-status update. Test roles explicitly deny those writes.
+Disposable test grants do not establish production permissions.
+
+Public activation remains pending reviewed sender/delivery and notification policy, trusted initial
+enrollment, uniform externally observable recovery errors/timing, abuse limits, secret lifecycle,
+public Origin/intent/idempotency/body contracts, real resource/ACL checks and client UX. Internal
+neutral issuance DTOs alone are not proof of a safe public enumeration contract. There is no
+production enrollment, real email, migration, ACL mutation or background delivery in this increment.

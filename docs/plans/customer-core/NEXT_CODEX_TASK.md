@@ -51,3 +51,18 @@ register пока отсутствуют. До этого не создават�
 или ручного backfill и не активировать LOCAL login для пользователей. Runtime роль login не
 получает запись credentials. Фактические LOCAL/CI/review результаты фиксируются в Draft PR.
 Разработка не означает merge, применение 0097, real ACL, публикацию или деплой.
+
+## Следующий инкремент КЯ-04 — внутренний email-proof/reset
+
+PR #347 слит в `main` как `5393fae90d00639d9128557bb5ae67d02f84abbf`.
+Следующий ограниченный результат — внутренний одноразовый proof для **уже доверенно enrolled**
+email credential и atomic password reset, без public API/runtime sender. Его контракт описан в
+[ADR 0004](../../adr/0004-provider-neutral-authentication.md#кя-04-internal-enrolled-email-recovery-proof-and-reset).
+Почтовый сервис ещё не выбран и не настроен. SMTP/API transport и реальная отправка — отдельная
+граница. Source/local fixtures не доказывают доставку или production activation.
+
+Initial enrollment нового email к прежнему UUID остаётся следующим результатом: нужна свежая
+проверка уже привязанного фактора, а затем proof нового адреса. Существующая consumer-сессия,
+контакт, импорт или совпадение email этого не заменяют. Reset не создаёт новую сессию: после
+атомарного отзыва прежних семей и локальных provider delegations нужен новый consumer login.
+Никакие реальные credentials, grants или migration/backfill не выполнены этой разработкой.
