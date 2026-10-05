@@ -3,6 +3,7 @@ import type { components, PublicApiComponents, UserApiV2Components } from '@phub
 export type AuthChallengeRequest = components['schemas']['AuthChallengeRequest'];
 export type AuthChallenge = components['schemas']['AuthChallenge'];
 export type VerifyAuthChallengeRequest = components['schemas']['VerifyAuthChallengeRequest'];
+export type PasswordLoginRequest = components['schemas']['PasswordLoginRequest'];
 export type AuthenticatedSession = components['schemas']['AuthenticatedSession'];
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
@@ -381,7 +382,7 @@ export type BookingScreenReadCompletion =
   | BookingScreenUpcomingReadCompletion;
 
 export type RequestAuthMode = 'none' | 'required';
-export type SessionIntent = 'refresh' | 'logout';
+export type SessionIntent = 'refresh' | 'logout' | 'password-login';
 
 export type VivaOAuthProvider = 'vkid' | 'yandex';
 
@@ -588,6 +589,22 @@ export class PadlHubApiClient {
         body: jsonRequestBody(input),
       }),
     );
+  }
+
+  public async loginWithPassword(input: PasswordLoginRequest): Promise<AuthenticatedSession> {
+    const idempotencyKey = createCorrelationId();
+    const session = await this.retryOnceOnNetworkFailure(() =>
+      this.request<AuthenticatedSession>('/auth/password/login', {
+        method: 'POST',
+        auth: 'none',
+        credentials: 'include',
+        idempotencyKey,
+        sessionIntent: 'password-login',
+        body: jsonRequestBody(input),
+      }),
+    );
+    this.applyAuthenticatedSession(session);
+    return session;
   }
 
   public async verifyAuthChallenge(

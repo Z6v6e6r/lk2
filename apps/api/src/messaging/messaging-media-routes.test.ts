@@ -5,7 +5,7 @@ import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApp } from '../app.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 import type { MessagingMediaObjectStore } from './messaging-media-object-store.js';
 
 const config = loadConfig({

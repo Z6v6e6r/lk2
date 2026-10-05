@@ -5,7 +5,7 @@ import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildApp } from '../app.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 import type { ActivityHistoryProjectionService } from './activity-history-routes.js';
 import { MemoryBookingScreenReadJobStore } from './booking-screen-read-job-store.js';
 

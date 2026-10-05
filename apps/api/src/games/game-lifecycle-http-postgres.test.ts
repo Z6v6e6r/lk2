@@ -11,7 +11,7 @@ import { SignJWT } from 'jose';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { buildApp } from '../app.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 
 const connectionString = process.env.GAME_LIFECYCLE_HTTP_TEST_DATABASE_URL;
 

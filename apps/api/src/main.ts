@@ -1,4 +1,5 @@
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
+import { RedisPasswordLoginLimiter } from './auth/password-login-limiter.js';
 import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   createAdminNotificationRepository,
@@ -49,6 +50,7 @@ import {
   projectHomeBaseUser,
 } from '@phub/database';
 import { createContactReader } from '@phub/database/contacts';
+import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
 import {
   LegacyGamesMongoAdapter,
   LegacyGamesPublicAdapter,
@@ -228,6 +230,8 @@ const providerIdentityLink = config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED
 const authService = new AuthService({
   config,
   repository: new PostgresAuthRepository(pool),
+  localPasswordRepository: createLocalPasswordLoginRepository(pool),
+  passwordLoginLimiter: new RedisPasswordLoginLimiter(redis, config.JWT_REFRESH_SECRET),
   challengeStore: new RedisAuthChallengeStore(redis),
   vivaOAuthProvider: vivaIdentityProvider,
   vivaOAuthStateStore: new RedisVivaOAuthStateStore(redis),

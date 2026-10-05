@@ -19,3 +19,35 @@ SDK предоставляет `getProfileContacts()`, API получает read
 Фактические LOCAL/CI результаты фиксируются в Draft PR; эта запись не означает merge, деплой,
 применение `0096` или изменение прав на реальном target. Следующий продуктовый инкремент требует
 отдельного выбора: подтверждение контактов нельзя добавлять без trusted proof path.
+
+## Текущий инкремент КЯ-02a
+
+После merge КЯ-01b выбран первый consumer security инкремент: server-side проверка отзыва
+access-сессии на защищённых API маршрутах и сериализация refresh/logout. Контракт и пределы
+описаны в [ARCHITECTURE.md](ARCHITECTURE.md#кя-02a-отзыв-access-сессии-на-api).
+Новые login/recovery/contact verification/staff API не входят в этот результат.
+В той же task branch/Draft PR следующий инкремент добавляет внутренний revoke-all persistence
+primitive и выравнивает user-lock при создании сессии. Он вызывается на client уже открытого
+tenant transaction и может войти в будущий atomic reset; сам reset и public command не выпущены.
+[Proof/reset contract](ARCHITECTURE.md#кя-02a-внутренний-массовый-отзыв-и-proof-contract) фиксирует
+account/method/purpose/generation binding, single consume и общий transaction/receipt.
+Для КЯ-04 остаётся выбрать trusted LOCAL proof/delivery contract и реализовать конкретные
+credential/proof writers с generation fence, same-client replacement policy и negative tests.
+До этого public reset/revoke-all остаются недоступны. Разработка не означает merge или деплой.
+
+## Текущий инкремент КЯ-04 — email + пароль
+
+Первый LOCAL способ выбран: **email + пароль**. Additive consumer `POST /auth/password/login`
+и SDK `loginWithPassword()` работают только с заранее доверенно enrolled login binding,
+не с `profile.contacts`/email профиля. Реализованы фиксированный scrypt, независимые Redis
+лимиты, process admission, generation/hash recheck под user lock и atomic session/receipt/audit.
+Refresh-token replay использует прежний HMAC hash и проверяет exact root/expiry/revoke/rotation.
+Схема 0097 expand-only и не заселяет credentials. Инварианты, ACL и recovery описаны в
+[ADR 0004](../../adr/0004-provider-neutral-authentication.md#кя-04-additive-emailpassword-consumer-login).
+
+Следующий результат: trusted email delivery/proof и server-owned enrollment конкретного UUID,
+затем atomic password reset/recovery с generation fence/revoke-all. Setup/recovery/public
+register пока отсутствуют. До этого не создавать production credentials из контактов, импорта
+или ручного backfill и не активировать LOCAL login для пользователей. Runtime роль login не
+получает запись credentials. Фактические LOCAL/CI/review результаты фиксируются в Draft PR.
+Разработка не означает merge, применение 0097, real ACL, публикацию или деплой.

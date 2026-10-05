@@ -131,3 +131,62 @@ Viva can be replaced per tenant without a UI or public API migration, while Padl
 security from the first vertical. Identity mappings and provider readiness still require an
 explicit migration and reconciliation before a production switch. The home page may consume only
 the normalized authenticated context; schedule remains deliberately absent.
+
+## КЯ-04: additive email/password consumer login
+
+The selected first independent LOCAL method is email plus password. `POST /auth/password/login`
+is an explicit PadlHub method that coexists with the tenant-owned legacy phone provider. It does
+not change `tenant_auth_config`, choose a provider from the browser, or run a phone code against
+multiple providers. It authenticates only an already enrolled `identity.local_email_credentials`
+binding to the existing PadlHub UUID. Contacts, profile email and imports never enroll an account.
+
+The route is consumer-only, requires `Idempotency-Key`, `X-Session-Intent: password-login`, an
+allowed browser origin and current legal acceptances. It uses the existing JWT and HttpOnly
+refresh-cookie contract; `X-App-Platform: cup-admin` cannot select admin audience. The SDK stores
+only the access token in its existing memory store and retries a lost response with one key.
+
+The server checks raw ASCII email before case folding; the entire address is compared without
+case sensitivity, without provider-specific dot/plus alias merging. Passwords preserve exact
+Unicode/space bytes; enrollment policy is 15–128 code points and at most 512 UTF-8 bytes. Scrypt
+uses only `phub-scrypt-v1`, N=131072/r=8/p=1, 16-byte random salt, 64-byte derived key and bounded
+memory. Unknown/disabled/malformed credentials use the same KDF; credential rejection is uniform.
+Independent shared Redis buckets allow at most 5 attempts/account/minute, 20/IP/tenant/minute,
+and 120/service/minute. Two process slots cover the whole lookup/KDF/commit contour without a
+queue; dependency/admission failure is fail-closed. The body is limited to 4 KiB. Credential
+responses and errors have no-store headers; logs redact email/password/hash and requests carry
+correlation. Success audit records only UUIDs/reason/correlation; HTTP status supplies failure
+observability without an email label.
+
+Password verification happens outside the transaction. The transaction locks the exact user
+first, rechecks ACTIVE user/method, exact binding/id/hash/generation, then creates the root
+refresh session, successful-login receipt and security audit on one client. Every future
+credential writer must take this same user lock, increase generation, consume trusted proof and
+revoke prior families in its own atomic transition. A verification snapshot from before reset
+cannot create a session afterward. A login committed first is caught by the reset's revoke-all.
+Refresh-session id/tenant/user are immutable; rotation/revocation/timestamp updates remain valid.
+
+Receipt replay verifies the password again and requires the same credential generation, request
+binding and exact unrotated, unrevoked, unexpired root session/token hash. The refresh token and
+session UUID are reproduced with domain-separated PRFs over tenant/credential/generation/email/
+command key; refresh hashing uses the existing canonical HMAC. Receipts store derivation version and stable SHA-256 command/request digests independent of rotating key material.
+The request digest contains technical binding/versions and fixed client audience, never the password.
+No derived key fingerprint or known-message JWT-secret verifier is persisted.
+Changed refresh derivation keys deny old replay through the exact token/session check; no old family is revived or replaced. A
+successful command key bound to another account/request returns conflict; the losing concurrent
+transaction rolls back its session. Receipts are retained as tombstones for at least the original
+session lifetime. This increment adds no pruning job or plaintext/encrypted password/token copy.
+
+Migration 0097 is expand-only: empty credential and receipt tables, tenant FORCE RLS, bounded
+5-second lock/30-second statement timeouts, and receipt/session ownership constraints. Binary
+rollback leaves schema/ledger in place; use forward repair, never drop enrolled data. Runtime
+login needs SELECT on credentials/profile/users/receipts, UPDATE on users for row locks,
+SELECT/INSERT/UPDATE on refresh sessions and INSERT on receipts/audit. It must have no INSERT,
+UPDATE or DELETE on credentials; trusted enrollment/reset ownership is a separate future boundary.
+Actual target ACL/default privileges must be verified before activation; synthetic CI grants do
+not establish live access. A failed/missing migration or dependency yields a redacted 503.
+
+Production enrollment and activation are unavailable until trusted email proof/delivery, exact
+account enrollment, reset/recovery, incident response, receipt-retention/key lifecycle and container
+memory capacity are accepted and verified. There is no setup/register/recovery route, credential
+write export, seeded credential, staff grant, contact backfill or email provider write. LOCAL tests
+exercise only synthetic fixtures; production users cannot enroll through this increment.

@@ -714,6 +714,58 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/password/login:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/PasswordLoginIntent'
+    post:
+      operationId: loginWithPassword
+      summary: Sign in to an enrolled email account
+      description: |
+        Consumer-only email/password login, independent of the legacy phone provider.
+        Only an existing trusted email login binding is accepted; profile contacts never
+        select, create or link an account. Missing, disabled and invalid credentials share
+        AUTH_CREDENTIAL_INVALID. Current legal acceptances are required.
+        A lost response can be replayed with the same key and current credential, only
+        while the original session is unrotated, unrevoked and unexpired. A conflicting
+        successful request gets IDEMPOTENCY_KEY_CONFLICT. The refresh token is returned
+        exclusively in the HttpOnly cookie. X-App-Platform never grants admin audience.
+        Enrollment, email delivery and recovery are not provided by this operation.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordLoginRequest'
+      responses:
+        '200':
+          description: A consumer session was created or safely replayed.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+            Set-Cookie:
+              $ref: '#/components/headers/RefreshCookie'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthenticatedSession'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/auth/challenges:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -6089,6 +6141,22 @@ components:
           type: integer
           minimum: 0
           maximum: 3600
+    PasswordLoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          minLength: 3
+          maxLength: 254
+          description: ASCII email login binding, trimmed and compared case-insensitively. Shared contacts are not login bindings.
+        password:
+          type: string
+          minLength: 1
+          maxLength: 512
+          writeOnly: true
+          description: Exact password, without trimming or normalization. Enrollment policy requires 15–128 Unicode code points and at most 512 UTF-8 bytes.
     VerifyAuthChallengeRequest:
       type: object
       additionalProperties: false
@@ -9714,6 +9782,14 @@ components:
       schema:
         type: string
         format: uuid
+    PasswordLoginIntent:
+      name: X-Session-Intent
+      in: header
+      required: true
+      description: Explicit consumer password login intent.
+      schema:
+        type: string
+        const: password-login
     RefreshSessionIntent:
       name: X-Session-Intent
       in: header
@@ -9899,7 +9975,12 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: PadlHub-issued JWT; audience phub-api, UUID subject and authorized tenant UUIDs.
+      description: >-
+        PadlHub-issued JWT; audience phub-api, UUID subject, authorized tenant UUIDs and exp.
+        Authenticated tenant routes also verify the signed sid against the active server-side
+        session family and ACTIVE account. Revoked sessions receive AUTH_SESSION_REVOKED (401);
+        unavailable verification receives AUTH_SESSION_CHECK_UNAVAILABLE (503). Ordinary refresh
+        rotation preserves earlier access JWTs until exp while their session family remains active.
     PadlHubRefreshCookie:
       type: apiKey
       in: cookie

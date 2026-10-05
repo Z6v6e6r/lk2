@@ -807,6 +807,30 @@ describe('PadlHubApiClient authentication boundary', () => {
     expect(contextHeaders.get('Authorization')).toBe(`Bearer ${authenticatedSession.accessToken}`);
   });
 
+  it('replays a lost password-login response with the same key and keeps credentials in transport', async () => {
+    const calls: RequestInit[] = [];
+    const fetchImplementation: typeof fetch = (_input, init) => {
+      calls.push(init!);
+      return calls.length === 1
+        ? Promise.reject(new TypeError('synthetic response lost'))
+        : Promise.resolve(jsonResponse(authenticatedSession));
+    };
+    const client = createClient(fetchImplementation, { initialAccessToken: 'old-access-token' });
+    await expect(
+      client.loginWithPassword({
+        email: 'player@example.test',
+        password: 'Synthetic password 42!',
+      }),
+    ).resolves.toEqual(authenticatedSession);
+    expect(calls).toHaveLength(2);
+    expect(new Headers(calls[0]!.headers).get('Idempotency-Key')).toBe(
+      new Headers(calls[1]!.headers).get('Idempotency-Key'),
+    );
+    expect(new Headers(calls[0]!.headers).get('Authorization')).toBeNull();
+    expect(calls[0]!.credentials).toBe('include');
+    expect(client.getAccessToken()).toBe(authenticatedSession.accessToken);
+  });
+
   it('uses one cookie refresh for concurrent protected requests and retries both', async () => {
     let releaseRefresh: (() => void) | undefined;
     const refreshGate = new Promise<void>((resolve) => {

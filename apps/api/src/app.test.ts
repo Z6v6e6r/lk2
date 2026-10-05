@@ -13,7 +13,8 @@ import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApp, requireIdempotencyKey, sanitizeRequestLogUrl } from './app.js';
+import { requireIdempotencyKey, sanitizeRequestLogUrl } from './app.js';
+import { buildAppWithActiveSession as buildApp } from './testing/build-test-app.js';
 import { AuthServiceError } from './auth/auth-service.js';
 import { buildMockHomeDashboard } from './home/home-dashboard.js';
 

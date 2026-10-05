@@ -7,7 +7,7 @@ import pino from 'pino';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AuthService, AuthUser } from '../auth/auth-service.js';
-import { buildApp } from '../app.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 
 const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
 const otherTenantId = '11111111-1111-4111-8111-111111111111';

@@ -5,7 +5,7 @@ import { createLogger } from '@phub/observability';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildApp } from '../app.js';
+import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 
 const tenantId = '11111111-1111-4111-8111-111111111111';
 const catalogId = '22222222-2222-4222-8222-222222222222';
