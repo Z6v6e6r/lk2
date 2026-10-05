@@ -31,7 +31,8 @@ writeFileSync(
         image,
         labels: { 'fixture.owner': project, 'phub.release-id': '${API_RELEASE:-api-previous}' },
       },
-      worker: { image, labels: { 'fixture.owner': project } },
+      worker: { image, profiles: ['background'], labels: { 'fixture.owner': project } },
+      migrator: { image, profiles: ['migration'], labels: { 'fixture.owner': project } },
       realtime: { image, labels: { 'fixture.owner': project } },
       web: { image, labels: { 'fixture.owner': project, 'phub.release-id': '${RELEASE}' } },
     },
@@ -46,21 +47,33 @@ const docker = (args) =>
   });
 const compose = (env, action) => docker(standardWebComposeArgs(composeFile, baseline, env, action));
 const inspect = (service) => {
-  const id = docker([
+  const ids = docker([
+    'ps',
+    '-q',
+    '--filter',
+    `label=com.docker.compose.project=${project}`,
+    '--filter',
+    `label=com.docker.compose.service=${service}`,
+  ])
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  if (ids.length !== 1) throw Error('Ambiguous fixture service');
+  return JSON.parse(docker(['inspect', ids[0]]))[0];
+};
+const journal = [];
+try {
+  docker([
     'compose',
     '--env-file',
     baseline,
     '-f',
     composeFile,
-    'ps',
-    '-q',
-    service,
-  ]).trim();
-  return JSON.parse(docker(['inspect', id]))[0];
-};
-const journal = [];
-try {
-  docker(['compose', '--env-file', baseline, '-f', composeFile, 'up', '-d']);
+    '--profile',
+    'background',
+    'up',
+    '-d',
+  ]);
   const apiBefore = inspect('api').Id;
   const previousImage = inspect('web').Image;
   const attestBackend = async () => {
@@ -133,7 +146,34 @@ try {
   };
   const criticalJournal = [];
   const criticalOps = {
-    preflight: unchanged,
+    preflight: async () => {
+      await unchanged();
+      const configurationSnapshot = () =>
+        ['api', 'web', 'worker', 'realtime'].map((service) => {
+          const value = inspect(service);
+          return [value.Id, value.Image, value.RestartCount, value.State.StartedAt];
+        });
+      const before = configurationSnapshot();
+      const rendered = JSON.parse(criticalCompose(criticalCandidate, 'config', 'api'));
+      if (Object.keys(rendered.services).sort().join(',') !== 'api,migrator,realtime,web,worker')
+        throw Error('Unexpected read-only configuration services');
+      for (const service of ['api', 'web', 'worker', 'realtime', 'migrator'])
+        if (rendered.services[service]?.image !== image)
+          throw Error('Profile service missing from read-only configuration');
+      if (JSON.stringify(configurationSnapshot()) !== JSON.stringify(before))
+        throw Error('Read-only configuration changed a container');
+      if (
+        docker([
+          'ps',
+          '-aq',
+          '--filter',
+          `label=com.docker.compose.project=${project}`,
+          '--filter',
+          'label=com.docker.compose.service=migrator',
+        ]).trim()
+      )
+        throw Error('Migrator fixture activated');
+    },
     pullAndSmoke: async () => {
       await unchanged();
     },
@@ -278,6 +318,16 @@ try {
     'STANDARD_COMPOSE_REHEARSAL_PASS success_and_forced_rollback=true backend_unchanged=true same_digest_rollback=true\n',
   );
 } finally {
-  docker(['compose', '--env-file', baseline, '-f', composeFile, 'down', '--remove-orphans']);
+  docker([
+    'compose',
+    '--env-file',
+    baseline,
+    '-f',
+    composeFile,
+    '--profile',
+    '*',
+    'down',
+    '--remove-orphans',
+  ]);
   rmSync(directory, { recursive: true });
 }

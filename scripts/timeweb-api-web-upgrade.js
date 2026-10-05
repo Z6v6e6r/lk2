@@ -298,6 +298,8 @@ export function apiWebComposeArgs(baseline, overlay, action, service) {
     overlay,
     '-f',
     COMPOSE,
+    // Render dormant services for identity checks; activation never enables profiles.
+    ...(action === 'config' ? ['--profile', '*'] : []),
     ...(action === 'config'
       ? ['config', '--format', 'json']
       : action === 'pull'
