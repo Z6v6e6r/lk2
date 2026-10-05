@@ -345,7 +345,10 @@ verify the exact unchanged previous pair, remove only the incomplete controller 
 `preparation-aborted.json` and fsync release of the owned pointer, without restarting a service. The controller writes an
 immutable `plan.json`, previous overlays, baseline/configuration hashes and `backup.complete`, then
 journals `PREPARED` before the first container change. A pre-activation failure attests the exact
-unchanged previous pair, writes `ABORTED` and releases the manual lock; it never restarts a service. It pulls and smokes API/Web, starts API with
+unchanged previous pair, writes `ABORTED` and releases the manual lock; it never restarts a service. It pulls and smokes API/Web offline with read-only artifact filesystems. The Web configuration
+check receives only bounded, ephemeral tmpfs scratch paths (`/run`: 1 MiB, `/var/cache/nginx`: 8 MiB),
+with noexec/nosuid/nodev; nginx needs these for its pid/cache checks. No runtime environment, host
+volume or published port enters the smoke container. The controller starts API with
 `--no-deps`, waits for exact identity/readiness, then starts Web with `--no-deps`. Read-only
 `compose config --format json` enables all profiles with `--profile '*'` to validate all five service
 definitions, including Worker and Migrator. `pull` and `up` keep profiles disabled and target only

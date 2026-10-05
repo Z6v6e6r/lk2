@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { runWebTransition, standardWebComposeArgs } from './timeweb-standard-policy.js';
 import {
   apiWebComposeArgs,
+  apiWebArtifactSmokeArgs,
   observeDirectApiWeb,
   runApiWebTransition,
   recoverApiWebTransition,
@@ -16,7 +17,8 @@ if (process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')
 const directory = mkdtempSync(join(tmpdir(), 'lk2-standard-fixture-'));
 const project = `lk2-standard-fixture-${process.pid}`;
 const lock = JSON.parse(readFileSync('deploy/timeweb/base-images.lock.json'));
-const image = `nginx@${lock.images.find((item) => item.id === 'nginx-web-runtime').indexDigest}`;
+const nginxDigest = lock.images.find((item) => item.id === 'nginx-web-runtime').indexDigest;
+const image = `nginx@${nginxDigest}`;
 const composeFile = join(directory, 'compose.json');
 const baseline = join(directory, 'baseline.env');
 const candidate = join(directory, 'candidate.env');
@@ -45,6 +47,25 @@ const docker = (args) =>
     stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 120000,
   });
+// Substitute only the fixture image: keep the production smoke arguments and nginx runtime
+// digest. These --rm, network-none containers receive no host credentials, ports or volumes.
+const smokeWebRuntimeBase = () => {
+  const contractRef = `ghcr.io/z6v6e6r/phub-web@${nginxDigest}`;
+  const args = apiWebArtifactSmokeArgs('web', contractRef);
+  args[args.indexOf(contractRef)] = image;
+  args.splice(1, 0, '--label', `fixture.owner=${project}`);
+  const withoutScratch = args.filter(
+    (value, index) => value !== '--tmpfs' && args[index - 1] !== '--tmpfs',
+  );
+  let rejectedReadOnly = false;
+  try {
+    docker(withoutScratch);
+  } catch (error) {
+    rejectedReadOnly = String(error.stderr).includes('Read-only file system');
+  }
+  if (!rejectedReadOnly) throw Error('Missing scratch paths did not reproduce nginx EROFS');
+  docker(args);
+};
 const compose = (env, action) => docker(standardWebComposeArgs(composeFile, baseline, env, action));
 const inspect = (service) => {
   const ids = docker([
@@ -175,6 +196,8 @@ try {
         throw Error('Migrator fixture activated');
     },
     pullAndSmoke: async () => {
+      await unchanged();
+      smokeWebRuntimeBase();
       await unchanged();
     },
     journal: async (status) => criticalJournal.push(status),
