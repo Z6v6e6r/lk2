@@ -406,8 +406,13 @@ or stale. Timeweb monitoring and Email/Telegram configuration stay enabled and t
 them; this context is not a provider PASS and does not prove notification delivery or regional
 availability. Every other V1/automatic eligibility and evidence requirement remains unchanged.
 
+After the original window elapsed without activation, the release owner must explicitly renew
+the deadline to `2026-10-06T00:00:00.000Z` (6 October 03:00 Moscow) before activation. The expired
+operation is not replayed; the renewed request and reviewed controller must agree on this deadline.
+Artifact, target, previous pair and all other gates stay fixed.
+
 The same root-only request uses `PHUB_TIMEWEB_API_WEB_OPERATION_V2`, adds `evidencePolicy:
-CALLBACK_DIRECT_OBSERVATION_V1` and fixed `expiresAt: 2026-10-04T00:00:00.000Z`, and extends
+CALLBACK_DIRECT_OBSERVATION_V1` and fixed `expiresAt: 2026-10-06T00:00:00.000Z`, and extends
 confirmation with
 `_DIRECT_15M_NO_PROVIDER_EVIDENCE`. It is closed to all of these identities:
 
@@ -421,7 +426,7 @@ confirmation with
   `sha256:887455ea273abc6138bdb176f4af82295c37d56ac9a7a96b83c006e5f4d72b9e`.
 
 Fresh expected container IDs, no restarts, exact target and all canonical custody checks still
-apply. Deployment and the complete observation must finish before `2026-10-04T00:00:00.000Z`.
+apply. Deployment and the complete observation must finish before `2026-10-06T00:00:00.000Z`.
 This permission expires naturally after the previous pair changes; no other artifact, candidate,
 previous source or target can use it. Expiry never prevents restoration of the recorded previous
 pair or verification of historically successful evidence.

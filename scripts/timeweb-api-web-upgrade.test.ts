@@ -65,7 +65,7 @@ const directOperation = {
     releaseId: 'c43e9dc8da3eb19a1684ed28e989aafacdb5d8bf-36629104876-1',
   },
   evidencePolicy: 'CALLBACK_DIRECT_OBSERVATION_V1',
-  expiresAt: '2026-10-04T00:00:00.000Z',
+  expiresAt: '2026-10-06T00:00:00.000Z',
   confirmation:
     'DEPLOY_API_WEB_0D6078BE7A50_FROM_C43E9DC8DA3E_C43E9DC8DA3E_DIRECT_15M_NO_PROVIDER_EVIDENCE',
 };
@@ -78,7 +78,7 @@ describe('explicit API/Web upgrade boundary', () => {
   });
   it('requires 61 real-shape rounds and threshold-safe direct observation', () => {
     scenario(
-      `let now=Date.parse('2026-10-03T00:00:00.000Z'); const evidence=await observeDirectApiWeb({inspectService:()=>{},probeService:async()=>10,attest:async()=>{},now:()=>now,sleep:async ms=>{now+=ms;}});assert.equal(evidence.elapsedSeconds,900);assert.equal(evidence.samples.api.privateMs.length,61);validateDirectObservation(evidence);for(const [name,change] of Object.entries({short:v=>v.elapsedSeconds=1,count:v=>v.samples.api.privateMs.pop(),nan:v=>v.samples.web.publicMs[0]=NaN,p95:v=>v.samples.api.p95PublicMs=1501,tail:v=>v.samples.api.privateMs.splice(57,4,2000,2000,2000,2000),provider:v=>v.providerEvidence='PASS',expiry:v=>v.completedAt='2026-10-05T00:00:00.000Z'})){const x=structuredClone(evidence);change(x);assert.throws(()=>validateDirectObservation(x),name);}`,
+      `let now=Date.parse('2026-10-03T00:00:00.000Z'); const evidence=await observeDirectApiWeb({inspectService:()=>{},probeService:async()=>10,attest:async()=>{},now:()=>now,sleep:async ms=>{now+=ms;}});assert.equal(evidence.elapsedSeconds,900);assert.equal(evidence.samples.api.privateMs.length,61);validateDirectObservation(evidence);for(const [name,change] of Object.entries({short:v=>v.elapsedSeconds=1,count:v=>v.samples.api.privateMs.pop(),nan:v=>v.samples.web.publicMs[0]=NaN,p95:v=>v.samples.api.p95PublicMs=1501,tail:v=>v.samples.api.privateMs.splice(57,4,2000,2000,2000,2000),provider:v=>v.providerEvidence='PASS',expiry:v=>v.completedAt='2026-10-07T00:00:00.000Z'})){const x=structuredClone(evidence);change(x);assert.throws(()=>validateDirectObservation(x),name);}`,
     );
   });
   it('keeps V1 provider receipts and V2 owner receipts mutually exclusive', () => {
@@ -363,18 +363,18 @@ describe('direct observation custody and failure recovery', () => {
       assert.throws(()=>validateUpgradeReceipt({...receipt,evidencePolicy:'OTHER'},sha(planBytes),op,plan,planBytes));`);
   });
   it('accepts historical evidence after current-time expiry but refuses a new deployment', () => {
-    directScenario(`const original=Date.now;Date.now=()=>Date.parse('2026-10-05T00:00:00.000Z');try{
+    directScenario(`const original=Date.now;Date.now=()=>Date.parse('2026-10-07T00:00:00.000Z');try{
       assert.throws(()=>validateDirectApiWebOperation(op,true));
       validateDirectApiWebOperation(op);
       validateDirectInstalledEvidence(receipt,planBytes,operationBytes,ownerBytes,observationBytes,releaseId,images);
-      const late=structuredClone(observation);late.completedAt='2026-10-05T00:00:00.000Z';late.elapsedSeconds=(Date.parse(late.completedAt)-Date.parse(late.startedAt))/1000;
+      const late=structuredClone(observation);late.completedAt='2026-10-07T00:00:00.000Z';late.elapsedSeconds=(Date.parse(late.completedAt)-Date.parse(late.startedAt))/1000;
       assert.throws(()=>validateDirectObservation(late));
       const calls=[];await recoverApiWebPhase('OBSERVING',{journal:async s=>calls.push(s),restore:async s=>calls.push(s),attest:async()=>{}});
       assert.deepEqual(calls,['ROLLBACK_INTENT','web','api','ROLLED_BACK']);
     }finally{Date.now=original;}`);
   });
   it('rejects changed exact scope, policy and prior service identities', () => {
-    directScenario(`for(const change of [v=>v.controllerSha='main',v=>v.target='other',v=>v.publicationRunId='1',v=>v.artifactId='1',v=>v.manifestSha256='f'.repeat(64),v=>v.expectedApi.releaseId='f'.repeat(40)+'-1-1',v=>v.expectedWeb.image=v.expectedApi.image,v=>v.expiresAt='2026-10-06T00:00:00.000Z',v=>v.confirmation=v.confirmation.replace('_DIRECT_15M_NO_PROVIDER_EVIDENCE',''),v=>delete v.evidencePolicy]){
+    directScenario(`for(const change of [v=>v.controllerSha='main',v=>v.target='other',v=>v.publicationRunId='1',v=>v.artifactId='1',v=>v.manifestSha256='f'.repeat(64),v=>v.expectedApi.releaseId='f'.repeat(40)+'-1-1',v=>v.expectedWeb.image=v.expectedApi.image,v=>v.expiresAt='2026-10-04T00:00:00.000Z',v=>v.expiresAt='2026-10-07T00:00:00.000Z',v=>v.confirmation=v.confirmation.replace('_DIRECT_15M_NO_PROVIDER_EVIDENCE',''),v=>delete v.evidencePolicy]){
       const altered=structuredClone(op);change(altered);assert.throws(()=>validateApiWebOperation(altered));
     }`);
   });
