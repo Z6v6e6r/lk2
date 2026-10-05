@@ -346,9 +346,12 @@ verify the exact unchanged previous pair, remove only the incomplete controller 
 immutable `plan.json`, previous overlays, baseline/configuration hashes and `backup.complete`, then
 journals `PREPARED` before the first container change. A pre-activation failure attests the exact
 unchanged previous pair, writes `ABORTED` and releases the manual lock; it never restarts a service. It pulls and smokes API/Web, starts API with
-`--no-deps`, waits for exact identity/readiness, then starts Web with `--no-deps`. Durable intent
+`--no-deps`, waits for exact identity/readiness, then starts Web with `--no-deps`. Read-only
+`compose config --format json` enables all profiles with `--profile '*'` to validate all five service
+definitions, including Worker and Migrator. `pull` and `up` keep profiles disabled and target only
+API/Web. Durable intent
 phases bracket both actions. Every boundary attests unchanged non-target containers and runtime
-files. No profile, dependency restart, migration, ingress or provider write is available.
+files. No profile activation, dependency restart, migration, ingress or provider write is available.
 
 After startup, the controller observes both private readiness and public HTTPS routes for 900s with
 61 samples/service. Any failed probe, container restart/replacement, excluded-state drift, missing

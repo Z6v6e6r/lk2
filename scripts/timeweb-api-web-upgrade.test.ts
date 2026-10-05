@@ -101,15 +101,21 @@ describe('explicit API/Web upgrade boundary', () => {
       assert.throws(()=>validateControllerDelta([]));
     `);
   });
-  it('uses only exact API/Web Compose stages with no dependency/profile/ingress action', () => {
+  it('renders all profiles for config and limits mutating stages to exact API/Web', () => {
     scenario(`for(const s of ['api','web']) {
       const args=apiWebComposeArgs('/baseline','/overlay','up',s);
-      assert.deepEqual(args.slice(-4),['up','-d','--no-deps',s]);
+      const prefix=['compose','--env-file','/baseline','--env-file','/overlay','-f','/opt/phub/timeweb-beta/standard/source/deploy/timeweb/compose.beta.yaml'];
+      assert.deepEqual(args,[...prefix,'up','-d','--no-deps',s]);
       assert(!args.includes('--profile'));assert(!args.includes('--remove-orphans'));
-      assert.deepEqual(apiWebComposeArgs('/baseline','/overlay','pull',s).slice(-2),['pull',s]);
+      const pull=apiWebComposeArgs('/baseline','/overlay','pull',s);
+      assert.deepEqual(pull,[...prefix,'pull',s]);assert(!pull.includes('--profile'));
+      const config=apiWebComposeArgs('/baseline','/overlay','config',s);
+      assert.deepEqual(config,[...prefix,'--profile','*','config','--format','json']);
+      assert.equal(config.filter(v=>v==='--profile').length,1);
+      assert(!config.includes('up'));assert(!config.includes('pull'));
     }
-    for(const s of ['worker','realtime','migrator','caddy'])assert.throws(()=>apiWebComposeArgs('/baseline','/overlay','up',s));
-    for(const action of ['down','restart','exec'])assert.throws(()=>apiWebComposeArgs('/baseline','/overlay',action,'api'));
+    for(const s of ['worker','realtime','migrator','caddy'])for(const action of ['config','pull','up'])assert.throws(()=>apiWebComposeArgs('/baseline','/overlay',action,s));
+    for(const action of ['down','restart','exec','run','build','create','start','rm'])assert.throws(()=>apiWebComposeArgs('/baseline','/overlay',action,'api'));
     `);
   });
   it('reads public metadata without credentials and stops on unavailable authority', () => {
