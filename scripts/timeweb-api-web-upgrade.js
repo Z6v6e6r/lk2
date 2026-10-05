@@ -41,7 +41,7 @@ const HASH = /^[a-f0-9]{64}$/;
 const ID = /^[a-f0-9]{40}-[1-9][0-9]*-1$/;
 const NUMBER = /^[1-9][0-9]*$/;
 const CALLBACK_DIRECT_POLICY = 'CALLBACK_DIRECT_OBSERVATION_V1';
-const CALLBACK_DIRECT_EXPIRY = '2026-10-04T00:00:00.000Z';
+const CALLBACK_DIRECT_EXPIRY = '2026-10-06T00:00:00.000Z';
 const CALLBACK_DIRECT_CANDIDATE = {
   candidateSha: '0d6078be7a50ed3f5761d66071527be003bd568f',
   candidateTree: '5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
