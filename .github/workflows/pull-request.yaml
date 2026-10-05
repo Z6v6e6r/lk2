@@ -856,11 +856,35 @@ jobs:
         if: ${{ always() }}
         env:
           BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+          SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
-          if [[ -n "$BUILDER_NAME" ]]; then
-            docker buildx rm "$BUILDER_NAME"
+          if [[ -z "$BUILDER_NAME" ]]; then
+            exit 0
           fi
+          [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SERVICE" = api || "$SERVICE" = web ]]
+          test "$BUILDER_NAME" = "phub-timeweb-pr-provenance-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$SERVICE"
+          container="buildx_buildkit_${BUILDER_NAME}0"
+          volume="${container}_state"
+          for attempt in 1 2 3; do
+            # A timeout can happen after removal; verify exact residue before retrying.
+            docker buildx rm --force --timeout 60s "$BUILDER_NAME" || true
+            builders="$(docker buildx ls --format '{{.Name}}')"
+            containers="$(docker ps -a --format '{{.Names}}')"
+            volumes="$(docker volume ls --format '{{.Name}}')"
+            if ! grep -Fxq "$BUILDER_NAME" <<<"$builders" \
+              && ! grep -Fxq "$container" <<<"$containers" \
+              && ! grep -Fxq "$volume" <<<"$volumes"; then
+              exit 0
+            fi
+            if [[ "$attempt" = 3 ]]; then
+              echo 'The exact ephemeral BuildKit builder still has residue.' >&2
+              exit 1
+            fi
+            sleep 2
+          done
       - name: Upload sanitized no-push provenance evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
