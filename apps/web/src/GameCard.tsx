@@ -522,14 +522,14 @@ export function GameCard({
               </div>
             </div>
           ) : null}
-          {!compact ? (
-            <p className="game-card__availability">
-              {openSlots > 0
-                ? `Свободных мест: ${openSlots} из ${game.capacity.total}`
-                : 'Свободных мест нет'}
-            </p>
-          ) : null}
         </div>
+      ) : null}
+      {!compact ? (
+        <p className="game-card__availability">
+          {openSlots > 0
+            ? `Свободных мест: ${openSlots} из ${game.capacity.total}`
+            : 'Свободных мест нет'}
+        </p>
       ) : null}
     </article>
   );
