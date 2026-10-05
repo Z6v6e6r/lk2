@@ -199,8 +199,8 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
     const id = randomUUID();
     await withTenantTransaction(admin, tenantId, async (client) =>
       client.query<Record<string, unknown>>(
-        `insert into identity.refresh_sessions (id,tenant_id,user_id,family_id,token_hash,expires_at,revoked_at,revoke_reason)
-      values ($1,$2,$3,$1,$4,now() + $5::interval,case when $6 then now() else null end,case when $6 then 'LOGOUT' else null end)`,
+        `insert into identity.refresh_sessions (id,tenant_id,user_id,family_id,token_hash,created_at,expires_at,revoked_at,revoke_reason)
+      values ($1,$2,$3,$1,$4,now() - interval '2 days',now() + $5::interval,case when $6 then now() else null end,case when $6 then 'LOGOUT' else null end)`,
         [
           id,
           tenantId,
