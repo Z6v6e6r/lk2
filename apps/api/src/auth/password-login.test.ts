@@ -1,7 +1,7 @@
 import { createHash, createHmac } from 'node:crypto';
 
 import { loadConfig } from '@phub/config';
-import type { LocalPasswordLoginRepository } from '@phub/database';
+import type { LocalPasswordLoginRepository } from '@phub/database/password-login';
 import { createLogger } from '@phub/observability';
 import { jwtVerify } from 'jose';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';

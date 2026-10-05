@@ -571,7 +571,7 @@ suite('LOCAL password login under non-owner PostgreSQL role', () => {
         [legacyTenant, legacyUser],
       );
       await fixture.query(
-        "insert into identity.external_identities (tenant_id, user_id, provider, issuer, subject) values ($1, $2, 'VIVA', 'https://synthetic.example.test', $3)",
+        "insert into integration.external_identity_map (tenant_id, user_id, provider, issuer, subject) values ($1, $2, 'VIVA', 'https://synthetic.example.test', $3)",
         [legacyTenant, legacyUser, legacyUser],
       );
       await fixture.query(
@@ -588,10 +588,11 @@ suite('LOCAL password login under non-owner PostgreSQL role', () => {
           }>(`select
         (select jsonb_agg(to_jsonb(u)) from identity.users u) as users,
         (select jsonb_agg(to_jsonb(s)) from identity.refresh_sessions s) as sessions,
-        (select jsonb_agg(to_jsonb(e)) from identity.external_identities e) as mappings,
+        (select jsonb_agg(to_jsonb(e)) from integration.external_identity_map e) as mappings,
         (select pg_get_indexdef(oid) from pg_class where relname = 'user_summaries_phone_lookup_idx') as phone_index`)
         ).rows;
       const originalLegacy = await legacyState();
+      expect(originalLegacy[0]?.phone_index).toContain('CREATE UNIQUE INDEX');
       await copyFile(resolve(sourceDirectory, migration), resolve(migrationDirectory, migration));
       // Drift fails closed after the first CREATE, and the canonical transaction rolls it back.
       await fixture.query('create table identity.local_password_login_receipts (wrong integer)');

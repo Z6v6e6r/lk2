@@ -70,11 +70,14 @@ const suite = url ? describe : describe.skip;
 suite('password admission on disposable CI Redis', () => {
   const redis = new Redis(url!, { lazyConnect: true, maxRetriesPerRequest: 1 });
   const ownedKeys = new Set<string>();
+  const admittedKeys = new Set<string>();
   const limiter = new RedisPasswordLoginLimiter(
     {
       eval: async (script: string, numberOfKeys: number, ...keys: string[]) => {
         for (const key of keys) ownedKeys.add(key);
-        return redis.eval(script, numberOfKeys, ...keys);
+        const result = await redis.eval(script, numberOfKeys, ...keys);
+        if (result === 1) for (const key of keys) admittedKeys.add(key);
+        return result;
       },
     },
     randomUUID(),
@@ -107,7 +110,13 @@ suite('password admission on disposable CI Redis', () => {
     expect(result.filter(Boolean)).toHaveLength(5);
   });
   it('sets bounded expiration on every owned counter', async () => {
-    for (const key of ownedKeys) expect(await redis.ttl(key)).toBeGreaterThan(0);
+    // Denied attempts do not create counters, so only admitted keys have a TTL.
+    expect(admittedKeys.size).toBeGreaterThan(0);
+    for (const key of admittedKeys) {
+      const ttl = await redis.ttl(key);
+      expect(ttl).toBeGreaterThan(0);
+      expect(ttl).toBeLessThanOrEqual(60);
+    }
   });
   it('enforces a service-wide cap across different tenants and addresses', async () => {
     const key = [...ownedKeys].find((value) => value.endsWith(':global'))!;

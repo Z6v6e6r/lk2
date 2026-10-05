@@ -19,7 +19,7 @@ import {
   encryptVivaDelegationToken,
 } from '@phub/auth/viva-delegation';
 import type { AppConfig } from '@phub/config';
-import type { LocalPasswordLoginRepository } from '@phub/database';
+import type { LocalPasswordLoginRepository } from '@phub/database/password-login';
 import { SignJWT } from 'jose';
 
 import type { AuthChallenge, AuthChallengeStore } from './challenge-store.js';

@@ -10,7 +10,6 @@ import {
   createCupPlayerLevelProjectionRepository,
   createCommunityLogoMediaRepository,
   createDatabasePool,
-  createLocalPasswordLoginRepository,
   warmDatabasePool,
   createGameRepository,
   createGameTestCourtRepository,
@@ -51,6 +50,7 @@ import {
   projectHomeBaseUser,
 } from '@phub/database';
 import { createContactReader } from '@phub/database/contacts';
+import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
 import {
   LegacyGamesMongoAdapter,
   LegacyGamesPublicAdapter,
