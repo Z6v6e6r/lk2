@@ -522,3 +522,18 @@ describe('GameCard lifecycle template', () => {
     expect(screen.queryByRole('link', { name: 'Чат игры' })).toBeNull();
   });
 });
+
+it('shows authoritative capacity even when participants are redacted and never replaces missing price with zero', () => {
+  render(
+    <GameCard
+      game={{
+        ...publicGame,
+        participants: [],
+        priceSummary: null,
+        capacity: { ...publicGame.capacity, open: 0 },
+      }}
+    />,
+  );
+  expect(screen.getByText('Свободных мест нет')).toBeInTheDocument();
+  expect(screen.queryByLabelText(/Стоимость места/)).not.toBeInTheDocument();
+});

@@ -207,6 +207,8 @@ function gateway(): AuthGateway {
 
 afterEach(() => {
   cleanup();
+  window.sessionStorage.clear();
+  vi.restoreAllMocks();
   window.history.replaceState({}, '', '/');
 });
 
@@ -1118,4 +1120,110 @@ describe('GamesPage discovery', () => {
     );
     expect(await screen.findByText(/Вы в игре/)).toBeInTheDocument();
   });
+});
+
+describe('GamesPage list return and freshness', () => {
+  it('replays filtered pages with fresh reads and restores scroll after returning from details', async () => {
+    const api = gateway();
+    const secondGame = {
+      ...game,
+      id: '11111111-1111-4111-8111-111111111111',
+      title: 'Игра на второй странице',
+    };
+    vi.mocked(api.listEventCatalog).mockResolvedValue(
+      catalogPage([{ kind: 'GAME', game }], 'page-two'),
+    );
+    vi.mocked(api.continueEventCatalog).mockResolvedValue(
+      catalogPage([{ kind: 'GAME', game: secondGame }]),
+    );
+    const user = userEvent.setup();
+    const first = render(<GamesPage gateway={api} />);
+    await screen.findByText(game.title);
+    await user.click(screen.getByRole('button', { name: 'Все станции' }));
+    await user.click(screen.getByRole('checkbox', { name: game.station.name }));
+    await user.click(screen.getByRole('button', { name: 'Все фильтры · 1' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Время начала' }), '18:00');
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Уровень игроков' }), 'C_B_PLUS');
+    await user.click(await screen.findByRole('button', { name: 'Показать ещё' }));
+    const link = await screen.findByRole('link', { name: secondGame.title });
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(640);
+    link.addEventListener('click', (event) => event.preventDefault());
+    await user.click(link);
+    const stored = window.sessionStorage.getItem('phub.games-list.v1:local:local');
+    expect(JSON.parse(stored!)).toMatchObject({ pages: 2, scrollY: 640 });
+    expect(stored).not.toContain(secondGame.title);
+    expect(stored).not.toContain('page-two');
+    first.unmount();
+
+    // The return re-reads the authoritative catalog instead of displaying old saved cards.
+    vi.mocked(api.listEventCatalog).mockClear();
+    vi.mocked(api.continueEventCatalog).mockClear();
+    vi.mocked(api.continueEventCatalog).mockResolvedValue(
+      catalogPage([{ kind: 'GAME', game: { ...secondGame, title: 'Обновлённая игра' } }]),
+    );
+    const scroll = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    render(<GamesPage gateway={api} />);
+    await screen.findByRole('link', { name: 'Обновлённая игра' });
+    expect(api.listEventCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stationIds: [game.station.id],
+        startsAfterLocal: '18:00',
+        levelFrom: 'C',
+        levelTo: 'B+',
+      }),
+    );
+    expect(api.continueEventCatalog).toHaveBeenCalledTimes(1);
+    expect(api.continueEventCatalog).toHaveBeenCalledWith('page-two', 20);
+    expect(screen.getByRole('combobox', { name: 'Время начала' })).toHaveValue('18:00');
+    await waitFor(() => expect(scroll).toHaveBeenCalledWith({ top: 640, behavior: 'instant' }));
+  });
+
+  it('marks an expired snapshot and refreshes it without inventing current availability', async () => {
+    const api = gateway();
+    vi.mocked(api.listEventCatalog).mockResolvedValueOnce({
+      ...catalogPage([{ kind: 'GAME', game }]),
+      staleAt: new Date(Date.now() - 1000).toISOString(),
+    });
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+    await screen.findByText(/Данные могли измениться/);
+    expect(screen.getByText('Свободных мест: 1 из 4')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Обновить список' }));
+    await waitFor(() => expect(api.listEventCatalog).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByText(/Данные могли измениться/)).not.toBeInTheDocument(),
+    );
+  });
+
+  it('keeps the loaded page on continuation failure and retries the same cursor', async () => {
+    const api = gateway();
+    vi.mocked(api.listEventCatalog).mockResolvedValue(
+      catalogPage([{ kind: 'GAME', game }], 'page-two'),
+    );
+    vi.mocked(api.continueEventCatalog)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(catalogPage([]));
+    const user = userEvent.setup();
+    render(<GamesPage gateway={api} />);
+    await user.click(await screen.findByRole('button', { name: 'Показать ещё' }));
+    await screen.findByText(/Уже загруженные события сохранены/);
+    expect(screen.getByRole('link', { name: game.title })).toBeInTheDocument();
+    expect(screen.queryByText('Подходящих событий пока нет')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Повторить загрузку' }));
+    await waitFor(() => expect(api.continueEventCatalog).toHaveBeenCalledTimes(2));
+    expect(api.continueEventCatalog).toHaveBeenLastCalledWith('page-two', 20);
+  });
+});
+
+it('ignores invalid saved filters instead of sending them to the catalog', async () => {
+  window.sessionStorage.setItem(
+    'phub.games-list.v1:local:local',
+    JSON.stringify({ tab: 'DISCOVER', selectedKinds: ['UNSUPPORTED'], pages: -1 }),
+  );
+  const api = gateway();
+  render(<GamesPage gateway={api} />);
+  await screen.findByRole('link', { name: game.title });
+  expect(api.listEventCatalog).toHaveBeenCalledWith(
+    expect.objectContaining({ kinds: ['GAME', 'COACH_GAME', 'TOURNAMENT'] }),
+  );
 });

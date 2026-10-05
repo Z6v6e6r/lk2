@@ -271,7 +271,9 @@ export function GameCard({
             <span>{dateBadge.weekday}</span>
           </time>
         ) : priceLabel(game) ? (
-          <strong className="game-card__price">{priceLabel(game)}</strong>
+          <strong className="game-card__price" aria-label={`Стоимость места: ${priceLabel(game)}`}>
+            {priceLabel(game)}
+          </strong>
         ) : null}
       </div>
 
@@ -519,6 +521,13 @@ export function GameCard({
                 ) : null}
               </div>
             </div>
+          ) : null}
+          {!compact ? (
+            <p className="game-card__availability">
+              {openSlots > 0
+                ? `Свободных мест: ${openSlots} из ${game.capacity.total}`
+                : 'Свободных мест нет'}
+            </p>
           ) : null}
         </div>
       ) : null}
