@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "scripts": {
-    "build": "tsup src/index.ts src/contact-reader.ts src/local-password-login-repository.ts --format esm --dts --sourcemap --clean"
+    "build": "tsup src/index.ts src/contact-reader.ts src/local-password-login-repository.ts src/local-password-reset-repository.ts --format esm --dts --sourcemap --clean"
   },
   "dependencies": {
     "@phub/communities": "0.1.0",
@@ -30,6 +30,10 @@
     "./password-login": {
       "types": "./src/local-password-login-repository.ts",
       "import": "./dist/local-password-login-repository.js"
+    },
+    "./password-reset": {
+      "types": "./src/local-password-reset-repository.ts",
+      "import": "./dist/local-password-reset-repository.js"
     }
   }
 }
