@@ -221,8 +221,8 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
     await withTenantTransaction(admin, tenantId, async (client) =>
       client.query<Record<string, unknown>>(
         `insert into integration.user_delegations (tenant_id,user_id,provider,issuer,subject,refresh_token_ciphertext,encryption_key_version)
-      values ($1,$2,'VIVA','https://synthetic.example.test',$2,'synthetic-not-a-token','synthetic')`,
-        [tenantId, input.owner.userId],
+      values ($1,$2,'VIVA','https://synthetic.example.test',$3,'synthetic-not-a-token','synthetic')`,
+        [tenantId, input.owner.userId, `synthetic-subject-${input.owner.userId}`],
       ),
     );
     expect(await repository.commit(input)).toBe('changed');
