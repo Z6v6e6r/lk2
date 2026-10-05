@@ -348,7 +348,7 @@ export function GameCard({
             sets.length === 0 ? (
               <ParticipantAvatarStack
                 ariaLabel="Участники игры"
-                capacity={game.capacity.total}
+                capacity={Math.min(game.capacity.total, visibleParticipants.length + openSlots)}
                 showLevelRing={!(compact && compactActionVariant === 'mini-create')}
                 participants={visibleParticipants.map((participant, index) => ({
                   key:

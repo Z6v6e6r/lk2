@@ -535,5 +535,6 @@ it('shows authoritative capacity even when participants are redacted and never r
     />,
   );
   expect(screen.getByText('Свободных мест нет')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Свободное место')).not.toBeInTheDocument();
   expect(screen.queryByLabelText(/Стоимость места/)).not.toBeInTheDocument();
 });
