@@ -61,8 +61,11 @@ paths:
       operationId: createGame
       summary: Start idempotent game creation
       description: |
-        Commits the PadlHub command and returns a durable operation. Booking and payment provider
-        work continues asynchronously; a browser redirect never marks the operation paid.
+        Currently accepts only NO_PAYMENT beta creation: arbitrary future times are not bookable
+        slot offers. Other payment modes fail with GAME_PAYMENT_REQUIRED before persistence.
+        SUCCEEDED proves local game creation only; it does not confirm a court booking or payment.
+        Commercial creation remains unavailable until a server-issued slot/quote and an authoritative
+        booking/settlement operation are connected. A browser redirect never proves payment.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -426,7 +429,10 @@ paths:
       summary: Get durable game command progress
       responses:
         '200':
-          description: Current operation state, safe next action and latest committed game card.
+          description: |
+            Durable actor-scoped command receipt. Current CREATE_GAME receipts confirm only the
+            NO_PAYMENT beta command and return game=null; they contain no booking confirmation.
+            A read failure or 404 does not authorize sending a new create command.
           headers:
             X-Correlation-ID:
               $ref: ../../common/components.yaml#/components/headers/CorrelationId
