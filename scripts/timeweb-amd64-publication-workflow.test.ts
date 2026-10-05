@@ -1636,7 +1636,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(probe).toContain('node scripts/verify-timeweb-provenance-materials.js verify');
     expect(probe).toContain('authorizesPublication: false');
     expect(probe).toContain('authorizesDeploy: false');
-    expect(probe).toContain('docker buildx rm "$BUILDER_NAME"');
+    expect(probe).toContain('docker buildx rm --force --timeout 60s "$BUILDER_NAME"');
     expect(document.jobs?.['pr-gate']?.needs).toEqual(
       expect.arrayContaining([
         'quality',
