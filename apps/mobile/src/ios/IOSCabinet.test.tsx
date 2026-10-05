@@ -48,8 +48,9 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Чаты' })).toBeNull();
     fireEvent.click(within(nav).getByRole('link', { name: 'Профиль' }));
-    await screen.findByRole('heading', { name: 'Анна Петрова' });
-    const subscriptions = screen.getByRole('region', { name: 'Подписки и абонементы' });
+    // Home and Profile share the name heading; await a region unique to the destination.
+    const subscriptions = await screen.findByRole('region', { name: 'Подписки и абонементы' });
+    expect(screen.getByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(within(subscriptions).getByRole('status')).toHaveTextContent(
       'Загружаем действующие подписки…',
     );
