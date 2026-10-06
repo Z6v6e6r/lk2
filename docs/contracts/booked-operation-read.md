@@ -103,7 +103,13 @@ Initial target eligibility remains server-owned and is checked before any provid
 The LK1 delegation uses the separate `subscription-runtime.booked-operation.admit` scope and
 binds method/path, request hash, target mapping/version, actor, tenant and correlation. The
 SDK makes one writer attempt; a lost response is recovered only through the same key. A valid
-receipt remains readable through B1 without any owner write attempt. Production `main.ts`
+receipt remains readable through B1 without any owner write attempt. A 503 or lost response
+is not evidence that admission was rejected: the owner may already have saved PREPARED.
+The SDK reports admission-only UNKNOWN recovery with an immutable copy of the same request
+and idempotency key and `canStartNewPurchase=false`; it performs no automatic retry.
+A caller retains that attempt and can explicitly recover with its original key/body under
+the same authenticated principal. Neither an uncertain response nor admission-only PENDING
+authorizes a fresh purchase, commercial JOIN or CREATE_GAME. Production `main.ts`
 does not supply these optional dependencies, so the route stays disabled.
 
 Admission means only an owner `PREPARED` operation with canonical association. Quote, booking,

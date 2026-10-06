@@ -3,7 +3,7 @@ import { createHmac, randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { z } from 'zod';
 import { decodeJwt, importPKCS8, SignJWT } from 'jose';
-import { PadlHubApiClient } from '@phub/api-sdk';
+import { BookedOperationAdmissionUncertainError, PadlHubApiClient } from '@phub/api-sdk';
 import { loadConfig } from '@phub/config';
 import {
   createIdentityAuthRepository,
@@ -50,6 +50,7 @@ const f = z
     capacity: z.number(),
     targetVersion: z.string(),
     controlUrl: z.url(),
+    scenario: z.enum(['full', 'lost-response-recovery']).default('full'),
   })
   .parse(JSON.parse(raw));
 const pg = new URL(f.pgUrl);
@@ -289,197 +290,235 @@ try {
     }),
     'physical canonical game mapping must resolve',
   );
-  const first = await actor.sdk.admitBookedOperation(input, key);
-  assert.equal(first.status, 'PENDING');
-  const repeat = await actor.sdk.admitBookedOperation(input, key);
-  assert.deepEqual(repeat, first);
-  await control('checkpoint_get');
-  assert.deepEqual(await actor.sdk.getBookedOperation(first.operationId), first);
-  assert.deepEqual(await actor.sdk.getBookedOperation(first.operationId), first);
-  await control('assert_get_unchanged');
-  // Concurrent initial commands exercise the Mongo unique _id, not a precreated receipt.
-  const raceKey = randomUUID();
-  const race = await Promise.all([
-    actor.sdk.admitBookedOperation(input, raceKey),
-    actor.sdk.admitBookedOperation(input, raceKey),
-  ]);
-  assert.deepEqual(race[0], race[1]);
-  const lostKey = randomUUID();
-  await control('lose_next_insert_ack');
-  const recovered = await actor.sdk.admitBookedOperation(input, lostKey);
-  assert.equal(recovered.status, 'PENDING');
-  assert.deepEqual(await actor.sdk.admitBookedOperation(input, lostKey), recovered);
-  const responseLostKey = randomUUID();
-  await control('lose_next_http_response');
-  await assert.rejects(actor.sdk.admitBookedOperation(input, responseLostKey));
-  const httpRecovered = await actor.sdk.admitBookedOperation(input, responseLostKey);
-  assert.equal(httpRecovered.status, 'PENDING');
-  assert.deepEqual(await actor.sdk.getBookedOperation(httpRecovered.operationId), httpRecovered);
-  const rotated = await authenticate(f.userId);
-  assert.notEqual(rotated.sid, actor.sid);
-  assert.deepEqual(await rotated.sdk.admitBookedOperation(input, key), first);
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query(
-      "update games.games set revision=revision+1,lifecycle_state='CANCELLED',cancellation_reason_code='ORGANIZER_REQUEST',cancelled_by_user_id=organizer_user_id,cancelled_at=now() where id=$1",
-      [f.gameId],
-    ),
-  );
-  assert.deepEqual(await actor.sdk.admitBookedOperation(input, key), first);
-  await checkError(actor.sdk.admitBookedOperation(input, randomUUID()), 409);
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query(
-      "update games.games set revision=1,lifecycle_state='SCHEDULED',cancellation_reason_code=null,cancelled_by_user_id=null,cancelled_at=null where id=$1",
-      [f.gameId],
-    ),
-  );
-  await control('provider_drift');
-  assert.deepEqual(await actor.sdk.admitBookedOperation(input, key), first);
-  await control('restore');
-  await checkError(
-    actor.sdk.admitBookedOperation(
-      { ...input, target: { ...input.target, expectedRevision: 2 } },
-      key,
-    ),
-    409,
-  );
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query(
-      "update identity.user_access_profiles set permissions=array['profile.read'] where user_id=$1",
-      [foreignUserId],
-    ),
-  );
-  const noPermission = await authenticate(foreignUserId);
-  await checkError(noPermission.sdk.admitBookedOperation(input, randomUUID()), 403);
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query(
-      "update identity.user_access_profiles set permissions=array['games.play','profile.read'] where user_id=$1",
-      [foreignUserId],
-    ),
-  );
-  const foreign = await authenticate(foreignUserId);
-  await checkError(foreign.sdk.getBookedOperation(first.operationId), 404);
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query('update integration.external_entity_map set external_id=$2 where id=$1', [
-      f.mappingId,
-      `changed-${randomUUID()}`,
-    ]),
-  );
-  await checkError(actor.sdk.admitBookedOperation(input, key), 409);
-  await checkError(actor.sdk.getBookedOperation(first.operationId), 404);
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query('update integration.external_entity_map set external_id=$2 where id=$1', [
-      f.mappingId,
-      f.providerClientId,
-    ]),
-  );
-  const direct = await issuer.issueBookedOperationAdmission({
-    userId: f.userId,
-    tenantId: f.tenantId,
-    tenantKey: f.tenantKey,
-    sessionId: actor.sid,
-    providerClientId: f.providerClientId,
-    providerMappingId: f.mappingId,
-    providerExerciseId: f.providerExerciseId,
-    targetMappingId: f.targetMappingId,
-    targetVersion: f.targetVersion,
-    startsAt: f.startsAt,
-    durationMinutes: f.durationMinutes,
-    capacity: f.capacity,
-    admissible: true,
-    operationId: first.operationId,
-    request: input,
-    idempotencyKey: key,
-    correlationId: 'b1-admission-direct',
-  });
-  const post = async (token: string, body: unknown = input) =>
-    fetch(f.baseUrl + '/lk/integrations/v1/booked-operation-admissions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Correlation-ID': 'b1-admission-direct',
-        'X-Subscription-Actor-Delegation': token,
-      },
-      body: JSON.stringify(body),
+  if (f.scenario === 'lost-response-recovery') {
+    await control('lose_next_http_response');
+    const uncertain: unknown = await actor.sdk
+      .admitBookedOperation(input, key)
+      .catch((e: unknown) => e);
+    assert.ok(uncertain instanceof BookedOperationAdmissionUncertainError);
+    assert.equal(uncertain.status, 503);
+    assert.equal(uncertain.operationStatus, 'UNKNOWN');
+    assert.equal(uncertain.recoveryAction, 'KEEP_SAME_ATTEMPT');
+    assert.equal(uncertain.canStartNewPurchase, false);
+    assert.equal(uncertain.idempotencyKey, key);
+    assert.deepEqual(uncertain.request, input);
+    assert.match(uncertain.message, /Статус операции не подтверждён/);
+    assert.equal(uncertain.message.includes('Операция не принята'), false);
+    await control('assert_single_prepared');
+    await control('checkpoint_get');
+    const recovered = await actor.sdk.admitBookedOperation(
+      uncertain.request,
+      uncertain.idempotencyKey,
+    );
+    assert.equal(recovered.status, 'PENDING');
+    // Recovery with the same key only reads the existing owner's association.
+    await control('assert_get_unchanged');
+    assert.deepEqual(await actor.sdk.getBookedOperation(recovered.operationId), recovered);
+    await control('assert_get_unchanged');
+    console.log(
+      JSON.stringify({
+        result: 'PASS',
+        acceptedOperations: 1,
+        scenario: 'lost-response-recovery',
+        operationStatusAfterLoss: 'UNKNOWN',
+        retainedAttemptAndKey: true,
+        canStartNewPurchase: false,
+        noAdditionalOwnerOrProviderWrites: true,
+      }),
+    );
+  } else {
+    const first = await actor.sdk.admitBookedOperation(input, key);
+    assert.equal(first.status, 'PENDING');
+    const repeat = await actor.sdk.admitBookedOperation(input, key);
+    assert.deepEqual(repeat, first);
+    await control('checkpoint_get');
+    assert.deepEqual(await actor.sdk.getBookedOperation(first.operationId), first);
+    assert.deepEqual(await actor.sdk.getBookedOperation(first.operationId), first);
+    await control('assert_get_unchanged');
+    // Concurrent initial commands exercise the Mongo unique _id, not a precreated receipt.
+    const raceKey = randomUUID();
+    const race = await Promise.all([
+      actor.sdk.admitBookedOperation(input, raceKey),
+      actor.sdk.admitBookedOperation(input, raceKey),
+    ]);
+    assert.deepEqual(race[0], race[1]);
+    const lostKey = randomUUID();
+    await control('lose_next_insert_ack');
+    const recovered = await actor.sdk.admitBookedOperation(input, lostKey);
+    assert.equal(recovered.status, 'PENDING');
+    assert.deepEqual(await actor.sdk.admitBookedOperation(input, lostKey), recovered);
+    const responseLostKey = randomUUID();
+    await control('lose_next_http_response');
+    await assert.rejects(actor.sdk.admitBookedOperation(input, responseLostKey));
+    const httpRecovered = await actor.sdk.admitBookedOperation(input, responseLostKey);
+    assert.equal(httpRecovered.status, 'PENDING');
+    assert.deepEqual(await actor.sdk.getBookedOperation(httpRecovered.operationId), httpRecovered);
+    const rotated = await authenticate(f.userId);
+    assert.notEqual(rotated.sid, actor.sid);
+    assert.deepEqual(await rotated.sdk.admitBookedOperation(input, key), first);
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query(
+        "update games.games set revision=revision+1,lifecycle_state='CANCELLED',cancellation_reason_code='ORGANIZER_REQUEST',cancelled_by_user_id=organizer_user_id,cancelled_at=now() where id=$1",
+        [f.gameId],
+      ),
+    );
+    assert.deepEqual(await actor.sdk.admitBookedOperation(input, key), first);
+    await checkError(actor.sdk.admitBookedOperation(input, randomUUID()), 409);
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query(
+        "update games.games set revision=1,lifecycle_state='SCHEDULED',cancellation_reason_code=null,cancelled_by_user_id=null,cancelled_at=null where id=$1",
+        [f.gameId],
+      ),
+    );
+    await control('provider_drift');
+    assert.deepEqual(await actor.sdk.admitBookedOperation(input, key), first);
+    await control('restore');
+    await checkError(
+      actor.sdk.admitBookedOperation(
+        { ...input, target: { ...input.target, expectedRevision: 2 } },
+        key,
+      ),
+      409,
+    );
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query(
+        "update identity.user_access_profiles set permissions=array['profile.read'] where user_id=$1",
+        [foreignUserId],
+      ),
+    );
+    const noPermission = await authenticate(foreignUserId);
+    await checkError(noPermission.sdk.admitBookedOperation(input, randomUUID()), 403);
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query(
+        "update identity.user_access_profiles set permissions=array['games.play','profile.read'] where user_id=$1",
+        [foreignUserId],
+      ),
+    );
+    const foreign = await authenticate(foreignUserId);
+    await checkError(foreign.sdk.getBookedOperation(first.operationId), 404);
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query('update integration.external_entity_map set external_id=$2 where id=$1', [
+        f.mappingId,
+        `changed-${randomUUID()}`,
+      ]),
+    );
+    await checkError(actor.sdk.admitBookedOperation(input, key), 409);
+    await checkError(actor.sdk.getBookedOperation(first.operationId), 404);
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query('update integration.external_entity_map set external_id=$2 where id=$1', [
+        f.mappingId,
+        f.providerClientId,
+      ]),
+    );
+    const direct = await issuer.issueBookedOperationAdmission({
+      userId: f.userId,
+      tenantId: f.tenantId,
+      tenantKey: f.tenantKey,
+      sessionId: actor.sid,
+      providerClientId: f.providerClientId,
+      providerMappingId: f.mappingId,
+      providerExerciseId: f.providerExerciseId,
+      targetMappingId: f.targetMappingId,
+      targetVersion: f.targetVersion,
+      startsAt: f.startsAt,
+      durationMinutes: f.durationMinutes,
+      capacity: f.capacity,
+      admissible: true,
+      operationId: first.operationId,
+      request: input,
+      idempotencyKey: key,
+      correlationId: 'b1-admission-direct',
     });
-  const wrongCaller = await new SignJWT({ ...decodeJwt(direct), caller: 'foreign-service' })
-    .setProtectedHeader({
-      alg: 'RS256',
-      typ: 'phub-subscription-runtime-actor-delegation+jwt',
-      kid: 'b1-admission-key',
-    })
-    .sign(await importPKCS8(f.privateKeyPem, 'RS256'));
-  assert.equal((await post(wrongCaller)).status, 401);
-  const alteredMapping = await new SignJWT({
-    ...decodeJwt(direct),
-    provider_mapping_id: randomUUID(),
-  })
-    .setProtectedHeader({
-      alg: 'RS256',
-      typ: 'phub-subscription-runtime-actor-delegation+jwt',
-      kid: 'b1-admission-key',
-    })
-    .sign(await importPKCS8(f.privateKeyPem, 'RS256'));
-  assert.equal((await post(alteredMapping)).status, 409);
-  assert.equal((await post(direct, { ...input, actorClientId: f.providerClientId })).status, 400);
-  const readToken = await issuer.issueBookedOperationRead({
-    userId: f.userId,
-    tenantId: f.tenantId,
-    tenantKey: f.tenantKey,
-    sessionId: actor.sid,
-    providerClientId: f.providerClientId,
-    providerMappingId: f.mappingId,
-    operationId: first.operationId,
-    correlationId: 'b1-admission-direct',
-  });
-  assert.equal((await post(readToken)).status, 401);
-  assert.equal(
-    (
-      await fetch(f.baseUrl + `/lk/integrations/v1/booked-operations/${first.operationId}`, {
+    const post = async (token: string, body: unknown = input) =>
+      fetch(f.baseUrl + '/lk/integrations/v1/booked-operation-admissions', {
+        method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           'X-Correlation-ID': 'b1-admission-direct',
-          'X-Subscription-Actor-Delegation': direct,
+          'X-Subscription-Actor-Delegation': token,
         },
+        body: JSON.stringify(body),
+      });
+    const wrongCaller = await new SignJWT({ ...decodeJwt(direct), caller: 'foreign-service' })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: 'b1-admission-key',
       })
-    ).status,
-    401,
-  );
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query("update integration.external_entity_map set sync_status='pending' where id=$1", [
-      f.mappingId,
-    ]),
-  );
-  await checkError(actor.sdk.admitBookedOperation(input, key), 503);
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query("update integration.external_entity_map set sync_status='synced' where id=$1", [
-      f.mappingId,
-    ]),
-  );
-  await withTenantTransaction(admin, f.tenantId, (c) =>
-    c.query('update identity.refresh_sessions set revoked_at=now() where id=$1', [actor.sid]),
-  );
-  await checkError(actor.sdk.admitBookedOperation(input, key), 401);
-  await checkError(actor.sdk.getBookedOperation(first.operationId), 401);
-  console.log(
-    JSON.stringify({
-      result: 'PASS',
-      path: 'real AuthService refresh -> NOBYPASSRLS PostgreSQL actor/game mapping -> signed admission -> actual owner source -> physical Mongo -> B1 SDK GET',
-      acceptedOperations: 4,
-      initialReadAndReplay: true,
-      getExactNoWriteWindow: true,
-      postgresDeadline: true,
-      race: true,
-      ambiguousInsertAck: true,
-      lostHttpResponse: true,
-      permissionDenied: true,
-      rotatedSessionReplay: true,
-      postgresDriftReplay: true,
-      providerDriftReplay: true,
-      foreignActor: true,
-      changedMapping: true,
-      wrongScopeAndCaller: true,
-      revocation: true,
-    }),
-  );
+      .sign(await importPKCS8(f.privateKeyPem, 'RS256'));
+    assert.equal((await post(wrongCaller)).status, 401);
+    const alteredMapping = await new SignJWT({
+      ...decodeJwt(direct),
+      provider_mapping_id: randomUUID(),
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: 'b1-admission-key',
+      })
+      .sign(await importPKCS8(f.privateKeyPem, 'RS256'));
+    assert.equal((await post(alteredMapping)).status, 409);
+    assert.equal((await post(direct, { ...input, actorClientId: f.providerClientId })).status, 400);
+    const readToken = await issuer.issueBookedOperationRead({
+      userId: f.userId,
+      tenantId: f.tenantId,
+      tenantKey: f.tenantKey,
+      sessionId: actor.sid,
+      providerClientId: f.providerClientId,
+      providerMappingId: f.mappingId,
+      operationId: first.operationId,
+      correlationId: 'b1-admission-direct',
+    });
+    assert.equal((await post(readToken)).status, 401);
+    assert.equal(
+      (
+        await fetch(f.baseUrl + `/lk/integrations/v1/booked-operations/${first.operationId}`, {
+          headers: {
+            'X-Correlation-ID': 'b1-admission-direct',
+            'X-Subscription-Actor-Delegation': direct,
+          },
+        })
+      ).status,
+      401,
+    );
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query("update integration.external_entity_map set sync_status='pending' where id=$1", [
+        f.mappingId,
+      ]),
+    );
+    await checkError(actor.sdk.admitBookedOperation(input, key), 503);
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query("update integration.external_entity_map set sync_status='synced' where id=$1", [
+        f.mappingId,
+      ]),
+    );
+    await withTenantTransaction(admin, f.tenantId, (c) =>
+      c.query('update identity.refresh_sessions set revoked_at=now() where id=$1', [actor.sid]),
+    );
+    await checkError(actor.sdk.admitBookedOperation(input, key), 401);
+    await checkError(actor.sdk.getBookedOperation(first.operationId), 401);
+    console.log(
+      JSON.stringify({
+        result: 'PASS',
+        path: 'real AuthService refresh -> NOBYPASSRLS PostgreSQL actor/game mapping -> signed admission -> actual owner source -> physical Mongo -> B1 SDK GET',
+        acceptedOperations: 4,
+        initialReadAndReplay: true,
+        getExactNoWriteWindow: true,
+        postgresDeadline: true,
+        race: true,
+        ambiguousInsertAck: true,
+        lostHttpResponse: true,
+        permissionDenied: true,
+        rotatedSessionReplay: true,
+        postgresDriftReplay: true,
+        providerDriftReplay: true,
+        foreignActor: true,
+        changedMapping: true,
+        wrongScopeAndCaller: true,
+        revocation: true,
+      }),
+    );
+  }
 } finally {
   await app.close();
   await runtime.end();

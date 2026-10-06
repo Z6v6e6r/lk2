@@ -115,7 +115,9 @@ export function registerBookedOperationAdmissionRoutes(
               : status === 401
                 ? 'BOOKED_OPERATION_SESSION_INACTIVE'
                 : 'BOOKED_OPERATION_ADMISSION_UNAVAILABLE',
-          'Операция не принята.',
+          status === 503
+            ? 'Статус операции не подтверждён. Сохраните текущую попытку; новую покупку не начинайте.'
+            : 'Операция не принята.',
         );
       }
     },
