@@ -218,6 +218,40 @@ describe('booked admission public boundary', () => {
     ).toBe(400);
     expect(f.fetchImplementation).not.toHaveBeenCalled();
   });
+  it('does not claim rejection for owner 503 or a lost response after dispatch', async () => {
+    const f = await fixture(),
+      auth = await headers();
+    for (const failure of [
+      () => f.fetchImplementation.mockRejectedValueOnce(new TypeError('Synthetic lost response')),
+      () => f.fetchImplementation.mockResolvedValueOnce(Response.json({}, { status: 503 })),
+    ]) {
+      failure();
+      const result = await f.app.inject({
+        method: 'POST',
+        url: route,
+        headers: auth,
+        payload: body,
+      });
+      expect(result.statusCode).toBe(503);
+      expect(result.json<{ code: string; message: string; correlationId: string }>()).toEqual({
+        code: 'BOOKED_OPERATION_ADMISSION_UNAVAILABLE',
+        message:
+          'Статус операции не подтверждён. Сохраните текущую попытку; новую покупку не начинайте.',
+        correlationId: auth['x-correlation-id'],
+      });
+    }
+    expect(f.fetchImplementation).toHaveBeenCalledTimes(2);
+    f.target.resolve.mockResolvedValueOnce(null);
+    const rejected = await f.app.inject({
+      method: 'POST',
+      url: route,
+      headers: auth,
+      payload: body,
+    });
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json<{ message: string }>().message).toBe('Операция не принята.');
+    expect(f.fetchImplementation).toHaveBeenCalledTimes(2);
+  });
   it('inactive session, missing mapping/target and disabled runtime fail closed', async () => {
     const f = await fixture(),
       auth = await headers();

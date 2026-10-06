@@ -421,6 +421,28 @@ export class ApiClientError extends Error {
   }
 }
 
+// Admission can be durably PREPARED even when its response is lost. This is
+// recovery information for the existing JOIN attempt, never permission to buy again.
+export class BookedOperationAdmissionUncertainError extends ApiClientError {
+  public readonly operationStatus = 'UNKNOWN' as const;
+  public readonly recoveryAction = 'KEEP_SAME_ATTEMPT' as const;
+  public readonly canStartNewPurchase = false;
+
+  public constructor(
+    public readonly request: BookedOperationAdmissionRequest,
+    public readonly idempotencyKey: string,
+    correlationId: string,
+  ) {
+    super(
+      'Статус операции не подтверждён. Сохраните текущую попытку; новую покупку не начинайте.',
+      503,
+      'BOOKED_OPERATION_ADMISSION_UNAVAILABLE',
+      correlationId,
+    );
+    this.name = 'BookedOperationAdmissionUncertainError';
+  }
+}
+
 export class CommunityEventGapExpiredError extends ApiClientError {
   public readonly recoveryAction = 'FULL_CANONICAL_RELOAD' as const;
 
@@ -1443,18 +1465,28 @@ export class PadlHubApiClient {
       { cache: 'no-store' },
     );
   }
-  public admitBookedOperation(
+  public async admitBookedOperation(
     body: BookedOperationAdmissionRequest,
     idempotencyKey: string,
   ): Promise<BookedOperationReadOutcome> {
-    return this.request<BookedOperationReadOutcome>('/booked-operation-admissions', {
-      method: 'POST',
-      body: JSON.stringify(body),
-      idempotencyKey,
-      retryOnUnauthorized: false,
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'no-store',
-    });
+    const attempt = Object.freeze({ ...body, target: Object.freeze({ ...body.target }) });
+    try {
+      return await this.request<BookedOperationReadOutcome>('/booked-operation-admissions', {
+        method: 'POST',
+        body: JSON.stringify(attempt),
+        idempotencyKey,
+        retryOnUnauthorized: false,
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+      });
+    } catch (error) {
+      if (error instanceof ApiClientError && error.status < 500) throw error;
+      throw new BookedOperationAdmissionUncertainError(
+        attempt,
+        idempotencyKey,
+        error instanceof ApiClientError ? error.correlationId : '',
+      );
+    }
   }
 
   public listGameTestCourts(): Promise<GameTestCourtList> {
