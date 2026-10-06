@@ -13,7 +13,11 @@ it('loads patched libvips and librsvg for image decoding', () => {
     const current = actual.split('.').map(Number);
     const floor = minimum.split('.').map(Number);
     const difference = current
-      .map((value, index) => value - floor[index])
+      .map((value, index) => {
+        const expected = floor[index];
+        if (expected === undefined) throw new Error('Invalid native decoder version');
+        return value - expected;
+      })
       .find((value) => value !== 0);
     expect(
       difference ?? 0,
