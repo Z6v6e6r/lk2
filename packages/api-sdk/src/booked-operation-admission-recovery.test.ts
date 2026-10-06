@@ -3,8 +3,8 @@ import {
   ApiClientError,
   BookedOperationAdmissionUncertainError,
   PadlHubApiClient,
+  type BookedOperationAdmissionRequest,
 } from './index.js';
-import type { BookedOperationAdmissionRequest } from '@phub/api-contracts';
 
 const request: BookedOperationAdmissionRequest = {
   action: 'JOIN_GAME',
