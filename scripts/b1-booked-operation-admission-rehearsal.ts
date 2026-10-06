@@ -8,7 +8,6 @@ import { loadConfig } from '@phub/config';
 import {
   createIdentityAuthRepository,
   createSubscriptionRuntimeActorContextRepository,
-  createBookedOperationAdmissionTargetRepository,
   withTenantTransaction,
 } from '@phub/database';
 import { createLogger } from '@phub/observability';
@@ -17,6 +16,7 @@ import {
   BookedOperationAdmissionClient,
   type BookedOperationAdmissionRequest,
 } from '@phub/subscription-runtime-adapter';
+import { createBookedOperationAdmissionTargetRepository } from '../packages/database/src/booked-operation-admission-target-repository.js';
 import { buildApp } from '../apps/api/src/app.js';
 import { AuthService } from '../apps/api/src/auth/auth-service.js';
 import { MemoryAuthChallengeStore } from '../apps/api/src/auth/challenge-store.js';
