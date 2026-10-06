@@ -32,6 +32,48 @@ tags:
   - name: subscriptions
     description: Non-binding WARN-only subscription-runtime checks through a server-owned actor delegation.
 paths:
+  /{tenantKey}/booked-operation-admissions:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [bookings]
+      operationId: admitBookedOperation
+      summary: Admit one existing game request before booking or payment
+      description: |
+        Requires games.play and an active session. Server resolves the canonical game
+        revision and synced Viva mapping. The owner independently validates target,
+        exactly one owned eligible subscription, tariff and policy, then persists the
+        canonical binding in its existing PREPARED receipt before any business action.
+        PENDING means admission only; it does not mean booked, paid or a new LK2 game.
+        Reuse the same key and body after a lost response. No automatic business retry.
+        Default-disabled until owner dependencies are explicitly connected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookedOperationAdmissionRequest'
+      responses:
+        '202':
+          description: The owner has durably admitted the request, with no business continuation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookedOperationReadOutcome'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/booked-operations/{operationId}:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -5190,6 +5232,29 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 components:
   schemas:
+    BookedOperationAdmissionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, target, paymentIntent]
+      properties:
+        action:
+          type: string
+          const: JOIN_GAME
+        paymentIntent:
+          type: string
+          const: USE_SUBSCRIPTION
+        target:
+          type: object
+          additionalProperties: false
+          required: [id, expectedRevision]
+          properties:
+            id:
+              type: string
+              format: uuid
+            expectedRevision:
+              type: integer
+              minimum: 1
+              maximum: 9007199254740991
     BookedOperationReadOutcome:
       type: object
       additionalProperties: false

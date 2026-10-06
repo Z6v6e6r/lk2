@@ -82,3 +82,4 @@ export * from './promotion-engagement-repository.js';
 export * from './trainer-avatar-repository.js';
 export * from './upcoming-bookings-repository.js';
 export * from './subscription-runtime-actor-context-repository.js';
+export * from './booked-operation-admission-target-repository.js';

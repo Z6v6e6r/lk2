@@ -185,6 +185,10 @@ import {
   registerBookedOperationReadRoutes,
   type BookedOperationReadRouteOptions,
 } from './subscriptions/booked-operation-read-routes.js';
+import {
+  registerBookedOperationAdmissionRoutes,
+  type BookedOperationAdmissionRouteOptions,
+} from './subscriptions/booked-operation-admission-routes.js';
 
 interface PadlHubClaims extends JWTPayload {
   readonly sub: string;
@@ -384,6 +388,7 @@ export interface BuildAppOptions {
     BookedOperationReadRouteOptions,
     'authenticatedTenantHandlers'
   >;
+  readonly bookedOperationAdmission?: Omit<BookedOperationAdmissionRouteOptions, 'commandHandlers'>;
 }
 
 function clientPlatform(request: FastifyRequest): ClientPlatform {
@@ -1073,6 +1078,10 @@ export async function buildApp(options: BuildAppOptions) {
   registerBookedOperationReadRoutes(app as unknown as FastifyInstance, {
     ...options.bookedOperationRead,
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
+  registerBookedOperationAdmissionRoutes(app as unknown as FastifyInstance, {
+    ...options.bookedOperationAdmission,
+    commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });
   registerSubscriptionRuntimeWarnRoutes(app as unknown as FastifyInstance, {
     mode: options.config.SUBSCRIPTION_RUNTIME_WARN_MODE,
