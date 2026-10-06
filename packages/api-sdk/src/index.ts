@@ -7,6 +7,7 @@ export type PasswordLoginRequest = components['schemas']['PasswordLoginRequest']
 export type AuthenticatedSession = components['schemas']['AuthenticatedSession'];
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
+export type BookedOperationReadOutcome = components['schemas']['BookedOperationReadOutcome'];
 export type UserRuntimeCapabilities = components['schemas']['UserRuntimeCapabilities'];
 export type RealtimeTicket = components['schemas']['RealtimeTicket'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
@@ -1432,6 +1433,13 @@ export class PadlHubApiClient {
 
   public getGameOperation(operationId: string): Promise<GameCommandResult> {
     return this.request<GameCommandResult>(`/game-operations/${encodeURIComponent(operationId)}`);
+  }
+
+  public getBookedOperation(operationId: string): Promise<BookedOperationReadOutcome> {
+    return this.request<BookedOperationReadOutcome>(
+      `/booked-operations/${encodeURIComponent(operationId)}`,
+      { cache: 'no-store' },
+    );
   }
 
   public listGameTestCourts(): Promise<GameTestCourtList> {

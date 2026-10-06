@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.25.0
+  version: 1.26.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -32,6 +32,56 @@ tags:
   - name: subscriptions
     description: Non-binding WARN-only subscription-runtime checks through a server-owned actor delegation.
 paths:
+  /{tenantKey}/booked-operations/{operationId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [bookings]
+      operationId: getBookedOperation
+      summary: Read the owner's durable receipt for an existing commercial attempt
+      description: |
+        Requires games.play, an active PadlHub session and the server-owned synced Viva
+        actor mapping. The read is default-deny until the dedicated owner boundary is
+        connected and the receipt has a trusted canonical PadlHub operation association.
+        Caller-provided actor fields and query parameters are rejected. This endpoint
+        never invokes creation, booking, debit, payment or the legacy POST router.
+        CONFIRMED means owner booking receipt confirmation, not a newly created LK2 game.
+        asOf is the durable receipt timestamp, not a monotonic revision. UNKNOWN, missing
+        status, 404 and 503 never authorize retrying a commercial creation.
+      responses:
+        '200':
+          description: Actor-scoped owner receipt status.
+          headers:
+            Cache-Control:
+              description: Actor-bound receipts must not be stored.
+              schema:
+                type: string
+                const: no-store
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookedOperationReadOutcome'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/subscription-runtime/quote:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -5140,6 +5190,27 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 components:
   schemas:
+    BookedOperationReadOutcome:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, operationId, status, asOf, reason]
+      properties:
+        contractVersion:
+          type: integer
+          const: 1
+        operationId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING, UNKNOWN, CONFIRMED]
+        asOf:
+          type: [string, 'null']
+          format: date-time
+          description: Durable updatedAt; null only when UNKNOWN and the timestamp is unavailable.
+        reason:
+          type: string
+          enum: [OWNER_PENDING, RECONCILIATION_REQUIRED, OWNER_BOOKING_CONFIRMED]
     ManagedSubscriptionWarnQuoteRequest:
       type: object
       additionalProperties: false

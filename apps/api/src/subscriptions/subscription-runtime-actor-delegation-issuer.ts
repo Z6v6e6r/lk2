@@ -1,7 +1,11 @@
 import { createHash, createPrivateKey, randomUUID } from 'node:crypto';
 
 import { importPKCS8, SignJWT } from 'jose';
-import type { ManagedSubscriptionRuntimeV1QuoteRequest } from '@phub/subscription-runtime-adapter';
+import {
+  BOOKED_OPERATION_READ_PREFIX,
+  BOOKED_OPERATION_READ_SCOPE,
+  type ManagedSubscriptionRuntimeV1QuoteRequest,
+} from '@phub/subscription-runtime-adapter';
 
 const actionSet = new Set(['CREATE_GAME', 'JOIN_GAME']);
 const correlationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -82,6 +86,64 @@ export class SubscriptionRuntimeActorDelegationIssuer {
         'SUBSCRIPTION_RUNTIME_DELEGATION_CONFIGURATION_INVALID',
       );
     }
+  }
+
+  async issueBookedOperationRead(input: {
+    readonly userId: string;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly sessionId: string;
+    readonly providerClientId: string;
+    readonly providerMappingId: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+  }): Promise<string> {
+    if (
+      ![
+        input.userId,
+        input.tenantId,
+        input.sessionId,
+        input.providerMappingId,
+        input.operationId,
+      ].every((value) => uuidPattern.test(value) && value === value.toLowerCase()) ||
+      !idPattern.test(input.tenantKey) ||
+      !idPattern.test(input.providerClientId) ||
+      !correlationPattern.test(input.correlationId)
+    ) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    const key = await importPKCS8(this.options.privateKeyPem, 'RS256');
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 1,
+      scope: BOOKED_OPERATION_READ_SCOPE,
+      caller: 'lk2-api',
+      method: 'GET',
+      path: BOOKED_OPERATION_READ_PREFIX + input.operationId,
+      operation_id: input.operationId,
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      provider_mapping_id: input.providerMappingId,
+      correlation_id: input.correlationId,
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(key);
   }
 
   async issue(input: {
