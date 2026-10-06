@@ -20,6 +20,10 @@ import { validateCanonicalManifest } from './timeweb-release-manifest-contract.j
 import { verifySourceCi } from './verify-source-ci.js';
 import { readInstalledApiBaseline, runManualApiWebUpgrade } from './timeweb-api-web-upgrade.js';
 import {
+  createStandardDeliveryDiagnostic,
+  standardDeliveryGuardError,
+} from './timeweb-standard-diagnostic.js';
+import {
   runWebTransition,
   standardRange,
   standardWebComposeArgs,
@@ -43,8 +47,12 @@ const cleanEnvironment = {
 };
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
+let diagnostic;
+const diagnosticStage = (stage, context) => diagnostic?.stage(stage, context);
+const diagnosticBoundary = (stage, operation) =>
+  diagnostic ? diagnostic.boundary(stage, operation) : operation();
 const fail = (message) => {
-  throw new Error(message);
+  throw standardDeliveryGuardError(message);
 };
 function command(program, args, options = {}) {
   return execFileSync(program, args, {
@@ -320,14 +328,7 @@ async function main(ciRunId) {
   if (resolve(dirname(fileURLToPath(import.meta.url)), '..') !== SOURCE)
     fail('Controller must run from enrolled path');
   process.chdir(SOURCE);
-  const config = JSON.parse(readSecure(CONFIG));
-  if (
-    config.schema !== 1 ||
-    config.enabled !== true ||
-    !config.owner ||
-    !/^[a-f0-9]{40}$/.test(config.controllerSha)
-  )
-    fail('Standard delivery not enrolled');
+  secure(`${ROOT}/standard`);
   secure(SOURCE);
   secure(`${SOURCE}/.git`);
   for (const path of git(['ls-files', '-z']).split('\0').filter(Boolean))
@@ -337,19 +338,41 @@ async function main(ciRunId) {
     'node_modules/postcss/lib/postcss.js',
   ])
     secure(`${SOURCE}/${path}`);
+  const controllerSha = git(['rev-parse', 'HEAD']);
+  try {
+    diagnostic = createStandardDeliveryDiagnostic(`${ROOT}/standard/attempts`, {
+      sourceCiRunId: ciRunId,
+      controllerSha,
+    });
+  } catch {
+    /* Diagnostic I/O cannot change the existing delivery outcome; no readback claim. */
+  }
+  diagnosticStage('enrollment');
+  const config = JSON.parse(readSecure(CONFIG));
+  if (
+    config.schema !== 1 ||
+    config.enabled !== true ||
+    !config.owner ||
+    !/^[a-f0-9]{40}$/.test(config.controllerSha)
+  )
+    fail('Standard delivery not enrolled');
+  diagnosticStage('controller');
   if (
     git(['rev-parse', 'HEAD']) !== config.controllerSha ||
     git(['status', '--porcelain', '--untracked-files=no']) !== ''
   )
     fail('Enrolled controller changed');
+  diagnosticStage('source-ci');
   const run = await github(`actions/runs/${ciRunId}`);
   const jobs = await github(`actions/runs/${ciRunId}/attempts/1/jobs?per_page=100`);
   if (jobs.total_count !== jobs.jobs.length) fail('Truncated source jobs');
   const sha = run.head_sha;
   verifySourceCi(run, jobs.jobs, sha);
+  diagnosticStage('source-fetch', { candidateSha: sha });
   git(['fetch', '--no-tags', 'https://github.com/Z6v6e6r/lk2.git', 'main']);
   if (git(['rev-parse', 'FETCH_HEAD']) !== sha)
     fail('Main moved; next successful main run owns the release');
+  diagnosticStage('runtime-baseline');
   assertNoMigrator();
   const api = inspect('api');
   const web = inspect('web');
@@ -359,10 +382,12 @@ async function main(ciRunId) {
   const previousWebId = releaseId(web.releaseId);
   if (previousWebId.startsWith(`${sha}-`))
     fail('Already installed source requires successful-receipt reconciliation');
+  diagnosticStage('eligibility');
   for (const base of [config.controllerSha, baselineId.slice(0, 40), previousWebId.slice(0, 40)]) {
     const plan = standardRange(base, sha);
     if (!plan.eligible) fail(`Standard release ineligible: ${plan.reason}`);
   }
+  diagnosticStage('runtime-baseline');
   const installedBaseline = readInstalledApiBaseline(baselineId);
   const baselineEnv = installedBaseline.path;
   const baselineBytes = installedBaseline.bytes;
@@ -390,10 +415,13 @@ async function main(ciRunId) {
       fail('Backend/configuration changed');
   };
   const lock = `${ROOT}/standard/active`;
+  diagnosticStage('lock');
   mkdirSync(lock, { mode: 0o700 }); // Local exclusion also covers non-workflow invocation.
   let finished = false;
   try {
+    diagnosticStage('publication');
     const runId = await publish(sha, ciRunId);
+    diagnosticStage('artifact', { publicationRunId: String(runId) });
     const candidate = await downloadPublication(sha, runId);
     const id = releaseId(`${sha}-${runId}-1`);
     const image = candidate.manifest.images.find((item) => item.component === 'web');
@@ -436,98 +464,115 @@ async function main(ciRunId) {
       fail('Web readiness timeout');
     };
     await runWebTransition({
-      preflight: async () => {
-        assertBackend();
-        if (
-          git(['ls-remote', 'https://github.com/Z6v6e6r/lk2.git', 'refs/heads/main']).split(
-            /\s/,
-          )[0] !== sha
-        )
-          fail('Main changed before deployment');
-        const rendered = JSON.parse(compose(overlay, 'config'));
-        if (rendered.services.web.image !== candidateRef) fail('Web Compose reference mismatch');
-        await probe('http://172.30.26.12:3000/health/ready');
-      },
-      pull: async () => {
-        compose(overlay, 'pull');
-      },
-      artifactSmoke: async () => {
-        docker([
-          'run',
-          '--rm',
-          '--network',
-          'none',
-          '--entrypoint',
-          '/bin/sh',
-          candidateRef,
-          '-ec',
-          'nginx -t && test -s /usr/share/nginx/html/index.html',
-        ]);
-      },
-      journal: async (status) =>
-        writeDurable(
-          `${candidate.directory}/web-rollout-receipt.json`,
-          JSON.stringify(
-            {
-              schema: 1,
-              status,
-              owner: config.owner,
-              sourceCiRunId: ciRunId,
-              candidateManifestSha256: candidate.checksum,
-              candidateArtifactDigest: candidate.artifactDigest,
-              candidateSource: sha,
-              candidatePublicationRunId: runId,
-              // Preserve component origin; this receipt is not a fabricated mixed canonical manifest.
-              installedBackend: {
-                api,
-                realtime,
-                // A running worker is attested too, so the receipt states what actually stayed
-                // unchanged instead of implying an all-off baseline.
-                worker,
-                baselineId,
-                baselineEnvSha256: sha256(baselineBytes),
-              },
-              previousWeb: web,
-              candidateWeb: { image: candidateRef, releaseId: id },
-              observedAt: new Date().toISOString(),
-              requestsPerService: status === 'success' ? 60 : 0,
-              userOutcome: 'requires-product-feedback',
-            },
-            null,
-            2,
-          ) + '\n',
-        ),
-      activate: async () => {
-        compose(overlay, 'up');
-        await waitWeb(candidateRef, id);
-        activatedWeb = inspect('web');
-        if (activatedWeb.restarts !== 0) fail('Web restarted during initial readiness');
-      },
-      observe: async () => {
-        const apiTimes = [],
-          webTimes = [];
-        for (let round = 0; round < 60; round += 1) {
-          apiTimes.push(await probe('http://172.30.26.12:3000/health/ready'));
-          webTimes.push(await probe('http://172.30.26.11:8080/', '<div id="phub-app"></div>'));
-          attestWeb(candidateRef, id);
+      preflight: () =>
+        diagnosticBoundary('preflight', async () => {
           assertBackend();
-          await delay(1000);
-        }
-        const p95 = (times) => times.sort((a, b) => a - b)[Math.ceil(times.length * 0.95) - 1];
-        attestWeb(candidateRef, id);
-        if (p95(apiTimes) > 1500 || p95(webTimes) > 1000) fail('Web release latency threshold');
-      },
-      attestBackend: async () => {
-        assertBackend();
-      },
-      rollback: async () => {
-        compose(rollback, 'up');
-        await waitWeb(web.image, previousWebId);
-      },
+          if (
+            git(['ls-remote', 'https://github.com/Z6v6e6r/lk2.git', 'refs/heads/main']).split(
+              /\s/,
+            )[0] !== sha
+          )
+            fail('Main changed before deployment');
+          const rendered = JSON.parse(compose(overlay, 'config'));
+          if (rendered.services.web.image !== candidateRef) fail('Web Compose reference mismatch');
+          await probe('http://172.30.26.12:3000/health/ready');
+        }),
+      pull: () =>
+        diagnosticBoundary('pull', async () => {
+          compose(overlay, 'pull');
+        }),
+      artifactSmoke: () =>
+        diagnosticBoundary('artifact-smoke', async () => {
+          docker([
+            'run',
+            '--rm',
+            '--network',
+            'none',
+            '--entrypoint',
+            '/bin/sh',
+            candidateRef,
+            '-ec',
+            'nginx -t && test -s /usr/share/nginx/html/index.html',
+          ]);
+        }),
+      journal: async (status) =>
+        diagnosticBoundary('rollout-journal', async () =>
+          writeDurable(
+            `${candidate.directory}/web-rollout-receipt.json`,
+            JSON.stringify(
+              {
+                schema: 1,
+                status,
+                owner: config.owner,
+                sourceCiRunId: ciRunId,
+                candidateManifestSha256: candidate.checksum,
+                candidateArtifactDigest: candidate.artifactDigest,
+                candidateSource: sha,
+                candidatePublicationRunId: runId,
+                // Preserve component origin; this receipt is not a fabricated mixed canonical manifest.
+                installedBackend: {
+                  api,
+                  realtime,
+                  // A running worker is attested too, so the receipt states what actually stayed
+                  // unchanged instead of implying an all-off baseline.
+                  worker,
+                  baselineId,
+                  baselineEnvSha256: sha256(baselineBytes),
+                },
+                previousWeb: web,
+                candidateWeb: { image: candidateRef, releaseId: id },
+                observedAt: new Date().toISOString(),
+                requestsPerService: status === 'success' ? 60 : 0,
+                userOutcome: 'requires-product-feedback',
+              },
+              null,
+              2,
+            ) + '\n',
+          ),
+        ),
+      activate: () =>
+        diagnosticBoundary('activate', async () => {
+          compose(overlay, 'up');
+          diagnosticStage('initial-readiness');
+          await waitWeb(candidateRef, id);
+          activatedWeb = inspect('web');
+          if (activatedWeb.restarts !== 0) fail('Web restarted during initial readiness');
+        }),
+      observe: () =>
+        diagnosticBoundary('observe', async () => {
+          const apiTimes = [],
+            webTimes = [];
+          for (let round = 0; round < 60; round += 1) {
+            apiTimes.push(await probe('http://172.30.26.12:3000/health/ready'));
+            webTimes.push(await probe('http://172.30.26.11:8080/', '<div id="phub-app"></div>'));
+            attestWeb(candidateRef, id);
+            assertBackend();
+            await delay(1000);
+          }
+          const p95 = (times) => times.sort((a, b) => a - b)[Math.ceil(times.length * 0.95) - 1];
+          attestWeb(candidateRef, id);
+          if (p95(apiTimes) > 1500 || p95(webTimes) > 1000) fail('Web release latency threshold');
+        }),
+      attestBackend: () =>
+        diagnosticBoundary('attest-backend', async () => {
+          assertBackend();
+        }),
+      rollback: () =>
+        diagnosticBoundary('rollback', async () => {
+          compose(rollback, 'up');
+          await waitWeb(web.image, previousWebId);
+        }),
     });
     finished = true;
+    let pointer = 'unavailable';
+    try {
+      diagnosticStage('complete');
+      if (diagnostic) pointer = JSON.stringify(diagnostic.success());
+    } catch {
+      /* Canonical success and lock release are independent of diagnostic persistence. */
+    }
     process.stdout.write(
-      `STANDARD_WEB_DELIVERY_SUCCESS source=${sha} publication=${runId} user_feedback=pending\n`,
+      `STANDARD_WEB_DELIVERY_SUCCESS source=${sha} publication=${runId} user_feedback=pending diagnostic=${pointer}\n`,
     );
   } finally {
     // Any uncertainty stops future propagation until the owner reconciles the receipt/run.
@@ -555,10 +600,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     : args.length === 1
       ? main(args[0])
       : Promise.reject(new Error('Invalid controller arguments'));
-  operation.catch(() => {
+  operation.catch((error) => {
     // External command errors may contain runtime environment; never print raw error/stdout.
+    let pointer = 'unavailable';
+    try {
+      if (diagnostic) pointer = JSON.stringify(diagnostic.stop(error));
+    } catch {
+      /* No receipt claim without durable readback. */
+    }
     process.stderr.write(
-      'STANDARD_WEB_DELIVERY_STOP: inspect the root-only receipt and workflow status; no automatic retry\n',
+      `STANDARD_WEB_DELIVERY_STOP diagnostic=${pointer}; inspect the root-only receipt and workflow status; no automatic retry\n`,
     );
     process.exitCode = 1;
   });
