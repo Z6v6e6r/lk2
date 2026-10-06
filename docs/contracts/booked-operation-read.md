@@ -88,3 +88,27 @@ Owner regression: `node --test scripts/tests/bookedOperationRead.test.mjs` in LK
 Consumer regression: the B1 route, adapter and SDK tests in LK2. Real loopback HTTP
 tests use synthetic actor/receipt fixtures. Physical Mongo evidence is reported separately;
 an in-memory collection or a synthetic binding is not proof of production identity.
+
+## Server-owned admission
+
+`POST /user/api/v1/{tenantKey}/booked-operation-admissions` is an additive, default-disabled
+command requiring an active session, tenant membership, `games.play` and `Idempotency-Key`.
+Its strict body contains only `JOIN_GAME`, target UUID/expected revision and `USE_SUBSCRIPTION`.
+Actor and game provider mappings come from tenant-scoped PostgreSQL. The key is hashed and
+scoped to the canonical tenant/user; the owner stores the immutable binding before returning
+`202 PENDING`. A repeated key/body recovers the original receipt across session rotation and
+mutable game lifecycle/revision drift; mapping ownership changes and conflicting bodies deny.
+Initial target eligibility remains server-owned and is checked before any provider read/insert.
+
+The LK1 delegation uses the separate `subscription-runtime.booked-operation.admit` scope and
+binds method/path, request hash, target mapping/version, actor, tenant and correlation. The
+SDK makes one writer attempt; a lost response is recovered only through the same key. A valid
+receipt remains readable through B1 without any owner write attempt. Production `main.ts`
+does not supply these optional dependencies, so the route stays disabled.
+
+Admission means only an owner `PREPARED` operation with canonical association. Quote, booking,
+settlement, entitlement and game projection are later boundaries and are excluded. No mobile
+artifact or production activation is claimed. The isolated physical rehearsal additionally
+covers real AuthService refresh/session, NOBYPASSRLS PG mappings, blocked-query timeout,
+majority owner Mongo write/read, HTTP/SDK replay, lost ACK/response and exact no-write GET
+snapshots. It is distinct from ordinary CI route/adapter/repository tests and live evidence.
