@@ -95,12 +95,15 @@ async function fixture(disabled = false) {
     }),
   };
   const fetchImplementation = vi.fn<typeof fetch>(async (url, init) => {
-    expect(String(url)).toBe(
+    expect(typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url).toBe(
       'https://owner.example.test/lk/integrations/v1/booked-operation-admissions',
     );
     expect(init?.method).toBe('POST');
     expect(init?.redirect).toBe('error');
-    expect(JSON.parse(String(init?.body))).toEqual(body);
+    const raw = init?.body;
+    if (typeof raw !== 'string') throw Error('Expected JSON body');
+    const requestBody: unknown = JSON.parse(raw);
+    expect(requestBody).toEqual(body);
     const proof = new Headers(init?.headers).get('X-Subscription-Actor-Delegation')!;
     const { payload } = await jwtVerify(proof, keys.publicKey, {
       issuer: 'https://lk2.example.test',
@@ -161,7 +164,7 @@ describe('booked admission public boundary', () => {
     for (let i = 0; i < 2; i++) {
       const r = await f.app.inject({ method: 'POST', url: route, headers: auth, payload: body });
       expect(r.statusCode).toBe(202);
-      expect(r.json().operationId).toBe(operationId);
+      expect(r.json<{ operationId: string }>().operationId).toBe(operationId);
     }
     expect(f.actor.resolve).toHaveBeenCalledWith({ tenantId, userId, sessionId: sid });
     expect(f.target.resolve).toHaveBeenCalledWith({ tenantId, targetId, expectedRevision: 1 });

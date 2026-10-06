@@ -12,9 +12,11 @@ const row = {
   admissible: true,
 };
 function fixture(rows: unknown[]) {
-  const query = vi.fn(async (sql: string) => ({
-    rows: sql.includes('select mapping.id') ? rows : [],
-  }));
+  const query = vi.fn((sql: string) =>
+    Promise.resolve({
+      rows: sql.includes('select mapping.id') ? rows : [],
+    }),
+  );
   const client = { query, release: vi.fn() };
   const pool = { connect: vi.fn().mockResolvedValue(client) };
   return { query, pool };

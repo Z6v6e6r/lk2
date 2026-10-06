@@ -58,7 +58,7 @@ describe('admission bounded transport', () => {
       },
     });
     await expect(
-      fixture(async () => new Response(stream, { status: 202 })).admit(body, envelope),
+      fixture(() => Promise.resolve(new Response(stream, { status: 202 }))).admit(body, envelope),
     ).rejects.toMatchObject({ status: 503 });
     expect(cancelled).toBe(true);
   });
@@ -69,14 +69,16 @@ describe('admission bounded transport', () => {
         if (init?.signal) signals.push(init.signal);
         return new Promise(() => {});
       }) as typeof fetch,
-      (async () =>
-        new Response(
-          new ReadableStream({
-            pull() {
-              return new Promise(() => {});
-            },
-          }),
-          { status: 202 },
+      (() =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              pull() {
+                return new Promise(() => {});
+              },
+            }),
+            { status: 202 },
+          ),
         )) as typeof fetch,
     ]) {
       const start = Date.now();
