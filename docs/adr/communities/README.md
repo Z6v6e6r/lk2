@@ -19,6 +19,7 @@ from `proposed` to `accepted` only with decision evidence and an implementation/
 | C-11 | Frontend routes and visual reuse            | accepted | Frontend Lead              | visual state QA per slice       |
 | C-12 | Membership lifecycle and ЦУП decisions      | accepted | Backend + Product          | DIRECT invite decisions         |
 | C-13 | Reusable DIRECT invite security             | proposed | Product + Backend + AppSec | revoke, PENDING and abuse quota |
+| C-17 | PadlHub-owned community rating              | proposed | Product + Backend          | game-to-community attribution   |
 
 Canonical decision register and Gate A status live in
 [Communities Architecture Definition Pack](../../architecture/communities-architecture-definition-pack.md).
