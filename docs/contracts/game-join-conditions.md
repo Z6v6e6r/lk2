@@ -2,9 +2,15 @@
 
 `GET /user/api/v1/{tenantKey}/games/{gameId}/join-conditions` accepts only a canonical
 PadlHub game UUID, expected LK2 revision and canonical subscription instance UUID.
-The normal API authenticates the JWT, `games.play` and tenant membership. The production
-entry point does not inject the owner; it remains `503 GAME_JOIN_CONDITIONS_DISABLED`.
-This source change activates no real-account read, provider write or commercial command.
+The normal API authenticates the JWT, `games.play` and tenant membership. The API entry
+point injects the concrete owner only when GAMES_READ_ENABLED, VIVA_DIRECT_READ_ENABLED
+and VIVA_OAUTH_ENABLED are all true, VIVA_MODE is sandbox or production, and the configured
+VIVA_AUTH_TENANT_KEY is exactly iSkq6G. Normalized bearer destinations must be exactly
+https://api.vivacrm.ru/end-user/api and https://padlhub.su, without credentials, query,
+fragment or nondefault port. Otherwise the route remains
+`503 GAME_JOIN_CONDITIONS_DISABLED`. Composition performs no token, database or provider
+operation. This source-only integration changes no deployed configuration and runs no
+real-account read, provider write or commercial command.
 
 ## Exact selection and ownership
 
@@ -35,7 +41,9 @@ has a 28-second deadline, no retries and bounded streamed bodies. The fixed exis
 `POST /lk/subscriptions/game-price-preview` receives only targetKind, owner game ID,
 Moscow startsAt, 90-minute duration and one owned subscription ID. It is an advisory
 owner read, not a booking or payment POST. The exact production resolver runs again
-after evaluation; mapping/source/revision/owned-record drift refuses the response.
+after evaluation; mapping/source/revision/owned-record drift refuses the response. Both
+resolutions share one token promise scoped to the request AbortSignal and exact actor,
+so the token broker refreshes at most once per advisory; no token is shared across requests.
 The route limits the authenticated tenant/principal to 10 requests per minute; transport
 circuits open after three failures for 30 seconds. Logs expose only stable refusal codes.
 
@@ -54,10 +62,14 @@ most base and free + paid minutes equal 90. A refusal has null amount, zero minu
 an explicit reason. Malformed AVAILABLE never becomes free.
 
 GameDetailView has optional canonical selection and SDK client props. The frozen P1
-GamesPage integration has not supplied them in this change; main.ts wiring is also absent.
+GamesPage integration has not supplied them in this change. main.ts now supplies the owner
+through the existing read gates; default mock/disabled configuration keeps it absent.
 Commercial JOIN/CREATE/leave, capacity mutation, settlement and subscription write-off
-remain outside this source outcome. The token broker may refresh/persist OAuth
-infrastructure credentials if later wired; live activation requires its own authority.
+remain outside this source outcome. The wired token broker may refresh/persist OAuth
+infrastructure credentials and optionally link identity on an authorized request after
+live activation. This is not a zero-write auth path. That activation,
+real account login/consent, deployment and provider parity require separate exact-target
+authority and fresh operational prerequisites; task-branch source approval supplies none.
 
 ## Evidence boundaries
 

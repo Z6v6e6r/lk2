@@ -27,16 +27,36 @@ export function createGameJoinConditionsOwner(options: {
   readonly readPreview: GameJoinConditionsOwner['readPreview'];
   readonly providerMode: 'MOCK' | 'LIVE';
 }): GameJoinConditionsOwner {
+  const requestTokens = new WeakMap<AbortSignal, { actorKey: string; token: Promise<string> }>();
   return {
     async resolveSelection(actor, signal) {
       if (signal.aborted) return null;
       const context = await options.contextRepository.resolve(actor, signal);
       if (!context || context.revision !== actor.expectedRevision || signal.aborted) return null;
-      const accessToken = await options.getAccessToken({
-        ...actor,
-        tenantKey: actor.tenantKey,
-        correlationId: actor.correlationId,
-      });
+      const actorKey = JSON.stringify([
+        actor.tenantId,
+        actor.tenantKey,
+        actor.userId,
+        actor.sessionId,
+      ]);
+      let requestToken = requestTokens.get(signal);
+      if (requestToken && requestToken.actorKey !== actorKey) {
+        throw new Error('JOIN_SELECTION_ACTOR_CHANGED');
+      }
+      if (!requestToken) {
+        requestToken = {
+          actorKey,
+          token: options.getAccessToken({
+            tenantId: actor.tenantId,
+            userId: actor.userId,
+            sessionId: actor.sessionId,
+            tenantKey: actor.tenantKey,
+            correlationId: actor.correlationId,
+          }),
+        };
+        requestTokens.set(signal, requestToken);
+      }
+      const accessToken = await requestToken.token;
       if (signal.aborted) return null;
       const proof = await options.readOwnedSubscription({
         accessToken,
