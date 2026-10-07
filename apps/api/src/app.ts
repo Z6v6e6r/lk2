@@ -180,7 +180,19 @@ import {
   type TournamentSummarySource,
 } from './tournaments/tournament-summary-routes.js';
 import type { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscription-runtime-actor-delegation-issuer.js';
+import {
+  registerGameJoinConditionsRoutes,
+  type GameJoinConditionsRouteOptions,
+} from './games/game-join-conditions-routes.js';
 import { registerSubscriptionRuntimeWarnRoutes } from './subscriptions/subscription-runtime-warn-routes.js';
+import {
+  registerBookedOperationReadRoutes,
+  type BookedOperationReadRouteOptions,
+} from './subscriptions/booked-operation-read-routes.js';
+import {
+  registerBookedOperationAdmissionRoutes,
+  type BookedOperationAdmissionRouteOptions,
+} from './subscriptions/booked-operation-admission-routes.js';
 
 interface PadlHubClaims extends JWTPayload {
   readonly sub: string;
@@ -375,7 +387,13 @@ export interface BuildAppOptions {
     SubscriptionRuntimeActorDelegationIssuer,
     'issue'
   >;
+  readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
+  readonly bookedOperationRead?: Omit<
+    BookedOperationReadRouteOptions,
+    'authenticatedTenantHandlers'
+  >;
+  readonly bookedOperationAdmission?: Omit<BookedOperationAdmissionRouteOptions, 'commandHandlers'>;
 }
 
 function clientPlatform(request: FastifyRequest): ClientPlatform {
@@ -1061,6 +1079,18 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerBookedOperationReadRoutes(app as unknown as FastifyInstance, {
+    ...options.bookedOperationRead,
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
+  registerBookedOperationAdmissionRoutes(app as unknown as FastifyInstance, {
+    ...options.bookedOperationAdmission,
+    commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerGameJoinConditionsRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameJoinConditionsOwner ? { owner: options.gameJoinConditionsOwner } : {}),
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerSubscriptionRuntimeWarnRoutes(app as unknown as FastifyInstance, {
     mode: options.config.SUBSCRIPTION_RUNTIME_WARN_MODE,

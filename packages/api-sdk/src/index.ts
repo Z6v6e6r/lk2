@@ -7,11 +7,15 @@ export type PasswordLoginRequest = components['schemas']['PasswordLoginRequest']
 export type AuthenticatedSession = components['schemas']['AuthenticatedSession'];
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
+export type BookedOperationReadOutcome = components['schemas']['BookedOperationReadOutcome'];
+export type BookedOperationAdmissionRequest =
+  components['schemas']['BookedOperationAdmissionRequest'];
 export type UserRuntimeCapabilities = components['schemas']['UserRuntimeCapabilities'];
 export type RealtimeTicket = components['schemas']['RealtimeTicket'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
 export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
+export type GameJoinConditions = components['schemas']['GameJoinConditions'];
 export type GameTestCourtList = components['schemas']['GameTestCourtList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
@@ -415,6 +419,28 @@ export class ApiClientError extends Error {
   ) {
     super(message);
     this.name = 'ApiClientError';
+  }
+}
+
+// Admission can be durably PREPARED even when its response is lost. This is
+// recovery information for the existing JOIN attempt, never permission to buy again.
+export class BookedOperationAdmissionUncertainError extends ApiClientError {
+  public readonly operationStatus = 'UNKNOWN' as const;
+  public readonly recoveryAction = 'KEEP_SAME_ATTEMPT' as const;
+  public readonly canStartNewPurchase = false;
+
+  public constructor(
+    public readonly request: BookedOperationAdmissionRequest,
+    public readonly idempotencyKey: string,
+    correlationId: string,
+  ) {
+    super(
+      'Статус операции не подтверждён. Сохраните текущую попытку; новую покупку не начинайте.',
+      503,
+      'BOOKED_OPERATION_ADMISSION_UNAVAILABLE',
+      correlationId,
+    );
+    this.name = 'BookedOperationAdmissionUncertainError';
   }
 }
 
@@ -1358,6 +1384,20 @@ export class PadlHubApiClient {
     );
   }
 
+  public getGameJoinConditions(
+    gameId: string,
+    input: { readonly expectedRevision: number; readonly subscriptionInstanceId: string },
+  ): Promise<GameJoinConditions> {
+    const query = new URLSearchParams({
+      expectedRevision: String(input.expectedRevision),
+      subscriptionInstanceId: input.subscriptionInstanceId,
+    });
+    return this.request<GameJoinConditions>(
+      `/games/${encodeURIComponent(gameId)}/join-conditions?${query.toString()}`,
+      { auth: 'required', cache: 'no-store', retryOnUnauthorized: false },
+    );
+  }
+
   public getGame(gameId: string): Promise<GameCard> {
     return this.request<{ readonly game: GameCard }>(`/games/${encodeURIComponent(gameId)}`).then(
       ({ game }) => game,
@@ -1432,6 +1472,36 @@ export class PadlHubApiClient {
 
   public getGameOperation(operationId: string): Promise<GameCommandResult> {
     return this.request<GameCommandResult>(`/game-operations/${encodeURIComponent(operationId)}`);
+  }
+
+  public getBookedOperation(operationId: string): Promise<BookedOperationReadOutcome> {
+    return this.request<BookedOperationReadOutcome>(
+      `/booked-operations/${encodeURIComponent(operationId)}`,
+      { cache: 'no-store' },
+    );
+  }
+  public async admitBookedOperation(
+    body: BookedOperationAdmissionRequest,
+    idempotencyKey: string,
+  ): Promise<BookedOperationReadOutcome> {
+    const attempt = Object.freeze({ ...body, target: Object.freeze({ ...body.target }) });
+    try {
+      return await this.request<BookedOperationReadOutcome>('/booked-operation-admissions', {
+        method: 'POST',
+        body: JSON.stringify(attempt),
+        idempotencyKey,
+        retryOnUnauthorized: false,
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+      });
+    } catch (error) {
+      if (error instanceof ApiClientError && error.status < 500) throw error;
+      throw new BookedOperationAdmissionUncertainError(
+        attempt,
+        idempotencyKey,
+        error instanceof ApiClientError ? error.correlationId : '',
+      );
+    }
   }
 
   public listGameTestCourts(): Promise<GameTestCourtList> {

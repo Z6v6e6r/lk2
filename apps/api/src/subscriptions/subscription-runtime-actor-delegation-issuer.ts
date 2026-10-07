@@ -1,7 +1,16 @@
 import { createHash, createPrivateKey, randomUUID } from 'node:crypto';
 
 import { importPKCS8, SignJWT } from 'jose';
-import type { ManagedSubscriptionRuntimeV1QuoteRequest } from '@phub/subscription-runtime-adapter';
+import {
+  BOOKED_OPERATION_READ_PREFIX,
+  BOOKED_OPERATION_READ_SCOPE,
+  BOOKED_OPERATION_ADMISSION_PATH,
+  BOOKED_OPERATION_ADMISSION_SCOPE,
+  bookedOperationAdmissionId,
+  bookedOperationAdmissionRequestSha256,
+  type BookedOperationAdmissionRequest,
+  type ManagedSubscriptionRuntimeV1QuoteRequest,
+} from '@phub/subscription-runtime-adapter';
 
 const actionSet = new Set(['CREATE_GAME', 'JOIN_GAME']);
 const correlationPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
@@ -82,6 +91,156 @@ export class SubscriptionRuntimeActorDelegationIssuer {
         'SUBSCRIPTION_RUNTIME_DELEGATION_CONFIGURATION_INVALID',
       );
     }
+  }
+
+  async issueBookedOperationAdmission(input: {
+    readonly userId: string;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly sessionId: string;
+    readonly providerClientId: string;
+    readonly providerMappingId: string;
+    readonly providerExerciseId: string;
+    readonly targetMappingId: string;
+    readonly targetVersion: string;
+    readonly startsAt: string;
+    readonly durationMinutes: number;
+    readonly capacity: number;
+    readonly admissible: boolean;
+    readonly operationId: string;
+    readonly correlationId: string;
+    readonly idempotencyKey: string;
+    readonly request: BookedOperationAdmissionRequest;
+  }): Promise<string> {
+    const keyHash = subscriptionRuntimeIdempotencyKeySha256(input.idempotencyKey);
+    if (
+      ![
+        input.userId,
+        input.tenantId,
+        input.sessionId,
+        input.providerMappingId,
+        input.targetMappingId,
+        input.operationId,
+      ].every((v) => uuidPattern.test(v) && v === v.toLowerCase()) ||
+      !idPattern.test(input.tenantKey) ||
+      !idPattern.test(input.providerClientId) ||
+      !idPattern.test(input.providerExerciseId) ||
+      !correlationPattern.test(input.correlationId) ||
+      !correlationPattern.test(input.idempotencyKey) ||
+      !/^[A-Za-z0-9._:-]{1,128}$/.test(input.targetVersion) ||
+      !Number.isSafeInteger(input.durationMinutes) ||
+      input.durationMinutes < 1 ||
+      input.durationMinutes > 1440 ||
+      !Number.isInteger(input.capacity) ||
+      input.capacity < 1 ||
+      input.capacity > 1000 ||
+      typeof input.admissible !== 'boolean' ||
+      !Number.isFinite(Date.parse(input.startsAt)) ||
+      new Date(input.startsAt).toISOString() !== input.startsAt ||
+      input.operationId !== bookedOperationAdmissionId(input.tenantId, input.userId, keyHash)
+    ) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 1,
+      scope: BOOKED_OPERATION_ADMISSION_SCOPE,
+      caller: 'lk2-api',
+      method: 'POST',
+      path: BOOKED_OPERATION_ADMISSION_PATH,
+      operation_id: input.operationId,
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      provider_mapping_id: input.providerMappingId,
+      correlation_id: input.correlationId,
+      request_sha256: bookedOperationAdmissionRequestSha256(input.request),
+      idempotency_key_sha256: keyHash,
+      target_id: input.request.target.id,
+      expected_revision: input.request.target.expectedRevision,
+      target_mapping_id: input.targetMappingId,
+      provider_exercise_id: input.providerExerciseId,
+      target_version: input.targetVersion,
+      target_starts_at: input.startsAt,
+      target_duration_minutes: input.durationMinutes,
+      target_capacity: input.capacity,
+      target_admissible: input.admissible,
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(await importPKCS8(this.options.privateKeyPem, 'RS256'));
+  }
+
+  async issueBookedOperationRead(input: {
+    readonly userId: string;
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly sessionId: string;
+    readonly providerClientId: string;
+    readonly providerMappingId: string;
+    readonly operationId: string;
+    readonly correlationId: string;
+  }): Promise<string> {
+    if (
+      ![
+        input.userId,
+        input.tenantId,
+        input.sessionId,
+        input.providerMappingId,
+        input.operationId,
+      ].every((value) => uuidPattern.test(value) && value === value.toLowerCase()) ||
+      !idPattern.test(input.tenantKey) ||
+      !idPattern.test(input.providerClientId) ||
+      !correlationPattern.test(input.correlationId)
+    ) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    const key = await importPKCS8(this.options.privateKeyPem, 'RS256');
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({
+      contract_version: 1,
+      scope: BOOKED_OPERATION_READ_SCOPE,
+      caller: 'lk2-api',
+      method: 'GET',
+      path: BOOKED_OPERATION_READ_PREFIX + input.operationId,
+      operation_id: input.operationId,
+      tenant_id: input.tenantId,
+      tenant_key: input.tenantKey,
+      sid: input.sessionId,
+      provider: 'VIVA',
+      provider_client_id: input.providerClientId,
+      provider_mapping_id: input.providerMappingId,
+      correlation_id: input.correlationId,
+    })
+      .setProtectedHeader({
+        alg: 'RS256',
+        typ: 'phub-subscription-runtime-actor-delegation+jwt',
+        kid: this.options.keyId,
+      })
+      .setIssuer(this.options.issuer)
+      .setAudience(this.options.audience)
+      .setSubject(input.userId)
+      .setIssuedAt(now)
+      .setNotBefore(now)
+      .setExpirationTime(now + this.options.ttlSeconds)
+      .setJti(randomUUID())
+      .sign(key);
   }
 
   async issue(input: {
