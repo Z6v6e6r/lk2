@@ -83,3 +83,8 @@ export * from './trainer-avatar-repository.js';
 export * from './upcoming-bookings-repository.js';
 export * from './subscription-runtime-actor-context-repository.js';
 export type { BookedOperationAdmissionTargetRepository } from './booked-operation-admission-target-repository.js';
+
+export type {
+  GameJoinConditionsContextInput,
+  GameJoinConditionsContext,
+} from './game-join-conditions-context-repository.js';

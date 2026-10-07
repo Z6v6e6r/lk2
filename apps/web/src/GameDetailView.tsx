@@ -1,4 +1,8 @@
 import { useState } from 'react';
+import {
+  GameJoinConditionsPanel,
+  type GameJoinConditionsClient,
+} from './GameJoinConditionsPanel.js';
 
 import { GameResultEditor } from './GameResultEditor.js';
 import { GameScoreSummary } from './GameScoreSummary.js';
@@ -681,6 +685,8 @@ function ResultTab(props: {
 }
 
 export function GameDetailView(props: {
+  readonly joinConditionsClient?: GameJoinConditionsClient;
+  readonly subscriptionInstanceId?: string;
   readonly activeTab: GameDetailTab;
   readonly busy: boolean;
   readonly game: GameCard;
@@ -771,6 +777,17 @@ export function GameDetailView(props: {
             Результат
           </button>
         </div>
+
+        {activeTab === 'GAME' ? (
+          <GameJoinConditionsPanel
+            gameId={game.id}
+            revision={game.revision}
+            {...(props.joinConditionsClient ? { client: props.joinConditionsClient } : {})}
+            {...(props.subscriptionInstanceId
+              ? { subscriptionInstanceId: props.subscriptionInstanceId }
+              : {})}
+          />
+        ) : null}
 
         {activeTab === 'GAME' ? (
           <GameTab

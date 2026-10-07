@@ -124,6 +124,60 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/games/{gameId}/join-conditions:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - in: path
+        name: gameId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: expectedRevision
+        required: true
+        schema: { type: integer, minimum: 1, maximum: 9007199254740991 }
+      - in: query
+        name: subscriptionInstanceId
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [games]
+      operationId: getGameJoinConditions
+      summary: Read personal advisory conditions for one existing 90-minute game
+      description: |
+        Requires an authenticated active PadlHub session, games.play and tenant membership.
+        Both public identifiers are PadlHub UUIDs. One trusted owner resolver must prove the
+        exact LK1 game, server-derived schedule and a unique owned post-enforcement HUB instance.
+        Missing, ambiguous, foreign or stale context fails closed before an upstream read.
+        The fixed LK1 price preview only reads provider/Mongo state. It cannot JOIN, reserve,
+        debit, pay or create an operation. No price, actor, tenant or provider ID is caller-selected.
+        revision is the LK2 aggregate revision rechecked after the preview; ownerRevision is null
+        because LK1 does not provide one. The amount is always advisory, never a payment mandate.
+        Missing amount remains null. No source hash is represented as deployed owner evidence.
+        The route returns 503 until its trusted owner dependency is explicitly wired.
+      responses:
+        '200':
+          description: Non-binding actor-bound advisory; no JOIN or payment authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameJoinConditions' }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          description: Game/selection revision changed or quote expired; refresh conditions.
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/subscription-runtime/quote:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -5232,6 +5286,56 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 components:
   schemas:
+    GameJoinConditions:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          gameId,
+          revision,
+          ownerRevision,
+          subscriptionInstanceId,
+          eligibility,
+          reasonCode,
+          subscriptionApplied,
+          price,
+          freeMinutes,
+          paidMinutes,
+          evaluatedAt,
+          expiresAt,
+          nonBinding,
+          requiresReservationRecheck,
+          source,
+          providerMode,
+        ]
+      properties:
+        gameId: { type: string, format: uuid }
+        revision:
+          type: integer
+          minimum: 1
+          description: LK2 aggregate revision, never an LK1 producer revision.
+        ownerRevision: { type: 'null' }
+        subscriptionInstanceId: { type: string, format: uuid }
+        eligibility: { type: string, enum: [AVAILABLE, UNAVAILABLE, LIMIT_USED] }
+        reasonCode: { type: [string, 'null'] }
+        subscriptionApplied: { type: boolean }
+        price:
+          type: object
+          additionalProperties: false
+          required: [status, amountMinor, currency, confirmed]
+          properties:
+            status: { type: string, enum: [ADVISORY, MISSING] }
+            amountMinor: { type: [integer, 'null'], minimum: 0, maximum: 9007199254740991 }
+            currency: { type: string, const: RUB }
+            confirmed: { type: boolean, const: false }
+        freeMinutes: { type: integer, minimum: 0, maximum: 90 }
+        paidMinutes: { type: integer, minimum: 0, maximum: 90 }
+        evaluatedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        nonBinding: { type: boolean, const: true }
+        requiresReservationRecheck: { type: boolean, const: true }
+        source: { type: string, const: LK1_PRICE_PREVIEW }
+        providerMode: { type: string, enum: [MOCK, LIVE] }
     BookedOperationAdmissionRequest:
       type: object
       additionalProperties: false

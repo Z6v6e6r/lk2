@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import { DEFAULT_PROFILE_PRIVACY_SETTINGS } from '@phub/domain';
 
 import { createBrowserAuthGateway } from './auth-gateway.js';
@@ -781,6 +782,60 @@ describe('browser auth gateway', () => {
     expect(accessAttempts).toBe(2);
     expect(redirected).not.toHaveBeenCalled();
   });
+
+  it.each(['user', 'tenant', 'logout'] as const)(
+    'discards pending HomeDashboard data when the %s principal changes',
+    async (change) => {
+      let session = profilePhotoSession();
+      const pendingHome: Array<(response: Response) => void> = [];
+      const fetchImplementation = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+        if (url.endsWith('/auth/session'))
+          return Promise.resolve(new Response(null, { status: 204 }));
+        if (url.endsWith('/home')) {
+          return new Promise<Response>((resolve) => pendingHome.push(resolve));
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.synthetic.invalid/',
+        tenantKey: 'synthetic',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+      await gateway.restoreSession();
+      const oldHome = gateway.getHomeDashboard();
+      expect(gateway.getHomeDashboard()).toBe(oldHome);
+      const oldRejection = expect(oldHome).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+      if (change === 'logout') await gateway.logout();
+      else {
+        session = {
+          ...session,
+          context: {
+            ...session.context,
+            ...(change === 'user'
+              ? { userId: '00000000-0000-4000-8000-000000000003' }
+              : { tenantId: '00000000-0000-4000-8000-000000000004' }),
+          },
+        };
+        await gateway.restoreSession();
+      }
+      const newHome = gateway.getHomeDashboard();
+      expect(newHome).not.toBe(oldHome);
+      expect(pendingHome).toHaveLength(2);
+      pendingHome[0]!(
+        Response.json({
+          subscriptions: [{ id: PROFILE_PHOTO_USER_ID, title: 'Old synthetic title' }],
+        }),
+      );
+      await oldRejection;
+      // Settling the previous request must not evict the new principal's in-flight read.
+      expect(gateway.getHomeDashboard()).toBe(newHome);
+      pendingHome[1]!(Response.json({ subscriptions: [] }));
+      await expect(newHome).resolves.toMatchObject({ subscriptions: [] });
+    },
+  );
 
   it('discards a late Viva access token after logout', async () => {
     const session = {
@@ -3834,5 +3889,39 @@ describe('browser auth gateway', () => {
       'Bearer expired-padlhub-token',
       'Bearer refreshed-padlhub-token',
     ]);
+  });
+});
+
+describe('existing-game advisory SDK forwarding', () => {
+  it('forwards canonical selection and preserves SDK refusal without auth/provider fallbacks', async () => {
+    const refusal = new ApiClientError(
+      'synthetic refusal',
+      409,
+      'JOIN_SELECTION_UNAVAILABLE',
+      'synthetic-correlation',
+    );
+    const sdk = vi
+      .spyOn(PadlHubApiClient.prototype, 'getGameJoinConditions')
+      .mockRejectedValue(refusal);
+    try {
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.synthetic.invalid',
+        tenantKey: 'synthetic',
+        appVersion: 'test',
+        fetchImplementation: vi.fn<typeof fetch>(() =>
+          Promise.reject(new Error('network prohibited')),
+        ),
+      });
+      const gameId = '00000000-0000-4000-8000-000000000004';
+      const input = {
+        expectedRevision: 8,
+        subscriptionInstanceId: '00000000-0000-4000-8000-000000000005',
+      };
+      await expect(gateway.getGameJoinConditions?.(gameId, input)).rejects.toBe(refusal);
+      expect(sdk).toHaveBeenCalledTimes(1);
+      expect(sdk).toHaveBeenCalledWith(gameId, input);
+    } finally {
+      sdk.mockRestore();
+    }
   });
 });
