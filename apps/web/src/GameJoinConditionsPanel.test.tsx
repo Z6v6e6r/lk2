@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PadlHubApiClient } from '@phub/api-sdk';
@@ -12,7 +13,9 @@ import {
   fixtureId,
 } from '../../api/src/games/game-join-conditions.test-fixture.js';
 import { GameDetailView } from './GameDetailView.js';
-import type { GameCard } from './auth-gateway.js';
+import { GamesPage } from './GamesPage.js';
+import { buildMockHomeDashboard } from '../../api/src/home/home-dashboard.js';
+import type { AuthGateway, GameCard } from './auth-gateway.js';
 const apps: FastifyInstance[] = [];
 afterEach(async () => {
   cleanup();
@@ -47,6 +50,29 @@ const game: GameCard = {
 function harness(fixture: ReturnType<typeof createJoinConditionsFixture>) {
   const app = Fastify();
   apps.push(app);
+  app.get<{ Params: { gameId: string } }>('/user/api/v1/synthetic/games/:gameId', (request) => ({
+    game: { ...game, id: request.params.gameId },
+  }));
+  app.get('/user/api/v1/synthetic/home', () => ({
+    ...buildMockHomeDashboard({
+      tenantId: fixtureActor.tenantId,
+      userId: fixtureActor.userId,
+      displayName: 'Синтетический игрок',
+      phoneLast4: '0000',
+      roles: ['client'],
+      permissions: ['games.play'],
+    }),
+    subscriptions: [
+      {
+        id: fixtureActor.subscriptionInstanceId,
+        title: 'Годовая HUB · тестовая подписка',
+        status: 'active',
+        remainingUnits: 1,
+        validUntil: '2099-09-30T20:59:59Z',
+        route: '/subscriptions/' + fixtureActor.subscriptionInstanceId,
+      },
+    ],
+  }));
   registerGameJoinConditionsRoutes(app, {
     owner: fixture.owner,
     authenticatedTenantHandlers: [
@@ -81,8 +107,21 @@ function harness(fixture: ReturnType<typeof createJoinConditionsFixture>) {
     initialAccessToken: 'synthetic-only',
     fetchImplementation: transport,
   });
+  const pageGateway = {
+    getGame: (gameId: string) => client.getGame(gameId),
+    getHomeDashboard: () => client.getHomeDashboard(),
+    getGameJoinConditions: client.getGameJoinConditions.bind(client),
+  } as unknown as AuthGateway;
   return {
     client,
+    pageGateway,
+    drawPage: (userId = fixtureActor.userId, gameId = game.id, gateway = pageGateway) => (
+      <GamesPage
+        gateway={gateway}
+        gameId={gameId}
+        chatNavigationScope={{ tenantKey: 'synthetic', userId }}
+      />
+    ),
     draw: (value = game) => (
       <GameDetailView
         game={value}
@@ -166,4 +205,104 @@ describe('API production resolver → SDK → GameDetailView synthetic read', ()
       await screen.findByText('Условия и цена не подтверждены. Повторите проверку.'),
     ).toBeVisible();
   });
+});
+
+describe('GamesPage explicit canonical selection → API/SDK → existing-game conditions', () => {
+  it('waits for explicit selection and clears price when selection is cleared', async () => {
+    const fixture = createJoinConditionsFixture();
+    const view = harness(fixture);
+    render(view.drawPage());
+    const picker = await screen.findByRole('combobox', { name: 'Выберите подписку' });
+    expect(picker).toHaveValue('');
+    expect(fixture.calls).toHaveLength(0);
+    const user = userEvent.setup();
+    await user.selectOptions(picker, fixtureActor.subscriptionInstanceId);
+    expect(await screen.findByText(/Предварительная цена: 700/)).toBeVisible();
+    expect(screen.getByText('Тестовый контур · provider mock')).toBeVisible();
+    expect(screen.getByText(/Ревизия игры ЛК2: 8/)).toBeVisible();
+    await user.selectOptions(picker, '');
+    expect(screen.queryByText(/Предварительная цена:/)).toBeNull();
+    expect(fixture.calls.filter((call) => call.kind === 'LK1_ADVISORY_READ')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Вступить в игру' })).toBeNull();
+  });
+
+  it('shows server refusal and missing price for the explicitly selected subscription', async () => {
+    const fixture = createJoinConditionsFixture();
+    fixture.setDenial('SUBSCRIPTION_EXPIRED');
+    const view = harness(fixture);
+    render(view.drawPage());
+    await userEvent
+      .setup()
+      .selectOptions(
+        await screen.findByRole('combobox', { name: 'Выберите подписку' }),
+        fixtureActor.subscriptionInstanceId,
+      );
+    expect(await screen.findByText('Срок действия подписки истёк.')).toBeVisible();
+    expect(screen.getByText('Цена не подтверждена.')).toBeVisible();
+    expect(screen.queryByText(/Предварительная цена:/)).toBeNull();
+  });
+
+  it('removes conditions at the owner TTL through the actual page entry point', async () => {
+    const fixture = createJoinConditionsFixture(70000, 250);
+    const view = harness(fixture);
+    render(view.drawPage());
+    await userEvent
+      .setup()
+      .selectOptions(
+        await screen.findByRole('combobox', { name: 'Выберите подписку' }),
+        fixtureActor.subscriptionInstanceId,
+      );
+    await screen.findByText(/Предварительная цена: 700/);
+    expect(await screen.findByText('Срок проверки истёк. Обновите условия.')).toBeVisible();
+    expect(screen.queryByText(/Предварительная цена:/)).toBeNull();
+  });
+
+  it.each(['viewer', 'game', 'gateway'] as const)(
+    'clears old selection and price when %s changes',
+    async (change) => {
+      const fixture = createJoinConditionsFixture();
+      const view = harness(fixture);
+      const rendered = render(view.drawPage());
+      await userEvent
+        .setup()
+        .selectOptions(
+          await screen.findByRole('combobox', { name: 'Выберите подписку' }),
+          fixtureActor.subscriptionInstanceId,
+        );
+      await screen.findByText(/Предварительная цена: 700/);
+      rendered.rerender(
+        view.drawPage(
+          change === 'viewer' ? fixtureId(90) : fixtureActor.userId,
+          change === 'game' ? fixtureId(91) : game.id,
+          change === 'gateway' ? { ...view.pageGateway } : view.pageGateway,
+        ),
+      );
+      expect(screen.queryByText(/Предварительная цена:/)).toBeNull();
+      expect(await screen.findByRole('combobox', { name: 'Выберите подписку' })).toHaveValue('');
+      expect(fixture.calls.filter((call) => call.kind === 'LK1_ADVISORY_READ')).toHaveLength(1);
+      // Returning to the previous scope still requires a fresh, explicit selection.
+      rendered.rerender(view.drawPage());
+      expect(screen.queryByText(/Предварительная цена:/)).toBeNull();
+      expect(await screen.findByRole('combobox', { name: 'Выберите подписку' })).toHaveValue('');
+      expect(fixture.calls.filter((call) => call.kind === 'LK1_ADVISORY_READ')).toHaveLength(1);
+    },
+  );
+
+  it.runIf(process.env.LK1_JOIN_EVALUATOR_SOURCE)(
+    'uses the pinned actual LK1 evaluator after user selection',
+    async () => {
+      const decision = evaluatePinnedLk1JoinFixture(process.env.LK1_JOIN_EVALUATOR_SOURCE!);
+      const fixture = createJoinConditionsFixture(decision.benefit.finalPriceMinor);
+      const view = harness(fixture);
+      render(view.drawPage());
+      await userEvent
+        .setup()
+        .selectOptions(
+          await screen.findByRole('combobox', { name: 'Выберите подписку' }),
+          fixtureActor.subscriptionInstanceId,
+        );
+      expect(await screen.findByText(/Предварительная цена: 700/)).toBeVisible();
+      expect(screen.getByText(/Бесплатные минуты: 60. Платные минуты: 30./)).toBeVisible();
+    },
+  );
 });

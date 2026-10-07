@@ -61,8 +61,12 @@ requiresReservationRecheck is true. AVAILABLE requires non-null amount/base, amo
 most base and free + paid minutes equal 90. A refusal has null amount, zero minutes and
 an explicit reason. Malformed AVAILABLE never becomes free.
 
-GameDetailView has optional canonical selection and SDK client props. The frozen P1
-GamesPage integration has not supplied them in this change. main.ts now supplies the owner
+GamesPage reads subscription labels and canonical instance UUIDs from the existing owned
+HomeDashboard contract. The user explicitly selects a subscription; the browser never
+selects an annual HUB instance from its title, status or remaining visits. GamesPage passes
+the selected canonical UUID and SDK read client to GameDetailView. Clearing the selection,
+changing the game/viewer/gateway or observing a new revision removes previous conditions.
+Discovery filters, back/scroll and navigation are unchanged. main.ts supplies the owner
 through the existing read gates; default mock/disabled configuration keeps it absent.
 Commercial JOIN/CREATE/leave, capacity mutation, settlement and subscription write-off
 remain outside this source outcome. The wired token broker may refresh/persist OAuth
