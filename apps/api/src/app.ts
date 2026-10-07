@@ -180,6 +180,10 @@ import {
   type TournamentSummarySource,
 } from './tournaments/tournament-summary-routes.js';
 import type { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscription-runtime-actor-delegation-issuer.js';
+import {
+  registerGameJoinConditionsRoutes,
+  type GameJoinConditionsRouteOptions,
+} from './games/game-join-conditions-routes.js';
 import { registerSubscriptionRuntimeWarnRoutes } from './subscriptions/subscription-runtime-warn-routes.js';
 import {
   registerBookedOperationReadRoutes,
@@ -383,6 +387,7 @@ export interface BuildAppOptions {
     SubscriptionRuntimeActorDelegationIssuer,
     'issue'
   >;
+  readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
   readonly bookedOperationRead?: Omit<
     BookedOperationReadRouteOptions,
@@ -1082,6 +1087,10 @@ export async function buildApp(options: BuildAppOptions) {
   registerBookedOperationAdmissionRoutes(app as unknown as FastifyInstance, {
     ...options.bookedOperationAdmission,
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerGameJoinConditionsRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameJoinConditionsOwner ? { owner: options.gameJoinConditionsOwner } : {}),
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
   });
   registerSubscriptionRuntimeWarnRoutes(app as unknown as FastifyInstance, {
     mode: options.config.SUBSCRIPTION_RUNTIME_WARN_MODE,
