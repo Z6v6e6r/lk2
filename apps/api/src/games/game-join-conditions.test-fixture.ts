@@ -63,6 +63,7 @@ export function createJoinConditionsFixture(amountMinor = 70_000, ttlMs = 30_000
     hasNext: false,
   };
   let duplicate = false;
+  let entries: Record<string, unknown>[] | undefined;
   let afterPreview: (() => void) | undefined;
   const calls: { kind: string; path?: string; sql?: string; values?: readonly unknown[] }[] = [];
   const pool = {
@@ -109,7 +110,7 @@ export function createJoinConditionsFixture(amountMinor = 70_000, ttlMs = 30_000
     if (path.endsWith('/profile')) return Response.json({ id: profileId });
     if (path.endsWith('/subscriptions'))
       return Response.json({
-        content: duplicate ? [subscription, subscription] : [subscription],
+        content: entries ?? (duplicate ? [subscription, subscription] : [subscription]),
         ...page,
       });
     throw new Error('unknown provider path');
@@ -174,6 +175,13 @@ export function createJoinConditionsFixture(amountMinor = 70_000, ttlMs = 30_000
     },
     setPage(value: Record<string, unknown>) {
       page = value;
+    },
+    setEntries(count: number) {
+      entries = Array.from({ length: count }, (_, index) => ({
+        ...subscription,
+        subscriptionId: fixtureId(1000 + index),
+      }));
+      page = { totalElements: count, totalPages: 1, last: true };
     },
     setDuplicate() {
       duplicate = true;

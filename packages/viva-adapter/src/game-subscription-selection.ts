@@ -179,15 +179,18 @@ export function createOwnedHubSubscriptionReader(options: {
         .object({
           content: z.array(z.object({ subscriptionId: z.string().uuid() }).passthrough()).max(1000),
           totalElements: z.number().int().nonnegative(),
-          number: z.literal(0),
+          number: z.literal(0).optional(),
           totalPages: z.union([z.literal(0), z.literal(1)]),
           last: z.literal(true),
-          hasNext: z.literal(false),
+          hasNext: z.literal(false).optional(),
         })
         .safeParse(await get('subscriptions?includeFinished=true&page=0&size=1000'));
       if (
         !parsed.success ||
         parsed.data.totalElements !== parsed.data.content.length ||
+        (parsed.data.totalElements === 0
+          ? parsed.data.totalPages !== 0
+          : parsed.data.totalPages !== 1) ||
         new Set(parsed.data.content.map((row) => row.subscriptionId)).size !==
           parsed.data.content.length
       ) {

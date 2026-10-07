@@ -16,6 +16,24 @@ const read = (fixture: ReturnType<typeof createJoinConditionsFixture>, input = a
   readGameJoinConditions(fixture.owner, input, input.correlationId);
 
 describe('production resolver with inert SQL and provider transports', () => {
+  it('proves the existing Spring page contract without inventing number/hasNext fields', async () => {
+    const fixture = createJoinConditionsFixture();
+    fixture.setPage({ totalElements: 1, totalPages: 1, last: true });
+    expect((await read(fixture)).price.amountMinor).toBe(70000);
+  });
+  it('refuses more than 1000 instances and inconsistent page counts', async () => {
+    const many = createJoinConditionsFixture();
+    many.setEntries(1001);
+    await expect(read(many)).rejects.toMatchObject({
+      code: 'JOIN_SELECTION_SUBSCRIPTIONS_INCOMPLETE',
+    });
+    const pages = createJoinConditionsFixture();
+    pages.setPage({ totalElements: 1, totalPages: 0, last: true });
+    await expect(read(pages)).rejects.toMatchObject({
+      code: 'JOIN_SELECTION_SUBSCRIPTIONS_INCOMPLETE',
+    });
+  });
+
   it('sets a local query timeout and releases the read snapshot on timeout', async () => {
     const fixture = createJoinConditionsFixture();
     fixture.setDbTimeout();
