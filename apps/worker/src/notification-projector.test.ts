@@ -513,6 +513,142 @@ describe('notification intent projector', () => {
     ).toHaveLength(2);
   });
 
+  it('applies only the chat rule whose context matches the event', async () => {
+    const conversationId = '73333333-3333-4333-8333-333333333334';
+    const rules = [
+      {
+        rule_id: '76666666-6666-4666-8666-666666666661',
+        template_id: '77777777-7777-4777-8777-777777777771',
+        audience_selector: {
+          type: 'EVENT_USERS',
+          field: 'recipientUserIds',
+          match: { field: 'conversationKind', oneOf: ['DIRECT'] },
+        },
+        mandatory: false,
+        effective_channels: ['IN_APP', 'PUSH'],
+        category: 'CHAT_DIRECT',
+        title_template: 'Новое сообщение',
+        body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+        deep_link_template: '/chats/{{conversationId}}',
+      },
+      {
+        rule_id: '76666666-6666-4666-8666-666666666662',
+        template_id: '77777777-7777-4777-8777-777777777772',
+        audience_selector: {
+          type: 'EVENT_USERS',
+          field: 'recipientUserIds',
+          match: { field: 'conversationKind', oneOf: ['GAME'] },
+        },
+        mandatory: false,
+        effective_channels: ['IN_APP', 'PUSH'],
+        category: 'CHAT_GAME',
+        title_template: 'Новое сообщение',
+        body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+        deep_link_template: '/chats/{{conversationId}}',
+      },
+    ];
+
+    async function project(conversationKind: 'DIRECT' | 'GAME'): Promise<{
+      readonly result: unknown;
+      readonly inboxCategories: readonly unknown[];
+    }> {
+      const messageEvent: NotificationSourceEvent = {
+        id: '74444444-4444-4444-8444-444444444446',
+        type: 'messaging.message.created.v1',
+        aggregateId: conversationId,
+        tenantId,
+        occurredAt: '2026-08-03T12:00:00.000Z',
+        correlationId: `messaging-context-${conversationKind.toLowerCase()}`,
+        payload: {
+          conversationId,
+          conversationKind,
+          messageId: '75555555-5555-4555-8555-555555555556',
+          sequence: 9,
+          recipientUserIds: [userId],
+        },
+      };
+      const inboxCategories: unknown[] = [];
+      const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+        if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        }
+        if (text.includes('insert into audit.inbox_events')) {
+          return Promise.resolve({ rows: [{ event_id: messageEvent.id }], rowCount: 1 });
+        }
+        if (text.includes('from notifications.tenant_runtime_settings')) {
+          return Promise.resolve({ rows: [{ in_app_enabled: true }], rowCount: 1 });
+        }
+        if (text.includes('from notifications.trigger_rules')) {
+          return Promise.resolve({ rows: rules, rowCount: rules.length });
+        }
+        if (text.includes('from identity.users')) {
+          return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+        }
+        if (text.includes('from notifications.user_preferences')) {
+          return Promise.resolve({ rows: [], rowCount: 0 });
+        }
+        if (text.includes('insert into notifications.intents')) {
+          return Promise.resolve({
+            rows: [{ id: '80000000-0000-4000-8000-000000000001' }],
+            rowCount: 1,
+          });
+        }
+        if (text.includes('insert into notifications.deliveries')) {
+          return Promise.resolve({
+            rows: [{ id: '81000000-0000-4000-8000-000000000001' }],
+            rowCount: 1,
+          });
+        }
+        if (text.includes('insert into notifications.inbox_items')) {
+          inboxCategories.push(values[3]);
+          return Promise.resolve({
+            rows: [{ id: '82000000-0000-4000-8000-000000000001' }],
+            rowCount: 1,
+          });
+        }
+        if (
+          text.includes('insert into audit.outbox_events') ||
+          text.includes('insert into audit.audit_log') ||
+          text.includes('update audit.inbox_events')
+        ) {
+          return Promise.resolve({ rows: [], rowCount: 1 });
+        }
+        throw new Error(`Unexpected query: ${text}`);
+      });
+      const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+      const result = await applyNotificationSourceEvent({
+        pool: pool as never,
+        event: messageEvent,
+      });
+      return { result, inboxCategories };
+    }
+
+    // The matching rule notifies; the rule of the other context resolves nobody and is skipped, so a
+    // muted game chat can never ride along with a private message.
+    await expect(project('DIRECT')).resolves.toEqual({
+      result: {
+        outcome: 'processed',
+        created: 1,
+        suppressed: 0,
+        pushQueued: 0,
+        skippedRules: 1,
+        quietSuppressed: 0,
+      },
+      inboxCategories: ['CHAT_DIRECT'],
+    });
+    await expect(project('GAME')).resolves.toEqual({
+      result: {
+        outcome: 'processed',
+        created: 1,
+        suppressed: 0,
+        pushQueued: 0,
+        skippedRules: 1,
+        quietSuppressed: 0,
+      },
+      inboxCategories: ['CHAT_GAME'],
+    });
+  });
+
   it('queues an in-app and a push delivery for an incoming friend request', async () => {
     const requestId = '76666666-6666-4666-8666-666666666666';
     const friendRequestEvent: NotificationSourceEvent = {

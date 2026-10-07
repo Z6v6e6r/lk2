@@ -111,15 +111,23 @@ tenant gate канала, а не выбор получателя. `PUT` зам�
 уведомление; эффективное состояние (`muted`) считает сервер и отдаёт в summary разговора.
 Direct-chat family
 добавляет ruleset
-`messaging.ru-ru.v2`: `messaging.conversation.created.v1` и `messaging.message.created.v1` идут по
+`messaging.ru-ru.v3`: `messaging.conversation.created.v1` и `messaging.message.created.v1` идут по
 generic source-event схеме, их payload остаётся identifier-only (tenant, conversation, message,
-sequence и `recipientUserIds`), а получатели резолвятся правилом
-`EVENT_USERS/recipientUserIds` из активных участников разговора, кроме автора. Шаблон не цитирует
-текст сообщения: inbox-item ведёт ссылкой `/chats/{{conversationId}}`, категория `MESSAGING`
-опциональна для получателя. Direct message — это разговор, в который человека нужно вернуть,
-поэтому каналы шаблона и правила — `IN_APP` и `PUSH`; версия ruleset и шаблона поднята, потому что
-провижиненная версия шаблона не может изменить свои каналы. Провижининг —
-`npm run notifications:messaging:provision`, отдельная очередь проектора —
+sequence и `recipientUserIds`, у сообщения ещё и `conversationKind`), а получатели резолвятся
+правилом `EVENT_USERS/recipientUserIds` из активных участников разговора, кроме автора. Селектор
+аудитории несёт необязательный `match` (`field` + `oneOf`): правило применяется только когда payload
+содержит один из перечисленных видов разговора, а отсутствующее или чужое значение резолвит ноль
+получателей, поэтому сообщение никогда не уходит в контекст, для которого правило не провижинили.
+Один вид разговора — одна пользовательская категория: `CHAT_DIRECT` для `DIRECT` и `CHAT_GAME` для
+`GAME`, поэтому приглушение шумного игрового чата не глушит личное сообщение. Шаблон не цитирует
+текст сообщения: inbox-item ведёт ссылкой `/chats/{{conversationId}}`, каждая категория опциональна
+для получателя. Direct message — это разговор, в который человека нужно вернуть, поэтому каналы
+шаблона и правила — `IN_APP` и `PUSH`; версия ruleset и шаблона поднята, потому что провижиненная
+версия шаблона не может изменить ни категорию, ни каналы. Применение v3 деактивирует (не удаляет)
+остальные активные `messaging.*` правила и шаблоны, чтобы правила v2 не срабатывали на то же
+сообщение второй раз, и переносит уже сохранённую строку предпочтения `MESSAGING` в обе новые
+категории там, где своей строки ещё нет, — так явный отказ и тихие часы получателя сохраняются.
+Провижининг — `npm run notifications:messaging:provision`, отдельная очередь проектора —
 `phub.messaging-notification-intent-projector.v1`.
 
 Входящая заявка в друзья описана отдельным ruleset `friendship.ru-ru.v1`
@@ -623,26 +631,26 @@ recommendation и revoke signal. Она не получает user/admin JWT, н
 
 ## 6. Стабильные события
 
-| Событие                                    | Минимальный payload                          | Потребители                                       |
-| ------------------------------------------ | -------------------------------------------- | ------------------------------------------------- |
-| `messaging.conversation.created.v1`        | conversationId, kind, contextId?             | realtime, analytics                               |
-| `messaging.message.created.v1`             | conversationId, messageId, sequence          | realtime, connector delivery, notification policy |
-| `messaging.message.updated.v1`             | conversationId, messageId, sequence, version | realtime                                          |
-| `messaging.message.deleted.v1`             | conversationId, messageId, sequence          | realtime, connector policy                        |
-| `messaging.member.changed.v1`              | conversationId, memberId, state              | realtime, authorization cache invalidation        |
-| `messaging.user-block.changed.v1`          | otherUserId, action, changed                 | authorization cache invalidation, audit analytics |
-| `notifications.intent.created.v1`          | intentId, recipientUserId                    | delivery worker                                   |
-| `notifications.inbox.created.v1`           | inboxItemId, recipientUserId                 | realtime                                          |
-| `notifications.delivery.changed.v1`        | deliveryId, state, errorCode?                | ЦУП, metrics                                      |
-| `notifications.delivery.receipt.v1`        | deliveryId, receiptType, platform            | ЦУП, analytics                                    |
-| `notifications.read-cursor.updated.v1`     | recipientUserId, readThroughItemId           | home counters, analytics                          |
-| `notifications.admin-campaign.accepted.v1` | campaignId, matchedCount, requestedChannels  | ЦУП, analytics                                    |
-| `booking.confirmed.v1`                     | bookingId, revision, recipientUserIds        | notification policy                               |
-| `booking.changed.v1`                       | bookingId, revision, recipientUserIds        | notification policy                               |
-| `booking.cancelled.v1`                     | bookingId, revision, recipientUserIds        | notification policy                               |
-| `booking.reminder.due.v1`                  | bookingId, revision, recipientUserIds        | notification policy                               |
-| `moderation.case.created.v1`               | caseId, source, severity                     | ЦУП moderation queue                              |
-| `moderation.action.applied.v1`             | caseId, actionId, actionType, target IDs     | messaging, realtime, audit projection             |
+| Событие                                    | Минимальный payload                                   | Потребители                                       |
+| ------------------------------------------ | ----------------------------------------------------- | ------------------------------------------------- |
+| `messaging.conversation.created.v1`        | conversationId, kind, contextId?                      | realtime, analytics                               |
+| `messaging.message.created.v1`             | conversationId, conversationKind, messageId, sequence | realtime, connector delivery, notification policy |
+| `messaging.message.updated.v1`             | conversationId, messageId, sequence, version          | realtime                                          |
+| `messaging.message.deleted.v1`             | conversationId, messageId, sequence                   | realtime, connector policy                        |
+| `messaging.member.changed.v1`              | conversationId, memberId, state                       | realtime, authorization cache invalidation        |
+| `messaging.user-block.changed.v1`          | otherUserId, action, changed                          | authorization cache invalidation, audit analytics |
+| `notifications.intent.created.v1`          | intentId, recipientUserId                             | delivery worker                                   |
+| `notifications.inbox.created.v1`           | inboxItemId, recipientUserId                          | realtime                                          |
+| `notifications.delivery.changed.v1`        | deliveryId, state, errorCode?                         | ЦУП, metrics                                      |
+| `notifications.delivery.receipt.v1`        | deliveryId, receiptType, platform                     | ЦУП, analytics                                    |
+| `notifications.read-cursor.updated.v1`     | recipientUserId, readThroughItemId                    | home counters, analytics                          |
+| `notifications.admin-campaign.accepted.v1` | campaignId, matchedCount, requestedChannels           | ЦУП, analytics                                    |
+| `booking.confirmed.v1`                     | bookingId, revision, recipientUserIds                 | notification policy                               |
+| `booking.changed.v1`                       | bookingId, revision, recipientUserIds                 | notification policy                               |
+| `booking.cancelled.v1`                     | bookingId, revision, recipientUserIds                 | notification policy                               |
+| `booking.reminder.due.v1`                  | bookingId, revision, recipientUserIds                 | notification policy                               |
+| `moderation.case.created.v1`               | caseId, source, severity                              | ЦУП moderation queue                              |
+| `moderation.action.applied.v1`             | caseId, actionId, actionType, target IDs              | messaging, realtime, audit projection             |
 
 Broker payloads не содержат body, attachment URLs, телефон, email, push token или внешний contact
 ID. Версия является частью имени события; несовместимое изменение создаёт новую версию.

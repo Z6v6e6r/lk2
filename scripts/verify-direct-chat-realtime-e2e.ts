@@ -395,7 +395,11 @@ function matchesRabbitEvent(
     parsed.type === 'messaging.message.created.v1' &&
     parsed.tenantId === input.tenantId &&
     parsed.correlationId === input.correlationId &&
-    Object.keys(parsed.payload).sort().join(',') === 'conversationId,messageId,sequence' &&
+    // The identifier-only payload now also carries the notification recipients and the conversation
+    // kind used by the per-context chat categories; it still never carries message text.
+    Object.keys(parsed.payload).sort().join(',') ===
+      'conversationId,conversationKind,messageId,recipientUserIds,sequence' &&
+    parsed.payload.conversationKind === 'DIRECT' &&
     parsed.payload.conversationId === input.conversationId &&
     parsed.payload.messageId === input.messageId &&
     parsed.payload.sequence === input.sequence
@@ -652,7 +656,11 @@ function createDatabaseProbe(databaseUrl: string, tenantId: string): DatabasePro
         if (row) {
           if (
             !isRecord(row.payload) ||
-            Object.keys(row.payload).sort().join(',') !== 'conversationId,messageId,sequence' ||
+            // Same identifier-only contract as the broker envelope: recipients and the conversation
+            // kind for the per-context chat categories, never message text.
+            Object.keys(row.payload).sort().join(',') !==
+              'conversationId,conversationKind,messageId,recipientUserIds,sequence' ||
+            row.payload.conversationKind !== 'DIRECT' ||
             row.payload.conversationId !== input.conversationId ||
             row.payload.messageId !== input.messageId ||
             row.payload.sequence !== input.sequence ||
