@@ -107,6 +107,26 @@ What the class does not prove, and what a review must therefore still check:
   quality contour stays mandatory for both classes, and the entire main-push CI must still pass before
   the controller publishes anything.
 
+## Standard invocation diagnostics
+
+After trusted source, Git metadata and dependency path checks, the standard controller creates a
+separate `0700` directory `/opt/phub/timeweb-beta/standard/attempts` and a unique `0600` invocation
+receipt (`PHUB_STANDARD_DELIVERY_DIAGNOSTIC_V1`). It pins source CI and executing controller SHA;
+candidate SHA and publication run are added when known. `STARTED` records the current stage and is
+never success evidence. Controlled failure codes, bounded failure history, command exit status and
+allowlisted signals identify failure and recovery stages without retaining error text, stacks,
+arguments, environment, stdout or stderr. Early untrusted-path failures have no durable receipt.
+
+The existing Actions job logs a diagnostic ID and SHA-256 only after file fsync, directory fsync and
+readback. That job log binds the unique invocation to its outer workflow run; the existing two-line
+SSH transport is unchanged. Reconciliation reads the exact root-only file by ID and checks the
+logged checksum. `diagnostic=unavailable` makes no readback claim. A persistence failure during
+rollout never triggers an extra rollback. Initial or terminal diagnostic failure reports
+`unavailable`; canonical delivery success and its lock release remain unchanged. The canonical
+rollout receipt remains separate evidence. These files are not automatically deleted.
+Changing this source requires reviewed enrollment before a future authorized attempt; it neither
+repairs an old missing diagnostic nor authorizes a retry, publication, enrollment or live rollout.
+
 ## One-time owner activation checklist
 
 Complete this as one bounded activation decision after this infrastructure PR's checks/reviews.
@@ -345,7 +365,10 @@ verify the exact unchanged previous pair, remove only the incomplete controller 
 `preparation-aborted.json` and fsync release of the owned pointer, without restarting a service. The controller writes an
 immutable `plan.json`, previous overlays, baseline/configuration hashes and `backup.complete`, then
 journals `PREPARED` before the first container change. A pre-activation failure attests the exact
-unchanged previous pair, writes `ABORTED` and releases the manual lock; it never restarts a service. It pulls and smokes API/Web, starts API with
+unchanged previous pair, writes `ABORTED` and releases the manual lock; it never restarts a service. It pulls and smokes API/Web offline with read-only artifact filesystems. The Web configuration
+check receives only bounded, ephemeral tmpfs scratch paths (`/run`: 1 MiB, `/var/cache/nginx`: 8 MiB),
+with noexec/nosuid/nodev; nginx needs these for its pid/cache checks. No runtime environment, host
+volume or published port enters the smoke container. The controller starts API with
 `--no-deps`, waits for exact identity/readiness, then starts Web with `--no-deps`. Read-only
 `compose config --format json` enables all profiles with `--profile '*'` to validate all five service
 definitions, including Worker and Migrator. `pull` and `up` keep profiles disabled and target only

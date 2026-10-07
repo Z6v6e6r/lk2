@@ -568,6 +568,7 @@ export interface AuthGateway {
   }) => Promise<GameCardPage>;
   readonly getActivityHistory: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly getGame: (gameId: string) => Promise<GameCard>;
+  readonly getGameJoinConditions?: PadlHubApiClient['getGameJoinConditions'];
   readonly createGame: (
     input: CreateGameRequest,
     options?: { readonly idempotencyKey?: string },
@@ -1207,6 +1208,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       playerProfilePromises.clear();
       vivaReauthorizationStarted = false;
       vivaAccessPromise = undefined;
+      homeDashboardPromise = undefined;
       principalGeneration += 1;
     }
     currentUserId = session.context.userId;
@@ -2102,9 +2104,24 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getHomeDashboard() {
       if (homeDashboardPromise) return homeDashboardPromise;
-      const request = client.getHomeDashboard().finally(() => {
-        if (homeDashboardPromise === request) homeDashboardPromise = undefined;
-      });
+      const generation = principalGeneration;
+      const userId = currentUserId;
+      const tenantId = currentTenantId;
+      const request = client
+        .getHomeDashboard()
+        .then((dashboard) => {
+          if (
+            generation !== principalGeneration ||
+            userId !== currentUserId ||
+            tenantId !== currentTenantId
+          ) {
+            throw new Error('AUTH_PRINCIPAL_CHANGED');
+          }
+          return dashboard;
+        })
+        .finally(() => {
+          if (homeDashboardPromise === request) homeDashboardPromise = undefined;
+        });
       homeDashboardPromise = request;
       return request;
     },
@@ -2186,6 +2203,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getGame(gameId) {
       return client.getGame(gameId);
+    },
+
+    getGameJoinConditions(gameId, input) {
+      return client.getGameJoinConditions(gameId, input);
     },
 
     createGame(input, options) {

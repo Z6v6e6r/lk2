@@ -10,7 +10,7 @@ function scenario(body: string) {
       '-e',
       `
     import assert from 'node:assert/strict';
-    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade} from './scripts/timeweb-api-web-upgrade.js';
+    import {validateApiWebOperation,validateDirectApiWebOperation,validateDirectObservation,observeDirectApiWeb,directOwnerBytes,validateDirectInstalledEvidence,validateControllerDelta,apiWebComposeArgs,apiWebArtifactSmokeArgs,runApiWebTransition,recoverApiWebTransition,githubPublic,overlayBytes,validateRuntimeDelta,validateUpgradeReceipt,assertOverlayBytes,recoverApiWebPhase,validateUnchangedImages,writeUpgradeAtomic,reconcileApiWebPhase,normalizeUpgradeHardlink,hashUpgradeDescriptor,INERT_CONTROLLER_BRIDGE,validateControllerBridge,CALLBACK_RUNTIME_BRIDGE,parseRuntimeDelta,validateRuntimeUpgrade} from './scripts/timeweb-api-web-upgrade.js';
     ${body}
   `,
     ],
@@ -116,6 +116,18 @@ describe('explicit API/Web upgrade boundary', () => {
     }
     for(const s of ['worker','realtime','migrator','caddy'])for(const action of ['config','pull','up'])assert.throws(()=>apiWebComposeArgs('/baseline','/overlay',action,s));
     for(const action of ['down','restart','exec','run','build','create','start','rm'])assert.throws(()=>apiWebComposeArgs('/baseline','/overlay',action,'api'));
+    `);
+  });
+  it('keeps artifact smoke offline and read-only with bounded Web-only scratch paths', () => {
+    scenario(`const digest='a'.repeat(64);
+      const api='ghcr.io/z6v6e6r/phub-api@sha256:'+digest;
+      const web='ghcr.io/z6v6e6r/phub-web@sha256:'+digest;
+      const prefix=['run','--rm','--network','none','--read-only'];
+      assert.deepEqual(apiWebArtifactSmokeArgs('api',api),[...prefix,'--entrypoint','node',api,'--check','/app/apps/api/dist/main.js']);
+      assert.deepEqual(apiWebArtifactSmokeArgs('web',web),[...prefix,'--tmpfs','/run:rw,noexec,nosuid,nodev,size=1m,mode=0755','--tmpfs','/var/cache/nginx:rw,noexec,nosuid,nodev,size=8m,mode=0755','--entrypoint','/bin/sh',web,'-ec','nginx -t && test -s /usr/share/nginx/html/index.html']);
+      for(const service of ['worker','realtime','migrator','caddy','web;id'])assert.throws(()=>apiWebArtifactSmokeArgs(service,web));
+      for(const image of [web.replace('@sha256:'+digest,':latest'),web+';id',web.replace('ghcr.io','elsewhere.io'),api])assert.throws(()=>apiWebArtifactSmokeArgs('web',image));
+      assert.throws(()=>apiWebArtifactSmokeArgs('api',web));
     `);
   });
   it('reads public metadata without credentials and stops on unavailable authority', () => {

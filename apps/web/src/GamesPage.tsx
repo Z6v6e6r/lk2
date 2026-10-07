@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { BookingActivityCard } from './BookingRecommendations.js';
 import { GameCard, type GameCardAction, type GameCardModel } from './GameCard.js';
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
+import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import {
   MainBottomNavigation,
   UpcomingBookingCard,
@@ -310,6 +311,33 @@ export function GamesPage({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<GameDetailTab>('GAME');
+  const joinSelectionScope = JSON.stringify([
+    gameId,
+    chatNavigationScope?.tenantKey,
+    chatNavigationScope?.userId,
+  ]);
+  const [joinSelection, setJoinSelection] = useState<{
+    scope: string;
+    gateway: AuthGateway;
+    id?: string;
+  } | null>(null);
+  if (
+    joinSelection &&
+    (joinSelection.scope !== joinSelectionScope || joinSelection.gateway !== gateway)
+  ) {
+    setJoinSelection(null);
+  }
+  const selectedSubscriptionId =
+    joinSelection?.scope === joinSelectionScope && joinSelection.gateway === gateway
+      ? joinSelection.id
+      : undefined;
+  const joinConditionsClient = useMemo(
+    () =>
+      gateway.getGameJoinConditions
+        ? { getGameJoinConditions: gateway.getGameJoinConditions }
+        : undefined,
+    [gateway],
+  );
   const [reloadToken, setReloadToken] = useState(0);
   const [levelRecovery, setLevelRecovery] = useState<{
     readonly action: 'JOIN' | 'JOIN_WAITLIST';
@@ -1389,16 +1417,37 @@ export function GamesPage({
           </p>
         ) : null}
         {detail ? (
-          <GameDetailView
-            activeTab={detailTab}
-            busy={busyGameId === detail.id}
-            game={detail}
-            onAction={(action) => void handleAction(action, detail)}
-            onChatOpen={() => void openGameChat(detail)}
-            onChatNavigate={(conversationId) => rememberCardGameChat(detail, conversationId)}
-            onSubmit={submitResult}
-            onTabChange={setDetailTab}
-          />
+          <>
+            {detail.id === gameId && detailTab === 'GAME' && joinConditionsClient ? (
+              <GameJoinSubscriptionPicker
+                key={`subscription:${joinSelectionScope}`}
+                gateway={gateway}
+                {...(selectedSubscriptionId ? { value: selectedSubscriptionId } : {})}
+                onChange={(id) =>
+                  setJoinSelection({
+                    scope: joinSelectionScope,
+                    gateway,
+                    ...(id ? { id } : {}),
+                  })
+                }
+              />
+            ) : null}
+            <GameDetailView
+              key={`conditions:${joinSelectionScope}`}
+              {...(detail.id === gameId && joinConditionsClient ? { joinConditionsClient } : {})}
+              {...(detail.id === gameId && selectedSubscriptionId
+                ? { subscriptionInstanceId: selectedSubscriptionId }
+                : {})}
+              activeTab={detailTab}
+              busy={busyGameId === detail.id}
+              game={detail}
+              onAction={(action) => void handleAction(action, detail)}
+              onChatOpen={() => void openGameChat(detail)}
+              onChatNavigate={(conversationId) => rememberCardGameChat(detail, conversationId)}
+              onSubmit={submitResult}
+              onTabChange={setDetailTab}
+            />
+          </>
         ) : null}
         <MainBottomNavigation active="games" gamesDestination="games" />
         {renderLevelRecoveryDialog()}

@@ -307,6 +307,36 @@ export function apiWebComposeArgs(baseline, overlay, action, service) {
         : ['up', '-d', '--no-deps', service]),
   ];
 }
+// nginx -t creates its pid and cache paths even when it only validates configuration.
+// Keep the artifact root read-only; only these bounded, ephemeral scratch paths are writable.
+export function apiWebArtifactSmokeArgs(service, image) {
+  if (
+    !['api', 'web'].includes(service) ||
+    !new RegExp(`^ghcr\\.io/z6v6e6r/phub-${service}@sha256:[a-f0-9]{64}$`).test(image)
+  )
+    fail('invalid_artifact_smoke');
+  return [
+    'run',
+    '--rm',
+    '--network',
+    'none',
+    '--read-only',
+    ...(service === 'web'
+      ? [
+          '--tmpfs',
+          '/run:rw,noexec,nosuid,nodev,size=1m,mode=0755',
+          '--tmpfs',
+          '/var/cache/nginx:rw,noexec,nosuid,nodev,size=8m,mode=0755',
+        ]
+      : []),
+    '--entrypoint',
+    service === 'api' ? 'node' : '/bin/sh',
+    image,
+    ...(service === 'api'
+      ? ['--check', '/app/apps/api/dist/main.js']
+      : ['-ec', 'nginx -t && test -s /usr/share/nginx/html/index.html']),
+  ];
+}
 // Every ambiguous activation has a durable intent. Recovery always converges to the previous pair.
 export async function runApiWebTransition(ops) {
   let activationIntent = false;
@@ -1713,19 +1743,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       for (const s of ['api', 'web']) {
         compose('candidate', 'pull', s);
         imagePresent(plan.candidate[s].image, op.candidateSha);
-        docker([
-          'run',
-          '--rm',
-          '--network',
-          'none',
-          '--read-only',
-          '--entrypoint',
-          s === 'api' ? 'node' : '/bin/sh',
-          plan.candidate[s].image,
-          ...(s === 'api'
-            ? ['--check', '/app/apps/api/dist/main.js']
-            : ['-ec', 'nginx -t && test -s /usr/share/nginx/html/index.html']),
-        ]);
+        docker(apiWebArtifactSmokeArgs(s, plan.candidate[s].image));
       }
       attest();
     },
