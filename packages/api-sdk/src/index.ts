@@ -15,6 +15,7 @@ export type RealtimeTicket = components['schemas']['RealtimeTicket'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
 export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
+export type GameJoinConditions = components['schemas']['GameJoinConditions'];
 export type GameTestCourtList = components['schemas']['GameTestCourtList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
@@ -1380,6 +1381,20 @@ export class PadlHubApiClient {
         idempotencyKey,
         body: jsonRequestBody(input),
       }),
+    );
+  }
+
+  public getGameJoinConditions(
+    gameId: string,
+    input: { readonly expectedRevision: number; readonly subscriptionInstanceId: string },
+  ): Promise<GameJoinConditions> {
+    const query = new URLSearchParams({
+      expectedRevision: String(input.expectedRevision),
+      subscriptionInstanceId: input.subscriptionInstanceId,
+    });
+    return this.request<GameJoinConditions>(
+      `/games/${encodeURIComponent(gameId)}/join-conditions?${query.toString()}`,
+      { auth: 'required', cache: 'no-store', retryOnUnauthorized: false },
     );
   }
 
