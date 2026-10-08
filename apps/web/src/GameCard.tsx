@@ -271,7 +271,9 @@ export function GameCard({
             <span>{dateBadge.weekday}</span>
           </time>
         ) : priceLabel(game) ? (
-          <strong className="game-card__price">{priceLabel(game)}</strong>
+          <strong className="game-card__price" aria-label={`Стоимость места: ${priceLabel(game)}`}>
+            {priceLabel(game)}
+          </strong>
         ) : null}
       </div>
 
@@ -346,7 +348,7 @@ export function GameCard({
             sets.length === 0 ? (
               <ParticipantAvatarStack
                 ariaLabel="Участники игры"
-                capacity={game.capacity.total}
+                capacity={Math.min(game.capacity.total, visibleParticipants.length + openSlots)}
                 showLevelRing={!(compact && compactActionVariant === 'mini-create')}
                 participants={visibleParticipants.map((participant, index) => ({
                   key:
@@ -521,6 +523,13 @@ export function GameCard({
             </div>
           ) : null}
         </div>
+      ) : null}
+      {!compact ? (
+        <p className="game-card__availability">
+          {openSlots > 0
+            ? `Свободных мест: ${openSlots} из ${game.capacity.total}`
+            : 'Свободных мест нет'}
+        </p>
       ) : null}
     </article>
   );
