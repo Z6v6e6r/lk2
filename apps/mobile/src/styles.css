@@ -18,6 +18,15 @@ body {
   text-align: center;
 }
 
+.mobile-status button {
+  min-height: 48px;
+}
+
+.mobile-error-code {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
 .mobile-cache-notice {
   margin: max(12px, env(safe-area-inset-top)) 16px 12px;
   padding: 12px 16px;

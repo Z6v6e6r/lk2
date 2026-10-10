@@ -5,6 +5,7 @@ import { createNativeApiFetch } from './native-api-fetch.js';
 import { installMobileNavigation } from './navigation.js';
 import type { MobileRuntimeConfig } from './runtime-config.js';
 import { MobileCacheNotice } from './MobileCacheNotice.js';
+import { sessionFailureDetails } from './session-failure.js';
 import { AndroidLoginGate, type StartAndroidYandexLogin } from './AndroidLoginGate.js';
 import {
   createMobileReadState,
@@ -28,6 +29,7 @@ function MobileSession({
 }): React.JSX.Element {
   const [blocked, setBlocked] = useState<'restore' | 'logout' | null>(null);
   const [pending, setPending] = useState(false);
+  const [restoreFailure, setRestoreFailure] = useState<ReturnType<typeof sessionFailureDetails>>();
   const [staleReads, setStaleReads] = useState<StaleMobileReads>({});
   const [dataGeneration, setDataGeneration] = useState(0);
   const gateway = useMemo(() => {
@@ -76,6 +78,7 @@ function MobileSession({
         try {
           return await service.restoreSession();
         } catch (error) {
+          setRestoreFailure(sessionFailureDetails(error));
           setBlocked('restore');
           throw error;
         }
@@ -102,9 +105,13 @@ function MobileSession({
             ? 'Завершаем выход…'
             : blocked === 'logout'
               ? 'Выход ещё не завершён. Проверьте подключение и повторите попытку.'
-              : 'Не удалось проверить сохранённый вход. Проверьте подключение и повторите попытку.'}
+              : restoreFailure?.message}
         </p>
+        {blocked === 'restore' && restoreFailure && (
+          <p className="mobile-error-code">Код ошибки: {restoreFailure.code}</p>
+        )}
         <button
+          className="viva-login-button"
           type="button"
           disabled={pending}
           onClick={() => {

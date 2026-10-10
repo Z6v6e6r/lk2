@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { NativeCacheObservation } from './native-api-fetch.js';
 import type { ReactNode } from 'react';
 import type { StartAndroidYandexLogin } from './AndroidLoginGate.js';
+import { sanitizedNativeSessionError } from './session-failure.js';
 vi.mock('./AndroidLoginGate.js', () => ({
   AndroidLoginGate: ({ children }: { children: (start: StartAndroidYandexLogin) => ReactNode }) =>
     children(() => Promise.resolve()),
@@ -125,6 +126,21 @@ it('offers restoration retry while preserving a transient storage/network error'
   expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
   expect(await screen.findByText('Личные данные тестового аккаунта')).toBeInTheDocument();
+});
+
+it('shows a safe storage diagnostic, hides account data and retries without logout', async () => {
+  calls.restore.mockRejectedValueOnce(
+    sanitizedNativeSessionError({ code: 'NATIVE_STORAGE_UNAVAILABLE', message: 'private' }),
+  );
+  render(<MobileApp config={config} native />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('защищённые данные');
+  expect(screen.getByText('Код ошибки: NATIVE_STORAGE_UNAVAILABLE')).toBeInTheDocument();
+  expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent('private');
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+  expect(await screen.findByText('Личные данные тестового аккаунта')).toBeInTheDocument();
+  expect(calls.logout).not.toHaveBeenCalled();
+  expect(calls.restore).toHaveBeenCalledTimes(2);
 });
 
 it('discards retained screen state after a denied cached read without revoking the account', async () => {
