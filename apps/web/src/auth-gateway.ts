@@ -2205,9 +2205,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getGame(gameId);
     },
 
-    getGameJoinConditions(gameId, input) {
-      return client.getGameJoinConditions(gameId, input);
-    },
+    // The advisory capability stays absent until its API owner is deployed and explicitly enabled.
+    // Synthetic/local gateways may supply the optional method to preview the panel.
 
     createGame(input, options) {
       return client.createGame(input, options);

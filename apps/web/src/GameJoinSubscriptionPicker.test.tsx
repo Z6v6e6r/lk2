@@ -154,7 +154,7 @@ describe('canonical subscription picker', () => {
       appVersion: 'test',
       fetchImplementation,
     });
-    const conditions = vi.spyOn(gateway, 'getGameJoinConditions');
+    expect(gateway.getGameJoinConditions).toBeUndefined();
     const onChange = vi.fn();
     await gateway.restoreSession();
     const view = render(
@@ -179,8 +179,6 @@ describe('canonical subscription picker', () => {
     expect(await screen.findByRole('option', { name: 'Подписка текущего игрока' })).toBeVisible();
     expect(screen.queryByRole('option', { name: 'Подписка прежнего игрока' })).toBeNull();
     expect(onChange).not.toHaveBeenCalled();
-    expect(conditions).not.toHaveBeenCalled();
-    conditions.mockRestore();
   });
 
   it('hides old gateway options synchronously and ignores a late old response', async () => {
