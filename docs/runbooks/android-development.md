@@ -7,8 +7,8 @@ The native shell uses the repository's Capacitor 8.4.1, Java, JDK 21 and Android
 
 The existing Home, profile/level history, bookings/history, notifications and location screens
 are enabled. Other sections display an explicit unavailable screen. This is an implementation
-stage toward the complete LK2 product, not a reduced product scope. The inherited icon/splash
-assets remain Capacitor placeholders.
+stage toward the complete LK2 product, not a reduced product scope. Android launcher icons use
+the existing PadlHub mark; splash assets remain Capacitor placeholders.
 
 Phone OTP uses the existing PadlHub challenge, verify, refresh and revoke endpoints. Android
 requests go through `PadlHubAndroidSession` and system HTTPS, without browser fetch, shared cookie
@@ -128,8 +128,8 @@ VITE_PHUB_API_BASE_URL=https://lk2.padlhub.su VITE_PHUB_TENANT_KEY=local-padel n
 ```
 
 `android:debug` bundles local assets, syncs the same public configuration into Android, then
-builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.4/code 5 replaces
-version 1.3/code 4 using the existing local debug signature. No release keys
+builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.6/code 7 replaces
+versions 1.4/code 5 and 1.5/code 6 using the existing local debug signature. No release keys
 are created. Always inspect the packaged `capacitor.config.json`, manifest and signature.
 
 Builds have **no implicit API target**. Missing configuration displays a setup message. The native
@@ -156,6 +156,19 @@ A debug APK is for controlled testing, not store or broad distribution. Keystore
 do not remove Android's debuggable application flag. Use a test account, then log out. If both
 intent and credential storage cannot be written, the app blocks the current session and reports
 failure; no successful logout is claimed. Corrupt/unavailable secure storage fails closed.
+
+Session-check failures show a fixed diagnostic code distinguishing native network, TLS, secure
+storage/cache, rejected requests/responses and HTTP status. Only allowlisted native constants and
+numeric HTTP status reach this screen; raw errors, causes, server codes, correlation values and
+credentials are omitted. Retry preserves native credentials and recovery journals. This diagnostic
+does not prove that a failure on a user's device has been repaired.
+
+Native session refresh/logout send empty POST/DELETE with explicit `Content-Type: text/plain`. Android's
+`HttpsURLConnection` otherwise adds `application/x-www-form-urlencoded`, which the API's Fastify
+parser rejects with HTTP 415 before session validation. Empty JSON is also invalid. Keep lifecycle
+calls bodyless and leave JSON OTP/OAuth payloads unchanged. `AndroidHttpSenderTest` checks the actual
+Android HTTPS wire format against an ephemeral loopback certificate; the API auth-route test
+checks refresh rotation and logout with this format. These tests use synthetic credentials only.
 
 Games/tournaments/training, chats/media, payment return navigation, additional App Links and FCM remain
 subsequent complete increments using existing APIs. Release signing, store publication, live SMS,

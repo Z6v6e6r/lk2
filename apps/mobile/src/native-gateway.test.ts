@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PadlHubApiClient } from '@phub/api-sdk';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
+import { createNativeApiFetch, type AndroidSessionPlugin } from './native-api-fetch.js';
+import { sessionFailureDetails } from './session-failure.js';
 
 const userId = '00000000-0000-4000-8000-000000000001';
 const session = {
@@ -27,6 +29,43 @@ const acceptance = {
   publicOfferAccepted: true as const,
   personalDataPolicyAccepted: true as const,
 };
+
+it.each([
+  ['NATIVE_NETWORK_UNAVAILABLE', 2],
+  ['NATIVE_STORAGE_UNAVAILABLE', 1],
+  ['NATIVE_TLS_REJECTED', 1],
+] as const)(
+  'preserves native refresh retry policy and safe diagnostics for %s',
+  async (code, count) => {
+    const native = {
+      configuration: vi.fn(),
+      request: vi
+        .fn<AndroidSessionPlugin['request']>()
+        .mockRejectedValue({ code, message: 'private-native-detail' }),
+    };
+    const config = {
+      apiBaseUrl: options.baseUrl,
+      tenantKey: options.tenantKey,
+      appVersion: 'test',
+    };
+    const gateway = createBrowserAuthGateway({
+      ...options,
+      nativeSessionTransport: true,
+      fetchImplementation: createNativeApiFetch(config, native),
+    });
+    const failure: unknown = await gateway.restoreSession().catch((error: unknown) => error);
+    expect(sessionFailureDetails(failure).code).toBe(code);
+    expect(native.request).toHaveBeenCalledTimes(count);
+    const first = native.request.mock.calls[0]![0];
+    expect(first.path).toMatch(/\/auth\/session\/refresh$/);
+    expect(first.headers['idempotency-key']).toBeTruthy();
+    for (const [request] of native.request.mock.calls) {
+      expect(request.headers['idempotency-key']).toBe(first.headers['idempotency-key']);
+      expect(request.headers['x-session-intent']).toBe('refresh');
+    }
+    expect(JSON.stringify(failure)).not.toContain('private-native-detail');
+  },
+);
 function url(input: Parameters<typeof fetch>[0]): string {
   return typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
 }

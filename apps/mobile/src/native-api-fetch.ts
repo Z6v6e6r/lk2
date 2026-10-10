@@ -1,6 +1,7 @@
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError } from '@phub/api-sdk';
 import type { MobileRuntimeConfig } from './runtime-config.js';
+import { sanitizedNativeSessionError } from './session-failure.js';
 
 export interface AndroidSessionPlugin {
   configuration(): Promise<MobileRuntimeConfig>;
@@ -112,18 +113,8 @@ export function createNativeApiFetch(
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
       unavailable();
-      const code =
-        typeof error === 'object' && error !== null && 'code' in error ? error.code : null;
-      if (code === 'NATIVE_NETWORK_UNAVAILABLE') {
-        // eslint-disable-next-line preserve-caught-error -- Native errors may contain credentials; expose only a fixed retryable class.
-        throw new TypeError('Native network unavailable');
-      }
-      throw new ApiClientError(
-        'Не удалось подключиться. Повторите попытку.',
-        503,
-        'NATIVE_SESSION_UNAVAILABLE',
-        'native',
-      );
+      // eslint-disable-next-line preserve-caught-error -- Preserve only allowlisted codes, never a raw native error/cause.
+      throw sanitizedNativeSessionError(error);
     }
   };
 }
