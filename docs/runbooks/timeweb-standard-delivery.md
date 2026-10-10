@@ -493,3 +493,113 @@ owner/enabled fields. Drift requires a fresh containing-main check; it never cha
 pin or the application candidate. All original candidate/controller and runtime delta validators
 continue to run before any pull/up. No image republication, migration, contact-reader activation,
 Worker/Realtime promotion, provider write, secret, signing or ingress change is authorized here.
+
+## Closed manual Web compatibility bridge for the profile overflow fix
+
+`--critical-web` is a separate manual mode of the same enrolled controller. Numeric CI-run
+invocations retain the existing cumulative automatic policy. This mode never dispatches a
+publisher, downloads an archive, uses a GitHub token, starts API/Realtime/Worker/Migrator, changes
+secrets, or writes `installed-components.env`. It consumes the already transferred canonical V2
+archive and public first-attempt metadata through the existing custody validator.
+
+The reviewed API baseline is `0d6078be7a50ed3f5761d66071527be003bd568f`, tree
+`5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`. The reviewed whole-repository Web runtime anchor is
+`8960afe24211372320006fc4c5b18905923672f5`, tree `bf0988012cfce0f14811491a14ae46fa57fe5541`.
+The exact raw, no-renames, no-abbreviation, NUL-delimited baseline-to-anchor delta has SHA-256
+`c71dcfeb564b648ff78305680af3d3a37477a2d54e1db8101662c2b1d6e11fec`. This is a closed reviewed
+compatibility proof, not a directory heuristic or a user-supplied allowlist. The entire candidate
+tree must differ from the anchor only in the six named controller/test/rehearsal/runbook paths in
+`WEB_CONTROLLER_FILES`, each an added/modified regular `100644 blob`. Root dependencies/lockfiles,
+Dockerfiles, all package/build inputs, generated-contract inputs, application files, workflow code,
+renames and deletions are forbidden in that tail. `COPY . .` therefore keeps all build inputs frozen.
+
+The candidate must equal the executing enrolled controller commit and the exact current `main`
+with successful full first-attempt push CI. Use a **merge commit preserving the runtime anchor**;
+a squash or rebase that removes it from candidate ancestry is ineligible. Refresh these identities
+before every transition. Publication occurs after this source merge, through the existing canonical
+publisher at that exact current main. Publication, controller enrollment and Web activation each
+retain their own authority and prerequisites. No existing merge/deploy approval enrolls this new
+controller automatically. Any later product/build change requires a new compatibility review;
+this bridge does not widen future automatic eligibility or support other baseline sources.
+
+| Browser behavior in this anchor                                    | Compatibility with API baseline                                                                                                                                                                       |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Profile grid                                                       | Contains the merged screen-width correction.                                                                                                                                                          |
+| Existing home/subscription/game reads                              | Existing API contracts; principal-generation guard prevents stale home responses after a session switch.                                                                                              |
+| Advisory subscription quote                                        | Production gateway omits `getGameJoinConditions`; picker and panel stay absent. Synthetic preview gateways may still expose it. Enable later only with a separately reviewed deployed API capability. |
+| Existing JOIN                                                      | Same `joinGame(gameId, revision, invitationId)` delegation and SDK wire body; no subscription selection is added to the command.                                                                      |
+| Password-login, profile-contact and booked-operation SDK additions | No production Web gateway exposure or call sites. No API, auth owner or schema is activated by this Web rollout.                                                                                      |
+
+The release includes the cumulative reviewed game rendering/navigation changes. Compatibility with
+an unchanged API does not prove authenticated production journeys; collect product feedback after
+activation. LOCAL fixtures and CI are separate from that evidence.
+
+### Inputs and execution
+
+The fixed root-owned `0600`, single-link request is
+`/opt/phub/timeweb-beta/operator/web-upgrade.json`, with root-owned non-writable parents. It is read
+once using `O_NOFOLLOW`, checked against its open descriptor, copied durably into the transaction,
+and hashed. Unknown/duplicate fields reject. Its exact keys are:
+
+- `schema`: `PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1`;
+- `target`: `{ "hostname": "lk2.padlhub.su", "serverId": 8886471, "projectId": 262717 }`;
+- `component`: `web`;
+- `controllerSha`, `candidateSha`: the same enrolled merged main SHA;
+- `candidateTree`: its exact tree;
+- `controllerSourceCiRunId`, `sourceCiRunId`: the same successful full first-attempt main-push CI ID;
+- `publicationRunId`, `artifactId`: decimal strings naming the successful first-attempt canonical publication and archive;
+- `artifactDigest`: GitHub archive `sha256:…`; `manifestSha256`: canonical manifest SHA-256;
+- `expectedApi`, `expectedWeb`: exact `{ "id": "<container-id>", "image": "<immutable-component-ref>", "releaseId": "<installed-release-id>" }`, both from the pinned API baseline source;
+- `expiresAt`: canonical UTC ISO timestamp, 20–60 minutes ahead before deploy/preflight/activation;
+- `confirmation`: `UPGRADE_WEB_<CANDIDATE_FIRST_12_UPPERCASE>_FROM_<PREVIOUS_WEB_DIGEST_LAST_12_UPPERCASE>_KEEP_API_0D6078BE7A50`.
+
+Prepare the canonical archive at
+`/opt/phub/timeweb-beta/releases/<candidate>-<publication>-1/artifact/canonical-artifact.zip` using
+existing custody procedures. Prepare a root-owned `0700` transaction directory
+`/opt/phub/timeweb-beta/backups/<candidate>-<publication>-1-web` containing the existing
+`database-backup-receipt.json` and `database.pgcustom` contract: independent verified restore,
+matching source/restored ledger, exact API baseline, immutable restore image and completion within
+one hour. The controller validates these inputs; it does not create a backup, restore a production
+database or provision evidence. The canonical provider-monitor and alert readbacks remain mandatory
+and must satisfy `api-web-observability.v1.json`; there is no direct-observation waiver.
+
+After exact-source publication, reviewed controller enrollment and separately approved activation:
+
+```sh
+/usr/bin/node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js --critical-web /opt/phub/timeweb-beta/operator/web-upgrade.json
+```
+
+The shared exclusion pointer binds the durable operation/plan before activation. Every preflight,
+observation and recovery checks unchanged API identity/start time/restarts, all other running
+containers (including ingress/dependencies/Realtime/Worker), the baseline env, controller Compose,
+operation/plan and five secret-file hashes; an active migrator rejects. It validates the prior Web
+image locally for rollback. It pulls only Web, verifies its immutable source/platform identity,
+runs the existing network-none readonly Web smoke, journals `ACTIVATING`, and executes only
+`up -d --no-deps web`. It then observes 61 rounds over at least 900 seconds, with private/public
+API/Web readiness and latency, fresh strict monitor readbacks, and unchanged backend/secret state.
+The durable receipt binds plan, operation, artifact/manifest, backup proof, final monitor/alert
+snapshots and observation digest. Canonical backend image entries remain unused; the backend
+release descriptor remains unchanged. Health/latency success still requires profile/product QA.
+
+### Interrupted and failed operations
+
+No failed or uncertain attempt is automatically replayed. An activation/observation failure
+journals rollback intent and restores only the exact recorded previous Web digest/release label.
+`ROLLED_BACK`, preparation failure or rollback failure retains the pointer for owner reconciliation.
+`SUCCESS` releases it only after durable receipt. A lock-release/fsync failure after success never
+starts an extra rollback.
+
+```sh
+/usr/bin/node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js --critical-web-recover /opt/phub/timeweb-beta/operator/web-upgrade.json
+/usr/bin/node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js --critical-web-reconcile /opt/phub/timeweb-beta/operator/web-upgrade.json
+```
+
+These are separately authorized recovery actions. Recovery reads the pointer-bound operation copy,
+not the mutable request; expired deployment authorization permits only restoring the recorded prior
+Web. `PREPARED`/`PREPARATION_FAILED` can be aborted after exact prior-runtime readback without `up`.
+`ACTIVATING`/`OBSERVING`/`ROLLBACK_INTENT`/`ROLLBACK_FAILED` permit one previous-Web restoration;
+unknown Web images or changed non-target state stop. Reconciliation accepts only success, proven
+rollback or proven preparation abort, attests its corresponding runtime, writes a durable reconciled
+receipt and releases the owned pointer without service mutation. A fully prepared plan without an
+acquired pointer has never activated a service; it remains an orphan for an explicit owner audit,
+not a reusable deployment input. Keep all operation/plan/receipt/evidence files for that audit.
