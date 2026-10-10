@@ -1,7 +1,7 @@
 import { registerPlugin } from '@capacitor/core';
 import { ApiClientError } from '@phub/api-sdk';
 import type { MobileRuntimeConfig } from './runtime-config.js';
-import { sanitizedNativeSessionError } from './session-failure.js';
+import { sanitizedNativeSessionError, sessionFailureDetails } from './session-failure.js';
 import { resolveCabinetMedia } from './cabinet-media.js';
 
 export interface AndroidSessionPlugin {
@@ -31,6 +31,58 @@ export interface NativeCacheObservation {
   readonly savedAt?: number;
   /** The shared App retains loaded screen state on errors; discard it after a failed read. */
   readonly invalidate?: boolean;
+}
+
+export interface NativeReadFailure {
+  readonly status?: number;
+  /** Reviewed constants only; never a server/native message. */
+  readonly code: string;
+  readonly correlationId?: string;
+}
+
+export interface NativeReadObservation {
+  readonly section: 'profile' | 'bookings';
+  readonly failure: NativeReadFailure | null;
+}
+
+const readErrorCodes = new Set([
+  'AUTH_REQUIRED',
+  'AUTH_SESSION_REVOKED',
+  'AUTH_SESSION_CHECK_UNAVAILABLE',
+  'TENANT_CONTEXT_UNAVAILABLE',
+  'TENANT_KEY_INVALID',
+  'TENANT_NOT_FOUND',
+  'TENANT_ACCESS_DENIED',
+  'PROFILE_PROJECTION_INVALID',
+  'PROFILE_PROJECTION_STALE',
+  'BOOKINGS_PROJECTION_INVALID',
+  'BOOKINGS_PROJECTION_STALE',
+]);
+const correlationPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function readFailureCode(
+  status: number,
+  bytes: Uint8Array,
+  section: NativeReadObservation['section'],
+): string | null {
+  const failed = Number.isInteger(status) && status >= 300 && status <= 599;
+  if (!failed && !(status === 200 && section === 'bookings')) return null;
+  // Only small error envelopes or an explicit unavailable state are inspected.
+  let payload: unknown;
+  if (bytes.byteLength <= 4096) {
+    try {
+      payload = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      // HTTP status remains useful without retaining malformed response data.
+    }
+  }
+  if (typeof payload === 'object' && payload !== null) {
+    if (!failed && 'state' in payload && payload.state === 'UNAVAILABLE')
+      return 'BOOKINGS_UNAVAILABLE';
+    if (failed && 'code' in payload && typeof payload.code === 'string')
+      return readErrorCodes.has(payload.code) ? payload.code : 'HTTP_ERROR';
+  }
+  return failed ? 'HTTP_ERROR' : null;
 }
 
 function rejected(): ApiClientError {
@@ -71,10 +123,12 @@ export function createNativeApiFetch(
   plugin: AndroidSessionPlugin = androidSessionPlugin,
   onSessionExpired?: () => void,
   onCacheObservation?: (observation: NativeCacheObservation) => void,
+  onReadObservation?: (observation: NativeReadObservation) => void,
 ): typeof fetch {
   let active = false;
   let generation = 0;
   const displayedReads = new Set<string>();
+  const readSequence = { profile: 0, bookings: 0 };
   return async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
     const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}/`;
@@ -98,6 +152,30 @@ export function createNativeApiFetch(
       displayedReads.clear();
     }
     const requestGeneration = generation;
+    const section =
+      !onReadObservation || method !== 'GET'
+        ? undefined
+        : value === root + 'profile'
+          ? 'profile'
+          : value === root + 'bookings/upcoming'
+            ? 'bookings'
+            : undefined;
+    const sequence = section ? ++readSequence[section] : 0;
+    const requestCorrelation = headers['x-correlation-id'];
+    const observeRead = (failure: NativeReadFailure | null): void => {
+      if (
+        !section ||
+        requestGeneration !== generation ||
+        sequence !== readSequence[section] ||
+        init?.signal?.aborted
+      )
+        return;
+      try {
+        onReadObservation?.({ section, failure });
+      } catch {
+        // Diagnostics must not change the response, session or retry policy.
+      }
+    };
     const cacheRead = method === 'GET' && [root + 'home/base', root + 'locations'].includes(value);
     const unavailable = (): void => {
       if (!cacheRead || requestGeneration !== generation) return;
@@ -148,6 +226,23 @@ export function createNativeApiFetch(
         status: result.status,
         headers: safeHeaders,
       });
+      if (section) {
+        const code = readFailureCode(result.status, bytes, section);
+        const returnedCorrelation = response.headers.get('x-correlation-id');
+        const correlationId =
+          requestCorrelation &&
+          correlationPattern.test(requestCorrelation) &&
+          (returnedCorrelation === null ||
+            (correlationPattern.test(returnedCorrelation) &&
+              returnedCorrelation.toLowerCase() === requestCorrelation.toLowerCase()))
+            ? requestCorrelation.toLowerCase()
+            : undefined;
+        observeRead(
+          code
+            ? { status: result.status, code, ...(correlationId ? { correlationId } : {}) }
+            : null,
+        );
+      }
       if (
         method === 'GET' &&
         result.status === 200 &&
@@ -170,7 +265,16 @@ export function createNativeApiFetch(
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
       unavailable();
-      throw sanitizedNativeSessionError(error);
+      const sanitized = sanitizedNativeSessionError(error);
+      const correlationId =
+        requestCorrelation && correlationPattern.test(requestCorrelation)
+          ? requestCorrelation.toLowerCase()
+          : undefined;
+      observeRead({
+        code: sessionFailureDetails(sanitized).code,
+        ...(correlationId ? { correlationId } : {}),
+      });
+      throw sanitized;
     }
   };
 }
