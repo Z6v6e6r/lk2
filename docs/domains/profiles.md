@@ -12,6 +12,14 @@ The two reads intentionally serve different purposes:
 | `GET /{tenantKey}/profile`           | migration-compatible authenticated-self aggregate | yes                      |
 | `GET /{tenantKey}/profiles/{userId}` | canonical viewer-filtered player card             | only when viewer is self |
 
+Android and iOS read the canonical authenticated-self profile through their native session
+transports. They preserve optional first/last name, avatar, assessed level and observed account
+fields; an absent balance remains unknown. Both resolve relative media fields against the bundled
+PadlHub API origin while keeping application routes relative. Native profile and Home responses
+must match the active account, and pending reads are discarded as soon as logout starts.
+The Android profile's subscriptions block reads the existing Home dashboard independently of the
+profile, as iOS does; a failed dashboard read leaves the remaining profile usable.
+
 Web maps `/profile` to the signed-in user's UUID and `/profile/{userId}` to another player's UUID.
 The browser does not select a provider or request a wider DTO. The authenticated-self read follows
 the server-issued routing plan: a direct Viva result is strictly normalized, bound to the already

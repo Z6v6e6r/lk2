@@ -2,6 +2,7 @@ import { registerPlugin } from '@capacitor/core';
 import { ApiClientError } from '@phub/api-sdk';
 import type { MobileRuntimeConfig } from './runtime-config.js';
 import { sanitizedNativeSessionError } from './session-failure.js';
+import { resolveCabinetMedia } from './cabinet-media.js';
 
 export interface AndroidSessionPlugin {
   configuration(): Promise<MobileRuntimeConfig>;
@@ -106,14 +107,32 @@ export function createNativeApiFetch(
         ),
       );
       const bytes = Uint8Array.from(atob(result.body), (character) => character.charCodeAt(0));
-      return new Response(result.status === 204 ? null : bytes, {
+      const response = new Response(result.status === 204 ? null : bytes, {
         status: result.status,
         headers: safeHeaders,
       });
+      if (
+        method === 'GET' &&
+        result.status === 200 &&
+        response.headers.get('content-type')?.split(';')[0]?.trim() === 'application/json'
+      ) {
+        // Native transport owns credentials; public media loads use the same API origin
+        // without sending them through an image URL or a provider fallback.
+        const payload: unknown = await response
+          .clone()
+          .json()
+          .catch(() => undefined);
+        if (payload !== undefined) {
+          return new Response(JSON.stringify(resolveCabinetMedia(payload, config.apiBaseUrl)), {
+            status: result.status,
+            headers: safeHeaders,
+          });
+        }
+      }
+      return response;
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
       unavailable();
-      // eslint-disable-next-line preserve-caught-error -- Preserve only allowlisted codes, never a raw native error/cause.
       throw sanitizedNativeSessionError(error);
     }
   };
