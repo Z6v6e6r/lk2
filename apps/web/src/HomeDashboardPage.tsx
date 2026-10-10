@@ -399,7 +399,7 @@ export function MainBottomNavigation({
   );
 }
 
-function NotificationBellIcon(): React.JSX.Element {
+function HomeHeaderCircleIcon({ arrow = false }: { readonly arrow?: boolean }): React.JSX.Element {
   const rawId = useId().replace(/:/g, '');
   const topGradientId = `notification-top-${rawId}`;
   const bottomGradientId = `notification-bottom-${rawId}`;
@@ -471,14 +471,26 @@ function NotificationBellIcon(): React.JSX.Element {
           strokeWidth="0.9"
         />
       </g>
-      <path
-        d="M22.8936 19.66L22.227 18.5534C22.087 18.3067 21.9603 17.84 21.9603 17.5667V15.88C21.9603 14.3134 21.0403 12.96 19.7136 12.3267C19.367 11.7134 18.727 11.3334 17.9936 11.3334C17.267 11.3334 16.6136 11.7267 16.267 12.3467C14.967 12.9934 14.067 14.3334 14.067 15.88V17.5667C14.067 17.84 13.9403 18.3067 13.8003 18.5467L13.127 19.66C12.8603 20.1067 12.8003 20.6 12.967 21.0534C13.127 21.5 13.507 21.8467 14.0003 22.0134C15.2936 22.4534 16.6536 22.6667 18.0136 22.6667C19.3736 22.6667 20.7336 22.4534 22.027 22.02C22.4936 21.8667 22.8536 21.5134 23.027 21.0534C23.2003 20.5934 23.1536 20.0867 22.8936 19.66Z"
-        fill="white"
-      />
-      <path
-        d="M19.8868 23.34C19.6068 24.1134 18.8668 24.6667 18.0001 24.6667C17.4735 24.6667 16.9535 24.4534 16.5868 24.0734C16.3735 23.8734 16.2135 23.6067 16.1201 23.3334C16.2068 23.3467 16.2935 23.3534 16.3868 23.3667C16.5401 23.3867 16.7001 23.4067 16.8601 23.42C17.2401 23.4534 17.6268 23.4734 18.0135 23.4734C18.3935 23.4734 18.7735 23.4534 19.1468 23.42C19.2868 23.4067 19.4268 23.4 19.5601 23.38C19.6668 23.3667 19.7735 23.3534 19.8868 23.34Z"
-        fill="white"
-      />
+      {arrow ? (
+        <path
+          d="M18 24V12M12.5 17.5 18 12l5.5 5.5"
+          stroke="white"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : (
+        <>
+          <path
+            d="M22.8936 19.66L22.227 18.5534C22.087 18.3067 21.9603 17.84 21.9603 17.5667V15.88C21.9603 14.3134 21.0403 12.96 19.7136 12.3267C19.367 11.7134 18.727 11.3334 17.9936 11.3334C17.267 11.3334 16.6136 11.7267 16.267 12.3467C14.967 12.9934 14.067 14.3334 14.067 15.88V17.5667C14.067 17.84 13.9403 18.3067 13.8003 18.5467L13.127 19.66C12.8603 20.1067 12.8003 20.6 12.967 21.0534C13.127 21.5 13.507 21.8467 14.0003 22.0134C15.2936 22.4534 16.6536 22.6667 18.0136 22.6667C19.3736 22.6667 20.7336 22.4534 22.027 22.02C22.4936 21.8667 22.8536 21.5134 23.027 21.0534C23.2003 20.5934 23.1536 20.0867 22.8936 19.66Z"
+            fill="white"
+          />
+          <path
+            d="M19.8868 23.34C19.6068 24.1134 18.8668 24.6667 18.0001 24.6667C17.4735 24.6667 16.9535 24.4534 16.5868 24.0734C16.3735 23.8734 16.2135 23.6067 16.1201 23.3334C16.2068 23.3467 16.2935 23.3534 16.3868 23.3667C16.5401 23.3867 16.7001 23.4067 16.8601 23.42C17.2401 23.4534 17.6268 23.4734 18.0135 23.4734C18.3935 23.4734 18.7735 23.4534 19.1468 23.42C19.2868 23.4067 19.4268 23.4 19.5601 23.38C19.6668 23.3667 19.7735 23.3534 19.8868 23.34Z"
+            fill="white"
+          />
+        </>
+      )}
     </svg>
   );
 }
@@ -502,7 +514,7 @@ export function NotificationBellLink({
           : 'Уведомления, непрочитанных нет'
       }
     >
-      <NotificationBellIcon />
+      <HomeHeaderCircleIcon />
       {unreadCount > 0 ? <span className="fh-bell-dot" aria-hidden="true" /> : null}
     </a>
   );
@@ -1322,6 +1334,42 @@ export function HomeDashboardPage({
   const [bookingRecommendationsMoreError, setBookingRecommendationsMoreError] = useState(false);
   const bookingRecommendationsExpansionStarted = useRef(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const heroRef = useRef<HTMLElement>(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
+  useEffect(() => {
+    let frame = 0;
+    const schedule = (): void => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        const hero = heroRef.current;
+        const statusInset =
+          Number.parseFloat(
+            getComputedStyle(document.documentElement).getPropertyValue('--phub-status-bar-top'),
+          ) || 0;
+        setShowScrollTop(Boolean(hero && hero.getBoundingClientRect().bottom <= statusInset));
+      });
+    };
+    schedule();
+    window.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+    };
+  }, []);
+
+  function returnToProfile(): void {
+    heroRef.current
+      ?.querySelector<HTMLAnchorElement>('.fh-profile')
+      ?.focus({ preventScroll: true });
+    window.scrollTo({
+      top: 0,
+      behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  }
   const upcomingItems =
     upcoming && upcoming.state !== 'UNAVAILABLE' ? upcoming.value.items : ([] as const);
   const datesWithBookings = new Set(
@@ -1486,6 +1534,7 @@ export function HomeDashboardPage({
     <div className={shellClassName}>
       <main className="figma-home" aria-label="Главная">
         <section
+          ref={heroRef}
           className={`fh-hero${usesCompactHero ? ' fh-hero--v2' : ''}${
             layoutVariant === 'v3' ? ' fh-hero--v3' : ''
           }`}
@@ -1523,7 +1572,9 @@ export function HomeDashboardPage({
           </nav>
         </section>
 
-        <div className={`fh-tabs-bar${usesCompactHero ? ' fh-tabs-bar--compact' : ''}`}>
+        <div
+          className={`fh-tabs-bar${usesCompactHero ? ' fh-tabs-bar--compact' : ''}${showScrollTop ? ' has-scroll-top' : ''}`}
+        >
           <div className="fh-tabs" role="tablist" aria-label="Раздел записей">
             <button
               type="button"
@@ -1531,7 +1582,7 @@ export function HomeDashboardPage({
               aria-selected={bookingTab === 'FOR_ME'}
               onClick={showBookingRecommendations}
             >
-              Для меня
+              <span className="fh-tab-label">Для меня</span>
             </button>
             <a
               className="fh-preferences-edit"
@@ -1559,6 +1610,17 @@ export function HomeDashboardPage({
               </span>
             </button>
           </div>
+          {showScrollTop ? (
+            <button
+              className="fh-bell fh-scroll-top"
+              type="button"
+              aria-label="Вернуться к шапке профиля"
+              title="Наверх"
+              onClick={returnToProfile}
+            >
+              <HomeHeaderCircleIcon arrow />
+            </button>
+          ) : null}
         </div>
 
         <section className="fh-main-box">

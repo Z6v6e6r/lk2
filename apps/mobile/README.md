@@ -6,10 +6,14 @@ The bundle identifier is `ru.padlhub.app`; the deployment target is iOS 15.0.
 
 ## System bars and display cutouts
 
-Both native shells contain the entire WebView inside the system safe area. This keeps
-headers, dialogs, fixed navigation and scrolling content below the status bar and outside
-camera cutouts, including after rotation. Heights come from the operating system, never
-from a fixed number of CSS pixels. The reserved strip uses a light background and dark icons.
+Both native shells contain the WebView inside the system safe area by default. On Home,
+the presentation-only `PadlHubViewport` Capacitor plugin extends its top to the window edge,
+and paints an opaque violet status strip (`#9474ff`), matching the sticky Home tabs.
+The strip stays the same color while scrolling; cards and photos cannot show through it.
+Home controls and sticky tabs use the reported CSS-pixel top inset. Status icons stay light
+throughout Home scrolling.
+Dialogs and other routes restore native containment and dark icons. Heights come from the
+operating system, never from a device-model table or a fixed CSS-pixel value.
 
 Android `MainActivity` applies system-bar/display-cutout insets to the WebView container,
 uses the larger of keyboard and navigation insets at the bottom, and passes zero handled
@@ -17,11 +21,17 @@ insets to Chromium. Capacitor `SystemBars.insetsHandling` is disabled because na
 already owns the viewport. iOS `PadlHubBridgeViewController` constrains WKWebView to
 `safeAreaLayoutGuide`; `ios.contentInset=never` prevents a second scroll inset. Existing
 shared CSS safe-area rules therefore receive zero within the contained native viewport.
-Browser Web layout is unaffected.
+Only the Home underlap uses `--phub-status-bar-top`; keyboard, bottom and landscape side
+safe areas remain natively contained. The scrim follows the painted viewport width and does
+not extend into the excluded side cutouts. It cannot receive input or accessibility focus.
+Browser Web layout is unaffected; older native shells without the plugin retain containment.
 
 Regression checks: `AndroidWindowInsetsTest` covers repeated delivery, portrait cutout,
-landscape side cutouts, keyboard and restored zero insets; `PadlHubBridgeTests` covers
-portrait/landscape containment and absence of duplicate WKWebView scroll insets. On-device
+landscape side cutouts, keyboard, underlap switching and restored zero insets;
+`PadlHubBridgeTests` covers portrait/landscape containment, the non-interactive scrim and
+absence of duplicate WKWebView scroll insets. Native checks assert the strip's opaque violet
+color. JS tests cover stable light icons during scrolling, rotation updates, dialog/route
+switching and pending native updates. On-device
 acceptance also checks Home while scrolling, fixed dialogs/navigation, keyboard open/close,
 rotation and devices with and without a cutout. Native screenshots and physical-device
 acceptance are separate from JS tests and bundle compilation.
