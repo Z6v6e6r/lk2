@@ -508,10 +508,24 @@ The reviewed API baseline is `0d6078be7a50ed3f5761d66071527be003bd568f`, tree
 The exact raw, no-renames, no-abbreviation, NUL-delimited baseline-to-anchor delta has SHA-256
 `c71dcfeb564b648ff78305680af3d3a37477a2d54e1db8101662c2b1d6e11fec`. This is a closed reviewed
 compatibility proof, not a directory heuristic or a user-supplied allowlist. The entire candidate
-tree must differ from the anchor only in the six named controller/test/rehearsal/runbook paths in
-`WEB_CONTROLLER_FILES`, each an added/modified regular `100644 blob`. Root dependencies/lockfiles,
-Dockerfiles, all package/build inputs, generated-contract inputs, application files, workflow code,
-renames and deletions are forbidden in that tail. `COPY . .` therefore keeps all build inputs frozen.
+tree must differ from the anchor only in the eight named paths in `WEB_CONTROLLER_FILES`, each an
+added/modified regular `100644 blob`. The six controller/test/rehearsal/runbook paths are joined only
+by `.github/workflows/publish-timeweb-amd64-images.yaml` and
+`scripts/timeweb-amd64-publication-workflow.test.ts` so the complete internal publication artifact
+can retain every file referenced by its per-image checksum sidecars. The publisher YAML is excluded
+from the Web build context by `.dockerignore`. Its test is not executed or imported by `npm ci`,
+`contracts:generate`, `build:packages`, or the Web build, and the final nginx image copies only
+`apps/web/dist`. Root dependencies/lockfiles, Dockerfiles, all other package/build inputs,
+generated-contract inputs, application files, every other workflow, renames and deletions remain
+forbidden in that tail. `COPY . .` therefore keeps all Web build inputs frozen.
+
+Run `38053674241` attempt 1 published the five images and a valid canonical V2 pair for
+`4df9a8512a4735af8eb33bd9b4085febfefec2cc`, but its internal artifact omitted 48 referenced BuildKit
+readiness/provenance diagnostic files. The original same-run per-image artifacts retain those
+bytes; they are incident evidence and cannot repair the immutable internal custody artifact. That
+release is ineligible for deployment. The correction must pass source checks and merge before a
+separately approved controller enrollment and a new exact-main publication; never rerun or replace
+that run's artifacts.
 
 The candidate must equal the executing enrolled controller commit and the exact current `main`
 with successful full first-attempt push CI. Use a **merge commit preserving the runtime anchor**;

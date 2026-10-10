@@ -58,7 +58,8 @@ export const WEB_COMPATIBILITY = Object.freeze({
   runtimeTree: 'bf0988012cfce0f14811491a14ae46fa57fe5541',
   runtimeDeltaSha256: 'c71dcfeb564b648ff78305680af3d3a37477a2d54e1db8101662c2b1d6e11fec',
 });
-// These are not build inputs: Web's npm scripts/imports do not execute these controller files.
+// These are not build inputs: Web npm scripts/imports do not execute these controller/test files.
+// The publisher YAML is excluded by .dockerignore; its test is not executed by the Web build.
 // Everything else in COPY . . is frozen to the reviewed runtime tree, including all tests/deps.
 export const WEB_CONTROLLER_FILES = new Set([
   'scripts/timeweb-critical-web.js',
@@ -67,6 +68,8 @@ export const WEB_CONTROLLER_FILES = new Set([
   'scripts/run-timeweb-standard-delivery.js',
   'scripts/timeweb-api-web-upgrade.js',
   'docs/runbooks/timeweb-standard-delivery.md',
+  '.github/workflows/publish-timeweb-amd64-images.yaml',
+  'scripts/timeweb-amd64-publication-workflow.test.ts',
 ]);
 function exact(value, keys) {
   if (
