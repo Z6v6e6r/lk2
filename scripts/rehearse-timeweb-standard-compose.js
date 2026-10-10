@@ -3,6 +3,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {
+  runCriticalWebTransition,
+  validateCriticalWebRecoveryImages,
+} from './timeweb-critical-web.js';
 import { runWebTransition, standardWebComposeArgs } from './timeweb-standard-policy.js';
 import {
   apiWebComposeArgs,
@@ -148,6 +152,104 @@ try {
   )
     throw Error('Wrong transition result');
   await attestBackend();
+  // Exercise the new Web-only phase machine against real disposable Compose, including partial
+  // activation that leaves two labeled Web containers. No production request/path is substituted.
+  const criticalWebPlan = {
+    candidate: { image, releaseId: 'candidate' },
+    previous: { web: { image, releaseId: 'previous' } },
+  };
+  const targetRows = () => {
+    const ids = docker([
+      'ps',
+      '-aq',
+      '--filter',
+      `label=com.docker.compose.project=${project}`,
+      '--filter',
+      'label=com.docker.compose.service=web',
+    ])
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    return ids.map((id) => JSON.parse(docker(['inspect', id]))[0]);
+  };
+  const webPhases = [];
+  let released = false;
+  let extra;
+  const nonTargets = Object.fromEntries(
+    ['api', 'worker', 'realtime'].map((service) => [service, inspect(service).Id]),
+  );
+  const unchangedWebBackend = async () => {
+    for (const [service, id] of Object.entries(nonTargets))
+      if (inspect(service).Id !== id) throw Error('Web-only changed another container');
+  };
+  const manualWebOps = {
+    ...operations,
+    attestBackend: unchangedWebBackend,
+    attestPrevious: async () => {
+      if (inspect('web').Config.Labels['phub.release-id'] !== 'previous')
+        throw Error('Previous Web not restored');
+    },
+    attestCandidate: async () => {
+      if (inspect('web').Config.Labels['phub.release-id'] !== 'candidate')
+        throw Error('Candidate Web not active');
+    },
+    authorizeActivation: unchangedWebBackend,
+    activate: async (markMutating) => {
+      markMutating();
+      await activate();
+    },
+    rollback: async () => {
+      validateCriticalWebRecoveryImages(targetRows(), criticalWebPlan);
+      await rollback();
+    },
+    journal: async (phase) => webPhases.push(phase),
+    unlock: async () => {
+      released = true;
+    },
+  };
+  await runCriticalWebTransition(manualWebOps, 'deploy', 'PREPARED');
+  if (!released) throw Error('Successful Web-only receipt did not release fixture');
+  await rollback();
+  released = false;
+  try {
+    await runCriticalWebTransition(
+      {
+        ...manualWebOps,
+        activate: async (markMutating) => {
+          markMutating();
+          await activate();
+          extra = docker([
+            'run',
+            '-d',
+            '--network',
+            'none',
+            '--label',
+            `fixture.owner=${project}`,
+            '--label',
+            `com.docker.compose.project=${project}`,
+            '--label',
+            'com.docker.compose.service=web',
+            image,
+          ]).trim();
+          throw Error('Injected partial Compose activation');
+        },
+      },
+      'deploy',
+      'PREPARED',
+    );
+    throw Error('Partial activation unexpectedly accepted');
+  } catch {
+    if (!webPhases.includes('ROLLBACK_FAILED') || released)
+      throw Error('Partial Web ambiguity did not retain fixture lock');
+  }
+  docker(['rm', '-f', extra]);
+  await runCriticalWebTransition(manualWebOps, 'recover', 'ROLLBACK_FAILED');
+  if (released || !webPhases.includes('ROLLED_BACK')) throw Error('Recovery custody incorrect');
+  await runCriticalWebTransition(manualWebOps, 'reconcile', 'ROLLED_BACK');
+  await unchangedWebBackend();
+  process.stdout.write(
+    'CRITICAL_WEB_COMPOSE_REHEARSAL_PASS success_partial_activation_recovery=true other_containers_unchanged=true\n',
+  );
   const criticalPrevious = join(directory, 'critical-previous.env');
   const criticalCandidate = join(directory, 'critical-candidate.env');
   writeFileSync(criticalPrevious, 'RELEASE=web-previous\nAPI_RELEASE=api-previous\n');

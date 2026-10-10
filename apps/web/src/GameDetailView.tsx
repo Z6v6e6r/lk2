@@ -778,7 +778,7 @@ export function GameDetailView(props: {
           </button>
         </div>
 
-        {activeTab === 'GAME' ? (
+        {activeTab === 'GAME' && props.joinConditionsClient ? (
           <GameJoinConditionsPanel
             gameId={game.id}
             revision={game.revision}

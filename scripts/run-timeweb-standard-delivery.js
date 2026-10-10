@@ -1,6 +1,7 @@
 // Installed once, root-owned, in the enrolled controller checkout. Never execute a candidate's
 // copy of this program or npm scripts on the operator. No PR checkout on the privileged runner.
 import { execFileSync } from 'node:child_process';
+import { runCriticalWeb } from './timeweb-critical-web.js';
 import { createHash } from 'node:crypto';
 import {
   closeSync,
@@ -586,20 +587,34 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ['--critical-api-web', '--critical-api-web-recover', '--critical-api-web-reconcile'].includes(
       args[0],
     );
-  const operation = manual
-    ? runManualApiWebUpgrade(
-        args[0] === '--critical-api-web'
+  const criticalWeb =
+    args.length === 2 &&
+    ['--critical-web', '--critical-web-recover', '--critical-web-reconcile'].includes(args[0]);
+  const operation = criticalWeb
+    ? runCriticalWeb(
+        args[0] === '--critical-web'
           ? 'deploy'
-          : args[0] === '--critical-api-web-recover'
+          : args[0] === '--critical-web-recover'
             ? 'recover'
             : 'reconcile',
         args[1],
       ).then((receipt) => {
         process.stdout.write(JSON.stringify(receipt) + '\n');
       })
-    : args.length === 1
-      ? main(args[0])
-      : Promise.reject(new Error('Invalid controller arguments'));
+    : manual
+      ? runManualApiWebUpgrade(
+          args[0] === '--critical-api-web'
+            ? 'deploy'
+            : args[0] === '--critical-api-web-recover'
+              ? 'recover'
+              : 'reconcile',
+          args[1],
+        ).then((receipt) => {
+          process.stdout.write(JSON.stringify(receipt) + '\n');
+        })
+      : args.length === 1
+        ? main(args[0])
+        : Promise.reject(new Error('Invalid controller arguments'));
   operation.catch((error) => {
     // External command errors may contain runtime environment; never print raw error/stdout.
     let pointer = 'unavailable';

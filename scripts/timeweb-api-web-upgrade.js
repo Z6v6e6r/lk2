@@ -65,6 +65,8 @@ const SECRET_NAMES = [
 ];
 const CONTROLLER_FILES = new Set([
   'scripts/run-timeweb-standard-delivery.js',
+  'scripts/timeweb-critical-web.js',
+  'scripts/timeweb-critical-web.test.ts',
   'scripts/timeweb-api-web-upgrade.js',
   'scripts/timeweb-api-web-upgrade.test.ts',
   'scripts/rehearse-timeweb-standard-compose.js',
@@ -1884,3 +1886,19 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     receipt: journalPath,
   };
 }
+
+// Shared trusted primitives only; the critical Web route never calls the API/Web executor.
+export {
+  secure as secureUpgradePath,
+  read as readUpgradeFile,
+  git as upgradeGit,
+  docker as upgradeDocker,
+  inspect as inspectUpgradeService,
+  excluded as inspectUpgradeExcluded,
+  secretHashes as upgradeSecretHashes,
+  candidateAuthority as validateUpgradeCandidateAuthority,
+  imagePresent as assertUpgradeImagePresent,
+  probe as probeUpgradeService,
+  validateBackupProof as validateUpgradeBackup,
+  validateMonitoring as readUpgradeMonitoring,
+};

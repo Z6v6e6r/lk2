@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
+import { PadlHubApiClient } from '@phub/api-sdk';
 import { DEFAULT_PROFILE_PRIVACY_SETTINGS } from '@phub/domain';
 
 import { createBrowserAuthGateway } from './auth-gateway.js';
@@ -3892,36 +3892,31 @@ describe('browser auth gateway', () => {
   });
 });
 
-describe('existing-game advisory SDK forwarding', () => {
-  it('forwards canonical selection and preserves SDK refusal without auth/provider fallbacks', async () => {
-    const refusal = new ApiClientError(
-      'synthetic refusal',
-      409,
-      'JOIN_SELECTION_UNAVAILABLE',
-      'synthetic-correlation',
+describe('mixed-version game capability', () => {
+  it('omits the undeployed advisory and preserves the legacy JOIN signature', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(() =>
+      Promise.reject(new Error('network prohibited')),
     );
-    const sdk = vi
-      .spyOn(PadlHubApiClient.prototype, 'getGameJoinConditions')
-      .mockRejectedValue(refusal);
+    const advisory = vi.spyOn(PadlHubApiClient.prototype, 'getGameJoinConditions');
+    const refusal = new Error('synthetic legacy refusal');
+    const join = vi.spyOn(PadlHubApiClient.prototype, 'joinGame').mockRejectedValue(refusal);
     try {
       const gateway = createBrowserAuthGateway({
         baseUrl: 'https://api.synthetic.invalid',
         tenantKey: 'synthetic',
         appVersion: 'test',
-        fetchImplementation: vi.fn<typeof fetch>(() =>
-          Promise.reject(new Error('network prohibited')),
-        ),
+        fetchImplementation,
       });
+      expect(gateway.getGameJoinConditions).toBeUndefined();
       const gameId = '00000000-0000-4000-8000-000000000004';
-      const input = {
-        expectedRevision: 8,
-        subscriptionInstanceId: '00000000-0000-4000-8000-000000000005',
-      };
-      await expect(gateway.getGameJoinConditions?.(gameId, input)).rejects.toBe(refusal);
-      expect(sdk).toHaveBeenCalledTimes(1);
-      expect(sdk).toHaveBeenCalledWith(gameId, input);
+      const invitationId = '00000000-0000-4000-8000-000000000005';
+      await expect(gateway.joinGame(gameId, 8, invitationId)).rejects.toBe(refusal);
+      expect(join).toHaveBeenCalledExactlyOnceWith(gameId, 8, invitationId);
+      expect(advisory).not.toHaveBeenCalled();
+      expect(fetchImplementation).not.toHaveBeenCalled();
     } finally {
-      sdk.mockRestore();
+      advisory.mockRestore();
+      join.mockRestore();
     }
   });
 });
