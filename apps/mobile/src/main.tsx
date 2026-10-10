@@ -1,6 +1,9 @@
 import { Capacitor } from '@capacitor/core';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { installStatusBarUnderlay } from './status-bar-underlay.js';
+
+installStatusBarUnderlay();
 
 // Load only the selected platform entry, including its styles and session policy.
 if (Capacitor.getPlatform() === 'ios') {

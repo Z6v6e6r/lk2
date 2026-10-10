@@ -13,6 +13,7 @@ final class PadlHubBridgeTests: XCTestCase {
       windows.compactMap { $0.rootViewController as? PadlHubBridgeViewController }.first)
     let originalInsets = controller.additionalSafeAreaInsets
     defer {
+      controller.setStatusBarUnderlap(false)
       controller.additionalSafeAreaInsets = originalInsets
       controller.view.setNeedsLayout()
       controller.view.layoutIfNeeded()
@@ -27,13 +28,28 @@ final class PadlHubBridgeTests: XCTestCase {
     XCTAssertEqual(webView.scrollView.contentInsetAdjustmentBehavior, .never)
     XCTAssertEqual(webView.safeAreaInsets, .zero)
 
+    controller.setStatusBarUnderlap(true)
+    XCTAssertEqual(webView.frame.minY, 0)
+    XCTAssertEqual(webView.frame.maxY, controller.view.safeAreaLayoutGuide.layoutFrame.maxY)
+    XCTAssertEqual(controller.statusBarScrim.frame.height, controller.view.safeAreaInsets.top)
+    XCTAssertFalse(controller.statusBarScrim.isHidden)
+    XCTAssertFalse(controller.statusBarScrim.isUserInteractionEnabled)
+    XCTAssertFalse(controller.statusBarScrim.isAccessibilityElement)
+    XCTAssertEqual(controller.statusBarContentInset, controller.view.safeAreaInsets.top)
+    XCTAssertEqual(webView.scrollView.contentInsetAdjustmentBehavior, .never)
+
     // Model side cutouts after rotation. Constraints must follow without a fixed top value.
     controller.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59)
     controller.view.setNeedsLayout()
     controller.view.layoutIfNeeded()
-    XCTAssertEqual(webView.frame, controller.view.safeAreaLayoutGuide.layoutFrame)
+    XCTAssertEqual(webView.frame.minY, 0)
+    XCTAssertEqual(controller.statusBarScrim.frame.height, controller.view.safeAreaInsets.top)
     XCTAssertGreaterThanOrEqual(webView.frame.minX, 59)
     XCTAssertLessThanOrEqual(webView.frame.maxX, controller.view.bounds.maxX - 59)
+    controller.setStatusBarUnderlap(false)
+    XCTAssertEqual(webView.frame, controller.view.safeAreaLayoutGuide.layoutFrame)
+    XCTAssertTrue(controller.statusBarScrim.isHidden)
+    XCTAssertEqual(controller.statusBarContentInset, 0)
   }
 
   @MainActor
@@ -68,5 +84,6 @@ final class PadlHubBridgeTests: XCTestCase {
     let plugin = try XCTUnwrap(bridge.plugin(withName: "PadlHubSession") as? CAPBridgedPlugin)
     XCTAssertEqual(plugin.jsName, "PadlHubSession")
     XCTAssertFalse(bridge.config.loggingEnabled)
+    XCTAssertNotNil(bridge.plugin(withName: "PadlHubViewport"))
   }
 }

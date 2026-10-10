@@ -88,8 +88,16 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
 
 @objc(PadlHubBridgeViewController)
 final class PadlHubBridgeViewController: CAPBridgeViewController {
+  private var containedTop: NSLayoutConstraint?
+  private var underlayTop: NSLayoutConstraint?
+  private var underlap = false
+  private var lastPublishedTop: CGFloat = -1
+  let statusBarScrim = UIView()
+  var onViewportInsetsChanged: ((CGFloat) -> Void)?
+
   override func capacitorDidLoad() {
     bridge?.registerPluginInstance(PadlHubSessionPlugin())
+    bridge?.registerPluginInstance(PadlHubViewportPlugin())
     // Contain the viewport itself so scrolling and position:fixed cannot cover system UI.
     guard let webView else { return }
     let container = UIView(frame: webView.frame)
@@ -98,12 +106,82 @@ final class PadlHubBridgeViewController: CAPBridgeViewController {
     container.addSubview(webView)
     webView.translatesAutoresizingMaskIntoConstraints = false
     let safeArea = container.safeAreaLayoutGuide
+    containedTop = webView.topAnchor.constraint(equalTo: safeArea.topAnchor)
+    underlayTop = webView.topAnchor.constraint(equalTo: container.topAnchor)
     NSLayoutConstraint.activate([
-      webView.topAnchor.constraint(equalTo: safeArea.topAnchor),
+      containedTop!,
       webView.leadingAnchor.constraint(equalTo: safeArea.leadingAnchor),
       webView.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor),
       webView.bottomAnchor.constraint(equalTo: safeArea.bottomAnchor),
     ])
+    statusBarScrim.accessibilityIdentifier = "phub-status-bar-scrim"
+    statusBarScrim.backgroundColor = UIColor.black.withAlphaComponent(24 / 255)
+    statusBarScrim.isUserInteractionEnabled = false
+    statusBarScrim.isAccessibilityElement = false
+    statusBarScrim.isHidden = true
+    container.addSubview(statusBarScrim)
+    statusBarScrim.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      statusBarScrim.topAnchor.constraint(equalTo: container.topAnchor),
+      statusBarScrim.bottomAnchor.constraint(equalTo: safeArea.topAnchor),
+      statusBarScrim.leadingAnchor.constraint(equalTo: safeArea.leadingAnchor),
+      statusBarScrim.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor),
+    ])
     statusBarStyle = .darkContent
+  }
+
+  var statusBarContentInset: CGFloat { underlap ? view.safeAreaInsets.top : 0 }
+
+  func setStatusBarUnderlap(_ enabled: Bool) {
+    underlap = enabled
+    if let containedTop, let underlayTop {
+      NSLayoutConstraint.deactivate([containedTop, underlayTop])
+      NSLayoutConstraint.activate([enabled ? underlayTop : containedTop])
+    }
+    statusBarScrim.isHidden = !enabled
+    view.setNeedsLayout()
+    view.layoutIfNeeded()
+    publishViewportInsets()
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    publishViewportInsets()
+  }
+
+  private func publishViewportInsets() {
+    let top = statusBarContentInset
+    guard top != lastPublishedTop else { return }
+    lastPublishedTop = top
+    onViewportInsetsChanged?(top)
+  }
+}
+
+// Presentation-only plugin on Capacitor's existing bridge; session transport is unchanged.
+@objc(PadlHubViewportPlugin)
+final class PadlHubViewportPlugin: CAPPlugin, CAPBridgedPlugin {
+  let identifier = "PadlHubViewportPlugin"
+  let jsName = "PadlHubViewport"
+  let pluginMethods: [CAPPluginMethod] = [CAPPluginMethod(name: "setUnderlap", returnType: CAPPluginReturnPromise)]
+
+  override func load() {
+    (bridge?.viewController as? PadlHubBridgeViewController)?.onViewportInsetsChanged = { [weak self] top in
+      self?.notifyListeners("insetsChanged", data: ["top": Double(top)], retainUntilConsumed: true)
+    }
+  }
+
+  @objc func setUnderlap(_ call: CAPPluginCall) {
+    guard let enabled = call.getBool("enabled") else {
+      call.reject("Viewport setting is required")
+      return
+    }
+    DispatchQueue.main.async { [weak self] in
+      guard let controller = self?.bridge?.viewController as? PadlHubBridgeViewController else {
+        call.reject("Viewport is unavailable")
+        return
+      }
+      controller.setStatusBarUnderlap(enabled)
+      call.resolve(["top": Double(controller.statusBarContentInset)])
+    }
   }
 }

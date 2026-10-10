@@ -34,10 +34,21 @@ public class AndroidWindowInsetsTest {
                 ViewCompat.dispatchApplyWindowInsets(viewport, portrait);
                 assertEquals("Repeated delivery must not accumulate padding", 59, viewport.getPaddingTop());
 
+                activity.setStatusBarUnderlap(true);
+                View scrim = viewport.findViewWithTag("phub-status-bar-scrim");
+                assertEquals("Only artwork may enter the status region", 0, viewport.getPaddingTop());
+                assertEquals(59, scrim.getLayoutParams().height);
+                assertEquals(View.VISIBLE, scrim.getVisibility());
+                assertFalse(scrim.isClickable());
+                assertFalse(scrim.isFocusable());
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO, scrim.getImportantForAccessibility());
+                assertEquals(59 / activity.getResources().getDisplayMetrics().density,
+                    activity.statusBarContentInset(), 0.001);
+
                 WindowInsetsCompat keyboard = new WindowInsetsCompat.Builder(portrait)
                     .setInsets(ime, Insets.of(0, 0, 0, 320)).build();
                 ViewCompat.dispatchApplyWindowInsets(viewport, keyboard);
-                assertEquals(59, viewport.getPaddingTop());
+                assertEquals(0, viewport.getPaddingTop());
                 assertEquals("Keyboard replaces rather than adds navigation inset", 320, viewport.getPaddingBottom());
 
                 WindowInsetsCompat landscape = new WindowInsetsCompat.Builder()
@@ -45,9 +56,14 @@ public class AndroidWindowInsetsTest {
                     .setInsets(cutout, Insets.of(59, 0, 59, 0)).build();
                 ViewCompat.dispatchApplyWindowInsets(viewport, landscape);
                 assertEquals(59, viewport.getPaddingLeft());
-                assertEquals(24, viewport.getPaddingTop());
+                assertEquals(0, viewport.getPaddingTop());
+                assertEquals(24, scrim.getLayoutParams().height);
                 assertEquals(59, viewport.getPaddingRight());
                 assertEquals(21, viewport.getPaddingBottom());
+                activity.setStatusBarUnderlap(false);
+                assertEquals("Routes/dialogs restore native top containment", 24, viewport.getPaddingTop());
+                assertEquals(View.GONE, scrim.getVisibility());
+                assertEquals(0, activity.statusBarContentInset(), 0.001);
                 ViewCompat.dispatchApplyWindowInsets(viewport, new WindowInsetsCompat.Builder().build());
                 assertEquals(0, viewport.getPaddingLeft());
                 assertEquals(0, viewport.getPaddingTop());

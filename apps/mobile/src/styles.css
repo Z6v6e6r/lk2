@@ -9,6 +9,23 @@ body {
   min-height: 100dvh;
 }
 
+/* Native Home is full bleed only at the top. Insets are real OS dimensions, in CSS pixels. */
+html.phub-status-underlap .fh-hero--v2 {
+  padding-top: calc(10px + var(--phub-status-bar-top, 0px));
+}
+
+html.phub-status-underlap .figma-home-shell:is(.is-home-v3, .is-home-v3-rows) .figma-home {
+  background-size: 100% calc(435px + var(--phub-status-bar-top, 0px));
+}
+
+html.phub-status-underlap .fh-tabs-bar {
+  top: var(--phub-status-bar-top, 0px);
+}
+
+html.phub-status-underlap .ios-cabinet {
+  padding-top: 0;
+}
+
 .mobile-status {
   min-height: 100dvh;
   display: grid;
