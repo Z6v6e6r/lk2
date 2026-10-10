@@ -10,6 +10,10 @@ body {
 }
 
 /* Native Home is full bleed only at the top. Insets are real OS dimensions, in CSS pixels. */
+html.phub-status-underlap .fh-hero {
+  padding-top: calc(16px + var(--phub-status-bar-top, 0px));
+}
+
 html.phub-status-underlap .fh-hero--v2 {
   padding-top: calc(10px + var(--phub-status-bar-top, 0px));
 }
