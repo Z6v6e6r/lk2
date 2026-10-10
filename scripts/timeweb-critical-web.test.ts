@@ -11,7 +11,7 @@ function scenario(code: string) {
       `
     import assert from 'node:assert/strict';
     import {validateCriticalWebOperation, validateWebControllerDelta, validateCriticalWebRequestStat,
-      validateCriticalWebSource, validateCriticalWebReceipt, validateCriticalWebRecoveryImages, validateCriticalWebSuccessEvidence, runCriticalWebTransition, observeCriticalWeb, WEB_COMPATIBILITY} from './scripts/timeweb-critical-web.js';
+      validateCriticalWebSource, WEB_CONTROLLER_FILES, validateCriticalWebReceipt, validateCriticalWebRecoveryImages, validateCriticalWebSuccessEvidence, runCriticalWebTransition, observeCriticalWeb, WEB_COMPATIBILITY} from './scripts/timeweb-critical-web.js';
     ${code}`,
     ],
     { encoding: 'utf8' },
@@ -50,9 +50,43 @@ describe('closed critical Web delivery', () => {
   it('freezes every build input beyond the reviewed whole-runtime anchor', () =>
     scenario(`
     validateWebControllerDelta([{status:'A',path:'scripts/timeweb-critical-web.js'},{status:'M',path:'docs/runbooks/timeweb-standard-delivery.md'}]);
-    for (const path of ['package-lock.json','package.json','apps/web/src/styles.css','apps/web/src/auth-gateway.ts','apps/web/Dockerfile','contracts/openapi/user/v2/openapi.yaml','packages/api-sdk/src/index.ts','.github/workflows/publish-timeweb-amd64-images.yaml','scripts/presentation-boundary.js']) assert.throws(()=>validateWebControllerDelta([{status:'M',path}]));
+    assert.equal(WEB_CONTROLLER_FILES.size,8);
+    for (const path of ['.github/workflows/publish-timeweb-amd64-images.yaml','scripts/timeweb-amd64-publication-workflow.test.ts']) {
+      for (const status of ['A','M']) validateWebControllerDelta([{status,path}]);
+      for (const status of ['R100','D','T','C100']) assert.throws(()=>validateWebControllerDelta([{status,path}]));
+    }
+    for (const path of ['package-lock.json','package.json','apps/web/src/styles.css','apps/web/src/auth-gateway.ts','apps/web/Dockerfile','contracts/openapi/user/v2/openapi.yaml','packages/api-sdk/src/index.ts','.github/workflows/reconcile-timeweb-amd64-publication.yaml','.github/workflows/publish-timeweb-amd64-images.yml','scripts/timeweb-amd64-publication-workflow.test.js','scripts/timeweb-amd64-registry-custody-retry.sh','scripts/presentation-boundary.js']) assert.throws(()=>validateWebControllerDelta([{status:'M',path}]));
     for (const status of ['R100','D','T','C100']) assert.throws(()=>validateWebControllerDelta([{status,path:'scripts/timeweb-critical-web.js'}]));
   `));
+  it('requires regular non-executable blobs for each inert publisher path', () => {
+    const raw = spawnSync(
+      'git',
+      [
+        'diff',
+        '--raw',
+        '--no-abbrev',
+        '--no-renames',
+        '-z',
+        '0d6078be7a50ed3f5761d66071527be003bd568f',
+        '8960afe24211372320006fc4c5b18905923672f5',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(raw.status, raw.stderr).toBe(0);
+    scenario(
+      fixture +
+        `
+      const raw=${JSON.stringify(raw.stdout.trim())};
+      for (const path of ['.github/workflows/publish-timeweb-amd64-images.yaml','scripts/timeweb-amd64-publication-workflow.test.ts']) {
+        for (const mode of ['100644','100755','120000','160000']) {
+          const runGit=args=>args[0]==='rev-parse' ? args[1]===op.candidateSha+'^{tree}' ? op.candidateTree : args[1]===WEB_COMPATIBILITY.baselineSource+'^{tree}' ? WEB_COMPATIBILITY.baselineTree : WEB_COMPATIBILITY.runtimeTree : args[0]==='diff' ? args.includes('--raw') ? raw : 'M\\0'+path+'\\0' : args[0]==='ls-tree' ? mode+' blob '+'e'.repeat(40)+'\\t'+path : '';
+          if (mode==='100644') validateCriticalWebSource(op,runGit);
+          else assert.throws(()=>validateCriticalWebSource(op,runGit),/CONTROLLER_FILE_MODE/);
+        }
+      }
+    `,
+    );
+  });
   it('rejects substituted trees and raw runtime proof before any activation', () =>
     scenario(
       fixture +

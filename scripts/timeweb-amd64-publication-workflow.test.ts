@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { globSync, readFileSync } from 'node:fs';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -307,6 +307,20 @@ describe('Timeweb amd64 publication workflow', () => {
     });
     expect(canonicalStep?.if).toBeUndefined();
     expect(canonicalStep?.['continue-on-error']).toBeUndefined();
+
+    const internalIndex = publicationSteps.findIndex(({ id }) => id === 'artifact');
+    const internalStep = publicationSteps[internalIndex];
+    expect(internalIndex).toBeGreaterThan(generationIndex);
+    expect(internalIndex).toBeLessThan(canonicalIndex);
+    expect(internalStep?.uses).toBe(canonicalStep?.uses);
+    expect(internalStep?.with).toEqual({
+      name: 'timeweb-amd64-publication-${{ github.run_id }}-${{ github.run_attempt }}',
+      path: 'timeweb-amd64-publication-manifest.json\ntimeweb-amd64-publication-checksums.txt\npublication-evidence/images\n',
+      'if-no-files-found': 'error',
+      'retention-days': 90,
+    });
+    expect(internalStep?.if).toBeUndefined();
+    expect(internalStep?.['continue-on-error']).toBeUndefined();
 
     expect(workflow).toContain('default: source_check_only');
     expect(workflow).toContain("inputs.operation == 'publish'");
@@ -1059,6 +1073,84 @@ describe('Timeweb amd64 publication workflow', () => {
       expect(mismatching.status).not.toBe(0);
       expect(mismatching.stderr).toContain('PHUB_GHCR_CUSTODY_WRONG_DIGEST');
       await expect(readFile(rejected, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it('preserves the complete five-image custody in the uploaded internal artifact', async () => {
+    const workflow = parse(
+      await readFile(
+        new URL('../.github/workflows/publish-timeweb-amd64-images.yaml', import.meta.url),
+        'utf8',
+      ),
+    ) as {
+      readonly jobs: {
+        readonly 'publication-manifest': {
+          readonly steps: readonly {
+            readonly id?: string;
+            readonly with?: { readonly path?: string };
+          }[];
+        };
+      };
+    };
+    const selection = workflow.jobs['publication-manifest'].steps
+      .find(({ id }) => id === 'artifact')
+      ?.with?.path?.trim()
+      .split('\n');
+    expect(selection).toBeDefined();
+    const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-upload-custody-'));
+    const source = join(directory, 'source');
+    const uploaded = join(directory, 'uploaded');
+    const images = join(source, 'publication-evidence/images');
+    try {
+      await mkdir(images, { recursive: true });
+      for (const name of [
+        'timeweb-amd64-publication-manifest.json',
+        'timeweb-amd64-publication-checksums.txt',
+      ])
+        await writeFile(join(source, name), 'synthetic fixture\n');
+      for (const component of ['web', 'api', 'worker', 'realtime', 'migrator']) {
+        const lines: string[] = [];
+        for (const suffix of [
+          'image.json',
+          'provenance.json',
+          'sbom.spdx.json',
+          'provenance-material-diagnostic.json',
+          'buildkit-readiness/attempt-1.stderr.txt',
+          'buildkit-readiness/summary.txt',
+        ]) {
+          const name = `${component}-${suffix}`;
+          const contents = `${component}:${suffix}\n`;
+          await mkdir(dirname(join(images, name)), { recursive: true });
+          await writeFile(join(images, name), contents);
+          lines.push(
+            `${createHash('sha256').update(contents).digest('hex')}  publication-evidence/${name}`,
+          );
+        }
+        await writeFile(
+          join(images, `${component}-evidence-checksums.txt`),
+          `${lines.join('\n')}\n`,
+        );
+      }
+      // Apply the actual upload selection; checking the complete pre-upload tree misses packaging loss.
+      for (const selected of globSync(selection!, { cwd: source })) {
+        const destination = join(uploaded, selected);
+        await mkdir(dirname(destination), { recursive: true });
+        await cp(join(source, selected), destination, { recursive: true });
+      }
+      const uploadedImages = join(uploaded, 'publication-evidence/images');
+      const verify = () =>
+        spawnSync(process.execPath, [publicationEvidenceValidator, uploadedImages], {
+          encoding: 'utf8',
+        });
+      const complete = verify();
+      expect(complete.status, complete.stderr).toBe(0);
+      // Removing a referenced nested diagnostic must remain fail-closed after extraction.
+      await rm(join(uploadedImages, 'web-buildkit-readiness/summary.txt'));
+      const incomplete = verify();
+      expect(incomplete.status).not.toBe(0);
+      expect(incomplete.stderr).toContain('reason=evidence_unavailable');
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
