@@ -26,6 +26,34 @@ html.phub-status-underlap .fh-tabs-bar {
   top: var(--phub-status-bar-top, 0px);
 }
 
+html.phub-status-underlap .fh-tabs,
+html.phub-status-underlap .fh-tabs button {
+  height: 44px;
+}
+
+html.phub-status-underlap .fh-tabs {
+  flex-basis: 44px;
+}
+
+html.phub-status-underlap .fh-tabs button {
+  padding-top: 8px;
+  justify-content: center;
+  gap: 15px;
+}
+
+html.phub-status-underlap .fh-tabs-bar--compact .fh-tabs button {
+  padding-top: 9.5px;
+  gap: 13.5px;
+}
+
+html.phub-status-underlap .figma-home .fh-preferences-edit {
+  top: 5px;
+}
+
+html.phub-status-underlap .figma-home .fh-tabs-bar--compact .fh-preferences-edit {
+  top: 6.5px;
+}
+
 html.phub-status-underlap .ios-cabinet {
   padding-top: 0;
 }
