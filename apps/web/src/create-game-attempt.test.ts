@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { CreateGameRequest } from './auth-gateway.js';
 import {
+  bindCreateGameOperation,
   clearCreateGameAttempt,
   createGameAttemptStorageKey,
   loadCreateGameAttempt,
@@ -97,6 +98,106 @@ async function pending(
 }
 
 describe('durable create game logical-attempt ledger', () => {
+  it('upgrades a v3 pending attempt without changing its key and persists the accepted operation', async () => {
+    const storage = memoryStorage();
+    const locks = serialLocks();
+    const first = await pending(storage, locks);
+    storage.setItem(
+      createGameAttemptStorageKey(principal),
+      JSON.stringify({
+        version: 3,
+        activeAttempt: first,
+        resolvedAttempts: [],
+      }),
+    );
+    const restored = loadCreateGameAttempt(principal, storage);
+    expect(restored).toEqual(first);
+    const operationId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const bound = await bindCreateGameOperation(principal, first, operationId, storage, locks);
+    expect(bound.idempotencyKey).toBe(first.idempotencyKey);
+    expect(loadCreateGameAttempt(principal, storage)).toEqual(bound);
+    expect(
+      JSON.parse(storage.getItem(createGameAttemptStorageKey(principal))!) as unknown,
+    ).toMatchObject({ version: 4 });
+    const replay = await prepareCreateGameAttempt(principal, payload(), storage, locks, {
+      mountedAttempt: first,
+    });
+    expect(replay).toEqual(bound);
+    await expect(
+      bindCreateGameOperation(principal, first, gameId1, storage, locks),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_STATE_CHANGED' });
+  });
+
+  it('cannot bind an operation to another actor, malformed ID, resolved or replaced attempt', async () => {
+    const storage = memoryStorage();
+    const locks = serialLocks();
+    const first = await pending(storage, locks);
+    await expect(
+      bindCreateGameOperation(otherUser, first, gameId1, storage, locks),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_FOREIGN_PRINCIPAL' });
+    await expect(
+      bindCreateGameOperation(principal, first, 'provider-id', storage, locks),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_MALFORMED' });
+    await clearCreateGameAttempt(principal, first, storage, locks);
+    await pending(storage, locks, {
+      attemptId: attemptId2,
+      key: 'create-logical-attempt-key-0002',
+    });
+    await expect(
+      bindCreateGameOperation(principal, first, gameId1, storage, locks),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_STATE_CHANGED' });
+    const replacement = loadCreateGameAttempt(principal, storage);
+    if (!replacement || replacement.state !== 'PENDING') throw new Error('expected pending');
+    await resolveCreateGameAttempt(principal, replacement, gameId1, storage, locks);
+    await expect(
+      bindCreateGameOperation(principal, replacement, gameId1, storage, locks),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_STATE_CHANGED' });
+  });
+
+  it('rejects a malformed operation binding and a forged v3 operation envelope', async () => {
+    const storage = memoryStorage();
+    const attempt = await pending(storage, serialLocks());
+    for (const [version, operationId] of [
+      [4, 'provider-id'],
+      [3, gameId1],
+    ]) {
+      storage.setItem(
+        createGameAttemptStorageKey(principal),
+        JSON.stringify({
+          version,
+          activeAttempt: { ...attempt, operationId },
+          resolvedAttempts: [],
+        }),
+      );
+      expect(() => loadCreateGameAttempt(principal, storage)).toThrowError(
+        expect.objectContaining({ code: 'ATTEMPT_MALFORMED' }),
+      );
+    }
+  });
+
+  it('fences stale terminal rejection and success after another tab binds an accepted operation', async () => {
+    const storage = memoryStorage();
+    const locks = serialLocks();
+    const first = await pending(storage, locks);
+    const operationId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    await bindCreateGameOperation(principal, first, operationId, storage, locks);
+    await expect(clearCreateGameAttempt(principal, first, storage, locks)).rejects.toMatchObject({
+      code: 'ATTEMPT_STATE_CHANGED',
+    });
+    await expect(
+      resolveCreateGameAttempt(principal, first, gameId1, storage, locks),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_STATE_CHANGED' });
+    await expect(
+      resolveCreateGameAttempt(principal, first, gameId1, storage, locks, { operationId: gameId1 }),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_STATE_CHANGED' });
+    expect(loadCreateGameAttempt(principal, storage)).toMatchObject({ operationId });
+    await resolveCreateGameAttempt(principal, first, gameId1, storage, locks, { operationId });
+    expect(loadCreateGameAttempt(principal, storage)).toMatchObject({
+      state: 'RESOLVED',
+      gameId: gameId1,
+    });
+  });
+
   it('normalizes a payload and reuses one pending key without time expiry', async () => {
     const storage = memoryStorage();
     const locks = serialLocks();

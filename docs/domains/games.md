@@ -35,6 +35,19 @@ Multiple stations use OR semantics in the server query. Tournament station filte
 canonical PadlHub station UUID, not venue-name prefix matching. A local Game and a Viva activity are
 deduplicated only through a verified integration mapping.
 
+### Current commercial-create boundary (P2)
+
+`POST /games` currently accepts only NO_PAYMENT beta creation. Its SUCCEEDED receipt confirms a
+local aggregate, never a court booking; arbitrary future times and private test courts are not
+commercial slot offers. Accepted-operation IDs survive browser reopen and are recovered through
+`GET /game-operations/{operationId}` without another create POST. Without an operation ID, response
+loss retains the original payload and Idempotency-Key for safe replay.
+
+Commercial open-game creation remains BLOCKED on a reviewed allowed-slot/quote and authoritative
+booking/settlement operation from the existing owners. See the narrow [P2 consumer contract](../contracts/p2-booked-game-consumer.md)
+for the observed call graph, synthetic executable proposal and exact L/C request. No second game
+writer, provider framework, auth route, schema or runtime activation is introduced by this increment.
+
 ## 2. Domain boundary and ownership
 
 Games are `LOCAL_PRIMARY`: PostgreSQL is the source of truth for the game aggregate. Business state
