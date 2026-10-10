@@ -51,7 +51,9 @@ it.each([
       );
       await session.restore();
       render(<IOSAuthApp session={session} />);
-      fireEvent.click(await screen.findByRole('link', { name: 'Профиль' }));
+      // The loading shell is replaced by Home; click the mounted navigation after that transition.
+      await screen.findByRole('main', { name: 'Главная' });
+      fireEvent.click(screen.getByRole('link', { name: 'Профиль' }));
       expect(selfProfile(profile).profile.lastName).toBe('Петрова');
     } else {
       const request = vi.fn<AndroidSessionPlugin['request']>(async (input) => {
