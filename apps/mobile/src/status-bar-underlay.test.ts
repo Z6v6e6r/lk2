@@ -27,20 +27,16 @@ vi.mock('@capacitor/core', () => ({
   },
 }));
 let stop = () => undefined as void;
-let sheetTop = 450;
 async function settle(): Promise<void> {
   await vi.waitFor(() => expect(native.setUnderlap).toHaveBeenCalled());
   await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 function home(): void {
   document.body.innerHTML = '<div class="figma-home"><div class="fh-main-box"></div></div>';
-  document.querySelector('.fh-main-box')!.getBoundingClientRect = () =>
-    ({ top: sheetTop }) as DOMRect;
 }
 beforeEach(() => {
   vi.clearAllMocks();
   native.enabled = true;
-  sheetTop = 450;
   native.setUnderlap.mockImplementation(({ enabled }: { enabled: boolean }) =>
     Promise.resolve({
       top: enabled ? 59 : 0,
@@ -54,10 +50,9 @@ beforeEach(() => {
 afterEach(() => {
   stop();
   document.body.innerHTML = '';
-  Reflect.deleteProperty(document, 'elementsFromPoint');
 });
 
-describe('native translucent Home status strip', () => {
+describe('native opaque Home status strip', () => {
   it('keeps dark icons and restores containment if the native underlap call fails', async () => {
     native.setUnderlap.mockRejectedValueOnce(new Error('Viewport is unavailable'));
     stop = installStatusBarUnderlay();
@@ -70,24 +65,27 @@ describe('native translucent Home status strip', () => {
     await settle();
     expect(native.setUnderlap).toHaveBeenCalledTimes(calls);
   });
-  it('keeps the purple hero below real cutouts and changes icon contrast over the scrolled sheet', async () => {
+  it('keeps light icons and real cutout spacing while white cards and photos scroll below the purple strip', async () => {
     stop = installStatusBarUnderlay();
     await settle();
     expect(native.setUnderlap).toHaveBeenCalledWith({ enabled: true });
     expect(document.documentElement.classList.contains('phub-status-underlap')).toBe(true);
     expect(document.documentElement.style.getPropertyValue('--phub-status-bar-top')).toBe('59px');
     expect(native.setStyle).toHaveBeenLastCalledWith({ style: 'DARK', bar: 'StatusBar' });
-    sheetTop = 0;
+    const calls = native.setStyle.mock.calls.length;
+    const sheet = document.querySelector<HTMLElement>('.fh-main-box')!;
+    sheet.style.background = 'white';
+    sheet.innerHTML = '<img alt="Synthetic court" src="/synthetic-court.jpg">';
+    sheet.scrollTop = 450;
     document.dispatchEvent(new Event('scroll'));
-    await vi.waitFor(() =>
-      expect(native.setStyle).toHaveBeenLastCalledWith({ style: 'LIGHT', bar: 'StatusBar' }),
-    );
+    await settle();
     expect(native.setUnderlap).toHaveBeenCalledTimes(1);
-    sheetTop = 450;
+    expect(native.setStyle).toHaveBeenCalledTimes(calls);
+    expect(native.setStyle).toHaveBeenLastCalledWith({ style: 'DARK', bar: 'StatusBar' });
+    sheet.scrollTop = 0;
     document.dispatchEvent(new Event('scroll'));
-    await vi.waitFor(() =>
-      expect(native.setStyle).toHaveBeenLastCalledWith({ style: 'DARK', bar: 'StatusBar' }),
-    );
+    await settle();
+    expect(native.setStyle).toHaveBeenCalledTimes(calls);
   });
 
   it('follows rotation insets and restores native containment for dialogs and other routes', async () => {
@@ -108,6 +106,7 @@ describe('native translucent Home status strip', () => {
     await vi.waitFor(() => expect(native.setUnderlap).toHaveBeenLastCalledWith({ enabled: false }));
     await settle();
     expect(document.documentElement.style.getPropertyValue('--phub-status-bar-top')).toBe('0px');
+    expect(native.setStyle).toHaveBeenLastCalledWith({ style: 'LIGHT', bar: 'StatusBar' });
   });
 
   it('serializes a route change during a native layout update', async () => {
@@ -132,22 +131,5 @@ describe('native translucent Home status strip', () => {
     stop = installStatusBarUnderlay();
     expect(native.register).not.toHaveBeenCalled();
     expect(native.setUnderlap).not.toHaveBeenCalled();
-  });
-
-  it('keeps light icons over media even when the white sheet has scrolled under the strip', async () => {
-    sheetTop = 0;
-    const media = document.createElement('div');
-    media.style.backgroundImage = 'url(/synthetic-photo.jpg)';
-    document.querySelector('.fh-main-box')!.append(media);
-    const elements = vi.fn<() => Element[]>().mockReturnValue([media]);
-    document.elementsFromPoint = elements;
-    stop = installStatusBarUnderlay();
-    await settle();
-    expect(native.setStyle).toHaveBeenLastCalledWith({ style: 'DARK', bar: 'StatusBar' });
-    elements.mockReturnValue([]);
-    document.dispatchEvent(new Event('scroll'));
-    await vi.waitFor(() =>
-      expect(native.setStyle).toHaveBeenLastCalledWith({ style: 'LIGHT', bar: 'StatusBar' }),
-    );
   });
 });

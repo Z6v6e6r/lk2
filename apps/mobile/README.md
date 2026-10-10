@@ -8,9 +8,10 @@ The bundle identifier is `ru.padlhub.app`; the deployment target is iOS 15.0.
 
 Both native shells contain the WebView inside the system safe area by default. On Home,
 the presentation-only `PadlHubViewport` Capacitor plugin extends its top to the window edge,
-so the actual purple hero and then scrolling content appear behind a transparent status bar
-with a 9.4% black native scrim. Home controls and sticky tabs use the reported CSS-pixel top
-inset. Status icons are light above the hero/media and dark above the white content sheet.
+and paints an opaque violet status strip (`#9474ff`), matching the sticky Home tabs.
+The strip stays the same color while scrolling; cards and photos cannot show through it.
+Home controls and sticky tabs use the reported CSS-pixel top inset. Status icons stay light
+throughout Home scrolling.
 Dialogs and other routes restore native containment and dark icons. Heights come from the
 operating system, never from a device-model table or a fixed CSS-pixel value.
 
@@ -28,8 +29,9 @@ Browser Web layout is unaffected; older native shells without the plugin retain 
 Regression checks: `AndroidWindowInsetsTest` covers repeated delivery, portrait cutout,
 landscape side cutouts, keyboard, underlap switching and restored zero insets;
 `PadlHubBridgeTests` covers portrait/landscape containment, the non-interactive scrim and
-absence of duplicate WKWebView scroll insets. JS tests cover icon contrast during scrolling,
-media, rotation updates, dialog/route switching and pending native updates. On-device
+absence of duplicate WKWebView scroll insets. Native checks assert the strip's opaque violet
+color. JS tests cover stable light icons during scrolling, rotation updates, dialog/route
+switching and pending native updates. On-device
 acceptance also checks Home while scrolling, fixed dialogs/navigation, keyboard open/close,
 rotation and devices with and without a cutout. Native screenshots and physical-device
 acceptance are separate from JS tests and bundle compilation.

@@ -17,13 +17,12 @@ interface ViewportPlugin {
     listener: (insets: ViewportInsets) => void,
   ): Promise<PluginListenerHandle>;
 }
-/** Let Home artwork scroll under system UI; other screens keep native containment. */
+/** Keep Home below its opaque native status strip; other screens keep native containment. */
 export function installStatusBarUnderlay(): () => void {
   if (!Capacitor.isNativePlatform() || !Capacitor.isPluginAvailable('PadlHubViewport'))
     return () => undefined;
   const viewport = registerPlugin<ViewportPlugin>('PadlHubViewport');
   const html = document.documentElement;
-  let top = 0;
   let applied: boolean | undefined;
   let updating = false;
   let stopped = false;
@@ -45,21 +44,7 @@ export function installStatusBarUnderlay(): () => void {
   }
 
   function updateIconStyle(): void {
-    const home = applied ? homeUnderlay() : null;
-    const sheet = home?.querySelector<HTMLElement>('.fh-main-box');
-    const overLightSheet = sheet && sheet.getBoundingClientRect().top <= top;
-    const overPhoto = Boolean(
-      home &&
-      document
-        .elementsFromPoint?.(innerWidth / 2, top / 2)
-        .some(
-          (element) =>
-            element.matches('img, video, canvas') ||
-            getComputedStyle(element).backgroundImage.includes('url('),
-        ),
-    );
-    const next =
-      home && (!overLightSheet || overPhoto) ? SystemBarsStyle.Dark : SystemBarsStyle.Light;
+    const next = applied && homeUnderlay() ? SystemBarsStyle.Dark : SystemBarsStyle.Light;
     if (next === iconStyle) return;
     iconStyle = next;
     // DARK means light glyphs. Navigation-bar appearance remains separately native-owned.
@@ -68,8 +53,7 @@ export function installStatusBarUnderlay(): () => void {
 
   function applyInsets(insets: ViewportInsets): void {
     if (stopped || failed || !Number.isFinite(insets.top) || insets.top < 0) return;
-    top = insets.top;
-    html.style.setProperty('--phub-status-bar-top', `${top}px`);
+    html.style.setProperty('--phub-status-bar-top', `${insets.top}px`);
     updateIconStyle();
   }
 
@@ -92,7 +76,6 @@ export function installStatusBarUnderlay(): () => void {
       // Unsupported native shells retain their existing contained viewport.
       failed = true;
       applied = false;
-      top = 0;
       html.classList.remove('phub-status-underlap');
       html.style.removeProperty('--phub-status-bar-top');
       updateIconStyle();
@@ -114,7 +97,6 @@ export function installStatusBarUnderlay(): () => void {
     attributes: true,
     attributeFilter: ['open', 'hidden', 'aria-hidden'],
   });
-  document.addEventListener('scroll', schedule, { passive: true, capture: true });
   window.addEventListener('resize', schedule, { passive: true });
   void viewport
     .addListener('insetsChanged', applyInsets)
@@ -129,7 +111,6 @@ export function installStatusBarUnderlay(): () => void {
     stopped = true;
     observer.disconnect();
     cancelAnimationFrame(frame);
-    document.removeEventListener('scroll', schedule, true);
     window.removeEventListener('resize', schedule);
     void listener?.remove();
     html.classList.remove('phub-status-underlap');

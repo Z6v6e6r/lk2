@@ -33,6 +33,9 @@ final class PadlHubBridgeTests: XCTestCase {
     XCTAssertEqual(webView.frame.maxY, controller.view.safeAreaLayoutGuide.layoutFrame.maxY)
     XCTAssertEqual(controller.statusBarScrim.frame.height, controller.view.safeAreaInsets.top)
     XCTAssertFalse(controller.statusBarScrim.isHidden)
+    XCTAssertEqual(controller.statusBarScrim.backgroundColor,
+      UIColor(red: 148 / 255, green: 116 / 255, blue: 1, alpha: 1))
+    XCTAssertTrue(controller.statusBarScrim.isOpaque)
     XCTAssertFalse(controller.statusBarScrim.isUserInteractionEnabled)
     XCTAssertFalse(controller.statusBarScrim.isAccessibilityElement)
     XCTAssertEqual(controller.statusBarContentInset, controller.view.safeAreaInsets.top)

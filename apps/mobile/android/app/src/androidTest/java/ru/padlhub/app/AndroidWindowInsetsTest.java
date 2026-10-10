@@ -2,6 +2,8 @@ package ru.padlhub.app;
 
 import android.app.Instrumentation;
 import android.content.Intent;
+import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.view.View;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -39,6 +41,9 @@ public class AndroidWindowInsetsTest {
                 assertEquals("Only artwork may enter the status region", 0, viewport.getPaddingTop());
                 assertEquals(59, scrim.getLayoutParams().height);
                 assertEquals(View.VISIBLE, scrim.getVisibility());
+                int stripColor = ((ColorDrawable) scrim.getBackground()).getColor();
+                assertEquals(Color.rgb(148, 116, 255), stripColor);
+                assertEquals("Scrolling cards cannot show through the status strip", 255, Color.alpha(stripColor));
                 assertFalse(scrim.isClickable());
                 assertFalse(scrim.isFocusable());
                 assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_NO, scrim.getImportantForAccessibility());

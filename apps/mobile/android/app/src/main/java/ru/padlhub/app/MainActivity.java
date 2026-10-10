@@ -56,7 +56,8 @@ public class MainActivity extends BridgeActivity {
         }
         statusBarScrim = new View(this);
         statusBarScrim.setTag("phub-status-bar-scrim");
-        statusBarScrim.setBackgroundColor(Color.argb(24, 0, 0, 0));
+        // Match the sticky Home tabs (#9474ff); scrolling cards must not show through.
+        statusBarScrim.setBackgroundColor(Color.rgb(148, 116, 255));
         statusBarScrim.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         statusBarScrim.setClickable(false);
         statusBarScrim.setFocusable(false);

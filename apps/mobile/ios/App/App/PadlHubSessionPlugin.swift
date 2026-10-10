@@ -115,7 +115,9 @@ final class PadlHubBridgeViewController: CAPBridgeViewController {
       webView.bottomAnchor.constraint(equalTo: safeArea.bottomAnchor),
     ])
     statusBarScrim.accessibilityIdentifier = "phub-status-bar-scrim"
-    statusBarScrim.backgroundColor = UIColor.black.withAlphaComponent(24 / 255)
+    // Match the sticky Home tabs (#9474ff); scrolling cards must not show through.
+    statusBarScrim.backgroundColor = UIColor(red: 148 / 255, green: 116 / 255, blue: 1, alpha: 1)
+    statusBarScrim.isOpaque = true
     statusBarScrim.isUserInteractionEnabled = false
     statusBarScrim.isAccessibilityElement = false
     statusBarScrim.isHidden = true
