@@ -4,6 +4,35 @@ The iOS app reuses the existing React/TypeScript client in `src`, the PadlHub AP
 and Capacitor **8.4.1**. Its Xcode project is checked in under `ios/App/App.xcodeproj`.
 The bundle identifier is `ru.padlhub.app`; the deployment target is iOS 15.0.
 
+## System bars and display cutouts
+
+Both native shells contain the entire WebView inside the system safe area. This keeps
+headers, dialogs, fixed navigation and scrolling content below the status bar and outside
+camera cutouts, including after rotation. Heights come from the operating system, never
+from a fixed number of CSS pixels. The reserved strip uses a light background and dark icons.
+
+Android `MainActivity` applies system-bar/display-cutout insets to the WebView container,
+uses the larger of keyboard and navigation insets at the bottom, and passes zero handled
+insets to Chromium. Capacitor `SystemBars.insetsHandling` is disabled because native layout
+already owns the viewport. iOS `PadlHubBridgeViewController` constrains WKWebView to
+`safeAreaLayoutGuide`; `ios.contentInset=never` prevents a second scroll inset. Existing
+shared CSS safe-area rules therefore receive zero within the contained native viewport.
+Browser Web layout is unaffected.
+
+Regression checks: `AndroidWindowInsetsTest` covers repeated delivery, portrait cutout,
+landscape side cutouts, keyboard and restored zero insets; `PadlHubBridgeTests` covers
+portrait/landscape containment and absence of duplicate WKWebView scroll insets. On-device
+acceptance also checks Home while scrolling, fixed dialogs/navigation, keyboard open/close,
+rotation and devices with and without a cutout. Native screenshots and physical-device
+acceptance are separate from JS tests and bundle compilation.
+
+Camera decoration is not enabled. Android exposes cutout bounding rectangles, which can
+support a decorative ball around a reported circular cutout. They describe an excluded
+screen region rather than the precise optical sensor location. UIKit exposes safe areas,
+not a portable public camera/Dynamic Island geometry API; do not infer coordinates from
+the device model. Keep any future decoration outside interactive content and preserve a
+plain status strip when geometry is unavailable.
+
 ## Build for a simulator
 
 Requirements: the repository's Node/npm versions, full Xcode, and an installed iOS

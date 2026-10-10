@@ -1,8 +1,35 @@
 import Capacitor
 import UIKit
 import XCTest
+@testable import App
 
 final class PadlHubBridgeTests: XCTestCase {
+  @MainActor
+  func testViewportStaysInsideSafeAreaWithoutDuplicateScrollInsets() throws {
+    let controller = PadlHubBridgeViewController()
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    window.rootViewController = controller
+    controller.loadViewIfNeeded()
+    controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
+    window.layoutIfNeeded()
+    controller.view.layoutIfNeeded()
+    let webView = try XCTUnwrap(controller.webView)
+    XCTAssertFalse(webView === controller.view)
+    XCTAssertEqual(webView.frame, controller.view.safeAreaLayoutGuide.layoutFrame)
+    XCTAssertGreaterThanOrEqual(webView.frame.minY, 59)
+    XCTAssertEqual(webView.scrollView.contentInsetAdjustmentBehavior, .never)
+    XCTAssertEqual(webView.safeAreaInsets, .zero)
+
+    // Rotation moves the cutout to the side. Constraints must follow without a fixed top value.
+    window.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
+    controller.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59)
+    window.layoutIfNeeded()
+    controller.view.layoutIfNeeded()
+    XCTAssertEqual(webView.frame, controller.view.safeAreaLayoutGuide.layoutFrame)
+    XCTAssertGreaterThanOrEqual(webView.frame.minX, 59)
+    XCTAssertLessThanOrEqual(webView.frame.maxX, controller.view.bounds.maxX - 59)
+  }
+
   @MainActor
   func testPrivateContentIsCoveredUntilApplicationBecomesActive() throws {
     let app = UIApplication.shared

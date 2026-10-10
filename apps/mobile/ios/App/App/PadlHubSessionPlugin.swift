@@ -90,5 +90,20 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
 final class PadlHubBridgeViewController: CAPBridgeViewController {
   override func capacitorDidLoad() {
     bridge?.registerPluginInstance(PadlHubSessionPlugin())
+    // Contain the viewport itself so scrolling and position:fixed cannot cover system UI.
+    guard let webView else { return }
+    let container = UIView(frame: webView.frame)
+    container.backgroundColor = UIColor(red: 251 / 255, green: 251 / 255, blue: 250 / 255, alpha: 1)
+    view = container
+    container.addSubview(webView)
+    webView.translatesAutoresizingMaskIntoConstraints = false
+    let safeArea = container.safeAreaLayoutGuide
+    NSLayoutConstraint.activate([
+      webView.topAnchor.constraint(equalTo: safeArea.topAnchor),
+      webView.leadingAnchor.constraint(equalTo: safeArea.leadingAnchor),
+      webView.trailingAnchor.constraint(equalTo: safeArea.trailingAnchor),
+      webView.bottomAnchor.constraint(equalTo: safeArea.bottomAnchor),
+    ])
+    statusBarStyle = .darkContent
   }
 }
