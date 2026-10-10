@@ -1322,6 +1322,22 @@ describe('provider-neutral authentication routes', () => {
     expect(firstSetCookie).toContain('HttpOnly');
     const firstCookie = firstSetCookie.split(';')[0];
 
+    // Android's URLConnection supplies a form media type for an otherwise empty POST.
+    // The parser must reject it without consuming the saved refresh credential.
+    const unsupportedRefresh = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/auth/session/refresh',
+      headers: {
+        cookie: firstCookie,
+        'content-type': 'application/x-www-form-urlencoded',
+        'content-length': '0',
+        'x-session-intent': 'refresh',
+        'idempotency-key': 'auth-refresh-format-001',
+      },
+    });
+    expect(unsupportedRefresh.statusCode).toBe(415);
+    expect(unsupportedRefresh.headers['set-cookie']).toBeUndefined();
+
     const disallowedOrigin = await app.inject({
       method: 'POST',
       url: '/user/api/v1/local-padel/auth/session/refresh',
@@ -1348,6 +1364,9 @@ describe('provider-neutral authentication routes', () => {
         cookie: firstCookie,
         'x-session-intent': 'refresh',
         'idempotency-key': 'auth-refresh-test-0001',
+        'content-type': 'text/plain',
+        'content-length': '0',
+        'x-app-platform': 'android',
       },
     });
     expect(refreshResponse.statusCode).toBe(200);
@@ -1374,6 +1393,20 @@ describe('provider-neutral authentication routes', () => {
     });
     expect(replayResponse.statusCode).toBe(401);
 
+    const unsupportedLogout = await app.inject({
+      method: 'DELETE',
+      url: '/user/api/v1/local-padel/auth/session',
+      headers: {
+        cookie: nextCookie,
+        'content-type': 'application/x-www-form-urlencoded',
+        'content-length': '0',
+        'x-session-intent': 'logout',
+        'idempotency-key': 'auth-logout-format-0001',
+      },
+    });
+    expect(unsupportedLogout.statusCode).toBe(415);
+    expect(unsupportedLogout.headers['set-cookie']).toBeUndefined();
+
     const logoutResponse = await app.inject({
       method: 'DELETE',
       url: '/user/api/v1/local-padel/auth/session',
@@ -1381,6 +1414,9 @@ describe('provider-neutral authentication routes', () => {
         cookie: nextCookie,
         'x-session-intent': 'logout',
         'idempotency-key': 'auth-logout-test-00001',
+        'content-type': 'text/plain',
+        'content-length': '0',
+        'x-app-platform': 'android',
       },
     });
     expect(logoutResponse.statusCode).toBe(204);

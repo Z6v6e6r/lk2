@@ -39,6 +39,12 @@ final class AndroidHttpSender implements AndroidSessionEngine.Sender {
             connection.setRequestProperty("Accept-Encoding", "identity");
             connection.setRequestProperty("Cache-Control", "no-store");
             for (Map.Entry<String, String> header : request.headers.entrySet()) connection.setRequestProperty(header.getKey(), header.getValue());
+            // Android adds application/x-www-form-urlencoded to empty POST/DELETE,
+            // which Fastify rejects with 415. Its text parser accepts lifecycle calls;
+            // application/json would instead fail with an empty-JSON-body error.
+            if ((request.operation == AndroidSessionPolicy.Operation.REFRESH
+                || request.operation == AndroidSessionPolicy.Operation.LOGOUT) && request.body == null)
+                connection.setRequestProperty("Content-Type", "text/plain");
             HttpsURLConnection active = connection;
             deadline = timer.schedule(active::disconnect, 30, TimeUnit.SECONDS);
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);

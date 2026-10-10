@@ -128,8 +128,8 @@ VITE_PHUB_API_BASE_URL=https://lk2.padlhub.su VITE_PHUB_TENANT_KEY=local-padel n
 ```
 
 `android:debug` bundles local assets, syncs the same public configuration into Android, then
-builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.5/code 6 replaces
-version 1.4/code 5 using the existing local debug signature. No release keys
+builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.6/code 7 replaces
+versions 1.4/code 5 and 1.5/code 6 using the existing local debug signature. No release keys
 are created. Always inspect the packaged `capacitor.config.json`, manifest and signature.
 
 Builds have **no implicit API target**. Missing configuration displays a setup message. The native
@@ -162,6 +162,13 @@ storage/cache, rejected requests/responses and HTTP status. Only allowlisted nat
 numeric HTTP status reach this screen; raw errors, causes, server codes, correlation values and
 credentials are omitted. Retry preserves native credentials and recovery journals. This diagnostic
 does not prove that a failure on a user's device has been repaired.
+
+Native session refresh/logout send empty POST/DELETE with explicit `Content-Type: text/plain`. Android's
+`HttpsURLConnection` otherwise adds `application/x-www-form-urlencoded`, which the API's Fastify
+parser rejects with HTTP 415 before session validation. Empty JSON is also invalid. Keep lifecycle
+calls bodyless and leave JSON OTP/OAuth payloads unchanged. `AndroidHttpSenderTest` checks the actual
+Android HTTPS wire format against an ephemeral loopback certificate; the API auth-route test
+checks refresh rotation and logout with this format. These tests use synthetic credentials only.
 
 Games/tournaments/training, chats/media, payment return navigation, additional App Links and FCM remain
 subsequent complete increments using existing APIs. Release signing, store publication, live SMS,
