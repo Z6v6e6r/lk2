@@ -20,6 +20,34 @@ function plugin() {
 }
 
 describe('Android native bridge adapter', () => {
+  it('resolves account and nested avatars against the API while preserving account data and routes', async () => {
+    const native = plugin();
+    const photo = '/public/api/v1/media/profile-photos/tenant/photo';
+    const account = {
+      userId: 'synthetic-account',
+      displayName: 'Анна Петрова',
+      firstName: 'Анна',
+      lastName: 'Петрова',
+      phoneLast4: '0001',
+      balanceMinor: 54000,
+      currency: 'RUB',
+      level: { label: 'C+', value: 3.8, assessmentRequired: false },
+      avatarUrl: photo,
+      participants: [{ avatarUrl: photo, route: '/profile/synthetic-account' }],
+    };
+    native.request.mockResolvedValue({
+      ...result(),
+      body: Buffer.from(JSON.stringify(account)).toString('base64'),
+    });
+    const response = await createNativeApiFetch(config, native)(`${root}/profile`);
+    expect(await response.json()).toEqual({
+      ...account,
+      avatarUrl: config.apiBaseUrl + photo,
+      participants: [{ avatarUrl: config.apiBaseUrl + photo, route: '/profile/synthetic-account' }],
+    });
+    expect(native.request).toHaveBeenCalledOnce();
+  });
+
   it('uses only the native plugin and strips credential response headers', async () => {
     const native = plugin();
     const response = await createNativeApiFetch(config, native)(`${root}/profile`, {
@@ -33,6 +61,21 @@ describe('Android native bridge adapter', () => {
     });
     expect(response.headers.get('set-cookie')).toBeNull();
     expect(await response.json()).toEqual({ ok: true });
+  });
+  it.each([
+    [503, 'application/json', '{"avatarUrl":"/error","code":"UNAVAILABLE"}'],
+    [200, 'text/plain', '/public/api/v1/media/photo'],
+    [200, 'application/json', '{invalid'],
+  ])('preserves error and non-JSON bodies (%s, %s)', async (status, contentType, body) => {
+    const native = plugin();
+    native.request.mockResolvedValue({
+      status,
+      headers: { 'Content-Type': contentType },
+      body: btoa(body),
+    });
+    const response = await createNativeApiFetch(config, native)(`${root}/profile`);
+    expect(response.status).toBe(status);
+    expect(await response.text()).toBe(body);
   });
   it.each([
     'https://api.vivacrm.invalid/end-user/api/profile',

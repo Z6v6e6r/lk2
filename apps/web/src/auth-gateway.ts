@@ -854,6 +854,7 @@ function buildSelfPlayerProfileView(profile: UserProfile): PlayerProfileView {
       userId: profile.userId,
       displayName: profile.displayName,
       ...(profile.firstName !== undefined ? { firstName: profile.firstName } : {}),
+      ...(profile.lastName !== undefined ? { lastName: profile.lastName } : {}),
       ...(profile.avatarUrl !== undefined ? { avatarUrl: profile.avatarUrl } : {}),
       ...(profile.level === undefined
         ? {}
@@ -1248,7 +1249,24 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
   function loadSelfProfile(): Promise<UserProfile> {
     if (!currentUserId) return Promise.reject(new Error('AUTH_REQUIRED'));
-    if (nativeClient) return client.getUserProfile();
+    if (nativeClient) {
+      const userId = currentUserId;
+      const generation = principalGeneration;
+      return client.getUserProfile().then((profile) => {
+        if (generation !== principalGeneration || currentUserId !== userId) {
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        }
+        if (profile.userId !== userId) {
+          throw new ApiClientError(
+            'Account does not match',
+            403,
+            'NATIVE_ACCOUNT_MISMATCH',
+            'native',
+          );
+        }
+        return profile;
+      });
+    }
     if (selfProfilePromise && selfProfileExpiresAt > Date.now()) return selfProfilePromise;
     const userId = currentUserId;
     const generation = principalGeneration;
@@ -2087,9 +2105,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getHomeBase() {
       if (homeBasePromise) return homeBasePromise;
+      const generation = principalGeneration;
       const request = client
         .getHomeBase()
         .then((homeBase) => {
+          if (nativeClient && generation !== principalGeneration) {
+            throw new Error('AUTH_PRINCIPAL_CHANGED');
+          }
           if (!currentUserId || homeBase.viewerUserId !== currentUserId) {
             throw new Error('HOME_BASE_VIEWER_MISMATCH');
           }
@@ -2116,6 +2138,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
             tenantId !== currentTenantId
           ) {
             throw new Error('AUTH_PRINCIPAL_CHANGED');
+          }
+          if (nativeClient && dashboard.profile.userId !== userId) {
+            throw new ApiClientError(
+              'Account does not match',
+              403,
+              'NATIVE_ACCOUNT_MISMATCH',
+              'native',
+            );
           }
           return dashboard;
         })
@@ -2680,6 +2710,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     async logout() {
       if (nativeClient) {
+        // Invalidate account reads before waiting for native revocation/recovery.
+        principalGeneration += 1;
+        currentUserId = undefined;
+        currentTenantId = undefined;
         client.clearAccessToken();
         if (options.nativeSessionTransport) await client.revokeSession();
       } else await client.revokeSession();
@@ -2704,7 +2738,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       currentTenantId = undefined;
       vivaReauthorizationStarted = false;
       vivaAccessPromise = undefined;
-      principalGeneration += 1;
+      if (!nativeClient) principalGeneration += 1;
       try {
         window.sessionStorage.removeItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
         window.sessionStorage.removeItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);

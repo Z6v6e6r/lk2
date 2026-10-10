@@ -3,6 +3,7 @@ import { PadlHubApiClient } from '@phub/api-sdk';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
 import { createNativeApiFetch, type AndroidSessionPlugin } from './native-api-fetch.js';
 import { sessionFailureDetails } from './session-failure.js';
+import { homeBase } from './ios/testing/cabinet-fixtures.js';
 
 const userId = '00000000-0000-4000-8000-000000000001';
 const session = {
@@ -71,6 +72,121 @@ function url(input: Parameters<typeof fetch>[0]): string {
 }
 
 describe('Android process session using the existing API contract', () => {
+  it.each(['profile', 'home', 'home/base'])(
+    'discards a late %s read while native logout is still pending',
+    async (path) => {
+      let finishRead!: (response: Response) => void;
+      let finishLogout!: (response: Response) => void;
+      const transport = vi.fn<typeof fetch>().mockImplementation((input) => {
+        if (url(input).endsWith('/verify')) return Promise.resolve(Response.json(session));
+        return new Promise((resolve) => {
+          if (url(input).endsWith('/auth/session')) finishLogout = resolve;
+          else finishRead = resolve;
+        });
+      });
+      const gateway = createBrowserAuthGateway({
+        ...options,
+        nativeSessionTransport: true,
+        fetchImplementation: transport,
+      });
+      await gateway.verifyCode({ challengeId: 'challenge', code: '0000', acceptance });
+      const read =
+        path === 'profile'
+          ? gateway.getSelfProfile
+          : path === 'home'
+            ? gateway.getHomeDashboard
+            : gateway.getHomeBase;
+      const pending = read();
+      const discarded = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+      const logout = gateway.logout();
+      finishRead(
+        Response.json(
+          path === 'profile'
+            ? { userId, displayName: 'Тестовый игрок' }
+            : path === 'home'
+              ? { profile: { userId } }
+              : homeBase,
+        ),
+      );
+      await discarded;
+      await expect(gateway.getSelfProfile()).rejects.toThrow('AUTH_REQUIRED');
+      finishLogout(new Response(null, { status: 204 }));
+      await logout;
+    },
+  );
+  it.each(['profile', 'home', 'home/base'])(
+    'rejects another account in the canonical %s read',
+    async (path) => {
+      const foreignId = '00000000-0000-4000-8000-000000000099';
+      const transport = vi
+        .fn<typeof fetch>()
+        .mockImplementation((input) =>
+          Promise.resolve(
+            Response.json(
+              url(input).endsWith('/verify')
+                ? session
+                : path === 'profile'
+                  ? { userId: foreignId, displayName: 'Другой аккаунт' }
+                  : path === 'home'
+                    ? { profile: { userId: foreignId } }
+                    : { ...homeBase, viewerUserId: foreignId },
+            ),
+          ),
+        );
+      const gateway = createBrowserAuthGateway({ ...options, fetchImplementation: transport });
+      await gateway.verifyCode({ challengeId: 'challenge', code: '0000', acceptance });
+      const read =
+        path === 'profile'
+          ? gateway.getSelfProfile
+          : path === 'home'
+            ? gateway.getHomeDashboard
+            : gateway.getHomeBase;
+      if (path === 'home/base') await expect(read()).rejects.toThrow('HOME_BASE_VIEWER_MISMATCH');
+      else
+        await expect(read()).rejects.toMatchObject({
+          code: 'NATIVE_ACCOUNT_MISMATCH',
+          status: 403,
+        });
+      expect(transport).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(['profile', 'home', 'home/base'])(
+    'discards a late %s response after logout and login to the same account',
+    async (path) => {
+      let finish!: (response: Response) => void;
+      const transport = vi.fn<typeof fetch>().mockImplementation((input) =>
+        url(input).endsWith('/verify')
+          ? Promise.resolve(Response.json(session))
+          : new Promise((resolve) => {
+              finish = resolve;
+            }),
+      );
+      const gateway = createBrowserAuthGateway({ ...options, fetchImplementation: transport });
+      await gateway.verifyCode({ challengeId: 'challenge', code: '0000', acceptance });
+      const read =
+        path === 'profile'
+          ? gateway.getSelfProfile
+          : path === 'home'
+            ? gateway.getHomeDashboard
+            : gateway.getHomeBase;
+      const pending = read();
+      const discarded = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+      await gateway.logout();
+      await gateway.verifyCode({ challengeId: 'challenge', code: '0000', acceptance });
+      finish(
+        Response.json(
+          path === 'profile'
+            ? { userId, displayName: 'Тестовый игрок' }
+            : path === 'home'
+              ? { profile: { userId } }
+              : homeBase,
+        ),
+      );
+      await discarded;
+    },
+  );
+
   it('restores without network; OTP then reads the canonical profile with the Android header', async () => {
     const transport = vi
       .fn<typeof fetch>()

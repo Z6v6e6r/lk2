@@ -1165,13 +1165,30 @@ export function App({
             setProfileCommunitiesError('Не удалось загрузить сообщества.');
           },
         );
-        void Promise.resolve().then(() => {
-          if (!active) return;
-          setProfileSubscriptions(null);
-          setProfileSubscriptionsError(
-            'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
+        if (clientPlatform === 'android') {
+          void gateway.getHomeDashboard().then(
+            (dashboard) => {
+              if (!active) return;
+              setProfileSubscriptions(dashboard.subscriptions);
+              setProfileSubscriptionsError(null);
+            },
+            () => {
+              if (!active) return;
+              setProfileSubscriptions(null);
+              setProfileSubscriptionsError(
+                'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
+              );
+            },
           );
-        });
+        } else {
+          void Promise.resolve().then(() => {
+            if (!active) return;
+            setProfileSubscriptions(null);
+            setProfileSubscriptionsError(
+              'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
+            );
+          });
+        }
         void gateway.listProfileFriends(8).then(
           (page) => {
             if (!active) return;
@@ -1714,6 +1731,7 @@ export function App({
   }, [
     gateway,
     chatsReloadToken,
+    clientPlatform,
     protectedRoute.kind,
     realtimeBaseUrl,
     requestedConversationId,
@@ -2528,6 +2546,7 @@ export function App({
       }
       return (
         <ProfilePage
+          subscriptionRenewalAvailable={clientPlatform === 'web'}
           profile={userProfile}
           logoutBusy={state.busy === 'logout'}
           notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}

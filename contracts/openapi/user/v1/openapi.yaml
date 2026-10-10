@@ -6879,6 +6879,9 @@ components:
         firstName:
           type: [string, 'null']
           maxLength: 100
+        lastName:
+          type: [string, 'null']
+          maxLength: 100
         avatarUrl:
           type: [string, 'null']
           pattern: '^(https?://.+|/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
