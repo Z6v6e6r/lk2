@@ -6,12 +6,19 @@ import XCTest
 final class PadlHubBridgeTests: XCTestCase {
   @MainActor
   func testViewportStaysInsideSafeAreaWithoutDuplicateScrollInsets() throws {
-    let controller = PadlHubBridgeViewController()
-    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
-    window.rootViewController = controller
-    controller.loadViewIfNeeded()
+    // A detached UIWindow has no scene geometry; exercise the displayed application instead.
+    let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+    let controller = try XCTUnwrap(
+      windows.compactMap { $0.rootViewController as? PadlHubBridgeViewController }.first)
+    let originalInsets = controller.additionalSafeAreaInsets
+    defer {
+      controller.additionalSafeAreaInsets = originalInsets
+      controller.view.setNeedsLayout()
+      controller.view.layoutIfNeeded()
+    }
     controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
-    window.layoutIfNeeded()
+    controller.view.setNeedsLayout()
     controller.view.layoutIfNeeded()
     let webView = try XCTUnwrap(controller.webView)
     XCTAssertFalse(webView === controller.view)
@@ -20,10 +27,9 @@ final class PadlHubBridgeTests: XCTestCase {
     XCTAssertEqual(webView.scrollView.contentInsetAdjustmentBehavior, .never)
     XCTAssertEqual(webView.safeAreaInsets, .zero)
 
-    // Rotation moves the cutout to the side. Constraints must follow without a fixed top value.
-    window.frame = CGRect(x: 0, y: 0, width: 844, height: 390)
+    // Model side cutouts after rotation. Constraints must follow without a fixed top value.
     controller.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 59, bottom: 21, right: 59)
-    window.layoutIfNeeded()
+    controller.view.setNeedsLayout()
     controller.view.layoutIfNeeded()
     XCTAssertEqual(webView.frame, controller.view.safeAreaLayoutGuide.layoutFrame)
     XCTAssertGreaterThanOrEqual(webView.frame.minX, 59)
