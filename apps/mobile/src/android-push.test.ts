@@ -99,6 +99,33 @@ afterEach(() => {
 });
 
 describe('Android push controller', () => {
+  it('handles unavailable native listeners immediately and can still clean up', async () => {
+    const { transport } = plugin({
+      addListener: vi.fn().mockRejectedValue(new Error('native listener unavailable')),
+      status: vi.fn().mockResolvedValue({
+        configured: false,
+        state: 'unsupported',
+        installationId: 'install-1',
+        pendingRevoke: false,
+      }),
+    });
+    const publish = vi.fn();
+    const controller = createAndroidPushController(gateway() as never, publish, transport);
+    const cleanup = controller.mount();
+    await vi.waitFor(() =>
+      expect(publish).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          enabled: false,
+          state: 'unsupported',
+          busy: false,
+        }),
+      ),
+    );
+    cleanup();
+    expect(transport.registration).not.toHaveBeenCalled();
+    expect(windowListeners.get('focus')?.size).toBe(0);
+  });
+
   it('keeps the native registration key across a lost response and activates only after acknowledgement', async () => {
     const registerAndroidPushEndpoint = vi
       .fn()

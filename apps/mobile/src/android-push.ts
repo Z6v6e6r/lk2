@@ -191,7 +191,7 @@ export function createAndroidPushController(
         transport.addListener('notificationOpened', () => {
           void open().catch(() => undefined);
         }),
-      ];
+      ].map((listener) => listener.catch(() => undefined));
       const focus = (): void => {
         void refresh().catch(() => undefined);
         void open().catch(() => undefined);
@@ -203,10 +203,7 @@ export function createAndroidPushController(
         alive = false;
         window.removeEventListener('focus', focus);
         for (const listener of listeners)
-          void listener.then(
-            (handle) => handle.remove(),
-            () => undefined,
-          );
+          void listener.then((handle) => handle?.remove()).catch(() => undefined);
       };
     },
   };

@@ -34,6 +34,8 @@ export async function deferNotificationDeliveryWithoutAttempt(options: {
 }): Promise<'retry' | 'stale'> {
   const retryAfterMs = Math.max(1_000, Math.min(Math.trunc(options.retryAfterMs), 3_600_000));
   return withTenantTransaction(options.pool, options.job.tenantId, async (client) => {
+    // No provider call has occurred. Preserve the baseline claim-generation fence:
+    // a reclaim increments attempt_count, so an older deferrer cannot match it.
     const updated = await client.query(
       `update notifications.deliveries
           set state = 'PENDING',
@@ -42,8 +44,7 @@ export async function deferNotificationDeliveryWithoutAttempt(options: {
               lease_expires_at = null,
               updated_at = now(),
               last_error_code = $5
-        where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3
-          and lease_expires_at > now()`,
+        where tenant_id = $1 and id = $2 and state = 'SENDING' and attempt_count = $3`,
       [
         options.job.tenantId,
         options.job.deliveryId,
