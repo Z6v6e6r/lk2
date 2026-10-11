@@ -47,17 +47,17 @@ const row = {
 
 function publicReadPool(queries: string[]): Pool {
   const client = {
-    query: async (text: string) => {
+    query: (text: string) => {
       queries.push(text);
       if (text.includes('recommendation_card_photos')) {
-        throw new Error('PUBLIC_READ_MUST_NOT_QUERY_RECOMMENDATION_PHOTOS');
+        return Promise.reject(new Error('PUBLIC_READ_MUST_NOT_QUERY_RECOMMENDATION_PHOTOS'));
       }
-      if (text.includes('from locations.profiles')) return { rows: [row] };
-      return { rows: [] };
+      if (text.includes('from locations.profiles')) return Promise.resolve({ rows: [row] });
+      return Promise.resolve({ rows: [] });
     },
     release: () => undefined,
   } as unknown as PoolClient;
-  return { connect: async () => client } as unknown as Pool;
+  return { connect: () => Promise.resolve(client) } as unknown as Pool;
 }
 
 describe('location published reads', () => {
