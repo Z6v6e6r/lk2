@@ -136,6 +136,68 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('Home return to profile', () => {
+  it.each(['default', 'v2', 'v3'] as const)(
+    'returns %s Home to its profile without changing the selected tab',
+    async (layoutVariant) => {
+      let nextFrame: FrameRequestCallback | undefined;
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+        nextFrame = callback;
+        return 1;
+      });
+      vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+      const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+      vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+      const activateUpcoming = vi.fn();
+      const { container } = render(
+        <HomeDashboardPage
+          {...independentSectionProps}
+          dashboard={homeBase}
+          layoutVariant={layoutVariant}
+          tenantName="ПадлХАБ"
+          notificationUnreadCount={0}
+          logoutBusy={false}
+          onActivateUpcoming={activateUpcoming}
+          onLogout={vi.fn()}
+        />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      const hero = container.querySelector('.fh-hero') as HTMLElement;
+      let bottom = 400;
+      vi.spyOn(hero, 'getBoundingClientRect').mockImplementation(() => ({ bottom }) as DOMRect);
+      act(() => nextFrame?.(0));
+      expect(screen.queryByRole('button', { name: 'Вернуться к шапке профиля' })).toBeNull();
+      fireEvent.click(screen.getByRole('tab', { name: 'Мои записи' }));
+      bottom = -1;
+      fireEvent.scroll(window);
+      act(() => nextFrame?.(0));
+
+      const button = screen.getByRole('button', { name: 'Вернуться к шапке профиля' });
+      const tablist = screen.getByRole('tablist', { name: 'Раздел записей' });
+      expect(within(tablist).getAllByRole('tab')).toHaveLength(2);
+      expect(tablist).not.toContainElement(button);
+      fireEvent.click(button);
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+      expect(screen.getByRole('tab', { name: 'Мои записи' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      expect(activateUpcoming).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(container.querySelector('.fh-profile'));
+
+      vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: true }));
+      fireEvent.click(button);
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'auto' });
+      bottom = 400;
+      fireEvent.scroll(window);
+      act(() => nextFrame?.(0));
+      expect(screen.queryByRole('button', { name: 'Вернуться к шапке профиля' })).toBeNull();
+    },
+  );
+});
+
 describe('Home promotion carousel', () => {
   it('uses the mobile WebP derivative and rotates active CUP promotions', () => {
     vi.useFakeTimers();

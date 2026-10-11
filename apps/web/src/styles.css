@@ -10392,6 +10392,48 @@ label {
   margin-top: var(--gap-actions-tabs);
 }
 
+.fh-tabs-bar.has-scroll-top .fh-tabs {
+  width: calc(var(--fh-page-width) - 88px);
+  margin-left: 20px;
+}
+
+.fh-tabs-bar.has-scroll-top .fh-tabs button {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 50%;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.fh-tabs-bar.has-scroll-top .fh-tabs button:first-child {
+  padding-right: 32px;
+}
+
+.fh-tabs-bar.has-scroll-top .fh-tabs button::after {
+  width: 100%;
+  align-self: flex-start;
+}
+
+.fh-tabs-bar.has-scroll-top .fh-tabs button:first-child::after {
+  width: calc(100% + 32px);
+}
+
+.figma-home .fh-tabs-bar.has-scroll-top .fh-preferences-edit {
+  left: calc((100% - 100px) / 2 - 10px);
+}
+
+.fh-tabs-bar .fh-scroll-top {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  width: 44px;
+  height: 44px;
+  padding: 4px;
+  border: 0;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+
 .fh-tabs {
   box-sizing: border-box;
   display: flex;

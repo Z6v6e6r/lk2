@@ -8,7 +8,11 @@ const entry = vi.hoisted(() => ({
   loadShared: vi.fn(),
 }));
 vi.mock('@capacitor/core', () => ({
-  Capacitor: { getPlatform: () => entry.platform },
+  Capacitor: {
+    getPlatform: () => entry.platform,
+    isNativePlatform: () => false,
+    isPluginAvailable: () => false,
+  },
 }));
 vi.mock('react-dom/client', () => ({ createRoot: () => ({ render: entry.render }) }));
 
