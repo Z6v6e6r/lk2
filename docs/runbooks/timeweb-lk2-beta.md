@@ -346,6 +346,17 @@ Start the candidate API behind Basic through the exact rendered `release.env` an
 `compose.beta.yaml`, prove readiness, then start Web the same way. Compose stamps both containers
 with the non-secret exact `phub.release-id` label. Public ingress is last:
 
+Android FCM is an explicit notification activation, documented in
+[Android chats and FCM](android-chats-fcm.md#operator-preparation-and-activation). Its optional five
+FCM keys are restricted to API/worker. With FCM absent/disabled, the worker's read-only credential
+bind resolves to `/dev/null` and needs no private file. For an approved enabled worker transition,
+the existing canonical release Compose controller derives the source from validated API/worker
+runtime env, checks the fixed host file's UID 1001, 0600 mode, one-link regular-file identity and
+16 KiB size bound, then supplies only the worker bind at `/run/phub/fcm-service-account.json`.
+It rejects ambient mount substitution and never creates a missing host path. Other services receive
+no FCM credential mount. API/Web upgrades preserve the worker. Disabling FCM stops sending;
+rolling back to a pre-FCM source also requires its compatible receipt-bound runtime env set.
+
 ```sh
 sudo -- /usr/bin/env -i PATH=/usr/bin:/bin HOME=/root \
   /usr/bin/node scripts/control-timeweb-yandex-public-beta.js --mode activate-ingress \

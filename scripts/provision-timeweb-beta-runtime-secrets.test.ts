@@ -409,6 +409,44 @@ describe('Timeweb beta runtime secret provisioner', () => {
   });
 
   it.each([
+    ['FCM_ENABLED', 'false'],
+    ['FCM_PROJECT_ID', 'other-project'],
+    ['FCM_APP_ID', 'com.cabinet.app'],
+    ['FCM_ENVIRONMENT', 'PRODUCTION'],
+    ['FCM_CREDENTIAL_FILE', '/etc/phub/timeweb-beta/api.env'],
+    ['NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS', '{"v1":"different-synthetic-keyring"}'],
+  ])('rejects mismatched FCM %s before creating a runtime secret set', (key, replacement) => {
+    const value = fixture();
+    for (const service of ['api', 'worker']) value.environments[service]!.FCM_ENABLED = 'true';
+    value.environments.worker![key] = replacement;
+    for (const service of ['api', 'worker'])
+      writeFileSync(
+        join(value.sourceDir, `${service}.env`),
+        encodeEnvironment(value.environments[service]!),
+      );
+    expect(() => provisionTimewebBetaRuntimeSecrets(options(value))).toThrow('fcm_runtime_binding');
+    expect(() => lstatSync(value.targetDir)).toThrow();
+  });
+
+  it('accepts a matching FCM preview and a legacy preview with all FCM keys absent', () => {
+    for (const enabled of [true, false]) {
+      const value = fixture();
+      for (const service of ['api', 'worker']) {
+        const environment = value.environments[service]!;
+        if (enabled) environment.FCM_ENABLED = 'true';
+        else
+          for (const key of Object.keys(environment))
+            if (key.startsWith('FCM_')) delete environment[key];
+        writeFileSync(join(value.sourceDir, `${service}.env`), encodeEnvironment(environment));
+      }
+      expect(provisionTimewebBetaRuntimeSecrets(options(value, { dryRun: true })).dryRun).toBe(
+        true,
+      );
+      expect(() => lstatSync(value.targetDir)).toThrow();
+    }
+  });
+
+  it.each([
     [
       'production APP_ENV with staging-only Games reads',
       (environments: ReturnType<typeof safeRuntimeEnvironments>) => {

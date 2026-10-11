@@ -39,7 +39,7 @@ interface MutableComposeService {
   image: string;
   profiles?: string[];
   ports?: string[];
-  volumes?: string[];
+  volumes?: unknown[];
   build?: string;
   privileged?: boolean;
   network_mode?: string;
@@ -490,6 +490,40 @@ describe('Timeweb deployment contract', () => {
     ).toThrow('application_escape');
   });
 
+  it.each([
+    ['read_only', false],
+    ['source', '/etc/phub/timeweb-beta'],
+    ['target', '/app'],
+    ['type', 'volume'],
+    ['bind', { create_host_path: true }],
+  ])('rejects an unsafe worker FCM mount %s', (key, value) => {
+    expect(() =>
+      validateApplicationCompose(
+        mutatedApplication((compose) => {
+          const mount = compose.services.worker.volumes?.[0] as Record<string, unknown>;
+          mount[key] = value;
+        }),
+        target,
+      ),
+    ).toThrow('application_fcm_mount');
+  });
+
+  it('rejects missing/additional worker mounts and a credential mount on the API', () => {
+    for (const mode of ['missing', 'additional', 'api']) {
+      expect(() =>
+        validateApplicationCompose(
+          mutatedApplication((compose) => {
+            if (mode === 'missing') delete compose.services.worker.volumes;
+            else if (mode === 'additional')
+              compose.services.worker.volumes?.push('/var/run/docker.sock:/var/run/docker.sock');
+            else compose.services.api.volumes = compose.services.worker.volumes;
+          }),
+          target,
+        ),
+      ).toThrow(mode === 'api' ? 'application_escape' : 'application_fcm_mount');
+    }
+  });
+
   it('30. rejects privileged or host-network application services', () => {
     expect(() =>
       validateApplicationCompose(
@@ -787,6 +821,60 @@ describe('Timeweb deployment contract', () => {
     realtimeInput.realtime!.JWT_ACCESS_SECRET = 'synthetic';
     expect(() => validateRuntimeEnvironments(realtimeInput, runtime, target)).toThrow(
       'env_realtime_forbidden_key',
+    );
+  });
+
+  function fcmEnvironments() {
+    const input = syntheticEnvironments();
+    for (const service of ['api', 'worker']) {
+      Object.assign(input[service]!, {
+        FCM_ENABLED: 'true',
+        FCM_PROJECT_ID: 'padlhub',
+        FCM_APP_ID: 'ru.padlhub.app',
+        FCM_ENVIRONMENT: 'SANDBOX',
+        FCM_CREDENTIAL_FILE: '/run/phub/fcm-service-account.json',
+        NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: '{"v1":"synthetic-keyring"}',
+        NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: 'v1',
+      });
+    }
+    return input;
+  }
+
+  it('accepts opt-in FCM and preserves old environments with FCM absent', () => {
+    expect(() => validateRuntimeEnvironments(fcmEnvironments(), runtime, target)).not.toThrow();
+    expect(() =>
+      validateRuntimeEnvironments(syntheticEnvironments(), runtime, target),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['FCM_ENABLED', 'false'],
+    ['FCM_PROJECT_ID', 'other-project'],
+    ['FCM_APP_ID', 'com.cabinet.app'],
+    ['FCM_ENVIRONMENT', 'PRODUCTION'],
+    ['FCM_CREDENTIAL_FILE', '/etc/phub/timeweb-beta/api.env'],
+    ['NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS', '{"v1":"different-synthetic-keyring"}'],
+    ['NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID', 'v2'],
+  ])('rejects mismatched FCM binding %s', (key, value) => {
+    const input = fcmEnvironments();
+    input.worker![key] = value;
+    expect(() => validateRuntimeEnvironments(input, runtime, target)).toThrow('env_fcm_identity');
+  });
+
+  it('rejects an enabled FCM configuration without its project or with an invalid flag', () => {
+    const input = fcmEnvironments();
+    delete input.api!.FCM_PROJECT_ID;
+    expect(() => validateRuntimeEnvironments(input, runtime, target)).toThrow('env_fcm_identity');
+    const badFlag = fcmEnvironments();
+    badFlag.worker!.FCM_ENABLED = 'yes';
+    expect(() => validateRuntimeEnvironments(badFlag, runtime, target)).toThrow('env_fcm_flag');
+  });
+
+  it.each(['realtime', 'migrator'])('does not pass FCM metadata into %s', (service) => {
+    const input = syntheticEnvironments();
+    input[service]!.FCM_CREDENTIAL_FILE = '/run/phub/fcm-service-account.json';
+    expect(() => validateRuntimeEnvironments(input, runtime, target)).toThrow(
+      `env_${service}_unknown_key`,
     );
   });
 

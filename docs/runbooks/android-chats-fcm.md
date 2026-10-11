@@ -104,6 +104,21 @@ tenant before changing credentials, deploying or applying either operator.
 2. Set matching `FCM_PROJECT_ID=padlhub`, `FCM_APP_ID=ru.padlhub.app`, `FCM_ENVIRONMENT` and endpoint
    encryption keyring on API/worker. Keep `FCM_ENABLED=false` until the reviewed candidate and file
    permissions are verified. Do not change VAPID/receipt configuration to make Android work.
+
+   The Timeweb contract permits the five FCM identity/gate keys only on API and worker, and requires
+   matching project/app/environment/keyring when enabled. Use
+   `FCM_CREDENTIAL_FILE=/run/phub/fcm-service-account.json`. The private host file is
+   `/etc/phub/timeweb-beta-fcm/fcm-service-account.json`: regular, non-symlink, one link, UID 1001,
+   mode 0600, at most 16 KiB. Its separate directory is real, root-owned and 0700; it is outside the
+   managed runtime-env set so env rotation never copies or removes the credential. Prepare it only
+   through the approved secret process. The canonical
+   `render-timeweb-beta-release-env.js --compose-stage` controller derives the worker-only bind
+   from its validated runtime env files and checks credential metadata before Compose. The bind
+   is read-only and never creates a missing host path. An ambient
+   `TIMEWEB_FCM_CREDENTIAL_SOURCE` override is rejected. With FCM absent/disabled it binds only
+   `/dev/null`; no credential file is required or inspected. Existing API/Web component upgrades
+   preserve the running worker and do not activate FCM.
+
 3. Preview the provider account using an existing active tenant operator with
    `admin`/`notifications.manage`; the command reads no Firebase credential and sends no push:
 
@@ -138,6 +153,9 @@ audited tenant operator. Provider disabling uses `--state=off` on the exact sele
 endpoints, campaigns and delivery evidence for reconciliation; do not delete or retarget pending
 deliveries. Re-enable only after readback: queued work may resume, while events acknowledged during
 global disablement are not automatically replayed.
+For an image/source rollback to the predecessor without FCM support, restore its receipt-bound
+runtime env set through the existing recovery procedure; that predecessor rejects the new FCM
+keys. Preserve the separate credential file privately and keep the notification keyring unchanged.
 
 ## Local verification
 

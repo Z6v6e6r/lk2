@@ -124,7 +124,7 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
         [androidProviderAccountId, 'ru.padlhub.app', 'SANDBOX', 'ACTIVE', idOnlyUser, 'd'],
         [randomUUID(), 'ru.padlhub.other', 'SANDBOX', 'ACTIVE', idOnlyUser, 'e'],
         [randomUUID(), 'ru.padlhub.app', 'PRODUCTION', 'ACTIVE', idOnlyUser, 'f'],
-        [randomUUID(), 'ru.padlhub.disabled', 'SANDBOX', 'DISABLED', idOnlyUser, 'g'],
+        [randomUUID(), 'ru.padlhub.disabled', 'SANDBOX', 'DISABLED', idOnlyUser, '1'],
       ] as const) {
         await client.query(
           `insert into integration.notification_provider_accounts (
@@ -156,7 +156,7 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
           loginOwner,
           androidProviderAccountId,
           Buffer.from('synthetic-encrypted-endpoint'),
-          'h'.repeat(64),
+          '2'.repeat(64),
         ],
       );
       await insertEndpoint(client, loginOwner, 'a');

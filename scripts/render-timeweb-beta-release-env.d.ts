@@ -123,6 +123,12 @@ export function validateTimewebRuntimeSecretPaths(
 
 export function assertNoAmbientComposeOverrides(environment?: NodeJS.ProcessEnv): void;
 export function assertNoAmbientDockerOverrides(environment?: NodeJS.ProcessEnv): void;
+export function timewebFcmCredentialSource(
+  runtimeEnvRoot: string,
+  expectedEnvUid?: number,
+  expectedCredentialUid?: number,
+  credentialRoot?: string,
+): string;
 
 export type TimewebInitialBetaComposeStage =
   | 'preflight'

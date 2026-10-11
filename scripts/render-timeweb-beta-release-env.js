@@ -14,6 +14,7 @@ import {
   linkSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   unlinkSync,
@@ -31,6 +32,10 @@ import {
   assertExactTimewebFrozenSource,
   requireExactTimewebFrozenSourceAuthority,
 } from './verify-timeweb-frozen-source.js';
+import {
+  parseEnvironment,
+  validateTimewebFcmEnvironment,
+} from './verify-timeweb-deployment-contract.js';
 
 const BASE_LOCK_PATH = fileURLToPath(
   new URL('../deploy/timeweb/base-images.lock.json', import.meta.url),
@@ -842,9 +847,80 @@ export function validateTimewebRuntimeSecretPaths(runtimeEnvRoot, releaseId, exp
 
 export function assertNoAmbientComposeOverrides(environment = process.env) {
   const forbidden = Object.keys(environment).filter(
-    (key) => key.startsWith('COMPOSE_') && environment[key] !== undefined,
+    (key) =>
+      (key.startsWith('COMPOSE_') || key === 'TIMEWEB_FCM_CREDENTIAL_SOURCE') &&
+      environment[key] !== undefined,
   );
   if (forbidden.length > 0) fail('ambient_compose_override');
+}
+
+export function timewebFcmCredentialSource(
+  runtimeEnvRoot,
+  expectedEnvUid = 0,
+  expectedCredentialUid = 1001,
+  credentialRoot = '/etc/phub/timeweb-beta-fcm',
+) {
+  const root = lstatSync(runtimeEnvRoot);
+  if (
+    !root.isDirectory() ||
+    root.isSymbolicLink() ||
+    realpathSync(runtimeEnvRoot) !== runtimeEnvRoot ||
+    root.uid !== expectedEnvUid ||
+    (root.mode & 0o777) !== 0o700
+  )
+    fail('runtime_env_root_security');
+  const environments = ['api', 'worker'].map((service) =>
+    parseEnvironment(
+      decodeUtf8(
+        readSecureRegularFile(join(runtimeEnvRoot, `${service}.env`), {
+          expectedUid: expectedEnvUid,
+          expectedMode: 0o600,
+          maxBytes: 131_072,
+          reason: 'runtime_secret_file_security',
+        }),
+        'runtime_secret_encoding',
+      ),
+    ),
+  );
+  let enabled;
+  try {
+    enabled = validateTimewebFcmEnvironment(...environments);
+  } catch {
+    fail('fcm_runtime_binding');
+  }
+  if (!enabled) return '/dev/null';
+  let credentialDirectory;
+  try {
+    credentialDirectory = lstatSync(credentialRoot);
+  } catch {
+    fail('fcm_credential_directory_security');
+  }
+  if (
+    !credentialDirectory.isDirectory() ||
+    credentialDirectory.isSymbolicLink() ||
+    realpathSync(credentialRoot) !== credentialRoot ||
+    credentialDirectory.uid !== expectedEnvUid ||
+    (credentialDirectory.mode & 0o777) !== 0o700
+  )
+    fail('fcm_credential_directory_security');
+  const path = join(credentialRoot, 'fcm-service-account.json');
+  let file;
+  try {
+    file = lstatSync(path);
+  } catch {
+    fail('fcm_credential_file_security');
+  }
+  if (
+    !file.isFile() ||
+    file.isSymbolicLink() ||
+    file.uid !== expectedCredentialUid ||
+    (file.mode & 0o777) !== 0o600 ||
+    file.nlink !== 1 ||
+    file.size < 1 ||
+    file.size > 16 * 1024
+  )
+    fail('fcm_credential_file_security');
+  return path;
 }
 
 export function assertNoAmbientDockerOverrides(environment = process.env) {
@@ -900,6 +976,7 @@ export function runTimewebInitialBetaComposeStage(
   expectedUid = 0,
 ) {
   assertNoAmbientDockerOverrides(process.env);
+  assertNoAmbientComposeOverrides(process.env);
   const authority = verifiedRenderedEnvironments.get(rendered);
   if (!authority) fail('untrusted_rendered_environment');
   const currentSourceAuthority = assertExactTimewebFrozenSource({
@@ -945,6 +1022,10 @@ export function runTimewebInitialBetaComposeStage(
     DOCKER_HOST: `unix://${TARGET_DOCKER_SOCKET}`,
     DOCKER_CONFIG: TARGET_DOCKER_CONFIG,
     COMPOSE_PROFILES: '',
+    TIMEWEB_FCM_CREDENTIAL_SOURCE: timewebFcmCredentialSource(
+      authority.runtimeEnvRoot,
+      expectedUid,
+    ),
   };
   const preflight = buildTimewebInitialBetaComposeInvocation('preflight', releaseEnvPath);
   let services;

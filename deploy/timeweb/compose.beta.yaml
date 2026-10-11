@@ -81,6 +81,13 @@ services:
     env_file:
       - path: ${TIMEWEB_RUNTIME_ENV_ROOT:?TIMEWEB_RUNTIME_ENV_ROOT is required}/worker.env
         required: true
+    volumes:
+      - type: bind
+        source: ${TIMEWEB_FCM_CREDENTIAL_SOURCE:-/dev/null}
+        target: /run/phub/fcm-service-account.json
+        read_only: true
+        bind:
+          create_host_path: false
     healthcheck:
       test:
         [
