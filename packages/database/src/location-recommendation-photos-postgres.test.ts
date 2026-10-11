@@ -292,7 +292,7 @@ suite('location recommendation card photos under a non-owner PostgreSQL role', (
       qual: string;
       with_check: string;
     }>(
-      `select roles, cmd, permissive, qual, with_check from pg_policies where schemaname = 'locations' and tablename = 'recommendation_card_photos'`,
+      `select roles::text[] as roles, cmd, permissive, qual, with_check from pg_policies where schemaname = 'locations' and tablename = 'recommendation_card_photos'`,
     );
     expect(policies.rows).toHaveLength(1);
     expect(policies.rows[0]).toMatchObject({
