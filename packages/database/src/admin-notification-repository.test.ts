@@ -102,6 +102,7 @@ function campaignProjectionHandler(input: {
   readonly phoneRows?: readonly RecipientRowFixture[];
   readonly userIdRows?: readonly RecipientRowFixture[];
   readonly endpointRows?: readonly { readonly id: string }[];
+  readonly capabilities?: Record<string, unknown>;
 }) {
   let intentNumber = 0;
   let deliveryNumber = 0;
@@ -113,7 +114,7 @@ function campaignProjectionHandler(input: {
       return { rows: [], rowCount: 0 };
     }
     if (text.includes('web_push_provider_configured')) {
-      return { rows: [capabilitiesRow()], rowCount: 1 };
+      return { rows: [capabilitiesRow(input.capabilities)], rowCount: 1 };
     }
     if (text.includes('u.id = any($2::uuid[])')) {
       return { rows: userIdRows, rowCount: userIdRows.length };
@@ -146,7 +147,10 @@ function campaignProjectionHandler(input: {
       return { rows: [{ id: '88888888-8888-4888-8888-888888888888' }], rowCount: 1 };
     }
     if (text.includes('from integration.notification_endpoints e')) {
-      return { rows: endpointRows, rowCount: endpointRows.length };
+      return {
+        rows: endpointRows.map((row) => ({ ...row, platform: 'WEB' })),
+        rowCount: endpointRows.length,
+      };
     }
     if (
       text.includes('insert into notifications.admin_campaign_commands') ||
@@ -175,6 +179,7 @@ describe('admin notification repository', () => {
       webPushProviderConfigured: false,
       iosPushTenantEnabled: false,
       androidPushTenantEnabled: false,
+      androidPushProviderConfigured: false,
     });
     expect(release).toHaveBeenCalledOnce();
   });

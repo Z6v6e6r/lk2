@@ -24,6 +24,7 @@ import {
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 
 import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
+import { validateTimewebFcmEnvironment } from './verify-timeweb-deployment-contract.js';
 import {
   assertExactTimewebFrozenSource,
   requireExactTimewebFrozenSourceAuthority,
@@ -349,6 +350,11 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
   )
     fail('instance_identity');
 
+  try {
+    validateTimewebFcmEnvironment(api, worker);
+  } catch {
+    fail('fcm_runtime_binding');
+  }
   return environments;
 }
 

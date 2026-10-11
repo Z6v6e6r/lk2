@@ -1,8 +1,20 @@
 import type { LocationRepository } from '@phub/database';
-import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
+import type {
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+  preHandlerHookHandler,
+  onRequestHookHandler,
+} from 'fastify';
 import { createHash } from 'node:crypto';
 
 import { sendApiError } from '../http-errors.js';
+import {
+  androidBinaryMediaRateLimit,
+  binaryMediaPrincipalKey,
+  binaryMediaReadBudget,
+  releaseBinaryReadWithResponse,
+} from '../binary-media-read-budget.js';
 import type { StationSupportRepository } from './station-support-repository.js';
 import {
   StationSupportProviderError,
@@ -1013,7 +1025,10 @@ export function registerStationSupportRoutes(
    */
   app.get(
     '/user/api/v1/:tenantKey/support/attachments/:attachmentId/content',
-    { preHandler: [...options.authenticatedTenantHandlers] },
+    {
+      onRequest: [...options.authenticatedTenantHandlers] as onRequestHookHandler[],
+      config: { rateLimit: androidBinaryMediaRateLimit },
+    },
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       if (!ready()) return disabled(request, reply);
@@ -1031,6 +1046,36 @@ export function registerStationSupportRoutes(
       const objectKey = stationSupportMediaObjectKey(current.tenantId, current.userId, sha256);
       const stored = await media.stat(objectKey).catch(() => undefined);
       if (!stored) return attachmentMissing();
+      if (request.headers['x-app-platform'] === 'android') {
+        const release = binaryMediaReadBudget.acquire(binaryMediaPrincipalKey(request));
+        if (!release)
+          return sendApiError(
+            request,
+            reply,
+            429,
+            'SUPPORT_ATTACHMENT_READ_BUSY',
+            'Подождите завершения загрузки фотографий.',
+          );
+        try {
+          const body = await media.read(objectKey, STATION_SUPPORT_MEDIA_MAX_BYTES);
+          releaseBinaryReadWithResponse(reply, release);
+          return reply
+            .header('Cache-Control', 'private, no-store')
+            .header('Content-Type', 'image/webp')
+            .header('Content-Disposition', 'inline')
+            .header('X-Content-Type-Options', 'nosniff')
+            .send(body);
+        } catch {
+          release();
+          return sendApiError(
+            request,
+            reply,
+            503,
+            'SUPPORT_ATTACHMENTS_UNAVAILABLE',
+            'Фотографии временно недоступны.',
+          );
+        }
+      }
       try {
         const url = await media.createDeliveryUrl({
           objectKey,

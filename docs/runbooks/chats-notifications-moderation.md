@@ -1028,12 +1028,15 @@ docker compose -f deploy/docker-compose.local.yml up -d --build phab-api-local
 
 The standalone `apps/cup-admin` client on port `5174` remains a development harness, not the active
 CUP entry point. Open the local CUP on port `3001` and verify that Web Push and in-app reflect live
-capability, while Android and iOS remain disabled until the FCM/APNs adapters and provider
-credentials exist. Resolve a known internal phone, send one test campaign, then verify:
+capability. Android now uses the same campaign/recipient preview and the FCM delivery worker, gated
+by matching global/tenant/provider configuration; see [Android chats and FCM](android-chats-fcm.md)
+for operator preparation and device acceptance. iOS remains disabled pending APNs. Resolve only the
+approved internal test recipient, send one test campaign, then verify:
 
 - one `notifications.admin_campaigns` row and one recipient row;
 - one inbox item when `IN_APP` is selected;
-- one pending push delivery per active Web endpoint, eventually `SENT` or a stable failure;
+- one pending push delivery per active endpoint of each selected platform, eventually `SENT` or a
+  stable failure; selecting Android must not also queue Web Push unless Web Push is selected;
 - the same `Idempotency-Key` returns the original campaign with `replayed=true`;
 - logs and RabbitMQ contain no title, body, phone or endpoint material.
 

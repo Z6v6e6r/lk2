@@ -154,6 +154,7 @@ import type { StationSupportMediaStore } from './support/station-support-media.j
 import type { StationSupportRepository } from './support/station-support-repository.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
+import { registerAndroidPushRoutes } from './notifications/android-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
 import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
 import { registerProfileLevelHistoryRoutes } from './profile/profile-level-history-routes.js';
@@ -1287,6 +1288,22 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
+  registerAndroidPushRoutes(app as unknown as FastifyInstance, {
+    ...(options.notificationEndpointRepository
+      ? { repository: options.notificationEndpointRepository }
+      : {}),
+    ...(options.notificationEndpointCipher ? { cipher: options.notificationEndpointCipher } : {}),
+    enabledGlobally: options.config.FCM_ENABLED,
+    maxEndpointsPerUser: options.config.WEB_PUSH_ENDPOINTS_PER_USER_MAX,
+    selector: {
+      appId: options.config.FCM_APP_ID,
+      environment: options.config.FCM_ENVIRONMENT,
+      platform: 'ANDROID',
+      provider: 'FCM',
+    },
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
   registerAdminNotificationRoutes(app as unknown as FastifyInstance, {
     ...(options.adminNotificationRepository
       ? { repository: options.adminNotificationRepository }
@@ -1299,6 +1316,11 @@ export async function buildApp(options: BuildAppOptions) {
     webPushAppId: options.config.WEB_PUSH_APP_ID,
     webPushEnvironment: options.config.WEB_PUSH_ENVIRONMENT,
     authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    androidPush: {
+      globallyEnabled: options.config.FCM_ENABLED && Boolean(options.notificationEndpointCipher),
+      appId: options.config.FCM_APP_ID,
+      environment: options.config.FCM_ENVIRONMENT,
+    },
     commandHandlers: [
       authenticateAdmin,
       authorizeNotificationAdmin,

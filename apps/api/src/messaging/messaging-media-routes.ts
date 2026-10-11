@@ -9,11 +9,29 @@ import {
   type MessagingMediaRepository,
   type MessagingRepository,
 } from '@phub/database';
-import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
+import type {
+  FastifyInstance,
+  FastifyReply,
+  FastifyRequest,
+  preHandlerHookHandler,
+  onRequestHookHandler,
+} from 'fastify';
 import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
-import type { MessagingMediaObjectStore } from './messaging-media-object-store.js';
+import {
+  androidBinaryMediaRateLimit,
+  binaryMediaPrincipalKey,
+  binaryMediaReadBudget,
+  releaseBinaryReadWithResponse,
+} from '../binary-media-read-budget.js';
+import {
+  contentDispositionHeader,
+  type MessagingMediaObjectStore,
+} from './messaging-media-object-store.js';
+
+const ANDROID_PLATFORM = 'android';
+const BINARY_CONTENT_TYPE = 'application/octet-stream';
 
 const CONTENT_TYPE_PATTERN = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,100}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,100}$/;
 /**
@@ -140,6 +158,27 @@ function forbiddenContentType(contentType: string): boolean {
     : false;
 }
 
+function androidRequest(request: FastifyRequest): boolean {
+  return request.headers['x-app-platform'] === ANDROID_PLATFORM;
+}
+
+function storedObjectMatches(
+  observed: Awaited<ReturnType<MessagingMediaObjectStore['inspectCurrentVersion']>>,
+  target: {
+    readonly declaredByteSize: number;
+    readonly declaredContentType: string;
+    readonly declaredSha256: string;
+  },
+): boolean {
+  return (
+    observed !== undefined &&
+    observed.byteSize === target.declaredByteSize &&
+    observed.contentType === target.declaredContentType &&
+    observed.checksumSha256?.toLowerCase() === target.declaredSha256 &&
+    observed.versionId.length > 0
+  );
+}
+
 export function registerMessagingMediaRoutes(
   app: FastifyInstance,
   options: {
@@ -153,6 +192,13 @@ export function registerMessagingMediaRoutes(
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
+  if (!app.hasContentTypeParser(BINARY_CONTENT_TYPE)) {
+    app.addContentTypeParser(
+      BINARY_CONTENT_TYPE,
+      { parseAs: 'buffer', bodyLimit: MESSAGING_MEDIA_MAX_BYTES },
+      (_request, body, done) => done(null, body),
+    );
+  }
   function disabled(request: FastifyRequest, reply: FastifyReply) {
     return sendApiError(
       request,
@@ -224,6 +270,28 @@ export function registerMessagingMediaRoutes(
       if (issued.outcome !== 'issued') {
         return quotaFailure(request, reply, issued.outcome, issued.retryAfterSeconds);
       }
+      if (androidRequest(request)) {
+        reply.header('X-Idempotent-Replayed', String(issued.replayed));
+        return reply.code(issued.replayed ? 200 : 201).send({
+          media: {
+            id: issued.intent.id,
+            conversationId: issued.intent.conversationId,
+            mediaType: issued.intent.mediaType,
+            fileName: body.data.fileName.trim(),
+            contentType: issued.intent.declaredContentType,
+            byteSize: issued.intent.declaredByteSize,
+            sha256: issued.intent.declaredSha256,
+            state: 'UPLOADING',
+            revision: issued.intent.revision,
+          },
+          upload: {
+            method: 'PUT',
+            url: `/user/api/v1/${encodeURIComponent(params.data.tenantKey)}/conversations/${encodeURIComponent(issued.intent.conversationId)}/media/${encodeURIComponent(issued.intent.id)}/bytes`,
+            requiredHeaders: { 'Content-Type': BINARY_CONTENT_TYPE },
+            expiresAt: issued.intent.uploadExpiresAt,
+          },
+        });
+      }
       try {
         const grant = await options.objectStore.createUploadGrant({
           objectKey: issued.intent.objectKey,
@@ -264,6 +332,179 @@ export function registerMessagingMediaRoutes(
     },
   );
 
+  app.put(
+    '/user/api/v1/:tenantKey/conversations/:conversationId/media/:mediaId/bytes',
+    {
+      // This relay accepts up to 15 MiB, so authorization and the command key must be rejected
+      // before Fastify parses the bytes. Keep the small attachment-shaped limit at onRequest as
+      // well, rather than relying on the general preHandler limit after parsing.
+      onRequest: [...options.commandHandlers] as onRequestHookHandler[],
+      bodyLimit: MESSAGING_MEDIA_MAX_BYTES,
+      config: {
+        rateLimit: {
+          max: 4,
+          timeWindow: 60_000,
+          hook: 'onRequest',
+          groupId: 'messaging-media-relay',
+          keyGenerator: (request) => {
+            const current = principal(request);
+            return current ? binaryMediaPrincipalKey(request) : `anonymous:${request.ip}`;
+          },
+          // The application error handler preserves an error status but normalizes response bodies.
+          // Supply it here so a rejection from the onRequest limiter cannot become a 500.
+          errorResponseBuilder: () => ({ statusCode: 429 }),
+        },
+      },
+    },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!options.enabled) return disabled(request, reply);
+      const current = principal(request);
+      const params = mediaParamsSchema.safeParse(request.params);
+      const idempotencyKey = request.headers['idempotency-key'];
+      const contentType = String(request.headers['content-type'] ?? '')
+        .split(';')[0]
+        ?.trim()
+        .toLowerCase();
+      const body = request.body;
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      if (!options.repository || !options.objectStore) return unavailable(request, reply);
+      if (
+        !androidRequest(request) ||
+        !params.success ||
+        typeof idempotencyKey !== 'string' ||
+        contentType !== BINARY_CONTENT_TYPE ||
+        !Buffer.isBuffer(body) ||
+        body.byteLength < 1 ||
+        body.byteLength > MESSAGING_MEDIA_MAX_BYTES
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'MESSAGING_MEDIA_PAYLOAD_INVALID',
+          'Проверьте параметры и размер загружаемого файла.',
+        );
+      }
+      const sha256 = createHash('sha256').update(body).digest('hex');
+      const target = await options.repository.getFinalizeTarget({
+        tenantId: current.tenantId,
+        actorUserId: current.userId,
+        conversationId: params.data.conversationId,
+        mediaId: params.data.mediaId,
+        idempotencyKey,
+        requestHash: hash({
+          operation: 'MESSAGING_MEDIA_RELAY_UPLOAD',
+          ...params.data,
+          byteSize: body.byteLength,
+          sha256,
+        }),
+      });
+      if (target.outcome === 'upload_expired') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'MESSAGING_MEDIA_UPLOAD_EXPIRED',
+          'Срок загрузки истёк.',
+        );
+      }
+      if (target.outcome === 'state_invalid') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'MESSAGING_MEDIA_STATE_INVALID',
+          'Операция недоступна в текущем состоянии вложения.',
+        );
+      }
+      if (target.outcome === 'idempotency_conflict') {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'IDEMPOTENCY_KEY_REUSED',
+          'Idempotency-Key уже использован для другой команды.',
+        );
+      }
+      if (target.outcome !== 'inspect') return mediaNotFound(request, reply);
+      if (target.conversationId !== params.data.conversationId)
+        return mediaNotFound(request, reply);
+      if (
+        body.byteLength !== target.declaredByteSize ||
+        sha256 !== target.declaredSha256.toLowerCase()
+      ) {
+        return sendApiError(
+          request,
+          reply,
+          422,
+          'MESSAGING_MEDIA_OBJECT_MISMATCH',
+          'Параметры загруженного файла не совпадают с заявленными.',
+        );
+      }
+
+      let observed: Awaited<ReturnType<MessagingMediaObjectStore['inspectCurrentVersion']>>;
+      let replayed = false;
+      try {
+        await options.objectStore.putSourceObject({
+          objectKey: target.objectKey,
+          contentType: target.declaredContentType,
+          body,
+          sha256,
+          mediaId: params.data.mediaId,
+        });
+        observed = await options.objectStore.inspectCurrentVersion(target.objectKey);
+      } catch (error) {
+        // A timeout or precondition response can still mean the immutable PUT committed. Inspecting
+        // the exact key before any retry prevents a duplicate write after an ambiguous result.
+        replayed = true;
+        try {
+          observed = await options.objectStore.inspectCurrentVersion(target.objectKey);
+        } catch {
+          request.log.warn(
+            { code: 'MESSAGING_MEDIA_RELAY_UPLOAD_FAILED', correlationId: request.id },
+            'chat media relay upload failed',
+          );
+          return unavailable(request, reply);
+        }
+        void error;
+      }
+      if (!observed || !storedObjectMatches(observed, target)) {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'MESSAGING_MEDIA_OBJECT_MISMATCH',
+          'Загруженный файл не совпадает с заявленным вложением.',
+        );
+      }
+      try {
+        await options.repository.recordSourceUpload({
+          tenantId: current.tenantId,
+          actorUserId: current.userId,
+          conversationId: params.data.conversationId,
+          mediaId: params.data.mediaId,
+          correlationId: request.id,
+          idempotencyKey,
+          observed: {
+            objectKey: target.objectKey,
+            objectVersion: observed.versionId,
+            etag: observed.etag,
+            byteSize: observed.byteSize,
+            contentType: observed.contentType,
+            checksumSha256: observed.checksumSha256,
+          },
+        });
+      } catch {
+        return unavailable(request, reply);
+      }
+      reply.header('X-Idempotent-Replayed', String(replayed));
+      return reply.code(replayed ? 200 : 201).send({ uploaded: true });
+    },
+  );
+
   app.post(
     '/user/api/v1/:tenantKey/conversations/:conversationId/media/:mediaId/finalize',
     { preHandler: [...options.commandHandlers] },
@@ -290,6 +531,7 @@ export function registerMessagingMediaRoutes(
       const target = await options.repository.getFinalizeTarget({
         tenantId: current.tenantId,
         actorUserId: current.userId,
+        conversationId: params.data.conversationId,
         mediaId: params.data.mediaId,
         idempotencyKey,
         requestHash: hash({
@@ -354,6 +596,7 @@ export function registerMessagingMediaRoutes(
       const finalized = await options.repository.finalizeUpload({
         tenantId: current.tenantId,
         actorUserId: current.userId,
+        conversationId: params.data.conversationId,
         mediaId: params.data.mediaId,
         idempotencyKey,
         requestHash: hash({
@@ -459,7 +702,10 @@ export function registerMessagingMediaRoutes(
 
   app.get(
     '/user/api/v1/:tenantKey/conversations/:conversationId/media/:mediaId/content',
-    { preHandler: [...options.authenticatedTenantHandlers] },
+    {
+      onRequest: [...options.authenticatedTenantHandlers] as onRequestHookHandler[],
+      config: { rateLimit: androidBinaryMediaRateLimit },
+    },
     async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store');
       if (!options.enabled) return disabled(request, reply);
@@ -485,6 +731,46 @@ export function registerMessagingMediaRoutes(
       });
       if (result.outcome !== 'ok' || result.media.conversationId !== params.data.conversationId) {
         return mediaNotFound(request, reply);
+      }
+      if (androidRequest(request)) {
+        const release = binaryMediaReadBudget.acquire(binaryMediaPrincipalKey(request));
+        if (!release)
+          return sendApiError(
+            request,
+            reply,
+            429,
+            'MESSAGING_MEDIA_READ_BUSY',
+            'Подождите завершения загрузки вложений.',
+          );
+        try {
+          const body = await options.objectStore.readDelivery({
+            delivery: {
+              objectKey: result.media.objectKey,
+              objectVersion: result.media.objectVersion,
+              fileName: result.media.fileName,
+              contentType: result.media.contentType,
+              inline: result.media.mediaType === 'IMAGE',
+            },
+            maxBytes: result.media.byteSize,
+          });
+          releaseBinaryReadWithResponse(reply, release);
+          return reply
+            .header('Content-Type', result.media.contentType)
+            .header(
+              'Content-Disposition',
+              contentDispositionHeader(result.media.fileName, result.media.mediaType === 'IMAGE'),
+            )
+            .header('X-Content-Type-Options', 'nosniff')
+            .send(body);
+        } catch (error) {
+          release();
+          request.log.warn(
+            { code: 'MESSAGING_MEDIA_DELIVERY_READ_FAILED', correlationId: request.id },
+            'chat media delivery read failed',
+          );
+          void error;
+          return unavailable(request, reply);
+        }
       }
       try {
         const url = await options.objectStore.createDeliveryUrl({

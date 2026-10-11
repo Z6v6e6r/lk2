@@ -13,6 +13,7 @@ import {
 import styles from './NotificationsUi.module.css';
 
 interface NotificationSettingsScreenProps {
+  readonly platform?: 'web' | 'android';
   readonly draft: PreferenceDraft | null;
   readonly busy: boolean;
   readonly error?: string | null | undefined;
@@ -31,6 +32,7 @@ interface NotificationSettingsScreenProps {
  * not have to remember a separate save step.
  */
 export function NotificationSettingsScreen({
+  platform = 'web',
   draft,
   busy,
   error,
@@ -83,7 +85,7 @@ export function NotificationSettingsScreen({
           </span>
           <div className={styles.settingsCopy}>
             <strong>Получать push</strong>
-            <small>{notificationPushStatus(webPush, browserState)}</small>
+            <small>{notificationPushStatus(webPush, browserState, platform)}</small>
           </div>
           <NotificationSwitch
             checked={subscribed}

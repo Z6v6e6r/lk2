@@ -8,6 +8,15 @@ import type { NativeCacheObservation } from './native-api-fetch.js';
 import type { ReactNode } from 'react';
 import type { StartAndroidYandexLogin } from './AndroidLoginGate.js';
 import { sanitizedNativeSessionError } from './session-failure.js';
+vi.mock('./android-push.js', () => ({
+  initialAndroidPushState: { enabled: false, state: 'unsupported', busy: false },
+  createAndroidPushController: () => ({
+    mount: () => () => undefined,
+    sessionReady: () => undefined,
+    sessionExpired: () => undefined,
+    beforeLogout: () => Promise.resolve(),
+  }),
+}));
 vi.mock('./AndroidLoginGate.js', () => ({
   AndroidLoginGate: ({ children }: { children: (start: StartAndroidYandexLogin) => ReactNode }) =>
     children(() => Promise.resolve()),
@@ -109,6 +118,7 @@ it('hides account data immediately and retries failed logout without remounting 
   fireEvent.click(await screen.findByRole('button', { name: 'Выйти' }));
   expect(await screen.findByText('Завершаем выход…')).toBeInTheDocument();
   expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
+  await waitFor(() => expect(calls.logout).toHaveBeenCalledOnce());
   reject(new Error('network unavailable'));
   expect(await screen.findByRole('alert')).toHaveTextContent('Выход ещё не завершён');
   expect(calls.restore).toHaveBeenCalledOnce();

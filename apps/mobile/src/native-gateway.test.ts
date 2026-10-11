@@ -215,7 +215,7 @@ describe('Android process session using the existing API contract', () => {
     await expect(gateway.getSelfProfile()).rejects.toThrow('AUTH_REQUIRED');
     expect(transport).toHaveBeenCalledTimes(2);
   });
-  it('never exchanges native credentials for browser-only providers, payments, media or push', async () => {
+  it('never exchanges native credentials for browser-only providers, payments, community uploads or Web Push', async () => {
     const transport = vi.fn<typeof fetch>();
     const gateway = createBrowserAuthGateway({ ...options, fetchImplementation: transport });
     await expect(gateway.startVivaOAuth({ provider: 'yandex', acceptance })).rejects.toThrow();
@@ -227,39 +227,53 @@ describe('Android process session using the existing API contract', () => {
       code: 'NATIVE_FLOW_UNAVAILABLE',
     });
     await expect(
-      gateway.uploadStationSupportAttachment({
-        fileName: 'photo.png',
-        contentType: 'image/png',
-        data: '',
-      }),
-    ).rejects.toMatchObject({ code: 'NATIVE_FLOW_UNAVAILABLE' });
-    await expect(gateway.listStationSupportStations()).rejects.toMatchObject({
-      code: 'NATIVE_FLOW_UNAVAILABLE',
-    });
-    await expect(gateway.listStationSupportMessages('dialog')).rejects.toMatchObject({
-      code: 'NATIVE_FLOW_UNAVAILABLE',
-    });
-    await expect(
-      gateway.sendStationSupportMessage({
-        clientMessageId: 'synthetic-command',
-        text: 'synthetic',
-        stationId: 'station',
-      }),
-    ).rejects.toMatchObject({ code: 'NATIVE_FLOW_UNAVAILABLE' });
-    await expect(gateway.loadStationSupportAttachment('attachment')).rejects.toMatchObject({
-      code: 'NATIVE_FLOW_UNAVAILABLE',
-    });
-    await expect(
       gateway.finalizeCommunityMediaUpload('community', 'media', 1),
-    ).rejects.toMatchObject({ code: 'NATIVE_FLOW_UNAVAILABLE' });
-    await expect(
-      gateway.finalizeConversationMediaUpload('chat', 'media', 1, 'synthetic-command'),
     ).rejects.toMatchObject({ code: 'NATIVE_FLOW_UNAVAILABLE' });
     await expect(gateway.revokeWebPushEndpoint('installation')).rejects.toMatchObject({
       code: 'NATIVE_FLOW_UNAVAILABLE',
     });
     expect(await gateway.getWebPushConfiguration()).toEqual({ enabled: false });
     expect(transport).not.toHaveBeenCalled();
+  });
+  it('sends authorized station chat and media commands only to the PadlHub API', async () => {
+    const transport = vi
+      .fn<typeof fetch>()
+      .mockImplementation((input) =>
+        Promise.resolve(
+          url(input).endsWith('/verify')
+            ? Response.json(session)
+            : url(input).endsWith('/content')
+              ? new Response(new Uint8Array([1]), { headers: { 'content-type': 'image/webp' } })
+              : Response.json({ items: [], hasMore: false }),
+        ),
+      );
+    const gateway = createBrowserAuthGateway({ ...options, fetchImplementation: transport });
+    await gateway.verifyCode({ challengeId: 'challenge', code: '0000', acceptance });
+    await gateway.listStationSupportStations();
+    await gateway.listStationSupportMessages('dialog');
+    await gateway.sendStationSupportMessage({
+      clientMessageId: 'synthetic-command',
+      text: 'synthetic',
+      stationId: 'station',
+    });
+    await gateway.uploadStationSupportAttachment({
+      fileName: 'photo.png',
+      contentType: 'image/png',
+      data: 'AQ==',
+    });
+    expect((await gateway.loadStationSupportAttachment('attachment')).size).toBe(1);
+    await gateway.finalizeConversationMediaUpload('chat', 'media', 1, 'synthetic-finalize');
+    const requests = transport.mock.calls.slice(1);
+    expect(requests).toHaveLength(6);
+    for (const [input, init] of requests) {
+      expect(new URL(url(input)).origin).toBe(new URL(options.baseUrl).origin);
+      expect(new Headers(init?.headers).get('X-App-Platform')).toBe('android');
+      expect(new Headers(init?.headers).get('Authorization')).toBe(
+        'Bearer synthetic-process-token',
+      );
+    }
+    const command = requests.find(([input]) => url(input).endsWith('/support/messages'))!;
+    expect(new Headers(command[1]?.headers).get('Idempotency-Key')).toBe('synthetic-command');
   });
   it('does not retry a 401 or retain an expired token in the SDK', async () => {
     const transport = vi

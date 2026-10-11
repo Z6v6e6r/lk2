@@ -47,15 +47,29 @@ final class AndroidSessionPolicy {
         final String path;
         final String method;
         final Map<String, String> headers;
-        final String body;
+        final byte[] body;
+        final String contentType;
         final Operation operation;
         Request(String path, String method, Map<String, String> headers, String body, Operation operation) {
+            this(path, method, headers, body == null ? null : body.getBytes(StandardCharsets.UTF_8),
+                body == null ? null : "application/json", operation);
+        }
+        private Request(String path, String method, Map<String, String> headers, byte[] body, String contentType, Operation operation) {
             this.path = path; this.method = method; this.headers = headers;
-            this.body = body; this.operation = operation;
+            this.body = body; this.contentType = contentType; this.operation = operation;
         }
     }
 
     Request request(String path, String method, Map<String, String> inputHeaders, String body) throws Failure {
+        return request(path, method, inputHeaders, body, null);
+    }
+
+    Request requestBinary(String path, String method, Map<String, String> inputHeaders, byte[] body) throws Failure {
+        return request(path, method, inputHeaders, null, body);
+    }
+
+    private Request request(String path, String method, Map<String, String> inputHeaders, String textBody, byte[] binaryBody) throws Failure {
+        if (textBody != null && binaryBody != null) throw rejected();
         if (path == null || path.length() > 8192 || path.contains("\\") || path.contains("#")
             || path.contains("\r") || path.contains("\n")) throw rejected();
         final URI uri;
@@ -64,6 +78,8 @@ final class AndroidSessionPolicy {
         if (uri.isAbsolute() || uri.getRawAuthority() != null || cleanPath == null
             || cleanPath.contains("%") || cleanPath.contains("..") || cleanPath.contains("//")) throw rejected();
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
+        String relativePath = cleanPath.substring(userRoot.length());
+        if (!validQuery(relativePath, method, uri.getQuery())) throw rejected();
 
         Operation operation;
         if (cleanPath.equals(authRoot + "/challenges") && "POST".equals(method)) operation = Operation.CHALLENGE;
@@ -78,7 +94,8 @@ final class AndroidSessionPolicy {
             if (cleanPath.contains("/auth/")) throw rejected();
             boolean notificationWrite = "PUT".equals(method) && (cleanPath.equals(userRoot + "/notifications/read-cursor")
                 || cleanPath.equals(userRoot + "/notifications/preferences"));
-            if (!("GET".equals(method) && allowedRead(cleanPath.substring(userRoot.length()))) && !notificationWrite) throw rejected();
+            if (!("GET".equals(method) && allowedRead(relativePath))
+                && !notificationWrite && !allowedMessagingWrite(relativePath, method)) throw rejected();
             operation = Operation.API;
         }
         boolean auth = operation != Operation.API && operation != Operation.PUBLIC;
@@ -99,28 +116,81 @@ final class AndroidSessionPolicy {
         if (!"GET".equals(method) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9._:-]{16,128}")) throw rejected();
         String intent = operation == Operation.REFRESH ? "refresh" : operation == Operation.LOGOUT ? "logout" : null;
         if (!java.util.Objects.equals(intent, headers.get("x-session-intent"))) throw rejected();
-        headers.put("accept", "application/json");
+        headers.put("accept", isBinaryContentRead(relativePath, method) ? "*/*" : "application/json");
         headers.put("x-app-platform", "android");
         headers.put("x-app-version", version);
         headers.put("x-app-build", build);
         if (!headers.containsKey("x-correlation-id")) headers.put("x-correlation-id", UUID.randomUUID().toString());
-        if (body != null && body.getBytes(StandardCharsets.UTF_8).length > 16_384) throw rejected();
-        if (operation == Operation.CHALLENGE || operation == Operation.VERIFY) validateAuthBody(operation, body);
-        else if (("GET".equals(method) || auth) && body != null) throw rejected();
-        if (body != null) headers.put("content-type", "application/json");
-        return new Request(path, method, headers, body, operation);
+        boolean relay = isConversationMediaRelay(relativePath, method);
+        if (binaryBody != null) {
+            if (!relay || binaryBody.length < 1 || binaryBody.length > 15 * 1024 * 1024) throw rejected();
+            headers.put("content-type", "application/octet-stream");
+            return new Request(path, method, headers, binaryBody, "application/octet-stream", operation);
+        }
+        if (textBody != null && textBody.getBytes(StandardCharsets.UTF_8).length > maxJsonBodyBytes(relativePath, method)) throw rejected();
+        if (operation == Operation.CHALLENGE || operation == Operation.VERIFY) validateAuthBody(operation, textBody);
+        else if (("GET".equals(method) || auth) && textBody != null) throw rejected();
+        if (textBody != null) headers.put("content-type", "application/json");
+        return new Request(path, method, headers, textBody, operation);
     }
 
     private boolean allowedRead(String path) {
-        // This shipped slice has canonical reads and notification preferences only.
-        // New routes need an explicit native review, even when the web SDK knows them.
+        // Only reviewed PadlHub routes; media and provider handoffs remain separate capabilities.
         if (Arrays.asList("/context", "/routing-plan", "/profile", "/profile/privacy",
             "/profile/friends", "/profile/friend-requests", "/profile/level-history",
             "/profile/level", "/profile/level-assessment", "/profile/booking-preferences",
             "/bookings/upcoming", "/bookings/history", "/recommendations/bookings",
             "/home", "/home/base", "/locations", "/communities/mine", "/conversations",
-            "/notifications", "/notifications/preferences").contains(path)) return true;
+            "/notifications", "/notifications/preferences", "/support/stations", "/support/dialogs",
+            "/notification-endpoints/android/config").contains(path)) return true;
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.matches("/conversations/" + uuid + "/messages")
+            || path.matches("/conversations/" + uuid + "/media/" + uuid)
+            || path.matches("/conversations/" + uuid + "/media/" + uuid + "/content")
+            || path.matches("/support/dialogs/" + uuid + "/messages")
+            || path.matches("/support/attachments/[A-Za-z0-9_-]{43}/content")) return true;
         return path.matches("/(?:profiles|profile/friends|locations)/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}");
+    }
+
+    private boolean allowedMessagingWrite(String path, String method) {
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if ("POST".equals(method)) return path.equals("/conversations/direct")
+            || path.equals("/conversations/game") || path.equals("/messaging/realtime-ticket")
+            || path.equals("/support/messages") || path.equals("/support/attachments")
+            || path.equals("/notification-endpoints/android")
+            || path.matches("/conversations/" + uuid + "/(?:messages|media/uploads)")
+            || path.matches("/conversations/" + uuid + "/media/" + uuid + "/finalize");
+        if ("PUT".equals(method)) return path.matches("/conversations/" + uuid + "/(?:read-cursor|notification-policy)")
+            || path.matches("/conversations/" + uuid + "/media/" + uuid + "/bytes");
+        return "DELETE".equals(method) && path.matches("/notification-endpoints/android/" + uuid);
+    }
+
+    private boolean isConversationMediaRelay(String path, String method) {
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        return "PUT".equals(method) && path.matches("/conversations/" + uuid + "/media/" + uuid + "/bytes");
+    }
+
+    private boolean isBinaryContentRead(String path, String method) {
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        return "GET".equals(method) && (path.matches("/conversations/" + uuid + "/media/" + uuid + "/content")
+            || path.matches("/support/attachments/[A-Za-z0-9_-]{43}/content"));
+    }
+
+    private int maxJsonBodyBytes(String path, String method) {
+        return "POST".equals(method) && "/support/attachments".equals(path) ? 11_188_907 : 16_384;
+    }
+
+    private boolean validQuery(String path, String method, String query) {
+        if (!"GET".equals(method)) return query == null;
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.matches("/conversations/" + uuid + "/messages"))
+            return query == null || query.matches("(?:afterSequence=(?:0|[1-9][0-9]{0,8}))(?:&limit=(?:[1-9]|[1-9][0-9]|100))?|limit=(?:[1-9]|[1-9][0-9]|100)(?:&afterSequence=(?:0|[1-9][0-9]{0,8}))?");
+        if (path.matches("/support/dialogs/" + uuid + "/messages"))
+            return query == null || query.matches("before=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}(?::|%3A)[0-9]{2}(?::|%3A)[0-9]{2}(?:\\.[0-9]{1,3})?(?:Z|[+-][0-9]{2}(?::|%3A)[0-9]{2})");
+        if (path.equals("/support/stations") || path.equals("/support/dialogs")) return query == null;
+        if (path.matches("/conversations/" + uuid + "/media/" + uuid + "(?:/content)?")
+            || path.matches("/support/attachments/[A-Za-z0-9_-]{43}/content")) return query == null;
+        return true;
     }
 
     private void validateAuthBody(Operation operation, String body) throws Failure {

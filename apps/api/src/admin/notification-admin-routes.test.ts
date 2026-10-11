@@ -211,6 +211,126 @@ afterEach(async () => {
 });
 
 describe('admin notification routes', () => {
+  it.each([
+    {
+      global: false,
+      cipher: true,
+      tenant: true,
+      provider: true,
+      reason: 'GLOBAL_RUNTIME_DISABLED',
+    },
+    {
+      global: true,
+      cipher: false,
+      tenant: true,
+      provider: true,
+      reason: 'GLOBAL_RUNTIME_DISABLED',
+    },
+    {
+      global: true,
+      cipher: true,
+      tenant: false,
+      provider: true,
+      reason: 'TENANT_RUNTIME_DISABLED',
+    },
+    {
+      global: true,
+      cipher: true,
+      tenant: true,
+      provider: false,
+      reason: 'PROVIDER_NOT_CONFIGURED',
+    },
+    { global: true, cipher: true, tenant: true, provider: true, reason: undefined },
+  ])('reports independent Android capability and fail-closed reason: %j', async (input) => {
+    const adminRepository = repository();
+    adminRepository.getCapabilities.mockResolvedValue({
+      inAppTenantEnabled: true,
+      webPushTenantEnabled: false,
+      webPushProviderConfigured: false,
+      iosPushTenantEnabled: false,
+      androidPushTenantEnabled: input.tenant,
+      androidPushProviderConfigured: input.provider,
+    });
+    const app = await buildApp({
+      config: { ...config, FCM_ENABLED: input.global, WEB_PUSH_ENABLED: false },
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+      ...(input.cipher ? { notificationEndpointCipher: endpointCipher } : {}),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/notifications/capabilities',
+      headers: { authorization: `Bearer ${await token()}`, 'x-app-platform': 'cup-admin' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json<{ channels: unknown[] }>().channels).toContainEqual({
+      channel: 'ANDROID_PUSH',
+      enabled: input.reason === undefined,
+      ...(input.reason ? { reason: input.reason } : {}),
+      tenantEnabled: input.tenant,
+    });
+    expect(adminRepository.getCapabilities).toHaveBeenCalledWith(
+      expect.objectContaining({
+        androidPush: {
+          globallyEnabled: input.global && input.cipher,
+          appId: 'ru.padlhub.app',
+          environment: 'SANDBOX',
+        },
+      }),
+    );
+  });
+
+  it('accepts Android campaigns through the same authorized idempotent queue even with Web Push off', async () => {
+    const adminRepository = repository();
+    const app = await buildApp({
+      config: { ...config, FCM_ENABLED: true, WEB_PUSH_ENABLED: false },
+      logger: createLogger('admin-notification-test', 'silent'),
+      pool: fakePool(),
+      adminNotificationRepository: adminRepository.value,
+      notificationEndpointCipher: endpointCipher,
+    });
+    apps.push(app);
+    const payload = {
+      userIds: [userId],
+      title: 'Тест',
+      body: 'Сообщение',
+      channels: ['ANDROID_PUSH', 'IN_APP'],
+    };
+    const headers = {
+      authorization: `Bearer ${await token()}`,
+      'x-app-platform': 'cup-admin',
+      'idempotency-key': 'synthetic-android-admin-command-0001',
+    };
+    const response = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/campaigns',
+      headers,
+      payload,
+    });
+    expect(response.statusCode).toBe(202);
+    expect(createCampaignInput(adminRepository.createCampaign, 0)).toMatchObject({
+      normalizedUserIds: [userId],
+      requestedChannels: ['ANDROID_PUSH', 'IN_APP'],
+      idempotencyKey: headers['idempotency-key'],
+      webPushGloballyEnabled: false,
+      androidPush: { globallyEnabled: true, appId: 'ru.padlhub.app', environment: 'SANDBOX' },
+    });
+    adminRepository.createCampaign.mockResolvedValueOnce({
+      outcome: 'channel_unavailable',
+      channel: 'ANDROID_PUSH',
+    });
+    const disabled = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/notifications/campaigns',
+      headers,
+      payload,
+    });
+    expect(disabled.statusCode).toBe(409);
+    expect(disabled.json()).toMatchObject({ code: 'NOTIFICATION_CHANNEL_UNAVAILABLE' });
+  });
+
   it('requires the dedicated admin audience and CUP platform', async () => {
     const app = await buildApp({
       config,
@@ -386,7 +506,7 @@ describe('admin notification routes', () => {
     expect(adminRepository.resolveRecipients).not.toHaveBeenCalled();
   });
 
-  it('fails closed for mobile channels until APNs and FCM are implemented', async () => {
+  it('keeps APNs unavailable until its adapter is implemented', async () => {
     const adminRepository = repository();
     const app = await buildApp({
       config,
@@ -408,7 +528,7 @@ describe('admin notification routes', () => {
         phones: ['+79990000001'],
         title: 'Тест',
         body: 'Сообщение',
-        channels: ['ANDROID_PUSH'],
+        channels: ['IOS_PUSH'],
       },
     });
 

@@ -1,6 +1,7 @@
 import { loadConfig } from '@phub/config';
 import type { MessagingMediaRepository, MessagingRepository } from '@phub/database';
 import { createLogger } from '@phub/observability';
+import { createHash } from 'node:crypto';
 import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -44,6 +45,7 @@ function fakePool(): Pool {
 
 async function accessToken(
   permissions: readonly string[] = ['chat.direct.create'],
+  subject = userId,
 ): Promise<string> {
   return new SignJWT({
     tenants: [tenantId],
@@ -54,7 +56,7 @@ async function accessToken(
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuer(config.JWT_ISSUER)
     .setAudience(config.JWT_AUDIENCE)
-    .setSubject(userId)
+    .setSubject(subject)
     .setExpirationTime('5m')
     .sign(new TextEncoder().encode(config.JWT_ACCESS_SECRET));
 }
@@ -101,12 +103,17 @@ function mediaRepository(
     getFinalizeTarget: vi.fn().mockResolvedValue({
       outcome: 'inspect',
       objectKey: `chat-media/quarantine/${tenantId}/${conversationId}/${mediaId}/source`,
+      conversationId,
+      declaredContentType: 'image/png',
+      declaredByteSize: 1_024,
+      declaredSha256: sha256,
     }),
     finalizeUpload: vi.fn().mockResolvedValue({
       outcome: 'finalized',
       replayed: false,
       media: { ...asset, state: 'SCANNING' },
     }),
+    recordSourceUpload: vi.fn().mockResolvedValue(undefined),
     getMedia: vi.fn().mockResolvedValue({ outcome: 'ok', media: asset }),
     claimScans: vi.fn().mockResolvedValue([]),
     completeScan: vi.fn().mockResolvedValue('ready'),
@@ -142,6 +149,14 @@ function objectStore(
       versionId: 'version-1',
       checksumSha256: sha256,
     }),
+    putSourceObject: vi.fn().mockResolvedValue({
+      byteSize: 1_024,
+      contentType: 'image/png',
+      etag: '"etag"',
+      versionId: 'version-1',
+      checksumSha256: sha256,
+    }),
+    readDelivery: vi.fn().mockResolvedValue(Buffer.from('ready-image')),
     createDeliveryUrl: vi.fn().mockResolvedValue('https://storage.example.test/signed'),
     ...overrides,
   };
@@ -233,6 +248,291 @@ describe('messaging media API', () => {
       media: { id: mediaId, mediaType: 'IMAGE', state: 'UPLOADING' },
       upload: { method: 'PUT', requiredHeaders: { 'If-None-Match': '*' } },
     });
+  });
+
+  it('gives Android a PadlHub relay descriptor without creating or exposing an S3 grant', async () => {
+    const createUploadGrant = vi.fn();
+    const app = await build({ store: objectStore({ createUploadGrant }) });
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/uploads`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'android',
+        'idempotency-key': 'chat-media-issue-android-0001',
+      },
+      payload: { fileName: 'photo.png', contentType: 'image/png', byteSize: 1_024, sha256 },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      upload: {
+        method: 'PUT',
+        url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/bytes`,
+        requiredHeaders: { 'Content-Type': 'application/octet-stream' },
+      },
+    });
+    expect(response.body).not.toContain('storage.example.test');
+    expect(response.body).not.toContain('chat-media/quarantine');
+    expect(createUploadGrant).not.toHaveBeenCalled();
+  });
+
+  it('relays declared Android upload bytes to the server-owned quarantine key', async () => {
+    const body = Buffer.from('android-upload');
+    const bodySha256 = createHash('sha256').update(body).digest('hex');
+    const putSourceObject = vi.fn().mockResolvedValue({});
+    const inspectCurrentVersion = vi.fn().mockResolvedValue({
+      byteSize: body.byteLength,
+      contentType: 'image/png',
+      etag: '"relay-etag"',
+      versionId: 'relay-version-1',
+      checksumSha256: bodySha256,
+    });
+    const app = await build({
+      media: mediaRepository({
+        getFinalizeTarget: vi.fn().mockResolvedValue({
+          outcome: 'inspect',
+          objectKey: `chat-media/quarantine/${tenantId}/${conversationId}/${mediaId}/source`,
+          conversationId,
+          declaredContentType: 'image/png',
+          declaredByteSize: body.byteLength,
+          declaredSha256: bodySha256,
+        }),
+      }),
+      store: objectStore({ putSourceObject, inspectCurrentVersion }),
+    });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/bytes`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'android',
+        'idempotency-key': 'chat-media-relay-0001',
+        'content-type': 'application/octet-stream',
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({ uploaded: true });
+    expect(putSourceObject).toHaveBeenCalledWith({
+      objectKey: `chat-media/quarantine/${tenantId}/${conversationId}/${mediaId}/source`,
+      contentType: 'image/png',
+      body,
+      sha256: bodySha256,
+      mediaId,
+    });
+  });
+
+  it('requires authentication before relaying Android upload bytes', async () => {
+    const putSourceObject = vi.fn();
+    const getFinalizeTarget = vi.fn();
+    const app = await build({
+      media: mediaRepository({ getFinalizeTarget }),
+      store: objectStore({ putSourceObject }),
+    });
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/bytes`,
+      headers: {
+        'x-app-platform': 'android',
+        'idempotency-key': 'chat-media-relay-unauthorized',
+        'content-type': 'application/octet-stream',
+      },
+      payload: Buffer.from('unauthorized'),
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(getFinalizeTarget).not.toHaveBeenCalled();
+    expect(putSourceObject).not.toHaveBeenCalled();
+  });
+
+  it('stops excess Android relay attempts at onRequest before object storage', async () => {
+    const body = Buffer.alloc(1_024, 7);
+    const bodySha256 = createHash('sha256').update(body).digest('hex');
+    const putSourceObject = vi.fn().mockResolvedValue(undefined);
+    const inspectCurrentVersion = vi.fn().mockResolvedValue({
+      byteSize: body.byteLength,
+      contentType: 'image/png',
+      etag: 'relay-etag',
+      versionId: 'relay-version-1',
+      checksumSha256: bodySha256,
+    });
+    const app = await build({
+      media: mediaRepository({
+        getFinalizeTarget: vi.fn().mockResolvedValue({
+          outcome: 'inspect',
+          objectKey: `chat-media/quarantine/${tenantId}/${conversationId}/${mediaId}/source`,
+          conversationId,
+          declaredContentType: 'image/png',
+          declaredByteSize: body.byteLength,
+          declaredSha256: bodySha256,
+        }),
+      }),
+      store: objectStore({ putSourceObject, inspectCurrentVersion }),
+    });
+    const request = {
+      method: 'PUT' as const,
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/bytes`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'android',
+        'idempotency-key': 'chat-media-relay-rate-limit',
+        'content-type': 'application/octet-stream',
+      },
+      payload: body,
+    };
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect((await app.inject(request)).statusCode).toBe(201);
+    }
+    const limited = await app.inject({
+      ...request,
+      // A rotated JWT for the same account must remain in the principal's limiter bucket.
+      headers: { ...request.headers, authorization: `Bearer ${await accessToken(['games.play'])}` },
+    });
+
+    expect(limited.statusCode).toBe(429);
+    expect(putSourceObject).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not touch storage when a formerly valid uploader lost conversation access', async () => {
+    const putSourceObject = vi.fn();
+    const app = await build({
+      media: mediaRepository({
+        // The repository performs the same-transaction OPEN/active-member check before returning
+        // a target, so this is the route-level representation of a revoked member or closed chat.
+        getFinalizeTarget: vi.fn().mockResolvedValue({ outcome: 'not_found' }),
+      }),
+      store: objectStore({ putSourceObject }),
+    });
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/bytes`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'android',
+        'idempotency-key': 'chat-media-relay-revoked',
+        'content-type': 'application/octet-stream',
+      },
+      payload: Buffer.from('revoked'),
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(putSourceObject).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-Android, mismatched, expired and foreign-conversation relay uploads before storage', async () => {
+    const body = Buffer.from('android-upload');
+    const putSourceObject = vi.fn();
+    const getFinalizeTarget = vi
+      .fn()
+      .mockResolvedValueOnce({
+        outcome: 'inspect',
+        objectKey: `chat-media/quarantine/${tenantId}/${conversationId}/${mediaId}/source`,
+        conversationId,
+        declaredContentType: 'image/png',
+        declaredByteSize: body.byteLength,
+        declaredSha256: 'a'.repeat(64),
+      })
+      .mockResolvedValueOnce({ outcome: 'upload_expired' })
+      .mockResolvedValueOnce({
+        outcome: 'inspect',
+        objectKey: `chat-media/quarantine/${tenantId}/${conversationId}/${mediaId}/source`,
+        conversationId: '33333333-3333-4333-8333-333333333333',
+        declaredContentType: 'image/png',
+        declaredByteSize: body.byteLength,
+        declaredSha256: createHash('sha256').update(body).digest('hex'),
+      })
+      .mockResolvedValueOnce({ outcome: 'not_found' });
+    const app = await build({
+      media: mediaRepository({ getFinalizeTarget }),
+      store: objectStore({ putSourceObject }),
+    });
+    const base = {
+      method: 'PUT' as const,
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/bytes`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'chat-media-relay-0002',
+        'content-type': 'application/octet-stream',
+      },
+      payload: body,
+    };
+    const browser = await app.inject(base);
+    const mismatch = await app.inject({
+      ...base,
+      headers: { ...base.headers, 'x-app-platform': 'android' },
+    });
+    const expired = await app.inject({
+      ...base,
+      headers: { ...base.headers, 'x-app-platform': 'android' },
+    });
+    const foreign = await app.inject({
+      ...base,
+      headers: { ...base.headers, 'x-app-platform': 'android' },
+    });
+    const foreignUploader = await app.inject({
+      ...base,
+      headers: {
+        ...base.headers,
+        authorization: `Bearer ${await accessToken(
+          ['games.play'],
+          '99999999-9999-4999-8999-999999999999',
+        )}`,
+        'x-app-platform': 'android',
+      },
+    });
+
+    expect(browser.statusCode).toBe(400);
+    expect(mismatch.statusCode).toBe(422);
+    expect(expired.statusCode).toBe(409);
+    expect(foreign.statusCode).toBe(404);
+    expect(foreignUploader.statusCode).toBe(404);
+    expect(putSourceObject).not.toHaveBeenCalled();
+  });
+
+  it('reconciles a failed immutable relay write by inspecting the exact stored version', async () => {
+    const body = Buffer.from('android-upload');
+    const bodySha256 = createHash('sha256').update(body).digest('hex');
+    const putSourceObject = vi.fn().mockRejectedValue(new Error('timeout'));
+    const inspectCurrentVersion = vi.fn().mockResolvedValue({
+      byteSize: body.byteLength,
+      contentType: 'image/png',
+      etag: '"relay-etag"',
+      versionId: 'relay-version-1',
+      checksumSha256: bodySha256,
+    });
+    const app = await build({
+      media: mediaRepository({
+        getFinalizeTarget: vi.fn().mockResolvedValue({
+          outcome: 'inspect',
+          objectKey: `chat-media/quarantine/${tenantId}/${conversationId}/${mediaId}/source`,
+          conversationId,
+          declaredContentType: 'image/png',
+          declaredByteSize: body.byteLength,
+          declaredSha256: bodySha256,
+        }),
+      }),
+      store: objectStore({ putSourceObject, inspectCurrentVersion }),
+    });
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/bytes`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'x-app-platform': 'android',
+        'idempotency-key': 'chat-media-relay-0003',
+        'content-type': 'application/octet-stream',
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['x-idempotent-replayed']).toBe('true');
+    expect(putSourceObject).toHaveBeenCalledTimes(1);
+    expect(inspectCurrentVersion).toHaveBeenCalledTimes(1);
   });
 
   it('refuses content a browser would execute and any unrecognised image type', async () => {
@@ -353,6 +653,26 @@ describe('messaging media API', () => {
     expect(response.json()).toMatchObject({ code: 'MESSAGING_MEDIA_OBJECT_MISMATCH' });
   });
 
+  it('does not finalize after access is revoked between inspection and the final transaction', async () => {
+    const finalizeUpload = vi.fn().mockResolvedValue({ outcome: 'not_found' });
+    const app = await build({ media: mediaRepository({ finalizeUpload }) });
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/finalize`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'chat-media-finalize-revoked',
+      },
+      payload: { declaredByteSize: 1_024 },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: 'MESSAGING_MEDIA_NOT_FOUND' });
+    expect(finalizeUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId, mediaId, actorUserId: userId }),
+    );
+  });
+
   it('hands a reader a short-lived redirect instead of an object key', async () => {
     const createDeliveryUrl = vi.fn().mockResolvedValue('https://storage.example.test/signed');
     const store = objectStore({ createDeliveryUrl });
@@ -378,9 +698,87 @@ describe('messaging media API', () => {
     expect(JSON.stringify(response.body)).not.toContain('chat-media/ready');
   });
 
+  it('relays authorized Android media bytes without a storage redirect', async () => {
+    const readDelivery = vi.fn().mockResolvedValue(Buffer.from('ready-image'));
+    const createDeliveryUrl = vi.fn();
+    const app = await build({ store: objectStore({ readDelivery, createDeliveryUrl }) });
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/content`,
+      headers: { authorization: `Bearer ${await accessToken()}`, 'x-app-platform': 'android' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toBe('ready-image');
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers['cache-control']).toBe('private, no-store');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(readDelivery).toHaveBeenCalledWith({
+      delivery: {
+        objectKey: `chat-media/ready/${tenantId}/${conversationId}/${mediaId}/content`,
+        objectVersion: 'ready-version-1',
+        fileName: 'photo.png',
+        contentType: 'image/png',
+        inline: true,
+      },
+      maxBytes: 1_024,
+    });
+    expect(createDeliveryUrl).not.toHaveBeenCalled();
+  });
+
+  it('shares the early Android read limit across rotated tokens before storage', async () => {
+    const readDelivery = vi.fn().mockResolvedValue(Buffer.from('ready-image'));
+    const app = await build({ store: objectStore({ readDelivery }) });
+    const token = await accessToken();
+    const rotated = await accessToken(['chat.direct.create', 'notification.read']);
+    expect(rotated).not.toBe(token);
+    const request = {
+      method: 'GET' as const,
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/content`,
+      headers: { authorization: `Bearer ${token}`, 'x-app-platform': 'android' },
+    };
+    for (let i = 0; i < 60; i++) expect((await app.inject(request)).statusCode).toBe(200);
+    const limited = await app.inject({
+      ...request,
+      headers: { ...request.headers, authorization: `Bearer ${rotated}` },
+    });
+    expect(limited.statusCode).toBe(429);
+    expect(readDelivery).toHaveBeenCalledTimes(60);
+  });
+
+  it('rejects excess concurrent Android reads before allocating another storage buffer', async () => {
+    const complete: ((body: Buffer) => void)[] = [];
+    const readDelivery = vi.fn(
+      () =>
+        new Promise<Buffer>((resolve) => {
+          complete.push(resolve);
+        }),
+    );
+    const app = await build({ store: objectStore({ readDelivery }) });
+    const token = await accessToken();
+    const request = {
+      method: 'GET' as const,
+      url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/content`,
+      headers: { authorization: `Bearer ${token}`, 'x-app-platform': 'android' },
+    };
+    const inFlight = Array.from({ length: 4 }, () =>
+      app.inject(request).then((response) => response),
+    );
+    await vi.waitFor(() => expect(readDelivery).toHaveBeenCalledTimes(4));
+    expect((await app.inject(request)).statusCode).toBe(429);
+    expect(readDelivery).toHaveBeenCalledTimes(4);
+    for (const resolve of complete) resolve(Buffer.from('ready-image'));
+    expect((await Promise.all(inFlight)).every((response) => response.statusCode === 200)).toBe(
+      true,
+    );
+    readDelivery.mockImplementation(() => Promise.resolve(Buffer.from('ready-image')));
+    expect((await app.inject(request)).statusCode).toBe(200);
+  });
+
   it('hides a message attachment from a reader without an active membership', async () => {
     const createDeliveryUrl = vi.fn().mockResolvedValue('https://storage.example.test/signed');
-    const store = objectStore({ createDeliveryUrl });
+    const readDelivery = vi.fn();
+    const store = objectStore({ createDeliveryUrl, readDelivery });
     const app = await build({
       store,
       messages: messageRepository({
@@ -390,12 +788,13 @@ describe('messaging media API', () => {
     const response = await app.inject({
       method: 'GET',
       url: `/user/api/v1/local-padel/conversations/${conversationId}/media/${mediaId}/content`,
-      headers: { authorization: `Bearer ${await accessToken()}` },
+      headers: { authorization: `Bearer ${await accessToken()}`, 'x-app-platform': 'android' },
     });
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ code: 'MESSAGING_MEDIA_NOT_FOUND' });
     expect(createDeliveryUrl).not.toHaveBeenCalled();
+    expect(readDelivery).not.toHaveBeenCalled();
   });
 
   it('sends an attachment-only message through the messaging command', async () => {
