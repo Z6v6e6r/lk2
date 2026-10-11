@@ -68,10 +68,10 @@ describe('client-assisted booking screen read routes', () => {
         bookingScreenMappingRepository: {
           resolve: vi
             .fn()
-            .mockImplementation(async (input: { exerciseAssociationIds: readonly string[] }) => {
+            .mockImplementation((input: { exerciseAssociationIds: readonly string[] }) => {
               if (mappingUnavailable && input.exerciseAssociationIds.length === 0)
-                throw new Error('Photo station mapping unavailable');
-              return {
+                return Promise.reject(new Error('Photo station mapping unavailable'));
+              return Promise.resolve({
                 bookings: [],
                 games: [],
                 stations: [
@@ -80,7 +80,7 @@ describe('client-assisted booking screen read routes', () => {
                     stationId: '60000000-0000-4000-8000-000000000001',
                   },
                 ],
-              };
+              });
             }),
         },
         locationRepository: {
