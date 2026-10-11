@@ -5264,7 +5264,7 @@ import { fileURLToPath as fileURLToPath2 } from "url";
 
 // src/communities-staging-role-split-trusted-inventory-authorization-loader.ts
 init_esm_shims();
-import { createHash as createHash36 } from "crypto";
+import { createHash as createHash37 } from "crypto";
 import { isAbsolute as isAbsolute3, resolve as resolve2 } from "path";
 
 // ../../packages/database/src/communities-staging-role-split-trusted-inventory-authorization.ts
@@ -6065,7 +6065,7 @@ async function readRootOwnedEvidence(path2, maximumBytes, io = defaultIo) {
 
 // src/communities-staging-role-split-trusted-inventory-authorization-request.ts
 init_esm_shims();
-import { createHash as createHash35 } from "crypto";
+import { createHash as createHash36 } from "crypto";
 
 // ../../packages/database/src/index.ts
 init_esm_shims();
@@ -37532,7 +37532,7 @@ function parseCommunitiesStagingRoleSplitTrustedInventoryReceipt(text) {
 
 // ../../packages/database/src/messaging-media-repository.ts
 init_esm_shims();
-import { randomUUID as randomUUID9 } from "crypto";
+import { createHash as createHash32, randomUUID as randomUUID9 } from "crypto";
 var MESSAGING_MEDIA_MAX_BYTES = 15 * 1024 * 1024;
 var MESSAGING_MEDIA_MAX_DAILY_BYTES_PER_USER = 150 * 1024 * 1024;
 var MESSAGING_MEDIA_UPLOAD_TTL_MS = 15 * 60 * 1e3;
@@ -37553,7 +37553,7 @@ init_esm_shims();
 
 // ../../packages/database/src/profile-friendship-repository.ts
 init_esm_shims();
-import { createHash as createHash32 } from "crypto";
+import { createHash as createHash33 } from "crypto";
 
 // ../../packages/database/src/profile-level-history-repository.ts
 init_esm_shims();
@@ -37579,12 +37579,12 @@ init_esm_shims();
 
 // src/communities-staging-role-split-trusted-inventory-gate.ts
 init_esm_shims();
-import { createHash as createHash34 } from "crypto";
+import { createHash as createHash35 } from "crypto";
 import { dirname, isAbsolute as isAbsolute2, resolve } from "path";
 
 // ../../packages/database/src/communities-staging-role-split-trusted-inventory-gate.ts
 init_esm_shims();
-import { createHash as createHash33 } from "crypto";
+import { createHash as createHash34 } from "crypto";
 var COMMUNITIES_STAGING_ROLE_SPLIT_TRUSTED_INVENTORY_GATE_VERSION = "communities-staging-role-split-trusted-inventory-gate-v1";
 var SHA2564 = /^[a-f0-9]{64}$/u;
 var COMMIT4 = /^[a-f0-9]{40}$/u;
@@ -37664,7 +37664,7 @@ function canonicalCommunitiesStagingRoleSplitTrustedInventoryGate(value) {
   return canonicalText2(value);
 }
 function communitiesStagingRoleSplitTrustedInventoryGateSha256(value) {
-  return createHash33("sha256").update(canonicalCommunitiesStagingRoleSplitTrustedInventoryGate(value), "utf8").digest("hex");
+  return createHash34("sha256").update(canonicalCommunitiesStagingRoleSplitTrustedInventoryGate(value), "utf8").digest("hex");
 }
 
 // src/communities-staging-role-split-trusted-inventory-gate.ts
@@ -37716,7 +37716,7 @@ function exactKeys6(value, expected) {
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
 }
 function sha2563(value) {
-  return createHash34("sha256").update(value, "utf8").digest("hex");
+  return createHash35("sha256").update(value, "utf8").digest("hex");
 }
 function pathSha256(path2) {
   return sha2563(`${path2}
@@ -37936,7 +37936,7 @@ function exactKeys7(value, expected) {
   return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
 }
 function sha2564(value) {
-  return createHash35("sha256").update(value, "utf8").digest("hex");
+  return createHash36("sha256").update(value, "utf8").digest("hex");
 }
 function subjectSha256(value) {
   return sha2564(`${communitiesRoleSplitCanonicalJson(value)}
@@ -38131,7 +38131,7 @@ function fail8(code) {
   throw new CommunitiesStagingRoleSplitTrustedInventoryAuthorizationLoaderError(code);
 }
 function digest(bytes) {
-  return createHash36("sha256").update(bytes).digest("hex");
+  return createHash37("sha256").update(bytes).digest("hex");
 }
 function pathSha2562(path2) {
   return digest(`${path2}
@@ -38403,18 +38403,18 @@ async function loadCommunitiesStagingRoleSplitTrustedInventoryAuthorization(inpu
 
 // src/communities-staging-role-split-trusted-inventory-runtime-wiring.ts
 init_esm_shims();
-import { createHash as createHash39 } from "crypto";
+import { createHash as createHash40 } from "crypto";
 import { dirname as dirname3, resolve as resolve5 } from "path";
 
 // src/communities-staging-role-split-trusted-inventory-supervised-producer.ts
 init_esm_shims();
 import { spawn } from "child_process";
-import { createHash as createHash38 } from "crypto";
+import { createHash as createHash39 } from "crypto";
 import { resolve as resolve4 } from "path";
 
 // src/communities-staging-role-split-trusted-inventory-host.ts
 init_esm_shims();
-import { createHash as createHash37, randomBytes } from "crypto";
+import { createHash as createHash38, randomBytes } from "crypto";
 import { constants as constants2 } from "fs";
 import { link, lstat as lstat2, open as open2, readFile, unlink } from "fs/promises";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute4, join, resolve as resolve3 } from "path";
@@ -38489,7 +38489,7 @@ function fail10(code) {
   throw new CommunitiesStagingRoleSplitTrustedInventoryHostError(code);
 }
 function sha2565(value) {
-  return createHash37("sha256").update(value).digest("hex");
+  return createHash38("sha256").update(value).digest("hex");
 }
 function pathSha2563(path2) {
   return sha2565(`${path2}
@@ -38520,7 +38520,7 @@ async function descriptorObservation(handle) {
   }
 }
 async function sha256Handle(handle, maximumBytes) {
-  const hash3 = createHash37("sha256");
+  const hash3 = createHash38("sha256");
   const buffer = Buffer.allocUnsafe(64 * 1024);
   let offset = 0;
   try {
@@ -38930,7 +38930,7 @@ function fail11(code) {
   throw new CommunitiesStagingRoleSplitTrustedInventorySupervisedProducerError(code);
 }
 function sha2566(value) {
-  return createHash38("sha256").update(value, "utf8").digest("hex");
+  return createHash39("sha256").update(value, "utf8").digest("hex");
 }
 function pathSha2564(path2) {
   return sha2566(`${path2}
@@ -39160,7 +39160,7 @@ function fail12(code) {
   throw new CommunitiesStagingRoleSplitTrustedInventoryRuntimeWiringError(code);
 }
 function sha2567(value) {
-  return createHash39("sha256").update(value, "utf8").digest("hex");
+  return createHash40("sha256").update(value, "utf8").digest("hex");
 }
 function pathSha2565(path2) {
   return sha2567(`${path2}
