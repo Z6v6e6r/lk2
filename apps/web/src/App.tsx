@@ -82,6 +82,9 @@ import {
 const BookingsPage = lazy(() =>
   import('./BookingsPage.js').then((module) => ({ default: module.BookingsPage })),
 );
+const SupportPage = lazy(() =>
+  import('./SupportPage.js').then((module) => ({ default: module.SupportPage })),
+);
 const ChatsPage = lazy(() =>
   import('./ChatsPage.js').then((module) => ({ default: module.ChatsPage })),
 );
@@ -151,6 +154,7 @@ type ProtectedRoute =
       readonly conversationId?: string;
     }
   | { readonly kind: 'notifications' }
+  | { readonly kind: 'support'; readonly ticketId?: string }
   | { readonly kind: 'communities' }
   | { readonly kind: 'community'; readonly communityId: string }
   | { readonly kind: 'community-invite' }
@@ -193,6 +197,11 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
     return { kind: 'chats', mode: 'thread', conversationId: chatMatch[1] };
   }
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
+  if (normalizedPath === '/support') return { kind: 'support' };
+  const supportMatch = normalizedPath.match(
+    /^\/support\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (supportMatch?.[1]) return { kind: 'support', ticketId: supportMatch[1] };
   if (normalizedPath === '/communities') return { kind: 'communities' };
   if (normalizedPath === '/community-invite') return { kind: 'community-invite' };
   const communityMatch = normalizedPath.match(
@@ -848,6 +857,7 @@ export function App({
     'home-v3',
     'profile',
     'profile-level-history',
+    'support',
     'bookings',
     'notifications',
     'locations',
@@ -2563,6 +2573,7 @@ export function App({
           subscriptionsError={profileSubscriptionsError}
           communities={profileCommunities}
           communitiesError={profileCommunitiesError}
+          loadCommunityPage={gateway.listMyCommunities}
           friends={profileFriends}
           friendship={profileFriendship}
           friendsBusy={profileFriendsBusy}
@@ -2705,6 +2716,16 @@ export function App({
           onMarkAllRead={handleMarkAllNotificationsRead}
           onRetryInbox={handleRetryNotificationInbox}
           onOpenNotification={handleOpenNotification}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'support') {
+      return (
+        <SupportPage
+          key={state.session.context.user.id}
+          gateway={gateway}
+          readOnly={realAccountPreview}
+          {...(protectedRoute.ticketId ? { initialTicketId: protectedRoute.ticketId } : {})}
         />
       );
     }

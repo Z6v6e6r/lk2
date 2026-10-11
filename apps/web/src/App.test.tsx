@@ -1303,6 +1303,25 @@ describe('PadlHub web authentication', () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each(['web', 'android'] as const)(
+    'opens the standalone support route on %s',
+    async (clientPlatform) => {
+      window.history.replaceState({}, '', '/support');
+      const listSupportTickets = vi.fn().mockResolvedValue({ items: [] });
+      const gateway = createGateway({
+        restoreSession: vi.fn().mockResolvedValue(session),
+        listSupportTickets,
+        getSupportTicket: vi.fn(),
+        createSupportTicket: vi.fn(),
+        sendSupportTicketMessage: vi.fn(),
+      });
+      render(<App clientPlatform={clientPlatform} gateway={gateway} tenantKey="padlhub" />);
+      expect(await screen.findByRole('heading', { name: 'Техническая поддержка' })).toBeVisible();
+      await waitFor(() => expect(listSupportTickets).toHaveBeenCalledOnce());
+      expect(screen.getByRole('button', { name: 'Новое обращение' })).toBeEnabled();
+    },
+  );
+
   it('loads the profile route with profile details and active subscriptions', async () => {
     window.history.replaceState({}, '', '/profile');
     const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });

@@ -1,5 +1,12 @@
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
-import type { AuthenticatedSession, AuthChallenge, CommunityPost } from '@phub/api-sdk';
+import type {
+  AuthenticatedSession,
+  AuthChallenge,
+  CommunityPost,
+  SupportTicket,
+  SupportTicketPage,
+  SupportTicketSummary,
+} from '@phub/api-sdk';
 import type {
   GiftCertificateAdminCatalogState,
   GiftCertificateCatalogInput,
@@ -24,6 +31,7 @@ export type AdminGiftCertificateMediaCommandResult = GiftCertificateMediaAsset &
 };
 
 export type AdminNotificationChannel = 'IN_APP' | 'WEB_PUSH' | 'IOS_PUSH' | 'ANDROID_PUSH';
+export type { SupportTicket, SupportTicketPage } from '@phub/api-sdk';
 
 export interface AdminNotificationChannelCapability {
   readonly channel: AdminNotificationChannel;
@@ -68,6 +76,27 @@ export interface AdminNotificationCampaignAccepted {
   readonly pushQueuedCount: number;
   readonly suppressedCount: number;
   readonly replayed: boolean;
+}
+
+export type SupportTicketCategory = SupportTicketSummary['category'];
+export type SupportTicketStatus = SupportTicketSummary['status'];
+export type SupportTicketPriority = SupportTicketSummary['priority'];
+
+export interface AdminSupportTicketFilters {
+  readonly cursor?: string;
+  readonly status?: SupportTicketStatus;
+  readonly category?: SupportTicketCategory;
+  readonly priority?: SupportTicketPriority;
+  readonly query?: string;
+}
+
+export interface AdminSupportTicketUpdate {
+  readonly expectedVersion: number;
+  readonly status?: SupportTicketStatus;
+  readonly priority?: SupportTicketPriority;
+  readonly category?: SupportTicketCategory;
+  readonly assignedTo?: string | null;
+  readonly tags?: readonly string[];
 }
 
 export type LevelEligibilityActivityType = 'GAME' | 'TOURNAMENT' | 'TRAINING';
@@ -342,6 +371,18 @@ export interface NotificationAdminClient {
       readonly metadata?: Record<string, unknown>;
     };
   }>;
+  listAdminSupportTickets(input?: AdminSupportTicketFilters): Promise<SupportTicketPage>;
+  getAdminSupportTicket(ticketId: string, before?: string): Promise<SupportTicket>;
+  updateAdminSupportTicket(
+    ticketId: string,
+    input: AdminSupportTicketUpdate,
+    idempotencyKey: string,
+  ): Promise<SupportTicket>;
+  sendAdminSupportTicketMessage(
+    ticketId: string,
+    input: { readonly body: string; readonly internal: boolean; readonly expectedVersion: number },
+    idempotencyKey: string,
+  ): Promise<SupportTicket>;
 }
 
 interface NotificationAdminClientOptions {
@@ -454,6 +495,18 @@ export function createNotificationAdminClient(
         { method: 'POST', body: JSON.stringify(input) },
         operationId(),
       );
+    },
+    listAdminSupportTickets(input = {}) {
+      return userClient.listAdminSupportTickets(input);
+    },
+    getAdminSupportTicket(ticketId, before) {
+      return userClient.getAdminSupportTicket(ticketId, before);
+    },
+    updateAdminSupportTicket(ticketId, input, idempotencyKey) {
+      return userClient.updateAdminSupportTicket(ticketId, input, idempotencyKey);
+    },
+    sendAdminSupportTicketMessage(ticketId, input, idempotencyKey) {
+      return userClient.sendAdminSupportTicketMessage(ticketId, input, idempotencyKey);
     },
     listPendingCommunityJoinRequests(input = {}) {
       const query = new URLSearchParams();

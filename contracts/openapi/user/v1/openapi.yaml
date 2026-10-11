@@ -5284,6 +5284,130 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/tickets:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+    get:
+      tags:
+        - support
+      operationId: listSupportTickets
+      summary: List only the authenticated user’s support tickets
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Cursor
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Limit
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Status
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Category
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Priority
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Query
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/UserTicketPage
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags:
+        - support
+      operationId: createSupportTicket
+      summary: Create a support ticket and first message
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/IdempotencyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/support-tickets.yaml#/components/schemas/Create
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/UserTicket
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '410':
+          $ref: ../../common/support-tickets.yaml#/components/responses/CommandExpired
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+      description:
+        ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
+        ticket before an explicit fresh command.'
+  /{tenantKey}/support/tickets/{ticketId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/support-tickets.yaml#/components/parameters/TicketId
+    get:
+      tags:
+        - support
+      operationId: getSupportTicket
+      summary: Read an owned ticket excluding all internal staff metadata
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Before
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/UserTicket
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/tickets/{ticketId}/messages:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/support-tickets.yaml#/components/parameters/TicketId
+    post:
+      tags:
+        - support
+      operationId: sendSupportTicketMessage
+      summary: Reply to an owned ticket; resolved or closed tickets reopen
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/IdempotencyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/support-tickets.yaml#/components/schemas/UserMessage
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/UserTicket
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '410':
+          $ref: ../../common/support-tickets.yaml#/components/responses/CommandExpired
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+      description:
+        ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
+        ticket before an explicit fresh command.'
 components:
   schemas:
     GameJoinConditions:

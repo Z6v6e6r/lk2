@@ -11,7 +11,7 @@ import type {
   ProfilePrivacySettings,
   ProfilePrivacyUpdateRequest,
 } from '@phub/api-sdk';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 
 import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.js';
@@ -62,6 +62,7 @@ interface ProfilePageProps {
   readonly subscriptionsError?: string | null;
   readonly communities?: CommunityMembershipPage | null;
   readonly communitiesError?: string | null;
+  readonly loadCommunityPage?: (cursor?: string) => Promise<CommunityMembershipPage>;
   readonly friends?: ProfileFriendPage | null;
   readonly friendship?: ProfileFriendship | null;
   readonly friendsBusy?: boolean;
@@ -507,6 +508,8 @@ function ProfileIcon({
   name,
 }: {
   readonly name:
+    | 'edit'
+    | 'support'
     | 'back'
     | 'bell'
     | 'share'
@@ -529,6 +532,31 @@ function ProfileIcon({
   } as const;
 
   switch (name) {
+    case 'edit':
+      return (
+        <svg {...common}>
+          <path
+            d="m14 5 5 5M4 20l4.5-1 12-12a2.8 2.8 0 0 0-4-4l-12 12L4 20Z"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    case 'support':
+      return (
+        <svg {...common}>
+          <path
+            d="M4 13v-2a8 8 0 0 1 16 0v6a4 4 0 0 1-4 4h-3M4 12H3v6h4v-6H4ZM20 12h1v6h-4v-6h3Z"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path d="M10 20h4v2h-4z" fill="currentColor" />
+        </svg>
+      );
     case 'back':
       return (
         <svg {...common}>
@@ -694,13 +722,28 @@ function ProfileShareQrCode({ value }: { readonly value: string }): React.JSX.El
   );
 }
 
+const profileCities = ['Москва', 'Питер', 'Сочи', 'Завидово'] as const;
+type ProfileCity = (typeof profileCities)[number];
+
+function readProfileCity(userId: string): ProfileCity {
+  try {
+    const value = window.localStorage.getItem(`lk2:profile:city:${userId}`);
+    return profileCities.find((city) => city === value) ?? 'Москва';
+  } catch {
+    return 'Москва';
+  }
+}
+
 function ProfileFacts({
+  userId,
   sport,
   onChooseSport,
 }: {
+  readonly userId: string;
   readonly sport: ProfileSport;
   readonly onChooseSport?: () => void;
 }): React.JSX.Element {
+  const [city, setCity] = useState(() => readProfileCity(userId));
   const sportLabel = sport === 'SQUASH' ? 'Сквош' : sport === 'BADMINTON' ? 'Бадминтон' : 'Падел';
 
   return (
@@ -709,10 +752,29 @@ function ProfileFacts({
         <span className="profile-inline-icon">
           <ProfileIcon name="city" />
         </span>
-        <span>
+        <label className="profile-city-choice">
           <small>город</small>
-          <strong>Москва</strong>
-        </span>
+          <select
+            aria-label="Город"
+            value={city}
+            onChange={(event) => {
+              const next = profileCities.find((item) => item === event.currentTarget.value);
+              if (!next) return;
+              setCity(next);
+              try {
+                window.localStorage.setItem(`lk2:profile:city:${userId}`, next);
+              } catch {
+                // The current selection still works when browser storage is unavailable.
+              }
+            }}
+          >
+            {profileCities.map((item) => (
+              <option value={item} key={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+        </label>
         <i aria-hidden="true">›</i>
       </div>
       <button
@@ -916,11 +978,13 @@ function ProfileSubscriptions({
 function ProfileCommunities({
   page,
   error,
+  loadPage,
 }: {
   readonly page?: CommunityMembershipPage | null;
   readonly error?: string | null;
+  readonly loadPage?: (cursor?: string) => Promise<CommunityMembershipPage>;
 }): React.JSX.Element {
-  const communities = page?.items.slice(0, 4) ?? [];
+  const communities = page?.items ?? [];
 
   return (
     <section className="profile-communities" aria-labelledby="profile-communities-title">
@@ -938,33 +1002,127 @@ function ProfileCommunities({
       ) : communities.length === 0 ? (
         <p>Вы пока не вступили ни в одно сообщество.</p>
       ) : (
-        <div className="profile-community-list">
-          {communities.map((community) => {
-            // The ranking source is queried for one community at a time, never for the whole
-            // preview, so an absent place means "not published", not "outside the rating".
-            const rankLabel = community.memberRank ? `${community.memberRank} место` : null;
-            return (
-              <a
-                href={community.route}
-                key={community.id}
-                aria-label={rankLabel ? `${community.title}, ${rankLabel}` : community.title}
-              >
-                <span>
-                  {community.logoUrl ? (
-                    <img src={community.logoUrl} alt="" />
-                  ) : (
-                    communityInitials(community.title)
-                  )}
-                </span>
-                <small>{community.title}</small>
-                {rankLabel ? <em>{rankLabel}</em> : null}
-                {community.unreadChatCount > 0 ? <b>{community.unreadChatCount}</b> : null}
-              </a>
-            );
-          })}
-        </div>
+        <ProfileCommunityRail initialPage={page} {...(loadPage ? { loadPage } : {})} />
       )}
     </section>
+  );
+}
+
+function ProfileCommunityRail({
+  initialPage,
+  loadPage,
+}: {
+  readonly initialPage: CommunityMembershipPage;
+  readonly loadPage?: (cursor?: string) => Promise<CommunityMembershipPage>;
+}): React.JSX.Element {
+  const [page, setPage] = useState(initialPage);
+  const [source, setSource] = useState(() => ({ initialPage, loadPage }));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inFlight = useRef(false);
+  const generation = useRef<symbol | null>(null);
+  const communities = page.items;
+
+  useEffect(() => {
+    generation.current = Symbol();
+    inFlight.current = false;
+    return () => {
+      generation.current = null;
+    };
+  }, [initialPage, loadPage]);
+
+  if (source.initialPage !== initialPage || source.loadPage !== loadPage) {
+    setSource({ initialPage, loadPage });
+    setPage(initialPage);
+    setBusy(false);
+    setError(null);
+  }
+
+  function loadMore(): void {
+    if (!loadPage || !page.nextCursor || inFlight.current) return;
+    const requestGeneration = generation.current;
+    const cursor = page.nextCursor;
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    void loadPage(cursor).then(
+      (next) => {
+        if (generation.current !== requestGeneration) return;
+        setPage((current) => {
+          const byId = new Map(current.items.map((item) => [item.id, item]));
+          next.items.forEach((item) => byId.set(item.id, item));
+          return {
+            items: [...byId.values()],
+            ...(next.nextCursor && next.nextCursor !== cursor
+              ? { nextCursor: next.nextCursor }
+              : {}),
+          };
+        });
+        inFlight.current = false;
+        setBusy(false);
+      },
+      () => {
+        if (generation.current !== requestGeneration) return;
+        inFlight.current = false;
+        setBusy(false);
+        setError('Не удалось догрузить сообщества.');
+      },
+    );
+  }
+
+  return (
+    <>
+      <div
+        className="profile-community-list"
+        role="region"
+        aria-label="Мои сообщества"
+        tabIndex={0}
+        aria-busy={busy}
+        onScroll={(event) => {
+          const rail = event.currentTarget;
+          if (!error && rail.scrollWidth - rail.scrollLeft - rail.clientWidth <= 116) loadMore();
+        }}
+      >
+        {communities.map((community) => {
+          // The ranking source is queried for one community at a time, never for the whole
+          // preview, so an absent place means "not published", not "outside the rating".
+          const rankLabel = community.memberRank ? `${community.memberRank} место` : null;
+          return (
+            <a
+              href={community.route}
+              key={community.id}
+              aria-label={rankLabel ? `${community.title}, ${rankLabel}` : community.title}
+            >
+              <span>
+                {community.logoUrl ? (
+                  <img src={community.logoUrl} alt="" loading="lazy" />
+                ) : (
+                  communityInitials(community.title)
+                )}
+              </span>
+              <small>{community.title}</small>
+              {rankLabel ? <em>{rankLabel}</em> : null}
+              {community.unreadChatCount > 0 ? <b>{community.unreadChatCount}</b> : null}
+            </a>
+          );
+        })}
+        {loadPage && page.nextCursor ? (
+          <button
+            className="profile-community-more"
+            type="button"
+            disabled={busy}
+            onClick={loadMore}
+          >
+            {busy ? 'Загружаем…' : error ? 'Повторить' : 'Показать ещё'}
+          </button>
+        ) : null}
+      </div>
+      {error ? (
+        <p className="profile-community-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </>
   );
 }
 
@@ -1382,6 +1540,7 @@ export function ProfilePage({
   subscriptionsError,
   communities,
   communitiesError,
+  loadCommunityPage,
   friends,
   friendship,
   friendsBusy = false,
@@ -1410,12 +1569,6 @@ export function ProfilePage({
   const independentSport: Exclude<ProfileSport, 'PADEL'> | null =
     activeSport === 'PADEL' ? null : activeSport;
   const isIndependentSport = independentSport !== null;
-  const productLabel =
-    activeSport === 'SQUASH'
-      ? 'SquashHub Player'
-      : activeSport === 'BADMINTON'
-        ? 'BadmintonHub Player'
-        : 'PadelHub Player';
   const balance = privateAccount
     ? formatBalance(privateAccount.balanceMinor, privateAccount.currency, 'currency')
     : null;
@@ -1517,24 +1670,40 @@ export function ProfilePage({
           >
             <ProfileIcon name="back" />
           </button>
-          <span>{productLabel}</span>
-          {notificationsAvailable ? (
-            <NotificationBellLink
-              className="profile-toolbar__bell"
-              unreadCount={notificationUnreadCount}
-            />
-          ) : null}
+          <div className="profile-toolbar__identity">
+            <h1 id="profile-name">{profile.displayName}</h1>
+            {isSelf ? (
+              <a
+                className="profile-edit-link"
+                href="#profile-settings"
+                aria-label="редактировать профиль"
+                title="Редактировать профиль"
+              >
+                <ProfileIcon name="edit" />
+              </a>
+            ) : null}
+          </div>
+          <div className="profile-toolbar__actions">
+            {notificationsAvailable ? (
+              <NotificationBellLink
+                className="profile-toolbar__bell"
+                unreadCount={notificationUnreadCount}
+              />
+            ) : null}
+            {isSelf ? (
+              <a
+                className="profile-toolbar__support"
+                href="/support"
+                aria-label="Техническая поддержка"
+                title="Техническая поддержка"
+              >
+                <ProfileIcon name="support" />
+              </a>
+            ) : null}
+          </div>
         </header>
 
         <section className="profile-identity" aria-labelledby="profile-name">
-          <h1 id="profile-name">{profile.displayName}</h1>
-          {isSelf ? (
-            <a className="profile-edit-link" href="#profile-settings">
-              <span aria-hidden="true">✎</span>
-              редактировать профиль
-            </a>
-          ) : null}
-
           <div className="profile-avatar-stage">
             <PlayerLevelAvatar
               className="profile-level-avatar"
@@ -1567,12 +1736,19 @@ export function ProfilePage({
           {!isIndependentSport ? (
             <>
               <div className="profile-share-row">
-                <button className="profile-share" type="button" onClick={() => void shareProfile()}>
+                <button
+                  className="profile-share"
+                  type="button"
+                  aria-label="поделиться"
+                  title="Поделиться профилем"
+                  onClick={() => void shareProfile()}
+                >
                   <ProfileIcon name="share" />
-                  поделиться
                 </button>
                 <button
                   aria-haspopup="dialog"
+                  aria-label="QR-код"
+                  title="QR-код профиля"
                   className="profile-share"
                   type="button"
                   onClick={() => {
@@ -1581,7 +1757,6 @@ export function ProfilePage({
                   }}
                 >
                   <ProfileIcon name="qr" />
-                  QR-код
                 </button>
               </div>
               {shareNotice ? (
@@ -1671,7 +1846,12 @@ export function ProfilePage({
           ) : null}
 
           {isSelf ? (
-            <ProfileFacts sport={activeSport} onChooseSport={() => setSportPickerOpen(true)} />
+            <ProfileFacts
+              key={`facts:${profile.userId}`}
+              userId={profile.userId}
+              sport={activeSport}
+              onChooseSport={() => setSportPickerOpen(true)}
+            />
           ) : null}
 
           {isSelf && independentSport ? (
@@ -1702,6 +1882,8 @@ export function ProfilePage({
 
           {isSelf && !isIndependentSport ? (
             <ProfileCommunities
+              key={`communities:${profile.userId}`}
+              {...(loadCommunityPage ? { loadPage: loadCommunityPage } : {})}
               {...(communities !== undefined ? { page: communities } : {})}
               {...(communitiesError !== undefined ? { error: communitiesError } : {})}
             />

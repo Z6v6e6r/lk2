@@ -2,13 +2,28 @@
 
 import '@testing-library/jest-dom/vitest';
 import type { PlayerProfileView } from '@phub/api-sdk';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfilePage } from './ProfilePage.js';
 
+beforeEach(() => {
+  const values = new Map<string, string>();
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      clear: () => values.clear(),
+    },
+  });
+});
+
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   Reflect.deleteProperty(window.navigator, 'share');
   Reflect.deleteProperty(window.navigator, 'clipboard');
 });
@@ -81,7 +96,21 @@ describe('ProfilePage', () => {
 
     expect(toolbar).toHaveClass('profile-toolbar');
     expect(toolbar?.firstElementChild).toBe(backButton);
-    expect(toolbar?.lastElementChild).toBe(notificationsLink);
+    expect(toolbar?.lastElementChild).toHaveClass('profile-toolbar__actions');
+    expect(notificationsLink?.nextElementSibling).toBe(
+      screen.getByRole('link', { name: 'Техническая поддержка' }),
+    );
+    expect(screen.getByRole('link', { name: 'Техническая поддержка' })).toHaveAttribute(
+      'href',
+      '/support',
+    );
+    expect(screen.getByRole('heading', { name: 'Алексей Максимов' }).closest('header')).toBe(
+      toolbar,
+    );
+    expect(screen.queryByText('PadelHub Player')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('link', { name: 'редактировать профиль' }).querySelector('svg'),
+    ).toBeInTheDocument();
     expect(backButton).toHaveClass('profile-toolbar__back');
     expect(notificationsLink).toHaveAttribute('href', '/notifications');
     expect(notificationsLink).toHaveClass('fh-bell', 'is-unread', 'profile-toolbar__bell');
@@ -176,7 +205,7 @@ describe('ProfilePage', () => {
     const picker = screen.getByRole('dialog', { name: 'Выберите вид спорта' });
     fireEvent.click(within(picker).getByRole('button', { name: 'Сквош' }));
 
-    expect(screen.getByText('SquashHub Player')).toBeVisible();
+    expect(screen.queryByText('SquashHub Player')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Вид спорта: Сквош' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Отдельный спортивный профиль' })).toBeVisible();
     expect(screen.getByRole('main').getAttribute('style')).toContain('squash-level-a.webp');
@@ -200,7 +229,7 @@ describe('ProfilePage', () => {
     const picker = screen.getByRole('dialog', { name: 'Выберите вид спорта' });
     fireEvent.click(within(picker).getByRole('button', { name: 'Бадминтон' }));
 
-    expect(screen.getByText('BadmintonHub Player')).toBeVisible();
+    expect(screen.queryByText('BadmintonHub Player')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Вид спорта: Бадминтон' })).toBeVisible();
     expect(screen.getByText('рекомендации по бадминтону', { exact: false })).toBeVisible();
     expect(screen.getByRole('main').getAttribute('style')).toContain('badminton-level-a.webp');
@@ -595,5 +624,104 @@ describe('ProfilePage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Закрыть QR-код' }));
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+describe('Profile city and community rail', () => {
+  it('offers the four cities, restores selection for the same player and isolates another player', () => {
+    const props = {
+      profile: selfProfile('D+'),
+      logoutBusy: false,
+      communities: { items: [] },
+      onLogout: () => undefined,
+    };
+    const { unmount } = render(<ProfilePage {...props} />);
+    const city = screen.getByRole('combobox', { name: 'Город' });
+    expect(
+      within(city)
+        .getAllByRole('option')
+        .map((item) => item.textContent),
+    ).toEqual(['Москва', 'Питер', 'Сочи', 'Завидово']);
+    fireEvent.change(city, { target: { value: 'Сочи' } });
+    expect(city).toHaveValue('Сочи');
+    unmount();
+    const second = render(<ProfilePage {...props} />);
+    expect(screen.getByRole('combobox', { name: 'Город' })).toHaveValue('Сочи');
+    second.unmount();
+    render(
+      <ProfilePage
+        {...props}
+        profile={{
+          ...props.profile,
+          profile: { ...props.profile.profile, userId: '24f15c0a-b6b6-4701-86a6-0c789c81a815' },
+        }}
+      />,
+    );
+    expect(screen.getByRole('combobox', { name: 'Город' })).toHaveValue('Москва');
+  });
+
+  it('loads on sideways scroll once, merges duplicates and keeps the existing cards after a failed page', async () => {
+    const items = Array.from({ length: 6 }, (_, index) => ({
+      id: `11111111-1111-4111-8111-11111111111${index}`,
+      title: `Сообщество ${index + 1}`,
+      logoUrl: null,
+      isVerified: false,
+      unreadChatCount: 0,
+      route: `/communities/11111111-1111-4111-8111-11111111111${index}`,
+    }));
+    let finish!: (page: { items: typeof items; nextCursor?: string }) => void;
+    const loadPage = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ items: [], nextCursor: undefined });
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        logoutBusy={false}
+        communities={{ items, nextCursor: 'page-2' }}
+        loadCommunityPage={loadPage}
+        onLogout={() => undefined}
+      />,
+    );
+    const rail = screen.getByRole('region', { name: 'Мои сообщества' });
+    expect(within(rail).getAllByRole('link')).toHaveLength(6);
+    Object.defineProperties(rail, {
+      clientWidth: { value: 300 },
+      scrollWidth: { value: 600 },
+      scrollLeft: { value: 280, writable: true },
+    });
+    fireEvent.scroll(rail);
+    fireEvent.scroll(rail);
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    expect(loadPage).toHaveBeenLastCalledWith('page-2');
+    await act(async () => {
+      finish({
+        items: [
+          items[0]!,
+          { ...items[1]!, id: '21111111-1111-4111-8111-111111111111', title: 'Новое сообщество' },
+        ],
+        nextCursor: 'page-3',
+      });
+      await Promise.resolve();
+    });
+    expect(within(rail).getAllByRole('link')).toHaveLength(7);
+    fireEvent.scroll(rail);
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Не удалось догрузить сообщества'),
+    );
+    expect(within(rail).getAllByRole('link')).toHaveLength(7);
+    fireEvent.scroll(rail);
+    expect(loadPage).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Показать ещё' })).not.toBeInTheDocument(),
+    );
+    expect(loadPage).toHaveBeenCalledTimes(3);
   });
 });

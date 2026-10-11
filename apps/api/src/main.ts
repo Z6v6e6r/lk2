@@ -47,6 +47,7 @@ import {
   createTrainerAvatarRepository,
   createUpcomingBookingsRepository,
   createSubscriptionRuntimeActorContextRepository,
+  createSupportTicketRepository,
   projectHomeBaseUser,
 } from '@phub/database';
 import { createContactReader } from '@phub/database/contacts';
@@ -677,6 +678,7 @@ const app = await buildApp({
   locationRepository: createLocationRepository(pool),
   ...(stationSupportProvider ? { stationSupportProvider } : {}),
   ...(stationSupportRepository ? { stationSupportRepository } : {}),
+  supportTicketRepository: createSupportTicketRepository(pool),
   ...(stationSupportMediaStore ? { stationSupportMediaStore } : {}),
   ...(stationSupportMediaAllowedHosts.length > 0 ? { stationSupportMediaAllowedHosts } : {}),
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
