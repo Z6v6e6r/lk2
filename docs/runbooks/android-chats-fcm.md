@@ -164,3 +164,9 @@ Run `npm run check`, the focused Android/media/FCM suites, and a versioned debug
 `android-development.md`. Do not provision a database, change Firebase/server configuration or send a
 real test message as part of source verification. Device/provider and live activation evidence are
 separate. The Firebase JSON and any signing/private credential files stay excluded from commits.
+
+## API + Worker server rollout preparation
+
+The explicit Android bridge in [standard delivery](timeweb-standard-delivery.md#explicit-android-api--worker-bridge-and-recovery) prepares a coordinated API/Worker update and receipt-bound failure recovery for the published `11954ffd.../38144582876` artifact. It restores previous runtime settings before restarting the previous Worker, supports PostgreSQL-independent emergency containment, and preserves shared locks until terminal reconciliation. Source preparation and LOCAL/CI checks do not enroll or execute it on Timeweb.
+
+Live prerequisites remain separate: approved `0096`/`0097` migrations, a fresh backup/restore proof over all 101 migrations, prepared private runtime environments, existing FCM credential custody, controller enrollment and exact rollout authority. The rollout enables global FCM and reads the credential inside Worker while all Android tenant/provider gates stay off. Actual provider activation and the requested remote push test follow only after server runtime evidence; APK installation and Android permission do not establish delivery.

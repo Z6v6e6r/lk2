@@ -39,3 +39,33 @@ export function provisionTimewebBetaRuntimeSecrets(options: {
   previousBackedUp?: boolean;
   backupDir?: string;
 };
+
+export interface TimewebSecretSetSnapshot {
+  releaseId: string;
+  device: number;
+  inode: number;
+  files: Record<string, string>;
+}
+export function describeTimewebRuntimeSecretSet(
+  directory: string,
+  expectedUid?: number,
+  expectedGid?: number,
+): TimewebSecretSetSnapshot;
+export function validateTimewebFcmSecretDelta(
+  previousDir: string,
+  candidateDir: string,
+  expectedUid?: number,
+  expectedGid?: number,
+): void;
+export function transitionPreparedTimewebRuntimeSecrets(options: {
+  direction: 'install' | 'restore';
+  targetDir: string;
+  candidateDir: string;
+  backupDir: string;
+  previous: TimewebSecretSetSnapshot;
+  candidate: TimewebSecretSetSnapshot;
+  planSha256: string;
+  expectedUid?: number;
+  expectedGid?: number;
+  afterRename?: (phase: string) => void;
+}): { status: 'INSTALLED' | 'RESTORED'; planSha256: string };

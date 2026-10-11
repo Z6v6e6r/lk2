@@ -20,6 +20,7 @@ import {
 import { dirname, basename } from 'node:path';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { validateTimewebRuntimeSecretPaths } from './render-timeweb-beta-release-env.js';
+import { validateInstalledApiWorkerEvidence } from './timeweb-api-worker-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
 import {
   validateTimewebMonitorReadback,
@@ -1200,53 +1201,80 @@ export function readInstalledApiBaseline(releaseId) {
   const values = parseEnv(bytes);
   if (values.PHUB_RELEASE_ID !== releaseId) fail('baseline_release_id');
   if (existsSync(installed)) {
-    if (
-      values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
-      values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
-        `${ROOT}/backups/${releaseId}-api-web/rollout-receipt.json`
-    )
-      fail('installed_baseline_identity');
-    const receipt = JSON.parse(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT));
-    const planBytes = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
-    const plan = JSON.parse(planBytes);
-    validateUpgradeReceipt(receipt, hash(planBytes));
-    const transaction = `${ROOT}/backups/${releaseId}-api-web`;
-    const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
-    for (const [file, key] of direct
-      ? [
-          ['observation.json', 'observationSha256'],
-          ['release-owner-observation.json', 'ownerObservationSha256'],
-        ]
-      : [
-          ['observation.json', 'observationSha256'],
-          ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-          ['alert-test-readback.json', 'alertReadbackSha256'],
-        ])
-      if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
-    if (direct)
-      validateDirectInstalledEvidence(
-        receipt,
-        planBytes,
-        read(`${transaction}/operation.json`),
-        read(`${transaction}/release-owner-observation.json`),
-        read(`${transaction}/observation.json`),
+    if (values.PHUB_COMPONENT_ROLLOUT_KIND === 'API_WORKER') {
+      const transaction = `${ROOT}/backups/${releaseId}-api-worker`;
+      if (
+        values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
+        values.PHUB_COMPONENT_ROLLOUT_RECEIPT !== `${transaction}/rollout-receipt.json`
+      )
+        fail('installed_baseline_identity');
+      validateInstalledApiWorkerEvidence({
         releaseId,
-        {
-          api: `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}`,
-          web: `ghcr.io/z6v6e6r/phub-web@${values.WEB_IMAGE_DIGEST}`,
-        },
-      );
-    if (
-      !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
-        receipt.schema,
-      ) ||
-      !(
-        receipt.status === 'SUCCESS' ||
-        (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
-      ) ||
-      receipt.installedBaselineSha256 !== hash(bytes)
-    )
-      fail('installed_baseline_receipt');
+        values,
+        bytes,
+        receipt: JSON.parse(read(`${transaction}/rollout-receipt.json`)),
+        planBytes: read(`${transaction}/plan.json`),
+        operationBytes: read(`${transaction}/operation.json`),
+        evidence: Object.fromEntries(
+          ['observation.json', 'timeweb-monitor-readback.json', 'alert-test-readback.json'].map(
+            (name) => [name, read(`${transaction}/${name}`)],
+          ),
+        ),
+      });
+    } else {
+      if (
+        values.PHUB_COMPONENT_ROLLOUT_KIND !== undefined &&
+        values.PHUB_COMPONENT_ROLLOUT_KIND !== 'API_WEB'
+      )
+        fail('installed_baseline_kind');
+      if (
+        values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
+        values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
+          `${ROOT}/backups/${releaseId}-api-web/rollout-receipt.json`
+      )
+        fail('installed_baseline_identity');
+      const receipt = JSON.parse(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT));
+      const planBytes = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
+      const plan = JSON.parse(planBytes);
+      validateUpgradeReceipt(receipt, hash(planBytes));
+      const transaction = `${ROOT}/backups/${releaseId}-api-web`;
+      const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+      for (const [file, key] of direct
+        ? [
+            ['observation.json', 'observationSha256'],
+            ['release-owner-observation.json', 'ownerObservationSha256'],
+          ]
+        : [
+            ['observation.json', 'observationSha256'],
+            ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+            ['alert-test-readback.json', 'alertReadbackSha256'],
+          ])
+        if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
+      if (direct)
+        validateDirectInstalledEvidence(
+          receipt,
+          planBytes,
+          read(`${transaction}/operation.json`),
+          read(`${transaction}/release-owner-observation.json`),
+          read(`${transaction}/observation.json`),
+          releaseId,
+          {
+            api: `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}`,
+            web: `ghcr.io/z6v6e6r/phub-web@${values.WEB_IMAGE_DIGEST}`,
+          },
+        );
+      if (
+        !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
+          receipt.schema,
+        ) ||
+        !(
+          receipt.status === 'SUCCESS' ||
+          (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
+        ) ||
+        receipt.installedBaselineSha256 !== hash(bytes)
+      )
+        fail('installed_baseline_receipt');
+    }
     validateTimewebRuntimeSecretPaths(RUNTIME, values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID);
   }
   return {
