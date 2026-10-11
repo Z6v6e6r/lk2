@@ -36,7 +36,7 @@ const channelCopy: Readonly<
   },
   ANDROID_PUSH: {
     title: 'Android',
-    description: 'Push через Firebase Cloud Messaging',
+    description: 'Push на Android; текст доступен в центре уведомлений',
     icon: 'A',
   },
   IOS_PUSH: {
@@ -52,7 +52,7 @@ const channelCopy: Readonly<
 };
 
 const reasonCopy: Readonly<Record<string, string>> = {
-  GLOBAL_RUNTIME_DISABLED: 'Web Push выключен на сервере',
+  GLOBAL_RUNTIME_DISABLED: 'Канал выключен на сервере',
   TENANT_RUNTIME_DISABLED: 'Канал выключен для организации',
   PROVIDER_NOT_CONFIGURED: 'Не настроена учётная запись провайдера',
   FCM_ADAPTER_NOT_IMPLEMENTED: 'FCM ещё не подключён',

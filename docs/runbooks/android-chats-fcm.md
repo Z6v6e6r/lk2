@@ -68,8 +68,76 @@ Only explicit FCM UNREGISTERED invalidates a token. Provider acceptance is not d
 this slice does not produce native display/open receipts.
 
 Worker readiness exposes FCM forward progress; bounded provider outcome and cycle metrics use the
-`phub.worker.fcm.*` instruments without token/payload labels. CUP Android campaigns remain outside
-this application/event-delivery slice and continue using their existing disabled capability.
+`phub.worker.fcm.*` instruments without token/payload labels.
+
+## Server delivery from CUP
+
+The existing CUP Android card is controlled by the PadlHub Admin API capability response. Android
+is available only when the global FCM gate, API endpoint cipher, tenant Android gate and an active
+`PUSH/ANDROID/FCM` provider account match the server-selected app/environment. Web Push may stay off.
+APNs remains unavailable. The active CUP is the external ph-admin panel; `apps/cup-admin` is its
+development harness.
+
+Recipient preview uses the same active-user and authoritative UUID/phone resolution as existing
+campaigns. It reports Android only for consenting recipients with an active matching endpoint.
+A campaign rechecks the gates and preferences in its tenant transaction, writes one intent per
+matched user, queues only the selected platform endpoints, and writes audit/outbox records atomically.
+The existing actor-bound idempotency journal replays an accepted command without new deliveries even
+when FCM is subsequently disabled. A mismatched request hash returns a conflict. If all selected
+endpoints disappear before queueing, the intent completes as delivered in-app or suppressed.
+
+FCM still sends only opaque IDs and a safe route. Android displays generic text. Select **Android +
+Центр уведомлений** in CUP when the recipient should read the authored title/body inside PadlHub;
+the Android-only channel does not create an inbox item. Provider acceptance, device display and
+opening the notification remain separate evidence.
+
+### Operator preparation and activation
+
+These are deployment/activation instructions, not actions performed by source tests. Use the
+existing release/secret-management process and obtain authority for the exact environment and
+tenant before changing credentials, deploying or applying either operator.
+
+1. Prepare the Firebase service-account credential for project `padlhub` privately. Mount it
+   read-only to **worker only**, at its absolute `FCM_CREDENTIAL_FILE` path, with worker UID ownership
+   and mode 0600. API receives the path reference for configuration validation and does not read the
+   credential. Do not mount it in web, CUP, Android, realtime or migrator. No private key enters a report.
+2. Set matching `FCM_PROJECT_ID=padlhub`, `FCM_APP_ID=ru.padlhub.app`, `FCM_ENVIRONMENT` and endpoint
+   encryption keyring on API/worker. Keep `FCM_ENABLED=false` until the reviewed candidate and file
+   permissions are verified. Do not change VAPID/receipt configuration to make Android work.
+3. Preview the provider account using an existing active tenant operator with
+   `admin`/`notifications.manage`; the command reads no Firebase credential and sends no push:
+
+   ```sh
+   npm run notifications:android-push:provider:set -- \
+     --tenant-key=local-padel --actor-id=<approved-operator-uuid> \
+     --app-id=ru.padlhub.app --environment=SANDBOX --state=on
+   ```
+
+   Apply the reviewed selector with `--confirm=APPLY_ANDROID_PUSH_PROVIDER` only under live authority.
+   Use the chosen environment consistently; it selects provider records and does not create a
+   separate Firebase sandbox project. The operator rechecks permission and state under a lock and
+   audits the provider status without credential content.
+
+4. Preview the tenant gate with `notifications:runtime:set -- --tenant-key=local-padel
+--actor-id=<approved-operator-uuid> --android-push=on`. Apply only under live authority using
+   `--confirm=APPLY_NOTIFICATION_RUNTIME`. Other channel and booking settings default to `keep`.
+   Existing booking-reminder activation prerequisites remain unchanged.
+5. Deploy the same reviewed API/worker immutable artifacts through the existing release runbook,
+   enable matching `FCM_ENABLED=true`, and verify readiness plus the authenticated Android
+   configuration/capability. An HTTP timeout does not establish runtime state.
+6. On installed APK 1.8 or newer, enter **Уведомления** after login and enable notifications if not
+   registered. Resolve only the approved test user's PadlHub UUID in CUP. Check the exact recipient
+   preview and select only **Android + Центр уведомлений**. Send one generic test with its existing
+   command key, then read back the campaign/queue/provider outcome before any retry. Reopening or
+   clicking Send again can create a new campaign; an ambiguous response is not permission to do so.
+7. Verify foreground/background delivery, tap into the notification centre, logout/account switch,
+   denied permission and rotation/offline recovery on the real phone. No USB is required.
+
+Rollback containment is `FCM_ENABLED=false` on API/worker and `--android-push=off` through the same
+audited tenant operator. Provider disabling uses `--state=off` on the exact selector. Keep encrypted
+endpoints, campaigns and delivery evidence for reconciliation; do not delete or retarget pending
+deliveries. Re-enable only after readback: queued work may resume, while events acknowledged during
+global disablement are not automatically replayed.
 
 ## Local verification
 

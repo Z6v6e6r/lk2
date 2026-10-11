@@ -1316,6 +1316,11 @@ export async function buildApp(options: BuildAppOptions) {
     webPushAppId: options.config.WEB_PUSH_APP_ID,
     webPushEnvironment: options.config.WEB_PUSH_ENVIRONMENT,
     authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    androidPush: {
+      globallyEnabled: options.config.FCM_ENABLED && Boolean(options.notificationEndpointCipher),
+      appId: options.config.FCM_APP_ID,
+      environment: options.config.FCM_ENVIRONMENT,
+    },
     commandHandlers: [
       authenticateAdmin,
       authorizeNotificationAdmin,
