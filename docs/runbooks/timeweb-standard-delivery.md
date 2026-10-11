@@ -617,3 +617,149 @@ rollback or proven preparation abort, attests its corresponding runtime, writes 
 receipt and releases the owned pointer without service mutation. A fully prepared plan without an
 acquired pointer has never activated a service; it remains an orphan for an explicit owner audit,
 not a reusable deployment input. Keep all operation/plan/receipt/evidence files for that audit.
+
+## Explicit Android API + Worker bridge and recovery
+
+The enrolled controller has a separate manual `--critical-api-worker` mode for the reviewed
+Android release `11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1`. Numeric CI callbacks
+and the forced SSH operator entry remain Web-only. Merge, publication, source preparation,
+controller enrollment, migrations, credential custody, deployment and provider activation are
+separate operations. This source change grants none of those live permissions.
+
+The closed bridge accepts only the API `0d6078be.../37038298584` and Worker `ff42c9e9...`
+preimages pinned in `scripts/timeweb-api-worker-contract.js`. The operation also binds their
+fresh complete container identities, the actual current secret-set release ID, candidate
+secret-file hashes, target server `8886471`, project `262717`, `lk2.padlhub.su`, controller
+source CI, canonical publication/artifact/manifest and a 20–60 minute expiry. Changing the
+source, target, preimage or environment requires a newly reviewed bridge. There is no general
+compatibility override.
+
+Before an approved execution:
+
+1. Enroll the reviewed controller source through the existing enrollment procedure; its delta
+   from the published candidate may contain only the named controller, test and runbook files.
+   Obtain exact deployment authority for mounting and reading the existing FCM credential,
+   enabling global FCM runtime, updating API and Worker, and receipt-bound failure recovery.
+2. Separately complete approved migrations `0096` and `0097`. The controller runs no migrator
+   and requires the complete 101-row checksum ledger, without unknown or legacy entries.
+3. Produce the existing fresh database backup and isolated restore proof **after** those
+   migrations, in `<candidate>-api-worker`. Both proof ledger digests must equal the candidate
+   ledger; a backup containing 99 migrations cannot pass. Retain the previous API/Worker images
+   locally and collect the existing monitoring and alert-test evidence. No database restore is
+   automatic in this operation.
+4. Through separately authorized secret preparation, use the existing provisioner to produce
+   `/etc/phub/timeweb-beta-candidates/<candidate-release-id>/timeweb-beta`. First prepare its
+   existing parent `/etc/phub/timeweb-beta-candidates` as a root-owned `0700` directory; the
+   provisioner creates only its immediate release parent. The candidate set uses root `0700`
+   directories and five regular root-owned `0600` files. Its API/Worker environments must differ
+   from the installed set only in `FCM_ENABLED`, `FCM_PROJECT_ID`, `FCM_APP_ID`,
+   `FCM_ENVIRONMENT` and `FCM_CREDENTIAL_FILE`. Previous FCM is disabled; candidate FCM is
+   enabled for `padlhub`, `ru.padlhub.app`, `SANDBOX`. Realtime/migrator bytes, endpoint
+   encryption keys and all other settings remain identical. The preparatory provisioner's
+   exported API requires both `targetDir` set to that isolated destination and `backupRoot`
+   set to `/etc/phub/timeweb-beta-candidates/<candidate-release-id>/backups` (beneath the same
+   private parent). The default `/etc/phub/timeweb-beta-backups` is invalid for this isolated
+   target. Pass `expectedCurrentReleaseId: null` for a new candidate staging directory, alongside
+   the existing approved input set. Import that export from a separately prepared clean frozen
+   candidate checkout at
+   `/opt/phub/timeweb-beta/releases/11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1/source`,
+   with `expectedSourceSha=11954ffd6d7bf7bd9b198e7e68d2123011f091c1`,
+   `expectedSourceTree=f5f5b2b5227018cf237de4fb8d7fe0f8ef53d1d5` and that exact candidate
+   `releaseId`. Frozen-source validation binds the importing module's actual Git HEAD/tree.
+   `sourceDir` is the approved directory of four secret environment inputs. The enrolled
+   controller activates the already prepared candidate set; it does not produce that set or
+   rewrite its release identity. The provisioner CLI does not accept a `--target-dir` argument.
+5. Provision the FCM file under its existing separate custody policy. The controller checks
+   metadata only, never reads, hashes, prints or copies the private key. Worker mounts it
+   read-only and parses it when global FCM starts. The API receives no credential mount.
+6. Keep Android tenant runtime gates off, active `ru.padlhub.app/SANDBOX` FCM providers absent,
+   and live FCM delivery leases at zero. Suspend tenant creation and direct/admin SQL changes
+   during the operation. The controller holds the same per-tenant advisory locks used by the
+   normal notification-runtime and Android-provider commands, on one READ COMMITTED/READ ONLY
+   PostgreSQL session through activation and observation. This fences those canonical commands;
+   it does not constrain an administrator bypassing them.
+
+Write the reviewed root-only operation to
+`/opt/phub/timeweb-beta/operator/api-worker-upgrade.json`. Its schema is
+`PHUB_TIMEWEB_API_WORKER_OPERATION_V1`; copy exact fields from `validateApiWorkerOperation`,
+not a historical screenshot. The confirmation is
+`UPGRADE_API_WORKER_11954FFD6D7B_FROM_0D6078BE7A50_FF42C9E9A238_GLOBAL_FCM_ON_TENANT_PROVIDER_GATES_OFF_NO_SEND`.
+The enrolled Linux host must provide `/usr/bin/flock`; an empty, private executor file stays
+in `standard` permanently. The kernel lock is retained by the parent descriptor, survives the
+acquisition child's exit and is released on controller exit/crash. No PID-file deletion or
+stale-owner takeover is used.
+
+Only after exact live approval, invoke the enrolled runner:
+
+```sh
+/usr/bin/node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker /opt/phub/timeweb-beta/operator/api-worker-upgrade.json
+```
+
+The controller persists a complete atomic preparation capsule before the shared pointer. An
+exact orphan capsule can resume only while the original request, preimages and custody remain
+unchanged and no materialized plan, journal, lock or secret-set backup directory exists. Once the pointer exists,
+recovery can discover the capsule even if materialized operation/plan/journal files are missing.
+There is no automatic retry after mutation intent or ambiguous completion.
+
+The forward sequence is: pull immutable API/Worker images and check packaged entrypoints;
+stop Worker; move the old secret directory to its deterministic backup; install the prepared
+set; update API; update Worker with `background` and `--no-deps`; observe 61 rounds over at
+least 15 minutes; persist the mixed installed-component baseline; release the database fence;
+write `SUCCESS`. Each round pins full candidate container identities and the credential mount,
+checks private readiness, excluded containers, settings custody, DB gates and monitoring.
+Web, Realtime, migrator, dependencies and ingress are never restarted by this mode.
+
+For a nonterminal failure/crash, the approved recovery mode is:
+
+```sh
+/usr/bin/node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-recover /opt/phub/timeweb-beta/operator/api-worker-upgrade.json
+```
+
+It acquires local exclusive ownership, validates the secure capsule/receipt, and stops a
+recognized Worker **before** checking GitHub, PostgreSQL, credential metadata or other runtime
+drift. PostgreSQL and GitHub are not required for restoration. If proof has drifted, it leaves
+Worker stopped and the shared locks/evidence retained. It never stops a foreign Worker.
+`PREPARING`/`PREPARED` can abort by attesting the untouched previous runtime without requiring
+candidate staging or credential custody. When no shared pointer exists, the same recovery
+command accepts only a byte-identical request/capsule, even after expiry. It proves the original
+runtime and settings unchanged and every shared/materialized rollout path absent, durably saves
+an `orphan-abort-<capsule-sha256>.json` audit containing the complete capsule, then removes only
+that exact `preparation.json`. This is terminal `RECONCILED/ABORTED` with no service action. An
+interruption before removal can repeat the same recovery; an expired request never activates a
+service. A newly authorized request with fresh expiry can be prepared after this exact cleanup.
+The marker records only that this orphan never owned the shared pointer and never mutated
+runtime at its attested point. A matching marker permits retrying exact capsule cleanup, including
+after unlink completed but the response was lost; it makes no new claim about later runtime.
+Keep the orphan audit permanently; foreign rollout state or drift prevents an initial abort,
+and malformed or duplicate matching audit records fail closed.
+
+A mutating recovery first contains Worker, then returns the exact old secret inode and bytes,
+restores API and Worker from their previous immutable images, verifies readiness, and removes
+only its exact candidate installed baseline. Recorded Compose configuration hashes identify
+controller-created replacements across interrupted rollback. The previous Worker mounts
+`/dev/null` and global FCM returns to disabled. The separately provisioned FCM credential stays
+in its private custody location; rollback does not delete it, change provider records, restore
+business data or undo a sent push. Repeated recovery after partial restoration is idempotent.
+A `SUCCESS`/`RECONCILED` receipt requires a separately reviewed rollback decision; this recovery
+command does not roll back a terminal successful deployment.
+
+`SUCCESS`, `ROLLED_BACK` and `ABORTED` retain the shared/provision exclusion until explicit
+terminal reconciliation:
+
+```sh
+/usr/bin/node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-reconcile /opt/phub/timeweb-beta/operator/api-worker-upgrade.json
+```
+
+Reconciliation verifies the terminal runtime/evidence, writes `RECONCILED`, then removes only
+the proven provision lock and shared pointer. A crash between those releases can reconcile
+again without deleting a foreign lock. A rollback/abort reconciliation needs no DB/provider
+fence. Mixed baselines are consumed by the existing shared reader through an exact API_WORKER
+receipt dispatch; unchanged Web/Realtime/migrator digests are bound into the receipt plan.
+
+This establishes server rollout/recovery evidence only. Tenant/provider activation, real FCM
+calls, token registration, remote push delivery and device acceptance remain separately approved
+and verified steps. LOCAL mocked adapter/rename checks and Linux CI lock checks do not establish
+STAGING or PRODUCTION execution.

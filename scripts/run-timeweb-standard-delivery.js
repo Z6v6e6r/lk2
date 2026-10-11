@@ -19,6 +19,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
+import { runManualApiWorkerUpgrade } from './timeweb-api-worker-upgrade.js';
 import { readInstalledApiBaseline, runManualApiWebUpgrade } from './timeweb-api-web-upgrade.js';
 import {
   createStandardDeliveryDiagnostic,
@@ -590,31 +591,49 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const criticalWeb =
     args.length === 2 &&
     ['--critical-web', '--critical-web-recover', '--critical-web-reconcile'].includes(args[0]);
-  const operation = criticalWeb
-    ? runCriticalWeb(
-        args[0] === '--critical-web'
+  const apiWorker =
+    args.length === 2 &&
+    [
+      '--critical-api-worker',
+      '--critical-api-worker-recover',
+      '--critical-api-worker-reconcile',
+    ].includes(args[0]);
+  const operation = apiWorker
+    ? runManualApiWorkerUpgrade(
+        args[0] === '--critical-api-worker'
           ? 'deploy'
-          : args[0] === '--critical-web-recover'
+          : args[0] === '--critical-api-worker-recover'
             ? 'recover'
             : 'reconcile',
         args[1],
       ).then((receipt) => {
         process.stdout.write(JSON.stringify(receipt) + '\n');
       })
-    : manual
-      ? runManualApiWebUpgrade(
-          args[0] === '--critical-api-web'
+    : criticalWeb
+      ? runCriticalWeb(
+          args[0] === '--critical-web'
             ? 'deploy'
-            : args[0] === '--critical-api-web-recover'
+            : args[0] === '--critical-web-recover'
               ? 'recover'
               : 'reconcile',
           args[1],
         ).then((receipt) => {
           process.stdout.write(JSON.stringify(receipt) + '\n');
         })
-      : args.length === 1
-        ? main(args[0])
-        : Promise.reject(new Error('Invalid controller arguments'));
+      : manual
+        ? runManualApiWebUpgrade(
+            args[0] === '--critical-api-web'
+              ? 'deploy'
+              : args[0] === '--critical-api-web-recover'
+                ? 'recover'
+                : 'reconcile',
+            args[1],
+          ).then((receipt) => {
+            process.stdout.write(JSON.stringify(receipt) + '\n');
+          })
+        : args.length === 1
+          ? main(args[0])
+          : Promise.reject(new Error('Invalid controller arguments'));
   operation.catch((error) => {
     // External command errors may contain runtime environment; never print raw error/stdout.
     let pointer = 'unavailable';
