@@ -118,7 +118,16 @@ final class AndroidSessionEngine {
     }
 
     synchronized Response request(String path, String method, Map<String, String> headers, String body) throws Failure {
-        Request request = policy.request(path, method, headers, body);
+        return request(path, method, headers, body, null);
+    }
+
+    synchronized Response requestBinary(String path, String method, Map<String, String> headers, byte[] body) throws Failure {
+        return request(path, method, headers, null, body);
+    }
+
+    private Response request(String path, String method, Map<String, String> headers, String textBody, byte[] binaryBody) throws Failure {
+        Request request = binaryBody == null ? policy.request(path, method, headers, textBody)
+            : policy.requestBinary(path, method, headers, binaryBody);
         if (request.operation == Operation.LOGOUT) {
             prepareLogout(request.headers.get("idempotency-key"));
         }
@@ -302,8 +311,15 @@ final class AndroidSessionEngine {
     private Response checkedSend(Request request) throws Failure {
         Response response = sender.send(request);
         if (response.status >= 300 && response.status < 400) throw new Failure("NATIVE_REDIRECT_REJECTED");
-        if (response.status < 200 || response.status > 599 || response.body.length > 1024 * 1024) throw new Failure("NATIVE_RESPONSE_REJECTED");
+        if (response.status < 200 || response.status > 599 || response.body.length > responseLimit(request)) throw new Failure("NATIVE_RESPONSE_REJECTED");
         return response;
+    }
+
+    private int responseLimit(Request request) {
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (request.path.matches(".*/conversations/" + uuid + "/media/" + uuid + "/content")) return 15 * 1024 * 1024;
+        if (request.path.matches(".*/support/attachments/[A-Za-z0-9_-]{43}/content")) return 3_145_710;
+        return 1024 * 1024;
     }
 
     private void acceptSession(Response response, Credential previous) throws Failure {

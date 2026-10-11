@@ -644,6 +644,14 @@ export interface AppProps {
   readonly tenantKey: string;
   readonly realtimeBaseUrl?: string;
   readonly realtimeUrl?: string;
+  readonly devicePush?: {
+    readonly enabled: boolean;
+    readonly state: WebPushBrowserState;
+    readonly busy: boolean;
+    readonly error?: string;
+    readonly enable: () => void;
+    readonly disable: () => void;
+  };
 }
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
@@ -662,6 +670,7 @@ export function App({
   tenantKey,
   realtimeBaseUrl,
   realtimeUrl,
+  devicePush,
 }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
   const communityRealtimeTransport = useMemo(() => {
@@ -850,6 +859,7 @@ export function App({
     'profile-level-history',
     'bookings',
     'notifications',
+    'chats',
     'locations',
     'location',
   ]);
@@ -1560,8 +1570,12 @@ export function App({
       loadConversations();
       void Promise.allSettled([
         gateway.listNotifications(),
-        gateway.getWebPushConfiguration(),
-        getWebPushBrowserState(serviceWorkerUrl),
+        clientPlatform === 'android'
+          ? Promise.resolve({ enabled: false })
+          : gateway.getWebPushConfiguration(),
+        clientPlatform === 'android'
+          ? Promise.resolve('unsupported' as const)
+          : getWebPushBrowserState(serviceWorkerUrl),
         gateway.listProfileFriendRequests(),
         gateway.listProfileFriendRequests(8, 'outgoing'),
         gateway.getNotificationPreferences(),
@@ -2011,9 +2025,26 @@ export function App({
         mediaType: issued.media.mediaType,
         progress: 0,
       });
-      const transfer = putChatAttachmentBytes(issued.upload, file, (progress) => {
-        if (isActive()) updateChatAttachment(localId, { progress });
-      });
+      const transfer =
+        clientPlatform === 'android'
+          ? (() => {
+              const upload = gateway.uploadConversationMediaBytes;
+              if (!upload) throw new Error('NATIVE_REQUEST_REJECTED');
+              const controller = new AbortController();
+              return {
+                promise: upload(
+                  conversationId,
+                  mediaId,
+                  file,
+                  createMessagingCommandId(),
+                  controller.signal,
+                ),
+                abort: () => controller.abort(),
+              };
+            })()
+          : putChatAttachmentBytes(issued.upload, file, (progress) => {
+              if (isActive()) updateChatAttachment(localId, { progress });
+            });
       chatAttachmentAbortRef.current.set(localId, transfer.abort);
       try {
         await transfer.promise;
@@ -2675,7 +2706,7 @@ export function App({
                   {notificationsError}
                 </p>
               ) : (
-                <p role="status">Проверяем ленту и Web Push…</p>
+                <p role="status">Проверяем ленту и уведомления…</p>
               )}
             </section>
           </main>
@@ -2684,11 +2715,12 @@ export function App({
       return (
         <NotificationsPage
           page={notifications}
-          webPush={webPushConfiguration}
-          browserState={webPushBrowserState}
+          webPush={devicePush ? { enabled: devicePush.enabled } : webPushConfiguration}
+          browserState={devicePush?.state ?? webPushBrowserState}
+          platform={clientPlatform}
           conversations={notificationConversations}
-          busy={notificationsBusy}
-          error={notificationsError}
+          busy={notificationsBusy || Boolean(devicePush?.busy)}
+          error={devicePush?.error ?? notificationsError}
           inboxUnavailable={notificationsInboxUnavailable}
           preferences={notificationPreferences}
           preferencesBusy={notificationPreferencesBusy}
@@ -2699,8 +2731,8 @@ export function App({
           friendRequestBusyId={friendRequestBusyId}
           onAcceptFriendRequest={handleAcceptFriendRequest}
           onDeclineFriendRequest={handleDeclineFriendRequest}
-          onEnableWebPush={handleEnableWebPush}
-          onDisableWebPush={handleDisableWebPush}
+          onEnableWebPush={devicePush?.enable ?? handleEnableWebPush}
+          onDisableWebPush={devicePush?.disable ?? handleDisableWebPush}
           onSavePreferences={handleSaveNotificationPreferences}
           onMarkAllRead={handleMarkAllNotificationsRead}
           onRetryInbox={handleRetryNotificationInbox}

@@ -7,6 +7,7 @@ import type { MobileRuntimeConfig } from './runtime-config.js';
 import { MobileCacheNotice } from './MobileCacheNotice.js';
 import { sessionFailureDetails } from './session-failure.js';
 import { AndroidLoginGate, type StartAndroidYandexLogin } from './AndroidLoginGate.js';
+import { createAndroidPushController, initialAndroidPushState } from './android-push.js';
 import {
   createMobileReadState,
   observeMobileCache,
@@ -32,7 +33,8 @@ function MobileSession({
   const [restoreFailure, setRestoreFailure] = useState<ReturnType<typeof sessionFailureDetails>>();
   const [staleReads, setStaleReads] = useState<StaleMobileReads>({});
   const [dataGeneration, setDataGeneration] = useState(0);
-  const gateway = useMemo(() => {
+  const [devicePush, setDevicePush] = useState(initialAndroidPushState);
+  const { gateway, push } = useMemo(() => {
     let expired = false;
     const root = `/user/api/v1/${config.tenantKey}`;
     const reads = createMobileReadState(
@@ -45,6 +47,7 @@ function MobileSession({
     const expire = (): void => {
       if (expired) return;
       expired = true;
+      controller?.sessionExpired();
       window.history.replaceState({}, '', '/');
       onSessionExpired();
     };
@@ -60,8 +63,8 @@ function MobileSession({
           }
         : {}),
     });
-    if (!native) return service;
-    return {
+    if (!native) return { gateway: service, push: undefined };
+    const nativeGateway = {
       ...service,
       ...(startYandexLogin
         ? {
@@ -73,10 +76,17 @@ function MobileSession({
           }
         : {}),
       getHomeBase: () => reads.read(root + '/home/base', () => service.getHomeBase()),
+      async verifyCode(input: Parameters<typeof service.verifyCode>[0]) {
+        const result = await service.verifyCode(input);
+        controller?.sessionReady();
+        return result;
+      },
       listLocations: () => reads.read(root + '/locations', () => service.listLocations()),
       async restoreSession() {
         try {
-          return await service.restoreSession();
+          const result = await service.restoreSession();
+          if (result) controller?.sessionReady();
+          return result;
         } catch (error) {
           setRestoreFailure(sessionFailureDetails(error));
           setBlocked('restore');
@@ -88,6 +98,7 @@ function MobileSession({
         setBlocked('logout');
         setPending(true);
         try {
+          await controller?.beforeLogout();
           await service.logout();
           expire();
         } finally {
@@ -95,7 +106,15 @@ function MobileSession({
         }
       },
     };
+    const controller: ReturnType<typeof createAndroidPushController> = createAndroidPushController(
+      nativeGateway,
+      setDevicePush,
+    );
+    return { gateway: nativeGateway, push: controller };
   }, [config, native, onSessionExpired, startYandexLogin]);
+  useEffect(() => {
+    return push?.mount();
+  }, [push]);
   if (blocked) {
     return (
       <main className="mobile-status">
@@ -133,6 +152,23 @@ function MobileSession({
         tenantKey={config.tenantKey}
         clientPlatform={native ? 'android' : 'web'}
         androidYandexLogin={native && Boolean(startYandexLogin)}
+        {...(native ? { realtimeBaseUrl: config.apiBaseUrl } : {})}
+        {...(push
+          ? {
+              devicePush: {
+                enabled: devicePush.enabled,
+                state: devicePush.state,
+                busy: devicePush.busy,
+                ...(devicePush.error ? { error: devicePush.error } : {}),
+                enable: () => {
+                  void push.enable().catch(() => undefined);
+                },
+                disable: () => {
+                  void push.disable().catch(() => undefined);
+                },
+              },
+            }
+          : {})}
       />
     </>
   );

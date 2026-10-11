@@ -473,6 +473,17 @@ const environmentSchema = z.object({
   WEB_PUSH_ENDPOINTS_PER_USER_MAX: z.coerce.number().int().min(1).max(20).default(5),
   WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
   WEB_PUSH_CIRCUIT_RESET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
+  FCM_ENABLED: booleanFromEnvironment,
+  FCM_APP_ID: z.string().min(1).max(300).default('ru.padlhub.app'),
+  FCM_PROJECT_ID: z.string().min(1).max(300).optional(),
+  FCM_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
+  /** Mounted server-only reference. The process never accepts credential material from clients. */
+  FCM_CREDENTIAL_FILE: z.string().min(1).max(1_024).optional(),
+  FCM_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  FCM_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  FCM_RETRY_BASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(5_000),
+  FCM_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+  FCM_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(1),
   NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: z.string().optional(),
   NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: z.string().min(1).max(64).default('v1'),
   VIVA_API_URL: z.string().url().optional().or(z.literal('')),
@@ -1280,6 +1291,18 @@ export function loadConfig(
         activeKey.replace(/=+$/, '')
     ) {
       throw new Error('Active notification endpoint encryption key must be 32-byte base64');
+    }
+  }
+  if (parsed.data.FCM_ENABLED) {
+    const missingFcm = [
+      ['FCM_PROJECT_ID', parsed.data.FCM_PROJECT_ID],
+      ['FCM_CREDENTIAL_FILE', parsed.data.FCM_CREDENTIAL_FILE],
+      ['NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS', parsed.data.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingFcm.length > 0) {
+      throw new Error(`FCM_ENABLED requires runtime configuration: ${missingFcm.join(', ')}`);
     }
   }
   if (

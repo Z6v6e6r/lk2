@@ -32,6 +32,7 @@ import {
   verifyNotificationReceiptToken,
   webPushEndpointPlatform,
   notificationAudienceSelectorSchema,
+  androidFcmTokenSchema,
   notificationSourceEventSchema,
   renderNotificationTemplate,
   resolveNotificationRecipients,
@@ -55,6 +56,11 @@ const event = notificationSourceEventSchema.parse({
 });
 
 describe('Web Push endpoint protection', () => {
+  it('accepts a bounded opaque Android FCM token without treating it as a URL', () => {
+    expect(androidFcmTokenSchema.safeParse(`a:${'B'.repeat(80)}`).success).toBe(true);
+    expect(androidFcmTokenSchema.safeParse('https://provider.example/token').success).toBe(false);
+    expect(androidFcmTokenSchema.safeParse('x'.repeat(4_097)).success).toBe(false);
+  });
   it('validates and canonicalizes the browser subscription shape', () => {
     const subscription = webPushSubscriptionSchema.parse({
       endpoint: 'https://PUSH.EXAMPLE.TEST:443/subscriptions/abc',

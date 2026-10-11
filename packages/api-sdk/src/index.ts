@@ -202,6 +202,20 @@ export type NotificationPreferencesUpdateRequest =
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
 export type WebPushEndpointRegistration = components['schemas']['WebPushEndpointRegistration'];
 export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpointCommandResult'];
+/** Additive Android endpoint contract until the generated OpenAPI snapshot is refreshed in integration. */
+export interface AndroidPushConfiguration {
+  readonly enabled: boolean;
+  readonly reason?:
+    | 'GLOBAL_GATE_DISABLED'
+    | 'TENANT_GATE_DISABLED'
+    | 'PROVIDER_NOT_CONFIGURED'
+    | 'RUNTIME_UNAVAILABLE';
+}
+export interface AndroidPushEndpointRegistration {
+  readonly installationId: string;
+  readonly token: string;
+}
+export type AndroidPushEndpointCommandResult = WebPushEndpointCommandResult;
 export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
@@ -2263,6 +2277,54 @@ export class PadlHubApiClient {
           method: 'DELETE',
           idempotencyKey,
         },
+      ),
+    );
+  }
+
+  public uploadConversationMediaBytes(
+    conversationId: string,
+    mediaId: string,
+    bytes: Blob,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly uploaded: true }> {
+    return this.request(
+      `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/bytes`,
+      {
+        method: 'PUT',
+        idempotencyKey,
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: bytes,
+        ...(signal ? { signal } : {}),
+      },
+    );
+  }
+
+  public getAndroidPushConfiguration(): Promise<AndroidPushConfiguration> {
+    return this.request<AndroidPushConfiguration>('/notification-endpoints/android/config');
+  }
+
+  public registerAndroidPushEndpoint(
+    input: AndroidPushEndpointRegistration,
+    idempotencyKey: string,
+  ): Promise<AndroidPushEndpointCommandResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AndroidPushEndpointCommandResult>('/notification-endpoints/android', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public revokeAndroidPushEndpoint(
+    installationId: string,
+    idempotencyKey: string,
+  ): Promise<AndroidPushEndpointCommandResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AndroidPushEndpointCommandResult>(
+        `/notification-endpoints/android/${encodeURIComponent(installationId)}`,
+        { method: 'DELETE', idempotencyKey },
       ),
     );
   }

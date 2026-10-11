@@ -17,6 +17,7 @@ import { StationSupportProviderError } from './station-support-provider.js';
 import type { StationSupportRepository } from './station-support-repository.js';
 import { stationSupportExternalMessageId } from './station-support-routes.js';
 import {
+  STATION_SUPPORT_MEDIA_MAX_BYTES,
   stationSupportAttachmentId,
   stationSupportMediaObjectKey,
   type StationSupportMediaStore,
@@ -183,7 +184,19 @@ async function build(overrides: {
 function mediaStore(stored: Map<string, { body: Buffer; fileName: string | null }> = new Map()): {
   readonly store: StationSupportMediaStore;
   readonly stored: Map<string, { body: Buffer; fileName: string | null }>;
+  readonly readSpy: ReturnType<typeof vi.fn>;
+  readonly deliveryUrlSpy: ReturnType<typeof vi.fn>;
 } {
+  const readSpy = vi.fn((objectKey: string) => {
+    const entry = stored.get(objectKey);
+    return entry
+      ? Promise.resolve(entry.body)
+      : Promise.reject(new Error('STATION_SUPPORT_MEDIA_NOT_FOUND'));
+  });
+  const deliveryUrlSpy = vi.fn(
+    (input: Parameters<StationSupportMediaStore['createDeliveryUrl']>[0]) =>
+      Promise.resolve(`https://media.test/${input.objectKey}?sig=1`),
+  );
   const store: StationSupportMediaStore = {
     putWebp: vi.fn((input: Parameters<StationSupportMediaStore['putWebp']>[0]) => {
       stored.set(input.objectKey, { body: input.body, fileName: input.fileName });
@@ -195,18 +208,10 @@ function mediaStore(stored: Map<string, { body: Buffer; fileName: string | null 
         entry ? { byteSize: entry.body.byteLength, fileName: entry.fileName } : undefined,
       );
     }),
-    read: vi.fn((objectKey: string) => {
-      const entry = stored.get(objectKey);
-      return entry
-        ? Promise.resolve(entry.body)
-        : Promise.reject(new Error('STATION_SUPPORT_MEDIA_NOT_FOUND'));
-    }),
-    createDeliveryUrl: vi.fn(
-      (input: Parameters<StationSupportMediaStore['createDeliveryUrl']>[0]) =>
-        Promise.resolve(`https://media.test/${input.objectKey}?sig=1`),
-    ),
+    read: readSpy,
+    createDeliveryUrl: deliveryUrlSpy,
   };
-  return { store, stored };
+  return { store, stored, readSpy, deliveryUrlSpy };
 }
 
 async function jpegBytes(): Promise<Buffer> {
@@ -977,6 +982,25 @@ describe('station support pictures', () => {
       headers: { authorization: `Bearer ${await accessToken()}` },
     });
     expect(malformed.statusCode).toBe(404);
+  });
+
+  it('relays a station-support picture through PadlHub for Android', async () => {
+    const { store, readSpy, deliveryUrlSpy } = mediaStore();
+    const app = await build({ mediaStore: store });
+    const attachmentId = await uploadPicture(app);
+    const delivered = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/support/attachments/${attachmentId}/content`,
+      headers: { authorization: `Bearer ${await accessToken()}`, 'x-app-platform': 'android' },
+    });
+
+    expect(delivered.statusCode).toBe(200);
+    expect(delivered.headers.location).toBeUndefined();
+    expect(delivered.headers['content-type']).toContain('image/webp');
+    expect(delivered.headers['cache-control']).toBe('private, no-store');
+    expect(delivered.headers['x-content-type-options']).toBe('nosniff');
+    expect(readSpy).toHaveBeenCalledWith(expect.any(String), STATION_SUPPORT_MEDIA_MAX_BYTES);
+    expect(deliveryUrlSpy).not.toHaveBeenCalled();
   });
 
   it('refuses an upload that is not a decodable JPEG, PNG or WebP', async () => {

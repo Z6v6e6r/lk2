@@ -11,6 +11,8 @@ export interface AndroidSessionPlugin {
     readonly method: string;
     readonly headers: Record<string, string>;
     readonly body?: string;
+    /** Internal bridge representation for the one reviewed raw-byte relay route. */
+    readonly bodyBase64?: string;
   }): Promise<{
     readonly status: number;
     readonly headers: Record<string, string>;
@@ -35,6 +37,34 @@ function rejected(): ApiClientError {
   return new ApiClientError('Запрос недоступен.', 403, 'NATIVE_REQUEST_REJECTED', 'native');
 }
 
+const MAX_RELAY_BYTES = 15 * 1024 * 1024;
+const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+
+function isBinaryRelay(path: string, method: string): boolean {
+  return method === 'PUT' && new RegExp(`/conversations/${uuid}/media/${uuid}/bytes$`).test(path);
+}
+
+function isBinaryBody(value: unknown): value is Blob | Uint8Array | ArrayBuffer {
+  return value instanceof Blob || value instanceof Uint8Array || value instanceof ArrayBuffer;
+}
+
+async function binaryBase64(value: Blob | Uint8Array | ArrayBuffer): Promise<string> {
+  const bytes =
+    value instanceof Blob
+      ? new Uint8Array(await value.arrayBuffer())
+      : value instanceof Uint8Array
+        ? value
+        : new Uint8Array(value);
+  if (bytes.byteLength < 1 || bytes.byteLength > MAX_RELAY_BYTES) throw rejected();
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, Math.min(offset + 0x8000, bytes.length)),
+    );
+  }
+  return btoa(binary);
+}
+
 /** Native HTTPS + Keystore custody; there is deliberately no browser-fetch fallback. */
 export function createNativeApiFetch(
   config: MobileRuntimeConfig,
@@ -54,7 +84,10 @@ export function createNativeApiFetch(
     if (url.origin !== config.apiBaseUrl || url.username || url.password || url.hash)
       throw rejected();
     const method = init?.method ?? 'GET';
-    if (init?.body != null && typeof init.body !== 'string') throw rejected();
+    const relay = isBinaryRelay(url.pathname, method);
+    const body = init?.body;
+    if (body != null && typeof body !== 'string' && (!relay || !isBinaryBody(body)))
+      throw rejected();
     const headers = Object.fromEntries(new Headers(init?.headers).entries());
     if ('cookie' in headers || 'set-cookie' in headers || 'origin' in headers) throw rejected();
     if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
@@ -76,11 +109,15 @@ export function createNativeApiFetch(
       onCacheObservation?.({ path: url.pathname, state: 'unavailable', invalidate });
     };
     try {
+      const binary =
+        body != null && typeof body !== 'string' ? await binaryBase64(body) : undefined;
+      if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
       const result = await plugin.request({
         path: url.pathname + url.search,
         method,
         headers,
-        ...(typeof init?.body === 'string' ? { body: init.body } : {}),
+        ...(typeof body === 'string' ? { body } : {}),
+        ...(binary === undefined ? {} : { bodyBase64: binary }),
       });
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
       if (result.status === 200 && (refresh || url.pathname.endsWith('/verify'))) active = true;

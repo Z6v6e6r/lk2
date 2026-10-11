@@ -72,7 +72,13 @@ export const FALLBACK_TIMEZONE = 'Europe/Moscow';
 export function notificationPushStatus(
   configuration: WebPushConfiguration,
   browserState: WebPushBrowserState,
+  platform: 'web' | 'android' = 'web',
 ): string {
+  if (platform === 'android') {
+    if (!configuration.enabled || browserState === 'unsupported')
+      return 'Уведомления пока недоступны.';
+    if (browserState === 'denied') return 'Разрешите уведомления в настройках приложения.';
+  }
   if (!configuration.enabled) return 'Push пока не включён для этой организации.';
   if (browserState === 'unsupported') return 'Этот браузер не поддерживает Web Push.';
   if (browserState === 'needs_install')

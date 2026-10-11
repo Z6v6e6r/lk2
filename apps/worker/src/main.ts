@@ -80,6 +80,10 @@ import { runProfilePhotoMaintenanceCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
 import { runWebPushTenantCycle } from './web-push-tenant-cycle.js';
+import { FcmDeliveryAdapter } from './fcm-adapter.js';
+import { FcmServiceAccountTokenProvider } from './fcm-credential-provider.js';
+import { runFcmDeliveryBatch } from './fcm-delivery.js';
+import { runFcmTenantCycle } from './fcm-tenant-cycle.js';
 import { runFairTenantCycle } from './tenant-cycle-orchestrator.js';
 import {
   calculateWorkerForwardProgressMaxStaleMs,
@@ -328,6 +332,40 @@ const webPushRuntime =
         }),
       }
     : undefined;
+const fcmRuntime = config.FCM_ENABLED
+  ? (() => {
+      if (
+        !config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS ||
+        !config.FCM_CREDENTIAL_FILE ||
+        !config.FCM_PROJECT_ID
+      ) {
+        throw new Error('FCM_RUNTIME_CONFIGURATION_INVALID');
+      }
+      return {
+        cipher: createNotificationEndpointCipher({
+          serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
+          activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
+        }),
+        provider: FcmServiceAccountTokenProvider.create({
+          credentialFile: config.FCM_CREDENTIAL_FILE,
+          projectId: config.FCM_PROJECT_ID,
+          timeoutMs: config.FCM_TIMEOUT_MS,
+        }),
+      };
+    })()
+  : undefined;
+const activeFcmRuntime = fcmRuntime
+  ? {
+      cipher: fcmRuntime.cipher,
+      adapter: new FcmDeliveryAdapter({
+        projectId: config.FCM_PROJECT_ID as string,
+        timeoutMs: config.FCM_TIMEOUT_MS,
+        accessTokenProvider: await fcmRuntime.provider,
+        onProviderOutcome: (outcome) =>
+          workerMetrics.recordFcmProviderOutcome(config.FCM_ENVIRONMENT, outcome),
+      }),
+    }
+  : undefined;
 const connection = await connect(config.RABBITMQ_URL);
 const channel = await connection.createConfirmChannel();
 const consumerChannel = await connection.createChannel();
@@ -391,6 +429,9 @@ await registerNotificationProjectorConsumer({
         },
       }
     : {}),
+  ...(activeFcmRuntime
+    ? { androidPush: { appId: config.FCM_APP_ID, environment: config.FCM_ENVIRONMENT } }
+    : {}),
 });
 if (giftCertificateRuntime) {
   await registerGiftCertificateIssuerConsumer({
@@ -423,6 +464,14 @@ const bookingReminderForwardProgress = config.BOOKING_REMINDER_SCHEDULER_ENABLED
       calculateWorkerForwardProgressMaxStaleMs({
         pollIntervalMs: config.BOOKING_REMINDER_POLL_INTERVAL_MS,
         confirmTimeoutMs: config.BOOKING_REMINDER_CLAIM_TTL_MS,
+      }),
+    )
+  : undefined;
+const fcmForwardProgress = activeFcmRuntime
+  ? new WorkerForwardProgressTracker(
+      calculateWorkerForwardProgressMaxStaleMs({
+        pollIntervalMs: config.FCM_POLL_INTERVAL_MS,
+        confirmTimeoutMs: config.FCM_TIMEOUT_MS,
       }),
     )
   : undefined;
@@ -491,6 +540,7 @@ const handleHealthRequest = async (
       profileMedia: profileMediaReady,
       forwardProgress: forwardProgress.ready,
       webPushForwardProgress: webPushProgress?.ready ?? true,
+      fcmForwardProgress: fcmForwardProgress?.snapshot().ready ?? true,
       bookingReminderForwardProgress: bookingReminderProgress?.ready ?? true,
     };
     response.statusCode = Object.values(checks).every(Boolean) ? 200 : 503;
@@ -499,6 +549,7 @@ const handleHealthRequest = async (
         status: response.statusCode === 200 ? 'ready' : 'not_ready',
         checks,
         coreCycle: forwardProgress,
+        ...(fcmForwardProgress ? { fcmCycle: fcmForwardProgress.snapshot() } : {}),
         ...(runtimeContourAttestation ? { runtimeContour: runtimeContourAttestation } : {}),
         ...(webPushProgress
           ? {
@@ -535,6 +586,7 @@ logger.info(
 );
 let tenantCycleStartOffset = 0;
 let webPushTenantCycleStartOffset = 0;
+let fcmTenantCycleStartOffset = 0;
 let bookingReminderTenantCycleStartOffset = 0;
 
 const publishConfiguredOutboxBatch = (tenantId: string): Promise<number> => {
@@ -1013,6 +1065,50 @@ const runWebPushCycle = async (): Promise<void> => {
   }
 };
 
+const runFcmCycle = async (): Promise<void> => {
+  if (shuttingDown || !activeFcmRuntime) return;
+  const startedAt = Date.now();
+  let failed = false;
+  fcmForwardProgress?.markCycleStarted(startedAt);
+  try {
+    const cycle = await runFcmTenantCycle({
+      pool,
+      startOffset: fcmTenantCycleStartOffset,
+      maxDeliveriesPerTenant: config.FCM_BATCH_SIZE,
+      shouldStop: () => shuttingDown,
+      runTenant: async (tenantId) =>
+        (
+          await runFcmDeliveryBatch({
+            pool,
+            logger,
+            tenantId,
+            appId: config.FCM_APP_ID,
+            environment: config.FCM_ENVIRONMENT,
+            cipher: activeFcmRuntime.cipher,
+            adapter: activeFcmRuntime.adapter,
+            maxAttempts: config.FCM_MAX_ATTEMPTS,
+            retryBaseMs: config.FCM_RETRY_BASE_MS,
+            batchSize: 1,
+          })
+        ).claimed,
+      onTenantFailure: (tenantId, error) =>
+        logger.error({ err: error, tenantId }, 'FCM tenant delivery failed'),
+      onProgress: () => fcmForwardProgress?.markProgress(),
+    });
+    fcmTenantCycleStartOffset = cycle.nextStartOffset;
+    failed = cycle.interrupted || cycle.failedCount > 0;
+    if (failed) fcmForwardProgress?.markCycleFailed();
+    else fcmForwardProgress?.markCycleSucceeded();
+  } catch (error) {
+    failed = true;
+    fcmForwardProgress?.markCycleFailed();
+    logger.error({ err: error }, 'FCM delivery cycle failed');
+  } finally {
+    workerMetrics.recordFcmCycle(Date.now() - startedAt, failed);
+    if (!shuttingDown) setTimeout(() => void runFcmCycle(), config.FCM_POLL_INTERVAL_MS);
+  }
+};
+
 const runGiftCertificateDeliveryCycle = async (): Promise<void> => {
   if (
     shuttingDown ||
@@ -1232,6 +1328,7 @@ void runHomeBaseCycle();
 void runPromotionSyncCycle();
 void runLegacyGamesRosterSync();
 void runWebPushCycle();
+void runFcmCycle();
 void runGiftCertificateDeliveryCycle();
 void runCommunityDirectInviteExpiryCycle();
 void runParticipationCommandExpiryCycle();

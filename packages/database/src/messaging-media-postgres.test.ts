@@ -62,6 +62,7 @@ describePostgres('chat media PostgreSQL pipeline', () => {
     const finalized = await media.finalizeUpload({
       tenantId,
       actorUserId: senderUserId,
+      conversationId,
       mediaId: issued.intent.id,
       idempotencyKey: `media-finalize-${randomUUID()}`,
       requestHash: randomUUID().replaceAll('-', '').padEnd(64, '0').slice(0, 64),

@@ -59,6 +59,7 @@ describe('notification endpoint repository', () => {
           rowCount: 1,
         });
       }
+      if (text.includes('installation_id = $3')) return Promise.resolve({ rows: [], rowCount: 0 });
       if (
         text.includes('from integration.notification_endpoints') &&
         (text.includes('installation_id = $4') ||
@@ -150,6 +151,7 @@ describe('notification endpoint repository', () => {
           rowCount: 1,
         });
       }
+      if (text.includes('installation_id = $3')) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('from integration.notification_endpoints') && text.includes('for update')) {
         if (values[3] === installationId) {
           return Promise.resolve({
@@ -258,6 +260,7 @@ describe('notification endpoint repository', () => {
           rowCount: 1,
         });
       }
+      if (text.includes('installation_id = $3')) return Promise.resolve({ rows: [], rowCount: 0 });
       if (text.includes('installation_id = $4')) {
         return Promise.resolve({ rows: [], rowCount: 0 });
       }
@@ -338,12 +341,14 @@ describe('notification endpoint repository', () => {
           String(text).includes('set user_id'),
       ),
     ).toBe(false);
-    const ownershipAudit = query.mock.calls.find(([text]) =>
-      String(text).includes('WEB_PUSH_ENDPOINT_OWNERSHIP_REVOKED'),
+    const ownershipAudit = query.mock.calls.find(
+      ([, values]) =>
+        Array.isArray(values) && values.includes('WEB_PUSH_ENDPOINT_OWNERSHIP_REVOKED'),
     );
     expect(ownershipAudit?.[1]).toEqual([
       tenantId,
       userId,
+      'WEB_PUSH_ENDPOINT_OWNERSHIP_REVOKED',
       previousEndpointId,
       'endpoint-register-transfer',
       JSON.stringify({ status: 'ACTIVE', addressHash: 'f'.repeat(64) }),
@@ -355,6 +360,7 @@ describe('notification endpoint repository', () => {
     expect(locks.map(([, values]) => (values as readonly unknown[])[0])).toEqual([
       `notification-endpoint-address:${tenantId}:${providerId}:${'f'.repeat(64)}`,
       `notification-endpoint:${userId}`,
+      `notification-endpoint-installation:${tenantId}:${providerId}:${installationId}`,
     ]);
     for (const sql of query.mock.calls
       .map(([text]) => String(text))
@@ -511,5 +517,129 @@ describe('notification endpoint repository', () => {
       status: 'ACTIVE',
       replayed: true,
     });
+  });
+
+  it('keeps Android provider identity isolated and reports Android gates independently', async () => {
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      if (text === 'begin' || text === 'commit' || text.includes("set_config('app.tenant_id'"))
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('provider_configured')) {
+        expect(text).toContain('android_push_enabled');
+        expect(text).toContain("a.platform = 'ANDROID'");
+        expect(values).toEqual([tenantId, 'ru.padlhub.app', 'SANDBOX']);
+        return Promise.resolve({
+          rows: [{ web_push_enabled: false, provider_configured: false }],
+          rowCount: 1,
+        });
+      }
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createNotificationEndpointRepository(poolWithQuery(query) as never);
+    await expect(
+      repository.getAndroidPushCapabilities?.(tenantId, {
+        appId: 'ru.padlhub.app',
+        environment: 'SANDBOX',
+        platform: 'ANDROID',
+        provider: 'FCM',
+      }),
+    ).resolves.toEqual({ tenantEnabled: false, providerConfigured: false });
+  });
+
+  it('does not retarget old Android delivery rows when an installation transfers accounts', async () => {
+    const oldUserId = '77777777-7777-4777-8777-777777777777';
+    const oldEndpointId = '88888888-8888-4888-8888-888888888888';
+    const query = vi.fn((text: string) => {
+      if (
+        text === 'begin' ||
+        text === 'commit' ||
+        text.includes("set_config('app.tenant_id'") ||
+        text.includes('pg_advisory_xact_lock')
+      )
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('from integration.notification_provider_accounts'))
+        return Promise.resolve({ rows: [{ id: providerId }], rowCount: 1 });
+      if (text.includes('insert into integration.notification_endpoint_commands'))
+        return Promise.resolve({
+          rows: [{ idempotency_key: 'android-transfer-0001' }],
+          rowCount: 1,
+        });
+      if (text.includes('installation_id = $3'))
+        return Promise.resolve({
+          rows: [
+            {
+              id: oldEndpointId,
+              user_id: oldUserId,
+              installation_id: installationId,
+              address_hash: 'old'.repeat(16),
+              status: 'ACTIVE',
+            },
+          ],
+          rowCount: 1,
+        });
+      if (text.includes('installation_id = $4')) return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('address_hash = $3'))
+        return Promise.resolve({
+          rows: [
+            {
+              id: oldEndpointId,
+              user_id: oldUserId,
+              installation_id: installationId,
+              address_hash: 'f'.repeat(64),
+              status: 'ACTIVE',
+            },
+          ],
+          rowCount: 1,
+        });
+      if (text.includes('address_hash = $4')) return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('count(*)::integer as endpoint_count'))
+        return Promise.resolve({ rows: [{ endpoint_count: 0 }], rowCount: 1 });
+      if (text.includes("set installation_id = null, status = 'REVOKED'"))
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      if (text.includes('insert into integration.notification_endpoints'))
+        return Promise.resolve({
+          rows: [
+            {
+              id: endpointId,
+              installation_id: installationId,
+              address_hash: 'f'.repeat(64),
+              status: 'ACTIVE',
+            },
+          ],
+          rowCount: 1,
+        });
+      if (
+        text.includes('update integration.notification_endpoint_commands') ||
+        text.includes('insert into audit.audit_log')
+      )
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const repository = createNotificationEndpointRepository(poolWithQuery(query) as never);
+    await expect(
+      repository.registerAndroidPush?.({
+        tenantId,
+        userId,
+        selector: {
+          appId: 'ru.padlhub.app',
+          environment: 'SANDBOX',
+          platform: 'ANDROID',
+          provider: 'FCM',
+        },
+        installationId,
+        ciphertext: Buffer.from('android-token-ciphertext'),
+        addressHash: 'f'.repeat(64),
+        encryptionKeyId: 'v1',
+        endpointsPerUserMax: 5,
+        requestHash: 'a'.repeat(64),
+        idempotencyKey: 'android-transfer-0001',
+        correlationId: 'android-transfer',
+      }),
+    ).resolves.toMatchObject({ outcome: 'updated', endpointId });
+    const sql = query.mock.calls.map(([text]) => String(text));
+    expect(
+      sql.some((text) => text.includes("set installation_id = null, status = 'REVOKED'")),
+    ).toBe(true);
+    expect(sql.some((text) => text.includes('set user_id'))).toBe(false);
+    expect(sql.some((text) => text.includes('update notifications.deliveries'))).toBe(false);
   });
 });

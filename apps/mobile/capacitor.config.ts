@@ -16,6 +16,10 @@ const config: CapacitorConfig = {
       apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',
       tenantKey: process.env.VITE_PHUB_TENANT_KEY ?? '',
     },
+    PadlHubAndroidPush: {
+      apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',
+      tenantKey: process.env.VITE_PHUB_TENANT_KEY ?? '',
+    },
     PadlHubSession: {
       apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',
       tenantKey: process.env.VITE_PHUB_TENANT_KEY ?? '',

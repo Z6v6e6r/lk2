@@ -99,7 +99,7 @@ describe('shared LK2 Android UI', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(request).not.toHaveBeenCalled();
   });
-  it.each(['/giftcard', '/gift-certificates', '/games/new', '/chats', '/communities'])(
+  it.each(['/giftcard', '/gift-certificates', '/games/new', '/communities'])(
     'does not expose browser-only commerce/provider/upload controls at %s',
     async (path) => {
       window.history.replaceState({}, '', path);
@@ -130,4 +130,27 @@ describe('shared LK2 Android UI', () => {
       expect(restore).toHaveBeenCalled();
     },
   );
+  it('opens Android chats through the authenticated PadlHub gateway', async () => {
+    window.history.replaceState({}, '', '/chats');
+    const gateway = createGateway();
+    vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
+      context: {
+        user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
+        tenant: { id: '00000000-0000-4000-8000-000000000002', key: 'local-padel', name: 'ПадлХАБ' },
+        roles: ['client'],
+        permissions: [],
+      },
+    });
+    const conversations = vi.spyOn(gateway, 'listConversations').mockResolvedValue({ items: [] });
+    vi.spyOn(gateway, 'listStationSupportStations').mockResolvedValue([]);
+    vi.spyOn(gateway, 'listStationSupportDialogs').mockResolvedValue([]);
+    render(<App gateway={gateway} tenantKey="local-padel" clientPlatform="android" />);
+    expect(
+      await screen.findByRole('searchbox', { name: 'Поиск по чатам' }, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(conversations).toHaveBeenCalled();
+    expect(
+      screen.queryByText('Раздел появится в следующей версии приложения'),
+    ).not.toBeInTheDocument();
+  });
 });

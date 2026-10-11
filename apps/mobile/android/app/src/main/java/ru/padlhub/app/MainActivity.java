@@ -24,6 +24,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(PadlHubAndroidSessionPlugin.class);
         registerPlugin(PadlHubViewportPlugin.class);
+        registerPlugin(PadlHubAndroidPushPlugin.class);
         super.onCreate(savedInstanceState);
         containWebViewInSafeArea();
         // Disable Capacitor's all-frame legacy fallback. Only its origin-scoped modern channel is supported.
