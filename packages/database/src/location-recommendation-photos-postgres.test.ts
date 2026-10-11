@@ -106,7 +106,8 @@ suite('location recommendation card photos under a non-owner PostgreSQL role', (
       `grant select, insert, delete on locations.recommendation_card_photos to ${role}`,
     );
     await admin.query(`grant select on locations.media_assets to ${role}`);
-    await admin.query(`grant select, insert on locations.admin_commands to ${role}`);
+    // SELECT FOR UPDATE in the existing command replay path requires UPDATE privilege.
+    await admin.query(`grant select, insert, update on locations.admin_commands to ${role}`);
     await admin.query(`grant select, insert, update on locations.home_projection_state to ${role}`);
     await admin.query(`grant select on home.dashboard_components to ${role}`);
     await admin.query(`grant insert on audit.audit_log, audit.outbox_events to ${role}`);
