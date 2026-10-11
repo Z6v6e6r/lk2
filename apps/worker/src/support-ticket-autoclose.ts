@@ -1,4 +1,4 @@
-import type { SupportTicketRepository } from '@phub/database';
+import type { SupportTicketRepository } from '@phub/database/support-tickets';
 import { runFairTenantCycle, type TenantCycleResult } from './tenant-cycle-orchestrator.js';
 
 export type SupportTicketAutoclosePort = Pick<

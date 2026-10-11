@@ -4,7 +4,7 @@ import {
   SupportTicketPermissionError,
   type SupportMutationResult,
   type SupportTicketRepository,
-} from '@phub/database';
+} from '@phub/database/support-tickets';
 import {
   SUPPORT_TICKET_CATEGORIES,
   SUPPORT_TICKET_PRIORITIES,

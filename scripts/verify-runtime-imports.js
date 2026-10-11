@@ -45,3 +45,19 @@ const contactReader = createContactReader({});
 if (Object.keys(contactReader).join(',') !== 'listForUser') {
   throw new Error('Contact runtime capability must expose only listForUser');
 }
+
+const { createSupportTicketRepository, SupportTicketPermissionError } =
+  await import('@phub/database/support-tickets');
+if (
+  typeof createSupportTicketRepository !== 'function' ||
+  typeof SupportTicketPermissionError !== 'function'
+) {
+  throw new Error('Support ticket runtime exports are missing');
+}
+const supportTickets = createSupportTicketRepository({});
+if (
+  Object.keys(supportTickets).sort().join(',') !==
+  'closeResolvedBatch,create,get,list,message,purgeClosedBatch,update'
+) {
+  throw new Error('Support ticket runtime repository surface is invalid');
+}

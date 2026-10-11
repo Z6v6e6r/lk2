@@ -3,7 +3,7 @@ import {
   SupportTicketPermissionError,
   type SupportTicketRepository,
   type SupportTicketView,
-} from '@phub/database';
+} from '@phub/database/support-tickets';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registerSupportTicketRoutes, supportCommandHash } from './support-ticket-routes.js';
 

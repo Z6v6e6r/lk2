@@ -22,8 +22,8 @@ import {
   createMessagingMediaRepository,
   createParticipationCommandRepository,
   createProfileFriendshipRepository,
-  createSupportTicketRepository,
 } from '@phub/database';
+import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';

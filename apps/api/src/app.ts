@@ -22,6 +22,7 @@ import type {
 } from '@phub/communities';
 import { checkDatabaseReady } from '@phub/database';
 import type { ContactReader } from '@phub/database/contacts';
+import type { SupportTicketRepository } from '@phub/database/support-tickets';
 import type {
   ClientRoutingPlanRepository,
   CommunityLogoMediaRepository,
@@ -63,7 +64,6 @@ import type {
   TrainerAvatarRepository,
   UpcomingBookingsRepository,
   SubscriptionRuntimeActorContextRepository,
-  SupportTicketRepository,
 } from '@phub/database';
 import {
   DIRECT_VIVA_READ_OPERATIONS,

@@ -47,9 +47,9 @@ import {
   createTrainerAvatarRepository,
   createUpcomingBookingsRepository,
   createSubscriptionRuntimeActorContextRepository,
-  createSupportTicketRepository,
   projectHomeBaseUser,
 } from '@phub/database';
+import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
 import {
