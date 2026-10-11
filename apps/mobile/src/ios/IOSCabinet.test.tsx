@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IOSAuthApp } from './IOSAuthApp.js';
 import type { IOSSessionPlugin } from './session.js';
 import {
@@ -13,6 +13,11 @@ import {
   viewerId,
   config,
 } from './testing/cabinet-fixtures.js';
+
+// Transform the shared lazy-loaded screens before the UI assertions' one-second budget.
+beforeAll(async () => {
+  await import('./IOSCabinet.js');
+});
 
 beforeEach(() => {
   vi.stubGlobal('scrollTo', vi.fn());
