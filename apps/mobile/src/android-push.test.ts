@@ -35,13 +35,17 @@ function gateway(overrides: Record<string, unknown> = {}) {
 }
 
 function plugin(overrides: Partial<AndroidPushPlugin> = {}) {
-  const callbacks: Record<string, Listener[]> = { registrationChanged: [], notificationOpened: [] };
+  const callbacks: Record<'registrationChanged' | 'notificationOpened', Listener[]> = {
+    registrationChanged: [],
+    notificationOpened: [],
+  };
   const removes: ReturnType<typeof vi.fn>[] = [];
   const addListener = vi.fn(
     (event: 'registrationChanged' | 'notificationOpened', callback: Listener) => {
       callbacks[event].push(callback);
       const remove = vi.fn(() => {
         callbacks[event] = callbacks[event].filter((item) => item !== callback);
+        return Promise.resolve();
       });
       removes.push(remove);
       return Promise.resolve({
