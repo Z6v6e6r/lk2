@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
@@ -49,16 +50,21 @@ describe('closed critical Web delivery', () => {
     ));
   it('freezes every build input beyond the reviewed whole-runtime anchor', () =>
     scenario(`
-    validateWebControllerDelta([{status:'A',path:'scripts/timeweb-critical-web.js'},{status:'M',path:'docs/runbooks/timeweb-standard-delivery.md'}]);
-    assert.equal(WEB_CONTROLLER_FILES.size,8);
-    for (const path of ['.github/workflows/publish-timeweb-amd64-images.yaml','scripts/timeweb-amd64-publication-workflow.test.ts']) {
-      for (const status of ['A','M']) validateWebControllerDelta([{status,path}]);
-      for (const status of ['R100','D','T','C100']) assert.throws(()=>validateWebControllerDelta([{status,path}]));
+    const entries=[...WEB_CONTROLLER_FILES].map(path=>({status:'M',path}));
+    assert.deepEqual([...WEB_CONTROLLER_FILES],['scripts/timeweb-critical-web.js','scripts/timeweb-critical-web.test.ts','docs/runbooks/timeweb-standard-delivery.md']);
+    validateWebControllerDelta(entries);
+    validateWebControllerDelta([...entries].reverse());
+    for (const incomplete of [[],entries.slice(0,1),entries.slice(0,2),[entries[0],entries[0],entries[2]],[...entries,entries[0]]]) assert.throws(()=>validateWebControllerDelta(incomplete),/SOURCE_DELTA/);
+    for (const path of ['scripts/rehearse-timeweb-standard-compose.js','scripts/run-timeweb-standard-delivery.js','scripts/timeweb-api-web-upgrade.js','.github/workflows/publish-timeweb-amd64-images.yaml','scripts/timeweb-amd64-publication-workflow.test.ts','package-lock.json','package.json','apps/web/src/styles.css','apps/web/src/HomeDashboardPage.tsx','apps/web/src/auth-gateway.ts','apps/mobile/src/main.tsx','apps/web/Dockerfile','contracts/openapi/user/v1/openapi.yaml','contracts/openapi/user/v2/openapi.yaml','packages/api-sdk/src/index.ts','.github/workflows/reconcile-timeweb-amd64-publication.yaml','.github/workflows/publish-timeweb-amd64-images.yml','scripts/timeweb-amd64-publication-workflow.test.js','scripts/timeweb-amd64-registry-custody-retry.sh','scripts/presentation-boundary.js']) {
+      assert.throws(()=>validateWebControllerDelta([...entries,{status:'M',path}]),/SOURCE_DELTA/);
+      assert.throws(()=>validateWebControllerDelta([{status:'M',path},...entries.slice(1)]),/SOURCE_DELTA/);
     }
-    for (const path of ['package-lock.json','package.json','apps/web/src/styles.css','apps/web/src/auth-gateway.ts','apps/web/Dockerfile','contracts/openapi/user/v2/openapi.yaml','packages/api-sdk/src/index.ts','.github/workflows/reconcile-timeweb-amd64-publication.yaml','.github/workflows/publish-timeweb-amd64-images.yml','scripts/timeweb-amd64-publication-workflow.test.js','scripts/timeweb-amd64-registry-custody-retry.sh','scripts/presentation-boundary.js']) assert.throws(()=>validateWebControllerDelta([{status:'M',path}]));
-    for (const status of ['R100','D','T','C100']) assert.throws(()=>validateWebControllerDelta([{status,path:'scripts/timeweb-critical-web.js'}]));
+    for (let i=0;i<entries.length;i++) {
+      for (const status of ['A','R100','D','T','C100',undefined]) assert.throws(()=>validateWebControllerDelta(entries.map((entry,j)=>j===i ? {...entry,status} : entry)),/SOURCE_DELTA/);
+      assert.throws(()=>validateWebControllerDelta(entries.map((entry,j)=>j===i ? {status:'M'} : entry)),/SOURCE_DELTA/);
+    }
   `));
-  it('requires regular non-executable blobs for each inert publisher path', () => {
+  it('pins the reviewed merged runtime and its entire baseline delta', () => {
     const raw = spawnSync(
       'git',
       [
@@ -68,7 +74,83 @@ describe('closed critical Web delivery', () => {
         '--no-renames',
         '-z',
         '0d6078be7a50ed3f5761d66071527be003bd568f',
+        '6f8209fa5129edb72fd537c87983ba49b397bdd4',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(raw.status, raw.stderr).toBe(0);
+    expect(createHash('sha256').update(raw.stdout.trim()).digest('hex')).toBe(
+      '9a35bad47b9c03b0d87b6cc35a85df29ae93712627769b9f384a139eaaf834cc',
+    );
+    const tree = spawnSync(
+      'git',
+      ['rev-parse', '6f8209fa5129edb72fd537c87983ba49b397bdd4^{tree}'],
+      { encoding: 'utf8' },
+    );
+    expect(tree.status, tree.stderr).toBe(0);
+    expect(tree.stdout.trim()).toBe('13f551df97d794c16fb0ad05ece505f39f91c88e');
+    scenario(
+      `assert.deepEqual(WEB_COMPATIBILITY,{baselineSource:'0d6078be7a50ed3f5761d66071527be003bd568f',baselineTree:'5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',runtimeSource:'6f8209fa5129edb72fd537c87983ba49b397bdd4',runtimeTree:'13f551df97d794c16fb0ad05ece505f39f91c88e',runtimeDeltaSha256:'9a35bad47b9c03b0d87b6cc35a85df29ae93712627769b9f384a139eaaf834cc'});`,
+    );
+  });
+  it('records the exact Web input changes since the previous reviewed anchor', () => {
+    const delta = spawnSync(
+      'git',
+      [
+        'diff',
+        '--name-only',
+        '--no-renames',
         '8960afe24211372320006fc4c5b18905923672f5',
+        '6f8209fa5129edb72fd537c87983ba49b397bdd4',
+        '--',
+        'apps/web',
+        'packages',
+        'contracts',
+        'package.json',
+        'package-lock.json',
+        'infra',
+        'deploy',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(delta.status, delta.stderr).toBe(0);
+    expect(delta.stdout.trim().split('\n')).toEqual([
+      'apps/web/src/App.tsx',
+      'apps/web/src/HomeDashboardPage.test.tsx',
+      'apps/web/src/HomeDashboardPage.tsx',
+      'apps/web/src/auth-gateway.ts',
+      'apps/web/src/styles.css',
+      'contracts/openapi/user/v1/openapi.yaml',
+    ]);
+    const raw = spawnSync(
+      'git',
+      [
+        'diff',
+        '--raw',
+        '--no-abbrev',
+        '--no-renames',
+        '-z',
+        '8960afe24211372320006fc4c5b18905923672f5',
+        '6f8209fa5129edb72fd537c87983ba49b397bdd4',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(raw.status, raw.stderr).toBe(0);
+    expect(createHash('sha256').update(raw.stdout.trim()).digest('hex')).toBe(
+      '1e724329946d88a00d9b57ff18589cfe826d4bb7050b4df53ca79c1fb05b705d',
+    );
+  });
+  it('requires regular non-executable blobs for every modified controller path', () => {
+    const raw = spawnSync(
+      'git',
+      [
+        'diff',
+        '--raw',
+        '--no-abbrev',
+        '--no-renames',
+        '-z',
+        '0d6078be7a50ed3f5761d66071527be003bd568f',
+        '6f8209fa5129edb72fd537c87983ba49b397bdd4',
       ],
       { encoding: 'utf8' },
     );
@@ -77,10 +159,13 @@ describe('closed critical Web delivery', () => {
       fixture +
         `
       const raw=${JSON.stringify(raw.stdout.trim())};
-      for (const path of ['.github/workflows/publish-timeweb-amd64-images.yaml','scripts/timeweb-amd64-publication-workflow.test.ts']) {
-        for (const mode of ['100644','100755','120000','160000']) {
-          const runGit=args=>args[0]==='rev-parse' ? args[1]===op.candidateSha+'^{tree}' ? op.candidateTree : args[1]===WEB_COMPATIBILITY.baselineSource+'^{tree}' ? WEB_COMPATIBILITY.baselineTree : WEB_COMPATIBILITY.runtimeTree : args[0]==='diff' ? args.includes('--raw') ? raw : 'M\\0'+path+'\\0' : args[0]==='ls-tree' ? mode+' blob '+'e'.repeat(40)+'\\t'+path : '';
-          if (mode==='100644') validateCriticalWebSource(op,runGit);
+      const entries=[...WEB_CONTROLLER_FILES];
+      const delta=entries.map(path=>'M\\0'+path+'\\0').join('');
+      for (const path of entries) {
+        const valid='100644 blob '+'e'.repeat(40)+'\\t'+path;
+        for (const row of [valid,'100755 blob '+'e'.repeat(40)+'\\t'+path,'120000 blob '+'e'.repeat(40)+'\\t'+path,'160000 commit '+'e'.repeat(40)+'\\t'+path,'040000 tree '+'e'.repeat(40)+'\\t'+path,'',valid+'\\n'+valid,'100644 blob '+'e'.repeat(40)+'\\t'+entries.find(other=>other!==path)]) {
+          const runGit=args=>args[0]==='rev-parse' ? args[1]===op.candidateSha+'^{tree}' ? op.candidateTree : args[1]===WEB_COMPATIBILITY.baselineSource+'^{tree}' ? WEB_COMPATIBILITY.baselineTree : WEB_COMPATIBILITY.runtimeTree : args[0]==='diff' ? args.includes('--raw') ? raw : delta : args[0]==='ls-tree' ? args.at(-1)===path ? row : '100644 blob '+'e'.repeat(40)+'\\t'+args.at(-1) : '';
+          if (row===valid) validateCriticalWebSource(op,runGit);
           else assert.throws(()=>validateCriticalWebSource(op,runGit),/CONTROLLER_FILE_MODE/);
         }
       }

@@ -504,20 +504,33 @@ archive and public first-attempt metadata through the existing custody validator
 
 The reviewed API baseline is `0d6078be7a50ed3f5761d66071527be003bd568f`, tree
 `5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`. The reviewed whole-repository Web runtime anchor is
-`8960afe24211372320006fc4c5b18905923672f5`, tree `bf0988012cfce0f14811491a14ae46fa57fe5541`.
+`6f8209fa5129edb72fd537c87983ba49b397bdd4` (merged PR #369), tree
+`13f551df97d794c16fb0ad05ece505f39f91c88e`. Its full first-attempt main-push CI is run
+`38121863043`; this is source evidence, not deployment evidence. Standard delivery run
+`38122388124` stopped at eligibility with `RANGE_INELIGIBLE` using controller `2e5f79fd`; it did
+not activate this runtime, and must not be retried as a substitute for controller enrollment.
+
 The exact raw, no-renames, no-abbreviation, NUL-delimited baseline-to-anchor delta has SHA-256
-`c71dcfeb564b648ff78305680af3d3a37477a2d54e1db8101662c2b1d6e11fec`. This is a closed reviewed
+`9a35bad47b9c03b0d87b6cc35a85df29ae93712627769b9f384a139eaaf834cc`. This is a closed reviewed
 compatibility proof, not a directory heuristic or a user-supplied allowlist. The entire candidate
-tree must differ from the anchor only in the eight named paths in `WEB_CONTROLLER_FILES`, each an
-added/modified regular `100644 blob`. The six controller/test/rehearsal/runbook paths are joined only
-by `.github/workflows/publish-timeweb-amd64-images.yaml` and
-`scripts/timeweb-amd64-publication-workflow.test.ts` so the complete internal publication artifact
-can retain every file referenced by its per-image checksum sidecars. The publisher YAML is excluded
-from the Web build context by `.dockerignore`. Its test is not executed or imported by `npm ci`,
-`contracts:generate`, `build:packages`, or the Web build, and the final nginx image copies only
-`apps/web/dist`. Root dependencies/lockfiles, Dockerfiles, all other package/build inputs,
-generated-contract inputs, application files, every other workflow, renames and deletions remain
-forbidden in that tail. `COPY . .` therefore keeps all Web build inputs frozen.
+tree must differ from the anchor in **exactly** the three named paths in `WEB_CONTROLLER_FILES`:
+`scripts/timeweb-critical-web.js`, `scripts/timeweb-critical-web.test.ts`, and this runbook.
+Each must occur once, as a modified regular `100644 blob`; empty/subset/duplicate deltas and
+additions, renames, deletions, symlinks or executable files reject. These files are not imported
+or executed by `npm ci`, `contracts:generate`, `build:packages`, or the Web build. The final nginx
+image copies only `apps/web/dist`. The previously reviewed controller/rehearsal/publication changes
+are already in the runtime anchor: their paths are no longer permitted in the candidate tail.
+Root dependencies/lockfiles, Dockerfiles, generated-contract inputs, application files, other
+scripts and every workflow remain frozen. `COPY . .` includes the inert three-file tail, while all
+application/contract/dependency inputs and scripts executed by the Web build remain pinned.
+
+Relative to the previous runtime anchor `8960afe24211372320006fc4c5b18905923672f5`, the Web-executed
+application/contract source delta is exactly `App.tsx`, `HomeDashboardPage.tsx` and its test, `auth-gateway.ts`, Web
+`styles.css`, and `contracts/openapi/user/v1/openapi.yaml`. The whole-repository raw delta between
+these anchors is pinned as `1e724329946d88a00d9b57ff18589cfe826d4bb7050b4df53ca79c1fb05b705d`.
+There is no dependency, lockfile, API SDK, Dockerfile, build-script, backend or migration change.
+Native source is included in the whole-tree proof but is not imported/executed by the Web build;
+Timeweb deployment cannot deliver Android/iOS applications.
 
 Run `38053674241` attempt 1 published the five images and a valid canonical V2 pair for
 `4df9a8512a4735af8eb33bd9b4085febfefec2cc`, but its internal artifact omitted 48 referenced BuildKit
@@ -536,13 +549,16 @@ retain their own authority and prerequisites. No existing merge/deploy approval 
 controller automatically. Any later product/build change requires a new compatibility review;
 this bridge does not widen future automatic eligibility or support other baseline sources.
 
-| Browser behavior in this anchor                                    | Compatibility with API baseline                                                                                                                                                                       |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Profile grid                                                       | Contains the merged screen-width correction.                                                                                                                                                          |
-| Existing home/subscription/game reads                              | Existing API contracts; principal-generation guard prevents stale home responses after a session switch.                                                                                              |
-| Advisory subscription quote                                        | Production gateway omits `getGameJoinConditions`; picker and panel stay absent. Synthetic preview gateways may still expose it. Enable later only with a separately reviewed deployed API capability. |
-| Existing JOIN                                                      | Same `joinGame(gameId, revision, invitationId)` delegation and SDK wire body; no subscription selection is added to the command.                                                                      |
-| Password-login, profile-contact and booked-operation SDK additions | No production Web gateway exposure or call sites. No API, auth owner or schema is activated by this Web rollout.                                                                                      |
+| Browser behavior in this anchor                                    | Compatibility with API baseline                                                                                                                                                                           |
+| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Profile grid                                                       | Contains the merged screen-width correction.                                                                                                                                                              |
+| Existing home/subscription/game reads                              | Existing API contracts; principal-generation guard rejects stale home responses after a principal/tenant switch without adding a request or command.                                                      |
+| Home safe area and return to profile                               | Client-only scroll/resize/rAF state, focus and `scrollTo`, with shared sticky-tab CSS; no API call. Validate narrow/desktop rendering, keyboard focus, reduced motion and listener cleanup.               |
+| Optional profile surname                                           | `HomeProfile.lastName` is optional and nullable. The installed API may omit it; Web preserves that behavior. No new request field, endpoint or command is required.                                       |
+| Native account/subscription/session refinements                    | Android-specific reads and native identity/logout guards remain behind `nativeClient`/`clientPlatform === 'android'`. Browser defaults to `web`; explicit renewal availability preserves its old default. |
+| Advisory subscription quote                                        | Production gateway omits `getGameJoinConditions`; picker and panel stay absent. Synthetic preview gateways may still expose it. Enable later only with a separately reviewed deployed API capability.     |
+| Existing JOIN                                                      | Same `joinGame(gameId, revision, invitationId)` delegation and SDK wire body; no subscription selection is added to the command.                                                                          |
+| Password-login, profile-contact and booked-operation SDK additions | No production Web gateway exposure or call sites. No API, auth owner or schema is activated by this Web rollout.                                                                                          |
 
 The release includes the cumulative reviewed game rendering/navigation changes. Compatibility with
 an unchanged API does not prove authenticated production journeys; collect product feedback after
