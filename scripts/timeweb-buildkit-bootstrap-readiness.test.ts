@@ -26,6 +26,7 @@ interface Scenario {
   readonly containerImage?: string;
   readonly containerRunning?: boolean;
   readonly containerState?: string;
+  readonly inspectDurationSeconds?: number;
   readonly inspections: readonly InspectResult[];
   readonly termIgnoringInspect?: boolean;
 }
@@ -84,10 +85,20 @@ signal_option="\${1:-}"
 kill_after_option="\${2:-}"
 duration="\${3:-}"
 shift 3
+if [[ "\${1:-}" = docker && "\${2:-}" = buildx && "\${3:-}" = inspect ]]; then
+  [[ "$signal_option" = --signal=TERM ]]
+  [[ "$kill_after_option" = --kill-after=1s ]]
+  duration_seconds="\${duration%s}"
+  [[ "$duration_seconds" -ge 1 && "$duration_seconds" -le 15 ]]
+  printf '%s\\n' "$duration_seconds" >> "$FAKE_DOCKER_STATE_DIR/inspect-timeouts.log"
+  if [[ "$duration_seconds" -lt "\${FAKE_INSPECT_DURATION_SECONDS:-0}" ]]; then
+    "$@"
+    exit 124
+  fi
+fi
 if [[ "\${FAKE_TERM_IGNORING_INSPECT:-0}" = 1 && "\${1:-}" = docker && "\${2:-}" = buildx && "\${3:-}" = inspect ]]; then
   [[ "$signal_option" = --signal=TERM ]]
   [[ "$kill_after_option" = --kill-after=1s ]]
-  [[ "$duration" = 5s || "$duration" =~ ^[1-4]s$ ]]
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_STATE_DIR/commands.log"
   ready_file="$FAKE_DOCKER_STATE_DIR/hung-child.ready"
   rm -f "$ready_file"
@@ -174,6 +185,7 @@ async function prepareScenario(scenario: Scenario): Promise<Execution> {
     ...process.env,
     FAKE_DOCKER_STATE_DIR: stateDirectory,
     FAKE_TERM_IGNORING_INSPECT: scenario.termIgnoringInspect ? '1' : '0',
+    FAKE_INSPECT_DURATION_SECONDS: String(scenario.inspectDurationSeconds ?? 0),
     PATH: `${binaryDirectory}:${process.env.PATH ?? ''}`,
     TMPDIR: temporaryDirectory,
   };
@@ -236,6 +248,37 @@ afterEach(async () => {
 });
 
 describe('Timeweb publication BuildKit readiness helper', () => {
+  it('allows a cold bootstrap to finish beyond the former five-second deadline', async () => {
+    const execution = await prepareScenario({
+      inspectDurationSeconds: 6,
+      inspections: [{ status: 0, version: expectedVersion }],
+    });
+
+    expect(execution.status, execution.stderr).toBe(0);
+    expect(await commandCount(execution, 'buildx inspect ')).toBe(1);
+    expect(await sleepCount(execution)).toBe(0);
+    expect(await readSummary(execution)).toContain('verified=true\nreason=verified\n');
+    expect(await readSummary(execution)).toContain('inspect_timeout_seconds=15\n');
+  }, 30_000);
+
+  it.each([124, 255])(
+    'still stops immediately after a failed inspect with exact version metadata (exit %s)',
+    async (status) => {
+      const execution = await prepareScenario({
+        inspections: [
+          { status, version: expectedVersion },
+          { status: 0, version: expectedVersion },
+        ],
+      });
+
+      expect(execution.status).toBe(1);
+      expect(await commandCount(execution, 'buildx inspect ')).toBe(1);
+      expect(await sleepCount(execution)).toBe(0);
+      expect(await readSummary(execution)).toContain('reason=inspect_failed_after_metadata\n');
+    },
+    30_000,
+  );
+
   it('recovers after two transient exit-255 observations and accepts only exact readiness', async () => {
     const execution = await prepareScenario({
       inspections: [
@@ -278,7 +321,7 @@ describe('Timeweb publication BuildKit readiness helper', () => {
     expect(await sleepCount(execution)).toBe(4);
     const summary = await readSummary(execution);
     expect(summary).toContain('max_attempts=5\nattempt_count=5\n');
-    expect(summary).toContain('total_retry_budget_seconds=29\n');
+    expect(summary).toContain('total_retry_budget_seconds=79\n');
     expect(summary).toContain('kill_after_seconds=1\n');
     expect(summary).toContain('reason=buildkit_readiness_exhausted\n');
     const sanitized = await readFile(
