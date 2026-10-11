@@ -12559,17 +12559,22 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .profile-toolbar__identity h1 {
   min-width: 0;
+  max-width: 211px;
   margin: 0;
   overflow-wrap: anywhere;
   font-family: 'RF Dewi', 'Inter Display', sans-serif;
   font-size: 21px;
   font-weight: 800;
   letter-spacing: -0.025em;
-  line-height: 1.08;
+  line-height: 1.12;
   text-align: center;
+  text-wrap: balance;
 }
 
 .profile-toolbar__actions {
+  position: absolute;
+  top: 0;
+  right: 14px;
   display: flex;
   flex-direction: column;
   justify-self: end;
@@ -12598,14 +12603,6 @@ button.participant-avatar-stack__open-slot:focus-visible {
   background: transparent;
 }
 
-.profile-toolbar a.profile-edit-link {
-  width: 32px;
-  height: 44px;
-  flex-basis: 32px;
-  color: #1f1e20;
-  background: transparent;
-}
-
 .profile-toolbar :is(a, button):focus-visible,
 .profile-share:focus-visible,
 .profile-community-list:focus-visible,
@@ -12619,21 +12616,24 @@ button.participant-avatar-stack__open-slot:focus-visible {
 .profile-identity {
   position: relative;
   z-index: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 172px minmax(0, 1fr);
   align-items: center;
-  flex-direction: column;
-  margin: 0;
-  padding: 0 16px;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0 16px 4px;
   text-align: center;
 }
 
 .profile-avatar-stage {
   position: relative;
-  order: 4;
+  order: 0;
   display: grid;
+  grid-column: 2;
+  grid-row: 1;
   width: 172px;
   height: 170px;
-  margin-top: 5px;
+  margin: 0;
   place-items: center;
 }
 
@@ -12656,28 +12656,24 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 .profile-stats {
-  order: 5;
+  order: 0;
   display: grid;
+  grid-column: 1;
+  grid-row: 1;
   width: 100%;
-  max-width: 220px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 6px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  margin: 0;
+  text-align: left;
 }
 
 .profile-stats > div {
-  position: relative;
   min-width: 0;
-  padding: 0 9px;
+  padding: 0;
 }
 
 .profile-stats > div + div::before {
-  position: absolute;
-  top: 7px;
-  bottom: 3px;
-  left: 0;
-  width: 1px;
-  background: rgb(84 72 103 / 16%);
-  content: '';
+  content: none;
 }
 
 .profile-stats span,
@@ -12691,23 +12687,24 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 .profile-stats strong {
-  overflow: hidden;
   margin-top: 3px;
+  overflow-wrap: anywhere;
   font-family: 'RF Dewi', 'Inter Display', sans-serif;
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.04em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .profile-share-row {
-  order: 6;
+  order: 0;
   display: flex;
+  grid-column: 3;
+  grid-row: 1;
+  flex-direction: column;
+  align-items: center;
   justify-content: center;
   width: 100%;
-  max-width: 300px;
-  margin-top: 10px;
+  margin: 12px 0 0;
   gap: 8px;
 }
 
@@ -12738,11 +12735,16 @@ button.participant-avatar-stack__open-slot:focus-visible {
   color: var(--profile-level-accent);
 }
 
-.profile-share-notice {
-  order: 7;
+.profile-identity .profile-share-notice {
+  order: 0;
+  grid-column: 1 / -1;
   margin: 6px 0 0;
   color: #625a6c;
   font-size: 9px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 1;
 }
 
 .profile-qr-backdrop {
@@ -14502,6 +14504,22 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 @media (max-width: 374px) {
+  .profile-toolbar {
+    grid-template-columns: 32px minmax(0, 1fr) 44px;
+  }
+
+  .profile-toolbar button.profile-toolbar__back {
+    justify-self: end;
+  }
+
+  .profile-toolbar button.profile-toolbar__back:focus-visible {
+    outline-offset: 0;
+  }
+
+  .profile-toolbar__identity h1 {
+    font-size: 17px;
+  }
+
   .profile-page .fh-bottom-nav,
   .games-page .fh-bottom-nav {
     left: 0;
