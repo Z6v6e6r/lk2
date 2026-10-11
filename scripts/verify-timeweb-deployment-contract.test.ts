@@ -516,7 +516,7 @@ describe('Timeweb deployment contract', () => {
             if (mode === 'missing') delete compose.services.worker.volumes;
             else if (mode === 'additional')
               compose.services.worker.volumes?.push('/var/run/docker.sock:/var/run/docker.sock');
-            else compose.services.api.volumes = compose.services.worker.volumes;
+            else compose.services.api.volumes = compose.services.worker.volumes ?? [];
           }),
           target,
         ),

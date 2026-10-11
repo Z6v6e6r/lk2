@@ -414,7 +414,10 @@ describe('Timeweb beta runtime secret provisioner', () => {
     ['FCM_APP_ID', 'com.cabinet.app'],
     ['FCM_ENVIRONMENT', 'PRODUCTION'],
     ['FCM_CREDENTIAL_FILE', '/etc/phub/timeweb-beta/api.env'],
-    ['NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS', '{"v1":"different-synthetic-keyring"}'],
+    [
+      'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS',
+      JSON.stringify({ v1: Buffer.alloc(32, 7).toString('base64') }),
+    ],
   ])('rejects mismatched FCM %s before creating a runtime secret set', (key, replacement) => {
     const value = fixture();
     for (const service of ['api', 'worker']) value.environments[service]!.FCM_ENABLED = 'true';
