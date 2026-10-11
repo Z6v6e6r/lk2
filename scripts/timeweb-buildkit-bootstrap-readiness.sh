@@ -2,10 +2,10 @@
 set -euo pipefail
 
 readonly MAX_ATTEMPTS=5
-readonly INSPECT_TIMEOUT_SECONDS=5
+readonly INSPECT_TIMEOUT_SECONDS=15
 readonly KILL_AFTER_SECONDS=1
 readonly RETRY_DELAY_SECONDS=1
-readonly TOTAL_RETRY_BUDGET_SECONDS=29
+readonly TOTAL_RETRY_BUDGET_SECONDS=79
 readonly BUILDER_PATTERN='^[a-z0-9][a-z0-9_.-]{0,127}$'
 readonly SERVICE_PATTERN='^(web|api|worker|realtime|migrator)$'
 readonly VERSION_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+$'
