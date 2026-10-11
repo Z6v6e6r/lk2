@@ -435,14 +435,45 @@ describe('booking recommendations', () => {
       now: '2026-07-18T09:00:00.000Z',
     } as const;
 
-    const firstPage = await listBookingRecommendations({ ...baseInput, limit: 14 });
-    const secondPage = await listBookingRecommendations({
+    const originalAsset = '80000000-0000-4000-8000-000000000001';
+    const readRecommendationPhotos = vi
+      .fn()
+      .mockResolvedValue(
+        new Map([
+          [
+            favoriteStationId,
+            [{ assetId: originalAsset, eventType: 'GAME', isActive: true, sortOrder: 0 }],
+          ],
+        ]),
+      );
+    const withPhotos = {
       ...baseInput,
+      tenantKey: 'local-padel',
+      locationRepository: { readRecommendationPhotos },
+    };
+    const firstPage = await listBookingRecommendations({ ...withPhotos, limit: 14 });
+    readRecommendationPhotos.mockResolvedValue(
+      new Map([
+        [
+          favoriteStationId,
+          [
+            {
+              assetId: '80000000-0000-4000-8000-000000000002',
+              eventType: 'GAME',
+              isActive: true,
+              sortOrder: 0,
+            },
+          ],
+        ],
+      ]),
+    );
+    const secondPage = await listBookingRecommendations({
+      ...withPhotos,
       limit: 12,
       cursor: firstPage.nextCursor!,
     });
     const thirdPage = await listBookingRecommendations({
-      ...baseInput,
+      ...withPhotos,
       limit: 12,
       cursor: secondPage.nextCursor!,
     });
@@ -454,6 +485,39 @@ describe('booking recommendations', () => {
     expect(secondPage.nextCursor).toEqual(expect.any(String));
     expect(thirdPage.nextCursor).toBeNull();
     expect(repository.listRecommendationCardProjections).toHaveBeenCalledOnce();
+    expect(readRecommendationPhotos).toHaveBeenCalledOnce();
+    expect(
+      [...firstPage.items, ...secondPage.items, ...thirdPage.items].every((item) =>
+        item.cardImageUrl?.endsWith(originalAsset),
+      ),
+    ).toBe(true);
+    const refreshed = await listBookingRecommendations({ ...withPhotos, limit: 14 });
+    expect(refreshed.version).not.toBe(firstPage.version);
+    expect(refreshed.items[0]?.cardImageUrl).not.toBe(firstPage.items[0]?.cardImageUrl);
+    readRecommendationPhotos.mockResolvedValue(new Map([[favoriteStationId, []]]));
+    const legacyFallback = await listBookingRecommendations({ ...withPhotos, limit: 14 });
+    readRecommendationPhotos.mockResolvedValue(
+      new Map([
+        [
+          favoriteStationId,
+          [{ assetId: originalAsset, eventType: 'GAME', isActive: false, sortOrder: 0 }],
+        ],
+      ]),
+    );
+    const disabledPhotos = await listBookingRecommendations({ ...withPhotos, limit: 14 });
+    expect(legacyFallback.items[0]?.cardImageUrl).toBeUndefined();
+    expect(disabledPhotos.items[0]?.cardImageUrl).toBeNull();
+    expect(disabledPhotos.version).not.toBe(legacyFallback.version);
+    readRecommendationPhotos.mockRejectedValue(new Error('photo table temporarily unavailable'));
+    const onPhotoReadError = vi.fn();
+    const withoutPhotoService = await listBookingRecommendations({
+      ...withPhotos,
+      onPhotoReadError,
+      limit: 14,
+    });
+    expect(withoutPhotoService.items).toHaveLength(14);
+    expect(withoutPhotoService.items.every((item) => item.cardImageUrl === undefined)).toBe(true);
+    expect(onPhotoReadError).toHaveBeenCalledOnce();
     const distinctIds = new Set(
       [...firstPage.items, ...secondPage.items, ...thirdPage.items].map((item) =>
         item.kind === 'GAME' ? item.game.id : item.activity.id,

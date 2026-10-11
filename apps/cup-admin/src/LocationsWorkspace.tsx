@@ -6,6 +6,7 @@ import {
   type LocationAmenityIcon,
   type LocationProfileInput,
   type LocationPublicationStatus,
+  type LocationRecommendationEventType,
   type LocationWeekday,
 } from '@phub/locations';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -16,8 +17,23 @@ import type { NotificationAdminClient } from './notification-admin-client.js';
 type SettingsTab = 'general' | 'quick' | 'stations';
 type LocationClient = Pick<
   NotificationAdminClient,
-  'listLocations' | 'createLocation' | 'updateLocation' | 'uploadLocationMedia' | 'resolveMediaUrl'
+  | 'listLocations'
+  | 'createLocation'
+  | 'updateLocation'
+  | 'uploadLocationMedia'
+  | 'resolveMediaUrl'
+  | 'resolveLocationMediaUrl'
 >;
+
+const recommendationPhotoGroups: readonly {
+  readonly eventType: LocationRecommendationEventType;
+  readonly label: string;
+}[] = [
+  { eventType: 'GAME', label: 'Игра' },
+  { eventType: 'COACH_GAME', label: 'Игра с тренером' },
+  { eventType: 'TRAINING', label: 'Тренировка' },
+  { eventType: 'TOURNAMENT', label: 'Турнир' },
+];
 
 const weekdays: readonly { readonly id: LocationWeekday; readonly label: string }[] = [
   { id: 'MON', label: 'Пн' },
@@ -84,6 +100,7 @@ function emptyProfile(): LocationProfileInput {
     workingHours: defaultHours(),
     amenities: [],
     gallery: [],
+    recommendationPhotos: [],
     publicationStatus: 'DRAFT',
     showOnHome: true,
     sortOrder: 100,
@@ -110,6 +127,7 @@ function editableProfile(location: LocationAdminView): LocationProfileInput {
     })),
     amenities: location.amenities.map((amenity) => ({ ...amenity })),
     gallery: location.gallery.map((image) => ({ ...image })),
+    recommendationPhotos: (location.recommendationPhotos ?? []).map((photo) => ({ ...photo })),
     publicationStatus: location.publicationStatus,
     showOnHome: location.showOnHome,
     sortOrder: location.sortOrder,
@@ -192,6 +210,7 @@ function LocationListPanel(props: {
   readonly onCreate: () => void;
   readonly onSelect: (location: LocationAdminView) => void;
   readonly mediaUrl: (url: string) => string;
+  readonly disabled?: boolean;
 }): React.JSX.Element {
   const normalizedQuery = props.query.trim().toLocaleLowerCase('ru-RU');
   const visible = props.locations.filter((location) =>
@@ -206,7 +225,12 @@ function LocationListPanel(props: {
           <p className="eyebrow">Публичный каталог</p>
           <h2>Станции</h2>
         </div>
-        <button className="primary-button compact-button" type="button" onClick={props.onCreate}>
+        <button
+          className="primary-button compact-button"
+          type="button"
+          disabled={props.disabled}
+          onClick={props.onCreate}
+        >
           + Добавить
         </button>
       </div>
@@ -228,6 +252,7 @@ function LocationListPanel(props: {
               type="button"
               role="listitem"
               key={location.id}
+              disabled={props.disabled}
               onClick={() => props.onSelect(location)}
             >
               <span
@@ -267,17 +292,26 @@ function LocationEditor(props: {
   readonly busy: boolean;
   readonly mediaUploading: boolean;
   readonly mediaUrl: (url: string) => string;
+  readonly locationMediaUrl: (assetId: string) => string;
   readonly message?: string;
   readonly error?: string;
   readonly onChange: (profile: LocationProfileInput) => void;
   readonly onUploadPhoto: (file: File) => void;
+  readonly onUploadRecommendationPhotos: (
+    eventType: LocationRecommendationEventType,
+    files: readonly File[],
+  ) => void;
   readonly onSave: (status: LocationPublicationStatus) => void;
 }): React.JSX.Element {
   const profile = props.profile;
   const imageInput = useRef<HTMLInputElement>(null);
+  const recommendationInputs = useRef<
+    Partial<Record<LocationRecommendationEventType, HTMLInputElement | null>>
+  >({});
   const parsed = locationProfileInputSchema.safeParse(profile);
   const completeness = locationCompleteness(profile);
   const isNew = !props.selected;
+  const recommendationPhotos = profile.recommendationPhotos ?? [];
 
   function change<K extends keyof LocationProfileInput>(
     key: K,
@@ -544,6 +578,109 @@ function LocationEditor(props: {
           <div className="editor-section-title">
             <span>3</span>
             <div>
+              <h3>Фото рекомендательных карточек</h3>
+              <p>
+                До 48 фото для станции. Выберите тип карточки, загрузите фото и включите нужные
+                варианты. Изменения появятся после сохранения станции.
+              </p>
+            </div>
+          </div>
+          <div className="recommendation-photo-groups">
+            {recommendationPhotoGroups.map(({ eventType, label }) => {
+              const photos = recommendationPhotos.filter((photo) => photo.eventType === eventType);
+              return (
+                <section className="recommendation-photo-group" key={eventType}>
+                  <div className="recommendation-photo-group-heading">
+                    <h4>{label}</h4>
+                    <input
+                      ref={(element) => {
+                        recommendationInputs.current[eventType] = element;
+                      }}
+                      className="sr-only"
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      multiple
+                      aria-label={`Загрузить фото для карточки «${label}»`}
+                      onChange={(event) => {
+                        const files = Array.from(event.target.files ?? []);
+                        event.currentTarget.value = '';
+                        if (files.length > 0) props.onUploadRecommendationPhotos(eventType, files);
+                      }}
+                    />
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={props.mediaUploading || recommendationPhotos.length >= 48}
+                      onClick={() => recommendationInputs.current[eventType]?.click()}
+                    >
+                      + Загрузить
+                    </button>
+                  </div>
+                  <div className="recommendation-photo-list">
+                    {photos.map((photo) => {
+                      const index = recommendationPhotos.indexOf(photo);
+                      const photoNumber = photos.indexOf(photo) + 1;
+                      return (
+                        <article className="recommendation-photo-row" key={photo.assetId}>
+                          <img
+                            src={props.locationMediaUrl(photo.assetId)}
+                            alt={`Фото для карточки «${label}»`}
+                          />
+                          <label className="inline-check">
+                            <input
+                              type="checkbox"
+                              aria-label={`Использовать фото ${photoNumber} для карточки «${label}»`}
+                              checked={photo.isActive}
+                              disabled={props.mediaUploading}
+                              onChange={(event) =>
+                                change(
+                                  'recommendationPhotos',
+                                  recommendationPhotos.map((candidate, candidateIndex) =>
+                                    candidateIndex === index
+                                      ? { ...candidate, isActive: event.target.checked }
+                                      : candidate,
+                                  ),
+                                )
+                              }
+                            />
+                            Активно
+                          </label>
+                          <button
+                            className="icon-button danger-icon"
+                            type="button"
+                            disabled={props.mediaUploading}
+                            aria-label={`Удалить фото для карточки «${label}»`}
+                            onClick={() =>
+                              change(
+                                'recommendationPhotos',
+                                recommendationPhotos
+                                  .filter((_, candidateIndex) => candidateIndex !== index)
+                                  .map((candidate, candidateIndex) => ({
+                                    ...candidate,
+                                    sortOrder: candidateIndex,
+                                  })),
+                              )
+                            }
+                          >
+                            ×
+                          </button>
+                        </article>
+                      );
+                    })}
+                    {photos.length === 0 ? (
+                      <p className="repeat-empty">Фото для этого типа ещё не добавлены.</p>
+                    ) : null}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="editor-section">
+          <div className="editor-section-title">
+            <span>4</span>
+            <div>
               <h3>График работы</h3>
               <p>Статус «Открыто сейчас» рассчитывается на сервере.</p>
             </div>
@@ -603,7 +740,7 @@ function LocationEditor(props: {
 
         <div className="editor-section">
           <div className="editor-section-title">
-            <span>4</span>
+            <span>5</span>
             <div>
               <h3>Преимущества</h3>
               <p>Иконка и текст выводятся в заданном порядке.</p>
@@ -678,7 +815,7 @@ function LocationEditor(props: {
 
         <div className="editor-section">
           <div className="editor-section-title">
-            <span>5</span>
+            <span>6</span>
             <div>
               <h3>Адрес и контакты</h3>
               <p>Карта и маршрут строятся по координатам.</p>
@@ -743,7 +880,7 @@ function LocationEditor(props: {
 
         <div className="editor-section publication-section">
           <div className="editor-section-title">
-            <span>6</span>
+            <span>7</span>
             <div>
               <h3>Публикация</h3>
               <p>В слайдер попадают только опубликованные карточки.</p>
@@ -833,6 +970,7 @@ export function LocationsWorkspace({
   const [mediaUploading, setMediaUploading] = useState(false);
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
+  const selectionVersion = useRef(0);
 
   useEffect(() => {
     let current = true;
@@ -930,6 +1068,72 @@ export function LocationsWorkspace({
     }
   }
 
+  async function uploadRecommendationPhotos(
+    eventType: LocationRecommendationEventType,
+    files: readonly File[],
+  ): Promise<void> {
+    const available = 48 - (profile.recommendationPhotos?.length ?? 0);
+    if (available <= 0) {
+      setError('Для рекомендательных карточек можно добавить не больше 48 фотографий.');
+      return;
+    }
+    const batch = files.slice(0, available);
+    const uploadSelectionVersion = selectionVersion.current;
+    setMediaUploading(true);
+    setError(undefined);
+    setMessage(undefined);
+    const bindings = new Set(
+      (profile.recommendationPhotos ?? []).map((photo) => `${photo.eventType}:${photo.assetId}`),
+    );
+    let added = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const file of batch) {
+      try {
+        const asset = await client.uploadLocationMedia(file);
+        if (selectionVersion.current !== uploadSelectionVersion) continue;
+        const binding = `${eventType}:${asset.id}`;
+        if (bindings.has(binding)) {
+          skipped += 1;
+          continue;
+        }
+        bindings.add(binding);
+        added += 1;
+        setProfile((current) => {
+          const currentPhotos = current.recommendationPhotos ?? [];
+          if (currentPhotos.length >= 48) return current;
+          return {
+            ...current,
+            recommendationPhotos: [
+              ...currentPhotos,
+              {
+                assetId: asset.id,
+                eventType,
+                isActive: false,
+                sortOrder: currentPhotos.length,
+              },
+            ],
+          };
+        });
+      } catch {
+        failed += 1;
+      }
+    }
+    if (selectionVersion.current === uploadSelectionVersion) {
+      setMessage(
+        failed === 0
+          ? added === 0
+            ? 'Все выбранные фото уже добавлены для этого типа карточки.'
+            : `Добавлено фото: ${added}${skipped > 0 ? `, уже было добавлено: ${skipped}` : ''}. Активируйте нужные варианты и сохраните станцию.`
+          : `Добавлено фото: ${added}${skipped > 0 ? `, уже было добавлено: ${skipped}` : ''}. Не удалось загрузить: ${failed}.`,
+      );
+      if (files.length > available) {
+        setError('Добавлены только первые фото: лимит для рекомендательных карточек — 48.');
+      }
+      setMediaUploading(false);
+    }
+  }
+
   return (
     <main className="workspace location-workspace">
       <header className="workspace-header">
@@ -977,13 +1181,16 @@ export function LocationsWorkspace({
             query={query}
             onQuery={setQuery}
             mediaUrl={client.resolveMediaUrl}
+            disabled={mediaUploading}
             onCreate={() => {
+              selectionVersion.current += 1;
               setSelected(undefined);
               setProfile(emptyProfile());
               setError(undefined);
               setMessage(undefined);
             }}
             onSelect={(location) => {
+              selectionVersion.current += 1;
               setSelected(location);
               setProfile(editableProfile(location));
               setError(undefined);
@@ -1002,10 +1209,14 @@ export function LocationsWorkspace({
               busy={busy}
               mediaUploading={mediaUploading}
               mediaUrl={client.resolveMediaUrl}
+              locationMediaUrl={client.resolveLocationMediaUrl}
               {...(message ? { message } : {})}
               {...(error ? { error } : {})}
               onChange={setProfile}
               onUploadPhoto={(file) => void uploadPhoto(file)}
+              onUploadRecommendationPhotos={(eventType, files) =>
+                void uploadRecommendationPhotos(eventType, files)
+              }
               onSave={(status) => void save(status)}
             />
           )}

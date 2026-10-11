@@ -17,215 +17,282 @@ describe('client-assisted booking screen read routes', () => {
     await Promise.all(apps.splice(0).map((app) => app.close()));
   });
 
-  it('binds commands to the user and removes provider identifiers before ranking', async () => {
-    const app = Fastify();
-    apps.push(app);
-    const avatarSources = new Map<string, string>();
-    const registerAvatarSource = vi.fn((activityId: string, sourceUrl: string) => {
-      avatarSources.set(activityId, sourceUrl);
-    });
-    const avatarMediaRead = vi.fn().mockResolvedValue({
-      body: Buffer.from('webp-host'),
-      etag: '"client-assisted-host"',
-    });
-    const authenticate = (request: FastifyRequest): Promise<void> => {
-      request.tenantId = tenantId;
-      request.padlHubClaims = {
-        sub: userId,
-        tenants: [tenantId],
-        roles: ['client'],
-        permissions: ['games.play'],
-        sid: '30000000-0000-4000-8000-000000000001',
+  it.each(['ready', 'photos', 'mapping'] as const)(
+    'binds commands and excludes provider IDs with photo dependency=%s',
+    async (dependency) => {
+      const photosUnavailable = dependency === 'photos';
+      const mappingUnavailable = dependency === 'mapping';
+      const app = Fastify();
+      apps.push(app);
+      const avatarSources = new Map<string, string>();
+      const registerAvatarSource = vi.fn((activityId: string, sourceUrl: string) => {
+        avatarSources.set(activityId, sourceUrl);
+      });
+      const avatarMediaRead = vi.fn().mockResolvedValue({
+        body: Buffer.from('webp-host'),
+        etag: '"client-assisted-host"',
+      });
+      const authenticate = (request: FastifyRequest): Promise<void> => {
+        request.tenantId = tenantId;
+        request.padlHubClaims = {
+          sub: userId,
+          tenants: [tenantId],
+          roles: ['client'],
+          permissions: ['games.play'],
+          sid: '30000000-0000-4000-8000-000000000001',
+        };
+        return Promise.resolve();
       };
-      return Promise.resolve();
-    };
-    registerBookingRecommendationRoutes(app, {
-      clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
-      gameRepository: {
-        listRecommendationCardProjections: vi.fn().mockResolvedValue({
-          candidates: [],
-          history: [],
-        }),
-      },
-      preferencesRepository: {
-        getRecommendationProfile: vi.fn().mockResolvedValue({
-          playerLevel: 'C',
-          preferences: {
-            favoriteStationIds: [],
-            preferredTimeWindows: [],
-            useHistory: false,
-            recommendFriends: true,
-            recommendationDisplay: 'CARDS',
-            version: 0,
-            updatedAt: null,
-          },
-        }),
-      } as never,
-      tournamentSource: {
-        readDate: vi.fn().mockResolvedValue([
-          {
-            id: '70000000-0000-4000-8000-000000000001',
-            title: 'Турнир из ЦУП',
-            format: 'Американо',
-            startsAt: '2099-07-29T17:00:00.000Z',
-            endsAt: '2099-07-29T19:00:00.000Z',
-            venue: 'Терехово',
-            trainerName: 'Илья Соколов',
-            levelRange: null,
-            organizer: {
-              displayName: 'Илья Соколов',
-              avatarUrl: null,
+      registerBookingRecommendationRoutes(app, {
+        clientAssistedJobStore: new MemoryBookingScreenReadJobStore(),
+        gameRepository: {
+          listRecommendationCardProjections: vi.fn().mockResolvedValue({
+            candidates: [],
+            history: [],
+          }),
+        },
+        preferencesRepository: {
+          getRecommendationProfile: vi.fn().mockResolvedValue({
+            playerLevel: 'C',
+            preferences: {
+              favoriteStationIds: [],
+              preferredTimeWindows: [],
+              useHistory: false,
+              recommendFriends: true,
+              recommendationDisplay: 'CARDS',
+              version: 0,
+              updatedAt: null,
             },
-            capacity: {
-              total: 16,
-              registered: 12,
-              open: 4,
-              waitlist: 0,
-            },
-            status: 'REGISTRATION',
-            route: '/tournaments?event=70000000-0000-4000-8000-000000000001',
-          },
-        ]),
-      },
-      exerciseSource: {
-        readDate: vi.fn().mockResolvedValue([]),
-        registerAvatarSource,
-        readAvatarSource: (activityId: string) => avatarSources.get(activityId),
-      },
-      avatarMedia: {
-        read: avatarMediaRead,
-      },
-      authenticatedTenantHandlers: [authenticate],
-      publicTenantHandlers: [],
-    });
-
-    const started = await app.inject({
-      method: 'POST',
-      url: '/user/api/v1/local-padel/booking-screen-read-jobs',
-      payload: { screen: 'FOR_ME' },
-    });
-    expect(started.statusCode).toBe(200);
-    const job = started.json<{
-      readonly jobId: string;
-      readonly commands: readonly {
-        readonly commandId: string;
-        readonly date: string;
-      }[];
-    }>();
-    expect(job.commands).toHaveLength(7);
-    const command = job.commands[1]!;
-
-    const accepted = await app.inject({
-      method: 'POST',
-      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${command.commandId}`,
-      payload: {
-        payload: [
-          {
-            id: 'viva-exercise-secret-42',
-            type: { id: 605, name: 'Групповая тренировка' },
-            direction: { id: 100, name: 'Тренировки' },
-            timeFrom: `${command.date}T15:00:00.000+03:00`,
-            timeTo: `${command.date}T16:30:00.000+03:00`,
-            studio: { id: 'viva-studio-secret-10', name: 'Терехово' },
-            room: { id: 'viva-room-secret-3', name: 'Корт №3' },
-            maxClientsCount: 8,
-            freePlaces: 3,
-            accessLevels: [2.5, 3],
-            trainers: [
-              {
-                id: 'viva-trainer-secret-7',
-                displayName: 'Мария Орлова',
-                photo: 'https://media.example/private-trainer-photo',
-              },
-            ],
-          },
-          {
-            id: 'viva-tournament-secret-99',
-            type: { id: 839, name: 'Турнир' },
-            direction: { id: 2617, name: 'Турниры' },
-            timeFrom: `${command.date}T17:00:00.000+03:00`,
-            timeTo: `${command.date}T19:00:00.000+03:00`,
-            studio: { id: 'viva-studio-secret-10', name: 'Терехово' },
-            maxClientsCount: 16,
-            freePlaces: 4,
-          },
-        ],
-      },
-    });
-    expect(accepted.statusCode).toBe(202);
-    expect(accepted.json()).toMatchObject({ accepted: true, replayed: false, itemCount: 1 });
-
-    const completed = await app.inject({
-      method: 'POST',
-      url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/complete`,
-      payload: { limit: 6 },
-    });
-    expect(completed.statusCode).toBe(200);
-    expect(completed.json()).toMatchObject({
-      state: 'PARTIAL',
-      completedCommands: 1,
-      totalCommands: 7,
-      page: {
-        items: [
-          {
-            kind: 'TRAINING',
-            activity: {
-              title: 'Групповая тренировка',
-              station: { name: 'Терехово' },
-              court: { name: 'Корт №3' },
-              category: { name: 'Групповая тренировка' },
-              host: {
-                displayName: 'Мария Орлова',
-              },
-            },
-          },
-          {
-            kind: 'TOURNAMENT',
-            activity: {
+          }),
+        } as never,
+        bookingScreenMappingRepository: {
+          resolve: vi
+            .fn()
+            .mockImplementation(async (input: { exerciseAssociationIds: readonly string[] }) => {
+              if (mappingUnavailable && input.exerciseAssociationIds.length === 0)
+                throw new Error('Photo station mapping unavailable');
+              return {
+                bookings: [],
+                games: [],
+                stations: [
+                  {
+                    externalId: 'viva-studio-secret-10',
+                    stationId: '60000000-0000-4000-8000-000000000001',
+                  },
+                ],
+              };
+            }),
+        },
+        locationRepository: {
+          getPublished: vi.fn(),
+          readRecommendationPhotos: photosUnavailable
+            ? vi.fn().mockRejectedValue(new Error('Photo storage unavailable'))
+            : vi.fn().mockResolvedValue(
+                new Map([
+                  [
+                    '60000000-0000-4000-8000-000000000001',
+                    [
+                      {
+                        assetId: '80000000-0000-4000-8000-000000000001',
+                        eventType: 'TRAINING',
+                        isActive: true,
+                        sortOrder: 0,
+                      },
+                      {
+                        assetId: '80000000-0000-4000-8000-000000000002',
+                        eventType: 'TOURNAMENT',
+                        isActive: true,
+                        sortOrder: 0,
+                      },
+                    ],
+                  ],
+                ]),
+              ),
+        },
+        tournamentSource: {
+          readStationExternalId: () => 'viva-studio-secret-10',
+          readDate: vi.fn().mockResolvedValue([
+            {
               id: '70000000-0000-4000-8000-000000000001',
               title: 'Турнир из ЦУП',
+              format: 'Американо',
+              startsAt: '2099-07-29T17:00:00.000Z',
+              endsAt: '2099-07-29T19:00:00.000Z',
+              venue: 'Терехово',
+              trainerName: 'Илья Соколов',
+              levelRange: null,
+              organizer: {
+                displayName: 'Илья Соколов',
+                avatarUrl: null,
+              },
+              capacity: {
+                total: 16,
+                registered: 12,
+                open: 4,
+                waitlist: 0,
+              },
+              status: 'REGISTRATION',
+              route: '/tournaments?event=70000000-0000-4000-8000-000000000001',
             },
-          },
-        ],
-      },
-    });
-    const completedBody = completed.json<{
-      readonly page: {
-        readonly items: readonly {
-          readonly kind: string;
-          readonly activity?: {
-            readonly id: string;
-            readonly host?: { readonly avatarUrl?: string | null };
-          };
-        }[];
-      };
-    }>();
-    const trainingActivity = completedBody.page.items.find(
-      (item) => item.kind === 'TRAINING',
-    )?.activity;
-    expect(trainingActivity?.host?.avatarUrl).toBe(
-      `/public/api/v1/local-padel/booking-activities/${trainingActivity?.id}/host-avatar`,
-    );
-    expect(registerAvatarSource).toHaveBeenCalledWith(
-      trainingActivity?.id,
-      'https://media.example/private-trainer-photo',
-    );
-    expect(completed.body).not.toMatch(
-      /viva-exercise-secret-42|viva-tournament-secret-99|viva-studio-secret-10|viva-room-secret-3|viva-trainer-secret-7|media\.example/,
-    );
+          ]),
+        },
+        exerciseSource: {
+          readDate: vi.fn().mockResolvedValue([]),
+          registerAvatarSource,
+          readAvatarSource: (activityId: string) => avatarSources.get(activityId),
+        },
+        avatarMedia: {
+          read: avatarMediaRead,
+        },
+        authenticatedTenantHandlers: [authenticate],
+        publicTenantHandlers: [],
+      });
 
-    const avatar = await app.inject({
-      method: 'GET',
-      url: `/public/api/v1/local-padel/booking-activities/${trainingActivity?.id}/host-avatar`,
-    });
-    expect(avatar.statusCode).toBe(200);
-    expect(avatar.headers['content-type']).toBe('image/webp');
-    expect(avatar.body).toBe('webp-host');
-    expect(avatarMediaRead).toHaveBeenCalledWith({
-      cacheKey: `booking-activity:${trainingActivity?.id}`,
-      sourceUrl: 'https://media.example/private-trainer-photo',
-    });
-  });
+      const started = await app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/booking-screen-read-jobs',
+        payload: { screen: 'FOR_ME' },
+      });
+      expect(started.statusCode).toBe(200);
+      const job = started.json<{
+        readonly jobId: string;
+        readonly commands: readonly {
+          readonly commandId: string;
+          readonly date: string;
+        }[];
+      }>();
+      expect(job.commands).toHaveLength(7);
+      const command = job.commands[1]!;
+
+      const accepted = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/results/${command.commandId}`,
+        payload: {
+          payload: [
+            {
+              id: 'viva-exercise-secret-42',
+              type: { id: 605, name: 'Групповая тренировка' },
+              direction: { id: 100, name: 'Тренировки' },
+              timeFrom: `${command.date}T15:00:00.000+03:00`,
+              timeTo: `${command.date}T16:30:00.000+03:00`,
+              studio: { id: 'viva-studio-secret-10', name: 'Терехово' },
+              room: { id: 'viva-room-secret-3', name: 'Корт №3' },
+              maxClientsCount: 8,
+              freePlaces: 3,
+              accessLevels: [2.5, 3],
+              trainers: [
+                {
+                  id: 'viva-trainer-secret-7',
+                  displayName: 'Мария Орлова',
+                  photo: 'https://media.example/private-trainer-photo',
+                },
+              ],
+            },
+            {
+              id: 'viva-tournament-secret-99',
+              type: { id: 839, name: 'Турнир' },
+              direction: { id: 2617, name: 'Турниры' },
+              timeFrom: `${command.date}T17:00:00.000+03:00`,
+              timeTo: `${command.date}T19:00:00.000+03:00`,
+              studio: { id: 'viva-studio-secret-10', name: 'Терехово' },
+              maxClientsCount: 16,
+              freePlaces: 4,
+            },
+          ],
+        },
+      });
+      expect(accepted.statusCode).toBe(202);
+      expect(accepted.json()).toMatchObject({ accepted: true, replayed: false, itemCount: 1 });
+
+      const completed = await app.inject({
+        method: 'POST',
+        url: `/user/api/v1/local-padel/booking-screen-read-jobs/${job.jobId}/complete`,
+        payload: { limit: 6 },
+      });
+      expect(completed.statusCode).toBe(200);
+      expect(completed.json()).toMatchObject({
+        state: 'PARTIAL',
+        completedCommands: 1,
+        totalCommands: 7,
+        page: {
+          items: [
+            {
+              kind: 'TRAINING',
+              ...(photosUnavailable
+                ? {}
+                : {
+                    cardImageUrl:
+                      '/public/api/v1/local-padel/location-media/80000000-0000-4000-8000-000000000001',
+                  }),
+              activity: {
+                title: 'Групповая тренировка',
+                station: { name: 'Терехово' },
+                court: { name: 'Корт №3' },
+                category: { name: 'Групповая тренировка' },
+                host: {
+                  displayName: 'Мария Орлова',
+                },
+              },
+            },
+            {
+              kind: 'TOURNAMENT',
+              ...(photosUnavailable || mappingUnavailable
+                ? {}
+                : {
+                    cardImageUrl:
+                      '/public/api/v1/local-padel/location-media/80000000-0000-4000-8000-000000000002',
+                  }),
+              activity: {
+                id: '70000000-0000-4000-8000-000000000001',
+                title: 'Турнир из ЦУП',
+              },
+            },
+          ],
+        },
+      });
+      const completedBody = completed.json<{
+        readonly page: {
+          readonly items: readonly {
+            readonly kind: string;
+            readonly activity?: {
+              readonly id: string;
+              readonly host?: { readonly avatarUrl?: string | null };
+            };
+          }[];
+        };
+      }>();
+      const trainingActivity = completedBody.page.items.find(
+        (item) => item.kind === 'TRAINING',
+      )?.activity;
+      expect(trainingActivity?.host?.avatarUrl).toBe(
+        `/public/api/v1/local-padel/booking-activities/${trainingActivity?.id}/host-avatar`,
+      );
+      expect(registerAvatarSource).toHaveBeenCalledWith(
+        trainingActivity?.id,
+        'https://media.example/private-trainer-photo',
+      );
+      expect(completed.body).not.toMatch(
+        /viva-exercise-secret-42|viva-tournament-secret-99|viva-studio-secret-10|viva-room-secret-3|viva-trainer-secret-7|media\.example/,
+      );
+      if (photosUnavailable) expect(completed.body).not.toContain('cardImageUrl');
+      if (mappingUnavailable)
+        expect(completed.body).not.toContain(
+          '/location-media/80000000-0000-4000-8000-000000000002',
+        );
+
+      const avatar = await app.inject({
+        method: 'GET',
+        url: `/public/api/v1/local-padel/booking-activities/${trainingActivity?.id}/host-avatar`,
+      });
+      expect(avatar.statusCode).toBe(200);
+      expect(avatar.headers['content-type']).toBe('image/webp');
+      expect(avatar.body).toBe('webp-host');
+      expect(avatarMediaRead).toHaveBeenCalledWith({
+        cacheKey: `booking-activity:${trainingActivity?.id}`,
+        sourceUrl: 'https://media.example/private-trainer-photo',
+      });
+    },
+  );
 
   it("accepts a bounded schedule relay larger than Fastify's default one-megabyte body limit", async () => {
     const app = Fastify();

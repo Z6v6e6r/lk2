@@ -5,6 +5,7 @@ import {
   locationProfileInputSchema,
   type LocationAdminView,
   type LocationProfileInput,
+  type LocationRecommendationPhoto,
 } from '@phub/locations';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
@@ -19,6 +20,7 @@ export type LocationCommandResult =
   | { readonly outcome: 'idempotency_conflict' }
   | { readonly outcome: 'not_found' }
   | { readonly outcome: 'version_conflict'; readonly current: LocationAdminView }
+  | { readonly outcome: 'media_invalid' }
   | { readonly outcome: 'publication_incomplete'; readonly missingFields: readonly string[] };
 
 export interface LocationRepository {
@@ -29,6 +31,10 @@ export interface LocationRepository {
     options?: { readonly homeOnly?: boolean; readonly limit?: number },
   ): Promise<readonly LocationAdminView[]>;
   getPublished(tenantId: string, locationId: string): Promise<LocationAdminView | undefined>;
+  readRecommendationPhotos?(
+    tenantId: string,
+    locationIds: readonly string[],
+  ): Promise<ReadonlyMap<string, readonly LocationRecommendationPhoto[]>>;
   create(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -86,6 +92,14 @@ interface RevisionRow extends QueryResultRow {
   readonly component_revision: string;
 }
 
+interface RecommendationPhotoRow extends QueryResultRow {
+  readonly location_id: string;
+  readonly asset_id: string;
+  readonly event_type: LocationRecommendationPhoto['eventType'];
+  readonly is_active: boolean;
+  readonly sort_order: number;
+}
+
 const LOCATION_COLUMNS = `
   id, slug, title, short_title, city, court_count, address,
   latitude, longitude, timezone, metro_name, metro_distance_meters,
@@ -132,6 +146,108 @@ function mapLocation(row: LocationRow): LocationAdminView {
     publishedAt: nullableTimestamp(row.published_at),
     archivedAt: nullableTimestamp(row.archived_at),
   });
+}
+
+async function readRecommendationPhotos(
+  client: PoolClient,
+  tenantId: string,
+  locationIds: readonly string[],
+  options: { readonly publishedOnly?: boolean } = {},
+): Promise<ReadonlyMap<string, readonly LocationRecommendationPhoto[]>> {
+  const uniqueLocationIds = [...new Set(locationIds)];
+  const result = new Map<string, readonly LocationRecommendationPhoto[]>();
+  if (uniqueLocationIds.length === 0) return result;
+  const profiles = await client.query<{ readonly id: string }>(
+    `select id from locations.profiles
+      where tenant_id = $1 and id = any($2::uuid[])
+        and ($3::boolean = false or publication_status = 'PUBLISHED')`,
+    [tenantId, uniqueLocationIds, options.publishedOnly ?? false],
+  );
+  for (const profile of profiles.rows) result.set(profile.id, []);
+  if (result.size === 0) return result;
+  const rows = await client.query<RecommendationPhotoRow>(
+    `select photos.location_id, photos.asset_id, photos.event_type, photos.is_active, photos.sort_order
+       from locations.recommendation_card_photos photos
+       join locations.media_assets assets
+         on assets.tenant_id = photos.tenant_id and assets.id = photos.asset_id and assets.status = 'READY'
+      where photos.tenant_id = $1 and photos.location_id = any($2::uuid[])
+      order by photos.location_id, photos.event_type, photos.sort_order, photos.asset_id`,
+    [tenantId, [...result.keys()]],
+  );
+  for (const row of rows.rows) {
+    const current = result.get(row.location_id) ?? [];
+    result.set(row.location_id, [
+      ...current,
+      {
+        assetId: row.asset_id,
+        eventType: row.event_type,
+        isActive: row.is_active,
+        sortOrder: row.sort_order,
+      },
+    ]);
+  }
+  return result;
+}
+
+function withRecommendationPhotos(
+  location: LocationAdminView,
+  recommendationPhotos: readonly LocationRecommendationPhoto[],
+): LocationAdminView {
+  return locationAdminViewSchema.parse({ ...location, recommendationPhotos });
+}
+
+async function hydrateLocations(
+  client: PoolClient,
+  tenantId: string,
+  locations: readonly LocationAdminView[],
+  options?: { readonly publishedOnly?: boolean },
+): Promise<LocationAdminView[]> {
+  const photos = await readRecommendationPhotos(
+    client,
+    tenantId,
+    locations.map((location) => location.id),
+    options,
+  );
+  return locations.map((location) =>
+    withRecommendationPhotos(location, photos.get(location.id) ?? []),
+  );
+}
+
+async function recommendationMediaValid(
+  client: PoolClient,
+  tenantId: string,
+  photos: readonly LocationRecommendationPhoto[],
+): Promise<boolean> {
+  if (photos.length === 0) return true;
+  const assetIds = [...new Set(photos.map((photo) => photo.assetId))];
+  const result = await client.query<{ readonly id: string }>(
+    `select id
+       from locations.media_assets
+      where tenant_id = $1 and status = 'READY' and id = any($2::uuid[])`,
+    [tenantId, assetIds],
+  );
+  return result.rows.length === assetIds.length;
+}
+
+async function replaceRecommendationPhotos(
+  client: PoolClient,
+  tenantId: string,
+  locationId: string,
+  photos: readonly LocationRecommendationPhoto[],
+): Promise<void> {
+  await client.query(
+    `delete from locations.recommendation_card_photos
+      where tenant_id = $1 and location_id = $2`,
+    [tenantId, locationId],
+  );
+  for (const photo of photos) {
+    await client.query(
+      `insert into locations.recommendation_card_photos (
+         tenant_id, location_id, asset_id, event_type, is_active, sort_order
+       ) values ($1, $2, $3, $4, $5, $6)`,
+      [tenantId, locationId, photo.assetId, photo.eventType, photo.isActive, photo.sortOrder],
+    );
+  }
 }
 
 async function currentCommand(
@@ -198,6 +314,7 @@ function auditMetadata(location: LocationAdminView): Record<string, unknown> {
     publicationStatus: location.publicationStatus,
     showOnHome: location.showOnHome,
     completenessPercent: location.completeness.percent,
+    recommendationPhotos: location.recommendationPhotos ?? [],
   };
 }
 
@@ -314,7 +431,7 @@ export function createLocationRepository(pool: Pool): LocationRepository {
             order by sort_order, title, id`,
           [tenantId],
         );
-        return result.rows.map(mapLocation);
+        return hydrateLocations(client, tenantId, result.rows.map(mapLocation));
       });
     },
 
@@ -327,7 +444,9 @@ export function createLocationRepository(pool: Pool): LocationRepository {
             where tenant_id = $1 and id = $2`,
           [tenantId, locationId],
         );
-        return row ? mapLocation(row) : undefined;
+        if (!row) return undefined;
+        const [location] = await hydrateLocations(client, tenantId, [mapLocation(row)]);
+        return location;
       });
     },
 
@@ -361,6 +480,12 @@ export function createLocationRepository(pool: Pool): LocationRepository {
       });
     },
 
+    readRecommendationPhotos(tenantId, locationIds) {
+      return withTenantTransaction(pool, tenantId, (client) =>
+        readRecommendationPhotos(client, tenantId, locationIds, { publishedOnly: true }),
+      );
+    },
+
     create(input) {
       const invalidPublication = publicationIncomplete(input.profile);
       if (invalidPublication) return Promise.resolve(invalidPublication);
@@ -374,6 +499,10 @@ export function createLocationRepository(pool: Pool): LocationRepository {
           input.requestHash,
         );
         if (replay) return replay;
+        const recommendationPhotos = input.profile.recommendationPhotos ?? [];
+        if (!(await recommendationMediaValid(client, input.tenantId, recommendationPhotos))) {
+          return { outcome: 'media_invalid' };
+        }
         const values = commandPayload(input.profile);
         const inserted = await queryOne<LocationRow>(
           client,
@@ -391,7 +520,13 @@ export function createLocationRepository(pool: Pool): LocationRepository {
           [input.tenantId, ...values, input.actorUserId],
         );
         if (!inserted) throw new Error('LOCATION_PROFILE_WRITE_LOST');
-        const location = mapLocation(inserted);
+        await replaceRecommendationPhotos(
+          client,
+          input.tenantId,
+          inserted.id,
+          recommendationPhotos,
+        );
+        const location = withRecommendationPhotos(mapLocation(inserted), recommendationPhotos);
         await storeCommand(client, {
           tenantId: input.tenantId,
           actorUserId: input.actorUserId,
@@ -433,9 +568,21 @@ export function createLocationRepository(pool: Pool): LocationRepository {
           [input.tenantId, input.locationId],
         );
         if (!currentRow) return { outcome: 'not_found' };
-        const previous = mapLocation(currentRow);
+        const previousBase = mapLocation(currentRow);
+        const previousPhotos = await readRecommendationPhotos(client, input.tenantId, [
+          input.locationId,
+        ]);
+        const previous = withRecommendationPhotos(
+          previousBase,
+          previousPhotos.get(input.locationId) ?? [],
+        );
         if (previous.version !== input.expectedVersion) {
           return { outcome: 'version_conflict', current: previous };
+        }
+        const recommendationPhotos =
+          input.profile.recommendationPhotos ?? previous.recommendationPhotos ?? [];
+        if (!(await recommendationMediaValid(client, input.tenantId, recommendationPhotos))) {
+          return { outcome: 'media_invalid' };
         }
         const values = commandPayload(input.profile);
         const updated = await queryOne<LocationRow>(
@@ -455,7 +602,8 @@ export function createLocationRepository(pool: Pool): LocationRepository {
           [input.tenantId, input.locationId, ...values, input.actorUserId, input.expectedVersion],
         );
         if (!updated) return { outcome: 'version_conflict', current: previous };
-        const location = mapLocation(updated);
+        await replaceRecommendationPhotos(client, input.tenantId, updated.id, recommendationPhotos);
+        const location = withRecommendationPhotos(mapLocation(updated), recommendationPhotos);
         await storeCommand(client, {
           tenantId: input.tenantId,
           actorUserId: input.actorUserId,

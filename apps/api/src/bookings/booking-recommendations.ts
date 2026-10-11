@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type {
   GameRepository,
+  LocationRepository,
   ProfileSummaryRepository,
   StoredGameCardProjection,
 } from '@phub/database';
@@ -14,6 +15,7 @@ import {
 } from '@phub/games';
 import type { PublicTournamentSummary } from '@phub/legacy-games-adapter';
 import type { VivaExerciseRecommendation } from '@phub/viva-adapter';
+import { withRecommendationCardPhotos } from './recommendation-card-photos.js';
 
 import {
   gameCardProfilePhotoUserIds,
@@ -35,6 +37,7 @@ export type BookingRecommendationReason = (typeof BOOKING_RECOMMENDATION_REASONS
 
 export interface BookingRecommendationGameItem {
   readonly kind: 'GAME';
+  readonly cardImageUrl?: string | null;
   readonly game: GameCardView;
   readonly reasons: readonly BookingRecommendationReason[];
 }
@@ -77,6 +80,7 @@ export interface BookingRecommendationActivity {
 
 export interface BookingRecommendationActivityItem {
   readonly kind: 'TRAINING' | 'TOURNAMENT';
+  readonly cardImageUrl?: string | null;
   readonly activity: BookingRecommendationActivity;
   readonly reasons: readonly BookingRecommendationReason[];
 }
@@ -628,6 +632,10 @@ function rankActivities(input: {
 export async function listBookingRecommendations(input: {
   readonly repository: CardReadRepository;
   readonly photoRepository?: Pick<ProfileSummaryRepository, 'getPhotoDeliveryIds'>;
+  readonly locationRepository?: Pick<LocationRepository, 'readRecommendationPhotos'>;
+  readonly onPhotoReadError?: () => void;
+  readonly tenantKey?: string;
+  readonly canonicalStationIds?: ReadonlyMap<string, string>;
   readonly tenantId: string;
   readonly userId: string;
   readonly preferences: BookingPreferences;
@@ -706,7 +714,29 @@ export async function listBookingRecommendations(input: {
     history,
   });
   const rankedRecommendations = [...rankedGames, ...rankedActivities];
-  const feedItems = buildPaginatedRecommendationFeed(rankedRecommendations, input.limit);
+  const rankedItems = buildPaginatedRecommendationFeed(rankedRecommendations, input.limit);
+  const stationIds = rankedItems.flatMap((item) => {
+    const id =
+      item.kind === 'GAME'
+        ? item.game.station.id
+        : input.canonicalStationIds?.get(item.activity.id);
+    return id ? [id] : [];
+  });
+  const photos =
+    input.locationRepository?.readRecommendationPhotos && input.tenantKey
+      ? await input.locationRepository
+          .readRecommendationPhotos(input.tenantId, [...new Set(stationIds)])
+          .catch(() => {
+            input.onPhotoReadError?.();
+            return new Map();
+          })
+      : new Map();
+  const feedItems = withRecommendationCardPhotos(
+    rankedItems,
+    photos,
+    input.tenantKey,
+    input.canonicalStationIds,
+  );
   const version = createHash('sha256')
     .update(
       JSON.stringify({
@@ -735,7 +765,17 @@ export async function listBookingRecommendations(input: {
           item.capacity.open,
         ]),
         feed: feedItems.map((item) =>
-          item.kind === 'GAME' ? ['GAME', item.game.id] : [item.kind, item.activity.id],
+          item.kind === 'GAME'
+            ? [
+                'GAME',
+                item.game.id,
+                item.cardImageUrl === undefined ? 'LEGACY_FALLBACK' : item.cardImageUrl,
+              ]
+            : [
+                item.kind,
+                item.activity.id,
+                item.cardImageUrl === undefined ? 'LEGACY_FALLBACK' : item.cardImageUrl,
+              ],
         ),
       }),
     )

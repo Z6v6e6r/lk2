@@ -292,6 +292,7 @@ export interface NotificationAdminClient {
   ): Promise<AdminLocationCommandResult>;
   uploadLocationMedia(file: File): Promise<AdminLocationMediaCommandResult>;
   resolveMediaUrl(url: string): string;
+  resolveLocationMediaUrl(assetId: string): string;
   getGiftCertificateCatalogState(): Promise<GiftCertificateAdminCatalogState>;
   saveGiftCertificateCatalogDraft(
     expectedRevision: number | null,
@@ -568,6 +569,11 @@ export function createNotificationAdminClient(
     resolveMediaUrl(url) {
       const baseUrl = options.baseUrl.replace(/\/$/, '');
       return baseUrl ? new URL(url, `${baseUrl}/`).toString() : url;
+    },
+    resolveLocationMediaUrl(assetId) {
+      const baseUrl = options.baseUrl.replace(/\/$/, '');
+      const path = `/public/api/v1/${encodeURIComponent(options.tenantKey)}/location-media/${encodeURIComponent(assetId)}`;
+      return baseUrl ? new URL(path, `${baseUrl}/`).toString() : path;
     },
     getGiftCertificateCatalogState() {
       return adminRequest<GiftCertificateAdminCatalogState>('/gift-certificate-catalog');

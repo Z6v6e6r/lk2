@@ -2319,6 +2319,23 @@ components:
           type: integer
           minimum: 0
           maximum: 99
+    LocationRecommendationPhoto:
+      type: object
+      additionalProperties: false
+      required: [assetId, eventType, isActive, sortOrder]
+      properties:
+        assetId:
+          type: string
+          format: uuid
+        eventType:
+          type: string
+          enum: [GAME, COACH_GAME, TRAINING, TOURNAMENT]
+        isActive:
+          type: boolean
+        sortOrder:
+          type: integer
+          minimum: 0
+          maximum: 99
     LocationMediaAsset:
       type: object
       additionalProperties: false
@@ -2446,6 +2463,12 @@ components:
           maxItems: 12
           items:
             $ref: '#/components/schemas/LocationGalleryImage'
+        recommendationPhotos:
+          type: array
+          description: Optional replacement of recommendation-card photo bindings. Omit on update to preserve existing bindings.
+          maxItems: 48
+          items:
+            $ref: '#/components/schemas/LocationRecommendationPhoto'
         publicationStatus:
           $ref: '#/components/schemas/LocationPublicationStatus'
         showOnHome:
@@ -2533,6 +2556,8 @@ components:
           $ref: '#/components/schemas/LocationProfileInput/properties/amenities'
         gallery:
           $ref: '#/components/schemas/LocationProfileInput/properties/gallery'
+        recommendationPhotos:
+          $ref: '#/components/schemas/LocationProfileInput/properties/recommendationPhotos'
         publicationStatus:
           $ref: '#/components/schemas/LocationProfileInput/properties/publicationStatus'
         showOnHome:

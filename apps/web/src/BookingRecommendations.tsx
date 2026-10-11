@@ -589,7 +589,7 @@ export function BookingRecommendations({
         const background = bookingCardBackground(recommendationBackgroundKind(item), key);
         const usesPhotoGridCard = compact && compactVisualVariant === 'photo-grid';
         const style: BookingRecommendationStyle = {
-          '--booking-card-background-image': `url("${background.image}")`,
+          '--booking-card-background-image': `url("${item.cardImageUrl ?? background.image}")`,
         };
 
         const { cardItem, stripItem } = advertisingInsertions[index] ?? {

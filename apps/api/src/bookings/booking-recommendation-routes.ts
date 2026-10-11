@@ -63,6 +63,7 @@ type ExerciseRecommendationSource = Pick<VivaExerciseRecommendationSourceAdapter
       | 'registerAvatarSource'
       | 'readTrainerAvatarSource'
       | 'registerTrainerAvatarSource'
+      | 'readStationExternalId'
     >
   >;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -334,6 +335,47 @@ function completedScheduleDates(
   );
 }
 
+async function recommendationStationIds(input: {
+  readonly tenantId: string;
+  readonly activities: readonly VivaExerciseRecommendation[];
+  readonly tournaments: readonly PublicTournamentSummary[];
+  readonly exerciseSource?: ExerciseRecommendationSource;
+  readonly tournamentSource?: TournamentSummarySource;
+  readonly mappingRepository?: BookingScreenMappingRepository;
+  readonly onError?: () => void;
+}): Promise<ReadonlyMap<string, string>> {
+  if (!input.mappingRepository) return new Map();
+  const rows = [
+    ...input.activities.flatMap((activity) => {
+      const externalId = input.exerciseSource?.readStationExternalId?.(activity.id);
+      return externalId ? [{ eventId: activity.id, externalId }] : [];
+    }),
+    ...input.tournaments.flatMap((tournament) => {
+      const externalId = input.tournamentSource?.readStationExternalId?.(tournament.id);
+      return externalId ? [{ eventId: tournament.id, externalId }] : [];
+    }),
+  ];
+  if (!rows.length) return new Map();
+  const mappings = await input.mappingRepository
+    .resolve({
+      tenantId: input.tenantId,
+      bookingExternalIds: [],
+      exerciseAssociationIds: [],
+      stationExternalIds: [...new Set(rows.map((row) => row.externalId))],
+    })
+    .catch(() => {
+      input.onError?.();
+      return { bookings: [], games: [], stations: [] };
+    });
+  const stations = new Map(mappings.stations.map((row) => [row.externalId, row.stationId]));
+  return new Map(
+    rows.flatMap((row) => {
+      const stationId = stations.get(row.externalId);
+      return stationId ? [[row.eventId, stationId] as const] : [];
+    }),
+  );
+}
+
 function activityHostAvatarUrl(tenantKey: string, activityId: string): string {
   return `/public/api/v1/${encodeURIComponent(tenantKey)}/booking-activities/${encodeURIComponent(activityId)}/host-avatar`;
 }
@@ -391,7 +433,10 @@ export function registerBookingRecommendationRoutes(
     readonly eventCatalogSnapshotStore?: EventCatalogSnapshotStore<EventCatalogItem>;
     readonly bookingScreenMappingRepository?: BookingScreenMappingRepository;
     readonly upcomingBookingsRepository?: UpcomingBookingsRepository;
-    readonly locationRepository?: Pick<LocationRepository, 'getPublished'>;
+    readonly locationRepository?: Pick<
+      LocationRepository,
+      'getPublished' | 'readRecommendationPhotos'
+    >;
     readonly getExerciseAccessToken?: (input: {
       readonly tenantKey: string;
       readonly tenantId: string;
@@ -559,6 +604,10 @@ export function registerBookingRecommendationRoutes(
         | {
             readonly kind: 'schedule';
             readonly activities: readonly VivaExerciseRecommendation[];
+            readonly stationAssociations?: readonly {
+              readonly activityId: string;
+              readonly stationId: string;
+            }[];
             readonly gameAssociations?: readonly {
               readonly activityId: string;
               readonly gameId: string;
@@ -580,6 +629,7 @@ export function registerBookingRecommendationRoutes(
       try {
         if (command.operation === 'schedule.read') {
           const exerciseExternalIds = new Map<string, string>();
+          const stationExternalIds = new Map<string, string>();
           const activities = normalizeVivaExerciseRecommendationPayload(body.payload, {
             onAvatarSource: (activityId, sourceUrl) =>
               options.exerciseSource?.registerAvatarSource?.(activityId, sourceUrl),
@@ -587,6 +637,8 @@ export function registerBookingRecommendationRoutes(
               options.exerciseSource?.registerTrainerAvatarSource?.(activityId, source),
             onExerciseExternalId: (activityId, externalId) =>
               exerciseExternalIds.set(activityId, externalId),
+            onStationExternalId: (activityId, externalId) =>
+              stationExternalIds.set(activityId, externalId),
           }).filter(
             (activity) =>
               activity.kind === 'TRAINING' &&
@@ -599,14 +651,23 @@ export function registerBookingRecommendationRoutes(
                 exerciseAssociationIds: [...exerciseExternalIds.values()].flatMap(
                   exerciseAssociationIds,
                 ),
+                stationExternalIds: [...new Set(stationExternalIds.values())],
               })
             : { bookings: [], games: [], stations: [] };
           const gamesByAssociation = new Map(
             mappings.games.map((mapping) => [mapping.associationId, mapping.gameId]),
           );
+          const stationsByExternalId = new Map(
+            mappings.stations.map((mapping) => [mapping.externalId, mapping.stationId]),
+          );
           result = {
             kind: 'schedule',
             activities,
+            stationAssociations: activities.flatMap((activity) => {
+              const externalId = stationExternalIds.get(activity.id);
+              const stationId = externalId ? stationsByExternalId.get(externalId) : undefined;
+              return stationId ? [{ activityId: activity.id, stationId }] : [];
+            }),
             gameAssociations: activities.flatMap((activity) => {
               const externalId = exerciseExternalIds.get(activity.id);
               const gameId = externalId
@@ -1046,8 +1107,41 @@ export function registerBookingRecommendationRoutes(
             .flatMap((result) => (result.kind === 'schedule' ? result.activities : []))
             .map((activity) => [activity.id, activity]),
         );
+        const canonicalStationIds = new Map(
+          results.flatMap((result) =>
+            result.kind === 'schedule'
+              ? (result.stationAssociations ?? []).map(
+                  (row) => [row.activityId, row.stationId] as const,
+                )
+              : [],
+          ),
+        );
+        const tournamentStationIds = await recommendationStationIds({
+          tenantId: current.tenantId,
+          onError: () =>
+            request.log.warn(
+              { event: 'recommendation_photo_station_mapping_failed' },
+              'Recommendation photo station mapping unavailable',
+            ),
+          activities: [],
+          tournaments: tournaments.items,
+          ...(options.tournamentSource ? { tournamentSource: options.tournamentSource } : {}),
+          ...(options.bookingScreenMappingRepository
+            ? { mappingRepository: options.bookingScreenMappingRepository }
+            : {}),
+        });
+        for (const [eventId, stationId] of tournamentStationIds)
+          canonicalStationIds.set(eventId, stationId);
         const page = await listBookingRecommendations({
           repository: options.gameRepository,
+          tenantKey,
+          canonicalStationIds,
+          onPhotoReadError: () =>
+            request.log.warn(
+              { event: 'recommendation_photo_read_failed' },
+              'Recommendation photo settings unavailable',
+            ),
+          ...(options.locationRepository ? { locationRepository: options.locationRepository } : {}),
           ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
           tenantId: current.tenantId,
           userId: current.userId,
@@ -1226,8 +1320,31 @@ export function registerBookingRecommendationRoutes(
               : { items: [] },
           ),
         ]);
+        const canonicalStationIds = await recommendationStationIds({
+          tenantId: current.tenantId,
+          onError: () =>
+            request.log.warn(
+              { event: 'recommendation_photo_station_mapping_failed' },
+              'Recommendation photo station mapping unavailable',
+            ),
+          activities,
+          tournaments: tournaments.items,
+          ...(options.exerciseSource ? { exerciseSource: options.exerciseSource } : {}),
+          ...(options.tournamentSource ? { tournamentSource: options.tournamentSource } : {}),
+          ...(options.bookingScreenMappingRepository
+            ? { mappingRepository: options.bookingScreenMappingRepository }
+            : {}),
+        });
         return await listBookingRecommendations({
           repository: options.gameRepository,
+          tenantKey,
+          canonicalStationIds,
+          onPhotoReadError: () =>
+            request.log.warn(
+              { event: 'recommendation_photo_read_failed' },
+              'Recommendation photo settings unavailable',
+            ),
+          ...(options.locationRepository ? { locationRepository: options.locationRepository } : {}),
           ...(options.photoRepository ? { photoRepository: options.photoRepository } : {}),
           tenantId: current.tenantId,
           userId: current.userId,
