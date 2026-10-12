@@ -67,6 +67,9 @@ import {
   exact,
   validateApiWorkerOperation,
   validateApiWorkerControllerDelta,
+  parseApiWorkerControllerDiff,
+  API_WORKER_CI_DOWNLOAD_PATCH,
+  API_WORKER_CI_READER_PATCH,
   validateApiWorkerLedger,
   validateApiWorkerReceipt,
   assertPlan,
@@ -75,6 +78,9 @@ export {
   API_WORKER_BRIDGE,
   validateApiWorkerOperation,
   validateApiWorkerControllerDelta,
+  parseApiWorkerControllerDiff,
+  API_WORKER_CI_DOWNLOAD_PATCH,
+  API_WORKER_CI_READER_PATCH,
   validateApiWorkerLedger,
   validateApiWorkerReceipt,
   validateInstalledApiWorkerEvidence,
@@ -718,22 +724,18 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     secure(`${SOURCE}/${path}`);
   git(['merge-base', '--is-ancestor', op.candidateSha, op.controllerSha]);
   if (git(['rev-parse', `${op.candidateSha}^{tree}`]) !== op.candidateTree) fail('TREE');
-  const parts = git([
-    'diff',
-    '--no-renames',
-    '--name-status',
-    '-z',
-    op.candidateSha,
-    op.controllerSha,
-  ])
-    .split('\0')
-    .filter(Boolean);
-  if (parts.length % 2) fail('CONTROLLER_DELTA');
   validateApiWorkerControllerDelta(
-    Array.from({ length: parts.length / 2 }, (_, i) => ({
-      status: parts[i * 2],
-      path: parts[i * 2 + 1],
-    })),
+    parseApiWorkerControllerDiff(
+      git([
+        'diff',
+        '--no-renames',
+        '--raw',
+        '--abbrev=40',
+        '-z',
+        op.candidateSha,
+        op.controllerSha,
+      ]),
+    ),
   );
   const id = `${op.candidateSha}-${op.publicationRunId}-1`,
     directory = `${ROOT}/releases/${id}`;

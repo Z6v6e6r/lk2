@@ -72,6 +72,110 @@ export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([
   'docs/runbooks/timeweb-standard-delivery.md',
   'docs/runbooks/android-chats-fcm.md',
 ]);
+// One frozen CI-download correction for the 11954 API/Worker bridge. Neither file is
+// in a generic allowlist: both exact regular M blobs must travel as one atomic pair.
+export const API_WORKER_CI_DOWNLOAD_PATCH = Object.freeze([
+  Object.freeze({
+    path: '.github/workflows/pull-request.yaml',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: '632bed8b410a3ac3e42a7ba7e607e80f8004f30d',
+    newOid: 'bd9cba78c1d9dbcb37fd2abf93f4e8a4ae3e4f87',
+  }),
+  Object.freeze({
+    path: 'scripts/pull-request-ci-workflow.test.ts',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: 'caf2f124bbc58e4225feca1ad38100ed07991787',
+    newOid: 'e2abfd6adac5d742b38ea16e8cb3d1dbb90c0982',
+  }),
+]);
+// The four reader files were already in the API/Worker closure, but the narrower
+// migration BASE closure admits them only with the exact CI pair as one six-blob unit.
+export const API_WORKER_CI_READER_PATCH = Object.freeze([
+  Object.freeze({
+    path: 'scripts/timeweb-api-worker-upgrade.js',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: '6420f1d4b5d5c905563d23921c61ce68be2ca28b',
+    newOid: 'd7c2da4e1bb353de041e8b51d9b8e0a56bea046a',
+  }),
+  Object.freeze({
+    path: 'scripts/timeweb-api-worker-upgrade.d.ts',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: '151a183b17349c57a4d23cd58b03dd33be0e1172',
+    newOid: '63a5ad2d64f5db337a0e5c74b43738d36ed18dfe',
+  }),
+  Object.freeze({
+    path: 'scripts/timeweb-api-worker-upgrade.test.ts',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: 'e446cc167a63ee54e9352dc38589e414f1aa7247',
+    newOid: '02f3927005dac547fb74b6955e2ddc69ee4d2deb',
+  }),
+  Object.freeze({
+    path: 'scripts/timeweb-api-worker-adapter.test.ts',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: 'dba09b8571260d1cb817971ce6a15a42a70f1032',
+    newOid: '57eb46c5588837b3177759f2aca6e6724651a382',
+  }),
+]);
+export function parseApiWorkerControllerDiff(raw) {
+  if (typeof raw !== 'string') fail('CONTROLLER_DELTA');
+  const parts = raw.split('\0').filter(Boolean);
+  if (!parts.length || parts.length % 2) fail('CONTROLLER_DELTA');
+  return Array.from({ length: parts.length / 2 }, (_, i) => {
+    const match = /^:([0-7]{6}) ([0-7]{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([AM])$/.exec(
+      parts[2 * i],
+    );
+    if (!match) fail('CONTROLLER_DELTA');
+    return {
+      oldMode: match[1],
+      newMode: match[2],
+      oldOid: match[3],
+      newOid: match[4],
+      status: match[5],
+      path: parts[2 * i + 1],
+    };
+  });
+}
+function withoutPinnedControllerPatch(entries, pins) {
+  if (
+    !Array.isArray(entries) ||
+    !entries.length ||
+    new Set(entries.map((v) => v?.path)).size !== entries.length
+  )
+    fail('CONTROLLER_DELTA');
+  const ciPaths = new Set(pins.map((v) => v.path));
+  const ci = entries.filter((v) => ciPaths.has(v?.path));
+  if (ci.length) {
+    if (ci.length !== pins.length) fail('CI_DOWNLOAD_PATCH');
+    for (const pin of pins) {
+      const row = ci.find((v) => v.path === pin.path);
+      if (!row) fail('CI_DOWNLOAD_PATCH');
+      exact(row, Object.keys(pin));
+      if (Object.keys(pin).some((key) => row[key] !== pin[key])) fail('CI_DOWNLOAD_PATCH');
+    }
+  }
+  return entries.filter((v) => !ciPaths.has(v.path));
+}
+export function withoutExactCiDownloadPatch(entries) {
+  return withoutPinnedControllerPatch(entries, API_WORKER_CI_DOWNLOAD_PATCH);
+}
+export function withoutExactMigrationCiPatch(entries) {
+  return withoutPinnedControllerPatch(entries, [
+    ...API_WORKER_CI_DOWNLOAD_PATCH,
+    ...API_WORKER_CI_READER_PATCH,
+  ]);
+}
 export function exact(v, keys) {
   if (
     !v ||
@@ -155,10 +259,19 @@ export function validateApiWorkerOperation(op, now) {
   return op;
 }
 export function validateApiWorkerControllerDelta(entries) {
+  const ordinary = withoutExactCiDownloadPatch(entries);
   if (
-    !Array.isArray(entries) ||
-    !entries.length ||
-    entries.some((v) => !['A', 'M'].includes(v.status) || !API_WORKER_CONTROLLER_FILES.has(v.path))
+    ordinary.some(
+      (v) =>
+        !['A', 'M'].includes(v.status) ||
+        !API_WORKER_CONTROLLER_FILES.has(v.path) ||
+        v.newMode !== '100644' ||
+        v.oldMode !== (v.status === 'A' ? '000000' : '100644') ||
+        !SHA.test(v.oldOid ?? '') ||
+        !SHA.test(v.newOid ?? '') ||
+        /^0{40}$/.test(v.newOid) ||
+        (v.status === 'A' && !/^0{40}$/.test(v.oldOid)),
+    )
   )
     fail('CONTROLLER_DELTA');
 }

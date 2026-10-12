@@ -297,7 +297,8 @@ function setup(phase = 'WORKER_ACTIVE') {
   mocks.git.mockImplementation((args: string[]) => {
     if (args[0] === 'rev-parse' && args[1] === 'HEAD') return f.op.controllerSha;
     if (args[0] === 'rev-parse') return bridge.candidateTree;
-    if (args[0] === 'diff') return 'M\0scripts/timeweb-api-worker-upgrade.js\0';
+    if (args[0] === 'diff')
+      return `:100644 100644 ${'a'.repeat(40)} ${'b'.repeat(40)} M\0scripts/timeweb-api-worker-upgrade.js\0`;
     return '';
   });
   mocks.docker.mockImplementation((args: string[]) => {
