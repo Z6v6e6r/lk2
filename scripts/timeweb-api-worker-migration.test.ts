@@ -236,6 +236,8 @@ describe('closed migration custody validators', () => {
   it('allows only unique regular A/M files in the narrow new migration slice', () => {
     const good = {
       status: 'A',
+      oldOid: '0'.repeat(40),
+      newOid: 'a'.repeat(40),
       oldMode: '000000',
       newMode: '100644',
       path: 'scripts/timeweb-api-worker-migration.js',
@@ -628,5 +630,23 @@ describe('disk-backed API/Worker restore attestation', () => {
           f.operationBytes,
         ),
       ).toThrow(/DISK_CONTAINER/);
+  });
+});
+
+describe('migration exact CI pair closure', () => {
+  it('uses the same frozen pair and rejects missing peers, wrong blobs and generic widening', async () => {
+    const { API_WORKER_CI_DOWNLOAD_PATCH } = await import('./timeweb-api-worker-upgrade.js');
+    const pair = API_WORKER_CI_DOWNLOAD_PATCH.map((v) => ({ ...v }));
+    expect(() => validateMigrationControllerClosure(pair)).not.toThrow();
+    for (const rows of [
+      pair.slice(0, 1),
+      [...pair, pair[0]],
+      pair.map((v, i) => (i === 0 ? { ...v, oldOid: 'a'.repeat(40) } : v)),
+      pair.map((v, i) => (i === 0 ? { ...v, newOid: 'b'.repeat(40) } : v)),
+      pair.map((v, i) => (i === 0 ? { ...v, newMode: '100755' } : v)),
+      pair.map((v, i) => (i === 0 ? { ...v, status: 'A', oldMode: '000000' } : v)),
+      [...pair, { ...pair[0], path: '.github/workflows/other.yaml' }],
+    ])
+      expect(() => validateMigrationControllerClosure(rows)).toThrow();
   });
 });

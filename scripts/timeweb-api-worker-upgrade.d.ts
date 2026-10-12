@@ -22,6 +22,16 @@ export const API_WORKER_BRIDGE: Readonly<
     string
   >
 >;
+export interface ApiWorkerControllerDiffEntry {
+  path: string;
+  status: string;
+  oldMode: string;
+  newMode: string;
+  oldOid: string;
+  newOid: string;
+}
+export const API_WORKER_CI_DOWNLOAD_PATCH: readonly Readonly<ApiWorkerControllerDiffEntry>[];
+export function parseApiWorkerControllerDiff(raw: string): ApiWorkerControllerDiffEntry[];
 export function validateApiWorkerOperation(op: unknown, now?: number): unknown;
 export function validateApiWorkerControllerDelta(entries: unknown): void;
 export function validateApiWorkerLedger(applied: unknown, packaged: unknown): void;

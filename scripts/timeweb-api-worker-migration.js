@@ -20,6 +20,8 @@ import {
   API_WORKER_MIGRATION_CONTROLLER_FILES,
   exact,
   validateApiWorkerControllerDelta,
+  parseApiWorkerControllerDiff,
+  withoutExactCiDownloadPatch,
 } from './timeweb-api-worker-contract.js';
 import { acquireApiWorkerExecutor } from './timeweb-api-worker-upgrade.js';
 import {
@@ -171,16 +173,20 @@ export function validateApiWorkerMigrationOperation(op, at) {
   return op;
 }
 export function validateMigrationControllerClosure(entries) {
-  if (!Array.isArray(entries) || !entries.length) stop('CONTROLLER_DELTA');
+  const ordinary = withoutExactCiDownloadPatch(entries);
   const paths = new Set();
-  for (const v of entries) {
+  for (const v of ordinary) {
     if (
       !v ||
       paths.has(v.path) ||
       !API_WORKER_MIGRATION_CONTROLLER_FILES.has(v.path) ||
       !['A', 'M'].includes(v.status) ||
       v.newMode !== '100644' ||
-      v.oldMode !== (v.status === 'A' ? '000000' : '100644')
+      v.oldMode !== (v.status === 'A' ? '000000' : '100644') ||
+      !SHA.test(v.oldOid ?? '') ||
+      !SHA.test(v.newOid ?? '') ||
+      /^0{40}$/.test(v.newOid) ||
+      (v.status === 'A' && !/^0{40}$/.test(v.oldOid))
     )
       stop('CONTROLLER_DELTA');
     paths.add(v.path);
@@ -822,41 +828,23 @@ function sourceAttest(op) {
   if (git(['rev-parse', `${BASE_SHA}^{tree}`]) !== BASE_TREE) stop('CONTROLLER_BASE');
   git(['merge-base', '--is-ancestor', BASE_SHA, op.controllerSha]);
   git(['merge-base', '--is-ancestor', op.candidateSha, op.controllerSha]);
-  const raw = git([
-    'diff',
-    '--no-renames',
-    '--raw',
-    '--abbrev=40',
-    '-z',
-    BASE_SHA,
-    op.controllerSha,
-  ])
-    .split('\0')
-    .filter(Boolean);
-  if (raw.length % 2) stop('CONTROLLER_DELTA');
   validateMigrationControllerClosure(
-    Array.from({ length: raw.length / 2 }, (_, i) => {
-      const m = /^:([0-7]{6}) ([0-7]{6}) [a-f0-9]{40} [a-f0-9]{40} ([AM])$/.exec(raw[2 * i]);
-      if (!m) stop('CONTROLLER_DELTA');
-      return { oldMode: m[1], newMode: m[2], status: m[3], path: raw[2 * i + 1] };
-    }),
+    parseApiWorkerControllerDiff(
+      git(['diff', '--no-renames', '--raw', '--abbrev=40', '-z', BASE_SHA, op.controllerSha]),
+    ),
   );
-  const delta = git([
-    'diff',
-    '--no-renames',
-    '--name-status',
-    '-z',
-    op.candidateSha,
-    op.controllerSha,
-  ])
-    .split('\0')
-    .filter(Boolean);
-  if (delta.length % 2) stop('CONTROLLER_DELTA');
   validateApiWorkerControllerDelta(
-    Array.from({ length: delta.length / 2 }, (_, i) => ({
-      status: delta[2 * i],
-      path: delta[2 * i + 1],
-    })),
+    parseApiWorkerControllerDiff(
+      git([
+        'diff',
+        '--no-renames',
+        '--raw',
+        '--abbrev=40',
+        '-z',
+        op.candidateSha,
+        op.controllerSha,
+      ]),
+    ),
   );
   for (const item of git(['ls-files', '--stage', '-z']).split('\0').filter(Boolean)) {
     const m = /^(100644|100755) [a-f0-9]{40} 0\t(.+)$/.exec(item);

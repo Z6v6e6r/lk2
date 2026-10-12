@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, renameSync } from 'node:fs';
@@ -15,6 +16,8 @@ import {
   validateApiWorkerLedger,
   validateApiWorkerReceipt,
   validateApiWorkerControllerDelta,
+  parseApiWorkerControllerDiff,
+  API_WORKER_CI_DOWNLOAD_PATCH,
   validateApiWorkerDatabase,
   API_WORKER_GATE_LOCK_SQL,
   API_WORKER_DATABASE_SQL,
@@ -121,7 +124,14 @@ describe('API + Worker exact manual bridge', () => {
   });
   it('allows only controller-owned source delta and only API/Worker no-deps commands', () => {
     validateApiWorkerControllerDelta([
-      { status: 'A', path: 'scripts/timeweb-api-worker-contract.js' },
+      {
+        status: 'A',
+        oldMode: '000000',
+        newMode: '100644',
+        oldOid: '0'.repeat(40),
+        newOid: 'a'.repeat(40),
+        path: 'scripts/timeweb-api-worker-contract.js',
+      },
     ]);
     for (const entry of [
       { status: 'D', path: 'scripts/timeweb-api-worker-upgrade.js' },
@@ -530,4 +540,51 @@ describe('kernel executor ownership', () => {
       }
     },
   );
+});
+
+describe('frozen CI download patch authority', () => {
+  const pair = () => API_WORKER_CI_DOWNLOAD_PATCH.map((v) => ({ ...v }));
+  const raw = (rows: ReturnType<typeof pair>) =>
+    rows
+      .map((v) => `:${v.oldMode} ${v.newMode} ${v.oldOid} ${v.newOid} ${v.status}\0${v.path}\0`)
+      .join('');
+  it('admits the exact atomic regular pair and preserves both Git blob identities', () => {
+    expect(parseApiWorkerControllerDiff(raw(pair()))).toEqual(pair());
+    expect(() =>
+      validateApiWorkerControllerDelta(parseApiWorkerControllerDiff(raw(pair()))),
+    ).not.toThrow();
+  });
+  it('rejects unpaired, duplicated, changed blobs/modes/statuses and any extra CI file', () => {
+    const invalid = [
+      pair().slice(0, 1),
+      [...pair(), pair()[0]],
+      [...pair(), { ...pair()[0], path: '.github/workflows/other.yaml' }],
+    ];
+    for (const change of [
+      { oldOid: 'a'.repeat(40) },
+      { newOid: 'b'.repeat(40) },
+      { oldMode: '000000' },
+      { newMode: '100755' },
+      { newMode: '120000' },
+      { status: 'A' },
+      { status: 'D' },
+      { status: 'R100' },
+    ])
+      invalid.push(pair().map((v, i) => (i === 0 ? { ...v, ...change } : v)));
+    for (const rows of invalid) expect(() => validateApiWorkerControllerDelta(rows)).toThrow();
+    for (const value of [
+      '',
+      'M\0scripts/timeweb-api-worker-upgrade.js\0',
+      raw(pair()).replace(' M\0', ' R100\0'),
+    ])
+      expect(() => parseApiWorkerControllerDiff(value)).toThrow();
+  });
+  it('pins final checked-in workflow and test bytes, rather than only their filenames', () => {
+    for (const pin of pair()) {
+      const bytes = readFileSync(pin.path);
+      expect(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')).toBe(
+        pin.newOid,
+      );
+    }
+  });
 });

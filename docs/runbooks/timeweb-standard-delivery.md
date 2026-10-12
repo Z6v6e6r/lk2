@@ -764,6 +764,28 @@ calls, token registration, remote push delivery and device acceptance remain sep
 and verified steps. LOCAL mocked adapter/rename checks and Linux CI lock checks do not establish
 STAGING or PRODUCTION execution.
 
+### Frozen CI download recovery for the Android bridge
+
+A transient GitHub HTTP 504 while downloading the pinned Buildx binary fails source CI.
+A rerun is not eligible source authority: retain the failed attempt and produce a reviewed
+source correction followed by a new full first-attempt main-push run. The correction retries
+only the immutable HTTPS GET, with three retries, a 10-second connect deadline, 30-second
+per-attempt deadline and 100-second retry budget. Curl truncates output before retries;
+an EXIT trap removes the temporary download. The frozen version, URL, SHA-256, installation
+readback, BuildKit identity, build/provenance checks and final gate remain mandatory.
+Checksum, install and build failures are not retried by this change.
+
+For the existing `11954ffd…/38144582876` Android artifact only, all four controller-delta
+checks admit one exact atomic pair of regular `M` Git blobs: the PR CI workflow and its
+workflow test. `API_WORKER_CI_DOWNLOAD_PATCH` pins old/new object IDs and `100644` modes;
+these paths remain excluded from both generic controller allowlists. Missing peers, extra CI
+paths, additions, deletion/rename, executable/symlink modes and changed blobs reject.
+The Python post-migration producer independently enforces the same tuple. Runtime image,
+manifest, migrator and APK identities are unchanged. This exact-source exception grants no
+enrollment, migration, credential, publication or deployment authority and does not accept
+PR events, reruns or a mismatched controller SHA. Future CI modifications need a new reviewed
+compatibility decision; do not update these pins from live input.
+
 ### Migration-only and API/Worker backup preparation
 
 The Android API/Worker bridge requires a post-101 backup, while the current database can still

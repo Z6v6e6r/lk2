@@ -771,7 +771,11 @@ jobs:
           set -euo pipefail
           download="$RUNNER_TEMP/docker-buildx"
           plugin="$HOME/.docker/cli-plugins/docker-buildx"
-          curl --fail --location --proto '=https' --tlsv1.2 --output "$download" \
+          # Only the immutable GET retries; checksum/install/build failures remain terminal.
+          trap 'rm -f -- "$download"' EXIT
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --connect-timeout 10 --max-time 30 \
+            --retry 3 --retry-delay 2 --retry-max-time 100 --output "$download" \
             "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
           printf '%s  %s\n' "$BUILDX_SHA256" "$download" | sha256sum --check --strict
           install -D -m 0755 "$download" "$plugin"

@@ -1,5 +1,7 @@
-import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -203,4 +205,117 @@ else if (args[0] === 'volume' && args[1] === 'ls') {
     expect(result.status).not.toBe(0);
     expect(result.calls).toEqual([]);
   });
+});
+
+describe('immutable Buildx download recovery', () => {
+  const bootstrap = workflow.jobs['timeweb-provenance-probe']?.steps?.find(
+    ({ name }) =>
+      name === 'Install pinned Buildx v0.36.1 and create pinned BuildKit v0.32.2 builder',
+  )?.run;
+  const url =
+    'https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64';
+  const payload = 'synthetic-buildx-download\n';
+
+  it('keeps immutable authority and bounds only transient download retries', () => {
+    expect(bootstrap).toBeDefined();
+    expect(bootstrap).toContain(url);
+    expect(bootstrap).toContain("--proto '=https' --proto-redir '=https' --tlsv1.2");
+    expect(bootstrap).toContain('--connect-timeout 10 --max-time 30');
+    expect(bootstrap).toContain('--retry 3 --retry-delay 2 --retry-max-time 100');
+    expect(bootstrap).toContain(`trap 'rm -f -- "$download"' EXIT`);
+    expect(bootstrap).not.toContain('--retry-all-errors');
+    expect(bootstrap!.indexOf('sha256sum --check --strict')).toBeLessThan(
+      bootstrap!.indexOf('install -D'),
+    );
+    expect(bootstrap).toContain('docker buildx version');
+    expect(source).toContain(
+      'BUILDX_SHA256: 48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778',
+    );
+  });
+
+  async function fixture(statuses: number[], validChecksum = true) {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-buildx-download-'));
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      const status = statuses[Math.min(requests++, statuses.length - 1)] ?? 500;
+      response.writeHead(status, { 'Content-Type': 'application/octet-stream' });
+      response.end(status === 200 ? payload : 'synthetic-transient-error');
+    });
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw Error('FIXTURE_ADDRESS');
+      writeFileSync(join(directory, 'docker-buildx'), 'stale-partial-file');
+      // Execute the real download+checksum shell against a disposable loopback HTTP fixture.
+      // Only URL/protocol are substituted; retry/deadline/checksum/cleanup commands are unchanged.
+      let script = bootstrap!
+        .slice(0, bootstrap!.indexOf('install -D'))
+        .replace('plugin="$HOME/.docker/cli-plugins/docker-buildx"\n', '')
+        .replace(url, `http://127.0.0.1:${address.port}/immutable-fixture`)
+        .replace(
+          "--proto '=https' --proto-redir '=https'",
+          "--proto '=http' --proto-redir '=http'",
+        );
+      // Darwin uses its native shasum checker; the one-line fixture still
+      // runs its real checksum comparison. CI keeps --check --strict unchanged.
+      if (process.platform === 'darwin')
+        script = script.replace('sha256sum --check --strict', 'shasum -a 256 -c');
+      let diagnostic = '';
+      const code = await new Promise<number | null>((resolve, reject) => {
+        const child = spawn('/bin/bash', ['-c', script], {
+          env: {
+            PATH: process.env.PATH,
+            RUNNER_TEMP: directory,
+            BUILDX_VERSION: 'v0.36.1',
+            BUILDX_SHA256: validChecksum
+              ? createHash('sha256').update(payload).digest('hex')
+              : '0'.repeat(64),
+          },
+          stdio: ['ignore', 'ignore', 'pipe'],
+        });
+        child.stderr.on('data', (chunk: Buffer) => {
+          diagnostic += chunk.toString();
+        });
+        const deadline = setTimeout(() => {
+          child.kill('SIGKILL');
+        }, 20000);
+        child.once('error', (error) => {
+          clearTimeout(deadline);
+          reject(error);
+        });
+        child.once('exit', (exit) => {
+          clearTimeout(deadline);
+          resolve(exit);
+        });
+      });
+      if (code !== 0 && statuses.includes(200) && validChecksum) throw Error(diagnostic);
+      return {
+        code,
+        requests,
+        temporaryDownloadRemoved: !existsSync(join(directory, 'docker-buildx')),
+      };
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  it('recovers a 504 and replaces stale output before verifying the exact bytes', async () => {
+    expect(await fixture([504, 200])).toEqual({
+      code: 0,
+      requests: 2,
+      temporaryDownloadRemoved: true,
+    });
+  }, 30000);
+  it('stops after the finite 504 retry budget and removes partial output', async () => {
+    const result = await fixture([504]);
+    expect(result.code).not.toBe(0);
+    expect(result).toMatchObject({ requests: 4, temporaryDownloadRemoved: true });
+  }, 30000);
+  it('does not retry a permanent 403 or a checksum mismatch', async () => {
+    for (const result of [await fixture([403]), await fixture([200], false)]) {
+      expect(result.code).not.toBe(0);
+      expect(result).toMatchObject({ requests: 1, temporaryDownloadRemoved: true });
+    }
+  }, 30000);
 });
