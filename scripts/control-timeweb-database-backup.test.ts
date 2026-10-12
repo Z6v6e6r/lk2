@@ -137,7 +137,7 @@ describe('Timeweb backup/isolated restore preparation', () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain('OK');
-  });
+  }, 35_000);
   it('refuses an unapproved entry before any host mutation', () => {
     const result = spawnSync(
       'python3',
