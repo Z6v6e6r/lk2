@@ -1070,11 +1070,15 @@ def namespace_daemon_quiescence(p, op, seconds=10):
                 if pid==0:break
             except ChildProcessError:break
         try:
-            namespace_daemon_absent(p,op);return
+            namespace_daemon_absent(p,op)
+            # Close the exit-between-reap-and-cgroup-read race. Only ECHILD is
+            # terminal: a reaped PID or a still-live child requires another round.
+            try:os.waitpid(-1,os.WNOHANG)
+            except ChildProcessError:return
         except Stop as error:
             need(str(error) in ('NS_DAEMON_STOP_UNPROVEN','NS_DAEMON_CHILDREN_REMAIN'), 'NS_QUIESCENCE_DRIFT')
-            need(time.monotonic()<deadline,'NS_DAEMON_QUIESCENCE_UNKNOWN')
-            time.sleep(.2)
+        need(time.monotonic()<deadline,'NS_DAEMON_QUIESCENCE_UNKNOWN')
+        time.sleep(.2)
 
 
 def namespace_daemon_exit(p, op, request, code):

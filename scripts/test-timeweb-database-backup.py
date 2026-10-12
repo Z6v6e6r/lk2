@@ -1078,9 +1078,15 @@ class NamespacePureTests(unittest.TestCase):
 
     def test_quiescence_reaps_adopted_zombie_then_waits_for_lingering_child(self):
         p=self.plan();order=[]
-        with patch.object(m.os,'waitpid',side_effect=[(88,0),(0,0),ChildProcessError()]) as wait,patch.object(m,'namespace_daemon_absent',side_effect=[m.Stop('NS_DAEMON_CHILDREN_REMAIN'),None]) as absent,patch.object(m.time,'sleep',side_effect=lambda _:order.append('wait')):
+        with patch.object(m.os,'waitpid',side_effect=[(88,0),(0,0),ChildProcessError(),ChildProcessError()]) as wait,patch.object(m,'namespace_daemon_absent',side_effect=[m.Stop('NS_DAEMON_CHILDREN_REMAIN'),None]) as absent,patch.object(m.time,'sleep',side_effect=lambda _:order.append('wait')):
             m.namespace_daemon_quiescence(p,namespace_operation())
-            self.assertEqual(wait.call_count,3);self.assertEqual(absent.call_count,2);self.assertEqual(order,['wait'])
+            self.assertEqual(wait.call_count,4);self.assertEqual(absent.call_count,2);self.assertEqual(order,['wait'])
+
+    def test_child_exit_between_reap_and_empty_cgroup_read_requires_echild_before_receipt(self):
+        p=self.plan()
+        with patch.object(m.os,'waitpid',side_effect=[(0,0),(88,0),ChildProcessError(),ChildProcessError()]) as wait,patch.object(m,'namespace_daemon_absent') as absent,patch.object(m.time,'sleep') as delay:
+            m.namespace_daemon_quiescence(p,namespace_operation())
+            self.assertEqual(wait.call_count,4);self.assertEqual(absent.call_count,2);delay.assert_called_once()
 
     def test_quiescence_timeout_and_foreign_drift_never_publish_exit_receipt(self):
         p=self.plan()
@@ -1096,6 +1102,76 @@ class NamespacePureTests(unittest.TestCase):
         with patch.object(m,'namespace_daemon_quiescence',side_effect=lambda *a:order.append('quiescence')),patch.object(m,'read_secure',return_value=b'plan'),patch.object(m,'atomic_exclusive',side_effect=lambda *a:order.append('receipt')):
             m.namespace_daemon_exit(p,namespace_operation(),{'process':{'pid':46}},0)
         self.assertEqual(order,['quiescence','receipt'])
+
+    def test_actual_unit_and_slice_stop_ack_loss_terminalizes_only_after_readback(self):
+        from contextlib import ExitStack
+        f=namespace_fixture();p=f['value']['plan'];a=f['value']['readback']['isolation']['admission'];sl=a['supervisor']['slice'];original_stat=m.os.stat
+        for action in ['NS_UNIT_STOP','NS_SLICE_STOP']:
+            for applied in (False,True):
+                with self.subTest(action=action,applied=applied):
+                    events={'NAMESPACE_SLICE_START_INTENT':{},'NAMESPACE_SLICE_READY':{'identity':sl},'NAMESPACE_UNIT_START_INTENT':{},
+                            'NAMESPACE_STORAGE_CLEANED':{},'DAEMON_START_INTENT':{},'DAEMON_STOPPED':{}}
+                    state={'unit':True,'slice':True,'fault':True};calls=[]
+                    def record(phase,**metadata):events.setdefault(phase,metadata)
+                    def command(args,code,**kwargs):
+                        calls.append(code)
+                        if state['fault'] and code==action and not applied:raise m.Stop('SYNTHETIC_ACK_UNKNOWN')
+                        state['unit'if code=='NS_UNIT_STOP' else 'slice']=False
+                        if state['fault'] and code==action:raise m.Stop('SYNTHETIC_ACK_UNKNOWN')
+                    journal=unittest.mock.Mock();journal.find.side_effect=events.get;journal.add.side_effect=record;journal.once.side_effect=record
+                    with ExitStack()as stack:
+                        stack.enter_context(patch.object(m,'namespace_frozen_source',return_value=a['sourceDaemon']))
+                        stack.enter_context(patch.object(m.os,'stat',side_effect=lambda path,*args,**kwargs:SimpleNamespace(st_ino=11)if str(path)=='/proc/self/ns/mnt'else original_stat(path,*args,**kwargs)))
+                        stack.enter_context(patch.object(m.os.path,'lexists',return_value=False))
+                        stack.enter_context(patch.object(m,'namespace_admission',return_value=a))
+                        stack.enter_context(patch.object(m,'namespace_unit',side_effect=lambda _:{**a['supervisor']['unit']}if state['unit']else {'LoadState':'not-found','ActiveState':'inactive','MainPID':'0'}))
+                        stack.enter_context(patch.object(m,'namespace_slice',return_value=sl))
+                        stack.enter_context(patch.object(m,'namespace_show',side_effect=lambda *args:sl['unit']if state['slice']else {'LoadState':'not-found','ActiveState':'inactive'}))
+                        stack.enter_context(patch.object(m,'namespace_members',side_effect=lambda _: [45]if state['unit']else []))
+                        stack.enter_context(patch.object(m,'command',side_effect=command))
+                        with self.assertRaises(m.Stop):m.namespace_release(p,namespace_operation(True),journal)
+                        self.assertNotIn('NAMESPACE_SLICE_RELEASED',events)
+                        count=calls.count(action);state['fault']=False;m.namespace_release(p,namespace_operation(True),journal)
+                        self.assertEqual(calls.count(action),count+(0 if applied else 1))
+                        self.assertIn('NAMESPACE_RELEASED',events);self.assertIn('NAMESPACE_SLICE_RELEASED',events)
+
+    def test_actual_daemon_stop_lost_ack_uses_same_request_and_exit_receipt_without_replay(self):
+        from contextlib import ExitStack
+        for applied,drift in [(False,False),(True,False),(True,True)]:
+            with self.subTest(applied=applied,drift=drift),tempfile.TemporaryDirectory(prefix='phub-ns-stop-ack-') as directory:
+                f=namespace_fixture();p=f['value']['plan'];p['isolation']['controlRoot']=directory
+                i=f['value']['readback']['isolation'];i['managed']['shims']=[];state={'active':True,'fault':True};events={'DAEMON_START_INTENT':{}}
+                for name in ['daemon-start.json','daemon-receipt.json']:Path(directory,name).write_bytes(b'{}')
+                journal=unittest.mock.Mock();journal.find.side_effect=events.get
+                def record(phase,**metadata):events.setdefault(phase,metadata)
+                journal.add.side_effect=record;journal.once.side_effect=record
+                def read(path,*args):return b'plan' if str(path).endswith('/disk-plan.json') else Path(path).read_bytes()
+                def wait(path,predicate,seconds):
+                    if not state['fault'] or applied:
+                        state['active']=False;process=copy.deepcopy(i['process'])
+                        if drift:process['startTicks']='99999'
+                        Path(path).write_bytes(m.encoded({'schema':'PHUB_PRIVATE_DAEMON_EXIT_V1','operationSha256':p['operationSha256'],
+                            'planSha256':m.digest(b'plan'),'process':process,'exitCode':0}))
+                    if state['fault']:raise m.Stop('SYNTHETIC_ACK_UNKNOWN')
+                    return json.loads(Path(path).read_bytes())
+                def absent(*args):m.need(not state['active'],'NS_DAEMON_CHILDREN_REMAIN')
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(m,'read_secure',side_effect=read))
+                    stack.enter_context(patch.object(m,'secure',side_effect=lambda path,*args:Path(path).lstat()))
+                    stack.enter_context(patch.object(m,'rename_noreplace',side_effect=lambda source,dest:os.rename(source,dest)))
+                    stack.enter_context(patch.object(m,'namespace_container_lookup',return_value=None))
+                    stack.enter_context(patch.object(m,'namespace_daemon_identity',return_value=i))
+                    stack.enter_context(patch.object(m,'namespace_wait',side_effect=wait))
+                    stack.enter_context(patch.object(m,'namespace_daemon_absent',side_effect=absent))
+                    command=stack.enter_context(patch.object(m,'command'))
+                    with self.assertRaisesRegex(m.Stop,'SYNTHETIC_ACK_UNKNOWN'):m.namespace_daemon_stop(p,namespace_operation(True),journal)
+                    request=Path(directory,'daemon-stop.json').read_bytes();state['fault']=False
+                    if drift:
+                        with self.assertRaisesRegex(m.Stop,'NS_DAEMON_EXIT'):m.namespace_daemon_stop(p,namespace_operation(True),journal)
+                        self.assertNotIn('DAEMON_STOPPED',events)
+                    else:
+                        m.namespace_daemon_stop(p,namespace_operation(True),journal);self.assertIn('DAEMON_STOPPED',events)
+                    self.assertEqual(Path(directory,'daemon-stop.json').read_bytes(),request);command.assert_not_called()
 
     def test_native_tuple_is_atomic_exact_and_matches_javascript(self):
         rows=list(m.API_WORKER_NATIVE_BOOKINGS_PATCH.values())
@@ -1117,7 +1193,7 @@ class NamespaceScenario(DiskScenario):
         self.op['schema']=m.NS_POST_SCHEMA if post else m.NS_PRE_SCHEMA
         self.op['confirmation']=namespace_operation(post)['confirmation'];self.request.write_bytes(m.encoded(self.op))
         with patch.object(m,'ROOT',self.root):self.plan=m.namespace_plan(self.op,m.encoded(self.op),m.namespace_sizing(1024,10**12,50*1024**3,NS_IMAGE),NS_IMAGE)
-        self.unit=False;self.daemon=False;self.private=False;self.privcalls=[];self.host_collision=False
+        self.unit=False;self.daemon=False;self.private=False;self.privcalls=[];self.host_collision=False;self.unit_receipt=False
 
     def docker(self,args,code='DOCKER_READ',**kwargs):
         if args[:2]==['image','inspect']:
@@ -1142,8 +1218,10 @@ class NamespaceScenario(DiskScenario):
 
     def start(self,p,op,j):
         Path(p['isolation']['controlRoot']).mkdir(mode=0o700)
-        j.add('NAMESPACE_SLICE_START_INTENT');j.add('NAMESPACE_SLICE_READY',identity={'synthetic':True})
-        j.add('NAMESPACE_UNIT_START_INTENT');self.unit=True;j.add('NAMESPACE_READY',receipt={'synthetic':True})
+        j.add('NAMESPACE_SLICE_START_INTENT');self.trip('NS_SLICE_START');self.trip('NS_SLICE_START',True)
+        j.add('NAMESPACE_SLICE_READY',identity={'synthetic':True})
+        j.add('NAMESPACE_UNIT_START_INTENT');self.trip('NS_UNIT_START');self.unit=True;self.trip('NS_UNIT_START',True)
+        self.unit_receipt=True;j.add('NAMESPACE_READY',receipt={'synthetic':True})
 
     def enter(self,p,op):
         from contextlib import contextmanager
@@ -1155,13 +1233,18 @@ class NamespaceScenario(DiskScenario):
             finally:self.private=False
         return owned()
 
+    def admission(self,*args):
+        m.need(self.unit_receipt,'NS_NAMESPACE_RECEIPT_MANUAL_STOP')
+        return {'synthetic':True}
+
     def daemon_start(self,p,op,j):
         assert self.mounted and self.private
-        j.add('DAEMON_START_INTENT');m.atomic_exclusive(m.namespace_control(p,'daemon-start.json'),b'{}')
-        self.daemon=True;m.atomic_exclusive(m.namespace_control(p,'daemon-receipt.json'),b'{}');j.add('DAEMON_READY',identity={'synthetic':True})
+        j.add('DAEMON_START_INTENT');self.trip('NS_DAEMON_REQUEST')
+        m.atomic_exclusive(m.namespace_control(p,'daemon-start.json'),b'{}');self.daemon=True;self.trip('NS_DAEMON_REQUEST',True)
+        m.atomic_exclusive(m.namespace_control(p,'daemon-receipt.json'),b'{}');j.add('DAEMON_READY',identity={'synthetic':True})
 
     def image_transfer(self,p,op,j):
-        assert self.daemon;j.add('IMAGE_TRANSFER_INTENT');j.add('IMAGE_LOADED',source=NS_IMAGE,imported=NS_IMAGE)
+        assert self.daemon;j.add('IMAGE_TRANSFER_INTENT');self.trip('NS_IMAGE_TRANSFER');self.trip('NS_IMAGE_TRANSFER',True);j.add('IMAGE_LOADED',source=NS_IMAGE,imported=NS_IMAGE)
 
     def attest(self,p,op,j):
         return {'storage':m.disk_storage_attest(p,j),'container':self.row(p),'synthetic':True}
@@ -1184,7 +1267,7 @@ class NamespaceScenario(DiskScenario):
         with ExitStack() as stack:
             for name,fn in [('namespace_source_daemon',lambda:{'pid':44,'startTicks':'123','mountNamespace':11}),
                 ('namespace_frozen_source',lambda p:{'pid':44,'startTicks':'123','mountNamespace':11}),('namespace_start',self.start),
-                ('namespace_enter',self.enter),('namespace_admission',lambda *a: {'synthetic':True}),('namespace_daemon_start',self.daemon_start),
+                ('namespace_enter',self.enter),('namespace_admission',self.admission),('namespace_daemon_start',self.daemon_start),
                 ('namespace_docker',self.private_docker),('namespace_container_lookup',self.row),('namespace_image_transfer',self.image_transfer),
                 ('namespace_running_attestation',self.attest),('namespace_daemon_stop',self.daemon_stop),('namespace_release',self.release)]:
                 stack.enter_context(patch.object(m,name,side_effect=fn))
@@ -1214,6 +1297,41 @@ class NamespacePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(m.Stop,'CONTAINER_BOUNDARY_DRIFT'):s.invoke()
         self.assertTrue((s.root/'standard/active').exists())
         self.assertFalse(Path(s.plan['canonical']).exists())
+
+    def test_new_start_ack_windows_preserve_lock_and_do_not_replay_creation(self):
+        for code in ['NS_SLICE_START','NS_UNIT_START','NS_DAEMON_REQUEST']:
+            for after in (False,True):
+                with self.subTest(code=code,after=after):
+                    s=self.scenario(fault=('after:'if after else 'before:')+code)
+                    with self.assertRaises(m.Stop):s.invoke()
+                    self.assertTrue((s.root/'standard/active').exists());s.fault=None
+                    if code=='NS_DAEMON_REQUEST' and not after:
+                        s.invoke(True);self.assertFalse((s.root/'standard/active').exists())
+                    else:
+                        with self.assertRaises(m.Stop):s.invoke(True)
+                        self.assertTrue((s.root/'standard/active').exists())
+                    self.assertFalse(Path(s.plan['canonical']).exists());self.assertFalse(s.created)
+
+    def test_private_create_start_remove_ack_loss_reconciles_by_lookup_without_replay(self):
+        for code in ['DISK_RESTORE_CREATE','DISK_RESTORE_START','NS_CONTAINER_STOP','NS_CONTAINER_REMOVE']:
+            for after in (False,True):
+                with self.subTest(code=code,after=after):
+                    s=self.scenario(fault=('after:'if after else 'before:')+code)
+                    with self.assertRaises(m.Stop):s.invoke()
+                    self.assertTrue((s.root/'standard/active').exists())
+                    before=[a for a in s.privcalls if a[0] in ('create','start') or 'pg_restore' in a]
+                    s.fault=None;s.invoke(True)
+                    self.assertEqual(before,[a for a in s.privcalls if a[0] in ('create','start') or 'pg_restore' in a])
+                    self.assertFalse(s.created or s.daemon or s.unit)
+
+    def test_partial_image_transfer_never_creates_a_container_or_replays_transfer(self):
+        for after in (False,True):
+            with self.subTest(after=after):
+                s=self.scenario(fault=('after:'if after else 'before:')+'NS_IMAGE_TRANSFER')
+                with self.assertRaises(m.Stop):s.invoke()
+                self.assertIsNotNone(s.journal().find('IMAGE_TRANSFER_INTENT'));self.assertIsNone(s.journal().find('IMAGE_LOADED'))
+                s.fault=None;s.invoke(True)
+                self.assertFalse(any(a[0]=='create' for a in s.privcalls));self.assertFalse(Path(s.plan['canonical']).exists())
 
     def test_phase_interruptions_preserve_lock_and_reconcile_never_replays_dump_restore(self):
         for phase in ['NAMESPACE_READY','DUMP_VERIFIED','MOUNTED','DAEMON_READY','IMAGE_LOADED','RESTORE_CREATED','RESTORE_STARTED',
