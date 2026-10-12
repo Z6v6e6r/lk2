@@ -119,7 +119,9 @@ final class AndroidUpcomingBookingsRefresh {
                 throw new Failure("NATIVE_OPERATION_CANCELLED");
         }
         long expiryDeadline(ApiReply reply, long expiresAt, long maximumLifetime) throws Failure {
-            long reference = reply.date == null ? clock.wall() : httpDate(reply.date);
+            long reference;
+            try { reference = reply.date == null ? clock.wall() : httpDate(reply.date); }
+            catch (Failure error) { throw expiryRejected("DATE"); }
             long now = clock.elapsed();
             long remaining = expiresAt - reference;
             if (reply.date != null) {
@@ -127,12 +129,17 @@ final class AndroidUpcomingBookingsRefresh {
                 // parsing/scheduling delay in an upper bound on server now, so phone clock
                 // skew cannot reject a valid job or extend an expired job/token.
                 long transit = now - reply.started;
-                if (remaining <= 0 || remaining > maximumLifetime + 999 || transit < 0 || transit > 60_000) throw rejected();
+                if (remaining <= 0) throw expiryRejected("EXPIRED");
+                if (remaining > maximumLifetime + 999 || transit < 0 || transit > 60_000) throw expiryRejected("LIFETIME");
                 remaining -= 1_000 + transit;
             }
             // Missing Date preserves the original strict wall-clock path, never a bypass.
-            if (remaining <= 0 || remaining > maximumLifetime || now < 0 || now > Long.MAX_VALUE - remaining) throw rejected();
+            if (remaining <= 0) throw expiryRejected("EXPIRED");
+            if (remaining > maximumLifetime || now < 0 || now > Long.MAX_VALUE - remaining) throw expiryRejected("LIFETIME");
             return now + remaining;
+        }
+        Failure expiryRejected(String reason) {
+            return "JOB".equals(stage) ? jobRejected(reason) : rejected();
         }
         void restrict(ApiReply reply, long expiresAt, long maximumLifetime) throws Failure {
             deadline = Math.min(deadline, expiryDeadline(reply, expiresAt, maximumLifetime));
@@ -161,7 +168,11 @@ final class AndroidUpcomingBookingsRefresh {
             current.stage = "JOB";
             ApiReply jobReply = api("/booking-screen-read-jobs", "POST", "{\"screen\":\"MY_BOOKINGS\"}",
                 UUID.randomUUID().toString(), false, current);
-            Job job = job(object(jobReply.body, PROVIDER_LIMIT));
+            Object decodedJob;
+            try { decodedJob = parsedJson(jobReply.body, PROVIDER_LIMIT); }
+            catch (Failure error) { throw jobRejected("JSON"); }
+            if (!(decodedJob instanceof JSONObject)) throw jobRejected("CONTRACT");
+            Job job = job((JSONObject) decodedJob);
             current.restrict(jobReply, job.expiresAt, 120_000);
             delegate(current);
             current.stage = "LIST";
@@ -229,10 +240,13 @@ final class AndroidUpcomingBookingsRefresh {
             }
             if (response.status >= 300 && response.status < 400) throw new Failure("NATIVE_REDIRECT_REJECTED");
             if (response.status < 200 || response.status >= 300) throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
-            if (response.body == null || response.body.length > PROVIDER_LIMIT || !jsonContent(response.headers)) throw rejected();
+            if (response.body == null || response.body.length > PROVIDER_LIMIT)
+                throw "JOB".equals(current.stage) ? jobRejected("TRANSPORT") : rejected();
+            if (!jsonContent(response.headers)) throw "JOB".equals(current.stage) ? jobRejected("MEDIA") : rejected();
             return new ApiReply(response, started);
         } catch (Failure error) {
             if ("NATIVE_NETWORK_UNAVAILABLE".equals(error.code)) throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
+            if ("JOB".equals(current.stage) && "NATIVE_RESPONSE_REJECTED".equals(error.code)) throw jobRejected("TRANSPORT");
             throw error;
         } finally { wipe(request.body); }
     }
@@ -351,16 +365,20 @@ final class AndroidUpcomingBookingsRefresh {
         Job(String jobId, String commandId, long expiresAt) { this.jobId = jobId; this.commandId = commandId; this.expiresAt = expiresAt; }
     }
     private static Job job(JSONObject value) throws Failure {
-        try {
-            if (!"MY_BOOKINGS".equals(value.getString("screen")) || !integer(value.opt("concurrency"), 1)) throw rejected();
-            JSONArray commands = value.getJSONArray("commands"); if (commands.length() != 1) throw rejected();
-            JSONObject command = commands.getJSONObject(0);
-            if (command.length() != 5 || !"bookings.read".equals(command.getString("operation"))
-                || !"bookings.details.read".equals(command.getString("detailsOperation"))
-                || !integer(command.opt("page"), 0) || !integer(command.opt("size"), 50)) throw rejected();
-            return new Job(uuid(value.getString("jobId")), uuid(command.getString("commandId")), timestamp(value.getString("expiresAt")));
-        } catch (Failure error) { throw error; }
-        catch (Exception ignored) { throw rejected(); }
+        if (!"MY_BOOKINGS".equals(value.opt("screen")) || !integer(value.opt("concurrency"), 1)) throw jobRejected("CONTRACT");
+        JSONArray commands = value.optJSONArray("commands");
+        if (commands == null || commands.length() != 1) throw jobRejected("COMMAND");
+        JSONObject command = commands.optJSONObject(0);
+        if (command == null || command.length() != 5 || !"bookings.read".equals(command.opt("operation"))
+            || !"bookings.details.read".equals(command.opt("detailsOperation"))
+            || !integer(command.opt("page"), 0) || !integer(command.opt("size"), 50)) throw jobRejected("COMMAND");
+        String jobId, commandId;
+        try { jobId = uuid(value.getString("jobId")); commandId = uuid(command.getString("commandId")); }
+        catch (Exception ignored) { throw jobRejected("ID"); }
+        long expiresAt;
+        try { expiresAt = timestamp(value.getString("expiresAt")); }
+        catch (Exception ignored) { throw jobRejected("EXPIRY"); }
+        return new Job(jobId, commandId, expiresAt);
     }
     private static String uuid(String value) throws Failure {
         if (!value.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) throw rejected();
@@ -422,12 +440,17 @@ final class AndroidUpcomingBookingsRefresh {
         throw rejected();
     }
     private static Object json(byte[] body, int limit) throws Failure {
+        Object value = parsedJson(body, limit);
+        if (!(value instanceof JSONObject) && !(value instanceof JSONArray)) throw rejected();
+        return value;
+    }
+    private static Object parsedJson(byte[] body, int limit) throws Failure {
         if (body == null || body.length == 0 || body.length > limit) throw rejected();
         try {
             String text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(body)).toString();
             JSONTokener input = new JSONTokener(text); Object value = input.nextValue();
-            if (input.nextClean() != 0 || (!(value instanceof JSONObject) && !(value instanceof JSONArray))) throw rejected();
+            if (input.nextClean() != 0) throw rejected();
             return value;
         } catch (Failure error) { throw error; }
         catch (Exception ignored) { throw rejected(); }
@@ -440,6 +463,22 @@ final class AndroidUpcomingBookingsRefresh {
         return value != null && "application/json".equals(value.split(";", 2)[0].trim().toLowerCase(Locale.ROOT));
     }
     private static Failure rejected() { return new Failure("NATIVE_RESPONSE_REJECTED"); }
+    private static Failure jobRejected(String reason) {
+        // Compile-time reasons only. Never include a field name, value, parser message or header.
+        switch (reason) {
+            case "TRANSPORT": return new Failure("NATIVE_BOOKINGS_JOB_TRANSPORT_REJECTED");
+            case "MEDIA": return new Failure("NATIVE_BOOKINGS_JOB_MEDIA_REJECTED");
+            case "JSON": return new Failure("NATIVE_BOOKINGS_JOB_JSON_REJECTED");
+            case "CONTRACT": return new Failure("NATIVE_BOOKINGS_JOB_CONTRACT_REJECTED");
+            case "COMMAND": return new Failure("NATIVE_BOOKINGS_JOB_COMMAND_REJECTED");
+            case "ID": return new Failure("NATIVE_BOOKINGS_JOB_ID_REJECTED");
+            case "EXPIRY": return new Failure("NATIVE_BOOKINGS_JOB_EXPIRY_REJECTED");
+            case "DATE": return new Failure("NATIVE_BOOKINGS_JOB_DATE_REJECTED");
+            case "EXPIRED": return new Failure("NATIVE_BOOKINGS_JOB_EXPIRED_REJECTED");
+            case "LIFETIME": return new Failure("NATIVE_BOOKINGS_JOB_LIFETIME_REJECTED");
+            default: return new Failure("NATIVE_BOOKINGS_JOB_REJECTED");
+        }
+    }
     private static Failure stageRejected(String stage) {
         // A closed vocabulary, never a provider field, message, header, URL or credential.
         switch (stage) {

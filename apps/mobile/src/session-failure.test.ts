@@ -9,6 +9,16 @@ it.each([
   'NATIVE_RESPONSE_REJECTED',
   'NATIVE_BOOKINGS_PLAN_REJECTED',
   'NATIVE_BOOKINGS_JOB_REJECTED',
+  'NATIVE_BOOKINGS_JOB_TRANSPORT_REJECTED',
+  'NATIVE_BOOKINGS_JOB_MEDIA_REJECTED',
+  'NATIVE_BOOKINGS_JOB_JSON_REJECTED',
+  'NATIVE_BOOKINGS_JOB_CONTRACT_REJECTED',
+  'NATIVE_BOOKINGS_JOB_COMMAND_REJECTED',
+  'NATIVE_BOOKINGS_JOB_ID_REJECTED',
+  'NATIVE_BOOKINGS_JOB_EXPIRY_REJECTED',
+  'NATIVE_BOOKINGS_JOB_DATE_REJECTED',
+  'NATIVE_BOOKINGS_JOB_EXPIRED_REJECTED',
+  'NATIVE_BOOKINGS_JOB_LIFETIME_REJECTED',
   'NATIVE_BOOKINGS_DELEGATION_REJECTED',
   'NATIVE_BOOKINGS_LIST_REJECTED',
   'NATIVE_BOOKINGS_DETAILS_REJECTED',
@@ -49,6 +59,15 @@ it.each([undefined, { code: 'unreviewed-private-code', message: 'private' }, new
     expect(JSON.stringify(safe)).not.toContain('private');
   },
 );
+
+it('does not widen the reviewed job-diagnostic family for an unknown suffix', () => {
+  const safe = sanitizedNativeSessionError({
+    code: 'NATIVE_BOOKINGS_JOB_NEW_PRIVATE_REASON_REJECTED',
+    message: 'private-job-payload',
+  });
+  expect(sessionFailureDetails(safe).code).toBe('NATIVE_SESSION_UNAVAILABLE');
+  expect(JSON.stringify(safe)).not.toContain('private-job-payload');
+});
 
 it('displays only the HTTP status for server errors and a fixed code for other failures', () => {
   expect(sessionFailureDetails(new ApiClientError('private', 503, 'private', 'private')).code).toBe(

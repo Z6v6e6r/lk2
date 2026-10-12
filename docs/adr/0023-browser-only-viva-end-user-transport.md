@@ -45,7 +45,11 @@ The delegated access token is an opaque credential supplied by the authenticated
 native code bounds its size and Bearer header grammar without requiring a JWT format or claims.
 Delegation remains server-owned and bound to the active user/tenant/session family; the fixed provider
 tenant comes from the authenticated routing plan, not from client token parsing. Rejection diagnostics
-use only a closed plan/job/delegation/list/details/result/completion stage vocabulary.
+use only a closed plan/job/delegation/list/details/result/completion stage vocabulary. Unresolved
+job-stage rejection additionally exposes one of ten compile-time reasons: transport, media, JSON,
+contract, command, ID, expiry format, Date, expired lifetime or excessive lifetime. These reasons
+classify existing validators; they do not change the accepted response set or reveal response bytes,
+field names/values, identifiers, timing or parser exceptions.
 
 Plan, job and delegation expiry use the `Date` from their own authenticated HTTPS response and a
 monotonic request timer. The calculation deducts the complete request/processing interval and the

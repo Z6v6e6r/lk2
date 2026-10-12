@@ -39,9 +39,12 @@ public class AndroidUpcomingBookingsRefreshTest {
         return json(status, body, null);
     }
     static Response json(int status, String body, String date) {
-        Map<String, String> headers = new HashMap<>(); headers.put("content-type", "application/json");
+        return response(status, body.getBytes(StandardCharsets.UTF_8), "application/json", date);
+    }
+    static Response response(int status, byte[] body, String contentType, String date) {
+        Map<String, String> headers = new HashMap<>(); headers.put("content-type", contentType);
         if (date != null) headers.put("date", date);
-        return new Response(status, headers, Collections.emptyList(), body.getBytes(StandardCharsets.UTF_8));
+        return new Response(status, headers, Collections.emptyList(), body);
     }
     static String iso(long epoch) {
         SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.ROOT);
@@ -83,6 +86,11 @@ public class AndroidUpcomingBookingsRefreshTest {
         final Map<String, String> responseDates = new HashMap<>();
         String delayedPath;
         long elapsedBeforeResponse;
+        String jobFailure;
+        String jobContentType = "application/json";
+        int jobStatus = 200;
+        byte[] jobBodyOverride;
+        boolean nullJobBody;
         String list = "{\"content\":[{\"id\":\"active id&1\",\"isCancelled\":false},{\"id\":42,\"isCancelled\":false},{\"id\":\"cancelled\",\"isCancelled\":true}]}";
         String details = "[{\"id\":\"active id&1\"}]";
         String result = "{\"accepted\":true,\"replayed\":false,\"itemCount\":2}";
@@ -108,7 +116,11 @@ public class AndroidUpcomingBookingsRefreshTest {
             api.add(copy(request));
             if (delayedPath != null && request.path.endsWith(delayedPath)) clock.elapsed += elapsedBeforeResponse;
             if (request.path.endsWith("/routing-plan")) return json(200, plan, dateFor(request.path));
-            if (request.path.endsWith("/booking-screen-read-jobs")) return json(200, job, dateFor(request.path));
+            if (request.path.endsWith("/booking-screen-read-jobs")) {
+                if (jobFailure != null) throw new Failure(jobFailure);
+                byte[] body = nullJobBody ? null : jobBodyOverride == null ? job.getBytes(StandardCharsets.UTF_8) : jobBodyOverride;
+                return response(jobStatus, body, jobContentType, dateFor(request.path));
+            }
             if (request.path.endsWith("/auth/viva/access")) return json(200, delegation, dateFor(request.path));
             if (request.path.contains("/results/")) {
                 resultAttempts++;
@@ -212,8 +224,64 @@ public class AndroidUpcomingBookingsRefreshTest {
             Fixture f = new Fixture(); f.plan = bad; f.fails("NATIVE_BOOKINGS_PLAN_REJECTED");
             assertEquals(0, f.providerCalls); assertEquals(0, countPath(f.api, "/auth/viva/access"));
         }
-        Fixture wrongJob = new Fixture(); wrongJob.job = wrongJob.job.replace("\"concurrency\":1", "\"concurrency\":2"); wrongJob.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        Fixture wrongJob = new Fixture(); wrongJob.job = wrongJob.job.replace("\"concurrency\":1", "\"concurrency\":2"); wrongJob.fails("NATIVE_BOOKINGS_JOB_CONTRACT_REJECTED");
         assertEquals(0, wrongJob.providerCalls); assertEquals(0, countPath(wrongJob.api, "/auth/viva/access"));
+    }
+
+    @Test public void jobDiagnosticsClassifyTransportMediaJsonCommandIdAndExpiryBeforeDelegation() throws Exception {
+        Fixture transportFailure = new Fixture(); transportFailure.jobFailure = "NATIVE_RESPONSE_REJECTED";
+        rejectsJobBeforeDelegate(transportFailure, "NATIVE_BOOKINGS_JOB_TRANSPORT_REJECTED");
+        Fixture oversized = new Fixture(); oversized.jobBodyOverride = new byte[AndroidUpcomingBookingsRefresh.PROVIDER_LIMIT + 1];
+        rejectsJobBeforeDelegate(oversized, "NATIVE_BOOKINGS_JOB_TRANSPORT_REJECTED");
+
+        Fixture media = new Fixture(); media.jobContentType = "text/plain";
+        rejectsJobBeforeDelegate(media, "NATIVE_BOOKINGS_JOB_MEDIA_REJECTED");
+        Fixture empty = new Fixture(); empty.jobBodyOverride = new byte[0];
+        rejectsJobBeforeDelegate(empty, "NATIVE_BOOKINGS_JOB_JSON_REJECTED");
+        Fixture nullBody = new Fixture(); nullBody.nullJobBody = true;
+        rejectsJobBeforeDelegate(nullBody, "NATIVE_BOOKINGS_JOB_TRANSPORT_REJECTED");
+        Fixture invalidUtf8 = new Fixture(); invalidUtf8.jobBodyOverride = new byte[] {(byte) 0xc3, (byte) 0x28};
+        rejectsJobBeforeDelegate(invalidUtf8, "NATIVE_BOOKINGS_JOB_JSON_REJECTED");
+        Fixture invalidJson = new Fixture(); invalidJson.jobBodyOverride = "{\"private-marker\":".getBytes(StandardCharsets.UTF_8);
+        rejectsJobBeforeDelegate(invalidJson, "NATIVE_BOOKINGS_JOB_JSON_REJECTED");
+        for (String root : Arrays.asList("[]", "null", "true", "42", "\"private-marker\"")) {
+            Fixture wrongRoot = new Fixture(); wrongRoot.jobBodyOverride = root.getBytes(StandardCharsets.UTF_8);
+            rejectsJobBeforeDelegate(wrongRoot, "NATIVE_BOOKINGS_JOB_CONTRACT_REJECTED");
+        }
+
+        Fixture command = new Fixture(); JSONObject commandBody = new JSONObject(command.job); commandBody.put("commands", new JSONArray()); command.job = commandBody.toString();
+        rejectsJobBeforeDelegate(command, "NATIVE_BOOKINGS_JOB_COMMAND_REJECTED");
+        Fixture identifier = new Fixture(); identifier.job = identifier.job.replace(JOB, "not-a-padlhub-uuid");
+        rejectsJobBeforeDelegate(identifier, "NATIVE_BOOKINGS_JOB_ID_REJECTED");
+        Fixture expiry = new Fixture(); JSONObject expiryBody = new JSONObject(expiry.job); expiryBody.put("expiresAt", "tomorrow"); expiry.job = expiryBody.toString();
+        rejectsJobBeforeDelegate(expiry, "NATIVE_BOOKINGS_JOB_EXPIRY_REJECTED");
+
+        String marker = "job-secret-marker";
+        Fixture contract = new Fixture(); contract.job = "{\"screen\":\"OTHER\",\"concurrency\":1,\"marker\":\"" + marker + "\"}";
+        try { contract.run(); fail(); } catch (Failure error) {
+            assertEquals("NATIVE_BOOKINGS_JOB_CONTRACT_REJECTED", error.code); assertFalse(error.getMessage().contains(marker)); assertNull(error.getCause());
+        }
+        assertEquals(0, contract.providerCalls); assertEquals(0, countPath(contract.api, "/auth/viva/access"));
+        assertEquals(0, countPath(contract.api, "/results/")); assertEquals(0, countPath(contract.api, "/complete"));
+    }
+
+    @Test public void jobDiagnosticsNeverReplaceAuthCancellationTlsRedirectOrNetworkFailures() throws Exception {
+        for (String code : Arrays.asList("NATIVE_OPERATION_CANCELLED", "NATIVE_TLS_REJECTED", "NATIVE_REDIRECT_REJECTED")) {
+            Fixture f = new Fixture(); f.jobFailure = code; rejectsJobBeforeDelegate(f, code);
+        }
+        Fixture network = new Fixture(); network.jobFailure = "NATIVE_NETWORK_UNAVAILABLE";
+        rejectsJobBeforeDelegate(network, "NATIVE_REFRESH_UNAVAILABLE");
+        for (int status : new int[] {403, 500, 302}) {
+            Fixture f = new Fixture(); f.jobStatus = status; f.jobContentType = "private-invalid-media";
+            f.jobBodyOverride = "private-malformed-body".getBytes(StandardCharsets.UTF_8);
+            rejectsJobBeforeDelegate(f, status == 302 ? "NATIVE_REDIRECT_REJECTED" : "NATIVE_REFRESH_UNAVAILABLE");
+        }
+        Fixture unauthorized = new Fixture(); unauthorized.jobStatus = 401;
+        unauthorized.jobContentType = "private-invalid-media";
+        unauthorized.responseDates.put(ROOT + "/booking-screen-read-jobs", "private-invalid-date");
+        rejectsJobBeforeDelegate(unauthorized, "AUTH_SESSION_REVOKED");
+        try { unauthorized.engine.nativeAccess(); fail(); }
+        catch (Failure error) { assertEquals("AUTH_SESSION_REVOKED", error.code); }
     }
 
     @Test public void opaqueDelegationAcceptsOnlyBoundedBearerValuesAndNeverLeaksThem() throws Exception {
@@ -260,15 +328,16 @@ public class AndroidUpcomingBookingsRefreshTest {
     }
 
     @Test public void serverAnchoredJobExpiryFailsClosedBeforeDelegationOrProvider() throws Exception {
-        for (long expiryOffset : new long[] {-1, 121_000}) {
+        long[] expiryOffsets = {-1, 121_000}; String[] expiryCodes = {"NATIVE_BOOKINGS_JOB_EXPIRED_REJECTED", "NATIVE_BOOKINGS_JOB_LIFETIME_REJECTED"};
+        for (int i = 0; i < expiryOffsets.length; i++) {
             Fixture f = new Fixture(); f.plan = plan(f.serverWall + 300_000);
-            f.job = job(isoMillis(f.serverWall + expiryOffset));
-            f.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+            f.job = job(isoMillis(f.serverWall + expiryOffsets[i]));
+            f.fails(expiryCodes[i]);
             assertEquals(0, countPath(f.api, "/auth/viva/access")); assertEquals(0, f.providerCalls);
         }
         Fixture malformedDate = new Fixture();
         malformedDate.responseDates.put(ROOT + "/booking-screen-read-jobs", "Tue, 99 Not-a-month 2026 00:00:00 GMT");
-        malformedDate.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        malformedDate.fails("NATIVE_BOOKINGS_JOB_DATE_REJECTED");
         assertEquals(0, countPath(malformedDate.api, "/auth/viva/access")); assertEquals(0, malformedDate.providerCalls);
         Fixture malformedPlanDate = new Fixture();
         malformedPlanDate.responseDates.put(ROOT + "/routing-plan", "2026-10-12T00:00:00Z");
@@ -280,7 +349,7 @@ public class AndroidUpcomingBookingsRefreshTest {
         Fixture rttExpired = new Fixture(); rttExpired.plan = plan(rttExpired.serverWall + 300_000);
         rttExpired.job = job(isoMillis(rttExpired.serverWall + 2_000));
         rttExpired.delayedPath = "/booking-screen-read-jobs"; rttExpired.elapsedBeforeResponse = 1_200;
-        rttExpired.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        rttExpired.fails("NATIVE_BOOKINGS_JOB_EXPIRED_REJECTED");
         assertEquals(0, rttExpired.providerCalls);
 
         Fixture missingDate = new Fixture(); missingDate.clock.wall = missingDate.serverWall + 300_000;
@@ -289,7 +358,7 @@ public class AndroidUpcomingBookingsRefreshTest {
         missingDate.defaultServerDate = false;
         missingDate.responseDates.put(ROOT + "/routing-plan", httpDate(missingDate.serverWall));
         missingDate.responseDates.put(ROOT + "/booking-screen-read-jobs", null);
-        missingDate.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        missingDate.fails("NATIVE_BOOKINGS_JOB_EXPIRED_REJECTED");
         assertEquals(0, countPath(missingDate.api, "/auth/viva/access")); assertEquals(0, missingDate.providerCalls);
     }
 
@@ -297,7 +366,7 @@ public class AndroidUpcomingBookingsRefreshTest {
         Fixture expiredJob = new Fixture(); expiredJob.plan = plan(expiredJob.serverWall + 300_000);
         expiredJob.job = job(isoMillis(expiredJob.serverWall + 120_000));
         expiredJob.responseDates.put(ROOT + "/booking-screen-read-jobs", httpDate(expiredJob.serverWall + 130_000));
-        expiredJob.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        expiredJob.fails("NATIVE_BOOKINGS_JOB_EXPIRED_REJECTED");
         assertEquals(0, countPath(expiredJob.api, "/auth/viva/access")); assertEquals(0, expiredJob.providerCalls);
 
         Fixture expiredToken = new Fixture();
@@ -384,6 +453,11 @@ public class AndroidUpcomingBookingsRefreshTest {
 
     static List<String> paths(List<Request> requests) {
         List<String> result = new ArrayList<>(); for (Request request : requests) result.add(request.method + " " + request.path.substring(ROOT.length())); return result;
+    }
+    static void rejectsJobBeforeDelegate(Fixture fixture, String code) throws Exception {
+        fixture.fails(code);
+        assertEquals(0, countPath(fixture.api, "/auth/viva/access")); assertEquals(0, fixture.providerCalls);
+        assertEquals(0, countPath(fixture.api, "/results/")); assertEquals(0, countPath(fixture.api, "/complete"));
     }
     static int countPath(List<Request> requests, String fragment) {
         int count = 0; for (Request request : requests) if (request.path.contains(fragment)) count++; return count;

@@ -64,7 +64,15 @@ request/processing interval, and retain the original lifetime caps. Malformed/du
 closed; absent dates retain the strict wall-clock path. Check skew in both directions, expired and
 excessive lifetimes, response binding and cancellation after a device clock change.
 
-Version 1.11/code12 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
+Version 1.12/code13 is a diagnostic build for the unresolved physical-device job rejection.
+It splits that job-stage rejection into ten closed reasons: transport framing/bounds, media type,
+JSON, screen/concurrency contract, command, identifiers, expiry format, Date, expired lifetime and
+excessive lifetime. The accepted response set and all read/expiry/session checks remain unchanged.
+No raw response, field name/value, header, URL, provider ID or token becomes a diagnostic. The UI
+correlation is the original `/bookings/upcoming` request; internal native job requests have their
+own correlation IDs. This build is not evidence that the phone issue is fixed.
+
+Version 1.12/code13 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
 debug-signing identity. Verify the fixed provider host and tenant, protocol/body bounds, 401 versus
 403 handling, exact replay, logout/account changes and token/payload absence in bridge/errors/store
 with native instrumentation. Physical-device acceptance must separately open My Records and
