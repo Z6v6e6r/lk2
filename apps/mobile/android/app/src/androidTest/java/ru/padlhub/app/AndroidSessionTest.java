@@ -128,6 +128,15 @@ public class AndroidSessionTest {
         assertFalse(new String(result.body, StandardCharsets.UTF_8).contains(REFRESH));
     }
 
+    @Test public void validatedLogoutCancelsNativeOnlyWorkBeforeItsQueuedCompletion() throws Exception {
+        MemoryStore store = new MemoryStore();
+        AndroidSessionEngine engine = new AndroidSessionEngine(policy(), store, request -> session(REFRESH));
+        engine.request(VERIFY, "POST", headers(null, KEY), VERIFY_BODY);
+        AndroidSessionEngine.NativeAccess access = engine.nativeAccess();
+        engine.prepareLogout(NEXT_KEY);
+        fails("NATIVE_OPERATION_CANCELLED", () -> engine.requireNativeAccess(access));
+    }
+
     @Test public void responseLostAfterRefreshReplaysSamePredecessorKeyAcrossEngineRestart() throws Exception {
         MemoryStore store = new MemoryStore(); store.value = credential();
         List<Request> sent = new ArrayList<>();

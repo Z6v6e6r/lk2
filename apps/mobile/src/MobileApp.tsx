@@ -56,34 +56,27 @@ function MobileSession({
       window.history.replaceState({}, '', '/');
       onSessionExpired();
     };
+    const nativeFetch = native
+      ? createNativeApiFetch(config, undefined, expire, reads.observe, ({ section, failure }) => {
+          if (expired) return;
+          setReadDiagnostics((current) => {
+            const next = { ...current.failures };
+            if (failure) next[section] = failure;
+            else delete next[section];
+            return {
+              failures: next,
+              expanded: Object.keys(next).length > 0 && current.expanded,
+            };
+          });
+        })
+      : undefined;
     const service = createBrowserAuthGateway({
       baseUrl: config.apiBaseUrl,
       tenantKey: config.tenantKey,
       appVersion: config.appVersion,
       platform: native ? 'android' : 'web',
       nativeSessionTransport: native,
-      ...(native
-        ? {
-            fetchImplementation: createNativeApiFetch(
-              config,
-              undefined,
-              expire,
-              reads.observe,
-              ({ section, failure }) => {
-                if (expired) return;
-                setReadDiagnostics((current) => {
-                  const next = { ...current.failures };
-                  if (failure) next[section] = failure;
-                  else delete next[section];
-                  return {
-                    failures: next,
-                    expanded: Object.keys(next).length > 0 && current.expanded,
-                  };
-                });
-              },
-            ),
-          }
-        : {}),
+      ...(nativeFetch ? { fetchImplementation: nativeFetch } : {}),
     });
     if (!native) return { gateway: service, push: undefined };
     const nativeGateway = {
@@ -121,6 +114,7 @@ function MobileSession({
         setReadDiagnostics({ failures: {}, expanded: false });
         setPending(true);
         try {
+          await nativeFetch?.cancelUpcomingBookingsRefresh?.();
           await controller?.beforeLogout();
           await service.logout();
           expire();

@@ -6,6 +6,9 @@ import { resolveCabinetMedia } from './cabinet-media.js';
 
 export interface AndroidSessionPlugin {
   configuration(): Promise<MobileRuntimeConfig>;
+  /** Fixed native capability; no provider credential or payload crosses this bridge. */
+  refreshUpcomingBookings?(): Promise<{ readonly state: 'refreshed' }>;
+  cancelUpcomingBookingsRefresh?(): Promise<{ readonly state: 'cancelled' }>;
   request(input: {
     readonly path: string;
     readonly method: string;
@@ -22,6 +25,11 @@ export interface AndroidSessionPlugin {
     readonly cache?: { readonly state: 'fresh-cache' | 'stale'; readonly savedAt: number };
   }>;
 }
+
+export type NativeApiFetch = typeof fetch & {
+  /** Retire reads immediately on logout, before slower push cleanup starts. */
+  cancelUpcomingBookingsRefresh(): Promise<void>;
+};
 
 export const androidSessionPlugin = registerPlugin<AndroidSessionPlugin>('PadlHubAndroidSession');
 
@@ -89,6 +97,33 @@ function rejected(): ApiClientError {
   return new ApiClientError('Запрос недоступен.', 403, 'NATIVE_REQUEST_REJECTED', 'native');
 }
 
+function needsBookingsRefresh(
+  result: Awaited<ReturnType<AndroidSessionPlugin['request']>>,
+): boolean {
+  if (result.status !== 200 && result.status !== 503) return false;
+  // This is the already-normalized PadlHub response, never a provider payload.
+  if (result.body.length > Math.ceil((1024 * 1024 * 4) / 3)) return false;
+  try {
+    const binary = atob(result.body);
+    if (binary.length > 1024 * 1024) return false;
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    if (typeof value !== 'object' || value === null) return false;
+    if (result.status === 503) return 'code' in value && value.code === 'BOOKINGS_PROJECTION_STALE';
+    if ('state' in value && value.state === 'UNAVAILABLE') return true;
+    return (
+      'state' in value &&
+      value.state === 'READY' &&
+      'staleAt' in value &&
+      typeof value.staleAt === 'string' &&
+      Number.isFinite(Date.parse(value.staleAt)) &&
+      Date.parse(value.staleAt) <= Date.now()
+    );
+  } catch {
+    return false;
+  }
+}
+
 const MAX_RELAY_BYTES = 15 * 1024 * 1024;
 const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
 
@@ -124,12 +159,20 @@ export function createNativeApiFetch(
   onSessionExpired?: () => void,
   onCacheObservation?: (observation: NativeCacheObservation) => void,
   onReadObservation?: (observation: NativeReadObservation) => void,
-): typeof fetch {
+): NativeApiFetch {
   let active = false;
   let generation = 0;
   const displayedReads = new Set<string>();
   const readSequence = { profile: 0, bookings: 0 };
-  return async (input, init) => {
+  let bookingsRefresh: { generation: number; promise: Promise<void> } | undefined;
+  const cancelUpcomingBookingsRefresh = async (): Promise<void> => {
+    generation += 1;
+    readSequence.bookings += 1;
+    if (!plugin.cancelUpcomingBookingsRefresh) return;
+    const result = await plugin.cancelUpcomingBookingsRefresh();
+    if (result.state !== 'cancelled' || Object.keys(result).length !== 1) throw rejected();
+  };
+  const implementation: typeof fetch = async (input, init) => {
     const value = typeof input === 'string' ? input : input instanceof URL ? input.href : '';
     const root = `${config.apiBaseUrl}/user/api/v1/${config.tenantKey}/`;
     // Check before URL normalization, which would hide traversal or encoded delimiters.
@@ -190,13 +233,50 @@ export function createNativeApiFetch(
       const binary =
         body != null && typeof body !== 'string' ? await binaryBase64(body) : undefined;
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
-      const result = await plugin.request({
+      const nativeRequest = {
         path: url.pathname + url.search,
         method,
         headers,
         ...(typeof body === 'string' ? { body } : {}),
         ...(binary === undefined ? {} : { bodyBase64: binary }),
-      });
+      };
+      let result = await plugin.request(nativeRequest);
+      if (
+        method === 'GET' &&
+        value === root + 'bookings/upcoming' &&
+        body == null &&
+        plugin.refreshUpcomingBookings &&
+        needsBookingsRefresh(result)
+      ) {
+        const requireCurrent = (): void => {
+          if (requestGeneration !== generation || init?.signal?.aborted)
+            throw new DOMException('Request aborted', 'AbortError');
+        };
+        requireCurrent();
+        if (!bookingsRefresh || bookingsRefresh.generation !== requestGeneration) {
+          const pending = plugin.refreshUpcomingBookings().then((ack) => {
+            if (ack.state !== 'refreshed' || Object.keys(ack).length !== 1) throw rejected();
+          });
+          const entry = { generation: requestGeneration, promise: pending };
+          bookingsRefresh = entry;
+          entry.promise = pending.finally(() => {
+            if (bookingsRefresh === entry) bookingsRefresh = undefined;
+          });
+        }
+        const abortRefresh = (): void => {
+          void cancelUpcomingBookingsRefresh().catch(() => undefined);
+        };
+        init?.signal?.addEventListener('abort', abortRefresh, { once: true });
+        try {
+          await bookingsRefresh.promise;
+          requireCurrent();
+          // Success means a fresh ordinary PadlHub read, never a locally constructed DTO.
+          result = await plugin.request(nativeRequest);
+          requireCurrent();
+        } finally {
+          init?.signal?.removeEventListener('abort', abortRefresh);
+        }
+      }
       if (init?.signal?.aborted) throw new DOMException('Request aborted', 'AbortError');
       if (result.status === 200 && (refresh || url.pathname.endsWith('/verify'))) active = true;
       if (result.status === 401 && refresh && active) {
@@ -277,4 +357,5 @@ export function createNativeApiFetch(
       throw sanitized;
     }
   };
+  return Object.assign(implementation, { cancelUpcomingBookingsRefresh });
 }

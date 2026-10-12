@@ -22,7 +22,41 @@ amplify load and make behavior depend on the API node's address.
 ## Decision
 
 All Viva **End User API** reads in sandbox and production execute in the authenticated user's
-browser context. PadlHub API and worker processes do not call `/end-user/api/...`.
+browser context, except the narrowly scoped Android `MY_BOOKINGS` transport below. PadlHub API and
+worker processes do not call `/end-user/api/...`.
+
+### Android My Bookings exception (2026-10-12)
+
+The installed Android client could read an existing upcoming-bookings projection but could not
+refresh it. Its `BOOKINGS_PROJECTION_STALE` response is not repaired by the HomeBase worker: the
+browser-assisted `MY_BOOKINGS` completion is the sole writer of that projection. The product owner
+approved one Android read-only exception for this concrete consumer.
+
+The bundled, trusted Android page may invoke only a no-argument native
+`refreshUpcomingBookings` capability. Native code validates the current server routing plan,
+authenticated principal and fixed, expiring `MY_BOOKINGS` job, then executes the existing
+`bookings.read -> bookings.details.read` chain from the user's device. Only bounded GET requests to
+the exact approved Viva HTTPS origin and server-issued tenant are permitted. Detail IDs come only
+from the immediately preceding active-booking list, with a maximum of 50 and 128 characters per detail ID. The existing global and
+tenant routing/delegation gates remain authoritative; the capability does not add delegated scopes,
+enable those gates, or promote bookings to general-purpose direct operations.
+
+The short-lived user token, provider IDs and raw provider responses remain in Java memory for this
+invocation. They are never returned to JavaScript, persisted, logged or attached to exceptions.
+Native code submits the bounded result to the existing PadlHub read job and completes it; PadlHub
+validates and produces the projection. The bridge returns only `{ state: "refreshed" }`, and the UI
+rereads ordinary `/bookings/upcoming`. Cancellation and logout retire the native lease before any
+later submission or completion. Two memory-only, session-bound circuits use monotonic backoff after
+provider failure and reset after successful reads. Closed operation/outcome/status-class/duration
+metrics are scheduled after projection completion in a bounded background queue using the existing
+authenticated PadlHub `routing-outcomes` route; metric failure or queue rejection is ignored,
+never retried, and cannot alter the projection or credential store. Metrics contain no provider IDs,
+URL, token or response body. The generic native request allowlist remains unchanged.
+
+This exception permits no provider write, system key, arbitrary URL/method, server/worker End User
+egress, expired-projection bypass or fabricated empty result. Provider denial or an unready server
+gate fails closed. Native transport acceptance and the actual My Records/profile/reopen journey
+require a physical-device check; source support or compilation is not that evidence.
 
 This decision does not move the authentication protocol itself into application JavaScript:
 

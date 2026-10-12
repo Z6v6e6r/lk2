@@ -8,6 +8,9 @@ const nativeCodes = [
   'NATIVE_REDIRECT_REJECTED',
   'NATIVE_REQUEST_REJECTED',
   'NATIVE_OAUTH_PENDING',
+  'NATIVE_OPERATION_CANCELLED',
+  'NATIVE_REFRESH_UNAVAILABLE',
+  'AUTH_SESSION_REVOKED',
 ] as const;
 type NativeCode = (typeof nativeCodes)[number] | 'NATIVE_SESSION_UNAVAILABLE';
 
@@ -32,6 +35,8 @@ class NativeNetworkError extends TypeError {
 export function sanitizedNativeSessionError(error: unknown): Error {
   const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : null;
   if (code === 'NATIVE_NETWORK_UNAVAILABLE') return new NativeNetworkError();
+  if (code === 'AUTH_SESSION_REVOKED')
+    return new ApiClientError('Сессия завершена.', 401, 'AUTH_SESSION_REVOKED', 'native');
   return new NativeSessionError(
     nativeCodes.find((known) => known === code) ?? 'NATIVE_SESSION_UNAVAILABLE',
   );

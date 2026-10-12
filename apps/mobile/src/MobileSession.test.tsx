@@ -14,7 +14,7 @@ vi.mock('./android-push.js', () => ({
     mount: () => () => undefined,
     sessionReady: () => undefined,
     sessionExpired: () => undefined,
-    beforeLogout: () => Promise.resolve(),
+    beforeLogout: () => calls.beforeLogout(),
   }),
 }));
 vi.mock('./AndroidLoginGate.js', () => ({
@@ -22,6 +22,8 @@ vi.mock('./AndroidLoginGate.js', () => ({
     children(() => Promise.resolve()),
 }));
 const calls = vi.hoisted(() => ({
+  cancelBookings: vi.fn(),
+  beforeLogout: vi.fn<() => Promise<void>>(),
   restore: vi.fn(),
   logout: vi.fn(),
   home: vi.fn(),
@@ -39,7 +41,7 @@ vi.mock('./native-api-fetch.js', () => ({
   ) => {
     calls.observe = observe;
     calls.observeRead = observeRead;
-    return vi.fn();
+    return Object.assign(vi.fn(), { cancelUpcomingBookingsRefresh: calls.cancelBookings });
   },
 }));
 vi.mock('../../web/src/auth-gateway.js', () => ({
@@ -102,6 +104,8 @@ const config = {
   appVersion: 'test',
 };
 beforeEach(() => {
+  calls.cancelBookings.mockReset().mockResolvedValue(undefined);
+  calls.beforeLogout.mockReset().mockResolvedValue(undefined);
   calls.observe = undefined;
   calls.observeRead = undefined;
   calls.restore.mockReset().mockResolvedValue(null);
@@ -296,4 +300,29 @@ it('does not attach native read diagnostics to the browser session', async () =>
   await screen.findByRole('button', { name: 'Выйти' });
   expect(calls.observeRead).toBeUndefined();
   expect(screen.queryByRole('note')).not.toBeInTheDocument();
+});
+
+it('retires native bookings before push cleanup or session logout can wait', async () => {
+  let cancelled!: () => void;
+  calls.cancelBookings.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        cancelled = resolve;
+      }),
+  );
+  render(<MobileApp config={config} native />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Выйти' }));
+  await waitFor(() => expect(calls.cancelBookings).toHaveBeenCalledOnce());
+  expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
+  expect(calls.beforeLogout).not.toHaveBeenCalled();
+  expect(calls.logout).not.toHaveBeenCalled();
+  act(() => cancelled());
+  await waitFor(() => expect(calls.logout).toHaveBeenCalledOnce());
+  expect(calls.beforeLogout).toHaveBeenCalledOnce();
+  expect(calls.cancelBookings.mock.invocationCallOrder[0]).toBeLessThan(
+    calls.beforeLogout.mock.invocationCallOrder[0]!,
+  );
+  expect(calls.beforeLogout.mock.invocationCallOrder[0]).toBeLessThan(
+    calls.logout.mock.invocationCallOrder[0]!,
+  );
 });
