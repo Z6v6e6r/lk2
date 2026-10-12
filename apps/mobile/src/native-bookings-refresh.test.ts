@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createNativeApiFetch, type AndroidSessionPlugin } from './native-api-fetch.js';
+import {
+  createNativeApiFetch,
+  type AndroidSessionPlugin,
+  type NativeReadObservation,
+} from './native-api-fetch.js';
 import { sessionFailureDetails } from './session-failure.js';
 
 const config = {
@@ -49,7 +53,9 @@ describe('fixed native upcoming-bookings refresh', () => {
         ['/user/api/v1/local-padel/bookings/upcoming', 'GET'],
         ['/user/api/v1/local-padel/bookings/upcoming', 'GET'],
       ]);
-      expect(observe).toHaveBeenLastCalledWith({ section: 'bookings', failure: null });
+      expect(observe).toHaveBeenLastCalledWith(
+        expect.objectContaining({ section: 'bookings', failure: null, complete: true }),
+      );
     },
   );
 
@@ -104,7 +110,15 @@ describe('fixed native upcoming-bookings refresh', () => {
     const pending = fetch(`${root}/bookings/upcoming`);
     const discarded = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     await vi.waitFor(() => expect(plugin.refreshUpcomingBookings).toHaveBeenCalledOnce());
+    expect(observe).toHaveBeenCalledOnce();
+    expect(observe.mock.calls[0]![0]).toMatchObject({ complete: false });
+    observe.mockClear();
     await fetch.cancelUpcomingBookingsRefresh();
+    expect(observe.mock.calls.map(([entry]) => (entry as NativeReadObservation).trace)).toEqual([
+      [],
+      [],
+    ]);
+    observe.mockClear();
     finish({ state: 'refreshed' });
     await discarded;
     expect(plugin.cancelUpcomingBookingsRefresh.mock.calls).toEqual([[]]);

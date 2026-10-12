@@ -74,6 +74,16 @@ public class AndroidUpcomingBookingsRefreshTest {
         return "{\"accessToken\":\"" + token + "\",\"expiresAt\":\"" + expiry + "\"}";
     }
 
+    @Test public void receiptContainsOnlyValidatedMilestonesWithoutExtraRequests() throws Exception {
+        Fixture fixture = new Fixture();
+        AndroidUpcomingBookingsRefresh.Receipt receipt = fixture.run();
+        assertTrue(receipt.jobAccepted); assertTrue(receipt.relayAccepted); assertTrue(receipt.completed);
+        assertEquals(2, fixture.providerCalls); assertEquals(1, fixture.resultAttempts); assertEquals(1, fixture.completeAttempts);
+        assertEquals(3, receipt.getClass().getDeclaredFields().length);
+        fixture.result = "{\"accepted\":false,\"replayed\":false,\"itemCount\":0}";
+        fixture.fails("NATIVE_BOOKINGS_RESULT_REJECTED");
+    }
+
     static class Fixture {
         final TestClock clock = new TestClock();
         final MemoryStore store = new MemoryStore();
@@ -157,11 +167,11 @@ public class AndroidUpcomingBookingsRefreshTest {
             if (providerStatus != 200) return json(providerStatus, "{}");
             return json(200, path.contains("/list?") ? details : list);
         }
-        void run() throws Exception {
-            run(() -> {});
+        AndroidUpcomingBookingsRefresh.Receipt run() throws Exception {
+            return run(() -> {});
         }
-        void run(AndroidUpcomingBookingsRefresh.Cancellation cancellation) throws Exception {
-            new AndroidUpcomingBookingsRefresh(policy, engine, this::send, this::provider, clock, circuits).run(engine.nativeAccess(), cancellation);
+        AndroidUpcomingBookingsRefresh.Receipt run(AndroidUpcomingBookingsRefresh.Cancellation cancellation) throws Exception {
+            return new AndroidUpcomingBookingsRefresh(policy, engine, this::send, this::provider, clock, circuits).run(engine.nativeAccess(), cancellation);
         }
         void fails(String code) throws Exception {
             try { run(); fail("Expected " + code); }
