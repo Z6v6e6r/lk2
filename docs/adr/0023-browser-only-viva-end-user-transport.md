@@ -47,6 +47,13 @@ Delegation remains server-owned and bound to the active user/tenant/session fami
 tenant comes from the authenticated routing plan, not from client token parsing. Rejection diagnostics
 use only a closed plan/job/delegation/list/details/result/completion stage vocabulary.
 
+Plan, job and delegation expiry use the `Date` from their own authenticated HTTPS response and a
+monotonic request timer. The calculation deducts the complete request/processing interval and the
+HTTP date's one-second precision, while keeping the existing maximum lifetimes. This prevents
+ordinary phone clock skew from rejecting a fresh 120-second job or extending an expired one.
+Malformed or duplicate dates fail closed; an absent date retains the original strict wall-clock
+check. These response times remain native and cannot enter bridge diagnostics or telemetry.
+
 The short-lived user token, provider IDs and raw provider responses remain in Java memory for this
 invocation. They are never returned to JavaScript, persisted, logged or attached to exceptions.
 Native code submits the bounded result to the existing PadlHub read job and completes it; PadlHub

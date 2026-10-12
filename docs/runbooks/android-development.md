@@ -57,7 +57,14 @@ not necessarily JWTs with a `tenant_key` claim. Native code accepts only bounded
 bytes from the authenticated endpoint and keeps the fixed plan tenant/host and current user lease.
 Rejected responses expose only one reviewed stage code, never raw payload or credential details.
 
-Version 1.10/code11 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
+Version 1.11/code12 corrects the job expiry check: a valid server-issued 120-second job must not
+be rejected merely because the phone clock differs. Plan, job and delegation use the `Date` from
+their own authenticated HTTPS response, deduct its one-second precision and the complete monotonic
+request/processing interval, and retain the original lifetime caps. Malformed/duplicate dates fail
+closed; absent dates retain the strict wall-clock path. Check skew in both directions, expired and
+excessive lifetimes, response binding and cancellation after a device clock change.
+
+Version 1.11/code12 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
 debug-signing identity. Verify the fixed provider host and tenant, protocol/body bounds, 401 versus
 403 handling, exact replay, logout/account changes and token/payload absence in bridge/errors/store
 with native instrumentation. Physical-device acceptance must separately open My Records and

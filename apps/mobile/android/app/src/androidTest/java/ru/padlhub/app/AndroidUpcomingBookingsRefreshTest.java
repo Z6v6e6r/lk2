@@ -36,10 +36,25 @@ public class AndroidUpcomingBookingsRefreshTest {
     }
 
     static Response json(int status, String body) {
-        return new Response(status, Collections.singletonMap("content-type", "application/json"), Collections.emptyList(), body.getBytes(StandardCharsets.UTF_8));
+        return json(status, body, null);
+    }
+    static Response json(int status, String body, String date) {
+        Map<String, String> headers = new HashMap<>(); headers.put("content-type", "application/json");
+        if (date != null) headers.put("date", date);
+        return new Response(status, headers, Collections.emptyList(), body.getBytes(StandardCharsets.UTF_8));
     }
     static String iso(long epoch) {
         SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.ROOT);
+        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return format.format(new Date(epoch));
+    }
+    static String isoMillis(long epoch) {
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT);
+        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return format.format(new Date(epoch));
+    }
+    static String httpDate(long epoch) {
+        SimpleDateFormat format = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US);
         format.setTimeZone(TimeZone.getTimeZone("UTC"));
         return format.format(new Date(epoch));
     }
@@ -47,7 +62,10 @@ public class AndroidUpcomingBookingsRefreshTest {
         return "{\"revision\":\"73\",\"mode\":\"MIXED_END_USER_READS\",\"issuedAt\":\"" + iso(expiry - 60_000) + "\",\"expiresAt\":\"" + iso(expiry) + "\",\"directViva\":{\"apiBaseUrl\":\"https://api.vivacrm.ru/end-user/api\",\"providerTenantKey\":\"citysport\",\"accessTokenPath\":\"/auth/viva/access\",\"allowedRequestHeaders\":[\"Authorization\"]},\"operations\":[{\"operation\":\"profile.read\",\"transport\":\"DIRECT_VIVA\",\"fallback\":\"UNAVAILABLE\"},{\"operation\":\"bookings.read\",\"transport\":\"PADLHUB_API\",\"fallback\":\"PADLHUB_API\"},{\"operation\":\"bookings.details.read\",\"transport\":\"PADLHUB_API\",\"fallback\":\"PADLHUB_API\"},{\"operation\":\"bookings.history.read\",\"transport\":\"DIRECT_VIVA\",\"fallback\":\"UNAVAILABLE\"},{\"operation\":\"subscriptions.read\",\"transport\":\"DIRECT_VIVA\",\"fallback\":\"UNAVAILABLE\"},{\"operation\":\"schedule.read\",\"transport\":\"DIRECT_VIVA\",\"fallback\":\"UNAVAILABLE\"}]}";
     }
     static String job(long expiry) {
-        return "{\"jobId\":\"" + JOB + "\",\"screen\":\"MY_BOOKINGS\",\"expiresAt\":\"" + iso(expiry) + "\",\"commands\":[{\"commandId\":\"" + COMMAND + "\",\"operation\":\"bookings.read\",\"detailsOperation\":\"bookings.details.read\",\"page\":0,\"size\":50}],\"concurrency\":1}";
+        return job(iso(expiry));
+    }
+    static String job(String expiry) {
+        return "{\"jobId\":\"" + JOB + "\",\"screen\":\"MY_BOOKINGS\",\"expiresAt\":\"" + expiry + "\",\"commands\":[{\"commandId\":\"" + COMMAND + "\",\"operation\":\"bookings.read\",\"detailsOperation\":\"bookings.details.read\",\"page\":0,\"size\":50}],\"concurrency\":1}";
     }
 
     static class Fixture {
@@ -60,6 +78,11 @@ public class AndroidUpcomingBookingsRefreshTest {
         final List<String> providerPaths = new ArrayList<>();
         final List<String> providerTokens = new ArrayList<>();
         String plan, job, delegation;
+        long serverWall = 1_790_531_000_123L;
+        boolean defaultServerDate = true;
+        final Map<String, String> responseDates = new HashMap<>();
+        String delayedPath;
+        long elapsedBeforeResponse;
         String list = "{\"content\":[{\"id\":\"active id&1\",\"isCancelled\":false},{\"id\":42,\"isCancelled\":false},{\"id\":\"cancelled\",\"isCancelled\":true}]}";
         String details = "[{\"id\":\"active id&1\"}]";
         String result = "{\"accepted\":true,\"replayed\":false,\"itemCount\":2}";
@@ -72,7 +95,7 @@ public class AndroidUpcomingBookingsRefreshTest {
 
         Fixture() throws Exception {
             policy = new AndroidSessionPolicy(ORIGIN, "local-padel", "test-version", "73", false);
-            plan = plan(clock.wall + 60_000); job = job(clock.wall + 60_000);
+            plan = plan(serverWall + 60_000); job = job(serverWall + 60_000);
             complete = "{\"screen\":\"MY_BOOKINGS\",\"state\":\"READY\",\"completedCommands\":1,\"totalCommands\":1,\"bookings\":{\"version\":\"synthetic-v1\",\"generatedAt\":\"" + iso(clock.wall) + "\",\"staleAt\":\"" + iso(clock.wall + 60_000) + "\",\"items\":[]}}";
             delegation = "{\"accessToken\":\"" + PROVIDER_TOKEN + "\",\"expiresAt\":\"" + iso(clock.wall + 60_000) + "\"}";
             engine = new AndroidSessionEngine(policy, store, this::send, null, clock);
@@ -81,24 +104,25 @@ public class AndroidUpcomingBookingsRefreshTest {
         }
         Response send(Request request) throws Failure {
             if (request.path.equals(VERIFY)) return session(REFRESH);
-            if (request.path.endsWith("/routing-outcomes")) { metrics.add(copy(request)); return json(204, ""); }
+            if (request.path.endsWith("/routing-outcomes")) { metrics.add(copy(request)); return json(204, "", dateFor(request.path)); }
             api.add(copy(request));
-            if (request.path.endsWith("/routing-plan")) return json(200, plan);
-            if (request.path.endsWith("/booking-screen-read-jobs")) return json(200, job);
-            if (request.path.endsWith("/auth/viva/access")) return json(200, delegation);
+            if (delayedPath != null && request.path.endsWith(delayedPath)) clock.elapsed += elapsedBeforeResponse;
+            if (request.path.endsWith("/routing-plan")) return json(200, plan, dateFor(request.path));
+            if (request.path.endsWith("/booking-screen-read-jobs")) return json(200, job, dateFor(request.path));
+            if (request.path.endsWith("/auth/viva/access")) return json(200, delegation, dateFor(request.path));
             if (request.path.contains("/results/")) {
                 resultAttempts++;
                 if ("result".equals(throwPath) && resultAttempts == 1) throw new Failure("NATIVE_NETWORK_UNAVAILABLE");
-                if ("result".equals(failPath)) return json(500, "{}");
-                return json(200, result);
+                if ("result".equals(failPath)) return json(500, "{}", dateFor(request.path));
+                return json(200, result, dateFor(request.path));
             }
             if (request.path.endsWith("/complete")) {
                 completeAttempts++;
                 if ("complete".equals(throwPath) && completeAttempts == 1) throw new Failure("NATIVE_NETWORK_UNAVAILABLE");
-                if ("complete".equals(failPath)) return json(500, "{}");
-                return json(200, complete);
+                if ("complete".equals(failPath)) return json(500, "{}", dateFor(request.path));
+                return json(200, complete, dateFor(request.path));
             }
-            return json(500, "{}");
+            return json(500, "{}", dateFor(request.path));
         }
         Response provider(String path, String token) throws Failure {
             providerPaths.add(path); providerTokens.add(token); providerCalls++;
@@ -118,6 +142,10 @@ public class AndroidUpcomingBookingsRefreshTest {
             List<Request> result = new ArrayList<>();
             for (Request request : api) if (!"GET".equals(request.method)) result.add(request);
             return result;
+        }
+        String dateFor(String path) {
+            if (responseDates.containsKey(path)) return responseDates.get(path);
+            return defaultServerDate ? httpDate(serverWall) : null;
         }
         private Request copy(Request request) {
             return new Request(request.path, request.method, new HashMap<>(request.headers),
@@ -214,6 +242,76 @@ public class AndroidUpcomingBookingsRefreshTest {
         Fixture f = new Fixture(); f.details = "{\"unterminated\":";
         f.fails("NATIVE_BOOKINGS_DETAILS_REJECTED");
         assertEquals(2, f.providerPaths.size()); assertEquals(0, countPath(f.api, "/results/")); assertEquals(0, countPath(f.api, "/complete"));
+    }
+
+    @Test public void serverAnchoredJobExpiryAcceptsFiveMinuteDeviceSkewAndConsumesRequestTime() throws Exception {
+        for (long skew : new long[] {-300_000, 300_000}) {
+            Fixture f = new Fixture(); f.clock.wall = f.serverWall + skew;
+            f.plan = plan(f.serverWall + 300_000);
+            f.job = job(isoMillis(f.serverWall + 120_000));
+            f.delayedPath = "/booking-screen-read-jobs"; f.elapsedBeforeResponse = 400;
+            f.run();
+            assertEquals(2, f.providerCalls); assertEquals(1, countPath(f.api, "/results/"));
+        }
+        Fixture upperBoundary = new Fixture(); upperBoundary.plan = plan(upperBoundary.serverWall + 300_000);
+        // The server's HTTP Date is rounded down to the second; this is exactly max TTL + 999 ms.
+        upperBoundary.job = job(isoMillis(upperBoundary.serverWall + 120_876));
+        upperBoundary.run(); assertEquals(2, upperBoundary.providerCalls);
+    }
+
+    @Test public void serverAnchoredJobExpiryFailsClosedBeforeDelegationOrProvider() throws Exception {
+        for (long expiryOffset : new long[] {-1, 121_000}) {
+            Fixture f = new Fixture(); f.plan = plan(f.serverWall + 300_000);
+            f.job = job(isoMillis(f.serverWall + expiryOffset));
+            f.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+            assertEquals(0, countPath(f.api, "/auth/viva/access")); assertEquals(0, f.providerCalls);
+        }
+        Fixture malformedDate = new Fixture();
+        malformedDate.responseDates.put(ROOT + "/booking-screen-read-jobs", "Tue, 99 Not-a-month 2026 00:00:00 GMT");
+        malformedDate.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        assertEquals(0, countPath(malformedDate.api, "/auth/viva/access")); assertEquals(0, malformedDate.providerCalls);
+        Fixture malformedPlanDate = new Fixture();
+        malformedPlanDate.responseDates.put(ROOT + "/routing-plan", "2026-10-12T00:00:00Z");
+        malformedPlanDate.fails("NATIVE_BOOKINGS_PLAN_REJECTED");
+        assertEquals(0, countExactPath(malformedPlanDate.api, "/booking-screen-read-jobs"));
+    }
+
+    @Test public void serverAnchoredExpirySubtractsRttAndMissingDateUsesStrictDeviceWallFallback() throws Exception {
+        Fixture rttExpired = new Fixture(); rttExpired.plan = plan(rttExpired.serverWall + 300_000);
+        rttExpired.job = job(isoMillis(rttExpired.serverWall + 2_000));
+        rttExpired.delayedPath = "/booking-screen-read-jobs"; rttExpired.elapsedBeforeResponse = 1_200;
+        rttExpired.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        assertEquals(0, rttExpired.providerCalls);
+
+        Fixture missingDate = new Fixture(); missingDate.clock.wall = missingDate.serverWall + 300_000;
+        missingDate.plan = plan(missingDate.serverWall + 600_000);
+        missingDate.job = job(isoMillis(missingDate.serverWall + 120_000));
+        missingDate.defaultServerDate = false;
+        missingDate.responseDates.put(ROOT + "/routing-plan", httpDate(missingDate.serverWall));
+        missingDate.responseDates.put(ROOT + "/booking-screen-read-jobs", null);
+        missingDate.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        assertEquals(0, countPath(missingDate.api, "/auth/viva/access")); assertEquals(0, missingDate.providerCalls);
+    }
+
+    @Test public void expiryUsesOnlyItsOwnResponseAndResultDatesCannotAlterIt() throws Exception {
+        Fixture expiredJob = new Fixture(); expiredJob.plan = plan(expiredJob.serverWall + 300_000);
+        expiredJob.job = job(isoMillis(expiredJob.serverWall + 120_000));
+        expiredJob.responseDates.put(ROOT + "/booking-screen-read-jobs", httpDate(expiredJob.serverWall + 130_000));
+        expiredJob.fails("NATIVE_BOOKINGS_JOB_REJECTED");
+        assertEquals(0, countPath(expiredJob.api, "/auth/viva/access")); assertEquals(0, expiredJob.providerCalls);
+
+        Fixture expiredToken = new Fixture();
+        expiredToken.responseDates.put(ROOT + "/auth/viva/access", httpDate(expiredToken.serverWall + 70_000));
+        expiredToken.fails("NATIVE_BOOKINGS_DELEGATION_REJECTED"); assertEquals(0, expiredToken.providerCalls);
+
+        Fixture malformedTokenDate = new Fixture();
+        malformedTokenDate.responseDates.put(ROOT + "/auth/viva/access", "");
+        malformedTokenDate.fails("NATIVE_BOOKINGS_DELEGATION_REJECTED"); assertEquals(0, malformedTokenDate.providerCalls);
+
+        Fixture resultDates = new Fixture();
+        resultDates.responseDates.put(ROOT + "/booking-screen-read-jobs/" + JOB + "/results/" + COMMAND, "ignored-invalid-result-date");
+        resultDates.responseDates.put(ROOT + "/booking-screen-read-jobs/" + JOB + "/complete", "ignored-invalid-completion-date");
+        resultDates.run(); assertEquals(2, resultDates.providerCalls); assertEquals(1, resultDates.completeAttempts);
     }
 
     @Test public void cancellationAndProviderFailureStopBeforeAnyLaterWrite() throws Exception {

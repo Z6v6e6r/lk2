@@ -92,6 +92,14 @@ final class AndroidUpcomingBookingsRefresh {
             this.operation = operation; this.outcome = outcome; this.status = status; this.duration = duration;
         }
     }
+    private static final class ApiReply {
+        final byte[] body;
+        final String date;
+        final long started;
+        ApiReply(Response response, long started) {
+            this.body = response.body; this.date = response.headers.get("date"); this.started = started;
+        }
+    }
     private final class Invocation {
         final AndroidSessionEngine.NativeAccess access;
         final Cancellation cancellation;
@@ -110,10 +118,24 @@ final class AndroidUpcomingBookingsRefresh {
             if (Thread.currentThread().isInterrupted() || clock.elapsed() >= deadline)
                 throw new Failure("NATIVE_OPERATION_CANCELLED");
         }
-        void restrict(long expiresAt, long maximumLifetime) throws Failure {
-            long remaining = expiresAt - clock.wall();
-            if (remaining <= 0 || remaining > maximumLifetime) throw rejected();
-            deadline = Math.min(deadline, clock.elapsed() + remaining);
+        long expiryDeadline(ApiReply reply, long expiresAt, long maximumLifetime) throws Failure {
+            long reference = reply.date == null ? clock.wall() : httpDate(reply.date);
+            long now = clock.elapsed();
+            long remaining = expiresAt - reference;
+            if (reply.date != null) {
+                // HTTP Date has second precision. Include the whole request transit and
+                // parsing/scheduling delay in an upper bound on server now, so phone clock
+                // skew cannot reject a valid job or extend an expired job/token.
+                long transit = now - reply.started;
+                if (remaining <= 0 || remaining > maximumLifetime + 999 || transit < 0 || transit > 60_000) throw rejected();
+                remaining -= 1_000 + transit;
+            }
+            // Missing Date preserves the original strict wall-clock path, never a bypass.
+            if (remaining <= 0 || remaining > maximumLifetime || now < 0 || now > Long.MAX_VALUE - remaining) throw rejected();
+            return now + remaining;
+        }
+        void restrict(ApiReply reply, long expiresAt, long maximumLifetime) throws Failure {
+            deadline = Math.min(deadline, expiryDeadline(reply, expiresAt, maximumLifetime));
         }
         void forget() { token = null; tenant = null; revision = null; }
     }
@@ -123,8 +145,9 @@ final class AndroidUpcomingBookingsRefresh {
         byte[] list = null, details = null;
         try {
             current.require();
-            JSONObject plan = object(api("/routing-plan", "GET", null, null, false, current), PROVIDER_LIMIT);
-            current.restrict(timestamp(plan.optString("expiresAt", "")), 3_600_000);
+            ApiReply planReply = api("/routing-plan", "GET", null, null, false, current);
+            JSONObject plan = object(planReply.body, PROVIDER_LIMIT);
+            current.restrict(planReply, timestamp(plan.optString("expiresAt", "")), 3_600_000);
             current.tenant = providerTenant(plan);
             current.revision = plan.getString("revision");
             if (!current.revision.matches("[0-9]{1,128}")) throw rejected();
@@ -136,10 +159,10 @@ final class AndroidUpcomingBookingsRefresh {
                 }
             }
             current.stage = "JOB";
-            JSONObject start = object(api("/booking-screen-read-jobs", "POST", "{\"screen\":\"MY_BOOKINGS\"}",
-                UUID.randomUUID().toString(), false, current), PROVIDER_LIMIT);
-            Job job = job(start);
-            current.restrict(job.expiresAt, 120_000);
+            ApiReply jobReply = api("/booking-screen-read-jobs", "POST", "{\"screen\":\"MY_BOOKINGS\"}",
+                UUID.randomUUID().toString(), false, current);
+            Job job = job(object(jobReply.body, PROVIDER_LIMIT));
+            current.restrict(jobReply, job.expiresAt, 120_000);
             delegate(current);
             current.stage = "LIST";
             list = providerRead("/v2/" + current.tenant + "/bookings?page=0&size=50", "bookings.read", current);
@@ -154,7 +177,7 @@ final class AndroidUpcomingBookingsRefresh {
             if (relay.getBytes(StandardCharsets.UTF_8).length > RELAY_LIMIT) throw rejected();
             current.stage = "RESULT";
             JSONObject accepted = object(api("/booking-screen-read-jobs/" + job.jobId + "/results/" + job.commandId,
-                "POST", relay, UUID.randomUUID().toString(), true, current), PROVIDER_LIMIT);
+                "POST", relay, UUID.randomUUID().toString(), true, current).body, PROVIDER_LIMIT);
             Object itemCount = accepted.opt("itemCount");
             if (!Boolean.TRUE.equals(accepted.opt("accepted")) || !(accepted.opt("replayed") instanceof Boolean)
                 || !(itemCount instanceof Number) || ((Number) itemCount).doubleValue() < 0
@@ -162,7 +185,7 @@ final class AndroidUpcomingBookingsRefresh {
                 || ((Number) itemCount).doubleValue() != ((Number) itemCount).intValue()) throw rejected();
             current.stage = "COMPLETION";
             byte[] completedBytes = api("/booking-screen-read-jobs/" + job.jobId + "/complete", "POST", "{\"limit\":50}",
-                UUID.randomUUID().toString(), true, current);
+                UUID.randomUUID().toString(), true, current).body;
             try {
                 JSONObject completed = object(completedBytes, PROVIDER_LIMIT);
                 if (!"MY_BOOKINGS".equals(completed.opt("screen")) || !"READY".equals(completed.opt("state"))
@@ -179,7 +202,7 @@ final class AndroidUpcomingBookingsRefresh {
         finally { wipe(list); wipe(details); current.forget(); }
     }
 
-    private byte[] api(String suffix, String method, String body, String key, boolean exactReplay, Invocation current) throws Failure {
+    private ApiReply api(String suffix, String method, String body, String key, boolean exactReplay, Invocation current) throws Failure {
         current.require();
         Map<String, String> headers = new HashMap<>();
         headers.put("authorization", current.access.bearer);
@@ -191,6 +214,7 @@ final class AndroidUpcomingBookingsRefresh {
         AndroidSessionPolicy.Request request = new AndroidSessionPolicy.Request(policy.userRoot + suffix, method, headers, body, AndroidSessionPolicy.Operation.API);
         if (request.body != null && request.body.length > RELAY_LIMIT) throw rejected();
         Response response;
+        long started = clock.elapsed();
         try {
             try { response = api.send(request); }
             catch (Failure first) {
@@ -206,7 +230,7 @@ final class AndroidUpcomingBookingsRefresh {
             if (response.status >= 300 && response.status < 400) throw new Failure("NATIVE_REDIRECT_REJECTED");
             if (response.status < 200 || response.status >= 300) throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
             if (response.body == null || response.body.length > PROVIDER_LIMIT || !jsonContent(response.headers)) throw rejected();
-            return response.body;
+            return new ApiReply(response, started);
         } catch (Failure error) {
             if ("NATIVE_NETWORK_UNAVAILABLE".equals(error.code)) throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
             throw error;
@@ -215,7 +239,8 @@ final class AndroidUpcomingBookingsRefresh {
 
     private void delegate(Invocation current) throws Failure {
         String previousStage = current.stage; current.stage = "DELEGATION";
-        byte[] bytes = api("/auth/viva/access", "POST", "{}", UUID.randomUUID().toString(), false, current);
+        ApiReply reply = api("/auth/viva/access", "POST", "{}", UUID.randomUUID().toString(), false, current);
+        byte[] bytes = reply.body;
         try {
             JSONObject value = object(bytes, PROVIDER_LIMIT);
             Object rawToken = value.opt("accessToken");
@@ -225,9 +250,8 @@ final class AndroidUpcomingBookingsRefresh {
             // RFC6750 header grammar/size only; JWT claims/tenant/subject are not client contracts.
             if (token.length() == 0 || token.length() > 8192 || !token.matches("[A-Za-z0-9._~+/-]+=*")) throw rejected();
             long expiresAt = timestamp(value.optString("expiresAt", ""));
-            long remaining = expiresAt - clock.wall();
-            if (remaining <= 0 || remaining > 3_600_000) throw rejected();
-            current.require(); current.token = token; current.tokenDeadline = clock.elapsed() + remaining; current.stage = previousStage;
+            long tokenDeadline = current.expiryDeadline(reply, expiresAt, 3_600_000);
+            current.require(); current.token = token; current.tokenDeadline = tokenDeadline; current.stage = previousStage;
         } catch (Failure error) { throw error; }
         catch (Exception ignored) { throw rejected(); }
         finally { wipe(bytes); }
@@ -378,6 +402,14 @@ final class AndroidUpcomingBookingsRefresh {
             }
             return path.toString();
         } catch (Exception ignored) { throw rejected(); }
+    }
+    private static long httpDate(String value) throws Failure {
+        if (value.length() != 29) throw rejected();
+        SimpleDateFormat format = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.US);
+        format.setTimeZone(TimeZone.getTimeZone("UTC")); format.setLenient(false);
+        ParsePosition position = new ParsePosition(0); java.util.Date date = format.parse(value, position);
+        if (date == null || position.getIndex() != value.length() || !format.format(date).equals(value)) throw rejected();
+        return date.getTime();
     }
     private static long timestamp(String value) throws Failure {
         if (!value.matches("[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{3})?Z")) throw rejected();
