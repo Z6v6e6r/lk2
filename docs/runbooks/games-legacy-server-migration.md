@@ -16,6 +16,37 @@ worker can later refresh only those rosters while their canonical revision has n
 local change or unknown baseline is quarantined as a conflict; the worker never overwrites it.
 This is not a client feature switch and never writes back to legacy Mongo/Node-RED.
 
+## One-game private observation
+
+For an independently authorized read, reuse `LegacyGamesMongoAdapter.readGameObservation({
+tenantKey, gameId, operationId? })` with the operator's selected LK1 source ID. Resolve the existing
+tenant-owned `integration.external_entity_map` (`LK_LEGACY_SNAPSHOT`, `game`) first; its raw/hash
+aliases must point to the same canonical `games.games.id`. Do not infer a mapping from a phone,
+court time, hash alone or a supplied request. This method neither verifies authorization nor creates
+a mapping. No HTTP endpoint, runner, credential acquisition or import is added.
+
+The source is fixed to `games.lk_games`. The read uses primary/majority, no retries, a single-client
+pool and 1–5000ms connection/socket/query timeouts. It selects exactly `tenantKey + id`, caps results
+at two to detect duplicates, and retrieves at most five pseudonymized participant IDs plus the
+source array count. Names, phones, avatars, payment payloads, keys and tokens are excluded. Null
+tenant requires an explicitly selected BSON-null tenant; missing tenant is never a wildcard. Legacy
+rows without that field remain unobserved under this selector.
+
+An optional selected operation is read only from `games.lk_legacy_game_commands`, by exact
+tenant/game/operation, after matching `game.legacyCommand.lastOperationId`. Other operation owners,
+an older operation, absence, ambiguity or unavailable permission stay `UNKNOWN`; no ledger search
+or fallback is attempted. Source game/command state is an observation, never booking, benefit or
+settlement proof. Those three remain explicitly `UNKNOWN`, including for source state `PAID` or
+`SUCCEEDED`. The game and operation have separate observation timestamps; these reads do not form
+an atomic snapshot. Participant-row count is not an active-membership count, and five keys are a
+bounded diagnostic sample, not a full roster when the source count is larger.
+
+Retain results only at the approved protected evidence destination: pseudonyms and source game ID
+remain private integration identifiers. A real read still requires the exact selected target,
+operator, IDs, allowed fields, read-only database/network role and time window. Do not inspect or
+export credential/URI values, probe production writes, create a fixture or enable a writer. Database
+ACL/network enforcement belongs to the operator; a read-only method is not an ACL guarantee.
+
 ## Preconditions
 
 - A reviewed change and an approved backup/rollback plan exist for the target environment.
