@@ -41,6 +41,12 @@ from the immediately preceding active-booking list, with a maximum of 50 and 128
 tenant routing/delegation gates remain authoritative; the capability does not add delegated scopes,
 enable those gates, or promote bookings to general-purpose direct operations.
 
+The delegated access token is an opaque credential supplied by the authenticated PadlHub endpoint;
+native code bounds its size and Bearer header grammar without requiring a JWT format or claims.
+Delegation remains server-owned and bound to the active user/tenant/session family; the fixed provider
+tenant comes from the authenticated routing plan, not from client token parsing. Rejection diagnostics
+use only a closed plan/job/delegation/list/details/result/completion stage vocabulary.
+
 The short-lived user token, provider IDs and raw provider responses remain in Java memory for this
 invocation. They are never returned to JavaScript, persisted, logged or attached to exceptions.
 Native code submits the bounded result to the existing PadlHub read job and completes it; PadlHub

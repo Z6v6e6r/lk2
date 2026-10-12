@@ -101,6 +101,7 @@ final class AndroidUpcomingBookingsRefresh {
         String token;
         long tokenDeadline;
         String tenant, revision;
+        String stage = "PLAN";
         Invocation(AndroidSessionEngine.NativeAccess access, Cancellation cancellation) {
             this.access = access; this.cancellation = cancellation;
         }
@@ -134,13 +135,16 @@ final class AndroidUpcomingBookingsRefresh {
                     throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
                 }
             }
+            current.stage = "JOB";
             JSONObject start = object(api("/booking-screen-read-jobs", "POST", "{\"screen\":\"MY_BOOKINGS\"}",
                 UUID.randomUUID().toString(), false, current), PROVIDER_LIMIT);
             Job job = job(start);
             current.restrict(job.expiresAt, 120_000);
             delegate(current);
+            current.stage = "LIST";
             list = providerRead("/v2/" + current.tenant + "/bookings?page=0&size=50", "bookings.read", current);
             List<String> ids = activeIds(list);
+            current.stage = "DETAILS";
             details = ids.isEmpty() ? "[]".getBytes(StandardCharsets.UTF_8)
                 : providerRead(detailsPath(current.tenant, ids), "bookings.details.read", current);
             Object detailsValue = json(details, PROVIDER_LIMIT);
@@ -148,6 +152,7 @@ final class AndroidUpcomingBookingsRefresh {
             JSONObject payload = new JSONObject().put("bookings", object(list, PROVIDER_LIMIT)).put("details", detailsValue);
             String relay = new JSONObject().put("payload", payload).toString();
             if (relay.getBytes(StandardCharsets.UTF_8).length > RELAY_LIMIT) throw rejected();
+            current.stage = "RESULT";
             JSONObject accepted = object(api("/booking-screen-read-jobs/" + job.jobId + "/results/" + job.commandId,
                 "POST", relay, UUID.randomUUID().toString(), true, current), PROVIDER_LIMIT);
             Object itemCount = accepted.opt("itemCount");
@@ -155,6 +160,7 @@ final class AndroidUpcomingBookingsRefresh {
                 || !(itemCount instanceof Number) || ((Number) itemCount).doubleValue() < 0
                 || ((Number) itemCount).doubleValue() > 50
                 || ((Number) itemCount).doubleValue() != ((Number) itemCount).intValue()) throw rejected();
+            current.stage = "COMPLETION";
             byte[] completedBytes = api("/booking-screen-read-jobs/" + job.jobId + "/complete", "POST", "{\"limit\":50}",
                 UUID.randomUUID().toString(), true, current);
             try {
@@ -168,8 +174,8 @@ final class AndroidUpcomingBookingsRefresh {
             } finally { wipe(completedBytes); }
             current.require();
             emitMetrics(current); // Projection is committed before metrics can be scheduled.
-        } catch (Failure error) { emitMetrics(current); throw error; }
-        catch (Exception ignored) { emitMetrics(current); throw rejected(); }
+        } catch (Failure error) { emitMetrics(current); throw "NATIVE_RESPONSE_REJECTED".equals(error.code) ? stageRejected(current.stage) : error; }
+        catch (Exception ignored) { emitMetrics(current); throw stageRejected(current.stage); }
         finally { wipe(list); wipe(details); current.forget(); }
     }
 
@@ -208,20 +214,20 @@ final class AndroidUpcomingBookingsRefresh {
     }
 
     private void delegate(Invocation current) throws Failure {
+        String previousStage = current.stage; current.stage = "DELEGATION";
         byte[] bytes = api("/auth/viva/access", "POST", "{}", UUID.randomUUID().toString(), false, current);
         try {
             JSONObject value = object(bytes, PROVIDER_LIMIT);
-            String token = value.optString("accessToken", "");
-            if (!token.matches("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+") || token.length() > 8192) throw rejected();
+            Object rawToken = value.opt("accessToken");
+            if (!(rawToken instanceof String)) throw rejected();
+            String token = (String) rawToken;
+            // The authenticated PadlHub delegation contract returns an opaque provider credential.
+            // RFC6750 header grammar/size only; JWT claims/tenant/subject are not client contracts.
+            if (token.length() == 0 || token.length() > 8192 || !token.matches("[A-Za-z0-9._~+/-]+=*")) throw rejected();
             long expiresAt = timestamp(value.optString("expiresAt", ""));
             long remaining = expiresAt - clock.wall();
             if (remaining <= 0 || remaining > 3_600_000) throw rejected();
-            // The backend verifies the token's signature and identity. This local check additionally
-            // prevents a mismatched provider tenant from directing that same user's credential elsewhere.
-            String payload = token.split("\\.", -1)[1];
-            JSONObject claims = object(android.util.Base64.decode(payload, android.util.Base64.URL_SAFE | android.util.Base64.NO_WRAP), 8192);
-            if (!current.tenant.equals(claims.opt("tenant_key"))) throw rejected();
-            current.require(); current.token = token; current.tokenDeadline = clock.elapsed() + remaining;
+            current.require(); current.token = token; current.tokenDeadline = clock.elapsed() + remaining; current.stage = previousStage;
         } catch (Failure error) { throw error; }
         catch (Exception ignored) { throw rejected(); }
         finally { wipe(bytes); }
@@ -402,6 +408,19 @@ final class AndroidUpcomingBookingsRefresh {
         return value != null && "application/json".equals(value.split(";", 2)[0].trim().toLowerCase(Locale.ROOT));
     }
     private static Failure rejected() { return new Failure("NATIVE_RESPONSE_REJECTED"); }
+    private static Failure stageRejected(String stage) {
+        // A closed vocabulary, never a provider field, message, header, URL or credential.
+        switch (stage) {
+            case "PLAN": return new Failure("NATIVE_BOOKINGS_PLAN_REJECTED");
+            case "JOB": return new Failure("NATIVE_BOOKINGS_JOB_REJECTED");
+            case "DELEGATION": return new Failure("NATIVE_BOOKINGS_DELEGATION_REJECTED");
+            case "LIST": return new Failure("NATIVE_BOOKINGS_LIST_REJECTED");
+            case "DETAILS": return new Failure("NATIVE_BOOKINGS_DETAILS_REJECTED");
+            case "RESULT": return new Failure("NATIVE_BOOKINGS_RESULT_REJECTED");
+            case "COMPLETION": return new Failure("NATIVE_BOOKINGS_COMPLETION_REJECTED");
+            default: return rejected();
+        }
+    }
     private static void wipe(byte[] bytes) { if (bytes != null) Arrays.fill(bytes, (byte) 0); }
 
     private static final class FixedProviderSender implements ProviderSender {

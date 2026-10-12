@@ -26,13 +26,7 @@ import static ru.padlhub.app.AndroidSessionTest.*;
 public class AndroidUpcomingBookingsRefreshTest {
     static final String JOB = "00000000-0000-4000-8000-000000000010";
     static final String COMMAND = "00000000-0000-4000-8000-000000000011";
-    static String providerToken(String tenant) {
-        int flags = android.util.Base64.URL_SAFE | android.util.Base64.NO_PADDING | android.util.Base64.NO_WRAP;
-        return android.util.Base64.encodeToString("{\"alg\":\"none\",\"fixture\":true}".getBytes(StandardCharsets.UTF_8), flags)
-            + "." + android.util.Base64.encodeToString(("{\"tenant_key\":\"" + tenant + "\"}").getBytes(StandardCharsets.UTF_8), flags)
-            + ".synthetic_signature";
-    }
-    static final String PROVIDER_TOKEN = providerToken("citysport");
+    static final String PROVIDER_TOKEN = "initial-viva-access-token";
 
     static class TestClock implements Clock {
         long wall = 1_790_531_000_000L, elapsed = 1_000L;
@@ -50,7 +44,7 @@ public class AndroidUpcomingBookingsRefreshTest {
         return format.format(new Date(epoch));
     }
     static String plan(long expiry) {
-        return "{\"revision\":\"73\",\"mode\":\"MIXED_END_USER_READS\",\"expiresAt\":\"" + iso(expiry) + "\",\"directViva\":{\"apiBaseUrl\":\"https://api.vivacrm.ru/end-user/api\",\"providerTenantKey\":\"citysport\",\"accessTokenPath\":\"/auth/viva/access\",\"allowedRequestHeaders\":[\"Authorization\"]},\"operations\":[{\"operation\":\"bookings.read\",\"transport\":\"PADLHUB_API\"},{\"operation\":\"bookings.details.read\",\"transport\":\"PADLHUB_API\"}]}";
+        return "{\"revision\":\"73\",\"mode\":\"MIXED_END_USER_READS\",\"issuedAt\":\"" + iso(expiry - 60_000) + "\",\"expiresAt\":\"" + iso(expiry) + "\",\"directViva\":{\"apiBaseUrl\":\"https://api.vivacrm.ru/end-user/api\",\"providerTenantKey\":\"citysport\",\"accessTokenPath\":\"/auth/viva/access\",\"allowedRequestHeaders\":[\"Authorization\"]},\"operations\":[{\"operation\":\"profile.read\",\"transport\":\"DIRECT_VIVA\",\"fallback\":\"UNAVAILABLE\"},{\"operation\":\"bookings.read\",\"transport\":\"PADLHUB_API\",\"fallback\":\"PADLHUB_API\"},{\"operation\":\"bookings.details.read\",\"transport\":\"PADLHUB_API\",\"fallback\":\"PADLHUB_API\"},{\"operation\":\"bookings.history.read\",\"transport\":\"DIRECT_VIVA\",\"fallback\":\"UNAVAILABLE\"},{\"operation\":\"subscriptions.read\",\"transport\":\"DIRECT_VIVA\",\"fallback\":\"UNAVAILABLE\"},{\"operation\":\"schedule.read\",\"transport\":\"DIRECT_VIVA\",\"fallback\":\"UNAVAILABLE\"}]}";
     }
     static String job(long expiry) {
         return "{\"jobId\":\"" + JOB + "\",\"screen\":\"MY_BOOKINGS\",\"expiresAt\":\"" + iso(expiry) + "\",\"commands\":[{\"commandId\":\"" + COMMAND + "\",\"operation\":\"bookings.read\",\"detailsOperation\":\"bookings.details.read\",\"page\":0,\"size\":50}],\"concurrency\":1}";
@@ -187,32 +181,39 @@ public class AndroidUpcomingBookingsRefreshTest {
     @Test public void malformedPlanAndJobAreRejectedBeforeDelegateOrProvider() throws Exception {
         String[] badPlans = {"{}", plan(1_790_531_060_000L).replace("PADLHUB_API", "DIRECT_VIVA"), plan(1_790_531_060_000L).replace("https://api.vivacrm.ru/end-user/api", "https://evil.invalid")};
         for (String bad : badPlans) {
-            Fixture f = new Fixture(); f.plan = bad; f.fails("NATIVE_RESPONSE_REJECTED");
+            Fixture f = new Fixture(); f.plan = bad; f.fails("NATIVE_BOOKINGS_PLAN_REJECTED");
             assertEquals(0, f.providerCalls); assertEquals(0, countPath(f.api, "/auth/viva/access"));
         }
-        Fixture wrongJob = new Fixture(); wrongJob.job = wrongJob.job.replace("\"concurrency\":1", "\"concurrency\":2"); wrongJob.fails("NATIVE_RESPONSE_REJECTED");
+        Fixture wrongJob = new Fixture(); wrongJob.job = wrongJob.job.replace("\"concurrency\":1", "\"concurrency\":2"); wrongJob.fails("NATIVE_BOOKINGS_JOB_REJECTED");
         assertEquals(0, wrongJob.providerCalls); assertEquals(0, countPath(wrongJob.api, "/auth/viva/access"));
     }
 
-    @Test public void mismatchedOrExpiredDelegationCannotReachTheProviderOrLeakIntoFailures() throws Exception {
-        Fixture mismatched = new Fixture(); String marker = "raw-provider-marker";
-        mismatched.delegation = "{\"accessToken\":\"" + providerToken("other") + "\",\"expiresAt\":\"" + iso(mismatched.clock.wall + 60_000) + "\"}";
-        try { mismatched.run(); fail(); } catch (Failure error) {
-            assertEquals("NATIVE_RESPONSE_REJECTED", error.code); assertFalse(error.getMessage().contains(marker)); assertNull(error.getCause());
+    @Test public void opaqueDelegationAcceptsOnlyBoundedBearerValuesAndNeverLeaksThem() throws Exception {
+        String marker = "provider-secret-marker";
+        for (String token : Arrays.asList("", "opaque token", "opaque\\r\\n" + marker, repeats("x", 8193).replace(",", ""))) {
+            Fixture f = new Fixture(); f.delegation = "{\"accessToken\":\"" + token + "\",\"expiresAt\":\"" + iso(f.clock.wall + 60_000) + "\"}";
+            try { f.run(); fail(); } catch (Failure error) {
+                assertEquals("NATIVE_BOOKINGS_DELEGATION_REJECTED", error.code); assertFalse(error.getMessage().contains(marker)); assertNull(error.getCause());
+            }
+            assertEquals(0, f.providerCalls); assertEquals(0, countPath(f.api, "/results/"));
         }
-        assertEquals(0, mismatched.providerCalls); assertEquals(0, countPath(mismatched.api, "/results/"));
-        Fixture expired = new Fixture(); expired.delegation = "{\"accessToken\":\"" + PROVIDER_TOKEN + "_" + marker + "\",\"expiresAt\":\"" + iso(expired.clock.wall) + "\"}";
-        try { expired.run(); fail(); } catch (Failure error) { assertEquals("NATIVE_RESPONSE_REJECTED", error.code); assertFalse(error.getMessage().contains(marker)); }
-        assertEquals(0, expired.providerCalls);
+        Fixture expired = new Fixture(); expired.delegation = "{\"accessToken\":\"" + PROVIDER_TOKEN + "\",\"expiresAt\":\"" + iso(expired.clock.wall) + "\"}";
+        expired.fails("NATIVE_BOOKINGS_DELEGATION_REJECTED"); assertEquals(0, expired.providerCalls);
     }
 
     @Test public void badListBoundariesNeverReachTheResultWrite() throws Exception {
         String fiftyOne = "{\"content\":[" + repeats("{\"id\":\"x\",\"isCancelled\":false}", 51) + "]}";
         for (String bad : Arrays.asList("{\"content\":[{\"id\":\"" + repeats("x", 129).replace(",", "") + "\",\"isCancelled\":false}]}", fiftyOne, "{\"content\":[{\"id\":\"x\"}]}", "{\"content\":[{\"id\":\"\",\"isCancelled\":false}]}", "{\"content\":[{\"id\":{},\"isCancelled\":false}]}")) {
-            Fixture f = new Fixture(); Credential before = f.store.value; f.list = bad; f.fails("NATIVE_RESPONSE_REJECTED");
+            Fixture f = new Fixture(); Credential before = f.store.value; f.list = bad; f.fails("NATIVE_BOOKINGS_LIST_REJECTED");
             assertEquals(1, f.providerPaths.size()); assertEquals(0, countPath(f.api, "/results/")); assertEquals(0, countPath(f.api, "/complete"));
             assertSame(before, f.store.value);
         }
+    }
+
+    @Test public void malformedDetailsAreClosedAtTheDetailsStageWithoutResultWrite() throws Exception {
+        Fixture f = new Fixture(); f.details = "{\"unterminated\":";
+        f.fails("NATIVE_BOOKINGS_DETAILS_REJECTED");
+        assertEquals(2, f.providerPaths.size()); assertEquals(0, countPath(f.api, "/results/")); assertEquals(0, countPath(f.api, "/complete"));
     }
 
     @Test public void cancellationAndProviderFailureStopBeforeAnyLaterWrite() throws Exception {
@@ -236,12 +237,12 @@ public class AndroidUpcomingBookingsRefreshTest {
     }
 
     @Test public void rejectedResultDoesNotCompleteAndApi401RetiresNativeAuthorization() throws Exception {
-        Fixture rejected = new Fixture(); rejected.result = "{\"accepted\":false,\"replayed\":false,\"itemCount\":0}"; rejected.fails("NATIVE_RESPONSE_REJECTED");
+        Fixture rejected = new Fixture(); rejected.result = "{\"accepted\":false,\"replayed\":false,\"itemCount\":0}"; rejected.fails("NATIVE_BOOKINGS_RESULT_REJECTED");
         assertEquals(0, countPath(rejected.api, "/complete"));
-        Fixture incomplete = new Fixture(); incomplete.result = "{\"accepted\":true}"; incomplete.fails("NATIVE_RESPONSE_REJECTED");
+        Fixture incomplete = new Fixture(); incomplete.result = "{\"accepted\":true}"; incomplete.fails("NATIVE_BOOKINGS_RESULT_REJECTED");
         assertEquals(0, countPath(incomplete.api, "/complete"));
         Fixture missingBookings = new Fixture(); missingBookings.complete = "{\"screen\":\"MY_BOOKINGS\",\"state\":\"READY\",\"completedCommands\":1,\"totalCommands\":1}";
-        missingBookings.fails("NATIVE_RESPONSE_REJECTED");
+        missingBookings.fails("NATIVE_BOOKINGS_COMPLETION_REJECTED");
         Fixture revoked = new Fixture(); revoked.failPath = "result";
         AndroidSessionEngine.Sender sender = request -> request.path.contains("/results/") ? json(401, "{}") : revoked.send(request);
         try { new AndroidUpcomingBookingsRefresh(revoked.policy, revoked.engine, sender, revoked::provider, revoked.clock).run(revoked.engine.nativeAccess(), () -> {}); fail(); }

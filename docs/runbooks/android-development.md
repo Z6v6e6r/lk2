@@ -52,7 +52,12 @@ one delegation refresh and one replay of that GET. Other provider failures have 
 fallback; result/complete lost responses may replay only the same payload and idempotency key.
 Partial failure never completes a projection or returns an invented empty result.
 
-Version 1.9/code10 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
+Version 1.10/code11 corrects a 1.9 contract mismatch: delegated Viva access tokens are opaque,
+not necessarily JWTs with a `tenant_key` claim. Native code accepts only bounded Bearer-safe token
+bytes from the authenticated endpoint and keeps the fixed plan tenant/host and current user lease.
+Rejected responses expose only one reviewed stage code, never raw payload or credential details.
+
+Version 1.10/code11 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
 debug-signing identity. Verify the fixed provider host and tenant, protocol/body bounds, 401 versus
 403 handling, exact replay, logout/account changes and token/payload absence in bridge/errors/store
 with native instrumentation. Physical-device acceptance must separately open My Records and
