@@ -763,3 +763,115 @@ This establishes server rollout/recovery evidence only. Tenant/provider activati
 calls, token registration, remote push delivery and device acceptance remain separately approved
 and verified steps. LOCAL mocked adapter/rename checks and Linux CI lock checks do not establish
 STAGING or PRODUCTION execution.
+
+### Migration-only and API/Worker backup preparation
+
+The Android API/Worker bridge requires a post-101 backup, while the current database can still
+have exactly the pre-99 ledger. Treat the migration and the post-migration backup as separate
+approved operations, before activating the prepared FCM runtime set. The application candidate
+remains publication `11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1`; changing the
+controller does not require rebuilding or republishing those images.
+
+Enroll the final reviewed controller X with its exact source CI. The previous controller is
+`72ca7789b2a4cd93537b442f75c1b8258fce13a0`, tree
+`8a79178d7e340c4ce7008bbf2c0b2b411e704572`. Base-to-X lineage permits only unique regular
+`100644` A/M entries from the exact controller/test/runbook allowlist. Delete, rename, mode/type
+change, symlink, unrelated files and dirty source are rejected. CI binds the actual X/tree,
+not an assumed future head. During separately approved enrollment, preserve root-private source
+custody and normalize tracked regular source files to 0644 and executable source files to 0755
+inside root-owned source directories. Do not apply those modes to secrets: runtime files stay
+0600 and runtime directories stay 0700. A source checkout saved with umask 077 can otherwise fail
+an explicit `readUpgradeFile(..., 0644)` gate.
+
+The pre-migration backup uses the existing Web producer operation and its original
+`backups/<X>-<controller-source-CI>-1-web` directory. Its receipt must pass the complete canonical
+validator: root custody, freshness, exact dump path and SHA, baseline identity, immutable restore
+image, and matching pre-99 source/restored ledger. The migration does not copy that backup into
+another transaction directory or rewrite its receipt.
+
+A migration-only transition must preserve current API/Worker container identities and healthy
+state, excluded services, PostgreSQL identity and the complete current secret-set inode/file
+hashes. Current secret-set identity is independently observed and need not equal the API release.
+The one-shot migrator consumes only current `migrator.env`; no candidate secret swap, API/Worker
+restart or FCM credential read/mount belongs to this transition. Verify its actual connection,
+restricted role, target cluster/database and the precise DDL/reference/trigger permissions for
+0096/0097. Also verify runtime/default ACL compatibility for new tables in `profile` and `identity`;
+a generic notification-schema role check is insufficient. Missing role or target proof fails
+closed, without granting permissions as part of the migration controller.
+
+Save immutable operation/plan and the complete private preparation capsule before publishing
+shared ownership. Persist create/start intent before Docker mutation, identify an ambiguous
+create by exact deterministic name/operation label in **all** container states, and separate
+start acknowledgement from bounded waiting. Never infer that a container is absent from
+`docker ps` alone. A partial ledger (including 100), foreign/multiple container, running migrator,
+nonzero/unknown exit or runtime/secret drift preserves locks and evidence for an operator decision.
+There is no automatic DDL retry or database rollback. Retain exact terminal containers as evidence;
+terminal reconciliation does not authorize replay or deletion. Only an explicit reconciliation
+reattests the unchanged boundary and removes proven owned locks, durably and resumably.
+
+After proven exit 0 and the exact 101-row ledger, produce a **new** post-migration backup with
+`PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2`. It targets only the fixed published candidate and
+`backups/<candidate-release-id>-api-worker`, and binds X/tree/source-CI to the immutable migration
+capsule/plan and successful receipt. The expected JSON tuple ledger digest is
+`34e0fb1115e0066733c6ede34ab1d9fb8fcc2842f2df192fbaefc03a97ce1c2d`; it differs from the
+text migration-manifest digest used by the packaged-ledger validator. Both source/restored
+ledger proofs must match. V1 Web backup behavior remains unchanged. Moving a Web dump or editing
+its receipt is not compatible backup custody.
+
+The existing capacity guard remains mandatory. An isolated restore uses at least
+`databaseBytes * 3 + 256 MiB` tmpfs, plus 2 GiB available-memory headroom; disk requires
+`databaseBytes * 2 + 5 GiB`. Failure stops before dump or restore creation. Increasing Timeweb RAM
+is a separately approved infrastructure change and reboots the VM, invalidating startedAt/restart
+preimages; refresh and review those inputs rather than silently rebasing an operation. A
+persistent-disk or off-host restore changes storage/data custody and requires a separate design
+and authority. This source mode does not weaken capacity checks or provide those alternatives.
+
+The migration request is the root-only file
+`/opt/phub/timeweb-beta/operator/api-worker-migration.json`, schema
+`PHUB_TIMEWEB_API_WORKER_MIGRATION_OPERATION_V1`. Copy exact fields from the owning validator;
+include the fresh API/Worker identities, actual secret-set release ID and five file hashes,
+controller X/tree/source-CI, the fixed publication/artifact tuple and a 20–60 minute expiry.
+It contains no caller-authored role PASS flag. Its confirmation is
+`MIGRATE_0096_0097_11954FFD6D7B_FROM_0D6078BE7A50_NO_API_WORKER_SECRET_OR_FCM_CHANGE`.
+Only after exact live authority, invoke:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin HOME=/root /usr/bin/node \
+  /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-migration /opt/phub/timeweb-beta/operator/api-worker-migration.json
+```
+
+The sealed private plan precedes the shared pointer and provision fence. Two deterministic
+read-only role-probe containers use the pinned migrator image with current API/migrator env
+files and catalog queries only. They verify cluster/database, wire/session roles and required
+capabilities/default ACLs. Missing `pg_control_system()` permission is `ROLE_PROOF_UNKNOWN`,
+not a reason to grant it. Probe and one-shot migrator containers are retained and never replayed.
+The actual Docker config image ID is read locally and bound into the plan; it is not the OCI
+index digest from the published reference. Runtime env values are compared in memory and never
+saved in the evidence files. This operation creates no FCM credential mount.
+
+The immutable `migration-success.json` binds the exact container and derived `role-proof.json`;
+`migration-receipt.json` remains the strict mutable phase journal. `SUCCESS` retains ownership.
+After explicit reconciliation authority, use the same frozen request (expired requests may only
+reconcile):
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin HOME=/root /usr/bin/node \
+  /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-migration-reconcile /opt/phub/timeweb-beta/operator/api-worker-migration.json
+```
+
+Reconciliation proves exact exited-zero/post-101 success or untouched pre-99 with no mutating
+start before `RECONCILED`; running/partial/unknown outcomes retain ownership. A capsule orphan
+before publication can abort only with unchanged preimages and no started migration. Keep all
+terminal evidence and containers; an aborted operation cannot be replayed or silently replaced.
+A renewed attempt or cleanup is a separately reviewed decision.
+
+V2 backup pins `controllerSourceCiRunId`, `migrationPlanSha256` and
+`migrationSuccessSha256`. The enrolled Python tool reuses the source-controlled Node proof
+validator instead of trusting a root-written status boolean or duplicating role schemas. Its
+Node reader receives bytes through stdin and a clean environment, without ambient Docker/Compose
+or Node overrides. It checks exact proof bytes/custody, actual retained migration/probe containers,
+unchanged runtime/secrets and post-101 ledger at each guard. Only the producer's exact owned
+restore ID/operation is excluded from that unchanged boundary. A changed proof fingerprint stops
+backup; no file relocation or receipt rewriting is available.

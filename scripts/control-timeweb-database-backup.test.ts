@@ -59,6 +59,77 @@ describe('Timeweb backup/isolated restore preparation', () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+  it('emits an API/Worker receipt accepted by both the current backup and packaged-ledger validators', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-backup-consumer-'));
+    try {
+      const fixture = spawnSync(
+        'python3',
+        [
+          '-I',
+          '-S',
+          '-B',
+          'scripts/test-timeweb-database-backup.py',
+          '--emit-api-worker-consumer-fixture',
+          directory,
+        ],
+        { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir() } },
+      );
+      expect(fixture.status, fixture.stderr).toBe(0);
+      const { transaction } = parseStrictJson<{ transaction: string }>(fixture.stdout);
+      expect(transaction).toMatch(
+        /11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1-api-worker$/u,
+      );
+      const program = `
+        import assert from 'node:assert/strict';
+        import { createHash } from 'node:crypto';
+        import fs from 'node:fs';
+        import { readdirSync, readFileSync } from 'node:fs';
+        import {syncBuiltinESMExports} from 'node:module';
+        const original=fs.lstatSync;
+        fs.lstatSync=(path)=>{const value=original(path);return Object.assign(Object.create(Object.getPrototypeOf(value)),value,{uid:0,gid:0,mode:(value.mode & ~0o777)|(value.isDirectory()?0o700:0o600)});};
+        syncBuiltinESMExports();
+        const {validateUpgradeBackup}=await import('./scripts/timeweb-api-web-upgrade.js');
+        const {validateApiWorkerBackupLedger}=await import('./scripts/timeweb-api-worker-upgrade.js');
+        const transaction=process.argv[1], candidate=process.argv[2], baseline=process.argv[3];
+        const receiptPath=transaction+'/database-backup-receipt.json', bytes=fs.readFileSync(receiptPath), receipt=JSON.parse(bytes);
+        const hash=(v)=>createHash('sha256').update(v).digest('hex');
+        const packaged=readdirSync('packages/database/migrations').filter(v=>v.endsWith('.sql')).sort().map(filename=>({filename,checksum:hash(readFileSync('packages/database/migrations/'+filename))}));
+        assert.equal(validateUpgradeBackup(transaction,{releaseId:baseline}).path,receiptPath);
+        validateApiWorkerBackupLedger(receipt,packaged);
+        for(const [key,value] of [['sourceLedgerSha256','f'.repeat(64)],['restoredLedgerSha256','f'.repeat(64)],['restoreImage','postgres:latest']]) {
+          fs.writeFileSync(receiptPath,JSON.stringify({...receipt,[key]:value}));
+          assert.throws(()=>validateApiWorkerBackupLedger(JSON.parse(fs.readFileSync(receiptPath)),packaged));
+        }
+        fs.writeFileSync(receiptPath,JSON.stringify({...receipt,backupFile:transaction+'/manual-move.pgcustom'}));
+        assert.throws(()=>validateUpgradeBackup(transaction,{releaseId:baseline}));
+        fs.writeFileSync(receiptPath,bytes);
+        const moved=transaction+'-manual-move'; fs.mkdirSync(moved); fs.copyFileSync(transaction+'/database.pgcustom',moved+'/database.pgcustom'); fs.copyFileSync(receiptPath,moved+'/database-backup-receipt.json');
+        assert.throws(()=>validateUpgradeBackup(moved,{releaseId:baseline}));
+        assert.equal(receipt.backupFile,transaction+'/database.pgcustom');
+        assert.equal(candidate,'11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1');
+        console.log(JSON.stringify({status:'API_WORKER_CONSUMER_COMPATIBILITY_PASS',negativeCases:5}));
+      `;
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          program,
+          transaction,
+          '11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1',
+          '0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1',
+        ],
+        { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(parseStrictJson(result.stdout)).toEqual({
+        status: 'API_WORKER_CONSUMER_COMPATIBILITY_PASS',
+        negativeCases: 5,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it('runs mock-only custody, isolation, recovery and receipt regression scenarios', () => {
     const result = spawnSync(

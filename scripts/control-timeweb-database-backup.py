@@ -19,6 +19,21 @@ ROOT = Path('/opt/phub/timeweb-beta')
 REQUEST = ROOT / 'operator/database-backup-restore.json'
 LOCK = ROOT / 'standard/active'
 BASELINE = '0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1'
+API_WORKER_CANDIDATE = '11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1'  # gitleaks:allow public Git/OCI release identity
+# This is the canonical JSON tuple digest, not the textual migration-manifest digest.
+API_WORKER_LEDGER_SHA256 = '34e0fb1115e0066733c6ede34ab1d9fb8fcc2842f2df192fbaefc03a97ce1c2d'
+API_WORKER_PRE_LEDGER_SHA256 = '025c5ee129bd583131192439d991f0dbbba4fbd19c31c1215bca5adcee9ce17c'
+MIGRATION_BASE_SHA = '72ca7789b2a4cd93537b442f75c1b8258fce13a0'
+MIGRATION_BASE_TREE = '8a79178d7e340c4ce7008bbf2c0b2b411e704572'
+API_WORKER_MIGRATION_CONTROLLER_FILES = frozenset([
+    'scripts/control-timeweb-database-backup.py', 'scripts/control-timeweb-database-backup.test.ts',
+    'scripts/test-timeweb-database-backup.py', 'scripts/timeweb-api-worker-migration.d.ts',
+    'scripts/timeweb-api-worker-migration.js', 'scripts/timeweb-api-worker-migration.test.ts',
+    'scripts/timeweb-api-worker-migration.adapter.test.ts', 'scripts/timeweb-api-worker-migration-role.js',
+    'scripts/timeweb-api-worker-migration-role.d.ts', 'scripts/timeweb-api-worker-migration-role.test.ts',
+    'scripts/timeweb-api-worker-contract.js', 'scripts/run-timeweb-standard-delivery.js',
+    'docs/runbooks/timeweb-standard-delivery.md', 'docs/runbooks/android-chats-fcm.md',
+])
 PG_ID = 'fe614a3312e446e8036243be3781590bfe90b5da037b83580abd410d4514e84c'
 PG_IMAGE = 'docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685'
 API_BASELINE = {'id': '6f7197c220269281e0268f1fbe9881a3cb6fa863c3a5a928ca2d47ef363132c0',
@@ -31,8 +46,10 @@ PG_BASELINE = {'id': PG_ID, 'image': PG_IMAGE, 'imageId': PG_IMAGE.split('@')[1]
                'startedAt': '2026-08-28T16:49:17.916395698Z'}
 TARGET = {'hostname': 'lk2.padlhub.su', 'serverId': 8886471, 'projectId': 262717}
 ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/root', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8',
-       'DOCKER_HOST': 'unix:///var/run/docker.sock', 'GIT_CONFIG_NOSYSTEM': '1',
-       'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_NO_REPLACE_OBJECTS': '1'}
+       'DOCKER_HOST': 'unix:///var/run/docker.sock', 'DOCKER_CONFIG': '/proc/self/phub-nonexistent-docker-config',
+       'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_OPTIONAL_LOCKS': '0',
+       'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_NO_LAZY_FETCH': '1', 'GIT_NO_PROMISOR_FETCH': '1',
+       'GIT_ALTERNATE_OBJECT_DIRECTORIES': ''}
 MAX_DUMP = 64 * 1024 ** 3
 SHA = re.compile(r'[a-f0-9]{40}\Z')
 HASH = re.compile(r'[a-f0-9]{64}\Z')
@@ -94,19 +111,45 @@ def now_iso():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
 
+def operation_mode(value):
+    if value['schema'] == 'PHUB_TIMEWEB_BACKUP_OPERATION_V1':
+        return 'web', value['releaseId']
+    if value['schema'] == 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2':
+        return 'api-worker', value['candidateReleaseId']
+    raise Stop('TARGET')
+
+
 def validate_operation(value, now, file_sha):
-    exact(value, ['schema', 'target', 'toolCommit', 'toolFileSha256', 'releaseId', 'controllerSha',
-                  'toolProofSha256', 'toolInstallationSha256',
-                  'controllerTree', 'controllerConfigSha256', 'expectedBoundarySha256',
-                  'expectedApi', 'expectedPostgres', 'expiresAt', 'confirmation'])
-    need(value['schema'] == 'PHUB_TIMEWEB_BACKUP_OPERATION_V1' and value['target'] == TARGET, 'TARGET')
+    common = ['schema', 'target', 'toolCommit', 'toolFileSha256', 'controllerSha',
+              'toolProofSha256', 'toolInstallationSha256', 'controllerTree',
+              'controllerConfigSha256', 'expectedBoundarySha256', 'expectedApi',
+              'expectedPostgres', 'expiresAt', 'confirmation']
+    schema = value.get('schema') if isinstance(value, dict) else None
+    if schema == 'PHUB_TIMEWEB_BACKUP_OPERATION_V1':
+        exact(value, common + ['releaseId'])
+        mode = 'web'
+        release_id = value['releaseId']
+    elif schema == 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2':
+        extra=['candidateReleaseId', 'expectedLedgerSha256','controllerSourceCiRunId','migrationPlanSha256','migrationSuccessSha256']
+        exact(value, common + extra)
+        mode = 'api-worker'
+        release_id = value['candidateReleaseId']
+        need(release_id == API_WORKER_CANDIDATE and value['expectedLedgerSha256'] == API_WORKER_LEDGER_SHA256,
+             'API_WORKER_OPERATION')
+        need(re.fullmatch(r'[1-9][0-9]*', value['controllerSourceCiRunId'] or '')
+             and HASH.fullmatch(value['migrationPlanSha256'] or '')
+             and HASH.fullmatch(value['migrationSuccessSha256'] or '')
+             and value['toolCommit']==value['controllerSha'], 'API_WORKER_PROOF')
+    else:
+        raise Stop('TARGET')
+    need(value['target'] == TARGET, 'TARGET')
     need(SHA.fullmatch(value['toolCommit'] or '') and value['toolFileSha256'] == file_sha
          and SHA.fullmatch(value['controllerSha'] or '') and SHA.fullmatch(value['controllerTree'] or '')
          and HASH.fullmatch(value['controllerConfigSha256'] or '')
          and HASH.fullmatch(value['toolProofSha256'] or '') and HASH.fullmatch(value['toolInstallationSha256'] or '')
          and HASH.fullmatch(value['expectedBoundarySha256'] or ''), 'TOOL_SOURCE')
-    match = RELEASE.fullmatch(value['releaseId'] or '')
-    need(match and match[1] == value['controllerSha'], 'RELEASE')
+    match = RELEASE.fullmatch(release_id or '')
+    need(match and (mode == 'api-worker' or match[1] == value['controllerSha']), 'RELEASE')
     fields = ['id', 'image', 'imageId', 'releaseId', 'revision', 'restarts', 'startedAt']
     for key in ['expectedApi', 'expectedPostgres']:
         exact(value[key], fields)
@@ -117,8 +160,42 @@ def validate_operation(value, now, file_sha):
     need(api == API_BASELINE, 'API_BASELINE')
     need(pg == PG_BASELINE, 'POSTGRES_BASELINE')
     need(1200 <= utc(value['expiresAt']) - now <= 3600, 'EXPIRY')
-    need(value['confirmation'] == 'BACKUP_RESTORE_' + match[1][:12].upper() + '_KEEP_API_0D6078BE7A50', 'CONFIRMATION')
+    confirmation = ('BACKUP_RESTORE_' + match[1][:12].upper() + '_KEEP_API_0D6078BE7A50'
+                    if mode == 'web' else
+                    'BACKUP_RESTORE_API_WORKER_11954FFD6D7B_KEEP_API_0D6078BE7A50')
+    need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
+
+
+def v2_migration_proof(op, request_bytes, source, restore=None):
+    """Bind a post-0097 backup to a reconciled immutable migration proof before any dump."""
+    if op['schema'] != 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2':
+        return
+    prefix=['/usr/bin/git','-C',str(source),'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
+    need(command(prefix+['rev-parse',MIGRATION_BASE_SHA+'^{tree}'], 'CONTROLLER_LINEAGE').decode().strip()==MIGRATION_BASE_TREE, 'CONTROLLER_LINEAGE')
+    command(prefix+['merge-base','--is-ancestor',MIGRATION_BASE_SHA,op['controllerSha']], 'CONTROLLER_LINEAGE')
+    raw=command(prefix+['diff','--no-renames','--raw','--abbrev=40','-z',MIGRATION_BASE_SHA,op['controllerSha']], 'CONTROLLER_LINEAGE').split(b'\0')
+    rows=[v for v in raw if v]
+    need(rows and len(rows)%2==0, 'CONTROLLER_LINEAGE')
+    seen=set()
+    for index in range(0,len(rows),2):
+        match=re.fullmatch(rb':([0-7]{6}) ([0-7]{6}) [a-f0-9]{40} [a-f0-9]{40} ([AM])',rows[index])
+        path=os.fsdecode(rows[index+1])
+        need(match and path not in seen and path in API_WORKER_MIGRATION_CONTROLLER_FILES
+             and match.group(2)==b'100644' and (match.group(3)==b'A' and match.group(1)==b'000000' or match.group(3)==b'M' and match.group(1)==b'100644'), 'CONTROLLER_LINEAGE')
+        seen.add(path)
+    expected={'controllerSha':op['controllerSha'],'controllerTree':op['controllerTree'],
+              'controllerSourceCiRunId':op['controllerSourceCiRunId'],'candidateReleaseId':op['candidateReleaseId'],
+              'migrationPlanSha256':op['migrationPlanSha256'],'migrationSuccessSha256':op['migrationSuccessSha256']}
+    if restore is not None:
+        exact(restore,['id','operationSha256'])
+        need(HASH.fullmatch(restore['id'] or '') and HASH.fullmatch(restore['operationSha256'] or ''), 'MIGRATION_RESTORE')
+    program="import {attestMigrationBackupProof} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-worker-migration.js';import fs from 'node:fs';const value=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(await attestMigrationBackupProof(value.expected,value.restore))+'\\n');"
+    node_env={key:ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
+    result=strict(command(['/usr/bin/node','--input-type=module','-e',program], 'MIGRATION_ATTESTATION', input_data=encoded({'expected':expected,'restore':restore}), environment=node_env, timeout=30))
+    exact(result,['schema','containerId','imageId','proofSha256'])
+    need(result['schema']=='PHUB_TIMEWEB_MIGRATION_BACKUP_ATTESTATION_V1' and HASH.fullmatch(result['containerId'] or '') and re.fullmatch(r'sha256:[a-f0-9]{64}',result['imageId'] or '') and HASH.fullmatch(result['proofSha256'] or ''), 'MIGRATION_ATTESTATION')
+    return result
 
 
 def ledger_bytes(data):
@@ -304,14 +381,15 @@ def dump_stream(path, expected_sha):
         os.close(fd)
 
 
-def command(args, code, stdin=None, stdout=subprocess.PIPE, timeout=120, file_limit=None):
+def command(args, code, stdin=None, input_data=None, stdout=subprocess.PIPE, timeout=120, file_limit=None, environment=ENV):
+    need(not (stdin is not None and input_data is not None) and (input_data is None or isinstance(input_data,bytes)), 'COMMAND_INPUT')
     if file_limit is not None:
         need(type(file_limit) is int and 0 < file_limit <= MAX_DUMP, 'DUMP_LIMIT')
     def limit_output():
         resource.setrlimit(resource.RLIMIT_FSIZE,(file_limit,file_limit))
     try:
-        result = subprocess.run(args, stdin=stdin, stdout=stdout, stderr=subprocess.DEVNULL,
-                                env=ENV, timeout=timeout, check=False, preexec_fn=limit_output if file_limit else None)
+        result = subprocess.run(args, stdin=stdin, input=input_data, stdout=stdout, stderr=subprocess.DEVNULL,
+                                env=environment, timeout=timeout, check=False, preexec_fn=limit_output if file_limit else None)
     except (OSError, subprocess.TimeoutExpired):
         raise Stop(code + '_UNCERTAIN') from None
     need(result.returncode == 0, code)
@@ -389,7 +467,8 @@ def restore_create_args(name, operation_sha, tmpfs_bytes):
 
 
 def execute(op, request_bytes, file_sha):
-    transaction = ROOT / ('backups/' + op['releaseId'] + '-web')
+    mode, release_id = operation_mode(op)
+    transaction = ROOT / ('backups/' + release_id + '-' + mode)
     incoming = transaction / 'database.pgcustom.incoming'
     final = transaction / 'database.pgcustom'
     receipt_path = transaction / 'database-backup-receipt.json'
@@ -419,6 +498,8 @@ def execute(op, request_bytes, file_sha):
             relative=Path(os.fsdecode(raw))
             need(not relative.is_absolute() and '..' not in relative.parts,'CONTROLLER_PATH')
             secure(source/relative)
+    controller_guard()
+    migration_attestation=v2_migration_proof(op, request_bytes, source)
     restore_id=None
     def container_boundary():
         ids=docker(['ps','-aq','--no-trunc']).decode().split()
@@ -432,6 +513,8 @@ def execute(op, request_bytes, file_sha):
             result.append(row)
         return result
     boundary=container_boundary()
+    if migration_attestation is not None:
+        need(any(row['Id']==migration_attestation['containerId'] for row in boundary), 'MIGRATION_CONTAINER_BOUNDARY')
     need(digest(encoded(boundary))==op['expectedBoundarySha256'], 'BASELINE_BOUNDARY')
     def guard():
         need(time.time()<utc(op['expiresAt']),'EXPIRED_OPERATION')
@@ -442,6 +525,9 @@ def execute(op, request_bytes, file_sha):
         need(container_boundary()==boundary,'CONTAINER_BOUNDARY_DRIFT')
         controller_guard()
         need(tool_custody(op)==installation_bytes,'TOOL_DRIFT')
+        if migration_attestation is not None:
+            current=v2_migration_proof(op, request_bytes, source, {'id':restore_id,'operationSha256':operation_sha} if restore_id else None)
+            need(current==migration_attestation,'MIGRATION_ATTESTATION_DRIFT')
     guard()
     image = strict(docker(['image','inspect','--format','{"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}}}', PG_IMAGE]))
     need(image['Os']=='linux' and image['Architecture']=='amd64' and PG_IMAGE in image.get('RepoDigests', []), 'RESTORE_IMAGE')
@@ -466,6 +552,8 @@ def execute(op, request_bytes, file_sha):
              and read_secure(LOCK/'backup-restore.json')==marker,'LOCK_DRIFT')
     guard(); owned_lock(); phase('LOCKED')
     before = ledger_bytes(source_query(SOURCE_LEDGER))
+    if mode == 'api-worker':
+        need(digest(before) == API_WORKER_LEDGER_SHA256, 'API_WORKER_LEDGER')
     size_data = source_query(SOURCE_SIZE).decode().strip()
     need(re.fullmatch(r'[1-9][0-9]*',size_data),'DATABASE_SIZE')
     memory = Path('/proc/meminfo').read_text()
@@ -487,7 +575,7 @@ def execute(op, request_bytes, file_sha):
     guard(); owned_lock()
     need(ledger_bytes(source_query(SOURCE_LEDGER))==before,'SOURCE_LEDGER_DRIFT')
     phase('DUMP_VERIFIED',dumpSha256=dump_sha,sourceLedgerSha256=digest(before))
-    match=RELEASE.fullmatch(op['releaseId'])
+    match=RELEASE.fullmatch(release_id)
     name='phub-timeweb-restore-'+match[1][:12]+'-'+match[2]+'-1'
     phase('RESTORE_CREATE_INTENT',containerName=name,restoreImage=PG_IMAGE)
     container=docker(restore_create_args(name,operation_sha,tmpfs),'RESTORE_CREATE').decode().strip()
@@ -537,7 +625,7 @@ def execute(op, request_bytes, file_sha):
     guard(); owned_lock()
     (LOCK/'backup-restore.json').unlink();sync_directory(LOCK);LOCK.rmdir();sync_directory(LOCK.parent)
     return {'status':'BACKUP_RESTORE_VERIFIED','receiptSha256':digest(read_secure(receipt_path)),
-            'releaseId':op['releaseId'],'authorizesDeploy':False,'dumpBytesPrinted':False}
+            'releaseId':release_id,'authorizesDeploy':False,'dumpBytesPrinted':False}
 
 
 def main():
