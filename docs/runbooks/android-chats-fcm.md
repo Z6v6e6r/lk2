@@ -112,7 +112,11 @@ tenant before changing credentials, deploying or applying either operator.
    `/run/phub/fcm-service-account.json`; API receives only the path reference. No private key is
    mounted in Web, CUP, Android, Realtime or migrator, or included in a report.
 3. Complete the approved migration-only and post-migration backup prerequisites in
-   [standard delivery](timeweb-standard-delivery.md). Prepare the isolated candidate runtime set,
+   [standard delivery](timeweb-standard-delivery.md). If current RAM cannot satisfy the unchanged
+   tmpfs guard, the separately reviewed pre-99/post-101 encrypted-disk schemas preserve the
+   existing app image digests. They still require physical Linux rehearsal, fresh disk/swap/tool
+   and daemon namespace proof, exact server authority and successful canonical backup receipts;
+   LOCAL mock/CI results do not authorize execution or imply target capacity. Prepare the isolated candidate runtime set,
    preserving current settings until the coordinated API/Worker transition. Only the five FCM
    keys change on API/Worker; keep endpoint encryption keyring, VAPID/receipt settings and all
    Realtime/migrator bytes unchanged. Candidate values are `FCM_ENABLED=true`,

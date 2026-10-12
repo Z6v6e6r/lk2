@@ -818,13 +818,137 @@ text migration-manifest digest used by the packaged-ledger validator. Both sourc
 ledger proofs must match. V1 Web backup behavior remains unchanged. Moving a Web dump or editing
 its receipt is not compatible backup custody.
 
-The existing capacity guard remains mandatory. An isolated restore uses at least
+The existing V1/V2 tmpfs capacity guard remains mandatory and unchanged. It needs at least
 `databaseBytes * 3 + 256 MiB` tmpfs, plus 2 GiB available-memory headroom; disk requires
-`databaseBytes * 2 + 5 GiB`. Failure stops before dump or restore creation. Increasing Timeweb RAM
-is a separately approved infrastructure change and reboots the VM, invalidating startedAt/restart
-preimages; refresh and review those inputs rather than silently rebasing an operation. A
-persistent-disk or off-host restore changes storage/data custody and requires a separate design
-and authority. This source mode does not weaken capacity checks or provide those alternatives.
+`databaseBytes * 2 + 5 GiB`. Its failure never selects another storage mode automatically.
+Increasing Timeweb RAM is a separately approved infrastructure change and reboots the VM,
+invalidating startedAt/restart preimages; refresh and review those inputs rather than silently
+rebasing an operation. The manual encrypted-disk alternative below has separate request schemas
+and requires its own reviewed storage prerequisites and exact live authority.
+
+### Manual encrypted-disk backup restore for pre-99 and post-101
+
+This controller-source mode preserves the APK and all published API/Worker/migrator image
+digests. It is not an app-image release or permission to operate the server. Use it only after a
+physical rehearsal on an isolated, disposable Linux amd64 host and a fresh read-only target
+preflight. Source/LOCAL mock tests and CI cannot establish production loop/LUKS/kernel behavior.
+Missing tools, capacity or namespace proof is STOP; this producer never installs packages,
+loads modules, changes swap/propagation, restarts Docker or falls back to plaintext storage.
+
+The root-only fixed request remains `operator/database-backup-restore.json`. It accepts no
+operator-authored paths, loop devices, sizes, mount options or container IDs. Copy its exact
+fields from `validate_operation`; the two new closed schemas are:
+
+- `PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_V1`: the common Web custody fields plus
+  `controllerSourceCiRunId` and the fixed pre-99 JSON ledger SHA
+  `025c5ee129bd583131192439d991f0dbbba4fbd19c31c1215bca5adcee9ce17c`.
+  `toolCommit == controllerSha` and `releaseId == <controllerSha>-<source-CI>-1` are mandatory.
+  Confirmation: `BACKUP_RESTORE_PRE99_DISK_LUKS2_KEEP_API_0D6078BE7A50`.
+- `PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_V1`: the existing V2 candidate, controller and
+  successful migration capsule/plan/receipt bindings, with the exact post-101 ledger above.
+  Confirmation: `BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50`.
+
+Both require the unchanged pinned API/PostgreSQL baselines, enrolled clean controller source,
+standalone helper Git-object proof and installation custody, current full-container boundary
+digest, and a fresh 20–60 minute expiry. Do not replace these identities after a reboot to make
+an old operation pass. Pre-99 does not invent a successful migration proof; post-101 consumes
+the existing owning Node validator. Its hash-only disk exclusion cannot be downgraded to the
+legacy caller-ID reference. Node independently compares helper bytes to the clean controller
+checkout, then verifies fixed request/plan/storage/kernel fields and rereads actual mountinfo.
+
+Linux prerequisites are fixed root-owned `losetup`, `cryptsetup`, `mke2fs`, `mount`, `umount`,
+`findmnt`, `blkid`, `blockdev`, `dmsetup`, `systemctl` and `dockerd` binaries; loaded loop,
+device-mapper/dm-crypt, ext4 and registered `xts(aes)` support; and `renameat2(RENAME_NOREPLACE)`.
+Require no active swap. The operator disables its core dump and locks its Python pages before
+generating the 64-byte random key. The key is passed only through cryptsetup stdin, never a
+file, argv, env, journal, digest or report. Python zeroization and cryptsetup/kernel memory
+zeroization are not claimed. An active swap or failed memory-lock gate stops before dump.
+The canonical custom-format backup itself remains a root-private plaintext backup under the
+existing backup policy; LUKS protects only the temporary restored PGDATA.
+
+Before any database writer, prove that this process and the fixed systemd Docker daemon share
+the same mount namespace and that the work directory's parent mount is private. Bind the daemon
+PID/start ticks/namespace to the operation and recheck before create and start. A daemon in a
+different namespace could otherwise see the unmounted underlying directory; refusal must
+precede PostgreSQL initialization. No global `mount --make-private` change is permitted.
+
+Capacity uses current read-only `pg_database_size` and available host RAM:
+
+- Restore container memory and swap cap: exactly 2 GiB, with at least another 2 GiB available
+  host memory. This is a bounded restore process, not a Timeweb RAM resize.
+- Restore data target: `max(512 MiB, databaseBytes * 3 + 256 MiB)`.
+- Preallocated LUKS image: that target plus `max(512 MiB, ceil(target / 20))`, rounded up to 4 MiB.
+  Verify actual allocated blocks, device size and mounted free capacity; sparse allocation fails.
+- Before dump, require `min(64 GiB, databaseBytes * 2 + 256 MiB) + 5 GiB` free disk and bound the
+  dump process file size. After the actual dump, require the complete image size plus 5 GiB
+  still free. Full allocation and the remaining reserve are rechecked. Neither estimate permits
+  an oversized real dump or an unbounded Docker log.
+
+The image is a regular root-owned 0600 file inside
+`backups/.disk-restore-<sha256-of-exact-request-bytes>/` (0700). Its unique loop binding must match
+backing dev/inode, offset, size and flags. LUKS2/ext4 UUIDs, mapper name, mountpoint and restore
+container name derive from those immutable bytes. The private ext4 mount uses
+`rw,nosuid,nodev,noexec,noatime`. Docker gets exactly that PGDATA bind with `rprivate`, two
+16-MiB tmpfs mounts, no network/ports/devices/socket/env-file, read-only root, user `postgres`,
+all capabilities dropped, no-new-privileges, 1 CPU, 128 PIDs, no restart and `--log-driver none`.
+Check fixed entrypoint/command, image-default env plus four fixed restore variables, the exact
+operation label and complete containment both before start and during lost-ACK cleanup. Actual
+host/container mountinfo must prove the same mapper device, filesystem root, private propagation,
+namespace inodes, PID and start timestamp; Docker inspect alone is insufficient.
+
+The private work directory holds exact request/plan, hash-only unrelated-container boundary,
+chained metadata events and storage proof. It never saves unrelated container labels, database
+bytes in metadata, keys or command stderr. Metadata is fsynced to a private temporary inode,
+then atomically renamed without replacement; partial `.disk-write-*.tmp` files remain incident
+evidence and are not committed journal events. A separate persistent root-private process lock
+uses nonblocking `flock` to exclude concurrent execute/reconcile invocations. Read-only
+`--attest-disk` deliberately takes no mutation lock because the Node proof calls it recursively.
+
+After pg_restore TOC validation, successful isolated restore and equal source/restored ledger,
+prepare the existing nine-field `PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1` receipt. Remove only
+the proven owned restore container, unmount, close mapper, detach loop and unlink the image.
+Publish the receipt and dump together by atomic no-replace directory rename only after cleanup
+readback and a fresh guard. Canonical consumer paths stay:
+
+- pre-99: `backups/<controllerSha>-<source-CI>-1-web`;
+- post-101: `backups/11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1-api-worker`.
+
+The receipt's canonical dump path, SHA, baseline, immutable PG image, freshness and ledger
+checks are unchanged. No receipt is admitted while cleanup is incomplete. Long reconciliation
+can leave a correctly published but expired receipt; never refresh its timestamp or reuse it
+by editing the receipt. A renewed backup needs a separately reviewed operation.
+
+Only after exact live authority, invoke the enrolled helper with the frozen request:
+
+```sh
+/usr/bin/env -i PATH=/usr/bin:/bin HOME=/root /usr/bin/python3 -I -S -B \
+  /opt/phub/timeweb-beta/operator/tools/<controllerSha>/control-timeweb-database-backup.py \
+  --execute /opt/phub/timeweb-beta/operator/database-backup-restore.json
+```
+
+On an uncertain outcome, never rerun execute. Inspect custody and journal, then obtain exact
+reconciliation authority for the same request. Expired requests may reconcile. Substitute
+`--reconcile-disk` above; it never dumps/restores/formats/opens a mapper/starts a container.
+It cleans only independently proven owned resources and either publishes an already durable
+`PUBLISH_READY` pair or marks the operation aborted while retaining the dump privately. Intent
+must precede each removal; missing resources/locks without a prior removal/unlock intent fail.
+Replay, unrelated cleanup and destructive rollback are not authorized by reconciliation.
+
+Recovery has explicit manual-stop windows: work/capsule or pending lock creation before custody
+is durably recorded, image open before inode proof, mountpoint mkdir before inode proof,
+corrupt committed journal, foreign entries, changed source/runtime/secrets, reboot or namespace
+drift. Tests require STOP and preservation in these windows; automatic recovery is not claimed.
+Never infer ownership from a matching path, remove an unproven object, rewrite a journal or
+silently reset a baseline. Keep incident evidence for a separately scoped operator decision.
+
+LOCAL checks use synthetic fixtures: both canonical consumer validators, capacity/containment,
+namespace refusal, concurrent mutation refusal, partial journal writes, before/after command
+ACK loss and durable-phase faults. Physical Linux rehearsal must separately verify real pinned
+PG dump/restore, loop/LUKS/ext4 and kernel bind visibility, sparse/capacity refusals, ownership
+drift and interrupted cleanup with exact pre/post inventory of its owned devices/mounts. Use a
+disposable host, no production datasets, credentials or daemon socket sharing. A macOS mock or
+a privileged Docker Desktop guest is not exact target/kernel or immutable-image admission proof.
+This source preparation changes no live backup, migration, IAM key or notification state.
 
 The migration request is the root-only file
 `/opt/phub/timeweb-beta/operator/api-worker-migration.json`, schema
@@ -872,6 +996,7 @@ V2 backup pins `controllerSourceCiRunId`, `migrationPlanSha256` and
 validator instead of trusting a root-written status boolean or duplicating role schemas. Its
 Node reader receives bytes through stdin and a clean environment, without ambient Docker/Compose
 or Node overrides. It checks exact proof bytes/custody, actual retained migration/probe containers,
-unchanged runtime/secrets and post-101 ledger at each guard. Only the producer's exact owned
-restore ID/operation is excluded from that unchanged boundary. A changed proof fingerprint stops
+unchanged runtime/secrets and post-101 ledger at each guard. For tmpfs, only the producer's exact owned
+restore ID/operation is excluded from that unchanged boundary. The disk mode instead requires
+its fixed hash-only reference, source-anchored helper, and independently read kernel proof. A changed proof fingerprint stops
 backup; no file relocation or receipt rewriting is available.

@@ -9,6 +9,8 @@ import {
   openSync,
   closeSync,
   fsyncSync,
+  readFileSync,
+  statSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseStrictJson } from './strict-json.js';
@@ -886,6 +888,512 @@ function envValues(kind, imageEnv) {
   }
   return Object.entries(values).map(([key, value]) => `${key}=${value}`);
 }
+const DISK_BACKUP_REQUEST = `${ROOT}/operator/database-backup-restore.json`;
+const DISK_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_V1';
+const DISK_EXCLUSION_SCHEMA = 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V1';
+const diskHostKeys = [
+  'NetworkMode',
+  'ReadonlyRootfs',
+  'Binds',
+  'PortBindings',
+  'Tmpfs',
+  'Privileged',
+  'AutoRemove',
+  'RestartPolicy',
+  'CapAdd',
+  'CapDrop',
+  'SecurityOpt',
+  'PidsLimit',
+  'Memory',
+  'MemorySwap',
+  'NanoCpus',
+  'PublishAllPorts',
+  'Links',
+  'Devices',
+  'DeviceRequests',
+  'VolumesFrom',
+  'PidMode',
+  'IpcMode',
+  'LogConfig',
+];
+
+export function parseDiskRestoreMountinfo(raw) {
+  if (typeof raw !== 'string' || raw.length > 4 * 1024 * 1024) stop('DISK_MOUNTINFO');
+  const decode = (v) => {
+    if (/\\(?![0-7]{3})/.test(v)) stop('DISK_MOUNTINFO_ESCAPE');
+    return v.replace(/\\([0-7]{3})/g, (_, code) => String.fromCharCode(Number.parseInt(code, 8)));
+  };
+  return raw
+    .trim()
+    .split('\n')
+    .map((line) => {
+      const parts = line.split(' - '),
+        left = parts[0].split(/\s+/),
+        right = parts[1]?.split(/\s+/);
+      if (
+        parts.length !== 2 ||
+        left.length < 6 ||
+        right?.length !== 3 ||
+        !/^[0-9]+:[0-9]+$/.test(left[2])
+      )
+        stop('DISK_MOUNTINFO');
+      return {
+        id: left[0],
+        parent: left[1],
+        device: left[2],
+        root: decode(left[3]),
+        target: decode(left[4]),
+        options: left[5].split(','),
+        optional: left.slice(6),
+        fstype: right[0],
+        source: decode(right[1]),
+        superOptions: right[2].split(','),
+      };
+    });
+}
+
+function diskUuid(name) {
+  const namespace = Buffer.from('6ba7b8119dad11d180b400c04fd430c8', 'hex');
+  const bytes = createHash('sha1').update(namespace).update(name).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 15) | 0x50;
+  bytes[8] = (bytes[8] & 63) | 0x80;
+  const v = bytes.toString('hex');
+  return `${v.slice(0, 8)}-${v.slice(8, 12)}-${v.slice(12, 16)}-${v.slice(16, 20)}-${v.slice(20)}`;
+}
+
+export function validateMigrationBackupRestoreReference(operationBytes, expected, reference) {
+  const op = parseStrictJson(operationBytes);
+  if (op.schema === DISK_POST_SCHEMA) {
+    exact(reference, ['schema', 'storageProofSha256']);
+    if (
+      reference.schema !== DISK_EXCLUSION_SCHEMA ||
+      !HASH.test(reference.storageProofSha256 ?? '')
+    )
+      stop('DISK_REFERENCE_DOWNGRADE');
+    return 'disk';
+  }
+  exact(reference, ['id', 'operationSha256']);
+  if (
+    op.schema !== 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2' ||
+    !HASH.test(reference.id ?? '') ||
+    reference.operationSha256 !== hash(operationBytes) ||
+    !same(Object.fromEntries(Object.keys(expected).map((k) => [k, op[k]])), expected) ||
+    op.expectedLedgerSha256 !== POST_LEDGER ||
+    op.toolCommit !== op.controllerSha ||
+    op.confirmation !== 'BACKUP_RESTORE_API_WORKER_11954FFD6D7B_KEEP_API_0D6078BE7A50'
+  )
+    stop('BACKUP_REFERENCE');
+  return 'legacy';
+}
+
+export function validateLegacyBackupRestoreMounts(row) {
+  const targets = ['/var/lib/postgresql/data', '/var/run/postgresql', '/tmp'];
+  if (
+    !Array.isArray(row.Mounts) ||
+    row.Mounts.some(
+      (v) => v.Type !== 'tmpfs' || v.RW !== true || !targets.includes(v.Destination),
+    ) ||
+    new Set(row.Mounts.map((v) => v.Destination)).size !== row.Mounts.length ||
+    !((row.State.Status === 'created' && row.Mounts.length === 0) || row.Mounts.length === 3)
+  )
+    stop('BACKUP_RESTORE_MOUNTS');
+}
+
+export function validateDiskRestoreReadback(value, expected, reference, operationBytes) {
+  exact(reference, ['schema', 'storageProofSha256']);
+  if (reference.schema !== DISK_EXCLUSION_SCHEMA || !HASH.test(reference.storageProofSha256 ?? ''))
+    stop('DISK_REFERENCE');
+  exact(value, [
+    'schema',
+    'operationSha256',
+    'storageProofSha256',
+    'plan',
+    'readback',
+    'migration',
+  ]);
+  const op = parseStrictJson(operationBytes);
+  exact(op, [
+    'schema',
+    'target',
+    'toolCommit',
+    'toolFileSha256',
+    'controllerSha',
+    'toolProofSha256',
+    'toolInstallationSha256',
+    'controllerTree',
+    'controllerConfigSha256',
+    'expectedBoundarySha256',
+    'expectedApi',
+    'expectedPostgres',
+    'expiresAt',
+    'confirmation',
+    'candidateReleaseId',
+    'expectedLedgerSha256',
+    'controllerSourceCiRunId',
+    'migrationPlanSha256',
+    'migrationSuccessSha256',
+  ]);
+  const sha = hash(operationBytes),
+    work = `${ROOT}/backups/.disk-restore-${sha}`;
+  if (
+    op.schema !== DISK_POST_SCHEMA ||
+    value.schema !== 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V1' ||
+    value.operationSha256 !== sha ||
+    value.storageProofSha256 !== reference.storageProofSha256 ||
+    !same(value.migration, expected) ||
+    !same(value.migration, Object.fromEntries(Object.keys(expected).map((k) => [k, op[k]]))) ||
+    op.toolCommit !== op.controllerSha ||
+    op.expectedLedgerSha256 !== POST_LEDGER ||
+    op.confirmation !== 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50' ||
+    !same(op.target, { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 })
+  )
+    stop('DISK_OPERATION');
+  const p = value.plan;
+  exact(p, [
+    'schema',
+    'operationSha256',
+    'work',
+    'canonical',
+    'pendingLock',
+    'image',
+    'mount',
+    'publication',
+    'mapperName',
+    'mapperPath',
+    'luksUuid',
+    'filesystemUuid',
+    'mountOptions',
+    'containerName',
+    'restoreImage',
+    'expectedLedgerSha256',
+    'databaseBytes',
+    'restoreDataBytes',
+    'imageBytes',
+    'memoryBytes',
+    'dumpLimitBytes',
+    'diskReserveBytes',
+  ]);
+  if (
+    p.schema !== 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V1' ||
+    p.operationSha256 !== sha ||
+    p.work !== work ||
+    p.canonical !== `${ROOT}/backups/${expected.candidateReleaseId}-api-worker` ||
+    p.pendingLock !== `${ROOT}/standard/.disk-lock-${sha}` ||
+    p.image !== `${work}/restore.luks` ||
+    p.mount !== `${work}/pgdata-mounted` ||
+    p.publication !== `${work}/publication` ||
+    p.mapperName !== `phub-restore-${sha.slice(0, 24)}` ||
+    p.mapperPath !== `/dev/mapper/${p.mapperName}` ||
+    p.containerName !==
+      `phub-timeweb-restore-${bridge.candidateSha.slice(0, 12)}-${bridge.publicationRunId}-1` ||
+    p.restoreImage !== bridge.postgresImage ||
+    p.expectedLedgerSha256 !== POST_LEDGER ||
+    p.mountOptions !== 'rw,nosuid,nodev,noexec,noatime' ||
+    p.memoryBytes !== 2 * 1024 ** 3 ||
+    !Number.isSafeInteger(p.databaseBytes) ||
+    p.databaseBytes <= 0 ||
+    p.databaseBytes > 64 * 1024 ** 3
+  )
+    stop('DISK_PLAN');
+  const data = Math.max(512 * 1024 ** 2, p.databaseBytes * 3 + 256 * 1024 ** 2);
+  const image =
+    Math.ceil((data + Math.max(512 * 1024 ** 2, Math.ceil(data / 20))) / (4 * 1024 ** 2)) *
+    4 *
+    1024 ** 2;
+  if (
+    p.restoreDataBytes !== data ||
+    p.imageBytes !== image ||
+    p.diskReserveBytes !== 5 * 1024 ** 3 ||
+    p.dumpLimitBytes !== Math.min(64 * 1024 ** 3, p.databaseBytes * 2 + 256 * 1024 ** 2) ||
+    p.luksUuid !== diskUuid(`phub-luks-${sha}`) ||
+    p.filesystemUuid !== diskUuid(`phub-ext4-${sha}`)
+  )
+    stop('DISK_CAPACITY_PLAN');
+  exact(value.readback, ['storage', 'kernel', 'container']);
+  const c = value.readback.container;
+  exact(c, ['Id', 'Config', 'HostConfig', 'Mounts', 'State']);
+  exact(c.Config, ['Image', 'User', 'Volumes', 'Labels', 'Env', 'Cmd', 'Entrypoint']);
+  exact(c.HostConfig, diskHostKeys);
+  exact(c.State, ['Status', 'Pid', 'StartedAt']);
+  const h = c.HostConfig,
+    empty = (v) => v == null || (typeof v === 'object' && Object.keys(v).length === 0);
+  const tmpfs = {
+    '/var/run/postgresql': 'rw,nosuid,nodev,noexec,mode=1777,size=16777216',
+    '/tmp': 'rw,nosuid,nodev,noexec,mode=1777,size=16777216',
+  };
+  if (
+    !same(h.LogConfig, { Type: 'none', Config: {} }) ||
+    h.NetworkMode !== 'none' ||
+    h.ReadonlyRootfs !== true ||
+    h.Privileged !== false ||
+    h.AutoRemove !== false ||
+    !same(h.RestartPolicy, { Name: 'no', MaximumRetryCount: 0 }) ||
+    !same(h.CapDrop, ['ALL']) ||
+    !empty(h.CapAdd) ||
+    ![canonical(['no-new-privileges']), canonical(['no-new-privileges:true'])].includes(
+      canonical(h.SecurityOpt),
+    ) ||
+    h.PidsLimit !== 128 ||
+    h.Memory !== 2 * 1024 ** 3 ||
+    h.MemorySwap !== h.Memory ||
+    h.NanoCpus !== 1000000000 ||
+    h.PublishAllPorts !== false ||
+    h.PidMode !== '' ||
+    h.IpcMode !== 'private' ||
+    ['Binds', 'PortBindings', 'Links', 'Devices', 'DeviceRequests', 'VolumesFrom'].some(
+      (k) => !empty(h[k]),
+    ) ||
+    !same(h.Tmpfs, tmpfs) ||
+    (!empty(c.Config.Volumes) && !same(c.Config.Volumes, { '/var/lib/postgresql/data': {} })) ||
+    !Array.isArray(c.Mounts) ||
+    c.Mounts.length !== 3 ||
+    new Set(c.Mounts.map((v) => v.Destination)).size !== 3
+  )
+    stop('DISK_CONTAINMENT');
+  const bind = c.Mounts.filter((v) => v.Type === 'bind'),
+    temps = c.Mounts.filter((v) => v.Type === 'tmpfs');
+  if (
+    bind.length !== 1 ||
+    bind[0].Source !== p.mount ||
+    bind[0].Destination !== '/var/lib/postgresql/data' ||
+    bind[0].RW !== true ||
+    bind[0].Propagation !== 'rprivate' ||
+    temps.length !== 2 ||
+    !same(temps.map((v) => v.Destination).sort(), Object.keys(tmpfs).sort()) ||
+    temps.some((v) => v.RW !== true)
+  )
+    stop('DISK_CONTAINMENT_MOUNTS');
+  if (
+    !Array.isArray(c.Config.Env) ||
+    c.Config.Env.some((v) => typeof v !== 'string' || !v.includes('=')) ||
+    new Set(c.Config.Env.map((v) => v.slice(0, v.indexOf('=')))).size !== c.Config.Env.length ||
+    ![
+      'PGDATA=/var/lib/postgresql/data/phub-restore',
+      'POSTGRES_USER=phub_restore',
+      'POSTGRES_DB=phub_restore',
+      'POSTGRES_HOST_AUTH_METHOD=trust',
+    ].every((v) => c.Config.Env.includes(v)) ||
+    !same(c.Config.Cmd, ['postgres']) ||
+    !same(c.Config.Entrypoint, ['docker-entrypoint.sh']) ||
+    !same(c.Config.Labels, { 'phub.backup-operation': sha })
+  )
+    stop('DISK_CONFIG');
+  validateDiskStorageKernel(value.readback, p);
+  if (
+    !HASH.test(c?.Id ?? '') ||
+    c.Config?.Image !== bridge.postgresImage ||
+    c.Config?.User !== 'postgres' ||
+    c.Config.Labels?.['phub.backup-operation'] !== sha ||
+    c.State?.Status !== 'running' ||
+    !Number.isSafeInteger(c.State?.Pid) ||
+    c.State.Pid < 1 ||
+    value.readback.kernel?.pid !== c.State.Pid ||
+    value.readback.kernel?.startedAt !== c.State.StartedAt
+  )
+    stop('DISK_CONTAINER');
+  return { ...value, requestSha256: sha, id: c.Id };
+}
+
+function validateDiskStorageKernel(readback, plan) {
+  const s = readback.storage,
+    k = readback.kernel;
+  exact(s, ['image', 'loop', 'mapper', 'mount']);
+  exact(s.image, ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink']);
+  exact(s.mapper, ['device', 'minor', 'uuid']);
+  exact(s.mount, ['dev', 'ino', 'uid', 'gid', 'mode']);
+  const integer = (v, min = 0) => Number.isSafeInteger(v) && v >= min;
+  if (
+    !integer(s.image.dev) ||
+    !integer(s.image.ino, 1) ||
+    s.image.uid !== 0 ||
+    s.image.gid !== 0 ||
+    s.image.mode !== 0o100600 ||
+    s.image.nlink !== 1 ||
+    !/^\/dev\/loop[0-9]+$/.test(s.loop ?? '') ||
+    !integer(s.mapper.device) ||
+    !integer(s.mapper.minor) ||
+    s.mapper.uuid !== `CRYPT-LUKS2-${plan.luksUuid.replaceAll('-', '')}-${plan.mapperName}` ||
+    !integer(s.mount.dev) ||
+    !integer(s.mount.ino, 1) ||
+    s.mount.uid !== 0 ||
+    s.mount.gid !== 0 ||
+    s.mount.mode !== 0o41777
+  )
+    stop('DISK_STORAGE');
+  const major = BigInt(s.mapper.device),
+    minor = BigInt(s.mapper.minor);
+  const dev =
+    (minor & 255n) | ((major & 4095n) << 8n) | ((minor & ~255n) << 12n) | ((major & ~4095n) << 32n);
+  if (BigInt(s.mount.dev) !== dev) stop('DISK_STORAGE_DEVICE');
+  exact(k, [
+    'hostNamespace',
+    'containerNamespace',
+    'pid',
+    'startedAt',
+    'hostMount',
+    'containerMount',
+  ]);
+  if (
+    !integer(k.hostNamespace, 1) ||
+    !integer(k.containerNamespace, 1) ||
+    !integer(k.pid, 1) ||
+    k.pid > 2 ** 31 - 1 ||
+    typeof k.startedAt !== 'string'
+  )
+    stop('DISK_KERNEL_FIELDS');
+  for (const [record, target] of [
+    [k.hostMount, plan.mount],
+    [k.containerMount, '/var/lib/postgresql/data'],
+  ]) {
+    exact(record, [
+      'id',
+      'parent',
+      'device',
+      'root',
+      'target',
+      'options',
+      'optional',
+      'fstype',
+      'source',
+      'superOptions',
+    ]);
+    if (
+      !/^[0-9]+$/.test(record.id ?? '') ||
+      !/^[0-9]+$/.test(record.parent ?? '') ||
+      record.device !== `${s.mapper.device}:${s.mapper.minor}` ||
+      record.target !== target ||
+      record.root !== '/' ||
+      record.fstype !== 'ext4' ||
+      record.source !== plan.mapperPath ||
+      !Array.isArray(record.options) ||
+      !Array.isArray(record.optional) ||
+      record.optional.length ||
+      !Array.isArray(record.superOptions) ||
+      [...record.options, ...record.superOptions].some((v) => typeof v !== 'string') ||
+      new Set(record.options).size !== record.options.length ||
+      ['rw', 'nosuid', 'nodev', 'noexec'].some((v) => !record.options.includes(v)) ||
+      record.options.includes('ro')
+    )
+      stop('DISK_KERNEL_FIELDS');
+  }
+}
+
+export function validateDiskRestoreToolBytes(installedBytes, sourceBytes, expectedSha256) {
+  if (
+    !Buffer.isBuffer(installedBytes) ||
+    !Buffer.isBuffer(sourceBytes) ||
+    !HASH.test(expectedSha256 ?? '') ||
+    !installedBytes.equals(sourceBytes) ||
+    hash(sourceBytes) !== expectedSha256
+  )
+    stop('DISK_TOOL_SOURCE');
+}
+
+export function validateDiskRestoreKernelSnapshot(row, attestation, actual) {
+  const expected = attestation.readback,
+    p = attestation.plan;
+  validateDiskStorageKernel(expected, p);
+  const projection = {
+    Id: row.Id,
+    Config: Object.fromEntries(
+      ['Image', 'User', 'Volumes', 'Labels', 'Env', 'Cmd', 'Entrypoint'].map((k) => [
+        k,
+        row.Config[k] ?? null,
+      ]),
+    ),
+    HostConfig: Object.fromEntries(diskHostKeys.map((k) => [k, row.HostConfig[k] ?? null])),
+    Mounts: row.Mounts,
+    State: Object.fromEntries(['Status', 'Pid', 'StartedAt'].map((k) => [k, row.State[k]])),
+  };
+  if (
+    row.Name !== `/${p.containerName}` ||
+    !same(projection, expected.container) ||
+    row.State.Status !== 'running' ||
+    actual.hostNamespace !== expected.kernel.hostNamespace ||
+    actual.containerNamespace !== expected.kernel.containerNamespace
+  )
+    stop('DISK_KERNEL_CONTAINER');
+  const check = (raw, target, record) => {
+    const entries = parseDiskRestoreMountinfo(raw),
+      rows = entries.filter((v) => v.target === target);
+    if (
+      rows.length !== 1 ||
+      !same(rows[0], record) ||
+      rows[0].optional.length ||
+      rows[0].root !== '/' ||
+      rows[0].fstype !== 'ext4' ||
+      ['rw', 'nosuid', 'nodev', 'noexec'].some((v) => !rows[0].options.includes(v)) ||
+      rows[0].options.includes('ro') ||
+      entries.some((v) => v.target.startsWith(`${target}/`))
+    )
+      stop('DISK_KERNEL_MOUNT');
+  };
+  check(actual.hostMountinfo, p.mount, expected.kernel.hostMount);
+  check(actual.containerMountinfo, '/var/lib/postgresql/data', expected.kernel.containerMount);
+  if (
+    actual.afterHostNamespace !== actual.hostNamespace ||
+    actual.afterContainerNamespace !== actual.containerNamespace
+  )
+    stop('DISK_NAMESPACE_DRIFT');
+}
+
+function readDiskRestoreExclusion(expected, reference) {
+  const operationBytes = read(DISK_BACKUP_REQUEST),
+    op = parseStrictJson(operationBytes);
+  // The enrolled script is the independently proven standalone source, never a caller path.
+  if (!SHA.test(op.controllerSha ?? '') || op.controllerSha !== expected.controllerSha)
+    stop('DISK_TOOL');
+  const tool = `${ROOT}/operator/tools/${op.controllerSha}/control-timeweb-database-backup.py`;
+  const sourceTool = `${SOURCE}/scripts/control-timeweb-database-backup.py`;
+  const sourceBytes = read(sourceTool, 0o644),
+    installedBytes = read(tool, 0o755);
+  validateDiskRestoreToolBytes(installedBytes, sourceBytes, op.toolFileSha256);
+  let output;
+  try {
+    output = execFileSync(
+      '/usr/bin/python3',
+      ['-I', '-S', '-B', tool, '--attest-disk', DISK_BACKUP_REQUEST],
+      {
+        encoding: 'utf8',
+        timeout: 30000,
+        maxBuffer: 256 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { PATH: '/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' },
+      },
+    );
+  } catch {
+    stop('DISK_READBACK_UNKNOWN');
+  }
+  const value = validateDiskRestoreReadback(
+    parseStrictJson(output),
+    expected,
+    reference,
+    operationBytes,
+  );
+  if (
+    !read(DISK_BACKUP_REQUEST).equals(operationBytes) ||
+    !read(tool, 0o755).equals(installedBytes) ||
+    !read(sourceTool, 0o644).equals(sourceBytes)
+  )
+    stop('DISK_REQUEST_DRIFT');
+  return value;
+}
+
+function inspectDiskRestoreKernel(row, attestation) {
+  const pid = row.State.Pid;
+  if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2 ** 31 - 1) stop('DISK_PID');
+  const hostNamespace = statSync('/proc/self/ns/mnt').ino;
+  const containerNamespace = statSync(`/proc/${pid}/ns/mnt`).ino;
+  validateDiskRestoreKernelSnapshot(row, attestation, {
+    hostNamespace,
+    containerNamespace,
+    hostMountinfo: readFileSync('/proc/self/mountinfo', 'utf8'),
+    containerMountinfo: readFileSync(`/proc/${pid}/mountinfo`, 'utf8'),
+    afterHostNamespace: statSync('/proc/self/ns/mnt').ino,
+    afterContainerNamespace: statSync(`/proc/${pid}/ns/mnt`).ino,
+  });
+}
+
 function productionOps(op, owner, ignoredRestore = null) {
   const candidate = `${op.candidateSha}-${op.publicationRunId}-1`,
     tx = `${ROOT}/backups/${candidate}-migration`;
@@ -1000,6 +1508,11 @@ function productionOps(op, owner, ignoredRestore = null) {
       let api, worker, pg;
       for (const row of rows) {
         if (ignoredRestore && row.Id === ignoredRestore.id) {
+          if (ignoredRestore.schema === 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V1') {
+            inspectDiskRestoreKernel(row, ignoredRestore);
+            continue;
+          }
+          validateLegacyBackupRestoreMounts(row);
           const h = row.HostConfig;
           if (
             row.Name !==
@@ -1362,10 +1875,14 @@ export async function attestMigrationBackupProof(expected, ignoredRestore = null
   assertNoAmbientComposeOverrides();
   if (expected?.candidateReleaseId !== `${bridge.candidateSha}-${bridge.publicationRunId}-1`)
     stop('BACKUP_TUPLE');
+  let backupReferenceKind = null;
   if (ignoredRestore !== null) {
-    exact(ignoredRestore, ['id', 'operationSha256']);
-    if (!HASH.test(ignoredRestore.id ?? '') || !HASH.test(ignoredRestore.operationSha256 ?? ''))
-      stop('BACKUP_RESTORE_CUSTODY');
+    // The fixed request chooses the branch. Caller shape cannot downgrade DISK to legacy.
+    backupReferenceKind = validateMigrationBackupRestoreReference(
+      read(DISK_BACKUP_REQUEST),
+      expected,
+      ignoredRestore,
+    );
   }
   const tx = `${ROOT}/backups/${expected.candidateReleaseId}-migration`;
   const names = {
@@ -1396,7 +1913,9 @@ export async function attestMigrationBackupProof(expected, ignoredRestore = null
   );
   const proof = validateMigrationProofBundle(bundle, expected);
   sourceAttest(proof.operation);
-  const ops = productionOps(proof.operation, { assertOwned() {} }, ignoredRestore);
+  const diskReference = backupReferenceKind === 'disk' ? ignoredRestore : null;
+  const diskReadback = diskReference ? readDiskRestoreExclusion(expected, diskReference) : null;
+  const ops = productionOps(proof.operation, { assertOwned() {} }, diskReadback ?? ignoredRestore);
   await ops.loadPlan(proof.plan, proof.planBytes, proof.plan.operationSha256);
   if (
     !same(await ops.snapshot(), proof.plan.runtime) ||
@@ -1405,6 +1924,8 @@ export async function attestMigrationBackupProof(expected, ignoredRestore = null
     (await ops.image()) !== proof.plan.imageId
   )
     stop('BACKUP_RUNTIME_DRIFT');
+  if (diskReadback && !same(diskReadback, readDiskRestoreExclusion(expected, diskReference)))
+    stop('DISK_READBACK_DRIFT');
   validateApiWorkerMigrationLedger(await ops.ledger(), POST_LEDGER);
   await ops.attestRoleContainers(proof.role);
   const row = await ops.lookup('migration', proof.plan.imageId, proof.plan.operationSha256);
