@@ -65,7 +65,13 @@ final class AndroidHttpSender implements AndroidSessionEngine.Sender {
                     headerSize += entry.getKey().length() + value.length();
                     if (headerSize > 32_768) throw new Failure("NATIVE_RESPONSE_REJECTED");
                     if (entry.getKey().equalsIgnoreCase("set-cookie")) cookies.add(value);
-                    else headers.put(entry.getKey().toLowerCase(java.util.Locale.ROOT), value);
+                    else {
+                        String name = entry.getKey().toLowerCase(java.util.Locale.ROOT);
+                        // Date must describe one response instant. Preserve a closed invalid
+                        // marker for duplicate values; native expiry validation rejects it.
+                        if (name.equals("date") && headers.containsKey(name)) headers.put(name, "");
+                        else headers.put(name, value);
+                    }
                 }
             }
             int responseLimit = responseLimit(request);

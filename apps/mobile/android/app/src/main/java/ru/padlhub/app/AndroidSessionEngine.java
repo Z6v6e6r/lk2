@@ -104,6 +104,16 @@ final class AndroidSessionEngine {
     private String activeBearer;
     private long accessDeadline, generation;
 
+    /** Ephemeral native-only custody for a reviewed capability. Never crosses the bridge. */
+    static final class NativeAccess {
+        final String bearer;
+        final Principal identity;
+        final long generation;
+        NativeAccess(String bearer, Principal identity, long generation) {
+            this.bearer = bearer; this.identity = identity; this.generation = generation;
+        }
+    }
+
     AndroidSessionEngine(AndroidSessionPolicy policy, Store store, Sender sender) {
         this(policy, store, sender, null);
     }
@@ -192,6 +202,29 @@ final class AndroidSessionEngine {
 
     synchronized boolean hasPendingLogout() throws Failure {
         return requestedLogoutKey != null || store.logoutIntent() != null;
+    }
+
+    synchronized NativeAccess nativeAccess() throws Failure {
+        Credential saved = current();
+        if (saved == null || saved.logoutKey != null || requestedLogoutKey != null || activeBearer == null
+            || activeIdentity == null || !activeIdentity.same(saved.identity) || clock.elapsed() >= accessDeadline)
+            throw new Failure("AUTH_SESSION_REVOKED");
+        return new NativeAccess(activeBearer, activeIdentity, generation);
+    }
+
+    synchronized void requireNativeAccess(NativeAccess access) throws Failure {
+        Credential saved = current();
+        if (access == null || access.generation != generation || requestedLogoutKey != null || activeBearer == null
+            || store.logoutIntent() != null || saved == null || saved.refreshKey != null || saved.logoutKey != null
+            || activeIdentity == null || !access.identity.same(activeIdentity) || !activeIdentity.same(saved.identity)
+            || !access.bearer.equals(activeBearer))
+            throw new Failure("NATIVE_OPERATION_CANCELLED");
+        if (clock.elapsed() >= accessDeadline) throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
+    }
+
+    synchronized void rejectNativeAccess(NativeAccess access) throws Failure {
+        requireNativeAccess(access);
+        clearReadCache(); // Preserve the refresh credential; the SDK may recover an ordinary 401.
     }
 
     synchronized void requireOAuthSignedOut() throws Failure {
