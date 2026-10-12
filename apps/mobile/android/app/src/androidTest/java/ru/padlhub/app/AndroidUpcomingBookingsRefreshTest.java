@@ -70,6 +70,9 @@ public class AndroidUpcomingBookingsRefreshTest {
     static String job(String expiry) {
         return "{\"jobId\":\"" + JOB + "\",\"screen\":\"MY_BOOKINGS\",\"expiresAt\":\"" + expiry + "\",\"commands\":[{\"commandId\":\"" + COMMAND + "\",\"operation\":\"bookings.read\",\"detailsOperation\":\"bookings.details.read\",\"page\":0,\"size\":50}],\"concurrency\":1}";
     }
+    static String delegation(String token, String expiry) {
+        return "{\"accessToken\":\"" + token + "\",\"expiresAt\":\"" + expiry + "\"}";
+    }
 
     static class Fixture {
         final TestClock clock = new TestClock();
@@ -91,6 +94,12 @@ public class AndroidUpcomingBookingsRefreshTest {
         int jobStatus = 200;
         byte[] jobBodyOverride;
         boolean nullJobBody;
+        String delegationFailure;
+        String delegationContentType = "application/json";
+        int delegationStatus = 200;
+        byte[] delegationBodyOverride;
+        boolean nullDelegationBody;
+        Runnable delegationHook;
         String list = "{\"content\":[{\"id\":\"active id&1\",\"isCancelled\":false},{\"id\":42,\"isCancelled\":false},{\"id\":\"cancelled\",\"isCancelled\":true}]}";
         String details = "[{\"id\":\"active id&1\"}]";
         String result = "{\"accepted\":true,\"replayed\":false,\"itemCount\":2}";
@@ -105,7 +114,7 @@ public class AndroidUpcomingBookingsRefreshTest {
             policy = new AndroidSessionPolicy(ORIGIN, "local-padel", "test-version", "73", false);
             plan = plan(serverWall + 60_000); job = job(serverWall + 60_000);
             complete = "{\"screen\":\"MY_BOOKINGS\",\"state\":\"READY\",\"completedCommands\":1,\"totalCommands\":1,\"bookings\":{\"version\":\"synthetic-v1\",\"generatedAt\":\"" + iso(clock.wall) + "\",\"staleAt\":\"" + iso(clock.wall + 60_000) + "\",\"items\":[]}}";
-            delegation = "{\"accessToken\":\"" + PROVIDER_TOKEN + "\",\"expiresAt\":\"" + iso(clock.wall + 60_000) + "\"}";
+            delegation = delegation(PROVIDER_TOKEN, iso(clock.wall + 60_000));
             engine = new AndroidSessionEngine(policy, store, this::send, null, clock);
             engine.request(VERIFY, "POST", headers(null, KEY), VERIFY_BODY);
             api.clear();
@@ -121,7 +130,12 @@ public class AndroidUpcomingBookingsRefreshTest {
                 byte[] body = nullJobBody ? null : jobBodyOverride == null ? job.getBytes(StandardCharsets.UTF_8) : jobBodyOverride;
                 return response(jobStatus, body, jobContentType, dateFor(request.path));
             }
-            if (request.path.endsWith("/auth/viva/access")) return json(200, delegation, dateFor(request.path));
+            if (request.path.endsWith("/auth/viva/access")) {
+                if (delegationFailure != null) throw new Failure(delegationFailure);
+                byte[] body = nullDelegationBody ? null : delegationBodyOverride == null ? delegation.getBytes(StandardCharsets.UTF_8) : delegationBodyOverride;
+                if (delegationHook != null) delegationHook.run();
+                return response(delegationStatus, body, delegationContentType, dateFor(request.path));
+            }
             if (request.path.contains("/results/")) {
                 resultAttempts++;
                 if ("result".equals(throwPath) && resultAttempts == 1) throw new Failure("NATIVE_NETWORK_UNAVAILABLE");
@@ -144,7 +158,10 @@ public class AndroidUpcomingBookingsRefreshTest {
             return json(200, path.contains("/list?") ? details : list);
         }
         void run() throws Exception {
-            new AndroidUpcomingBookingsRefresh(policy, engine, this::send, this::provider, clock, circuits).run(engine.nativeAccess(), () -> {});
+            run(() -> {});
+        }
+        void run(AndroidUpcomingBookingsRefresh.Cancellation cancellation) throws Exception {
+            new AndroidUpcomingBookingsRefresh(policy, engine, this::send, this::provider, clock, circuits).run(engine.nativeAccess(), cancellation);
         }
         void fails(String code) throws Exception {
             try { run(); fail("Expected " + code); }
@@ -289,12 +306,136 @@ public class AndroidUpcomingBookingsRefreshTest {
         for (String token : Arrays.asList("", "opaque token", "opaque\\r\\n" + marker, repeats("x", 8193).replace(",", ""))) {
             Fixture f = new Fixture(); f.delegation = "{\"accessToken\":\"" + token + "\",\"expiresAt\":\"" + iso(f.clock.wall + 60_000) + "\"}";
             try { f.run(); fail(); } catch (Failure error) {
-                assertEquals("NATIVE_BOOKINGS_DELEGATION_REJECTED", error.code); assertFalse(error.getMessage().contains(marker)); assertNull(error.getCause());
+                assertEquals("NATIVE_BOOKINGS_DELEGATION_TOKEN_REJECTED", error.code); assertFalse(error.getMessage().contains(marker)); assertNull(error.getCause());
             }
             assertEquals(0, f.providerCalls); assertEquals(0, countPath(f.api, "/results/"));
         }
         Fixture expired = new Fixture(); expired.delegation = "{\"accessToken\":\"" + PROVIDER_TOKEN + "\",\"expiresAt\":\"" + iso(expired.clock.wall) + "\"}";
-        expired.fails("NATIVE_BOOKINGS_DELEGATION_REJECTED"); assertEquals(0, expired.providerCalls);
+        expired.fails("NATIVE_BOOKINGS_DELEGATION_EXPIRED_REJECTED"); assertEquals(0, expired.providerCalls);
+    }
+
+    @Test public void delegationDiagnosticsCloseBeforeProviderAndWipeRejectedBytes() throws Exception {
+        Fixture transport = new Fixture(); transport.delegationFailure = "NATIVE_RESPONSE_REJECTED";
+        rejectsDelegationBeforeProvider(transport, "NATIVE_BOOKINGS_DELEGATION_TRANSPORT_REJECTED");
+        Fixture oversized = new Fixture(); oversized.delegationBodyOverride = new byte[AndroidUpcomingBookingsRefresh.PROVIDER_LIMIT + 1];
+        Arrays.fill(oversized.delegationBodyOverride, (byte) 0x5a);
+        rejectsDelegationBeforeProvider(oversized, "NATIVE_BOOKINGS_DELEGATION_TRANSPORT_REJECTED");
+        assertZeroed(oversized.delegationBodyOverride);
+        Fixture absent = new Fixture(); absent.nullDelegationBody = true;
+        rejectsDelegationBeforeProvider(absent, "NATIVE_BOOKINGS_DELEGATION_TRANSPORT_REJECTED");
+        Fixture empty = new Fixture(); empty.delegationBodyOverride = new byte[0];
+        rejectsDelegationBeforeProvider(empty, "NATIVE_BOOKINGS_DELEGATION_JSON_REJECTED");
+        Fixture utf8 = new Fixture(); utf8.delegationBodyOverride = new byte[] {(byte) 0xc3, (byte) 0x28};
+        rejectsDelegationBeforeProvider(utf8, "NATIVE_BOOKINGS_DELEGATION_JSON_REJECTED"); assertZeroed(utf8.delegationBodyOverride);
+        Fixture media = new Fixture(); byte[] mediaBytes = delegation(PROVIDER_TOKEN, iso(media.clock.wall + 60_000)).getBytes(StandardCharsets.UTF_8);
+        media.delegationBodyOverride = mediaBytes; media.delegationContentType = "text/plain";
+        rejectsDelegationBeforeProvider(media, "NATIVE_BOOKINGS_DELEGATION_MEDIA_REJECTED"); assertZeroed(mediaBytes);
+        Fixture malformed = new Fixture(); byte[] malformedBytes = "{\"private-delegation\":".getBytes(StandardCharsets.UTF_8);
+        malformed.delegationBodyOverride = malformedBytes;
+        rejectsDelegationBeforeProvider(malformed, "NATIVE_BOOKINGS_DELEGATION_JSON_REJECTED"); assertZeroed(malformedBytes);
+        for (String body : Arrays.asList("[]", "null", "true", "42", "\"private-marker\"")) {
+            Fixture root = new Fixture(); root.delegationBodyOverride = body.getBytes(StandardCharsets.UTF_8);
+            rejectsDelegationBeforeProvider(root, "NATIVE_BOOKINGS_DELEGATION_CONTRACT_REJECTED"); assertZeroed(root.delegationBodyOverride);
+        }
+        Fixture expiry = new Fixture(); expiry.delegation = delegation(PROVIDER_TOKEN, "not-an-iso-date");
+        rejectsDelegationBeforeProvider(expiry, "NATIVE_BOOKINGS_DELEGATION_EXPIRY_REJECTED");
+    }
+
+    @Test public void delegationDeadlineAcceptsLongProviderTokensButNeverOutlivesTheJob() throws Exception {
+        for (long ttl : new long[] {3_601_000, 86_400_000}) {
+            Fixture f = new Fixture(); f.clock.wall = f.serverWall + 300_000;
+            f.plan = plan(f.serverWall + 300_000); f.job = job(isoMillis(f.serverWall + 120_000));
+            f.delegation = delegation(PROVIDER_TOKEN, isoMillis(f.serverWall + ttl));
+            f.run(); assertEquals(2, f.providerCalls); assertEquals(1, countPath(f.api, "/results/"));
+        }
+
+        Fixture shorter = new Fixture(); shorter.plan = plan(shorter.serverWall + 300_000);
+        shorter.job = job(isoMillis(shorter.serverWall + 120_000));
+        shorter.delegation = delegation(PROVIDER_TOKEN, isoMillis(shorter.serverWall + 2_000));
+        shorter.providerHook = () -> { if (shorter.providerCalls == 1) shorter.clock.elapsed += 2_000; };
+        shorter.fails("NATIVE_REFRESH_UNAVAILABLE");
+        assertEquals(1, shorter.providerCalls); assertEquals(0, countPath(shorter.api, "/results/"));
+    }
+
+    @Test public void delegationDateTimingAndCancellationCannotPublishOrReuseAToken() throws Exception {
+        Fixture malformedDate = new Fixture(); malformedDate.responseDates.put(ROOT + "/auth/viva/access", "bad-date");
+        rejectsDelegationBeforeProvider(malformedDate, "NATIVE_BOOKINGS_DELEGATION_DATE_REJECTED");
+        Fixture duplicateDate = new Fixture(); String date = httpDate(duplicateDate.serverWall);
+        duplicateDate.responseDates.put(ROOT + "/auth/viva/access", date + ", " + date);
+        rejectsDelegationBeforeProvider(duplicateDate, "NATIVE_BOOKINGS_DELEGATION_DATE_REJECTED");
+        Fixture missingAhead = new Fixture(); missingAhead.clock.wall = missingAhead.serverWall + 300_000;
+        missingAhead.defaultServerDate = false;
+        missingAhead.responseDates.put(ROOT + "/routing-plan", httpDate(missingAhead.serverWall));
+        missingAhead.responseDates.put(ROOT + "/booking-screen-read-jobs", httpDate(missingAhead.serverWall));
+        missingAhead.delegation = delegation(PROVIDER_TOKEN, isoMillis(missingAhead.serverWall + 60_000));
+        rejectsDelegationBeforeProvider(missingAhead, "NATIVE_BOOKINGS_DELEGATION_EXPIRED_REJECTED");
+        Fixture negativeTransit = new Fixture(); negativeTransit.plan = plan(negativeTransit.serverWall + 300_000);
+        negativeTransit.job = job(isoMillis(negativeTransit.serverWall + 120_000));
+        negativeTransit.delegationHook = () -> negativeTransit.clock.elapsed--;
+        rejectsDelegationBeforeProvider(negativeTransit, "NATIVE_BOOKINGS_DELEGATION_TIMING_REJECTED");
+        Fixture slowTransit = new Fixture(); slowTransit.plan = plan(slowTransit.serverWall + 300_000);
+        slowTransit.job = job(isoMillis(slowTransit.serverWall + 120_000));
+        slowTransit.delegationHook = () -> slowTransit.clock.elapsed += 60_001;
+        rejectsDelegationBeforeProvider(slowTransit, "NATIVE_BOOKINGS_DELEGATION_TIMING_REJECTED");
+        Fixture overflow = new Fixture(); overflow.delegationHook = () -> overflow.clock.elapsed = Long.MIN_VALUE;
+        rejectsDelegationBeforeProvider(overflow, "NATIVE_BOOKINGS_DELEGATION_TIMING_REJECTED");
+        Fixture negativeElapsed = new Fixture(); negativeElapsed.delegationHook = () -> negativeElapsed.clock.elapsed = -1;
+        rejectsDelegationBeforeProvider(negativeElapsed, "NATIVE_BOOKINGS_DELEGATION_TIMING_REJECTED");
+        Fixture expiredInTransit = new Fixture(); expiredInTransit.delegation = delegation(PROVIDER_TOKEN, isoMillis(expiredInTransit.serverWall + 2_000));
+        expiredInTransit.delegationHook = () -> expiredInTransit.clock.elapsed += 1_200;
+        rejectsDelegationBeforeProvider(expiredInTransit, "NATIVE_BOOKINGS_DELEGATION_EXPIRED_REJECTED");
+
+        Fixture cancellation = new Fixture(); byte[] cancelledBytes = delegation(PROVIDER_TOKEN, iso(cancellation.clock.wall + 60_000)).getBytes(StandardCharsets.UTF_8);
+        cancellation.delegationBodyOverride = cancelledBytes; final boolean[] cancelled = {false}; cancellation.delegationHook = () -> cancelled[0] = true;
+        try { cancellation.run(() -> { if (cancelled[0]) throw new Failure("NATIVE_OPERATION_CANCELLED"); }); fail(); }
+        catch (Failure error) { assertEquals("NATIVE_OPERATION_CANCELLED", error.code); }
+        assertZeroed(cancelledBytes); assertEquals(0, cancellation.providerCalls); assertEquals(0, countPath(cancellation.api, "/results/"));
+        Fixture logout = new Fixture(); byte[] logoutBytes = delegation(PROVIDER_TOKEN, iso(logout.clock.wall + 60_000)).getBytes(StandardCharsets.UTF_8);
+        logout.delegationBodyOverride = logoutBytes; logout.delegationHook = () -> { try { logout.engine.prepareLogout(NEXT_KEY); } catch (Failure error) { throw new RuntimeException(error); } };
+        logout.fails("NATIVE_OPERATION_CANCELLED"); assertZeroed(logoutBytes); assertEquals(0, logout.providerCalls);
+    }
+
+    @Test public void missingDelegationDateUsesWallButCannotExtendJobWhenPhoneIsBehind() throws Exception {
+        Fixture f = new Fixture(); f.clock.wall = f.serverWall - 300_000;
+        f.responseDates.put(ROOT + "/auth/viva/access", null);
+        f.delegation = delegation(PROVIDER_TOKEN, isoMillis(f.serverWall + 86_400_000));
+        f.providerHook = () -> f.clock.elapsed += 60_000;
+        f.fails("NATIVE_OPERATION_CANCELLED");
+        assertEquals(1, f.providerCalls); assertEquals(0, countPath(f.api, "/results/")); assertEquals(0, countPath(f.api, "/complete"));
+
+        Fixture future = new Fixture(); future.delegation = delegation(PROVIDER_TOKEN, "9999-12-31T23:59:59.999Z");
+        future.run(); assertEquals(2, future.providerCalls);
+    }
+
+    @Test public void delegationDiagnosticsNeverReplaceAuthCancellationTlsRedirectOrNetworkFailures() throws Exception {
+        String[] failures = {"NATIVE_TLS_REJECTED", "NATIVE_NETWORK_UNAVAILABLE", "NATIVE_OPERATION_CANCELLED"};
+        String[] codes = {"NATIVE_TLS_REJECTED", "NATIVE_REFRESH_UNAVAILABLE", "NATIVE_OPERATION_CANCELLED"};
+        for (int i = 0; i < failures.length; i++) {
+            Fixture f = new Fixture(); f.delegationFailure = failures[i]; rejectsDelegationBeforeProvider(f, codes[i]);
+        }
+        for (int status : new int[] {302, 403, 429, 500}) {
+            Fixture f = new Fixture(); f.delegationStatus = status; f.delegationContentType = "private-media";
+            f.delegationBodyOverride = "private-token".getBytes(StandardCharsets.UTF_8);
+            rejectsDelegationBeforeProvider(f, status == 302 ? "NATIVE_REDIRECT_REJECTED" : "NATIVE_REFRESH_UNAVAILABLE");
+            assertZeroed(f.delegationBodyOverride);
+        }
+        Fixture revoked = new Fixture(); revoked.delegationStatus = 401; revoked.delegationContentType = "private-media";
+        revoked.delegationBodyOverride = "private-token".getBytes(StandardCharsets.UTF_8);
+        rejectsDelegationBeforeProvider(revoked, "AUTH_SESSION_REVOKED"); assertZeroed(revoked.delegationBodyOverride);
+        try { revoked.engine.nativeAccess(); fail(); } catch (Failure error) { assertEquals("AUTH_SESSION_REVOKED", error.code); }
+    }
+
+    @Test public void oneProvider401CanReissueButCannotExtendTheOriginalJobDeadline() throws Exception {
+        Fixture f = new Fixture(); f.plan = plan(f.serverWall + 300_000); f.job = job(isoMillis(f.serverWall + 60_000));
+        f.delegation = delegation(PROVIDER_TOKEN, isoMillis(f.serverWall + 86_400_000)); final int[] calls = {0};
+        AndroidUpcomingBookingsRefresh.ProviderSender provider = (path, token) -> {
+            f.providerPaths.add(path); f.providerTokens.add(token); calls[0]++;
+            if (calls[0] == 1) return json(401, "{}");
+            f.clock.elapsed += 60_000; return json(200, path.contains("/list?") ? f.details : f.list);
+        };
+        try { new AndroidUpcomingBookingsRefresh(f.policy, f.engine, f::send, provider, f.clock, f.circuits).run(f.engine.nativeAccess(), () -> {}); fail(); }
+        catch (Failure error) { assertEquals("NATIVE_OPERATION_CANCELLED", error.code); }
+        assertEquals(2, calls[0]); assertEquals(2, countPath(f.api, "/auth/viva/access")); assertEquals(0, countPath(f.api, "/results/"));
     }
 
     @Test public void badListBoundariesNeverReachTheResultWrite() throws Exception {
@@ -371,11 +512,11 @@ public class AndroidUpcomingBookingsRefreshTest {
 
         Fixture expiredToken = new Fixture();
         expiredToken.responseDates.put(ROOT + "/auth/viva/access", httpDate(expiredToken.serverWall + 70_000));
-        expiredToken.fails("NATIVE_BOOKINGS_DELEGATION_REJECTED"); assertEquals(0, expiredToken.providerCalls);
+        expiredToken.fails("NATIVE_BOOKINGS_DELEGATION_EXPIRED_REJECTED"); assertEquals(0, expiredToken.providerCalls);
 
         Fixture malformedTokenDate = new Fixture();
         malformedTokenDate.responseDates.put(ROOT + "/auth/viva/access", "");
-        malformedTokenDate.fails("NATIVE_BOOKINGS_DELEGATION_REJECTED"); assertEquals(0, malformedTokenDate.providerCalls);
+        malformedTokenDate.fails("NATIVE_BOOKINGS_DELEGATION_DATE_REJECTED"); assertEquals(0, malformedTokenDate.providerCalls);
 
         Fixture resultDates = new Fixture();
         resultDates.responseDates.put(ROOT + "/booking-screen-read-jobs/" + JOB + "/results/" + COMMAND, "ignored-invalid-result-date");
@@ -459,6 +600,15 @@ public class AndroidUpcomingBookingsRefreshTest {
         assertEquals(0, countPath(fixture.api, "/auth/viva/access")); assertEquals(0, fixture.providerCalls);
         assertEquals(0, countPath(fixture.api, "/results/")); assertEquals(0, countPath(fixture.api, "/complete"));
     }
+    static void rejectsDelegationBeforeProvider(Fixture fixture, String code) throws Exception {
+        try { fixture.run(); fail("Expected " + code); }
+        catch (Failure error) {
+            assertEquals(code, error.code); assertNull(error.getCause()); assertFalse(error.getMessage().contains("private"));
+        }
+        assertEquals(1, countPath(fixture.api, "/auth/viva/access")); assertEquals(0, fixture.providerCalls);
+        assertEquals(0, countPath(fixture.api, "/results/")); assertEquals(0, countPath(fixture.api, "/complete"));
+    }
+    static void assertZeroed(byte[] bytes) { for (byte value : bytes) assertEquals(0, value); }
     static int countPath(List<Request> requests, String fragment) {
         int count = 0; for (Request request : requests) if (request.path.contains(fragment)) count++; return count;
     }

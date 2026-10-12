@@ -72,7 +72,17 @@ No raw response, field name/value, header, URL, provider ID or token becomes a d
 correlation is the original `/bookings/upcoming` request; internal native job requests have their
 own correlation IDs. This build is not evidence that the phone issue is fixed.
 
-Version 1.12/code13 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
+Version 1.13/code14 corrects another native/API mismatch: `/auth/viva/access` publishes the
+provider credential expiry without a one-hour maximum. Android now accepts a valid longer expiry,
+but limits token use to the current validated plan/job deadline (at most 120 seconds); provider 401
+reissue cannot extend that deadline. Own-response Date, conservative transit/precision deduction,
+strict missing-Date wall fallback, expiry rejection and token grammar/size checks remain in force.
+Nine additional closed delegation diagnostics distinguish transport, media, JSON, root contract,
+token grammar/size, expiry format, Date, expired credential and invalid timing arithmetic. No
+credential, response value, timestamp or parser exception is exposed. This fixes a reproducible
+contract defect; the phone's actual token TTL and acceptance remain unconfirmed.
+
+Version 1.13/code14 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
 debug-signing identity. Verify the fixed provider host and tenant, protocol/body bounds, 401 versus
 403 handling, exact replay, logout/account changes and token/payload absence in bridge/errors/store
 with native instrumentation. Physical-device acceptance must separately open My Records and

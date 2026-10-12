@@ -20,6 +20,15 @@ it.each([
   'NATIVE_BOOKINGS_JOB_EXPIRED_REJECTED',
   'NATIVE_BOOKINGS_JOB_LIFETIME_REJECTED',
   'NATIVE_BOOKINGS_DELEGATION_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_TRANSPORT_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_MEDIA_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_JSON_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_CONTRACT_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_TOKEN_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_EXPIRY_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_DATE_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_EXPIRED_REJECTED',
+  'NATIVE_BOOKINGS_DELEGATION_TIMING_REJECTED',
   'NATIVE_BOOKINGS_LIST_REJECTED',
   'NATIVE_BOOKINGS_DETAILS_REJECTED',
   'NATIVE_BOOKINGS_RESULT_REJECTED',
@@ -67,6 +76,19 @@ it('does not widen the reviewed job-diagnostic family for an unknown suffix', ()
   });
   expect(sessionFailureDetails(safe).code).toBe('NATIVE_SESSION_UNAVAILABLE');
   expect(JSON.stringify(safe)).not.toContain('private-job-payload');
+});
+
+it('redacts an unknown delegation suffix and ignores untrusted response metadata', () => {
+  const safe = sanitizedNativeSessionError({
+    code: 'NATIVE_BOOKINGS_DELEGATION_NEW_PRIVATE_REASON_REJECTED',
+    message: 'private-token',
+    accessToken: 'private-token',
+    expiresAt: 'private-expiry',
+    cause: 'private-provider-response',
+  });
+  expect(sessionFailureDetails(safe).code).toBe('NATIVE_SESSION_UNAVAILABLE');
+  expect(JSON.stringify(safe)).not.toContain('private');
+  expect(safe.cause).toBeUndefined();
 });
 
 it('displays only the HTTP status for server errors and a fixed code for other failures', () => {

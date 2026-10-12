@@ -49,11 +49,17 @@ use only a closed plan/job/delegation/list/details/result/completion stage vocab
 job-stage rejection additionally exposes one of ten compile-time reasons: transport, media, JSON,
 contract, command, ID, expiry format, Date, expired lifetime or excessive lifetime. These reasons
 classify existing validators; they do not change the accepted response set or reveal response bytes,
-field names/values, identifiers, timing or parser exceptions.
+field names/values, identifiers, timing or parser exceptions. Delegation-stage rejection also uses
+nine fixed classes: transport, media, JSON, contract, token grammar/size, expiry format, Date,
+expired credential or invalid timing arithmetic. Unknown reasons retain the generic fallback.
 
 Plan, job and delegation expiry use the `Date` from their own authenticated HTTPS response and a
 monotonic request timer. The calculation deducts the complete request/processing interval and the
-HTTP date's one-second precision, while keeping the existing maximum lifetimes. This prevents
+HTTP date's one-second precision, while keeping the plan's one-hour and job's 120-second maximum
+lifetimes. The delegation API does not specify a provider token maximum TTL. A valid longer-lived
+credential is accepted, but its local token deadline is capped to the already validated plan/job
+deadline before arithmetic addition; it never extends that deadline, including after provider 401.
+An earlier credential expiry still stops provider reads. This prevents
 ordinary phone clock skew from rejecting a fresh 120-second job or extending an expired one.
 Malformed or duplicate dates fail closed; an absent date retains the original strict wall-clock
 check. These response times remain native and cannot enter bridge diagnostics or telemetry.

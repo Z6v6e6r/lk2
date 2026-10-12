@@ -144,6 +144,30 @@ final class AndroidUpcomingBookingsRefresh {
         void restrict(ApiReply reply, long expiresAt, long maximumLifetime) throws Failure {
             deadline = Math.min(deadline, expiryDeadline(reply, expiresAt, maximumLifetime));
         }
+        long delegationDeadline(ApiReply reply, long expiresAt) throws Failure {
+            long reference;
+            try { reference = reply.date == null ? clock.wall() : httpDate(reply.date); }
+            catch (Failure error) { throw delegationRejected("DATE"); }
+            long now = clock.elapsed(), remaining, budget;
+            try { remaining = Math.subtractExact(expiresAt, reference); budget = Math.subtractExact(deadline, now); }
+            catch (ArithmeticException ignored) { throw delegationRejected("TIMING"); }
+            if (now < 0 || deadline == Long.MAX_VALUE) throw delegationRejected("TIMING");
+            if (remaining <= 0) throw delegationRejected("EXPIRED");
+            if (reply.date != null) {
+                long transit;
+                try { transit = Math.subtractExact(now, reply.started); }
+                catch (ArithmeticException ignored) { throw delegationRejected("TIMING"); }
+                if (transit < 0 || transit > 60_000) throw delegationRejected("TIMING");
+                remaining -= 1_000 + transit;
+            }
+            if (remaining <= 0) throw delegationRejected("EXPIRED");
+            if (budget <= 0) { require(); throw delegationRejected("TIMING"); }
+            // The API does not cap provider token TTL. Bound its local use to the
+            // already validated plan/job deadline before adding, without extending it.
+            long usable = Math.min(remaining, budget);
+            if (now > Long.MAX_VALUE - usable) throw delegationRejected("TIMING");
+            return now + usable;
+        }
         void forget() { token = null; tenant = null; revision = null; }
     }
 
@@ -224,7 +248,8 @@ final class AndroidUpcomingBookingsRefresh {
         if (body != null) headers.put("content-type", "application/json");
         AndroidSessionPolicy.Request request = new AndroidSessionPolicy.Request(policy.userRoot + suffix, method, headers, body, AndroidSessionPolicy.Operation.API);
         if (request.body != null && request.body.length > RELAY_LIMIT) throw rejected();
-        Response response;
+        Response response = null;
+        boolean returned = false;
         long started = clock.elapsed();
         try {
             try { response = api.send(request); }
@@ -241,14 +266,14 @@ final class AndroidUpcomingBookingsRefresh {
             if (response.status >= 300 && response.status < 400) throw new Failure("NATIVE_REDIRECT_REJECTED");
             if (response.status < 200 || response.status >= 300) throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
             if (response.body == null || response.body.length > PROVIDER_LIMIT)
-                throw "JOB".equals(current.stage) ? jobRejected("TRANSPORT") : rejected();
-            if (!jsonContent(response.headers)) throw "JOB".equals(current.stage) ? jobRejected("MEDIA") : rejected();
-            return new ApiReply(response, started);
+                throw responseRejected(current.stage, "TRANSPORT");
+            if (!jsonContent(response.headers)) throw responseRejected(current.stage, "MEDIA");
+            ApiReply reply = new ApiReply(response, started); returned = true; return reply;
         } catch (Failure error) {
             if ("NATIVE_NETWORK_UNAVAILABLE".equals(error.code)) throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
-            if ("JOB".equals(current.stage) && "NATIVE_RESPONSE_REJECTED".equals(error.code)) throw jobRejected("TRANSPORT");
+            if ("NATIVE_RESPONSE_REJECTED".equals(error.code)) throw responseRejected(current.stage, "TRANSPORT");
             throw error;
-        } finally { wipe(request.body); }
+        } finally { wipe(request.body); if (!returned && response != null) wipe(response.body); }
     }
 
     private void delegate(Invocation current) throws Failure {
@@ -256,15 +281,21 @@ final class AndroidUpcomingBookingsRefresh {
         ApiReply reply = api("/auth/viva/access", "POST", "{}", UUID.randomUUID().toString(), false, current);
         byte[] bytes = reply.body;
         try {
-            JSONObject value = object(bytes, PROVIDER_LIMIT);
+            Object decoded;
+            try { decoded = parsedJson(bytes, PROVIDER_LIMIT); }
+            catch (Failure error) { throw delegationRejected("JSON"); }
+            if (!(decoded instanceof JSONObject)) throw delegationRejected("CONTRACT");
+            JSONObject value = (JSONObject) decoded;
             Object rawToken = value.opt("accessToken");
-            if (!(rawToken instanceof String)) throw rejected();
+            if (!(rawToken instanceof String)) throw delegationRejected("TOKEN");
             String token = (String) rawToken;
             // The authenticated PadlHub delegation contract returns an opaque provider credential.
             // RFC6750 header grammar/size only; JWT claims/tenant/subject are not client contracts.
-            if (token.length() == 0 || token.length() > 8192 || !token.matches("[A-Za-z0-9._~+/-]+=*")) throw rejected();
-            long expiresAt = timestamp(value.optString("expiresAt", ""));
-            long tokenDeadline = current.expiryDeadline(reply, expiresAt, 3_600_000);
+            if (token.length() == 0 || token.length() > 8192 || !token.matches("[A-Za-z0-9._~+/-]+=*")) throw delegationRejected("TOKEN");
+            long expiresAt;
+            try { expiresAt = timestamp(value.optString("expiresAt", "")); }
+            catch (Failure error) { throw delegationRejected("EXPIRY"); }
+            long tokenDeadline = current.delegationDeadline(reply, expiresAt);
             current.require(); current.token = token; current.tokenDeadline = tokenDeadline; current.stage = previousStage;
         } catch (Failure error) { throw error; }
         catch (Exception ignored) { throw rejected(); }
@@ -463,6 +494,26 @@ final class AndroidUpcomingBookingsRefresh {
         return value != null && "application/json".equals(value.split(";", 2)[0].trim().toLowerCase(Locale.ROOT));
     }
     private static Failure rejected() { return new Failure("NATIVE_RESPONSE_REJECTED"); }
+    private static Failure responseRejected(String stage, String reason) {
+        if ("JOB".equals(stage)) return jobRejected(reason);
+        if ("DELEGATION".equals(stage)) return delegationRejected(reason);
+        return rejected();
+    }
+    private static Failure delegationRejected(String reason) {
+        // Compile-time classes only; never emit credential bytes, timestamps or parser details.
+        switch (reason) {
+            case "TRANSPORT": return new Failure("NATIVE_BOOKINGS_DELEGATION_TRANSPORT_REJECTED");
+            case "MEDIA": return new Failure("NATIVE_BOOKINGS_DELEGATION_MEDIA_REJECTED");
+            case "JSON": return new Failure("NATIVE_BOOKINGS_DELEGATION_JSON_REJECTED");
+            case "CONTRACT": return new Failure("NATIVE_BOOKINGS_DELEGATION_CONTRACT_REJECTED");
+            case "TOKEN": return new Failure("NATIVE_BOOKINGS_DELEGATION_TOKEN_REJECTED");
+            case "EXPIRY": return new Failure("NATIVE_BOOKINGS_DELEGATION_EXPIRY_REJECTED");
+            case "DATE": return new Failure("NATIVE_BOOKINGS_DELEGATION_DATE_REJECTED");
+            case "EXPIRED": return new Failure("NATIVE_BOOKINGS_DELEGATION_EXPIRED_REJECTED");
+            case "TIMING": return new Failure("NATIVE_BOOKINGS_DELEGATION_TIMING_REJECTED");
+            default: return new Failure("NATIVE_BOOKINGS_DELEGATION_REJECTED");
+        }
+    }
     private static Failure jobRejected(String reason) {
         // Compile-time reasons only. Never include a field name, value, parser message or header.
         switch (reason) {
