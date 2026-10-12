@@ -1105,7 +1105,7 @@ class NamespacePureTests(unittest.TestCase):
 
     def test_actual_unit_and_slice_stop_ack_loss_terminalizes_only_after_readback(self):
         from contextlib import ExitStack
-        f=namespace_fixture();p=f['value']['plan'];a=f['value']['readback']['isolation']['admission'];sl=a['supervisor']['slice'];original_stat=m.os.stat
+        f=namespace_fixture();p=f['value']['plan'];a=f['value']['readback']['isolation']['admission'];sl=a['supervisor']['slice'];original_stat=m.os.stat;original_exists=Path.exists
         for action in ['NS_UNIT_STOP','NS_SLICE_STOP']:
             for applied in (False,True):
                 with self.subTest(action=action,applied=applied):
@@ -1123,6 +1123,8 @@ class NamespacePureTests(unittest.TestCase):
                         stack.enter_context(patch.object(m,'namespace_frozen_source',return_value=a['sourceDaemon']))
                         stack.enter_context(patch.object(m.os,'stat',side_effect=lambda path,*args,**kwargs:SimpleNamespace(st_ino=11)if str(path)=='/proc/self/ns/mnt'else original_stat(path,*args,**kwargs)))
                         stack.enter_context(patch.object(m.os.path,'lexists',return_value=False))
+                        # Synthetic PIDs/cgroups never read the real Linux runner inventory.
+                        stack.enter_context(patch.object(Path,'exists',new=lambda path:False if str(path)=='/proc/45' or str(path).startswith('/sys/fs/cgroup/phubdiskrestore') else original_exists(path)))
                         stack.enter_context(patch.object(m,'namespace_admission',return_value=a))
                         stack.enter_context(patch.object(m,'namespace_unit',side_effect=lambda _:{**a['supervisor']['unit']}if state['unit']else {'LoadState':'not-found','ActiveState':'inactive','MainPID':'0'}))
                         stack.enter_context(patch.object(m,'namespace_slice',return_value=sl))
