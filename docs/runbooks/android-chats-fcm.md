@@ -97,30 +97,45 @@ These are deployment/activation instructions, not actions performed by source te
 existing release/secret-management process and obtain authority for the exact environment and
 tenant before changing credentials, deploying or applying either operator.
 
-1. Prepare the Firebase service-account credential for project `padlhub` privately. Mount it
-   read-only to **worker only**, at its absolute `FCM_CREDENTIAL_FILE` path, with worker UID ownership
-   and mode 0600. API receives the path reference for configuration validation and does not read the
-   credential. Do not mount it in web, CUP, Android, realtime or migrator. No private key enters a report.
-2. Set matching `FCM_PROJECT_ID=padlhub`, `FCM_APP_ID=ru.padlhub.app`, `FCM_ENVIRONMENT` and endpoint
-   encryption keyring on API/worker. Keep `FCM_ENABLED=false` until the reviewed candidate and file
-   permissions are verified. Do not change VAPID/receipt configuration to make Android work.
-
-   The Timeweb contract permits the five FCM identity/gate keys only on API and worker, and requires
-   matching project/app/environment/keyring when enabled. Use
-   `FCM_CREDENTIAL_FILE=/run/phub/fcm-service-account.json`. The private host file is
+1. Verify the existing Firebase project `padlhub` and Android registration `ru.padlhub.app`.
+   The older `com.cabinet.app` registration does not configure this binary. Check that the FCM
+   HTTP v1 API (`fcm.googleapis.com`) is enabled. Under exact Firebase/IAM authority, prefer a
+   dedicated `padlhub-fcm-worker` service account with `roles/firebasecloudmessaging.admin` only
+   on `padlhub`; do not grant Owner/Editor. Review existing bindings before creating a new account
+   or key. See [HTTP v1](https://firebase.google.com/docs/cloud-messaging/send/v1-api) and
+   [FCM IAM roles](https://docs.cloud.google.com/iam/docs/roles-permissions/firebasecloudmessaging).
+2. Prepare one service-account JSON privately, outside Git, images, reports and chat. Install it
+   only under exact secret-target authority. The host file is
    `/etc/phub/timeweb-beta-fcm/fcm-service-account.json`: regular, non-symlink, one link, UID 1001,
-   mode 0600, at most 16 KiB. Its separate directory is real, root-owned and 0700; it is outside the
-   managed runtime-env set so env rotation never copies or removes the credential. Prepare it only
-   through the approved secret process. The canonical
-   `render-timeweb-beta-release-env.js --compose-stage` controller derives the worker-only bind
-   from its validated runtime env files and checks credential metadata before Compose. The bind
-   is read-only and never creates a missing host path. An ambient
-   `TIMEWEB_FCM_CREDENTIAL_SOURCE` override is rejected. With FCM absent/disabled it binds only
-   `/dev/null`; no credential file is required or inspected. Existing API/Web component upgrades
-   preserve the running worker and do not activate FCM.
+   mode 0600, at most 16 KiB. Its separate directory is real, root-owned and 0700. Runtime env
+   rotation never copies or removes it. Worker alone receives the read-only mount at
+   `/run/phub/fcm-service-account.json`; API receives only the path reference. No private key is
+   mounted in Web, CUP, Android, Realtime or migrator, or included in a report.
+3. Complete the approved migration-only and post-migration backup prerequisites in
+   [standard delivery](timeweb-standard-delivery.md). Prepare the isolated candidate runtime set,
+   preserving current settings until the coordinated API/Worker transition. Only the five FCM
+   keys change on API/Worker; keep endpoint encryption keyring, VAPID/receipt settings and all
+   Realtime/migrator bytes unchanged. Candidate values are `FCM_ENABLED=true`,
+   `FCM_PROJECT_ID=padlhub`, `FCM_APP_ID=ru.padlhub.app`, `FCM_ENVIRONMENT=SANDBOX` and
+   `FCM_CREDENTIAL_FILE=/run/phub/fcm-service-account.json`.
 
-3. Preview the provider account using an existing active tenant operator with
-   `admin`/`notifications.manage`; the command reads no Firebase credential and sends no push:
+   The canonical renderer derives the worker-only bind from validated env files and checks
+   credential metadata before Compose. It never creates a missing credential path. Ambient
+   `TIMEWEB_FCM_CREDENTIAL_SOURCE` is rejected. With FCM disabled/absent, only `/dev/null` is
+   bound and the credential is not inspected. Existing API/Web upgrades preserve Worker.
+
+4. Execute the separately approved coordinated API/Worker rollout of the existing immutable
+   artifacts with global FCM enabled, while tenant/provider gates remain off and live leases are
+   zero. Verify readiness, observation and terminal reconciliation before any activation.
+   An HTTP timeout does not establish runtime state.
+5. Before a strict one-recipient test, inspect all matching Android delivery states, including
+   inactive endpoints, retries, scheduled work and expired leases. Require no nonterminal work,
+   no live/expired leases, and no active matching endpoint. Prove Rabbit notification backlog
+   and outbox are empty or explicitly explained. PostgreSQL delivery counts alone cannot see
+   messages waiting in Rabbit. Tenant/provider activation can resume old work for other users;
+   switching gates off does not cancel an already claimed provider call. If latent work exists,
+   stop; deleting or rewriting it is outside a single-recipient test.
+6. Preview the provider with an existing active operator holding `admin`/`notifications.manage`:
 
    ```sh
    npm run notifications:android-push:provider:set -- \
@@ -128,25 +143,26 @@ tenant before changing credentials, deploying or applying either operator.
      --app-id=ru.padlhub.app --environment=SANDBOX --state=on
    ```
 
-   Apply the reviewed selector with `--confirm=APPLY_ANDROID_PUSH_PROVIDER` only under live authority.
-   Use the chosen environment consistently; it selects provider records and does not create a
-   separate Firebase sandbox project. The operator rechecks permission and state under a lock and
-   audits the provider status without credential content.
+   Apply that selector with `--confirm=APPLY_ANDROID_PUSH_PROVIDER` only under exact live
+   authority. Use the same environment throughout; `SANDBOX` selects server provider records,
+   not a separate Firebase project. The command locks, rechecks permissions and audits status
+   without reading a credential or sending a push.
 
-4. Preview the tenant gate with `notifications:runtime:set -- --tenant-key=local-padel
---actor-id=<approved-operator-uuid> --android-push=on`. Apply only under live authority using
-   `--confirm=APPLY_NOTIFICATION_RUNTIME`. Other channel and booking settings default to `keep`.
-   Existing booking-reminder activation prerequisites remain unchanged.
-5. Deploy the same reviewed API/worker immutable artifacts through the existing release runbook,
-   enable matching `FCM_ENABLED=true`, and verify readiness plus the authenticated Android
-   configuration/capability. An HTTP timeout does not establish runtime state.
-6. On installed APK 1.8 or newer, enter **Уведомления** after login and enable notifications if not
-   registered. Resolve only the approved test user's PadlHub UUID in CUP. Check the exact recipient
-   preview and select only **Android + Центр уведомлений**. Send one generic test with its existing
-   command key, then read back the campaign/queue/provider outcome before any retry. Reopening or
-   clicking Send again can create a new campaign; an ambiguous response is not permission to do so.
-7. Verify foreground/background delivery, tap into the notification centre, logout/account switch,
-   denied permission and rotation/offline recovery on the real phone. No USB is required.
+7. Preview `notifications:runtime:set -- --tenant-key=local-padel
+--actor-id=<approved-operator-uuid> --android-push=on`; apply only under exact live authority
+   using `--confirm=APPLY_NOTIFICATION_RUNTIME`. Other channels and booking settings stay `keep`.
+8. On APK 1.8 or newer, log in, enter **Уведомления** and enable registration. Require exactly
+   one active matching endpoint and no latent delivery/lease work. Use authenticated CUP preview
+   to bind that endpoint to the approved user's PadlHub UUID; an aggregate count cannot establish
+   ownership. Verify the deployed CUP supports the selector and delivery readback.
+9. Create one generic test campaign in CUP with **Android + Центр уведомлений**, safe local
+   route `/notifications` and one command key. Read back campaign/queue/provider outcome before
+   retrying. Reopening or clicking Send again can create another campaign; an ambiguous response
+   does not authorize it. Tenant/provider containment after the test needs its own approved scope;
+   wait for live leases to drain rather than assuming disabling gates cancelled in-flight calls.
+10. Verify foreground/background display and tap navigation on the phone, then logout/account
+    switch, denied permission and rotation/offline recovery. No USB is required. Provider acceptance
+    is separate from display/open, and the native client has no DISPLAYED/OPENED receipts.
 
 Rollback containment is `FCM_ENABLED=false` on API/worker and `--android-push=off` through the same
 audited tenant operator. Provider disabling uses `--state=off` on the exact selector. Keep encrypted

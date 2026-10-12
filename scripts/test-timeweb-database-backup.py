@@ -1,7 +1,10 @@
 """Mock-only regression scenarios; no Docker, provider or database is contacted."""
+import base64
 import copy
 import importlib.util
 import io
+import re
+import shutil
 import json
 import os
 from pathlib import Path
@@ -20,6 +23,18 @@ PG={'id':m.PG_ID,'image':m.PG_IMAGE,'imageId':m.PG_IMAGE.split('@')[1],'releaseI
 LEDGER=[['0001_initial.sql','c'*64],['0002_next.sql','d'*64]]
 OP={'schema':'PHUB_TIMEWEB_BACKUP_OPERATION_V1','target':m.TARGET,'toolCommit':'1'*40,'toolFileSha256':'2'*64,'releaseId':'3'*40+'-38060874880-1','controllerSha':'3'*40,'controllerTree':'4'*40,'controllerConfigSha256':'5'*64,'expectedBoundarySha256':'6'*64,'toolProofSha256':'7'*64,'toolInstallationSha256':'8'*64,'expectedApi':API,'expectedPostgres':PG,'expiresAt':'2026-10-10T16:00:00.000Z','confirmation':'BACKUP_RESTORE_'+'3'*12+'_KEEP_API_0D6078BE7A50'}
 NOW=m.utc('2026-10-10T15:20:00.000Z')
+API_WORKER_LEDGER=[[path.name,m.digest(path.read_bytes())] for path in sorted(Path(__file__).parents[1].glob('packages/database/migrations/*.sql'))]
+assert len(API_WORKER_LEDGER)==101
+assert m.digest(m.encoded(API_WORKER_LEDGER))==m.API_WORKER_LEDGER_SHA256
+OP_API={**OP,'schema':'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2','candidateReleaseId':m.API_WORKER_CANDIDATE,
+        'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256,
+        'controllerSourceCiRunId':'38170498441','migrationPlanSha256':'a'*64,'migrationSuccessSha256':'b'*64,
+        'confirmation':'BACKUP_RESTORE_API_WORKER_11954FFD6D7B_KEEP_API_0D6078BE7A50'}
+del OP_API['releaseId']
+
+
+def v2_operation(plan_sha='a'*64, success_sha='b'*64):
+    return {**OP_API,'toolCommit':OP_API['controllerSha'],'migrationPlanSha256':plan_sha,'migrationSuccessSha256':success_sha}
 
 
 def restore_row(container, operation_sha, tmpfs_bytes, state):
@@ -43,6 +58,19 @@ def source_proof(script=b'synthetic reviewed helper'):
 
 
 class PureTests(unittest.TestCase):
+    def test_command_real_node_stdin_uses_clean_environment(self):
+        env={key:m.ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
+        program="import fs from 'node:fs';process.stdout.write(JSON.stringify({stdin:fs.readFileSync(0,'utf8'),docker:process.env.DOCKER_HOST??null,compose:process.env.COMPOSE_FILE??null,node:process.env.NODE_OPTIONS??null}));"
+        node=shutil.which('node')
+        self.assertIsNotNone(node)
+        result=json.loads(m.command([node,'--input-type=module','-e',program],'NODE_TEST',input_data=b'fixture',environment=env))
+        self.assertEqual(result,{'stdin':'fixture','docker':None,'compose':None,'node':None})
+
+    def test_v2_controller_allowlist_matches_the_js_contract_exactly(self):
+        contract=Path(__file__).with_name('timeweb-api-worker-contract.js').read_text()
+        section=contract.split('export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([',1)[1].split(']);',1)[0]
+        self.assertEqual(set(re.findall(r"'([^']+)'",section)),m.API_WORKER_MIGRATION_CONTROLLER_FILES)
+
     def test_exact_request(self):
         self.assertEqual(m.validate_operation(copy.deepcopy(OP),NOW,'2'*64),OP)
 
@@ -54,6 +82,50 @@ class PureTests(unittest.TestCase):
                 with self.assertRaises(m.Stop):m.validate_operation(op,NOW,'2'*64)
         op=copy.deepcopy(OP);op['unknown']='value'
         with self.assertRaises(m.Stop):m.validate_operation(op,NOW,'2'*64)
+
+    def test_api_worker_request_is_closed_to_the_candidate_and_json_ledger(self):
+        actual=m.validate_operation(v2_operation(),NOW,'2'*64)
+        self.assertEqual(m.operation_mode(actual),('api-worker',m.API_WORKER_CANDIDATE))
+        for key,value in [('candidateReleaseId','4'*40+'-38144582876-1'),('expectedLedgerSha256','f'*64),
+                          ('confirmation','BACKUP_RESTORE_API_WORKER_KEEP_API')]:
+            with self.subTest(key=key):
+                op=copy.deepcopy(OP_API);op[key]=value
+                with self.assertRaises(m.Stop):m.validate_operation(op,NOW,'2'*64)
+
+    def test_v2_requires_bound_migration_proof_hashes(self):
+        self.assertEqual(m.validate_operation(v2_operation(),NOW,'2'*64)['schema'],'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2')
+        for key,value in [('migrationPlanSha256','x'),('migrationSuccessSha256','f'*63),('controllerSourceCiRunId','0')]:
+            op=v2_operation();op[key]=value
+            with self.assertRaises(m.Stop):m.validate_operation(op,NOW,'2'*64)
+
+    def test_v2_migration_proof_requires_lineage_capsule_success_and_reconciliation(self):
+        with tempfile.TemporaryDirectory(prefix='phub-v2-proof-') as directory:
+            root=Path(directory);tx=root/'backups'/(m.API_WORKER_CANDIDATE+'-migration');tx.mkdir(parents=True)
+            operation_bytes=b'{"migration":"operation"}\n'
+            plan={'schema':'PHUB_TIMEWEB_API_WORKER_MIGRATION_PLAN_V1','controllerSha':OP['controllerSha'],'controllerTree':OP['controllerTree'],'controllerSourceCiRunId':'38170498441','candidate':m.API_WORKER_CANDIDATE,'migratorImage':'sha256:fixed','imageId':'sha256:fixed','preLedgerSha256':m.API_WORKER_PRE_LEDGER_SHA256,'postLedgerSha256':m.API_WORKER_LEDGER_SHA256,'operationSha256':m.digest(operation_bytes),'secretSet':{},'runtime':{},'backup':{},'roleProbeSourceSha256':'e'*64}
+            plan_bytes=m.encoded(plan);capsule=m.encoded({'schema':'PHUB_TIMEWEB_API_WORKER_MIGRATION_CAPSULE_V1','operation':base64.b64encode(operation_bytes).decode(),'plan':base64.b64encode(plan_bytes).decode()})
+            role=m.encoded({'schema':'PHUB_TIMEWEB_MIGRATION_ROLE_PROOF_V1','planSha256':m.digest(plan_bytes),'operationSha256':m.digest(operation_bytes),'observedAt':'2026-10-10T15:00:00.000Z','target':{},'runtime':{},'migrator':{}})
+            success=m.encoded({'schema':'PHUB_TIMEWEB_API_WORKER_MIGRATION_SUCCESS_V1','status':'SUCCESS','planSha256':m.digest(plan_bytes),'operationSha256':m.digest(operation_bytes),'containerId':'c'*64,'roleProofSha256':m.digest(role),'observedAt':'2026-10-10T15:00:00.000Z'})
+            receipt=m.encoded({'schema':'PHUB_TIMEWEB_API_WORKER_MIGRATION_RECEIPT_V1','status':'RECONCILED','planSha256':m.digest(plan_bytes),'operationSha256':m.digest(operation_bytes),'observedAt':'2026-10-10T15:00:00.000Z','containerId':'c'*64,'successSha256':m.digest(success),'reconciledStatus':'SUCCESS'})
+            files={tx/'preparation.json':capsule,tx/'plan.json':plan_bytes,tx/'role-proof.json':role,tx/'migration-success.json':success,tx/'migration-receipt.json':receipt}
+            op=v2_operation(m.digest(plan_bytes),m.digest(success));op['controllerSha']=OP['controllerSha'];op['controllerTree']=OP['controllerTree']
+            for path,data in files.items():path.write_bytes(data)
+            raw=b':000000 100644 '+b'a'*40+b' '+b'b'*40+b' A\0scripts/control-timeweb-database-backup.py\0'
+            def command(args,code,**kwargs):
+                if args[0]=='/usr/bin/node':
+                    valid=files[tx/'migration-success.json']==success and files[tx/'migration-receipt.json']==receipt
+                    return m.encoded({'schema':'PHUB_TIMEWEB_MIGRATION_BACKUP_ATTESTATION_V1' if valid else 'invalid','containerId':'c'*64,'imageId':'sha256:'+'e'*64,'proofSha256':'f'*64})
+                if 'rev-parse' in args:return (m.MIGRATION_BASE_TREE+'\n').encode()
+                if 'merge-base' in args:return b''
+                if 'diff' in args:return raw
+                raise AssertionError(args)
+            def read(path,*args):return files[Path(path)]
+            with patch.object(m,'ROOT',root),patch.object(m,'LOCK',root/'standard/active'),patch.object(m,'command',side_effect=command),patch.object(m,'read_secure',side_effect=read),patch.object(m,'secure',return_value=SimpleNamespace()):
+                m.v2_migration_proof(op,b'backup request',root/'source')
+                for path,data in [(tx/'migration-success.json',m.encoded({**m.strict(success),'status':'FAILED'})),(tx/'migration-receipt.json',m.encoded({**m.strict(receipt),'successSha256':'e'*64}))]:
+                    files[path]=data
+                    with self.assertRaises(m.Stop):m.v2_migration_proof(op,b'backup request',root/'source')
+                    files[path]=success if path.name=='migration-success.json' else receipt
 
     def test_runtime_negative_boundaries(self):
         for service,key,value in [('expectedApi','restarts',1),('expectedApi','releaseId','other'),('expectedApi','revision','4'*40),('expectedPostgres','id','5'*64),('expectedPostgres','image','postgres:latest'),('expectedPostgres','imageId','sha256:'+'6'*64)]:
@@ -185,14 +257,15 @@ class PureTests(unittest.TestCase):
 
 
 class Scenario:
-    def __init__(self, directory, fault=None):
+    def __init__(self, directory, fault=None, operation=OP, ledger=LEDGER):
         self.root=Path(directory);self.fault=fault;self.calls=[];self.container='e'*64
+        self.ledger=ledger
         self.created=False;self.running=False;self.query_count=0;self.api_reads=0
         for path in ['operator','standard','backups','standard/source','standard/source/.git']:(self.root/path).mkdir(parents=True,exist_ok=True)
         self.request=self.root/'operator/database-backup-restore.json'
-        self.request.write_bytes(m.encoded(OP))
-        self.config=m.encoded({'controllerSha':OP['controllerSha'],'enabled':True})
-        self.op=copy.deepcopy(OP);self.op['controllerConfigSha256']=m.digest(self.config)
+        self.request.write_bytes(m.encoded(operation))
+        self.config=m.encoded({'controllerSha':operation['controllerSha'],'enabled':True})
+        self.op=copy.deepcopy(operation);self.op['controllerConfigSha256']=m.digest(self.config)
         self.op['expectedBoundarySha256']=m.digest(m.encoded(sorted([self.service_row(True),self.service_row(False)],key=lambda r:r['Id'])))
         self.request.write_bytes(m.encoded(self.op))
         self.tmpfs=m.capacity(1024,10**12,10**12)
@@ -249,14 +322,14 @@ class Scenario:
             if m.SOURCE_SIZE in args:return b'1024\n'
             if m.SOURCE_LEDGER in args:
                 self.query_count+=1
-                return m.encoded([['0001_changed.sql','f'*64]]) if self.fault=='source-ledger-drift' and self.query_count>1 else m.encoded(LEDGER)
+                return m.encoded([['0001_changed.sql','f'*64]]) if self.fault=='source-ledger-drift' and self.query_count>1 else m.encoded(self.ledger)
             if 'pg_restore' in args:
                 assert args[2]==self.container
                 kwargs['stdin'].read()
                 return b''
             if 'pg_isready' in args:return b''
             if '--command='+m.LEDGER_SQL in args:
-                return m.encoded([['0001_changed.sql','f'*64]]) if self.fault=='restore-ledger-mismatch' else m.encoded(LEDGER)
+                return m.encoded([['0001_changed.sql','f'*64]]) if self.fault=='restore-ledger-mismatch' else m.encoded(self.ledger)
         raise AssertionError('unmocked docker command: '+repr(args))
 
     def assert_no_environment(self,args):
@@ -266,15 +339,15 @@ class Scenario:
         real_read_text=Path.read_text
         def read_text(path,*args,**kwargs):
             return 'MemAvailable: 10000000 kB\n' if str(path)=='/proc/meminfo' else real_read_text(path,*args,**kwargs)
-        with patch.object(m,'ROOT',self.root),patch.object(m,'REQUEST',self.request),patch.object(m,'LOCK',self.root/'standard/active'),patch.object(m,'secure',side_effect=lambda path,*args,**kwargs:Path(path).lstat()),patch.object(m,'read_secure',side_effect=self.read),patch.object(m,'docker',side_effect=self.docker),patch.object(m,'command',side_effect=self.command),patch.object(m,'tool_custody',return_value=b'validated-installation'),patch.object(m.time,'time',return_value=NOW),patch.object(m.os,'statvfs',return_value=SimpleNamespace(f_bavail=50*1024**3,f_frsize=1)),patch.object(Path,'read_text',new=read_text):
+        with patch.object(m,'ROOT',self.root),patch.object(m,'REQUEST',self.request),patch.object(m,'LOCK',self.root/'standard/active'),patch.object(m,'secure',side_effect=lambda path,*args,**kwargs:Path(path).lstat()),patch.object(m,'read_secure',side_effect=self.read),patch.object(m,'docker',side_effect=self.docker),patch.object(m,'command',side_effect=self.command),patch.object(m,'tool_custody',return_value=b'validated-installation'),patch.object(m,'v2_migration_proof',return_value=None),patch.object(m.time,'time',return_value=NOW),patch.object(m.os,'statvfs',return_value=SimpleNamespace(f_bavail=50*1024**3,f_frsize=1)),patch.object(Path,'read_text',new=read_text):
             return m.execute(copy.deepcopy(self.op),m.encoded(self.op),'2'*64)
 
 
 class PipelineTests(unittest.TestCase):
-    def scenario(self,fault=None):
+    def scenario(self,fault=None,operation=OP,ledger=LEDGER):
         tmp=tempfile.TemporaryDirectory(prefix='phub-backup-mock-')
         self.addCleanup(tmp.cleanup)
-        return Scenario(tmp.name,fault)
+        return Scenario(tmp.name,fault,operation,ledger)
 
     def test_complete_mock_pipeline_emits_exact_receipt_then_removes_only_owned_restore(self):
         scenario=self.scenario()
@@ -317,6 +390,21 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse((scenario.root/'standard/active').exists())
         self.assertFalse(any(m.SOURCE_DUMP in a for a in scenario.calls))
 
+    def test_api_worker_backup_uses_the_candidate_path_and_exact_101_row_ledger(self):
+        scenario=self.scenario(operation=OP_API,ledger=API_WORKER_LEDGER)
+        result=scenario.invoke()
+        transaction=scenario.root/'backups'/(m.API_WORKER_CANDIDATE+'-api-worker')
+        receipt=json.loads((transaction/'database-backup-receipt.json').read_bytes())
+        self.assertEqual(result['releaseId'],m.API_WORKER_CANDIDATE)
+        self.assertEqual(receipt['sourceLedgerSha256'],m.API_WORKER_LEDGER_SHA256)
+        self.assertEqual(receipt['restoredLedgerSha256'],m.API_WORKER_LEDGER_SHA256)
+
+    def test_api_worker_rejects_99_row_ledger_before_dump_or_restore_creation(self):
+        scenario=self.scenario(operation=OP_API,ledger=API_WORKER_LEDGER[:-2])
+        with self.assertRaisesRegex(m.Stop,'^API_WORKER_LEDGER$'):scenario.invoke()
+        self.assertFalse(any(m.SOURCE_DUMP in args for args in scenario.calls))
+        self.assertFalse(any(args[0]=='/usr/bin/docker' and args[1] in ['create','start','stop','rm'] for args in scenario.calls))
+
 
 class SourceWitnessTests(unittest.TestCase):
     def test_local_git_proof_roundtrip_refuses_dirty_and_overridden_sources(self):
@@ -353,5 +441,11 @@ if __name__=='__main__':
         scenario=Scenario(destination)
         scenario.invoke()
         print(json.dumps({'transaction':str(destination/'backups'/(OP['releaseId']+'-web'))}))
+    elif len(sys.argv)==3 and sys.argv[1]=='--emit-api-worker-consumer-fixture':
+        destination=Path(sys.argv[2]).resolve(strict=True)
+        m.need(destination.is_relative_to(Path(tempfile.gettempdir()).resolve()) and destination.name.startswith('phub-backup-consumer-'), 'TEST_FIXTURE_PATH')
+        scenario=Scenario(destination,operation=OP_API,ledger=API_WORKER_LEDGER)
+        scenario.invoke()
+        print(json.dumps({'transaction':str(destination/'backups'/(m.API_WORKER_CANDIDATE+'-api-worker'))}))
     else:
         unittest.main()
