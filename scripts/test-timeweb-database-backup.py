@@ -71,6 +71,22 @@ class PureTests(unittest.TestCase):
         section=contract.split('export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([',1)[1].split(']);',1)[0]
         self.assertEqual(set(re.findall(r"'([^']+)'",section)),m.API_WORKER_MIGRATION_CONTROLLER_FILES)
 
+    def test_restore_image_accepts_only_frozen_official_digest_aliases(self):
+        canonical = {'Os': 'linux', 'Architecture': 'amd64', 'RepoDigests': [m.PG_IMAGE]}
+        short = m.PG_IMAGE.removeprefix('docker.io/library/')
+        self.assertTrue(m.restore_image_admitted(canonical))
+        self.assertTrue(m.restore_image_admitted({**canonical, 'RepoDigests': [short]}))
+        invalid = [
+            {'Os': 'windows'}, {'Architecture': 'arm64'}, {'RepoDigests': []},
+            {'RepoDigests': None}, {'RepoDigests': short},
+            {'RepoDigests': ['postgres:latest']}, {'RepoDigests': ['postgres@sha256:' + '0' * 64]},
+            {'RepoDigests': ['untrusted.example/library/' + short]},
+            {'RepoDigests': ['library/' + short]}, {'RepoDigests': [m.PG_IMAGE.upper()]},
+        ]
+        for changes in invalid:
+            with self.subTest(changes=changes):
+                self.assertFalse(m.restore_image_admitted({**canonical, **changes}))
+
     def test_exact_request(self):
         self.assertEqual(m.validate_operation(copy.deepcopy(OP),NOW,'2'*64),OP)
 

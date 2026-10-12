@@ -929,6 +929,15 @@ def source_query(shell):
     return docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', shell], 'SOURCE_QUERY')
 
 
+def restore_image_admitted(image):
+    # Docker Engine shortens official docker.io/library names in RepoDigests.
+    # Accept only these two names for the same frozen digest, never tags or another registry.
+    digests = image.get('RepoDigests')
+    return (image.get('Os') == 'linux' and image.get('Architecture') == 'amd64'
+            and isinstance(digests, list)
+            and any(value in (PG_IMAGE, PG_IMAGE.removeprefix('docker.io/library/')) for value in digests))
+
+
 def restore_tmpfs(tmpfs_bytes):
     return {'/var/lib/postgresql/data': 'rw,nosuid,nodev,noexec,mode=1777,size='+str(tmpfs_bytes),
             '/var/run/postgresql': 'rw,nosuid,nodev,noexec,mode=1777,size=16777216',
@@ -1040,7 +1049,7 @@ def execute_tmpfs(op, request_bytes, file_sha):
             need(current==migration_attestation,'MIGRATION_ATTESTATION_DRIFT')
     guard()
     image = strict(docker(['image','inspect','--format','{"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}}}', PG_IMAGE]))
-    need(image['Os']=='linux' and image['Architecture']=='amd64' and PG_IMAGE in image.get('RepoDigests', []), 'RESTORE_IMAGE')
+    need(restore_image_admitted(image), 'RESTORE_IMAGE')
     operation_sha = digest(request_bytes)
     marker = encoded({'schema':'PHUB_TIMEWEB_BACKUP_LOCK_V1','operationSha256':operation_sha,
                       'toolFileSha256':file_sha,'transaction':str(transaction),'createdAt':now_iso()})
@@ -1250,7 +1259,7 @@ def disk_initialize(op, request_bytes, file_sha):
     daemon = disk_daemon_namespace()
     need(not os.path.lexists(plan['pendingLock']), 'DISK_PENDING_LOCK_EXISTS')
     image = strict(docker(['image', 'inspect', '--format', '{"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}}}', PG_IMAGE]))
-    need(image['Os'] == 'linux' and image['Architecture'] == 'amd64' and PG_IMAGE in image.get('RepoDigests', []), 'RESTORE_IMAGE')
+    need(restore_image_admitted(image), 'RESTORE_IMAGE')
     work.mkdir(mode=0o700); sync_directory(work.parent)
     atomic_exclusive(work / 'backup-operation.json', request_bytes)
     atomic_exclusive(work / 'disk-plan.json', encoded(plan))
