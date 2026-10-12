@@ -433,6 +433,455 @@ class SourceWitnessTests(unittest.TestCase):
             (repo/'.git/info/grafts').write_text('synthetic ambiguity')
             with self.assertRaisesRegex(source.backup.Stop,'SOURCE_OBJECT_OVERRIDE'):source.prepare(repo,commit)
 
+def disk_operation(post=False):
+    if post:
+        return {**v2_operation(), 'schema': m.DISK_POST_SCHEMA,
+                'confirmation': 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50'}
+    op = {**OP, 'schema': m.DISK_PRE_SCHEMA, 'toolCommit': OP['controllerSha'],
+          'controllerSourceCiRunId': '38060874880', 'expectedLedgerSha256': m.API_WORKER_PRE_LEDGER_SHA256,
+          'confirmation': 'BACKUP_RESTORE_PRE99_DISK_LUKS2_KEEP_API_0D6078BE7A50'}
+    return op
+
+
+def disk_restore_row(plan, container='e'*64, state='running'):
+    row = restore_row(container, plan['operationSha256'], 512*1024**2, state)
+    row['Config'].update(Env=['PGDATA=/var/lib/postgresql/data/phub-restore','POSTGRES_USER=phub_restore','POSTGRES_DB=phub_restore','POSTGRES_HOST_AUTH_METHOD=trust'], Cmd=['postgres'], Entrypoint=['docker-entrypoint.sh'])
+    row['HostConfig']['LogConfig'] = {'Type':'none','Config':{}}
+    row['HostConfig']['Tmpfs'] = m.DISK_COMMON_TMPFS.copy()
+    row['HostConfig']['Memory'] = row['HostConfig']['MemorySwap'] = m.DISK_MEMORY
+    row['Mounts'] = [{'Type': 'bind', 'Source': plan['mount'], 'Destination': '/var/lib/postgresql/data', 'RW': True, 'Propagation': 'rprivate'}]
+    if state != 'created':
+        row['Mounts'] += [{'Type': 'tmpfs', 'Destination': key, 'RW': True} for key in m.DISK_COMMON_TMPFS]
+    row['State'].update(Pid=221 if state == 'running' else 0, StartedAt='2026-10-10T15:25:00.000Z')
+    return row
+
+
+class DiskPureTests(unittest.TestCase):
+    def plan(self):
+        op = disk_operation()
+        return m.disk_plan(op, m.encoded(op), m.disk_sizing(1024**3, 8*1024**3, 30*1024**3))
+
+    def test_closed_pre_and_post_disk_schemas_bind_actual_ledger_and_distinct_authority(self):
+        for post in (False, True):
+            op = disk_operation(post)
+            m.validate_operation(op, NOW, '2'*64)
+            for key, value in [('expectedLedgerSha256', 'f'*64), ('confirmation', OP['confirmation']),
+                               ('controllerSourceCiRunId', '0'), ('toolCommit', 'f'*40)]:
+                bad = copy.deepcopy(op); bad[key] = value
+                with self.subTest(post=post,key=key), self.assertRaises(m.Stop):
+                    m.validate_operation(bad, NOW, '2'*64)
+            bad = copy.deepcopy(op); bad['mountPath'] = '/live/pgdata'
+            with self.assertRaises(m.Stop):m.validate_operation(bad, NOW, '2'*64)
+        bad = disk_operation();bad['releaseId'] = OP['controllerSha']+'-1-1'
+        with self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+
+    def test_disk_fields_cannot_widen_existing_tmpfs_modes(self):
+        for op in (OP, v2_operation()):
+            bad = copy.deepcopy(op);bad['restoreStorage'] = 'disk'
+            with self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+            self.assertFalse(m.is_disk_operation(op))
+
+    def test_disk_capacity_two_stage_allows_current_ram_but_preserves_full_data_and_reserve(self):
+        db = 7021263895
+        first = m.disk_sizing(db, 9348202496, 34485190656)
+        self.assertEqual(first['restoreDataBytes'],21332227141)
+        self.assertGreater(first['imageBytes'],first['restoreDataBytes'])
+        self.assertEqual(first['imageBytes']%(4*1024**2),0)
+        with self.assertRaises(m.Stop):m.capacity(db,9348202496,34485190656)
+        self.assertEqual(m.disk_sizing(db,9348202496,34485190656,True),first)
+        for args in [(db,m.DISK_MEMORY+2*1024**3-1,10**12),(db,10**12,first['dumpLimitBytes']+m.DISK_HEADROOM-1),
+                     (0,10**12,10**12),(True,10**12,10**12)]:
+            with self.subTest(args=args),self.assertRaises(m.Stop):m.disk_sizing(*args)
+        with self.assertRaises(m.Stop):m.disk_sizing(db,10**12,first['imageBytes']+m.DISK_HEADROOM-1,True)
+
+    def test_names_paths_uuid_and_sizes_derive_from_operation_bytes_not_operator_paths(self):
+        p=self.plan();other=m.disk_plan(disk_operation(),m.encoded({**disk_operation(),'expiresAt':'2026-10-10T16:01:00.000Z'}),
+                                       m.disk_sizing(1024**3,8*1024**3,30*1024**3))
+        self.assertEqual(p['canonical'],str(m.ROOT/'backups'/(OP['releaseId']+'-web')))
+        self.assertNotEqual(p['work'],other['work']);self.assertNotEqual(p['luksUuid'],other['luksUuid'])
+        self.assertNotEqual(p['filesystemUuid'],p['luksUuid'])
+        self.assertTrue(p['work'].endswith(p['operationSha256']))
+
+    def test_disk_container_has_only_operation_storage_fixed_memory_and_two_tmpfs(self):
+        p=self.plan();args=m.disk_container_args(p)
+        self.assertEqual(args.count('--mount'),1);self.assertEqual(args.count('--tmpfs'),2)
+        self.assertEqual(args[args.index('--memory')+1],str(m.DISK_MEMORY))
+        self.assertEqual(args[args.index('--memory-swap')+1],str(m.DISK_MEMORY))
+        self.assertIn('type=bind,src='+p['mount']+',dst=/var/lib/postgresql/data,bind-propagation=rprivate',args)
+        for forbidden in ['--privileged','--volume','--device','--env-file','--publish','--rm']:self.assertNotIn(forbidden,args)
+        with patch.object(m,'disk_expected_environment',return_value=disk_restore_row(p)['Config']['Env']):
+            for state in ['created','running','exited']:m.validate_disk_container(disk_restore_row(p,state=state),p)
+
+    def test_disk_container_rejects_all_containment_drift_and_extra_mounts(self):
+        p=self.plan();row=disk_restore_row(p)
+        changes={'NetworkMode':'host','ReadonlyRootfs':False,'Privileged':True,'AutoRemove':True,
+                 'CapAdd':['SYS_ADMIN'],'CapDrop':[],'SecurityOpt':[],'PidsLimit':0,'Memory':0,'MemorySwap':-1,
+                 'NanoCpus':0,'PublishAllPorts':True,'Links':['other'],'Devices':[{}],'DeviceRequests':[{}],
+                 'VolumesFrom':['other'],'PidMode':'host','IpcMode':'host','Binds':['/live:/var/lib/postgresql/data'],
+                 'Tmpfs':{},'PortBindings':{'5432/tcp':[]},'LogConfig':{'Type':'json-file','Config':{}}}
+        for key,val in changes.items():
+            bad=copy.deepcopy(row);bad['HostConfig'][key]=val
+            with self.subTest(key=key),patch.object(m,'disk_expected_environment',return_value=row['Config']['Env']),self.assertRaises(m.Stop):m.validate_disk_container(bad,p)
+        for key,val in [('Source','/live/pgdata'),('Propagation','rshared'),('RW',False),('Type','volume')]:
+            bad=copy.deepcopy(row);bad['Mounts'][0][key]=val
+            with self.subTest(key=key),patch.object(m,'disk_expected_environment',return_value=row['Config']['Env']),self.assertRaises(m.Stop):m.validate_disk_container(bad,p)
+        for extra in [copy.deepcopy(row['Mounts'][0]),{'Type':'bind','Source':'/etc','Destination':'/etc','RW':False}]:
+            bad=copy.deepcopy(row);bad['Mounts'].append(extra)
+            with patch.object(m,'disk_expected_environment',return_value=row['Config']['Env']),self.assertRaises(m.Stop):m.validate_disk_container(bad,p)
+
+    def test_mountinfo_parser_and_match_reject_shared_nested_wrong_device_root_and_options(self):
+        raw='42 1 253:7 / /private/pgdata rw,nosuid,nodev,noexec,noatime - ext4 /dev/mapper/owned rw\n'
+        rows=m.mountinfo_records(raw);mapper={'device':253,'minor':7}
+        self.assertEqual(m.mountinfo_match(rows,'/private/pgdata',mapper,'/dev/mapper/owned')['id'],'42')
+        escaped=m.mountinfo_records(raw.replace('/private/pgdata','/private/has\\040space'))
+        self.assertEqual(escaped[0]['target'],'/private/has space')
+        for bad in [raw.replace('253:7','253:8'),raw.replace(' / /private',' /other /private'),
+                    raw.replace('noexec,',''),raw.replace(' - ext4',' shared:4 - ext4'),
+                    raw+'43 42 253:7 / /private/pgdata/nested rw - ext4 /dev/mapper/owned rw\n']:
+            with self.subTest(raw=bad),self.assertRaises(m.Stop):m.mountinfo_match(m.mountinfo_records(bad),'/private/pgdata',mapper,'/dev/mapper/owned')
+        with self.assertRaises(m.Stop):m.mountinfo_records(raw.replace('/private/pgdata','/private/\\q'))
+
+    def test_journal_is_append_only_and_detects_missing_reordered_or_mutated_events(self):
+        with tempfile.TemporaryDirectory(prefix='phub-disk-journal-') as directory:
+            with patch.object(m,'secure',side_effect=lambda p,*a:Path(p).lstat()),patch.object(m,'read_secure',side_effect=lambda p,*a:Path(p).read_bytes()),patch.object(m,'rename_noreplace',side_effect=lambda a,b:os.rename(a,b)):
+                j=m.DiskJournal(directory,'a'*64);j.add('PREPARED');j.add('LOCKED',identity={'ino':1})
+                self.assertEqual(m.DiskJournal(directory,'a'*64).find('LOCKED'),{'identity':{'ino':1}})
+                p=Path(directory)/'disk-event-0001.json';raw=p.read_bytes();value=json.loads(raw);value['previousSha256']='f'*64;p.write_bytes(m.encoded(value))
+                with self.assertRaises(m.Stop):m.DiskJournal(directory,'a'*64)
+                p.write_bytes(raw);(Path(directory)/'disk-event-0000.json').unlink()
+                with self.assertRaises(m.Stop):m.DiskJournal(directory,'a'*64)
+
+    def test_image_requires_preexisting_inode_proof_exact_allocation_and_no_replacement(self):
+        p=self.plan();info=SimpleNamespace(st_dev=1,st_ino=2,st_uid=0,st_gid=0,st_mode=stat.S_IFREG|0o600,st_nlink=1,
+                                         st_size=p['imageBytes'],st_blocks=p['imageBytes']//512)
+        journal=SimpleNamespace(find=lambda phase:{'identity':m.storage_identity(info)})
+        with patch.object(m.os.path,'lexists',return_value=True),patch.object(m,'secure',return_value=info):
+            m.disk_image(p,journal)
+            info.st_blocks=0
+            with self.assertRaisesRegex(m.Stop,'SPARSE'):m.disk_image(p,journal)
+            info.st_blocks=p['imageBytes']//512;expected=m.storage_identity(info);info.st_ino=3
+            with self.assertRaises(m.Stop):m.disk_image(p,SimpleNamespace(find=lambda phase:{'identity':expected}))
+        with patch.object(m.os.path,'lexists',return_value=True):
+            with self.assertRaises(m.Stop):m.disk_image(p,SimpleNamespace(find=lambda phase:None))
+
+    def test_ephemeral_key_prerequisites_are_not_required_for_abort_cleanup(self):
+        fake=SimpleNamespace(st_mode=stat.S_IFREG|0o755)
+        with patch.object(m.sys,'platform','linux'), patch.object(m.os,'uname',return_value=SimpleNamespace(machine='x86_64')), \
+             patch.object(m,'secure',return_value=fake) as custody, patch.object(m.Path,'is_dir',return_value=True), \
+             patch.object(m.Path,'exists',return_value=True), patch.object(m.Path,'read_text',return_value='nodev ext4'), \
+             patch.object(m.resource,'setrlimit'), patch('ctypes.CDLL',return_value=SimpleNamespace(renameat2=lambda:None)), \
+             patch.object(m,'disk_tool',side_effect=AssertionError('create-only command')):
+            m.disk_prerequisites(cleanup=True)
+        self.assertNotIn(m.DISK_TOOLS['mkfs'],[v.args[0]for v in custody.call_args_list])
+        self.assertNotIn(m.DISK_TOOLS['mount'],[v.args[0]for v in custody.call_args_list])
+
+    def test_cleanup_requires_atomic_publication_primitive_but_not_key_custody(self):
+        fake=SimpleNamespace(st_mode=stat.S_IFREG|0o755)
+        with patch.object(m.sys,'platform','linux'), patch.object(m.os,'uname',return_value=SimpleNamespace(machine='x86_64')), \
+             patch.object(m,'secure',return_value=fake), patch.object(m.Path,'is_dir',return_value=True), \
+             patch.object(m.Path,'exists',return_value=True), patch.object(m.Path,'read_text',return_value='nodev ext4'), \
+             patch.object(m.resource,'setrlimit'), patch('ctypes.CDLL',return_value=SimpleNamespace()):
+            with self.assertRaisesRegex(m.Stop,'DISK_NOREPLACE_UNAVAILABLE'):m.disk_prerequisites(cleanup=True)
+
+    def test_docker_namespace_is_proven_before_any_database_writer(self):
+        fake_stat='44 (dockerd) '+ ' '.join(['S']+['0']*18+['123'])
+        with patch.object(m,'secure'),patch.object(m,'command',return_value=b'44\n'), \
+             patch.object(m.Path,'read_text',return_value=fake_stat),patch.object(m.os,'readlink',return_value='/usr/bin/dockerd'), \
+             patch.object(m.os,'stat',return_value=SimpleNamespace(st_ino=11)):
+            self.assertEqual(m.disk_daemon_namespace(),{'pid':44,'startTicks':'123','namespace':11})
+        with patch.object(m,'secure'),patch.object(m,'command',return_value=b'44\n'), \
+             patch.object(m.Path,'read_text',return_value=fake_stat),patch.object(m.os,'readlink',return_value='/usr/bin/dockerd'), \
+             patch.object(m.os,'stat',side_effect=lambda p:SimpleNamespace(st_ino=12 if p=='/proc/44/ns/mnt' else 11)):
+            with self.assertRaisesRegex(m.Stop,'DISK_DAEMON_NAMESPACE'):m.disk_daemon_namespace()
+
+    def test_atomic_journal_partial_temporary_write_is_never_a_committed_event(self):
+        with tempfile.TemporaryDirectory(prefix='phub-disk-atomic-journal-') as directory:
+            work=Path(directory)
+            def partial(path,data):
+                Path(path).write_bytes(data[:17])
+                raise m.Stop('SYNTHETIC_PARTIAL_WRITE')
+            with patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()),patch.object(m,'read_secure',side_effect=lambda p,*a:Path(p).read_bytes()), \
+                 patch.object(m,'rename_noreplace',side_effect=lambda a,b:os.rename(a,b)):
+                j=m.DiskJournal(work,'a'*64)
+                with patch.object(m,'exclusive',side_effect=partial):
+                    with self.assertRaises(m.Stop):j.add('PREPARED')
+                self.assertFalse((work/'disk-event-0000.json').exists())
+                self.assertEqual(m.DiskJournal(work,'a'*64).events,[])
+                self.assertEqual(len(list(work.glob('.disk-write-*.tmp'))),1)
+                m.DiskJournal(work,'a'*64).add('PREPARED')
+                self.assertEqual(len(m.DiskJournal(work,'a'*64).events),1)
+
+    def test_same_operation_mutators_are_serialized_and_lock_is_never_deleted(self):
+        with tempfile.TemporaryDirectory(prefix='phub-disk-process-lock-') as directory:
+            root=Path(directory);(root/'standard').mkdir()
+            with patch.object(m,'ROOT',root),patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()),patch.object(m,'secure_info'):
+                with m.disk_mutation_lock():
+                    with self.assertRaisesRegex(m.Stop,'DISK_PROCESS_BUSY'):
+                        with m.disk_mutation_lock():self.fail('parallel mutator entered')
+                with m.disk_mutation_lock():pass
+                self.assertTrue((root/'standard/database-backup-disk-process.lock').exists())
+
+    def test_fixed_environment_and_command_cannot_be_replaced_in_a_lost_ack_container(self):
+        p=self.plan();row=disk_restore_row(p)
+        with patch.object(m,'disk_expected_environment',return_value=row['Config']['Env']):
+            for key,val in [('Cmd',['sh','-c','foreign']),('Entrypoint',['sh']),('Env',row['Config']['Env']+['LD_PRELOAD=/foreign']),
+                            ('Labels',{**row['Config']['Labels'],'foreign':'label'})]:
+                bad=copy.deepcopy(row);bad['Config'][key]=val
+                with self.subTest(key=key),self.assertRaises(m.Stop):m.validate_disk_container(bad,p)
+
+
+
+class DiskScenario(Scenario):
+    """Only Linux/Docker primitives are simulated; capsule/journal/publish/lock I/O is real."""
+    def __init__(self,directory,post=False,fault=None):
+        super().__init__(directory,None,disk_operation(post),API_WORKER_LEDGER if post else API_WORKER_LEDGER[:-2])
+        self.fault=fault;self.loop=None;self.mapper=None;self.mounted=False;self.stopped=False
+        with patch.object(m,'ROOT',self.root):
+            self.plan=m.disk_plan(self.op,m.encoded(self.op),m.disk_sizing(1024,10**12,50*1024**3))
+        self.secret=b'SYNTHETIC_EPHEMERAL_KEY_CANARY_'*2+b'!!!!!!'
+        self.secret=self.secret[:64].ljust(64,b'!')
+
+    def trip(self,code,after=False):
+        if self.fault==('after:'if after else 'before:')+code:raise m.Stop(code+'_UNCERTAIN')
+
+    def docker(self,args,code='DOCKER_READ',**kwargs):
+        self.trip(code)
+        if args[0]=='inspect' and args[-1]==self.container:
+            self.calls.append(['/usr/bin/docker']+args)
+            state='running'if self.running else 'exited'if self.stopped else 'created'
+            result=m.encoded(disk_restore_row(self.plan,self.container,state))
+        else:
+            saved=self.fault;self.fault=None
+            try:result=super().docker(args,code,**kwargs)
+            finally:self.fault=saved
+            if args[0]=='stop':self.stopped=True
+        self.trip(code,True)
+        return result
+
+    def tool(self,name,args,code,**kwargs):
+        self.calls.append([m.DISK_TOOLS[name],*args]);self.trip(code)
+        result=b''
+        if name=='loop':
+            if '--json' in args:
+                rows=[]
+                if self.loop:
+                    info=Path(self.plan['image']).lstat()
+                    rows=[{'name':self.loop,'back-file':self.plan['image'],'back-ino':info.st_ino,
+                           'back-maj:min':f'{os.major(info.st_dev)}:{os.minor(info.st_dev)}','offset':0,
+                           'sizelimit':self.plan['imageBytes'],'ro':False,'autoclear':False}]
+                result=m.encoded({'loopdevices':rows})
+            elif '--detach' in args:self.loop=None
+            else:self.loop='/dev/loop7';result=(self.loop+'\n').encode()
+        elif name=='crypt':
+            if args[0]=='luksUUID':result=(self.plan['luksUuid']+'\n').encode()
+            elif args[0]=='open':self.mapper={'device':253,'minor':7,'uuid':'synthetic-owned-mapper'}
+            elif args[0]=='close':self.mapper=None
+            if args[0] in ('open','luksFormat'):
+                assert kwargs['input_data']==self.secret
+                assert all(self.secret not in v.encode() for v in args)
+                assert self.secret not in m.encoded(kwargs.get('environment',m.ENV))
+        elif name=='blkid':result=(self.plan['filesystemUuid']+'\n').encode()
+        elif name=='mount':self.mounted=True
+        elif name=='umount':self.mounted=False;Path(self.plan['mount']).chmod(0o700)
+        elif name=='mkfs':
+            assert kwargs['environment']['MKE2FS_CONFIG']=='/dev/null'
+        else:raise AssertionError((name,args,code))
+        self.trip(code,True);return result
+
+    def mapper_read(self,plan,loop,optional=False):
+        if not self.mapper:m.need(optional,'DISK_MAPPER_MISSING')
+        if self.mapper:m.need(loop==self.loop,'DISK_MAPPER_CUSTODY')
+        return self.mapper
+
+    def mount_read(self,plan,mapper,optional=False,complete=True):
+        if not self.mounted:m.need(optional,'DISK_MOUNT_MISSING');return None
+        m.need(mapper==self.mapper and self.mapper is not None,'DISK_MOUNT_CUSTODY')
+        info=Path(self.plan['mount']).lstat()
+        return {k:v for k,v in m.storage_identity(info).items()if k!='nlink'}
+
+    def kernel(self,plan,mapper,row):
+        m.need(row['State']['Status']=='running','DISK_RESTORE_RUNNING')
+        return {'hostNamespace':11,'containerNamespace':12,'pid':row['State']['Pid'],'startedAt':row['State']['StartedAt'],
+                'hostMount':{'target':plan['mount']},'containerMount':{'target':'/var/lib/postgresql/data'}}
+
+    def journal(self):
+        with patch.object(m,'read_secure',side_effect=lambda p,*a:Path(p).read_bytes()):
+            return m.DiskJournal(self.plan['work'],self.plan['operationSha256'])
+
+    def invoke(self,reconcile=False):
+        from contextlib import ExitStack
+        original_statvfs=os.statvfs
+        original_urandom=os.urandom
+        original_add=m.DiskJournal.add
+        def fs(path):
+            if str(path)==self.plan['mount']:return SimpleNamespace(f_bavail=self.plan['restoreDataBytes'],f_frsize=1,f_blocks=self.plan['restoreDataBytes'])
+            return SimpleNamespace(f_bavail=50*1024**3,f_frsize=1,f_blocks=50*1024**3)
+        def secure(path,*args,**kwargs):
+            value=Path(path).lstat()
+            if str(path)==self.plan['image']:
+                result=SimpleNamespace(**{k:getattr(value,k)for k in dir(value)if k.startswith('st_')})
+                result.st_blocks=value.st_size//512
+                return result
+            return value
+        def phase(journal,phase,**metadata):
+            self.trip('PHASE_'+phase)
+            result=original_add(journal,phase,**metadata)
+            self.trip('PHASE_'+phase,True);return result
+        with ExitStack()as stack:
+            for name,val in [('ROOT',self.root),('REQUEST',self.request),('LOCK',self.root/'standard/active')]:stack.enter_context(patch.object(m,name,val))
+            for name,fn in [('secure',secure),('read_secure',self.read),('docker',self.docker),('command',self.command),('tool_custody',lambda op:b'validated-installation'),
+                            ('v2_migration_proof',lambda *a:None),('disk_prerequisites',lambda **kwargs:None),('disk_private_parent',lambda p:None),
+                            ('disk_daemon_namespace',lambda:{'pid':44,'startTicks':'123','namespace':11}),
+                            ('disk_expected_environment',lambda:disk_restore_row(self.plan)['Config']['Env']),
+                            ('disk_memory_available',lambda:10**12),('disk_tool',self.tool),('disk_mapper',self.mapper_read),('disk_mount',self.mount_read),
+                            ('disk_kernel_mount_proof',self.kernel)]:stack.enter_context(patch.object(m,name,side_effect=fn))
+            stack.enter_context(patch.object(m.time,'time',return_value=NOW))
+            stack.enter_context(patch.object(m.os,'statvfs',side_effect=fs))
+            stack.enter_context(patch.object(m.os,'posix_fallocate',side_effect=lambda fd,offset,size:os.ftruncate(fd,size),create=True))
+            stack.enter_context(patch.object(m.os,'urandom',side_effect=lambda size:self.secret if size==64 else original_urandom(size)))
+            stack.enter_context(patch.object(m,'rename_noreplace',side_effect=lambda source,dest:os.rename(source,dest)))
+            stack.enter_context(patch.object(m.DiskJournal,'add',new=phase))
+            # Only the actual Linux mapper path is virtual in this mock.
+            original_lexists=m.os.path.lexists
+            stack.enter_context(patch.object(m.os.path,'lexists',side_effect=lambda p:bool(self.mapper)if str(p)==self.plan['mapperPath'] else original_lexists(p)))
+            return m.reconcile_disk(copy.deepcopy(self.op),m.encoded(self.op),'2'*64)if reconcile else m.execute(copy.deepcopy(self.op),m.encoded(self.op),'2'*64)
+
+
+class DiskPipelineTests(unittest.TestCase):
+    def scenario(self,post=False,fault=None):
+        tmp=tempfile.TemporaryDirectory(prefix='phub-disk-backup-mock-');self.addCleanup(tmp.cleanup)
+        return DiskScenario(tmp.name,post,fault)
+
+    def test_both_real_consumer_paths_are_published_only_after_exact_cleanup(self):
+        for post in (False,True):
+            with self.subTest(post=post):
+                s=self.scenario(post);result=s.invoke();canonical=Path(s.plan['canonical'])
+                receipt=json.loads((canonical/'database-backup-receipt.json').read_bytes())
+                self.assertEqual(len(receipt),9);self.assertEqual(receipt['sourceLedgerSha256'],s.plan['expectedLedgerSha256'])
+                self.assertEqual(receipt['backupFile'],str(canonical/'database.pgcustom'))
+                self.assertFalse((s.root/'standard/active').exists());self.assertFalse(s.created)
+                self.assertFalse(s.loop);self.assertFalse(s.mapper);self.assertFalse(s.mounted)
+                self.assertFalse(Path(s.plan['image']).exists());self.assertFalse(Path(s.plan['mount']).exists())
+                self.assertFalse(result['authorizesDeploy'])
+                events=s.journal().events
+                phases=[v['phase']for v in events]
+                self.assertLess(phases.index('STORAGE_CLEANUP_VERIFIED'),phases.index('PUBLISHED'))
+                self.assertLess(phases.index('PUBLISHED'),phases.index('UNLOCK_INTENT'))
+                for p in Path(s.plan['work']).glob('*.json'):self.assertNotIn(s.secret,p.read_bytes())
+
+    def test_every_mutating_command_lost_ack_retains_lock_and_reconcile_never_replays(self):
+        codes=['DUMP','DISK_LOOP_ATTACH','DISK_LUKS_FORMAT','DISK_MAPPER_OPEN','DISK_FS_FORMAT','DISK_MOUNT',
+               'DISK_RESTORE_CREATE','DISK_RESTORE_START','RESTORE','DISK_RESTORE_STOP','DISK_RESTORE_REMOVE',
+               'DISK_UNMOUNT','DISK_MAPPER_CLOSE','DISK_LOOP_DETACH']
+        for when in ('before:','after:'):
+            for code in codes:
+                with self.subTest(fault=when+code):
+                    s=self.scenario(True,when+code)
+                    with self.assertRaises(m.Stop):s.invoke()
+                    self.assertTrue((s.root/'standard/active').exists())
+                    self.assertFalse(Path(s.plan['canonical']).exists())
+                    old=len(s.calls);s.fault=None;s.invoke(True)
+                    forbidden={'create','start'}
+                    for args in s.calls[old:]:
+                        self.assertFalse(args[0]=='/usr/bin/docker'and(args[1]in forbidden or m.SOURCE_DUMP in args or 'pg_restore'in args))
+                        self.assertFalse(args[0]==m.DISK_TOOLS['crypt']and args[1]in ['open','luksFormat'])
+                        self.assertNotEqual(args[0],m.DISK_TOOLS['mkfs'])
+                    s.invoke(True)
+                    self.assertFalse((s.root/'standard/active').exists())
+                    self.assertFalse(Path(s.plan['image']).exists())
+
+    def test_after_each_durable_phase_reconciliation_preserves_canonical_admission(self):
+        phases=['LOCK_PREPARED','LOCK_PUBLISH_INTENT','LOCKED','DUMP_INTENT','DUMP_VERIFIED','IMAGE_CREATE_INTENT','IMAGE_CREATED',
+                'IMAGE_ALLOCATE_INTENT','IMAGE_ALLOCATED','LOOP_ATTACH_INTENT','LOOP_ATTACHED','LUKS_FORMAT_INTENT',
+                'LUKS_FORMATTED','MAPPER_OPEN_INTENT','MAPPER_OPENED','FS_FORMAT_INTENT','FS_FORMATTED',
+                'MOUNTPOINT_CREATE_INTENT','MOUNTPOINT_CREATED','MOUNT_INTENT','MOUNTED','RESTORE_CREATE_INTENT','RESTORE_CREATED','RESTORE_START_INTENT',
+                'RESTORE_STARTED','RESTORE_INTENT','RESTORE_VERIFIED','PUBLISH_READY','CONTAINER_STOP_INTENT',
+                'CONTAINER_STOPPED','CONTAINER_REMOVE_INTENT','CONTAINER_REMOVED','UNMOUNT_INTENT','UNMOUNTED',
+                'MOUNTPOINT_REMOVE_INTENT','MOUNTPOINT_REMOVED','MAPPER_CLOSE_INTENT','MAPPER_CLOSED','LOOP_DETACH_INTENT',
+                'LOOP_DETACHED','IMAGE_UNLINK_INTENT','IMAGE_UNLINKED','STORAGE_CLEANUP_VERIFIED','PUBLISH_INTENT','PUBLISHED','UNLOCK_INTENT']
+        for phase in phases:
+            with self.subTest(phase=phase):
+                s=self.scenario(False,'after:PHASE_'+phase)
+                with self.assertRaises(m.Stop):s.invoke()
+                s.fault=None;s.invoke(True)
+                events=s.journal()
+                self.assertIsNotNone(events.find('RECONCILED'))
+                self.assertEqual(Path(s.plan['canonical']).exists(),events.find('PUBLISH_READY')is not None)
+                self.assertFalse((s.root/'standard/active').exists())
+
+    def test_foreign_lock_canonical_path_and_replay_are_never_overwritten(self):
+        s=self.scenario();lock=s.root/'standard/active';lock.write_text('foreign')
+        with self.assertRaises(m.Stop):s.invoke()
+        self.assertEqual(lock.read_text(),'foreign');self.assertEqual(s.calls,[])
+        s=self.scenario();Path(s.plan['canonical']).mkdir()
+        with self.assertRaises(m.Stop):s.invoke()
+        s=self.scenario();s.invoke()
+        with self.assertRaises(m.Stop):s.invoke()
+
+    def test_partial_unlock_reconciliation_finishes_only_exact_owned_empty_lock(self):
+        s=self.scenario(False,'after:PHASE_UNLOCK_INTENT')
+        with self.assertRaises(m.Stop):s.invoke()
+        marker=s.root/'standard/active/backup-restore.json';marker.unlink()
+        s.fault=None;s.invoke(True)
+        self.assertFalse((s.root/'standard/active').exists())
+        s=self.scenario(False,'after:PHASE_UNLOCK_INTENT')
+        with self.assertRaises(m.Stop):s.invoke()
+        (s.root/'standard/active/foreign').write_text('foreign')
+        s.fault=None
+        with self.assertRaises(m.Stop):s.invoke(True)
+        self.assertTrue((s.root/'standard/active/foreign').exists())
+
+    def test_missing_owned_lock_or_marker_before_unlock_intent_is_not_authorized_by_new_intent(self):
+        for entire in (False,True):
+            s=self.scenario(False,'before:PHASE_UNLOCK_INTENT')
+            with self.assertRaises(m.Stop):s.invoke()
+            marker=s.root/'standard/active/backup-restore.json';marker.unlink()
+            if entire:marker.parent.rmdir()
+            s.fault=None
+            with self.assertRaises(m.Stop):s.invoke(True)
+            self.assertIsNone(s.journal().find('UNLOCK_INTENT'))
+
+    def test_mountpoint_disappearance_before_removal_intent_requires_manual_resolution(self):
+        s=self.scenario(False,'after:PHASE_MOUNTPOINT_CREATED')
+        with self.assertRaises(m.Stop):s.invoke()
+        Path(s.plan['mount']).rmdir();s.fault=None
+        with self.assertRaisesRegex(m.Stop,'DISK_MOUNTPOINT_DISAPPEARED'):s.invoke(True)
+        self.assertTrue((s.root/'standard/active').exists())
+        self.assertTrue(Path(s.plan['image']).exists())
+
+    def test_raw_filesystem_gaps_stop_without_claiming_unrecorded_resources(self):
+        # These crash windows deliberately need exact-owner manual incident handling.
+        for phase in ('LOCK_PREPARED','IMAGE_CREATED','MOUNTPOINT_CREATED'):
+            s=self.scenario(False,'before:PHASE_'+phase)
+            with self.assertRaises(m.Stop):s.invoke()
+            s.fault=None;before=list(s.calls)
+            with self.subTest(phase=phase),self.assertRaises(m.Stop):s.invoke(True)
+            self.assertFalse(Path(s.plan['canonical']).exists())
+            self.assertFalse(any(v[0]==m.DISK_TOOLS['mkfs'] for v in s.calls[len(before):]))
+
+    def test_pending_lock_with_foreign_inventory_is_never_published(self):
+        s=self.scenario(False,'after:PHASE_LOCK_PREPARED')
+        with self.assertRaises(m.Stop):s.invoke()
+        foreign=Path(s.plan['pendingLock'])/'foreign';foreign.write_text('foreign');s.fault=None
+        with self.assertRaises(m.Stop):s.invoke(True)
+        self.assertTrue(foreign.exists());self.assertFalse((s.root/'standard/active').exists())
+
+    def test_boundary_labels_affect_digest_without_persisting_unrelated_private_metadata(self):
+        s=self.scenario()
+        original=s.service_row
+        canary='SYNTHETIC_PRIVATE_LABEL_CANARY'
+        def labelled(api):
+            row=original(api);row['Config']['Labels']['private-note']=canary;return row
+        s.service_row=labelled
+        s.op['expectedBoundarySha256']=m.digest(m.encoded(sorted([labelled(True),labelled(False)],key=lambda r:r['Id'])))
+        s.request.write_bytes(m.encoded(s.op))
+        with patch.object(m,'ROOT',s.root):s.plan=m.disk_plan(s.op,m.encoded(s.op),m.disk_sizing(1024,10**12,50*1024**3))
+        s.invoke()
+        self.assertEqual(json.loads((Path(s.plan['work'])/'boundary.json').read_bytes()),{'sha256':s.op['expectedBoundarySha256']})
+        for path in Path(s.plan['work']).glob('*.json'):self.assertNotIn(canary.encode(),path.read_bytes())
+
+
+
 
 if __name__=='__main__':
     if len(sys.argv)==3 and sys.argv[1]=='--emit-consumer-fixture':
@@ -447,5 +896,11 @@ if __name__=='__main__':
         scenario=Scenario(destination,operation=OP_API,ledger=API_WORKER_LEDGER)
         scenario.invoke()
         print(json.dumps({'transaction':str(destination/'backups'/(m.API_WORKER_CANDIDATE+'-api-worker'))}))
+    elif len(sys.argv)==3 and sys.argv[1] in ('--emit-disk-pre99-consumer-fixture','--emit-disk-post101-consumer-fixture'):
+        destination=Path(sys.argv[2]).resolve(strict=True)
+        m.need(destination.is_relative_to(Path(tempfile.gettempdir()).resolve()) and destination.name.startswith('phub-backup-consumer-'), 'TEST_FIXTURE_PATH')
+        scenario=DiskScenario(destination,post=sys.argv[1]=='--emit-disk-post101-consumer-fixture')
+        scenario.invoke()
+        print(json.dumps({'transaction':scenario.plan['canonical']}))
     else:
         unittest.main()

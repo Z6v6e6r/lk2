@@ -6,25 +6,23 @@ import { parseStrictJson } from './strict-json.js';
 import { describe, expect, it } from 'vitest';
 
 describe('Timeweb backup/isolated restore preparation', () => {
-  it('accepts an emitted Web-only receipt through the actual owning validator and rejects drift', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'phub-backup-consumer-'));
-    try {
-      const fixture = spawnSync(
-        'python3',
-        [
-          '-I',
-          '-S',
-          '-B',
-          'scripts/test-timeweb-database-backup.py',
-          '--emit-consumer-fixture',
-          directory,
-        ],
-        { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir() } },
-      );
-      expect(fixture.status, fixture.stderr).toBe(0);
-      const { transaction } = parseStrictJson<{ transaction: string }>(fixture.stdout);
-      expect(transaction).toMatch(/[a-f0-9]{40}-38060874880-1-web$/u);
-      const program = `
+  it.each(['--emit-consumer-fixture', '--emit-disk-pre99-consumer-fixture'])(
+    'accepts the Web receipt from %s through its owning validator and rejects drift',
+    (fixtureMode) => {
+      const directory = mkdtempSync(join(tmpdir(), 'phub-backup-consumer-'));
+      try {
+        const fixture = spawnSync(
+          'python3',
+          ['-I', '-S', '-B', 'scripts/test-timeweb-database-backup.py', fixtureMode, directory],
+          {
+            encoding: 'utf8',
+            env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir() },
+          },
+        );
+        expect(fixture.status, fixture.stderr).toBe(0);
+        const { transaction } = parseStrictJson<{ transaction: string }>(fixture.stdout);
+        expect(transaction).toMatch(/[a-f0-9]{40}-(?:38060874880|38170498441)-1-web$/u);
+        const program = `
         import assert from 'node:assert/strict';
         import fs from 'node:fs';
         import {syncBuiltinESMExports} from 'node:module';
@@ -45,41 +43,40 @@ describe('Timeweb backup/isolated restore preparation', () => {
         assert.equal(validateUpgradeBackup(directory,{releaseId:receipt.baselineReleaseId}).path,path);
         console.log(JSON.stringify({status:'CONSUMER_COMPATIBILITY_PASS',negativeCases:negatives.length+1}));
       `;
-      const result = spawnSync(
-        process.execPath,
-        ['--input-type=module', '-e', program, transaction],
-        { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(parseStrictJson(result.stdout)).toEqual({
-        status: 'CONSUMER_COMPATIBILITY_PASS',
-        negativeCases: 8,
-      });
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-  it('emits an API/Worker receipt accepted by both the current backup and packaged-ledger validators', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'phub-backup-consumer-'));
-    try {
-      const fixture = spawnSync(
-        'python3',
-        [
-          '-I',
-          '-S',
-          '-B',
-          'scripts/test-timeweb-database-backup.py',
-          '--emit-api-worker-consumer-fixture',
-          directory,
-        ],
-        { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir() } },
-      );
-      expect(fixture.status, fixture.stderr).toBe(0);
-      const { transaction } = parseStrictJson<{ transaction: string }>(fixture.stdout);
-      expect(transaction).toMatch(
-        /11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1-api-worker$/u,
-      );
-      const program = `
+        const result = spawnSync(
+          process.execPath,
+          ['--input-type=module', '-e', program, transaction],
+          { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(parseStrictJson(result.stdout)).toEqual({
+          status: 'CONSUMER_COMPATIBILITY_PASS',
+          negativeCases: 8,
+        });
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+  it.each(['--emit-api-worker-consumer-fixture', '--emit-disk-post101-consumer-fixture'])(
+    'accepts the API/Worker receipt from %s through both backup and packaged-ledger validators',
+    (fixtureMode) => {
+      const directory = mkdtempSync(join(tmpdir(), 'phub-backup-consumer-'));
+      try {
+        const fixture = spawnSync(
+          'python3',
+          ['-I', '-S', '-B', 'scripts/test-timeweb-database-backup.py', fixtureMode, directory],
+          {
+            encoding: 'utf8',
+            env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TMPDIR: tmpdir() },
+          },
+        );
+        expect(fixture.status, fixture.stderr).toBe(0);
+        const { transaction } = parseStrictJson<{ transaction: string }>(fixture.stdout);
+        expect(transaction).toMatch(
+          /11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1-api-worker$/u,
+        );
+        const program = `
         import assert from 'node:assert/strict';
         import { createHash } from 'node:crypto';
         import fs from 'node:fs';
@@ -109,27 +106,28 @@ describe('Timeweb backup/isolated restore preparation', () => {
         assert.equal(candidate,'11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1');
         console.log(JSON.stringify({status:'API_WORKER_CONSUMER_COMPATIBILITY_PASS',negativeCases:5}));
       `;
-      const result = spawnSync(
-        process.execPath,
-        [
-          '--input-type=module',
-          '-e',
-          program,
-          transaction,
-          '11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1',
-          '0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1',
-        ],
-        { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(parseStrictJson(result.stdout)).toEqual({
-        status: 'API_WORKER_CONSUMER_COMPATIBILITY_PASS',
-        negativeCases: 5,
-      });
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+        const result = spawnSync(
+          process.execPath,
+          [
+            '--input-type=module',
+            '-e',
+            program,
+            transaction,
+            '11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1',
+            '0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1',
+          ],
+          { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(parseStrictJson(result.stdout)).toEqual({
+          status: 'API_WORKER_CONSUMER_COMPATIBILITY_PASS',
+          negativeCases: 5,
+        });
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('runs mock-only custody, isolation, recovery and receipt regression scenarios', () => {
     const result = spawnSync(

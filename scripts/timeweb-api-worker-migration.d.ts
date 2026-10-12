@@ -98,3 +98,41 @@ export function runManualApiWorkerMigration(
 ): Promise<{ status: string; receipt: string }>;
 
 export function validateMigrationReleaseState(active: boolean, provision: boolean): void;
+
+export interface DiskRestoreMountinfoRecord {
+  id: string;
+  parent: string;
+  device: string;
+  root: string;
+  target: string;
+  options: string[];
+  optional: string[];
+  fstype: string;
+  source: string;
+  superOptions: string[];
+}
+export function parseDiskRestoreMountinfo(raw: string): DiskRestoreMountinfoRecord[];
+export function validateDiskRestoreReadback(
+  value: unknown,
+  expected: unknown,
+  reference: unknown,
+  operationBytes: Buffer,
+): unknown;
+export function validateDiskRestoreKernelSnapshot(
+  row: unknown,
+  attestation: unknown,
+  actual: unknown,
+): void;
+
+export function validateMigrationBackupRestoreReference(
+  operationBytes: Buffer,
+  expected: unknown,
+  reference: unknown,
+): 'disk' | 'legacy';
+export function validateLegacyBackupRestoreMounts(row: unknown): void;
+
+export function validateDiskRestoreToolBytes(
+  installedBytes: Buffer,
+  sourceBytes: Buffer,
+  expectedSha256: string,
+): void;
