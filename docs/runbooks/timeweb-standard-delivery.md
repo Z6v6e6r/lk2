@@ -1025,3 +1025,85 @@ unchanged runtime/secrets and post-101 ledger at each guard. For tmpfs, only the
 restore ID/operation is excluded from that unchanged boundary. The disk mode instead requires
 its fixed hash-only reference, source-anchored helper, and independently read kernel proof. A changed proof fingerprint stops
 backup; no file relocation or receipt rewriting is available.
+
+### Private mount namespace and temporary Docker runtime (V2)
+
+Shared host mounts make the V1 disk mode ineligible: even a bind followed by `--make-private`
+can propagate the initial bind before privatization. V1 keeps its refusal. The new namespace
+mode creates a PID1-owned supervisor, unshares only its mount namespace, then runs
+`mount --make-rprivate /` inside that namespace before creating storage. It never changes host
+propagation or restarts the system Docker daemon. A parent crash leaves the supervisor holding
+the namespace for a separately authorized reconciliation; it does not replay the operation.
+
+The fixed request fields remain closed. These distinct schemas and confirmations are required:
+
+- `PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_NAMESPACE_V2`, confirmation
+  `BACKUP_RESTORE_PRE99_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_KEEP_API_0D6078BE7A50`;
+- `PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_NAMESPACE_V2`, confirmation
+  `BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_11954FFD6D7B_KEEP_API_0D6078BE7A50`.
+
+All earlier source, installation, expiry, server, ledger, lock and immutable image gates apply.
+The supervisor and both Docker clients are bound to the original system daemon PID/start ticks
+and mount namespace recorded before lock publication. A restart is drift, never a new baseline.
+The parent may enter only from this frozen source namespace, through a pinned namespace FD,
+and must prove its return. Namespace FDs and the mutation flock never pass to daemon children.
+
+The operation creates one transient root slice named `phubdiskrestore<operation-sha-prefix>.slice`
+through fixed typed `StartTransientUnit` D-Bus properties. The name has no parent slice hierarchy.
+Its aggregate cap is 4 GiB, 384 tasks, 2 CPUs and no swap. The supervisor service cap is 2 GiB,
+256 tasks, 1 CPU; the restore scope cap is 2 GiB, 128 tasks, 1 CPU. Both are inside this slice.
+Before mutation, read back systemd properties and kernel cgroup limits. No persistent drop-in,
+restart, ambient unit property or caller-selected cgroup parent is accepted.
+
+The temporary root Docker daemon uses only an operation-derived Unix socket, vfs storage,
+data/exec roots inside the private LUKS mount, and fixed root-private configuration. It has no
+bridge, iptables, IP forwarding, live restore or logs. The generated managed-containerd config
+must bind its root/state/socket to these same paths with CRI disabled and no imports or proxy
+plugins. Prove dockerd/containerd/shim executable, full argv, owner, start ticks, namespace,
+service cgroup and complete member inventory. Unknown generated config or runtime version stops.
+Runtime binaries, systemd and Docker parent behavior require physical admission before use.
+
+The source client always reads the fixed system Docker socket; the restore client always names
+the temporary socket. There is no fallback. Stream only the already admitted pinned PostgreSQL
+image between clients, with a byte cap, timeout, bounded relay memory and parent-death signal.
+No image tar or credential enters the work directory. Import admission compares config ID,
+ordered rootfs layers, platform, size and image environment; retained RepoDigests are not assumed.
+Create by config ID with `--pull never`, retaining the existing container containment contract.
+
+Capacity requires 6 GiB available RAM: restore 2 GiB, daemon 2 GiB, host headroom 2 GiB.
+The encrypted image additionally reserves `max(512 MiB, image.Size * 3 + 256 MiB)` for vfs.
+Retain the full dump/file/allocation/free-space checks and 5 GiB disk reserve; the mount root
+is 0700 and only its `pgdata` subdirectory is made accessible to the PostgreSQL user.
+
+Post-101 uses `PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V2` with the exact storage-proof hash.
+Despite the historical reference name, namespace V2 excludes no container from the host
+boundary. Node independently rereads unit properties, cgroup bounds and members, process
+identities, containerd config hash, image/container inspect, socket custody and mountinfo.
+Broker/daemon/restore must see the proven mapper with private propagation; the system daemon
+must see no mapper mount or device. Older references and caller IDs cannot downgrade this proof.
+
+Cleanup removes the owned container, proves empty restore scope, stops only the pinned daemon,
+proves no managed children/socket/pidfile, then cleans mount/mapper/loop/image. Only after durable
+storage cleanup may it stop the proven supervisor, prove the slice empty and remove that transient
+slice. Publication and shared-lock release remain last. Exact start/stop/exit receipts bind the
+request and plan. A fixed-code supervisor terminal receipt reports `MANUAL_STOP`, without stderr.
+
+Reconciliation never starts a daemon or recreates storage. A start intent without a published
+start request can prove absence; a clean exit receipt and durable stop intent can finish readback;
+a collected unit after a durable release intent can prove terminal absence. Missing namespace
+receipt, daemon request published without readiness, slice creation without durable identity,
+unexpected supervisor exit, PID reuse, changed source or foreign members are manual-stop windows.
+Preserve the lock and all incident evidence rather than guessing ownership or repeating execute.
+
+LOCAL mock and cross-language tests do not establish Linux support. Before any live enrollment
+or backup, obtain a separately authorized disposable Linux amd64 rehearsal covering real
+systemd/Moby/containerd versions, pinned PG restore, shared-host mount non-propagation, aggregate
+cgroup caps, caller crashes, relay parent-death custody, every manual-stop window and cleanup
+inventory. A fresh production resource/tool preflight is then required. This source mode grants
+no VM order, server preparation, migration, FCM activation or push authority.
+
+Controller source compatibility additionally admits the atomic 20-file native-bookings patch
+whose exact old/new object IDs and modes are pinned independently in Node and Python. All 20
+must match; missing files, extra paths, mode/status/OID drift fail. Ordinary mobile/ADR paths
+are not added to the controller allowlist. The already published app/migrator images remain
+frozen; this source exception does not upgrade an installed APK.

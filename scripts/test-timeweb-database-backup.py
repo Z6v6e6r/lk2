@@ -920,8 +920,318 @@ class DiskPipelineTests(unittest.TestCase):
 
 
 
+def namespace_operation(post=False):
+    op=disk_operation(post); op['schema']=m.NS_POST_SCHEMA if post else m.NS_PRE_SCHEMA
+    op['confirmation']='BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_11954FFD6D7B_KEEP_API_0D6078BE7A50' if post else 'BACKUP_RESTORE_PRE99_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_KEEP_API_0D6078BE7A50'
+    return op
+
+
+NS_IMAGE={'Id':'sha256:'+'9'*64,'Os':'linux','Architecture':'amd64','RepoDigests':[m.PG_IMAGE],
+          'Size':300*1024**2,'RootFS':{'Type':'layers','Layers':['sha256:'+'a'*64]},'Env':['PATH=/usr/bin:/bin']}
+
+
+def namespace_fixture():
+    op=namespace_operation(True);raw=m.encoded(op);sha=m.digest(raw)
+    plan=m.namespace_plan(op,raw,m.namespace_sizing(3*1024**3,8*1024**3,40*1024**3,NS_IMAGE),NS_IMAGE);r=plan['isolation'];cg='/'+r['slice']+'/'+r['unit']
+    def process(pid,exe,args,ns=12,group=cg,root=True):
+        return {'pid':pid,'startTicks':str(100+pid),'executable':exe,'cmdline':args,'mountNamespace':ns,
+                'uid':[0 if root else 999]*4,'gid':[0 if root else 999]*4,'cgroup':'0::'+group}
+    tool=str(m.ROOT/'operator/tools'/op['toolCommit']/'control-timeweb-database-backup.py')
+    broker=process(45,'/usr/bin/python3.13',['/usr/bin/python3','-I','-S','-B',tool,'--disk-runtime-supervisor',str(m.REQUEST),sha])
+    source=process(44,'/usr/bin/dockerd',['/usr/bin/dockerd'],11,'/system.slice/docker.service')
+    daemon=process(46,'/usr/bin/dockerd',['/usr/bin/dockerd','--config-file',r['configFile']])
+    child=process(47,'/usr/bin/containerd',['/usr/bin/containerd','--config',r['execRoot']+'/containerd/containerd.toml'])
+    cid='e'*64;shim=process(48,'/usr/bin/containerd-shim-runc-v2',['/usr/bin/containerd-shim-runc-v2','-namespace','phub-'+sha[:24],'-id',cid,'-address',r['execRoot']+'/containerd/containerd.sock'])
+    pg=process(4242,'/usr/lib/postgresql/16/bin/postgres',['postgres'],13,'/'+r['slice']+'/docker-'+cid+'.scope',False)
+    unit={'LoadState':'loaded','ActiveState':'active','SubState':'running','MainPID':'45','InvocationID':'a'*32,'ControlGroup':cg,
+        'MemoryMax':str(2*1024**3),'MemorySwapMax':'0','TasksMax':'256','Delegate':'yes','CPUQuotaPerSecUSec':'1s','KillMode':'control-group',
+        'SendSIGKILL':'yes','Restart':'no','TimeoutStopUSec':'30s','LimitCORE':'0','UMask':'0077','User':'root','Group':'root',
+        'WorkingDirectory':plan['work'],'StandardInput':'null','StandardOutput':'null','StandardError':'null','Slice':r['slice'],'Transient':'yes',
+        'NRestarts':'0','Result':'success','ExecMainCode':'0','ExecMainStatus':'0'}
+    sl={'LoadState':'loaded','ActiveState':'active','ControlGroup':'/'+r['slice'],'Transient':'yes','MemoryMax':str(4*1024**3),'MemorySwapMax':'0','TasksMax':'384','CPUQuotaPerSecUSec':'2s'}
+    def bounds(group,mem,pids,cpu):return {'identity':{'dev':29,'ino':1000+pids,'uid':0,'gid':0,'mode':0o40755},'path':'/sys/fs/cgroup'+group,
+        'memory.max':str(mem),'memory.swap.max':'0','pids.max':str(pids),'cpu.max':str(cpu*100000)+' 100000'}
+    b=bounds(cg,2*1024**3,256,1);sb=bounds('/'+r['slice'],4*1024**3,384,2)
+    admission={'schema':'PHUB_TIMEWEB_PRIVATE_NAMESPACE_RECEIPT_V1','operationSha256':sha,'toolFileSha256':op['toolFileSha256'],
+               'sourceDaemon':source,'supervisor':{'unit':unit,'process':broker,'bounds':b,'slice':{'unit':sl,'bounds':sb}}}
+    managed={'containerd':child,'config':{'version':2,'root':r['dataRoot']+'/containerd/daemon','state':r['execRoot']+'/containerd/daemon',
+              'address':r['execRoot']+'/containerd/containerd.sock','disabledPlugins':['cri']},'configSha256':'d'*64,'shims':[shim]}
+    socket={'dev':64775,'ino':7003,'uid':0,'gid':0,'mode':0o140660,'nlink':1}
+    isolation={'admission':admission,'process':daemon,'socket':socket,'info':{'DockerRootDir':r['dataRoot'],'Driver':'vfs','CgroupDriver':'systemd','LiveRestoreEnabled':False},'managed':managed}
+    def mounts(target,root='/'):
+        return '1 0 8:1 / / rw - ext4 /dev/root rw\n41 1 253:7 '+root+' '+target+' rw,nosuid,nodev,noexec,noatime - ext4 '+plan['mapperPath']+' rw\n'
+    broker_m=mounts(plan['mount']);container_m=mounts('/var/lib/postgresql/data','/pgdata')
+    storage={'image':{'dev':64775,'ino':7001,'uid':0,'gid':0,'mode':0o100600,'nlink':1},'loop':'/dev/loop7',
+        'mapper':{'device':253,'minor':7,'uuid':'CRYPT-LUKS2-'+plan['luksUuid'].replace('-','')+'-'+plan['mapperName']},
+        'mount':{'dev':64775,'ino':7002,'uid':0,'gid':0,'mode':0o40700}}
+    container_bounds={'memory.max':str(2*1024**3),'memory.swap.max':'0','pids.max':'128','cpu.max':'100000 100000'}
+    kernel={'containerProcess':pg,'containerBounds':container_bounds,'containerMembers':[pg],'brokerMount':m.mountinfo_records(broker_m)[1],'daemonMount':m.mountinfo_records(broker_m)[1],'containerMount':m.mountinfo_records(container_m)[1]}
+    row=disk_restore_row({**plan,'mount':r['pgdata']},cid);row['Image']=row['Config']['Image']=NS_IMAGE['Id']
+    row['State']['Pid']=pg['pid'];row['HostConfig'].update(CgroupParent=r['slice'],CgroupnsMode='private')
+    row['Config']['Env']=NS_IMAGE['Env']+['PGDATA=/var/lib/postgresql/data/phub-restore','POSTGRES_USER=phub_restore','POSTGRES_DB=phub_restore','POSTGRES_HOST_AUTH_METHOD=trust']
+    container=m.disk_container_projection(row);container['Image']=row['Image'];container['HostConfig'].update(CgroupParent=r['slice'],CgroupnsMode='private')
+    expected={k:op[k]for k in ['controllerSha','controllerTree','controllerSourceCiRunId','candidateReleaseId','migrationPlanSha256','migrationSuccessSha256']}
+    value={'schema':'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V2','operationSha256':sha,'storageProofSha256':'b'*64,'plan':plan,
+        'readback':{'storage':storage,'isolation':isolation,'kernel':kernel,'container':container,'image':{'source':NS_IMAGE,'imported':NS_IMAGE}},'migration':expected}
+    runtime={'unit':unit,'slice':sl,'bounds':b,'sliceBounds':sb,'configSha256':managed['configSha256'],'members':[45,46,47,48],'containerBounds':container_bounds,'containerMembers':[pg]}
+    processes={'broker':broker,'daemon':daemon,'source':source,'container':pg,'containerd':child,'shim':shim}
+    actual={'selfNamespace':12,'afterSelfNamespace':12,'processes':processes,'afterProcesses':processes,'socket':socket,'sourceImage':NS_IMAGE,
+        'privateImage':NS_IMAGE,'container':container,'runtime':runtime,'afterRuntime':runtime,
+        'mountinfo':{'broker':broker_m,'daemon':broker_m,'source':'1 0 8:1 / / rw shared:1 - ext4 /dev/root rw\n','container':container_m,'containerd':broker_m,'shim':broker_m}}
+    return {'nativePatch':list(m.API_WORKER_NATIVE_BOOKINGS_PATCH.values()),'operationBase64':base64.b64encode(raw).decode(),'expected':expected,'reference':{'schema':'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V2','storageProofSha256':'b'*64},'value':value,'actual':actual}
+
+
+class NamespacePureTests(unittest.TestCase):
+    def plan(self,post=False):
+        op=namespace_operation(post)
+        return m.namespace_plan(op,m.encoded(op),m.namespace_sizing(1024**3,8*1024**3,40*1024**3,NS_IMAGE),NS_IMAGE)
+
+    def test_closed_namespace_authority_never_downgrades_to_v1(self):
+        for post in (False,True):
+            op=namespace_operation(post);m.validate_operation(op,NOW,'2'*64)
+            for key,value in [('schema',disk_operation(post)['schema']),('confirmation',disk_operation(post)['confirmation']),
+                              ('expectedLedgerSha256','f'*64),('containerdSocket','/run/containerd/containerd.sock')]:
+                bad=copy.deepcopy(op);bad[key]=value
+                with self.subTest(post=post,key=key),self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+
+    def test_capacity_reserves_vfs_and_aggregate_memory_without_changing_v1(self):
+        p=self.plan();self.assertGreater(p['imageBytes'],m.disk_sizing(1024**3,8*1024**3,40*1024**3)['imageBytes'])
+        for memory,free,after in [(6*1024**3-1,40*1024**3,False),(8*1024**3,p['imageBytes']+m.DISK_HEADROOM-1,True)]:
+            with self.assertRaises(m.Stop):m.namespace_sizing(1024**3,memory,free,NS_IMAGE,after)
+        altered=copy.deepcopy(NS_IMAGE);altered['RepoDigests']=[]
+        m.namespace_image(altered,NS_IMAGE)
+        with self.assertRaises(m.Stop):m.namespace_image(altered)
+        for key,value in [('Id','sha256:'+'b'*64),('RootFS',{'Type':'layers','Layers':['sha256:'+'b'*64]}),('Env',['PATH=/foreign'])]:
+            bad=copy.deepcopy(altered);bad[key]=value
+            with self.subTest(key=key),self.assertRaises(m.Stop):m.namespace_image(bad,NS_IMAGE)
+
+    def test_closed_unit_slice_and_daemon_paths_cannot_touch_host_runtime(self):
+        p=self.plan();cfg=m.namespace_config(p);args=m.namespace_unit_args(p,'/reviewed/helper.py')
+        self.assertRegex(p['isolation']['slice'],r'^phubdiskrestore[a-f0-9]{24}\.slice$')
+        self.assertIn('--slice='+p['isolation']['slice'],args)
+        self.assertIn('--property=SendSIGKILL=yes',args);self.assertIn('--property=Restart=no',args)
+        self.assertIn('--property=MemoryMax=2147483648',args);self.assertIn('--property=TasksMax=256',args)
+        self.assertEqual(cfg['hosts'],['unix://'+p['isolation']['socket']]);self.assertEqual(cfg['cgroup-parent'],p['isolation']['slice'])
+        self.assertEqual(cfg['storage-driver'],'vfs');self.assertFalse(cfg['iptables']);self.assertFalse(cfg['live-restore'])
+        for key in ['data-root','exec-root','pidfile']:self.assertTrue(cfg[key].startswith(p['mount']+'/.runtime/'))
+        self.assertNotIn('containerd',cfg);self.assertNotIn('/run/containerd/containerd.sock',m.encoded(cfg).decode())
+        create=m.namespace_container_args(p)
+        self.assertEqual(create[create.index('--cgroup-parent')+1],p['isolation']['slice'])
+        self.assertIn(NS_IMAGE['Id'],create);self.assertNotIn(m.PG_IMAGE,create)
+        self.assertIn('--pull',create);self.assertEqual(create[create.index('--pull')+1],'never')
+        bus=m.namespace_slice_args(p)
+        self.assertIn('ssa(sv)a(sa(sv))',bus);self.assertEqual(bus[-1],'0')
+        self.assertIn('4294967296',bus);self.assertIn('384',bus);self.assertIn('2000000',bus)
+
+    def test_source_restart_is_not_adopted_and_is_detected_before_mutation(self):
+        p=self.plan();frozen={'pid':44,'startTicks':'123','mountNamespace':11}
+        with patch.object(m,'DiskJournal') as journal,patch.object(m,'namespace_source_daemon',return_value={**frozen,'startTicks':'124'}):
+            journal.return_value.find.return_value={'identity':frozen}
+            with self.assertRaisesRegex(m.Stop,'NS_SOURCE_DAEMON_DRIFT'):m.namespace_frozen_source(p)
+
+    def test_enter_rejects_wrong_caller_and_closes_fd_even_when_target_open_fails(self):
+        from contextlib import ExitStack
+        p=self.plan();ad={'sourceDaemon':{'mountNamespace':11},'supervisor':{'process':{'pid':45,'mountNamespace':12}}}
+        for inode,side in [(99,[7]),(11,[7,OSError('synthetic target disappearance')])]:
+            with self.subTest(inode=inode),ExitStack() as stack:
+                stack.enter_context(patch.object(m,'namespace_admission',return_value=ad))
+                stack.enter_context(patch.object(m.os,'open',side_effect=side))
+                stack.enter_context(patch.object(m.os,'fstat',return_value=SimpleNamespace(st_ino=inode)))
+                closed=stack.enter_context(patch.object(m.os,'close'));switch=stack.enter_context(patch.object(m,'namespace_syscall'))
+                with self.assertRaises((m.Stop,OSError)):
+                    with m.namespace_enter(p,namespace_operation()):self.fail('must not enter')
+                closed.assert_called_once_with(7);switch.assert_not_called()
+
+    def test_release_requires_cleanup_and_never_stops_an_unproven_unit(self):
+        p=self.plan()
+        with patch.object(m,'command') as cmd:
+            journal=unittest.mock.Mock();journal.find.side_effect=lambda phase: {} if phase=='NAMESPACE_SLICE_START_INTENT' else None
+            with self.assertRaisesRegex(m.Stop,'NS_RELEASE_PREREQUISITES'):m.namespace_release(p,namespace_operation(),journal)
+            cmd.assert_not_called()
+
+    def test_every_unit_property_drift_stops_before_cgroup_or_daemon_use(self):
+        f=namespace_fixture();p=f['value']['plan'];u=f['value']['readback']['isolation']['admission']['supervisor']['unit']
+        for key in m.NS_UNIT_KEYS:
+            bad={**u,key:'foreign'}
+            with self.subTest(key=key),patch.object(m,'namespace_unit',return_value=bad),patch.object(m,'namespace_process') as proc:
+                with self.assertRaises((m.Stop,ValueError)):m.namespace_supervisor_identity(p,namespace_operation(True))
+                proc.assert_not_called()
+
+    def test_managed_containerd_rejects_host_socket_foreign_process_and_config(self):
+        f=namespace_fixture();p=f['value']['plan'];i=f['value']['readback']['isolation'];a=i['admission'];managed=i['managed']
+        members=[a['supervisor']['process'],i['process'],managed['containerd'],*managed['shims']]
+        cfg={'version':2,'root':managed['config']['root'],'state':managed['config']['state'],'grpc':{'address':managed['config']['address']},'disabled_plugins':['cri']}
+        import tomllib
+        for key,value in [('grpc',{'address':'/run/containerd/containerd.sock'}),('root','/var/lib/containerd'),('imports',['/etc/containerd/config.toml']),('proxy_plugins',{'foreign':{}})]:
+            with self.subTest(key=key),patch.object(m,'namespace_members',return_value=[v['pid'] for v in members]),patch.object(m,'namespace_process',side_effect=lambda pid:next(v for v in members if v['pid']==pid)),patch.object(m,'read_secure',return_value=b'synthetic'),patch.object(tomllib,'loads',return_value={**cfg,key:value}):
+                with self.assertRaises(m.Stop):m.namespace_managed(p,a,i['process'])
+        extra=copy.deepcopy(managed['containerd']);extra['pid']=88;extra['executable']='/usr/bin/runc'
+        allmembers=[*members,extra]
+        with patch.object(m,'namespace_members',return_value=[v['pid'] for v in allmembers]),patch.object(m,'namespace_process',side_effect=lambda pid:next(v for v in allmembers if v['pid']==pid)),patch.object(m,'read_secure',return_value=b'synthetic'),patch.object(tomllib,'loads',return_value=cfg):
+            with self.assertRaisesRegex(m.Stop,'NS_SHIM_CUSTODY'):m.namespace_managed(p,a,i['process'])
+
+    def test_daemon_no_start_request_is_reconciled_without_private_api_or_replay(self):
+        p=self.plan();journal=unittest.mock.Mock();journal.find.side_effect=lambda phase:{}if phase=='DAEMON_START_INTENT' else None
+        with patch.object(m,'namespace_control',return_value=Path('/proc/phub-synthetic-absent')),patch.object(m,'namespace_daemon_absent') as absent,patch.object(m,'namespace_container_lookup') as lookup,patch.object(m,'command') as cmd:
+            m.namespace_daemon_stop(p,namespace_operation(),journal)
+            absent.assert_called_once();lookup.assert_not_called();cmd.assert_not_called();journal.once.assert_called_with('DAEMON_STOPPED',neverStarted=True)
+
+    def test_quiescence_reaps_adopted_zombie_then_waits_for_lingering_child(self):
+        p=self.plan();order=[]
+        with patch.object(m.os,'waitpid',side_effect=[(88,0),(0,0),ChildProcessError()]) as wait,patch.object(m,'namespace_daemon_absent',side_effect=[m.Stop('NS_DAEMON_CHILDREN_REMAIN'),None]) as absent,patch.object(m.time,'sleep',side_effect=lambda _:order.append('wait')):
+            m.namespace_daemon_quiescence(p,namespace_operation())
+            self.assertEqual(wait.call_count,3);self.assertEqual(absent.call_count,2);self.assertEqual(order,['wait'])
+
+    def test_quiescence_timeout_and_foreign_drift_never_publish_exit_receipt(self):
+        p=self.plan()
+        for code in ['NS_DAEMON_CHILDREN_REMAIN','NS_UNIT_CUSTODY']:
+            with self.subTest(code=code),patch.object(m.os,'waitpid',side_effect=ChildProcessError()),patch.object(m,'namespace_daemon_absent',side_effect=m.Stop(code)),patch.object(m.time,'monotonic',side_effect=[1,12]):
+                with self.assertRaises(m.Stop):m.namespace_daemon_quiescence(p,namespace_operation())
+        with patch.object(m,'namespace_daemon_quiescence',side_effect=m.Stop('NS_DAEMON_QUIESCENCE_UNKNOWN')),patch.object(m,'atomic_exclusive') as write:
+            with self.assertRaises(m.Stop):m.namespace_daemon_exit(p,namespace_operation(),{'process':{'pid':46}},0)
+            write.assert_not_called()
+
+    def test_exit_receipt_is_written_only_after_quiescence(self):
+        p=self.plan();order=[]
+        with patch.object(m,'namespace_daemon_quiescence',side_effect=lambda *a:order.append('quiescence')),patch.object(m,'read_secure',return_value=b'plan'),patch.object(m,'atomic_exclusive',side_effect=lambda *a:order.append('receipt')):
+            m.namespace_daemon_exit(p,namespace_operation(),{'process':{'pid':46}},0)
+        self.assertEqual(order,['quiescence','receipt'])
+
+    def test_native_tuple_is_atomic_exact_and_matches_javascript(self):
+        rows=list(m.API_WORKER_NATIVE_BOOKINGS_PATCH.values())
+        raw=lambda items:b''.join((':'+v['oldMode']+' '+v['newMode']+' '+v['oldOid']+' '+v['newOid']+' '+v['status']+'\0'+v['path']+'\0').encode()for v in items)
+        self.assertEqual(len(rows),20);m.validate_migration_controller_delta(raw(rows))
+        for case in [rows[:-1],rows+[rows[0]],*[rows[:i]+[dict(rows[i],newOid='f'*40)]+rows[i+1:]for i in range(20)],
+                     [dict(rows[0],newMode='100755')]+rows[1:], [dict(rows[0],status='D')]+rows[1:]]:
+            with self.subTest(case=case[0]['path']),self.assertRaises(m.Stop):m.validate_migration_controller_delta(raw(case))
+        import subprocess
+        js="import {API_WORKER_NATIVE_BOOKINGS_PATCH as p} from './scripts/timeweb-api-worker-contract.js';process.stdout.write(JSON.stringify(p));"
+        result=subprocess.run([shutil.which('node'),'--input-type=module','-e',js],cwd=Path(__file__).parents[1],env={'PATH':os.environ.get('PATH','')},capture_output=True,check=True)
+        self.assertEqual(json.loads(result.stdout),rows)
+
+
+class NamespaceScenario(DiskScenario):
+    """Real source/backup journal and publication; all kernel/daemon primitives are mocks."""
+    def __init__(self,directory,post=False,fault=None):
+        super().__init__(directory,post,fault)
+        self.op['schema']=m.NS_POST_SCHEMA if post else m.NS_PRE_SCHEMA
+        self.op['confirmation']=namespace_operation(post)['confirmation'];self.request.write_bytes(m.encoded(self.op))
+        with patch.object(m,'ROOT',self.root):self.plan=m.namespace_plan(self.op,m.encoded(self.op),m.namespace_sizing(1024,10**12,50*1024**3,NS_IMAGE),NS_IMAGE)
+        self.unit=False;self.daemon=False;self.private=False;self.privcalls=[];self.host_collision=False
+
+    def docker(self,args,code='DOCKER_READ',**kwargs):
+        if args[:2]==['image','inspect']:
+            return m.encoded(NS_IMAGE if m.NS_IMAGE_FORMAT in args else {'Os':'linux','Architecture':'amd64','RepoDigests':[m.PG_IMAGE]})
+        if args[0]=='ps' and '--filter' not in args:
+            return ('\n'.join([API['id'],m.PG_ID]+([self.container] if self.host_collision and self.created else []))).encode()
+        return super().docker(args,code,**kwargs)
+
+    def private_docker(self,plan,args,code='NS_READ',**kwargs):
+        assert self.unit and self.daemon and self.private, 'private client before daemon/readiness'
+        assert m.PG_ID not in args and m.SOURCE_DUMP not in args, 'source crossed private socket'
+        self.privcalls.append(args)
+        if args[0]=='ps':return self.container.encode() if self.created else b''
+        return DiskScenario.docker(self,args,code,**kwargs)
+
+    def row(self,plan):
+        if not self.created:return None
+        state='running'if self.running else 'exited'if self.stopped else 'created'
+        row=disk_restore_row({**plan,'mount':plan['isolation']['pgdata']},self.container,state)
+        row['Image']=row['Config']['Image']=NS_IMAGE['Id'];row['HostConfig'].update(CgroupParent=plan['isolation']['slice'],CgroupnsMode='private')
+        return row
+
+    def start(self,p,op,j):
+        Path(p['isolation']['controlRoot']).mkdir(mode=0o700)
+        j.add('NAMESPACE_SLICE_START_INTENT');j.add('NAMESPACE_SLICE_READY',identity={'synthetic':True})
+        j.add('NAMESPACE_UNIT_START_INTENT');self.unit=True;j.add('NAMESPACE_READY',receipt={'synthetic':True})
+
+    def enter(self,p,op):
+        from contextlib import contextmanager
+        @contextmanager
+        def owned():
+            assert self.unit
+            self.private=True
+            try:yield {'synthetic':True}
+            finally:self.private=False
+        return owned()
+
+    def daemon_start(self,p,op,j):
+        assert self.mounted and self.private
+        j.add('DAEMON_START_INTENT');m.atomic_exclusive(m.namespace_control(p,'daemon-start.json'),b'{}')
+        self.daemon=True;m.atomic_exclusive(m.namespace_control(p,'daemon-receipt.json'),b'{}');j.add('DAEMON_READY',identity={'synthetic':True})
+
+    def image_transfer(self,p,op,j):
+        assert self.daemon;j.add('IMAGE_TRANSFER_INTENT');j.add('IMAGE_LOADED',source=NS_IMAGE,imported=NS_IMAGE)
+
+    def attest(self,p,op,j):
+        return {'storage':m.disk_storage_attest(p,j),'container':self.row(p),'synthetic':True}
+
+    def daemon_stop(self,p,op,j):
+        assert not self.created
+        j.once('DAEMON_STOP_INTENT');self.daemon=False;j.once('DAEMON_STOPPED')
+
+    def release(self,p,op,j):
+        assert not self.private and not self.created and not self.daemon and not self.mounted and self.loop is None and self.mapper is None
+        assert j.find('NAMESPACE_STORAGE_CLEANED') is not None
+        j.once('NAMESPACE_RELEASE_INTENT');self.unit=False;j.once('NAMESPACE_RELEASED');j.once('NAMESPACE_SLICE_RELEASE_INTENT');j.once('NAMESPACE_SLICE_RELEASED')
+
+    def invoke(self,reconcile=False):
+        from contextlib import ExitStack
+        original_stat=m.os.stat
+        def stat_value(path,*args,**kwargs):
+            if str(path)=='/proc/self/ns/mnt':return SimpleNamespace(st_ino=11)
+            return original_stat(path,*args,**kwargs)
+        with ExitStack() as stack:
+            for name,fn in [('namespace_source_daemon',lambda:{'pid':44,'startTicks':'123','mountNamespace':11}),
+                ('namespace_frozen_source',lambda p:{'pid':44,'startTicks':'123','mountNamespace':11}),('namespace_start',self.start),
+                ('namespace_enter',self.enter),('namespace_admission',lambda *a: {'synthetic':True}),('namespace_daemon_start',self.daemon_start),
+                ('namespace_docker',self.private_docker),('namespace_container_lookup',self.row),('namespace_image_transfer',self.image_transfer),
+                ('namespace_running_attestation',self.attest),('namespace_daemon_stop',self.daemon_stop),('namespace_release',self.release)]:
+                stack.enter_context(patch.object(m,name,side_effect=fn))
+            stack.enter_context(patch.object(m.os,'stat',side_effect=stat_value))
+            stack.enter_context(patch.object(m,'reconcile_disk',side_effect=m.reconcile_namespace))
+            return super().invoke(reconcile)
+
+
+class NamespacePipelineTests(unittest.TestCase):
+    def scenario(self,post=False,fault=None):
+        tmp=tempfile.TemporaryDirectory(prefix='phub-namespace-backup-mock-');self.addCleanup(tmp.cleanup)
+        return NamespaceScenario(tmp.name,post,fault)
+
+    def test_pre99_and_post101_use_host_dump_and_private_restore_then_publish_after_release(self):
+        for post in (False,True):
+            with self.subTest(post=post):
+                s=self.scenario(post);result=s.invoke();self.assertEqual(result['status'],'BACKUP_RESTORE_VERIFIED')
+                self.assertFalse(s.unit or s.created or s.daemon);self.assertFalse((s.root/'standard/active').exists())
+                self.assertTrue(any(m.SOURCE_DUMP in args for args in s.calls))
+                self.assertFalse(any(m.SOURCE_DUMP in args for args in s.privcalls))
+                phases=[v['phase']for v in s.journal().events]
+                self.assertLess(phases.index('NAMESPACE_SLICE_RELEASED'),phases.index('PUBLISHED'))
+                for file in Path(s.plan['work']).rglob('*.json'):self.assertNotIn(s.secret,file.read_bytes())
+
+    def test_matching_host_container_is_never_hidden_by_private_restore_reference(self):
+        s=self.scenario();s.host_collision=True
+        with self.assertRaisesRegex(m.Stop,'CONTAINER_BOUNDARY_DRIFT'):s.invoke()
+        self.assertTrue((s.root/'standard/active').exists())
+        self.assertFalse(Path(s.plan['canonical']).exists())
+
+    def test_phase_interruptions_preserve_lock_and_reconcile_never_replays_dump_restore(self):
+        for phase in ['NAMESPACE_READY','DUMP_VERIFIED','MOUNTED','DAEMON_READY','IMAGE_LOADED','RESTORE_CREATED','RESTORE_STARTED',
+                      'RESTORE_VERIFIED','PUBLISH_READY','CONTAINER_REMOVED','DAEMON_STOPPED','NAMESPACE_STORAGE_CLEANED','NAMESPACE_RELEASED','PUBLISHED']:
+            with self.subTest(phase=phase):
+                s=self.scenario(fault='after:PHASE_'+phase)
+                with self.assertRaises(m.Stop):s.invoke()
+                self.assertTrue((s.root/'standard/active').exists())
+                before=len([a for a in s.calls if m.SOURCE_DUMP in a])+len([a for a in s.privcalls if 'pg_restore' in a])
+                s.fault=None;s.invoke(True)
+                after=len([a for a in s.calls if m.SOURCE_DUMP in a])+len([a for a in s.privcalls if 'pg_restore' in a])
+                self.assertEqual(before,after);self.assertFalse((s.root/'standard/active').exists())
+
+
 if __name__=='__main__':
-    if len(sys.argv)==3 and sys.argv[1]=='--emit-consumer-fixture':
+    if len(sys.argv)==2 and sys.argv[1]=='--emit-namespace-fixture':
+        print(json.dumps(namespace_fixture()))
+    elif len(sys.argv)==3 and sys.argv[1]=='--emit-consumer-fixture':
         destination=Path(sys.argv[2]).resolve(strict=True)
         m.need(destination.is_relative_to(Path(tempfile.gettempdir()).resolve()) and destination.name.startswith('phub-backup-consumer-'), 'TEST_FIXTURE_PATH')
         scenario=Scenario(destination)

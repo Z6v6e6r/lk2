@@ -128,6 +128,171 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     newOid: '57eb46c5588837b3177759f2aca6e6724651a382',
   }),
 ]);
+// Frozen PR380 native-only source delta; app images stay on11954. Never widen a generic path list.
+export const API_WORKER_NATIVE_BOOKINGS_PATCH = Object.freeze(
+  [
+    {
+      path: 'apps/mobile/android/app/build.gradle',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'b5451e4334bc50c083e6b0d45cecf156d7e632e3',
+      newOid: '70eb7c9f09bea9bc0aa8c26a67ae31c7595e7f15',
+    },
+    {
+      path: 'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidHttpSenderTest.java',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '03b6967ef337078b1359ea9109440fd4d41b910b',
+      newOid: 'ea5763e2fce0556717f01be1e1db03200f110755',
+    },
+    {
+      path: 'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidSessionTest.java',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '35a8e40c86060544e6454949ee72db293e8b5991',
+      newOid: 'd60f3d8166b3129b89c1e415be5eac656c7fbea2',
+    },
+    {
+      path: 'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidUpcomingBookingsRefreshTest.java',
+      status: 'A',
+      oldMode: '000000',
+      newMode: '100644',
+      oldOid: '0000000000000000000000000000000000000000',
+      newOid: '6772d0dd08f779352a962128d4a062af3e012e4a',
+    },
+    {
+      path: 'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidHttpSender.java',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'c468bcaeb1c5826de2e6e8983495eed59f9a69a6',
+      newOid: 'e3610c361644fd57a48eb5e5602ba912ed1ab512',
+    },
+    {
+      path: 'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidSessionEngine.java',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '1f939e114deb2ad04fd0be4ec7231b93a4431897',
+      newOid: '58101384544473def5819106996529406dd29f13',
+    },
+    {
+      path: 'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidUpcomingBookingsRefresh.java',
+      status: 'A',
+      oldMode: '000000',
+      newMode: '100644',
+      oldOid: '0000000000000000000000000000000000000000',
+      newOid: 'e55ef5f508ce9e99e16068adee251f1d08231ad0',
+    },
+    {
+      path: 'apps/mobile/android/app/src/main/java/ru/padlhub/app/PadlHubAndroidSessionPlugin.java',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'd82ccb21a299ddd96c53452f2c41c33c65250430',
+      newOid: 'e0f4f8cdbc016dfaeb3aca9deaaa43323ae046db',
+    },
+    {
+      path: 'apps/mobile/src/MobileApp.tsx',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'fa598c298bfa8d95bfc8981f2e49c08862946299',
+      newOid: '7e1188cc9493c6347f0ca84ca5c6cd38ad245144',
+    },
+    {
+      path: 'apps/mobile/src/MobileSession.test.tsx',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'ca26a53526fd7488e57c6200f924ec754947e7b2',
+      newOid: 'fa26d6ad05715ece43ccdc904e9cc87c0f7f5817',
+    },
+    {
+      path: 'apps/mobile/src/native-api-fetch.test.ts',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'fd7a348bd29a52f9f8beb79c1694c7e4f0b5b6ef',
+      newOid: 'a93a254f179a52294ef0ce5e5594a9bb082ae8d7',
+    },
+    {
+      path: 'apps/mobile/src/native-api-fetch.ts',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '518a35a52876e49f873b1f3c0905f7672f9d5ff3',
+      newOid: '98ea1bf70dee6c3a29d35ed0d6afc091f2bbe32f',
+    },
+    {
+      path: 'apps/mobile/src/native-bookings-refresh.test.ts',
+      status: 'A',
+      oldMode: '000000',
+      newMode: '100644',
+      oldOid: '0000000000000000000000000000000000000000',
+      newOid: 'f0bc5b853fc95a220f3795b091e7a26d6dfd8e44',
+    },
+    {
+      path: 'apps/mobile/src/native-gateway.test.ts',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '7ef122ec4302588ca5c2fd75c0881376a343a182',
+      newOid: '8de932302903de5bd919721b281cb20e8200ac33',
+    },
+    {
+      path: 'apps/mobile/src/session-failure.test.ts',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'd7d19d39357faea456c02516901a6f03fa9896f3',
+      newOid: '4f43d53c2319e1b304b16948d3af44e7857740f1',
+    },
+    {
+      path: 'apps/mobile/src/session-failure.ts',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: 'ced9a4274220ddbfffca756d46b863c86681f210',
+      newOid: '00cb9921dd089da76ed4f7520694bb1433045a07',
+    },
+    {
+      path: 'docs/adr/0005-viva-user-delegation-and-direct-transport.md',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '34869e776f45d54cf2a33cbb481013693820b91d',
+      newOid: 'bb1f2c6f137392fb3533bd5f1969217bf3d2c487',
+    },
+    {
+      path: 'docs/adr/0020-client-assisted-booking-screen-snapshots.md',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '9adc609998839ae23e00e5b6f27362d07de7b73c',
+      newOid: '3cc2a9089ebb201268ba138d64b191524426f14d',
+    },
+    {
+      path: 'docs/adr/0023-browser-only-viva-end-user-transport.md',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '8f875c98a5524a25497bbf26e7c983bae5804530',
+      newOid: 'b7bde1f395ae00ec5b7f195065d752c4a00c3af2',
+    },
+    {
+      path: 'docs/runbooks/android-development.md',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '6ee27c15223fda5d3239db8d1693ea727b69e355',
+      newOid: 'c98d269710dabda6924e1524c7d9a45a16d407f4',
+    },
+  ].map(Object.freeze),
+);
 export function parseApiWorkerControllerDiff(raw) {
   if (typeof raw !== 'string') fail('CONTROLLER_DELTA');
   const parts = raw.split('\0').filter(Boolean);
@@ -148,11 +313,7 @@ export function parseApiWorkerControllerDiff(raw) {
   });
 }
 function withoutPinnedControllerPatch(entries, pins) {
-  if (
-    !Array.isArray(entries) ||
-    !entries.length ||
-    new Set(entries.map((v) => v?.path)).size !== entries.length
-  )
+  if (!Array.isArray(entries) || new Set(entries.map((v) => v?.path)).size !== entries.length)
     fail('CONTROLLER_DELTA');
   const ciPaths = new Set(pins.map((v) => v.path));
   const ci = entries.filter((v) => ciPaths.has(v?.path));
@@ -168,13 +329,18 @@ function withoutPinnedControllerPatch(entries, pins) {
   return entries.filter((v) => !ciPaths.has(v.path));
 }
 export function withoutExactCiDownloadPatch(entries) {
-  return withoutPinnedControllerPatch(entries, API_WORKER_CI_DOWNLOAD_PATCH);
+  if (!Array.isArray(entries) || !entries.length) fail('CONTROLLER_DELTA');
+  return withoutPinnedControllerPatch(
+    withoutPinnedControllerPatch(entries, API_WORKER_NATIVE_BOOKINGS_PATCH),
+    API_WORKER_CI_DOWNLOAD_PATCH,
+  );
 }
 export function withoutExactMigrationCiPatch(entries) {
-  return withoutPinnedControllerPatch(entries, [
-    ...API_WORKER_CI_DOWNLOAD_PATCH,
-    ...API_WORKER_CI_READER_PATCH,
-  ]);
+  if (!Array.isArray(entries) || !entries.length) fail('CONTROLLER_DELTA');
+  return withoutPinnedControllerPatch(
+    withoutPinnedControllerPatch(entries, API_WORKER_NATIVE_BOOKINGS_PATCH),
+    [...API_WORKER_CI_DOWNLOAD_PATCH, ...API_WORKER_CI_READER_PATCH],
+  );
 }
 export function exact(v, keys) {
   if (
