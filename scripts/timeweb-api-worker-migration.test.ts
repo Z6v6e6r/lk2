@@ -635,10 +635,17 @@ describe('disk-backed API/Worker restore attestation', () => {
 
 describe('migration exact CI pair closure', () => {
   it('uses the same frozen pair and rejects missing peers, wrong blobs and generic widening', async () => {
-    const { API_WORKER_CI_DOWNLOAD_PATCH } = await import('./timeweb-api-worker-upgrade.js');
-    const pair = API_WORKER_CI_DOWNLOAD_PATCH.map((v) => ({ ...v }));
+    const { API_WORKER_CI_DOWNLOAD_PATCH, API_WORKER_CI_READER_PATCH } =
+      await import('./timeweb-api-worker-upgrade.js');
+    const pair = [...API_WORKER_CI_DOWNLOAD_PATCH, ...API_WORKER_CI_READER_PATCH].map((v) => ({
+      ...v,
+    }));
     expect(() => validateMigrationControllerClosure(pair)).not.toThrow();
     for (const rows of [
+      pair.slice(0, 2),
+      pair.slice(2),
+      pair.slice(0, -1),
+      pair.map((v, i) => (i === 2 ? { ...v, newOid: v.oldOid } : v)),
       pair.slice(0, 1),
       [...pair, pair[0]],
       pair.map((v, i) => (i === 0 ? { ...v, oldOid: 'a'.repeat(40) } : v)),

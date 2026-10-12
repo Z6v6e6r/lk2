@@ -18,6 +18,7 @@ import {
   validateApiWorkerControllerDelta,
   parseApiWorkerControllerDiff,
   API_WORKER_CI_DOWNLOAD_PATCH,
+  API_WORKER_CI_READER_PATCH,
   validateApiWorkerDatabase,
   API_WORKER_GATE_LOCK_SQL,
   API_WORKER_DATABASE_SQL,
@@ -580,7 +581,7 @@ describe('frozen CI download patch authority', () => {
       expect(() => parseApiWorkerControllerDiff(value)).toThrow();
   });
   it('pins final checked-in workflow and test bytes, rather than only their filenames', () => {
-    for (const pin of pair()) {
+    for (const pin of [...pair(), ...API_WORKER_CI_READER_PATCH]) {
       const bytes = readFileSync(pin.path);
       expect(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')).toBe(
         pin.newOid,

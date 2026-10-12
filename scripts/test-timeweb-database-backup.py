@@ -144,12 +144,12 @@ class PureTests(unittest.TestCase):
                     files[path]=success if path.name=='migration-success.json' else receipt
 
     def test_frozen_ci_download_pair_requires_exact_oids_modes_atomic_paths(self):
-        pair=list(m.API_WORKER_CI_DOWNLOAD_PATCH.values())
+        pair=list(m.API_WORKER_CI_DOWNLOAD_PATCH.values())+list(m.API_WORKER_CI_READER_PATCH.values())
         def raw(rows):return b''.join((':'+v['oldMode']+' '+v['newMode']+' '+v['oldOid']+' '+v['newOid']+' '+v['status']+'\0'+v['path']+'\0').encode()for v in rows)
         m.validate_migration_controller_delta(raw(pair))
-        invalid=[pair[:1],pair+[pair[0]],pair+[dict(pair[0],path='.github/workflows/other.yaml')]]
+        invalid=[pair[:1],pair[:2],pair[2:],pair[:-1],[dict(v,newOid=v['oldOid'])if i==2 else v for i,v in enumerate(pair)],pair+[pair[0]],pair+[dict(pair[0],path='.github/workflows/other.yaml')]]
         for field,value in [('oldOid','a'*40),('newOid','b'*40),('newMode','100755'),('newMode','120000'),('oldMode','000000'),('status','A'),('status','D'),('status','R100')]:
-            invalid.append([dict(pair[0],**{field:value}),pair[1]])
+            invalid.append([dict(pair[0],**{field:value})]+pair[1:])
         for rows in invalid:
             with self.assertRaises(m.Stop):m.validate_migration_controller_delta(raw(rows))
         contract=(Path(__file__).parent/'timeweb-api-worker-contract.js').read_text()
@@ -158,6 +158,11 @@ class PureTests(unittest.TestCase):
         for item in re.findall(r'Object.freeze\(\{(.*?)\}\)',section,re.S):
             value=dict(re.findall(r"(path|status|oldMode|newMode|oldOid|newOid):\s*'([^']+)'",item));js[value['path']]=value
         self.assertEqual(js,m.API_WORKER_CI_DOWNLOAD_PATCH)
+        section=contract.split('export const API_WORKER_CI_READER_PATCH = Object.freeze([',1)[1].split(']);',1)[0]
+        js={}
+        for item in re.findall(r'Object.freeze\(\{(.*?)\}\)',section,re.S):
+            value=dict(re.findall(r"(path|status|oldMode|newMode|oldOid|newOid):\s*'([^']+)'",item));js[value['path']]=value
+        self.assertEqual(js,m.API_WORKER_CI_READER_PATCH)
 
     def test_runtime_negative_boundaries(self):
         for service,key,value in [('expectedApi','restarts',1),('expectedApi','releaseId','other'),('expectedApi','revision','4'*40),('expectedPostgres','id','5'*64),('expectedPostgres','image','postgres:latest'),('expectedPostgres','imageId','sha256:'+'6'*64)]:

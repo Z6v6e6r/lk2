@@ -39,6 +39,12 @@ API_WORKER_CI_DOWNLOAD_PATCH = {
     '.github/workflows/pull-request.yaml': {'path': '.github/workflows/pull-request.yaml', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '632bed8b410a3ac3e42a7ba7e607e80f8004f30d', 'newOid': 'bd9cba78c1d9dbcb37fd2abf93f4e8a4ae3e4f87'},
     'scripts/pull-request-ci-workflow.test.ts': {'path': 'scripts/pull-request-ci-workflow.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'caf2f124bbc58e4225feca1ad38100ed07991787', 'newOid': 'e2abfd6adac5d742b38ea16e8cb3d1dbb90c0982'},
 }
+API_WORKER_CI_READER_PATCH = {
+    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': 'd7c2da4e1bb353de041e8b51d9b8e0a56bea046a'},
+    'scripts/timeweb-api-worker-upgrade.d.ts': {'path': 'scripts/timeweb-api-worker-upgrade.d.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '151a183b17349c57a4d23cd58b03dd33be0e1172', 'newOid': '63a5ad2d64f5db337a0e5c74b43738d36ed18dfe'},
+    'scripts/timeweb-api-worker-upgrade.test.ts': {'path': 'scripts/timeweb-api-worker-upgrade.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'e446cc167a63ee54e9352dc38589e414f1aa7247', 'newOid': '02f3927005dac547fb74b6955e2ddc69ee4d2deb'},
+    'scripts/timeweb-api-worker-adapter.test.ts': {'path': 'scripts/timeweb-api-worker-adapter.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'dba09b8571260d1cb817971ce6a15a42a70f1032', 'newOid': '57eb46c5588837b3177759f2aca6e6724651a382'},
+}
 PG_ID = 'fe614a3312e446e8036243be3781590bfe90b5da037b83580abd410d4514e84c'
 PG_IMAGE = 'docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685'
 API_BASELINE = {'id': '6f7197c220269281e0268f1fbe9881a3cb6fa863c3a5a928ca2d47ef363132c0',
@@ -674,12 +680,13 @@ def validate_migration_controller_delta(data):
         match=re.fullmatch(rb':([0-7]{6}) ([0-7]{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([AM])',rows[index])
         path=os.fsdecode(rows[index+1]);need(match and path not in seen,'CONTROLLER_LINEAGE');seen.add(path)
         parsed.append(dict(path=path,oldMode=match.group(1).decode(),newMode=match.group(2).decode(),oldOid=match.group(3).decode(),newOid=match.group(4).decode(),status=match.group(5).decode()))
-    ci=[v for v in parsed if v['path'] in API_WORKER_CI_DOWNLOAD_PATCH]
+    pins={**API_WORKER_CI_DOWNLOAD_PATCH,**API_WORKER_CI_READER_PATCH}
+    ci=[v for v in parsed if v['path'] in pins]
     if ci:
-        need(len(ci)==len(API_WORKER_CI_DOWNLOAD_PATCH) and {v['path']for v in ci}==set(API_WORKER_CI_DOWNLOAD_PATCH),'CI_DOWNLOAD_PATCH')
-        need(all(v==API_WORKER_CI_DOWNLOAD_PATCH[v['path']] for v in ci),'CI_DOWNLOAD_PATCH')
+        need(len(ci)==len(pins) and {v['path']for v in ci}==set(pins),'CI_DOWNLOAD_PATCH')
+        need(all(v==pins[v['path']] for v in ci),'CI_DOWNLOAD_PATCH')
     for v in parsed:
-        if v['path'] in API_WORKER_CI_DOWNLOAD_PATCH:continue
+        if v['path'] in pins:continue
         need(v['path'] in API_WORKER_MIGRATION_CONTROLLER_FILES and v['newMode']=='100644'
              and v['oldMode']==('000000'if v['status']=='A'else '100644') and v['newOid']!='0'*40
              and (v['status']!='A' or v['oldOid']=='0'*40),'CONTROLLER_LINEAGE')

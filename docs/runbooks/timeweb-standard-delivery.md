@@ -780,7 +780,10 @@ checks admit one exact atomic pair of regular `M` Git blobs: the PR CI workflow 
 workflow test. `API_WORKER_CI_DOWNLOAD_PATCH` pins old/new object IDs and `100644` modes;
 these paths remain excluded from both generic controller allowlists. Missing peers, extra CI
 paths, additions, deletion/rename, executable/symlink modes and changed blobs reject.
-The Python post-migration producer independently enforces the same tuple. Runtime image,
+The migration BASE closure and independent Python post-migration producer additionally
+require the four exact API/Worker reader blobs as part of one atomic six-blob group. These
+reader paths remain outside the generic migration allowlist; the wider candidate-to-controller
+API/Worker closure already owns them and still applies the exact two-blob CI exception. Runtime image,
 manifest, migrator and APK identities are unchanged. This exact-source exception grants no
 enrollment, migration, credential, publication or deployment authority and does not accept
 PR events, reruns or a mismatched controller SHA. Future CI modifications need a new reviewed

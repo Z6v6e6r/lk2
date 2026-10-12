@@ -21,7 +21,7 @@ import {
   exact,
   validateApiWorkerControllerDelta,
   parseApiWorkerControllerDiff,
-  withoutExactCiDownloadPatch,
+  withoutExactMigrationCiPatch,
 } from './timeweb-api-worker-contract.js';
 import { acquireApiWorkerExecutor } from './timeweb-api-worker-upgrade.js';
 import {
@@ -173,7 +173,7 @@ export function validateApiWorkerMigrationOperation(op, at) {
   return op;
 }
 export function validateMigrationControllerClosure(entries) {
-  const ordinary = withoutExactCiDownloadPatch(entries);
+  const ordinary = withoutExactMigrationCiPatch(entries);
   const paths = new Set();
   for (const v of ordinary) {
     if (

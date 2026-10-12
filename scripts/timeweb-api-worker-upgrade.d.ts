@@ -31,6 +31,7 @@ export interface ApiWorkerControllerDiffEntry {
   newOid: string;
 }
 export const API_WORKER_CI_DOWNLOAD_PATCH: readonly Readonly<ApiWorkerControllerDiffEntry>[];
+export const API_WORKER_CI_READER_PATCH: readonly Readonly<ApiWorkerControllerDiffEntry>[];
 export function parseApiWorkerControllerDiff(raw: string): ApiWorkerControllerDiffEntry[];
 export function validateApiWorkerOperation(op: unknown, now?: number): unknown;
 export function validateApiWorkerControllerDelta(entries: unknown): void;
