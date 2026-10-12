@@ -691,11 +691,15 @@ function namespaceChanged(value: unknown, path: string, replacement: unknown): u
   const copy = structuredClone(value),
     parts = path.split('.');
   let cursor = copy as Record<string, unknown>;
-  const last = parts.pop();
-  if (last === undefined) throw Error('TEST_PATH');
-  for (const part of parts) cursor = cursor[part] as Record<string, unknown>;
-  cursor[last] = replacement;
-  return copy;
+  for (const [index, part] of parts.entries()) {
+    const key = parts.slice(index).join('.');
+    if (Object.hasOwn(cursor, key)) {
+      cursor[key] = replacement;
+      return copy;
+    }
+    cursor = cursor[part] as Record<string, unknown>;
+  }
+  throw Error('TEST_PATH_NOT_FOUND');
 }
 describe('private namespace restore V2 independent contract', () => {
   it('accepts Python-derived paths, sizing and process proof and independently checks kernel readback', () => {
@@ -732,17 +736,13 @@ describe('private namespace restore V2 independent contract', () => {
     ).readback.isolation.admission.supervisor.unit;
     for (const key of Object.keys(unit))
       negatives.push([`readback.isolation.admission.supervisor.unit.${key}`, 'foreign']);
-    for (const [path, value] of negatives)
+    for (const [path, value] of negatives) {
+      const changed = namespaceChanged(f.value, path, value);
       expect(
-        () =>
-          validateDiskRestoreReadback(
-            namespaceChanged(f.value, path, value),
-            f.expected,
-            f.reference,
-            raw,
-          ),
+        () => validateDiskRestoreReadback(changed, f.expected, f.reference, raw),
         path,
       ).toThrow();
+    }
     expect(() =>
       validateMigrationBackupRestoreReference(raw, f.expected, {
         schema: 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V1',
