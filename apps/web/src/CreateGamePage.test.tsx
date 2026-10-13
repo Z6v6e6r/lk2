@@ -160,8 +160,14 @@ describe('same-operation CREATE recovery on the actual page', () => {
       page(gateway);
       await screen.findByRole('button', { name: 'Проверить прежнюю операцию' });
       await userEvent.clear(screen.getByRole('textbox', { name: 'Название' }));
-      for (let n = 0; n < 2; n++)
-        await userEvent.click(screen.getByRole('button', { name: 'Проверить прежнюю операцию' }));
+      for (let n = 0; n < 2; n++) {
+        await userEvent.click(
+          await screen.findByRole('button', { name: 'Проверить прежнюю операцию' }),
+        );
+        await waitFor(() =>
+          expect(screen.getByRole('button', { name: 'Проверить прежнюю операцию' })).toBeEnabled(),
+        );
+      }
       expect(gateway.createGame).not.toHaveBeenCalled();
       expect(gateway.getGameCreateOperation).toHaveBeenCalledTimes(3);
       expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toEqual(
@@ -223,6 +229,8 @@ describe('same-operation CREATE recovery on the actual page', () => {
     vi.useRealTimers();
     await screen.findByRole('button', { name: 'Проверить прежнюю операцию' });
     await userEvent.click(screen.getByRole('button', { name: 'Проверить прежнюю операцию' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('PROCESSING'));
+    await screen.findByRole('button', { name: 'Проверить прежнюю операцию' });
     await act(async () => {
       late.resolve(result());
       await Promise.resolve();
