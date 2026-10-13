@@ -128,6 +128,26 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     newOid: '57eb46c5588837b3177759f2aca6e6724651a382',
   }),
 ]);
+// One inert fixture-readiness correction for the frozen Android bridge; both regular blobs
+// must travel together. Neither rehearsal path belongs to a generic controller allowlist.
+export const API_WORKER_REHEARSAL_READINESS_PATCH = Object.freeze([
+  Object.freeze({
+    path: 'scripts/rehearse-timeweb-standard-compose.js',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: '98c63003b8736bc1da48abfa9be5ee1e7bd6b005',
+    newOid: '0e1ff6d8d8e8ce6e246ee3b43c5934f5be79d90b',
+  }),
+  Object.freeze({
+    path: 'scripts/timeweb-standard-compose.test.ts',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: 'ba60973d95649afa3b81ac035e55b043cddc6285',
+    newOid: 'b7b826e1731179f3d982a0c2b776f8cc5b00473d',
+  }),
+]);
 // Frozen PR380 native-only source delta; app images stay on11954. Never widen a generic path list.
 export const API_WORKER_NATIVE_BOOKINGS_PATCH = Object.freeze(
   [
@@ -331,14 +351,20 @@ function withoutPinnedControllerPatch(entries, pins) {
 export function withoutExactCiDownloadPatch(entries) {
   if (!Array.isArray(entries) || !entries.length) fail('CONTROLLER_DELTA');
   return withoutPinnedControllerPatch(
-    withoutPinnedControllerPatch(entries, API_WORKER_NATIVE_BOOKINGS_PATCH),
+    withoutPinnedControllerPatch(
+      withoutPinnedControllerPatch(entries, API_WORKER_REHEARSAL_READINESS_PATCH),
+      API_WORKER_NATIVE_BOOKINGS_PATCH,
+    ),
     API_WORKER_CI_DOWNLOAD_PATCH,
   );
 }
 export function withoutExactMigrationCiPatch(entries) {
   if (!Array.isArray(entries) || !entries.length) fail('CONTROLLER_DELTA');
   return withoutPinnedControllerPatch(
-    withoutPinnedControllerPatch(entries, API_WORKER_NATIVE_BOOKINGS_PATCH),
+    withoutPinnedControllerPatch(
+      withoutPinnedControllerPatch(entries, API_WORKER_REHEARSAL_READINESS_PATCH),
+      API_WORKER_NATIVE_BOOKINGS_PATCH,
+    ),
     [...API_WORKER_CI_DOWNLOAD_PATCH, ...API_WORKER_CI_READER_PATCH],
   );
 }
