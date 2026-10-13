@@ -88,3 +88,4 @@ export type {
   GameJoinConditionsContextInput,
   GameJoinConditionsContext,
 } from './game-join-conditions-context-repository.js';
+export * from './create-owner-association-reader.js';
