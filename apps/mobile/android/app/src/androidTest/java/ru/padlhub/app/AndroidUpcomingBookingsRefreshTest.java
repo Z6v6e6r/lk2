@@ -94,7 +94,10 @@ public class AndroidUpcomingBookingsRefreshTest {
             final boolean[] cancelled = {false};
             fixture.completionHook = () -> {
                 cancelled[0] = true;
-                if (logout) fixture.engine.prepareLogout(KEY);
+                if (logout) {
+                    try { fixture.engine.prepareLogout(KEY); }
+                    catch (Failure error) { throw new AssertionError(error.code); }
+                }
             };
             try {
                 fixture.run(() -> { if (!logout && cancelled[0]) throw new Failure("NATIVE_OPERATION_CANCELLED"); });
