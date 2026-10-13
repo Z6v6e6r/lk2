@@ -4,7 +4,7 @@ import {
   createOriginalBindingSchema,
   CreateOriginalAssociationReadError,
   type CreateOriginalAssociationReader,
-} from '@phub/games';
+} from '../../games/src/create-financial-proof-resolver.js';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 

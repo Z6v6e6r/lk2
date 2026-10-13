@@ -1625,4 +1625,3 @@ const EVENT_CONSUMER_ROUTES: Readonly<Record<GameDomainEventType, readonly GameE
 export function consumersForGameEvent(type: GameDomainEventType): readonly GameEventConsumer[] {
   return EVENT_CONSUMER_ROUTES[type];
 }
-export * from './create-financial-proof-resolver.js';

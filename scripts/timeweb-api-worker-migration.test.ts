@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { ledger as historicalLedger } from './timeweb-api-worker.fixture.js';
 import {
   API_WORKER_MIGRATION_BRIDGE as b,
   migrationCreateArgs,
@@ -214,13 +215,17 @@ function diskFixture() {
 }
 describe('closed migration custody validators', () => {
   it('accepts exact packaged ledgers and rejects partial, reordered, altered and extra rows', () => {
-    const rows = readdirSync('packages/database/migrations')
+    const currentRows = readdirSync('packages/database/migrations')
       .filter((v) => v.endsWith('.sql'))
       .sort()
       .map((filename) => ({
         filename,
         checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
       }));
+    const rows = historicalLedger;
+    if (currentRows.length !== rows.length) {
+      expect(() => validateApiWorkerMigrationLedger(currentRows, b.postLedgerSha256)).toThrow();
+    }
     expect(validateApiWorkerMigrationLedger(rows.slice(0, 99), b.preLedgerSha256)).toBe(
       b.preLedgerSha256,
     );

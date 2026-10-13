@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
-import { createFinancialProofResolver, type CreateOriginalBinding } from '@phub/games';
+import {
+  createFinancialProofResolver,
+  type CreateOriginalBinding,
+} from '../../games/src/create-financial-proof-resolver.js';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 

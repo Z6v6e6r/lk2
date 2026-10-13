@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseStrictJson } from './strict-json.js';
+import { ledger as rows } from './timeweb-api-worker.fixture.js';
 import {
   API_WORKER_MIGRATION_BRIDGE as b,
   readApiWorkerMigrationCapsule,
@@ -11,13 +11,6 @@ import {
 } from './timeweb-api-worker-migration.js';
 
 const hash = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
-const rows = readdirSync('packages/database/migrations')
-  .filter((v) => v.endsWith('.sql'))
-  .sort()
-  .map((filename) => ({
-    filename,
-    checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
-  }));
 const clone = <T>(v: T): T => structuredClone(v);
 const encoded = (v: unknown) => Buffer.from(JSON.stringify(v) + '\n');
 function operation() {

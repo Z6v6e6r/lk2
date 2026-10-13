@@ -100,6 +100,13 @@ existing non-final projection (or null when original/source integrity fails).
 It may preserve pending recovery with the same operation. This task edits none
 of B's UI/SDK/HTTP files and installs no public resolver endpoint.
 
+The modules are exported from their own source files only; common package barrels
+remain unchanged. This avoids changing the byte-pinned Communities runtime bundle
+before any C1/finance composition exists. Historical Timeweb test fixtures select
+the exact 0001–0097/101-row ledger and retain its pinned digest; the 102-row current
+source ledger is still rejected by that old operation protocol. These fixture-only
+changes do not enroll migration 0098 into an existing delivery operation.
+
 Required transitions before final success:
 
 1. L/finance owners identify the exact CREATE booking, benefit application and
