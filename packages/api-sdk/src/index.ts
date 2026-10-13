@@ -218,6 +218,7 @@ export interface AndroidPushEndpointRegistration {
 export type AndroidPushEndpointCommandResult = WebPushEndpointCommandResult;
 export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
+export type GameCreateRecoveryResult = components['schemas']['GameCreateRecoveryResult'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
 export type CreateGameRequest = components['schemas']['CreateGameRequest'];
 export type CancelGameRequest = components['schemas']['CancelGameRequest'];
@@ -1420,16 +1421,19 @@ export class PadlHubApiClient {
 
   public createGame(
     input: CreateGameRequest,
-    options: { readonly idempotencyKey?: string } = {},
+    options: { readonly idempotencyKey?: string; readonly signal?: AbortSignal } = {},
   ): Promise<GameCommandResult> {
     const idempotencyKey = options.idempotencyKey ?? createCorrelationId();
-    return this.retryOnceOnNetworkFailure(() =>
-      this.request<GameCommandResult>('/games', {
-        method: 'POST',
-        idempotencyKey,
-        body: jsonRequestBody(input),
-      }),
-    );
+    // Response loss is ambiguous: never replay CREATE, refresh into another actor,
+    // or mint a replacement key. P2 recovers the original key through GET.
+    return this.request<GameCommandResult>('/games', {
+      method: 'POST',
+      body: JSON.stringify(input),
+      idempotencyKey,
+      retryOnUnauthorized: false,
+      ...(options.signal ? { signal: options.signal } : {}),
+      headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   public cancelGame(gameId: string, input: CancelGameRequest): Promise<GameCommandResult> {
@@ -1482,6 +1486,19 @@ export class PadlHubApiClient {
       'POST',
       input,
     );
+  }
+
+  public getGameCreateOperation(
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<GameCreateRecoveryResult> {
+    return this.request<GameCreateRecoveryResult>('/game-create-operation', {
+      method: 'GET',
+      idempotencyKey,
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+      ...(signal ? { signal } : {}),
+    });
   }
 
   public getGameOperation(operationId: string): Promise<GameCommandResult> {

@@ -415,6 +415,44 @@ paths:
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 
+  /{tenantKey}/game-create-operation:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    get:
+      tags: [games]
+      operationId: getGameCreateOperation
+      summary: Read the original beta CREATE by its saved key
+      description: |
+        Read-only exact tenant/actor/key lookup over the canonical command association.
+        No payload, query identity override, CREATE replay or provider write is performed.
+        Only a committed NO_PAYMENT game without a booking is returned. SUCCEEDED describes
+        the local command, never booking, benefit or financial confirmation. Missing reads
+        do not prove absence of effects and never authorize a replacement CREATE.
+      responses:
+        '200':
+          description: Original canonical beta operation; never commercial success.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameCreateRecoveryResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
   /{tenantKey}/game-operations/{operationId}:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -1237,6 +1275,31 @@ components:
         note:
           type: [string, 'null']
           maxLength: 500
+    GameCreateRecoveryResult:
+      type: object
+      additionalProperties: false
+      required: [commandId, operation, game, replayed, recovery]
+      properties:
+        commandId:
+          type: string
+          format: uuid
+        operation:
+          $ref: '#/components/schemas/GameOperation'
+        game:
+          oneOf:
+            - $ref: '#/components/schemas/GameCardView'
+            - type: 'null'
+        replayed:
+          type: boolean
+        recovery:
+          type: object
+          additionalProperties: false
+          required: [paymentMode]
+          properties:
+            paymentMode:
+              type: string
+              enum: [NO_PAYMENT]
+
     GameCommandResult:
       type: object
       additionalProperties: false

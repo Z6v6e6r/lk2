@@ -12,6 +12,7 @@ import type {
   GameRosterOperation,
   GameRosterRepository,
 } from '@phub/database';
+import { isValidIdempotencyKey } from '@phub/domain';
 import { GAME_KINDS, GAME_PLAYER_LEVELS, GAME_VISIBILITIES } from '@phub/games';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
@@ -25,7 +26,7 @@ type UserRosterRepository = Pick<
 >;
 type UserManagementRepository = Pick<
   GameRepository,
-  'create' | 'cancel' | 'getManagementOperation'
+  'create' | 'cancel' | 'getManagementOperation' | 'getCreateOperation'
 >;
 
 type UserRosterCommand = 'JOIN_GAME' | 'LEAVE_GAME' | 'JOIN_WAITLIST' | 'LEAVE_WAITLIST';
@@ -647,6 +648,59 @@ export function registerGameRoutes(
     '/user/api/v1/:tenantKey/games/:gameId/waitlist/me',
     'LEAVE_WAITLIST',
     (repository, input) => repository.leaveWaitlist(input),
+  );
+
+  app.get(
+    '/user/api/v1/:tenantKey/game-create-operation',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'private, no-store');
+      const current = principal(request);
+      if (!current)
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      const key = request.headers['idempotency-key'];
+      if (
+        typeof key !== 'string' ||
+        !isValidIdempotencyKey(key) ||
+        Object.keys(request.query as object).length ||
+        request.body !== undefined
+      )
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Некорректный запрос исходной операции.',
+        );
+      if (!options.managementRepository?.getCreateOperation) return unavailable(request, reply);
+      try {
+        const operation = await options.managementRepository.getCreateOperation({
+          tenantId: current.tenantId,
+          actorUserId: current.userId,
+          idempotencyKey: key,
+        });
+        if (!operation)
+          return sendApiError(
+            request,
+            reply,
+            404,
+            'GAME_OPERATION_NOT_FOUND',
+            'Операция недоступна.',
+          );
+        return {
+          ...managementOperationBody(operation.result, 'CREATE_GAME'),
+          recovery: { paymentMode: 'NO_PAYMENT' as const },
+        };
+      } catch {
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'GAME_CREATE_RECOVERY_UNAVAILABLE',
+          'Исходная операция временно недоступна.',
+        );
+      }
+    },
   );
 
   app.get(
