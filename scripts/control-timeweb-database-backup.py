@@ -913,12 +913,47 @@ def namespace_wait(path, predicate, seconds=45):
     raise Stop('NS_ACK_UNKNOWN')
 
 
+def namespace_require_absent(name):
+    # show/LoadUnit synthesizes implicit .slice units. These listing queries do not
+    # load the name; StartTransientUnit(mode=fail) remains the atomic admission.
+    need(isinstance(name, str) and re.fullmatch(
+        r'(?:phubdiskrestore[a-f0-9]{24}\.slice|phub-disk-runtime-[a-f0-9]{24}\.service)', name),
+        'NS_ADMISSION_UNIT_NAME')
+    code = 'NS_SLICE_EXISTS' if name.endswith('.slice') else 'NS_UNIT_EXISTS'
+    rows = command(['/usr/bin/systemctl', 'list-units', '--all', '--plain', '--full',
+                    '--no-legend', '--no-pager', '--', name], 'NS_UNIT_ADMISSION', timeout=15)
+    need(not rows.strip(), code)
+    # On systemd 259 a filtered unit-file query returns 1 for no matches. Read the
+    # complete non-loading inventory instead; command errors are never absence.
+    rows = command(['/usr/bin/systemctl', 'list-unit-files', '--all', '--full',
+                    '--no-legend', '--no-pager'], 'NS_UNIT_ADMISSION', timeout=15)
+    need(0 < len(rows) <= 1024 ** 2, 'NS_UNIT_ADMISSION_OUTPUT')
+    try:
+        lines = rows.decode('utf-8').splitlines()
+    except UnicodeError:
+        raise Stop('NS_UNIT_ADMISSION_OUTPUT') from None
+    need(0 < len(lines) <= 16384, 'NS_UNIT_ADMISSION_OUTPUT')
+    states = {'enabled', 'enabled-runtime', 'linked', 'linked-runtime', 'alias', 'masked',
+              'masked-runtime', 'static', 'disabled', 'indirect', 'generated', 'transient', 'bad'}
+    seen = set()
+    for line in lines:
+        fields = line.split()
+        need(len(fields) in (2, 3) and re.fullmatch(
+            r'[^\s]+\.(?:automount|busname|device|mount|path|scope|service|slice|socket|swap|target|timer)',
+            fields[0]) and fields[1] in states and
+            (len(fields) == 2 or fields[2] in {'enabled', 'disabled', '-'}), 'NS_UNIT_ADMISSION_OUTPUT')
+        need(fields[0] not in seen, 'NS_UNIT_ADMISSION_OUTPUT')
+        seen.add(fields[0])
+        need(fields[0] != name, code)
+
+
+
 def namespace_start(p, op, journal):
     for tool in ['/usr/bin/busctl', '/usr/bin/containerd-shim-runc-v2', '/usr/bin/runc', '/usr/bin/systemd-run', '/usr/bin/systemctl', '/usr/bin/docker', '/usr/bin/dockerd', '/usr/bin/containerd']:
         need(stat.S_IMODE(secure(tool).st_mode) & 0o111, 'NS_TOOL_CUSTODY')
-    need(namespace_unit(p)['LoadState'] == 'not-found', 'NS_UNIT_EXISTS')
+    namespace_require_absent(p['isolation']['unit'])
+    namespace_require_absent(p['isolation']['slice'])
     Path(p['isolation']['controlRoot']).mkdir(mode=0o700); sync_directory(p['work'])
-    need(namespace_show(p['isolation']['slice'], NS_SLICE_KEYS)['LoadState'] == 'not-found', 'NS_SLICE_EXISTS')
     namespace_frozen_source(p)
     journal.add('NAMESPACE_SLICE_START_INTENT')
     command(namespace_slice_args(p), 'NS_SLICE_START', timeout=30)
