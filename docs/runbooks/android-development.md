@@ -88,6 +88,13 @@ The accepted APK 1.13/code14 was built before this observation enhancement. Its 
 Profile/My Records/reopen acceptance remains valid; these additional details require a separately
 authorized new build and device verification.
 
+Version 1.14/code15 packages these bounded observations under the same application ID, public
+API/tenant configuration and controlled-test debug certificate. Its build receipt must identify
+the source commit, APK SHA-256, packaged configuration and newly executed native/JS checks.
+APK identity/configuration inspection is local artifact evidence; physical Profile/My Records/reopen
+acceptance and installed artifact/API binding remain separate until observed on the allocated
+test device/account. Do not relabel terminal native acknowledgements as captured internal responses.
+
 Version 1.10/code11 corrects a 1.9 contract mismatch: delegated Viva access tokens are opaque,
 not necessarily JWTs with a `tenant_key` claim. Native code accepts only bounded Bearer-safe token
 bytes from the authenticated endpoint and keeps the fixed plan tenant/host and current user lease.
