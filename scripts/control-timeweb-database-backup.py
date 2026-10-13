@@ -45,6 +45,11 @@ API_WORKER_CI_READER_PATCH = {
     'scripts/timeweb-api-worker-upgrade.test.ts': {'path': 'scripts/timeweb-api-worker-upgrade.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'e446cc167a63ee54e9352dc38589e414f1aa7247', 'newOid': '02f3927005dac547fb74b6955e2ddc69ee4d2deb'},
     'scripts/timeweb-api-worker-adapter.test.ts': {'path': 'scripts/timeweb-api-worker-adapter.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'dba09b8571260d1cb817971ce6a15a42a70f1032', 'newOid': '57eb46c5588837b3177759f2aca6e6724651a382'},
 }
+# One inert fixture correction; the exact regular pair is never a generic path allowance.
+API_WORKER_REHEARSAL_READINESS_PATCH = {
+    'scripts/rehearse-timeweb-standard-compose.js': {'path': 'scripts/rehearse-timeweb-standard-compose.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '98c63003b8736bc1da48abfa9be5ee1e7bd6b005', 'newOid': '0e1ff6d8d8e8ce6e246ee3b43c5934f5be79d90b'},
+    'scripts/timeweb-standard-compose.test.ts': {'path': 'scripts/timeweb-standard-compose.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ba60973d95649afa3b81ac035e55b043cddc6285', 'newOid': 'b7b826e1731179f3d982a0c2b776f8cc5b00473d'},
+}
 # Independent duplicate of the frozen atomic native source tuple.
 API_WORKER_NATIVE_BOOKINGS_PATCH = {
     'apps/mobile/android/app/build.gradle': {'path': 'apps/mobile/android/app/build.gradle', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'b5451e4334bc50c083e6b0d45cecf156d7e632e3', 'newOid': '70eb7c9f09bea9bc0aa8c26a67ae31c7595e7f15'},
@@ -1349,6 +1354,10 @@ def validate_migration_controller_delta(data):
         match=re.fullmatch(rb':([0-7]{6}) ([0-7]{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([AM])',rows[index])
         path=os.fsdecode(rows[index+1]);need(match and path not in seen,'CONTROLLER_LINEAGE');seen.add(path)
         parsed.append(dict(path=path,oldMode=match.group(1).decode(),newMode=match.group(2).decode(),oldOid=match.group(3).decode(),newOid=match.group(4).decode(),status=match.group(5).decode()))
+    rehearsal=[v for v in parsed if v['path'] in API_WORKER_REHEARSAL_READINESS_PATCH]
+    if rehearsal:
+        need(len(rehearsal)==len(API_WORKER_REHEARSAL_READINESS_PATCH) and all(v==API_WORKER_REHEARSAL_READINESS_PATCH[v['path']] for v in rehearsal),'REHEARSAL_READINESS_PATCH')
+    parsed=[v for v in parsed if v['path'] not in API_WORKER_REHEARSAL_READINESS_PATCH]
     native=[v for v in parsed if v['path'] in API_WORKER_NATIVE_BOOKINGS_PATCH]
     if native:
         need(len(native)==len(API_WORKER_NATIVE_BOOKINGS_PATCH) and all(v==API_WORKER_NATIVE_BOOKINGS_PATCH[v['path']] for v in native),'NATIVE_BOOKINGS_PATCH')

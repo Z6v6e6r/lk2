@@ -255,8 +255,14 @@ TIMEWEB_STANDARD_DOCKER_VERIFY=1 node scripts/rehearse-timeweb-standard-compose.
 
 It uses the pinned nginx base, verifies a successful Web transition, injects observation failure,
 restores the previous release label even when the digest is identical, and proves the unrelated API
-container ID stayed unchanged. The full CI integration job opts into this rehearsal. This is LOCAL
-Compose/rollback evidence, not canonical publication or production evidence.
+container ID stayed unchanged. It exercises one delayed Web startup and gates its API/Web nginx
+fixtures with HTTP healthchecks and bounded Compose `--wait` before strict observation. An HTTP-unavailable
+fixture must fail that gate; the production Compose arguments and observation policy are unchanged.
+The full CI integration job opts into this rehearsal. This is LOCAL Compose/rollback evidence, not
+canonical publication or production evidence. For the frozen Android API/Worker and migration
+bridge, this inert correction is admitted only as its exact atomic two-blob tuple, mirrored in
+Node and the Python backup producer. Missing peers, changed blobs or non-regular modes are rejected;
+the generic controller path lists remain closed.
 
 ## Explicit critical API/Web upgrade
 

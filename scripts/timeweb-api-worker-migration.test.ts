@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { parseStrictJson } from './strict-json.js';
 import {
   validateApiWorkerControllerDelta,
+  parseApiWorkerControllerDiff,
   type ApiWorkerControllerDiffEntry,
 } from './timeweb-api-worker-upgrade.js';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -789,6 +790,84 @@ describe('private namespace restore V2 independent contract', () => {
     for (const value of invalid) {
       expect(() => validateMigrationControllerClosure(value)).toThrow();
       expect(() => validateApiWorkerControllerDelta(value)).toThrow();
+    }
+  });
+});
+
+describe('exact inert Compose readiness pair', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      "import * as c from './scripts/timeweb-api-worker-contract.js';process.stdout.write(JSON.stringify({pins:c.API_WORKER_REHEARSAL_READINESS_PATCH,ordinary:[...c.API_WORKER_CONTROLLER_FILES],migration:[...c.API_WORKER_MIGRATION_CONTROLLER_FILES]}));",
+    ],
+    { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' }, timeout: 10000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  const contract = parseStrictJson<{
+    pins: ApiWorkerControllerDiffEntry[];
+    ordinary: string[];
+    migration: string[];
+  }>(result.stdout);
+  const pair = () => contract.pins.map((row) => ({ ...row }));
+  const validators = [validateApiWorkerControllerDelta, validateMigrationControllerClosure];
+  it('admits only the exact pair in both closures without widening generic paths', () => {
+    const ordinary = {
+      ...pair()[0],
+      path: 'scripts/timeweb-api-worker-contract.js',
+    };
+    for (const validate of validators) {
+      expect(() => validate(pair())).not.toThrow();
+      expect(() => validate([...pair(), ordinary])).not.toThrow();
+      expect(() => validate([ordinary])).not.toThrow();
+    }
+    for (const row of pair()) {
+      expect(contract.ordinary.includes(row.path)).toBe(false);
+      expect(contract.migration.includes(row.path)).toBe(false);
+      const bytes = readFileSync(row.path);
+      expect(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')).toBe(
+        row.newOid,
+      );
+    }
+  });
+  it('rejects either missing peer, duplicates, changed blobs, modes, statuses and extra paths', () => {
+    const invalid = [
+      pair().slice(0, 1),
+      pair().slice(1),
+      [...pair(), pair()[0]],
+      [...pair(), { ...pair()[0], path: 'scripts/unreviewed-compose.js' }],
+    ];
+    for (let index = 0; index < pair().length; index++) {
+      for (const change of [
+        { oldOid: 'a'.repeat(40) },
+        { newOid: 'b'.repeat(40) },
+        { oldMode: '000000' },
+        { oldMode: '100755' },
+        { oldMode: '120000' },
+        { newMode: '100755' },
+        { newMode: '120000' },
+        { newMode: '160000' },
+        { status: 'A' },
+        { status: 'D' },
+        { status: 'R100' },
+        { path: 'scripts/unreviewed-compose.js' },
+        { type: 'blob' },
+      ])
+        invalid.push(pair().map((row, i) => (i === index ? { ...row, ...change } : row)));
+    }
+    for (const rows of invalid)
+      for (const validate of validators) expect(() => validate(rows)).toThrow();
+    for (const mode of ['100755', '120000', '160000']) {
+      const rows = pair().map((row, i) => (i === 0 ? { ...row, newMode: mode } : row));
+      const raw = rows
+        .map(
+          (row) =>
+            `:${row.oldMode} ${row.newMode} ${row.oldOid} ${row.newOid} ${row.status}\0${row.path}\0`,
+        )
+        .join('');
+      for (const validate of validators)
+        expect(() => validate(parseApiWorkerControllerDiff(raw))).toThrow();
     }
   });
 });

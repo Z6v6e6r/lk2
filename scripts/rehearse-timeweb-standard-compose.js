@@ -23,6 +23,16 @@ const project = `lk2-standard-fixture-${process.pid}`;
 const lock = JSON.parse(readFileSync('deploy/timeweb/base-images.lock.json'));
 const nginxDigest = lock.images.find((item) => item.id === 'nginx-web-runtime').indexDigest;
 const image = `nginx@${nginxDigest}`;
+const fixtureHttp = {
+  healthcheck: {
+    test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/'],
+    interval: '1s',
+    timeout: '1s',
+    retries: 5,
+    start_period: '2s',
+    start_interval: '100ms',
+  },
+};
 const composeFile = join(directory, 'compose.json');
 const baseline = join(directory, 'baseline.env');
 const candidate = join(directory, 'candidate.env');
@@ -35,12 +45,17 @@ writeFileSync(
     services: {
       api: {
         image,
+        ...fixtureHttp,
         labels: { 'fixture.owner': project, 'phub.release-id': '${API_RELEASE:-api-previous}' },
       },
       worker: { image, profiles: ['background'], labels: { 'fixture.owner': project } },
       migrator: { image, profiles: ['migration'], labels: { 'fixture.owner': project } },
       realtime: { image, labels: { 'fixture.owner': project } },
-      web: { image, labels: { 'fixture.owner': project, 'phub.release-id': '${RELEASE}' } },
+      web: {
+        image,
+        ...fixtureHttp,
+        labels: { 'fixture.owner': project, 'phub.release-id': '${RELEASE}' },
+      },
     },
     networks: { default: { internal: true } },
   }),
@@ -70,7 +85,15 @@ const smokeWebRuntimeBase = () => {
   if (!rejectedReadOnly) throw Error('Missing scratch paths did not reproduce nginx EROFS');
   docker(args);
 };
-const compose = (env, action) => docker(standardWebComposeArgs(composeFile, baseline, env, action));
+// The fixture waits for nginx startup before exercising strict observation. Production args and
+// observation policy are unchanged; readiness failures still reject the disposable transition.
+const compose = (env, action) => {
+  const args = standardWebComposeArgs(composeFile, baseline, env, action);
+  if (action === 'up') args.push('--wait', '--wait-timeout', '30');
+  const output = docker(args);
+  if (action === 'up') assertFixtureHttp('web');
+  return output;
+};
 const inspect = (service) => {
   const ids = docker([
     'ps',
@@ -86,6 +109,10 @@ const inspect = (service) => {
   if (ids.length !== 1) throw Error('Ambiguous fixture service');
   return JSON.parse(docker(['inspect', ids[0]]))[0];
 };
+const assertFixtureHttp = (service) => {
+  if (inspect(service).State.Health?.Status !== 'healthy')
+    throw Error(`Fixture ${service} HTTP not ready`);
+};
 const journal = [];
 try {
   docker([
@@ -98,9 +125,67 @@ try {
     'background',
     'up',
     '-d',
+    '--wait',
+    '--wait-timeout',
+    '30',
   ]);
+  for (const service of ['api', 'web']) assertFixtureHttp(service);
   const apiBefore = inspect('api').Id;
   const previousImage = inspect('web').Image;
+  // Exercise a delayed startup once, instead of imposing an unrelated delay on every recovery.
+  const fixtureModel = JSON.parse(readFileSync(composeFile, 'utf8'));
+  const delayedCompose = join(directory, 'delayed-compose.json');
+  writeFileSync(
+    delayedCompose,
+    JSON.stringify({
+      name: project,
+      services: {
+        web: {
+          ...fixtureModel.services.web,
+          command: ['/bin/sh', '-c', "sleep 1; exec nginx -g 'daemon off;'"],
+        },
+      },
+      networks: fixtureModel.networks,
+    }),
+  );
+  docker([
+    ...standardWebComposeArgs(delayedCompose, baseline, baseline, 'up'),
+    '--wait',
+    '--wait-timeout',
+    '30',
+  ]);
+  assertFixtureHttp('web');
+  docker(['exec', inspect('web').Id, 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1/']);
+  // A container that stays running without HTTP must fail the bounded readiness gate. Use only
+  // the owned Web fixture; the initial API/Worker/Realtime containers stay untouched.
+  const unavailableCompose = join(directory, 'unavailable-compose.json');
+  writeFileSync(
+    unavailableCompose,
+    JSON.stringify({
+      name: project,
+      services: { web: { ...fixtureModel.services.web, command: ['sleep', '60'] } },
+      networks: fixtureModel.networks,
+    }),
+  );
+  let readinessRejected = false;
+  try {
+    docker([
+      ...standardWebComposeArgs(unavailableCompose, baseline, baseline, 'up'),
+      '--wait',
+      '--wait-timeout',
+      '2',
+    ]);
+  } catch (error) {
+    readinessRejected =
+      error.status === 1 && /unhealthy|not healthy|timeout.*healthy/i.test(String(error.stderr));
+  }
+  if (!readinessRejected) throw Error('Unavailable fixture HTTP accepted or readiness gate failed');
+  if (inspect('web').State.Health?.Status === 'healthy')
+    throw Error('Unavailable fixture falsely healthy');
+  compose(baseline, 'up');
+  process.stdout.write(
+    'COMPOSE_HTTP_READY_GUARD_PASS delayed_start=true unavailable_rejected=true\n',
+  );
   const attestBackend = async () => {
     if (inspect('api').Id !== apiBefore) throw Error('Backend restarted');
   };
@@ -257,7 +342,10 @@ try {
   const criticalCompose = (env, action, service) => {
     const args = apiWebComposeArgs(baseline, env, action, service);
     args[args.indexOf('-f') + 1] = composeFile;
-    return docker(args);
+    if (action === 'up') args.push('--wait', '--wait-timeout', '30');
+    const output = docker(args);
+    if (action === 'up') assertFixtureHttp(service);
+    return output;
   };
   for (const service of ['web', 'api']) criticalCompose(criticalPrevious, 'up', service);
   const outside = Object.fromEntries(

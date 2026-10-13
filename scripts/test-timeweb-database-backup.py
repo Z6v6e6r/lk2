@@ -164,6 +164,27 @@ class PureTests(unittest.TestCase):
             value=dict(re.findall(r"(path|status|oldMode|newMode|oldOid|newOid):\s*'([^']+)'",item));js[value['path']]=value
         self.assertEqual(js,m.API_WORKER_CI_READER_PATCH)
 
+    def test_inert_rehearsal_pair_is_exact_atomic_and_matches_source_and_javascript(self):
+        import hashlib
+        rows=list(m.API_WORKER_REHEARSAL_READINESS_PATCH.values())
+        def raw(items):return b''.join((':'+v['oldMode']+' '+v['newMode']+' '+v['oldOid']+' '+v['newOid']+' '+v['status']+'\0'+v['path']+'\0').encode()for v in items)
+        ordinary=dict(rows[0],path='scripts/timeweb-api-worker-contract.js')
+        for case in [rows,rows+[ordinary],[ordinary]]:m.validate_migration_controller_delta(raw(case))
+        invalid=[rows[:1],rows[1:],rows+[rows[0]],rows+[dict(rows[0],path='scripts/unreviewed-compose.js')]]
+        for index in range(2):
+            for field,value in [('oldOid','a'*40),('newOid','b'*40),('oldMode','000000'),('oldMode','100755'),('oldMode','120000'),('newMode','100755'),('newMode','120000'),('newMode','160000'),('status','A'),('status','D'),('status','R100'),('path','scripts/unreviewed-compose.js')]:
+                invalid.append([dict(row,**{field:value})if i==index else row for i,row in enumerate(rows)])
+        for case in invalid:
+            with self.subTest(case=case),self.assertRaises(m.Stop):m.validate_migration_controller_delta(raw(case))
+        for row in rows:
+            self.assertNotIn(row['path'],m.API_WORKER_MIGRATION_CONTROLLER_FILES)
+            data=(Path(__file__).parents[1]/row['path']).read_bytes()
+            self.assertEqual(hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest(),row['newOid'])
+        import subprocess
+        js="import {API_WORKER_REHEARSAL_READINESS_PATCH as p} from './scripts/timeweb-api-worker-contract.js';process.stdout.write(JSON.stringify(p));"
+        result=subprocess.run([shutil.which('node'),'--input-type=module','-e',js],cwd=Path(__file__).parents[1],env={'PATH':os.environ.get('PATH','')},capture_output=True,check=True)
+        self.assertEqual(json.loads(result.stdout),rows)
+
     def test_runtime_negative_boundaries(self):
         for service,key,value in [('expectedApi','restarts',1),('expectedApi','releaseId','other'),('expectedApi','revision','4'*40),('expectedPostgres','id','5'*64),('expectedPostgres','image','postgres:latest'),('expectedPostgres','imageId','sha256:'+'6'*64)]:
             with self.subTest(service=service,key=key):
