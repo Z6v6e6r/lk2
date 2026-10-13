@@ -1054,6 +1054,17 @@ and mount namespace recorded before lock publication. A restart is drift, never 
 The parent may enter only from this frozen source namespace, through a pinned namespace FD,
 and must prove its return. Namespace FDs and the mutation flock never pass to daemon children.
 
+Before creating runtime control directories or journaling a start intent, query the exact service
+and slice names with non-loading systemd listings of loaded units and unit files; both must be
+absent. Query loaded units by exact name. Read a bounded, strictly parsed full unit-file inventory
+and compare its first column by exact equality: systemd 259 returns exit code 1 for an empty
+filtered unit-file result, and command errors must never count as absence. Reject malformed,
+empty, duplicate or unknown inventory rows. Do not use `systemctl show` or `LoadUnit` for this admission: querying an implicit slice
+can load an inactive default unit and make the absence probe reject its own lookup. Reject every
+already loaded or file-backed name, including inactive units. Keep transient creation in `fail`
+mode and attest the exact properties and cgroup limits only after creation. A start ACK loss keeps
+the durable intent and requires exact-owner reconciliation; an unowned implicit slice is preserved.
+
 The operation creates one transient root slice named `phubdiskrestore<operation-sha-prefix>.slice`
 through fixed typed `StartTransientUnit` D-Bus properties. The name has no parent slice hierarchy.
 Its aggregate cap is 4 GiB, 384 tasks, 2 CPUs and no swap. The supervisor service cap is 2 GiB,

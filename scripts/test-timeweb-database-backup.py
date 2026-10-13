@@ -1023,6 +1023,103 @@ class NamespacePureTests(unittest.TestCase):
         op=namespace_operation(post)
         return m.namespace_plan(op,m.encoded(op),m.namespace_sizing(1024**3,8*1024**3,40*1024**3,NS_IMAGE),NS_IMAGE)
 
+    def test_admission_does_not_load_implicit_units(self):
+        p=self.plan();loaded=set();calls=[]
+        def listing(args,*unused,**options):
+            calls.append(args)
+            self.assertEqual(args[0],'/usr/bin/systemctl')
+            self.assertIn('--no-legend',args);self.assertIn('--no-pager',args)
+            if args[1]=='list-unit-files':
+                self.assertEqual(args[-1],'--no-pager')
+                return b'unrelated.service disabled enabled\nother.target static -\n'
+            self.assertEqual(args[1],'list-units');self.assertEqual(args[-2],'--')
+            return (args[-1]+' loaded inactive\n').encode() if args[-1] in loaded else b''
+        def loading(name,*unused):
+            loaded.add(name)
+            return {'LoadState':'loaded','ActiveState':'inactive','Transient':'no'}
+        with patch.object(m,'command',side_effect=listing),patch.object(m,'namespace_show',side_effect=loading) as show:
+            m.namespace_require_absent(p['isolation']['unit'])
+            m.namespace_require_absent(p['isolation']['slice'])
+            show.assert_not_called()
+        self.assertEqual(loaded,set());self.assertEqual(len(calls),4)
+
+    def test_admission_rejects_existing_loaded_or_file_backed_units(self):
+        p=self.plan()
+        for kind in ('unit','slice'):
+            name=p['isolation'][kind]
+            for state in ('inactive','active','transient'):
+                with self.subTest(kind=kind,state=state),patch.object(m,'command',return_value=(name+' loaded '+state+'\n').encode()):
+                    with self.assertRaisesRegex(m.Stop,'NS_SLICE_EXISTS' if kind=='slice' else 'NS_UNIT_EXISTS'):
+                        m.namespace_require_absent(name)
+            for state in ('static','enabled-runtime','generated','transient','masked','linked-runtime'):
+                def listing(args,*unused,**options):
+                    return b'' if args[1]=='list-units' else (name+' '+state+'\n').encode()
+                with self.subTest(kind=kind,file=state),patch.object(m,'command',side_effect=listing):
+                    with self.assertRaisesRegex(m.Stop,'NS_SLICE_EXISTS' if kind=='slice' else 'NS_UNIT_EXISTS'):
+                        m.namespace_require_absent(name)
+
+    def test_admission_rejects_bad_names_responses_and_command_failure(self):
+        name=self.plan()['isolation']['slice']
+        for bad in ('docker.service','../foreign.slice','--all',None,5):
+            with self.subTest(name=bad),patch.object(m,'command') as command:
+                with self.assertRaisesRegex(m.Stop,'NS_ADMISSION_UNIT_NAME'):m.namespace_require_absent(bad)
+                command.assert_not_called()
+        with patch.object(m,'command',return_value=b'malformed response'):
+            with self.assertRaisesRegex(m.Stop,'NS_SLICE_EXISTS'):m.namespace_require_absent(name)
+        for verb in ('list-units','list-unit-files'):
+            def failure(args,*unused,**options):
+                if args[1]==verb:raise m.Stop('NS_UNIT_ADMISSION')
+                return b''
+            with self.subTest(verb=verb),patch.object(m,'command',side_effect=failure):
+                with self.assertRaisesRegex(m.Stop,'NS_UNIT_ADMISSION'):m.namespace_require_absent(name)
+
+    def test_unit_file_inventory_accepts_unrelated_names_and_known_states(self):
+        name=self.plan()['isolation']['slice']
+        states=('enabled','enabled-runtime','linked','linked-runtime','alias','masked','masked-runtime',
+                'static','disabled','indirect','generated','transient','bad')
+        rows=''.join('unrelated'+str(i)+'.service '+state+'\n' for i,state in enumerate(states))
+        rows+='prefix'+name+' disabled enabled\n'+name+'.service static -\n'
+        with patch.object(m,'command',side_effect=lambda args,*a,**kw: b'' if args[1]=='list-units' else rows.encode()):
+            m.namespace_require_absent(name)
+
+    def test_unit_file_inventory_rejects_malformed_empty_duplicate_or_unknown(self):
+        name=self.plan()['isolation']['slice']
+        bad_rows=(b'',b'\n',b'a'*(1024**2+1),b'a.service static\n'*16385,b'a.service static\na.service disabled\n',
+                  b'invalid static\n',b'a.service\n',b'a.service static - extra\n',b'a.service unknown -\n',
+                  b'a.service static unknown\n',b'a.service static -\n\n',b'\xff.service static\n')
+        for rows in bad_rows:
+            with self.subTest(bytes=len(rows)),patch.object(m,'command',side_effect=lambda args,*a,**kw: b'' if args[1]=='list-units' else rows):
+                with self.assertRaisesRegex(m.Stop,'NS_UNIT_ADMISSION_OUTPUT'):m.namespace_require_absent(name)
+
+    def test_admission_failure_precedes_control_directory_and_start_intent(self):
+        for kind in ('unit','slice'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as directory:
+                p=self.plan();p['work']=directory;p['isolation']['controlRoot']=directory+'/runtime-control'
+                name=p['isolation'][kind];journal=unittest.mock.Mock()
+                def listing(args,*unused,**options):
+                    if args[1]=='list-unit-files':return b'unrelated.service static -\n'
+                    return (name+' loaded inactive\n').encode() if args[-1]==name else b''
+                with patch.object(m,'secure',return_value=SimpleNamespace(st_mode=0o100755)),patch.object(m,'command',side_effect=listing),patch.object(m,'namespace_frozen_source') as frozen:
+                    with self.assertRaisesRegex(m.Stop,'NS_SLICE_EXISTS' if kind=='slice' else 'NS_UNIT_EXISTS'):
+                        m.namespace_start(p,{},journal)
+                self.assertFalse(Path(p['isolation']['controlRoot']).exists())
+                journal.add.assert_not_called();frozen.assert_not_called()
+
+    def test_slice_start_ack_loss_keeps_only_durable_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            p=self.plan();p['work']=directory;p['isolation']['controlRoot']=directory+'/runtime-control'
+            journal=unittest.mock.Mock();calls=[]
+            def command(args,*unused,**options):
+                calls.append(args)
+                if args[0]=='/usr/bin/busctl':raise m.Stop('NS_SLICE_START')
+                return b'unrelated.service static -\n' if args[1]=='list-unit-files' else b''
+            with patch.object(m,'secure',return_value=SimpleNamespace(st_mode=0o100755)),patch.object(m,'command',side_effect=command),patch.object(m,'namespace_frozen_source'),patch.object(m,'namespace_slice') as slice_read:
+                with self.assertRaisesRegex(m.Stop,'NS_SLICE_START'):m.namespace_start(p,{},journal)
+            journal.add.assert_called_once_with('NAMESPACE_SLICE_START_INTENT')
+            slice_read.assert_not_called()
+            self.assertEqual(calls[-1][calls[-1].index(p['isolation']['slice'])+1],'fail')
+            self.assertFalse(any(args[0]=='/usr/bin/systemd-run' for args in calls))
+
     def test_closed_namespace_authority_never_downgrades_to_v1(self):
         for post in (False,True):
             op=namespace_operation(post);m.validate_operation(op,NOW,'2'*64)
