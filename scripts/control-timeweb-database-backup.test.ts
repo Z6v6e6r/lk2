@@ -6,6 +6,81 @@ import { parseStrictJson } from './strict-json.js';
 import { describe, expect, it } from 'vitest';
 
 describe('Timeweb backup/isolated restore preparation', () => {
+  it.skipIf(process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')(
+    'captures containers without a healthcheck in the real Docker boundary',
+    () => {
+      const helper = spawnSync(
+        'python3',
+        [
+          '-I',
+          '-S',
+          '-B',
+          '-c',
+          "import importlib.util;spec=importlib.util.spec_from_file_location('backup','scripts/control-timeweb-database-backup.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);print(m.INSPECT_FORMAT)",
+        ],
+        { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+      );
+      expect(helper.status, helper.stderr).toBe(0);
+      const created = spawnSync(
+        'docker',
+        [
+          'create',
+          '--pull',
+          'never',
+          '--network',
+          'none',
+          '--entrypoint',
+          '/bin/true',
+          'redis:7-alpine',
+        ],
+        { encoding: 'utf8', timeout: 15_000 },
+      );
+      expect(created.status, created.stderr).toBe(0);
+      const id = created.stdout.trim();
+      expect(id).toMatch(/^[a-f0-9]{64}$/u);
+      try {
+        const absent = spawnSync(
+          'docker',
+          ['inspect', '--format', '{{json (index .State "Health")}}', id],
+          { encoding: 'utf8', timeout: 10_000 },
+        );
+        expect(absent.status, absent.stderr).toBe(0);
+        expect(JSON.parse(absent.stdout)).toBeNull();
+        const legacy = spawnSync(
+          'docker',
+          [
+            'inspect',
+            '--format',
+            '{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}',
+            id,
+          ],
+          { encoding: 'utf8', timeout: 10_000 },
+        );
+        // CLI versions differ on missing map keys; LK2's strict client rejects this legacy lookup.
+        if (legacy.status === 0) expect(JSON.parse(legacy.stdout)).toBeNull();
+        else expect(legacy.stderr).toContain('Health');
+        const inspected = spawnSync('docker', ['inspect', '--format', helper.stdout.trim(), id], {
+          encoding: 'utf8',
+          timeout: 10_000,
+        });
+        expect(inspected.status, inspected.stderr).toBe(0);
+        const boundary = parseStrictJson<{
+          Id: string;
+          State: { Status: string; Health: { Status: string | null } };
+        }>(inspected.stdout);
+        expect(boundary.Id).toBe(id);
+        expect(boundary.State.Status).toBe('created');
+        expect(boundary.State.Health.Status).toBeNull();
+      } finally {
+        const removed = spawnSync('docker', ['rm', '--volumes', id], {
+          encoding: 'utf8',
+          timeout: 15_000,
+        });
+        expect(removed.status, removed.stderr).toBe(0);
+      }
+    },
+    60_000,
+  );
   it.each(['--emit-consumer-fixture', '--emit-disk-pre99-consumer-fixture'])(
     'accepts the Web receipt from %s through its owning validator and rejects drift',
     (fixtureMode) => {

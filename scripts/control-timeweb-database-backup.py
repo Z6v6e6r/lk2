@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import resource
 import signal
+import shlex
 import stat
 import subprocess
 import sys
@@ -95,10 +96,10 @@ HASH = re.compile(r'[a-f0-9]{64}\Z')
 RELEASE = re.compile(r'([a-f0-9]{40})-([1-9][0-9]{0,19})-1\Z')
 LEDGER_SQL = "select coalesce(json_agg(json_build_array(filename, checksum) order by filename), '[]'::json)::text from public.schema_migrations"
 READ_ONLY = "export PGOPTIONS='-c default_transaction_read_only=on -c lock_timeout=2000'; "
-SOURCE_LEDGER = READ_ONLY + 'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc --tuples-only --no-align --set=ON_ERROR_STOP=1 --command=' + "'" + LEDGER_SQL + "'"
+SOURCE_LEDGER = READ_ONLY + 'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc --tuples-only --no-align --set=ON_ERROR_STOP=1 --command=' + shlex.quote(LEDGER_SQL)
 SOURCE_SIZE = READ_ONLY + 'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc --tuples-only --no-align --set=ON_ERROR_STOP=1 --command=\'select pg_database_size(current_database())\''
 SOURCE_DUMP = READ_ONLY + 'exec pg_dump --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --format=custom --serializable-deferrable --no-owner --no-acl'
-INSPECT_FORMAT = '{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Image":{{json .Config.Image}},"Labels":{{json .Config.Labels}}},"RestartCount":{{json .RestartCount}},"State":{"Status":{{json .State.Status}},"StartedAt":{{json .State.StartedAt}},"Health":{"Status":{{if .State.Health}}{{json .State.Health.Status}}{{else}}null{{end}}}}}'
+INSPECT_FORMAT = '{"Id":{{json .Id}},"Image":{{json .Image}},"Config":{"Image":{{json .Config.Image}},"Labels":{{json .Config.Labels}}},"RestartCount":{{json .RestartCount}},"State":{"Status":{{json .State.Status}},"StartedAt":{{json .State.StartedAt}},"Health":{"Status":{{with index .State "Health"}}{{json .Status}}{{else}}null{{end}}}}}'
 RESTORE_FORMAT = '{"Id":{{json .Id}},"Config":{"Image":{{json .Config.Image}},"User":{{json .Config.User}},"Volumes":{{json .Config.Volumes}},"Labels":{{json .Config.Labels}}},"HostConfig":{' + ','.join('"'+key+'":{{json .HostConfig.'+key+'}}' for key in ['NetworkMode','ReadonlyRootfs','Binds','PortBindings','Tmpfs','Privileged','AutoRemove','RestartPolicy','CapAdd','CapDrop','SecurityOpt','PidsLimit','Memory','MemorySwap','NanoCpus','PublishAllPorts','Links','Devices','DeviceRequests','VolumesFrom','PidMode','IpcMode']) + '},"Mounts":{{json .Mounts}},"State":{"Status":{{json .State.Status}}}}'
 
 

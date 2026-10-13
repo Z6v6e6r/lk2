@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -58,6 +59,21 @@ def source_proof(script=b'synthetic reviewed helper'):
 
 
 class PureTests(unittest.TestCase):
+    def test_ledger_query_survives_real_shell_quoting(self):
+        with tempfile.TemporaryDirectory(prefix='phub-ledger-shell-') as directory:
+            psql=Path(directory)/'psql'
+            psql.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@"\n')
+            psql.chmod(0o700)
+            result=subprocess.run(['/bin/sh','-eu','-c',m.SOURCE_LEDGER],
+                                  env={'PATH':directory,'POSTGRES_USER':'synthetic_role','POSTGRES_DB':'synthetic_db'},
+                                  capture_output=True,text=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr)
+            arguments=result.stdout.splitlines()
+            self.assertIn('--username=synthetic_role',arguments)
+            self.assertIn('--dbname=synthetic_db',arguments)
+            self.assertIn('--command='+m.LEDGER_SQL,arguments)
+            self.assertIn("'[]'::json",arguments[-1])
+
     def test_command_real_node_stdin_uses_clean_environment(self):
         env={key:m.ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
         program="import fs from 'node:fs';process.stdout.write(JSON.stringify({stdin:fs.readFileSync(0,'utf8'),docker:process.env.DOCKER_HOST??null,compose:process.env.COMPOSE_FILE??null,node:process.env.NODE_OPTIONS??null}));"
