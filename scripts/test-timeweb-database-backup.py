@@ -23,7 +23,9 @@ PG={'id':m.PG_ID,'image':m.PG_IMAGE,'imageId':m.PG_IMAGE.split('@')[1],'releaseI
 LEDGER=[['0001_initial.sql','c'*64],['0002_next.sql','d'*64]]
 OP={'schema':'PHUB_TIMEWEB_BACKUP_OPERATION_V1','target':m.TARGET,'toolCommit':'1'*40,'toolFileSha256':'2'*64,'releaseId':'3'*40+'-38060874880-1','controllerSha':'3'*40,'controllerTree':'4'*40,'controllerConfigSha256':'5'*64,'expectedBoundarySha256':'6'*64,'toolProofSha256':'7'*64,'toolInstallationSha256':'8'*64,'expectedApi':API,'expectedPostgres':PG,'expiresAt':'2026-10-10T16:00:00.000Z','confirmation':'BACKUP_RESTORE_'+'3'*12+'_KEEP_API_0D6078BE7A50'}
 NOW=m.utc('2026-10-10T15:20:00.000Z')
-API_WORKER_LEDGER=[[path.name,m.digest(path.read_bytes())] for path in sorted(Path(__file__).parents[1].glob('packages/database/migrations/*.sql'))]
+# The controller protocol is frozen to this historical 99→101 ledger. Later source
+# migrations must not silently enroll in the old operation's mock receipts.
+API_WORKER_LEDGER=[[path.name,m.digest(path.read_bytes())] for path in sorted(Path(__file__).parents[1].glob('packages/database/migrations/*.sql')) if int(path.name[:4])<=97]
 assert len(API_WORKER_LEDGER)==101
 assert m.digest(m.encoded(API_WORKER_LEDGER))==m.API_WORKER_LEDGER_SHA256
 OP_API={**OP,'schema':'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2','candidateReleaseId':m.API_WORKER_CANDIDATE,

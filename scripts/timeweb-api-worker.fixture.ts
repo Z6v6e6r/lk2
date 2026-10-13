@@ -6,12 +6,18 @@ export const id = `${bridge.candidateSha}-${bridge.publicationRunId}-1`;
 export const root = '/opt/phub/timeweb-beta';
 const names = ['.release-identity.json', 'api.env', 'migrator.env', 'realtime.env', 'worker.env'];
 export const ledger = readdirSync('packages/database/migrations')
-  .filter((v) => v.endsWith('.sql'))
+  // This fixture belongs to the frozen 99→101 operation, not today's schema inventory.
+  .filter((v) => v.endsWith('.sql') && Number.parseInt(v.slice(0, 4), 10) <= 97)
   .sort()
   .map((filename) => ({
     filename,
     checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
   }));
+if (
+  ledger.length !== 101 ||
+  hash(ledger.map((row) => `${row.filename}|${row.checksum}\n`).join('')) !== bridge.ledgerSha256
+)
+  throw new Error('FROZEN_API_WORKER_LEDGER_FIXTURE_DRIFT');
 export const operation = () => ({
   schema: 'PHUB_TIMEWEB_API_WORKER_OPERATION_V1',
   target: { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 },

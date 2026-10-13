@@ -90,7 +90,8 @@ describe('Timeweb backup/isolated restore preparation', () => {
         const transaction=process.argv[1], candidate=process.argv[2], baseline=process.argv[3];
         const receiptPath=transaction+'/database-backup-receipt.json', bytes=fs.readFileSync(receiptPath), receipt=JSON.parse(bytes);
         const hash=(v)=>createHash('sha256').update(v).digest('hex');
-        const packaged=readdirSync('packages/database/migrations').filter(v=>v.endsWith('.sql')).sort().map(filename=>({filename,checksum:hash(readFileSync('packages/database/migrations/'+filename))}));
+        // This consumer receipt belongs to the historical frozen 101-row operation.
+        const packaged=readdirSync('packages/database/migrations').filter(v=>v.endsWith('.sql') && Number.parseInt(v.slice(0,4),10)<=97).sort().map(filename=>({filename,checksum:hash(readFileSync('packages/database/migrations/'+filename))}));
         assert.equal(validateUpgradeBackup(transaction,{releaseId:baseline}).path,receiptPath);
         validateApiWorkerBackupLedger(receipt,packaged);
         for(const [key,value] of [['sourceLedgerSha256','f'.repeat(64)],['restoredLedgerSha256','f'.repeat(64)],['restoreImage','postgres:latest']]) {
