@@ -1,3 +1,9 @@
+import { spawnSync } from 'node:child_process';
+import { parseStrictJson } from './strict-json.js';
+import {
+  validateApiWorkerControllerDelta,
+  type ApiWorkerControllerDiffEntry,
+} from './timeweb-api-worker-upgrade.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
@@ -13,6 +19,7 @@ import {
   parseDiskRestoreMountinfo,
   validateDiskRestoreReadback,
   validateDiskRestoreKernelSnapshot,
+  validateNamespaceRestoreKernelSnapshot,
   validateMigrationBackupRestoreReference,
   validateLegacyBackupRestoreMounts,
   validateDiskRestoreToolBytes,
@@ -655,5 +662,133 @@ describe('migration exact CI pair closure', () => {
       [...pair, { ...pair[0], path: '.github/workflows/other.yaml' }],
     ])
       expect(() => validateMigrationControllerClosure(rows)).toThrow();
+  });
+});
+
+interface NamespaceFixture {
+  operationBase64: string;
+  nativePatch: ApiWorkerControllerDiffEntry[];
+  expected: unknown;
+  reference: unknown;
+  value: unknown;
+  actual: unknown;
+}
+function namespaceFixture(): NamespaceFixture {
+  const result = spawnSync(
+    'python3',
+    ['-I', '-S', '-B', 'scripts/test-timeweb-database-backup.py', '--emit-namespace-fixture'],
+    {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
+      timeout: 10000,
+      maxBuffer: 512 * 1024,
+    },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return parseStrictJson<NamespaceFixture>(result.stdout);
+}
+function namespaceChanged(value: unknown, path: string, replacement: unknown): unknown {
+  const copy = structuredClone(value),
+    parts = path.split('.');
+  let cursor = copy as Record<string, unknown>;
+  for (const [index, part] of parts.entries()) {
+    const key = parts.slice(index).join('.');
+    if (Object.hasOwn(cursor, key)) {
+      cursor[key] = replacement;
+      return copy;
+    }
+    cursor = cursor[part] as Record<string, unknown>;
+  }
+  throw Error('TEST_PATH_NOT_FOUND');
+}
+describe('private namespace restore V2 independent contract', () => {
+  it('accepts Python-derived paths, sizing and process proof and independently checks kernel readback', () => {
+    const f = namespaceFixture(),
+      raw = Buffer.from(f.operationBase64, 'base64');
+    const proof = validateDiskRestoreReadback(f.value, f.expected, f.reference, raw);
+    expect(validateMigrationBackupRestoreReference(raw, f.expected, f.reference)).toBe('namespace');
+    expect(() => validateNamespaceRestoreKernelSnapshot(proof, f.actual)).not.toThrow();
+  });
+  it('refuses downgrade, a host parent slice, escaped containerd and every unit/cgroup custody drift', () => {
+    const f = namespaceFixture(),
+      raw = Buffer.from(f.operationBase64, 'base64');
+    const negatives: [string, unknown][] = [
+      ['schema', 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V1'],
+      ['plan.isolation.slice', 'system.slice'],
+      ['readback.container.HostConfig.CgroupParent', 'system.slice'],
+      ['readback.container.HostConfig.NetworkMode', 'host'],
+      ['readback.isolation.managed.config.address', '/run/containerd/containerd.sock'],
+      ['readback.isolation.managed.config.root', '/var/lib/containerd'],
+      ['readback.isolation.managed.shims.0.cmdline', ['/usr/bin/runc']],
+      ['readback.isolation.managed.containerd.mountNamespace', 11],
+      ['readback.isolation.admission.supervisor.slice.unit.MemoryMax', 'infinity'],
+      ['readback.isolation.admission.supervisor.slice.bounds.pids.max', 'max'],
+      ['readback.isolation.socket.mode', 0o140666],
+      ['readback.isolation.info.LiveRestoreEnabled', true],
+      ['readback.kernel.containerProcess.gid', [0, 0, 0, 0]],
+      ['readback.kernel.brokerMount.optional', ['shared:1']],
+      ['readback.image.imported.RootFS.Layers', ['sha256:' + 'f'.repeat(64)]],
+    ];
+    const unit = (
+      f.value as {
+        readback: { isolation: { admission: { supervisor: { unit: Record<string, string> } } } };
+      }
+    ).readback.isolation.admission.supervisor.unit;
+    for (const key of Object.keys(unit))
+      negatives.push([`readback.isolation.admission.supervisor.unit.${key}`, 'foreign']);
+    for (const [path, value] of negatives) {
+      const changed = namespaceChanged(f.value, path, value);
+      expect(
+        () => validateDiskRestoreReadback(changed, f.expected, f.reference, raw),
+        path,
+      ).toThrow();
+    }
+    expect(() =>
+      validateMigrationBackupRestoreReference(raw, f.expected, {
+        schema: 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V1',
+        storageProofSha256: 'b'.repeat(64),
+      }),
+    ).toThrow();
+    expect(() => validateMigrationBackupRestoreReference(raw, f.expected, undefined)).toThrow();
+  });
+  it('rejects independently observed PID reuse, runtime drift and any host mount leakage', () => {
+    const f = namespaceFixture(),
+      raw = Buffer.from(f.operationBase64, 'base64');
+    const proof = validateDiskRestoreReadback(f.value, f.expected, f.reference, raw);
+    const source = (f.actual as { mountinfo: { source: string; broker: string } }).mountinfo.source;
+    const broker = (f.actual as { mountinfo: { source: string; broker: string } }).mountinfo.broker;
+    for (const [path, value] of [
+      ['afterProcesses.source.startTicks', '9999'],
+      ['processes.containerd.cgroup', '0::/system.slice/containerd.service'],
+      ['runtime.members', [45, 46, 47, 48, 99]],
+      ['afterRuntime.configSha256', 'f'.repeat(64)],
+      ['afterSelfNamespace', 11],
+      ['mountinfo.source', source + broker.split('\n')[1] + '\n'],
+      ['mountinfo.broker', broker.replace(' - ext4', ' shared:1 - ext4')],
+    ] as [string, unknown][])
+      expect(
+        () =>
+          validateNamespaceRestoreKernelSnapshot(proof, namespaceChanged(f.actual, path, value)),
+        path,
+      ).toThrow();
+  });
+  it('admits the one frozen native patch atomically without adding mobile paths to ordinary allowlists', () => {
+    const rows = namespaceFixture().nativePatch.map((v) => ({ ...v }));
+    expect(rows).toHaveLength(20);
+    expect(() => validateMigrationControllerClosure(rows)).not.toThrow();
+    expect(() => validateApiWorkerControllerDelta(rows)).not.toThrow();
+    const invalid = [
+      rows.slice(1),
+      [...rows, rows[0]],
+      ...rows.map((row, index) =>
+        rows.map((v, i) => (i === index ? { ...row, newOid: 'f'.repeat(40) } : v)),
+      ),
+      [{ ...rows[0], newMode: '100755' }, ...rows.slice(1)],
+      [{ ...rows[0], path: 'apps/mobile/src/foreign.ts' }, ...rows.slice(1)],
+    ];
+    for (const value of invalid) {
+      expect(() => validateMigrationControllerClosure(value)).toThrow();
+      expect(() => validateApiWorkerControllerDelta(value)).toThrow();
+    }
   });
 });

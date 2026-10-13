@@ -128,7 +128,7 @@ export function validateMigrationBackupRestoreReference(
   operationBytes: Buffer,
   expected: unknown,
   reference: unknown,
-): 'disk' | 'legacy';
+): 'disk' | 'namespace' | 'legacy';
 export function validateLegacyBackupRestoreMounts(row: unknown): void;
 
 export function validateDiskRestoreToolBytes(
@@ -136,3 +136,35 @@ export function validateDiskRestoreToolBytes(
   sourceBytes: Buffer,
   expectedSha256: string,
 ): void;
+
+/** Independent read-only /proc, cgroup, unit and private-socket proof; never excludes a host container. */
+export interface NamespaceRestoreProcess {
+  pid: number;
+  startTicks: string;
+  executable: string;
+  cmdline: string[];
+  mountNamespace: number;
+  uid: number[];
+  gid: number[];
+  cgroup: string;
+}
+export interface NamespaceRestoreKernelSnapshot {
+  selfNamespace: number;
+  afterSelfNamespace: number;
+  processes: Record<
+    'broker' | 'daemon' | 'source' | 'container' | 'containerd' | 'shim',
+    NamespaceRestoreProcess
+  >;
+  afterProcesses: NamespaceRestoreKernelSnapshot['processes'];
+  mountinfo: Record<keyof NamespaceRestoreKernelSnapshot['processes'], string>;
+  socket: Record<'dev' | 'ino' | 'uid' | 'gid' | 'mode' | 'nlink', number>;
+  sourceImage: unknown;
+  privateImage: unknown;
+  container: unknown;
+  runtime: unknown;
+  afterRuntime: unknown;
+}
+export function validateNamespaceRestoreKernelSnapshot(
+  attestation: unknown,
+  actual: unknown,
+): asserts actual is NamespaceRestoreKernelSnapshot;

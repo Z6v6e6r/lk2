@@ -45,6 +45,29 @@ API_WORKER_CI_READER_PATCH = {
     'scripts/timeweb-api-worker-upgrade.test.ts': {'path': 'scripts/timeweb-api-worker-upgrade.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'e446cc167a63ee54e9352dc38589e414f1aa7247', 'newOid': '02f3927005dac547fb74b6955e2ddc69ee4d2deb'},
     'scripts/timeweb-api-worker-adapter.test.ts': {'path': 'scripts/timeweb-api-worker-adapter.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'dba09b8571260d1cb817971ce6a15a42a70f1032', 'newOid': '57eb46c5588837b3177759f2aca6e6724651a382'},
 }
+# Independent duplicate of the frozen atomic native source tuple.
+API_WORKER_NATIVE_BOOKINGS_PATCH = {
+    'apps/mobile/android/app/build.gradle': {'path': 'apps/mobile/android/app/build.gradle', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'b5451e4334bc50c083e6b0d45cecf156d7e632e3', 'newOid': '70eb7c9f09bea9bc0aa8c26a67ae31c7595e7f15'},
+    'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidHttpSenderTest.java': {'path': 'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidHttpSenderTest.java', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '03b6967ef337078b1359ea9109440fd4d41b910b', 'newOid': 'ea5763e2fce0556717f01be1e1db03200f110755'},
+    'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidSessionTest.java': {'path': 'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidSessionTest.java', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '35a8e40c86060544e6454949ee72db293e8b5991', 'newOid': 'd60f3d8166b3129b89c1e415be5eac656c7fbea2'},
+    'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidUpcomingBookingsRefreshTest.java': {'path': 'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidUpcomingBookingsRefreshTest.java', 'status': 'A', 'oldMode': '000000', 'newMode': '100644', 'oldOid': '0000000000000000000000000000000000000000', 'newOid': '6772d0dd08f779352a962128d4a062af3e012e4a'},
+    'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidHttpSender.java': {'path': 'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidHttpSender.java', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'c468bcaeb1c5826de2e6e8983495eed59f9a69a6', 'newOid': 'e3610c361644fd57a48eb5e5602ba912ed1ab512'},
+    'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidSessionEngine.java': {'path': 'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidSessionEngine.java', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '1f939e114deb2ad04fd0be4ec7231b93a4431897', 'newOid': '58101384544473def5819106996529406dd29f13'},
+    'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidUpcomingBookingsRefresh.java': {'path': 'apps/mobile/android/app/src/main/java/ru/padlhub/app/AndroidUpcomingBookingsRefresh.java', 'status': 'A', 'oldMode': '000000', 'newMode': '100644', 'oldOid': '0000000000000000000000000000000000000000', 'newOid': 'e55ef5f508ce9e99e16068adee251f1d08231ad0'},
+    'apps/mobile/android/app/src/main/java/ru/padlhub/app/PadlHubAndroidSessionPlugin.java': {'path': 'apps/mobile/android/app/src/main/java/ru/padlhub/app/PadlHubAndroidSessionPlugin.java', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'd82ccb21a299ddd96c53452f2c41c33c65250430', 'newOid': 'e0f4f8cdbc016dfaeb3aca9deaaa43323ae046db'},
+    'apps/mobile/src/MobileApp.tsx': {'path': 'apps/mobile/src/MobileApp.tsx', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'fa598c298bfa8d95bfc8981f2e49c08862946299', 'newOid': '7e1188cc9493c6347f0ca84ca5c6cd38ad245144'},
+    'apps/mobile/src/MobileSession.test.tsx': {'path': 'apps/mobile/src/MobileSession.test.tsx', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ca26a53526fd7488e57c6200f924ec754947e7b2', 'newOid': 'fa26d6ad05715ece43ccdc904e9cc87c0f7f5817'},
+    'apps/mobile/src/native-api-fetch.test.ts': {'path': 'apps/mobile/src/native-api-fetch.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'fd7a348bd29a52f9f8beb79c1694c7e4f0b5b6ef', 'newOid': 'a93a254f179a52294ef0ce5e5594a9bb082ae8d7'},
+    'apps/mobile/src/native-api-fetch.ts': {'path': 'apps/mobile/src/native-api-fetch.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '518a35a52876e49f873b1f3c0905f7672f9d5ff3', 'newOid': '98ea1bf70dee6c3a29d35ed0d6afc091f2bbe32f'},
+    'apps/mobile/src/native-bookings-refresh.test.ts': {'path': 'apps/mobile/src/native-bookings-refresh.test.ts', 'status': 'A', 'oldMode': '000000', 'newMode': '100644', 'oldOid': '0000000000000000000000000000000000000000', 'newOid': 'f0bc5b853fc95a220f3795b091e7a26d6dfd8e44'},
+    'apps/mobile/src/native-gateway.test.ts': {'path': 'apps/mobile/src/native-gateway.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '7ef122ec4302588ca5c2fd75c0881376a343a182', 'newOid': '8de932302903de5bd919721b281cb20e8200ac33'},
+    'apps/mobile/src/session-failure.test.ts': {'path': 'apps/mobile/src/session-failure.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'd7d19d39357faea456c02516901a6f03fa9896f3', 'newOid': '4f43d53c2319e1b304b16948d3af44e7857740f1'},
+    'apps/mobile/src/session-failure.ts': {'path': 'apps/mobile/src/session-failure.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ced9a4274220ddbfffca756d46b863c86681f210', 'newOid': '00cb9921dd089da76ed4f7520694bb1433045a07'},
+    'docs/adr/0005-viva-user-delegation-and-direct-transport.md': {'path': 'docs/adr/0005-viva-user-delegation-and-direct-transport.md', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '34869e776f45d54cf2a33cbb481013693820b91d', 'newOid': 'bb1f2c6f137392fb3533bd5f1969217bf3d2c487'},
+    'docs/adr/0020-client-assisted-booking-screen-snapshots.md': {'path': 'docs/adr/0020-client-assisted-booking-screen-snapshots.md', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '9adc609998839ae23e00e5b6f27362d07de7b73c', 'newOid': '3cc2a9089ebb201268ba138d64b191524426f14d'},
+    'docs/adr/0023-browser-only-viva-end-user-transport.md': {'path': 'docs/adr/0023-browser-only-viva-end-user-transport.md', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '8f875c98a5524a25497bbf26e7c983bae5804530', 'newOid': 'b7bde1f395ae00ec5b7f195065d752c4a00c3af2'},
+    'docs/runbooks/android-development.md': {'path': 'docs/runbooks/android-development.md', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6ee27c15223fda5d3239db8d1693ea727b69e355', 'newOid': 'c98d269710dabda6924e1524c7d9a45a16d407f4'},
+}
 PG_ID = 'fe614a3312e446e8036243be3781590bfe90b5da037b83580abd410d4514e84c'
 PG_IMAGE = 'docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685'
 API_BASELINE = {'id': '6f7197c220269281e0268f1fbe9881a3cb6fa863c3a5a928ca2d47ef363132c0',
@@ -77,6 +100,9 @@ RESTORE_FORMAT = '{"Id":{{json .Id}},"Config":{"Image":{{json .Config.Image}},"U
 # Two manual-only schemas. Ordinary Web V1 and API/Worker V2 remain tmpfs-only.
 DISK_PRE_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_V1'
 DISK_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_V1'
+NS_PRE_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_NAMESPACE_V2'
+NS_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_NAMESPACE_V2'
+NS_DAEMON_MEMORY = 2 * 1024 ** 3
 DISK_MEMORY = 2 * 1024 ** 3
 DISK_HEADROOM = 5 * 1024 ** 3
 DISK_COMMON_TMPFS = {'/var/run/postgresql': 'rw,nosuid,nodev,noexec,mode=1777,size=16777216',
@@ -90,11 +116,11 @@ DISK_TOOLS = {'loop': '/usr/sbin/losetup', 'crypt': '/usr/sbin/cryptsetup',
 
 
 def is_disk_operation(op):
-    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA)
+    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA)
 
 
 def disk_ledger_sha(op):
-    return API_WORKER_PRE_LEDGER_SHA256 if op['schema'] == DISK_PRE_SCHEMA else API_WORKER_LEDGER_SHA256
+    return API_WORKER_PRE_LEDGER_SHA256 if op['schema'] in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA) else API_WORKER_LEDGER_SHA256
 
 
 def disk_sizing(database_bytes, available_memory, free_disk, after_dump=False):
@@ -370,7 +396,7 @@ def disk_mount(plan, mapper, optional=False, complete=True):
          and set(row.get('options', '').split(',')) == {'rw', 'nosuid', 'nodev', 'noexec', 'noatime'}, 'DISK_MOUNT_CUSTODY')
     info = Path(plan['mount']).lstat()
     need(info.st_dev == os.makedev(mapper['device'], mapper['minor']) and info.st_uid == info.st_gid == 0
-         and stat.S_ISDIR(info.st_mode) and (stat.S_IMODE(info.st_mode) == 0o1777 if complete else stat.S_IMODE(info.st_mode) in (0o700, 0o755, 0o1777)), 'DISK_MOUNT_METADATA')
+         and stat.S_ISDIR(info.st_mode) and (stat.S_IMODE(info.st_mode) == (0o700 if plan['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2' else 0o1777) if complete else stat.S_IMODE(info.st_mode) in (0o700, 0o755, 0o1777)), 'DISK_MOUNT_METADATA')
     uuid = disk_tool('blkid', ['--probe', '--match-tag', 'UUID', '--output', 'value', plan['mapperPath']], 'DISK_FILESYSTEM_UUID').decode().strip()
     need(uuid == plan['filesystemUuid'], 'DISK_FILESYSTEM_UUID')
     # PGDATA creation changes root link count; device/inode/owner/mode identify the mount.
@@ -555,6 +581,645 @@ def disk_verify_reference(op, request_bytes, file_sha):
 
 DISK_RESTORE_FORMAT = RESTORE_FORMAT.replace('"State":{"Status":{{json .State.Status}}}', '"State":{"Status":{{json .State.Status}},"Pid":{{json .State.Pid}},"StartedAt":{{json .State.StartedAt}}}').replace('"Labels":{{json .Config.Labels}}}', '"Labels":{{json .Config.Labels}},"Env":{{json .Config.Env}},"Cmd":{{json .Config.Cmd}},"Entrypoint":{{json .Config.Entrypoint}}}').replace('"IpcMode":{{json .HostConfig.IpcMode}}}', '"IpcMode":{{json .HostConfig.IpcMode}},"LogConfig":{{json .HostConfig.LogConfig}}}')
 
+# Namespace V2 is deliberately separate from the existing tmpfs/DISK V1 contracts.
+def is_namespace_operation(op):
+    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA)
+
+
+NS_IMAGE_FORMAT = '{"Id":{{json .Id}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}},"Size":{{json .Size}},"RootFS":{{json .RootFS}},"Env":{{json .Config.Env}}}'
+NS_RESTORE_FORMAT = DISK_RESTORE_FORMAT.replace('{"Id":', '{"Image":{{json .Image}},"Id":', 1).replace('"LogConfig":{{json .HostConfig.LogConfig}}}', '"LogConfig":{{json .HostConfig.LogConfig}},"CgroupParent":{{json .HostConfig.CgroupParent}},"CgroupnsMode":{{json .HostConfig.CgroupnsMode}}}')
+
+
+def namespace_image(value, source=None):
+    exact(value, ['Id', 'Os', 'Architecture', 'RepoDigests', 'Size', 'RootFS', 'Env'])
+    exact(value['RootFS'], ['Type', 'Layers'])
+    need(re.fullmatch(r'sha256:[a-f0-9]{64}', value['Id'] or '')
+         and value['Os'] == 'linux' and value['Architecture'] == 'amd64'
+         and type(value['Size']) is int and 0 < value['Size'] <= 2 * 1024**3
+         and value['RootFS']['Type'] == 'layers' and isinstance(value['RootFS']['Layers'], list)
+         and 0 < len(value['RootFS']['Layers']) <= 128
+         and all(re.fullmatch(r'sha256:[a-f0-9]{64}', v or '') for v in value['RootFS']['Layers']), 'NS_IMAGE')
+    need(isinstance(value['Env'], list) and len(value['Env']) <= 256 and all(isinstance(v, str) and '=' in v for v in value['Env'])
+         and len({v.split('=',1)[0] for v in value['Env']}) == len(value['Env']), 'NS_IMAGE_ENV')
+    if source is None:
+        need(restore_image_admitted(value), 'NS_IMAGE_SOURCE')
+    else:
+        # docker save/load need not retain RepoDigests. The config ID and ordered
+        # layer chain bind the import to the independently admitted source digest.
+        need(all(value[k] == source[k] for k in ['Id', 'Os', 'Architecture', 'Size', 'RootFS', 'Env']), 'NS_IMAGE_IMPORT')
+    return value
+
+
+def namespace_sizing(database_bytes, memory, free, image, after_dump=False):
+    namespace_image(image)
+    need(memory >= DISK_MEMORY + NS_DAEMON_MEMORY + 2 * 1024**3, 'NS_MEMORY_CAPACITY')
+    base = disk_sizing(database_bytes, memory, free, after_dump=False)
+    runtime = max(512 * 1024**2, image['Size'] * 3 + 256 * 1024**2)
+    total = base['restoreDataBytes'] + runtime
+    base['imageBytes'] = ((total + max(512 * 1024**2, (total + 19)//20) + 4*1024**2-1)//(4*1024**2))*(4*1024**2)
+    need(free >= (base['imageBytes'] if after_dump else base['dumpLimitBytes']) + DISK_HEADROOM, 'NS_DISK_CAPACITY')
+    return base
+
+
+def namespace_plan(op, raw, sizing, image):
+    need(is_namespace_operation(op), 'NS_OPERATION')
+    namespace_image(image)
+    p = disk_plan(op, raw, sizing)
+    p['schema'] = 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2'
+    root, control = p['mount'] + '/.runtime', p['work'] + '/runtime-control'
+    p['isolation'] = {'strategy': 'SYSTEMD_SUPERVISOR_PRIVATE_MOUNT_V1',
+        'unit': 'phub-disk-runtime-' + p['operationSha256'][:24] + '.service',
+        'slice': 'phubdiskrestore' + p['operationSha256'][:24] + '.slice',
+        'controlRoot': control, 'pgdata': p['mount'] + '/pgdata',
+        'dataRoot': root + '/docker-data', 'execRoot': root + '/docker-exec',
+        'socket': root + '/docker.sock', 'pidFile': root + '/dockerd.pid',
+        'configFile': control + '/daemon.json', 'image': image,
+        'imageTransferLimitBytes': image['Size'] * 2 + 512*1024**2,
+        'daemonMemoryBytes': NS_DAEMON_MEMORY, 'daemonPids': 256, 'daemonNanoCpus': 1000000000}
+    return p
+
+
+def namespace_config(p):
+    r = p['isolation']; suffix = p['operationSha256'][:24]
+    return {'hosts': ['unix://' + r['socket']], 'pidfile': r['pidFile'],
+        'data-root': r['dataRoot'], 'exec-root': r['execRoot'], 'storage-driver': 'vfs',
+        'bridge': 'none', 'iptables': False, 'ip6tables': False, 'ip-forward': False,
+        'ip-masq': False, 'userland-proxy': False, 'live-restore': False,
+        'shutdown-timeout': 30, 'group': 'root', 'log-driver': 'none',
+        'exec-opts': ['native.cgroupdriver=systemd'], 'cgroup-parent': r['slice'],
+        'default-cgroupns-mode': 'private', 'default-runtime': 'runc', 'no-new-privileges': True,
+        'containerd-namespace': 'phub-' + suffix, 'containerd-plugins-namespace': 'phub-plugins-' + suffix,
+        'features': {'containerd-snapshotter': False}}
+
+
+def namespace_unit_args(p, tool):
+    r = p['isolation']
+    props = {'Restart': 'no', 'Delegate': 'yes', 'KillMode': 'control-group',
+        'SendSIGKILL': 'yes', 'TimeoutStopSec': '30s', 'MemoryAccounting': 'yes', 'MemoryMax': str(NS_DAEMON_MEMORY),
+        'MemorySwapMax': '0', 'TasksAccounting': 'yes', 'TasksMax': '256',
+        'CPUAccounting': 'yes', 'CPUQuota': '100%', 'LimitCORE': '0', 'UMask': '0077',
+        'StandardInput': 'null', 'StandardOutput': 'null', 'StandardError': 'null'}
+    return ['/usr/bin/systemd-run', '--unit=' + r['unit'], '--service-type=exec', '--collect',
+        '--quiet', '--slice=' + r['slice'], '--uid=root', '--gid=root', '--working-directory=' + p['work'],
+        *['--property=' + k + '=' + v for k, v in props.items()],
+        '--setenv=PATH=/usr/bin:/bin', '--setenv=HOME=/root', '--setenv=LANG=C', '--setenv=LC_ALL=C',
+        '/usr/bin/python3', '-I', '-S', '-B', str(tool), '--disk-runtime-supervisor', str(REQUEST), p['operationSha256']]
+
+
+def namespace_process(pid, root=True):
+    need(type(pid) is int and 0 < pid < 2**31, 'NS_PID')
+    base = Path('/proc') / str(pid)
+    start = (base/'stat').read_text().rsplit(')', 1)[1].split()[19]
+    status = (base/'status').read_text()
+    uids = re.search(r'^Uid:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)$', status, re.M)
+    gids = re.search(r'^Gid:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)$', status, re.M)
+    need(uids is not None and gids is not None, 'NS_PROCESS_OWNER')
+    uid, gid = [int(v) for v in uids.groups()], [int(v) for v in gids.groups()]
+    need((uid == gid == [0]*4) if root else all(v != 0 for v in uid + gid), 'NS_PROCESS_OWNER')
+    argv = (base/'cmdline').read_bytes()
+    need(0 < len(argv) <= 65536 and argv.endswith(b'\0'), 'NS_PROCESS_ARGV')
+    value = {'pid': pid, 'startTicks': start, 'executable': os.readlink(base/'exe'),
+        'cmdline': argv[:-1].decode().split('\0'), 'mountNamespace': os.stat(base/'ns/mnt').st_ino,
+        'uid': uid, 'gid': gid, 'cgroup': (base/'cgroup').read_text().strip()}
+    need((base/'stat').read_text().rsplit(')', 1)[1].split()[19] == start
+         and os.stat(base/'ns/mnt').st_ino == value['mountNamespace'], 'NS_PROCESS_DRIFT')
+    return value
+
+
+def namespace_source_daemon():
+    secure('/usr/bin/systemctl'); secure('/usr/bin/dockerd')
+    raw = command(['/usr/bin/systemctl', 'show', 'docker.service', '--property=MainPID', '--value'], 'NS_SOURCE_DAEMON').decode().strip()
+    need(re.fullmatch(r'[1-9][0-9]*', raw), 'NS_SOURCE_DAEMON')
+    v = namespace_process(int(raw)); need(v['executable'] == '/usr/bin/dockerd', 'NS_SOURCE_DAEMON')
+    return v
+
+
+NS_UNIT_KEYS = ['LoadState', 'ActiveState', 'SubState', 'MainPID', 'InvocationID', 'ControlGroup',
+    'MemoryMax', 'MemorySwapMax', 'TasksMax', 'Delegate', 'CPUQuotaPerSecUSec', 'KillMode',
+    'SendSIGKILL', 'Restart', 'TimeoutStopUSec', 'LimitCORE', 'UMask', 'User', 'Group',
+    'WorkingDirectory', 'StandardInput', 'StandardOutput', 'StandardError', 'Slice',
+    'Transient', 'NRestarts', 'Result', 'ExecMainCode', 'ExecMainStatus']
+NS_SLICE_KEYS = ['LoadState', 'ActiveState', 'ControlGroup', 'Transient', 'MemoryMax', 'MemorySwapMax', 'TasksMax', 'CPUQuotaPerSecUSec']
+
+
+def namespace_show(name, keys):
+    raw = command(['/usr/bin/systemctl', 'show', name, *['--property=' + v for v in keys]], 'NS_UNIT_READ').decode()
+    rows = [line.split('=', 1) for line in raw.splitlines()]
+    need(len(rows) == len(keys) and len({v[0] for v in rows}) == len(keys), 'NS_UNIT_FIELDS')
+    value = dict(rows); need(set(value) == set(keys), 'NS_UNIT_FIELDS'); return value
+
+
+def namespace_unit(p):
+    return namespace_show(p['isolation']['unit'], NS_UNIT_KEYS)
+
+
+def namespace_bounds(group, memory, pids, cpus):
+    need(re.fullmatch(r'/phubdiskrestore[a-f0-9]{24}\.slice(?:/phub-disk-runtime-[a-f0-9]{24}\.service)?', group), 'NS_CGROUP_PATH')
+    path = Path('/sys/fs/cgroup') / group.lstrip('/')
+    result = {'identity': storage_identity(secure(path, 'dir')), 'path': str(path)}
+    for filename, expected in [('memory.max', str(memory)), ('memory.swap.max', '0'), ('pids.max', str(pids))]:
+        v = (path/filename).read_text().strip(); need(v == expected, 'NS_CGROUP_BOUND'); result[filename] = v
+    quota = (path/'cpu.max').read_text().strip().split()
+    need(len(quota) == 2 and all(v.isdigit() and int(v)>0 for v in quota) and int(quota[0]) == cpus*int(quota[1]), 'NS_CGROUP_CPU')
+    result['cpu.max'] = ' '.join(quota); return result
+
+
+def namespace_slice(p):
+    r = p['isolation']; u = namespace_show(r['slice'], NS_SLICE_KEYS)
+    need(u == {'LoadState':'loaded', 'ActiveState':'active', 'ControlGroup':'/'+r['slice'], 'Transient':'yes',
+        'MemoryMax':str(2*NS_DAEMON_MEMORY), 'MemorySwapMax':'0', 'TasksMax':'384', 'CPUQuotaPerSecUSec':'2s'}, 'NS_SLICE_CUSTODY')
+    return {'unit':u, 'bounds':namespace_bounds(u['ControlGroup'], 2*NS_DAEMON_MEMORY, 384, 2)}
+
+
+def namespace_slice_args(p):
+    # A transient unit via typed D-Bus properties: no persistent runtime drop-in.
+    return ['/usr/bin/busctl', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
+        'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))', p['isolation']['slice'], 'fail', '9',
+        'Description','s','PadlHub owned disk restore '+p['operationSha256'],
+        'MemoryAccounting','b','true','MemoryMax','t',str(2*NS_DAEMON_MEMORY),'MemorySwapMax','t','0',
+        'TasksAccounting','b','true','TasksMax','t','384','CPUAccounting','b','true','CPUQuotaPerSecUSec','t','2000000',
+        'CollectMode','s','inactive-or-failed','0']
+
+
+def namespace_members(group):
+    path = Path('/sys/fs/cgroup') / group.lstrip('/')
+    if not path.exists():return []
+    ids = []
+    for file in path.rglob('cgroup.procs'):
+        ids += file.read_text().split()
+    need(len(ids)==len(set(ids)) and all(re.fullmatch(r'[1-9][0-9]*', v) for v in ids), 'NS_CGROUP_MEMBERS')
+    return sorted(int(v) for v in ids)
+
+
+def namespace_frozen_source(p):
+    event = DiskJournal(p['work'], p['operationSha256']).find('SOURCE_DAEMON')
+    need(event is not None and event['identity'] == namespace_source_daemon(), 'NS_SOURCE_DAEMON_DRIFT')
+    return event['identity']
+
+
+def namespace_control(p, name):
+    need(name in ('namespace-receipt.json', 'daemon.json', 'daemon-start.json', 'daemon-receipt.json',
+                  'daemon-stop.json', 'daemon-exit.json', 'supervisor-terminal.json'), 'NS_CONTROL_PATH')
+    return Path(p['isolation']['controlRoot']) / name
+
+
+def namespace_supervisor_identity(p, op):
+    value = namespace_unit(p)
+    need(value['LoadState'] == 'loaded' and value['ActiveState'] == 'active'
+         and value['SubState'] == 'running' and value['Delegate'] == 'yes'
+         and value['KillMode'] == 'control-group' and value['MemoryMax'] == str(NS_DAEMON_MEMORY)
+         and value['MemorySwapMax'] == '0' and value['TasksMax'] == '256'
+         and value['CPUQuotaPerSecUSec'] == '1s'
+         and re.fullmatch(r'[a-f0-9]{32}', value['InvocationID'] or '')
+         and value['ControlGroup'] == '/' + p['isolation']['slice'] + '/' + p['isolation']['unit']
+         and all(value[k] == v for k,v in {'SendSIGKILL':'yes','Restart':'no','TimeoutStopUSec':'30s','LimitCORE':'0',
+             'UMask':'0077','User':'root','Group':'root','WorkingDirectory':p['work'], 'StandardInput':'null',
+             'StandardOutput':'null','StandardError':'null','Slice':p['isolation']['slice'],'Transient':'yes',
+             'NRestarts':'0','Result':'success','ExecMainCode':'0','ExecMainStatus':'0'}.items()), 'NS_UNIT_CUSTODY')
+    process = namespace_process(int(value['MainPID']))
+    tool = str(ROOT/'operator/tools'/op['toolCommit']/'control-timeweb-database-backup.py')
+    need(process['executable'] == os.readlink('/proc/self/exe')
+         and process['cmdline'] == ['/usr/bin/python3', '-I', '-S', '-B', tool,
+             '--disk-runtime-supervisor', str(REQUEST), p['operationSha256']]
+         and process['cgroup'] == '0::' + value['ControlGroup'], 'NS_SUPERVISOR_CUSTODY')
+    return {'unit':value, 'process':process, 'bounds':namespace_bounds(value['ControlGroup'], NS_DAEMON_MEMORY,256,1),
+            'slice':namespace_slice(p)}
+
+
+def namespace_admission(p, op):
+    receipt = strict(read_secure(namespace_control(p, 'namespace-receipt.json')))
+    exact(receipt, ['schema', 'operationSha256', 'toolFileSha256', 'sourceDaemon', 'supervisor'])
+    need(receipt['schema'] == 'PHUB_TIMEWEB_PRIVATE_NAMESPACE_RECEIPT_V1'
+         and receipt['operationSha256'] == p['operationSha256']
+         and receipt['toolFileSha256'] == op['toolFileSha256']
+         and receipt['supervisor'] == namespace_supervisor_identity(p, op)
+         and receipt['sourceDaemon'] == namespace_frozen_source(p)
+         and receipt['sourceDaemon']['mountNamespace'] != receipt['supervisor']['process']['mountNamespace'], 'NS_RECEIPT_DRIFT')
+    return receipt
+
+
+def namespace_syscall(name, fd=None):
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    fn = getattr(libc, name); fn.argtypes = [ctypes.c_int] if name == 'unshare' else [ctypes.c_int, ctypes.c_int]; fn.restype = ctypes.c_int
+    need(fn(0x00020000) == 0 if name == 'unshare' else fn(fd, 0x00020000) == 0, 'NS_' + name.upper())
+
+
+@contextmanager
+def namespace_enter(p, op):
+    admission = namespace_admission(p, op); expected = admission['supervisor']['process']
+    host = os.open('/proc/self/ns/mnt', os.O_RDONLY | os.O_CLOEXEC); target = None; entered = False
+    try:
+        need(os.fstat(host).st_ino == admission['sourceDaemon']['mountNamespace'], 'NS_ATTACH_CALLER')
+        target = os.open('/proc/' + str(expected['pid']) + '/ns/mnt', os.O_RDONLY | os.O_CLOEXEC)
+        need(os.fstat(target).st_ino == expected['mountNamespace'] and namespace_admission(p, op) == admission, 'NS_ATTACH_DRIFT')
+        namespace_syscall('setns', target); entered = True; os.chdir('/')
+        need(os.stat('/proc/self/ns/mnt').st_ino == expected['mountNamespace'], 'NS_ATTACH_READBACK')
+        disk_private_parent(p); yield admission
+    finally:
+        try:
+            if entered:
+                namespace_syscall('setns', host); os.chdir('/')
+                need(os.stat('/proc/self/ns/mnt').st_ino == admission['sourceDaemon']['mountNamespace'], 'NS_RETURN_READBACK')
+        finally:
+            if target is not None:os.close(target)
+            os.close(host)
+
+
+def namespace_socket(p):
+    path = Path(p['isolation']['socket']); info = path.lstat()
+    need(stat.S_ISSOCK(info.st_mode) and info.st_uid == info.st_gid == 0
+         and stat.S_IMODE(info.st_mode) == 0o660 and info.st_nlink == 1, 'NS_SOCKET_CUSTODY')
+    for parent in path.parents:
+        secure(parent, 'dir')
+    return storage_identity(info)
+
+
+def namespace_docker(p, args, code='NS_DOCKER_READ', **kwargs):
+    # No overload, ambient socket or host fallback. Source reads remain docker().
+    namespace_socket(p)
+    return command(['/usr/bin/docker', '--host', 'unix://' + p['isolation']['socket'], *args], code,
+                   environment={**ENV, 'DOCKER_HOST': 'unix://' + p['isolation']['socket']}, **kwargs)
+
+
+def namespace_daemon_identity(p, op):
+    admission = namespace_admission(p, op)
+    need(os.stat('/proc/self/ns/mnt').st_ino == admission['supervisor']['process']['mountNamespace'], 'NS_CALLER_NAMESPACE')
+    path = Path(p['isolation']['pidFile']); raw = read_secure(path, 0o644).decode().strip()
+    need(re.fullmatch(r'[1-9][0-9]*', raw), 'NS_DAEMON_PID')
+    process = namespace_process(int(raw))
+    need(process['executable'] == '/usr/bin/dockerd'
+         and process['cmdline'] == ['/usr/bin/dockerd', '--config-file', p['isolation']['configFile']]
+         and process['mountNamespace'] == admission['supervisor']['process']['mountNamespace']
+         and process['cgroup'] == '0::' + admission['supervisor']['unit']['ControlGroup'], 'NS_DAEMON_CUSTODY')
+    need(strict(read_secure(namespace_control(p, 'daemon.json'))) == namespace_config(p), 'NS_DAEMON_CONFIG')
+    info = strict(namespace_docker(p, ['info', '--format', '{"DockerRootDir":{{json .DockerRootDir}},"Driver":{{json .Driver}},"CgroupDriver":{{json .CgroupDriver}},"LiveRestoreEnabled":{{json .LiveRestoreEnabled}}}']))
+    need(info == {'DockerRootDir': p['isolation']['dataRoot'], 'Driver': 'vfs', 'CgroupDriver': 'systemd', 'LiveRestoreEnabled': False}, 'NS_DAEMON_INFO')
+    return {'admission':admission, 'process':process, 'socket':namespace_socket(p), 'info':info,
+            'managed':namespace_managed(p, admission, process)}
+
+
+def namespace_managed(p, admission, daemon):
+    import tomllib
+    r = p['isolation']; broker = admission['supervisor']['process']; group = admission['supervisor']['unit']['ControlGroup']
+    members = [namespace_process(pid) for pid in namespace_members(group)]
+    need([v for v in members if v['pid']==broker['pid']]==[broker] and [v for v in members if v['pid']==daemon['pid']]==[daemon], 'NS_RUNTIME_MEMBERS')
+    children = [v for v in members if v['pid'] not in (broker['pid'], daemon['pid'])]
+    containerds = [v for v in children if v['executable']=='/usr/bin/containerd']
+    need(len(containerds)==1, 'NS_CONTAINERD_COUNT'); child = containerds[0]
+    path = r['execRoot']+'/containerd/containerd.toml'
+    need(child['cmdline'] in (['/usr/bin/containerd','--config',path], ['/usr/bin/containerd','--config',path,'--log-level','info']), 'NS_CONTAINERD_ARGV')
+    raw = read_secure(path, 0o600); cfg = tomllib.loads(raw.decode())
+    projection = {'version':cfg.get('version'), 'root':cfg.get('root'), 'state':cfg.get('state'),
+                  'address':cfg.get('grpc',{}).get('address'), 'disabledPlugins':cfg.get('disabled_plugins')}
+    need(projection['version']==2 and projection['root']==r['dataRoot']+'/containerd/daemon'
+         and projection['state']==r['execRoot']+'/containerd/daemon'
+         and projection['address']==r['execRoot']+'/containerd/containerd.sock'
+         and projection['disabledPlugins']==['cri'], 'NS_CONTAINERD_CONFIG')
+    # Reject external runtime configuration, remote sockets, imports and custom plugins.
+    need(not cfg.get('imports') and not cfg.get('proxy_plugins'), 'NS_CONTAINERD_EXTERNAL')
+    shims = [v for v in children if v is not child]
+    for v in children:
+        need(v['mountNamespace']==broker['mountNamespace'] and v['cgroup']=='0::'+group, 'NS_MANAGED_CUSTODY')
+    for v in shims:
+        argv=v['cmdline']
+        need(v['executable']=='/usr/bin/containerd-shim-runc-v2' and len(argv)==7
+             and argv[:3]==['/usr/bin/containerd-shim-runc-v2','-namespace','phub-'+p['operationSha256'][:24]]
+             and argv[3]=='-id' and HASH.fullmatch(argv[4]) and argv[5:]==['-address',projection['address']], 'NS_SHIM_CUSTODY')
+    need(len(shims)<=1 and namespace_members(group)==sorted(v['pid'] for v in members)
+         and all(namespace_process(v['pid'])==v for v in members), 'NS_MANAGED_DRIFT')
+    return {'containerd':child, 'config':projection, 'configSha256':digest(raw), 'shims':shims}
+
+
+def namespace_control_value(p, name, schema, fields):
+    value = strict(read_secure(namespace_control(p,name))); exact(value, ['schema','operationSha256','planSha256',*fields])
+    need(value['schema']==schema and value['operationSha256']==p['operationSha256']
+         and value['planSha256']==digest(read_secure(Path(p['work'])/'disk-plan.json')), 'NS_CONTROL_DRIFT')
+    return value
+
+
+def namespace_wait(path, predicate, seconds=45):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if path.exists():
+            value = strict(read_secure(path)); need(predicate(value), 'NS_ACK_DRIFT'); return value
+        time.sleep(0.2)
+    raise Stop('NS_ACK_UNKNOWN')
+
+
+def namespace_start(p, op, journal):
+    for tool in ['/usr/bin/busctl', '/usr/bin/containerd-shim-runc-v2', '/usr/bin/runc', '/usr/bin/systemd-run', '/usr/bin/systemctl', '/usr/bin/docker', '/usr/bin/dockerd', '/usr/bin/containerd']:
+        need(stat.S_IMODE(secure(tool).st_mode) & 0o111, 'NS_TOOL_CUSTODY')
+    need(namespace_unit(p)['LoadState'] == 'not-found', 'NS_UNIT_EXISTS')
+    Path(p['isolation']['controlRoot']).mkdir(mode=0o700); sync_directory(p['work'])
+    need(namespace_show(p['isolation']['slice'], NS_SLICE_KEYS)['LoadState'] == 'not-found', 'NS_SLICE_EXISTS')
+    namespace_frozen_source(p)
+    journal.add('NAMESPACE_SLICE_START_INTENT')
+    command(namespace_slice_args(p), 'NS_SLICE_START', timeout=30)
+    journal.add('NAMESPACE_SLICE_READY', identity=namespace_slice(p))
+    journal.add('NAMESPACE_UNIT_START_INTENT')
+    tool = ROOT/'operator/tools'/op['toolCommit']/'control-timeweb-database-backup.py'
+    command(namespace_unit_args(p, tool), 'NS_UNIT_START', timeout=30)
+    namespace_wait(namespace_control(p, 'namespace-receipt.json'), lambda v: v['operationSha256'] == p['operationSha256'])
+    value = namespace_admission(p, op); journal.add('NAMESPACE_READY', receipt=value)
+
+
+def namespace_daemon_start(p, op, journal):
+    need(namespace_admission(p, op) == journal.find('NAMESPACE_READY')['receipt'], 'NS_START_DRIFT')
+    Path(p['isolation']['pgdata']).mkdir(mode=0o1777); os.chmod(p['isolation']['pgdata'], 0o1777)
+    root = Path(p['isolation']['dataRoot']).parent; root.mkdir(mode=0o700)
+    for path in [p['isolation']['dataRoot'], p['isolation']['execRoot']]:Path(path).mkdir(mode=0o700)
+    sync_directory(p['mount']); sync_directory(root)
+    config = encoded(namespace_config(p)); atomic_exclusive(namespace_control(p, 'daemon.json'), config)
+    journal.add('DAEMON_START_INTENT', configSha256=digest(config))
+    request = {'schema': 'PHUB_PRIVATE_DAEMON_START_V1', 'operationSha256': p['operationSha256'],
+               'planSha256': digest(read_secure(Path(p['work'])/'disk-plan.json')), 'configSha256': digest(config)}
+    atomic_exclusive(namespace_control(p, 'daemon-start.json'), encoded(request))
+    namespace_wait(namespace_control(p, 'daemon-receipt.json'), lambda v: v['operationSha256'] == p['operationSha256'])
+    identity = namespace_daemon_identity(p, op)
+    receipt = namespace_control_value(p,'daemon-receipt.json','PHUB_PRIVATE_DAEMON_RECEIPT_V1',['identity'])
+    need(receipt['identity']==identity, 'NS_DAEMON_RECEIPT_DRIFT')
+    journal.add('DAEMON_READY', identity=identity)
+
+
+def namespace_client_death(parent):
+    import ctypes
+    libc=ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, signal.SIGKILL, 0, 0, 0)!=0 or os.getppid()!=parent:os._exit(125)
+
+
+def namespace_image_transfer(p, op, journal):
+    namespace_daemon_identity(p, op)
+    frozen = namespace_frozen_source(p)
+    source = namespace_image(strict(docker(['image', 'inspect', '--format', NS_IMAGE_FORMAT, PG_IMAGE])))
+    need(source == p['isolation']['image'], 'NS_SOURCE_IMAGE_DRIFT')
+    journal.add('IMAGE_TRANSFER_INTENT')
+    # Streaming relay: no temporary tar, unbounded capture, shell or secret-bearing args.
+    client_parent=os.getpid()
+    save = subprocess.Popen(['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock', 'image', 'save', PG_IMAGE],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env=ENV, close_fds=True, preexec_fn=lambda:namespace_client_death(client_parent))
+    load = subprocess.Popen(['/usr/bin/docker', '--host', 'unix://' + p['isolation']['socket'], 'image', 'load'],
+                            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=ENV, close_fds=True, preexec_fn=lambda:namespace_client_death(client_parent))
+    import selectors
+    selector = selectors.DefaultSelector(); selector.register(save.stdout, selectors.EVENT_READ); selector.register(load.stdin, selectors.EVENT_WRITE)
+    total, pending, eof, deadline = 0, b'', False, time.monotonic() + 120
+    try:
+        os.set_blocking(save.stdout.fileno(), False); os.set_blocking(load.stdin.fileno(), False)
+        while not eof or pending:
+            need(time.monotonic() < deadline and load.poll() is None, 'NS_IMAGE_TRANSFER_TIMEOUT')
+            for key, _ in selector.select(0.2):
+                if key.fileobj is save.stdout and not pending and not eof:
+                    chunk = os.read(save.stdout.fileno(), 65536)
+                    if not chunk:eof = True; selector.unregister(save.stdout)
+                    else:
+                        total += len(chunk); need(total <= p['isolation']['imageTransferLimitBytes'], 'NS_IMAGE_TRANSFER_LIMIT'); pending = chunk
+                elif key.fileobj is load.stdin and pending:
+                    pending = pending[os.write(load.stdin.fileno(), pending):]
+        load.stdin.close(); need(save.wait(timeout=15) == 0 and load.wait(timeout=30) == 0, 'NS_IMAGE_TRANSFER')
+    finally:
+        selector.close()
+        for proc in [save, load]:
+            if proc.poll() is None:proc.kill()
+            proc.wait(timeout=15)
+        save.stdout.close()
+        if not load.stdin.closed:load.stdin.close()
+    need(namespace_frozen_source(p)==frozen and namespace_image(strict(docker(['image','inspect','--format',NS_IMAGE_FORMAT,PG_IMAGE])))==source, 'NS_TRANSFER_SOURCE_DRIFT')
+    imported = namespace_image(strict(namespace_docker(p, ['image', 'inspect', '--format', NS_IMAGE_FORMAT, source['Id']])), source)
+    need(os.statvfs(p['mount']).f_bavail * os.statvfs(p['mount']).f_frsize >= p['restoreDataBytes'], 'NS_RESTORE_CAPACITY')
+    journal.add('IMAGE_LOADED', source=source, imported=imported)
+
+
+def namespace_container_args(p):
+    value = {**p, 'mount': p['isolation']['pgdata']}; args = disk_container_args(value)
+    args[args.index(PG_IMAGE)] = p['isolation']['image']['Id']
+    args[1:1] = ['--pull', 'never', '--cgroup-parent', p['isolation']['slice'], '--cgroupns', 'private']
+    return args
+
+
+def namespace_container_lookup(p):
+    ids = namespace_docker(p, ['ps', '-aq', '--no-trunc']).decode().split()
+    need(len(ids) <= 1 and all(HASH.fullmatch(v) for v in ids), 'NS_CONTAINER_COUNT')
+    if not ids:return None
+    row = strict(namespace_docker(p, ['inspect', '--format', NS_RESTORE_FORMAT, ids[0]]))
+    need(row['Id'] == ids[0] and row['Image'] == row['Config']['Image'] == p['isolation']['image']['Id']
+         and row['HostConfig']['CgroupParent'] == p['isolation']['slice'] and row['HostConfig']['CgroupnsMode'] == 'private', 'NS_CONTAINER_IMAGE_CGROUP')
+    legacy = {**row, 'Config': {**row['Config'], 'Image': PG_IMAGE}}
+    validate_disk_container(legacy, {**p, 'mount': p['isolation']['pgdata']})
+    return row
+
+
+def namespace_running_attestation(p, op, journal):
+    isolation = namespace_daemon_identity(p, op); storage = disk_storage_attest(p, journal)
+    row = namespace_container_lookup(p); need(row is not None and row['State']['Status'] == 'running', 'NS_CONTAINER_STATE')
+    container = namespace_process(row['State']['Pid'], root=False)
+    need(container['cgroup'] == '0::/' + p['isolation']['slice'] + '/docker-' + row['Id'] + '.scope', 'NS_CONTAINER_CGROUP')
+    cg = Path('/sys/fs/cgroup')/p['isolation']['slice']/('docker-' + row['Id'] + '.scope')
+    container_bounds={k:(cg/k).read_text().strip() for k in ['memory.max','memory.swap.max','pids.max','cpu.max']}
+    for filename, expected in [('memory.max', str(DISK_MEMORY)), ('memory.swap.max', '0'), ('pids.max', '128')]:
+        need(container_bounds[filename]==expected, 'NS_CONTAINER_BOUND')
+    cpu = (cg/'cpu.max').read_text().strip().split(); need(len(cpu) == 2 and cpu[0].isdigit() and cpu[1].isdigit() and int(cpu[0]) == int(cpu[1]), 'NS_CONTAINER_CPU')
+    mapper = storage['mapper']; device = str(mapper['device']) + ':' + str(mapper['minor'])
+    def mount(pid, target, root):
+        rows = mountinfo_records(Path('/proc/'+str(pid)+'/mountinfo').read_text())
+        match = [v for v in rows if v['target'] == target]
+        need(len(match) == 1 and match[0]['device'] == device and match[0]['source'] == p['mapperPath']
+             and match[0]['root'] == root and match[0]['fstype'] == 'ext4' and not match[0]['optional']
+             and {'rw','nosuid','nodev','noexec'} <= set(match[0]['options'])
+             and not any(v['target'].startswith(target+'/') for v in rows), 'NS_KERNEL_MOUNT')
+        return match[0]
+    broker = isolation['admission']['supervisor']['process']; daemon = isolation['process']; source = isolation['admission']['sourceDaemon']
+    need(os.stat('/proc/self/ns/mnt').st_ino == broker['mountNamespace'] == daemon['mountNamespace']
+         and container['mountNamespace'] not in (broker['mountNamespace'], source['mountNamespace']), 'NS_KERNEL_NAMESPACE')
+    source_mounts = mountinfo_records(Path('/proc/'+str(source['pid'])+'/mountinfo').read_text())
+    need(not any(v['target'] == p['mount'] or v['target'].startswith(p['mount']+'/')
+                 or v['source'] == p['mapperPath'] or v['device'] == device for v in source_mounts), 'NS_HOST_MOUNT_LEAK')
+    managed = isolation['managed']
+    need(len(managed['shims'])==1 and managed['shims'][0]['cmdline'][4]==row['Id'], 'NS_RESTORE_SHIM')
+    container_members=[namespace_process(pid,root=False) for pid in namespace_members('/'+p['isolation']['slice']+'/docker-'+row['Id']+'.scope')]
+    need(container in container_members and all(v['mountNamespace']==container['mountNamespace'] and v['cgroup']==container['cgroup'] for v in container_members), 'NS_CONTAINER_MEMBERS')
+    kernel = {'containerProcess': container, 'containerBounds':container_bounds, 'containerMembers':container_members, 'brokerMount': mount(broker['pid'], p['mount'], '/'),
+              'daemonMount': mount(daemon['pid'], p['mount'], '/'),
+              'containerMount': mount(container['pid'], '/var/lib/postgresql/data', '/pgdata')}
+    projection = disk_container_projection(row); projection['Image'] = row['Image']
+    projection['HostConfig'].update(CgroupParent=p['isolation']['slice'], CgroupnsMode='private')
+    need(namespace_daemon_identity(p, op) == isolation and namespace_container_lookup(p) == row
+         and namespace_process(container['pid'],root=False)==container
+         and [namespace_process(v['pid'],root=False) for v in container_members]==container_members, 'NS_ATTESTATION_DRIFT')
+    return {'storage': storage, 'isolation': isolation, 'kernel': kernel, 'container': projection,
+            'image': {k:journal.find('IMAGE_LOADED')[k] for k in ['source','imported']}}
+
+
+def namespace_daemon_absent(p, op, identity=None):
+    need(not os.path.lexists(p['isolation']['socket']) and not os.path.lexists(p['isolation']['pidFile']), 'NS_DAEMON_STOP_UNPROVEN')
+    unit=namespace_supervisor_identity(p,op)
+    need(namespace_members(unit['unit']['ControlGroup'])==[unit['process']['pid']]
+         and namespace_members('/'+p['isolation']['slice'])==[unit['process']['pid']], 'NS_DAEMON_CHILDREN_REMAIN')
+    if identity is not None:
+        for process in [identity['process'],identity['managed']['containerd'],*identity['managed']['shims']]:
+            need(not Path('/proc/'+str(process['pid'])).exists(), 'NS_DAEMON_PID_REMAINS')
+
+
+def namespace_daemon_quiescence(p, op, seconds=10):
+    deadline=time.monotonic()+seconds
+    while True:
+        # The supervisor is a child subreaper. Reap only its exited adopted children;
+        # never signal a guessed process, host daemon or another operation.
+        while True:
+            try:
+                pid,_=os.waitpid(-1,os.WNOHANG)
+                if pid==0:break
+            except ChildProcessError:break
+        try:
+            namespace_daemon_absent(p,op)
+            # Close the exit-between-reap-and-cgroup-read race. Only ECHILD is
+            # terminal: a reaped PID or a still-live child requires another round.
+            try:os.waitpid(-1,os.WNOHANG)
+            except ChildProcessError:return
+        except Stop as error:
+            need(str(error) in ('NS_DAEMON_STOP_UNPROVEN','NS_DAEMON_CHILDREN_REMAIN'), 'NS_QUIESCENCE_DRIFT')
+        need(time.monotonic()<deadline,'NS_DAEMON_QUIESCENCE_UNKNOWN')
+        time.sleep(.2)
+
+
+def namespace_daemon_exit(p, op, request, code):
+    need(code==0,'NS_DAEMON_EXIT')
+    namespace_daemon_quiescence(p,op)
+    atomic_exclusive(namespace_control(p,'daemon-exit.json'),encoded({'schema':'PHUB_PRIVATE_DAEMON_EXIT_V1',
+        'operationSha256':p['operationSha256'],'planSha256':digest(read_secure(Path(p['work'])/'disk-plan.json')),
+        'process':request['process'],'exitCode':code}))
+
+
+def namespace_daemon_stop(p, op, journal):
+    if journal.find('DAEMON_START_INTENT') is None:
+        namespace_daemon_absent(p,op); return
+    if not namespace_control(p,'daemon-start.json').exists():
+        # The held mutator flock means no parent may publish this request later.
+        namespace_daemon_absent(p,op); journal.once('DAEMON_STOPPED', neverStarted=True); return
+    if journal.find('DAEMON_STOPPED') is not None:
+        namespace_daemon_absent(p,op); return
+    previous=journal.find('DAEMON_STOP_INTENT')
+    if previous is None:
+        need(namespace_control(p,'daemon-receipt.json').exists(), 'NS_DAEMON_START_MANUAL_STOP')
+        need(namespace_container_lookup(p) is None, 'NS_STOP_CONTAINER_PRESENT')
+        identity=namespace_daemon_identity(p,op)
+        need(not identity['managed']['shims'], 'NS_STOP_SHIM_PRESENT')
+        journal.add('DAEMON_STOP_INTENT',identity=identity)
+    else:identity=previous['identity']
+    request={'schema':'PHUB_PRIVATE_DAEMON_STOP_V1','operationSha256':p['operationSha256'],
+             'planSha256':digest(read_secure(Path(p['work'])/'disk-plan.json')),'process':identity['process']}
+    path=namespace_control(p,'daemon-stop.json'); exitpath=namespace_control(p,'daemon-exit.json')
+    if not path.exists():
+        need(namespace_daemon_identity(p,op)==identity, 'NS_STOP_IDENTITY_DRIFT')
+        atomic_exclusive(path,encoded(request))
+    need(strict(read_secure(path))==request, 'NS_STOP_REQUEST_DRIFT')
+    namespace_wait(exitpath,lambda v: v.get('operationSha256')==p['operationSha256'],55)
+    result=namespace_control_value(p,'daemon-exit.json','PHUB_PRIVATE_DAEMON_EXIT_V1',['process','exitCode'])
+    need(result['process']==identity['process'] and result['exitCode']==0, 'NS_DAEMON_EXIT')
+    namespace_daemon_absent(p,op,identity); journal.once('DAEMON_STOPPED',identity=identity)
+
+
+def namespace_release(p, op, journal):
+    if journal.find('NAMESPACE_SLICE_START_INTENT') is None:return
+    need(journal.find('NAMESPACE_STORAGE_CLEANED') is not None and
+         (journal.find('DAEMON_START_INTENT') is None or journal.find('DAEMON_STOPPED') is not None), 'NS_RELEASE_PREREQUISITES')
+    need(not os.path.lexists(p['image']) and not os.path.lexists(p['mount']) and not os.path.lexists(p['mapperPath']), 'NS_RELEASE_STORAGE')
+    source=namespace_frozen_source(p)
+    need(os.stat('/proc/self/ns/mnt').st_ino==source['mountNamespace'], 'NS_RELEASE_CALLER')
+    if journal.find('NAMESPACE_UNIT_START_INTENT') is not None and journal.find('NAMESPACE_RELEASED') is None:
+        previous=journal.find('NAMESPACE_RELEASE_INTENT')
+        if previous is None:
+            admission=namespace_admission(p,op)
+            need(namespace_members('/'+p['isolation']['slice'])==[admission['supervisor']['process']['pid']], 'NS_RELEASE_MEMBERS')
+            journal.add('NAMESPACE_RELEASE_INTENT',receipt=admission)
+        else:admission=previous['receipt']
+        value=namespace_unit(p)
+        if value['ActiveState']=='active':
+            need(namespace_admission(p,op)==admission, 'NS_RELEASE_DRIFT')
+            command(['/usr/bin/systemctl','stop',p['isolation']['unit']], 'NS_UNIT_STOP',timeout=45)
+            value=namespace_unit(p)
+        need(value['ActiveState'] in ('inactive','failed') and value['LoadState']=='not-found'
+             and value['MainPID']=='0' and not Path('/proc/'+str(admission['supervisor']['process']['pid'])).exists()
+             and not Path(admission['supervisor']['bounds']['path']).exists(), 'NS_RELEASE_UNPROVEN')
+        journal.once('NAMESPACE_RELEASED')
+    need(not namespace_members('/'+p['isolation']['slice']), 'NS_SLICE_NOT_EMPTY')
+    if journal.find('NAMESPACE_SLICE_RELEASED') is None:
+        current=namespace_show(p['isolation']['slice'],NS_SLICE_KEYS)
+        if journal.find('NAMESPACE_SLICE_RELEASE_INTENT') is None:
+            need(namespace_slice(p)==journal.find('NAMESPACE_SLICE_READY')['identity'], 'NS_SLICE_RELEASE_DRIFT')
+            journal.add('NAMESPACE_SLICE_RELEASE_INTENT')
+        if current['ActiveState']=='active':
+            need(namespace_slice(p)==journal.find('NAMESPACE_SLICE_READY')['identity'], 'NS_SLICE_RELEASE_DRIFT')
+            command(['/usr/bin/systemctl','stop',p['isolation']['slice']], 'NS_SLICE_STOP',timeout=30)
+        current=namespace_show(p['isolation']['slice'],NS_SLICE_KEYS)
+        need(current['LoadState']=='not-found' and current['ActiveState']=='inactive'
+             and not Path('/sys/fs/cgroup/'+p['isolation']['slice']).exists(), 'NS_SLICE_RELEASE_UNPROVEN')
+        journal.once('NAMESPACE_SLICE_RELEASED')
+
+
+def namespace_supervisor_loop(op, raw, p):
+    """PID1-owned actor. Only fixed daemon start/stop, never source DB or DiskJournal."""
+    import ctypes
+    libc=ctypes.CDLL(None,use_errno=True); subreaper=ctypes.c_int()
+    need(libc.prctl(36,1,0,0,0)==0 and libc.prctl(37,ctypes.byref(subreaper),0,0,0)==0 and subreaper.value==1, 'NS_SUBREAPER')
+    source = namespace_frozen_source(p)
+    namespace_supervisor_identity(p, op)
+    need(os.stat('/proc/self/ns/mnt').st_ino == source['mountNamespace'], 'NS_SUPERVISOR_INITIAL_NAMESPACE')
+    namespace_syscall('unshare'); disk_tool('mount', ['--make-rprivate', '/'], 'NS_PRIVATE_ROOT')
+    disk_private_parent(p)
+    identity = namespace_supervisor_identity(p, op)
+    need(identity['process']['pid'] == os.getpid() and identity['process']['mountNamespace'] != source['mountNamespace'], 'NS_SUPERVISOR_IDENTITY')
+    receipt = {'schema': 'PHUB_TIMEWEB_PRIVATE_NAMESPACE_RECEIPT_V1', 'operationSha256': p['operationSha256'],
+               'toolFileSha256': op['toolFileSha256'], 'sourceDaemon': source, 'supervisor': identity}
+    atomic_exclusive(namespace_control(p, 'namespace-receipt.json'), encoded(receipt))
+    daemon = None; stopped = False
+    # No inherited stdio/flock, restart, parent-death signal or automatic recovery.
+    while True:
+        need(read_secure(REQUEST)==raw and namespace_supervisor_identity(p,op)==identity, 'NS_SUPERVISOR_DRIFT')
+        tool_custody(op); namespace_validate_plan(op,raw,strict(read_secure(Path(p['work'])/'disk-plan.json')))
+        namespace_frozen_source(p)
+        start = namespace_control(p, 'daemon-start.json')
+        if start.exists() and daemon is None:
+            need(strict(read_secure(start)) == {'schema': 'PHUB_PRIVATE_DAEMON_START_V1', 'operationSha256': p['operationSha256'],
+                'planSha256': digest(read_secure(Path(p['work'])/'disk-plan.json')),
+                'configSha256': digest(read_secure(namespace_control(p, 'daemon.json')))}, 'NS_START_REQUEST')
+            need(strict(read_secure(namespace_control(p, 'daemon.json'))) == namespace_config(p), 'NS_DAEMON_CONFIG')
+            for path in [p['isolation']['dataRoot'], p['isolation']['execRoot']]:secure(path, 'dir', 0o700)
+            disk_storage_attest(p, DiskJournal(p['work'], p['operationSha256']))
+            daemon = subprocess.Popen(['/usr/bin/dockerd', '--config-file', p['isolation']['configFile']],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=ENV, close_fds=True)
+            deadline = time.monotonic() + 45
+            while True:
+                need(daemon.poll() is None and time.monotonic()<deadline, 'NS_DAEMON_START_UNKNOWN')
+                try:
+                    ready=namespace_daemon_identity(p,op); break
+                except (Stop,FileNotFoundError):time.sleep(.2)
+            process = namespace_process(daemon.pid)
+            need(process['cmdline'] == ['/usr/bin/dockerd', '--config-file', p['isolation']['configFile']], 'NS_DAEMON_CHILD')
+            atomic_exclusive(namespace_control(p, 'daemon-receipt.json'), encoded({'schema':'PHUB_PRIVATE_DAEMON_RECEIPT_V1','operationSha256':p['operationSha256'],
+                    'planSha256':digest(read_secure(Path(p['work'])/'disk-plan.json')), 'identity':ready}))
+        stop = namespace_control(p, 'daemon-stop.json')
+        if daemon is not None and not stopped:
+            need(daemon.poll() is None, 'NS_DAEMON_DISAPPEARED')
+            if stop.exists():
+                request=namespace_control_value(p,'daemon-stop.json','PHUB_PRIVATE_DAEMON_STOP_V1',['process'])
+                need(request['operationSha256'] == p['operationSha256'] and request['process'] == namespace_process(daemon.pid), 'NS_STOP_CHILD_DRIFT')
+                disk_storage_attest(p,DiskJournal(p['work'],p['operationSha256']))
+                need(read_secure(REQUEST)==raw and namespace_supervisor_identity(p,op)==identity, 'NS_STOP_CUSTODY')
+                daemon.terminate(); code=daemon.wait(timeout=35)
+                namespace_daemon_exit(p,op,request,code);stopped=True
+        time.sleep(.2)
+
+def namespace_supervisor(op, raw, p):
+    try:
+        namespace_supervisor_loop(op,raw,p)
+    except Exception as error:
+        code=str(error) if isinstance(error,Stop) and re.fullmatch(r'[A-Z0-9_]+',str(error)) else 'NS_SUPERVISOR_UNKNOWN'
+        receipt={'schema':'PHUB_PRIVATE_SUPERVISOR_TERMINAL_V1','operationSha256':p['operationSha256'],
+                 'planSha256':digest(read_secure(Path(p['work'])/'disk-plan.json')),'phase':'MANUAL_STOP','code':code}
+        atomic_exclusive(namespace_control(p,'supervisor-terminal.json'),encoded(receipt))
+        raise
+
+
 class Stop(RuntimeError):
     pass
 
@@ -604,9 +1269,9 @@ def now_iso():
 
 
 def operation_mode(value):
-    if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_V1', DISK_PRE_SCHEMA):
+    if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_V1', DISK_PRE_SCHEMA, NS_PRE_SCHEMA):
         return 'web', value['releaseId']
-    if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA):
+    if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA, NS_POST_SCHEMA):
         return 'api-worker', value['candidateReleaseId']
     raise Stop('TARGET')
 
@@ -621,7 +1286,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         exact(value, common + ['releaseId'])
         mode = 'web'
         release_id = value['releaseId']
-    elif schema == DISK_PRE_SCHEMA:
+    elif schema in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA):
         exact(value, common + ['releaseId', 'controllerSourceCiRunId', 'expectedLedgerSha256'])
         mode = 'web'
         release_id = value['releaseId']
@@ -629,7 +1294,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and release_id == value['controllerSha'] + '-' + value['controllerSourceCiRunId'] + '-1'
              and value['expectedLedgerSha256'] == API_WORKER_PRE_LEDGER_SHA256
              and value['toolCommit'] == value['controllerSha'], 'DISK_PRE99_OPERATION')
-    elif schema in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA):
+    elif schema in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA, NS_POST_SCHEMA):
         extra=['candidateReleaseId', 'expectedLedgerSha256','controllerSourceCiRunId','migrationPlanSha256','migrationSuccessSha256']
         exact(value, common + extra)
         mode = 'api-worker'
@@ -668,6 +1333,10 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         confirmation = 'BACKUP_RESTORE_PRE99_DISK_LUKS2_KEEP_API_0D6078BE7A50'
     elif schema == DISK_POST_SCHEMA:
         confirmation = 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50'
+    if schema == NS_PRE_SCHEMA:
+        confirmation = 'BACKUP_RESTORE_PRE99_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_KEEP_API_0D6078BE7A50'
+    elif schema == NS_POST_SCHEMA:
+        confirmation = 'BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_11954FFD6D7B_KEEP_API_0D6078BE7A50'
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 
@@ -680,6 +1349,10 @@ def validate_migration_controller_delta(data):
         match=re.fullmatch(rb':([0-7]{6}) ([0-7]{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([AM])',rows[index])
         path=os.fsdecode(rows[index+1]);need(match and path not in seen,'CONTROLLER_LINEAGE');seen.add(path)
         parsed.append(dict(path=path,oldMode=match.group(1).decode(),newMode=match.group(2).decode(),oldOid=match.group(3).decode(),newOid=match.group(4).decode(),status=match.group(5).decode()))
+    native=[v for v in parsed if v['path'] in API_WORKER_NATIVE_BOOKINGS_PATCH]
+    if native:
+        need(len(native)==len(API_WORKER_NATIVE_BOOKINGS_PATCH) and all(v==API_WORKER_NATIVE_BOOKINGS_PATCH[v['path']] for v in native),'NATIVE_BOOKINGS_PATCH')
+    parsed=[v for v in parsed if v['path'] not in API_WORKER_NATIVE_BOOKINGS_PATCH]
     pins={**API_WORKER_CI_DOWNLOAD_PATCH,**API_WORKER_CI_READER_PATCH}
     ci=[v for v in parsed if v['path'] in pins]
     if ci:
@@ -694,7 +1367,7 @@ def validate_migration_controller_delta(data):
 
 def v2_migration_proof(op, request_bytes, source, restore=None):
     """Bind a post-0097 backup to a reconciled immutable migration proof before any dump."""
-    if op['schema'] not in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA):
+    if op['schema'] not in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA, NS_POST_SCHEMA):
         return
     prefix=['/usr/bin/git','-C',str(source),'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
     need(command(prefix+['rev-parse',MIGRATION_BASE_SHA+'^{tree}'], 'CONTROLLER_LINEAGE').decode().strip()==MIGRATION_BASE_TREE, 'CONTROLLER_LINEAGE')
@@ -705,9 +1378,9 @@ def v2_migration_proof(op, request_bytes, source, restore=None):
               'controllerSourceCiRunId':op['controllerSourceCiRunId'],'candidateReleaseId':op['candidateReleaseId'],
               'migrationPlanSha256':op['migrationPlanSha256'],'migrationSuccessSha256':op['migrationSuccessSha256']}
     if restore is not None:
-        if op['schema'] == DISK_POST_SCHEMA:
+        if op['schema'] in (DISK_POST_SCHEMA, NS_POST_SCHEMA):
             exact(restore, ['schema', 'storageProofSha256'])
-            need(restore['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V1'
+            need(restore['schema'] == ('PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V2' if is_namespace_operation(op) else 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V1')
                  and HASH.fullmatch(restore['storageProofSha256'] or ''), 'MIGRATION_DISK_RESTORE')
         else:
             exact(restore,['id','operationSha256'])
@@ -1213,6 +1886,7 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
                  and read_secure(LOCK / 'backup-restore.json') == encoded(marker['marker']), 'DISK_LOCK_DRIFT')
         return True
     def guard(restore=None, cleanup=False, optional_lock=False):
+        if is_namespace_operation(op):namespace_frozen_source(plan)
         if not allow_expired:
             need(time.time() < utc(op['expiresAt']), 'EXPIRED_OPERATION')
         source_guard(); owned_lock(optional_lock)
@@ -1224,12 +1898,12 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
         # Exclusion follows exact containment/custody verification, never a caller-selected ID.
         ignored = None
         if restore is not None:
-            row = disk_container_lookup(plan)
+            row = namespace_container_lookup(plan) if is_namespace_operation(op) else disk_container_lookup(plan)
             need(row is not None and row['Id'] == restore, 'DISK_RESTORE_ID_DRIFT')
             if not cleanup:
-                proof = disk_running_attestation(plan, journal)
+                proof = namespace_running_attestation(plan, op, journal) if is_namespace_operation(op) else disk_running_attestation(plan, journal)
                 need(proof == strict(read_secure(work / 'restore-storage-proof.json'))['readback'], 'DISK_STORAGE_PROOF_DRIFT')
-            ignored = row['Id']
+            ignored = None if is_namespace_operation(op) else row['Id']
         rows = []
         ids = docker(['ps', '-aq', '--no-trunc']).decode().split()
         need(len(ids) == len(set(ids)) and all(HASH.fullmatch(v) for v in ids), 'CONTAINER_ID')
@@ -1241,8 +1915,8 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
         need(digest(encoded(rows)) == boundary['sha256'], 'CONTAINER_BOUNDARY_DRIFT')
         if not cleanup or ignored is None:
             ref = None
-            if ignored is not None:
-                ref = {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V1',
+            if ignored is not None or (is_namespace_operation(op) and restore is not None and not cleanup):
+                ref = {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V2' if is_namespace_operation(op) else 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V1',
                        'storageProofSha256': digest(read_secure(work / 'restore-storage-proof.json'))}
             attestation = v2_migration_proof(op, request_bytes, source, ref)
             initial = journal.find('MIGRATION_ATTESTATION')
@@ -1308,7 +1982,10 @@ def disk_initialize(op, request_bytes, file_sha):
 
 def disk_create_storage(plan, journal, guard):
     work = Path(plan['work'])
-    disk_sizing(plan['databaseBytes'], disk_memory_available(), disk_free(), after_dump=True)
+    if plan['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2':
+        namespace_sizing(plan['databaseBytes'], disk_memory_available(), disk_free(), plan['isolation']['image'], after_dump=True)
+    else:
+        disk_sizing(plan['databaseBytes'], disk_memory_available(), disk_free(), after_dump=True)
     guard(); disk_private_parent(plan)
     journal.add('IMAGE_CREATE_INTENT')
     fd = os.open(plan['image'], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -1354,7 +2031,7 @@ def disk_create_storage(plan, journal, guard):
     guard(); disk_private_parent(plan)
     journal.add('MOUNT_INTENT')
     disk_tool('mount', ['--no-mtab', '--types', 'ext4', '--options', plan['mountOptions'], plan['mapperPath'], plan['mount']], 'DISK_MOUNT')
-    os.chmod(plan['mount'], 0o1777)
+    os.chmod(plan['mount'], 0o700 if plan['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2' else 0o1777)
     mount = disk_mount(plan, mapper)
     journal.add('MOUNTED', identity=mount)
     available = os.statvfs(plan['mount'])
@@ -1395,6 +2072,11 @@ def disk_cleanup(plan, journal, guard):
     elif created is not None:
         need(journal.find('CONTAINER_REMOVE_INTENT') is not None, 'DISK_RESTORE_DISAPPEARED')
         journal.once('CONTAINER_REMOVED', containerId=created['containerId'])
+    disk_cleanup_storage(plan, journal, guard)
+
+
+def disk_cleanup_storage(plan, journal, guard, finalize=True):
+    image = disk_image(plan, journal, optional=True, complete=False)
     guard(cleanup=True)
     expected_image = (journal.find('IMAGE_CREATED') or {}).get('identity')
     loop = disk_loop(plan, expected_image, optional=True) if expected_image is not None else None
@@ -1453,7 +2135,8 @@ def disk_cleanup(plan, journal, guard):
     need(not os.path.lexists(plan['image']) and not os.path.lexists(plan['mount'])
          and not os.path.lexists(plan['mapperPath']), 'DISK_CLEANUP_UNPROVEN')
     guard(cleanup=True)
-    journal.once('STORAGE_CLEANUP_VERIFIED')
+    if finalize:
+        journal.once('STORAGE_CLEANUP_VERIFIED')
 
 
 def disk_publication(plan, journal):
@@ -1612,13 +2295,273 @@ def reconcile_disk(op, request_bytes, file_sha):
     return {'status': 'DISK_RECONCILED', 'authorizesDeploy': False, 'replayAllowed': False}
 
 
+def namespace_initialize(op, request_bytes, file_sha):
+    disk_prerequisites()
+    mode, release = operation_mode(op)
+    canonical = ROOT / 'backups' / (release + '-' + mode)
+    work = ROOT / 'backups' / ('.disk-restore-' + digest(request_bytes))
+    need(not os.path.lexists(LOCK) and not os.path.lexists(work) and not os.path.lexists(canonical), 'EXISTING_STATE')
+    for path in [ROOT, ROOT / 'standard', ROOT / 'operator', ROOT / 'backups']:
+        secure(path, 'dir')
+    tool_custody(op)
+    need(service('phub-timeweb-beta', 'api') == op['expectedApi']
+         and service('phub-timeweb-beta-dependencies', 'postgres') == op['expectedPostgres'], 'RUNTIME_DRIFT')
+    need(not docker(['ps', '-q', '--no-trunc', '--filter', 'label=com.docker.compose.service=migrator']).strip(), 'ACTIVE_MIGRATOR')
+    boundary = []
+    ids = docker(['ps', '-aq', '--no-trunc']).decode().split()
+    need(len(ids) == len(set(ids)) and all(HASH.fullmatch(v) for v in ids), 'CONTAINER_ID')
+    for container in sorted(ids):
+        row = strict(docker(['inspect', '--format', INSPECT_FORMAT, container]))
+        need(row['Id'] == container, 'CONTAINER_ID')
+        boundary.append(row)
+    need(digest(encoded(boundary)) == op['expectedBoundarySha256'], 'BASELINE_BOUNDARY')
+    ledger = ledger_bytes(source_query(SOURCE_LEDGER))
+    need(digest(ledger) == disk_ledger_sha(op), 'DISK_LEDGER')
+    raw_size = source_query(SOURCE_SIZE).decode().strip()
+    need(re.fullmatch(r'[1-9][0-9]*', raw_size), 'DATABASE_SIZE')
+    image = namespace_image(strict(docker(['image', 'inspect', '--format', NS_IMAGE_FORMAT, PG_IMAGE])))
+    sizing = namespace_sizing(int(raw_size), disk_memory_available(), disk_free(), image)
+    plan = namespace_plan(op, request_bytes, sizing, image)
+    daemon = namespace_source_daemon()
+    need(os.stat('/proc/self/ns/mnt').st_ino == daemon['mountNamespace'], 'NS_INITIAL_HOST_NAMESPACE')
+    need(not os.path.lexists(plan['pendingLock']), 'DISK_PENDING_LOCK_EXISTS')
+    image = strict(docker(['image', 'inspect', '--format', '{"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}}}', PG_IMAGE]))
+    need(restore_image_admitted(image), 'RESTORE_IMAGE')
+    work.mkdir(mode=0o700); sync_directory(work.parent)
+    atomic_exclusive(work / 'backup-operation.json', request_bytes)
+    atomic_exclusive(work / 'disk-plan.json', encoded(plan))
+    atomic_exclusive(work / 'boundary.json', encoded({'sha256': op['expectedBoundarySha256']}))
+    journal = DiskJournal(work, plan['operationSha256'])
+    journal.add('PREPARED')
+    journal.add('SOURCE_DAEMON', identity=daemon)
+    attestation = v2_migration_proof(op, request_bytes, ROOT / 'standard/source')
+    journal.add('MIGRATION_ATTESTATION', proof=attestation)
+    pending = Path(plan['pendingLock'])
+    pending.mkdir(mode=0o700); sync_directory(pending.parent)
+    marker = {'schema': 'PHUB_TIMEWEB_BACKUP_LOCK_V1', 'operationSha256': plan['operationSha256'],
+              'toolFileSha256': file_sha, 'transaction': str(work), 'createdAt': now_iso()}
+    atomic_exclusive(pending / 'backup-restore.json', encoded(marker))
+    journal.add('LOCK_PREPARED', identity=storage_identity(secure(pending, 'dir', 0o700)), marker=marker)
+    journal.add('LOCK_PUBLISH_INTENT')
+    rename_noreplace(pending, LOCK)
+    journal.add('LOCKED')
+    guard, _ = disk_context(op, request_bytes, plan, journal)
+    guard()
+    return plan, journal, guard
+
+
+def execute_namespace(op, request_bytes, file_sha):
+    plan, journal, guard = namespace_initialize(op, request_bytes, file_sha)
+    work = Path(plan['work'])
+    guard(); namespace_start(plan, op, journal)
+    with namespace_enter(plan, op):
+        incoming = work / 'database.pgcustom.incoming'
+        journal.add('DUMP_INTENT')
+        fd = os.open(incoming, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            with os.fdopen(os.dup(fd), 'wb') as stream:
+                namespace_frozen_source(plan)
+                docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
+                       file_limit=plan['dumpLimitBytes'])
+                stream.flush()
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        sync_directory(work)
+        dump_sha = file_digest(incoming)
+        namespace_frozen_source(plan)
+        guard(); journal.add('DUMP_VERIFIED', dumpSha256=dump_sha)
+        disk_create_storage(plan, journal, guard)
+        disk_storage_attest(plan, journal)
+        namespace_daemon_start(plan, op, journal)
+        namespace_image_transfer(plan, op, journal)
+        journal.add('RESTORE_CREATE_INTENT')
+        container = namespace_docker(plan, namespace_container_args(plan), 'DISK_RESTORE_CREATE').decode().strip()
+        row = namespace_container_lookup(plan)
+        need(row is not None and row['Id'] == container and row['State']['Status'] == 'created', 'DISK_RESTORE_CREATE_UNPROVEN')
+        journal.add('RESTORE_CREATED', containerId=container)
+        disk_storage_attest(plan, journal)
+        journal.add('RESTORE_START_INTENT', containerId=container)
+        namespace_docker(plan, ['start', container], 'DISK_RESTORE_START')
+        ready = False
+        for _ in range(45):
+            row = namespace_container_lookup(plan)
+            need(row is not None and row['Id'] == container and row['State']['Status'] == 'running', 'DISK_RESTORE_START_UNPROVEN')
+            try:
+                namespace_docker(plan, ['exec', container, 'pg_isready', '--username=phub_restore', '--dbname=phub_restore'], 'DISK_RESTORE_READY')
+                ready = True; break
+            except Stop:
+                time.sleep(2)
+        need(ready, 'RESTORE_NOT_READY')
+        journal.add('RESTORE_STARTED', containerId=container)
+        readback = namespace_running_attestation(plan, op, journal)
+        proof = {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_STORAGE_PROOF_V2', 'operationSha256': plan['operationSha256'],
+                 'planSha256': digest(read_secure(work / 'disk-plan.json')), 'readback': readback}
+        atomic_exclusive(work / 'restore-storage-proof.json', encoded(proof))
+        guard(container)
+        with dump_stream(incoming, dump_sha) as stream:
+            namespace_docker(plan, ['exec', '-i', container, 'pg_restore', '--list'], 'DUMP_TOC', stdin=stream, stdout=subprocess.DEVNULL, timeout=120)
+        journal.add('RESTORE_INTENT', containerId=container)
+        with dump_stream(incoming, dump_sha) as stream:
+            namespace_docker(plan, ['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
+                    '--no-owner', '--no-acl', '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=600)
+        restored = ledger_bytes(namespace_docker(plan, ['exec', container, 'psql', '-X', '--username=phub_restore', '--dbname=phub_restore',
+                                      '--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', '--command=' + LEDGER_SQL], 'RESTORED_LEDGER'))
+        need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
+        guard(container)
+        journal.add('RESTORE_VERIFIED', containerId=container, ledgerSha256=digest(restored), dumpSha256=dump_sha)
+        Path(plan['publication']).mkdir(mode=0o700); sync_directory(work)
+        rename_noreplace(incoming, Path(plan['publication']) / 'database.pgcustom')
+        receipt = {'schema': 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1', 'baselineReleaseId': BASELINE,
+                   'completedAt': now_iso(), 'backupFile': str(Path(plan['canonical']) / 'database.pgcustom'),
+                   'backupSha256': dump_sha, 'restoreVerified': True, 'restoreImage': PG_IMAGE,
+                   'restoredLedgerSha256': digest(restored), 'sourceLedgerSha256': digest(restored)}
+        atomic_exclusive(Path(plan['publication']) / 'database-backup-receipt.json', encoded(receipt))
+        journal.add('PUBLISH_READY', dumpSha256=dump_sha, receiptSha256=digest(encoded(receipt)))
+        namespace_cleanup(plan, op, journal, guard)
+    namespace_release(plan, op, journal)
+    guard(cleanup=True); journal.once('STORAGE_CLEANUP_VERIFIED')
+    receipt_sha = disk_publication(plan, journal)
+    guard(cleanup=True)
+    _, owner = disk_context(op, request_bytes, plan, journal)
+    disk_release(plan, journal, owner)
+    return {'status': 'BACKUP_RESTORE_VERIFIED', 'receiptSha256': receipt_sha, 'releaseId': operation_mode(op)[1],
+            'authorizesDeploy': False, 'dumpBytesPrinted': False}
+
+
+def namespace_validate_plan(op, raw, plan):
+    image = plan['isolation']['image']
+    expected = namespace_sizing(plan['databaseBytes'], 2**50, 2**50, image)
+    need(plan == namespace_plan(op, raw, expected, image), 'NS_PLAN_DRIFT')
+    return plan
+
+
+def namespace_cleanup(plan, op, journal, guard):
+    image = disk_image(plan, journal, optional=True, complete=False)
+    started = journal.find('DAEMON_START_INTENT') is not None
+    stopped = journal.find('DAEMON_STOPPED') is not None
+    if started and not stopped and namespace_control(plan,'daemon-start.json').exists():
+        need(namespace_control(plan,'daemon-receipt.json').exists(), 'NS_DAEMON_START_MANUAL_STOP')
+        if journal.find('DAEMON_STOP_INTENT') is None:row=namespace_container_lookup(plan)
+        else:row=None
+    else:row=None
+    created = journal.find('RESTORE_CREATED')
+    if row is not None:
+        need(journal.find('RESTORE_CREATE_INTENT') is not None and image is not None
+             and journal.find('IMAGE_LOADED') is not None, 'NS_RESTORE_UNPROVEN')
+        if created is None:journal.add('RESTORE_CREATED', containerId=row['Id'])
+        else:need(created['containerId'] == row['Id'], 'NS_RESTORE_ID_DRIFT')
+        guard(row['Id'], cleanup=True)
+        if row['State']['Status'] == 'running':
+            namespace_running_attestation(plan, op, journal)
+            journal.once('CONTAINER_STOP_INTENT', containerId=row['Id'])
+            namespace_docker(plan, ['stop', '--time', '30', row['Id']], 'NS_CONTAINER_STOP')
+            row = namespace_container_lookup(plan)
+            need(row is not None and row['State']['Status'] == 'exited', 'NS_CONTAINER_STOP_UNKNOWN')
+        else:need(row['State']['Status'] in ('created', 'exited'), 'NS_RESTORE_STATE')
+        journal.once('CONTAINER_STOPPED', containerId=row['Id'])
+        journal.once('CONTAINER_REMOVE_INTENT', containerId=row['Id'])
+        namespace_docker(plan, ['rm', row['Id']], 'NS_CONTAINER_REMOVE')
+        need(namespace_container_lookup(plan) is None, 'NS_CONTAINER_REMOVE_UNKNOWN')
+        journal.once('CONTAINER_REMOVED', containerId=row['Id'])
+    elif created is not None:
+        need(journal.find('CONTAINER_REMOVE_INTENT') is not None, 'NS_CONTAINER_DISAPPEARED')
+        journal.once('CONTAINER_REMOVED', containerId=created['containerId'])
+    guard(cleanup=True)
+    namespace_daemon_stop(plan, op, journal)
+    disk_cleanup_storage(plan, journal, guard, finalize=False)
+    journal.once('NAMESPACE_STORAGE_CLEANED')
+
+
+def namespace_terminal(plan, journal):
+    need(journal.find('NAMESPACE_UNIT_START_INTENT') is None or journal.find('NAMESPACE_RELEASED') is not None, 'NS_TERMINAL_UNIT')
+    need(journal.find('NAMESPACE_SLICE_START_INTENT') is None or journal.find('NAMESPACE_SLICE_RELEASED') is not None, 'NS_TERMINAL_SLICE')
+    need(not os.path.lexists(plan['image']) and not os.path.lexists(plan['mount'])
+         and not os.path.lexists(plan['mapperPath']), 'NS_TERMINAL_STORAGE')
+    image = (journal.find('IMAGE_CREATED') or {}).get('identity')
+    need(image is None or disk_loop(plan, image, optional=True) is None, 'NS_TERMINAL_LOOP')
+
+
+def reconcile_namespace(op, raw, file_sha):
+    disk_prerequisites(cleanup=True)
+    work = ROOT/'backups'/('.disk-restore-' + digest(raw))
+    need(read_secure(work/'backup-operation.json') == raw, 'NS_CAPSULE_DRIFT')
+    plan = namespace_validate_plan(op, raw, strict(read_secure(work/'disk-plan.json')))
+    journal = DiskJournal(work, plan['operationSha256'])
+    guard, owner = disk_context(op, raw, plan, journal, allow_expired=True)
+    need(journal.find('LOCK_PREPARED') is not None, 'NS_LOCK_UNPROVEN')
+    if journal.find('RECONCILED') is not None:
+        namespace_terminal(plan, journal); guard(cleanup=True, optional_lock=True)
+        if journal.find('PUBLISHED') is not None:disk_publication(plan, journal)
+        else:need(journal.find('ABORTED') is not None and not os.path.lexists(plan['canonical']), 'NS_TERMINAL_PUBLICATION')
+        return {'status': 'DISK_RECONCILED', 'authorizesDeploy': False, 'replayAllowed': False}
+    if not os.path.lexists(LOCK):
+        if os.path.lexists(plan['pendingLock']):
+            expected = journal.find('LOCK_PREPARED'); pending = Path(plan['pendingLock'])
+            need(same_storage(secure(pending, 'dir', 0o700), expected['identity'])
+                 and sorted(p.name for p in pending.iterdir()) == ['backup-restore.json']
+                 and read_secure(pending/'backup-restore.json') == encoded(expected['marker'])
+                 and journal.find('NAMESPACE_UNIT_START_INTENT') is None, 'NS_PENDING_LOCK_DRIFT')
+            rename_noreplace(pending, LOCK)
+        else:
+            need(journal.find('UNLOCK_INTENT') is not None, 'NS_LOCK_MISSING')
+            namespace_terminal(plan, journal); guard(cleanup=True, optional_lock=True)
+            journal.once('RECONCILED'); return {'status': 'DISK_RECONCILED', 'authorizesDeploy': False, 'replayAllowed': False}
+    if journal.find('NAMESPACE_RELEASE_INTENT') is not None:
+        namespace_release(plan, op, journal)
+    elif journal.find('NAMESPACE_UNIT_START_INTENT') is not None:
+        # No guessed process adoption before the supervisor's owned durable receipt.
+        admission = namespace_admission(plan, op)
+        journal.once('NAMESPACE_READY', receipt=admission)
+        with namespace_enter(plan, op):namespace_cleanup(plan, op, journal, guard)
+        namespace_release(plan, op, journal)
+    else:
+        need(journal.find('DUMP_INTENT') is None, 'NS_ORPHAN_MUTATION')
+        disk_cleanup_storage(plan,journal,guard,finalize=False)
+        journal.once('NAMESPACE_STORAGE_CLEANED')
+        if journal.find('NAMESPACE_SLICE_START_INTENT') is not None:
+            need(journal.find('NAMESPACE_SLICE_READY') is not None, 'NS_SLICE_START_MANUAL_STOP')
+            namespace_release(plan,op,journal)
+    namespace_terminal(plan, journal); guard(cleanup=True)
+    journal.once('STORAGE_CLEANUP_VERIFIED')
+    if journal.find('PUBLISH_READY') is not None:disk_publication(plan, journal)
+    else:
+        need(not os.path.lexists(plan['canonical']), 'NS_ABORT_CANONICAL_EXISTS'); journal.once('ABORTED')
+    disk_release(plan, journal, owner)
+    return {'status': 'DISK_RECONCILED', 'authorizesDeploy': False, 'replayAllowed': False}
+
+
+def namespace_verify_reference(op, raw, file_sha):
+    need(op['schema'] == NS_POST_SCHEMA, 'NS_POST_ATTESTATION_ONLY'); tool_custody(op)
+    work = ROOT/'backups'/('.disk-restore-' + digest(raw))
+    need(read_secure(work/'backup-operation.json') == raw, 'NS_REQUEST_DRIFT')
+    plan_bytes = read_secure(work/'disk-plan.json'); plan = namespace_validate_plan(op, raw, strict(plan_bytes))
+    journal = DiskJournal(work, plan['operationSha256']); lock = journal.find('LOCK_PREPARED')
+    need(lock is not None and same_storage(secure(LOCK, 'dir', 0o700), lock['identity'])
+         and sorted(p.name for p in LOCK.iterdir()) == ['backup-restore.json']
+         and read_secure(LOCK/'backup-restore.json') == encoded(lock['marker']), 'NS_ATTEST_LOCK')
+    proof_bytes = read_secure(work/'restore-storage-proof.json'); proof = strict(proof_bytes)
+    exact(proof, ['schema', 'operationSha256', 'planSha256', 'readback'])
+    need(proof['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_STORAGE_PROOF_V2'
+         and proof['operationSha256'] == plan['operationSha256'] and proof['planSha256'] == digest(plan_bytes), 'NS_STORAGE_PROOF')
+    # Read-only callers must already be in the independently proven runtime namespace.
+    value = namespace_running_attestation(plan, op, journal)
+    need(value == proof['readback'] and read_secure(work/'restore-storage-proof.json') == proof_bytes
+         and read_secure(REQUEST) == raw, 'NS_PROOF_DRIFT')
+    return {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V2', 'operationSha256': digest(raw),
+            'storageProofSha256': digest(proof_bytes), 'plan': plan, 'readback': value,
+            'migration': {k: op[k] for k in ['controllerSha', 'controllerTree', 'controllerSourceCiRunId',
+               'candidateReleaseId', 'migrationPlanSha256', 'migrationSuccessSha256']}}
+
 def execute(op, request_bytes, file_sha):
+    if is_namespace_operation(op):return execute_namespace(op, request_bytes, file_sha)
     return execute_disk(op, request_bytes, file_sha) if is_disk_operation(op) else execute_tmpfs(op, request_bytes, file_sha)
 
 
 def main():
     need(sys.flags.optimize==0 and sys.flags.isolated==1, 'ISOLATED_NONOPTIMIZED_PYTHON_REQUIRED')
-    need(os.getuid()==0 and len(sys.argv)==3 and sys.argv[1] in ('--execute', '--reconcile-disk', '--attest-disk') and sys.argv[2]==str(REQUEST), 'ENTRY')
+    supervisor = len(sys.argv) == 4 and sys.argv[1] == '--disk-runtime-supervisor' and sys.argv[2] == str(REQUEST)
+    need(os.getuid()==0 and (supervisor or len(sys.argv)==3 and sys.argv[1] in ('--execute', '--reconcile-disk', '--attest-disk') and sys.argv[2]==str(REQUEST)), 'ENTRY')
     os.umask(0o077)
     file=Path(__file__)
     file_sha=digest(read_secure(file,0o755))
@@ -1628,17 +2571,26 @@ def main():
     need(os.uname().nodename=='msk-1-vm-z8ks' and os.uname().machine=='x86_64','HOST')
     ips=command(['/usr/bin/hostname','-I'],'HOST').decode().split()
     need('100.77.212.57' in ips and '103.88.243.171' in ips,'HOST')
+    if supervisor:
+        need(is_namespace_operation(op) and sys.argv[3]==digest(request_bytes) and time.time()<utc(op['expiresAt']), 'NS_SUPERVISOR_ENTRY')
+        tool_custody(op)
+        work = ROOT/'backups'/('.disk-restore-' + digest(request_bytes))
+        need(read_secure(work/'backup-operation.json') == request_bytes, 'NS_SUPERVISOR_CAPSULE')
+        plan = namespace_validate_plan(op, request_bytes, strict(read_secure(work/'disk-plan.json')))
+        journal = DiskJournal(work, plan['operationSha256'])
+        need(journal.find('NAMESPACE_UNIT_START_INTENT') is not None, 'NS_SUPERVISOR_INTENT')
+        namespace_supervisor(op, request_bytes, plan); return
     for sig in (signal.SIGTERM,signal.SIGINT):
         signal.signal(sig,lambda *_: (_ for _ in ()).throw(Stop('INTERRUPTED_UNCERTAIN')))
     if sys.argv[1] == '--attest-disk':
-        result = disk_verify_reference(op, request_bytes, file_sha)
+        result = namespace_verify_reference(op, request_bytes, file_sha) if is_namespace_operation(op) else disk_verify_reference(op, request_bytes, file_sha)
     elif sys.argv[1] == '--reconcile-disk':
         need(is_disk_operation(op), 'DISK_RECONCILIATION_ONLY')
         with disk_mutation_lock():
-            result = reconcile_disk(op, request_bytes, file_sha)
+            result = reconcile_namespace(op, request_bytes, file_sha) if is_namespace_operation(op) else reconcile_disk(op, request_bytes, file_sha)
     elif is_disk_operation(op):
         with disk_mutation_lock():
-            result = execute_disk(op, request_bytes, file_sha)
+            result = execute(op, request_bytes, file_sha)
     else:
         result = execute_tmpfs(op, request_bytes, file_sha)
     print(json.dumps(result,separators=(',',':')))

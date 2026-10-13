@@ -11,6 +11,8 @@ import {
   fsyncSync,
   readFileSync,
   statSync,
+  readlinkSync,
+  readdirSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseStrictJson } from './strict-json.js';
@@ -879,6 +881,8 @@ function envValues(kind, imageEnv) {
 const DISK_BACKUP_REQUEST = `${ROOT}/operator/database-backup-restore.json`;
 const DISK_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_V1';
 const DISK_EXCLUSION_SCHEMA = 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V1';
+const NS_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_NAMESPACE_V2';
+const NS_EXCLUSION_SCHEMA = 'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V2';
 const diskHostKeys = [
   'NetworkMode',
   'ReadonlyRootfs',
@@ -951,6 +955,12 @@ function diskUuid(name) {
 
 export function validateMigrationBackupRestoreReference(operationBytes, expected, reference) {
   const op = parseStrictJson(operationBytes);
+  if (op.schema === NS_POST_SCHEMA) {
+    exact(reference, ['schema', 'storageProofSha256']);
+    if (reference.schema !== NS_EXCLUSION_SCHEMA || !HASH.test(reference.storageProofSha256 ?? ''))
+      stop('NS_REFERENCE_DOWNGRADE');
+    return 'namespace';
+  }
   if (op.schema === DISK_POST_SCHEMA) {
     exact(reference, ['schema', 'storageProofSha256']);
     if (
@@ -988,6 +998,8 @@ export function validateLegacyBackupRestoreMounts(row) {
 }
 
 export function validateDiskRestoreReadback(value, expected, reference, operationBytes) {
+  if (parseStrictJson(operationBytes).schema === NS_POST_SCHEMA)
+    return validateNamespaceRestoreReadback(value, expected, reference, operationBytes);
   exact(reference, ['schema', 'storageProofSha256']);
   if (reference.schema !== DISK_EXCLUSION_SCHEMA || !HASH.test(reference.storageProofSha256 ?? ''))
     stop('DISK_REFERENCE');
@@ -1182,9 +1194,7 @@ export function validateDiskRestoreReadback(value, expected, reference, operatio
   return { ...value, requestSha256: sha, id: c.Id };
 }
 
-function validateDiskStorageKernel(readback, plan) {
-  const s = readback.storage,
-    k = readback.kernel;
+function validateDiskStorageIdentity(s, plan, mountMode) {
   exact(s, ['image', 'loop', 'mapper', 'mount']);
   exact(s.image, ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink']);
   exact(s.mapper, ['device', 'minor', 'uuid']);
@@ -1205,7 +1215,7 @@ function validateDiskStorageKernel(readback, plan) {
     !integer(s.mount.ino, 1) ||
     s.mount.uid !== 0 ||
     s.mount.gid !== 0 ||
-    s.mount.mode !== 0o41777
+    s.mount.mode !== mountMode
   )
     stop('DISK_STORAGE');
   const major = BigInt(s.mapper.device),
@@ -1213,6 +1223,13 @@ function validateDiskStorageKernel(readback, plan) {
   const dev =
     (minor & 255n) | ((major & 4095n) << 8n) | ((minor & ~255n) << 12n) | ((major & ~4095n) << 32n);
   if (BigInt(s.mount.dev) !== dev) stop('DISK_STORAGE_DEVICE');
+}
+
+function validateDiskStorageKernel(readback, plan) {
+  const s = readback.storage,
+    k = readback.kernel;
+  validateDiskStorageIdentity(s, plan, 0o41777);
+  const integer = (v, min = 0) => Number.isSafeInteger(v) && v >= min;
   exact(k, [
     'hostNamespace',
     'containerNamespace',
@@ -1323,6 +1340,899 @@ export function validateDiskRestoreKernelSnapshot(row, attestation, actual) {
     actual.afterContainerNamespace !== actual.containerNamespace
   )
     stop('DISK_NAMESPACE_DRIFT');
+}
+
+function validateNamespaceContainer(c, p, sha) {
+  exact(c, ['Id', 'Config', 'HostConfig', 'Mounts', 'State', 'Image']);
+  exact(c.Config, ['Image', 'User', 'Volumes', 'Labels', 'Env', 'Cmd', 'Entrypoint']);
+  exact(c.HostConfig, [...diskHostKeys, 'CgroupParent', 'CgroupnsMode']);
+  exact(c.State, ['Status', 'Pid', 'StartedAt']);
+  const h = c.HostConfig,
+    empty = (v) => v == null || (typeof v === 'object' && Object.keys(v).length === 0);
+  const tmpfs = {
+    '/var/run/postgresql': 'rw,nosuid,nodev,noexec,mode=1777,size=16777216',
+    '/tmp': 'rw,nosuid,nodev,noexec,mode=1777,size=16777216',
+  };
+  if (
+    !same(h.LogConfig, { Type: 'none', Config: {} }) ||
+    h.NetworkMode !== 'none' ||
+    h.ReadonlyRootfs !== true ||
+    h.Privileged !== false ||
+    h.AutoRemove !== false ||
+    !same(h.RestartPolicy, { Name: 'no', MaximumRetryCount: 0 }) ||
+    !same(h.CapDrop, ['ALL']) ||
+    !empty(h.CapAdd) ||
+    ![canonical(['no-new-privileges']), canonical(['no-new-privileges:true'])].includes(
+      canonical(h.SecurityOpt),
+    ) ||
+    h.PidsLimit !== 128 ||
+    h.Memory !== 2 * 1024 ** 3 ||
+    h.MemorySwap !== h.Memory ||
+    h.NanoCpus !== 1000000000 ||
+    h.PublishAllPorts !== false ||
+    h.PidMode !== '' ||
+    h.IpcMode !== 'private' ||
+    ['Binds', 'PortBindings', 'Links', 'Devices', 'DeviceRequests', 'VolumesFrom'].some(
+      (k) => !empty(h[k]),
+    ) ||
+    !same(h.Tmpfs, tmpfs) ||
+    (!empty(c.Config.Volumes) && !same(c.Config.Volumes, { '/var/lib/postgresql/data': {} })) ||
+    !Array.isArray(c.Mounts) ||
+    c.Mounts.length !== 3 ||
+    new Set(c.Mounts.map((v) => v.Destination)).size !== 3
+  )
+    stop('DISK_CONTAINMENT');
+  const bind = c.Mounts.filter((v) => v.Type === 'bind'),
+    temps = c.Mounts.filter((v) => v.Type === 'tmpfs');
+  if (
+    bind.length !== 1 ||
+    bind[0].Source !== p.isolation.pgdata ||
+    bind[0].Destination !== '/var/lib/postgresql/data' ||
+    bind[0].RW !== true ||
+    bind[0].Propagation !== 'rprivate' ||
+    temps.length !== 2 ||
+    !same(temps.map((v) => v.Destination).sort(), Object.keys(tmpfs).sort()) ||
+    temps.some((v) => v.RW !== true)
+  )
+    stop('DISK_CONTAINMENT_MOUNTS');
+  if (
+    !Array.isArray(c.Config.Env) ||
+    c.Config.Env.some((v) => typeof v !== 'string' || !v.includes('=')) ||
+    new Set(c.Config.Env.map((v) => v.slice(0, v.indexOf('=')))).size !== c.Config.Env.length ||
+    ![
+      'PGDATA=/var/lib/postgresql/data/phub-restore',
+      'POSTGRES_USER=phub_restore',
+      'POSTGRES_DB=phub_restore',
+      'POSTGRES_HOST_AUTH_METHOD=trust',
+    ].every((v) => c.Config.Env.includes(v)) ||
+    !same(c.Config.Cmd, ['postgres']) ||
+    !same(c.Config.Entrypoint, ['docker-entrypoint.sh']) ||
+    !same(c.Config.Labels, { 'phub.backup-operation': sha })
+  )
+    stop('DISK_CONFIG');
+
+  const env = Object.fromEntries(
+    p.isolation.image.Env.map((v) => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)]),
+  );
+  Object.assign(env, {
+    PGDATA: '/var/lib/postgresql/data/phub-restore',
+    POSTGRES_USER: 'phub_restore',
+    POSTGRES_DB: 'phub_restore',
+    POSTGRES_HOST_AUTH_METHOD: 'trust',
+  });
+  if (
+    !HASH.test(c.Id ?? '') ||
+    c.Image !== p.isolation.image.Id ||
+    c.Config.Image !== c.Image ||
+    c.Config.User !== 'postgres' ||
+    c.State.Status !== 'running' ||
+    !Number.isSafeInteger(c.State.Pid) ||
+    c.State.Pid < 1 ||
+    typeof c.State.StartedAt !== 'string' ||
+    c.HostConfig.CgroupParent !== p.isolation.slice ||
+    c.HostConfig.CgroupnsMode !== 'private' ||
+    !same(
+      [...c.Config.Env].sort(),
+      Object.entries(env)
+        .map(([k, v]) => `${k}=${v}`)
+        .sort(),
+    )
+  )
+    stop('NS_CONTAINER');
+}
+
+function namespaceImage(v, source = null) {
+  exact(v, ['Id', 'Os', 'Architecture', 'RepoDigests', 'Size', 'RootFS', 'Env']);
+  exact(v.RootFS, ['Type', 'Layers']);
+  if (
+    !/^sha256:[a-f0-9]{64}$/.test(v.Id ?? '') ||
+    v.Os !== 'linux' ||
+    v.Architecture !== 'amd64' ||
+    !Number.isSafeInteger(v.Size) ||
+    v.Size <= 0 ||
+    v.Size > 2 * 1024 ** 3 ||
+    v.RootFS.Type !== 'layers' ||
+    !Array.isArray(v.RootFS.Layers) ||
+    !v.RootFS.Layers.length ||
+    v.RootFS.Layers.length > 128 ||
+    v.RootFS.Layers.some((x) => !/^sha256:[a-f0-9]{64}$/.test(x)) ||
+    !Array.isArray(v.Env) ||
+    v.Env.length > 256 ||
+    v.Env.some((x) => typeof x !== 'string' || !x.includes('=')) ||
+    new Set(v.Env.map((x) => x.split('=')[0])).size !== v.Env.length
+  )
+    stop('NS_IMAGE');
+  if (source) {
+    if (['Id', 'Os', 'Architecture', 'Size', 'RootFS', 'Env'].some((k) => !same(v[k], source[k])))
+      stop('NS_IMAGE_IMPORT');
+  } else if (
+    !Array.isArray(v.RepoDigests) ||
+    !v.RepoDigests.some((x) =>
+      [bridge.postgresImage, bridge.postgresImage.replace('docker.io/library/', '')].includes(x),
+    )
+  )
+    stop('NS_IMAGE_SOURCE');
+}
+
+function namespaceProcess(v, executable, root = true) {
+  exact(v, [
+    'pid',
+    'startTicks',
+    'executable',
+    'cmdline',
+    'mountNamespace',
+    'uid',
+    'gid',
+    'cgroup',
+  ]);
+  if (
+    !Number.isSafeInteger(v.pid) ||
+    v.pid < 1 ||
+    v.pid >= 2 ** 31 ||
+    !/^[0-9]+$/.test(v.startTicks ?? '') ||
+    v.executable !== executable ||
+    !Number.isSafeInteger(v.mountNamespace) ||
+    v.mountNamespace < 1 ||
+    !Array.isArray(v.cmdline) ||
+    !v.cmdline.length ||
+    v.cmdline.some((x) => typeof x !== 'string' || x.includes('\0')) ||
+    !Array.isArray(v.uid) ||
+    v.uid.length !== 4 ||
+    !Array.isArray(v.gid) ||
+    v.gid.length !== 4 ||
+    [...v.uid, ...v.gid].some((x) => !Number.isSafeInteger(x) || x < 0) ||
+    (root
+      ? [...v.uid, ...v.gid].some((x) => x !== 0)
+      : [...v.uid, ...v.gid].some((x) => x === 0)) ||
+    typeof v.cgroup !== 'string' ||
+    !v.cgroup.startsWith('0::/')
+  )
+    stop('NS_PROCESS');
+}
+
+function namespaceMount(record, target, root, plan, mapper) {
+  exact(record, [
+    'id',
+    'parent',
+    'device',
+    'root',
+    'target',
+    'options',
+    'optional',
+    'fstype',
+    'source',
+    'superOptions',
+  ]);
+  if (
+    !/^[0-9]+$/.test(record.id ?? '') ||
+    !/^[0-9]+$/.test(record.parent ?? '') ||
+    record.target !== target ||
+    record.root !== root ||
+    record.device !== `${mapper.device}:${mapper.minor}` ||
+    record.fstype !== 'ext4' ||
+    record.source !== plan.mapperPath ||
+    !Array.isArray(record.options) ||
+    !Array.isArray(record.optional) ||
+    record.optional.length ||
+    !Array.isArray(record.superOptions) ||
+    [...record.options, ...record.superOptions].some((x) => typeof x !== 'string') ||
+    new Set(record.options).size !== record.options.length ||
+    ['rw', 'nosuid', 'nodev', 'noexec'].some((x) => !record.options.includes(x)) ||
+    record.options.includes('ro')
+  )
+    stop('NS_MOUNT');
+}
+
+const NS_UNIT_KEYS = [
+  'LoadState',
+  'ActiveState',
+  'SubState',
+  'MainPID',
+  'InvocationID',
+  'ControlGroup',
+  'MemoryMax',
+  'MemorySwapMax',
+  'TasksMax',
+  'Delegate',
+  'CPUQuotaPerSecUSec',
+  'KillMode',
+  'SendSIGKILL',
+  'Restart',
+  'TimeoutStopUSec',
+  'LimitCORE',
+  'UMask',
+  'User',
+  'Group',
+  'WorkingDirectory',
+  'StandardInput',
+  'StandardOutput',
+  'StandardError',
+  'Slice',
+  'Transient',
+  'NRestarts',
+  'Result',
+  'ExecMainCode',
+  'ExecMainStatus',
+];
+const NS_SLICE_KEYS = [
+  'LoadState',
+  'ActiveState',
+  'ControlGroup',
+  'Transient',
+  'MemoryMax',
+  'MemorySwapMax',
+  'TasksMax',
+  'CPUQuotaPerSecUSec',
+];
+function namespaceValidateBounds(b, group, memory, pids, cpus) {
+  exact(b, ['identity', 'path', 'memory.max', 'memory.swap.max', 'pids.max', 'cpu.max']);
+  exact(b.identity, ['dev', 'ino', 'uid', 'gid', 'mode']);
+  const cpu = typeof b['cpu.max'] === 'string' ? b['cpu.max'].split(' ') : [];
+  if (
+    b.path !== `/sys/fs/cgroup${group}` ||
+    b.identity.uid !== 0 ||
+    b.identity.gid !== 0 ||
+    b.identity.mode !== 0o40755 ||
+    !Number.isSafeInteger(b.identity.dev) ||
+    !Number.isSafeInteger(b.identity.ino) ||
+    b.identity.ino < 1 ||
+    b['memory.max'] !== String(memory) ||
+    b['memory.swap.max'] !== '0' ||
+    b['pids.max'] !== String(pids) ||
+    cpu.length !== 2 ||
+    !cpu.every((x) => /^[1-9][0-9]*$/.test(x)) ||
+    Number(cpu[0]) !== cpus * Number(cpu[1])
+  )
+    stop('NS_BOUNDS');
+}
+
+function validateNamespaceRestoreReadback(value, expected, reference, operationBytes) {
+  exact(reference, ['schema', 'storageProofSha256']);
+  exact(value, [
+    'schema',
+    'operationSha256',
+    'storageProofSha256',
+    'plan',
+    'readback',
+    'migration',
+  ]);
+  const op = parseStrictJson(operationBytes),
+    sha = hash(operationBytes);
+  exact(op, [
+    'schema',
+    'target',
+    'toolCommit',
+    'toolFileSha256',
+    'controllerSha',
+    'toolProofSha256',
+    'toolInstallationSha256',
+    'controllerTree',
+    'controllerConfigSha256',
+    'expectedBoundarySha256',
+    'expectedApi',
+    'expectedPostgres',
+    'expiresAt',
+    'confirmation',
+    'candidateReleaseId',
+    'expectedLedgerSha256',
+    'controllerSourceCiRunId',
+    'migrationPlanSha256',
+    'migrationSuccessSha256',
+  ]);
+  if (
+    op.schema !== NS_POST_SCHEMA ||
+    reference.schema !== NS_EXCLUSION_SCHEMA ||
+    !HASH.test(reference.storageProofSha256 ?? '') ||
+    value.schema !== 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V2' ||
+    value.operationSha256 !== sha ||
+    value.storageProofSha256 !== reference.storageProofSha256 ||
+    !same(value.migration, expected) ||
+    !same(value.migration, Object.fromEntries(Object.keys(expected).map((k) => [k, op[k]]))) ||
+    op.toolCommit !== op.controllerSha ||
+    op.expectedLedgerSha256 !== POST_LEDGER ||
+    op.confirmation !==
+      'BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_11954FFD6D7B_KEEP_API_0D6078BE7A50' ||
+    !same(op.target, { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 })
+  )
+    stop('NS_OPERATION');
+  const p = value.plan,
+    work = `${ROOT}/backups/.disk-restore-${sha}`;
+  exact(p, [
+    'schema',
+    'operationSha256',
+    'work',
+    'canonical',
+    'pendingLock',
+    'image',
+    'mount',
+    'publication',
+    'mapperName',
+    'mapperPath',
+    'luksUuid',
+    'filesystemUuid',
+    'mountOptions',
+    'containerName',
+    'restoreImage',
+    'expectedLedgerSha256',
+    'databaseBytes',
+    'restoreDataBytes',
+    'imageBytes',
+    'memoryBytes',
+    'dumpLimitBytes',
+    'diskReserveBytes',
+    'isolation',
+  ]);
+  const i = p.isolation;
+  exact(i, [
+    'strategy',
+    'unit',
+    'slice',
+    'controlRoot',
+    'pgdata',
+    'dataRoot',
+    'execRoot',
+    'socket',
+    'pidFile',
+    'configFile',
+    'image',
+    'imageTransferLimitBytes',
+    'daemonMemoryBytes',
+    'daemonPids',
+    'daemonNanoCpus',
+  ]);
+  namespaceImage(i.image);
+  const data = Math.max(512 * 1024 ** 2, p.databaseBytes * 3 + 256 * 1024 ** 2),
+    runtime = Math.max(512 * 1024 ** 2, i.image.Size * 3 + 256 * 1024 ** 2),
+    total = data + runtime;
+  const image =
+    Math.ceil((total + Math.max(512 * 1024 ** 2, Math.ceil(total / 20))) / (4 * 1024 ** 2)) *
+    4 *
+    1024 ** 2;
+  const derived = {
+    strategy: 'SYSTEMD_SUPERVISOR_PRIVATE_MOUNT_V1',
+    unit: `phub-disk-runtime-${sha.slice(0, 24)}.service`,
+    slice: `phubdiskrestore${sha.slice(0, 24)}.slice`,
+    controlRoot: `${work}/runtime-control`,
+    pgdata: `${work}/pgdata-mounted/pgdata`,
+    dataRoot: `${work}/pgdata-mounted/.runtime/docker-data`,
+    execRoot: `${work}/pgdata-mounted/.runtime/docker-exec`,
+    socket: `${work}/pgdata-mounted/.runtime/docker.sock`,
+    pidFile: `${work}/pgdata-mounted/.runtime/dockerd.pid`,
+    configFile: `${work}/runtime-control/daemon.json`,
+    image: i.image,
+    imageTransferLimitBytes: i.image.Size * 2 + 512 * 1024 ** 2,
+    daemonMemoryBytes: 2 * 1024 ** 3,
+    daemonPids: 256,
+    daemonNanoCpus: 1000000000,
+  };
+  if (
+    p.schema !== 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2' ||
+    p.operationSha256 !== sha ||
+    p.work !== work ||
+    p.canonical !== `${ROOT}/backups/${expected.candidateReleaseId}-api-worker` ||
+    p.pendingLock !== `${ROOT}/standard/.disk-lock-${sha}` ||
+    p.image !== `${work}/restore.luks` ||
+    p.mount !== `${work}/pgdata-mounted` ||
+    p.publication !== `${work}/publication` ||
+    p.mapperName !== `phub-restore-${sha.slice(0, 24)}` ||
+    p.mapperPath !== `/dev/mapper/${p.mapperName}` ||
+    p.containerName !==
+      `phub-timeweb-restore-${bridge.candidateSha.slice(0, 12)}-${bridge.publicationRunId}-1` ||
+    p.restoreImage !== bridge.postgresImage ||
+    p.expectedLedgerSha256 !== POST_LEDGER ||
+    p.mountOptions !== 'rw,nosuid,nodev,noexec,noatime' ||
+    p.memoryBytes !== 2 * 1024 ** 3 ||
+    !Number.isSafeInteger(p.databaseBytes) ||
+    p.databaseBytes <= 0 ||
+    p.databaseBytes > 64 * 1024 ** 3 ||
+    p.restoreDataBytes !== data ||
+    p.imageBytes !== image ||
+    p.diskReserveBytes !== 5 * 1024 ** 3 ||
+    p.dumpLimitBytes !== Math.min(64 * 1024 ** 3, p.databaseBytes * 2 + 256 * 1024 ** 2) ||
+    p.luksUuid !== diskUuid(`phub-luks-${sha}`) ||
+    p.filesystemUuid !== diskUuid(`phub-ext4-${sha}`) ||
+    !same(i, derived)
+  )
+    stop('NS_PLAN');
+  const r = value.readback;
+  exact(r, ['storage', 'isolation', 'kernel', 'container', 'image']);
+  exact(r.image, ['source', 'imported']);
+  namespaceImage(r.image.source);
+  namespaceImage(r.image.imported, r.image.source);
+  if (!same(r.image.source, i.image)) stop('NS_IMAGE_PLAN');
+  validateDiskStorageIdentity(r.storage, p, 0o40700);
+  exact(r.isolation, ['admission', 'process', 'socket', 'info', 'managed']);
+  const a = r.isolation.admission;
+  exact(a, ['schema', 'operationSha256', 'toolFileSha256', 'sourceDaemon', 'supervisor']);
+  exact(a.supervisor, ['unit', 'process', 'bounds', 'slice']);
+  const u = a.supervisor.unit,
+    cg = a.supervisor.bounds,
+    broker = a.supervisor.process,
+    daemon = r.isolation.process,
+    source = a.sourceDaemon;
+  exact(u, NS_UNIT_KEYS);
+  exact(cg, ['identity', 'path', 'memory.max', 'memory.swap.max', 'pids.max', 'cpu.max']);
+  exact(cg.identity, ['dev', 'ino', 'uid', 'gid', 'mode']);
+  namespaceProcess(broker, broker.executable);
+  namespaceProcess(daemon, '/usr/bin/dockerd');
+  namespaceProcess(source, '/usr/bin/dockerd');
+  const cpu = cg['cpu.max'].split(' '),
+    tool = `${ROOT}/operator/tools/${op.toolCommit}/control-timeweb-database-backup.py`;
+  if (
+    a.schema !== 'PHUB_TIMEWEB_PRIVATE_NAMESPACE_RECEIPT_V1' ||
+    a.operationSha256 !== sha ||
+    a.toolFileSha256 !== op.toolFileSha256 ||
+    !/^\/usr\/bin\/python3(?:\.[0-9]+)?$/.test(broker.executable) ||
+    !same(broker.cmdline, [
+      '/usr/bin/python3',
+      '-I',
+      '-S',
+      '-B',
+      tool,
+      '--disk-runtime-supervisor',
+      DISK_BACKUP_REQUEST,
+      sha,
+    ]) ||
+    !same(daemon.cmdline, ['/usr/bin/dockerd', '--config-file', i.configFile]) ||
+    broker.cgroup !== `0::/${i.slice}/${i.unit}` ||
+    daemon.cgroup !== broker.cgroup ||
+    broker.mountNamespace !== daemon.mountNamespace ||
+    source.mountNamespace === broker.mountNamespace ||
+    u.LoadState !== 'loaded' ||
+    u.ActiveState !== 'active' ||
+    u.SubState !== 'running' ||
+    u.MainPID !== String(broker.pid) ||
+    !/^[a-f0-9]{32}$/.test(u.InvocationID ?? '') ||
+    u.ControlGroup !== `/${i.slice}/${i.unit}` ||
+    u.MemoryMax !== String(2 * 1024 ** 3) ||
+    u.MemorySwapMax !== '0' ||
+    u.TasksMax !== '256' ||
+    u.Delegate !== 'yes' ||
+    u.CPUQuotaPerSecUSec !== '1s' ||
+    u.KillMode !== 'control-group' ||
+    !Object.entries({
+      SendSIGKILL: 'yes',
+      Restart: 'no',
+      TimeoutStopUSec: '30s',
+      LimitCORE: '0',
+      UMask: '0077',
+      User: 'root',
+      Group: 'root',
+      WorkingDirectory: p.work,
+      StandardInput: 'null',
+      StandardOutput: 'null',
+      StandardError: 'null',
+      Slice: i.slice,
+      Transient: 'yes',
+      NRestarts: '0',
+      Result: 'success',
+      ExecMainCode: '0',
+      ExecMainStatus: '0',
+    }).every(([k, v]) => u[k] === v) ||
+    cg.path !== `/sys/fs/cgroup${u.ControlGroup}` ||
+    cg.identity.uid !== 0 ||
+    cg.identity.gid !== 0 ||
+    cg.identity.mode !== 0o40755 ||
+    !Number.isSafeInteger(cg.identity.dev) ||
+    !Number.isSafeInteger(cg.identity.ino) ||
+    cg.identity.ino < 1 ||
+    cg['memory.max'] !== u.MemoryMax ||
+    cg['memory.swap.max'] !== '0' ||
+    cg['pids.max'] !== '256' ||
+    cpu.length !== 2 ||
+    !cpu.every((x) => /^[1-9][0-9]*$/.test(x)) ||
+    cpu[0] !== cpu[1]
+  )
+    stop('NS_ISOLATION');
+  const sl = a.supervisor.slice;
+  exact(sl, ['unit', 'bounds']);
+  exact(sl.unit, NS_SLICE_KEYS);
+  if (
+    !same(sl.unit, {
+      LoadState: 'loaded',
+      ActiveState: 'active',
+      ControlGroup: `/${i.slice}`,
+      Transient: 'yes',
+      MemoryMax: String(4 * 1024 ** 3),
+      MemorySwapMax: '0',
+      TasksMax: '384',
+      CPUQuotaPerSecUSec: '2s',
+    })
+  )
+    stop('NS_SLICE');
+  namespaceValidateBounds(sl.bounds, sl.unit.ControlGroup, 4 * 1024 ** 3, 384, 2);
+  const managed = r.isolation.managed;
+  exact(managed, ['containerd', 'config', 'configSha256', 'shims']);
+  exact(managed.config, ['version', 'root', 'state', 'address', 'disabledPlugins']);
+  namespaceProcess(managed.containerd, '/usr/bin/containerd');
+  const config = `${i.execRoot}/containerd/containerd.toml`;
+  if (
+    !same(managed.config, {
+      version: 2,
+      root: `${i.dataRoot}/containerd/daemon`,
+      state: `${i.execRoot}/containerd/daemon`,
+      address: `${i.execRoot}/containerd/containerd.sock`,
+      disabledPlugins: ['cri'],
+    }) ||
+    !HASH.test(managed.configSha256 ?? '') ||
+    ![
+      canonical(['/usr/bin/containerd', '--config', config]),
+      canonical(['/usr/bin/containerd', '--config', config, '--log-level', 'info']),
+    ].includes(canonical(managed.containerd.cmdline)) ||
+    !Array.isArray(managed.shims) ||
+    managed.shims.length !== 1
+  )
+    stop('NS_MANAGED');
+  for (const child of [managed.containerd, ...managed.shims]) {
+    namespaceProcess(child, child.executable);
+    if (child.mountNamespace !== broker.mountNamespace || child.cgroup !== broker.cgroup)
+      stop('NS_MANAGED_CUSTODY');
+  }
+  const shim = managed.shims[0];
+  if (
+    shim.executable !== '/usr/bin/containerd-shim-runc-v2' ||
+    !same(shim.cmdline, [
+      '/usr/bin/containerd-shim-runc-v2',
+      '-namespace',
+      `phub-${sha.slice(0, 24)}`,
+      '-id',
+      r.container.Id,
+      '-address',
+      managed.config.address,
+    ])
+  )
+    stop('NS_SHIM');
+  const socket = r.isolation.socket;
+  exact(socket, ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink']);
+  if (
+    !Number.isSafeInteger(socket.dev) ||
+    !Number.isSafeInteger(socket.ino) ||
+    socket.ino < 1 ||
+    socket.uid !== 0 ||
+    socket.gid !== 0 ||
+    socket.mode !== 0o140660 ||
+    socket.nlink !== 1 ||
+    !same(r.isolation.info, {
+      DockerRootDir: i.dataRoot,
+      Driver: 'vfs',
+      CgroupDriver: 'systemd',
+      LiveRestoreEnabled: false,
+    })
+  )
+    stop('NS_SOCKET');
+  const k = r.kernel;
+  exact(k, [
+    'containerProcess',
+    'containerBounds',
+    'containerMembers',
+    'brokerMount',
+    'daemonMount',
+    'containerMount',
+  ]);
+  namespaceProcess(k.containerProcess, k.containerProcess.executable, false);
+  if (
+    k.containerProcess.mountNamespace === broker.mountNamespace ||
+    k.containerProcess.mountNamespace === source.mountNamespace ||
+    k.containerProcess.cgroup !== `0::/${i.slice}/docker-${r.container.Id}.scope`
+  )
+    stop('NS_CONTAINER_NAMESPACE');
+  exact(k.containerBounds, ['memory.max', 'memory.swap.max', 'pids.max', 'cpu.max']);
+  const containerCpu =
+    typeof k.containerBounds['cpu.max'] === 'string' ? k.containerBounds['cpu.max'].split(' ') : [];
+  if (
+    k.containerBounds['memory.max'] !== String(2 * 1024 ** 3) ||
+    k.containerBounds['memory.swap.max'] !== '0' ||
+    k.containerBounds['pids.max'] !== '128' ||
+    containerCpu.length !== 2 ||
+    !containerCpu.every((v) => /^[1-9][0-9]*$/.test(v)) ||
+    containerCpu[0] !== containerCpu[1] ||
+    !Array.isArray(k.containerMembers) ||
+    !k.containerMembers.length ||
+    k.containerMembers.length > 128 ||
+    new Set(k.containerMembers.map((v) => v.pid)).size !== k.containerMembers.length ||
+    !k.containerMembers.some((v) => same(v, k.containerProcess))
+  )
+    stop('NS_CONTAINER_BOUNDS');
+  for (const member of k.containerMembers) {
+    namespaceProcess(member, member.executable, false);
+    if (
+      member.mountNamespace !== k.containerProcess.mountNamespace ||
+      member.cgroup !== k.containerProcess.cgroup
+    )
+      stop('NS_CONTAINER_MEMBERS');
+  }
+  namespaceMount(k.brokerMount, p.mount, '/', p, r.storage.mapper);
+  namespaceMount(k.daemonMount, p.mount, '/', p, r.storage.mapper);
+  namespaceMount(k.containerMount, '/var/lib/postgresql/data', '/pgdata', p, r.storage.mapper);
+  validateNamespaceContainer(r.container, p, sha);
+  if (r.container.State.Pid !== k.containerProcess.pid) stop('NS_CONTAINER_PID');
+  return { ...value, requestSha256: sha, id: r.container.Id };
+}
+
+export function validateNamespaceRestoreKernelSnapshot(attestation, actual) {
+  exact(actual, [
+    'selfNamespace',
+    'processes',
+    'mountinfo',
+    'socket',
+    'sourceImage',
+    'privateImage',
+    'container',
+    'runtime',
+    'afterRuntime',
+    'afterProcesses',
+    'afterSelfNamespace',
+  ]);
+  const p = attestation.plan,
+    r = attestation.readback,
+    i = r.isolation;
+  const expected = {
+    broker: i.admission.supervisor.process,
+    daemon: i.process,
+    source: i.admission.sourceDaemon,
+    container: r.kernel.containerProcess,
+    containerd: i.managed.containerd,
+    shim: i.managed.shims[0],
+  };
+  if (
+    !same(actual.processes, expected) ||
+    !same(actual.afterProcesses, expected) ||
+    actual.selfNamespace !== expected.broker.mountNamespace ||
+    actual.afterSelfNamespace !== actual.selfNamespace ||
+    !same(actual.socket, i.socket) ||
+    !same(actual.sourceImage, r.image.source) ||
+    !same(actual.privateImage, r.image.imported) ||
+    !same(actual.container, r.container)
+  )
+    stop('NS_INDEPENDENT_DRIFT');
+  exact(actual.mountinfo, ['broker', 'daemon', 'source', 'container', 'containerd', 'shim']);
+  const runtime = actual.runtime;
+  exact(runtime, [
+    'unit',
+    'slice',
+    'bounds',
+    'sliceBounds',
+    'configSha256',
+    'members',
+    'containerBounds',
+    'containerMembers',
+  ]);
+  if (
+    !same(runtime, actual.afterRuntime) ||
+    !same(runtime.unit, i.admission.supervisor.unit) ||
+    !same(runtime.slice, i.admission.supervisor.slice.unit) ||
+    !same(runtime.bounds, i.admission.supervisor.bounds) ||
+    !same(runtime.sliceBounds, i.admission.supervisor.slice.bounds) ||
+    runtime.configSha256 !== i.managed.configSha256 ||
+    !same(runtime.containerBounds, r.kernel.containerBounds) ||
+    !same(runtime.containerMembers, r.kernel.containerMembers) ||
+    !same(
+      runtime.members,
+      [expected.broker.pid, expected.daemon.pid, expected.containerd.pid, expected.shim.pid].sort(
+        (a, b) => a - b,
+      ),
+    )
+  )
+    stop('NS_RUNTIME_DRIFT');
+  const mapper = r.storage.mapper,
+    device = `${mapper.device}:${mapper.minor}`;
+  for (const [name, target, root] of [
+    ['broker', p.mount, '/'],
+    ['daemon', p.mount, '/'],
+    ['container', '/var/lib/postgresql/data', '/pgdata'],
+  ]) {
+    const entries = parseDiskRestoreMountinfo(actual.mountinfo[name]),
+      match = entries.filter((x) => x.target === target);
+    if (match.length !== 1 || entries.some((x) => x.target.startsWith(`${target}/`)))
+      stop('NS_INDEPENDENT_MOUNT');
+    namespaceMount(match[0], target, root, p, mapper);
+    if (!same(match[0], r.kernel[`${name}Mount`])) stop('NS_INDEPENDENT_MOUNT');
+    if (name !== 'container') {
+      const ancestors = entries.filter(
+        (x) => p.work === x.target || p.work.startsWith(`${x.target.replace(/\/$/, '')}/`),
+      );
+      if (!ancestors.length || ancestors.some((x) => x.optional.length))
+        stop('NS_PARENT_NOT_PRIVATE');
+    }
+  }
+  if (
+    parseDiskRestoreMountinfo(actual.mountinfo.source).some(
+      (x) =>
+        x.target === p.mount ||
+        x.target.startsWith(`${p.mount}/`) ||
+        x.source === p.mapperPath ||
+        x.device === device,
+    )
+  )
+    stop('NS_HOST_MOUNT_LEAK');
+}
+
+function namespaceReadProcess(pid) {
+  const path = `/proc/${pid}`,
+    stat = () =>
+      readFileSync(`${path}/stat`, 'utf8').split(')').slice(-1)[0].trim().split(/\s+/)[19],
+    startTicks = stat();
+  const status = readFileSync(`${path}/status`, 'utf8');
+  const ids = (key) => {
+    const v = new RegExp(`^${key}:\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)$`, 'm').exec(status);
+    if (!v) stop('NS_PROCESS_OWNER');
+    return v.slice(1).map(Number);
+  };
+  const bytes = readFileSync(`${path}/cmdline`);
+  if (!bytes.length || bytes.length > 65536 || bytes.at(-1) !== 0) stop('NS_PROCESS_ARGV');
+  const value = {
+    pid,
+    startTicks,
+    executable: readlinkSync(`${path}/exe`),
+    cmdline: bytes.subarray(0, -1).toString().split('\0'),
+    mountNamespace: statSync(`${path}/ns/mnt`).ino,
+    uid: ids('Uid'),
+    gid: ids('Gid'),
+    cgroup: readFileSync(`${path}/cgroup`, 'utf8').trim(),
+  };
+  if (stat() !== startTicks || statSync(`${path}/ns/mnt`).ino !== value.mountNamespace)
+    stop('NS_PROCESS_DRIFT');
+  return value;
+}
+
+function inspectNamespaceRestoreKernel(value) {
+  const p = value.plan,
+    r = value.readback;
+  const processes = () => ({
+    broker: namespaceReadProcess(r.isolation.admission.supervisor.process.pid),
+    daemon: namespaceReadProcess(r.isolation.process.pid),
+    source: namespaceReadProcess(r.isolation.admission.sourceDaemon.pid),
+    container: namespaceReadProcess(r.container.State.Pid),
+    containerd: namespaceReadProcess(r.isolation.managed.containerd.pid),
+    shim: namespaceReadProcess(r.isolation.managed.shims[0].pid),
+  });
+  const env = {
+    PATH: '/usr/bin:/bin',
+    HOME: '/root',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    DOCKER_CONFIG: '/proc/self/phub-nonexistent-docker-config',
+  };
+  const show = (name, keys) => {
+    const raw = execFileSync(
+      '/usr/bin/systemctl',
+      ['show', name, ...keys.map((k) => `--property=${k}`)],
+      { env, timeout: 10000, maxBuffer: 65536, stdio: ['ignore', 'pipe', 'pipe'] },
+    ).toString();
+    const entries = raw
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const i = line.indexOf('=');
+        if (i < 0) stop('NS_UNIT_FIELDS');
+        return [line.slice(0, i), line.slice(i + 1)];
+      });
+    if (entries.length !== keys.length || new Set(entries.map((x) => x[0])).size !== keys.length)
+      stop('NS_UNIT_FIELDS');
+    return Object.fromEntries(entries);
+  };
+  const bounds = (group) => {
+    const path = `/sys/fs/cgroup${group}`,
+      st = lstatSync(path);
+    return {
+      path,
+      identity: Object.fromEntries(['dev', 'ino', 'uid', 'gid', 'mode'].map((k) => [k, st[k]])),
+      ...Object.fromEntries(
+        ['memory.max', 'memory.swap.max', 'pids.max', 'cpu.max'].map((k) => [
+          k,
+          readFileSync(`${path}/${k}`, 'utf8').trim(),
+        ]),
+      ),
+    };
+  };
+  const group = `/${p.isolation.slice}/${p.isolation.unit}`;
+  const members = (path) => {
+    let ids = readFileSync(`${path}/cgroup.procs`, 'utf8')
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number);
+    for (const entry of readdirSync(path, { withFileTypes: true }))
+      if (entry.isDirectory()) ids.push(...members(`${path}/${entry.name}`));
+    if (ids.some((v) => !Number.isSafeInteger(v) || v < 1) || new Set(ids).size !== ids.length)
+      stop('NS_CGROUP_MEMBERS');
+    return ids.sort((a, b) => a - b);
+  };
+  const runtime = () => ({
+    unit: show(p.isolation.unit, NS_UNIT_KEYS),
+    slice: show(p.isolation.slice, NS_SLICE_KEYS),
+    bounds: bounds(group),
+    sliceBounds: bounds(`/${p.isolation.slice}`),
+    configSha256: hash(read(`${p.isolation.execRoot}/containerd/containerd.toml`)),
+    members: members(`/sys/fs/cgroup${group}`),
+    containerBounds: Object.fromEntries(
+      ['memory.max', 'memory.swap.max', 'pids.max', 'cpu.max'].map((k) => [
+        k,
+        readFileSync(
+          `/sys/fs/cgroup/${p.isolation.slice}/docker-${r.container.Id}.scope/${k}`,
+          'utf8',
+        ).trim(),
+      ]),
+    ),
+    containerMembers: members(
+      `/sys/fs/cgroup/${p.isolation.slice}/docker-${r.container.Id}.scope`,
+    ).map(namespaceReadProcess),
+  });
+  const beforeRuntime = runtime();
+  const before = processes(),
+    selfNamespace = statSync('/proc/self/ns/mnt').ino;
+  const privateRead = (args) =>
+    parseStrictJson(
+      execFileSync('/usr/bin/docker', ['--host', `unix://${p.isolation.socket}`, ...args], {
+        env,
+        timeout: 10000,
+        maxBuffer: 256 * 1024,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+  const imageFormat =
+    '{"Id":{{json .Id}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}},"Size":{{json .Size}},"RootFS":{{json .RootFS}},"Env":{{json .Config.Env}}}';
+  const sourceImage = parseStrictJson(
+    docker(['image', 'inspect', '--format', imageFormat, bridge.postgresImage]),
+  );
+  const privateImage = privateRead([
+    'image',
+    'inspect',
+    '--format',
+    imageFormat,
+    p.isolation.image.Id,
+  ]);
+  const raw = privateRead(['inspect', r.container.Id]);
+  if (!Array.isArray(raw) || raw.length !== 1) stop('NS_CONTAINER_COUNT');
+  const row = raw[0],
+    socket = lstatSync(p.isolation.socket);
+  const container = {
+    Id: row.Id,
+    Config: Object.fromEntries(Object.keys(r.container.Config).map((k) => [k, row.Config[k]])),
+    HostConfig: Object.fromEntries(
+      Object.keys(r.container.HostConfig).map((k) => [k, row.HostConfig[k]]),
+    ),
+    Mounts: row.Mounts,
+    State: Object.fromEntries(Object.keys(r.container.State).map((k) => [k, row.State[k]])),
+    Image: row.Image,
+  };
+  validateNamespaceRestoreKernelSnapshot(value, {
+    selfNamespace,
+    processes: before,
+    mountinfo: Object.fromEntries(
+      Object.entries(before).map(([k, v]) => [k, readFileSync(`/proc/${v.pid}/mountinfo`, 'utf8')]),
+    ),
+    socket: Object.fromEntries(
+      ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink'].map((k) => [k, socket[k]]),
+    ),
+    sourceImage,
+    privateImage,
+    container,
+    runtime: beforeRuntime,
+    afterRuntime: runtime(),
+    afterProcesses: processes(),
+    afterSelfNamespace: statSync('/proc/self/ns/mnt').ino,
+  });
 }
 
 function readDiskRestoreExclusion(expected, reference) {
@@ -1901,9 +2811,15 @@ export async function attestMigrationBackupProof(expected, ignoredRestore = null
   );
   const proof = validateMigrationProofBundle(bundle, expected);
   sourceAttest(proof.operation);
-  const diskReference = backupReferenceKind === 'disk' ? ignoredRestore : null;
+  const namespaceReference = backupReferenceKind === 'namespace';
+  const diskReference = ['disk', 'namespace'].includes(backupReferenceKind) ? ignoredRestore : null;
   const diskReadback = diskReference ? readDiskRestoreExclusion(expected, diskReference) : null;
-  const ops = productionOps(proof.operation, { assertOwned() {} }, diskReadback ?? ignoredRestore);
+  if (namespaceReference) inspectNamespaceRestoreKernel(diskReadback);
+  const ops = productionOps(
+    proof.operation,
+    { assertOwned() {} },
+    namespaceReference ? null : (diskReadback ?? ignoredRestore),
+  );
   await ops.loadPlan(proof.plan, proof.planBytes, proof.plan.operationSha256);
   if (
     !same(await ops.snapshot(), proof.plan.runtime) ||
@@ -1912,8 +2828,11 @@ export async function attestMigrationBackupProof(expected, ignoredRestore = null
     (await ops.image()) !== proof.plan.imageId
   )
     stop('BACKUP_RUNTIME_DRIFT');
-  if (diskReadback && !same(diskReadback, readDiskRestoreExclusion(expected, diskReference)))
-    stop('DISK_READBACK_DRIFT');
+  if (diskReadback) {
+    const again = readDiskRestoreExclusion(expected, diskReference);
+    if (namespaceReference) inspectNamespaceRestoreKernel(again);
+    if (!same(diskReadback, again)) stop('DISK_READBACK_DRIFT');
+  }
   validateApiWorkerMigrationLedger(await ops.ledger(), POST_LEDGER);
   await ops.attestRoleContainers(proof.role);
   const row = await ops.lookup('migration', proof.plan.imageId, proof.plan.operationSha256);
