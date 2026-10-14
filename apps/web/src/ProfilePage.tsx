@@ -18,6 +18,7 @@ import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import { ProfileSportIcon } from './ProfileSportIcon.js';
+import './ProfilePageV2.css';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 import { QR_QUIET_ZONE_MODULES, qrCodePath, tryCreateQrCode } from './qr-code.js';
 import friendshipArtwork from './assets/subscriptions/friendship.svg';
@@ -140,8 +141,6 @@ const squashLevelBackgrounds: Readonly<Record<string, string>> = {
   'D+': squashLevelDPlusBackground,
   D: squashLevelDBackground,
 };
-
-const levelScale = ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D'] as const;
 
 const weekdayLabels: Readonly<
   Record<BookingPreferences['preferredTimeWindows'][number]['weekday'], string>
@@ -512,6 +511,11 @@ function ProfileIcon({
 }: {
   readonly name:
     | 'edit'
+    | 'settings'
+    | 'calendar'
+    | 'about'
+    | 'trophy'
+    | 'lock'
     | 'support'
     | 'back'
     | 'bell'
@@ -534,6 +538,47 @@ function ProfileIcon({
   } as const;
 
   switch (name) {
+    case 'settings':
+      return (
+        <svg {...common} stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round">
+          <path d="m9.5 3-.6 2.1-1.6.9-2.1-.5-2.5 4.3 1.5 1.6v1.8l-1.5 1.6 2.5 4.3 2.1-.5 1.6.9.6 2.1h5l.6-2.1 1.6-.9 2.1.5 2.5-4.3-1.5-1.6v-1.8l1.5-1.6-2.5-4.3-2.1.5-1.6-.9-.6-2.1Z" />
+          <circle cx="12" cy="12" r="3.2" />
+        </svg>
+      );
+    case 'calendar':
+      return (
+        <svg {...common} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+          <rect x="4" y="5" width="16" height="16" rx="3" />
+          <path d="M8 3v4m8-4v4M4 10h16" />
+        </svg>
+      );
+    case 'about':
+      return (
+        <svg {...common} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 11v6" />
+          <circle cx="12" cy="7.5" r=".8" fill="currentColor" />
+        </svg>
+      );
+    case 'trophy':
+      return (
+        <svg
+          {...common}
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M8 3h8v7a4 4 0 0 1-8 0ZM8 5H4v3a4 4 0 0 0 4 4m8-7h4v3a4 4 0 0 1-4 4M12 14v6m-4 1h8" />
+        </svg>
+      );
+    case 'lock':
+      return (
+        <svg {...common} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+          <rect x="5" y="10" width="14" height="11" rx="3" />
+          <path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2" />
+        </svg>
+      );
     case 'edit':
       return (
         <svg {...common}>
@@ -736,6 +781,224 @@ function readProfileCity(userId: string): ProfileCity {
   } catch {
     return 'Москва';
   }
+}
+
+function ProfileV2Actions({
+  notificationsAvailable,
+  unreadCount,
+  onShare,
+  onQr,
+}: {
+  readonly notificationsAvailable: boolean;
+  readonly unreadCount: number;
+  readonly onShare: () => void;
+  readonly onQr: () => void;
+}): React.JSX.Element {
+  const menu = useRef<HTMLDetailsElement>(null);
+  return (
+    <details
+      className="profile-v2-actions"
+      ref={menu}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          if (menu.current) {
+            menu.current.open = false;
+            menu.current.querySelector('summary')?.focus();
+          }
+        }
+      }}
+    >
+      <summary aria-label="Настройки профиля" title="Настройки профиля">
+        <ProfileIcon name="settings" />
+      </summary>
+      <div className="profile-v2-actions__menu">
+        <a
+          href="#profile-settings"
+          onClick={() => {
+            if (menu.current) menu.current.open = false;
+          }}
+        >
+          <ProfileIcon name="settings" />
+          Настройки
+        </a>
+        {notificationsAvailable ? (
+          <a
+            href="/notifications"
+            className={
+              unreadCount > 0 ? 'profile-v2-notifications is-unread' : 'profile-v2-notifications'
+            }
+            aria-label={
+              unreadCount > 0
+                ? `Уведомления, непрочитанных: ${unreadCount}`
+                : 'Уведомления, непрочитанных нет'
+            }
+          >
+            <ProfileIcon name="bell" />
+            Уведомления
+            {unreadCount > 0 ? (
+              <span className="profile-v2-unread-count" aria-hidden="true">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            ) : null}
+          </a>
+        ) : null}
+        <a href="/support" aria-label="Техническая поддержка">
+          <ProfileIcon name="support" />
+          Поддержка
+        </a>
+        <button
+          type="button"
+          aria-label="поделиться"
+          onClick={() => {
+            onShare();
+            if (menu.current) menu.current.open = false;
+          }}
+        >
+          <ProfileIcon name="share" />
+          Поделиться профилем
+        </button>
+        <button
+          type="button"
+          aria-label="QR-код"
+          onClick={() => {
+            onQr();
+            if (menu.current) menu.current.open = false;
+          }}
+        >
+          <ProfileIcon name="qr" />
+          QR-код
+        </button>
+        <a href="/profile/level-history">
+          <ProfileIcon name="history" />
+          История изменения уровня
+        </a>
+      </div>
+    </details>
+  );
+}
+
+function ProfileDirectorySheet({
+  title,
+  onClose,
+  children,
+}: {
+  readonly title: string;
+  readonly onClose: () => void;
+  readonly children: ReactNode;
+}): React.JSX.Element {
+  const sheet = useRef<HTMLElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    close.current?.focus();
+    return () => {
+      if (previous instanceof HTMLElement) previous.focus();
+    };
+  }, []);
+  return (
+    <div
+      className="profile-settings-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="profile-settings-sheet profile-v2-directory"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        ref={sheet}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            onClose();
+          }
+          if (event.key !== 'Tab') return;
+          const controls = sheet.current?.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), a[href]',
+          );
+          const first = controls?.[0];
+          const last = controls?.[controls.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }}
+      >
+        <header className="profile-settings-sheet__toolbar">
+          <button ref={close} type="button" aria-label={`Закрыть: ${title}`} onClick={onClose}>
+            ‹
+          </button>
+          <h2>{title}</h2>
+          <span aria-hidden="true" />
+        </header>
+        {children}
+      </section>
+    </div>
+  );
+}
+
+function ProfileV2Overview({
+  level,
+  friends,
+  communities,
+  friendsAvailable,
+  onFriends,
+  onCommunities,
+}: {
+  readonly level: string;
+  readonly friends?: ProfileFriendPage | null;
+  readonly communities?: CommunityMembershipPage | null;
+  readonly friendsAvailable: boolean;
+  readonly onFriends: () => void;
+  readonly onCommunities: () => void;
+}): React.JSX.Element {
+  const loadedFriends = friends?.items.length;
+  const loadedCommunities = communities?.items.length;
+  // Neither contract contains a total. A plus only reports a known lower bound.
+  const friendCount =
+    loadedFriends === undefined || !friendsAvailable
+      ? '—'
+      : loadedFriends === 0
+        ? '0'
+        : `${loadedFriends}+`;
+  const communityCount =
+    loadedCommunities === undefined
+      ? '—'
+      : `${loadedCommunities}${communities?.nextCursor ? '+' : ''}`;
+  return (
+    <section className="profile-v2-metrics" aria-label="Показатели игрока">
+      <a href="/bookings" aria-label="Мои игры: общее число пока недоступно">
+        <strong>—</strong>
+        <span>игры</span>
+      </a>
+      <button
+        type="button"
+        disabled={!friendsAvailable}
+        onClick={onFriends}
+        aria-label={
+          loadedFriends === undefined
+            ? 'Друзья: число неизвестно'
+            : `Друзья: загружено ${loadedFriends}, общее число неизвестно`
+        }
+      >
+        <strong>{friendCount}</strong>
+        <span>друзей</span>
+      </button>
+      <button type="button" onClick={onCommunities} aria-label={`Сообщества: ${communityCount}`}>
+        <strong>{communityCount}</strong>
+        <span>сообщества</span>
+      </button>
+      <a href="/profile/level-history">
+        <strong>{level}</strong>
+        <span>уровень</span>
+      </a>
+    </section>
+  );
 }
 
 function ProfileBalanceCard({ balance }: { readonly balance: string | null }): React.JSX.Element {
@@ -1036,13 +1299,13 @@ function ProfileSubscriptions({
               subscription.title.trim().toLocaleLowerCase('ru-RU'),
             );
             return (
-              <article className={artwork ? 'has-plan-artwork' : undefined} key={subscription.id}>
-                {!artwork ? (
-                  <span className="profile-subscription-art" aria-hidden="true">
-                    <b>{subscription.remainingUnits}</b>
-                    <small>игр</small>
-                  </span>
-                ) : null}
+              <article
+                className={artwork ? 'has-plan-artwork' : undefined}
+                data-plan={
+                  artwork ? subscription.title.trim().toLocaleLowerCase('ru-RU') : 'generic'
+                }
+                key={subscription.id}
+              >
                 <span className="profile-subscription-copy">
                   <span>
                     <strong>
@@ -1065,7 +1328,13 @@ function ProfileSubscriptions({
                     {validUntil ? ` · до ${validUntil}` : ''}
                   </small>
                 </span>
-                <a href={subscription.route}>{renewalAvailable ? 'продлить' : 'подробнее'}</a>
+                <a
+                  className="profile-subscription-open"
+                  href={subscription.route}
+                  aria-label={`${renewalAvailable ? 'Открыть подписку' : 'Подробнее о подписке'}: ${subscription.title}`}
+                >
+                  <span aria-hidden="true">›</span>
+                </a>
               </article>
             );
           })}
@@ -1073,7 +1342,7 @@ function ProfileSubscriptions({
       )}
 
       <a className="profile-subscriptions-all" href="/subscriptions">
-        все подписки <span aria-hidden="true">›</span>
+        Купить подписку
       </a>
     </section>
   );
@@ -1668,6 +1937,7 @@ export function ProfilePage({
   const [activeSettings, setActiveSettings] = useState<'preferences' | 'visibility' | null>(null);
   const [activeSport, setActiveSport] = useState<ProfileSport>('PADEL');
   const [sportPickerOpen, setSportPickerOpen] = useState(false);
+  const [activeDirectory, setActiveDirectory] = useState<'friends' | 'communities' | null>(null);
   const isSelf = access.audience === 'SELF';
   const profileLink = profileShareUrl(profile.userId, publicProfileOrigin);
   const independentSport: Exclude<ProfileSport, 'PADEL'> | null =
@@ -1767,8 +2037,8 @@ export function ProfilePage({
   }
 
   return (
-    <div className="profile-shell">
-      <main className="profile-page" style={pageStyle}>
+    <div className={`profile-shell${isSelf ? ' profile-shell--v2' : ''}`}>
+      <main className={`profile-page${isSelf ? ' profile-page--v2' : ''}`} style={pageStyle}>
         <header className="profile-toolbar">
           <button
             className="profile-toolbar__back"
@@ -1778,24 +2048,26 @@ export function ProfilePage({
           >
             <ProfileIcon name="back" />
           </button>
-          <div className="profile-toolbar__actions">
-            {notificationsAvailable ? (
-              <NotificationBellLink
-                className="profile-toolbar__bell"
-                unreadCount={notificationUnreadCount}
-              />
-            ) : null}
-            {isSelf ? (
-              <a
-                className="profile-toolbar__support"
-                href="/support"
-                aria-label="Техническая поддержка"
-                title="Техническая поддержка"
-              >
-                <ProfileIcon name="support" />
-              </a>
-            ) : null}
-          </div>
+          {isSelf ? (
+            <ProfileV2Actions
+              notificationsAvailable={notificationsAvailable}
+              unreadCount={notificationUnreadCount}
+              onShare={() => void shareProfile()}
+              onQr={() => {
+                setQrNotice(null);
+                setQrOpen(true);
+              }}
+            />
+          ) : (
+            <div className="profile-toolbar__actions">
+              {notificationsAvailable ? (
+                <NotificationBellLink
+                  className="profile-toolbar__bell"
+                  unreadCount={notificationUnreadCount}
+                />
+              ) : null}
+            </div>
+          )}
         </header>
 
         <section className="profile-identity" aria-labelledby="profile-name">
@@ -1806,13 +2078,9 @@ export function ProfilePage({
               fallbackSeed={profile.userId}
               level={displayLevel}
               progress={levelProgress(rating, profile.level?.assessmentRequired ?? true)}
-              size={112}
+              size={isSelf ? 144 : 112}
               src={profile.avatarUrl ?? null}
             />
-          </div>
-
-          <div className="profile-name-row">
-            <h1 id="profile-name">{profile.displayName}</h1>
             {isSelf ? (
               <a
                 className="profile-edit-link"
@@ -1825,7 +2093,20 @@ export function ProfilePage({
             ) : null}
           </div>
 
-          {!isSelf || isIndependentSport ? (
+          <div className="profile-name-row">
+            <h1 id="profile-name">{profile.displayName}</h1>
+          </div>
+
+          {isSelf ? (
+            <ProfileFacts
+              key={`facts:${profile.userId}`}
+              userId={profile.userId}
+              sport={activeSport}
+              onChooseSport={() => setSportPickerOpen(true)}
+            />
+          ) : null}
+
+          {!isSelf ? (
             <div className="profile-stats" aria-label="Данные профиля">
               <div>
                 <span>{isIndependentSport ? 'профиль' : privateAccount ? 'баланс' : 'доступ'}</span>
@@ -1840,7 +2121,7 @@ export function ProfilePage({
             </div>
           ) : null}
 
-          {!isIndependentSport ? (
+          {!isSelf && !isIndependentSport ? (
             <>
               <div className="profile-share-row">
                 <button
@@ -1872,6 +2153,11 @@ export function ProfilePage({
                 </p>
               ) : null}
             </>
+          ) : null}
+          {isSelf && shareNotice ? (
+            <p className="profile-share-notice" role="status">
+              {shareNotice}
+            </p>
           ) : null}
         </section>
 
@@ -1920,6 +2206,16 @@ export function ProfilePage({
         ) : null}
 
         <div className="profile-content">
+          {isSelf && !isIndependentSport ? (
+            <ProfileV2Overview
+              level={displayLevel}
+              friendsAvailable={friendsAvailable}
+              {...(friends !== undefined ? { friends } : {})}
+              {...(communities !== undefined ? { communities } : {})}
+              onFriends={() => setActiveDirectory('friends')}
+              onCommunities={() => setActiveDirectory('communities')}
+            />
+          ) : null}
           {isSelf && !isIndependentSport ? <ProfileBalanceCard balance={balance} /> : null}
 
           {access.audience === 'OTHER' ? (
@@ -1954,15 +2250,6 @@ export function ProfilePage({
             </>
           ) : null}
 
-          {isSelf ? (
-            <ProfileFacts
-              key={`facts:${profile.userId}`}
-              userId={profile.userId}
-              sport={activeSport}
-              onChooseSport={() => setSportPickerOpen(true)}
-            />
-          ) : null}
-
           {isSelf && independentSport ? (
             <IndependentSportProfileContent sport={independentSport} />
           ) : null}
@@ -1977,25 +2264,62 @@ export function ProfilePage({
             </>
           ) : null}
 
-          {isSelf && !isIndependentSport && friendsAvailable ? (
-            <ProfileFriends
-              {...(friends !== undefined ? { page: friends } : {})}
-              {...(friendsError !== undefined ? { error: friendsError } : {})}
-              {...(friendRequests !== undefined ? { requests: friendRequests } : {})}
-              {...(friendRequestsError !== undefined ? { requestsError: friendRequestsError } : {})}
-              friendRequestBusyId={friendRequestBusyId}
-              {...(onAcceptFriendRequest ? { onAcceptRequest: onAcceptFriendRequest } : {})}
-              {...(onDeclineFriendRequest ? { onDeclineRequest: onDeclineFriendRequest } : {})}
-            />
+          {isSelf && !isIndependentSport ? (
+            <nav className="profile-v2-shortcuts" aria-label="Быстрые переходы профиля">
+              <a href="/bookings">
+                <span>
+                  <ProfileIcon name="calendar" />
+                </span>
+                Мои игры
+              </a>
+              <button
+                type="button"
+                disabled={!friendsAvailable}
+                aria-label="Открыть друзей"
+                onClick={() => setActiveDirectory('friends')}
+              >
+                <span>
+                  <ProfileIcon name="friends" />
+                </span>
+                Друзья
+              </button>
+              <button
+                type="button"
+                aria-label="Открыть мои сообщества"
+                onClick={() => setActiveDirectory('communities')}
+              >
+                <span>
+                  <ProfileIcon name="community" />
+                </span>
+                Сообщества
+              </button>
+            </nav>
+          ) : null}
+          {isSelf && !isIndependentSport && friendsAvailable && activeDirectory === 'friends' ? (
+            <ProfileDirectorySheet title="Друзья" onClose={() => setActiveDirectory(null)}>
+              <ProfileFriends
+                {...(friends !== undefined ? { page: friends } : {})}
+                {...(friendsError !== undefined ? { error: friendsError } : {})}
+                {...(friendRequests !== undefined ? { requests: friendRequests } : {})}
+                {...(friendRequestsError !== undefined
+                  ? { requestsError: friendRequestsError }
+                  : {})}
+                friendRequestBusyId={friendRequestBusyId}
+                {...(onAcceptFriendRequest ? { onAcceptRequest: onAcceptFriendRequest } : {})}
+                {...(onDeclineFriendRequest ? { onDeclineRequest: onDeclineFriendRequest } : {})}
+              />
+            </ProfileDirectorySheet>
           ) : null}
 
-          {isSelf && !isIndependentSport ? (
-            <ProfileCommunities
-              key={`communities:${profile.userId}`}
-              {...(loadCommunityPage ? { loadPage: loadCommunityPage } : {})}
-              {...(communities !== undefined ? { page: communities } : {})}
-              {...(communitiesError !== undefined ? { error: communitiesError } : {})}
-            />
+          {isSelf && !isIndependentSport && activeDirectory === 'communities' ? (
+            <ProfileDirectorySheet title="Сообщества" onClose={() => setActiveDirectory(null)}>
+              <ProfileCommunities
+                key={`communities:${profile.userId}`}
+                {...(loadCommunityPage ? { loadPage: loadCommunityPage } : {})}
+                {...(communities !== undefined ? { page: communities } : {})}
+                {...(communitiesError !== undefined ? { error: communitiesError } : {})}
+              />
+            </ProfileDirectorySheet>
           ) : null}
 
           {isSelf && !isIndependentSport ? (
@@ -2004,23 +2328,53 @@ export function ProfilePage({
               id="profile-settings"
               aria-label="Настройки"
             >
+              <button
+                className="profile-v2-unavailable"
+                type="button"
+                disabled
+                aria-label="О себе — пока недоступно"
+              >
+                <span className="profile-inline-icon">
+                  <ProfileIcon name="about" />
+                </span>
+                <span>
+                  <strong>О себе</strong>
+                  <small>Информация пока не добавлена</small>
+                </span>
+                <i aria-hidden="true">›</i>
+              </button>
+              <button
+                className="profile-v2-unavailable"
+                type="button"
+                disabled
+                aria-label="Достижения — пока недоступно"
+              >
+                <span className="profile-inline-icon">
+                  <ProfileIcon name="trophy" />
+                </span>
+                <span>
+                  <strong>Достижения</strong>
+                  <small>Пока нет данных</small>
+                </span>
+                <b className="profile-v2-achievement-count">—</b>
+              </button>
               <button type="button" onClick={() => setActiveSettings('preferences')}>
                 <span className="profile-inline-icon">
                   <ProfileIcon name="preference" />
                 </span>
                 <span>
                   <strong>Предпочтения</strong>
-                  <small>любимые станции · удобное время · история игр</small>
+                  <small>Станции, время, рекомендации</small>
                 </span>
                 <i aria-hidden="true">›</i>
               </button>
               <button type="button" onClick={() => setActiveSettings('visibility')}>
                 <span className="profile-inline-icon">
-                  <ProfileIcon name="eye" />
+                  <ProfileIcon name="lock" />
                 </span>
                 <span>
-                  <strong>Видимость профиля</strong>
-                  <small>связь и личный чат</small>
+                  <strong>Конфиденциальность</strong>
+                  <small>Кто может видеть профиль</small>
                 </span>
                 <i aria-hidden="true">›</i>
               </button>
@@ -2037,32 +2391,6 @@ export function ProfilePage({
                 </a>
               ) : null}
             </section>
-          ) : null}
-
-          {isSelf && !isIndependentSport ? (
-            <section className="profile-level-scale" aria-labelledby="profile-level-scale-title">
-              <span id="profile-level-scale-title">уровень игрока</span>
-              <div>
-                {levelScale.map((level) => (
-                  <b className={level === levelKey ? 'is-active' : undefined} key={level}>
-                    {level}
-                  </b>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          {isSelf && !isIndependentSport ? (
-            <a className="profile-level-history-link" href="/profile/level-history">
-              <span className="profile-inline-icon">
-                <ProfileIcon name="history" />
-              </span>
-              <span>
-                <strong>История изменения уровня</strong>
-                <small>график по датам и уровням</small>
-              </span>
-              <i aria-hidden="true">›</i>
-            </a>
           ) : null}
 
           {error ? (

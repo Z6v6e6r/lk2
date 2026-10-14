@@ -79,7 +79,7 @@ describe('ProfilePage', () => {
     expect(within(card).getByRole('img', { name: title })).toHaveAttribute('src', artwork);
     expect(within(card).getByText('осталось 8 посещений')).toBeVisible();
     expect(within(card).getByText('активна')).toBeVisible();
-    expect(within(card).getByRole('link', { name: 'продлить' })).toHaveAttribute(
+    expect(within(card).getByRole('link', { name: `Открыть подписку: ${title}` })).toHaveAttribute(
       'href',
       '/subscriptions/11111111-1111-4111-8111-111111111111',
     );
@@ -109,7 +109,7 @@ describe('ProfilePage', () => {
       const card = screen.getByRole('region', { name: 'Подписки и абонементы' });
       expect(within(card).queryByRole('img')).not.toBeInTheDocument();
       expect(within(card).getByText(title)).toBeVisible();
-      expect(within(card).getByText('8')).toBeVisible();
+      expect(within(card).getByText('осталось 8 посещений')).toBeVisible();
     },
   );
 
@@ -139,7 +139,7 @@ describe('ProfilePage', () => {
     expect(screen.getByRole('heading', { name: 'Когда и где мне удобно' })).toBeVisible();
   });
 
-  it('shows Back on the left and notifications on the right', () => {
+  it('shows Back and keeps notifications and support in the v2 settings menu', () => {
     const historyBack = vi.spyOn(window.history, 'back').mockImplementation(() => undefined);
 
     render(
@@ -154,13 +154,14 @@ describe('ProfilePage', () => {
 
     const backButton = screen.getByRole('button', { name: 'Назад' });
     const toolbar = backButton.closest('header');
-    const notificationsLink = toolbar?.querySelector(
-      'a[aria-label="Уведомления, непрочитанных: 1"]',
-    );
 
     expect(toolbar).toHaveClass('profile-toolbar');
     expect(toolbar?.firstElementChild).toBe(backButton);
-    expect(toolbar?.lastElementChild).toHaveClass('profile-toolbar__actions');
+    expect(toolbar?.lastElementChild).toHaveClass('profile-v2-actions');
+    fireEvent.click(screen.getByLabelText('Настройки профиля'));
+    const notificationsLink = toolbar?.querySelector(
+      'a[aria-label="Уведомления, непрочитанных: 1"]',
+    );
     expect(notificationsLink?.nextElementSibling).toBe(
       screen.getByRole('link', { name: 'Техническая поддержка' }),
     );
@@ -185,8 +186,8 @@ describe('ProfilePage', () => {
     ).toBeInTheDocument();
     expect(backButton).toHaveClass('profile-toolbar__back');
     expect(notificationsLink).toHaveAttribute('href', '/notifications');
-    expect(notificationsLink).toHaveClass('fh-bell', 'is-unread', 'profile-toolbar__bell');
-    expect(notificationsLink?.querySelector('.fh-bell-dot')).toBeInTheDocument();
+    expect(notificationsLink).toHaveClass('is-unread');
+    expect(within(notificationsLink as HTMLElement).getByText('1')).toBeVisible();
     expect(screen.getByRole('link', { name: /^История изменения уровня/ })).toHaveAttribute(
       'href',
       '/profile/level-history',
@@ -220,6 +221,63 @@ describe('ProfilePage', () => {
         name: `Алексей Максимов, уровень ${level}, прогресс 64%`,
       }),
     ).toBeVisible();
+  });
+
+  it('keeps unavailable v2 statistics and sections explicit without invented data', () => {
+    render(
+      <ProfilePage profile={selfProfile('D+')} logoutBusy={false} onLogout={() => undefined} />,
+    );
+    const metrics = screen.getByRole('region', { name: 'Показатели игрока' });
+    expect(within(metrics).getAllByText('—')).toHaveLength(3);
+    expect(within(metrics).getByRole('link', { name: /Мои игры/ })).toHaveAttribute(
+      'href',
+      '/bookings',
+    );
+    expect(screen.getByRole('button', { name: 'О себе — пока недоступно' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Достижения — пока недоступно' })).toBeDisabled();
+    expect(screen.getByRole('link', { name: 'Купить подписку' })).toHaveAttribute(
+      'href',
+      '/subscriptions',
+    );
+  });
+
+  it('opens a v2 directory from quick navigation and restores focus after Escape', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        friends={{ items: [] }}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Открыть друзей' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const sheet = screen.getByRole('dialog', { name: 'Друзья' });
+    const close = within(sheet).getByRole('button', { name: 'Закрыть: Друзья' });
+    expect(close).toHaveFocus();
+    expect(
+      within(sheet).getByText('Добавляйте игроков из их профилей — они появятся здесь.'),
+    ).toBeVisible();
+    fireEvent.keyDown(close, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Друзья' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('respects unavailable friends and notifications in the v2 client', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        friendsAvailable={false}
+        notificationsAvailable={false}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Открыть друзей' })).toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Настройки профиля'));
+    expect(screen.queryByRole('link', { name: /Уведомления/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'QR-код' })).toBeVisible();
   });
 
   it('shows balance below the identity with top-up availability and information', () => {
@@ -404,7 +462,12 @@ describe('ProfilePage', () => {
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'Друзья' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть друзей' }));
+    expect(
+      within(screen.getByRole('region', { name: 'Друзья' })).getByRole('heading', {
+        name: 'Друзья',
+      }),
+    ).toBeVisible();
     expect(screen.queryByText('ПаделХАБ')).not.toBeInTheDocument();
     expect(screen.queryByText('•••• 5826')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Мария Соколова · C' })).toHaveAttribute(
@@ -435,6 +498,7 @@ describe('ProfilePage', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть друзей' }));
     for (const friend of items) {
       expect(screen.getByRole('link', { name: `${friend.displayName} · C` })).toHaveAttribute(
         'href',
@@ -465,6 +529,7 @@ describe('ProfilePage', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть мои сообщества' }));
     expect(screen.getByRole('link', { name: 'хАБ Нагатинская, 12 место' })).toHaveAttribute(
       'href',
       '/communities/11111111-1111-4111-8111-111111111111',
@@ -494,6 +559,7 @@ describe('ProfilePage', () => {
     );
 
     // The preview never triggers a per-community ranking read, so absence is "unknown", not a place.
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть мои сообщества' }));
     expect(screen.getByRole('link', { name: 'хАБ Терехово' })).toBeVisible();
     expect(screen.queryByText('вне рейтинга')).not.toBeInTheDocument();
   });
@@ -619,6 +685,7 @@ describe('ProfilePage', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть друзей' }));
     const requestsBlock = screen.getByRole('region', { name: 'Заявки в друзья' });
     expect(within(requestsBlock).getByText('Анна Шубина')).toBeVisible();
     expect(within(requestsBlock).getByText('хочет добавить вас в друзья')).toBeVisible();
@@ -644,6 +711,7 @@ describe('ProfilePage', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть друзей' }));
     expect(screen.queryByRole('region', { name: 'Заявки в друзья' })).not.toBeInTheDocument();
     expect(
       screen.getByText('Добавляйте игроков из их профилей — они появятся здесь.'),
@@ -840,6 +908,7 @@ describe('Profile city and community rail', () => {
         onLogout={() => undefined}
       />,
     );
+    fireEvent.click(screen.getByRole('button', { name: 'Открыть мои сообщества' }));
     const rail = screen.getByRole('region', { name: 'Мои сообщества' });
     expect(within(rail).getAllByRole('link')).toHaveLength(6);
     Object.defineProperties(rail, {
