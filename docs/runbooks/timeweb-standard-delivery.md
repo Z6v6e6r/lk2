@@ -1032,6 +1032,12 @@ restore ID/operation is excluded from that unchanged boundary. The disk mode ins
 its fixed hash-only reference, source-anchored helper, and independently read kernel proof. A changed proof fingerprint stops
 backup; no file relocation or receipt rewriting is available.
 
+The mapper readback accepts cryptsetup's exact 512-bit displays `512 bits` and
+`512 [bits]`. Cipher, backing loop, read/write mode, LUKS UUID, device numbers and
+kernel mapper UUID remain mandatory. A different size, unit or trailing content
+is a custody failure; formatting compatibility never authorizes a new mapper or
+replay of an interrupted operation.
+
 ### Private mount namespace and temporary Docker runtime (V2)
 
 Shared host mounts make the V1 disk mode ineligible: even a bind followed by `--make-private`

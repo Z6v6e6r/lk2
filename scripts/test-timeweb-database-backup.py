@@ -535,6 +535,43 @@ class DiskPureTests(unittest.TestCase):
         op = disk_operation()
         return m.disk_plan(op, m.encoded(op), m.disk_sizing(1024**3, 8*1024**3, 30*1024**3))
 
+    def mapper_readback(self, keysize='512 [bits]', status_changes=None, uuid=None, dm_uuid=None):
+        plan=self.plan();loop='/dev/loop7';major,minor=253,2
+        fields={'type':'LUKS2','cipher':'aes-xts-plain64','keysize':keysize,'device':loop,'mode':'read/write'}
+        fields.update(status_changes or {})
+        status=''.join('  '+key+': '+value+'\n' for key,value in fields.items()).encode()
+        expected_uuid='CRYPT-LUKS2-'+plan['luksUuid'].replace('-','')+'-'+plan['mapperName']
+        def tool(name,args,code,**kwargs):
+            if name=='crypt' and args==['status',plan['mapperName']]:return status
+            if name=='crypt' and args==['luksUUID',loop]:return ((uuid or plan['luksUuid'])+'\n').encode()
+            if name=='dmsetup' and args==['info','--columns','--noheadings','--separator',':','--options','name,major,minor,uuid',plan['mapperName']]:
+                return (plan['mapperName']+':'+str(major)+':'+str(minor)+':'+(dm_uuid or expected_uuid)+'\n').encode()
+            raise AssertionError('unexpected mapper read command')
+        block=SimpleNamespace(st_mode=stat.S_IFBLK|0o600,st_rdev=os.makedev(major,minor))
+        with patch.object(m.os.path,'lexists',return_value=True),patch.object(m.os,'stat',return_value=block),patch.object(m,'disk_tool',side_effect=tool):
+            return m.disk_mapper(plan,loop)
+
+    def test_mapper_accepts_legacy_and_bracketed_cryptsetup_bit_units(self):
+        for keysize in ['512 bits','512 [bits]']:
+            with self.subTest(keysize=keysize):
+                result=self.mapper_readback(keysize)
+                self.assertEqual(result['device'],253)
+                self.assertEqual(result['minor'],2)
+                self.assertEqual(result['uuid'],'CRYPT-LUKS2-'+self.plan()['luksUuid'].replace('-','')+'-'+self.plan()['mapperName'])
+
+    def test_mapper_rejects_wrong_sizes_units_and_extra_status_content(self):
+        for keysize in ['256 bits','1024 [bits]','512 bytes','512 [bytes]','512bits','512 [bits] trailing','']:
+            with self.subTest(keysize=keysize),self.assertRaisesRegex(m.Stop,'DISK_MAPPER_CUSTODY'):
+                self.mapper_readback(keysize)
+
+    def test_mapper_unit_compatibility_preserves_device_cipher_mode_and_uuid_checks(self):
+        for change in [{'type':'LUKS1'},{'cipher':'aes-cbc-essiv:sha256'},{'device':'/dev/loop8'},{'mode':'readonly'}]:
+            with self.subTest(change=change),self.assertRaisesRegex(m.Stop,'DISK_MAPPER_CUSTODY'):
+                self.mapper_readback(status_changes=change)
+        for changes in [{'uuid':'00000000-0000-0000-0000-000000000000'},{'dm_uuid':'CRYPT-LUKS2-foreign-device'}]:
+            with self.subTest(changes=changes),self.assertRaisesRegex(m.Stop,'DISK_MAPPER_ID'):
+                self.mapper_readback(**changes)
+
     def test_closed_pre_and_post_disk_schemas_bind_actual_ledger_and_distinct_authority(self):
         for post in (False, True):
             op = disk_operation(post)
