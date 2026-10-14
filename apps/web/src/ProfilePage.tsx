@@ -17,6 +17,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
+import { ProfilePackIcon } from './ProfilePackIcon.js';
 import { ProfileSportIcon } from './ProfileSportIcon.js';
 import './ProfilePageV2.css';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
@@ -852,7 +853,7 @@ function ProfileV2Actions({
                 : 'Уведомления, непрочитанных нет'
             }
           >
-            <ProfileIcon name="bell" />
+            <ProfilePackIcon name="bell" />
             Уведомления
             {unreadCount > 0 ? (
               <span className="profile-v2-unread-count" aria-hidden="true">
@@ -877,7 +878,7 @@ function ProfileV2Actions({
           QR-код
         </button>
         <a href="/profile/level-history">
-          <ProfileIcon name="history" />
+          <ProfilePackIcon name="history" />
           История изменения уровня
         </a>
       </div>
@@ -1000,7 +1001,7 @@ function ProfileV2Overview({
             : `Открыть друзей: загружено ${loadedFriends}, общее число неизвестно`
         }
       >
-        <ProfileIcon name="friends" />
+        <ProfilePackIcon name="friends" />
         <strong>{friendCount}</strong>
         <span>друзей</span>
       </button>
@@ -1009,7 +1010,7 @@ function ProfileV2Overview({
         onClick={onCommunities}
         aria-label={`Открыть мои сообщества: ${communityCount === '—' ? 'число неизвестно' : communityCount}`}
       >
-        <ProfileIcon name="community" />
+        <ProfilePackIcon name="community" />
         <strong>{communityCount}</strong>
         <span>сообщества</span>
       </button>
@@ -1024,7 +1025,7 @@ function ProfileBalanceCard({ balance }: { readonly balance: string | null }): R
     <section className="profile-balance-card" aria-labelledby="profile-balance-title">
       <div className="profile-balance-card__amount" aria-label="Данные профиля">
         <span className="profile-balance-card__symbol">
-          <ProfileIcon name="wallet" />
+          <ProfilePackIcon name="wallet" />
         </span>
         <h2 id="profile-balance-title">Баланс</h2>
         <strong>{balance ?? UNKNOWN_VALUE_PLACEHOLDER}</strong>
@@ -1076,7 +1077,7 @@ function ProfileFacts({
     <section className="profile-facts" aria-label="Город и вид спорта">
       <div>
         <span className="profile-inline-icon">
-          <ProfileIcon name="city" />
+          <ProfilePackIcon name="city" />
         </span>
         <label className="profile-city-choice">
           <small>город</small>
@@ -1382,7 +1383,7 @@ function ProfileCommunities({
     <section className="profile-communities" aria-labelledby="profile-communities-title">
       <header>
         <span className="profile-inline-icon">
-          <ProfileIcon name="community" />
+          <ProfilePackIcon name="community" />
         </span>
         <h2 id="profile-communities-title">Сообщества</h2>
         <a href="/communities">Все</a>
@@ -1543,7 +1544,7 @@ function ProfileFriends({
     <section className="profile-friends" aria-labelledby="profile-friends-title">
       <header>
         <span className="profile-inline-icon">
-          <ProfileIcon name="friends" />
+          <ProfilePackIcon name="friends" />
         </span>
         <h2 id="profile-friends-title">Друзья</h2>
         {page ? <span>{page.items.length}</span> : null}
@@ -2342,7 +2343,7 @@ export function ProfilePage({
                 aria-label="О себе — пока недоступно"
               >
                 <span className="profile-inline-icon">
-                  <ProfileIcon name="friends" />
+                  <ProfilePackIcon name="friends" />
                 </span>
                 <span>
                   <strong>О себе</strong>
@@ -2367,7 +2368,7 @@ export function ProfilePage({
               </button>
               <button type="button" onClick={() => setActiveSettings('preferences')}>
                 <span className="profile-inline-icon">
-                  <ProfileIcon name="preference" />
+                  <ProfilePackIcon name="preference" />
                 </span>
                 <span>
                   <strong>Предпочтения</strong>
@@ -2377,7 +2378,7 @@ export function ProfilePage({
               </button>
               <button type="button" onClick={() => setActiveSettings('visibility')}>
                 <span className="profile-inline-icon">
-                  <ProfileIcon name="eye" />
+                  <ProfilePackIcon name="eye" />
                 </span>
                 <span>
                   <strong>Видимость профиля</strong>
@@ -2388,7 +2389,7 @@ export function ProfilePage({
               {notificationsAvailable ? (
                 <a href="/notifications">
                   <span className="profile-inline-icon">
-                    <ProfileIcon name="bell" />
+                    <ProfilePackIcon name="bell" />
                   </span>
                   <span>
                     <strong>Уведомления</strong>
