@@ -6,6 +6,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfilePage } from './ProfilePage.js';
+import friendshipArtwork from './assets/subscriptions/friendship.svg';
+import raArtwork from './assets/subscriptions/ra.svg';
+import academyArtwork from './assets/subscriptions/academy.svg';
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -49,6 +52,67 @@ function selfProfile(level: string): PlayerProfileView {
 }
 
 describe('ProfilePage', () => {
+  it.each([
+    ['Дружба', friendshipArtwork],
+    ['РА', raArtwork],
+    ['Академия', academyArtwork],
+  ])('uses the original %s wordmark while preserving subscription details', (title, artwork) => {
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        logoutBusy={false}
+        communities={{ items: [] }}
+        subscriptions={[
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            title,
+            status: 'active',
+            remainingUnits: 8,
+            validUntil: null,
+            route: '/subscriptions/11111111-1111-4111-8111-111111111111',
+          },
+        ]}
+        onLogout={() => undefined}
+      />,
+    );
+    const card = screen.getByRole('region', { name: 'Подписки и абонементы' });
+    expect(within(card).getByRole('img', { name: title })).toHaveAttribute('src', artwork);
+    expect(within(card).getByText('осталось 8 посещений')).toBeVisible();
+    expect(within(card).getByText('активна')).toBeVisible();
+    expect(within(card).getByRole('link', { name: 'продлить' })).toHaveAttribute(
+      'href',
+      '/subscriptions/11111111-1111-4111-8111-111111111111',
+    );
+  });
+
+  it.each(['Индивидуальный абонемент', 'Дружба Плюс'])(
+    'keeps the original fallback for an unidentified plan: %s',
+    (title) => {
+      render(
+        <ProfilePage
+          profile={selfProfile('D+')}
+          logoutBusy={false}
+          communities={{ items: [] }}
+          subscriptions={[
+            {
+              id: '11111111-1111-4111-8111-111111111111',
+              title,
+              status: 'active',
+              remainingUnits: 8,
+              validUntil: null,
+              route: '/subscriptions/11111111-1111-4111-8111-111111111111',
+            },
+          ]}
+          onLogout={() => undefined}
+        />,
+      );
+      const card = screen.getByRole('region', { name: 'Подписки и абонементы' });
+      expect(within(card).queryByRole('img')).not.toBeInTheDocument();
+      expect(within(card).getByText(title)).toBeVisible();
+      expect(within(card).getByText('8')).toBeVisible();
+    },
+  );
+
   it('opens recommendation preferences from the Home deep link', () => {
     window.history.replaceState({}, '', '/profile#booking-preferences-title');
 
@@ -104,9 +168,17 @@ describe('ProfilePage', () => {
       'href',
       '/support',
     );
-    expect(screen.getByRole('heading', { name: 'Алексей Максимов' }).closest('header')).toBe(
-      toolbar,
-    );
+    const heading = screen.getByRole('heading', { name: 'Алексей Максимов' });
+    expect(heading.closest('header')).toBeNull();
+    const identity = heading.closest('section');
+    expect(identity).toHaveClass('profile-identity');
+    const avatar = within(identity!).getByRole('img', {
+      name: 'Алексей Максимов, уровень D+, прогресс 64%',
+    });
+    expect(avatar.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(
+      within(screen.getByLabelText('Данные профиля')).queryByText('уровень'),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText('PadelHub Player')).not.toBeInTheDocument();
     expect(
       screen.getByRole('link', { name: 'редактировать профиль' }).querySelector('svg'),
@@ -184,8 +256,11 @@ describe('ProfilePage', () => {
       />,
     );
 
+    expect(
+      screen.getByRole('img', { name: 'Алексей Максимов, уровень —, прогресс 0%' }),
+    ).toBeVisible();
     const stats = screen.getByLabelText('Данные профиля');
-    expect(within(stats).getByText('—')).toBeVisible();
+    expect(within(stats).queryByText('уровень')).not.toBeInTheDocument();
     expect(within(stats).queryByText('D')).not.toBeInTheDocument();
   });
 

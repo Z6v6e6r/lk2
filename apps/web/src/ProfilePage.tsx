@@ -19,6 +19,9 @@ import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 import { QR_QUIET_ZONE_MODULES, qrCodePath, tryCreateQrCode } from './qr-code.js';
+import friendshipArtwork from './assets/subscriptions/friendship.svg';
+import raArtwork from './assets/subscriptions/ra.svg';
+import academyArtwork from './assets/subscriptions/academy.svg';
 import levelABackground from './assets/profile-levels/level-a.jpg';
 import levelBBackground from './assets/profile-levels/level-b.jpg';
 import levelBPlusBackground from './assets/profile-levels/level-b-plus.jpg';
@@ -583,18 +586,33 @@ function ProfileIcon({
       );
     case 'share':
       return (
-        <svg {...common}>
-          <path
-            d="M8 12h8M13 8l4 4-4 4M5 5h6M5 19h6M5 5v14"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
+        <svg
+          {...common}
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="18" cy="5" r="3" />
+          <circle cx="6" cy="12" r="3" />
+          <circle cx="18" cy="19" r="3" />
+          <path d="m8.59 13.51 6.83 3.98m-.01-10.98-6.82 3.98" />
+        </svg>
+      );
+    case 'friends':
+      return (
+        <svg
+          {...common}
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="7" r="4" />
+          <path d="M5 21v-2a7 7 0 0 1 14 0v2" />
         </svg>
       );
     case 'community':
-    case 'friends':
       return (
         <svg {...common}>
           <path
@@ -910,6 +928,14 @@ function remainingVisitsLabel(value: number): string {
   return `${value} посещений`;
 }
 
+// Original plan wordmarks from https://padlhub.ru/sub_hab. Generic provider labels
+// keep the existing fallback; artwork never determines subscription entitlements.
+const subscriptionPlanArtwork = new Map([
+  ['дружба', friendshipArtwork],
+  ['ра', raArtwork],
+  ['академия', academyArtwork],
+]);
+
 function ProfileSubscriptions({
   subscriptions,
   error,
@@ -943,15 +969,30 @@ function ProfileSubscriptions({
         <div className="profile-subscription-list">
           {current.map((subscription) => {
             const validUntil = subscriptionDate(subscription.validUntil);
+            const artwork = subscriptionPlanArtwork.get(
+              subscription.title.trim().toLocaleLowerCase('ru-RU'),
+            );
             return (
-              <article key={subscription.id}>
-                <span className="profile-subscription-art" aria-hidden="true">
-                  <b>{subscription.remainingUnits}</b>
-                  <small>игр</small>
-                </span>
+              <article className={artwork ? 'has-plan-artwork' : undefined} key={subscription.id}>
+                {!artwork ? (
+                  <span className="profile-subscription-art" aria-hidden="true">
+                    <b>{subscription.remainingUnits}</b>
+                    <small>игр</small>
+                  </span>
+                ) : null}
                 <span className="profile-subscription-copy">
                   <span>
-                    <strong>{subscription.title}</strong>
+                    <strong>
+                      {artwork ? (
+                        <img
+                          className="profile-subscription-wordmark"
+                          src={artwork}
+                          alt={subscription.title}
+                        />
+                      ) : (
+                        subscription.title
+                      )}
+                    </strong>
                     {subscription.status === 'active' ? <em>активна</em> : null}
                   </span>
                   <small>
@@ -1670,19 +1711,6 @@ export function ProfilePage({
           >
             <ProfileIcon name="back" />
           </button>
-          <div className="profile-toolbar__identity">
-            <h1 id="profile-name">{profile.displayName}</h1>
-            {isSelf ? (
-              <a
-                className="profile-edit-link"
-                href="#profile-settings"
-                aria-label="редактировать профиль"
-                title="Редактировать профиль"
-              >
-                <ProfileIcon name="edit" />
-              </a>
-            ) : null}
-          </div>
           <div className="profile-toolbar__actions">
             {notificationsAvailable ? (
               <NotificationBellLink
@@ -1716,11 +1744,21 @@ export function ProfilePage({
             />
           </div>
 
+          <div className="profile-name-row">
+            <h1 id="profile-name">{profile.displayName}</h1>
+            {isSelf ? (
+              <a
+                className="profile-edit-link"
+                href="#profile-settings"
+                aria-label="редактировать профиль"
+                title="Редактировать профиль"
+              >
+                <ProfileIcon name="edit" />
+              </a>
+            ) : null}
+          </div>
+
           <div className="profile-stats" aria-label="Данные профиля">
-            <div>
-              <span>уровень</span>
-              <strong>{displayLevel}</strong>
-            </div>
             <div>
               <span>{isIndependentSport ? 'профиль' : privateAccount ? 'баланс' : 'доступ'}</span>
               <strong>
@@ -1737,7 +1775,7 @@ export function ProfilePage({
             <>
               <div className="profile-share-row">
                 <button
-                  className="profile-share"
+                  className="profile-share profile-share--link"
                   type="button"
                   aria-label="поделиться"
                   title="Поделиться профилем"
