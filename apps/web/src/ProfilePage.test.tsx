@@ -6,9 +6,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfilePage } from './ProfilePage.js';
-import friendshipArtwork from './assets/subscriptions/friendship.svg';
-import raArtwork from './assets/subscriptions/ra.svg';
-import academyArtwork from './assets/subscriptions/academy.svg';
+import friendshipArtwork from './assets/subscriptions/friendship-badge.png';
+import raArtwork from './assets/subscriptions/ra-badge.png';
+import academyArtwork from './assets/subscriptions/academy-badge.png';
 
 beforeEach(() => {
   const values = new Map<string, string>();
@@ -56,7 +56,7 @@ describe('ProfilePage', () => {
     ['Дружба', friendshipArtwork],
     ['РА', raArtwork],
     ['Академия', academyArtwork],
-  ])('uses the original %s wordmark while preserving subscription details', (title, artwork) => {
+  ])('uses the supplied %s badge while preserving subscription details', (title, artwork) => {
     render(
       <ProfilePage
         profile={selfProfile('D+')}

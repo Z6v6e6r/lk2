@@ -22,9 +22,11 @@ import { ProfileSportIcon } from './ProfileSportIcon.js';
 import './ProfilePageV2.css';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 import { QR_QUIET_ZONE_MODULES, qrCodePath, tryCreateQrCode } from './qr-code.js';
-import friendshipArtwork from './assets/subscriptions/friendship.svg';
-import raArtwork from './assets/subscriptions/ra.svg';
-import academyArtwork from './assets/subscriptions/academy.svg';
+import friendshipArtwork from './assets/subscriptions/friendship-badge.png';
+import raArtwork from './assets/subscriptions/ra-badge.png';
+import academyArtwork from './assets/subscriptions/academy-badge.png';
+import energyArtwork from './assets/subscriptions/energy-badge.png';
+import kidsPadelArtwork from './assets/subscriptions/kids-padel-badge.png';
 import levelABackground from './assets/profile-levels/level-a.jpg';
 import levelBBackground from './assets/profile-levels/level-b.jpg';
 import levelBPlusBackground from './assets/profile-levels/level-b-plus.jpg';
@@ -1272,13 +1274,35 @@ function remainingVisitsLabel(value: number): string {
   return `${value} посещений`;
 }
 
-// Original plan wordmarks from https://padlhub.ru/sub_hab. Generic provider labels
-// keep the existing fallback; artwork never determines subscription entitlements.
-const subscriptionPlanArtwork = new Map([
-  ['дружба', friendshipArtwork],
-  ['ра', raArtwork],
-  ['академия', academyArtwork],
+// User-supplied plan badges. Exact display titles select artwork only, never entitlements.
+// Viewports exclude transparent canvas padding; the original PNG pixel streams are unchanged.
+type SubscriptionBadge = {
+  readonly src: string;
+  readonly viewport: readonly [x: number, y: number, width: number, height: number];
+};
+
+const subscriptionPlanArtwork = new Map<string, SubscriptionBadge>([
+  ['дружба', { src: friendshipArtwork, viewport: [124, 164, 1924, 385] }],
+  ['ра', { src: raArtwork, viewport: [532, 189, 1106, 344] }],
+  ['академия', { src: academyArtwork, viewport: [124, 195, 1924, 325] }],
+  ['энергия', { src: energyArtwork, viewport: [118, 191, 1937, 322] }],
+  ['дети падел', { src: kidsPadelArtwork, viewport: [167, 222, 1838, 297] }],
 ]);
+
+function subscriptionBadgeStyle([
+  x,
+  y,
+  width,
+  height,
+]: SubscriptionBadge['viewport']): CSSProperties {
+  // All five supplied PNG canvases are 2172 × 724; only their display viewport differs.
+  return {
+    '--profile-badge-ratio': width / height,
+    '--profile-badge-image-width': `${(2172 / width) * 100}%`,
+    '--profile-badge-image-left': `${(-x / width) * 100}%`,
+    '--profile-badge-image-top': `${(-y / height) * 100}%`,
+  } as CSSProperties;
+}
 
 function ProfileSubscriptions({
   subscriptions,
@@ -1326,11 +1350,14 @@ function ProfileSubscriptions({
               >
                 <span className="profile-subscription-copy">
                   <span>
-                    <strong>
+                    <strong
+                      className={artwork ? 'profile-subscription-badge' : undefined}
+                      style={artwork ? subscriptionBadgeStyle(artwork.viewport) : undefined}
+                    >
                       {artwork ? (
                         <img
-                          className="profile-subscription-wordmark"
-                          src={artwork}
+                          className="profile-subscription-badge__image"
+                          src={artwork.src}
                           alt={subscription.title}
                         />
                       ) : (

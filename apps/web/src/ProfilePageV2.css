@@ -529,10 +529,31 @@
   letter-spacing: 0.01em;
 }
 
-.profile-page--v2 .profile-subscription-wordmark {
-  filter: brightness(0) invert(1);
-  max-width: 100%;
-  height: 26px;
+.profile-page--v2 .has-plan-artwork .profile-subscription-copy > span {
+  justify-content: space-between;
+  padding-right: 0;
+}
+
+.profile-page--v2 .has-plan-artwork .profile-subscription-copy em {
+  position: static;
+  flex: 0 0 auto;
+}
+
+.profile-page--v2 .profile-subscription-copy .profile-subscription-badge {
+  position: relative;
+  display: block;
+  width: min(100%, calc(36px * var(--profile-badge-ratio)));
+  aspect-ratio: var(--profile-badge-ratio);
+}
+
+.profile-page--v2 .profile-subscription-badge__image {
+  position: absolute;
+  top: var(--profile-badge-image-top);
+  left: var(--profile-badge-image-left);
+  display: block;
+  width: var(--profile-badge-image-width);
+  max-width: none;
+  height: auto;
 }
 
 .profile-page--v2 .profile-subscription-copy em {
