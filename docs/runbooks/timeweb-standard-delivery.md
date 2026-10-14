@@ -1130,3 +1130,19 @@ whose exact old/new object IDs and modes are pinned independently in Node and Py
 must match; missing files, extra paths, mode/status/OID drift fail. Ordinary mobile/ADR paths
 are not added to the controller allowlist. The already published app/migrator images remain
 frozen; this source exception does not upgrade an installed APK.
+
+### Terminal slice proof on systemd 259
+
+After the owned transient restore slice is stopped, `systemctl show` may synthesize a
+`loaded/inactive/dead` implicit slice. The active slice identity and durable journal shape remain
+unchanged. Terminal proof accepts only the exact default non-transient form: empty cgroup,
+fragment/source/drop-ins/unit-file state/job/invocation, all resource limits `infinity`, no unit-file
+inventory entry, no cgroup path and no members. It requires the existing owned release intent and
+storage/unit cleanup history. The implicit branch never stops or adopts a unit. A legacy operation
+stopped at that proof needs fresh exact-owner continuation custody; never replay its execute or
+silently replace its installed helper, request or recovery claim.
+
+The disposable Compose unavailable-Web check requires exit status 1 and the exact newly recreated
+owned running `sleep 60` fixture with `starting` or `unhealthy` health. It does not depend on Docker
+Compose diagnostic wording; unexpected exit/status/identity/command/health fails with bounded
+diagnostics. A failed first-attempt main CI remains ineligible; rerunning it does not grant delivery.

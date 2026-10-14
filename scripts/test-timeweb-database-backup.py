@@ -1299,7 +1299,8 @@ class NamespacePureTests(unittest.TestCase):
                         stack.enter_context(patch.object(m,'namespace_admission',return_value=a))
                         stack.enter_context(patch.object(m,'namespace_unit',side_effect=lambda _:{**a['supervisor']['unit']}if state['unit']else {'LoadState':'not-found','ActiveState':'inactive','MainPID':'0'}))
                         stack.enter_context(patch.object(m,'namespace_slice',return_value=sl))
-                        stack.enter_context(patch.object(m,'namespace_show',side_effect=lambda *args:sl['unit']if state['slice']else {'LoadState':'not-found','ActiveState':'inactive'}))
+                        stack.enter_context(patch.object(m,'namespace_show',side_effect=lambda *args:sl['unit']if state['slice']else slice_terminal_fixture('not-found')))
+                        stack.enter_context(patch.object(m,'namespace_require_no_unit_file'))
                         stack.enter_context(patch.object(m,'namespace_members',side_effect=lambda _: [45]if state['unit']else []))
                         stack.enter_context(patch.object(m,'command',side_effect=command))
                         with self.assertRaises(m.Stop):m.namespace_release(p,namespace_operation(True),journal)
@@ -1518,6 +1519,98 @@ class NamespacePipelineTests(unittest.TestCase):
                 after=len([a for a in s.calls if m.SOURCE_DUMP in a])+len([a for a in s.privcalls if 'pg_restore' in a])
                 self.assertEqual(before,after);self.assertFalse((s.root/'standard/active').exists())
 
+
+
+
+def slice_terminal_fixture(load='loaded'):
+    return {'LoadState':load,'ActiveState':'inactive','SubState':'dead','ControlGroup':'',
+        'Transient':'no','MemoryMax':'infinity','MemorySwapMax':'infinity','TasksMax':'infinity',
+        'CPUQuotaPerSecUSec':'infinity','FragmentPath':'','SourcePath':'','DropInPaths':'',
+        'UnitFileState':'','Job':'','InvocationID':''}
+
+
+class NamespaceSliceTerminalTests(unittest.TestCase):
+    def test_exact_implicit_and_not_found_terminal_properties(self):
+        for load in ('loaded','not-found'):
+            with self.subTest(load=load):
+                value=slice_terminal_fixture(load)
+                self.assertEqual(m.namespace_slice_terminal_properties(value),value)
+
+    def test_every_foreign_terminal_property_and_missing_extra_fields_fail(self):
+        fields={'LoadState':'error','ActiveState':'active','SubState':'running','ControlGroup':'/foreign',
+            'Transient':'yes','MemoryMax':'4096','MemorySwapMax':'0','TasksMax':'384',
+            'CPUQuotaPerSecUSec':'2s','FragmentPath':'/etc/systemd/system/foreign.slice',
+            'SourcePath':'/run/foreign','DropInPaths':'/run/systemd/foreign.conf',
+            'UnitFileState':'static','Job':'123','InvocationID':'a'*32}
+        for key,value in fields.items():
+            with self.subTest(key=key),self.assertRaises(m.Stop):
+                m.namespace_slice_terminal_properties({**slice_terminal_fixture(),key:value})
+        for value in ({k:v for k,v in slice_terminal_fixture().items()if k!='Job'},
+                      {**slice_terminal_fixture(),'foreign':''},None):
+            with self.subTest(value=value),self.assertRaises(m.Stop):m.namespace_slice_terminal_properties(value)
+
+    def test_terminal_requires_existing_owned_release_history_and_absent_files_cgroups_members(self):
+        from contextlib import ExitStack
+        p=namespace_fixture()['value']['plan']
+        initial={'NAMESPACE_SLICE_READY':{},'NAMESPACE_SLICE_RELEASE_INTENT':{},
+            'NAMESPACE_STORAGE_CLEANED':{},'NAMESPACE_UNIT_START_INTENT':{},'NAMESPACE_RELEASED':{}}
+        for drift in [None,*[k for k in initial if k!='NAMESPACE_UNIT_START_INTENT'],'cgroup','member','unit-file']:
+            with self.subTest(drift=drift),ExitStack()as stack:
+                events=dict(initial)
+                if drift in events:events.pop(drift)
+                journal=unittest.mock.Mock();journal.find.side_effect=events.get
+                stack.enter_context(patch.object(m,'namespace_show',return_value=slice_terminal_fixture()))
+                stack.enter_context(patch.object(m.os.path,'lexists',return_value=drift=='cgroup'))
+                stack.enter_context(patch.object(m,'namespace_members',return_value=[99]if drift=='member'else []))
+                rows=(p['isolation']['slice']+' static -\n')if drift=='unit-file'else 'system.slice static -\n'
+                cmd=stack.enter_context(patch.object(m,'command',return_value=rows.encode()))
+                if drift:
+                    with self.assertRaises(m.Stop):m.namespace_slice_terminal(p,journal)
+                else:self.assertEqual(m.namespace_slice_terminal(p,journal),slice_terminal_fixture())
+                self.assertFalse(any(c.args[0][1]=='stop'for c in cmd.call_args_list))
+                journal.add.assert_not_called();journal.once.assert_not_called()
+
+    def test_actual_resume_from_slice_release_intent_is_read_only_except_journal_completion(self):
+        from contextlib import ExitStack
+        f=namespace_fixture();p=f['value']['plan'];a=f['value']['readback']['isolation']['admission']
+        events={'NAMESPACE_SLICE_START_INTENT':{},'NAMESPACE_SLICE_READY':{'identity':a['supervisor']['slice']},
+            'NAMESPACE_UNIT_START_INTENT':{},'NAMESPACE_RELEASED':{},'NAMESPACE_STORAGE_CLEANED':{},
+            'NAMESPACE_SLICE_RELEASE_INTENT':{}}
+        journal=unittest.mock.Mock();journal.find.side_effect=events.get;added=[]
+        def record(phase,**metadata):events.setdefault(phase,metadata);added.append(phase)
+        journal.once.side_effect=record;journal.add.side_effect=record;original=m.os.stat
+        with ExitStack()as stack:
+            stack.enter_context(patch.object(m,'namespace_frozen_source',return_value=a['sourceDaemon']))
+            stack.enter_context(patch.object(m.os,'stat',side_effect=lambda path,*args,**kw:SimpleNamespace(st_ino=11)if str(path)=='/proc/self/ns/mnt'else original(path,*args,**kw)))
+            stack.enter_context(patch.object(m.os.path,'lexists',return_value=False))
+            stack.enter_context(patch.object(m,'namespace_members',return_value=[]))
+            stack.enter_context(patch.object(m,'namespace_show',side_effect=lambda name,keys:{k:slice_terminal_fixture()[k]for k in keys}))
+            stack.enter_context(patch.object(m,'command',return_value=b'system.slice static -\n'))
+            stop=stack.enter_context(patch.object(m,'namespace_unit'));adopt=stack.enter_context(patch.object(m,'namespace_admission'))
+            m.namespace_release(p,namespace_operation(),journal);m.namespace_release(p,namespace_operation(),journal)
+            stop.assert_not_called();adopt.assert_not_called()
+        self.assertEqual(added,['NAMESPACE_SLICE_RELEASED'])
+
+    def test_canonical_reconciler_completes_metadata_after_exact_storage_release_without_repeating_cleanup(self):
+        with tempfile.TemporaryDirectory(prefix='phub-slice-terminal-resume-')as directory:
+            s=NamespaceScenario(directory,fault='after:DISK_MAPPER_OPEN')
+            with self.assertRaises(m.Stop):s.invoke()
+            s.fault=None;canonical_release=m.namespace_release
+            def interrupt(p,op,j):
+                j.once('NAMESPACE_RELEASE_INTENT');s.unit=False;j.once('NAMESPACE_RELEASED')
+                j.once('NAMESPACE_SLICE_RELEASE_INTENT');raise m.Stop('NS_SLICE_RELEASE_UNPROVEN')
+            s.release=interrupt
+            with self.assertRaises(m.Stop):s.invoke(True)
+            self.assertEqual(s.journal().events[-1]['phase'],'NAMESPACE_SLICE_RELEASE_INTENT')
+            self.assertFalse(s.mapper or s.loop or s.unit);self.assertFalse(Path(s.plan['image']).exists())
+            calls=len(s.calls);private=len(s.privcalls);s.release=canonical_release
+            with patch.object(m,'namespace_require_no_unit_file'),patch.object(m,'namespace_members',return_value=[]),patch.object(m,'namespace_show',side_effect=lambda name,keys:{k:slice_terminal_fixture()[k]for k in keys}):
+                result=s.invoke(True)
+            self.assertEqual(result['status'],'DISK_RECONCILED');self.assertEqual(s.journal().events[-1]['phase'],'RECONCILED')
+            self.assertFalse((s.root/'standard/active').exists())
+            self.assertTrue((Path(s.plan['work'])/'database.pgcustom.incoming').exists());self.assertTrue((Path(s.plan['work'])/'backup-operation.json').exists())
+            self.assertEqual(s.privcalls[private:],[])
+            self.assertFalse(any(a[0]in (m.DISK_TOOLS['mkfs'],m.DISK_TOOLS['mount']) or 'luksFormat'in a or a[0]==m.DISK_TOOLS['crypt']and a[1]in ('open','close') or a[0]==m.DISK_TOOLS['loop']and '--detach'in a for a in s.calls[calls:]))
 
 if __name__=='__main__':
     if len(sys.argv)==2 and sys.argv[1]=='--emit-namespace-fixture':

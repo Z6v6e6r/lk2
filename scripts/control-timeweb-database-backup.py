@@ -48,8 +48,8 @@ API_WORKER_CI_READER_PATCH = {
 }
 # One inert fixture correction; the exact regular pair is never a generic path allowance.
 API_WORKER_REHEARSAL_READINESS_PATCH = {
-    'scripts/rehearse-timeweb-standard-compose.js': {'path': 'scripts/rehearse-timeweb-standard-compose.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '98c63003b8736bc1da48abfa9be5ee1e7bd6b005', 'newOid': '0e1ff6d8d8e8ce6e246ee3b43c5934f5be79d90b'},
-    'scripts/timeweb-standard-compose.test.ts': {'path': 'scripts/timeweb-standard-compose.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ba60973d95649afa3b81ac035e55b043cddc6285', 'newOid': 'b7b826e1731179f3d982a0c2b776f8cc5b00473d'},
+    'scripts/rehearse-timeweb-standard-compose.js': {'path': 'scripts/rehearse-timeweb-standard-compose.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '98c63003b8736bc1da48abfa9be5ee1e7bd6b005', 'newOid': 'fe805aa7bea92879af4a75bfef98aa925b883f3a'},
+    'scripts/timeweb-standard-compose.test.ts': {'path': 'scripts/timeweb-standard-compose.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ba60973d95649afa3b81ac035e55b043cddc6285', 'newOid': '4ab447c1dbbe16272c42c56ce070a463c570e317'},
 }
 # Independent duplicate of the frozen atomic native source tuple.
 API_WORKER_NATIVE_BOOKINGS_PATCH = {
@@ -923,6 +923,14 @@ def namespace_require_absent(name):
     rows = command(['/usr/bin/systemctl', 'list-units', '--all', '--plain', '--full',
                     '--no-legend', '--no-pager', '--', name], 'NS_UNIT_ADMISSION', timeout=15)
     need(not rows.strip(), code)
+    namespace_require_no_unit_file(name)
+
+
+def namespace_require_no_unit_file(name):
+    need(isinstance(name, str) and re.fullmatch(
+        r'(?:phubdiskrestore[a-f0-9]{24}\.slice|phub-disk-runtime-[a-f0-9]{24}\.service)', name),
+        'NS_ADMISSION_UNIT_NAME')
+    code = 'NS_SLICE_EXISTS' if name.endswith('.slice') else 'NS_UNIT_EXISTS'
     # On systemd 259 a filtered unit-file query returns 1 for no matches. Read the
     # complete non-loading inventory instead; command errors are never absence.
     rows = command(['/usr/bin/systemctl', 'list-unit-files', '--all', '--full',
@@ -1191,10 +1199,37 @@ def namespace_release(p, op, journal):
         if current['ActiveState']=='active':
             need(namespace_slice(p)==journal.find('NAMESPACE_SLICE_READY')['identity'], 'NS_SLICE_RELEASE_DRIFT')
             command(['/usr/bin/systemctl','stop',p['isolation']['slice']], 'NS_SLICE_STOP',timeout=30)
-        current=namespace_show(p['isolation']['slice'],NS_SLICE_KEYS)
-        need(current['LoadState']=='not-found' and current['ActiveState']=='inactive'
-             and not Path('/sys/fs/cgroup/'+p['isolation']['slice']).exists(), 'NS_SLICE_RELEASE_UNPROVEN')
+        namespace_slice_terminal(p, journal)
         journal.once('NAMESPACE_SLICE_RELEASED')
+
+
+NS_TERMINAL_SLICE_KEYS = NS_SLICE_KEYS + ['SubState', 'FragmentPath', 'SourcePath',
+    'DropInPaths', 'UnitFileState', 'Job', 'InvocationID']
+
+
+def namespace_slice_terminal_properties(value):
+    # show/LoadUnit may synthesize an implicit default .slice after transient removal.
+    need(isinstance(value, dict) and set(value) == set(NS_TERMINAL_SLICE_KEYS), 'NS_SLICE_TERMINAL_FIELDS')
+    expected = {'LoadState': value['LoadState'], 'ActiveState': 'inactive', 'SubState': 'dead',
+        'ControlGroup': '', 'Transient': 'no', 'MemoryMax': 'infinity', 'MemorySwapMax': 'infinity',
+        'TasksMax': 'infinity', 'CPUQuotaPerSecUSec': 'infinity', 'FragmentPath': '',
+        'SourcePath': '', 'DropInPaths': '', 'UnitFileState': '', 'Job': '', 'InvocationID': ''}
+    need(value['LoadState'] in ('not-found', 'loaded') and value == expected, 'NS_SLICE_RELEASE_UNPROVEN')
+    return value
+
+
+def namespace_slice_terminal(p, journal):
+    need(journal.find('NAMESPACE_SLICE_READY') is not None
+         and journal.find('NAMESPACE_SLICE_RELEASE_INTENT') is not None
+         and journal.find('NAMESPACE_STORAGE_CLEANED') is not None
+         and (journal.find('NAMESPACE_UNIT_START_INTENT') is None
+              or journal.find('NAMESPACE_RELEASED') is not None), 'NS_SLICE_TERMINAL_PREREQUISITES')
+    name = p['isolation']['slice']
+    namespace_require_no_unit_file(name)
+    value = namespace_slice_terminal_properties(namespace_show(name, NS_TERMINAL_SLICE_KEYS))
+    need(not os.path.lexists('/sys/fs/cgroup/' + name) and not namespace_members('/' + name),
+         'NS_SLICE_RELEASE_UNPROVEN')
+    return value
 
 
 def namespace_supervisor_loop(op, raw, p):
