@@ -497,22 +497,44 @@
   padding: 19px 17px;
   border: 1px solid rgb(255 255 255 / 75%);
   border-radius: 21px;
-  color: #fff;
+  color: var(--profile-subscription-ink, #fff);
   background: linear-gradient(120deg, #141a38, #283557);
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 12%);
   scroll-snap-align: start;
 }
 
 .profile-page--v2 article[data-plan='дружба'] {
-  background: linear-gradient(120deg, #03c584, #00aa75);
+  --profile-subscription-ink: #14182f;
+  background-image: url('./assets/subscriptions/friendship-background.png');
 }
 
 .profile-page--v2 article[data-plan='ра'] {
-  background: linear-gradient(120deg, #9572ff, #7050db);
+  --profile-subscription-surface: rgb(20 24 47 / 92%);
+  background-image: url('./assets/subscriptions/ra-background.png');
 }
 
 .profile-page--v2 article[data-plan='академия'] {
-  background: linear-gradient(120deg, #ff945b, #f2653b);
+  --profile-subscription-surface: rgb(20 24 47 / 92%);
+  background-image: url('./assets/subscriptions/academy-background.png');
+}
+
+.profile-page--v2 article[data-plan='энергия'] {
+  --profile-subscription-surface: rgb(255 255 255 / 92%);
+  --profile-subscription-ink: #14182f;
+  background-image: url('./assets/subscriptions/energy-background.png');
+}
+
+.profile-page--v2 article[data-plan='дети падел'] {
+  --profile-subscription-ink: #14182f;
+  background-image: url('./assets/subscriptions/kids-padel-background.png');
+}
+
+.profile-page--v2 .profile-subscription-list article.has-plan-artwork {
+  border-color: transparent;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  box-shadow: none;
 }
 
 .profile-page--v2 .profile-subscription-copy > span {
@@ -521,7 +543,7 @@
 }
 
 .profile-page--v2 .profile-subscription-copy strong {
-  color: #fff;
+  color: var(--profile-subscription-ink, #fff);
   font-family: var(--profile-v2-font-heading);
   font-size: 19px;
   font-weight: 600;
@@ -561,9 +583,9 @@
   top: 19px;
   right: 17px;
   padding: 6px 10px;
-  border: 1px solid rgb(255 255 255 / 38%);
+  border: 1px solid color-mix(in srgb, currentColor 38%, transparent);
   border-radius: 999px;
-  color: #fff;
+  color: var(--profile-subscription-ink, #fff);
   background: rgb(255 255 255 / 12%);
   font-size: 10px;
   font-weight: 500;
@@ -573,9 +595,9 @@
 
 .profile-page--v2 .profile-subscription-copy > small {
   display: block;
-  max-width: calc(100% - 35px);
+  max-width: calc(100% - 48px);
   margin-top: 18px;
-  color: #fff;
+  color: var(--profile-subscription-ink, #fff);
   font-size: 12px;
   font-weight: 500;
   line-height: 1.24;
@@ -594,10 +616,35 @@
   padding: 0;
   place-items: center;
   border: 0;
-  color: #fff;
+  color: var(--profile-subscription-ink, #fff);
   background: transparent;
   font-size: 35px;
   text-decoration: none;
+}
+
+/* These brighter patterned areas need a local surface behind small text and controls. */
+.profile-page--v2
+  article:is([data-plan='энергия'], [data-plan='ра'], [data-plan='академия'])
+  .profile-subscription-copy
+  > small {
+  width: fit-content;
+  padding: 4px 7px;
+  border-radius: 7px;
+  background: var(--profile-subscription-surface);
+}
+
+.profile-page--v2
+  article:is([data-plan='энергия'], [data-plan='ра'], [data-plan='академия'])
+  .profile-subscription-copy
+  em {
+  background: var(--profile-subscription-surface);
+}
+
+.profile-page--v2
+  article:is([data-plan='энергия'], [data-plan='ра'], [data-plan='академия'])
+  .profile-subscription-open {
+  border-radius: 50%;
+  background: var(--profile-subscription-surface);
 }
 
 .profile-page--v2 .profile-subscriptions-all {
