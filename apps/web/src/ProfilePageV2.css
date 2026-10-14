@@ -1,4 +1,20 @@
-/* Profile v2: the self profile uses the supplied light visual reference. */
+/* Profile v2 reuses the Figma font assets without changing other screens' font faces. */
+@font-face {
+  font-family: 'Profile RF Dewi';
+  src: url('./assets/home/rf-dewi-semibold.woff2') format('woff2');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: 'Profile RF Dewi';
+  src: url('./assets/recommendation-cards/rf-dewi-bold.ttf') format('truetype');
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
 .profile-shell.profile-shell--v2 {
   background: #edf2f7;
 }
@@ -6,7 +22,15 @@
 .profile-page.profile-page--v2 {
   --profile-v2-accent: var(--profile-level-accent);
   --profile-v2-accent-ink: color-mix(in srgb, var(--profile-v2-accent) 90%, #14182f);
+  --profile-v2-font-heading: 'Profile RF Dewi', 'RF Dewi', 'Inter Display', sans-serif;
+  --profile-v2-font-body: 'Inter Display', Inter, sans-serif;
   padding-top: 18px;
+  font-family: var(--profile-v2-font-body);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.24;
+  letter-spacing: 0.02em;
+  font-synthesis: none;
   color: #14182f;
   background: linear-gradient(155deg, #f9fbfd, #f0f5f9 60%, #f7fafc);
   box-shadow: 0 12px 55px rgb(25 43 67 / 9%);
@@ -112,7 +136,8 @@
   color: #1b2138;
   background: transparent;
   font: inherit;
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 1.24;
   text-align: left;
 }
 
@@ -181,11 +206,19 @@
   filter: drop-shadow(0 5px 10px rgb(26 55 74 / 7%));
 }
 
+.profile-page--v2 .profile-avatar-stage [data-avatar-initials] {
+  font-family: var(--profile-v2-font-heading);
+}
+
 .profile-page--v2 .profile-avatar-stage [data-player-level-badge] {
   min-width: 40px;
   height: 27px;
   padding: 0 6px;
+  font-family: var(--profile-v2-font-heading);
   font-size: 18px;
+  font-weight: 700;
+  line-height: 1.24;
+  letter-spacing: normal;
   border: 1.5px solid var(--profile-v2-accent);
   box-shadow: 0 0 0 3px #fff;
 }
@@ -208,9 +241,11 @@
 .profile-page--v2 .profile-name-row h1 {
   max-width: 100%;
   color: #101529;
+  font-family: var(--profile-v2-font-heading);
   font-size: 26px;
-  letter-spacing: -0.04em;
-  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: normal;
+  line-height: 1.1;
 }
 
 .profile-page--v2 .profile-facts {
@@ -266,14 +301,17 @@
   font-size: 14px;
   font-weight: 500;
   line-height: 20px;
+  letter-spacing: 0.02em;
 }
 
 .profile-page--v2 .profile-facts strong {
   display: block;
   color: #536077;
+  font-family: var(--profile-v2-font-body);
   font-size: 14px;
   font-weight: 500;
   line-height: 20px;
+  letter-spacing: 0.02em;
 }
 
 .profile-page--v2 .profile-facts .profile-inline-icon {
@@ -336,15 +374,19 @@
 }
 
 .profile-v2-metrics strong {
-  font-family: 'RF Dewi', sans-serif;
+  font-family: var(--profile-v2-font-heading);
   font-size: 21px;
-  font-weight: 800;
-  line-height: 1.1;
+  font-weight: 700;
+  line-height: 1.24;
+  letter-spacing: 0.01em;
 }
 
 .profile-v2-metrics span {
   color: #758098;
   font-size: 11px;
+  font-weight: 500;
+  line-height: 1.24;
+  letter-spacing: 0.02em;
 }
 
 .profile-page--v2 .profile-balance-card {
@@ -379,13 +421,19 @@
 .profile-page--v2 .profile-balance-card h2 {
   margin-bottom: 4px;
   color: #758098;
-  font-size: 13px;
+  font-family: var(--profile-v2-font-body);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
 }
 
 .profile-page--v2 .profile-balance-card strong {
   color: #15192f;
+  font-family: var(--profile-v2-font-heading);
   font-size: 25px;
-  font-weight: 800;
+  font-weight: 700;
+  line-height: 1.24;
+  letter-spacing: 0.01em;
 }
 
 .profile-page--v2 .profile-balance-card .profile-balance-card__topup {
@@ -394,7 +442,11 @@
   border-color: var(--profile-v2-accent-ink);
   color: #fff;
   background: var(--profile-v2-accent-ink);
-  font-size: 12px;
+  font-family: var(--profile-v2-font-heading);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
 }
 
 .profile-page--v2 .profile-balance-card__topup:disabled {
@@ -470,7 +522,11 @@
 
 .profile-page--v2 .profile-subscription-copy strong {
   color: #fff;
+  font-family: var(--profile-v2-font-heading);
   font-size: 19px;
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: 0.01em;
 }
 
 .profile-page--v2 .profile-subscription-wordmark {
@@ -489,6 +545,9 @@
   color: #fff;
   background: rgb(255 255 255 / 12%);
   font-size: 10px;
+  font-weight: 500;
+  line-height: 1.24;
+  letter-spacing: 0.02em;
 }
 
 .profile-page--v2 .profile-subscription-copy > small {
@@ -496,9 +555,11 @@
   max-width: calc(100% - 35px);
   margin-top: 18px;
   color: #fff;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.24;
   white-space: normal;
+  letter-spacing: 0.02em;
 }
 
 .profile-page--v2 .profile-subscription-open {
@@ -529,8 +590,11 @@
   border-radius: 25px;
   color: #fff;
   background: #111733;
-  font-size: 15px;
+  font-family: var(--profile-v2-font-heading);
+  font-size: 16px;
   font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
   text-decoration: none;
 }
 
@@ -570,15 +634,20 @@
 }
 
 .profile-page--v2 .profile-settings-overview strong {
+  font-family: var(--profile-v2-font-heading);
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: 0.01em;
 }
 
 .profile-page--v2 .profile-settings-overview small {
   margin-top: 3px;
   color: #78849a;
-  font-size: 11px;
-  line-height: 1.4;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.24;
+  letter-spacing: 0.02em;
 }
 
 .profile-page--v2 .profile-settings-overview .profile-inline-icon {
@@ -636,8 +705,10 @@
   border-radius: 16px;
   color: #283658;
   background: #e8eff6;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.02em;
 }
 
 .profile-page--v2 .fh-bottom-nav {
@@ -685,8 +756,8 @@
 .profile-page--v2 .profile-share-notice {
   margin: 0;
   color: #68758d;
-  font-size: 11px;
-  letter-spacing: normal;
+  font-size: 12px;
+  line-height: 1.24;
   text-transform: none;
 }
 
