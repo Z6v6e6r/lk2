@@ -13210,6 +13210,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   margin-top: 10px;
   padding-bottom: 2px;
   overflow-x: auto;
+  scrollbar-width: none;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
@@ -13217,12 +13218,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 .profile-friend-list::-webkit-scrollbar {
-  height: 3px;
-}
-
-.profile-friend-list::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgb(135 102 235 / 35%);
+  display: none;
 }
 
 .profile-friend-list > a {
@@ -13470,6 +13466,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   margin-top: 10px;
   padding: 3px 2px 6px;
   overflow-x: auto;
+  scrollbar-width: none;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
@@ -13477,12 +13474,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 .profile-community-list::-webkit-scrollbar {
-  height: 3px;
-}
-
-.profile-community-list::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: rgb(135 102 235 / 35%);
+  display: none;
 }
 
 .profile-community-more {
