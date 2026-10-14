@@ -31,10 +31,16 @@ const unavailableFixture = () => ({
   },
   State: { Running: true, Status: 'running', Health: { Status: 'starting' } },
 });
-function checkReadinessProof(error: unknown, row: unknown, previousId = previousFixtureId) {
-  const input = JSON.stringify({ error, row, project: readinessProject, previousId });
-  const code = `import { requireUnavailableFixtureRejection as proof } from './scripts/rehearse-timeweb-standard-compose.js';
-    const input=${input};try {proof(input.error,input.row,input.project,input.previousId);process.stdout.write('PROVEN');}
+function checkReadinessProof(
+  error: unknown,
+  row: unknown,
+  previousId = previousFixtureId,
+  helperError = false,
+) {
+  const input = JSON.stringify({ error, row, project: readinessProject, previousId, helperError });
+  const code = `import { requireUnavailableFixtureRejection as proof, requireFixtureHttpReady as ready } from './scripts/rehearse-timeweb-standard-compose.js';
+    const input=${input};let error=input.error;if(input.helperError){try{ready(input.row,'web');}catch(own){error=own;Object.assign(error,input.error);}}
+    try {proof(error,input.row,input.project,input.previousId);process.stdout.write('PROVEN');}
     catch(error){process.stderr.write(String(error));process.exitCode=1;}`;
   return spawnSync(process.execPath, ['--input-type=module', '-e', code], {
     encoding: 'utf8',
@@ -100,4 +106,65 @@ describe('owned unavailable Compose fixture proof', () => {
     expect(result.status).toBe(1);
     expect(result.stderr.length).toBeLessThan(1800);
   });
+});
+
+describe('strict owned HTTP rejection after Compose false success', () => {
+  it.each(['starting', 'unhealthy'])('accepts only the actual helper error for %s', (health) => {
+    const row = unavailableFixture();
+    row.State.Health.Status = health;
+    expect(checkReadinessProof({}, row, previousFixtureId, true).status).toBe(0);
+  });
+  it('does not invent rejection when the helper sees healthy', () => {
+    const row = unavailableFixture();
+    row.State.Health.Status = 'healthy';
+    expect(checkReadinessProof(undefined, row, previousFixtureId, true).status).toBe(1);
+  });
+  it.each([
+    undefined,
+    {},
+    { name: 'OWNED_FIXTURE_HTTP_NOT_READY' },
+    { code: 'OWNED_FIXTURE_HTTP_NOT_READY' },
+  ])('rejects unbranded or absent errors: %j', (error) => {
+    expect(checkReadinessProof(error, unavailableFixture()).status).toBe(1);
+  });
+  it.each([{ status: 1 }, { status: 2 }, { status: 0 }, { signal: 'SIGTERM' }])(
+    'rejects mutated helper errors: %j',
+    (error) => {
+      expect(checkReadinessProof(error, unavailableFixture(), previousFixtureId, true).status).toBe(
+        1,
+      );
+    },
+  );
+  it('keeps final ownership and state checks on helper rejection', () => {
+    const row = unavailableFixture();
+    row.Config.Labels['fixture.owner'] = 'foreign';
+    expect(checkReadinessProof({}, row, previousFixtureId, true).status).toBe(1);
+    row.Config.Labels['fixture.owner'] = readinessProject;
+    row.Id = previousFixtureId;
+    expect(checkReadinessProof({}, row, previousFixtureId, true).status).toBe(1);
+    row.Id = 'a'.repeat(64);
+    row.State.Running = false;
+    row.State.Status = 'exited';
+    expect(checkReadinessProof({}, row, previousFixtureId, true).status).toBe(1);
+  });
+  it.each(['healthy', 'starting', 'unhealthy', null])(
+    'the strict HTTP helper admits healthy only: %s',
+    (health) => {
+      const row = { State: { Health: { Status: health } } };
+      const input = JSON.stringify(row);
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `import {requireFixtureHttpReady as ready} from './scripts/rehearse-timeweb-standard-compose.js';try{ready(${input},'web');process.stdout.write('READY');}catch(error){process.stderr.write(error.name);process.exitCode=1;}`,
+        ],
+        { encoding: 'utf8', timeout: 5000 },
+      );
+      expect(result.status, result.stderr).toBe(health === 'healthy' ? 0 : 1);
+      expect(health === 'healthy' ? result.stdout : result.stderr).toBe(
+        health === 'healthy' ? 'READY' : 'OWNED_FIXTURE_HTTP_NOT_READY',
+      );
+    },
+  );
 });

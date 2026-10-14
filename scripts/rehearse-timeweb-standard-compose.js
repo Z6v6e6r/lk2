@@ -23,11 +23,24 @@ const tail = (value) =>
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
     .slice(-1200);
 
+class OwnedFixtureHttpNotReady extends Error {
+  constructor(service) {
+    super(`Fixture ${service} HTTP not ready`);
+    this.name = 'OWNED_FIXTURE_HTTP_NOT_READY';
+  }
+}
+
+export function requireFixtureHttpReady(row, service) {
+  if (row?.State?.Health?.Status !== 'healthy') throw new OwnedFixtureHttpNotReady(service);
+}
+
 export function requireUnavailableFixtureRejection(error, row, project, previousId) {
   const labels = row?.Config?.Labels;
+  const ownedHttpRejection = error instanceof OwnedFixtureHttpNotReady;
+  const rejected = ownedHttpRejection ? error.status == null : error?.status === 1;
   if (
-    error?.status === 1 &&
-    !error.signal &&
+    rejected &&
+    !error?.signal &&
     /^lk2-standard-fixture-[1-9][0-9]*$/.test(project) &&
     /^[a-f0-9]{64}$/.test(row?.Id ?? '') &&
     /^[a-f0-9]{64}$/.test(previousId ?? '') &&
@@ -153,8 +166,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     return JSON.parse(docker(['inspect', ids[0]]))[0];
   };
   const assertFixtureHttp = (service) => {
-    if (inspect(service).State.Health?.Status !== 'healthy')
-      throw Error(`Fixture ${service} HTTP not ready`);
+    requireFixtureHttpReady(inspect(service), service);
   };
   const journal = [];
   try {
@@ -219,6 +231,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
         '--wait-timeout',
         '2',
       ]);
+      // Compose may return before HTTP is healthy; the owned gate must still reject it.
+      assertFixtureHttp('web');
     } catch (error) {
       readinessError = error;
     }

@@ -48,8 +48,8 @@ API_WORKER_CI_READER_PATCH = {
 }
 # One inert fixture correction; the exact regular pair is never a generic path allowance.
 API_WORKER_REHEARSAL_READINESS_PATCH = {
-    'scripts/rehearse-timeweb-standard-compose.js': {'path': 'scripts/rehearse-timeweb-standard-compose.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '98c63003b8736bc1da48abfa9be5ee1e7bd6b005', 'newOid': 'fe805aa7bea92879af4a75bfef98aa925b883f3a'},
-    'scripts/timeweb-standard-compose.test.ts': {'path': 'scripts/timeweb-standard-compose.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ba60973d95649afa3b81ac035e55b043cddc6285', 'newOid': '4ab447c1dbbe16272c42c56ce070a463c570e317'},
+    'scripts/rehearse-timeweb-standard-compose.js': {'path': 'scripts/rehearse-timeweb-standard-compose.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '98c63003b8736bc1da48abfa9be5ee1e7bd6b005', 'newOid': 'df0f4dd006a229a55b517043042e7715127678eb'},
+    'scripts/timeweb-standard-compose.test.ts': {'path': 'scripts/timeweb-standard-compose.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ba60973d95649afa3b81ac035e55b043cddc6285', 'newOid': '0e7ac3a12722d6250dd989e6d4dd9aed5b82bfac'},
 }
 # Independent duplicate of the frozen atomic native source tuple.
 API_WORKER_NATIVE_BOOKINGS_PATCH = {

@@ -1142,7 +1142,8 @@ storage/unit cleanup history. The implicit branch never stops or adopts a unit. 
 stopped at that proof needs fresh exact-owner continuation custody; never replay its execute or
 silently replace its installed helper, request or recovery claim.
 
-The disposable Compose unavailable-Web check requires exit status 1 and the exact newly recreated
-owned running `sleep 60` fixture with `starting` or `unhealthy` health. It does not depend on Docker
-Compose diagnostic wording; unexpected exit/status/identity/command/health fails with bounded
-diagnostics. A failed first-attempt main CI remains ineligible; rerunning it does not grant delivery.
+The disposable Compose unavailable-Web check requires either Compose exit status 1 or an actual
+owned strict HTTP-helper rejection immediately after Compose returns before readiness. A module-local
+error brand distinguishes that rejection from generic errors, missing errors or spoofed names/codes.
+Both paths require the exact newly recreated owned running `sleep 60` fixture with `starting` or
+`unhealthy` health. Unexpected exit/status/identity/command/health fails with bounded diagnostics. A failed first-attempt main CI remains ineligible; rerunning it does not grant delivery.
