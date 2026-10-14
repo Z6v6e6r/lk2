@@ -273,7 +273,7 @@
   font-size: 14px;
 }
 
-.profile-page--v2 .profile-facts > button::before {
+.profile-page--v2 .profile-facts > .profile-fact-action + .profile-fact-action::before {
   margin-right: 2px;
   color: #8a95a8;
   content: '·';
@@ -281,27 +281,6 @@
 
 .profile-page--v2 .profile-facts :is(small, i) {
   display: none;
-}
-
-.profile-page--v2 .profile-city-choice {
-  display: flex;
-  align-items: center;
-  margin: 0;
-}
-
-.profile-page--v2 .profile-city-choice select {
-  width: auto;
-  max-width: 120px;
-  height: 44px;
-  min-height: 44px;
-  padding: 0;
-  color: #536077;
-  background: transparent;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 20px;
-  letter-spacing: 0.02em;
 }
 
 .profile-page--v2 .profile-facts strong {

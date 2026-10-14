@@ -910,17 +910,33 @@ describe('Profile city and community rail', () => {
       onLogout: () => undefined,
     };
     const { unmount } = render(<ProfilePage {...props} />);
-    const city = screen.getByRole('combobox', { name: 'Город' });
+    const city = screen.getByRole('button', { name: 'Город: Москва' });
+    city.focus();
+    expect(city).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(city);
+    const picker = screen.getByRole('dialog', { name: 'Выберите город' });
+    expect(city).toHaveAttribute('aria-expanded', 'true');
+    expect(city).toHaveAttribute('aria-controls', picker.id);
     expect(
-      within(city)
-        .getAllByRole('option')
-        .map((item) => item.textContent),
+      within(picker)
+        .getAllByRole('button')
+        .slice(1)
+        .map((item) => item.getAttribute('aria-label')),
     ).toEqual(['Москва', 'Питер', 'Сочи', 'Завидово']);
-    fireEvent.change(city, { target: { value: 'Сочи' } });
-    expect(city).toHaveValue('Сочи');
+    expect(within(picker).getByRole('button', { name: 'Москва' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    fireEvent.click(within(picker).getByRole('button', { name: 'Сочи' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Город: Сочи' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Вид спорта: Падел' })).toBeVisible();
+    expect(window.localStorage.getItem(`lk2:profile:city:${props.profile.profile.userId}`)).toBe(
+      'Сочи',
+    );
     unmount();
     const second = render(<ProfilePage {...props} />);
-    expect(screen.getByRole('combobox', { name: 'Город' })).toHaveValue('Сочи');
+    expect(screen.getByRole('button', { name: 'Город: Сочи' })).toBeVisible();
     second.unmount();
     render(
       <ProfilePage
@@ -931,7 +947,96 @@ describe('Profile city and community rail', () => {
         }}
       />,
     );
-    expect(screen.getByRole('combobox', { name: 'Город' })).toHaveValue('Москва');
+    expect(screen.getByRole('button', { name: 'Город: Москва' })).toBeVisible();
+  });
+
+  it('traps city choices and restores the trigger after Escape, backdrop or close', () => {
+    render(
+      <ProfilePage profile={selfProfile('C+')} logoutBusy={false} onLogout={() => undefined} />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Город: Москва' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const picker = screen.getByRole('dialog', { name: 'Выберите город' });
+    const close = within(picker).getByRole('button', { name: 'Закрыть выбор города' });
+    const last = within(picker).getByRole('button', { name: 'Завидово' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(last).toHaveFocus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(trigger);
+    fireEvent.mouseDown(screen.getByRole('dialog', { name: 'Выберите город' }).parentElement!);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть выбор города' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('closes an open city choice on profile changes and does not resurrect it on return', () => {
+    const first = selfProfile('D+');
+    const second = {
+      ...first,
+      profile: { ...first.profile, userId: '24f15c0a-b6b6-4701-86a6-0c789c81a815' },
+    };
+    window.localStorage.setItem(`lk2:profile:city:${second.profile.userId}`, 'Сочи');
+    const { rerender } = render(
+      <ProfilePage profile={first} logoutBusy={false} onLogout={() => undefined} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Город: Москва' }));
+    rerender(<ProfilePage profile={second} logoutBusy={false} onLogout={() => undefined} />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Город: Сочи' })).toBeVisible();
+    expect(window.localStorage.getItem(`lk2:profile:city:${first.profile.userId}`)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Город: Сочи' }));
+    rerender(
+      <ProfilePage
+        profile={{
+          profile: second.profile,
+          reachable: true,
+          access: {
+            audience: 'OTHER',
+            tier: 'INTERACTION',
+            visibleSections: ['BASIC', 'PLAYER_LEVEL'],
+            contact: { status: 'LOCKED', reason: 'FEATURE_UNAVAILABLE' },
+            chat: { status: 'LOCKED', reason: 'FEATURE_UNAVAILABLE' },
+          },
+        }}
+        logoutBusy={false}
+        onLogout={() => undefined}
+      />,
+    );
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Город:/ })).not.toBeInTheDocument();
+    rerender(<ProfilePage profile={first} logoutBusy={false} onLogout={() => undefined} />);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Город: Москва' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('keeps the selected city usable when browser storage cannot be written', () => {
+    const setItem = vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
+      throw new Error('storage unavailable');
+    });
+    try {
+      render(
+        <ProfilePage profile={selfProfile('D+')} logoutBusy={false} onLogout={() => undefined} />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Город: Москва' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Питер' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Город: Питер' })).toBeVisible();
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it('loads on sideways scroll once, merges duplicates and keeps the existing cards after a failed page', async () => {

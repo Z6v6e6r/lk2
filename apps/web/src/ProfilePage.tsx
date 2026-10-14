@@ -796,6 +796,13 @@ function ProfileShareQrCode({ value }: { readonly value: string }): React.JSX.El
 
 const profileCities = ['Москва', 'Питер', 'Сочи', 'Завидово'] as const;
 type ProfileCity = (typeof profileCities)[number];
+type ProfileChoice = 'city' | 'sport' | null;
+type ProfileChoiceState = {
+  readonly userId: string;
+  readonly isSelf: boolean;
+  readonly city: ProfileCity;
+  readonly open: ProfileChoice;
+};
 
 function readProfileCity(userId: string): ProfileCity {
   try {
@@ -1060,50 +1067,45 @@ function ProfileBalanceCard({ balance }: { readonly balance: string | null }): R
 }
 
 function ProfileFacts({
-  userId,
+  city,
   sport,
+  openChoice,
+  onChooseCity,
   onChooseSport,
 }: {
-  readonly userId: string;
+  readonly city: ProfileCity;
   readonly sport: ProfileSport;
+  readonly openChoice: ProfileChoice;
+  readonly onChooseCity: () => void;
   readonly onChooseSport?: () => void;
 }): React.JSX.Element {
-  const [city, setCity] = useState(() => readProfileCity(userId));
   const sportLabel = profileSportLabels[sport];
 
   return (
     <section className="profile-facts" aria-label="Город и вид спорта">
-      <div>
+      <button
+        className="profile-fact-action"
+        type="button"
+        aria-label={`Город: ${city}`}
+        aria-haspopup="dialog"
+        aria-expanded={openChoice === 'city'}
+        aria-controls={openChoice === 'city' ? 'profile-city-sheet' : undefined}
+        onClick={onChooseCity}
+      >
         <span className="profile-inline-icon">
           <ProfilePackIcon name="city" />
         </span>
-        <label className="profile-city-choice">
+        <span>
           <small>город</small>
-          <select
-            aria-label="Город"
-            value={city}
-            onChange={(event) => {
-              const next = profileCities.find((item) => item === event.currentTarget.value);
-              if (!next) return;
-              setCity(next);
-              try {
-                window.localStorage.setItem(`lk2:profile:city:${userId}`, next);
-              } catch {
-                // The current selection still works when browser storage is unavailable.
-              }
-            }}
-          >
-            {profileCities.map((item) => (
-              <option value={item} key={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
+          <strong>{city}</strong>
+        </span>
         <i aria-hidden="true">›</i>
-      </div>
+      </button>
       <button
+        className="profile-fact-action"
         aria-haspopup={onChooseSport ? 'dialog' : undefined}
+        aria-expanded={onChooseSport ? openChoice === 'sport' : undefined}
+        aria-controls={openChoice === 'sport' ? 'profile-sport-sheet' : undefined}
         aria-label={onChooseSport ? `Вид спорта: ${sportLabel}` : undefined}
         type="button"
         onClick={onChooseSport}
@@ -1121,14 +1123,18 @@ function ProfileFacts({
   );
 }
 
-function SportPicker({
-  activeSport,
+function ProfileChoiceSheet({
+  id,
+  title,
+  closeLabel,
   onClose,
-  onSelect,
+  children,
 }: {
-  readonly activeSport: ProfileSport;
+  readonly id: string;
+  readonly title: string;
+  readonly closeLabel: string;
   readonly onClose: () => void;
-  readonly onSelect: (sport: ProfileSport) => void;
+  readonly children: ReactNode;
 }): React.JSX.Element {
   const sheetRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -1169,52 +1175,112 @@ function SportPicker({
             first?.focus();
           }
         }}
+        id={id}
         className="profile-sport-sheet"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="profile-sport-sheet-title"
+        aria-labelledby={`${id}-title`}
       >
         <header>
           <div>
-            <h2 id="profile-sport-sheet-title">Выберите вид спорта</h2>
+            <h2 id={`${id}-title`}>{title}</h2>
           </div>
-          <button ref={closeRef} type="button" aria-label="Закрыть выбор спорта" onClick={onClose}>
+          <button ref={closeRef} type="button" aria-label={closeLabel} onClick={onClose}>
             ×
           </button>
         </header>
-        {profileSportChoices.map((option) => (
-          <button
-            aria-label={option.available ? option.title : `${option.title} — пока недоступен`}
-            className={option.sport === activeSport ? 'is-active' : undefined}
-            key={option.sport}
-            type="button"
-            disabled={!option.available}
-            onClick={() => {
-              if (option.available) onSelect(option.sport);
-            }}
-          >
-            <span className="profile-sport-option__mark" aria-hidden="true">
-              <ProfileSportIcon sport={option.icon} />
-            </span>
-            <span>
-              <strong>{option.title}</strong>
-              <small>
-                {!option.available
-                  ? 'Пока недоступен'
-                  : option.sport === 'PADEL'
-                    ? 'Текущий кабинет ПаделХАБ'
-                    : 'Отдельный спортивный профиль'}
-              </small>
-            </span>
-            {option.sport === activeSport ? (
-              <em>выбран</em>
-            ) : option.available ? (
-              <i aria-hidden="true">›</i>
-            ) : null}
-          </button>
-        ))}
+        {children}
       </section>
     </div>
+  );
+}
+
+function CityPicker({
+  city,
+  onClose,
+  onSelect,
+}: {
+  readonly city: ProfileCity;
+  readonly onClose: () => void;
+  readonly onSelect: (city: ProfileCity) => void;
+}): React.JSX.Element {
+  return (
+    <ProfileChoiceSheet
+      id="profile-city-sheet"
+      title="Выберите город"
+      closeLabel="Закрыть выбор города"
+      onClose={onClose}
+    >
+      {profileCities.map((item) => (
+        <button
+          key={item}
+          type="button"
+          aria-label={item}
+          aria-pressed={item === city}
+          className={item === city ? 'is-active' : undefined}
+          onClick={() => onSelect(item)}
+        >
+          <span className="profile-sport-option__mark" aria-hidden="true">
+            <ProfilePackIcon name="city" />
+          </span>
+          <span>
+            <strong>{item}</strong>
+          </span>
+          {item === city ? <em aria-hidden="true">выбран</em> : <i aria-hidden="true">›</i>}
+        </button>
+      ))}
+    </ProfileChoiceSheet>
+  );
+}
+
+function SportPicker({
+  activeSport,
+  onClose,
+  onSelect,
+}: {
+  readonly activeSport: ProfileSport;
+  readonly onClose: () => void;
+  readonly onSelect: (sport: ProfileSport) => void;
+}): React.JSX.Element {
+  return (
+    <ProfileChoiceSheet
+      id="profile-sport-sheet"
+      title="Выберите вид спорта"
+      closeLabel="Закрыть выбор спорта"
+      onClose={onClose}
+    >
+      {profileSportChoices.map((option) => (
+        <button
+          aria-label={option.available ? option.title : `${option.title} — пока недоступен`}
+          className={option.sport === activeSport ? 'is-active' : undefined}
+          key={option.sport}
+          type="button"
+          disabled={!option.available}
+          onClick={() => {
+            if (option.available) onSelect(option.sport);
+          }}
+        >
+          <span className="profile-sport-option__mark" aria-hidden="true">
+            <ProfileSportIcon sport={option.icon} />
+          </span>
+          <span>
+            <strong>{option.title}</strong>
+            <small>
+              {!option.available
+                ? 'Пока недоступен'
+                : option.sport === 'PADEL'
+                  ? 'Текущий кабинет ПаделХАБ'
+                  : 'Отдельный спортивный профиль'}
+            </small>
+          </span>
+          {option.sport === activeSport ? (
+            <em>выбран</em>
+          ) : option.available ? (
+            <i aria-hidden="true">›</i>
+          ) : null}
+        </button>
+      ))}
+    </ProfileChoiceSheet>
   );
 }
 
@@ -1972,14 +2038,35 @@ export function ProfilePage({
   onLogout,
 }: ProfilePageProps): React.JSX.Element {
   const { profile, privateAccount, access } = view;
+  const isSelf = access.audience === 'SELF';
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrNotice, setQrNotice] = useState<string | null>(null);
   const [activeSettings, setActiveSettings] = useState<'preferences' | 'visibility' | null>(null);
   const [activeSport, setActiveSport] = useState<ProfileSport>('PADEL');
-  const [sportPickerOpen, setSportPickerOpen] = useState(false);
+  const [choices, setChoices] = useState<ProfileChoiceState>(() => ({
+    userId: profile.userId,
+    isSelf,
+    city: isSelf ? readProfileCity(profile.userId) : 'Москва',
+    open: null,
+  }));
   const [activeDirectory, setActiveDirectory] = useState<'friends' | 'communities' | null>(null);
-  const isSelf = access.audience === 'SELF';
+  // Reset before committing a different profile, as the formerly keyed facts did.
+  if (choices.userId !== profile.userId || choices.isSelf !== isSelf) {
+    setChoices({
+      userId: profile.userId,
+      isSelf,
+      city: isSelf ? readProfileCity(profile.userId) : 'Москва',
+      open: null,
+    });
+  }
+  const openChoice =
+    isSelf && choices.userId === profile.userId && choices.isSelf ? choices.open : null;
+  const city = !isSelf
+    ? 'Москва'
+    : choices.userId === profile.userId && choices.isSelf
+      ? choices.city
+      : readProfileCity(profile.userId);
   const profileLink = profileShareUrl(profile.userId, publicProfileOrigin);
   const independentSport: Exclude<ProfileSport, 'PADEL'> | null =
     activeSport === 'PADEL' ? null : activeSport;
@@ -2161,9 +2248,11 @@ export function ProfilePage({
           {isSelf ? (
             <ProfileFacts
               key={`facts:${profile.userId}`}
-              userId={profile.userId}
+              city={city}
               sport={activeSport}
-              onChooseSport={() => setSportPickerOpen(true)}
+              openChoice={openChoice}
+              onChooseCity={() => setChoices((current) => ({ ...current, open: 'city' }))}
+              onChooseSport={() => setChoices((current) => ({ ...current, open: 'sport' }))}
             />
           ) : null}
 
@@ -2509,14 +2598,27 @@ export function ProfilePage({
           </div>
         ) : null}
 
-        {isSelf && sportPickerOpen ? (
+        {openChoice === 'city' ? (
+          <CityPicker
+            city={city}
+            onClose={() => setChoices((current) => ({ ...current, open: null }))}
+            onSelect={(next) => {
+              setChoices((current) => ({ ...current, city: next, open: null }));
+              try {
+                window.localStorage.setItem(`lk2:profile:city:${profile.userId}`, next);
+              } catch {
+                // The current selection still works when browser storage is unavailable.
+              }
+            }}
+          />
+        ) : openChoice === 'sport' ? (
           <SportPicker
             activeSport={activeSport}
-            onClose={() => setSportPickerOpen(false)}
+            onClose={() => setChoices((current) => ({ ...current, open: null }))}
             onSelect={(sport) => {
               setActiveSport(sport);
               setShareNotice(null);
-              setSportPickerOpen(false);
+              setChoices((current) => ({ ...current, open: null }));
             }}
           />
         ) : null}
