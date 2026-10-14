@@ -12582,7 +12582,8 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 .profile-toolbar a,
-.profile-toolbar button {
+.profile-toolbar button,
+.profile-share {
   display: grid;
   width: 44px;
   height: 44px;
@@ -12621,7 +12622,7 @@ button.participant-avatar-stack__open-slot:focus-visible {
   align-items: center;
   gap: 4px;
   margin: 8px 0 0;
-  padding: 0 16px 4px;
+  padding: 0 14px 4px;
   text-align: center;
 }
 
@@ -12701,38 +12702,18 @@ button.participant-avatar-stack__open-slot:focus-visible {
   grid-column: 3;
   grid-row: 1;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  align-self: end;
+  align-items: flex-end;
+  justify-content: flex-end;
   width: 100%;
-  margin: 12px 0 0;
+  margin: 0;
   gap: 8px;
-}
-
-.profile-share {
-  display: flex;
-  flex: 0 0 44px;
-  width: 44px;
-  min-width: 0;
-  min-height: 44px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid rgb(255 255 255 / 70%);
-  border-radius: 50%;
-  background: rgb(255 255 255 / 88%);
-  box-shadow: 0 10px 28px rgb(77 52 102 / 8%);
-  color: #1f1e20;
-  cursor: pointer;
-  font-family: 'RF Dewi', 'Inter Display', sans-serif;
-  font-size: 10px;
-  font-weight: 600;
-  backdrop-filter: blur(12px);
 }
 
 .profile-share svg {
   width: 22px;
   height: 22px;
-  color: var(--profile-level-accent);
+  color: currentcolor;
 }
 
 .profile-identity .profile-share-notice {
