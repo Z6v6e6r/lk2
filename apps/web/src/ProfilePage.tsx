@@ -17,6 +17,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { MainBottomNavigation, NotificationBellLink } from './HomeDashboardPage.js';
 import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
+import { ProfileSportIcon } from './ProfileSportIcon.js';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 import { QR_QUIET_ZONE_MODULES, qrCodePath, tryCreateQrCode } from './qr-code.js';
 import friendshipArtwork from './assets/subscriptions/friendship.svg';
@@ -29,12 +30,6 @@ import levelCBackground from './assets/profile-levels/level-c.jpg';
 import levelCPlusBackground from './assets/profile-levels/level-c-plus.jpg';
 import levelDBackground from './assets/profile-levels/level-d.jpg';
 import levelDPlusBackground from './assets/profile-levels/level-d-plus.jpg';
-import badmintonLevelABackground from './assets/profile-sports/badminton/badminton-level-a.webp';
-import badmintonLevelBBackground from './assets/profile-sports/badminton/badminton-level-b.webp';
-import badmintonLevelBPlusBackground from './assets/profile-sports/badminton/badminton-level-b-plus.webp';
-import badmintonLevelCBackground from './assets/profile-sports/badminton/badminton-level-c.webp';
-import badmintonLevelCPlusBackground from './assets/profile-sports/badminton/badminton-level-c-plus.webp';
-import badmintonLevelDBackground from './assets/profile-sports/badminton/badminton-level-d.webp';
 import squashLevelABackground from './assets/profile-sports/squash/squash-level-a.webp';
 import squashLevelBBackground from './assets/profile-sports/squash/squash-level-b.webp';
 import squashLevelBPlusBackground from './assets/profile-sports/squash/squash-level-b-plus.webp';
@@ -89,7 +84,22 @@ type ProfilePageStyle = CSSProperties & {
   readonly '--profile-level-soft': string;
 };
 
-type ProfileSport = 'PADEL' | 'SQUASH' | 'BADMINTON';
+type ProfileSport = 'PADEL' | 'SQUASH' | 'TENNIS';
+
+const profileSportLabels: Readonly<Record<ProfileSport, string>> = {
+  PADEL: 'Падел',
+  SQUASH: 'Сквош',
+  TENNIS: 'Теннис',
+};
+
+const profileSportChoices = [
+  { sport: 'PADEL', icon: 'padel', available: true, title: 'Падел' },
+  { sport: 'SQUASH', icon: 'squash', available: true, title: 'Сквош' },
+  { sport: 'TENNIS', icon: 'tennis', available: true, title: 'Теннис' },
+  { sport: 'BOXING', icon: 'boxing', available: false, title: 'Бокс' },
+  { sport: 'BASKETBALL', icon: 'basketball', available: false, title: 'Баскетбол' },
+  { sport: 'RUNNING', icon: 'running', available: false, title: 'Бег' },
+] as const;
 
 const levelBackgrounds: Readonly<Record<string, string>> = {
   A: levelABackground,
@@ -129,16 +139,6 @@ const squashLevelBackgrounds: Readonly<Record<string, string>> = {
   C: squashLevelCBackground,
   'D+': squashLevelDPlusBackground,
   D: squashLevelDBackground,
-};
-
-const badmintonLevelBackgrounds: Readonly<Record<string, string>> = {
-  A: badmintonLevelABackground,
-  'B+': badmintonLevelBPlusBackground,
-  B: badmintonLevelBBackground,
-  'C+': badmintonLevelCPlusBackground,
-  C: badmintonLevelCBackground,
-  'D+': badmintonLevelDBackground,
-  D: badmintonLevelDBackground,
 };
 
 const levelScale = ['A', 'B+', 'B', 'C+', 'C', 'D+', 'D'] as const;
@@ -522,7 +522,6 @@ function ProfileIcon({
     | 'history'
     | 'eye'
     | 'city'
-    | 'sport'
     | 'crown'
     | 'qr';
 }): React.JSX.Element {
@@ -675,18 +674,6 @@ function ProfileIcon({
           <circle cx="12" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.7" />
         </svg>
       );
-    case 'sport':
-      return (
-        <svg {...common}>
-          <path
-            d="m8 16 8-8M6.2 13.8l4 4M13.8 6.2l4 4M4.5 15.5l4 4M15.5 4.5l4 4M3 18l3 3 15-15-3-3L3 18Z"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      );
     case 'crown':
       return (
         <svg {...common}>
@@ -762,7 +749,7 @@ function ProfileFacts({
   readonly onChooseSport?: () => void;
 }): React.JSX.Element {
   const [city, setCity] = useState(() => readProfileCity(userId));
-  const sportLabel = sport === 'SQUASH' ? 'Сквош' : sport === 'BADMINTON' ? 'Бадминтон' : 'Падел';
+  const sportLabel = profileSportLabels[sport];
 
   return (
     <section className="profile-facts" aria-label="Город и вид спорта">
@@ -802,7 +789,7 @@ function ProfileFacts({
         onClick={onChooseSport}
       >
         <span className="profile-inline-icon">
-          <ProfileIcon name="sport" />
+          <ProfileSportIcon sport={sport.toLowerCase() as Lowercase<ProfileSport>} />
         </span>
         <span>
           <small>вид спорта</small>
@@ -823,6 +810,17 @@ function SportPicker({
   readonly onClose: () => void;
   readonly onSelect: (sport: ProfileSport) => void;
 }): React.JSX.Element {
+  const sheetRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    closeRef.current?.focus();
+    return () => {
+      if (previousFocus instanceof HTMLElement) previousFocus.focus();
+    };
+  }, []);
+
   return (
     <div
       className="profile-sport-backdrop"
@@ -831,6 +829,26 @@ function SportPicker({
       }}
     >
       <section
+        ref={sheetRef}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+          }
+          if (event.key !== 'Tab') return;
+          const buttons =
+            sheetRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+          const first = buttons?.[0];
+          const last = buttons?.[buttons.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }}
         className="profile-sport-sheet"
         role="dialog"
         aria-modal="true"
@@ -841,34 +859,40 @@ function SportPicker({
             <span>Личный кабинет</span>
             <h2 id="profile-sport-sheet-title">Выберите вид спорта</h2>
           </div>
-          <button type="button" aria-label="Закрыть выбор спорта" onClick={onClose}>
+          <button ref={closeRef} type="button" aria-label="Закрыть выбор спорта" onClick={onClose}>
             ×
           </button>
         </header>
         <p>У каждого вида спорта — собственные уровни, сообщества и игровая история.</p>
-        {(
-          [
-            ['PADEL', 'Падел', 'Текущий кабинет ПаделХАБ'] as const,
-            ['SQUASH', 'Сквош', 'Отдельный профиль и шкала уровней'] as const,
-            ['BADMINTON', 'Бадминтон', 'Отдельный профиль и шкала уровней'] as const,
-          ] satisfies readonly (readonly [ProfileSport, string, string])[]
-        ).map(([sport, title, description]) => (
+        {profileSportChoices.map((option) => (
           <button
-            aria-label={title}
-            className={sport === activeSport ? 'is-active' : undefined}
-            key={sport}
+            aria-label={option.available ? option.title : `${option.title} — пока недоступен`}
+            className={option.sport === activeSport ? 'is-active' : undefined}
+            key={option.sport}
             type="button"
-            onClick={() => onSelect(sport)}
+            disabled={!option.available}
+            onClick={() => {
+              if (option.available) onSelect(option.sport);
+            }}
           >
-            <span
-              className={`profile-sport-option__mark profile-sport-option__mark--${sport.toLowerCase()}`}
-              aria-hidden="true"
-            />
-            <span>
-              <strong>{title}</strong>
-              <small>{description}</small>
+            <span className="profile-sport-option__mark" aria-hidden="true">
+              <ProfileSportIcon sport={option.icon} />
             </span>
-            {sport === activeSport ? <em>выбран</em> : <i aria-hidden="true">›</i>}
+            <span>
+              <strong>{option.title}</strong>
+              <small>
+                {!option.available
+                  ? 'Пока недоступен'
+                  : option.sport === 'PADEL'
+                    ? 'Текущий кабинет ПаделХАБ'
+                    : 'Отдельный спортивный профиль'}
+              </small>
+            </span>
+            {option.sport === activeSport ? (
+              <em>выбран</em>
+            ) : option.available ? (
+              <i aria-hidden="true">›</i>
+            ) : null}
           </button>
         ))}
       </section>
@@ -881,8 +905,8 @@ function IndependentSportProfileContent({
 }: {
   readonly sport: Exclude<ProfileSport, 'PADEL'>;
 }): React.JSX.Element {
-  const sportLabel = sport === 'SQUASH' ? 'Сквош' : 'Бадминтон';
-  const sportInPrepositional = sport === 'SQUASH' ? 'сквошу' : 'бадминтону';
+  const sportLabel = profileSportLabels[sport];
+  const sportInPrepositional = sport === 'SQUASH' ? 'сквошу' : 'теннису';
 
   return (
     <>
@@ -1630,21 +1654,25 @@ export function ProfilePage({
         : profile.level.label
       : UNKNOWN_VALUE_PLACEHOLDER;
   const background =
-    activeSport === 'SQUASH'
-      ? (squashLevelBackgrounds[levelKey] ?? squashLevelABackground)
-      : activeSport === 'BADMINTON'
-        ? (badmintonLevelBackgrounds[levelKey] ?? badmintonLevelABackground)
-        : (levelBackgrounds[levelKey] ?? levelABackground);
+    activeSport === 'TENNIS'
+      ? 'linear-gradient(145deg, #daefb6, #f7fbe8)'
+      : `url("${
+          activeSport === 'SQUASH'
+            ? (squashLevelBackgrounds[levelKey] ?? squashLevelABackground)
+            : (levelBackgrounds[levelKey] ?? levelABackground)
+        }")`;
   const pageStyle: ProfilePageStyle = {
-    '--profile-level-background': `url("${background}")`,
+    '--profile-level-background': background,
     '--profile-level-accent':
       activeSport === 'SQUASH'
         ? '#7150ef'
-        : activeSport === 'BADMINTON'
-          ? '#8a45e8'
+        : activeSport === 'TENNIS'
+          ? '#4f772f'
           : (levelAccents[levelKey] ?? levelAccents.A ?? '#7650f4'),
     '--profile-level-soft': isIndependentSport
-      ? '#eeeaff'
+      ? activeSport === 'TENNIS'
+        ? '#f2f7e7'
+        : '#eeeaff'
       : (levelSoftTones[levelKey] ?? levelSoftTones.A ?? '#eeeaff'),
   };
 

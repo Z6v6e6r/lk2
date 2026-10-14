@@ -264,6 +264,56 @@ describe('ProfilePage', () => {
     expect(within(stats).queryByText('D')).not.toBeInTheDocument();
   });
 
+  it('offers three active sports and prevents selecting unavailable sports', () => {
+    render(
+      <ProfilePage profile={selfProfile('D+')} logoutBusy={false} onLogout={() => undefined} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Вид спорта: Падел' }));
+    const picker = screen.getByRole('dialog', { name: 'Выберите вид спорта' });
+    for (const title of ['Падел', 'Сквош', 'Теннис']) {
+      expect(within(picker).getByRole('button', { name: title })).toBeEnabled();
+    }
+    for (const title of ['Бокс', 'Баскетбол', 'Бег']) {
+      const option = within(picker).getByRole('button', { name: `${title} — пока недоступен` });
+      expect(option).toBeDisabled();
+      fireEvent.click(option);
+      expect(screen.getByRole('dialog', { name: 'Выберите вид спорта' })).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Вид спорта: Падел' })).toBeVisible();
+    }
+    expect(within(picker).queryByRole('button', { name: 'Бадминтон' })).not.toBeInTheDocument();
+    fireEvent.click(within(picker).getByRole('button', { name: 'Теннис' }));
+    expect(screen.queryByRole('dialog', { name: 'Выберите вид спорта' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Вид спорта: Теннис' }));
+    fireEvent.click(
+      within(screen.getByRole('dialog', { name: 'Выберите вид спорта' })).getByRole('button', {
+        name: 'Падел',
+      }),
+    );
+    expect(
+      screen.getByRole('img', { name: 'Алексей Максимов, уровень D+, прогресс 64%' }),
+    ).toBeVisible();
+  });
+
+  it('keeps keyboard focus in the sport picker and restores it after Escape', () => {
+    render(
+      <ProfilePage profile={selfProfile('D+')} logoutBusy={false} onLogout={() => undefined} />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Вид спорта: Падел' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const picker = screen.getByRole('dialog', { name: 'Выберите вид спорта' });
+    const close = within(picker).getByRole('button', { name: 'Закрыть выбор спорта' });
+    const tennis = within(picker).getByRole('button', { name: 'Теннис' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
+    expect(tennis).toHaveFocus();
+    fireEvent.keyDown(tennis, { key: 'Tab' });
+    expect(close).toHaveFocus();
+    fireEvent.keyDown(close, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Выберите вид спорта' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it('switches to an isolated squash profile without showing padel memberships or communities', () => {
     render(
       <ProfilePage
@@ -288,7 +338,7 @@ describe('ProfilePage', () => {
     expect(screen.queryByRole('region', { name: 'Сообщества' })).not.toBeInTheDocument();
   });
 
-  it('switches to an isolated badminton profile with its own artwork', () => {
+  it('switches to an isolated tennis profile without reusing padel data', () => {
     render(
       <ProfilePage
         profile={selfProfile('D+')}
@@ -302,12 +352,11 @@ describe('ProfilePage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Вид спорта: Падел' }));
 
     const picker = screen.getByRole('dialog', { name: 'Выберите вид спорта' });
-    fireEvent.click(within(picker).getByRole('button', { name: 'Бадминтон' }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Теннис' }));
 
-    expect(screen.queryByText('BadmintonHub Player')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Вид спорта: Бадминтон' })).toBeVisible();
-    expect(screen.getByText('рекомендации по бадминтону', { exact: false })).toBeVisible();
-    expect(screen.getByRole('main').getAttribute('style')).toContain('badminton-level-a.webp');
+    expect(screen.queryByText('TennisHub Player')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Вид спорта: Теннис' })).toBeVisible();
+    expect(screen.getByText('рекомендации по теннису', { exact: false })).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Подписки и абонементы' })).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Сообщества' })).not.toBeInTheDocument();
   });

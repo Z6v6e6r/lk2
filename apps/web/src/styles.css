@@ -14066,6 +14066,9 @@ button.participant-avatar-stack__open-slot:focus-visible {
 
 .profile-sport-sheet {
   width: min(100%, 375px);
+  max-height: calc(100svh - 28px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 20px 14px calc(22px + env(safe-area-inset-bottom));
   border-radius: 22px 22px 0 0;
   background: #f7f3fb;
@@ -14140,26 +14143,31 @@ button.participant-avatar-stack__open-slot:focus-visible {
 }
 
 .profile-sport-option__mark {
-  display: block;
+  display: grid;
   width: 32px;
   height: 32px;
-  border-radius: 10px;
+  place-items: center;
+  color: var(--profile-level-accent);
 }
 
-.profile-sport-option__mark--padel {
-  background: linear-gradient(145deg, #ff7728, #f6c163);
+.profile-sport-option__mark svg {
+  width: 24px;
+  height: 24px;
 }
 
-.profile-sport-option__mark--squash {
-  background:
-    radial-gradient(circle at 67% 33%, rgb(255 255 255 / 82%) 0 2px, transparent 3px),
-    linear-gradient(145deg, #4e31c6, #9a77ff);
+.profile-sport-sheet > button:disabled {
+  border-color: #e5e0e9;
+  color: #817a87;
+  background: #eeebf1;
+  cursor: default;
 }
 
-.profile-sport-option__mark--badminton {
-  background:
-    radial-gradient(ellipse at 66% 32%, rgb(255 255 255 / 86%) 0 3px, transparent 4px),
-    linear-gradient(145deg, #6926ae, #ed60b2);
+.profile-sport-sheet > button:disabled .profile-sport-option__mark {
+  color: #96909c;
+}
+
+.profile-sport-sheet > button:disabled small {
+  color: #817a87;
 }
 
 .profile-sport-sheet > button > span:nth-child(2) {
