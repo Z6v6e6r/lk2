@@ -879,10 +879,6 @@ function ProfileV2Actions({
           <ProfileIcon name="qr" />
           QR-код
         </button>
-        <a href="/profile/level-history">
-          <ProfilePackIcon name="history" />
-          История изменения уровня
-        </a>
       </div>
     </details>
   );
@@ -2280,7 +2276,20 @@ export function ProfilePage({
               onCommunities={() => setActiveDirectory('communities')}
             />
           ) : null}
-          {isSelf && !isIndependentSport ? <ProfileBalanceCard balance={balance} /> : null}
+          {isSelf && !isIndependentSport ? (
+            <>
+              <a className="profile-level-history-link" href="/profile/level-history">
+                <span className="profile-inline-icon">
+                  <ProfilePackIcon name="history" />
+                </span>
+                <span>История изменения уровня</span>
+                <span className="profile-level-history-link__chevron" aria-hidden="true">
+                  ›
+                </span>
+              </a>
+              <ProfileBalanceCard balance={balance} />
+            </>
+          ) : null}
 
           {access.audience === 'OTHER' ? (
             <>
