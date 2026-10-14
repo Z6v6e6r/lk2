@@ -99,7 +99,7 @@ it.each([
       screen.getByRole('img', { name: /Анна Петрова, уровень C\+/ }).querySelector('img'),
     ).toHaveAttribute('src', config.apiBaseUrl + photo);
     const account = screen.getByLabelText('Данные профиля');
-    expect(within(account).getByText('C+')).toBeVisible();
+    expect(screen.getByRole('img', { name: /Анна Петрова, уровень C\+/ })).toBeVisible();
     expect(account).toHaveTextContent('540');
     if (unavailableDashboard) {
       const subscriptions = screen.getByRole('region', { name: 'Подписки и абонементы' });
