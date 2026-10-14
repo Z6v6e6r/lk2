@@ -4,10 +4,26 @@
 }
 
 .profile-page.profile-page--v2 {
+  --profile-v2-accent: var(--profile-level-accent);
+  --profile-v2-accent-ink: color-mix(in srgb, var(--profile-v2-accent) 90%, #14182f);
   padding-top: 18px;
   color: #14182f;
   background: linear-gradient(155deg, #f9fbfd, #f0f5f9 60%, #f7fafc);
   box-shadow: 0 12px 55px rgb(25 43 67 / 9%);
+}
+
+/* Bright orange stays in the artwork; darker ink keeps small foregrounds readable. */
+.profile-page.profile-page--v2[data-profile-level-theme='D+'] {
+  --profile-v2-accent-ink: #b94b00;
+}
+
+.profile-page.profile-page--v2[data-profile-level-theme='D'] {
+  --profile-v2-accent-ink: #a34c00;
+}
+
+.profile-page.profile-page--v2[data-profile-level-theme='unrated'] {
+  --profile-v2-accent: #94a3b8;
+  --profile-v2-accent-ink: #64748b;
 }
 
 .profile-page.profile-page--v2::before,
@@ -130,29 +146,47 @@
 .profile-page--v2 .profile-avatar-stage {
   width: 156px;
   height: 156px;
+  isolation: isolate;
 }
 
 .profile-page--v2 .profile-avatar-stage::before {
-  width: 145px;
-  height: 145px;
-  background: #e7eef3;
-  box-shadow: 0 0 0 5px #edf3f6;
+  z-index: -1;
+  top: 50%;
+  left: 50%;
+  width: min(340px, 95vw);
+  height: 260px;
+  border-radius: 45%;
+  background:
+    radial-gradient(
+      ellipse at 35% 60%,
+      color-mix(in srgb, var(--profile-v2-accent) 23%, transparent),
+      transparent 68%
+    ),
+    radial-gradient(
+      ellipse at 68% 45%,
+      color-mix(in srgb, var(--profile-v2-accent) 18%, transparent),
+      transparent 70%
+    );
+  box-shadow: none;
+  filter: blur(18px);
+  transform: translate(-50%, -45%);
+  pointer-events: none;
 }
 
 .profile-page--v2 .profile-level-avatar {
   --player-level-avatar-segment: #d9e6ec;
-  --player-level-avatar-segment-active: #ff603c;
+  --player-level-avatar-segment-active: var(--profile-v2-accent);
   --player-level-avatar-badge-background: #fff;
-  --player-level-avatar-badge-color: #ff5e38;
+  --player-level-avatar-badge-color: var(--profile-v2-accent-ink);
   filter: drop-shadow(0 5px 10px rgb(26 55 74 / 7%));
 }
 
-.profile-page--v2 [data-player-level-badge] {
+.profile-page--v2 .profile-avatar-stage [data-player-level-badge] {
   min-width: 40px;
   height: 27px;
   padding: 0 6px;
   font-size: 18px;
-  border: 1.5px solid #ff6b48;
+  border: 1.5px solid var(--profile-v2-accent);
   box-shadow: 0 0 0 3px #fff;
 }
 
@@ -242,7 +276,7 @@
 
 .profile-page--v2 .profile-facts .profile-inline-icon {
   width: 16px;
-  color: #ff6745;
+  color: var(--profile-v2-accent-ink);
 }
 
 .profile-page--v2 .profile-facts .profile-inline-icon svg {
@@ -569,7 +603,7 @@
 }
 
 .profile-page--v2 .profile-v2-unavailable:nth-child(2) .profile-inline-icon {
-  color: #ff603c;
+  color: var(--profile-v2-accent-ink);
 }
 
 .profile-v2-directory > :is(.profile-friends, .profile-communities) {
@@ -616,7 +650,7 @@
   text-decoration: none;
 }
 
-.profile-page--v2 .fh-bottom-nav > a[aria-current='page'] {
+.profile-page.profile-page--v2 .fh-bottom-nav > a[aria-current='page'] {
   color: #ff603c;
 }
 

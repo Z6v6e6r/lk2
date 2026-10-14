@@ -2057,7 +2057,17 @@ export function ProfilePage({
 
   return (
     <div className={`profile-shell${isSelf ? ' profile-shell--v2' : ''}`}>
-      <main className={`profile-page${isSelf ? ' profile-page--v2' : ''}`} style={pageStyle}>
+      <main
+        className={`profile-page${isSelf ? ' profile-page--v2' : ''}`}
+        style={pageStyle}
+        data-profile-level-theme={
+          isSelf
+            ? Object.hasOwn(levelAccents, displayLevel)
+              ? displayLevel
+              : 'unrated'
+            : undefined
+        }
+      >
         <header className="profile-toolbar">
           <button
             className="profile-toolbar__back"

@@ -232,12 +232,34 @@ describe('ProfilePage', () => {
     );
 
     expect(screen.getByRole('main').getAttribute('style')).toContain(filename);
+    expect(screen.getByRole('main')).toHaveAttribute('data-profile-level-theme', level);
     expect(
       screen.getByRole('img', {
         name: `Алексей Максимов, уровень ${level}, прогресс 64%`,
       }),
     ).toBeVisible();
   });
+
+  it.each([
+    ['A', true],
+    ['unsupported', false],
+  ])(
+    'keeps the level theme neutral for %s with assessmentRequired=%s',
+    (label, assessmentRequired) => {
+      const view = selfProfile(label);
+      render(
+        <ProfilePage
+          profile={{
+            ...view,
+            profile: { ...view.profile, level: { label, value: 3.64, assessmentRequired } },
+          }}
+          logoutBusy={false}
+          onLogout={() => undefined}
+        />,
+      );
+      expect(screen.getByRole('main')).toHaveAttribute('data-profile-level-theme', 'unrated');
+    },
+  );
 
   it('keeps unavailable v2 statistics and sections explicit without invented data', () => {
     render(
@@ -369,6 +391,7 @@ describe('ProfilePage', () => {
     expect(
       screen.getByRole('img', { name: 'Алексей Максимов, уровень —, прогресс 0%' }),
     ).toBeVisible();
+    expect(screen.getByRole('main')).toHaveAttribute('data-profile-level-theme', 'unrated');
     const stats = screen.getByLabelText('Данные профиля');
     expect(within(stats).queryByText('уровень')).not.toBeInTheDocument();
     expect(within(stats).queryByText('D')).not.toBeInTheDocument();
@@ -393,6 +416,7 @@ describe('ProfilePage', () => {
     expect(within(picker).queryByRole('button', { name: 'Бадминтон' })).not.toBeInTheDocument();
     fireEvent.click(within(picker).getByRole('button', { name: 'Теннис' }));
     expect(screen.queryByRole('dialog', { name: 'Выберите вид спорта' })).not.toBeInTheDocument();
+    expect(screen.getByRole('main')).toHaveAttribute('data-profile-level-theme', 'unrated');
     fireEvent.click(screen.getByRole('button', { name: 'Вид спорта: Теннис' }));
     fireEvent.click(
       within(screen.getByRole('dialog', { name: 'Выберите вид спорта' })).getByRole('button', {
