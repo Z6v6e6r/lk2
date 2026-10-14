@@ -589,7 +589,7 @@
   place-items: center;
   border-radius: 25px;
   color: #fff;
-  background: #111733;
+  background: var(--profile-v2-accent-ink);
   font-family: var(--profile-v2-font-heading);
   font-size: 16px;
   font-weight: 600;
