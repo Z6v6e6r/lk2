@@ -982,6 +982,14 @@ function ProfileV2Overview({
         <strong>—</strong>
         <span>мои игры</span>
       </a>
+      <a
+        href="/bookings?scope=history&amp;kind=TOURNAMENT"
+        aria-label="Турниры: общее число пока недоступно"
+      >
+        <ProfileIcon name="trophy" />
+        <strong>—</strong>
+        <span>турниры</span>
+      </a>
       <button
         type="button"
         disabled={!friendsAvailable}
@@ -1005,14 +1013,6 @@ function ProfileV2Overview({
         <strong>{communityCount}</strong>
         <span>сообщества</span>
       </button>
-      <a
-        href="/bookings?scope=history&amp;kind=TOURNAMENT"
-        aria-label="Турниры: общее число пока недоступно"
-      >
-        <ProfileIcon name="trophy" />
-        <strong>—</strong>
-        <span>турниры</span>
-      </a>
     </section>
   );
 }
