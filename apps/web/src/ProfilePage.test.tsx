@@ -222,6 +222,27 @@ describe('ProfilePage', () => {
     ).toBeVisible();
   });
 
+  it('shows balance below the identity with top-up availability and information', () => {
+    render(
+      <ProfilePage profile={selfProfile('D+')} logoutBusy={false} onLogout={() => undefined} />,
+    );
+    const card = screen.getByRole('region', { name: 'Баланс' });
+    const identity = screen.getByRole('heading', { name: 'Алексей Максимов' }).closest('section');
+    expect(within(identity!).queryByText(/540/)).not.toBeInTheDocument();
+    expect(within(card).getByText(/540/)).toBeVisible();
+    expect(identity!.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(
+      within(card).getByRole('button', { name: 'Пополнить баланс — пока недоступно' }),
+    ).toBeDisabled();
+    const information = within(card).getByRole('button', { name: 'Информация о балансе' });
+    expect(information).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(information);
+    expect(information).toHaveAttribute('aria-expanded', 'true');
+    expect(within(card).getByText('Текущий баланс вашего счёта в ПадлХАБ.')).toBeVisible();
+    fireEvent.click(information);
+    expect(within(card).getByText('Текущий баланс вашего счёта в ПадлХАБ.')).not.toBeVisible();
+  });
+
   it('renders a placeholder for a balance the local read did not observe', () => {
     const profile = selfProfile('D+');
     render(
@@ -688,6 +709,12 @@ describe('ProfilePage', () => {
     expect(screen.getByText('Заявка сохранена')).toBeVisible();
     expect(screen.getByText('Отправим заявку, когда игрок войдёт в приложение')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Ожидает входа игрока' })).toBeDisabled();
+  });
+
+  it('does not show the private balance card on another player profile', () => {
+    render(<ProfilePage profile={otherProfile} logoutBusy={false} onLogout={() => undefined} />);
+    expect(screen.queryByRole('region', { name: 'Баланс' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Информация о балансе' })).not.toBeInTheDocument();
   });
 
   it('shares the canonical profile deep link instead of the current address bar', async () => {

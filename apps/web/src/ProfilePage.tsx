@@ -738,6 +738,46 @@ function readProfileCity(userId: string): ProfileCity {
   }
 }
 
+function ProfileBalanceCard({ balance }: { readonly balance: string | null }): React.JSX.Element {
+  const [informationOpen, setInformationOpen] = useState(false);
+
+  return (
+    <section className="profile-balance-card" aria-labelledby="profile-balance-title">
+      <div className="profile-balance-card__amount" aria-label="Данные профиля">
+        <h2 id="profile-balance-title">Баланс</h2>
+        <strong>{balance ?? UNKNOWN_VALUE_PLACEHOLDER}</strong>
+      </div>
+      <button
+        className="profile-balance-card__topup"
+        type="button"
+        disabled
+        aria-label="Пополнить баланс — пока недоступно"
+        title="Пополнение пока недоступно"
+      >
+        Пополнить
+      </button>
+      <button
+        className="profile-balance-card__info"
+        type="button"
+        aria-label="Информация о балансе"
+        aria-expanded={informationOpen}
+        aria-controls="profile-balance-information"
+        title="Информация о балансе"
+        onClick={() => setInformationOpen((open) => !open)}
+      >
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.7" />
+          <path d="M12 11v6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          <circle cx="12" cy="7.5" r="1" fill="currentColor" />
+        </svg>
+      </button>
+      <p id="profile-balance-information" hidden={!informationOpen}>
+        Текущий баланс вашего счёта в ПадлХАБ.
+      </p>
+    </section>
+  );
+}
+
 function ProfileFacts({
   userId,
   sport,
@@ -1766,7 +1806,7 @@ export function ProfilePage({
               fallbackSeed={profile.userId}
               level={displayLevel}
               progress={levelProgress(rating, profile.level?.assessmentRequired ?? true)}
-              size={150}
+              size={112}
               src={profile.avatarUrl ?? null}
             />
           </div>
@@ -1785,18 +1825,20 @@ export function ProfilePage({
             ) : null}
           </div>
 
-          <div className="profile-stats" aria-label="Данные профиля">
-            <div>
-              <span>{isIndependentSport ? 'профиль' : privateAccount ? 'баланс' : 'доступ'}</span>
-              <strong>
-                {isIndependentSport
-                  ? 'отдельный'
-                  : privateAccount
-                    ? (balance ?? UNKNOWN_VALUE_PLACEHOLDER)
-                    : accessTierLabel(access.tier)}
-              </strong>
+          {!isSelf || isIndependentSport ? (
+            <div className="profile-stats" aria-label="Данные профиля">
+              <div>
+                <span>{isIndependentSport ? 'профиль' : privateAccount ? 'баланс' : 'доступ'}</span>
+                <strong>
+                  {isIndependentSport
+                    ? 'отдельный'
+                    : privateAccount
+                      ? (balance ?? UNKNOWN_VALUE_PLACEHOLDER)
+                      : accessTierLabel(access.tier)}
+                </strong>
+              </div>
             </div>
-          </div>
+          ) : null}
 
           {!isIndependentSport ? (
             <>
@@ -1878,6 +1920,8 @@ export function ProfilePage({
         ) : null}
 
         <div className="profile-content">
+          {isSelf && !isIndependentSport ? <ProfileBalanceCard balance={balance} /> : null}
+
           {access.audience === 'OTHER' ? (
             <>
               <FriendshipAction
