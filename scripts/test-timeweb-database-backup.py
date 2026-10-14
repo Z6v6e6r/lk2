@@ -7,6 +7,7 @@ import re
 import shutil
 import json
 import os
+import socket
 from pathlib import Path
 import stat
 import subprocess
@@ -1014,44 +1015,57 @@ def namespace_fixture():
     broker=process(45,'/usr/bin/python3.13',['/usr/bin/python3','-I','-S','-B',tool,'--disk-runtime-supervisor',str(m.REQUEST),sha])
     source=process(44,'/usr/bin/dockerd',['/usr/bin/dockerd'],11,'/system.slice/docker.service')
     daemon=process(46,'/usr/bin/dockerd',['/usr/bin/dockerd','--config-file',r['configFile']])
-    child=process(47,'/usr/bin/containerd',['/usr/bin/containerd','--config',r['execRoot']+'/containerd/containerd.toml'])
+    child=process(47,'/usr/bin/containerd',['containerd','--config',r['execRoot']+'/containerd/containerd.toml'])
     cid='e'*64;shim=process(48,'/usr/bin/containerd-shim-runc-v2',['/usr/bin/containerd-shim-runc-v2','-namespace','phub-'+sha[:24],'-id',cid,'-address',r['execRoot']+'/containerd/containerd.sock'])
     pg=process(4242,'/usr/lib/postgresql/16/bin/postgres',['postgres'],13,'/'+r['slice']+'/docker-'+cid+'.scope',False)
     unit={'LoadState':'loaded','ActiveState':'active','SubState':'running','MainPID':'45','InvocationID':'a'*32,'ControlGroup':cg,
         'MemoryMax':str(2*1024**3),'MemorySwapMax':'0','TasksMax':'256','Delegate':'yes','CPUQuotaPerSecUSec':'1s','KillMode':'control-group',
         'SendSIGKILL':'yes','Restart':'no','TimeoutStopUSec':'30s','LimitCORE':'0','UMask':'0077','User':'root','Group':'root',
         'WorkingDirectory':plan['work'],'StandardInput':'null','StandardOutput':'null','StandardError':'null','Slice':r['slice'],'Transient':'yes',
-        'NRestarts':'0','Result':'success','ExecMainCode':'0','ExecMainStatus':'0'}
+        'NRestarts':'0','Result':'success','ExecMainCode':'0','ExecMainStatus':'0','PrivateNetwork':'yes'}
     sl={'LoadState':'loaded','ActiveState':'active','ControlGroup':'/'+r['slice'],'Transient':'yes','MemoryMax':str(4*1024**3),'MemorySwapMax':'0','TasksMax':'384','CPUQuotaPerSecUSec':'2s'}
     def bounds(group,mem,pids,cpu):return {'identity':{'dev':29,'ino':1000+pids,'uid':0,'gid':0,'mode':0o40755},'path':'/sys/fs/cgroup'+group,
         'memory.max':str(mem),'memory.swap.max':'0','pids.max':str(pids),'cpu.max':str(cpu*100000)+' 100000'}
     b=bounds(cg,2*1024**3,256,1);sb=bounds('/'+r['slice'],4*1024**3,384,2)
     admission={'schema':'PHUB_TIMEWEB_PRIVATE_NAMESPACE_RECEIPT_V1','operationSha256':sha,'toolFileSha256':op['toolFileSha256'],
-               'sourceDaemon':source,'supervisor':{'unit':unit,'process':broker,'bounds':b,'slice':{'unit':sl,'bounds':sb}}}
+               'sourceDaemon':source,'supervisor':{'unit':unit,'process':broker,'bounds':b,'slice':{'unit':sl,'bounds':sb}},
+               'network':{'sourceNamespace':21,'supervisorNamespace':22}}
     managed={'containerd':child,'config':{'version':2,'root':r['dataRoot']+'/containerd/daemon','state':r['execRoot']+'/containerd/daemon',
-              'address':r['execRoot']+'/containerd/containerd.sock','disabledPlugins':['cri']},'configSha256':'d'*64,'shims':[shim]}
+              'address':r['execRoot']+'/containerd/containerd.sock','disabledPlugins':['io.containerd.grpc.v1.cri']},'configSha256':'d'*64,'shims':[shim]}
     socket={'dev':64775,'ino':7003,'uid':0,'gid':0,'mode':0o140660,'nlink':1}
     isolation={'admission':admission,'process':daemon,'socket':socket,'info':{'DockerRootDir':r['dataRoot'],'Driver':'vfs','CgroupDriver':'systemd','LiveRestoreEnabled':False},'managed':managed}
     def mounts(target,root='/'):
         return '1 0 8:1 / / rw - ext4 /dev/root rw\n41 1 253:7 '+root+' '+target+' rw,nosuid,nodev,noexec,noatime - ext4 '+plan['mapperPath']+' rw\n'
     broker_m=mounts(plan['mount']);container_m=mounts('/var/lib/postgresql/data','/pgdata')
+    alias_m=mounts('/media');mask_m=mounts('/run/containerd','/.runtime/run-containerd')
+    runtime_m=('42 41 253:7 /.runtime/docker-data '+r['dataRoot']+' rw,nosuid,nodev,noexec,noatime shared:123 - ext4 '+plan['mapperPath']+' rw\n'
+               '43 41 0:4 net:[23] '+r['execRoot']+'/netns/'+'a'*12+' rw - nsfs nsfs rw\n')
     storage={'image':{'dev':64775,'ino':7001,'uid':0,'gid':0,'mode':0o100600,'nlink':1},'loop':'/dev/loop7',
         'mapper':{'device':253,'minor':7,'uuid':'CRYPT-LUKS2-'+plan['luksUuid'].replace('-','')+'-'+plan['mapperName']},
         'mount':{'dev':64775,'ino':7002,'uid':0,'gid':0,'mode':0o40700}}
     container_bounds={'memory.max':str(2*1024**3),'memory.swap.max':'0','pids.max':'128','cpu.max':'100000 100000'}
-    kernel={'containerProcess':pg,'containerBounds':container_bounds,'containerMembers':[pg],'brokerMount':m.mountinfo_records(broker_m)[1],'daemonMount':m.mountinfo_records(broker_m)[1],'containerMount':m.mountinfo_records(container_m)[1]}
+    alias={'baseline':{'dev':2049,'ino':1687,'uid':0,'gid':0,'mode':0o40755,'nlink':2},'mount':storage['mount'],
+           'brokerMount':m.mountinfo_records(alias_m)[1],'daemonMount':m.mountinfo_records(alias_m)[1]}
+    mask={'baseline':{'dev':28,'ino':3582,'uid':0,'gid':0,'mode':0o40711},'source':{'dev':64775,'ino':7003,'uid':0,'gid':0,'mode':0o40700},
+          'brokerMount':m.mountinfo_records(mask_m)[1],'daemonMount':m.mountinfo_records(mask_m)[1]}
+    kernel={'containerProcess':pg,'containerBounds':container_bounds,'containerMembers':[pg],'containerNetworkNamespace':23,'networkSandboxKey':r['execRoot']+'/netns/'+'a'*12,'brokerMount':m.mountinfo_records(broker_m)[1],'daemonMount':m.mountinfo_records(broker_m)[1],'containerMount':m.mountinfo_records(container_m)[1]}
     row=disk_restore_row({**plan,'mount':r['pgdata']},cid);row['Image']=row['Config']['Image']=NS_IMAGE['Id']
+    row['NetworkSettings']={'SandboxKey':r['execRoot']+'/netns/'+'a'*12}
     row['State']['Pid']=pg['pid'];row['HostConfig'].update(CgroupParent=r['slice'],CgroupnsMode='private')
     row['Config']['Env']=NS_IMAGE['Env']+['PGDATA=/var/lib/postgresql/data/phub-restore','POSTGRES_USER=phub_restore','POSTGRES_DB=phub_restore','POSTGRES_HOST_AUTH_METHOD=trust']
     container=m.disk_container_projection(row);container['Image']=row['Image'];container['HostConfig'].update(CgroupParent=r['slice'],CgroupnsMode='private')
     expected={k:op[k]for k in ['controllerSha','controllerTree','controllerSourceCiRunId','candidateReleaseId','migrationPlanSha256','migrationSuccessSha256']}
     value={'schema':'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V2','operationSha256':sha,'storageProofSha256':'b'*64,'plan':plan,
-        'readback':{'storage':storage,'isolation':isolation,'kernel':kernel,'container':container,'image':{'source':NS_IMAGE,'imported':NS_IMAGE}},'migration':expected}
+        'readback':{'storage':storage,'alias':alias,'mask':mask,'runtimeMounts':{'dataRoot':m.mountinfo_records(runtime_m)[0],'network':m.mountinfo_records(runtime_m)[1]},'isolation':isolation,'kernel':{**kernel,'containerNetworkNamespace':23},'container':container,'image':{'source':NS_IMAGE,'imported':NS_IMAGE}},'migration':expected}
     runtime={'unit':unit,'slice':sl,'bounds':b,'sliceBounds':sb,'configSha256':managed['configSha256'],'members':[45,46,47,48],'containerBounds':container_bounds,'containerMembers':[pg]}
     processes={'broker':broker,'daemon':daemon,'source':source,'container':pg,'containerd':child,'shim':shim}
+    mountinfo={'broker':broker_m+alias_m+mask_m+runtime_m,'daemon':broker_m+alias_m+mask_m+runtime_m,'source':'1 0 8:1 / / rw shared:1 - ext4 /dev/root rw\n','container':container_m,'containerd':broker_m+alias_m+mask_m+runtime_m,'shim':broker_m+alias_m+mask_m+runtime_m}
     actual={'selfNamespace':12,'afterSelfNamespace':12,'processes':processes,'afterProcesses':processes,'socket':socket,'sourceImage':NS_IMAGE,
-        'privateImage':NS_IMAGE,'container':container,'runtime':runtime,'afterRuntime':runtime,
-        'mountinfo':{'broker':broker_m,'daemon':broker_m,'source':'1 0 8:1 / / rw shared:1 - ext4 /dev/root rw\n','container':container_m,'containerd':broker_m,'shim':broker_m}}
+        'privateImage':NS_IMAGE,'container':container,'afterContainer':copy.deepcopy(container),'runtime':runtime,'afterRuntime':runtime,
+        'alias':{'mount':storage['mount'],'alias':storage['mount'],'sourceAlias':alias['baseline'],'sourceAliasEmpty':True,'daemonCwd':'/media','daemonCwdIdentity':storage['mount'],'mask':mask['source'],'maskSource':mask['source'],'sourceMask':mask['baseline'],'networkMountIdentity':{'dev':4,'ino':23},'containerNetworkIdentity':{'dev':4,'ino':23}},
+        'afterAlias':{'mount':storage['mount'],'alias':storage['mount'],'sourceAlias':alias['baseline'],'sourceAliasEmpty':True,'daemonCwd':'/media','daemonCwdIdentity':storage['mount'],'mask':mask['source'],'maskSource':mask['source'],'sourceMask':mask['baseline'],'networkMountIdentity':{'dev':4,'ino':23},'containerNetworkIdentity':{'dev':4,'ino':23}},
+        'network':{'source':21,'broker':22,'daemon':22,'containerd':22,'shim':22,'container':23},'afterNetwork':{'source':21,'broker':22,'daemon':22,'containerd':22,'shim':22,'container':23},'networkSandboxKey':row['NetworkSettings']['SandboxKey'],'afterNetworkSandboxKey':kernel['networkSandboxKey'],
+        'mountinfo':mountinfo,'afterMountinfo':copy.deepcopy(mountinfo)}
     return {'nativePatch':list(m.API_WORKER_NATIVE_BOOKINGS_PATCH.values()),'operationBase64':base64.b64encode(raw).decode(),'expected':expected,'reference':{'schema':'PHUB_TIMEWEB_DISK_RESTORE_EXCLUSION_V2','storageProofSha256':'b'*64},'value':value,'actual':actual}
 
 
@@ -1059,6 +1073,24 @@ class NamespacePureTests(unittest.TestCase):
     def plan(self,post=False):
         op=namespace_operation(post)
         return m.namespace_plan(op,m.encoded(op),m.namespace_sizing(1024**3,8*1024**3,40*1024**3,NS_IMAGE),NS_IMAGE)
+
+    def test_unix_socket_relative_alias_survives_absolute_path_limit(self):
+        with tempfile.TemporaryDirectory(prefix='phub-unix-socket-') as directory:
+            deep=Path(directory)/('a'*60)/('b'*60);deep.mkdir(parents=True)
+            absolute=deep/'.runtime'/'docker.sock';absolute.parent.mkdir()
+            self.assertGreater(len(str(absolute).encode()),107)
+            blocked=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+            try:
+                with self.assertRaises(OSError):blocked.bind(str(absolute))
+            finally:blocked.close()
+            old=os.getcwd();os.chdir(deep)
+            try:
+                relative=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+                try:
+                    try:relative.bind('./.runtime/docker.sock')
+                    except PermissionError:self.skipTest('execution sandbox forbids AF_UNIX bind')
+                finally:relative.close()
+            finally:os.chdir(old)
 
     def test_admission_does_not_load_implicit_units(self):
         p=self.plan();loaded=set();calls=[]
@@ -1182,9 +1214,15 @@ class NamespacePureTests(unittest.TestCase):
         self.assertIn('--slice='+p['isolation']['slice'],args)
         self.assertIn('--property=SendSIGKILL=yes',args);self.assertIn('--property=Restart=no',args)
         self.assertIn('--property=MemoryMax=2147483648',args);self.assertIn('--property=TasksMax=256',args)
-        self.assertEqual(cfg['hosts'],['unix://'+p['isolation']['socket']]);self.assertEqual(cfg['cgroup-parent'],p['isolation']['slice'])
+        self.assertEqual(cfg['hosts'],['unix:///media/.runtime/docker.sock']);self.assertEqual(cfg['cgroup-parent'],p['isolation']['slice'])
         self.assertEqual(cfg['storage-driver'],'vfs');self.assertFalse(cfg['iptables']);self.assertFalse(cfg['live-restore'])
-        for key in ['data-root','exec-root','pidfile']:self.assertTrue(cfg[key].startswith(p['mount']+'/.runtime/'))
+        for key in ['data-root','exec-root','pidfile']:self.assertTrue(cfg[key].startswith('/media/.runtime/'))
+        self.assertNotIn('containerd-plugins-namespace',cfg);self.assertNotIn('containerd-plugin-namespace',cfg)
+        for endpoint in [cfg['hosts'][0].removeprefix('unix://'),p['isolation']['socket'],
+                         p['isolation']['execRoot']+'/containerd/containerd.sock',
+                         p['isolation']['execRoot']+'/containerd/debug.sock',
+                         p['isolation']['execRoot']+'/containerd/s/'+'f'*64]:
+            self.assertLessEqual(len(endpoint.encode()),107)
         self.assertNotIn('containerd',cfg);self.assertNotIn('/run/containerd/containerd.sock',m.encoded(cfg).decode())
         create=m.namespace_container_args(p)
         self.assertEqual(create[create.index('--cgroup-parent')+1],p['isolation']['slice'])
@@ -1193,6 +1231,112 @@ class NamespacePureTests(unittest.TestCase):
         bus=m.namespace_slice_args(p)
         self.assertIn('ssa(sv)a(sa(sv))',bus);self.assertEqual(bus[-1],'0')
         self.assertIn('4294967296',bus);self.assertIn('384',bus);self.assertIn('2000000',bus)
+
+    def test_private_socket_uses_fixed_relative_uri_and_owned_mount_cwd(self):
+        p=self.plan(); calls=[]
+        with patch.object(m,'namespace_socket',return_value={'socket':'custody'}),patch.object(m,'namespace_client_cwd',return_value=Path('/media')) as cwd,patch.object(m,'command',side_effect=lambda args,code,**kwargs:calls.append((args,code,kwargs)) or b'{}'):
+            self.assertEqual(m.namespace_docker(p,['info'],'NS_TEST'),b'{}')
+        self.assertEqual(calls,[(['/usr/bin/docker','--host','unix:///media/.runtime/docker.sock','info'],'NS_TEST',
+            {'environment':{**m.ENV,'DOCKER_HOST':'unix:///media/.runtime/docker.sock'},'cwd':Path('/media')})])
+        cwd.assert_called_once_with(p)
+        with patch.object(m,'namespace_socket'),patch.object(m,'namespace_client_cwd') as owned,patch.object(m,'command') as command:
+            with self.assertRaisesRegex(m.Stop,'NS_DOCKER_CWD_OVERRIDE'):m.namespace_docker(p,['info'],cwd='/foreign')
+        owned.assert_not_called();command.assert_not_called()
+
+    def test_private_client_cwd_requires_mounted_receipt_namespace_and_identity(self):
+        p=self.plan()
+        with patch.object(m,'DiskJournal'),patch.object(m,'namespace_alias_attest',return_value={'mount':{}}) as attest,patch.object(m,'namespace_mask_attest',return_value={'source':{}}) as mask:
+            self.assertEqual(m.namespace_client_cwd(p),Path('/media'))
+        attest.assert_called_once()
+        mask.assert_called_once()
+        with patch.object(m,'DiskJournal'),patch.object(m,'namespace_alias_attest',side_effect=m.Stop('NS_ALIAS_IDENTITY')),patch.object(m,'namespace_mask_attest'):
+            with self.assertRaisesRegex(m.Stop,'NS_ALIAS_IDENTITY'):m.namespace_client_cwd(p)
+
+    def test_private_daemon_cwd_is_exact_owned_mount(self):
+        p=self.plan(); expected=SimpleNamespace(st_dev=1,st_ino=2,st_uid=0,st_gid=0,st_mode=0o40700,st_nlink=2)
+        actual=copy.copy(expected)
+        with patch.object(m,'namespace_client_cwd',return_value=Path('/owned/mount')),patch.object(m.os,'readlink',return_value='/owned/mount'),patch.object(Path,'stat',return_value=actual),patch.object(Path,'lstat',return_value=expected):
+            self.assertEqual(m.namespace_daemon_cwd(p,46),m.storage_identity(expected))
+        for link,info in [('/foreign/mount',actual),('/owned/mount',SimpleNamespace(**{**actual.__dict__,'st_ino':3}))]:
+            with self.subTest(link=link),patch.object(m,'namespace_client_cwd',return_value=Path('/owned/mount')),patch.object(m.os,'readlink',return_value=link),patch.object(Path,'stat',return_value=info),patch.object(Path,'lstat',return_value=expected):
+                with self.assertRaisesRegex(m.Stop,'NS_DAEMON_CWD'):m.namespace_daemon_cwd(p,46)
+
+    def test_network_inode_is_fail_closed_when_process_disappears(self):
+        with patch.object(m.os,'stat',side_effect=FileNotFoundError):
+            with self.assertRaisesRegex(m.Stop,'NS_NETWORK_READ'):m.namespace_network(46)
+
+    def test_runtime_root_attests_alias_before_any_filesystem_access(self):
+        journal=unittest.mock.Mock();journal.find.return_value={}
+        with patch.object(m,'namespace_alias_attest',side_effect=m.Stop('NS_ALIAS_NAMESPACE')),patch.object(Path,'mkdir') as mkdir,patch.object(m,'secure') as secure:
+            with self.assertRaisesRegex(m.Stop,'NS_ALIAS_NAMESPACE'):m.namespace_runtime_root(self.plan(),journal)
+        mkdir.assert_not_called();secure.assert_not_called();journal.add.assert_not_called()
+
+    def test_runtime_root_retains_directory_custody_after_owned_children_and_rejects_replacement(self):
+        with tempfile.TemporaryDirectory(prefix='phub-runtime-root-owned-') as directory:
+            alias=Path(directory);events={'ALIAS_MOUNTED':{}};journal=unittest.mock.Mock()
+            journal.find.side_effect=events.get
+            journal.add.side_effect=lambda phase,**value:events.__setitem__(phase,value)
+            def local_secure(path,kind,mode):
+                info=Path(path).lstat()
+                self.assertTrue(stat.S_ISDIR(info.st_mode));self.assertEqual(stat.S_IMODE(info.st_mode),mode)
+                return info
+            with patch.object(m,'NS_ALIAS',alias),patch.object(m,'namespace_alias_attest') as attest,patch.object(m,'secure',side_effect=local_secure):
+                root=m.namespace_runtime_root(self.plan(),journal)
+                self.assertEqual(set(events['RUNTIME_ROOT_CREATED']['identity']),{'dev','ino','uid','gid','mode'})
+                for name in ['run-containerd','docker-data','docker-exec']:(root/name).mkdir(mode=0o700)
+                self.assertEqual(m.namespace_runtime_root(self.plan(),journal),root)
+                root.rename(alias/'retained-runtime');root.mkdir(mode=0o700)
+                with self.assertRaisesRegex(m.Stop,'NS_RUNTIME_ROOT_DRIFT'):m.namespace_runtime_root(self.plan(),journal)
+                self.assertEqual(attest.call_count,3)
+
+    def test_startup_stderr_drain_caps_receipt_payload(self):
+        stream=SimpleNamespace(fileno=lambda: 9); captured=bytearray(); chunks=[b'x'*65536,b'y'*8192,b'']
+        with patch.object(m.os,'read',side_effect=chunks):
+            m.namespace_startup_drain(stream,captured)
+        self.assertEqual(len(captured),65536)
+
+    def test_startup_stderr_drain_returns_for_continuously_readable_pipe(self):
+        stream=SimpleNamespace(fileno=lambda: 9); captured=bytearray()
+        with patch.object(m.os,'read',return_value=b'x'*8192) as read:
+            m.namespace_startup_drain(stream,captured)
+        self.assertEqual(read.call_count,16);self.assertEqual(len(captured),65536)
+
+    def test_startup_error_receipt_never_persists_stderr(self):
+        p=self.plan();saved=[]
+        with patch.object(m,'atomic_exclusive',side_effect=lambda _path,raw:saved.append(raw)):
+            m.namespace_startup_error(p,'NS_DAEMON_START_EXIT',7,b'private-marker')
+        self.assertNotIn(b'private-marker',saved[0]);value=json.loads(saved[0])
+        self.assertEqual(set(value),{'schema','operationSha256','code','exitCode','stderrByteCount','truncated','stderrSha256'})
+
+    def test_runtime_mount_classifier_rejects_unowned_descendants_and_netns_drift(self):
+        p=self.plan();p['mapperPath']='/dev/mapper/synthetic';j=unittest.mock.Mock()
+        j.find.side_effect=lambda phase:{} if phase in ('DAEMON_START_INTENT','RESTORE_CREATE_INTENT','RESTORE_START_INTENT') else None
+        rows=[
+            {'id':'41','parent':'1','device':'253:7','root':'/','target':'/media','options':['rw','nosuid','nodev','noexec','noatime'],'optional':[],'fstype':'ext4','source':p['mapperPath'],'superOptions':['rw']},
+            {'id':'42','parent':'41','device':'253:7','root':'/.runtime/docker-data','target':p['isolation']['dataRoot'],'options':['rw','nosuid','nodev','noexec','noatime'],'optional':['shared:77'],'fstype':'ext4','source':p['mapperPath'],'superOptions':['rw']},
+            {'id':'43','parent':'41','device':'0:4','root':'net:[23]','target':p['isolation']['execRoot']+'/netns/'+'a'*12,'options':['rw'],'optional':[],'fstype':'nsfs','source':'nsfs','superOptions':['rw']},
+        ]
+        inode=SimpleNamespace(st_ino=23,st_dev=4)
+        with patch.object(Path,'stat',return_value=inode),patch.object(m.os,'major',return_value=0),patch.object(m.os,'minor',return_value=4):
+            value=m.namespace_runtime_mounts(p,j,rows)
+        self.assertEqual(value['network'],rows[2])
+        with patch.object(Path,'stat',return_value=inode),patch.object(m.os,'major',return_value=0),patch.object(m.os,'minor',return_value=4):
+            with self.assertRaisesRegex(m.Stop,'NS_RUNTIME_DESCENDANT'):m.namespace_runtime_mounts(p,j,[*rows,{**rows[1],'id':'44','target':'/media/foreign'}])
+        with patch.object(Path,'stat',return_value=SimpleNamespace(st_ino=24,st_dev=4)),patch.object(m.os,'major',return_value=0),patch.object(m.os,'minor',return_value=4):
+            with self.assertRaisesRegex(m.Stop,'NS_RUNTIME_NET_IDENTITY'):m.namespace_runtime_mounts(p,j,rows)
+        early=unittest.mock.Mock();early.find.side_effect=lambda phase:{} if phase=='DAEMON_START_INTENT' else None
+        with self.assertRaisesRegex(m.Stop,'NS_RUNTIME_NET_EARLY'):m.namespace_runtime_mounts(p,early,[rows[0],rows[2]])
+        before_start=unittest.mock.Mock();before_start.find.side_effect=lambda phase:{} if phase in ('DAEMON_START_INTENT','RESTORE_CREATE_INTENT') else None
+        with self.assertRaisesRegex(m.Stop,'NS_RUNTIME_NET_EARLY'):m.namespace_runtime_mounts(p,before_start,rows)
+
+    def test_lost_remove_ack_with_lingering_netns_stops_before_cleanup(self):
+        p=self.plan();events={'DAEMON_START_INTENT':{},'RESTORE_CREATED':{'containerId':'e'*64},
+                               'CONTAINER_REMOVE_INTENT':{}}
+        journal=unittest.mock.Mock();journal.find.side_effect=events.get;guard=unittest.mock.Mock()
+        control=SimpleNamespace(exists=lambda:True)
+        with patch.object(m,'disk_image',return_value={'synthetic':True}),patch.object(m,'namespace_control',return_value=control),patch.object(m,'namespace_container_lookup',return_value=None),patch.object(m,'namespace_alias_rows',return_value=[]),patch.object(m,'namespace_runtime_mounts',return_value={'dataRoot':None,'network':{'target':'/media/.runtime/docker-exec/netns/'+'a'*12}}),patch.object(m,'namespace_daemon_stop') as daemon,patch.object(m,'namespace_mask_unmount') as mask,patch.object(m,'namespace_alias_unmount') as alias,patch.object(m,'disk_cleanup_storage') as storage:
+            with self.assertRaisesRegex(m.Stop,'NS_RUNTIME_UNBOUND'):m.namespace_cleanup(p,namespace_operation(),journal,guard)
+        journal.once.assert_not_called();guard.assert_not_called();daemon.assert_not_called();mask.assert_not_called();alias.assert_not_called();storage.assert_not_called()
 
     def test_source_restart_is_not_adopted_and_is_detected_before_mutation(self):
         p=self.plan();frozen={'pid':44,'startTicks':'123','mountNamespace':11}
@@ -1231,14 +1375,14 @@ class NamespacePureTests(unittest.TestCase):
     def test_managed_containerd_rejects_host_socket_foreign_process_and_config(self):
         f=namespace_fixture();p=f['value']['plan'];i=f['value']['readback']['isolation'];a=i['admission'];managed=i['managed']
         members=[a['supervisor']['process'],i['process'],managed['containerd'],*managed['shims']]
-        cfg={'version':2,'root':managed['config']['root'],'state':managed['config']['state'],'grpc':{'address':managed['config']['address']},'disabled_plugins':['cri']}
+        cfg={'version':2,'root':managed['config']['root'],'state':managed['config']['state'],'grpc':{'address':managed['config']['address']},'disabled_plugins':['io.containerd.grpc.v1.cri']}
         import tomllib
         for key,value in [('grpc',{'address':'/run/containerd/containerd.sock'}),('root','/var/lib/containerd'),('imports',['/etc/containerd/config.toml']),('proxy_plugins',{'foreign':{}})]:
-            with self.subTest(key=key),patch.object(m,'namespace_members',return_value=[v['pid'] for v in members]),patch.object(m,'namespace_process',side_effect=lambda pid:next(v for v in members if v['pid']==pid)),patch.object(m,'read_secure',return_value=b'synthetic'),patch.object(tomllib,'loads',return_value={**cfg,key:value}):
+            with self.subTest(key=key),patch.object(m,'namespace_members',return_value=[v['pid'] for v in members]),patch.object(m,'namespace_process',side_effect=lambda pid:next(v for v in members if v['pid']==pid)),patch.object(m,'namespace_network',return_value=22),patch.object(m,'read_secure',return_value=b'synthetic'),patch.object(tomllib,'loads',return_value={**cfg,key:value}):
                 with self.assertRaises(m.Stop):m.namespace_managed(p,a,i['process'])
         extra=copy.deepcopy(managed['containerd']);extra['pid']=88;extra['executable']='/usr/bin/runc'
         allmembers=[*members,extra]
-        with patch.object(m,'namespace_members',return_value=[v['pid'] for v in allmembers]),patch.object(m,'namespace_process',side_effect=lambda pid:next(v for v in allmembers if v['pid']==pid)),patch.object(m,'read_secure',return_value=b'synthetic'),patch.object(tomllib,'loads',return_value=cfg):
+        with patch.object(m,'namespace_members',return_value=[v['pid'] for v in allmembers]),patch.object(m,'namespace_process',side_effect=lambda pid:next(v for v in allmembers if v['pid']==pid)),patch.object(m,'namespace_network',return_value=22),patch.object(m,'read_secure',return_value=b'synthetic'),patch.object(tomllib,'loads',return_value=cfg):
             with self.assertRaisesRegex(m.Stop,'NS_SHIM_CUSTODY'):m.namespace_managed(p,a,i['process'])
 
     def test_daemon_no_start_request_is_reconciled_without_private_api_or_replay(self):
@@ -1411,6 +1555,26 @@ class NamespaceScenario(DiskScenario):
         m.need(self.unit_receipt,'NS_NAMESPACE_RECEIPT_MANUAL_STOP')
         return {'synthetic':True}
 
+    def alias_baseline(self,*args):
+        return {'dev':64775,'ino':7002,'uid':0,'gid':0,'mode':0o40755,'nlink':2}
+
+    def alias_mount(self,p,j):
+        j.add('ALIAS_MOUNT_INTENT');j.add('ALIAS_MOUNTED',alias={'synthetic':True})
+
+    def alias_unmount(self,p,j):
+        if j.find('ALIAS_MOUNT_INTENT') is not None:
+            j.once('ALIAS_UNMOUNT_INTENT');j.once('ALIAS_UNMOUNTED')
+
+    def mask_baseline(self,*args):
+        return {'dev':28,'ino':3582,'uid':0,'gid':0,'mode':0o40711}
+
+    def mask_mount(self,p,j):
+        j.add('CONTAINERD_MASK_INTENT');j.add('CONTAINERD_MASKED',mask={'synthetic':True})
+
+    def mask_unmount(self,p,j):
+        if j.find('CONTAINERD_MASK_INTENT') is not None:
+            j.once('CONTAINERD_MASK_UNMOUNT_INTENT');j.once('CONTAINERD_MASK_UNMOUNTED')
+
     def daemon_start(self,p,op,j):
         assert self.mounted and self.private
         j.add('DAEMON_START_INTENT');self.trip('NS_DAEMON_REQUEST')
@@ -1445,6 +1609,16 @@ class NamespaceScenario(DiskScenario):
                 ('namespace_docker',self.private_docker),('namespace_container_lookup',self.row),('namespace_image_transfer',self.image_transfer),
                 ('namespace_running_attestation',self.attest),('namespace_daemon_stop',self.daemon_stop),('namespace_release',self.release)]:
                 stack.enter_context(patch.object(m,name,side_effect=fn))
+            stack.enter_context(patch.object(m,'namespace_alias_baseline',side_effect=self.alias_baseline))
+            stack.enter_context(patch.object(m,'namespace_alias_mount',side_effect=self.alias_mount))
+            stack.enter_context(patch.object(m,'namespace_alias_unmount',side_effect=self.alias_unmount))
+            stack.enter_context(patch.object(m,'namespace_mask_baseline',side_effect=self.mask_baseline))
+            stack.enter_context(patch.object(m,'namespace_mask_mount',side_effect=self.mask_mount))
+            stack.enter_context(patch.object(m,'namespace_mask_unmount',side_effect=self.mask_unmount))
+            stack.enter_context(patch.object(m,'namespace_runtime_mounts_empty'))
+            stack.enter_context(patch.object(m,'namespace_runtime_mounts',return_value={'dataRoot':None,'network':None}))
+            stack.enter_context(patch.object(m,'namespace_alias_rows',return_value=[]))
+            stack.enter_context(patch.object(m,'namespace_network',return_value=21))
             stack.enter_context(patch.object(m.os,'stat',side_effect=stat_value))
             stack.enter_context(patch.object(m,'reconcile_disk',side_effect=m.reconcile_namespace))
             return super().invoke(reconcile)
@@ -1508,7 +1682,7 @@ class NamespacePipelineTests(unittest.TestCase):
                 self.assertFalse(any(a[0]=='create' for a in s.privcalls));self.assertFalse(Path(s.plan['canonical']).exists())
 
     def test_phase_interruptions_preserve_lock_and_reconcile_never_replays_dump_restore(self):
-        for phase in ['NAMESPACE_READY','DUMP_VERIFIED','MOUNTED','DAEMON_READY','IMAGE_LOADED','RESTORE_CREATED','RESTORE_STARTED',
+        for phase in ['NAMESPACE_READY','DUMP_VERIFIED','MOUNTED','ALIAS_MOUNTED','CONTAINERD_MASKED','DAEMON_READY','IMAGE_LOADED','RESTORE_CREATED','RESTORE_STARTED',
                       'RESTORE_VERIFIED','PUBLISH_READY','CONTAINER_REMOVED','DAEMON_STOPPED','NAMESPACE_STORAGE_CLEANED','NAMESPACE_RELEASED','PUBLISHED']:
             with self.subTest(phase=phase):
                 s=self.scenario(fault='after:PHASE_'+phase)

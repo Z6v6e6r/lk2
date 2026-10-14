@@ -1086,6 +1086,45 @@ plugins. Prove dockerd/containerd/shim executable, full argv, owner, start ticks
 service cgroup and complete member inventory. Unknown generated config or runtime version stops.
 Runtime binaries, systemd and Docker parent behavior require physical admission before use.
 
+Linux filesystem Unix-socket addresses have a 107-byte pathname limit. The alias-specific
+`SYSTEMD_SUPERVISOR_PRIVATE_ALIAS_V1` strategy uses fixed `/media/.runtime/**` paths for
+Docker API, managed containerd, shims, data root and exec root. `/media` must already be a
+real empty root-owned 0755 directory without a mount or descendants; the producer never
+creates or changes this host directory. It binds only the owned encrypted mount to `/media`
+inside the proven private namespace, journals `ALIAS_MOUNT_INTENT` and `ALIAS_MOUNTED`, and
+checks the mapper, mountinfo, device/inode, secure options and original source-namespace
+baseline before any runtime write or client call. The independent Node consumer repeats
+these alias, daemon cwd and host-absence checks before and after reads. Cleanup first removes
+the restore container and stops all managed runtime processes, then journals and unmounts
+the fixed `/run/containerd` mask first and the exact `/media` alias second before original
+storage cleanup. The mask hides host containerd endpoints and keeps shim sockets on the
+encrypted filesystem. Its host baseline is a real root-owned 0711 or 0755 directory with no
+mount at or below it; live contents are never copied, hashed or changed. The unit also requires
+`PrivateNetwork=yes`, with independently proven source and supervisor network namespaces,
+so temporary runtime listeners cannot share the host network. The producer and consumer check
+managed containerd argv and full CRI plugin URI against Docker 29/containerd 2.3 semantics.
+An unverified plugin-namespace JSON override is omitted; each runtime uses its own data/state
+and the operation-bound task namespace. An intent with the exact owned alias
+can be adopted for cleanup; absent-after-ready without an unmount intent, foreign mounts,
+changed baseline or supervisor loss remain manual STOP. Old strategy artifacts fail closed;
+old exact-pinned helpers remain available for their own incident recovery.
+
+Docker 29 creates only two admitted descendants below the private alias: its exact data-root
+self-bind, with one private-namespace shared peer group, and the single `nsfs` mount for the
+restore container after `RESTORE_START_INTENT`. Running proof binds the latter to Docker's
+`SandboxKey`, the exact container PID/start ticks and its network-namespace device/inode.
+Created and exited containers have no network mount; stop/remove intent windows allow only
+the bounded acknowledgement transition. Unknown descendants and unbound namespaces stop
+the operation. Cleanup never unmounts these descendants directly and requires them absent
+before removing the mask and alias. Python and the independent Node reader compare fresh
+mount, process, container and namespace snapshots before and after reads.
+
+Validate the fixed dockerd configuration before starting it. The supervisor drains startup
+stderr with a bounded per-iteration budget and retains at most 64 KiB in memory; durable
+failure receipts contain only a fixed code, exit status, byte count, truncation indicator and
+SHA-256. Raw stderr, keys and database bytes never enter those receipts. A failed or unknown
+daemon start keeps the operation fenced for exact-owner reconciliation.
+
 The source client always reads the fixed system Docker socket; the restore client always names
 the temporary socket. There is no fallback. Stream only the already admitted pinned PostgreSQL
 image between clients, with a byte cap, timeout, bounded relay memory and parent-death signal.

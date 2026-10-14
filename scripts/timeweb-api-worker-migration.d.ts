@@ -157,14 +157,26 @@ export interface NamespaceRestoreKernelSnapshot {
   >;
   afterProcesses: NamespaceRestoreKernelSnapshot['processes'];
   mountinfo: Record<keyof NamespaceRestoreKernelSnapshot['processes'], string>;
+  afterMountinfo: NamespaceRestoreKernelSnapshot['mountinfo'];
   socket: Record<'dev' | 'ino' | 'uid' | 'gid' | 'mode' | 'nlink', number>;
   sourceImage: unknown;
   privateImage: unknown;
   container: unknown;
+  afterContainer: unknown;
   runtime: unknown;
   afterRuntime: unknown;
+  alias: unknown;
+  afterAlias: unknown;
+  network: Record<keyof NamespaceRestoreKernelSnapshot['processes'], number>;
+  afterNetwork: NamespaceRestoreKernelSnapshot['network'];
+  networkSandboxKey: string;
+  afterNetworkSandboxKey: string;
 }
 export function validateNamespaceRestoreKernelSnapshot(
   attestation: unknown,
   actual: unknown,
 ): asserts actual is NamespaceRestoreKernelSnapshot;
+export function namespaceRestoreClientOptions(
+  attestation: unknown,
+  actual: unknown,
+): { host: 'unix:///media/.runtime/docker.sock'; cwd: '/media' };

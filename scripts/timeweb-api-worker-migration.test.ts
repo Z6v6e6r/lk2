@@ -21,6 +21,7 @@ import {
   validateDiskRestoreReadback,
   validateDiskRestoreKernelSnapshot,
   validateNamespaceRestoreKernelSnapshot,
+  namespaceRestoreClientOptions,
   validateMigrationBackupRestoreReference,
   validateLegacyBackupRestoreMounts,
   validateDiskRestoreToolBytes,
@@ -703,6 +704,56 @@ function namespaceChanged(value: unknown, path: string, replacement: unknown): u
   throw Error('TEST_PATH_NOT_FOUND');
 }
 describe('private namespace restore V2 independent contract', () => {
+  it('connects only through the short absolute alias with independent host and namespace custody', () => {
+    const f = namespaceFixture(),
+      attestation = f.value as {
+        plan: unknown;
+        readback: { storage: { mount: Record<string, number> } };
+      },
+      observed = f.actual as {
+        selfNamespace: number;
+        alias: object;
+        mountinfo: { broker: string; source: string };
+      },
+      actual = {
+        ...observed.alias,
+        selfNamespace: observed.selfNamespace,
+        mountinfo: { self: observed.mountinfo.broker, source: observed.mountinfo.source },
+      },
+      mount = attestation.readback.storage.mount;
+    const connection: { host: 'unix:///media/.runtime/docker.sock'; cwd: '/media' } =
+      namespaceRestoreClientOptions(attestation, actual);
+    expect(connection).toEqual({
+      host: 'unix:///media/.runtime/docker.sock',
+      cwd: '/media',
+    });
+    for (const wrong of [
+      { ...actual, selfNamespace: 11 },
+      { ...actual, mount: { ...mount, dev: 3 } },
+      { ...actual, alias: { ...mount, ino: 3 } },
+      { ...actual, alias: { ...mount, uid: 1 } },
+      { ...actual, alias: { ...mount, mode: 0o120777 } },
+      { ...actual, sourceAliasEmpty: false },
+      { ...actual, sourceAlias: { ...mount, mode: 0o40755, nlink: 2 } },
+      { ...actual, daemonCwd: '/foreign' },
+      { ...actual, daemonCwdIdentity: { ...mount, ino: 3 } },
+      { ...actual, host: 'unix:///var/run/docker.sock' },
+      { ...actual, mountinfo: { ...actual.mountinfo, self: observed.mountinfo.source } },
+      { ...actual, mountinfo: { ...actual.mountinfo, source: observed.mountinfo.broker } },
+    ])
+      expect(() => namespaceRestoreClientOptions(attestation, wrong)).toThrow();
+    expect(() => namespaceRestoreClientOptions({}, actual)).toThrow('NS_CLIENT_CWD');
+    expect(() =>
+      namespaceRestoreClientOptions(
+        namespaceChanged(
+          attestation,
+          'plan.isolation.strategy',
+          'SYSTEMD_SUPERVISOR_PRIVATE_MOUNT_V1',
+        ),
+        actual,
+      ),
+    ).toThrow();
+  });
   it('accepts Python-derived paths, sizing and process proof and independently checks kernel readback', () => {
     const f = namespaceFixture(),
       raw = Buffer.from(f.operationBase64, 'base64');
@@ -729,6 +780,25 @@ describe('private namespace restore V2 independent contract', () => {
       ['readback.kernel.containerProcess.gid', [0, 0, 0, 0]],
       ['readback.kernel.brokerMount.optional', ['shared:1']],
       ['readback.image.imported.RootFS.Layers', ['sha256:' + 'f'.repeat(64)]],
+      ['plan.isolation.strategy', 'SYSTEMD_SUPERVISOR_PRIVATE_MOUNT_V1'],
+      ['plan.isolation.socket', '/var/run/docker.sock'],
+      ['plan.isolation.execRoot', '/opt/phub/long/runtime'],
+      ['readback.alias.baseline.mode', 0o40777],
+      ['readback.alias.baseline.nlink', 0],
+      ['readback.alias.mount.ino', 999],
+      ['readback.alias.brokerMount.source', '/dev/mapper/foreign'],
+      ['readback.alias.daemonMount.optional', ['shared:2']],
+      ['readback.mask.baseline.mode', 0o40777],
+      ['readback.mask.source.dev', 999],
+      ['readback.mask.brokerMount.root', '/'],
+      ['readback.isolation.admission.network.supervisorNamespace', 21],
+      ['readback.runtimeMounts.dataRoot.optional', []],
+      ['readback.runtimeMounts.dataRoot.parent', '99'],
+      ['readback.runtimeMounts.network.root', 'net:[21]'],
+      ['readback.runtimeMounts.network.source', '/foreign'],
+      ['readback.runtimeMounts.network.target', '/run/host-netns'],
+      ['readback.kernel.networkSandboxKey', '/run/host-netns'],
+      ['readback.kernel.containerNetworkNamespace', 22],
     ];
     const unit = (
       f.value as {
@@ -764,6 +834,22 @@ describe('private namespace restore V2 independent contract', () => {
       ['runtime.members', [45, 46, 47, 48, 99]],
       ['afterRuntime.configSha256', 'f'.repeat(64)],
       ['afterSelfNamespace', 11],
+      ['alias.alias.ino', 999],
+      ['alias.sourceAliasEmpty', false],
+      ['alias.sourceAlias.ino', 999],
+      ['alias.daemonCwd', '/foreign'],
+      ['afterAlias.daemonCwdIdentity.ino', 999],
+      ['alias.mask.ino', 999],
+      ['alias.sourceMask.ino', 999],
+      ['network.containerd', 11],
+      ['afterNetwork.shim', 11],
+      ['alias.networkMountIdentity.ino', 999],
+      ['alias.containerNetworkIdentity.dev', 999],
+      ['networkSandboxKey', '/foreign-netns'],
+      ['afterNetworkSandboxKey', '/foreign-netns'],
+      ['afterContainer.State.Pid', 999],
+      ['afterMountinfo.broker', 'not-mountinfo'],
+
       ['mountinfo.source', source + broker.split('\n')[1] + '\n'],
       ['mountinfo.broker', broker.replace(' - ext4', ' shared:1 - ext4')],
     ] as [string, unknown][])
