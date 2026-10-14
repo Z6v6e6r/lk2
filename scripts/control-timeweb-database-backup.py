@@ -374,7 +374,7 @@ def disk_mapper(plan, loop, optional=False):
     parsed = dict(re.findall(r'^\s*([a-zA-Z]+):\s*(.*?)\s*$', status, re.M))
     need(parsed.get('type') == 'LUKS2' and parsed.get('device') == loop
          and parsed.get('cipher') == 'aes-xts-plain64'
-         and parsed.get('keysize') == '512 bits'
+         and parsed.get('keysize') in ('512 bits', '512 [bits]')
          and parsed.get('mode') == 'read/write', 'DISK_MAPPER_CUSTODY')
     uuid = disk_tool('crypt', ['luksUUID', loop], 'DISK_LUKS_UUID').decode().strip()
     info = disk_tool('dmsetup', ['info', '--columns', '--noheadings', '--separator', ':',
