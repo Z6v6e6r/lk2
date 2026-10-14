@@ -522,7 +522,7 @@ function ProfileIcon({
     | 'history'
     | 'eye'
     | 'city'
-    | 'crown'
+    | 'subscriptions'
     | 'qr';
 }): React.JSX.Element {
   const common = {
@@ -674,15 +674,14 @@ function ProfileIcon({
           <circle cx="12" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.7" />
         </svg>
       );
-    case 'crown':
+    case 'subscriptions':
       return (
-        <svg {...common}>
+        <svg {...common} viewBox="0 0 32 32" fill="#FF641C" focusable="false">
+          <path d="M5.67 9 C5.95 7.73 6.90 6.99 8.10 6.78 L24.40 3.90 C26.13 3.60 27.44 4.76 27.73 6.42 L29.65 16.95 C29.97 18.72 28.85 19.94 27.05 20.34 V13.75 C27.05 11.13 24.94 9 22.32 9 Z" />
           <path
-            d="m3 7 4.5 4L12 4l4.5 7L21 7l-2 11H5L3 7Z"
-            fill="currentColor"
-            stroke="currentColor"
-            strokeWidth="1.2"
-            strokeLinejoin="round"
+            fillRule="evenodd"
+            clipRule="evenodd"
+            d="M5 11 H22.333 A3 3 0 0 1 25.333 14 V25.167 A3 3 0 0 1 22.333 28.167 H5 A3 3 0 0 1 2 25.167 V14 A3 3 0 0 1 5 11 Z M14.84 14.96 H17.35 Q17.54 14.96 17.45 15.13 L15.68 18.54 H20 Q20.22 18.54 20.10 18.75 L19.17 20.55 Q19.08 20.71 18.90 20.71 H14.56 Q14.37 20.71 14.27 20.89 L12.40 24.60 Q12.30 24.83 12.04 24.83 H9.50 Q9.34 24.83 9.43 24.65 L11.36 20.84 Q11.43 20.71 11.27 20.71 H7.01 Q6.85 20.71 6.94 20.56 L8.03 18.75 Q8.16 18.54 8.36 18.54 H12.51 Q12.71 18.54 12.81 18.36 L14.58 15.15 Q14.68 14.96 14.84 14.96 Z"
           />
         </svg>
       );
@@ -978,7 +977,7 @@ function ProfileSubscriptions({
     <section className="profile-subscriptions" aria-labelledby="profile-subscriptions-title">
       <header>
         <span className="profile-inline-icon">
-          <ProfileIcon name="crown" />
+          <ProfileIcon name="subscriptions" />
         </span>
         <h2 id="profile-subscriptions-title">Подписки и абонементы</h2>
       </header>
