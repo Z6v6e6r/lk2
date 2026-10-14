@@ -1178,14 +1178,12 @@ function SportPicker({
       >
         <header>
           <div>
-            <span>Личный кабинет</span>
             <h2 id="profile-sport-sheet-title">Выберите вид спорта</h2>
           </div>
           <button ref={closeRef} type="button" aria-label="Закрыть выбор спорта" onClick={onClose}>
             ×
           </button>
         </header>
-        <p>У каждого вида спорта — собственные уровни, сообщества и игровая история.</p>
         {profileSportChoices.map((option) => (
           <button
             aria-label={option.available ? option.title : `${option.title} — пока недоступен`}
