@@ -512,6 +512,8 @@ function ProfileIcon({
   readonly name:
     | 'edit'
     | 'settings'
+    | 'wallet'
+    | 'logout'
     | 'calendar'
     | 'about'
     | 'trophy'
@@ -538,6 +540,26 @@ function ProfileIcon({
   } as const;
 
   switch (name) {
+    case 'wallet':
+      return (
+        <svg {...common} stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round">
+          <path d="M19 7V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2H5a2 2 0 0 1-2-2" />
+          <path d="M21 11h-5a3 3 0 0 0 0 6h5" />
+          <circle cx="16" cy="14" r=".8" fill="currentColor" />
+        </svg>
+      );
+    case 'logout':
+      return (
+        <svg
+          {...common}
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5m5-12 4 4-4 4M8 12h11" />
+        </svg>
+      );
     case 'settings':
       return (
         <svg {...common} stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round">
@@ -670,13 +692,11 @@ function ProfileIcon({
       );
     case 'preference':
       return (
-        <svg {...common}>
-          <path
-            d="m12 2 3.1 6.3L22 9.3l-5 4.9 1.2 6.8-6.2-3.2L5.8 21 7 14.2 2 9.3l6.9-1L12 2Z"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinejoin="round"
-          />
+        <svg {...common} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+          <path d="M3 6h4m4 0h10M3 12h10m4 0h4M3 18h4m4 0h10" />
+          <circle cx="9" cy="6" r="2" />
+          <circle cx="15" cy="12" r="2" />
+          <circle cx="9" cy="18" r="2" />
         </svg>
       );
     case 'history':
@@ -786,12 +806,10 @@ function readProfileCity(userId: string): ProfileCity {
 function ProfileV2Actions({
   notificationsAvailable,
   unreadCount,
-  onShare,
   onQr,
 }: {
   readonly notificationsAvailable: boolean;
   readonly unreadCount: number;
-  readonly onShare: () => void;
   readonly onQr: () => void;
 }): React.JSX.Element {
   const menu = useRef<HTMLDetailsElement>(null);
@@ -847,17 +865,6 @@ function ProfileV2Actions({
           <ProfileIcon name="support" />
           Поддержка
         </a>
-        <button
-          type="button"
-          aria-label="поделиться"
-          onClick={() => {
-            onShare();
-            if (menu.current) menu.current.open = false;
-          }}
-        >
-          <ProfileIcon name="share" />
-          Поделиться профилем
-        </button>
         <button
           type="button"
           aria-label="QR-код"
@@ -943,14 +950,12 @@ function ProfileDirectorySheet({
 }
 
 function ProfileV2Overview({
-  level,
   friends,
   communities,
   friendsAvailable,
   onFriends,
   onCommunities,
 }: {
-  readonly level: string;
   readonly friends?: ProfileFriendPage | null;
   readonly communities?: CommunityMembershipPage | null;
   readonly friendsAvailable: boolean;
@@ -973,29 +978,40 @@ function ProfileV2Overview({
   return (
     <section className="profile-v2-metrics" aria-label="Показатели игрока">
       <a href="/bookings" aria-label="Мои игры: общее число пока недоступно">
+        <ProfileIcon name="calendar" />
         <strong>—</strong>
-        <span>игры</span>
+        <span>мои игры</span>
       </a>
       <button
         type="button"
         disabled={!friendsAvailable}
         onClick={onFriends}
         aria-label={
-          loadedFriends === undefined
-            ? 'Друзья: число неизвестно'
-            : `Друзья: загружено ${loadedFriends}, общее число неизвестно`
+          loadedFriends === undefined || !friendsAvailable
+            ? 'Открыть друзей: число неизвестно'
+            : `Открыть друзей: загружено ${loadedFriends}, общее число неизвестно`
         }
       >
+        <ProfileIcon name="friends" />
         <strong>{friendCount}</strong>
         <span>друзей</span>
       </button>
-      <button type="button" onClick={onCommunities} aria-label={`Сообщества: ${communityCount}`}>
+      <button
+        type="button"
+        onClick={onCommunities}
+        aria-label={`Открыть мои сообщества: ${communityCount === '—' ? 'число неизвестно' : communityCount}`}
+      >
+        <ProfileIcon name="community" />
         <strong>{communityCount}</strong>
         <span>сообщества</span>
       </button>
-      <a href="/profile/level-history">
-        <strong>{level}</strong>
-        <span>уровень</span>
+      <a
+        href="/bookings?scope=history&amp;kind=TOURNAMENT"
+        aria-label="Турниры: общее число пока недоступно"
+      >
+        <ProfileIcon name="trophy" />
+        <strong>—</strong>
+        <span>турниры</span>
       </a>
     </section>
   );
@@ -1007,6 +1023,9 @@ function ProfileBalanceCard({ balance }: { readonly balance: string | null }): R
   return (
     <section className="profile-balance-card" aria-labelledby="profile-balance-title">
       <div className="profile-balance-card__amount" aria-label="Данные профиля">
+        <span className="profile-balance-card__symbol">
+          <ProfileIcon name="wallet" />
+        </span>
         <h2 id="profile-balance-title">Баланс</h2>
         <strong>{balance ?? UNKNOWN_VALUE_PLACEHOLDER}</strong>
       </div>
@@ -2049,15 +2068,25 @@ export function ProfilePage({
             <ProfileIcon name="back" />
           </button>
           {isSelf ? (
-            <ProfileV2Actions
-              notificationsAvailable={notificationsAvailable}
-              unreadCount={notificationUnreadCount}
-              onShare={() => void shareProfile()}
-              onQr={() => {
-                setQrNotice(null);
-                setQrOpen(true);
-              }}
-            />
+            <div className="profile-v2-toolbar-actions">
+              <button
+                type="button"
+                className="profile-v2-share"
+                aria-label="поделиться"
+                title="Поделиться профилем"
+                onClick={() => void shareProfile()}
+              >
+                <ProfileIcon name="share" />
+              </button>
+              <ProfileV2Actions
+                notificationsAvailable={notificationsAvailable}
+                unreadCount={notificationUnreadCount}
+                onQr={() => {
+                  setQrNotice(null);
+                  setQrOpen(true);
+                }}
+              />
+            </div>
           ) : (
             <div className="profile-toolbar__actions">
               {notificationsAvailable ? (
@@ -2208,7 +2237,6 @@ export function ProfilePage({
         <div className="profile-content">
           {isSelf && !isIndependentSport ? (
             <ProfileV2Overview
-              level={displayLevel}
               friendsAvailable={friendsAvailable}
               {...(friends !== undefined ? { friends } : {})}
               {...(communities !== undefined ? { communities } : {})}
@@ -2264,37 +2292,6 @@ export function ProfilePage({
             </>
           ) : null}
 
-          {isSelf && !isIndependentSport ? (
-            <nav className="profile-v2-shortcuts" aria-label="Быстрые переходы профиля">
-              <a href="/bookings">
-                <span>
-                  <ProfileIcon name="calendar" />
-                </span>
-                Мои игры
-              </a>
-              <button
-                type="button"
-                disabled={!friendsAvailable}
-                aria-label="Открыть друзей"
-                onClick={() => setActiveDirectory('friends')}
-              >
-                <span>
-                  <ProfileIcon name="friends" />
-                </span>
-                Друзья
-              </button>
-              <button
-                type="button"
-                aria-label="Открыть мои сообщества"
-                onClick={() => setActiveDirectory('communities')}
-              >
-                <span>
-                  <ProfileIcon name="community" />
-                </span>
-                Сообщества
-              </button>
-            </nav>
-          ) : null}
           {isSelf && !isIndependentSport && friendsAvailable && activeDirectory === 'friends' ? (
             <ProfileDirectorySheet title="Друзья" onClose={() => setActiveDirectory(null)}>
               <ProfileFriends
@@ -2335,7 +2332,7 @@ export function ProfilePage({
                 aria-label="О себе — пока недоступно"
               >
                 <span className="profile-inline-icon">
-                  <ProfileIcon name="about" />
+                  <ProfileIcon name="friends" />
                 </span>
                 <span>
                   <strong>О себе</strong>
@@ -2370,10 +2367,10 @@ export function ProfilePage({
               </button>
               <button type="button" onClick={() => setActiveSettings('visibility')}>
                 <span className="profile-inline-icon">
-                  <ProfileIcon name="lock" />
+                  <ProfileIcon name="eye" />
                 </span>
                 <span>
-                  <strong>Конфиденциальность</strong>
+                  <strong>Видимость профиля</strong>
                   <small>Кто может видеть профиль</small>
                 </span>
                 <i aria-hidden="true">›</i>
@@ -2406,6 +2403,7 @@ export function ProfilePage({
               disabled={logoutBusy}
               onClick={onLogout}
             >
+              <ProfileIcon name="logout" />
               {logoutBusy ? 'Выходим…' : 'Выйти из аккаунта'}
             </button>
           ) : null}

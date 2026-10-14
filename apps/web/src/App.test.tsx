@@ -831,7 +831,7 @@ describe('PadlHub web authentication', () => {
     const user = userEvent.setup();
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    await user.click(await screen.findByRole('button', { name: /^Конфиденциальность/ }));
+    await user.click(await screen.findByRole('button', { name: /^Видимость профиля/ }));
     const privacyRegion = await screen.findByRole('region', { name: 'Кто может связаться' });
     expect(within(privacyRegion).getByRole('button', { name: 'Сохранить' })).toBeDisabled();
     expect(updateProfilePrivacy).not.toHaveBeenCalled();
@@ -1349,7 +1349,7 @@ describe('PadlHub web authentication', () => {
       ),
     ).toBeVisible();
     expect(screen.queryByText('Действующих подписок пока нет.')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Открыть мои сообщества' }));
+    await user.click(screen.getByRole('button', { name: /^Открыть мои сообщества/ }));
     expect(
       within(screen.getByRole('region', { name: 'Сообщества' })).getByRole('heading', {
         name: 'Сообщества',
@@ -1367,7 +1367,7 @@ describe('PadlHub web authentication', () => {
     expect(await screen.findByRole('heading', { name: 'Когда и где мне удобно' })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Закрыть настройки' }));
 
-    await user.click(screen.getByRole('button', { name: /^Конфиденциальность/ }));
+    await user.click(screen.getByRole('button', { name: /^Видимость профиля/ }));
     expect(screen.getByRole('dialog', { name: 'Видимость профиля' })).toBeVisible();
     expect(await screen.findByRole('heading', { name: 'Кто может связаться' })).toBeVisible();
     expect(screen.getByRole('checkbox', { name: /Запрос на связь/ })).toBeChecked();
@@ -1430,7 +1430,7 @@ describe('PadlHub web authentication', () => {
 
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
-    await user.click(await screen.findByRole('button', { name: /^Конфиденциальность/ }));
+    await user.click(await screen.findByRole('button', { name: /^Видимость профиля/ }));
     const chatToggle = await screen.findByRole('checkbox', { name: /Личный чат/ });
     await user.click(chatToggle);
     await user.click(
