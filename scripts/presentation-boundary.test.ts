@@ -52,7 +52,11 @@ describe('existing presentation module boundaries', () => {
   it.each([
     ['price', 'subscription.remainingUnits > 0', 'subscription.remainingUnits > 10'],
     ['entitlement', "['active', 'scheduled', 'paused']", "['active']"],
-    ['purchase handler', 'href={subscription.route}', 'onClick={() => purchase()}'],
+    [
+      'purchase handler',
+      'href={`/subscriptions/${subscription.id}`}',
+      'onClick={() => purchase()}',
+    ],
     ['auth import', "from 'react'", "from './auth-write.js'"],
   ])('rejects %s changes', (_name, oldText, newText) => {
     expect(before).toContain(oldText);
