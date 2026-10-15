@@ -22,6 +22,7 @@ import type {
 } from '@phub/communities';
 import { checkDatabaseReady } from '@phub/database';
 import type { ContactReader } from '@phub/database/contacts';
+import type { SupportTicketRepository } from '@phub/database/support-tickets';
 import type {
   ClientRoutingPlanRepository,
   CommunityLogoMediaRepository,
@@ -149,6 +150,7 @@ import { registerMessagingRoutes } from './messaging/messaging-routes.js';
 import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerStationSupportRoutes } from './support/station-support-routes.js';
+import { registerSupportTicketRoutes } from './support/support-ticket-routes.js';
 import type { StationSupportProvider } from './support/station-support-provider.js';
 import type { StationSupportMediaStore } from './support/station-support-media.js';
 import type { StationSupportRepository } from './support/station-support-repository.js';
@@ -300,6 +302,7 @@ export interface BuildAppOptions {
   /** Proxies the legacy station-support dialogs CUP operators answer; absent means the tab is closed. */
   readonly stationSupportProvider?: StationSupportProvider;
   readonly stationSupportRepository?: StationSupportRepository;
+  readonly supportTicketRepository?: SupportTicketRepository;
   /**
    * Chat pictures for that contour. Absent when the deployment has no media bucket; the tab then
    * keeps working as text-only instead of failing.
@@ -1367,6 +1370,13 @@ export async function buildApp(options: BuildAppOptions) {
       resolveTenant,
       requireIdempotencyKey,
     ],
+  });
+  registerSupportTicketRoutes(app as unknown as FastifyInstance, {
+    ...(options.supportTicketRepository ? { repository: options.supportTicketRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+    adminAuthenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    adminCommandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });
   registerGiftCertificateRoutes(app as unknown as FastifyInstance, {
     ...(options.giftCertificateCatalogRepository

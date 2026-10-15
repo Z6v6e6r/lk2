@@ -23,6 +23,7 @@ import {
   createParticipationCommandRepository,
   createProfileFriendshipRepository,
 } from '@phub/database';
+import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
@@ -85,6 +86,7 @@ import { FcmServiceAccountTokenProvider } from './fcm-credential-provider.js';
 import { runFcmDeliveryBatch } from './fcm-delivery.js';
 import { runFcmTenantCycle } from './fcm-tenant-cycle.js';
 import { runFairTenantCycle } from './tenant-cycle-orchestrator.js';
+import { runSupportTicketAutocloseTenantCycle } from './support-ticket-autoclose.js';
 import {
   calculateWorkerForwardProgressMaxStaleMs,
   createRabbitFailureHandler,
@@ -126,6 +128,9 @@ const gameRosterRepository = createGameRosterRepository(pool, {
 const messagingRepository = createMessagingRepository(pool);
 const participationCommandRepository = createParticipationCommandRepository(pool);
 const profileFriendshipRepository = createProfileFriendshipRepository(pool);
+const supportTicketRepository = createSupportTicketRepository(pool);
+const SUPPORT_TICKET_AUTOCLOSE_INTERVAL_MS = 60_000;
+const SUPPORT_TICKET_AUTOCLOSE_BATCH_SIZE = 100;
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS = 60_000;
 const DEFERRED_FRIEND_REQUEST_DELIVERY_INTERVAL_MS = 60_000;
@@ -738,6 +743,38 @@ const runParticipationCommandExpiryCycle = async (): Promise<void> => {
   }
 };
 
+let supportTicketTenantCycleStartOffset = 0;
+const runSupportTicketAutocloseCycle = async (): Promise<void> => {
+  if (shuttingDown) return;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true order by id',
+    );
+    const cycle = await runSupportTicketAutocloseTenantCycle({
+      repository: supportTicketRepository,
+      tenants: tenants.rows,
+      startOffset: supportTicketTenantCycleStartOffset,
+      limit: SUPPORT_TICKET_AUTOCLOSE_BATCH_SIZE,
+      correlationId: () => `support-autoclose-${randomUUID()}`,
+      shouldStop: () => shuttingDown,
+      onProgress: () => undefined,
+      onTenantFailure: (tenant) =>
+        logger.error({ tenantId: tenant.id }, 'support ticket tenant autoclose failed'),
+    });
+    supportTicketTenantCycleStartOffset = cycle.nextStartOffset;
+    if (cycle.closed > 0 || cycle.purged > 0)
+      logger.info(
+        { closed: cycle.closed, purged: cycle.purged },
+        'support ticket lifecycle cycle completed',
+      );
+  } catch {
+    logger.error('support ticket autoclose tenant discovery failed');
+  } finally {
+    if (!shuttingDown)
+      setTimeout(() => void runSupportTicketAutocloseCycle(), SUPPORT_TICKET_AUTOCLOSE_INTERVAL_MS);
+  }
+};
+
 const runDeferredFriendRequestDeliveryCycle = async (): Promise<void> => {
   if (shuttingDown) return;
   let delivered = 0;
@@ -1332,6 +1369,7 @@ void runFcmCycle();
 void runGiftCertificateDeliveryCycle();
 void runCommunityDirectInviteExpiryCycle();
 void runParticipationCommandExpiryCycle();
+void runSupportTicketAutocloseCycle();
 void runDeferredFriendRequestDeliveryCycle();
 if (canonicalCommunityWorkerEnabled) {
   void runCommunityMemberCountReconciliation();

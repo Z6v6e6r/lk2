@@ -1,0 +1,743 @@
+components:
+  parameters:
+    TicketId:
+      name: ticketId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+      description:
+        Actor and tenant scoped command key. Exact retry returns the immutable compact receipt
+        until 24-month retention; retired keys return SUPPORT_COMMAND_EXPIRED (410) without
+        executing again.
+    AdminPlatform:
+      name: X-App-Platform
+      in: header
+      required: true
+      schema:
+        type: string
+        enum:
+          - cup-admin
+    Cursor:
+      name: cursor
+      in: query
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 512
+        pattern: ^[A-Za-z0-9_-]+$
+      description: Opaque keyset cursor returned by the preceding list page.
+    Before:
+      name: before
+      in: query
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 512
+        pattern: ^[A-Za-z0-9_-]+$
+      description: Opaque nextMessageCursor for older messages; each page is chronological.
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 20
+    Status:
+      name: status
+      in: query
+      schema:
+        $ref: '#/components/schemas/Status'
+    Category:
+      name: category
+      in: query
+      schema:
+        $ref: '#/components/schemas/Category'
+    Priority:
+      name: priority
+      in: query
+      schema:
+        $ref: '#/components/schemas/Priority'
+    Query:
+      name: query
+      in: query
+      schema:
+        type: string
+        maxLength: 200
+      description: User search matches subject; admin search also matches internal tags.
+  schemas:
+    Status:
+      type: string
+      enum:
+        - OPEN
+        - IN_PROGRESS
+        - WAITING_USER
+        - RESOLVED
+        - CLOSED
+    Category:
+      type: string
+      enum:
+        - TECHNICAL
+        - ACCOUNT
+        - BOOKING
+        - BILLING
+        - OTHER
+    Priority:
+      type: string
+      enum:
+        - LOW
+        - NORMAL
+        - HIGH
+        - URGENT
+    Message:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - body
+        - authorRole
+        - internal
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        authorRole:
+          type: string
+          enum:
+            - USER
+            - AGENT
+            - SYSTEM
+        internal:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    Event:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    Ticket:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - subject
+        - category
+        - status
+        - priority
+        - assignedTo
+        - tags
+        - createdAt
+        - updatedAt
+        - resolvedAt
+        - autoCloseAt
+        - version
+        - messages
+        - history
+      description:
+        User views mask assignedTo as null and tags as empty; notes/internal history are admin
+        only. Command receipts have empty messages/history; refresh the canonical thread by GET
+        after success.
+      properties:
+        id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 300
+        category:
+          $ref: '#/components/schemas/Category'
+        status:
+          $ref: '#/components/schemas/Status'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        assignedTo:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        tags:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        autoCloseAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        messages:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/Message'
+        history:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/Event'
+        nextMessageCursor:
+          type: string
+          minLength: 8
+          maxLength: 512
+        closedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: System close timestamp; null after reopening.
+        conversationPurgedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description:
+            Conversation cleared after 24 months closed; clients discard previously loaded message
+            pages when this changes.
+    TicketPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/TicketSummary'
+        nextCursor:
+          type: string
+          minLength: 8
+          maxLength: 512
+    Create:
+      type: object
+      additionalProperties: false
+      required:
+        - subject
+        - category
+        - body
+      properties:
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 300
+        category:
+          $ref: '#/components/schemas/Category'
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+    UserMessage:
+      type: object
+      additionalProperties: false
+      required:
+        - body
+        - expectedVersion
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        expectedVersion:
+          type: integer
+          minimum: 1
+    AdminMessage:
+      type: object
+      additionalProperties: false
+      required:
+        - body
+        - expectedVersion
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        expectedVersion:
+          type: integer
+          minimum: 1
+        internal:
+          type: boolean
+          default: false
+    Update:
+      type: object
+      additionalProperties: false
+      minProperties: 2
+      required:
+        - expectedVersion
+      properties:
+        expectedVersion:
+          type: integer
+          minimum: 1
+        status:
+          $ref: '#/components/schemas/Status'
+        category:
+          $ref: '#/components/schemas/Category'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        assignedTo:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        tags:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+    PublicMessage:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - body
+        - authorRole
+        - internal
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        body:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        authorRole:
+          type: string
+          enum:
+            - USER
+            - AGENT
+            - SYSTEM
+        internal:
+          type: boolean
+          const: false
+        createdAt:
+          type: string
+          format: date-time
+    PublicEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum:
+            - support.ticket.created.v1
+            - support.ticket.message.v1
+            - support.ticket.updated.v1
+            - support.ticket.resolved.v1
+            - support.ticket.closed.v1
+            - support.ticket.conversation_purged.v1
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    UserTicket:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - subject
+        - category
+        - status
+        - priority
+        - assignedTo
+        - tags
+        - createdAt
+        - updatedAt
+        - resolvedAt
+        - autoCloseAt
+        - version
+        - messages
+        - history
+      description:
+        User views mask assignedTo as null and tags as empty; notes/internal history are admin
+        only. Command receipts have empty messages/history; refresh the canonical thread by GET
+        after success.
+      properties:
+        id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 300
+        category:
+          $ref: '#/components/schemas/Category'
+        status:
+          $ref: '#/components/schemas/Status'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        assignedTo:
+          type: 'null'
+        tags:
+          type: array
+          maxItems: 0
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        autoCloseAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        messages:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/PublicMessage'
+        history:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/PublicEvent'
+        nextMessageCursor:
+          type: string
+          minLength: 8
+          maxLength: 512
+        closedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: System close timestamp; null after reopening.
+        conversationPurgedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description:
+            Conversation cleared after 24 months closed; clients discard previously loaded message
+            pages when this changes.
+    UserTicketPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/UserTicketSummary'
+        nextCursor:
+          type: string
+          minLength: 8
+          maxLength: 512
+    TicketSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - subject
+        - category
+        - status
+        - priority
+        - assignedTo
+        - tags
+        - createdAt
+        - updatedAt
+        - resolvedAt
+        - autoCloseAt
+        - version
+      description: Compact queue item. User summary masks staff assignment/tags; thread arrays, when
+        emitted, are empty.
+      properties:
+        id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 300
+        category:
+          $ref: '#/components/schemas/Category'
+        status:
+          $ref: '#/components/schemas/Status'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        assignedTo:
+          type:
+            - string
+            - 'null'
+          format: uuid
+        tags:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        autoCloseAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        messages:
+          type: array
+          maxItems: 0
+          items:
+            $ref: '#/components/schemas/Message'
+        history:
+          type: array
+          maxItems: 0
+          items:
+            $ref: '#/components/schemas/Event'
+        closedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: System close timestamp; null after reopening.
+        conversationPurgedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description:
+            Conversation cleared after 24 months closed; clients discard previously loaded message
+            pages when this changes.
+    UserTicketSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - subject
+        - category
+        - status
+        - priority
+        - assignedTo
+        - tags
+        - createdAt
+        - updatedAt
+        - resolvedAt
+        - autoCloseAt
+        - version
+      description: Compact queue item. User summary masks staff assignment/tags; thread arrays, when
+        emitted, are empty.
+      properties:
+        id:
+          type: string
+          format: uuid
+        subject:
+          type: string
+          minLength: 1
+          maxLength: 300
+        category:
+          $ref: '#/components/schemas/Category'
+        status:
+          $ref: '#/components/schemas/Status'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        assignedTo:
+          type: 'null'
+        tags:
+          type: array
+          maxItems: 0
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        autoCloseAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+        messages:
+          type: array
+          maxItems: 0
+          items:
+            $ref: '#/components/schemas/PublicMessage'
+        history:
+          type: array
+          maxItems: 0
+          items:
+            $ref: '#/components/schemas/PublicEvent'
+        closedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description: System close timestamp; null after reopening.
+        conversationPurgedAt:
+          type:
+            - string
+            - 'null'
+          format: date-time
+          description:
+            Conversation cleared after 24 months closed; clients discard previously loaded message
+            pages when this changes.
+  responses:
+    Ticket:
+      description: Ticket view or immutable compact command receipt
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            enum:
+              - no-store
+        X-Idempotent-Replayed:
+          schema:
+            type: boolean
+          description: Present on successful commands
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Ticket'
+    TicketPage:
+      description: Bounded ticket page in descending update timestamp and UUID order
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            enum:
+              - no-store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/TicketPage'
+    UserTicket:
+      description: Ticket view or immutable compact command receipt
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            enum:
+              - no-store
+        X-Idempotent-Replayed:
+          schema:
+            type: boolean
+          description: Present on successful commands
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/UserTicket'
+    UserTicketPage:
+      description: Bounded ticket page in descending update timestamp and UUID order
+      headers:
+        Cache-Control:
+          schema:
+            type: string
+            enum:
+              - no-store
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/UserTicketPage'
+    CommandExpired:
+      headers:
+        X-Correlation-ID:
+          $ref: ./components.yaml#/components/headers/CorrelationId
+      description:
+        'SUPPORT_COMMAND_EXPIRED: 24-month retention retired this key and its content hash. The
+        old command cannot execute again.'
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required:
+              - code
+              - message
+              - correlationId
+            properties:
+              code:
+                type: string
+                const: SUPPORT_COMMAND_EXPIRED
+              message:
+                type: string
+              correlationId:
+                type: string

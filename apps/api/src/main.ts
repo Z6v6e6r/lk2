@@ -49,6 +49,7 @@ import {
   createSubscriptionRuntimeActorContextRepository,
   projectHomeBaseUser,
 } from '@phub/database';
+import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
 import {
@@ -672,6 +673,7 @@ const app = await buildApp({
   locationRepository: createLocationRepository(pool),
   ...(stationSupportProvider ? { stationSupportProvider } : {}),
   ...(stationSupportRepository ? { stationSupportRepository } : {}),
+  supportTicketRepository: createSupportTicketRepository(pool),
   ...(stationSupportMediaStore ? { stationSupportMediaStore } : {}),
   ...(stationSupportMediaAllowedHosts.length > 0 ? { stationSupportMediaAllowedHosts } : {}),
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),

@@ -70,3 +70,16 @@ describe('bulk beta client-access merge', () => {
     expect(twice).toEqual(once);
   });
 });
+
+describe('support operator permission isolation', () => {
+  it('keeps support read/manage admin-only and strips them from all user-token modes', () => {
+    for (const permission of ['support.read', 'support.manage']) {
+      expect(isAdminOnlyPermission(permission)).toBe(true);
+      expect(FULL_CLIENT_PERMISSIONS).not.toContain(permission);
+      for (const fullClientAccess of [false, true])
+        expect(
+          resolveClientPermissions({ stored: ['profile.read', permission], fullClientAccess }),
+        ).not.toContain(permission);
+    }
+  });
+});

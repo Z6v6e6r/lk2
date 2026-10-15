@@ -475,6 +475,10 @@ export interface LegalAcceptance {
 }
 
 export interface AuthGateway {
+  readonly listSupportTickets?: PadlHubApiClient['listSupportTickets'];
+  readonly getSupportTicket?: PadlHubApiClient['getSupportTicket'];
+  readonly createSupportTicket?: PadlHubApiClient['createSupportTicket'];
+  readonly sendSupportTicketMessage?: PadlHubApiClient['sendSupportTicketMessage'];
   readonly restoreSession: () => Promise<AuthenticatedSession | null>;
   readonly requestCode: (phoneE164: string) => Promise<PhoneChallenge>;
   readonly verifyCode: (input: {
@@ -2313,6 +2317,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getLocation(locationId);
     },
 
+    listSupportTickets: (filters) => client.listSupportTickets(filters),
+    getSupportTicket: (id, before) => client.getSupportTicket(id, before),
+    createSupportTicket: (input, key) => client.createSupportTicket(input, key),
+    sendSupportTicketMessage: (id, input, key) => client.sendSupportTicketMessage(id, input, key),
     listMyCommunities(cursor, limit = 20) {
       if (cursor) return client.listMyCommunities({ limit, cursor });
       const pending = communityMembershipPagePromises.get(limit);
