@@ -1573,6 +1573,7 @@ const NS_UNIT_KEYS = [
   'Result',
   'ExecMainCode',
   'ExecMainStatus',
+  'PrivateNetwork',
 ];
 const NS_SLICE_KEYS = [
   'LoadState',
@@ -1709,15 +1710,15 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
     4 *
     1024 ** 2;
   const derived = {
-    strategy: 'SYSTEMD_SUPERVISOR_PRIVATE_MOUNT_V1',
+    strategy: 'SYSTEMD_SUPERVISOR_PRIVATE_ALIAS_V1',
     unit: `phub-disk-runtime-${sha.slice(0, 24)}.service`,
     slice: `phubdiskrestore${sha.slice(0, 24)}.slice`,
     controlRoot: `${work}/runtime-control`,
     pgdata: `${work}/pgdata-mounted/pgdata`,
-    dataRoot: `${work}/pgdata-mounted/.runtime/docker-data`,
-    execRoot: `${work}/pgdata-mounted/.runtime/docker-exec`,
-    socket: `${work}/pgdata-mounted/.runtime/docker.sock`,
-    pidFile: `${work}/pgdata-mounted/.runtime/dockerd.pid`,
+    dataRoot: '/media/.runtime/docker-data',
+    execRoot: '/media/.runtime/docker-exec',
+    socket: '/media/.runtime/docker.sock',
+    pidFile: '/media/.runtime/dockerd.pid',
     configFile: `${work}/runtime-control/daemon.json`,
     image: i.image,
     imageTransferLimitBytes: i.image.Size * 2 + 512 * 1024 ** 2,
@@ -1755,15 +1756,34 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
   )
     stop('NS_PLAN');
   const r = value.readback;
-  exact(r, ['storage', 'isolation', 'kernel', 'container', 'image']);
+  exact(r, [
+    'storage',
+    'isolation',
+    'kernel',
+    'container',
+    'image',
+    'alias',
+    'mask',
+    'runtimeMounts',
+  ]);
   exact(r.image, ['source', 'imported']);
   namespaceImage(r.image.source);
   namespaceImage(r.image.imported, r.image.source);
   if (!same(r.image.source, i.image)) stop('NS_IMAGE_PLAN');
   validateDiskStorageIdentity(r.storage, p, 0o40700);
+  validateNamespaceAliasProof(r.alias, p, r.storage);
+  validateNamespaceMaskProof(r.mask, p, r.storage);
   exact(r.isolation, ['admission', 'process', 'socket', 'info', 'managed']);
   const a = r.isolation.admission;
-  exact(a, ['schema', 'operationSha256', 'toolFileSha256', 'sourceDaemon', 'supervisor']);
+  exact(a, [
+    'schema',
+    'operationSha256',
+    'toolFileSha256',
+    'sourceDaemon',
+    'supervisor',
+    'network',
+  ]);
+  validateNamespaceNetworkProof(a.network);
   exact(a.supervisor, ['unit', 'process', 'bounds', 'slice']);
   const u = a.supervisor.unit,
     cg = a.supervisor.bounds,
@@ -1822,6 +1842,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
       StandardInput: 'null',
       StandardOutput: 'null',
       StandardError: 'null',
+      PrivateNetwork: 'yes',
       Slice: i.slice,
       Transient: 'yes',
       NRestarts: '0',
@@ -1872,12 +1893,12 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
       root: `${i.dataRoot}/containerd/daemon`,
       state: `${i.execRoot}/containerd/daemon`,
       address: `${i.execRoot}/containerd/containerd.sock`,
-      disabledPlugins: ['cri'],
+      disabledPlugins: ['io.containerd.grpc.v1.cri'],
     }) ||
     !HASH.test(managed.configSha256 ?? '') ||
     ![
-      canonical(['/usr/bin/containerd', '--config', config]),
-      canonical(['/usr/bin/containerd', '--config', config, '--log-level', 'info']),
+      canonical(['containerd', '--config', config]),
+      canonical(['containerd', '--config', config, '--log-level', 'info']),
     ].includes(canonical(managed.containerd.cmdline)) ||
     !Array.isArray(managed.shims) ||
     managed.shims.length !== 1
@@ -1928,6 +1949,8 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
     'brokerMount',
     'daemonMount',
     'containerMount',
+    'containerNetworkNamespace',
+    'networkSandboxKey',
   ]);
   namespaceProcess(k.containerProcess, k.containerProcess.executable, false);
   if (
@@ -1964,6 +1987,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
   namespaceMount(k.brokerMount, p.mount, '/', p, r.storage.mapper);
   namespaceMount(k.daemonMount, p.mount, '/', p, r.storage.mapper);
   namespaceMount(k.containerMount, '/var/lib/postgresql/data', '/pgdata', p, r.storage.mapper);
+  validateNamespaceRuntimeProof(value);
   validateNamespaceContainer(r.container, p, sha);
   if (r.container.State.Pid !== k.containerProcess.pid) stop('NS_CONTAINER_PID');
   return { ...value, requestSha256: sha, id: r.container.Id };
@@ -1974,14 +1998,22 @@ export function validateNamespaceRestoreKernelSnapshot(attestation, actual) {
     'selfNamespace',
     'processes',
     'mountinfo',
+    'afterMountinfo',
     'socket',
     'sourceImage',
     'privateImage',
     'container',
     'runtime',
+    'afterContainer',
     'afterRuntime',
     'afterProcesses',
     'afterSelfNamespace',
+    'alias',
+    'afterAlias',
+    'network',
+    'afterNetwork',
+    'networkSandboxKey',
+    'afterNetworkSandboxKey',
   ]);
   const p = attestation.plan,
     r = attestation.readback,
@@ -2002,10 +2034,53 @@ export function validateNamespaceRestoreKernelSnapshot(attestation, actual) {
     !same(actual.socket, i.socket) ||
     !same(actual.sourceImage, r.image.source) ||
     !same(actual.privateImage, r.image.imported) ||
-    !same(actual.container, r.container)
+    !same(actual.container, r.container) ||
+    !same(actual.afterContainer, r.container)
   )
     stop('NS_INDEPENDENT_DRIFT');
   exact(actual.mountinfo, ['broker', 'daemon', 'source', 'container', 'containerd', 'shim']);
+  if (!same(actual.mountinfo, actual.afterMountinfo)) stop('NS_MOUNTINFO_DRIFT');
+  if (!same(actual.alias, actual.afterAlias)) stop('NS_ALIAS_DRIFT');
+  const network = i.admission.network;
+  validateNamespaceNetworkProof(network);
+  exact(actual.network, ['source', 'broker', 'daemon', 'containerd', 'shim', 'container']);
+  if (
+    !same(actual.network, actual.afterNetwork) ||
+    actual.network.source !== network.sourceNamespace ||
+    actual.network.container !== r.kernel.containerNetworkNamespace ||
+    actual.networkSandboxKey !== r.kernel.networkSandboxKey ||
+    actual.afterNetworkSandboxKey !== r.kernel.networkSandboxKey ||
+    ['broker', 'daemon', 'containerd', 'shim'].some(
+      (key) => actual.network[key] !== network.supervisorNamespace,
+    )
+  )
+    stop('NS_NETWORK_DRIFT');
+
+  namespaceRestoreClientOptions(attestation, {
+    ...actual.alias,
+    selfNamespace: actual.selfNamespace,
+    mountinfo: { self: actual.mountinfo.broker, source: actual.mountinfo.source },
+  });
+  for (const name of ['broker', 'daemon', 'containerd', 'shim']) {
+    const rows = parseDiskRestoreMountinfo(actual.mountinfo[name]),
+      alias = rows.filter((x) => x.target === '/media');
+    if (alias.length !== 1) stop('NS_ALIAS_MOUNT');
+    validateNamespaceRuntimeRows(
+      attestation,
+      rows,
+      parseDiskRestoreMountinfo(actual.mountinfo.source),
+    );
+    namespaceMount(alias[0], '/media', '/', p, r.storage.mapper);
+    if (!same(alias[0], r.alias[name === 'broker' ? 'brokerMount' : 'daemonMount']))
+      stop('NS_ALIAS_MOUNT');
+    const mask = rows.filter((x) => x.target === '/run/containerd');
+    if (mask.length !== 1 || rows.some((x) => x.target.startsWith('/run/containerd/')))
+      stop('NS_MASK_MOUNT');
+    namespaceMount(mask[0], '/run/containerd', '/.runtime/run-containerd', p, r.storage.mapper);
+    if (!same(mask[0], r.mask[name === 'broker' ? 'brokerMount' : 'daemonMount']))
+      stop('NS_MASK_MOUNT');
+  }
+
   const runtime = actual.runtime;
   exact(runtime, [
     'unit',
@@ -2095,6 +2170,249 @@ function namespaceReadProcess(pid) {
   return value;
 }
 
+function validateNamespaceAliasBaseline(value) {
+  exact(value, ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink']);
+  if (
+    !Number.isSafeInteger(value.dev) ||
+    value.dev < 1 ||
+    !Number.isSafeInteger(value.ino) ||
+    value.ino < 1 ||
+    value.uid !== 0 ||
+    value.gid !== 0 ||
+    value.mode !== 0o40755 ||
+    !Number.isSafeInteger(value.nlink) ||
+    value.nlink < 1
+  )
+    stop('NS_ALIAS_BASELINE');
+}
+
+function validateNamespaceAliasProof(alias, plan, storage) {
+  exact(alias, ['baseline', 'mount', 'brokerMount', 'daemonMount']);
+  validateNamespaceAliasBaseline(alias.baseline);
+  if (!same(alias.mount, storage.mount)) stop('NS_ALIAS_IDENTITY');
+  namespaceMount(alias.brokerMount, '/media', '/', plan, storage.mapper);
+  namespaceMount(alias.daemonMount, '/media', '/', plan, storage.mapper);
+}
+
+function validateNamespaceMaskProof(mask, plan, storage) {
+  exact(mask, ['baseline', 'source', 'brokerMount', 'daemonMount']);
+  for (const [value, modes] of [
+    [mask.baseline, [0o40711, 0o40755]],
+    [mask.source, [0o40700]],
+  ]) {
+    exact(value, ['dev', 'ino', 'uid', 'gid', 'mode']);
+    if (
+      !Number.isSafeInteger(value.dev) ||
+      value.dev < 1 ||
+      !Number.isSafeInteger(value.ino) ||
+      value.ino < 1 ||
+      value.uid !== 0 ||
+      value.gid !== 0 ||
+      !modes.includes(value.mode)
+    )
+      stop('NS_MASK_IDENTITY');
+  }
+  if (mask.source.dev !== storage.mount.dev || mask.source.ino === storage.mount.ino)
+    stop('NS_MASK_IDENTITY');
+  namespaceMount(
+    mask.brokerMount,
+    '/run/containerd',
+    '/.runtime/run-containerd',
+    plan,
+    storage.mapper,
+  );
+  namespaceMount(
+    mask.daemonMount,
+    '/run/containerd',
+    '/.runtime/run-containerd',
+    plan,
+    storage.mapper,
+  );
+}
+
+function validateNamespaceNetworkProof(network) {
+  exact(network, ['sourceNamespace', 'supervisorNamespace']);
+  if (
+    !Number.isSafeInteger(network.sourceNamespace) ||
+    network.sourceNamespace < 1 ||
+    !Number.isSafeInteger(network.supervisorNamespace) ||
+    network.supervisorNamespace < 1 ||
+    network.sourceNamespace === network.supervisorNamespace
+  )
+    stop('NS_NETWORK');
+}
+
+function validateNamespaceRuntimeProof(attestation) {
+  const p = attestation.plan,
+    r = attestation.readback,
+    k = r.kernel;
+  exact(r.runtimeMounts, ['dataRoot', 'network']);
+  const data = r.runtimeMounts.dataRoot,
+    net = r.runtimeMounts.network,
+    prefix = `${p.isolation.execRoot}/netns/`;
+  if (
+    !Array.isArray(data.optional) ||
+    data.optional.length !== 1 ||
+    !/^shared:[1-9][0-9]*$/.test(data.optional[0])
+  )
+    stop('NS_DATA_ROOT_MOUNT');
+  namespaceMount(
+    { ...data, optional: [] },
+    p.isolation.dataRoot,
+    '/.runtime/docker-data',
+    p,
+    r.storage.mapper,
+  );
+  exact(net, Object.keys(r.alias.brokerMount));
+  if (
+    data.parent !== r.alias.brokerMount.id ||
+    net.parent !== r.alias.brokerMount.id ||
+    !/^[0-9]+$/.test(net.id) ||
+    !/^[0-9]+:[0-9]+$/.test(net.device) ||
+    typeof net.target !== 'string' ||
+    !net.target.startsWith(prefix) ||
+    !/^[a-f0-9]{12}$/.test(net.target.slice(prefix.length)) ||
+    net.root !== `net:[${k.containerNetworkNamespace}]` ||
+    net.fstype !== 'nsfs' ||
+    net.source !== 'nsfs' ||
+    !same(net.options, ['rw']) ||
+    !same(net.optional, []) ||
+    !same(net.superOptions, ['rw']) ||
+    !Number.isSafeInteger(k.containerNetworkNamespace) ||
+    k.containerNetworkNamespace < 1 ||
+    [
+      r.isolation.admission.network.sourceNamespace,
+      r.isolation.admission.network.supervisorNamespace,
+    ].includes(k.containerNetworkNamespace) ||
+    k.networkSandboxKey !== net.target
+  )
+    stop('NS_NETNS_MOUNT');
+}
+
+function validateNamespaceRuntimeRows(attestation, rows, sourceRows) {
+  validateNamespaceRuntimeProof(attestation);
+  const r = attestation.readback,
+    descendants = rows.filter((v) => v.target.startsWith('/media/')),
+    expected = [r.runtimeMounts.dataRoot, r.runtimeMounts.network];
+  if (
+    descendants.length !== 2 ||
+    !expected.every((v) => descendants.some((x) => same(x, v))) ||
+    new Set(descendants.map((v) => v.id)).size !== 2 ||
+    rows.filter((v) => v.optional.includes(r.runtimeMounts.dataRoot.optional[0])).length !== 1 ||
+    sourceRows.some((v) => v.optional.includes(r.runtimeMounts.dataRoot.optional[0]))
+  )
+    stop('NS_RUNTIME_MOUNTS');
+}
+
+function namespaceDeviceString(value) {
+  if (!Number.isSafeInteger(value) || value < 1) stop('NS_NETNS_IDENTITY');
+  const dev = BigInt(value),
+    major = ((dev >> 8n) & 4095n) | ((dev >> 32n) & ~4095n),
+    minor = (dev & 255n) | ((dev >> 12n) & ~255n);
+  return `${major}:${minor}`;
+}
+
+export function namespaceRestoreClientOptions(attestation, actual) {
+  exact(actual, [
+    'selfNamespace',
+    'mount',
+    'alias',
+    'sourceAlias',
+    'sourceAliasEmpty',
+    'mountinfo',
+    'daemonCwd',
+    'daemonCwdIdentity',
+    'mask',
+    'maskSource',
+    'sourceMask',
+    'networkMountIdentity',
+    'containerNetworkIdentity',
+  ]);
+  const p = attestation?.plan,
+    r = attestation?.readback,
+    mount = r?.storage?.mount,
+    namespace = r?.isolation?.admission?.supervisor?.process?.mountNamespace;
+  if (!r?.alias || !r?.mask || !r?.storage || !p?.isolation) stop('NS_CLIENT_CWD');
+  validateNamespaceAliasProof(r.alias, p, r.storage);
+  validateNamespaceMaskProof(r.mask, p, r.storage);
+  if (
+    !Number.isSafeInteger(namespace) ||
+    namespace < 1 ||
+    actual.selfNamespace !== namespace ||
+    mount?.uid !== 0 ||
+    mount?.gid !== 0 ||
+    mount?.mode !== 0o40700 ||
+    !Number.isSafeInteger(mount?.dev) ||
+    !Number.isSafeInteger(mount?.ino) ||
+    mount.ino < 1 ||
+    !same(actual.mount, mount) ||
+    !same(actual.alias, mount) ||
+    !same(actual.mask, r.mask.source) ||
+    !same(actual.maskSource, r.mask.source) ||
+    !same(actual.sourceMask, r.mask.baseline) ||
+    !same(actual.sourceAlias, r.alias.baseline) ||
+    actual.sourceAliasEmpty !== true ||
+    actual.daemonCwd !== '/media' ||
+    !same(actual.daemonCwdIdentity, mount) ||
+    p.isolation.strategy !== 'SYSTEMD_SUPERVISOR_PRIVATE_ALIAS_V1' ||
+    p.isolation.dataRoot !== '/media/.runtime/docker-data' ||
+    p.isolation.execRoot !== '/media/.runtime/docker-exec' ||
+    p.isolation.socket !== '/media/.runtime/docker.sock' ||
+    p.isolation.pidFile !== '/media/.runtime/dockerd.pid'
+  )
+    stop('NS_CLIENT_CWD');
+  exact(actual.mountinfo, ['self', 'source']);
+  exact(actual.networkMountIdentity, ['dev', 'ino']);
+  exact(actual.containerNetworkIdentity, ['dev', 'ino']);
+  if (
+    !same(actual.networkMountIdentity, actual.containerNetworkIdentity) ||
+    actual.networkMountIdentity.ino !== r.kernel.containerNetworkNamespace ||
+    namespaceDeviceString(actual.networkMountIdentity.dev) !== r.runtimeMounts.network.device
+  )
+    stop('NS_NETNS_IDENTITY');
+  const rows = parseDiskRestoreMountinfo(actual.mountinfo.self),
+    alias = rows.filter((x) => x.target === '/media'),
+    canonical = rows.filter((x) => x.target === p.mount);
+  if (
+    alias.length !== 1 ||
+    canonical.length !== 1 ||
+    rows.some((x) => x.target.startsWith(`${p.mount}/`)) ||
+    rows
+      .filter((x) => x.target === '/' || p.work.startsWith(`${x.target.replace(/\/$/, '')}/`))
+      .some((x) => x.optional.length)
+  )
+    stop('NS_ALIAS_MOUNT');
+  namespaceMount(alias[0], '/media', '/', p, r.storage.mapper);
+  validateNamespaceRuntimeRows(
+    attestation,
+    rows,
+    parseDiskRestoreMountinfo(actual.mountinfo.source),
+  );
+  namespaceMount(canonical[0], p.mount, '/', p, r.storage.mapper);
+  if (!same(alias[0], r.alias.brokerMount)) stop('NS_ALIAS_MOUNT');
+  const mask = rows.filter((x) => x.target === '/run/containerd');
+  if (mask.length !== 1 || rows.some((x) => x.target.startsWith('/run/containerd/')))
+    stop('NS_MASK_MOUNT');
+  namespaceMount(mask[0], '/run/containerd', '/.runtime/run-containerd', p, r.storage.mapper);
+  if (!same(mask[0], r.mask.brokerMount)) stop('NS_MASK_MOUNT');
+  const device = `${r.storage.mapper.device}:${r.storage.mapper.minor}`;
+  if (
+    parseDiskRestoreMountinfo(actual.mountinfo.source).some(
+      (x) =>
+        x.target === '/media' ||
+        x.target.startsWith('/media/') ||
+        x.target === '/run/containerd' ||
+        x.target.startsWith('/run/containerd/') ||
+        x.target === p.mount ||
+        x.target.startsWith(`${p.mount}/`) ||
+        x.source === p.mapperPath ||
+        x.device === device,
+    )
+  )
+    stop('NS_HOST_MOUNT_LEAK');
+  return { host: 'unix:///media/.runtime/docker.sock', cwd: '/media' };
+}
+
 function inspectNamespaceRestoreKernel(value) {
   const p = value.plan,
     r = value.readback;
@@ -2181,10 +2499,58 @@ function inspectNamespaceRestoreKernel(value) {
   const beforeRuntime = runtime();
   const before = processes(),
     selfNamespace = statSync('/proc/self/ns/mnt').ino;
+  const mountSnapshot = (values) =>
+    Object.fromEntries(
+      Object.entries(values).map(([k, v]) => [k, readFileSync(`/proc/${v.pid}/mountinfo`, 'utf8')]),
+    );
+  const beforeMountinfo = mountSnapshot(before);
+  const identity = (st) =>
+    Object.fromEntries(['dev', 'ino', 'uid', 'gid', 'mode'].map((key) => [key, st[key]]));
+  const aliasSnapshot = () => {
+    const path = `/proc/${r.isolation.admission.sourceDaemon.pid}/root/media`,
+      source = lstatSync(path);
+    return {
+      mount: identity(lstatSync(p.mount)),
+      alias: identity(lstatSync('/media')),
+      mask: identity(lstatSync('/run/containerd')),
+      maskSource: identity(lstatSync('/media/.runtime/run-containerd')),
+      sourceMask: identity(
+        lstatSync(`/proc/${r.isolation.admission.sourceDaemon.pid}/root/run/containerd`),
+      ),
+      sourceAlias: { ...identity(source), nlink: source.nlink },
+      sourceAliasEmpty: readdirSync(path).length === 0,
+      daemonCwd: readlinkSync(`/proc/${r.isolation.process.pid}/cwd`),
+      daemonCwdIdentity: identity(statSync(`/proc/${r.isolation.process.pid}/cwd`)),
+      networkMountIdentity: Object.fromEntries(
+        ['dev', 'ino'].map((k) => [k, statSync(r.runtimeMounts.network.target)[k]]),
+      ),
+      containerNetworkIdentity: Object.fromEntries(
+        ['dev', 'ino'].map((k) => [k, statSync(`/proc/${r.container.State.Pid}/ns/net`)[k]]),
+      ),
+    };
+  };
+  const networkSnapshot = () =>
+    Object.fromEntries(
+      Object.entries(processes()).map(([name, value]) => [
+        name,
+        statSync(`/proc/${value.pid}/ns/net`).ino,
+      ]),
+    );
+  const beforeNetwork = networkSnapshot();
+  const beforeAlias = aliasSnapshot();
+  const connection = namespaceRestoreClientOptions(value, {
+    ...beforeAlias,
+    selfNamespace,
+    mountinfo: {
+      self: readFileSync('/proc/self/mountinfo', 'utf8'),
+      source: readFileSync(`/proc/${before.source.pid}/mountinfo`, 'utf8'),
+    },
+  });
   const privateRead = (args) =>
     parseStrictJson(
-      execFileSync('/usr/bin/docker', ['--host', `unix://${p.isolation.socket}`, ...args], {
-        env,
+      execFileSync('/usr/bin/docker', ['--host', connection.host, ...args], {
+        env: { ...env, DOCKER_HOST: connection.host },
+        cwd: connection.cwd,
         timeout: 10000,
         maxBuffer: 256 * 1024,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -2206,7 +2572,7 @@ function inspectNamespaceRestoreKernel(value) {
   if (!Array.isArray(raw) || raw.length !== 1) stop('NS_CONTAINER_COUNT');
   const row = raw[0],
     socket = lstatSync(p.isolation.socket);
-  const container = {
+  const projectContainer = (row) => ({
     Id: row.Id,
     Config: Object.fromEntries(Object.keys(r.container.Config).map((k) => [k, row.Config[k]])),
     HostConfig: Object.fromEntries(
@@ -2215,23 +2581,32 @@ function inspectNamespaceRestoreKernel(value) {
     Mounts: row.Mounts,
     State: Object.fromEntries(Object.keys(r.container.State).map((k) => [k, row.State[k]])),
     Image: row.Image,
-  };
+  });
+  const container = projectContainer(row);
+  const afterRaw = privateRead(['inspect', r.container.Id]);
+  if (!Array.isArray(afterRaw) || afterRaw.length !== 1) stop('NS_CONTAINER_COUNT');
   validateNamespaceRestoreKernelSnapshot(value, {
     selfNamespace,
     processes: before,
-    mountinfo: Object.fromEntries(
-      Object.entries(before).map(([k, v]) => [k, readFileSync(`/proc/${v.pid}/mountinfo`, 'utf8')]),
-    ),
+    mountinfo: beforeMountinfo,
+    afterMountinfo: mountSnapshot(processes()),
     socket: Object.fromEntries(
       ['dev', 'ino', 'uid', 'gid', 'mode', 'nlink'].map((k) => [k, socket[k]]),
     ),
     sourceImage,
     privateImage,
     container,
+    afterContainer: projectContainer(afterRaw[0]),
     runtime: beforeRuntime,
     afterRuntime: runtime(),
     afterProcesses: processes(),
     afterSelfNamespace: statSync('/proc/self/ns/mnt').ino,
+    alias: beforeAlias,
+    afterAlias: aliasSnapshot(),
+    network: beforeNetwork,
+    afterNetwork: networkSnapshot(),
+    networkSandboxKey: row.NetworkSettings?.SandboxKey,
+    afterNetworkSandboxKey: afterRaw[0].NetworkSettings?.SandboxKey,
   });
 }
 

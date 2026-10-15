@@ -594,6 +594,8 @@ def is_namespace_operation(op):
 
 NS_IMAGE_FORMAT = '{"Id":{{json .Id}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}},"Size":{{json .Size}},"RootFS":{{json .RootFS}},"Env":{{json .Config.Env}}}'
 NS_RESTORE_FORMAT = DISK_RESTORE_FORMAT.replace('{"Id":', '{"Image":{{json .Image}},"Id":', 1).replace('"LogConfig":{{json .HostConfig.LogConfig}}}', '"LogConfig":{{json .HostConfig.LogConfig}},"CgroupParent":{{json .HostConfig.CgroupParent}},"CgroupnsMode":{{json .HostConfig.CgroupnsMode}}}')
+NS_RESTORE_FORMAT = NS_RESTORE_FORMAT.removesuffix('}') + ',"NetworkSettings":{"SandboxKey":{{json .NetworkSettings.SandboxKey}}}' + '}'
+NS_ALIAS = Path('/media')
 
 
 def namespace_image(value, source=None):
@@ -632,8 +634,8 @@ def namespace_plan(op, raw, sizing, image):
     namespace_image(image)
     p = disk_plan(op, raw, sizing)
     p['schema'] = 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V2'
-    root, control = p['mount'] + '/.runtime', p['work'] + '/runtime-control'
-    p['isolation'] = {'strategy': 'SYSTEMD_SUPERVISOR_PRIVATE_MOUNT_V1',
+    root, control = str(NS_ALIAS / '.runtime'), p['work'] + '/runtime-control'
+    p['isolation'] = {'strategy': 'SYSTEMD_SUPERVISOR_PRIVATE_ALIAS_V1',
         'unit': 'phub-disk-runtime-' + p['operationSha256'][:24] + '.service',
         'slice': 'phubdiskrestore' + p['operationSha256'][:24] + '.slice',
         'controlRoot': control, 'pgdata': p['mount'] + '/pgdata',
@@ -647,14 +649,14 @@ def namespace_plan(op, raw, sizing, image):
 
 def namespace_config(p):
     r = p['isolation']; suffix = p['operationSha256'][:24]
-    return {'hosts': ['unix://' + r['socket']], 'pidfile': r['pidFile'],
+    return {'hosts': ['unix:///media/.runtime/docker.sock'], 'pidfile': r['pidFile'],
         'data-root': r['dataRoot'], 'exec-root': r['execRoot'], 'storage-driver': 'vfs',
         'bridge': 'none', 'iptables': False, 'ip6tables': False, 'ip-forward': False,
         'ip-masq': False, 'userland-proxy': False, 'live-restore': False,
         'shutdown-timeout': 30, 'group': 'root', 'log-driver': 'none',
         'exec-opts': ['native.cgroupdriver=systemd'], 'cgroup-parent': r['slice'],
         'default-cgroupns-mode': 'private', 'default-runtime': 'runc', 'no-new-privileges': True,
-        'containerd-namespace': 'phub-' + suffix, 'containerd-plugins-namespace': 'phub-plugins-' + suffix,
+        'containerd-namespace': 'phub-' + suffix,
         'features': {'containerd-snapshotter': False}}
 
 
@@ -663,7 +665,7 @@ def namespace_unit_args(p, tool):
     props = {'Restart': 'no', 'Delegate': 'yes', 'KillMode': 'control-group',
         'SendSIGKILL': 'yes', 'TimeoutStopSec': '30s', 'MemoryAccounting': 'yes', 'MemoryMax': str(NS_DAEMON_MEMORY),
         'MemorySwapMax': '0', 'TasksAccounting': 'yes', 'TasksMax': '256',
-        'CPUAccounting': 'yes', 'CPUQuota': '100%', 'LimitCORE': '0', 'UMask': '0077',
+        'CPUAccounting': 'yes', 'CPUQuota': '100%', 'LimitCORE': '0', 'UMask': '0077', 'PrivateNetwork': 'yes',
         'StandardInput': 'null', 'StandardOutput': 'null', 'StandardError': 'null'}
     return ['/usr/bin/systemd-run', '--unit=' + r['unit'], '--service-type=exec', '--collect',
         '--quiet', '--slice=' + r['slice'], '--uid=root', '--gid=root', '--working-directory=' + p['work'],
@@ -700,11 +702,19 @@ def namespace_source_daemon():
     return v
 
 
+def namespace_network(pid):
+    need(type(pid) is int and 0 < pid < 2**31, 'NS_NETWORK_PID')
+    try:
+        return os.stat('/proc/' + str(pid) + '/ns/net').st_ino
+    except OSError:
+        raise Stop('NS_NETWORK_READ') from None
+
+
 NS_UNIT_KEYS = ['LoadState', 'ActiveState', 'SubState', 'MainPID', 'InvocationID', 'ControlGroup',
     'MemoryMax', 'MemorySwapMax', 'TasksMax', 'Delegate', 'CPUQuotaPerSecUSec', 'KillMode',
     'SendSIGKILL', 'Restart', 'TimeoutStopUSec', 'LimitCORE', 'UMask', 'User', 'Group',
     'WorkingDirectory', 'StandardInput', 'StandardOutput', 'StandardError', 'Slice',
-    'Transient', 'NRestarts', 'Result', 'ExecMainCode', 'ExecMainStatus']
+    'Transient', 'NRestarts', 'Result', 'ExecMainCode', 'ExecMainStatus', 'PrivateNetwork']
 NS_SLICE_KEYS = ['LoadState', 'ActiveState', 'ControlGroup', 'Transient', 'MemoryMax', 'MemorySwapMax', 'TasksMax', 'CPUQuotaPerSecUSec']
 
 
@@ -765,7 +775,7 @@ def namespace_frozen_source(p):
 
 def namespace_control(p, name):
     need(name in ('namespace-receipt.json', 'daemon.json', 'daemon-start.json', 'daemon-receipt.json',
-                  'daemon-stop.json', 'daemon-exit.json', 'supervisor-terminal.json'), 'NS_CONTROL_PATH')
+                  'daemon-stop.json', 'daemon-exit.json', 'daemon-startup-error.json', 'supervisor-terminal.json'), 'NS_CONTROL_PATH')
     return Path(p['isolation']['controlRoot']) / name
 
 
@@ -779,7 +789,7 @@ def namespace_supervisor_identity(p, op):
          and re.fullmatch(r'[a-f0-9]{32}', value['InvocationID'] or '')
          and value['ControlGroup'] == '/' + p['isolation']['slice'] + '/' + p['isolation']['unit']
          and all(value[k] == v for k,v in {'SendSIGKILL':'yes','Restart':'no','TimeoutStopUSec':'30s','LimitCORE':'0',
-             'UMask':'0077','User':'root','Group':'root','WorkingDirectory':p['work'], 'StandardInput':'null',
+             'UMask':'0077','PrivateNetwork':'yes','User':'root','Group':'root','WorkingDirectory':p['work'], 'StandardInput':'null',
              'StandardOutput':'null','StandardError':'null','Slice':p['isolation']['slice'],'Transient':'yes',
              'NRestarts':'0','Result':'success','ExecMainCode':'0','ExecMainStatus':'0'}.items()), 'NS_UNIT_CUSTODY')
     process = namespace_process(int(value['MainPID']))
@@ -794,13 +804,19 @@ def namespace_supervisor_identity(p, op):
 
 def namespace_admission(p, op):
     receipt = strict(read_secure(namespace_control(p, 'namespace-receipt.json')))
-    exact(receipt, ['schema', 'operationSha256', 'toolFileSha256', 'sourceDaemon', 'supervisor'])
+    exact(receipt, ['schema', 'operationSha256', 'toolFileSha256', 'sourceDaemon', 'supervisor', 'network'])
+    source_network = DiskJournal(p['work'], p['operationSha256']).find('SOURCE_NETWORK')
     need(receipt['schema'] == 'PHUB_TIMEWEB_PRIVATE_NAMESPACE_RECEIPT_V1'
          and receipt['operationSha256'] == p['operationSha256']
          and receipt['toolFileSha256'] == op['toolFileSha256']
          and receipt['supervisor'] == namespace_supervisor_identity(p, op)
          and receipt['sourceDaemon'] == namespace_frozen_source(p)
-         and receipt['sourceDaemon']['mountNamespace'] != receipt['supervisor']['process']['mountNamespace'], 'NS_RECEIPT_DRIFT')
+         and receipt['sourceDaemon']['mountNamespace'] != receipt['supervisor']['process']['mountNamespace']
+         and type(receipt['network']) is dict and set(receipt['network']) == {'sourceNamespace','supervisorNamespace'}
+         and source_network is not None and receipt['network']['sourceNamespace'] == source_network['namespace']
+         and receipt['network']['sourceNamespace'] == namespace_network(receipt['sourceDaemon']['pid'])
+         and receipt['network']['supervisorNamespace'] == namespace_network(receipt['supervisor']['process']['pid'])
+         and receipt['network']['sourceNamespace'] != receipt['network']['supervisorNamespace'], 'NS_RECEIPT_DRIFT')
     return receipt
 
 
@@ -841,11 +857,237 @@ def namespace_socket(p):
     return storage_identity(info)
 
 
+def namespace_alias_rows(pid=None):
+    path = '/proc/self/mountinfo' if pid is None else '/proc/' + str(pid) + '/mountinfo'
+    return mountinfo_records(Path(path).read_text())
+
+
+def namespace_alias_identity(info):
+    return {key:getattr(info, 'st_' + key) for key in ['dev','ino','uid','gid','mode','nlink']}
+
+
+def namespace_mask_identity(info):
+    return {key:getattr(info, 'st_' + key) for key in ['dev','ino','uid','gid','mode']}
+
+
+def namespace_mask_baseline(source):
+    path = Path('/run/containerd'); info = secure(path, 'dir')
+    need(stat.S_IMODE(info.st_mode) in (0o711,0o755), 'NS_MASK_BASELINE')
+    baseline = namespace_mask_identity(info)
+    for rows in [namespace_alias_rows(), namespace_alias_rows(source['pid'])]:
+        need(not any(v['target'] == str(path) or v['target'].startswith(str(path) + '/') for v in rows), 'NS_MASK_MOUNTED')
+    source_path = Path('/proc') / str(source['pid']) / 'root' / 'run' / 'containerd'
+    need(namespace_mask_identity(source_path.lstat()) == baseline, 'NS_MASK_SOURCE_DRIFT')
+    return baseline
+
+
+def namespace_mask_source_baseline(source, baseline):
+    path = Path('/proc') / str(source['pid']) / 'root' / 'run' / 'containerd'
+    rows = namespace_alias_rows(source['pid'])
+    need(namespace_mask_identity(path.lstat()) == baseline
+         and not any(v['target'] == '/run/containerd' or v['target'].startswith('/run/containerd/') for v in rows),
+         'NS_MASK_SOURCE_DRIFT')
+
+
+def namespace_runtime_root(p, journal):
+    need(journal.find('ALIAS_MOUNTED') is not None, 'NS_RUNTIME_ROOT_PROOF')
+    namespace_alias_attest(p, journal)
+    root = NS_ALIAS / '.runtime'; event = journal.find('RUNTIME_ROOT_CREATED')
+    if event is None:
+        root.mkdir(mode=0o700)
+        identity = storage_identity(secure(root, 'dir', 0o700))
+        journal.add('RUNTIME_ROOT_CREATED', identity=identity)
+    else:
+        identity = storage_identity(secure(root, 'dir', 0o700))
+        need(identity == event['identity'], 'NS_RUNTIME_ROOT_DRIFT')
+    return root
+
+
+def namespace_alias_baseline(source):
+    info = secure(NS_ALIAS, 'dir', 0o755)
+    baseline = namespace_alias_identity(info)
+    need(not any(NS_ALIAS.iterdir()), 'NS_ALIAS_DIRTY')
+    for rows in [namespace_alias_rows(), namespace_alias_rows(source['pid'])]:
+        need(not any(v['target'] == str(NS_ALIAS) or v['target'].startswith(str(NS_ALIAS) + '/') for v in rows), 'NS_ALIAS_MOUNTED')
+    source_alias = Path('/proc') / str(source['pid']) / 'root' / 'media'
+    source_info = source_alias.lstat()
+    need(namespace_alias_identity(source_info) == baseline and not any(source_alias.iterdir()), 'NS_ALIAS_SOURCE_DRIFT')
+    return baseline
+
+
+def namespace_alias_local_baseline(baseline):
+    info = secure(NS_ALIAS, 'dir', 0o755)
+    need(namespace_alias_identity(info) == baseline and not any(NS_ALIAS.iterdir())
+         and not any(v['target'] == str(NS_ALIAS) or v['target'].startswith(str(NS_ALIAS) + '/') for v in namespace_alias_rows()),
+         'NS_ALIAS_UNMOUNT')
+
+
+def namespace_alias_restored(journal):
+    baseline = journal.find('ALIAS_BASELINE')['identity']; namespace_alias_local_baseline(baseline)
+    ready = journal.find('NAMESPACE_READY')
+    need(ready is not None and namespace_alias_baseline(ready['receipt']['sourceDaemon']) == baseline, 'NS_ALIAS_SOURCE_DRIFT')
+
+
+def namespace_mask_local_baseline(baseline):
+    path = Path('/run/containerd'); info = secure(path, 'dir')
+    need(namespace_mask_identity(info) == baseline
+         and not any(v['target'] == str(path) or v['target'].startswith(str(path) + '/') for v in namespace_alias_rows()),
+         'NS_MASK_UNMOUNT')
+
+
+def namespace_mask_restored(journal):
+    baseline = journal.find('CONTAINERD_MASK_BASELINE')['identity']; namespace_mask_local_baseline(baseline)
+    ready = journal.find('NAMESPACE_READY')
+    need(ready is not None and namespace_mask_baseline(ready['receipt']['sourceDaemon']) == baseline, 'NS_MASK_SOURCE_DRIFT')
+
+
+def namespace_alias_mount(p, journal):
+    baseline = journal.find('ALIAS_BASELINE')
+    mounted = journal.find('MOUNTED')
+    ready = journal.find('NAMESPACE_READY')
+    need(baseline is not None and mounted is not None and ready is not None, 'NS_ALIAS_PROOF')
+    source = ready['receipt']['sourceDaemon']
+    need(os.stat('/proc/self/ns/mnt').st_ino == ready['receipt']['supervisor']['process']['mountNamespace'], 'NS_ALIAS_NAMESPACE')
+    need(namespace_alias_baseline(source) == baseline['identity'], 'NS_ALIAS_SOURCE_DRIFT')
+    journal.add('ALIAS_MOUNT_INTENT', baseline=baseline['identity'])
+    disk_tool('mount', ['--no-mtab', '--bind', p['mount'], str(NS_ALIAS)], 'NS_ALIAS_MOUNT')
+    value = namespace_alias_attest(p, journal)
+    journal.add('ALIAS_MOUNTED', alias=value)
+    return value
+
+
+def namespace_alias_attest(p, journal):
+    baseline = journal.find('ALIAS_BASELINE')
+    mounted = journal.find('MOUNTED')
+    ready = journal.find('NAMESPACE_READY')
+    need(baseline is not None and mounted is not None and ready is not None, 'NS_ALIAS_PROOF')
+    receipt = ready['receipt']; source = receipt['sourceDaemon']
+    need(os.stat('/proc/self/ns/mnt').st_ino == receipt['supervisor']['process']['mountNamespace'], 'NS_ALIAS_NAMESPACE')
+    source_alias = Path('/proc') / str(source['pid']) / 'root' / 'media'
+    need(namespace_alias_identity(source_alias.lstat()) == baseline['identity'] and not any(source_alias.iterdir()), 'NS_ALIAS_SOURCE_DRIFT')
+    source_rows = namespace_alias_rows(source['pid'])
+    need(not any(v['target'] == str(NS_ALIAS) or v['target'].startswith(str(NS_ALIAS) + '/') for v in source_rows), 'NS_ALIAS_LEAK')
+    rows = namespace_alias_rows(); matches = [v for v in rows if v['target'] == str(NS_ALIAS)]
+    need(len(matches) == 1, 'NS_ALIAS_MOUNT')
+    row = matches[0]; mapper = p['mapperPath']; identity = mounted['identity']
+    need(row['source'] == mapper and row['root'] == '/' and row['fstype'] == 'ext4' and not row['optional']
+         and set(row['options']) == {'rw','nosuid','nodev','noexec','noatime'}, 'NS_ALIAS_MOUNT')
+    info = secure(NS_ALIAS, 'dir', 0o700)
+    current = {key:getattr(info, 'st_' + key) for key in ['dev','ino','uid','gid','mode']}
+    need(current == identity, 'NS_ALIAS_IDENTITY')
+    namespace_runtime_mounts(p, journal, rows)
+    return {'baseline': baseline['identity'], 'mount': identity, 'brokerMount': row}
+
+
+def namespace_alias_unmount(p, journal):
+    attempted = journal.find('ALIAS_MOUNT_INTENT') is not None
+    if not attempted:
+        namespace_alias_restored(journal)
+        return
+    if journal.find('ALIAS_UNMOUNTED') is not None:
+        namespace_alias_restored(journal)
+        return
+    if journal.find('ALIAS_MOUNTED') is None:
+        matches=[v for v in namespace_alias_rows() if v['target'] == str(NS_ALIAS)]
+        if matches:
+            journal.once('ALIAS_MOUNTED', alias=namespace_alias_attest(p, journal))
+        else:
+            namespace_alias_restored(journal)
+            journal.once('ALIAS_UNMOUNTED', neverMounted=True)
+            return
+    if journal.find('ALIAS_UNMOUNT_INTENT') is None:
+        namespace_alias_attest(p, journal)
+        journal.add('ALIAS_UNMOUNT_INTENT')
+    rows = namespace_alias_rows(); matches = [v for v in rows if v['target'] == str(NS_ALIAS)]
+    if matches:
+        namespace_alias_attest(p, journal)
+        disk_tool('umount', ['--no-mtab', str(NS_ALIAS)], 'NS_ALIAS_UNMOUNT')
+    namespace_alias_restored(journal)
+    journal.once('ALIAS_UNMOUNTED')
+
+
+def namespace_mask_mount(p, journal):
+    ready = journal.find('NAMESPACE_READY'); baseline = journal.find('CONTAINERD_MASK_BASELINE')
+    need(ready is not None and baseline is not None, 'NS_MASK_PROOF')
+    source = ready['receipt']['sourceDaemon']; private = namespace_runtime_root(p, journal) / 'run-containerd'
+    need(os.stat('/proc/self/ns/mnt').st_ino == ready['receipt']['supervisor']['process']['mountNamespace'], 'NS_MASK_NAMESPACE')
+    namespace_mask_source_baseline(source, baseline['identity'])
+    private.mkdir(mode=0o700); info = secure(private, 'dir', 0o700); source_identity = namespace_mask_identity(info)
+    need(not any(private.iterdir()), 'NS_MASK_SOURCE_DIRTY')
+    journal.add('CONTAINERD_MASK_INTENT', baseline=baseline['identity'], source=source_identity,
+                namespace=ready['receipt']['supervisor']['process']['mountNamespace'])
+    disk_tool('mount', ['--no-mtab', '--bind', str(private), '/run/containerd'], 'NS_MASK_MOUNT')
+    value = namespace_mask_attest(p, journal)
+    need(not Path('/run/containerd/containerd.sock').exists(), 'NS_MASK_SOCKET')
+    journal.add('CONTAINERD_MASKED', mask=value)
+    return value
+
+
+def namespace_mask_attest(p, journal):
+    baseline = journal.find('CONTAINERD_MASK_BASELINE'); intent = journal.find('CONTAINERD_MASK_INTENT'); ready = journal.find('NAMESPACE_READY')
+    need(baseline is not None and intent is not None and ready is not None, 'NS_MASK_PROOF')
+    source = ready['receipt']['sourceDaemon']; private = namespace_runtime_root(p, journal) / 'run-containerd'
+    need(os.stat('/proc/self/ns/mnt').st_ino == intent['namespace'] == ready['receipt']['supervisor']['process']['mountNamespace'], 'NS_MASK_NAMESPACE')
+    namespace_mask_source_baseline(source, baseline['identity'])
+    rows = namespace_alias_rows(); matches = [v for v in rows if v['target'] == '/run/containerd']
+    need(len(matches) == 1 and not any(v['target'].startswith('/run/containerd/') for v in rows), 'NS_MASK_MOUNT')
+    row = matches[0]; source_identity = namespace_mask_identity(secure(private, 'dir', 0o700))
+    need(row['source'] == p['mapperPath'] and row['root'] == '/.runtime/run-containerd' and row['fstype'] == 'ext4'
+         and not row['optional'] and set(row['options']) == {'rw','nosuid','nodev','noexec','noatime'}
+         and source_identity == intent['source'] and namespace_mask_identity(secure('/run/containerd', 'dir', 0o700)) == source_identity, 'NS_MASK_MOUNT')
+    return {'baseline':baseline['identity'], 'source':source_identity, 'brokerMount':row}
+
+
+def namespace_mask_unmount(p, journal):
+    attempted = journal.find('CONTAINERD_MASK_INTENT') is not None
+    baseline = journal.find('CONTAINERD_MASK_BASELINE')['identity']
+    if not attempted:
+        namespace_mask_restored(journal); return
+    if journal.find('CONTAINERD_MASK_UNMOUNTED') is not None:
+        namespace_mask_restored(journal); return
+    if journal.find('CONTAINERD_MASKED') is None:
+        matches=[v for v in namespace_alias_rows() if v['target'] == '/run/containerd']
+        if matches:
+            journal.once('CONTAINERD_MASKED', mask=namespace_mask_attest(p, journal))
+        else:
+            namespace_mask_restored(journal)
+            journal.once('CONTAINERD_MASK_UNMOUNTED', neverMasked=True)
+            return
+    if journal.find('CONTAINERD_MASK_UNMOUNT_INTENT') is None:
+        namespace_mask_attest(p, journal); journal.add('CONTAINERD_MASK_UNMOUNT_INTENT')
+    rows = namespace_alias_rows(); matches = [v for v in rows if v['target'] == '/run/containerd']
+    if matches:
+        namespace_mask_attest(p, journal)
+        disk_tool('umount', ['--no-mtab', '/run/containerd'], 'NS_MASK_UNMOUNT')
+    else:need(journal.find('CONTAINERD_MASK_UNMOUNT_INTENT') is not None, 'NS_MASK_DISAPPEARED')
+    namespace_mask_restored(journal)
+    journal.once('CONTAINERD_MASK_UNMOUNTED')
+
+
+def namespace_client_cwd(p):
+    journal = DiskJournal(p['work'], p['operationSha256'])
+    namespace_alias_attest(p, journal)
+    namespace_mask_attest(p, journal)
+    return NS_ALIAS
+
+
 def namespace_docker(p, args, code='NS_DOCKER_READ', **kwargs):
     # No overload, ambient socket or host fallback. Source reads remain docker().
     namespace_socket(p)
-    return command(['/usr/bin/docker', '--host', 'unix://' + p['isolation']['socket'], *args], code,
-                   environment={**ENV, 'DOCKER_HOST': 'unix://' + p['isolation']['socket']}, **kwargs)
+    need('cwd' not in kwargs, 'NS_DOCKER_CWD_OVERRIDE')
+    return command(['/usr/bin/docker', '--host', 'unix:///media/.runtime/docker.sock', *args], code,
+                   environment={**ENV, 'DOCKER_HOST': 'unix:///media/.runtime/docker.sock'},
+                   cwd=namespace_client_cwd(p), **kwargs)
+
+
+def namespace_daemon_cwd(p, pid):
+    expected = namespace_client_cwd(p)
+    path = Path('/proc') / str(pid) / 'cwd'
+    need(os.readlink(path) == str(expected), 'NS_DAEMON_CWD')
+    actual = path.stat()
+    expected_info = expected.lstat()
+    need(storage_identity(actual) == storage_identity(expected_info), 'NS_DAEMON_CWD')
+    return storage_identity(expected_info)
 
 
 def namespace_daemon_identity(p, op):
@@ -858,6 +1100,8 @@ def namespace_daemon_identity(p, op):
          and process['cmdline'] == ['/usr/bin/dockerd', '--config-file', p['isolation']['configFile']]
          and process['mountNamespace'] == admission['supervisor']['process']['mountNamespace']
          and process['cgroup'] == '0::' + admission['supervisor']['unit']['ControlGroup'], 'NS_DAEMON_CUSTODY')
+    namespace_daemon_cwd(p, process['pid'])
+    need(namespace_network(process['pid']) == admission['network']['supervisorNamespace'], 'NS_DAEMON_NETWORK')
     need(strict(read_secure(namespace_control(p, 'daemon.json'))) == namespace_config(p), 'NS_DAEMON_CONFIG')
     info = strict(namespace_docker(p, ['info', '--format', '{"DockerRootDir":{{json .DockerRootDir}},"Driver":{{json .Driver}},"CgroupDriver":{{json .CgroupDriver}},"LiveRestoreEnabled":{{json .LiveRestoreEnabled}}}']))
     need(info == {'DockerRootDir': p['isolation']['dataRoot'], 'Driver': 'vfs', 'CgroupDriver': 'systemd', 'LiveRestoreEnabled': False}, 'NS_DAEMON_INFO')
@@ -874,19 +1118,20 @@ def namespace_managed(p, admission, daemon):
     containerds = [v for v in children if v['executable']=='/usr/bin/containerd']
     need(len(containerds)==1, 'NS_CONTAINERD_COUNT'); child = containerds[0]
     path = r['execRoot']+'/containerd/containerd.toml'
-    need(child['cmdline'] in (['/usr/bin/containerd','--config',path], ['/usr/bin/containerd','--config',path,'--log-level','info']), 'NS_CONTAINERD_ARGV')
+    need(child['cmdline'] in (['containerd','--config',path], ['containerd','--config',path,'--log-level','info']), 'NS_CONTAINERD_ARGV')
     raw = read_secure(path, 0o600); cfg = tomllib.loads(raw.decode())
     projection = {'version':cfg.get('version'), 'root':cfg.get('root'), 'state':cfg.get('state'),
                   'address':cfg.get('grpc',{}).get('address'), 'disabledPlugins':cfg.get('disabled_plugins')}
     need(projection['version']==2 and projection['root']==r['dataRoot']+'/containerd/daemon'
          and projection['state']==r['execRoot']+'/containerd/daemon'
          and projection['address']==r['execRoot']+'/containerd/containerd.sock'
-         and projection['disabledPlugins']==['cri'], 'NS_CONTAINERD_CONFIG')
+         and projection['disabledPlugins']==['io.containerd.grpc.v1.cri'], 'NS_CONTAINERD_CONFIG')
     # Reject external runtime configuration, remote sockets, imports and custom plugins.
     need(not cfg.get('imports') and not cfg.get('proxy_plugins'), 'NS_CONTAINERD_EXTERNAL')
     shims = [v for v in children if v is not child]
     for v in children:
-        need(v['mountNamespace']==broker['mountNamespace'] and v['cgroup']=='0::'+group, 'NS_MANAGED_CUSTODY')
+        need(v['mountNamespace']==broker['mountNamespace'] and v['cgroup']=='0::'+group
+             and namespace_network(v['pid']) == admission['network']['supervisorNamespace'], 'NS_MANAGED_CUSTODY')
     for v in shims:
         argv=v['cmdline']
         need(v['executable']=='/usr/bin/containerd-shim-runc-v2' and len(argv)==7
@@ -976,10 +1221,11 @@ def namespace_start(p, op, journal):
 def namespace_daemon_start(p, op, journal):
     need(namespace_admission(p, op) == journal.find('NAMESPACE_READY')['receipt'], 'NS_START_DRIFT')
     Path(p['isolation']['pgdata']).mkdir(mode=0o1777); os.chmod(p['isolation']['pgdata'], 0o1777)
-    root = Path(p['isolation']['dataRoot']).parent; root.mkdir(mode=0o700)
+    root = namespace_runtime_root(p, journal)
     for path in [p['isolation']['dataRoot'], p['isolation']['execRoot']]:Path(path).mkdir(mode=0o700)
     sync_directory(p['mount']); sync_directory(root)
     config = encoded(namespace_config(p)); atomic_exclusive(namespace_control(p, 'daemon.json'), config)
+    command(['/usr/bin/dockerd', '--validate', '--config-file', str(namespace_control(p, 'daemon.json'))], 'NS_DAEMON_CONFIG_VALIDATE', timeout=15)
     journal.add('DAEMON_START_INTENT', configSha256=digest(config))
     request = {'schema': 'PHUB_PRIVATE_DAEMON_START_V1', 'operationSha256': p['operationSha256'],
                'planSha256': digest(read_secure(Path(p['work'])/'disk-plan.json')), 'configSha256': digest(config)}
@@ -1004,11 +1250,12 @@ def namespace_image_transfer(p, op, journal):
     need(source == p['isolation']['image'], 'NS_SOURCE_IMAGE_DRIFT')
     journal.add('IMAGE_TRANSFER_INTENT')
     # Streaming relay: no temporary tar, unbounded capture, shell or secret-bearing args.
+    owned_cwd=namespace_client_cwd(p)
     client_parent=os.getpid()
     save = subprocess.Popen(['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock', 'image', 'save', PG_IMAGE],
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env=ENV, close_fds=True, preexec_fn=lambda:namespace_client_death(client_parent))
-    load = subprocess.Popen(['/usr/bin/docker', '--host', 'unix://' + p['isolation']['socket'], 'image', 'load'],
-                            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=ENV, close_fds=True, preexec_fn=lambda:namespace_client_death(client_parent))
+    load = subprocess.Popen(['/usr/bin/docker', '--host', 'unix:///media/.runtime/docker.sock', 'image', 'load'],
+                            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={**ENV, 'DOCKER_HOST':'unix:///media/.runtime/docker.sock'}, cwd=owned_cwd, close_fds=True, preexec_fn=lambda:namespace_client_death(client_parent))
     import selectors
     selector = selectors.DefaultSelector(); selector.register(save.stdout, selectors.EVENT_READ); selector.register(load.stdin, selectors.EVENT_WRITE)
     total, pending, eof, deadline = 0, b'', False, time.monotonic() + 120
@@ -1057,6 +1304,64 @@ def namespace_container_lookup(p):
     return row
 
 
+def namespace_runtime_mounts(p, journal, rows):
+    alias = [v for v in rows if v['target'] == str(NS_ALIAS)]
+    need(len(alias) == 1, 'NS_RUNTIME_ALIAS_MOUNT')
+    data = [v for v in rows if v['target'] == p['isolation']['dataRoot']]
+    net = [v for v in rows if re.fullmatch(re.escape(p['isolation']['execRoot']) + r'/netns/[a-f0-9]{12}', v['target'])]
+    allowed = {str(NS_ALIAS), p['isolation']['dataRoot'], *[v['target'] for v in net]}
+    descendants = [v for v in rows if v['target'].startswith(str(NS_ALIAS) + '/')]
+    need(all(v['target'] in allowed for v in descendants), 'NS_RUNTIME_DESCENDANT')
+    daemon_start = journal.find('DAEMON_START_INTENT') is not None
+    daemon_ready = journal.find('DAEMON_READY') is not None
+    daemon_stopped = journal.find('DAEMON_STOPPED') is not None
+    created = journal.find('RESTORE_CREATE_INTENT') is not None
+    start_intent = journal.find('RESTORE_START_INTENT') is not None
+    started = journal.find('RESTORE_STARTED') is not None
+    remove_intent = journal.find('CONTAINER_REMOVE_INTENT') is not None
+    stop_intent = journal.find('CONTAINER_STOP_INTENT') is not None
+    removed = journal.find('CONTAINER_REMOVED') is not None
+    if not daemon_start:
+        need(not data and not net, 'NS_RUNTIME_EARLY')
+        return {'dataRoot':None, 'network':None}
+    if daemon_stopped:
+        need(not data and not net, 'NS_RUNTIME_STOPPED')
+        return {'dataRoot':None, 'network':None}
+    need((len(data) == 1 if daemon_ready else len(data) in (0,1)), 'NS_RUNTIME_DATA_MOUNT')
+    if not data:
+        need(not net, 'NS_RUNTIME_NET_EARLY')
+        return {'dataRoot':None, 'network':None}
+    need(data[0]['parent'] == alias[0]['id'] and data[0]['device'] == alias[0]['device']
+         and data[0]['source'] == p['mapperPath'] and data[0]['root'] == '/.runtime/docker-data'
+         and data[0]['fstype'] == 'ext4' and set(data[0]['options']) == {'rw','nosuid','nodev','noexec','noatime'}
+         and len(data[0]['optional']) == 1 and re.fullmatch(r'shared:[1-9][0-9]*', data[0]['optional'][0]), 'NS_RUNTIME_DATA_MOUNT')
+    token=data[0]['optional'][0]
+    need(sum(token in v['optional'] for v in rows) == 1, 'NS_RUNTIME_DATA_PEER')
+    ready=journal.find('NAMESPACE_READY')
+    if ready is not None:
+        source_rows=namespace_alias_rows(ready['receipt']['sourceDaemon']['pid'])
+        need(not any(token in v['optional'] for v in source_rows), 'NS_RUNTIME_DATA_PEER')
+    if not created or removed:
+        need(not net, 'NS_RUNTIME_NET_EARLY')
+        return {'dataRoot':data[0], 'network':None}
+    if not start_intent:
+        need(not net, 'NS_RUNTIME_NET_EARLY')
+        return {'dataRoot':data[0], 'network':None}
+    need((len(net) == 1 if started and not remove_intent and not stop_intent else len(net) in (0,1)), 'NS_RUNTIME_NET_MOUNT')
+    if not net:return {'dataRoot':data[0], 'network':None}
+    need(net[0]['parent'] == alias[0]['id'] and net[0]['fstype'] == 'nsfs'
+         and net[0]['source'] == 'nsfs' and re.fullmatch(r'net:\[[1-9][0-9]*\]', net[0]['root'])
+         and net[0]['options'] == ['rw'] and net[0]['superOptions'] == ['rw'] and not net[0]['optional'], 'NS_RUNTIME_NET_MOUNT')
+    inode = int(net[0]['root'][5:-1]); info = Path(net[0]['target']).stat()
+    need(info.st_ino == inode and net[0]['device'] == str(os.major(info.st_dev)) + ':' + str(os.minor(info.st_dev)), 'NS_RUNTIME_NET_IDENTITY')
+    return {'dataRoot':data[0], 'network':net[0]}
+
+
+def namespace_runtime_mounts_empty():
+    rows = namespace_alias_rows()
+    need(not any(v['target'].startswith(str(NS_ALIAS) + '/') for v in rows), 'NS_RUNTIME_CHILDREN_REMAIN')
+
+
 def namespace_running_attestation(p, op, journal):
     isolation = namespace_daemon_identity(p, op); storage = disk_storage_attest(p, journal)
     row = namespace_container_lookup(p); need(row is not None and row['State']['Status'] == 'running', 'NS_CONTAINER_STATE')
@@ -1068,13 +1373,13 @@ def namespace_running_attestation(p, op, journal):
         need(container_bounds[filename]==expected, 'NS_CONTAINER_BOUND')
     cpu = (cg/'cpu.max').read_text().strip().split(); need(len(cpu) == 2 and cpu[0].isdigit() and cpu[1].isdigit() and int(cpu[0]) == int(cpu[1]), 'NS_CONTAINER_CPU')
     mapper = storage['mapper']; device = str(mapper['device']) + ':' + str(mapper['minor'])
-    def mount(pid, target, root):
+    def mount(pid, target, root, no_children=True):
         rows = mountinfo_records(Path('/proc/'+str(pid)+'/mountinfo').read_text())
         match = [v for v in rows if v['target'] == target]
         need(len(match) == 1 and match[0]['device'] == device and match[0]['source'] == p['mapperPath']
              and match[0]['root'] == root and match[0]['fstype'] == 'ext4' and not match[0]['optional']
              and {'rw','nosuid','nodev','noexec'} <= set(match[0]['options'])
-             and not any(v['target'].startswith(target+'/') for v in rows), 'NS_KERNEL_MOUNT')
+             and (not no_children or not any(v['target'].startswith(target+'/') for v in rows)), 'NS_KERNEL_MOUNT')
         return match[0]
     broker = isolation['admission']['supervisor']['process']; daemon = isolation['process']; source = isolation['admission']['sourceDaemon']
     need(os.stat('/proc/self/ns/mnt').st_ino == broker['mountNamespace'] == daemon['mountNamespace']
@@ -1086,15 +1391,31 @@ def namespace_running_attestation(p, op, journal):
     need(len(managed['shims'])==1 and managed['shims'][0]['cmdline'][4]==row['Id'], 'NS_RESTORE_SHIM')
     container_members=[namespace_process(pid,root=False) for pid in namespace_members('/'+p['isolation']['slice']+'/docker-'+row['Id']+'.scope')]
     need(container in container_members and all(v['mountNamespace']==container['mountNamespace'] and v['cgroup']==container['cgroup'] for v in container_members), 'NS_CONTAINER_MEMBERS')
-    kernel = {'containerProcess': container, 'containerBounds':container_bounds, 'containerMembers':container_members, 'brokerMount': mount(broker['pid'], p['mount'], '/'),
+    alias = namespace_alias_attest(p, journal)
+    alias['brokerMount'] = mount(broker['pid'], str(NS_ALIAS), '/', no_children=False)
+    alias['daemonMount'] = mount(daemon['pid'], str(NS_ALIAS), '/', no_children=False)
+    mask = namespace_mask_attest(p, journal)
+    mask['brokerMount'] = mount(broker['pid'], '/run/containerd', '/.runtime/run-containerd')
+    mask['daemonMount'] = mount(daemon['pid'], '/run/containerd', '/.runtime/run-containerd')
+    runtime_mounts = namespace_runtime_mounts(p, journal, mountinfo_records(Path('/proc/'+str(daemon['pid'])+'/mountinfo').read_text()))
+    net = runtime_mounts['network']
+    need(net is not None and row['NetworkSettings']['SandboxKey'] == net['target'], 'NS_CONTAINER_NETWORK_BINDING')
+    network_inode = int(net['root'][5:-1])
+    need(namespace_network(container['pid']) == network_inode
+         and network_inode not in (isolation['admission']['network']['sourceNamespace'], isolation['admission']['network']['supervisorNamespace']),
+         'NS_CONTAINER_NETWORK_NAMESPACE')
+    kernel = {'containerProcess': container, 'containerBounds':container_bounds, 'containerMembers':container_members, 'containerNetworkNamespace':network_inode, 'networkSandboxKey':row['NetworkSettings']['SandboxKey'], 'brokerMount': mount(broker['pid'], p['mount'], '/'),
               'daemonMount': mount(daemon['pid'], p['mount'], '/'),
               'containerMount': mount(container['pid'], '/var/lib/postgresql/data', '/pgdata')}
     projection = disk_container_projection(row); projection['Image'] = row['Image']
     projection['HostConfig'].update(CgroupParent=p['isolation']['slice'], CgroupnsMode='private')
     need(namespace_daemon_identity(p, op) == isolation and namespace_container_lookup(p) == row
          and namespace_process(container['pid'],root=False)==container
-         and [namespace_process(v['pid'],root=False) for v in container_members]==container_members, 'NS_ATTESTATION_DRIFT')
-    return {'storage': storage, 'isolation': isolation, 'kernel': kernel, 'container': projection,
+         and [namespace_process(v['pid'],root=False) for v in container_members]==container_members
+         and namespace_network(container['pid']) == network_inode
+         and namespace_runtime_mounts(p, journal, mountinfo_records(Path('/proc/'+str(daemon['pid'])+'/mountinfo').read_text())) == runtime_mounts,
+         'NS_ATTESTATION_DRIFT')
+    return {'storage': storage, 'alias': alias, 'mask': mask, 'runtimeMounts':runtime_mounts, 'isolation': isolation, 'kernel': kernel, 'container': projection,
             'image': {k:journal.find('IMAGE_LOADED')[k] for k in ['source','imported']}}
 
 
@@ -1232,6 +1553,22 @@ def namespace_slice_terminal(p, journal):
     return value
 
 
+def namespace_startup_drain(stream, captured=None):
+    for _ in range(16):
+        try:chunk = os.read(stream.fileno(), 8192)
+        except BlockingIOError:return
+        if not chunk:return
+        if captured is not None and len(captured) < 65536:captured.extend(chunk[:65536-len(captured)])
+
+
+def namespace_startup_error(p, code, exit_code, captured):
+    need(code in ('NS_DAEMON_START_EXIT','NS_DAEMON_START_UNKNOWN') and (exit_code is None or type(exit_code) is int), 'NS_STARTUP_ERROR')
+    value={'schema':'PHUB_PRIVATE_DAEMON_STARTUP_ERROR_V1','operationSha256':p['operationSha256'],
+           'code':code,'exitCode':exit_code,'stderrByteCount':len(captured),'truncated':len(captured)==65536,
+           'stderrSha256':digest(bytes(captured))}
+    atomic_exclusive(namespace_control(p,'daemon-startup-error.json'),encoded(value))
+
+
 def namespace_supervisor_loop(op, raw, p):
     """PID1-owned actor. Only fixed daemon start/stop, never source DB or DiskJournal."""
     import ctypes
@@ -1244,10 +1581,12 @@ def namespace_supervisor_loop(op, raw, p):
     disk_private_parent(p)
     identity = namespace_supervisor_identity(p, op)
     need(identity['process']['pid'] == os.getpid() and identity['process']['mountNamespace'] != source['mountNamespace'], 'NS_SUPERVISOR_IDENTITY')
+    network = {'sourceNamespace': namespace_network(source['pid']), 'supervisorNamespace': namespace_network(os.getpid())}
+    need(network['sourceNamespace'] != network['supervisorNamespace'], 'NS_SUPERVISOR_NETWORK')
     receipt = {'schema': 'PHUB_TIMEWEB_PRIVATE_NAMESPACE_RECEIPT_V1', 'operationSha256': p['operationSha256'],
-               'toolFileSha256': op['toolFileSha256'], 'sourceDaemon': source, 'supervisor': identity}
+               'toolFileSha256': op['toolFileSha256'], 'sourceDaemon': source, 'supervisor': identity, 'network': network}
     atomic_exclusive(namespace_control(p, 'namespace-receipt.json'), encoded(receipt))
-    daemon = None; stopped = False
+    daemon = None; stopped = False; daemon_stderr = None
     # No inherited stdio/flock, restart, parent-death signal or automatic recovery.
     while True:
         need(read_secure(REQUEST)==raw and namespace_supervisor_identity(p,op)==identity, 'NS_SUPERVISOR_DRIFT')
@@ -1262,10 +1601,17 @@ def namespace_supervisor_loop(op, raw, p):
             for path in [p['isolation']['dataRoot'], p['isolation']['execRoot']]:secure(path, 'dir', 0o700)
             disk_storage_attest(p, DiskJournal(p['work'], p['operationSha256']))
             daemon = subprocess.Popen(['/usr/bin/dockerd', '--config-file', p['isolation']['configFile']],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=ENV, close_fds=True)
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=ENV,
+                cwd=namespace_client_cwd(p), close_fds=True)
+            daemon_stderr = daemon.stderr; os.set_blocking(daemon_stderr.fileno(), False); startup_stderr = bytearray()
             deadline = time.monotonic() + 45
             while True:
-                need(daemon.poll() is None and time.monotonic()<deadline, 'NS_DAEMON_START_UNKNOWN')
+                namespace_startup_drain(daemon_stderr, startup_stderr)
+                if daemon.poll() is not None or time.monotonic() >= deadline:
+                    namespace_startup_drain(daemon_stderr, startup_stderr)
+                    code = 'NS_DAEMON_START_EXIT' if daemon.poll() is not None else 'NS_DAEMON_START_UNKNOWN'
+                    namespace_startup_error(p, code, daemon.poll(), startup_stderr)
+                    raise Stop(code)
                 try:
                     ready=namespace_daemon_identity(p,op); break
                 except (Stop,FileNotFoundError):time.sleep(.2)
@@ -1275,6 +1621,7 @@ def namespace_supervisor_loop(op, raw, p):
                     'planSha256':digest(read_secure(Path(p['work'])/'disk-plan.json')), 'identity':ready}))
         stop = namespace_control(p, 'daemon-stop.json')
         if daemon is not None and not stopped:
+            namespace_startup_drain(daemon_stderr)
             need(daemon.poll() is None, 'NS_DAEMON_DISAPPEARED')
             if stop.exists():
                 request=namespace_control_value(p,'daemon-stop.json','PHUB_PRIVATE_DAEMON_STOP_V1',['process'])
@@ -1667,7 +2014,7 @@ def dump_stream(path, expected_sha):
         os.close(fd)
 
 
-def command(args, code, stdin=None, input_data=None, stdout=subprocess.PIPE, timeout=120, file_limit=None, environment=ENV):
+def command(args, code, stdin=None, input_data=None, stdout=subprocess.PIPE, timeout=120, file_limit=None, environment=ENV, cwd=None):
     need(not (stdin is not None and input_data is not None) and (input_data is None or isinstance(input_data,bytes)), 'COMMAND_INPUT')
     if file_limit is not None:
         need(type(file_limit) is int and 0 < file_limit <= MAX_DUMP, 'DUMP_LIMIT')
@@ -1675,7 +2022,7 @@ def command(args, code, stdin=None, input_data=None, stdout=subprocess.PIPE, tim
         resource.setrlimit(resource.RLIMIT_FSIZE,(file_limit,file_limit))
     try:
         result = subprocess.run(args, stdin=stdin, input=input_data, stdout=stdout, stderr=subprocess.DEVNULL,
-                                env=environment, timeout=timeout, check=False, preexec_fn=limit_output if file_limit else None)
+                                env=environment, cwd=cwd, timeout=timeout, check=False, preexec_fn=limit_output if file_limit else None)
     except (OSError, subprocess.TimeoutExpired):
         raise Stop(code + '_UNCERTAIN') from None
     need(result.returncode == 0, code)
@@ -2414,6 +2761,9 @@ def namespace_initialize(op, request_bytes, file_sha):
     journal = DiskJournal(work, plan['operationSha256'])
     journal.add('PREPARED')
     journal.add('SOURCE_DAEMON', identity=daemon)
+    journal.add('SOURCE_NETWORK', namespace=namespace_network(daemon['pid']))
+    journal.add('ALIAS_BASELINE', identity=namespace_alias_baseline(daemon))
+    journal.add('CONTAINERD_MASK_BASELINE', identity=namespace_mask_baseline(daemon))
     attestation = v2_migration_proof(op, request_bytes, ROOT / 'standard/source')
     journal.add('MIGRATION_ATTESTATION', proof=attestation)
     pending = Path(plan['pendingLock'])
@@ -2453,6 +2803,8 @@ def execute_namespace(op, request_bytes, file_sha):
         guard(); journal.add('DUMP_VERIFIED', dumpSha256=dump_sha)
         disk_create_storage(plan, journal, guard)
         disk_storage_attest(plan, journal)
+        namespace_alias_mount(plan, journal)
+        namespace_mask_mount(plan, journal)
         namespace_daemon_start(plan, op, journal)
         namespace_image_transfer(plan, op, journal)
         journal.add('RESTORE_CREATE_INTENT')
@@ -2531,6 +2883,11 @@ def namespace_cleanup(plan, op, journal, guard):
              and journal.find('IMAGE_LOADED') is not None, 'NS_RESTORE_UNPROVEN')
         if created is None:journal.add('RESTORE_CREATED', containerId=row['Id'])
         else:need(created['containerId'] == row['Id'], 'NS_RESTORE_ID_DRIFT')
+        runtime = namespace_runtime_mounts(plan, journal, namespace_alias_rows())
+        if runtime['network'] is not None:
+            need(row['NetworkSettings']['SandboxKey'] == runtime['network']['target'], 'NS_CONTAINER_NETWORK_BINDING')
+            if row['State']['Pid']:
+                need(namespace_network(row['State']['Pid']) == int(runtime['network']['root'][5:-1]), 'NS_CONTAINER_NETWORK_NAMESPACE')
         guard(row['Id'], cleanup=True)
         if row['State']['Status'] == 'running':
             namespace_running_attestation(plan, op, journal)
@@ -2539,21 +2896,32 @@ def namespace_cleanup(plan, op, journal, guard):
             row = namespace_container_lookup(plan)
             need(row is not None and row['State']['Status'] == 'exited', 'NS_CONTAINER_STOP_UNKNOWN')
         else:need(row['State']['Status'] in ('created', 'exited'), 'NS_RESTORE_STATE')
+        need(namespace_runtime_mounts(plan, journal, namespace_alias_rows())['network'] is None, 'NS_RUNTIME_UNBOUND')
         journal.once('CONTAINER_STOPPED', containerId=row['Id'])
         journal.once('CONTAINER_REMOVE_INTENT', containerId=row['Id'])
         namespace_docker(plan, ['rm', row['Id']], 'NS_CONTAINER_REMOVE')
         need(namespace_container_lookup(plan) is None, 'NS_CONTAINER_REMOVE_UNKNOWN')
+        need(namespace_runtime_mounts(plan, journal, namespace_alias_rows())['network'] is None, 'NS_RUNTIME_UNBOUND')
         journal.once('CONTAINER_REMOVED', containerId=row['Id'])
     elif created is not None:
         need(journal.find('CONTAINER_REMOVE_INTENT') is not None, 'NS_CONTAINER_DISAPPEARED')
+        need(namespace_runtime_mounts(plan, journal, namespace_alias_rows())['network'] is None, 'NS_RUNTIME_UNBOUND')
         journal.once('CONTAINER_REMOVED', containerId=created['containerId'])
+    if journal.find('RESTORE_CREATE_INTENT') is not None and journal.find('RESTORE_CREATED') is None:
+        runtime = namespace_runtime_mounts(plan, journal, namespace_alias_rows())
+        need(runtime['network'] is None, 'NS_RUNTIME_UNBOUND')
     guard(cleanup=True)
     namespace_daemon_stop(plan, op, journal)
+    namespace_runtime_mounts_empty()
+    namespace_mask_unmount(plan, journal)
+    namespace_alias_unmount(plan, journal)
     disk_cleanup_storage(plan, journal, guard, finalize=False)
     journal.once('NAMESPACE_STORAGE_CLEANED')
 
 
 def namespace_terminal(plan, journal):
+    need(journal.find('CONTAINERD_MASK_INTENT') is None or journal.find('CONTAINERD_MASK_UNMOUNTED') is not None, 'NS_TERMINAL_MASK')
+    need(journal.find('ALIAS_MOUNT_INTENT') is None or journal.find('ALIAS_UNMOUNTED') is not None, 'NS_TERMINAL_ALIAS')
     need(journal.find('NAMESPACE_UNIT_START_INTENT') is None or journal.find('NAMESPACE_RELEASED') is not None, 'NS_TERMINAL_UNIT')
     need(journal.find('NAMESPACE_SLICE_START_INTENT') is None or journal.find('NAMESPACE_SLICE_RELEASED') is not None, 'NS_TERMINAL_SLICE')
     need(not os.path.lexists(plan['image']) and not os.path.lexists(plan['mount'])
