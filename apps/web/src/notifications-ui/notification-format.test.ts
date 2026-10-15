@@ -45,6 +45,22 @@ const conversation: ConversationSummary = {
 describe('notification presentation mapping', () => {
   it('maps only observed categories and keeps unknown categories neutral', () => {
     expect(notificationCategory('GAME')).toMatchObject({ filter: 'GAME', categoryLabel: 'Игра' });
+    // The messaging ruleset v3 splits chats by context: both keep the single "Чаты" feed tab, while
+    // the settings screen offers them as separate switches.
+    expect(notificationCategory('CHAT_DIRECT')).toMatchObject({
+      filter: 'MESSAGING',
+      filterLabel: 'Чаты',
+      categoryLabel: 'Личный чат',
+    });
+    expect(notificationCategory('CHAT_GAME')).toMatchObject({
+      filter: 'MESSAGING',
+      filterLabel: 'Чаты',
+      categoryLabel: 'Чат игры',
+    });
+    expect(notificationCategory('MESSAGING')).toMatchObject({
+      filter: 'MESSAGING',
+      categoryLabel: 'Чат',
+    });
     expect(notificationCategory('ADMIN_MESSAGE')).toMatchObject({
       filter: 'SYSTEM',
       categoryLabel: 'Системное',

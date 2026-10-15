@@ -113,6 +113,29 @@ const notificationPreferences: NotificationPreferencesView = {
   ],
 };
 
+/**
+ * Preferences of a tenant that re-provisioned the messaging ruleset v3: chats arrive under two
+ * context categories instead of the aggregated `MESSAGING` one.
+ */
+const chatContextPreferences: NotificationPreferencesView = {
+  categories: [
+    {
+      category: 'CHAT_DIRECT',
+      channels: [
+        { channel: 'IN_APP', enabled: true, timezone: 'Europe/Moscow', available: true },
+        { channel: 'PUSH', enabled: true, timezone: 'Europe/Moscow', available: true },
+      ],
+    },
+    {
+      category: 'CHAT_GAME',
+      channels: [
+        { channel: 'IN_APP', enabled: true, timezone: 'Europe/Moscow', available: true },
+        { channel: 'PUSH', enabled: true, timezone: 'Europe/Moscow', available: true },
+      ],
+    },
+  ],
+};
+
 const defaultProps = {
   page: { unreadCount: 2, items },
   webPush: { enabled: true, publicKey: 'public-vapid-key-value' },
@@ -441,6 +464,46 @@ describe('NotificationsPage settings', () => {
       enabled: false,
     });
     expect(messaging?.channels.find((channel) => channel.channel === 'IN_APP')).toMatchObject({
+      enabled: true,
+    });
+  });
+
+  it('shows one switch per chat context and applies only the toggled one', () => {
+    const onSavePreferences = vi.fn();
+    render(
+      <NotificationsPage
+        {...defaultProps}
+        onSavePreferences={onSavePreferences}
+        preferences={chatContextPreferences}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Настройки уведомлений' }));
+
+    // The ruleset v3 categories are distinct rows, so muting a loud game chat keeps private
+    // messages switchable on their own.
+    fireEvent.click(screen.getByRole('switch', { name: 'Чаты игр: push-уведомления' }));
+
+    expect(onSavePreferences).toHaveBeenCalledTimes(1);
+    const update = onSavePreferences.mock.calls[0]?.[0] as {
+      readonly categories: readonly {
+        readonly category: string;
+        readonly channels: readonly {
+          readonly channel: string;
+          readonly enabled: boolean;
+          readonly quietFrom?: string;
+        }[];
+      }[];
+    };
+    const game = update.categories.find((category) => category.category === 'CHAT_GAME');
+    const direct = update.categories.find((category) => category.category === 'CHAT_DIRECT');
+    expect(game?.channels.find((channel) => channel.channel === 'PUSH')).toMatchObject({
+      enabled: false,
+    });
+    expect(game?.channels.find((channel) => channel.channel === 'IN_APP')).toMatchObject({
+      enabled: true,
+    });
+    expect(direct?.channels.find((channel) => channel.channel === 'PUSH')).toMatchObject({
       enabled: true,
     });
   });

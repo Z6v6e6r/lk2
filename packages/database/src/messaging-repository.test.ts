@@ -1006,7 +1006,19 @@ describe('messaging repository', () => {
         return Promise.resolve({ rows: [], rowCount: 1 });
       }
       if (text.includes('select next_sequence')) {
-        return Promise.resolve({ rows: [{ next_sequence: '1' }], rowCount: 1 });
+        return Promise.resolve({
+          rows: [{ next_sequence: '1', kind: 'DIRECT', context_id: null }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('select left_user_id, right_user_id')) {
+        return Promise.resolve({
+          rows: [{ left_user_id: userId, right_user_id: otherUserId }],
+          rowCount: 1,
+        });
+      }
+      if (text.includes('as reachable')) {
+        return Promise.resolve({ rows: [{ reachable: true }], rowCount: 1 });
       }
       if (text.includes('insert into messaging.messages')) {
         return Promise.resolve({ rows: [{ id: messageId }], rowCount: 1 });
@@ -1073,6 +1085,8 @@ describe('messaging repository', () => {
     expect(JSON.stringify(outboxCall?.[1])).toContain(messageId);
     expect(JSON.parse(String(outboxCall?.[1]?.[3]))).toMatchObject({
       conversationId,
+      // The notification ruleset routes the fact into the per-context chat category from this field.
+      conversationKind: 'DIRECT',
       messageId,
       recipientUserIds: [otherUserId],
     });

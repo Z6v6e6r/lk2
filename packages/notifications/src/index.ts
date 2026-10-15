@@ -163,19 +163,24 @@ export const GAME_NOTIFICATION_DEFINITIONS = GAME_NOTIFICATION_CANONICAL_CONTRAC
 export type GameNotificationDefinition = (typeof GAME_NOTIFICATION_DEFINITIONS)[number];
 
 /**
- * Direct-chat notification ruleset. Messaging events stay on the generic source-event schema: ADR
- * 0022 keeps their payload identifier-only (tenant, conversation, message, sequence and recipient
+ * Chat notification ruleset. Messaging events stay on the generic source-event schema: ADR 0022
+ * keeps their payload identifier-only (tenant, conversation, message, sequence and recipient
  * identifiers), so the projector resolves recipients from `recipientUserIds` instead of a dedicated
- * payload contract, and the rendered text never quotes message content. Direct messages are the one
- * conversation a person can be pulled back into, so the ruleset asks for both channels; the version
- * moves to `messaging.ru-ru.v2` because a provisioned template version can never change its channels.
+ * payload contract, and the rendered text never quotes message content.
+ *
+ * One conversation kind is one user-visible category, because a player who mutes a loud game chat
+ * must still receive a person writing privately. Rules therefore carry a payload match on the
+ * conversation kind, and every definition names the category its template belongs to: preferences,
+ * the settings screen and the configurable-category query are all derived from the active rules, so
+ * a per-context switch exists exactly while its rule exists. `messaging.ru-ru.v3` retires the single
+ * `MESSAGING` category of v2 and moves the template version with it, because a provisioned template
+ * version can never change its category or channels.
  */
 export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
-  rulesetVersion: 'messaging.ru-ru.v2',
+  rulesetVersion: 'messaging.ru-ru.v3',
   template: {
-    version: 2,
+    version: 3,
     locale: 'ru-RU',
-    category: 'MESSAGING',
     deepLink: '/chats/{{conversationId}}',
     channels: ['IN_APP', 'PUSH'],
     active: true,
@@ -187,24 +192,54 @@ export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
   },
   definitions: [
     {
-      key: 'messaging.conversation.created',
+      key: 'messaging.direct.conversation.created',
       sourceEventType: 'messaging.conversation.created.v1',
+      category: 'CHAT_DIRECT',
       title: 'Новый чат',
       body: 'Откройте чат в ПадлХАБ, чтобы ответить.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
+        match: { field: 'kind', oneOf: ['DIRECT'] },
       },
       mandatory: false,
     },
     {
-      key: 'messaging.message.created',
+      key: 'messaging.game.conversation.created',
+      sourceEventType: 'messaging.conversation.created.v1',
+      category: 'CHAT_GAME',
+      title: 'Новый чат',
+      body: 'Откройте чат в ПадлХАБ, чтобы ответить.',
+      audienceSelector: {
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+        match: { field: 'kind', oneOf: ['GAME'] },
+      },
+      mandatory: false,
+    },
+    {
+      key: 'messaging.direct.message.created',
       sourceEventType: 'messaging.message.created.v1',
+      category: 'CHAT_DIRECT',
       title: 'Новое сообщение',
       body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
+        match: { field: 'conversationKind', oneOf: ['DIRECT'] },
+      },
+      mandatory: false,
+    },
+    {
+      key: 'messaging.game.message.created',
+      sourceEventType: 'messaging.message.created.v1',
+      category: 'CHAT_GAME',
+      title: 'Новое сообщение',
+      body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+      audienceSelector: {
+        type: 'EVENT_USERS',
+        field: 'recipientUserIds',
+        match: { field: 'conversationKind', oneOf: ['GAME'] },
       },
       mandatory: false,
     },
@@ -217,8 +252,17 @@ export const MESSAGING_NOTIFICATION_TEMPLATE_VERSION =
   MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.version;
 export const MESSAGING_NOTIFICATION_LOCALE =
   MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.locale;
-export const MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY =
-  MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.category;
+export type MessagingNotificationCategory =
+  (typeof MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.definitions)[number]['category'];
+/**
+ * The chat categories this ruleset owns. Provisioning retires any other active `messaging.*`
+ * artifact, so this list is also the exact set of per-context switches the settings screen offers.
+ */
+export const MESSAGING_NOTIFICATION_CATEGORIES: readonly MessagingNotificationCategory[] = [
+  ...new Set(
+    MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.definitions.map((definition) => definition.category),
+  ),
+];
 export const MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK =
   MESSAGING_NOTIFICATION_CANONICAL_CONTRACT.template.deepLink;
 export const MESSAGING_NOTIFICATION_TEMPLATE_CHANNELS =
@@ -524,27 +568,52 @@ export const notificationSourceEventSchema = z.union([
 
 export type NotificationSourceEvent = z.infer<typeof notificationSourceEventSchema>;
 
+/**
+ * Optional payload predicate of an audience selector. A rule that names a `match` applies only while
+ * the event payload carries one of the listed string values at `field` (a dotted path is allowed, so
+ * a nested fact can be read without a dedicated payload contract). A missing or unknown value fails
+ * closed: the selector resolves no recipients, the projector skips the rule, and no notification can
+ * reach a context the rule was not configured for. Rules without `match` keep their previous
+ * behaviour, which is why adding this field is backward compatible for already provisioned tenants.
+ */
+export const notificationAudienceMatchSchema = z
+  .object({
+    field: z.string().regex(/^[A-Za-z][A-Za-z0-9_.]{0,127}$/),
+    oneOf: z.array(z.string().min(1).max(64)).min(1).max(16),
+  })
+  .strict();
+
+export type NotificationAudienceMatch = z.infer<typeof notificationAudienceMatchSchema>;
+
 export const notificationAudienceSelectorSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('EVENT_USER'),
       field: z.enum(['userId', 'recipientUserId']),
+      match: notificationAudienceMatchSchema.optional(),
     })
     .strict(),
   z
     .object({
       type: z.literal('EVENT_USERS'),
       field: z.enum(['recipientUserIds', 'participantUserIds']),
+      match: notificationAudienceMatchSchema.optional(),
     })
     .strict(),
 ]);
 
 export type NotificationAudienceSelector = z.infer<typeof notificationAudienceSelectorSchema>;
 
+function payloadMatches(event: NotificationSourceEvent, match: NotificationAudienceMatch): boolean {
+  const value = valueAtPath(event.payload, match.field);
+  return typeof value === 'string' && match.oneOf.includes(value);
+}
+
 export function resolveNotificationRecipients(
   event: NotificationSourceEvent,
   selector: NotificationAudienceSelector,
 ): readonly string[] {
+  if (selector.match && !payloadMatches(event, selector.match)) return [];
   const recipient = (event.payload as Readonly<Record<string, unknown>>)[selector.field];
   if (selector.type === 'EVENT_USER') {
     return typeof recipient === 'string' && uuid.safeParse(recipient).success ? [recipient] : [];

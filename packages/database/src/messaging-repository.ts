@@ -2092,6 +2092,10 @@ export function createMessagingRepository(pool: Pool): MessagingRepository {
               input.correlationId,
               JSON.stringify({
                 conversationId: input.conversationId,
+                // The conversation kind is an identifier, not content: the notification ruleset uses
+                // it to route the message into the per-context category a recipient can switch off,
+                // and the payload still carries no message text.
+                conversationKind: locked.kind,
                 messageId: inserted.id,
                 sequence: allocatedSequence,
                 recipientUserIds: recipients,
