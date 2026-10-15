@@ -870,3 +870,9 @@
     font-size: 14px;
   }
 }
+
+.profile-page--v2 .profile-subscriptions-note {
+  margin: 0 0 10px;
+  color: #536078;
+  font-size: 12px;
+}
