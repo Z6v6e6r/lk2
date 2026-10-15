@@ -30,8 +30,10 @@ tags:
   - name: realtime
     description: Short-lived one-time tickets for the PadlHub WebSocket gateway.
   - name: subscriptions
-    description: Non-binding WARN-only subscription-runtime checks through a server-owned actor delegation.
+    description: Self-only current product reads and non-binding WARN-only runtime checks.
 paths:
+  /{tenantKey}/subscriptions:
+    $ref: ./self-subscriptions.yaml#/path
   /{tenantKey}/booked-operation-admissions:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -6982,6 +6984,8 @@ components:
             $ref: '#/components/schemas/HomeAdditionalLink'
         capabilities:
           $ref: '#/components/schemas/HomeCapabilities'
+    SubscriptionSelfPage:
+      $ref: ./self-subscriptions.yaml#/schemas/Page
     HomeBase:
       type: object
       additionalProperties: false

@@ -191,6 +191,80 @@ describe('Viva Home source adapter', () => {
   });
 });
 
+describe('Viva Home subscription response validity', () => {
+  const subscription = {
+    subscriptionId: '44444444-4444-4444-8444-444444444444',
+    type: 'GROUP',
+    status: 'ACTIVE',
+    variant: 'BY_UNITS',
+    visitsLeft: 4,
+    availableMinutes: 0,
+    availableDays: 0,
+  };
+
+  function source(page: unknown) {
+    const metrics: string[] = [];
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(profile()))
+      .mockResolvedValueOnce(Response.json({ content: [] }))
+      .mockResolvedValueOnce(Response.json(page));
+    const adapter = new VivaHomeSourceAdapter({
+      mode: 'sandbox',
+      apiBaseUrl: 'https://api.vivacrm.invalid/end-user/api',
+      tenantKey: 'tenant-key',
+      timeoutMs: 100,
+      fetchImplementation,
+      onMetric: (metric) => metrics.push(`${metric.operation}:${metric.outcome}`),
+    });
+    return { adapter, fetchImplementation, metrics };
+  }
+
+  it('rejects a missing subscription page instead of returning an empty snapshot', async () => {
+    const { adapter, fetchImplementation, metrics } = source({});
+    await expect(adapter.read(access)).rejects.toMatchObject({
+      code: 'EXTERNAL_SOURCE_RESPONSE_INVALID',
+      retryable: false,
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    expect(metrics).toContain('subscriptions:failure');
+    expect(metrics).not.toContain('subscriptions:retry');
+  });
+
+  it.each([null, undefined])(
+    'rejects unknown BY_UNITS balance %s instead of zero',
+    async (unitsLeft) => {
+      const { adapter, fetchImplementation } = source({
+        content: [{ ...subscription, unitsLeft }],
+      });
+      await expect(adapter.read(access)).rejects.toMatchObject({
+        code: 'EXTERNAL_SOURCE_RESPONSE_INVALID',
+        retryable: false,
+      });
+      expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it('keeps null unitsLeft valid for BY_VISITS subscriptions', async () => {
+    const { adapter } = source({
+      content: [{ ...subscription, variant: 'BY_VISITS', unitsLeft: null }],
+    });
+    await expect(adapter.read(access)).resolves.toMatchObject({
+      subscriptions: [{ remainingUnits: 4 }],
+    });
+  });
+
+  it.each([0, 3.9])(
+    'preserves known BY_UNITS balance %s and existing rounding',
+    async (unitsLeft) => {
+      const { adapter } = source({ content: [{ ...subscription, unitsLeft }] });
+      await expect(adapter.read(access)).resolves.toMatchObject({
+        subscriptions: [{ remainingUnits: Math.floor(unitsLeft) }],
+      });
+    },
+  );
+});
+
 describe('CUP viewer phone normalization', () => {
   const cases: readonly (readonly [string, string | null, string | undefined])[] = [
     ['country code with plus', '+7 910 430-31-90', '+79104303190'],
