@@ -155,7 +155,7 @@ describe('Timeweb backup/isolated restore preparation', () => {
         import assert from 'node:assert/strict';
         import { createHash } from 'node:crypto';
         import fs from 'node:fs';
-        import { readdirSync, readFileSync } from 'node:fs';
+        import { readFileSync } from 'node:fs';
         import {syncBuiltinESMExports} from 'node:module';
         const original=fs.lstatSync;
         fs.lstatSync=(path)=>{const value=original(path);return Object.assign(Object.create(Object.getPrototypeOf(value)),value,{uid:0,gid:0,mode:(value.mode & ~0o777)|(value.isDirectory()?0o700:0o600)});};
@@ -165,7 +165,7 @@ describe('Timeweb backup/isolated restore preparation', () => {
         const transaction=process.argv[1], candidate=process.argv[2], baseline=process.argv[3];
         const receiptPath=transaction+'/database-backup-receipt.json', bytes=fs.readFileSync(receiptPath), receipt=JSON.parse(bytes);
         const hash=(v)=>createHash('sha256').update(v).digest('hex');
-        const packaged=readdirSync('packages/database/migrations').filter(v=>v.endsWith('.sql')).sort().map(filename=>({filename,checksum:hash(readFileSync('packages/database/migrations/'+filename))}));
+        const packaged=JSON.parse(readFileSync('scripts/fixtures/timeweb-api-worker-ledger-11954ffd.json','utf8')).ledger;
         assert.equal(validateUpgradeBackup(transaction,{releaseId:baseline}).path,receiptPath);
         validateApiWorkerBackupLedger(receipt,packaged);
         for(const [key,value] of [['sourceLedgerSha256','f'.repeat(64)],['restoredLedgerSha256','f'.repeat(64)],['restoreImage','postgres:latest']]) {
