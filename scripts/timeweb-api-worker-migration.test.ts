@@ -2,10 +2,12 @@ import { spawnSync } from 'node:child_process';
 import { parseStrictJson } from './strict-json.js';
 import {
   validateApiWorkerControllerDelta,
+  validateApiWorkerLedger,
   parseApiWorkerControllerDiff,
   type ApiWorkerControllerDiffEntry,
 } from './timeweb-api-worker-upgrade.js';
 import { readFileSync, readdirSync } from 'node:fs';
+import { ledger as frozenLedger } from './timeweb-api-worker.fixture.js';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
@@ -222,14 +224,22 @@ function diskFixture() {
   return { expected, operation, operationBytes, plan, row, value, hostMount, containerMount };
 }
 describe('closed migration custody validators', () => {
-  it('accepts exact packaged ledgers and rejects partial, reordered, altered and extra rows', () => {
-    const rows = readdirSync('packages/database/migrations')
-      .filter((v) => v.endsWith('.sql'))
+  it('rejects the current migration directory for the frozen API/Worker release', () => {
+    const currentPackage = readdirSync('packages/database/migrations')
+      .filter((filename) => filename.endsWith('.sql'))
       .sort()
       .map((filename) => ({
         filename,
         checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
       }));
+    expect(currentPackage.length).toBeGreaterThan(frozenLedger.length);
+    expect(currentPackage.some((row) => row.filename === '0098_support_tickets.sql')).toBe(true);
+    expect(() => validateApiWorkerLedger(currentPackage, currentPackage)).toThrow(
+      'API_WORKER_LEDGER',
+    );
+  });
+  it('accepts exact packaged ledgers and rejects partial, reordered, altered and extra rows', () => {
+    const rows = frozenLedger;
     expect(validateApiWorkerMigrationLedger(rows.slice(0, 99), b.preLedgerSha256)).toBe(
       b.preLedgerSha256,
     );
