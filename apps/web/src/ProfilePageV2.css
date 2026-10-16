@@ -481,12 +481,81 @@
 }
 
 .profile-page--v2 .profile-subscriptions > header {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.profile-page--v2 .profile-subscriptions > header > .profile-inline-icon,
+.profile-page--v2 .profile-subscriptions > header > h2 {
   position: absolute;
   width: 1px;
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
-  white-space: nowrap;
+}
+
+.profile-subscriptions-more {
+  min-height: 44px;
+  padding: 8px 0 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--profile-v2-accent-ink, #14182f);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.profile-subscriptions-more span {
+  margin-left: 6px;
+}
+
+.profile-subscriptions-more:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.profile-active-subscriptions > ul {
+  display: grid;
+  gap: 12px;
+  margin: 16px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.profile-active-subscriptions li {
+  padding: 16px;
+  border: 1px solid #e3e9ef;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.profile-active-subscriptions h3 {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.profile-active-subscriptions p {
+  margin: 6px 0;
+}
+.profile-active-subscriptions > button {
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid #dce3ee;
+  border-radius: 22px;
+  background: #fff;
+  color: var(--profile-v2-accent-ink, #14182f);
+  font: inherit;
+}
+
+.profile-page--v2 .profile-subscriptions-all {
+  width: 100%;
+  border: 0;
+}
+
+.profile-page--v2 .profile-subscriptions-all:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .profile-page--v2 .profile-subscription-list {
@@ -517,7 +586,9 @@
   scroll-snap-align: start;
 }
 
-.profile-page--v2 article[data-plan='дружба'] {
+.profile-page--v2 article[data-plan='дружба'],
+.profile-page--v2 article[data-plan='дружба 2.0'],
+.profile-page--v2 article[data-plan='дружба2.0'] {
   --profile-subscription-ink: #14182f;
   background-image: url('./assets/subscriptions/friendship-background.png');
 }
@@ -575,7 +646,8 @@
   flex: 0 0 auto;
 }
 
-.profile-page--v2 .profile-subscription-copy .profile-subscription-badge {
+.profile-page--v2 .profile-subscription-copy .profile-subscription-badge,
+.profile-page--v2 .profile-active-subscriptions .profile-subscription-badge {
   position: relative;
   display: block;
   width: min(100%, calc(36px * var(--profile-badge-ratio)));
@@ -671,7 +743,7 @@
   place-items: center;
   border-radius: 25px;
   color: #fff;
-  background: var(--profile-v2-accent-ink);
+  background: #171717;
   font-family: var(--profile-v2-font-heading);
   font-size: 16px;
   font-weight: 600;
@@ -869,10 +941,4 @@
   .profile-page--v2 .profile-settings-overview strong {
     font-size: 14px;
   }
-}
-
-.profile-page--v2 .profile-subscriptions-note {
-  margin: 0 0 10px;
-  color: #536078;
-  font-size: 12px;
 }

@@ -6,6 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProfilePage } from './ProfilePage.js';
+import type { ActiveSubscriptions } from './active-subscriptions.js';
 import friendshipArtwork from './assets/subscriptions/friendship-badge.png';
 import raArtwork from './assets/subscriptions/ra-badge.png';
 import academyArtwork from './assets/subscriptions/academy-badge.png';
@@ -77,7 +78,8 @@ describe('ProfilePage', () => {
     );
     const card = screen.getByRole('region', { name: 'Подписки и абонементы' });
     expect(within(card).getByRole('img', { name: title })).toHaveAttribute('src', artwork);
-    expect(within(card).getByText(/Остаток: 8 · единица не указана/)).toBeVisible();
+    expect(within(card).getByText('Срок действия не указан')).toBeVisible();
+    expect(within(card).queryByText(/Остаток/)).not.toBeInTheDocument();
     expect(within(card).getByText('активна')).toBeVisible();
     expect(within(card).getByRole('link', { name: `Открыть подписку: ${title}` })).toHaveAttribute(
       'href',
@@ -109,7 +111,7 @@ describe('ProfilePage', () => {
       const card = screen.getByRole('region', { name: 'Подписки и абонементы' });
       expect(within(card).queryByRole('img')).not.toBeInTheDocument();
       expect(within(card).getByText(title)).toBeVisible();
-      expect(within(card).getByText(/Остаток: 8 · единица не указана/)).toBeVisible();
+      expect(within(card).getByText('Срок действия не указан · Остаток: 8')).toBeVisible();
     },
   );
 
@@ -131,13 +133,154 @@ describe('ProfilePage', () => {
         ]}
       />,
     );
-    expect(screen.getByText('Остаток не подтверждён · срок не указан')).toBeVisible();
+    expect(screen.getByText('Срок действия не указан')).toBeVisible();
+    expect(screen.queryByText(/Остаток/)).not.toBeInTheDocument();
     expect(screen.queryByText(/закончились|посещений/)).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Мои абонементы' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Купить подписку' })).toHaveAttribute(
       'href',
-      '/subscriptions',
+      'https://padlhub.ru/sub_hab',
     );
-    expect(screen.getByText('Неполная подборка с Главной: до 6 абонементов.')).toBeVisible();
+    expect(screen.queryByText(/Неполная подборка с Главной/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Все подписки' })).toBeVisible();
+  });
+
+  it('keeps the external purchase unavailable on clients that disable subscription purchases', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('C+')}
+        logoutBusy={false}
+        onLogout={() => undefined}
+        subscriptionRenewalAvailable={false}
+      />,
+    );
+    expect(screen.queryByRole('link', { name: 'Купить подписку' })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Купить подписку — пока недоступно' }),
+    ).toBeDisabled();
+  });
+
+  it.each(['Дружба', 'РА', 'Академия', 'Дружба 2.0', '  Дружба   2.0 '])(
+    'shows only validity for %s',
+    (title) => {
+      render(
+        <ProfilePage
+          profile={selfProfile('C+')}
+          logoutBusy={false}
+          onLogout={() => undefined}
+          subscriptions={[
+            {
+              id: '11111111-1111-4111-8111-111111111111',
+              title,
+              status: 'active',
+              remainingUnits: 8,
+              validUntil: '2026-12-31T00:00:00Z',
+              route: '/subscriptions/11111111-1111-4111-8111-111111111111',
+            },
+          ]}
+        />,
+      );
+      expect(screen.getByText(/Действует до 31 дек. 2026 г./)).toBeVisible();
+      expect(screen.queryByText(/Остаток|посещений|не подтверждён/)).not.toBeInTheDocument();
+    },
+  );
+
+  const fullList: ActiveSubscriptions = {
+    snapshot: {
+      id: '00000000-0000-4000-8000-000000000001',
+      asOf: '2026-10-16T09:00:00Z',
+      staleAt: '2026-10-16T10:00:00Z',
+    },
+    freshness: 'FRESH',
+    items: Array.from({ length: 8 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      title: index === 0 ? 'Дружба' : `Абонемент ${index + 1}`,
+      kind: 'INDIVIDUAL',
+      status: 'ACTIVE',
+      remaining: { amount: 8, unit: 'VISITS' },
+      validUntil: '2026-12-31T00:00:00Z',
+    })),
+  };
+  it('opens all active products beyond the Home selection, then restores keyboard focus', async () => {
+    const load = vi.fn().mockResolvedValue(fullList);
+    render(
+      <ProfilePage
+        profile={selfProfile('C+')}
+        logoutBusy={false}
+        onLogout={() => undefined}
+        subscriptions={[]}
+        loadActiveSubscriptions={load}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Все подписки' });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Все подписки' });
+    expect(await within(dialog).findByRole('heading', { name: 'Абонемент 8' })).toBeVisible();
+    expect(within(dialog).getAllByRole('listitem')).toHaveLength(8);
+    expect(within(dialog).getAllByText('Посещений осталось: 8')).toHaveLength(7);
+    expect(load).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+  it('keeps a failed full read distinct from empty, with explicit retry and no Home fallback', async () => {
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('503'))
+      .mockResolvedValueOnce({ ...fullList, items: [] });
+    render(
+      <ProfilePage
+        profile={selfProfile('C+')}
+        logoutBusy={false}
+        onLogout={() => undefined}
+        subscriptions={[]}
+        loadActiveSubscriptions={load}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Все подписки' }));
+    const dialog = screen.getByRole('dialog', { name: 'Все подписки' });
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'Не удалось загрузить все подписки',
+    );
+    expect(
+      within(dialog).queryByText('Активных подписок и абонементов пока нет.'),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Обновить список' }));
+    expect(
+      await within(dialog).findByText('Активных подписок и абонементов пока нет.'),
+    ).toBeVisible();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+  it('discards a closed read and exposes unavailable instead of a synthetic empty list', async () => {
+    let resolve!: (data: ActiveSubscriptions) => void;
+    const load = () =>
+      new Promise<ActiveSubscriptions>((yes) => {
+        resolve = yes;
+      });
+    const view = render(
+      <ProfilePage
+        profile={selfProfile('C+')}
+        logoutBusy={false}
+        onLogout={() => undefined}
+        loadActiveSubscriptions={load}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Все подписки' }));
+    expect(screen.getByText('Загружаем все активные подписки и абонементы…')).toBeVisible();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await act(async () => {
+      resolve(fullList);
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('Абонемент 8')).not.toBeInTheDocument();
+    view.rerender(
+      <ProfilePage profile={selfProfile('C+')} logoutBusy={false} onLogout={() => undefined} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Все подписки' }));
+    expect(await within(screen.getByRole('dialog')).findByRole('alert')).toBeVisible();
   });
 
   it('opens recommendation preferences from the Home deep link', () => {
@@ -315,9 +458,9 @@ describe('ProfilePage', () => {
     );
     expect(screen.getByRole('button', { name: 'О себе — пока недоступно' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Достижения — пока недоступно' })).toBeDisabled();
-    expect(screen.getByRole('link', { name: 'Мои абонементы' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Купить подписку' })).toHaveAttribute(
       'href',
-      '/subscriptions',
+      'https://padlhub.ru/sub_hab',
     );
   });
 

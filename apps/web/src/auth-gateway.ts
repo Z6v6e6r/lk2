@@ -1,3 +1,5 @@
+import { readActiveSubscriptions } from './active-subscriptions.js';
+import type { ActiveSubscriptions } from './active-subscriptions.js';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession as ApiAuthenticatedSession,
@@ -539,6 +541,7 @@ export interface AuthGateway {
   readonly continueEventCatalog: (cursor: string, limit?: number) => Promise<EventCatalogPage>;
   readonly getHomeBase: () => Promise<HomeBase>;
   readonly getHomeDashboard: () => Promise<HomeDashboard>;
+  readonly getActiveSubscriptions?: (expectedUserId: string) => Promise<ActiveSubscriptions>;
   readonly getPublicGiftCertificateCatalog: () => Promise<PublicGiftCertificateCatalog>;
   readonly createPublicGiftCertificateOrder: (
     input: CreateGiftCertificateOrderRequest,
@@ -965,6 +968,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let selfProfileExpiresAt = 0;
   let currentUserId: string | undefined;
   let currentTenantId: string | undefined;
+  let subscriptionReadToken: string | undefined;
   let principalGeneration = 0;
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
@@ -1234,6 +1238,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       homeDashboardPromise = undefined;
       principalGeneration += 1;
     }
+    subscriptionReadToken = session.accessToken;
     currentUserId = session.context.userId;
     currentTenantId = session.context.tenantId;
     return { context: normalizeContext(session.context, options.tenantKey) };
@@ -1816,6 +1821,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return session;
     } catch (error) {
       client.clearAccessToken();
+      subscriptionReadToken = undefined;
       if (isUnauthorized(error)) return null;
       throw error;
     }
@@ -2144,6 +2150,43 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         });
       homeBasePromise = request;
       return request;
+    },
+
+    getActiveSubscriptions(expectedUserId) {
+      const generation = principalGeneration;
+      const userId = currentUserId;
+      const tenantId = currentTenantId;
+      if (!subscriptionReadToken || !userId || userId !== expectedUserId) {
+        return Promise.reject(new Error('AUTH_PRINCIPAL_CHANGED'));
+      }
+      // Isolate this read from private refreshes on the shared SDK client. The token
+      // belongs only to a session normalized by this gateway; cookies are never sent.
+      const reader = new PadlHubApiClient({
+        ...clientOptions,
+        sessionMode: 'memory',
+        initialAccessToken: subscriptionReadToken,
+      });
+      return readActiveSubscriptions(async (path) => {
+        if (
+          generation !== principalGeneration ||
+          userId !== currentUserId ||
+          tenantId !== currentTenantId
+        ) {
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        }
+        const page = await reader.request<unknown>(path, {
+          cache: 'no-store',
+          retryOnUnauthorized: false,
+        });
+        if (
+          generation !== principalGeneration ||
+          userId !== currentUserId ||
+          tenantId !== currentTenantId
+        ) {
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        }
+        return page;
+      });
     },
 
     getHomeDashboard() {
@@ -2751,6 +2794,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     async logout() {
+      subscriptionReadToken = undefined;
       if (nativeClient) {
         // Invalidate account reads before waiting for native revocation/recovery.
         principalGeneration += 1;

@@ -19,6 +19,12 @@ import { ParticipantAvatarStack } from './ParticipantAvatarStack.js';
 import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 import { ProfilePackIcon } from './ProfilePackIcon.js';
 import { ProfileSportIcon } from './ProfileSportIcon.js';
+import {
+  subscriptionIsValidityOnly,
+  subscriptionValidity,
+  subscriptionRemaining,
+} from './active-subscriptions.js';
+import type { ActiveSubscriptions } from './active-subscriptions.js';
 import './ProfilePageV2.css';
 import { formatBalance, UNKNOWN_VALUE_PLACEHOLDER } from './profile-field-format.js';
 import { QR_QUIET_ZONE_MODULES, qrCodePath, tryCreateQrCode } from './qr-code.js';
@@ -62,6 +68,7 @@ interface ProfilePageProps {
   readonly stationChoices?: readonly { readonly id: string; readonly name: string }[];
   readonly subscriptions?: HomeDashboard['subscriptions'] | null;
   readonly subscriptionsError?: string | null;
+  readonly loadActiveSubscriptions?: () => Promise<ActiveSubscriptions>;
   readonly communities?: CommunityMembershipPage | null;
   readonly communitiesError?: string | null;
   readonly loadCommunityPage?: (cursor?: string) => Promise<CommunityMembershipPage>;
@@ -1318,15 +1325,6 @@ function IndependentSportProfileContent({
   );
 }
 
-function subscriptionDate(value: string | null): string | null {
-  if (!value) return null;
-  return new Intl.DateTimeFormat('ru-RU', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  }).format(new Date(value));
-}
-
 // User-supplied plan badges. Exact display titles select artwork only, never entitlements.
 // Viewports exclude transparent canvas padding; the original PNG pixel streams are unchanged.
 type SubscriptionBadge = {
@@ -1336,6 +1334,8 @@ type SubscriptionBadge = {
 
 const subscriptionPlanArtwork = new Map<string, SubscriptionBadge>([
   ['дружба', { src: friendshipArtwork, viewport: [124, 164, 1924, 385] }],
+  ['дружба 2.0', { src: friendshipArtwork, viewport: [124, 164, 1924, 385] }],
+  ['дружба2.0', { src: friendshipArtwork, viewport: [124, 164, 1924, 385] }],
   ['ра', { src: raArtwork, viewport: [532, 189, 1106, 344] }],
   ['академия', { src: academyArtwork, viewport: [124, 195, 1924, 325] }],
   ['энергия', { src: energyArtwork, viewport: [118, 191, 1937, 322] }],
@@ -1361,11 +1361,14 @@ function ProfileSubscriptions({
   subscriptions,
   error,
   renewalAvailable = true,
+  loadActiveSubscriptions,
 }: {
   readonly subscriptions?: HomeDashboard['subscriptions'] | null;
   readonly error?: string | null;
   readonly renewalAvailable?: boolean;
+  readonly loadActiveSubscriptions?: () => Promise<ActiveSubscriptions>;
 }): React.JSX.Element {
+  const [allOpen, setAllOpen] = useState(false);
   const current =
     subscriptions
       ?.filter((subscription) => ['active', 'scheduled', 'paused'].includes(subscription.status))
@@ -1378,9 +1381,16 @@ function ProfileSubscriptions({
           <ProfileIcon name="subscriptions" />
         </span>
         <h2 id="profile-subscriptions-title">Подписки и абонементы</h2>
+        <button
+          className="profile-subscriptions-more"
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={allOpen}
+          onClick={() => setAllOpen(true)}
+        >
+          Все подписки <span aria-hidden="true">›</span>
+        </button>
       </header>
-
-      <p className="profile-subscriptions-note">Неполная подборка с Главной: до 6 абонементов.</p>
       {error ? (
         <p role="alert">{error}</p>
       ) : !subscriptions ? (
@@ -1390,7 +1400,6 @@ function ProfileSubscriptions({
       ) : (
         <div className="profile-subscription-list">
           {current.map((subscription) => {
-            const validUntil = subscriptionDate(subscription.validUntil);
             const artwork = subscriptionPlanArtwork.get(
               subscription.title.trim().toLocaleLowerCase('ru-RU'),
             );
@@ -1421,10 +1430,15 @@ function ProfileSubscriptions({
                     {subscription.status === 'active' ? <em>активна</em> : null}
                   </span>
                   <small>
-                    {subscription.remainingUnits > 0
-                      ? `Остаток: ${subscription.remainingUnits} · единица не указана`
-                      : 'Остаток не подтверждён'}
-                    {validUntil ? ` · до ${validUntil}` : ' · срок не указан'}
+                    {subscriptionValidity(subscription.validUntil)}
+                    {!subscriptionIsValidityOnly(subscription.title) ? (
+                      <>
+                        {' · '}
+                        {subscription.remainingUnits > 0
+                          ? `Остаток: ${subscription.remainingUnits}`
+                          : 'Остаток не подтверждён'}
+                      </>
+                    ) : null}
                   </small>
                 </span>
                 <a
@@ -1440,10 +1454,121 @@ function ProfileSubscriptions({
         </div>
       )}
 
-      <a className="profile-subscriptions-all" href="/subscriptions">
-        Мои абонементы
-      </a>
+      {renewalAvailable ? (
+        <a className="profile-subscriptions-all" href="https://padlhub.ru/sub_hab">
+          Купить подписку
+        </a>
+      ) : (
+        <button
+          className="profile-subscriptions-all"
+          type="button"
+          disabled
+          aria-label="Купить подписку — пока недоступно"
+        >
+          Купить подписку
+        </button>
+      )}
+      {allOpen ? (
+        <ProfileDirectorySheet title="Все подписки" onClose={() => setAllOpen(false)}>
+          <ProfileActiveSubscriptions
+            {...(loadActiveSubscriptions ? { load: loadActiveSubscriptions } : {})}
+          />
+        </ProfileDirectorySheet>
+      ) : null}
     </section>
+  );
+}
+
+function ProfileActiveSubscriptions({
+  load,
+}: {
+  readonly load?: () => Promise<ActiveSubscriptions>;
+}): React.JSX.Element {
+  const [revision, setRevision] = useState(0);
+  const [state, setState] = useState<{
+    loader: typeof load;
+    data: ActiveSubscriptions | null;
+    status: 'loading' | 'ready' | 'error';
+  }>({ loader: load, data: null, status: 'loading' });
+  const visible = state.loader === load ? state : { data: null, status: 'loading' as const };
+  useEffect(() => {
+    let active = true;
+    void Promise.resolve()
+      .then(() => {
+        if (!load) throw new Error('SUBSCRIPTIONS_READ_UNAVAILABLE');
+        return load();
+      })
+      .then(
+        (data) => {
+          if (active) setState({ loader: load, data, status: 'ready' });
+        },
+        () => {
+          if (active) setState({ loader: load, data: null, status: 'error' });
+        },
+      );
+    return () => {
+      active = false;
+    };
+  }, [load, revision]);
+  return (
+    <div className="profile-active-subscriptions" aria-busy={visible.status === 'loading'}>
+      {visible.status === 'loading' ? (
+        <p role="status">Загружаем все активные подписки и абонементы…</p>
+      ) : null}
+      {visible.status === 'error' ? (
+        <p role="alert">Не удалось загрузить все подписки. Попробуйте ещё раз.</p>
+      ) : null}
+      {visible.data?.freshness === 'STALE' ? (
+        <p role="status">Данные могут быть неактуальны. Обновите список.</p>
+      ) : null}
+      {visible.data ? (
+        visible.data.items.length ? (
+          <ul>
+            {visible.data.items.map((item) => {
+              const artwork = subscriptionPlanArtwork.get(
+                item.title?.trim().toLocaleLowerCase('ru-RU') ?? '',
+              );
+              return (
+                <li key={item.id}>
+                  <h3>
+                    {artwork ? (
+                      <span
+                        className="profile-subscription-badge"
+                        style={subscriptionBadgeStyle(artwork.viewport)}
+                      >
+                        <img
+                          className="profile-subscription-badge__image"
+                          src={artwork.src}
+                          alt={item.title ?? ''}
+                        />
+                      </span>
+                    ) : (
+                      (item.title ?? 'Название не указано')
+                    )}
+                  </h3>
+                  <p>{subscriptionValidity(item.validUntil)}</p>
+                  {!subscriptionIsValidityOnly(item.title) ? (
+                    <p>{subscriptionRemaining(item)}</p>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p>Активных подписок и абонементов пока нет.</p>
+        )
+      ) : null}
+      <button
+        type="button"
+        disabled={visible.status === 'loading'}
+        onClick={() => {
+          setState({ loader: load, data: null, status: 'loading' });
+          setRevision((value) => value + 1);
+        }}
+      >
+        Обновить список
+      </button>
+    </div>
   );
 }
 
@@ -2010,6 +2135,7 @@ export function ProfilePage({
   stationChoices = [],
   subscriptions,
   subscriptionsError,
+  loadActiveSubscriptions,
   communities,
   communitiesError,
   loadCommunityPage,
@@ -2411,6 +2537,8 @@ export function ProfilePage({
           {isSelf && !isIndependentSport ? (
             <>
               <ProfileSubscriptions
+                key={profile.userId}
+                {...(loadActiveSubscriptions ? { loadActiveSubscriptions } : {})}
                 renewalAvailable={subscriptionRenewalAvailable}
                 {...(subscriptions !== undefined ? { subscriptions } : {})}
                 {...(subscriptionsError !== undefined ? { error: subscriptionsError } : {})}
