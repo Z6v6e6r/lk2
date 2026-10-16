@@ -213,6 +213,34 @@ afterEach(() => {
 });
 
 describe('GamesPage discovery', () => {
+  it('routes the authenticated viewer leave badge to the existing self-leave command', async () => {
+    const user = userEvent.setup();
+    const pending = deferred<never>();
+    const api: AuthGateway = { ...gateway(), leaveGame: vi.fn().mockReturnValue(pending.promise) };
+    const viewerUserId = '00000000-0000-4000-8000-000000000001';
+    const detail: ViewerGameCard = {
+      ...(await api.getGame(game.id)),
+      startsAt: new Date(Date.now() + 172_800_000).toISOString(),
+      endsAt: new Date(Date.now() + 176_400_000).toISOString(),
+      allowedActions: ['OPEN_DETAILS', 'LEAVE'],
+    };
+    vi.mocked(api.getGame).mockResolvedValue(detail);
+    render(
+      <GamesPage
+        gateway={api}
+        gameId={game.id}
+        chatNavigationScope={{ tenantKey: 'local-padel', userId: viewerUserId }}
+      />,
+    );
+    const leave = await screen.findByRole('button', { name: 'Покинуть игру' });
+    expect(leave.parentElement).toContainElement(screen.getByRole('link', { name: /Борис/ }));
+    await user.click(leave);
+    expect(api.leaveGame).toHaveBeenCalledExactlyOnceWith(game.id);
+    expect(leave).toBeDisabled();
+    await user.click(leave);
+    expect(api.leaveGame).toHaveBeenCalledTimes(1);
+  });
+
   it('opens a client-assisted booking deep-link as the selected game card', async () => {
     const eventId = '8a830ad0-a8c7-479b-a239-5b434c42148f';
     const api = gateway();
