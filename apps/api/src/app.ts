@@ -853,13 +853,9 @@ export async function buildApp(options: BuildAppOptions) {
             .catch(() => false)
         : Promise.resolve(true),
     ]);
-    const supportStatus = options.supportTicketReady
-      ? { supportDatabase: await options.supportTicketReady().catch(() => false) }
-      : {};
     if (!databaseReady || !authReady || !communityMediaReady) {
       return reply.status(503).send({
         status: 'not_ready',
-        ...supportStatus,
         database: databaseReady,
         auth: authReady,
         communityMedia: communityMediaReady,
@@ -870,7 +866,6 @@ export async function buildApp(options: BuildAppOptions) {
     }
     return {
       status: 'ready',
-      ...supportStatus,
       database: true,
       auth: true,
       communityMedia: true,

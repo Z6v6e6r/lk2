@@ -563,7 +563,6 @@ const handleHealthRequest = async (
     response.end(
       JSON.stringify({
         status: response.statusCode === 200 ? 'ready' : 'not_ready',
-        ...(supportPool ? { supportDatabase: await checkDatabaseReady(supportPool) } : {}),
         checks,
         coreCycle: forwardProgress,
         ...(fcmForwardProgress ? { fcmCycle: fcmForwardProgress.snapshot() } : {}),

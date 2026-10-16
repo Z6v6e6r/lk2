@@ -155,7 +155,7 @@ describe.skipIf(!authorized || !connectionString)(
           await admin.query<{ schema: string | null }>(
             "select to_regnamespace('support')::text as schema",
           )
-        ).rows[0].schema,
+        ).rows[0]?.schema,
       ).toBeNull();
     });
     it('rolls back schema creation and ledger after post-DDL failure', async () => {
@@ -174,7 +174,7 @@ describe.skipIf(!authorized || !connectionString)(
           await admin.query<{ schema: string | null }>(
             "select to_regnamespace('support')::text as schema",
           )
-        ).rows[0].schema,
+        ).rows[0]?.schema,
       ).toBeNull();
     });
     it('bounds a real identity-table lock and rolls back 0098 on lock timeout', async () => {
@@ -198,7 +198,7 @@ describe.skipIf(!authorized || !connectionString)(
           await admin.query<{ schema: string | null }>(
             "select to_regnamespace('support')::text as schema",
           )
-        ).rows[0].schema,
+        ).rows[0]?.schema,
       ).toBeNull();
     }, 15000);
     it('applies only0098 as NOLOGIN support owner and writes ledger using explicit bootstrap', async () => {
@@ -241,7 +241,7 @@ describe.skipIf(!authorized || !connectionString)(
             "select has_column_privilege($1,'identity.user_access_profiles','permissions','UPDATE') as allowed",
             [runtime],
           )
-        ).rows[0].allowed,
+        ).rows[0]?.allowed,
       ).toBe(false);
     });
     it('commits exact ACL and proves a real restricted LOGIN startup without granting identity permission writes', async () => {
@@ -257,7 +257,7 @@ describe.skipIf(!authorized || !connectionString)(
         try {
           expect(
             (await client.query<{ current_user: string }>('select current_user')).rows[0]
-              .current_user,
+              ?.current_user,
           ).toBe(runtime);
           for (const [table, column] of [
             ['identity.users', 'status'],
@@ -270,14 +270,14 @@ describe.skipIf(!authorized || !connectionString)(
                   "select has_column_privilege(current_user,$1,$2,'UPDATE') as allowed",
                   [table, column],
                 )
-              ).rows[0].allowed,
+              ).rows[0]?.allowed,
             ).toBe(false);
           expect(
             (
               await client.query<{ total: number }>(
                 'select count(*)::int as total from support.tickets',
               )
-            ).rows[0].total,
+            ).rows[0]?.total,
           ).toBe(0);
         } finally {
           client.release();

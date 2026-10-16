@@ -123,8 +123,9 @@ Without the capability, authenticated support routes return the existing `SUPPOR
 503 and Worker never starts or schedules support close/purge. Configured but unsafe credentials
 fail startup. Later support failures remain isolated: API support readiness returns 503, Worker
 logs a body-free cycle failure and retries its bounded cycle. General authentication and existing
-Worker jobs do not depend on support readiness. Health responses expose a separate `supportDatabase`
-field only when configured; local contour attestation also binds its credential-free target.
+Worker jobs do not depend on support readiness. Global API/Worker health probes never query this
+optional dependency, so a stalled support connection cannot delay them. Local contour attestation
+also binds its credential-free target when configured.
 
 The runtime verifier rejects elevated roles, membership in either direction, any ownership,
 database/schema CREATE, unexpected effective table/column/schema privileges, grant options,

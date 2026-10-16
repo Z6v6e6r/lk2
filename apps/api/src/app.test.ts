@@ -153,6 +153,20 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(200);
   });
 
+  it('keeps global readiness independent of a stalled optional support dependency', async () => {
+    const supportTicketReady = vi.fn(() => new Promise<boolean>(() => undefined));
+    const app = await buildApp({
+      config,
+      logger: createLogger('api-test', 'silent'),
+      pool: fakePool(),
+      supportTicketReady,
+    });
+    apps.push(app);
+    const response = await app.inject({ method: 'GET', url: '/health/ready' });
+    expect(response.statusCode).toBe(200);
+    expect(supportTicketReady).not.toHaveBeenCalled();
+  }, 1000);
+
   it('exposes an explicitly supplied local contour attestation on readiness', async () => {
     const runtimeContourAttestation = {
       database: 'a'.repeat(64),

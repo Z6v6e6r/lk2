@@ -72,7 +72,7 @@ describe('closed support secret capability', () => {
           : change === 'worker-mismatch'
             ? 'worker'
             : 'api';
-      const values = {
+      const values: Record<string, string> = {
         ...f.environments[service],
         ...(['api', 'worker'].includes(service) ? { SUPPORT_DATABASE_URL: f.support } : {}),
       };
