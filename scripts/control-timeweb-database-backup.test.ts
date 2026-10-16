@@ -205,14 +205,21 @@ describe('Timeweb backup/isolated restore preparation', () => {
   );
 
   it('runs mock-only custody, isolation, recovery and receipt regression scenarios', () => {
+    // This child runs the whole Python suite alongside CI's other integration tests.
     const result = spawnSync(
       'python3',
-      ['-I', '-S', '-B', 'scripts/test-timeweb-database-backup.py'],
-      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, timeout: 30_000 },
+      ['-I', '-S', '-B', 'scripts/test-timeweb-database-backup.py', '-v'],
+      { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, timeout: 120_000 },
     );
-    expect(result.status, result.stderr).toBe(0);
+    const diagnostic = JSON.stringify({
+      error: result.error?.message,
+      signal: result.signal,
+      stderr: result.stderr,
+    });
+    expect(result.error, diagnostic).toBeUndefined();
+    expect(result.status, diagnostic).toBe(0);
     expect(result.stderr).toContain('OK');
-  }, 35_000);
+  }, 125_000);
   it('refuses an unapproved entry before any host mutation', () => {
     const result = spawnSync(
       'python3',
