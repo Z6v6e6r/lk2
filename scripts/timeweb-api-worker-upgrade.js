@@ -14,7 +14,10 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseStrictJson } from './strict-json.js';
-import { verifySourceCi } from './verify-source-ci.js';
+import {
+  readControllerSourceAuthority,
+  assertControllerPromotionGitConfig,
+} from './verify-source-ci.js';
 import {
   secureUpgradePath as secure,
   readUpgradeFile as read,
@@ -70,6 +73,8 @@ import {
   parseApiWorkerControllerDiff,
   API_WORKER_CI_DOWNLOAD_PATCH,
   API_WORKER_CI_READER_PATCH,
+  API_WORKER_CONTROLLER_PROMOTION_PATCH,
+  API_WORKER_ANDROID_CHAT_TEST_PATCH,
   validateApiWorkerLedger,
   validateApiWorkerReceipt,
   assertPlan,
@@ -81,6 +86,8 @@ export {
   parseApiWorkerControllerDiff,
   API_WORKER_CI_DOWNLOAD_PATCH,
   API_WORKER_CI_READER_PATCH,
+  API_WORKER_CONTROLLER_PROMOTION_PATCH,
+  API_WORKER_ANDROID_CHAT_TEST_PATCH,
   validateApiWorkerLedger,
   validateApiWorkerReceipt,
   validateInstalledApiWorkerEvidence,
@@ -645,7 +652,14 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     assertNoAmbientDockerOverrides();
   }
   secure(SOURCE);
-  secure(`${SOURCE}/.git`);
+  if (!secure(SOURCE + '/.git').isDirectory()) fail('CONTROLLER_GIT_CUSTODY');
+  assertControllerPromotionGitConfig(git);
+  if (
+    git(['rev-parse', '--show-toplevel']) !== SOURCE ||
+    git(['rev-parse', '--absolute-git-dir']) !== SOURCE + '/.git' ||
+    git(['rev-parse', '--path-format=absolute', '--git-common-dir']) !== SOURCE + '/.git'
+  )
+    fail('CONTROLLER_GIT_CUSTODY');
   let transaction, capsule, orphanBytes;
   if (mode !== 'deploy' && !pathPresent(LOCK)) {
     if (mode !== 'recover') fail('LOCK_POINTER');
@@ -749,14 +763,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     historicalAborts.some((audit) => audit.capsule.operationBytes.equals(opBytes))
   )
     fail('ORPHAN_ABORTED');
-  if (mode === 'deploy') {
-    const ci = await githubPublic(`actions/runs/${op.controllerSourceCiRunId}`),
-      jobs = await githubPublic(
-        `actions/runs/${op.controllerSourceCiRunId}/attempts/1/jobs?per_page=100`,
-      );
-    if (jobs.total_count !== jobs.jobs?.length) fail('CI');
-    verifySourceCi(ci, jobs.jobs, op.controllerSha);
-  }
+  if (mode === 'deploy') await readControllerSourceAuthority(op, git, githubPublic);
   const planPath = `${transaction}/plan.json`,
     journalPath = `${transaction}/rollout-receipt.json`;
   const candidateDir = `/etc/phub/timeweb-beta-candidates/${id}/timeweb-beta`,
@@ -817,6 +824,9 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       schema: 'PHUB_TIMEWEB_API_WORKER_PLAN_V1',
       operationSha256: hash(opBytes),
       controllerSha: op.controllerSha,
+      ...(op.controllerPromotion === undefined
+        ? {}
+        : { controllerPromotionSha256: op.controllerPromotion.sha256 }),
       manifestSha256: op.manifestSha256,
       artifactDigest: op.artifactDigest,
       composeSha256: hash(read(COMPOSE, 0o644)),

@@ -16,7 +16,11 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { parseStrictJson } from './strict-json.js';
-import { verifySourceCi } from './verify-source-ci.js';
+import {
+  readControllerSourceAuthority,
+  validateControllerPromotion,
+  assertControllerPromotionGitConfig,
+} from './verify-source-ci.js';
 import {
   API_WORKER_BRIDGE as bridge,
   API_WORKER_MIGRATION_CONTROLLER_FILES,
@@ -108,6 +112,7 @@ export function validateApiWorkerMigrationOperation(op, at) {
     'controllerSha',
     'controllerTree',
     'controllerSourceCiRunId',
+    ...(op?.controllerPromotion === undefined ? [] : ['controllerPromotion']),
     'candidateSha',
     'candidateTree',
     'sourceCiRunId',
@@ -133,6 +138,12 @@ export function validateApiWorkerMigrationOperation(op, at) {
     op.migratorImage !== MIGRATOR_IMAGE
   )
     stop('OPERATION');
+  if (op.controllerPromotion !== undefined)
+    validateControllerPromotion(op.controllerPromotion, {
+      controllerSha: op.controllerSha,
+      controllerTree: op.controllerTree,
+      controllerSourceCiRunId: op.controllerSourceCiRunId,
+    });
   for (const key of [
     'candidateSha',
     'candidateTree',
@@ -233,12 +244,14 @@ export function readApiWorkerMigrationCapsule(bytes) {
   };
 }
 export function validateMigrationPlan(plan, operationBytes) {
+  const op = validateApiWorkerMigrationOperation(parseStrictJson(operationBytes));
   exact(plan, [
     'schema',
     'operationSha256',
     'controllerSha',
     'controllerTree',
     'controllerSourceCiRunId',
+    ...(op.controllerPromotion === undefined ? [] : ['controllerPromotionSha256']),
     'candidate',
     'migratorImage',
     'imageId',
@@ -249,7 +262,6 @@ export function validateMigrationPlan(plan, operationBytes) {
     'backup',
     'roleProbeSourceSha256',
   ]);
-  const op = validateApiWorkerMigrationOperation(parseStrictJson(operationBytes));
   exact(plan.secretSet, ['releaseId', 'device', 'inode', 'files']);
   exact(plan.secretSet.files, secretNames);
   if (!Number.isSafeInteger(plan.secretSet.device) || !Number.isSafeInteger(plan.secretSet.inode))
@@ -294,6 +306,9 @@ export function validateMigrationPlan(plan, operationBytes) {
     plan.controllerSha !== op.controllerSha ||
     plan.controllerTree !== op.controllerTree ||
     plan.controllerSourceCiRunId !== op.controllerSourceCiRunId ||
+    (op.controllerPromotion === undefined
+      ? false
+      : plan.controllerPromotionSha256 !== op.controllerPromotion.sha256) ||
     plan.candidate !== `${op.candidateSha}-${op.publicationRunId}-1` ||
     plan.migratorImage !== MIGRATOR_IMAGE ||
     !/^sha256:[a-f0-9]{64}$/.test(plan.imageId ?? '') ||
@@ -569,6 +584,9 @@ export async function runMigrationAdapter(mode, operationBytes, ops) {
       controllerSha: op.controllerSha,
       controllerTree: op.controllerTree,
       controllerSourceCiRunId: op.controllerSourceCiRunId,
+      ...(op.controllerPromotion === undefined
+        ? {}
+        : { controllerPromotionSha256: op.controllerPromotion.sha256 }),
       candidate: `${op.candidateSha}-${op.publicationRunId}-1`,
       migratorImage: MIGRATOR_IMAGE,
       imageId,
@@ -729,12 +747,34 @@ function docker(args, timeout = 120000) {
   }
 }
 function git(args) {
+  const neutral =
+    JSON.stringify(args) ===
+    JSON.stringify([
+      '--git-dir=/dev/null',
+      'config',
+      '--file',
+      SOURCE + '/.git/config',
+      '--no-includes',
+      '--null',
+      '--list',
+    ]);
+  if (args[0] === '--git-dir=/dev/null' && !neutral) stop('GIT_CONFIG_PATH');
   try {
-    return execFileSync(
+    const result = execFileSync(
       '/usr/bin/git',
-      ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args],
+      [
+        '-c',
+        'core.hooksPath=/dev/null',
+        '-c',
+        'core.fsmonitor=false',
+        '-c',
+        'core.commitGraph=false',
+        '-c',
+        'protocol.allow=never',
+        ...args,
+      ],
       {
-        cwd: SOURCE,
+        cwd: neutral ? '/' : SOURCE,
         encoding: 'utf8',
         timeout: 30000,
         maxBuffer: 4 * 1024 * 1024,
@@ -747,14 +787,19 @@ function git(args) {
           GIT_OPTIONAL_LOCKS: '0',
           GIT_NO_REPLACE_OBJECTS: '1',
           GIT_NO_LAZY_FETCH: '1',
+          GIT_NO_PROMISOR_FETCH: '1',
+          GIT_GRAFT_FILE: '/dev/null',
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: '',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       },
-    ).trim();
+    );
+    return neutral ? result : result.trim();
   } catch {
     stop('GIT');
   }
 }
+Object.defineProperty(git, 'sourcePath', { value: SOURCE });
 function inspect(id) {
   const rows = parseStrictJson(docker(['container', 'inspect', id]));
   if (!Array.isArray(rows) || rows.length !== 1) stop('INSPECT');
@@ -797,9 +842,11 @@ function snapshotRow(v) {
 function sourceAttest(op) {
   if (!secure(SOURCE, 0o700).isDirectory() || !secure(`${SOURCE}/.git`).isDirectory())
     stop('SOURCE_DIRECTORY');
+  assertControllerPromotionGitConfig(git);
   if (
     git(['rev-parse', '--show-toplevel']) !== SOURCE ||
-    git(['rev-parse', '--absolute-git-dir']) !== `${SOURCE}/.git`
+    git(['rev-parse', '--absolute-git-dir']) !== `${SOURCE}/.git` ||
+    git(['rev-parse', '--path-format=absolute', '--git-common-dir']) !== SOURCE + '/.git'
   )
     stop('SOURCE_DIRECTORY');
   const config = parseStrictJson(read('/etc/phub/timeweb-beta-standard-delivery.json'));
@@ -812,7 +859,7 @@ function sourceAttest(op) {
     config.controllerSha !== op.controllerSha ||
     present(`${SOURCE}/.git/objects/info/alternates`) ||
     present(`${SOURCE}/.git/shallow`) ||
-    git(['config', '--local', '--list'])
+    git(['config', '--local', '--no-includes', '--list'])
       .split('\n')
       .some((line) =>
         /^(?:remote\..*\.(?:promisor|partialclonefilter)|extensions\.partialclone|include(?:if\..*)?\.path)=/i.test(
@@ -953,6 +1000,26 @@ function diskUuid(name) {
   return `${v.slice(0, 8)}-${v.slice(8, 12)}-${v.slice(12, 16)}-${v.slice(16, 20)}-${v.slice(20)}`;
 }
 
+function backupMigrationTuple(op, expected) {
+  if (
+    Object.hasOwn(op, 'controllerPromotion') !==
+    Object.hasOwn(expected, 'controllerPromotionSha256')
+  )
+    stop('PROMOTION_BINDING');
+  if (op.controllerPromotion !== undefined)
+    validateControllerPromotion(op.controllerPromotion, {
+      controllerSha: op.controllerSha,
+      controllerTree: op.controllerTree,
+      controllerSourceCiRunId: op.controllerSourceCiRunId,
+    });
+  return Object.fromEntries(
+    Object.keys(expected).map((key) => [
+      key,
+      key === 'controllerPromotionSha256' ? op.controllerPromotion?.sha256 : op[key],
+    ]),
+  );
+}
+
 export function validateMigrationBackupRestoreReference(operationBytes, expected, reference) {
   const op = parseStrictJson(operationBytes);
   if (op.schema === NS_POST_SCHEMA) {
@@ -975,7 +1042,7 @@ export function validateMigrationBackupRestoreReference(operationBytes, expected
     op.schema !== 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2' ||
     !HASH.test(reference.id ?? '') ||
     reference.operationSha256 !== hash(operationBytes) ||
-    !same(Object.fromEntries(Object.keys(expected).map((k) => [k, op[k]])), expected) ||
+    !same(backupMigrationTuple(op, expected), expected) ||
     op.expectedLedgerSha256 !== POST_LEDGER ||
     op.toolCommit !== op.controllerSha ||
     op.confirmation !== 'BACKUP_RESTORE_API_WORKER_11954FFD6D7B_KEEP_API_0D6078BE7A50'
@@ -1030,6 +1097,7 @@ export function validateDiskRestoreReadback(value, expected, reference, operatio
     'candidateReleaseId',
     'expectedLedgerSha256',
     'controllerSourceCiRunId',
+    ...(op?.controllerPromotion === undefined ? [] : ['controllerPromotion']),
     'migrationPlanSha256',
     'migrationSuccessSha256',
   ]);
@@ -1041,7 +1109,7 @@ export function validateDiskRestoreReadback(value, expected, reference, operatio
     value.operationSha256 !== sha ||
     value.storageProofSha256 !== reference.storageProofSha256 ||
     !same(value.migration, expected) ||
-    !same(value.migration, Object.fromEntries(Object.keys(expected).map((k) => [k, op[k]]))) ||
+    !same(value.migration, backupMigrationTuple(op, expected)) ||
     op.toolCommit !== op.controllerSha ||
     op.expectedLedgerSha256 !== POST_LEDGER ||
     op.confirmation !== 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50' ||
@@ -1637,6 +1705,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
     'candidateReleaseId',
     'expectedLedgerSha256',
     'controllerSourceCiRunId',
+    ...(op?.controllerPromotion === undefined ? [] : ['controllerPromotion']),
     'migrationPlanSha256',
     'migrationSuccessSha256',
   ]);
@@ -1648,7 +1717,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
     value.operationSha256 !== sha ||
     value.storageProofSha256 !== reference.storageProofSha256 ||
     !same(value.migration, expected) ||
-    !same(value.migration, Object.fromEntries(Object.keys(expected).map((k) => [k, op[k]]))) ||
+    !same(value.migration, backupMigrationTuple(op, expected)) ||
     op.toolCommit !== op.controllerSha ||
     op.expectedLedgerSha256 !== POST_LEDGER ||
     op.confirmation !==
@@ -2763,12 +2832,7 @@ function productionOps(op, owner, ignoredRestore = null) {
         stop('EXCLUSION');
     },
     authority: async (operation) => {
-      const run = await githubPublic(`actions/runs/${operation.controllerSourceCiRunId}`);
-      const jobs = await githubPublic(
-        `actions/runs/${operation.controllerSourceCiRunId}/attempts/1/jobs?per_page=100`,
-      );
-      if (jobs.total_count !== jobs.jobs?.length) stop('CI');
-      verifySourceCi(run, jobs.jobs, operation.controllerSha);
+      await readControllerSourceAuthority(operation, git, githubPublic);
       secure(`${ROOT}/releases/${candidate}`, 0o700);
       await candidateAuthority(operation, `${ROOT}/releases/${candidate}`);
     },
@@ -3044,19 +3108,29 @@ export function validateMigrationProofBundle(bundle, expected) {
     'controllerSha',
     'controllerTree',
     'controllerSourceCiRunId',
+    ...(expected?.controllerPromotionSha256 === undefined ? [] : ['controllerPromotionSha256']),
     'candidateReleaseId',
     'migrationPlanSha256',
     'migrationSuccessSha256',
   ]);
   exact(bundle, ['preparation', 'plan', 'role', 'success', 'receipt']);
   const capsule = readApiWorkerMigrationCapsule(bundle.preparation),
-    plan = validateMigrationPlan(capsule.plan, capsule.operationBytes);
+    plan = validateMigrationPlan(capsule.plan, capsule.operationBytes),
+    operationPromotionSha256 = capsule.operation.controllerPromotion?.sha256;
   if (
+    (expected.controllerPromotionSha256 === undefined
+      ? operationPromotionSha256 !== undefined
+      : !HASH.test(expected.controllerPromotionSha256) ||
+        operationPromotionSha256 !== expected.controllerPromotionSha256 ||
+        plan.controllerPromotionSha256 !== expected.controllerPromotionSha256) ||
     !capsule.planBytes.equals(bundle.plan) ||
     hash(bundle.plan) !== expected.migrationPlanSha256 ||
     plan.controllerSha !== expected.controllerSha ||
     plan.controllerTree !== expected.controllerTree ||
     plan.controllerSourceCiRunId !== expected.controllerSourceCiRunId ||
+    (expected.controllerPromotionSha256 === undefined
+      ? false
+      : plan.controllerPromotionSha256 !== expected.controllerPromotionSha256) ||
     plan.candidate !== expected.candidateReleaseId ||
     hash(bundle.success) !== expected.migrationSuccessSha256
   )

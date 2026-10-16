@@ -41,10 +41,18 @@ API_WORKER_CI_DOWNLOAD_PATCH = {
     'scripts/pull-request-ci-workflow.test.ts': {'path': 'scripts/pull-request-ci-workflow.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'caf2f124bbc58e4225feca1ad38100ed07991787', 'newOid': 'e2abfd6adac5d742b38ea16e8cb3d1dbb90c0982'},
 }
 API_WORKER_CI_READER_PATCH = {
-    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': 'd7c2da4e1bb353de041e8b51d9b8e0a56bea046a'},
-    'scripts/timeweb-api-worker-upgrade.d.ts': {'path': 'scripts/timeweb-api-worker-upgrade.d.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '151a183b17349c57a4d23cd58b03dd33be0e1172', 'newOid': '63a5ad2d64f5db337a0e5c74b43738d36ed18dfe'},
-    'scripts/timeweb-api-worker-upgrade.test.ts': {'path': 'scripts/timeweb-api-worker-upgrade.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'e446cc167a63ee54e9352dc38589e414f1aa7247', 'newOid': '02f3927005dac547fb74b6955e2ddc69ee4d2deb'},
-    'scripts/timeweb-api-worker-adapter.test.ts': {'path': 'scripts/timeweb-api-worker-adapter.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'dba09b8571260d1cb817971ce6a15a42a70f1032', 'newOid': '57eb46c5588837b3177759f2aca6e6724651a382'},
+    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': '5a2e148c5f82f291e329545989ef1136974d17a1'},
+    'scripts/timeweb-api-worker-upgrade.d.ts': {'path': 'scripts/timeweb-api-worker-upgrade.d.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '151a183b17349c57a4d23cd58b03dd33be0e1172', 'newOid': 'cb7711e1dd145acb9b1beefc74e3d643ecbb5d60'},
+    'scripts/timeweb-api-worker-upgrade.test.ts': {'path': 'scripts/timeweb-api-worker-upgrade.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'e446cc167a63ee54e9352dc38589e414f1aa7247', 'newOid': '1e9e3e958b39ad80a6f68c0f51efef45308cfa86'},
+    'scripts/timeweb-api-worker-adapter.test.ts': {'path': 'scripts/timeweb-api-worker-adapter.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'dba09b8571260d1cb817971ce6a15a42a70f1032', 'newOid': 'e858abd81817cef9d6d62eca98b965f7bbce0c6e'},
+    'scripts/timeweb-api-web-upgrade.js': {'path': 'scripts/timeweb-api-web-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'c3da47a8fa4c95d06081d1a189c28b2ec8afa55e', 'newOid': 'c97b7c4c9afc3f2c0b2a09543954dc8215c579a7'},
+}
+API_WORKER_CONTROLLER_PROMOTION_PATCH = {
+    'scripts/verify-source-ci.js': {'path': 'scripts/verify-source-ci.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ed4ad7fa0c27caba918a9a4a6f5d151d3a996ac4', 'newOid': '31b891b4856dd95ecf849af0b13e609a281cbac1'},
+    'scripts/verify-source-ci.test.ts': {'path': 'scripts/verify-source-ci.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'deddc6be4d875375e813abe13a345311029d71bb', 'newOid': '63f207f3c05aa12fdf852fa0f898f14f4fb53282'},
+}
+API_WORKER_ANDROID_CHAT_TEST_PATCH = {
+    'apps/mobile/src/MobileApp.test.tsx': {'path': 'apps/mobile/src/MobileApp.test.tsx', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '35f557d6da06916e3a411129786e51a76cdd2ae0', 'newOid': '541fe96a4f895044faa123e157d4b1aa6ef38ad2'},
 }
 # One inert fixture correction; the exact regular pair is never a generic path allowance.
 API_WORKER_REHEARSAL_READINESS_PATCH = {
@@ -582,8 +590,8 @@ def disk_verify_reference(op, request_bytes, file_sha):
          and read_secure(REQUEST) == request_bytes, 'DISK_STORAGE_PROOF_DRIFT')
     return {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V1', 'operationSha256': sha,
             'storageProofSha256': digest(proof_bytes), 'plan': plan, 'readback': readback,
-            'migration': {key: op[key] for key in ['controllerSha', 'controllerTree', 'controllerSourceCiRunId',
-                                                'candidateReleaseId', 'migrationPlanSha256', 'migrationSuccessSha256']}}
+            'migration': {**{key: op[key] for key in ['controllerSha', 'controllerTree', 'controllerSourceCiRunId',
+                                                'candidateReleaseId', 'migrationPlanSha256', 'migrationSuccessSha256']}, **promotion_expected(op)}}
 
 DISK_RESTORE_FORMAT = RESTORE_FORMAT.replace('"State":{"Status":{{json .State.Status}}}', '"State":{"Status":{{json .State.Status}},"Pid":{{json .State.Pid}},"StartedAt":{{json .State.StartedAt}}}').replace('"Labels":{{json .Config.Labels}}}', '"Labels":{{json .Config.Labels}},"Env":{{json .Config.Env}},"Cmd":{{json .Config.Cmd}},"Entrypoint":{{json .Config.Entrypoint}}}').replace('"IpcMode":{{json .HostConfig.IpcMode}}}', '"IpcMode":{{json .HostConfig.IpcMode}},"LogConfig":{{json .HostConfig.LogConfig}}}')
 
@@ -1699,12 +1707,46 @@ def operation_mode(value):
     raise Stop('TARGET')
 
 
+
+def validate_controller_promotion(value, op):
+    fields = ['schema', 'controllerSha', 'controllerTree', 'prNumber', 'headBranch',
+              'baseSha', 'prCiRunId', 'mergeSha', 'mergeTree', 'mainCiRunId',
+              'executableManifestSha256', 'resolutionManifestSha256', 'sha256']
+    exact(value, fields)
+    need(type(value['schema']) is int and value['schema'] == 1
+         and type(value['prNumber']) is int and 1 <= value['prNumber'] <= 9007199254740991
+         and isinstance(value['headBranch'], str)
+         and re.fullmatch(r'codex/[a-z0-9][a-z0-9/_-]{0,199}', value['headBranch'])
+         and '..' not in value['headBranch'] and not value['headBranch'].endswith('/'),
+         'CONTROLLER_PROMOTION_IDENTITY')
+    need(all(isinstance(value[k], str) and SHA.fullmatch(value[k])
+             for k in ['controllerSha', 'controllerTree', 'baseSha', 'mergeSha', 'mergeTree'])
+         and all(isinstance(value[k], str) and re.fullmatch(r'[1-9][0-9]*', value[k])
+                 for k in ['prCiRunId', 'mainCiRunId'])
+         and value['prCiRunId'] != value['mainCiRunId']
+         and all(isinstance(value[k], str) and HASH.fullmatch(value[k])
+                 for k in ['executableManifestSha256', 'resolutionManifestSha256', 'sha256']),
+         'CONTROLLER_PROMOTION_IDENTITY')
+    canonical = {k: value[k] for k in sorted(value) if k != 'sha256'}
+    need(value['sha256'] == digest(encoded(canonical)), 'CONTROLLER_PROMOTION_DIGEST')
+    need(value['controllerSha'] == op['controllerSha'] and value['controllerTree'] == op['controllerTree']
+         and value['prCiRunId'] == op['controllerSourceCiRunId'], 'CONTROLLER_PROMOTION_BINDING')
+    return value
+
+
+def promotion_expected(op):
+    return {'controllerPromotionSha256': op['controllerPromotion']['sha256']} if 'controllerPromotion' in op else {}
+
+
 def validate_operation(value, now, file_sha, allow_expired=False):
     common = ['schema', 'target', 'toolCommit', 'toolFileSha256', 'controllerSha',
               'toolProofSha256', 'toolInstallationSha256', 'controllerTree',
               'controllerConfigSha256', 'expectedBoundarySha256', 'expectedApi',
               'expectedPostgres', 'expiresAt', 'confirmation']
     schema = value.get('schema') if isinstance(value, dict) else None
+    if isinstance(value, dict) and 'controllerPromotion' in value:
+        need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
+        common += ['controllerPromotion']
     if schema == 'PHUB_TIMEWEB_BACKUP_OPERATION_V1':
         exact(value, common + ['releaseId'])
         mode = 'web'
@@ -1736,6 +1778,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
          and HASH.fullmatch(value['controllerConfigSha256'] or '')
          and HASH.fullmatch(value['toolProofSha256'] or '') and HASH.fullmatch(value['toolInstallationSha256'] or '')
          and HASH.fullmatch(value['expectedBoundarySha256'] or ''), 'TOOL_SOURCE')
+    if 'controllerPromotion' in value:
+        validate_controller_promotion(value['controllerPromotion'], value)
     match = RELEASE.fullmatch(release_id or '')
     need(match and (mode == 'api-worker' or match[1] == value['controllerSha']), 'RELEASE')
     fields = ['id', 'image', 'imageId', 'releaseId', 'revision', 'restarts', 'startedAt']
@@ -1772,14 +1816,14 @@ def validate_migration_controller_delta(data):
         match=re.fullmatch(rb':([0-7]{6}) ([0-7]{6}) ([a-f0-9]{40}) ([a-f0-9]{40}) ([AM])',rows[index])
         path=os.fsdecode(rows[index+1]);need(match and path not in seen,'CONTROLLER_LINEAGE');seen.add(path)
         parsed.append(dict(path=path,oldMode=match.group(1).decode(),newMode=match.group(2).decode(),oldOid=match.group(3).decode(),newOid=match.group(4).decode(),status=match.group(5).decode()))
-    rehearsal=[v for v in parsed if v['path'] in API_WORKER_REHEARSAL_READINESS_PATCH]
-    if rehearsal:
-        need(len(rehearsal)==len(API_WORKER_REHEARSAL_READINESS_PATCH) and all(v==API_WORKER_REHEARSAL_READINESS_PATCH[v['path']] for v in rehearsal),'REHEARSAL_READINESS_PATCH')
-    parsed=[v for v in parsed if v['path'] not in API_WORKER_REHEARSAL_READINESS_PATCH]
-    native=[v for v in parsed if v['path'] in API_WORKER_NATIVE_BOOKINGS_PATCH]
-    if native:
-        need(len(native)==len(API_WORKER_NATIVE_BOOKINGS_PATCH) and all(v==API_WORKER_NATIVE_BOOKINGS_PATCH[v['path']] for v in native),'NATIVE_BOOKINGS_PATCH')
-    parsed=[v for v in parsed if v['path'] not in API_WORKER_NATIVE_BOOKINGS_PATCH]
+    for pins,code in [(API_WORKER_CONTROLLER_PROMOTION_PATCH,'CONTROLLER_PROMOTION_PATCH'),
+                      (API_WORKER_ANDROID_CHAT_TEST_PATCH,'ANDROID_CHAT_TEST_PATCH'),
+                      (API_WORKER_REHEARSAL_READINESS_PATCH,'REHEARSAL_READINESS_PATCH'),
+                      (API_WORKER_NATIVE_BOOKINGS_PATCH,'NATIVE_BOOKINGS_PATCH')]:
+        group=[v for v in parsed if v['path'] in pins]
+        if group:
+            need(len(group)==len(pins) and all(v==pins[v['path']] for v in group),code)
+        parsed=[v for v in parsed if v['path'] not in pins]
     pins={**API_WORKER_CI_DOWNLOAD_PATCH,**API_WORKER_CI_READER_PATCH}
     ci=[v for v in parsed if v['path'] in pins]
     if ci:
@@ -1803,7 +1847,8 @@ def v2_migration_proof(op, request_bytes, source, restore=None):
     validate_migration_controller_delta(raw)
     expected={'controllerSha':op['controllerSha'],'controllerTree':op['controllerTree'],
               'controllerSourceCiRunId':op['controllerSourceCiRunId'],'candidateReleaseId':op['candidateReleaseId'],
-              'migrationPlanSha256':op['migrationPlanSha256'],'migrationSuccessSha256':op['migrationSuccessSha256']}
+              'migrationPlanSha256':op['migrationPlanSha256'],'migrationSuccessSha256':op['migrationSuccessSha256'],
+              **promotion_expected(op)}
     if restore is not None:
         if op['schema'] in (DISK_POST_SCHEMA, NS_POST_SCHEMA):
             exact(restore, ['schema', 'storageProofSha256'])
@@ -2998,8 +3043,8 @@ def namespace_verify_reference(op, raw, file_sha):
          and read_secure(REQUEST) == raw, 'NS_PROOF_DRIFT')
     return {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V2', 'operationSha256': digest(raw),
             'storageProofSha256': digest(proof_bytes), 'plan': plan, 'readback': value,
-            'migration': {k: op[k] for k in ['controllerSha', 'controllerTree', 'controllerSourceCiRunId',
-               'candidateReleaseId', 'migrationPlanSha256', 'migrationSuccessSha256']}}
+            'migration': {**{k: op[k] for k in ['controllerSha', 'controllerTree', 'controllerSourceCiRunId',
+               'candidateReleaseId', 'migrationPlanSha256', 'migrationSuccessSha256']}, **promotion_expected(op)}}
 
 def execute(op, request_bytes, file_sha):
     if is_namespace_operation(op):return execute_namespace(op, request_bytes, file_sha)

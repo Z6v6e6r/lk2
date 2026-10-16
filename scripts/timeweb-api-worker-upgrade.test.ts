@@ -19,6 +19,8 @@ import {
   parseApiWorkerControllerDiff,
   API_WORKER_CI_DOWNLOAD_PATCH,
   API_WORKER_CI_READER_PATCH,
+  API_WORKER_CONTROLLER_PROMOTION_PATCH,
+  API_WORKER_ANDROID_CHAT_TEST_PATCH,
   validateApiWorkerDatabase,
   API_WORKER_GATE_LOCK_SQL,
   API_WORKER_DATABASE_SQL,
@@ -32,7 +34,22 @@ import {
   validateInstalledApiWorkerEvidence,
 } from './timeweb-api-worker-upgrade.js';
 
+import { validateMigrationControllerClosure } from './timeweb-api-worker-migration.js';
+
 import { hash, id, root, ledger, operation, capsuleFixture } from './timeweb-api-worker.fixture.js';
+const promotionDigest = (value: Record<string, unknown>) =>
+  createHash('sha256')
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(value)
+            .filter((key) => key !== 'sha256')
+            .sort()
+            .map((key) => [key, value[key]]),
+        ),
+      ) + '\n',
+    )
+    .digest('hex');
 function transitionFixture(failAt?: string) {
   const calls: string[] = [];
   let failed = false;
@@ -93,6 +110,39 @@ describe('API + Worker exact manual bridge', () => {
         target: { hostname: 'another', serverId: 8886471, projectId: 262717 },
       }),
     ).toThrow();
+  });
+  it('admits only a complete controller-promotion proof bound to the operation source', () => {
+    const op = operation();
+    const proof = {
+      schema: 1,
+      controllerSha: op.controllerSha,
+      controllerTree: 'a'.repeat(40),
+      prNumber: 402,
+      headBranch: 'codex/backup-supervisor-host-20261016',
+      baseSha: 'b'.repeat(40),
+      prCiRunId: op.controllerSourceCiRunId,
+      mergeSha: 'c'.repeat(40),
+      mergeTree: 'd'.repeat(40),
+      mainCiRunId: '123457',
+      executableManifestSha256: 'e'.repeat(64),
+      resolutionManifestSha256: 'f'.repeat(64),
+    };
+    const controllerPromotion = {
+      ...proof,
+      sha256: promotionDigest(proof),
+    };
+    expect(validateApiWorkerOperation({ ...op, controllerPromotion })).toEqual({
+      ...op,
+      controllerPromotion,
+    });
+    for (const value of [
+      { ...controllerPromotion, sha256: '0'.repeat(64) },
+      { ...controllerPromotion, controllerSha: 'b'.repeat(40) },
+      { ...controllerPromotion, prCiRunId: '123457' },
+      { ...controllerPromotion, extra: true },
+    ])
+      expect(() => validateApiWorkerOperation({ ...op, controllerPromotion: value })).toThrow();
+    expect(() => validateApiWorkerOperation({ ...op, controllerPromotion: null })).toThrow();
   });
   it('requires all 101 exact migrations and a backup restored from that same ledger', () => {
     validateApiWorkerLedger(ledger, ledger);
@@ -581,11 +631,51 @@ describe('frozen CI download patch authority', () => {
       expect(() => parseApiWorkerControllerDiff(value)).toThrow();
   });
   it('pins final checked-in workflow and test bytes, rather than only their filenames', () => {
-    for (const pin of [...pair(), ...API_WORKER_CI_READER_PATCH]) {
+    for (const pin of [
+      ...pair(),
+      ...API_WORKER_CI_READER_PATCH,
+      ...API_WORKER_CONTROLLER_PROMOTION_PATCH,
+      ...API_WORKER_ANDROID_CHAT_TEST_PATCH,
+    ]) {
       const bytes = readFileSync(pin.path);
       expect(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')).toBe(
         pin.newOid,
       );
     }
   });
+});
+
+describe('exact controller-promotion and Android test patch groups', () => {
+  for (const group of [API_WORKER_CONTROLLER_PROMOTION_PATCH, API_WORKER_ANDROID_CHAT_TEST_PATCH]) {
+    it('admits the complete exact group in both controller closures, including the absent-group legacy case', () => {
+      const ordinary = { ...group[0]!, path: 'scripts/timeweb-api-worker-contract.js' };
+      for (const rows of [group, [...group, ordinary], [ordinary]]) {
+        expect(() => validateApiWorkerControllerDelta(rows)).not.toThrow();
+        expect(() => validateMigrationControllerClosure(rows)).not.toThrow();
+      }
+    });
+    it('rejects missing peers, duplicate paths, altered tuples and extra unapproved paths', () => {
+      const invalid = [
+        [...group, group[0]!],
+        [...group, { ...group[0]!, path: 'scripts/unreviewed-promotion.js' }],
+      ];
+      if (group.length > 1) invalid.push(group.slice(1));
+      for (let index = 0; index < group.length; index++) {
+        for (const change of [
+          { oldOid: 'a'.repeat(40) },
+          { newOid: 'b'.repeat(40) },
+          { oldMode: '000000' },
+          { newMode: '100755' },
+          { newMode: '120000' },
+          { status: 'A' },
+          { status: 'D' },
+        ])
+          invalid.push(group.map((row, i) => (i === index ? { ...row, ...change } : row)));
+      }
+      for (const rows of invalid) {
+        expect(() => validateApiWorkerControllerDelta(rows)).toThrow();
+        expect(() => validateMigrationControllerClosure(rows)).toThrow();
+      }
+    });
+  }
 });

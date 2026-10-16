@@ -182,6 +182,31 @@ class PureTests(unittest.TestCase):
             value=dict(re.findall(r"(path|status|oldMode|newMode|oldOid|newOid):\s*'([^']+)'",item));js[value['path']]=value
         self.assertEqual(js,m.API_WORKER_CI_READER_PATCH)
 
+    def test_promotion_and_android_test_groups_are_exact_atomic_and_match_both_languages(self):
+        import hashlib
+        contract=(Path(__file__).parent/'timeweb-api-worker-contract.js').read_text()
+        for name in ['API_WORKER_CONTROLLER_PROMOTION_PATCH','API_WORKER_ANDROID_CHAT_TEST_PATCH']:
+            pins=getattr(m,name);rows=list(pins.values())
+            def raw(items):return b''.join((':'+v['oldMode']+' '+v['newMode']+' '+v['oldOid']+' '+v['newOid']+' '+v['status']+'\0'+v['path']+'\0').encode()for v in items)
+            ordinary=dict(rows[0],path='scripts/timeweb-api-worker-contract.js')
+            for case in [rows,rows+[ordinary],[ordinary]]:m.validate_migration_controller_delta(raw(case))
+            invalid=[rows+[rows[0]],rows+[dict(rows[0],path='scripts/unreviewed-promotion.js')]]
+            if len(rows)>1:invalid.append(rows[1:])
+            for index in range(len(rows)):
+                for field,value in [('oldOid','a'*40),('newOid','b'*40),('oldMode','000000'),('newMode','100755'),('newMode','120000'),('status','A'),('status','D')]:
+                    invalid.append([dict(row,**{field:value})if i==index else row for i,row in enumerate(rows)])
+            for case in invalid:
+                with self.subTest(group=name,case=case),self.assertRaises(m.Stop):m.validate_migration_controller_delta(raw(case))
+            section=contract.split('export const '+name+' = Object.freeze([',1)[1].split(']);',1)[0]
+            js={}
+            for item in re.findall(r'Object.freeze\(\{(.*?)\}\)',section,re.S):
+                value=dict(re.findall(r"(path|status|oldMode|newMode|oldOid|newOid):\s*'([^']+)'",item));js[value['path']]=value
+            self.assertEqual(js,pins)
+            for row in rows:
+                self.assertNotIn(row['path'],m.API_WORKER_MIGRATION_CONTROLLER_FILES)
+                data=(Path(__file__).parents[1]/row['path']).read_bytes()
+                self.assertEqual(hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest(),row['newOid'])
+
     def test_inert_rehearsal_pair_is_exact_atomic_and_matches_source_and_javascript(self):
         import hashlib
         rows=list(m.API_WORKER_REHEARSAL_READINESS_PATCH.values())
@@ -1875,6 +1900,53 @@ class MainEntryRegressionTests(unittest.TestCase):
                     with self.assertRaises(m.Stop):m.main()
                     m.namespace_supervisor.assert_not_called();m.execute.assert_not_called()
                     self.assertEqual(len(reads),0 if name=='argv' else 2 if name in ('request-hash','expired') else 4)
+
+
+class ControllerPromotionBindingTests(unittest.TestCase):
+    def promotion(self, op):
+        value = {'schema': 1, 'controllerSha': op['controllerSha'], 'controllerTree': op['controllerTree'],
+                 'prNumber': 402, 'headBranch': 'codex/synthetic-controller', 'baseSha': 'a'*40,
+                 'prCiRunId': op['controllerSourceCiRunId'], 'mergeSha': 'b'*40, 'mergeTree': 'c'*40,
+                 'mainCiRunId': '123456789', 'executableManifestSha256': 'd'*64,
+                 'resolutionManifestSha256': 'e'*64}
+        value['sha256'] = m.digest(m.encoded({k: value[k] for k in sorted(value)}))
+        return value
+
+    def test_optional_promotion_preserves_legacy_and_binds_pre99_post101(self):
+        for factory in (disk_operation, namespace_operation):
+            for post in (False, True):
+                op = factory(post)
+                self.assertEqual(m.validate_operation(op, NOW, '2'*64), op)
+                op['controllerPromotion'] = self.promotion(op)
+                self.assertEqual(m.validate_operation(op, NOW, '2'*64), op)
+                self.assertEqual(m.promotion_expected(op), {'controllerPromotionSha256': op['controllerPromotion']['sha256']})
+        self.assertEqual(m.promotion_expected({}), {})
+
+    def test_promotion_cannot_be_null_partial_extra_or_digest_drifted(self):
+        op = namespace_operation()
+        good = self.promotion(op)
+        for bad in (None, {}, {**good, 'unknown': True}, {**good, 'sha256': '0'*64}):
+            with self.subTest(value=bad), self.assertRaises(m.Stop):
+                m.validate_operation({**op, 'controllerPromotion': bad}, NOW, '2'*64)
+
+    def test_promotion_identity_and_source_bindings_are_strict(self):
+        op = namespace_operation()
+        for key, value in [('controllerSha', 'f'*40), ('controllerTree', 'f'*40),
+                           ('prCiRunId', '1234'), ('prNumber', True), ('schema', True),
+                           ('headBranch', 'codex/../escape'), ('headBranch', 'main'),
+                           ('mainCiRunId', op['controllerSourceCiRunId']), ('baseSha', 'F'*40),
+                           ('executableManifestSha256', 'nope')]:
+            bad = self.promotion(op); bad[key] = value
+            bad['sha256'] = m.digest(m.encoded({k: bad[k] for k in sorted(bad) if k != 'sha256'}))
+            with self.subTest(key=key, value=value), self.assertRaises(m.Stop):
+                m.validate_operation({**op, 'controllerPromotion': bad}, NOW, '2'*64)
+
+    def test_promotion_cannot_expand_legacy_tmpfs_web_schema(self):
+        op = copy.deepcopy(OP)
+        op['controllerPromotion'] = self.promotion({**op, 'controllerSourceCiRunId': '1234'})
+        with self.assertRaisesRegex(m.Stop, 'CONTROLLER_PROMOTION_SCHEMA'):
+            m.validate_operation(op, NOW, '2'*64)
+
 
 if __name__=='__main__':
     if len(sys.argv)==2 and sys.argv[1]=='--emit-namespace-fixture':

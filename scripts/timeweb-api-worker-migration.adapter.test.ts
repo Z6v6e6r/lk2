@@ -6,6 +6,7 @@ import {
   API_WORKER_MIGRATION_BRIDGE as b,
   readApiWorkerMigrationCapsule,
   runMigrationAdapter,
+  validateApiWorkerMigrationOperation,
   validateMigrationProofBundle,
   type MigrationEffects,
 } from './timeweb-api-worker-migration.js';
@@ -20,8 +21,42 @@ const rows = readdirSync('packages/database/migrations')
   }));
 const clone = <T>(v: T): T => structuredClone(v);
 const encoded = (v: unknown) => Buffer.from(JSON.stringify(v) + '\n');
-function operation() {
-  return {
+const promotionDigest = (value: Record<string, unknown>) =>
+  createHash('sha256')
+    .update(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.keys(value)
+            .filter((key) => key !== 'sha256')
+            .sort()
+            .map((key) => [key, value[key]]),
+        ),
+      ) + '\n',
+    )
+    .digest('hex');
+function promotionFor(value: {
+  controllerSha: string;
+  controllerTree: string;
+  controllerSourceCiRunId: string;
+}) {
+  const proof = {
+    schema: 1,
+    controllerSha: value.controllerSha,
+    controllerTree: value.controllerTree,
+    prNumber: 402,
+    headBranch: 'codex/backup-supervisor-host-20261016',
+    baseSha: 'b'.repeat(40),
+    prCiRunId: value.controllerSourceCiRunId,
+    mergeSha: 'c'.repeat(40),
+    mergeTree: 'e'.repeat(40),
+    mainCiRunId: '38170498442',
+    executableManifestSha256: 'f'.repeat(64),
+    resolutionManifestSha256: '1'.repeat(64),
+  };
+  return { ...proof, sha256: promotionDigest(proof) };
+}
+function operation(withPromotion = false) {
+  const value = {
     schema: 'PHUB_TIMEWEB_API_WORKER_MIGRATION_OPERATION_V1',
     target: { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 },
     controllerSha: 'a'.repeat(40),
@@ -63,6 +98,8 @@ function operation() {
     confirmation:
       'MIGRATE_0096_0097_11954FFD6D7B_FROM_0D6078BE7A50_NO_API_WORKER_SECRET_OR_FCM_CHANGE',
   };
+  if (!withPromotion) return value;
+  return { ...value, controllerPromotion: promotionFor(value) };
 }
 const target = { systemIdentifier: '1234567890123456789', databaseName: 'phub' };
 function role(kind: string) {
@@ -126,8 +163,8 @@ function role(kind: string) {
   };
 }
 
-function fixture() {
-  const op = operation(),
+function fixture(withPromotion = false) {
+  const op = operation(withPromotion),
     bytes = encoded(op),
     events: string[] = [];
   const pg = {
@@ -477,6 +514,42 @@ describe('migration-only actual adapter boundary', () => {
         },
         expected,
       ),
+    ).toThrow();
+  });
+  it('binds promoted source evidence through the operation, migration plan and backup proof tuple', async () => {
+    const x = fixture(true);
+    expect(validateApiWorkerMigrationOperation(x.op)).toEqual(x.op);
+    await runMigrationAdapter('deploy', x.bytes, x.f);
+    await runMigrationAdapter('reconcile', x.bytes, x.f);
+    const bundle = x.bundle();
+    const promotion = promotionFor(x.op);
+    const expected = {
+      controllerSha: x.op.controllerSha,
+      controllerTree: x.op.controllerTree,
+      controllerSourceCiRunId: x.op.controllerSourceCiRunId,
+      controllerPromotionSha256: promotion.sha256,
+      candidateReleaseId: `${b.candidateSha}-${b.publicationRunId}-1`,
+      migrationPlanSha256: hash(bundle.plan),
+      migrationSuccessSha256: hash(bundle.success),
+    };
+    expect(validateMigrationProofBundle(bundle, expected)).toHaveProperty('plan');
+    expect(() =>
+      validateMigrationProofBundle(bundle, {
+        ...expected,
+        controllerPromotionSha256: 'f'.repeat(64),
+      }),
+    ).toThrow();
+    expect(() =>
+      validateMigrationProofBundle(bundle, {
+        ...expected,
+        controllerPromotionSha256: null,
+      }),
+    ).toThrow();
+    expect(() =>
+      validateApiWorkerMigrationOperation({
+        ...x.op,
+        controllerPromotion: { ...promotion, extra: true },
+      }),
     ).toThrow();
   });
 });
