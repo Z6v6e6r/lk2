@@ -374,6 +374,169 @@ describe('browser auth gateway', () => {
     );
   });
 
+  it('reads the complete subscription source through the existing authenticated no-store API transport', async () => {
+    const fullPage = {
+      scope: 'CURRENT',
+      coverage: 'COMPLETE',
+      snapshot: {
+        id: '00000000-0000-4000-8000-000000000099',
+        asOf: '2026-10-16T09:00:00Z',
+        staleAt: '2026-10-16T10:00:00Z',
+      },
+      freshness: 'FRESH',
+      items: [],
+      page: { offset: 0, limit: 50, total: 0, hasMore: false, nextCursor: null },
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(profilePhotoSession()))
+      .mockResolvedValueOnce(Response.json(fullPage));
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.synthetic.invalid/',
+      tenantKey: 'synthetic',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+    await gateway.restoreSession();
+    await expect(gateway.getActiveSubscriptions!(PROFILE_PHOTO_USER_ID)).resolves.toMatchObject({
+      items: [],
+    });
+    const [url, init] = fetchImplementation.mock.calls[1] ?? [];
+    expect(url).toBe('https://api.synthetic.invalid/user/api/v1/synthetic/subscriptions?limit=50');
+    expect(init?.cache).toBe('no-store');
+    expect(new Headers(init?.headers).get('Authorization')).toBe(
+      'Bearer short-lived-padlhub-token',
+    );
+    expect(new Headers(init?.headers).get('X-Correlation-ID')).toBeTruthy();
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+  it("does not privately refresh a failed subscription read into another tab's session", async () => {
+    const next = profilePhotoSession();
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(profilePhotoSession()))
+      .mockResolvedValueOnce(
+        Response.json({ code: 'TOKEN_EXPIRED', message: 'Expired' }, { status: 401 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ...next,
+          user: { ...next.user, id: '00000000-0000-4000-8000-000000000003' },
+          context: { ...next.context, userId: '00000000-0000-4000-8000-000000000003' },
+        }),
+      );
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.synthetic.invalid/',
+      tenantKey: 'synthetic',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+    await gateway.restoreSession();
+    await expect(gateway.getActiveSubscriptions!(PROFILE_PHOTO_USER_ID)).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(
+      fetchImplementation.mock.calls.filter(([url]) =>
+        requestUrl(url).endsWith('/auth/session/refresh'),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('keeps the normalized Profile token when another shared request privately refreshes into account B', async () => {
+    const initial = { ...profilePhotoSession(), accessToken: 'synthetic-token-a' };
+    const second = {
+      ...profilePhotoSession(),
+      accessToken: 'synthetic-token-b',
+      context: { ...profilePhotoSession().context, userId: '00000000-0000-4000-8000-000000000003' },
+    };
+    let refreshes = 0;
+    let homes = 0;
+    const fetchImplementation = vi.fn<typeof fetch>((input, init) => {
+      const url = requestUrl(input);
+      if (url.endsWith('/auth/session/refresh'))
+        return Promise.resolve(Response.json(++refreshes === 1 ? initial : second));
+      if (url.endsWith('/home'))
+        return Promise.resolve(
+          ++homes === 1
+            ? Response.json({ code: 'TOKEN_EXPIRED' }, { status: 401 })
+            : Response.json({ subscriptions: [] }),
+        );
+      if (url.includes('/subscriptions?')) {
+        expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer synthetic-token-a');
+        expect(init?.credentials).toBe('omit');
+        return Promise.resolve(Response.json({ code: 'TOKEN_EXPIRED' }, { status: 401 }));
+      }
+      return Promise.resolve(new Response(null, { status: 404 }));
+    });
+    const gateway = createBrowserAuthGateway({
+      baseUrl: 'https://api.synthetic.invalid/',
+      tenantKey: 'synthetic',
+      appVersion: 'test',
+      fetchImplementation,
+    });
+    await gateway.restoreSession();
+    await gateway.getHomeDashboard();
+    expect(refreshes).toBe(2);
+    await expect(gateway.getActiveSubscriptions!(PROFILE_PHOTO_USER_ID)).rejects.toMatchObject({
+      status: 401,
+    });
+    expect(refreshes).toBe(2);
+    const calls = fetchImplementation.mock.calls.length;
+    await expect(
+      gateway.getActiveSubscriptions!('00000000-0000-4000-8000-000000000003'),
+    ).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+    expect(fetchImplementation).toHaveBeenCalledTimes(calls);
+  });
+
+  it.each(['user', 'tenant', 'logout'] as const)(
+    'discards the complete subscription read on %s change',
+    async (change) => {
+      let session = profilePhotoSession();
+      let finish!: (value: Response) => void;
+      const fetchImplementation = vi.fn<typeof fetch>((input) => {
+        const url = requestUrl(input);
+        if (url.endsWith('/auth/session/refresh')) return Promise.resolve(Response.json(session));
+        if (url.endsWith('/auth/session'))
+          return Promise.resolve(new Response(null, { status: 204 }));
+        if (url.includes('/subscriptions?'))
+          return new Promise<Response>((resolve) => {
+            finish = resolve;
+          });
+        return Promise.resolve(new Response(null, { status: 404 }));
+      });
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.synthetic.invalid/',
+        tenantKey: 'synthetic',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+      await gateway.restoreSession();
+      const pending = gateway.getActiveSubscriptions!(PROFILE_PHOTO_USER_ID);
+      const rejected = expect(pending).rejects.toThrow('AUTH_PRINCIPAL_CHANGED');
+      if (change === 'logout') await gateway.logout();
+      else {
+        session = {
+          ...session,
+          context: {
+            ...session.context,
+            ...(change === 'user'
+              ? { userId: '00000000-0000-4000-8000-000000000003' }
+              : { tenantId: '00000000-0000-4000-8000-000000000004' }),
+          },
+        };
+        await gateway.restoreSession();
+      }
+      finish(Response.json({ items: [] }));
+      await rejected;
+      expect(
+        fetchImplementation.mock.calls.filter(([url]) =>
+          requestUrl(url).includes('/subscriptions?'),
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
   it('coalesces concurrent Home reads without pinning a resolved snapshot', async () => {
     const session = {
       accessToken: 'short-lived-padlhub-token',

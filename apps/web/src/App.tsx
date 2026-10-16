@@ -803,6 +803,11 @@ export function App({
     HomeDashboard['subscriptions'] | null
   >(null);
   const [profileSubscriptionsError, setProfileSubscriptionsError] = useState<string | null>(null);
+  const profileViewerId = userProfile?.profile.userId;
+  const loadActiveProfileSubscriptions = useMemo(() => {
+    const load = gateway.getActiveSubscriptions;
+    return load && profileViewerId ? () => load(profileViewerId) : undefined;
+  }, [gateway, profileViewerId]);
   const [profileFriends, setProfileFriends] = useState<ProfileFriendPage | null>(null);
   const [profileFriendship, setProfileFriendship] = useState<ProfileFriendship | null>(null);
   const [profileFriendsBusy, setProfileFriendsBusy] = useState(false);
@@ -2600,6 +2605,9 @@ export function App({
           bookingPreferencesNotice={bookingPreferencesNotice}
           stationChoices={bookingPreferenceStations}
           subscriptions={profileSubscriptions}
+          {...(loadActiveProfileSubscriptions
+            ? { loadActiveSubscriptions: loadActiveProfileSubscriptions }
+            : {})}
           subscriptionsError={profileSubscriptionsError}
           communities={profileCommunities}
           communitiesError={profileCommunitiesError}

@@ -1351,9 +1351,9 @@ describe('PadlHub web authentication', () => {
         'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
       ),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Мои абонементы' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Купить подписку' })).toHaveAttribute(
       'href',
-      '/subscriptions',
+      'https://padlhub.ru/sub_hab',
     );
     expect(screen.queryByText('Действующих подписок пока нет.')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /^Открыть мои сообщества/ }));
@@ -2147,6 +2147,40 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
     expect(gateway.getUpcomingBookings).not.toHaveBeenCalled();
     expect(gateway.getPlayerProfile).not.toHaveBeenCalled();
+  });
+
+  it('opens the full active subscription dialog from Profile using its independent reader', async () => {
+    window.history.replaceState({}, '', '/profile');
+    const getActiveSubscriptions = vi.fn().mockResolvedValue({
+      snapshot: {
+        id: '00000000-0000-4000-8000-000000000099',
+        asOf: '2026-10-16T09:00:00Z',
+        staleAt: '2026-10-16T10:00:00Z',
+      },
+      freshness: 'FRESH',
+      items: [
+        {
+          id: '00000000-0000-4000-8000-000000000098',
+          title: 'Восьмой активный абонемент',
+          kind: 'GROUP',
+          status: 'ACTIVE',
+          remaining: { amount: 5, unit: 'VISITS' },
+          validUntil: '2026-12-31T00:00:00Z',
+        },
+      ],
+    });
+    const gateway = createGateway({
+      restoreSession: vi.fn().mockResolvedValue(session),
+      getActiveSubscriptions,
+    });
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Все подписки' }));
+    const dialog = screen.getByRole('dialog', { name: 'Все подписки' });
+    expect(
+      await within(dialog).findByRole('heading', { name: 'Восьмой активный абонемент' }),
+    ).toBeVisible();
+    expect(within(dialog).getByText('Посещений осталось: 5')).toBeVisible();
+    expect(getActiveSubscriptions).toHaveBeenCalledTimes(1);
   });
 
   it('opens subscription list, canonical details and browser back from the current Home selection', async () => {
