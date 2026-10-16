@@ -59,6 +59,185 @@ afterEach(() => {
 });
 
 describe('GameDetailView', () => {
+  it('shows occupancy and organizer badges without changing avatars or links', () => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={{
+          ...game,
+          capacity: { total: 4, occupied: 2, reserved: 0, open: 2, waitlistCount: 0 },
+          participants: game.participants.slice(0, 2).map((participant, index) => ({
+            ...participant,
+            level: index === 0 ? 'C' : null,
+          })),
+        }}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+
+    const panel = screen.getByRole('region', { name: 'Участники игры' });
+    const progress = within(panel).getByRole('progressbar', { name: 'Заполненность игры' });
+    expect(progress).toHaveAttribute('aria-valuenow', '2');
+    expect(progress).toHaveAttribute('aria-valuemax', '4');
+    expect(progress.children).toHaveLength(4);
+    expect(progress.querySelectorAll('.is-filled')).toHaveLength(2);
+    expect(within(panel).getByText('2/4')).toBeVisible();
+    expect(within(panel).queryByText('Уровень')).toBeNull();
+    const organizer = within(panel).getByRole('link', { name: /Анна/ });
+    expect(organizer).toHaveAttribute('href', `/profile/${PLAYERS[0][0]}`);
+    expect(within(panel).getByText('Организатор')).toHaveClass('game-detail-player__badge');
+    expect(within(organizer).queryByText('Организатор')).toBeNull();
+    expect(within(panel).queryByLabelText('Уровень: C')).toBeNull();
+    expect(
+      within(organizer).getByRole('img', { name: /Анна, уровень C, прогресс 42%/ }),
+    ).toHaveAttribute('data-size', '48');
+    expect(within(organizer).getByRole('img', { name: /Анна, уровень C/ })).toHaveAttribute(
+      'data-player-level-ring-visible',
+      'true',
+    );
+    expect(within(panel).queryByLabelText('Уровень не указан')).toBeNull();
+    expect(within(panel).getAllByText('Свободное место')).toHaveLength(2);
+    expect(within(panel).queryByText('@никнэйм')).toBeNull();
+    expect(within(panel).queryByRole('button', { name: 'Показать больше' })).toBeNull();
+  });
+
+  it('offers only the viewer a leave badge through the existing action handler', async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        viewerUserId={PLAYERS[1][0]}
+        game={{ ...game, viewerRelation: 'PARTICIPANT', allowedActions: ['OPEN_DETAILS', 'LEAVE'] }}
+        onAction={onAction}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+    const panel = screen.getByRole('region', { name: 'Участники игры' });
+    const leave = within(panel).getByRole('button', { name: 'Покинуть игру' });
+    const viewerLink = within(panel).getByRole('link', { name: /Борис/ });
+    expect(leave.closest('a')).toBeNull();
+    expect(leave.parentElement).toBe(viewerLink.parentElement);
+    expect(within(panel).getAllByRole('button', { name: 'Покинуть игру' })).toHaveLength(1);
+    expect(within(panel).getByRole('link', { name: /Вера/ }).parentElement).not.toContainElement(
+      leave,
+    );
+    await user.click(leave);
+    expect(onAction).toHaveBeenCalledExactlyOnceWith('LEAVE');
+  });
+
+  it.each([
+    {
+      name: 'server denies leave',
+      viewerUserId: PLAYERS[1][0],
+      relation: 'PARTICIPANT',
+      allowed: false,
+    },
+    {
+      name: 'viewer identity is missing',
+      viewerUserId: undefined,
+      relation: 'PARTICIPANT',
+      allowed: true,
+    },
+    {
+      name: 'viewer is not on the roster',
+      viewerUserId: 'other-user',
+      relation: 'PARTICIPANT',
+      allowed: true,
+    },
+    {
+      name: 'viewer is an organizer',
+      viewerUserId: PLAYERS[0][0],
+      relation: 'ORGANIZER',
+      allowed: true,
+    },
+    {
+      name: 'viewer is not a participant',
+      viewerUserId: PLAYERS[1][0],
+      relation: 'NONE',
+      allowed: true,
+    },
+  ] as const)('hides the leave badge when $name', ({ viewerUserId, relation, allowed }) => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        {...(viewerUserId ? { viewerUserId } : {})}
+        game={{
+          ...game,
+          viewerRelation: relation,
+          allowedActions: allowed ? ['OPEN_DETAILS', 'LEAVE'] : ['OPEN_DETAILS'],
+        }}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+    const panel = screen.getByRole('region', { name: 'Участники игры' });
+    expect(within(panel).queryByRole('button', { name: 'Покинуть игру' })).toBeNull();
+  });
+
+  it('disables the leave badge while processing and removes it when permission is withdrawn', async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    const props = {
+      activeTab: 'GAME' as const,
+      busy: true,
+      viewerUserId: PLAYERS[1][0],
+      game: { ...game, allowedActions: ['OPEN_DETAILS', 'LEAVE'] } satisfies GameCard,
+      onAction,
+      onChatOpen: vi.fn(),
+      onSubmit: vi.fn().mockResolvedValue(undefined),
+      onTabChange: vi.fn(),
+    };
+    const view = render(<GameDetailView {...props} />);
+    const leave = screen.getByRole('button', { name: 'Покинуть игру' });
+    expect(leave).toBeDisabled();
+    await user.click(leave);
+    expect(onAction).not.toHaveBeenCalled();
+    view.rerender(
+      <GameDetailView
+        {...props}
+        busy={false}
+        game={{ ...game, allowedActions: ['OPEN_DETAILS'] }}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Покинуть игру' })).toBeNull();
+  });
+
+  it.each([0, 4])('renders the scale and available places for %i occupied seats', (occupied) => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={{
+          ...game,
+          participants: game.participants.slice(0, occupied),
+          capacity: { total: 4, occupied, reserved: 0, open: 4 - occupied, waitlistCount: 0 },
+        }}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+
+    const panel = screen.getByRole('region', { name: 'Участники игры' });
+    const progress = within(panel).getByRole('progressbar');
+    expect(progress).toHaveAttribute('aria-valuenow', String(occupied));
+    expect(progress.querySelectorAll('.is-filled')).toHaveLength(occupied);
+    expect(within(panel).queryAllByRole('link')).toHaveLength(occupied);
+    expect(within(panel).queryAllByText('Свободное место')).toHaveLength(4 - occupied);
+  });
+
   it('shows the existing seat price before the player joins', () => {
     render(
       <GameDetailView
