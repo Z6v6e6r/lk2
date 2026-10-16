@@ -102,17 +102,86 @@ permissive tenant policy with identical `USING` and `WITH CHECK`, requiring `app
 context and cross-tenant operations must fail before activation. The verifier supports PostgreSQL16;
 ACL rows reject unexpected privileges, including newer privilege names.
 
-Existing identity, audit and in-app notification prerequisites remain separate: support checks read
-identity users/access profiles; SHARE row locks need their existing SELECT/UPDATE privileges; audit
-needs INSERT; notifications templates/intents/deliveries/inbox need SELECT/INSERT. No identity update
-is executed by support. Verify these existing grants against the authorized runtime inventory.
-Before production activation, inventory the existing support-permission assignments, backup/WAL
-retention/access and replica policies, and document restoration followed by reconciling/reapplying
-overdue cleanup before restored data is served. Primary-table cleanup does not promise immediate
-erasure from preexisting backup/WAL/replica copies. No
-real permission grant or backup-policy change is part of this PR.
-API/worker/realtime currently share the runtime DATABASE_URL by the deployment contract. The worker
-uses only `SupportTicketAutoclosePort` in code; this is not a claim of separate worker credentials.
+### Compatible runtime activation
+
+The support owner is the pinned `phub_support_owner`: NOLOGIN, NOSUPERUSER, NOBYPASSRLS,
+NOCREATEDB/NOCREATEROLE/NOREPLICATION and no membership edges. It owns only the support schema,
+its four tables/indexes and four SECURITY INVOKER guard functions; derived toast objects are allowed.
+Its DDL capability preflight verifies database CREATE, identity USAGE, column REFERENCES on
+`identity.tenants(id)` and `identity.users(tenant_id,id)`, and UUID/PLpgSQL use. This is a capability
+minimum, not certification of every effective owner privilege. Role enrollment is a separate,
+exact-target management action; the activation commands never create roles or passwords.
+
+`SUPPORT_DATABASE_URL` is the sole activation capability, owned by the platform/release owner.
+It must name a distinct restricted LOGIN principal over the same PostgreSQL target as `DATABASE_URL`.
+API and Worker use a small separate support pool; support never falls back to the legacy main pool.
+Realtime and the ordinary migrator environment must not receive this credential. Review/remove this
+compatibility capability when the legacy main runtime role split is completed. It does not enable
+station support, FCM or another provider.
+
+Without the capability, authenticated support routes return the existing `SUPPORT_UNAVAILABLE`
+503 and Worker never starts or schedules support close/purge. Configured but unsafe credentials
+fail startup. Later support failures remain isolated: API support readiness returns 503, Worker
+logs a body-free cycle failure and retries its bounded cycle. General authentication and existing
+Worker jobs do not depend on support readiness. Health responses expose a separate `supportDatabase`
+field only when configured; local contour attestation also binds its credential-free target.
+
+The runtime verifier rejects elevated roles, membership in either direction, any ownership,
+database/schema CREATE, unexpected effective table/column/schema privileges, grant options,
+unsafe callable definers and support-function EXECUTE. Dependency privileges are column-scoped:
+
+- tenants SELECT(id, active);
+- users SELECT(tenant_id, id, status) and UPDATE(updated_at);
+- access profiles SELECT(tenant_id, user_id, roles, permissions) and UPDATE(updated_at);
+- only the INSERT columns used by support for audit/outbox and notifications;
+- only template lookup columns and intent id are readable in notifications.
+
+`UPDATE(updated_at)` is sufficient for PostgreSQL `FOR SHARE OF p,u`; table UPDATE and UPDATE of
+status/roles/permissions are forbidden. `supportRuntimePrerequisiteGrantStatements()` is the exact
+column inventory. Prerequisite and support grants execute in one ACL transaction, with subset-only
+preimage admission and exact post-verification before commit. Unrelated grants are not repaired.
+No human support permission assignment is performed by these tools.
+
+The immutable migrator image builds `dist/support-activation.js` and
+`dist/verify-support-runtime.js`. They are one-shot tools, not an automatic startup migration.
+`support-activation` accepts a protected `PHUB_SUPPORT_ACTIVATION_BINDING` JSON object, current
+bootstrap DATABASE_URL, one exact phase and a fresh expiry. It binds DB host/port/name/system id,
+bootstrap principal, fixed support owner, runtime role, full ledger checksum and confirmation.
+The result hashes the entire canonical binding; it does not claim that a self-supplied operation
+hash proves human approval. It never emits DSN/SQL errors, ticket bodies or personal data.
+
+The existing shared bootstrap is explicitly privileged (`EXISTING_PRIVILEGED_BOOTSTRAP`), never
+represented as a bounded migrator. The new compatible phases are separate from the frozen old
+99→101 controller; its pins and rejection of 102 remain unchanged:
+
+1. `compatibility`: exact 99→101, applying only 0096/0097 under the approved legacy bootstrap.
+   Their ownership stays with that executor. This is a separately approved compatibility transition,
+   not a bypass or call to the frozen old controller.
+2. `migrate`: exact 101→102, applying only 0098 under `SET LOCAL ROLE phub_support_owner`, then
+   RESET ROLE before the bootstrap ledger insert. Zero owner default ACLs, capability/ownership,
+   RLS/policy/trigger structure and runtime privilege inventory are checked before commit.
+3. `acl`: exact102; dependency column grants and support table grants are verified atomically.
+4. `verify`: read-only owner/ACL/ledger check. Runtime LOGIN verification uses the separate runtime
+   tool and does not require access to `pg_control_system()` or the migration ledger.
+
+All mutations share advisory fence 7140221 with the ordinary migrator, with 5s lock and 120s
+statement limits. DDL and ledger are one transaction. Timeout or uncertain command outcome means
+STOP and protected readback/reconciliation; never blindly rerun a phase. Partial/foreign ledgers,
+foreign namespace/owners/grants and expired bindings are refused.
+
+The support-specific secret delta validator permits only addition of the same SUPPORT_DATABASE_URL
+to candidate API/Worker env files. Removing that line must recover every previous env byte.
+Realtime/migrator bytes and all FCM/provider settings stay identical. Prepared sets still use the
+existing source-bound provisioner, immutable release markers and recoverable atomic swap helper.
+
+Before live work, require exact source/CI/manifest authority, role/credential enrollment, pre99 and
+pre101 backup/isolated restore proofs, retained one-shot migration/ACL/runtime receipts, post102
+backup/restore plus live ACL proof, the enrolled closed controller, rollback image/secret custody,
+and readiness/smoke/observation. These source tools alone are not an enrolled deployment controller.
+The existing dump/restore uses no-owner/no-acl: it does not prove restored role grants. Reapply and
+verify the exact ACL before serving restored support data. Inventory backup/WAL/replica retention
+and reconcile overdue cleanup before restored data is served; primary cleanup does not erase old
+backup copies. A permitted rollback leaves schema/data/FORCE RLS intact and uses only an attested gate-safe binary, as described below.
 
 ## Disposable physical rehearsal
 
@@ -145,9 +214,41 @@ Mock/unit tests remain distinct from physical PostgreSQL evidence.
 
 ## Rollback and forward recovery
 
-An application/worker rollback uses the prior immutable binaries and leaves the support schema,
-tables, data and FORCE-RLS policies in place. Do not drop tables or delete ticket data. The old
-worker stops auto-close and retention work; later forward recovery resumes due-row processing safely. If activation
-rollback needs support privilege removal, remove only the exact support grants through the separately
-authorized migrator process and exact runtime role, then verify the bounded inventory. No direct
-shared-target SQL, default grant or broad permission rollback is authorized by this development PR.
+The rollback target must be an immutable API/Worker baseline that either contains this separate-pool
+shutdown gate or predates all support wiring. The predecessor containing a main-pool support
+repository and unconditional support lifecycle is not eligible after 0098: removing the support
+secret or revoking its ACL cannot constrain the legacy SUPERUSER connection. Schema presence alone
+activates that predecessor's support paths.
+
+Required order: install the gate-safe API and Worker with SUPPORT_DATABASE_URL absent, prove the
+exact installed digests and that every old API/Worker process has drained, then execute the
+99→101 compatibility phase, 101→102 support migration and ACL phases. Only after restricted LOGIN
+verification may the support secret be installed and the support lifecycle enabled. The closed
+controller must enforce this order and retain the gate-safe rollback digests; ordinary
+migrations-before-process-replacement ordering is not eligible. The standalone database tools do
+not prove process drainage or supply this controller authority.
+
+Rollback removes the support secret and stays on the gate-safe baseline. It leaves the schema,
+data and FORCE-RLS policies in place; do not drop tables or delete tickets. Forward recovery resumes
+due-row processing. Any privilege removal is a separate authorized operation after support processes
+stop, limited to the exact runtime role and followed by inventory verification. Disaster restore
+is a separate transition and can lose writes after the backup. No direct shared-target SQL,
+default grant or broad permission rollback is authorized by this development PR.
+
+The compatibility phase also creates the empty profile contact store and local-password credential
+store (0096/0097); it performs no backfill, credential enrollment or provider switch. Existing local
+password logins remain invalid without enrolled credentials. The refresh-session identity guard
+permits existing revoke/rotation writes; its DDL lock remains bounded by the phase's 5s timeout.
+
+### Activation PostgreSQL fixture
+
+`apps/migrator/src/support-activation.pg.test.ts` requires an explicitly provisioned fresh
+loopback database at `127.0.0.1:65439/phub_support_activation_verify`, the synthetic
+`fixture_admin` bootstrap, `SUPPORT_ACTIVATION_PG_WRITES=AUTHORIZED` and
+`SUPPORT_ACTIVATION_PG_URL`. Its caller must pre-provision phub_support_owner (NOLOGIN) and
+support_fixture_activation (restricted LOGIN, synthetic password); the fixture validates these
+roles and never creates them. It proves the separate 99→101/101→102 phases, NOLOGIN ownership,
+5s lock abort, rollback after DDL and partial ACL, restricted LOGIN and rejected identity updates.
+The existing repository fixture also uses the exact column grant helper; for SCRAM it accepts
+`SUPPORT_TICKET_PG_RUNTIME_PASSWORD`, never borrowed from the bootstrap URL. These fixtures do not
+provision/drop their database or roles, connect to a provider or prove a production deployment.

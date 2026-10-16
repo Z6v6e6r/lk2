@@ -303,6 +303,7 @@ export interface BuildAppOptions {
   readonly stationSupportProvider?: StationSupportProvider;
   readonly stationSupportRepository?: StationSupportRepository;
   readonly supportTicketRepository?: SupportTicketRepository;
+  readonly supportTicketReady?: () => Promise<boolean>;
   /**
    * Chat pictures for that contour. Absent when the deployment has no media bucket; the tab then
    * keeps working as text-only instead of failing.
@@ -852,9 +853,13 @@ export async function buildApp(options: BuildAppOptions) {
             .catch(() => false)
         : Promise.resolve(true),
     ]);
+    const supportStatus = options.supportTicketReady
+      ? { supportDatabase: await options.supportTicketReady().catch(() => false) }
+      : {};
     if (!databaseReady || !authReady || !communityMediaReady) {
       return reply.status(503).send({
         status: 'not_ready',
+        ...supportStatus,
         database: databaseReady,
         auth: authReady,
         communityMedia: communityMediaReady,
@@ -865,6 +870,7 @@ export async function buildApp(options: BuildAppOptions) {
     }
     return {
       status: 'ready',
+      ...supportStatus,
       database: true,
       auth: true,
       communityMedia: true,
@@ -1373,6 +1379,7 @@ export async function buildApp(options: BuildAppOptions) {
   });
   registerSupportTicketRoutes(app as unknown as FastifyInstance, {
     ...(options.supportTicketRepository ? { repository: options.supportTicketRepository } : {}),
+    ...(options.supportTicketReady ? { isReady: options.supportTicketReady } : {}),
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
     adminAuthenticatedTenantHandlers: [authenticateAdmin, resolveTenant],

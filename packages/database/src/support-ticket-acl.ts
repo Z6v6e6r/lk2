@@ -183,7 +183,7 @@ export function assertSupportTicketAclBoundary(
   }
 }
 export async function inspectSupportTicketAclBoundary(
-  client: PoolClient,
+  client: Pick<PoolClient, 'query'>,
   runtimeRoleName: string,
   migratorRoleName: string,
 ): Promise<SupportTicketAclSnapshot> {

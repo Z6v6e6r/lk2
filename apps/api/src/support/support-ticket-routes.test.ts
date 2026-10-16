@@ -24,6 +24,8 @@ afterEach(async () => {
 function fixture(
   input: {
     authenticated?: boolean;
+    isReady?: () => Promise<boolean>;
+    failureCode?: string;
     admin?: boolean;
     permissions?: string[];
     outcome?: 'version_conflict' | 'not_found' | 'receipt_expired';
@@ -32,6 +34,12 @@ function fixture(
 ) {
   const repository = {
     list: vi.fn(() => {
+      if (input.failureCode)
+        return Promise.reject(
+          Object.assign(new Error('synthetic private database detail'), {
+            code: input.failureCode,
+          }),
+        );
       if (input.revoked) return Promise.reject(new SupportTicketPermissionError());
       return Promise.resolve({ items: [ticket] });
     }),
@@ -78,6 +86,7 @@ function fixture(
   });
   registerSupportTicketRoutes(app, {
     repository,
+    ...(input.isReady ? { isReady: input.isReady } : {}),
     authenticatedTenantHandlers: [],
     commandHandlers: [],
     adminAuthenticatedTenantHandlers: [],
@@ -235,4 +244,32 @@ describe('support expired command receipt', () => {
     expect(response.statusCode).toBe(410);
     expect(response.json<{ code: string }>().code).toBe('SUPPORT_COMMAND_EXPIRED');
   });
+});
+
+describe('support dependency isolation', () => {
+  it.each([() => Promise.resolve(false), () => Promise.reject(Error('sensitive DB URL'))])(
+    'returns body-free 503 without calling storage on unavailable pool',
+    async (isReady) => {
+      const { app, repository } = fixture({ isReady });
+      const response = await app.inject({ url: userBase });
+      expect(response.statusCode).toBe(503);
+      expect(response.json<{ code: string }>().code).toBe('SUPPORT_UNAVAILABLE');
+      expect(response.body).not.toContain('sensitive');
+      expect(repository.list).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('support database failure redaction', () => {
+  it.each(['ECONNREFUSED', '42501', '57P01'])(
+    'maps a dependency race after readiness to existing503 without raw database detail: %s',
+    async (failureCode) => {
+      const { app, repository } = fixture({ isReady: () => Promise.resolve(true), failureCode });
+      const response = await app.inject({ url: userBase });
+      expect(response.statusCode).toBe(503);
+      expect(response.body).not.toContain('private database');
+      expect(response.json<{ code: string }>().code).toBe('SUPPORT_UNAVAILABLE');
+      expect(repository.list).toHaveBeenCalledOnce();
+    },
+  );
 });

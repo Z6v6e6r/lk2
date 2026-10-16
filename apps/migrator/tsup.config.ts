@@ -3,6 +3,8 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: [
     'src/main.ts',
+    'src/support-activation.ts',
+    'src/verify-support-runtime.ts',
     'src/communities-staged-rehearsal.ts',
     'src/verify-role-boundary.ts',
     'src/verify-media-runtime-role.ts',
