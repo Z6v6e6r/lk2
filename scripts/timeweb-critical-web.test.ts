@@ -1,6 +1,13 @@
+// @vitest-environment jsdom
 import { spawnSync } from 'node:child_process';
+import { createElement } from 'react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { PadlHubApiClient } from '@phub/api-sdk';
+import type { AuthGateway } from '../apps/web/src/auth-gateway.js';
+import { SupportPage } from '../apps/web/src/SupportPage.js';
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+afterEach(cleanup);
 
 function scenario(code: string) {
   const result = spawnSync(
@@ -11,7 +18,7 @@ function scenario(code: string) {
       `
     import assert from 'node:assert/strict';
     import {validateCriticalWebOperation, validateWebControllerDelta, validateCriticalWebRequestStat,
-      validateCriticalWebSource, WEB_CONTROLLER_FILES, validateCriticalWebReceipt, validateCriticalWebRecoveryImages, validateCriticalWebSuccessEvidence, runCriticalWebTransition, observeCriticalWeb, WEB_COMPATIBILITY} from './scripts/timeweb-critical-web.js';
+      validateCriticalWebSource, WEB_CONTROLLER_FILES, validateCriticalWebReceipt, validateCriticalWebRecoveryImages, validateCriticalWebSuccessEvidence, runCriticalWebTransition, observeCriticalWeb, WEB_COMPATIBILITY, PROFILE_V2_WEB_COMPATIBILITY, PROFILE_V2_WEB_CONTROLLER_FILES, criticalWebDirectories, validateCriticalWebPlanBinding} from './scripts/timeweb-critical-web.js';
     ${code}`,
     ],
     { encoding: 'utf8' },
@@ -220,5 +227,136 @@ describe('closed critical Web delivery', () => {
     expect(source).toContain("apiWebArtifactSmokeArgs('web'");
     expect(source).toContain('standardWebComposeArgs(COMPOSE');
     expect(source).not.toContain('installed-components.env');
+  });
+});
+
+const profileFixture =
+  fixture +
+  `
+  op.schema='PHUB_TIMEWEB_CRITICAL_PROFILE_V2_WEB_OPERATION_V1';
+  op.confirmation='UPGRADE_PROFILE_V2_WEB_AAAAAAAAAAAA_FROM_222222222222_KEEP_API_0D6078BE7A50';
+`;
+describe('closed Profile V2 Web compatibility', () => {
+  it('requires the distinct schema and confirmation without changing the original V1 fixture', () =>
+    scenario(
+      profileFixture +
+        `
+    validateCriticalWebOperation(op,now);
+    assert.deepEqual(WEB_COMPATIBILITY,{
+      baselineSource:'0d6078be7a50ed3f5761d66071527be003bd568f',baselineTree:'5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
+      runtimeSource:'8960afe24211372320006fc4c5b18905923672f5',runtimeTree:'bf0988012cfce0f14811491a14ae46fa57fe5541',
+      runtimeDeltaSha256:'c71dcfeb564b648ff78305680af3d3a37477a2d54e1db8101662c2b1d6e11fec'});
+    for(const schema of ['PHUB_TIMEWEB_CRITICAL_PROFILE_V2_WEB_OPERATION_V2','profile','',null])
+      assert.throws(()=>validateCriticalWebOperation({...op,schema},now),/IDENTITY/);
+    assert.throws(()=>validateCriticalWebOperation({...op,confirmation:op.confirmation.replace('PROFILE_V2_WEB','WEB')},now),/CONFIRMATION/);
+    assert.throws(()=>validateCriticalWebOperation({...op,schema:'PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1'},now),/CONFIRMATION/);
+    assert.throws(()=>validateCriticalWebOperation({...op,component:'api'},now),/IDENTITY/);
+    assert.throws(()=>validateCriticalWebOperation({...op,sourceCiRunId:'99'},now),/IDENTITY/);
+    assert.throws(()=>validateCriticalWebOperation({...op,expiresAt:'2026-10-10T10:10:00.000Z'},now),/EXPIRY/);
+  `,
+    ));
+  it('limits the new runtime tail to the three approved inert files', () =>
+    scenario(
+      profileFixture +
+        `
+    assert.equal(WEB_CONTROLLER_FILES.size,8);assert.equal(PROFILE_V2_WEB_CONTROLLER_FILES.size,3);
+    for(const path of PROFILE_V2_WEB_CONTROLLER_FILES) for(const status of ['A','M']) validateWebControllerDelta([{status,path}],op);
+    for(const path of [...WEB_CONTROLLER_FILES].filter(v=>!PROFILE_V2_WEB_CONTROLLER_FILES.has(v))) {
+      validateWebControllerDelta([{status:'M',path}]);
+      assert.throws(()=>validateWebControllerDelta([{status:'M',path}],op),/SOURCE_DELTA/);
+    }
+    for(const path of ['apps/web/src/ProfilePage.tsx','packages/api-sdk/src/index.ts','package.json','package-lock.json','deploy/timeweb/compose.beta.yaml'])
+      assert.throws(()=>validateWebControllerDelta([{status:'M',path}],op),/SOURCE_DELTA/);
+    for(const status of ['D','R100','T','C100']) assert.throws(()=>validateWebControllerDelta([{status,path:'scripts/timeweb-critical-web.js'}],op),/SOURCE_DELTA/);
+  `,
+    ));
+  it('proves the actual frozen tree and raw delta, rejects altered source and executable tails, and keeps V1 closed', () =>
+    scenario(
+      profileFixture +
+        `
+    const {execFileSync}=await import('node:child_process');
+    const git=args=>execFileSync('git',args,{encoding:'utf8'}).trim();
+    op.candidateSha=op.controllerSha=git(['rev-parse','HEAD']);op.candidateTree=git(['rev-parse','HEAD^{tree}']);
+    op.confirmation='UPGRADE_PROFILE_V2_WEB_'+op.candidateSha.slice(0,12).toUpperCase()+'_FROM_222222222222_KEEP_API_0D6078BE7A50';
+    validateCriticalWebOperation(op,now);validateCriticalWebSource(op,git);
+    assert.throws(()=>validateCriticalWebSource({...op,candidateTree:'0'.repeat(40)},git),/SOURCE_TREE/);
+    assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='rev-parse'&&args[1]===PROFILE_V2_WEB_COMPATIBILITY.runtimeSource+'^{tree}'?'0'.repeat(40):git(args)),/SOURCE_TREE/);
+    assert.throws(()=>validateCriticalWebSource(op,args=>args.includes('--raw')?git(args)+'foreign':git(args)),/RUNTIME_PROOF/);
+    const tail='M\\0scripts/timeweb-critical-web.js\\0';
+    for(const mode of ['100644','100755','120000','160000']) {
+      const injected=args=>args.includes('--name-status')?tail:args[0]==='ls-tree'?mode+' blob '+'e'.repeat(40)+'\tscripts/timeweb-critical-web.js':git(args);
+      if(mode==='100644')validateCriticalWebSource(op,injected);
+      else assert.throws(()=>validateCriticalWebSource(op,injected),/CONTROLLER_FILE_MODE/);
+    }
+    assert.throws(()=>validateCriticalWebSource(op,args=>args.includes('--name-status')?'M\\0apps/web/src/ProfilePage.tsx\\0':git(args)),/SOURCE_DELTA/);
+    assert.throws(()=>validateCriticalWebSource({...op,schema:'PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1'},git),/SOURCE_DELTA/);
+  `,
+    ));
+  it('uses the original PRE99 backup directory and a separate publication transaction', () =>
+    scenario(
+      profileFixture +
+        `
+    const dirs=criticalWebDirectories(op);
+    assert.equal(dirs.transaction,'/opt/phub/timeweb-beta/backups/'+sha+'-22-1-web');
+    assert.equal(dirs.backupDirectory,'/opt/phub/timeweb-beta/backups/'+sha+'-11-1-web');
+    const original={...op,schema:'PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1',confirmation:op.confirmation.replace('PROFILE_V2_WEB','WEB')};
+    assert.equal(criticalWebDirectories(original).backupDirectory,dirs.transaction);
+    for(const patch of [{candidateSha:'../other'},{controllerSourceCiRunId:'../other'},{publicationRunId:'../other'}])
+      assert.throws(()=>criticalWebDirectories({...op,...patch}));
+  `,
+    ));
+  it('binds preparation and recovery to the selected compatibility, exact operation and backup path', () =>
+    scenario(
+      profileFixture +
+        `
+    const h='a'.repeat(64),dirs=criticalWebDirectories(op);
+    const plan={operationSha256:h,compatibility:PROFILE_V2_WEB_COMPATIBILITY,backup:{path:dirs.backupDirectory+'/database-backup-receipt.json'}};
+    validateCriticalWebPlanBinding(plan,op,h);
+    for(const patch of [{operationSha256:'b'.repeat(64)},{compatibility:WEB_COMPATIBILITY},{compatibility:{...PROFILE_V2_WEB_COMPATIBILITY,runtimeSource:WEB_COMPATIBILITY.runtimeSource}},{backup:{path:dirs.transaction+'/database-backup-receipt.json'}},{backup:{path:'/foreign/database-backup-receipt.json'}}])
+      assert.throws(()=>validateCriticalWebPlanBinding({...plan,...patch},op,h),/PLAN_BINDING/);
+    assert.throws(()=>validateCriticalWebPlanBinding(plan,op,'b'.repeat(64)),/PLAN_BINDING/);
+    const original={...op,schema:'PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1',confirmation:op.confirmation.replace('PROFILE_V2_WEB','WEB')};
+    assert.throws(()=>validateCriticalWebPlanBinding(plan,original,h),/PLAN_BINDING/);
+    validateCriticalWebPlanBinding({...plan,compatibility:WEB_COMPATIBILITY,backup:{path:dirs.transaction+'/database-backup-receipt.json'}},original,h);
+  `,
+    ));
+  it('handles old API support-ticket404 as a controlled read failure without issuing commands', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            message: 'Route GET:/user/api/v1/synthetic/support/tickets not found',
+            error: 'Not Found',
+            statusCode: 404,
+          }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+    const client = new PadlHubApiClient({
+      baseUrl: 'https://api.example.test',
+      tenantKey: 'synthetic',
+      platform: 'web',
+      appVersion: 'test',
+      initialAccessToken: 'synthetic-token',
+      fetchImplementation,
+    });
+    const create = vi.fn(),
+      send = vi.fn();
+    const gateway = {
+      listSupportTickets: () => client.listSupportTickets(),
+      getSupportTicket: vi.fn(),
+      createSupportTicket: create,
+      sendSupportTicketMessage: send,
+    } as unknown as AuthGateway;
+    render(createElement(SupportPage, { gateway }));
+    expect((await screen.findByRole('alert')).textContent).toContain('not found');
+    fireEvent.click(screen.getByRole('button', { name: 'Обновить обращения' }));
+    await waitFor(() => expect(fetchImplementation).toHaveBeenCalledTimes(2));
+    expect(
+      fetchImplementation.mock.calls.every(([, init]) => (init?.method ?? 'GET') === 'GET'),
+    ).toBe(true);
+    expect(create).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 });
