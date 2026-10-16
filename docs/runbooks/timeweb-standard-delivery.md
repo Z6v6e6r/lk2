@@ -1101,7 +1101,13 @@ storage cleanup. The mask hides host containerd endpoints and keeps shim sockets
 encrypted filesystem. Its host baseline is a real root-owned 0711 or 0755 directory with no
 mount at or below it; live contents are never copied, hashed or changed. The unit also requires
 `PrivateNetwork=yes`, with independently proven source and supervisor network namespaces,
-so temporary runtime listeners cannot share the host network. The producer and consumer check
+so temporary runtime listeners cannot share the host network. Host-address checks run only in
+the outer producer entry, where both pinned host addresses must be visible before any mutation.
+The isolated supervisor keeps the common hostname/architecture checks and binds to the exact
+request, tool, capsule, frozen source daemon, admitted unit/cgroup and source/supervisor network
+namespace proofs; it must not query its private network for the host addresses. These checks do
+not authorize retry or reconciliation of a unit that stopped before its durable receipt.
+The producer and consumer check
 managed containerd argv and full CRI plugin URI against Docker 29/containerd 2.3 semantics.
 An unverified plugin-namespace JSON override is omitted; each runtime uses its own data/state
 and the operation-bound task namespace. An intent with the exact owned alias

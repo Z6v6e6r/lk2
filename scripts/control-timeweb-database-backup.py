@@ -3017,8 +3017,11 @@ def main():
     op=validate_operation(strict(request_bytes),time.time(),file_sha,allow_expired=sys.argv[1]!='--execute')
     need(file==ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py'),'TOOL_PATH')
     need(os.uname().nodename=='msk-1-vm-z8ks' and os.uname().machine=='x86_64','HOST')
-    ips=command(['/usr/bin/hostname','-I'],'HOST').decode().split()
-    need('100.77.212.57' in ips and '103.88.243.171' in ips,'HOST')
+    if not supervisor:
+        # The supervisor runs in systemd's private network namespace. Its host
+        # binding is the frozen source daemon and admitted unit/namespace proof.
+        ips=command(['/usr/bin/hostname','-I'],'HOST').decode().split()
+        need('100.77.212.57' in ips and '103.88.243.171' in ips,'HOST')
     if supervisor:
         need(is_namespace_operation(op) and sys.argv[3]==digest(request_bytes) and time.time()<utc(op['expiresAt']), 'NS_SUPERVISOR_ENTRY')
         tool_custody(op)
