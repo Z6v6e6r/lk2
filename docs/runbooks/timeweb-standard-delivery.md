@@ -554,6 +554,68 @@ The release includes the cumulative reviewed game rendering/navigation changes. 
 an unchanged API does not prove authenticated production journeys; collect product feedback after
 activation. LOCAL fixtures and CI are separate from that evidence.
 
+### Closed Profile V2 compatibility contract
+
+The separately reviewed `PHUB_TIMEWEB_CRITICAL_PROFILE_V2_WEB_OPERATION_V1` operation selects a
+second frozen fixture. It leaves `PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1`, its runtime pins and its
+eight-file controller tail unchanged. Unknown schemas reject; a Profile V2 request cannot use the
+original confirmation or recover an original-mode plan.
+
+The Profile V2 whole-runtime anchor is PR #399 head
+`57ee5b14ebb1dbdc891e1a4415cc3b0dbe58779f`, tree
+`de1933c156478a04eda258da46374b3f58577737`. Its exact baseline-to-anchor
+`git diff --raw --no-abbrev --no-renames -z` SHA-256 is
+`c8075ca62a3ea2d67abc753c019cb3fb2db33d042c35bf113023f083a60f7dd1`. The baseline remains
+`0d6078be7a50ed3f5761d66071527be003bd568f`, tree
+`5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`. The candidate must descend from that exact Profile V2
+anchor and differ only by added/modified regular `100644` blobs in these three inert paths:
+
+- `scripts/timeweb-critical-web.js`
+- `scripts/timeweb-critical-web.test.ts`
+- `docs/runbooks/timeweb-standard-delivery.md`
+
+The new mode does not admit the other five V1 controller paths, product/build/dependency changes,
+renames, deletion or executable/symlink/gitlink modes. It uses the existing transition engine,
+canonical publication/CI verification, Web-only Compose operation, backend/secret attestations,
+backup validation, observation, lock/receipt and rollback/recovery process. Operation bytes bind
+the schema; both preparation and recovery bind the selected compatibility tuple, operation hash
+and the derived backup receipt path. The plan/lock/receipt schemas and executor entry point stay
+unchanged. No new automatic eligibility or enrollment authority is supplied.
+
+The delta from merged main `0c5ad818` to the anchor contains eight Web files and one presentation
+boundary test. Subscription list/detail/refresh reads the existing Home subscription fields with
+an explicit partial-coverage label; it does not purchase, activate or charge a subscription.
+The city selection is local to the user and the sport selection is local UI state. Existing JOIN
+and profile commands retain their delegation. Web does not expose the Android media/FCM or added
+password/contact SDK commands; production advisory join conditions remain absent. The older API
+has no support-ticket routes: the Support screen reports a controlled read failure on HTTP404,
+with explicit refresh, and this release does not make support available. These LOCAL compatibility
+checks are distinct from authenticated production journeys and post-activation product feedback.
+
+Merge PR #399 before this controller, preserving anchor ancestry. Publish only the resulting exact
+current main after its successful first-attempt full push CI. Any intervening non-inert change,
+including the separate API or support-foundation branches, invalidates this closed bridge and
+requires fresh compatibility review. Do not broaden the tail or silently select another anchor.
+Publication, controller enrollment and the concrete Web activation remain separately authorized.
+
+Use the same request fields below with the Profile V2 schema and confirmation
+`UPGRADE_PROFILE_V2_WEB_<CANDIDATE_FIRST_12_UPPERCASE>_FROM_<PREVIOUS_WEB_DIGEST_LAST_12_UPPERCASE>_KEEP_API_0D6078BE7A50`.
+For this mode the existing PRE99 backup producer retains its original source-CI directory:
+`/opt/phub/timeweb-beta/backups/<controllerSha>-<controllerSourceCiRunId>-1-web`.
+The rollout journal, lock target, overlay and receipts use a separate root-owned `0700` directory:
+`/opt/phub/timeweb-beta/backups/<candidateSha>-<publicationRunId>-1-web`.
+Both paths are derived from the validated operation. Prepare the empty rollout directory through
+the approved custody procedure; the controller does not create it. Read the backup receipt and
+`database.pgcustom` in the producer directory during prepare, preflight and immediately before
+activation. Never copy/edit the receipt or its absolute dump path to match the rollout directory.
+V1 continues using its original single transaction/backup directory.
+
+Fresh API/Web/PG and excluded-service preimages, exact immutable manifest and retained rollback
+image, the unchanged PRE99 backup/isolated-restore proof (at most one hour old), source-tool custody,
+mandatory monitor/alert readbacks and applicable Linux rehearsal evidence are still required.
+This source preparation performs no host write, image publication, controller enrollment,
+secret/role/permission change, database migration or service activation.
+
 ### Inputs and execution
 
 The fixed root-owned `0600`, single-link request is
