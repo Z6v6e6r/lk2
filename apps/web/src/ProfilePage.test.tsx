@@ -77,7 +77,7 @@ describe('ProfilePage', () => {
     );
     const card = screen.getByRole('region', { name: 'Подписки и абонементы' });
     expect(within(card).getByRole('img', { name: title })).toHaveAttribute('src', artwork);
-    expect(within(card).getByText('осталось 8 посещений')).toBeVisible();
+    expect(within(card).getByText(/Остаток: 8 · единица не указана/)).toBeVisible();
     expect(within(card).getByText('активна')).toBeVisible();
     expect(within(card).getByRole('link', { name: `Открыть подписку: ${title}` })).toHaveAttribute(
       'href',
@@ -109,9 +109,36 @@ describe('ProfilePage', () => {
       const card = screen.getByRole('region', { name: 'Подписки и абонементы' });
       expect(within(card).queryByRole('img')).not.toBeInTheDocument();
       expect(within(card).getByText(title)).toBeVisible();
-      expect(within(card).getByText('осталось 8 посещений')).toBeVisible();
+      expect(within(card).getByText(/Остаток: 8 · единица не указана/)).toBeVisible();
     },
   );
+
+  it('does not infer visits, exhaustion or expiry from an unknown profile subscription remainder', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('C+')}
+        logoutBusy={false}
+        onLogout={() => undefined}
+        subscriptions={[
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            title: 'Дружба',
+            status: 'active',
+            remainingUnits: 0,
+            validUntil: null,
+            route: '/subscriptions/11111111-1111-4111-8111-111111111111',
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('Остаток не подтверждён · срок не указан')).toBeVisible();
+    expect(screen.queryByText(/закончились|посещений/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Мои абонементы' })).toHaveAttribute(
+      'href',
+      '/subscriptions',
+    );
+    expect(screen.getByText('Неполная подборка с Главной: до 6 абонементов.')).toBeVisible();
+  });
 
   it('opens recommendation preferences from the Home deep link', () => {
     window.history.replaceState({}, '', '/profile#booking-preferences-title');
@@ -288,7 +315,7 @@ describe('ProfilePage', () => {
     );
     expect(screen.getByRole('button', { name: 'О себе — пока недоступно' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Достижения — пока недоступно' })).toBeDisabled();
-    expect(screen.getByRole('link', { name: 'Купить подписку' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Мои абонементы' })).toHaveAttribute(
       'href',
       '/subscriptions',
     );

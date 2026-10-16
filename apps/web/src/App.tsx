@@ -123,6 +123,9 @@ const LocationsPage = lazy(() =>
 const NotificationsPage = lazy(() =>
   import('./NotificationsPage.js').then((module) => ({ default: module.NotificationsPage })),
 );
+const SubscriptionsPage = lazy(() =>
+  import('./SubscriptionsPage.js').then((module) => ({ default: module.SubscriptionsPage })),
+);
 const ProfilePage = lazy(() =>
   import('./ProfilePage.js').then((module) => ({ default: module.ProfilePage })),
 );
@@ -165,13 +168,13 @@ type ProtectedRoute =
   | { readonly kind: 'game'; readonly gameId: string }
   | { readonly kind: 'trainings' }
   | { readonly kind: 'tournaments' }
+  | { readonly kind: 'subscriptions'; readonly subscriptionId?: string }
   | { readonly kind: 'gift-certificates' }
   | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
 
 const visibleWorkInProgressSections = [
   ['/coaches', 'Индивидуальные тренировки'],
-  ['/subscriptions', 'Абонементы'],
   ['/promotions', 'Акции'],
   ['/offers', 'Предложения'],
 ] as const;
@@ -217,6 +220,12 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   if (normalizedPath === '/games/new') return { kind: 'game-create' };
   if (normalizedPath === '/trainings') return { kind: 'trainings' };
   if (normalizedPath === '/tournaments') return { kind: 'tournaments' };
+  if (normalizedPath === '/subscriptions') return { kind: 'subscriptions' };
+  const subscriptionMatch = normalizedPath.match(
+    /^\/subscriptions\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (subscriptionMatch?.[1])
+    return { kind: 'subscriptions', subscriptionId: subscriptionMatch[1].toLowerCase() };
   if (normalizedPath === '/gift-certificates') return { kind: 'gift-certificates' };
   const gameMatch = normalizedPath.match(
     /^\/games\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -1185,30 +1194,20 @@ export function App({
             setProfileCommunitiesError('Не удалось загрузить сообщества.');
           },
         );
-        if (clientPlatform === 'android') {
-          void gateway.getHomeDashboard().then(
-            (dashboard) => {
-              if (!active) return;
-              setProfileSubscriptions(dashboard.subscriptions);
-              setProfileSubscriptionsError(null);
-            },
-            () => {
-              if (!active) return;
-              setProfileSubscriptions(null);
-              setProfileSubscriptionsError(
-                'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
-              );
-            },
-          );
-        } else {
-          void Promise.resolve().then(() => {
+        void gateway.getHomeDashboard().then(
+          (dashboard) => {
+            if (!active) return;
+            setProfileSubscriptions(dashboard.subscriptions);
+            setProfileSubscriptionsError(null);
+          },
+          () => {
             if (!active) return;
             setProfileSubscriptions(null);
             setProfileSubscriptionsError(
               'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
             );
-          });
-        }
+          },
+        );
         void gateway.listProfileFriends(8).then(
           (page) => {
             if (!active) return;
@@ -2932,6 +2931,26 @@ export function App({
           ? null
           : new URLSearchParams(window.location.search).get('event');
       return <TournamentDetailPage gateway={gateway} tournamentId={tournamentId} />;
+    }
+    if (protectedRoute.kind === 'subscriptions') {
+      return (
+        <SubscriptionsPage
+          key={`${context.tenant.id}:${context.user.id}`}
+          loadDashboard={gateway.getHomeDashboard}
+          {...(protectedRoute.subscriptionId
+            ? { subscriptionId: protectedRoute.subscriptionId }
+            : {})}
+          onNavigate={(href, method) => {
+            if (method === 'back') {
+              window.history.back();
+              return;
+            }
+            if (method === 'replace') window.history.replaceState({}, '', href);
+            else window.history.pushState({}, '', href);
+            refreshLocation();
+          }}
+        />
+      );
     }
     if (protectedRoute.kind === 'gift-certificates') {
       return (
