@@ -12,6 +12,36 @@ function ruleBody(selector: string): string {
 }
 
 describe('Home layout scroll contract', () => {
+  it('matches the Figma community search layers without changing keyboard focus', () => {
+    const button = ruleBody('.fh-community-search');
+    const surface = ruleBody('.fh-community-search > span');
+    const border = ruleBody('.fh-community-search::before');
+
+    expect(button).toMatch(/position:\s*relative\s*;/);
+    expect(button).toMatch(/width:\s*55px\s*;/);
+    expect(button).toMatch(/height:\s*55px\s*;/);
+    expect(button).toMatch(/flex:\s*0 0 55px\s*;/);
+    expect(surface).toMatch(/position:\s*absolute\s*;/);
+    expect(surface).toMatch(/left:\s*50%\s*;/);
+    expect(surface).toMatch(/top:\s*50%\s*;/);
+    expect(surface).toMatch(/transform:\s*translate\(-50%, -50%\)\s*;/);
+    expect(border).toMatch(/left:\s*50%\s*;/);
+    expect(border).toMatch(/top:\s*50%\s*;/);
+    expect(border).toMatch(/transform:\s*translate\(-50%, -50%\)\s*;/);
+    expect(surface).toMatch(/width:\s*52px\s*;/);
+    expect(surface).toMatch(/height:\s*52px\s*;/);
+    expect(surface).toMatch(/padding:\s*18px\s*;/);
+    expect(surface).toMatch(/background:\s*rgba\(255, 255, 255, 0\.08\)\s*;/);
+    expect(surface).toMatch(/border-radius:\s*16px\s*;/);
+    expect(border).toMatch(/width:\s*56px\s*;/);
+    expect(border).toMatch(/height:\s*56px\s*;/);
+    expect(border).toMatch(/border:\s*1\.5px solid rgba\(255, 255, 255, 0\.24\)\s*;/);
+    expect(border).toMatch(/border-radius:\s*18px\s*;/);
+    expect(border).toMatch(/pointer-events:\s*none\s*;/);
+    expect(ruleBody('.fh-community-search svg')).toMatch(/width:\s*16px\s*;/);
+    expect(ruleBody('.fh-community-search:focus-visible')).toMatch(/outline:\s*2px solid #fff\s*;/);
+  });
+
   it('pins the compact recommendation ad CTA to the bottom edge', () => {
     expect(
       ruleBody('.booking-recommendation-ad.is-card.is-compact .booking-recommendation-ad__footer'),
@@ -136,7 +166,7 @@ describe('Home layout scroll contract', () => {
     expect(communityTrackRule).toMatch(/padding:\s*1px 2px\s*;/);
     expect(communityTrackRule).toMatch(/gap:\s*12px\s*;/);
     expect(communityLogoRule).toMatch(/padding:\s*1px\s*;/);
-    expect(ruleBody('.fh-community-search')).toMatch(/height:\s*56px\s*;/);
+    expect(ruleBody('.fh-community-search')).toMatch(/height:\s*55px\s*;/);
     expect(recommendationCardRule).toMatch(/gap:\s*20px\s*;/);
     expect(recommendationScrollerRule).toMatch(/contain:\s*layout paint\s*;/);
     expect(recommendationScrollerRule).toMatch(/isolation:\s*isolate\s*;/);
