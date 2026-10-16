@@ -163,18 +163,25 @@ const bookingDetailsSchema = z.object({
   freeVisit: freeVisitSchema.optional(),
 });
 
-const subscriptionSchema = z.object({
-  subscriptionId: z.string().uuid(),
-  type: z.enum(['INDIVIDUAL', 'GROUP']),
-  status: z.enum(['NEW', 'ACTIVE', 'HOLD', 'EXPIRED', 'REFUNDED', 'NO_VISITS']),
-  variant: z.enum(['BY_VISITS', 'BY_TIME', 'BY_DURATION', 'BY_UNITS']),
-  visitsLeft: z.number().int(),
-  availableMinutes: z.number().int(),
-  availableDays: z.number().int(),
-  // Viva currently returns null for non-BY_UNITS subscriptions although OpenAPI says number.
-  unitsLeft: z.number().nullish(),
-  expirationDate: z.string().date().optional(),
-});
+const subscriptionSchema = z
+  .object({
+    subscriptionId: z.string().uuid(),
+    type: z.enum(['INDIVIDUAL', 'GROUP']),
+    status: z.enum(['NEW', 'ACTIVE', 'HOLD', 'EXPIRED', 'REFUNDED', 'NO_VISITS']),
+    variant: z.enum(['BY_VISITS', 'BY_TIME', 'BY_DURATION', 'BY_UNITS']),
+    visitsLeft: z.number().int(),
+    availableMinutes: z.number().int(),
+    availableDays: z.number().int(),
+    // Viva currently returns null for non-BY_UNITS subscriptions although OpenAPI says number.
+    unitsLeft: z.number().nullish(),
+    expirationDate: z.string().date().optional(),
+  })
+  .refine((item) => item.variant !== 'BY_UNITS' || item.unitsLeft != null, {
+    path: ['unitsLeft'],
+    message: 'BY_UNITS requires a known remaining balance',
+  });
+
+const subscriptionPageSchema = z.object({ content: z.array(subscriptionSchema) });
 
 const LEVEL_FIELD_IDS = [
   'eabfe27b-3f72-4496-9185-1a2ec6e6465e',
@@ -440,7 +447,7 @@ export class VivaHomeSourceAdapter {
       accessToken: input.accessToken,
       correlationId: input.correlationId,
       operation: 'subscriptions',
-      schema: pageSchema(subscriptionSchema),
+      schema: subscriptionPageSchema,
     });
 
     const displayName = [profile.firstName, profile.middleName, profile.lastName]

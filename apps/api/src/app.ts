@@ -189,6 +189,10 @@ import {
 } from './games/game-join-conditions-routes.js';
 import { registerSubscriptionRuntimeWarnRoutes } from './subscriptions/subscription-runtime-warn-routes.js';
 import {
+  registerSubscriptionSelfReadRoutes,
+  type SubscriptionSelfReadSource,
+} from './subscriptions/self-read-routes.js';
+import {
   registerBookedOperationReadRoutes,
   type BookedOperationReadRouteOptions,
 } from './subscriptions/booked-operation-read-routes.js';
@@ -397,6 +401,7 @@ export interface BuildAppOptions {
     BookedOperationReadRouteOptions,
     'authenticatedTenantHandlers'
   >;
+  readonly subscriptionSelfReadSource?: SubscriptionSelfReadSource;
   readonly bookedOperationAdmission?: Omit<BookedOperationAdmissionRouteOptions, 'commandHandlers'>;
 }
 
@@ -1083,6 +1088,11 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerSubscriptionSelfReadRoutes(app as unknown as FastifyInstance, {
+    ...(options.subscriptionSelfReadSource ? { source: options.subscriptionSelfReadSource } : {}),
+    cursorSecret: options.config.JWT_ACCESS_SECRET,
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
   });
   registerBookedOperationReadRoutes(app as unknown as FastifyInstance, {
     ...options.bookedOperationRead,

@@ -1,0 +1,103 @@
+path:
+  parameters:
+    - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+    - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+  get:
+    operationId: getSelfSubscriptions
+    tags: [subscriptions]
+    summary: Read one page of the authenticated user's current products
+    description: |
+      Requires profile.read and an active tenant-bound session. No user, provider, source,
+      station or financial selectors are accepted. The server returns canonical UUIDs only.
+      A trusted owner must supply COMPLETE source coverage; Home's six-item summary is never
+      a fallback. CURRENT excludes archive/history. COMPLETE describes the source snapshot,
+      while hasMore and nextCursor describe API pagination. Consume the whole cursor chain
+      for the full list. All pages keep one snapshot, total and canonical UUID order.
+      The cursor is signed, bound to the authenticated tenant/user/session and page size,
+      and expires after 15 minutes. Restart from the first page on snapshot drift.
+      Null title, remaining amount or validUntil means unknown, never zero or unlimited.
+      Version 1 has no representation for proven unlimited/no-expiry products.
+      UNKNOWN remaining unit requires a null amount. asOf and staleAt come from the owner;
+      freshness explicitly distinguishes stale snapshots. No commercial entitlement is inferred.
+      Default-unavailable until the trusted canonical source is separately implemented and
+      connected. This route does not activate Viva, a read-job, a worker or new permissions.
+    parameters:
+      - in: query
+        name: limit
+        schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      - in: query
+        name: cursor
+        schema: { type: string, minLength: 1, maxLength: 4096 }
+    responses:
+      '200':
+        description: One complete page of a consistently pinned self snapshot; Cache-Control no-store.
+        content:
+          application/json:
+            schema:
+              $ref: '#/schemas/Page'
+      '400':
+        $ref: ../../common/components.yaml#/components/responses/BadRequest
+      '401':
+        $ref: ../../common/components.yaml#/components/responses/Unauthorized
+      '403':
+        $ref: ../../common/components.yaml#/components/responses/Forbidden
+      '409':
+        description: SUBSCRIPTIONS_SNAPSHOT_CHANGED; discard the page chain and restart explicitly.
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/components.yaml#/components/schemas/ApiError
+      '429':
+        $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+      '503':
+        $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+schemas:
+  Item:
+    type: object
+    additionalProperties: false
+    required: [id, title, kind, status, remaining, validUntil]
+    properties:
+      id: { type: string, format: uuid }
+      title: { type: [string, 'null'], minLength: 1, maxLength: 200 }
+      kind: { type: string, enum: [INDIVIDUAL, GROUP, UNKNOWN] }
+      status: { type: string, enum: [SCHEDULED, ACTIVE, PAUSED, EXHAUSTED, UNKNOWN] }
+      remaining:
+        type: object
+        additionalProperties: false
+        required: [amount, unit]
+        properties:
+          amount: { type: [number, 'null'], minimum: 0 }
+          unit: { type: string, enum: [VISITS, MINUTES, DAYS, UNITS, UNKNOWN] }
+      validUntil: { type: [string, 'null'], format: date-time }
+  Page:
+    type: object
+    additionalProperties: false
+    required: [scope, coverage, snapshot, freshness, items, page]
+    properties:
+      scope: { type: string, enum: [CURRENT] }
+      coverage: { type: string, enum: [COMPLETE] }
+      snapshot:
+        type: object
+        additionalProperties: false
+        required: [id, asOf, staleAt]
+        properties:
+          id:
+            { type: string, format: uuid, description: Opaque canonical source snapshot revision. }
+          asOf: { type: string, format: date-time }
+          staleAt: { type: string, format: date-time }
+      freshness: { type: string, enum: [FRESH, STALE] }
+      items:
+        type: array
+        maxItems: 50
+        items:
+          $ref: '#/schemas/Item'
+      page:
+        type: object
+        additionalProperties: false
+        required: [offset, limit, total, hasMore, nextCursor]
+        properties:
+          offset: { type: integer, minimum: 0 }
+          limit: { type: integer, minimum: 1, maximum: 50 }
+          total: { type: integer, minimum: 0, maximum: 9007199254740991 }
+          hasMore: { type: boolean }
+          nextCursor: { type: [string, 'null'], minLength: 1, maxLength: 4096 }
