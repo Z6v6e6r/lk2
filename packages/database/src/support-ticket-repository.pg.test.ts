@@ -1,3 +1,4 @@
+import { supportRuntimePrerequisiteGrantStatements } from './support-ticket-prerequisites.js';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
@@ -40,7 +41,6 @@ function assertFixtureAuthority(url: string, runtime: string | undefined): void 
   )
     throw new Error('SUPPORT_PG_FIXTURE_AUTHORITY_REQUIRED');
 }
-const quoteIdentifier = (value: string): string => `"${value.replaceAll('"', '""')}"`;
 function applied(result: SupportMutationResult): SupportTicketView {
   if (result.outcome !== 'applied')
     throw new Error(`SUPPORT_FIXTURE_EXPECTED_APPLIED:${result.outcome}`);
@@ -116,26 +116,13 @@ describeDatabase('support physical transaction/RLS verification', () => {
         })),
       ),
     });
-    const syntheticRole = quoteIdentifier(runtimeRoleName!);
     const grantClient = await owner.connect();
     try {
       await grantClient.query('begin');
       for (const statement of supportTicketRuntimeGrantStatements(runtimeRoleName!))
         await grantClient.query(statement);
-      // Fixture-only prerequisites. SHARE checks require UPDATE privilege; no identity write is executed by support.
-      await grantClient.query(
-        `grant usage on schema identity,audit,notifications to ${syntheticRole}`,
-      );
-      await grantClient.query(`grant select on identity.tenants to ${syntheticRole}`);
-      await grantClient.query(
-        `grant select,update on identity.users,identity.user_access_profiles to ${syntheticRole}`,
-      );
-      await grantClient.query(
-        `grant insert on audit.audit_log,audit.outbox_events to ${syntheticRole}`,
-      );
-      await grantClient.query(
-        `grant select,insert on notifications.templates,notifications.intents,notifications.deliveries,notifications.inbox_items to ${syntheticRole}`,
-      );
+      for (const statement of supportRuntimePrerequisiteGrantStatements(runtimeRoleName!))
+        await grantClient.query(statement);
       assertSupportTicketAclBoundary(
         await inspectSupportTicketAclBoundary(grantClient, runtimeRoleName!, ownerRoleName),
         { runtimeRoleName: runtimeRoleName!, migratorRoleName: ownerRoleName },
@@ -149,7 +136,7 @@ describeDatabase('support physical transaction/RLS verification', () => {
     }
     const runtimeUrl = new URL(connectionString!);
     runtimeUrl.username = runtimeRoleName!;
-    runtimeUrl.password = '';
+    runtimeUrl.password = process.env.SUPPORT_TICKET_PG_RUNTIME_PASSWORD ?? '';
     runtime = new Pool({ connectionString: runtimeUrl.toString(), max: 8 });
     const wire = await runtime.query<{ current_role: string; session_role: string }>(
       'select current_user as current_role,session_user as session_role',

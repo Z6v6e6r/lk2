@@ -143,10 +143,11 @@ function mutationResult(
                     : 'SUPPORT_TICKET_NOT_FOUND';
   return sendApiError(request, reply, status, code, 'Не удалось изменить обращение.');
 }
-export function registerSupportTicketRoutes(
+function installSupportTicketRoutes(
   app: FastifyInstance,
   options: {
     readonly repository?: SupportTicketRepository;
+    readonly isReady?: () => Promise<boolean>;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
     readonly adminAuthenticatedTenantHandlers: readonly preHandlerHookHandler[];
@@ -155,6 +156,25 @@ export function registerSupportTicketRoutes(
 ): void {
   const unavailable = (request: FastifyRequest, reply: FastifyReply) =>
     sendApiError(request, reply, 503, 'SUPPORT_UNAVAILABLE', 'Поддержка временно недоступна.');
+  const dependencyReady = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    if (!options.isReady) return;
+    let ready = false;
+    try {
+      ready = await options.isReady();
+    } catch {
+      /* Redacted dependency failure. */
+    }
+    if (!ready) unavailable(request, reply);
+  };
+  const handlers = {
+    authenticatedTenantHandlers: [...options.authenticatedTenantHandlers, dependencyReady],
+    commandHandlers: [...options.commandHandlers, dependencyReady],
+    adminAuthenticatedTenantHandlers: [
+      ...options.adminAuthenticatedTenantHandlers,
+      dependencyReady,
+    ],
+    adminCommandHandlers: [...options.adminCommandHandlers, dependencyReady],
+  };
   const queryInvalid = (request: FastifyRequest, reply: FastifyReply) =>
     sendApiError(request, reply, 400, 'SUPPORT_QUERY_INVALID', 'Проверьте параметры.');
   const authRequired = (request: FastifyRequest, reply: FastifyReply) =>
@@ -168,9 +188,9 @@ export function registerSupportTicketRoutes(
   for (const admin of [false, true]) {
     const base = admin ? adminBase : userBase;
     const readHandlers = admin
-      ? options.adminAuthenticatedTenantHandlers
-      : options.authenticatedTenantHandlers;
-    const commandHandlers = admin ? options.adminCommandHandlers : options.commandHandlers;
+      ? handlers.adminAuthenticatedTenantHandlers
+      : handlers.authenticatedTenantHandlers;
+    const commandHandlers = admin ? handlers.adminCommandHandlers : handlers.commandHandlers;
     app.get(base, { preHandler: [...readHandlers] }, async (request, reply) => {
       const actor = current(request);
       if (!actor) return authRequired(request, reply);
@@ -285,7 +305,7 @@ export function registerSupportTicketRoutes(
       },
     );
   }
-  app.post(userBase, { preHandler: [...options.commandHandlers] }, async (request, reply) => {
+  app.post(userBase, { preHandler: [...handlers.commandHandlers] }, async (request, reply) => {
     const actor = current(request);
     if (!actor) return authRequired(request, reply);
     if (!options.repository) return unavailable(request, reply);
@@ -316,7 +336,7 @@ export function registerSupportTicketRoutes(
   });
   app.patch(
     `${adminBase}/:ticketId`,
-    { preHandler: [...options.adminCommandHandlers] },
+    { preHandler: [...handlers.adminCommandHandlers] },
     async (request, reply) => {
       const actor = current(request);
       if (!actor) return authRequired(request, reply);
@@ -355,4 +375,47 @@ export function registerSupportTicketRoutes(
       );
     },
   );
+}
+
+/** Encapsulated dependency errors never replace the parent API error handler or disclose SQL/DSNs. */
+export function registerSupportTicketRoutes(
+  app: FastifyInstance,
+  options: Parameters<typeof installSupportTicketRoutes>[1],
+): void {
+  app.register((child, _options, done) => {
+    child.setErrorHandler((error, request, reply) => {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error ? String(error.code) : '';
+      if (
+        code.startsWith('08') ||
+        [
+          'ECONNREFUSED',
+          'ECONNRESET',
+          'ETIMEDOUT',
+          'ENETUNREACH',
+          'EHOSTUNREACH',
+          'EAI_AGAIN',
+          '57P01',
+          '57P02',
+          '57P03',
+          '53300',
+          '42501',
+          '42P01',
+          '28P01',
+          '28000',
+          '3D000',
+        ].includes(code)
+      )
+        return sendApiError(
+          request,
+          reply,
+          503,
+          'SUPPORT_UNAVAILABLE',
+          'Поддержка временно недоступна.',
+        );
+      throw error;
+    });
+    installSupportTicketRoutes(child, options);
+    done();
+  });
 }

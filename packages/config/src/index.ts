@@ -60,6 +60,8 @@ const environmentSchema = z.object({
   CORS_ORIGINS: z.string().default('http://localhost:5173,http://127.0.0.1:5173'),
   TRUSTED_PROXY_CIDRS: z.string().default(''),
   DATABASE_URL: z.string().url(),
+  /** Support owner: platform. Enable only after 0098, restricted LOGIN ACL and restore proof; review after legacy runtime role split. */
+  SUPPORT_DATABASE_URL: z.string().url().optional(),
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
   DATABASE_POOL_WARM_CONNECTIONS: z.coerce.number().int().min(1).max(100).default(1),
   REDIS_URL: z.string().url(),
@@ -527,6 +529,7 @@ export interface ConfigRequirements {
 }
 
 export interface RuntimeContourAttestation {
+  readonly supportDatabase?: string;
   readonly database?: string;
   readonly redis?: string;
   readonly rabbitmq?: string;
@@ -657,6 +660,24 @@ export function loadConfig(
       .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
       .join('; ');
     throw new Error(`Invalid application configuration: ${issues}`);
+  }
+  if (parsed.data.SUPPORT_DATABASE_URL) {
+    const support = new URL(parsed.data.SUPPORT_DATABASE_URL);
+    const main = new URL(parsed.data.DATABASE_URL);
+    if (
+      !['postgres:', 'postgresql:'].includes(support.protocol) ||
+      !['postgres:', 'postgresql:'].includes(main.protocol) ||
+      support.search ||
+      support.hash ||
+      !support.password ||
+      !/^[a-z_][a-z0-9_]{0,62}$/.test(decodeURIComponent(support.username)) ||
+      decodeURIComponent(support.username) === decodeURIComponent(main.username) ||
+      runtimeContourTargetFingerprint(support.toString()) !==
+        runtimeContourTargetFingerprint(main.toString())
+    )
+      throw new Error(
+        'SUPPORT_DATABASE_URL requires the same database and a separate restricted role',
+      );
   }
   if (parsed.data.DATABASE_POOL_WARM_CONNECTIONS > parsed.data.DATABASE_POOL_MAX) {
     throw new Error('DATABASE_POOL_WARM_CONNECTIONS must not exceed DATABASE_POOL_MAX');
@@ -1515,6 +1536,8 @@ const WORKER_REFRESH_SECRET_SENTINEL = 'v'.repeat(32);
  * config shape but are never accepted by an API process and are not read by the gateway.
  */
 export function loadRealtimeConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
+  if (environment.SUPPORT_DATABASE_URL !== undefined)
+    throw new Error('Realtime runtime must not receive SUPPORT_DATABASE_URL');
   if (!environment.JWT_REALTIME_SECRET) {
     throw new Error('Realtime runtime requires JWT_REALTIME_SECRET');
   }

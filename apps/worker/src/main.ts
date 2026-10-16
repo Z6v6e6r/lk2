@@ -24,6 +24,7 @@ import {
   createProfileFriendshipRepository,
 } from '@phub/database';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
+import { openSupportTicketRuntimePool } from '@phub/database/support-activation';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
@@ -99,6 +100,9 @@ const communityLogoRollbackCapability = 'phub.community-logo-rollback.v1';
 const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION
   ? {
       database: runtimeContourTargetFingerprint(config.DATABASE_URL),
+      ...(config.SUPPORT_DATABASE_URL
+        ? { supportDatabase: runtimeContourTargetFingerprint(config.SUPPORT_DATABASE_URL) }
+        : {}),
       rabbitmq: runtimeContourTargetFingerprint(config.RABBITMQ_URL),
     }
   : undefined;
@@ -128,7 +132,14 @@ const gameRosterRepository = createGameRosterRepository(pool, {
 const messagingRepository = createMessagingRepository(pool);
 const participationCommandRepository = createParticipationCommandRepository(pool);
 const profileFriendshipRepository = createProfileFriendshipRepository(pool);
-const supportTicketRepository = createSupportTicketRepository(pool);
+const supportPool = await openSupportTicketRuntimePool(
+  config.DATABASE_URL,
+  config.SUPPORT_DATABASE_URL,
+);
+const supportTicketRepository = supportPool
+  ? createSupportTicketRepository(supportPool)
+  : undefined;
+logger.info({ enabled: Boolean(supportPool) }, 'support ticket lifecycle runtime');
 const SUPPORT_TICKET_AUTOCLOSE_INTERVAL_MS = 60_000;
 const SUPPORT_TICKET_AUTOCLOSE_BATCH_SIZE = 100;
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
@@ -745,9 +756,9 @@ const runParticipationCommandExpiryCycle = async (): Promise<void> => {
 
 let supportTicketTenantCycleStartOffset = 0;
 const runSupportTicketAutocloseCycle = async (): Promise<void> => {
-  if (shuttingDown) return;
+  if (shuttingDown || !supportPool || !supportTicketRepository) return;
   try {
-    const tenants = await pool.query<{ id: string }>(
+    const tenants = await supportPool.query<{ id: string }>(
       'select id from identity.tenants where active = true order by id',
     );
     const cycle = await runSupportTicketAutocloseTenantCycle({
@@ -1341,6 +1352,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
     consumerChannel.close(),
     channel.close(),
     connection.close(),
+    supportPool?.end(),
     pool.end(),
     telemetry?.shutdown(),
   ]);
@@ -1369,7 +1381,7 @@ void runFcmCycle();
 void runGiftCertificateDeliveryCycle();
 void runCommunityDirectInviteExpiryCycle();
 void runParticipationCommandExpiryCycle();
-void runSupportTicketAutocloseCycle();
+if (supportTicketRepository) void runSupportTicketAutocloseCycle();
 void runDeferredFriendRequestDeliveryCycle();
 if (canonicalCommunityWorkerEnabled) {
   void runCommunityMemberCountReconciliation();

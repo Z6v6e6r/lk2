@@ -69,3 +69,14 @@ export function transitionPreparedTimewebRuntimeSecrets(options: {
   expectedGid?: number;
   afterRename?: (phase: string) => void;
 }): { status: 'INSTALLED' | 'RESTORED'; planSha256: string };
+
+export function assertTimewebSupportDatabaseUrl(mainUrl: string, supportUrl: string): void;
+export function validateTimewebSupportDatabaseSecretDelta(
+  previousDir: string,
+  candidateDir: string,
+  expectedUid?: number,
+  expectedGid?: number,
+): {
+  previous: ReturnType<typeof describeTimewebRuntimeSecretSet>;
+  candidate: ReturnType<typeof describeTimewebRuntimeSecretSet>;
+};

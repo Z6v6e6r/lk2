@@ -322,6 +322,9 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
   )
     fail('signing_key_identity');
 
+  const supportUrl = api.SUPPORT_DATABASE_URL;
+  if (supportUrl !== worker.SUPPORT_DATABASE_URL) fail('support_database_contour');
+  if (supportUrl !== undefined) assertTimewebSupportDatabaseUrl(api.DATABASE_URL, supportUrl);
   for (const key of Object.keys(runtimeContract.dependencySchemes)) {
     const applicationTargets = [api, worker, realtime].map((environment) =>
       normalizedDependency(environment[key], key),
@@ -987,4 +990,73 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     process.stderr.write(`TIMEWEB_BETA_SECRET_PROVISION_FAILED|reason=${reason}\n`);
     process.exitCode = 1;
   }
+}
+
+/** A single additive capability over the existing target. Never enable FCM or replace other secrets. */
+export function assertTimewebSupportDatabaseUrl(mainUrl, supportUrl) {
+  let main, support;
+  try {
+    main = new URL(mainUrl);
+    support = new URL(supportUrl);
+  } catch {
+    fail('support_database_target');
+  }
+  if (
+    !['postgres:', 'postgresql:'].includes(support.protocol) ||
+    !['postgres:', 'postgresql:'].includes(main.protocol) ||
+    !support.password ||
+    !/^[a-z_][a-z0-9_]{0,62}$/.test(decodeURIComponent(support.username)) ||
+    decodeURIComponent(main.username) === decodeURIComponent(support.username) ||
+    main.search ||
+    main.hash ||
+    support.search ||
+    support.hash ||
+    normalizedDependency(mainUrl, 'DATABASE_URL') !==
+      normalizedDependency(supportUrl, 'DATABASE_URL')
+  )
+    fail('support_database_target');
+}
+export function validateTimewebSupportDatabaseSecretDelta(
+  previousDir,
+  candidateDir,
+  expectedUid = 0,
+  expectedGid = 0,
+) {
+  const previous = describeTimewebRuntimeSecretSet(previousDir, expectedUid, expectedGid);
+  const candidate = describeTimewebRuntimeSecretSet(candidateDir, expectedUid, expectedGid);
+  const environments = {};
+  for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
+    const before = readRegularFile(
+      join(previousDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    const after = readRegularFile(
+      join(candidateDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    const oldValues = parseTimewebSecretEnvironment(before),
+      next = parseTimewebSecretEnvironment(after);
+    if (service === 'api' || service === 'worker') {
+      if (oldValues.SUPPORT_DATABASE_URL !== undefined || next.SUPPORT_DATABASE_URL === undefined)
+        fail('support_database_delta');
+      const stripped = Buffer.from(
+        after
+          .toString()
+          .split('\n')
+          .filter((line) => !line.startsWith('SUPPORT_DATABASE_URL='))
+          .join('\n'),
+      );
+      if (!stripped.equals(before)) fail('support_database_delta');
+    } else if (!before.equals(after)) fail('support_database_delta');
+    environments[service] = next;
+  }
+  validateTimewebRuntimeEnvironments(environments, {
+    host: targetContract.hostname,
+    tenantKey: environments.api.TENANT_KEY,
+  });
+  return { previous, candidate };
 }

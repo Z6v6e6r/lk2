@@ -180,7 +180,8 @@
         "CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED",
         "BETA_FULL_CLIENT_ACCESS_ENABLED",
         "SUPPORT_STATIONS_ENABLED",
-        "SUPPORT_LEGACY_BASE_URL"
+        "SUPPORT_LEGACY_BASE_URL",
+        "SUPPORT_DATABASE_URL"
       ],
       "forbidden": ["AUTH_DEV_PHONE_E164", "AUTH_DEV_OTP_CODE"],
       "requiredTrueFlags": [
@@ -333,7 +334,8 @@
         "WEB_PUSH_VAPID_PRIVATE_KEY",
         "WEB_PUSH_ALLOWED_ENDPOINT_ORIGINS",
         "NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS",
-        "NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID"
+        "NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID",
+        "SUPPORT_DATABASE_URL"
       ],
       "forbidden": [
         "JWT_ACCESS_SECRET",
@@ -412,7 +414,8 @@
         "VIVA_SYSTEM_KEY",
         "VIVA_DELEGATION_ENCRYPTION_KEY",
         "VIVA_OAUTH_CLIENT_ID",
-        "VIVA_OAUTH_CLIENT_SECRET"
+        "VIVA_OAUTH_CLIENT_SECRET",
+        "SUPPORT_DATABASE_URL"
       ],
       "requiredTrueFlags": [],
       "requiredFalseFlags": [],
@@ -427,7 +430,8 @@
         "JWT_REFRESH_SECRET",
         "JWT_REALTIME_SECRET",
         "VIVA_API_KEY",
-        "VIVA_SYSTEM_KEY"
+        "VIVA_SYSTEM_KEY",
+        "SUPPORT_DATABASE_URL"
       ],
       "requiredTrueFlags": [],
       "requiredFalseFlags": [],

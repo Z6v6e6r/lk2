@@ -50,6 +50,7 @@ import {
   projectHomeBaseUser,
 } from '@phub/database';
 import { createSupportTicketRepository } from '@phub/database/support-tickets';
+import { openSupportTicketRuntimePool } from '@phub/database/support-activation';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
 import {
@@ -115,6 +116,9 @@ const config = loadConfig();
 const runtimeContourAttestation = config.LOCAL_RUNTIME_CONTOUR_ATTESTATION
   ? {
       database: runtimeContourTargetFingerprint(config.DATABASE_URL),
+      ...(config.SUPPORT_DATABASE_URL
+        ? { supportDatabase: runtimeContourTargetFingerprint(config.SUPPORT_DATABASE_URL) }
+        : {}),
       redis: runtimeContourTargetFingerprint(config.REDIS_URL),
     }
   : undefined;
@@ -132,6 +136,10 @@ const telemetry = startTelemetry({
 });
 const pool = createDatabasePool(config.DATABASE_URL, { max: config.DATABASE_POOL_MAX });
 await warmDatabasePool(pool, config.DATABASE_POOL_WARM_CONNECTIONS, config.DATABASE_POOL_MAX);
+const supportPool = await openSupportTicketRuntimePool(
+  config.DATABASE_URL,
+  config.SUPPORT_DATABASE_URL,
+);
 logger.info(
   {
     databasePoolMax: config.DATABASE_POOL_MAX,
@@ -673,7 +681,19 @@ const app = await buildApp({
   locationRepository: createLocationRepository(pool),
   ...(stationSupportProvider ? { stationSupportProvider } : {}),
   ...(stationSupportRepository ? { stationSupportRepository } : {}),
-  supportTicketRepository: createSupportTicketRepository(pool),
+  ...(supportPool
+    ? {
+        supportTicketRepository: createSupportTicketRepository(supportPool),
+        supportTicketReady: async () => {
+          try {
+            await supportPool.query('select 1');
+            return true;
+          } catch {
+            return false;
+          }
+        },
+      }
+    : {}),
   ...(stationSupportMediaStore ? { stationSupportMediaStore } : {}),
   ...(stationSupportMediaAllowedHosts.length > 0 ? { stationSupportMediaAllowedHosts } : {}),
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),
@@ -752,6 +772,7 @@ const shutdown = async (signal: string): Promise<void> => {
   logger.info({ signal }, 'shutting down');
   await app.close();
   await redis.quit().catch(() => redis.disconnect());
+  await supportPool?.end();
   await pool.end();
   await telemetry?.shutdown();
   process.exit(0);
