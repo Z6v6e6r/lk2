@@ -574,8 +574,13 @@ function CommunityLogo({ community }: { readonly community: HomeCommunity }): Re
 function CommunitySearchIcon(): React.JSX.Element {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.2" />
-      <path d="m10.5 10.5 3 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <circle cx="7.25" cy="7.25" r="4.5" stroke="currentColor" strokeWidth="1.2" />
+      <path
+        d="m10.625 10.625 2.625 2.625"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
     </svg>
   );
 }

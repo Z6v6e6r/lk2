@@ -198,6 +198,35 @@ describe('Home return to profile', () => {
   );
 });
 
+describe('Home community search', () => {
+  it('keeps the accessible directory link and uses the Figma search icon geometry', () => {
+    vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    render(
+      <HomeDashboardPage
+        {...independentSectionProps}
+        dashboard={{
+          ...homeBase,
+          capabilities: { ...homeBase.capabilities, canViewCommunities: true },
+        }}
+        tenantName="ПадлХАБ"
+        notificationUnreadCount={0}
+        logoutBusy={false}
+        onLogout={vi.fn()}
+      />,
+    );
+
+    const search = screen.getByRole('link', { name: 'Найти сообщество' });
+    expect(search).toHaveAttribute('href', '/communities');
+    expect(search.querySelector('span')).toHaveAttribute('aria-hidden', 'true');
+    expect(search.querySelector('svg')).toHaveAttribute('viewBox', '0 0 16 16');
+    expect(search.querySelector('circle')).toHaveAttribute('cx', '7.25');
+    expect(search.querySelector('circle')).toHaveAttribute('cy', '7.25');
+    expect(search.querySelector('circle')).toHaveAttribute('r', '4.5');
+    expect(search.querySelector('circle')).toHaveAttribute('stroke-width', '1.2');
+    expect(search.querySelector('path')).toHaveAttribute('d', 'm10.625 10.625 2.625 2.625');
+  });
+});
+
 describe('Home promotion carousel', () => {
   it('uses the mobile WebP derivative and rotates active CUP promotions', () => {
     vi.useFakeTimers();
