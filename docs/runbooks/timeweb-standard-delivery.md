@@ -787,13 +787,70 @@ workflow test. `API_WORKER_CI_DOWNLOAD_PATCH` pins old/new object IDs and `10064
 these paths remain excluded from both generic controller allowlists. Missing peers, extra CI
 paths, additions, deletion/rename, executable/symlink modes and changed blobs reject.
 The migration BASE closure and independent Python post-migration producer additionally
-require the four exact API/Worker reader blobs as part of one atomic six-blob group. These
+require the five exact API/Worker and public-PR reader/test blobs as part of one atomic seven-blob group. These
 reader paths remain outside the generic migration allowlist; the wider candidate-to-controller
 API/Worker closure already owns them and still applies the exact two-blob CI exception. Runtime image,
 manifest, migrator and APK identities are unchanged. This exact-source exception grants no
-enrollment, migration, credential, publication or deployment authority and does not accept
-PR events, reruns or a mismatched controller SHA. Future CI modifications need a new reviewed
+enrollment, migration, credential, publication or deployment authority. The legacy CI authority
+path rejects PR events, reruns and mismatched controller SHAs; the separate controller-promotion
+path below requires both exact PR CI and main merge CI. Future CI modifications need a new reviewed
 compatibility decision; do not update these pins from live input.
+
+### Controller-only promotion for the frozen Android release
+
+The existing main-only verifySourceCi contract remains available unchanged. An operation
+using controllerPromotion takes a separate fail-closed path: full first-attempt PR CI
+confirms the exact controller head/branch, while full first-attempt main-push CI confirms
+its actual merge commit. The merged PR must belong to this repository, target main,
+and bind that same head and merge SHA. This mode requires the ordinary merge-commit method:
+the raw merge object has exactly the ordered parents [baseSha, controllerSha].
+Record this method in the exact merge approval. Repository settings are not changed.
+
+The strict promotion object has schema: 1, controllerSha, controllerTree, prNumber,
+headBranch, baseSha, prCiRunId, mergeSha, mergeTree, mainCiRunId,
+executableManifestSha256, resolutionManifestSha256, and sha256. Its digest is SHA-256
+of sorted-key JSON without sha256, followed by one newline. controllerSourceCiRunId
+equals prCiRunId; API/Worker and migration plans additionally bind
+controllerPromotionSha256. The same digest must travel through enrollment/source proof,
+helper installation and post-migration backup proof. A missing, partial, null, foreign,
+or mixed proof rejects before activation.
+
+The readControllerSourceAuthority function recomputes the execution manifest from held Git
+objects: the fixed entrypoint/import closure, required deployment data and dependency lockfiles,
+and exactly the frozen 101 SQL files from 11954ffd. All execution blobs/modes must equal
+the main merge tree. The separate resolution manifest records the exact non-runtime
+first-parent-to-merge patch tuples, so current-main fixture/documentation changes can be
+reviewed without replacing the frozen executable source. Its digest is computed from
+path-sorted JSON rows plus one newline. Keep both derived manifests with the reviewed
+promotion receipt. Main-only 0098_support_tickets.sql never enters the controller source.
+Do not check out the main merge tree as the frozen controller.
+
+The source bundle must explicitly advertise both the exact controller head and merge commit
+under deterministic refs, and include their base and reachable objects. A single controller-head
+bundle cannot carry its descendant merge. Verify all three commits in an isolated clone.
+The held runtime must have the lockfile-pinned local TypeScript dependency before importing the verifier.
+Git proof rejects shallow, alternate, grafted, included or promisor/partial-clone metadata;
+the adapters disable lazy/promisor fetch, replacement/graft history and all Git transport.
+Before any repository-aware Git call, validate the dedicated root-owned source and regular
+config file, then read it with a neutral git-dir, explicit file, no includes and a fixed non-repository
+working directory/environment. Reject unsafe config and identity drift. Exclusive controller
+ownership is a prerequisite; concurrent root mutation invalidates the custody proof.
+Parents and ancestry are read from raw commit objects. GitHub access is limited to the
+existing fixed read-only run/job/artifact routes plus GET /pulls/<positive-number>.
+A completed merged PR run may have an empty pull_requests array; exact PR metadata and
+run head/repository/workflow bindings remain mandatory.
+
+Candidate-relative enrollment has exactly 50 changed paths: the earlier 47 plus the atomic
+verify-source-ci.js/test pair and one exact Android chat-test timing correction.
+The two new patch groups and five-file CI reader patch use reviewed
+path/status/mode/oldOID/newOID tuples in both JS delta reducers and the independent Python
+migration-base validator. Generic source allowlists remain unchanged. Refresh these pins
+only from the reviewed final source, never from a live request.
+
+Prepare the final promotion proof after the separately approved merge and successful
+main CI, then freeze its manifests/digest into the exact enrollment/helper packets.
+Source readiness or a green PR CI grants no enrollment, backup, migration, deploy, key,
+provider activation or notification-send authority.
 
 ### Migration-only and API/Worker backup preparation
 
@@ -1101,7 +1158,13 @@ storage cleanup. The mask hides host containerd endpoints and keeps shim sockets
 encrypted filesystem. Its host baseline is a real root-owned 0711 or 0755 directory with no
 mount at or below it; live contents are never copied, hashed or changed. The unit also requires
 `PrivateNetwork=yes`, with independently proven source and supervisor network namespaces,
-so temporary runtime listeners cannot share the host network. The producer and consumer check
+so temporary runtime listeners cannot share the host network. Host-address checks run only in
+the outer producer entry, where both pinned host addresses must be visible before any mutation.
+The isolated supervisor keeps the common hostname/architecture checks and binds to the exact
+request, tool, capsule, frozen source daemon, admitted unit/cgroup and source/supervisor network
+namespace proofs; it must not query its private network for the host addresses. These checks do
+not authorize retry or reconciliation of a unit that stopped before its durable receipt.
+The producer and consumer check
 managed containerd argv and full CRI plugin URI against Docker 29/containerd 2.3 semantics.
 An unverified plugin-namespace JSON override is omitted; each runtime uses its own data/state
 and the operation-bound task namespace. An intent with the exact owned alias

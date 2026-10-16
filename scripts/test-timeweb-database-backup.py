@@ -1,5 +1,6 @@
 """Mock-only regression scenarios; no Docker, provider or database is contacted."""
 import base64
+from contextlib import ExitStack
 import copy
 import importlib.util
 import io
@@ -183,6 +184,31 @@ class PureTests(unittest.TestCase):
         for item in re.findall(r'Object.freeze\(\{(.*?)\}\)',section,re.S):
             value=dict(re.findall(r"(path|status|oldMode|newMode|oldOid|newOid):\s*'([^']+)'",item));js[value['path']]=value
         self.assertEqual(js,m.API_WORKER_CI_READER_PATCH)
+
+    def test_promotion_and_android_test_groups_are_exact_atomic_and_match_both_languages(self):
+        import hashlib
+        contract=(Path(__file__).parent/'timeweb-api-worker-contract.js').read_text()
+        for name in ['API_WORKER_CONTROLLER_PROMOTION_PATCH','API_WORKER_ANDROID_CHAT_TEST_PATCH']:
+            pins=getattr(m,name);rows=list(pins.values())
+            def raw(items):return b''.join((':'+v['oldMode']+' '+v['newMode']+' '+v['oldOid']+' '+v['newOid']+' '+v['status']+'\0'+v['path']+'\0').encode()for v in items)
+            ordinary=dict(rows[0],path='scripts/timeweb-api-worker-contract.js')
+            for case in [rows,rows+[ordinary],[ordinary]]:m.validate_migration_controller_delta(raw(case))
+            invalid=[rows+[rows[0]],rows+[dict(rows[0],path='scripts/unreviewed-promotion.js')]]
+            if len(rows)>1:invalid.append(rows[1:])
+            for index in range(len(rows)):
+                for field,value in [('oldOid','a'*40),('newOid','b'*40),('oldMode','000000'),('newMode','100755'),('newMode','120000'),('status','A'),('status','D')]:
+                    invalid.append([dict(row,**{field:value})if i==index else row for i,row in enumerate(rows)])
+            for case in invalid:
+                with self.subTest(group=name,case=case),self.assertRaises(m.Stop):m.validate_migration_controller_delta(raw(case))
+            section=contract.split('export const '+name+' = Object.freeze([',1)[1].split(']);',1)[0]
+            js={}
+            for item in re.findall(r'Object.freeze\(\{(.*?)\}\)',section,re.S):
+                value=dict(re.findall(r"(path|status|oldMode|newMode|oldOid|newOid):\s*'([^']+)'",item));js[value['path']]=value
+            self.assertEqual(js,pins)
+            for row in rows:
+                self.assertNotIn(row['path'],m.API_WORKER_MIGRATION_CONTROLLER_FILES)
+                data=(Path(__file__).parents[1]/row['path']).read_bytes()
+                self.assertEqual(hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest(),row['newOid'])
 
     def test_inert_rehearsal_pair_is_exact_atomic_and_matches_source_and_javascript(self):
         import hashlib
@@ -1788,6 +1814,142 @@ class NamespaceSliceTerminalTests(unittest.TestCase):
             self.assertTrue((Path(s.plan['work'])/'database.pgcustom.incoming').exists());self.assertTrue((Path(s.plan['work'])/'backup-operation.json').exists())
             self.assertEqual(s.privcalls[private:],[])
             self.assertFalse(any(a[0]in (m.DISK_TOOLS['mkfs'],m.DISK_TOOLS['mount']) or 'luksFormat'in a or a[0]==m.DISK_TOOLS['crypt']and a[1]in ('open','close') or a[0]==m.DISK_TOOLS['loop']and '--detach'in a for a in s.calls[calls:]))
+
+
+class MainEntryRegressionTests(unittest.TestCase):
+    """Exercise the production entry point with only custody-safe memory fixtures."""
+
+    def entry_fixture(self):
+        source=b'isolated supervisor entry fixture\n'
+        op=namespace_operation(True)
+        op['toolFileSha256']=m.digest(source)
+        raw=m.encoded(op)
+        plan=m.namespace_plan(op,raw,m.namespace_sizing(3*1024**3,8*1024**3,40*1024**3,NS_IMAGE),NS_IMAGE)
+        tool=m.ROOT/'operator'/'tools'/op['toolCommit']/'control-timeweb-database-backup.py'
+        work=m.ROOT/'backups'/('.disk-restore-'+m.digest(raw))
+        return SimpleNamespace(source=source,op=op,raw=raw,plan=plan,tool=tool,work=work,
+                               now=m.utc('2026-10-10T15:20:00.000Z'))
+
+    def run_entry(self, fixture, argv, *, nodename='msk-1-vm-z8ks', machine='x86_64',
+                  hostname=b'100.77.212.57 103.88.243.171\n', intent=True, now=None):
+        reads=[]
+        def read(path, mode=0o600):
+            path=Path(path);reads.append((path,mode))
+            if path==fixture.tool:return fixture.source
+            if path==m.REQUEST:return fixture.raw
+            if path==fixture.work/'backup-operation.json':return fixture.raw
+            if path==fixture.work/'disk-plan.json':return m.encoded(fixture.plan)
+            raise AssertionError(path)
+        journal=SimpleNamespace(find=lambda phase:{} if intent and phase=='NAMESPACE_UNIT_START_INTENT' else None)
+        return reads,[patch.multiple(m,
+            __file__=str(fixture.tool),
+            read_secure=read,
+            DiskJournal=lambda work, operation_sha:journal,
+            tool_custody=unittest.mock.Mock(),
+            namespace_supervisor=unittest.mock.Mock(),
+            execute=unittest.mock.Mock()),patch.object(m.sys,'argv',argv),patch.object(
+            m.sys,'flags',SimpleNamespace(optimize=0,isolated=1)),patch.object(
+            m.os,'getuid',return_value=0),patch.object(m.os,'umask'),patch.object(
+            m.os,'uname',return_value=SimpleNamespace(nodename=nodename,machine=machine)),patch.object(
+            m.time,'time',return_value=fixture.now if now is None else now),patch.object(
+            m,'command',side_effect=lambda args,code:hostname if args==['/usr/bin/hostname','-I'] else (_ for _ in ()).throw(AssertionError(args)))]
+
+    def test_supervisor_entry_skips_host_ip_probe_after_exact_custody_validation(self):
+        f=self.entry_fixture();sha=m.digest(f.raw)
+        reads,patches=self.run_entry(f,[str(f.tool),'--disk-runtime-supervisor',str(m.REQUEST),sha],hostname=b'')
+        with ExitStack() as stack:
+            for item in patches:stack.enter_context(item)
+            m.main()
+            m.namespace_supervisor.assert_called_once_with(f.op,f.raw,f.plan)
+            self.assertEqual(reads,[(f.tool,0o755),(m.REQUEST,0o600),(f.work/'backup-operation.json',0o600),(f.work/'disk-plan.json',0o600)])
+            m.tool_custody.assert_called_once_with(f.op)
+
+    def test_normal_execution_rejects_missing_each_required_host_ip_before_mutation(self):
+        for hostname in (b'100.77.212.57\n',b'103.88.243.171\n'):
+            with self.subTest(hostname=hostname):
+                f=self.entry_fixture();reads,patches=self.run_entry(f,[str(f.tool),'--execute',str(m.REQUEST)],hostname=hostname)
+                with ExitStack() as stack:
+                    for item in patches:stack.enter_context(item)
+                    with self.assertRaisesRegex(m.Stop,'HOST'):m.main()
+                    m.execute.assert_not_called();m.namespace_supervisor.assert_not_called()
+                    self.assertEqual(reads,[(f.tool,0o755),(m.REQUEST,0o600)])
+
+    def test_nodename_and_architecture_remain_required_for_normal_and_supervisor_entries(self):
+        for argv_kind,nodename,machine in [('supervisor','other','x86_64'),('supervisor','msk-1-vm-z8ks','arm64'),
+                                           ('normal','other','x86_64'),('normal','msk-1-vm-z8ks','arm64')]:
+            with self.subTest(argv_kind=argv_kind,nodename=nodename,machine=machine):
+                f=self.entry_fixture();argv=([str(f.tool),'--disk-runtime-supervisor',str(m.REQUEST),m.digest(f.raw)]
+                    if argv_kind=='supervisor' else [str(f.tool),'--execute',str(m.REQUEST)])
+                reads,patches=self.run_entry(f,argv,nodename=nodename,machine=machine)
+                with ExitStack() as stack:
+                    for item in patches:stack.enter_context(item)
+                    with self.assertRaisesRegex(m.Stop,'HOST'):m.main()
+                    m.namespace_supervisor.assert_not_called();m.execute.assert_not_called()
+                    self.assertEqual(reads,[(f.tool,0o755),(m.REQUEST,0o600)])
+
+    def test_invalid_supervisor_arguments_and_custody_fail_before_supervisor(self):
+        f=self.entry_fixture();sha=m.digest(f.raw)
+        cases=[
+            ('argv',[str(f.tool),'--disk-runtime-supervisor','/wrong',sha],True,None),
+            ('request-hash',[str(f.tool),'--disk-runtime-supervisor',str(m.REQUEST),'0'*64],True,None),
+            ('expired',[str(f.tool),'--disk-runtime-supervisor',str(m.REQUEST),sha],True,m.utc(f.op['expiresAt'])),
+            ('intent',[str(f.tool),'--disk-runtime-supervisor',str(m.REQUEST),sha],False,None),
+        ]
+        for name,argv,intent,now in cases:
+            with self.subTest(name=name):
+                reads,patches=self.run_entry(f,argv,intent=intent,now=now)
+                with ExitStack() as stack:
+                    for item in patches:stack.enter_context(item)
+                    with self.assertRaises(m.Stop):m.main()
+                    m.namespace_supervisor.assert_not_called();m.execute.assert_not_called()
+                    self.assertEqual(len(reads),0 if name=='argv' else 2 if name in ('request-hash','expired') else 4)
+
+
+class ControllerPromotionBindingTests(unittest.TestCase):
+    def promotion(self, op):
+        value = {'schema': 1, 'controllerSha': op['controllerSha'], 'controllerTree': op['controllerTree'],
+                 'prNumber': 402, 'headBranch': 'codex/synthetic-controller', 'baseSha': 'a'*40,
+                 'prCiRunId': op['controllerSourceCiRunId'], 'mergeSha': 'b'*40, 'mergeTree': 'c'*40,
+                 'mainCiRunId': '123456789', 'executableManifestSha256': 'd'*64,
+                 'resolutionManifestSha256': 'e'*64}
+        value['sha256'] = m.digest(m.encoded({k: value[k] for k in sorted(value)}))
+        return value
+
+    def test_optional_promotion_preserves_legacy_and_binds_pre99_post101(self):
+        for factory in (disk_operation, namespace_operation):
+            for post in (False, True):
+                op = factory(post)
+                self.assertEqual(m.validate_operation(op, NOW, '2'*64), op)
+                op['controllerPromotion'] = self.promotion(op)
+                self.assertEqual(m.validate_operation(op, NOW, '2'*64), op)
+                self.assertEqual(m.promotion_expected(op), {'controllerPromotionSha256': op['controllerPromotion']['sha256']})
+        self.assertEqual(m.promotion_expected({}), {})
+
+    def test_promotion_cannot_be_null_partial_extra_or_digest_drifted(self):
+        op = namespace_operation()
+        good = self.promotion(op)
+        for bad in (None, {}, {**good, 'unknown': True}, {**good, 'sha256': '0'*64}):
+            with self.subTest(value=bad), self.assertRaises(m.Stop):
+                m.validate_operation({**op, 'controllerPromotion': bad}, NOW, '2'*64)
+
+    def test_promotion_identity_and_source_bindings_are_strict(self):
+        op = namespace_operation()
+        for key, value in [('controllerSha', 'f'*40), ('controllerTree', 'f'*40),
+                           ('prCiRunId', '1234'), ('prNumber', True), ('schema', True),
+                           ('headBranch', 'codex/../escape'), ('headBranch', 'main'),
+                           ('mainCiRunId', op['controllerSourceCiRunId']), ('baseSha', 'F'*40),
+                           ('executableManifestSha256', 'nope')]:
+            bad = self.promotion(op); bad[key] = value
+            bad['sha256'] = m.digest(m.encoded({k: bad[k] for k in sorted(bad) if k != 'sha256'}))
+            with self.subTest(key=key, value=value), self.assertRaises(m.Stop):
+                m.validate_operation({**op, 'controllerPromotion': bad}, NOW, '2'*64)
+
+    def test_promotion_cannot_expand_legacy_tmpfs_web_schema(self):
+        op = copy.deepcopy(OP)
+        op['controllerPromotion'] = self.promotion({**op, 'controllerSourceCiRunId': '1234'})
+        with self.assertRaisesRegex(m.Stop, 'CONTROLLER_PROMOTION_SCHEMA'):
+            m.validate_operation(op, NOW, '2'*64)
+
 
 if __name__=='__main__':
     if len(sys.argv)==2 and sys.argv[1]=='--emit-namespace-fixture':
