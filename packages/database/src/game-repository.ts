@@ -378,6 +378,11 @@ export interface GameRepository {
     readonly actorUserId: string;
     readonly operationId: string;
   }): Promise<GameManagementOperation | undefined>;
+  getCreateOperation?(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly idempotencyKey: string;
+  }): Promise<Extract<GameManagementOperation, { commandType: 'game.create.v1' }> | undefined>;
   upsertCardProjection(input: {
     readonly tenantId: string;
     readonly projectionRevision: number;
@@ -1315,6 +1320,31 @@ export function createGameRepository(
           return { commandType: row.command_type, result: stored };
         }
         return undefined;
+      });
+    },
+
+    getCreateOperation(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<IdempotencyRow & { id: string; aggregate_id: string }>(
+          client,
+          `select c.id, c.aggregate_id, c.command_type, c.request_hash, c.state,
+                  c.result_payload, c.completed_at
+             from games.command_idempotency c
+             join games.games g on g.tenant_id = c.tenant_id and g.id = c.aggregate_id
+            where c.tenant_id = $1 and c.actor_user_id = $2 and c.principal_key = $3
+              and c.idempotency_key = $4 and c.command_type = 'game.create.v1'
+              and c.state = 'COMPLETED' and g.organizer_user_id = $2
+              and g.payment_mode = 'NO_PAYMENT' and g.booking_id is null`,
+          [input.tenantId, input.actorUserId, `user:${input.actorUserId}`, input.idempotencyKey],
+        );
+        if (!row) return undefined;
+        const stored = storedCreateResult(
+          row.result_payload,
+          row.completed_at == null ? undefined : timestamp(row.completed_at),
+        );
+        if (!stored || stored.operationId !== row.id || stored.gameId !== row.aggregate_id)
+          throw new Error('GAME_CREATE_OPERATION_BINDING_CONFLICT');
+        return { commandType: 'game.create.v1', result: { ...stored, replayed: true } };
       });
     },
 

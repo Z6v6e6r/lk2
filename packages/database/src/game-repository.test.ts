@@ -1117,3 +1117,58 @@ describe('game repository', () => {
     expect(query).toHaveBeenCalledWith('commit');
   });
 });
+
+describe('CREATE canonical key recovery reader', () => {
+  it('uses a plain tenant/actor/principal/key SELECT, preserves original IDs and rejects corrupt associations', async () => {
+    let corrupt = false;
+    const { pool, query } = poolWithHandler((text, values) => {
+      if (!text.includes('select c.id, c.aggregate_id')) return { rows: [] };
+      expect(values).toEqual([
+        tenantId,
+        actorUserId,
+        `user:${actorUserId}`,
+        'synthetic-p2-original-key-0001',
+      ]);
+      expect(text).toContain("c.command_type = 'game.create.v1'");
+      expect(text).toContain("g.payment_mode = 'NO_PAYMENT'");
+      expect(text).toContain('g.booking_id is null');
+      expect(text).toContain('g.organizer_user_id = $2');
+      expect(text).not.toMatch(/for update|insert|update|delete/i);
+      return {
+        rows: [
+          {
+            id: operationId,
+            aggregate_id: corrupt ? eventId : gameId,
+            command_type: 'game.create.v1',
+            request_hash: 'a'.repeat(64),
+            state: 'COMPLETED',
+            completed_at: '2026-10-13T10:00:00Z',
+            result_payload: { outcome: 'applied', operationId, gameId, revision: 1 },
+          },
+        ],
+      };
+    });
+    const repo = createGameRepository(pool as never);
+    const input = { tenantId, actorUserId, idempotencyKey: 'synthetic-p2-original-key-0001' };
+    expect(await repo.getCreateOperation!(input)).toMatchObject({
+      result: { operationId, gameId, replayed: true },
+    });
+    corrupt = true;
+    await expect(repo.getCreateOperation!(input)).rejects.toThrow(
+      'GAME_CREATE_OPERATION_BINDING_CONFLICT',
+    );
+    expect(query.mock.calls.flatMap((c) => c[0]).join(' ')).not.toMatch(
+      /insert into|update games|delete from/,
+    );
+  });
+  it('returns no association when actor/key is absent without inventing a game', async () => {
+    const { pool } = poolWithHandler(() => ({ rows: [] }));
+    expect(
+      await createGameRepository(pool as never).getCreateOperation!({
+        tenantId,
+        actorUserId,
+        idempotencyKey: 'synthetic-p2-original-key-0001',
+      }),
+    ).toBeUndefined();
+  });
+});

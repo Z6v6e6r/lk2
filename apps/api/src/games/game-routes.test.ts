@@ -38,7 +38,7 @@ type UserRosterRepository = Pick<
 >;
 type UserManagementRepository = Pick<
   GameRepository,
-  'create' | 'cancel' | 'getManagementOperation'
+  'create' | 'cancel' | 'getManagementOperation' | 'getCreateOperation'
 >;
 
 function fakePool(): Pool {
@@ -151,6 +151,115 @@ afterEach(async () => {
 });
 
 describe('Games management User API', () => {
+  it('reads the canonical CREATE by original tenant/actor/key with no writer calls', async () => {
+    const getCreateOperation = vi.fn().mockResolvedValue({
+      commandType: 'game.create.v1',
+      result: {
+        outcome: 'applied',
+        operationId: commandId,
+        gameId,
+        revision: 1,
+        committedAt,
+        replayed: true,
+      },
+    });
+    const management = managementRepository({ getCreateOperation });
+    const app = await appWith(repository(), management);
+    const response = await app.inject({
+      url: '/user/api/v1/local-padel/game-create-operation',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'synthetic-p2-original-key-0001',
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('private, no-store');
+    expect(response.json()).toMatchObject({
+      operation: { id: commandId, gameId, status: 'SUCCEEDED', type: 'CREATE_GAME' },
+      recovery: { paymentMode: 'NO_PAYMENT' },
+    });
+    expect(getCreateOperation).toHaveBeenCalledWith({
+      tenantId,
+      actorUserId: userId,
+      idempotencyKey: 'synthetic-p2-original-key-0001',
+    });
+    expect(management.create).not.toHaveBeenCalled();
+    expect(management.cancel).not.toHaveBeenCalled();
+    getCreateOperation.mockResolvedValue(undefined);
+    expect(
+      (
+        await app.inject({
+          url: '/user/api/v1/local-padel/game-create-operation',
+          headers: {
+            authorization: `Bearer ${await accessToken()}`,
+            'idempotency-key': 'synthetic-p2-original-key-0001',
+          },
+        })
+      ).statusCode,
+    ).toBe(404);
+    getCreateOperation.mockRejectedValue(new Error('private original key/provider response'));
+    const unavailable = await app.inject({
+      url: '/user/api/v1/local-padel/game-create-operation',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'synthetic-p2-original-key-0001',
+      },
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.body).not.toContain('private original');
+  });
+
+  it('denies anonymous, wrong tenant, missing permission, invalid key and query identity overrides before reading', async () => {
+    const getCreateOperation = vi.fn();
+    const app = await appWith(repository(), managementRepository({ getCreateOperation }));
+    const path = '/user/api/v1/local-padel/game-create-operation';
+    const token = await accessToken();
+    const cases = [
+      { url: path, headers: { 'idempotency-key': 'synthetic-p2-original-key-0001' } },
+      {
+        url: path,
+        headers: {
+          authorization: `Bearer ${await accessToken([])}`,
+          'idempotency-key': 'synthetic-p2-original-key-0001',
+        },
+      },
+      { url: path, headers: { authorization: `Bearer ${token}`, 'idempotency-key': 'short' } },
+      {
+        url: path + '?actorUserId=' + userId,
+        headers: {
+          authorization: `Bearer ${token}`,
+          'idempotency-key': 'synthetic-p2-original-key-0001',
+        },
+      },
+    ];
+    for (const request of cases)
+      expect((await app.inject(request)).statusCode).toBeGreaterThanOrEqual(400);
+    const foreignToken = await new SignJWT({
+      tenants: [gameId],
+      roles: ['client'],
+      permissions: ['games.play'],
+      sid: '55555555-5555-4555-8555-555555555555',
+    })
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuer(config.JWT_ISSUER)
+      .setAudience(config.JWT_AUDIENCE)
+      .setSubject(userId)
+      .setExpirationTime('5m')
+      .sign(new TextEncoder().encode(config.JWT_ACCESS_SECRET));
+    expect(
+      (
+        await app.inject({
+          url: path,
+          headers: {
+            authorization: `Bearer ${foreignToken}`,
+            'idempotency-key': 'synthetic-p2-original-key-0001',
+          },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(getCreateOperation).not.toHaveBeenCalled();
+  });
+
   it('returns an empty tester catalogue by default with no public cache', async () => {
     const app = await appWith(repository());
     const response = await app.inject({

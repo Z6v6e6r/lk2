@@ -577,7 +577,7 @@ export interface AuthGateway {
   readonly getGameJoinConditions?: PadlHubApiClient['getGameJoinConditions'];
   readonly createGame: (
     input: CreateGameRequest,
-    options?: { readonly idempotencyKey?: string },
+    options?: { readonly idempotencyKey?: string; readonly signal?: AbortSignal },
   ) => Promise<GameCommandResult>;
   readonly cancelGame: (gameId: string, input: CancelGameRequest) => Promise<GameCommandResult>;
   readonly joinGame: (
@@ -598,6 +598,7 @@ export interface AuthGateway {
     submissionId: string,
     input: DisputeGameResultRequest,
   ) => Promise<GameCommandResult>;
+  readonly getGameCreateOperation?: PadlHubApiClient['getGameCreateOperation'];
   readonly getGameOperation: (operationId: string) => Promise<GameCommandResult>;
   readonly listLocations: () => Promise<LocationList>;
   readonly listGameTestCourts?: () => Promise<GameTestCourtList>;
@@ -2294,6 +2295,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     disputeGameResult(gameId, submissionId, input) {
       return client.disputeGameResult(gameId, submissionId, input);
+    },
+
+    getGameCreateOperation(idempotencyKey, signal) {
+      return client.getGameCreateOperation(idempotencyKey, signal);
     },
 
     getGameOperation(operationId) {
