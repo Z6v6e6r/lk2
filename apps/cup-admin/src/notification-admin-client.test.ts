@@ -110,6 +110,9 @@ describe('NotificationAdminClient media uploads', () => {
     expect(client.resolveMediaUrl(result.mediaUrl)).toBe(
       'https://api.padlhub.test/public/api/v1/local-padel/location-media/33333333-3333-4333-8333-333333333333',
     );
+    expect(client.resolveLocationMediaUrl(result.id)).toBe(
+      'https://api.padlhub.test/public/api/v1/local-padel/location-media/33333333-3333-4333-8333-333333333333',
+    );
   });
 
   it('keeps a stable relative media path on the local proxy origin', () => {
@@ -124,6 +127,9 @@ describe('NotificationAdminClient media uploads', () => {
         '/public/api/v1/local-padel/location-media/33333333-3333-4333-8333-333333333333',
       ),
     ).toBe('/public/api/v1/local-padel/location-media/33333333-3333-4333-8333-333333333333');
+    expect(client.resolveLocationMediaUrl('33333333-3333-4333-8333-333333333333')).toBe(
+      '/public/api/v1/local-padel/location-media/33333333-3333-4333-8333-333333333333',
+    );
   });
 });
 

@@ -635,7 +635,7 @@ export class PadlHubApiClient {
   }
 
   private resolveApiMediaUrl(url: string): string {
-    return url.startsWith('/')
+    return url.startsWith('/') && this.options.baseUrl
       ? new URL(url, `${this.options.baseUrl.replace(/\/$/, '')}/`).toString()
       : url;
   }
@@ -1101,7 +1101,20 @@ export class PadlHubApiClient {
   ): Promise<BookingRecommendationPage> {
     const query = new URLSearchParams({ limit: String(input.limit ?? 6) });
     if (input.cursor) query.set('cursor', input.cursor);
-    return this.request<BookingRecommendationPage>(`/recommendations/bookings?${query.toString()}`);
+    return this.request<BookingRecommendationPage>(
+      `/recommendations/bookings?${query.toString()}`,
+    ).then((page) => this.resolveRecommendationPhotos(page));
+  }
+
+  private resolveRecommendationPhotos(page: BookingRecommendationPage): BookingRecommendationPage {
+    return {
+      ...page,
+      items: page.items.map((item) =>
+        item.cardImageUrl
+          ? { ...item, cardImageUrl: this.resolveApiMediaUrl(item.cardImageUrl) }
+          : item,
+      ),
+    };
   }
 
   public recordPromotionEngagement(
@@ -1184,6 +1197,10 @@ export class PadlHubApiClient {
         idempotencyKey: createCorrelationId(),
         body: jsonRequestBody({ limit, ...(phase ? { phase } : {}) }),
       },
+    ).then((completion) =>
+      completion.screen === 'FOR_ME'
+        ? { ...completion, page: this.resolveRecommendationPhotos(completion.page) }
+        : completion,
     );
   }
 

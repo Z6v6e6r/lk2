@@ -110,6 +110,24 @@ export const locationGalleryImageSchema = z
   .strict();
 export type LocationGalleryImage = z.infer<typeof locationGalleryImageSchema>;
 
+export const locationRecommendationEventTypeSchema = z.enum([
+  'GAME',
+  'COACH_GAME',
+  'TRAINING',
+  'TOURNAMENT',
+]);
+export type LocationRecommendationEventType = z.infer<typeof locationRecommendationEventTypeSchema>;
+
+export const locationRecommendationPhotoSchema = z
+  .object({
+    assetId: uuid,
+    eventType: locationRecommendationEventTypeSchema,
+    isActive: z.boolean(),
+    sortOrder: z.number().int().min(0).max(99),
+  })
+  .strict();
+export type LocationRecommendationPhoto = z.infer<typeof locationRecommendationPhotoSchema>;
+
 export const locationMediaAssetSchema = z
   .object({
     id: uuid,
@@ -152,6 +170,7 @@ const locationEditorialFields = {
   workingHours: locationWeeklyHoursSchema,
   amenities: z.array(locationAmenitySchema).max(16),
   gallery: z.array(locationGalleryImageSchema).max(12),
+  recommendationPhotos: z.array(locationRecommendationPhotoSchema).max(48).optional(),
   publicationStatus: locationPublicationStatusSchema,
   showOnHome: z.boolean(),
   sortOrder: z.number().int().min(0).max(9_999),
@@ -196,6 +215,19 @@ export const locationProfileInputSchema = z
         message: 'gallery must have exactly one cover image',
       });
     }
+    const recommendationPhotos = value.recommendationPhotos ?? [];
+    const bindings = new Set<string>();
+    recommendationPhotos.forEach((photo, index) => {
+      const key = `${photo.eventType}:${photo.assetId}`;
+      if (bindings.has(key)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['recommendationPhotos', index, 'assetId'],
+          message: 'recommendation photo asset must be unique per event type',
+        });
+      }
+      bindings.add(key);
+    });
   });
 export type LocationProfileInput = z.infer<typeof locationProfileInputSchema>;
 

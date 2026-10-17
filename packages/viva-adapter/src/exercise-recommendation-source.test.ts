@@ -8,6 +8,7 @@ import {
 describe('Viva exercise recommendation source', () => {
   it('reports private exercise IDs only through the internal mapping hook', () => {
     const associations = new Map<string, string>();
+    const stations = new Map<string, string>();
     const items = normalizeVivaExerciseRecommendationPayload(
       [
         {
@@ -21,11 +22,14 @@ describe('Viva exercise recommendation source', () => {
       ],
       {
         onExerciseExternalId: (activityId, externalId) => associations.set(activityId, externalId),
+        onStationExternalId: (activityId, externalId) => stations.set(activityId, externalId),
       },
     );
 
     expect(associations.get(items[0]?.id ?? '')).toBe('private-exercise-42');
     expect(JSON.stringify(items)).not.toContain('private-exercise-42');
+    expect(stations.get(items[0]?.id ?? '')).toBe('private-station');
+    expect(JSON.stringify(items)).not.toContain('private-station');
   });
 
   it('normalizes trainings and tournaments without exposing Viva identifiers', async () => {
@@ -82,6 +86,7 @@ describe('Viva exercise recommendation source', () => {
       correlationId: 'correlation-test-0001',
     });
 
+    expect(source.readStationExternalId(items[0]!.id)).toBe('10');
     expect(items).toMatchObject([
       {
         kind: 'TRAINING',

@@ -178,123 +178,173 @@ describe('booking preferences and recommendations routes', () => {
     });
   });
 
-  it('loads tournaments from CUP and accepts only trainings from the Viva schedule', async () => {
-    const trainingId = '50000000-0000-4000-8000-000000000001';
-    const vivaTournamentId = '50000000-0000-4000-8000-000000000002';
-    const cupTournamentId = '70000000-0000-4000-8000-000000000001';
-    const vivaReadDate = vi.fn().mockResolvedValue([
-      {
-        id: trainingId,
-        kind: 'TRAINING',
-        title: 'Групповая тренировка',
-        startsAt: '2099-07-29T15:00:00.000Z',
-        endsAt: '2099-07-29T16:00:00.000Z',
-        timezone: 'Europe/Moscow',
-        station: {
-          id: '60000000-0000-4000-8000-000000000001',
-          name: 'Терехово',
-          shortAddress: null,
-        },
-        levelRange: null,
-        capacity: { total: 4, open: 3 },
-        host: null,
-        route: `/trainings?event=${trainingId}`,
-      },
-      {
-        id: vivaTournamentId,
-        kind: 'TOURNAMENT',
-        title: 'Турнир из Viva',
-        startsAt: '2099-07-29T17:00:00.000Z',
-        endsAt: '2099-07-29T19:00:00.000Z',
-        timezone: 'Europe/Moscow',
-        station: {
-          id: '60000000-0000-4000-8000-000000000001',
-          name: 'Терехово',
-          shortAddress: null,
-        },
-        levelRange: null,
-        capacity: { total: 16, open: 4 },
-        host: null,
-        route: `/tournaments?event=${vivaTournamentId}`,
-      },
-    ]);
-    const cupReadDate = vi.fn().mockResolvedValue([
-      {
-        id: cupTournamentId,
-        title: 'Турнир из ЦУП',
-        format: 'Американо',
-        startsAt: '2099-07-29T17:00:00.000Z',
-        endsAt: '2099-07-29T19:00:00.000Z',
-        venue: 'Терехово',
-        trainerName: 'Илья Соколов',
-        levelRange: null,
-        organizer: {
-          displayName: 'Илья Соколов',
-          avatarUrl: null,
-        },
-        capacity: {
-          total: 16,
-          registered: 12,
-          open: 4,
-          waitlist: 0,
-        },
-        status: 'REGISTRATION',
-        route: `/tournaments?event=${cupTournamentId}`,
-      },
-    ]);
-    const app = await buildApp({
-      config,
-      logger: createLogger('booking-routes-test', 'silent'),
-      pool: fakePool(),
-      authService: {
-        issueVivaAccessToken: vi.fn().mockResolvedValue({ accessToken: 'delegated-user-token' }),
-      } as never,
-      bookingPreferencesRepository: {
-        get: vi.fn().mockResolvedValue(defaults),
-        getPlayerLevel: vi.fn().mockResolvedValue(null),
-        getRecommendationProfile: vi
-          .fn()
-          .mockResolvedValue({ preferences: defaults, playerLevel: null }),
-        update: vi.fn(),
-      },
-      gameReadRepository: {
-        getCardProjection: vi.fn(),
-        listPublicCardProjections: vi.fn(),
-        listViewerCardProjections: vi.fn(),
-        listRecommendationCardProjections: vi.fn().mockResolvedValue({
-          candidates: [],
-          history: [],
-        }),
-      },
-      exerciseRecommendationSource: { readDate: vivaReadDate },
-      tournamentSummarySource: { readDate: cupReadDate },
-    });
-    apps.push(app);
-
-    const response = await app.inject({
-      method: 'GET',
-      url: '/user/api/v1/local-padel/recommendations/bookings?limit=6',
-      headers: { authorization: `Bearer ${await accessToken(['games.play'])}` },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      items: [
+  it.each(['ready', 'photos', 'mapping'] as const)(
+    'loads CUP tournaments and Viva trainings with photo dependency=%s',
+    async (dependency) => {
+      const photosUnavailable = dependency === 'photos';
+      const mappingUnavailable = dependency === 'mapping';
+      const trainingId = '50000000-0000-4000-8000-000000000001';
+      const vivaTournamentId = '50000000-0000-4000-8000-000000000002';
+      const cupTournamentId = '70000000-0000-4000-8000-000000000001';
+      const vivaReadDate = vi.fn().mockResolvedValue([
         {
+          id: trainingId,
           kind: 'TRAINING',
-          activity: { id: trainingId, title: 'Групповая тренировка' },
+          title: 'Групповая тренировка',
+          startsAt: '2099-07-29T15:00:00.000Z',
+          endsAt: '2099-07-29T16:00:00.000Z',
+          timezone: 'Europe/Moscow',
+          station: {
+            id: '60000000-0000-4000-8000-000000000001',
+            name: 'Терехово',
+            shortAddress: null,
+          },
+          levelRange: null,
+          capacity: { total: 4, open: 3 },
+          host: null,
+          route: `/trainings?event=${trainingId}`,
         },
         {
+          id: vivaTournamentId,
           kind: 'TOURNAMENT',
-          activity: { id: cupTournamentId, title: 'Турнир из ЦУП' },
+          title: 'Турнир из Viva',
+          startsAt: '2099-07-29T17:00:00.000Z',
+          endsAt: '2099-07-29T19:00:00.000Z',
+          timezone: 'Europe/Moscow',
+          station: {
+            id: '60000000-0000-4000-8000-000000000001',
+            name: 'Терехово',
+            shortAddress: null,
+          },
+          levelRange: null,
+          capacity: { total: 16, open: 4 },
+          host: null,
+          route: `/tournaments?event=${vivaTournamentId}`,
         },
-      ],
-    });
-    expect(response.body).not.toContain(vivaTournamentId);
-    expect(response.body).not.toContain('Турнир из Viva');
-    expect(vivaReadDate).toHaveBeenCalledTimes(7);
-    expect(cupReadDate).toHaveBeenCalledTimes(7);
-  });
+      ]);
+      const cupReadDate = vi.fn().mockResolvedValue([
+        {
+          id: cupTournamentId,
+          title: 'Турнир из ЦУП',
+          format: 'Американо',
+          startsAt: '2099-07-29T17:00:00.000Z',
+          endsAt: '2099-07-29T19:00:00.000Z',
+          venue: 'Терехово',
+          trainerName: 'Илья Соколов',
+          levelRange: null,
+          organizer: {
+            displayName: 'Илья Соколов',
+            avatarUrl: null,
+          },
+          capacity: {
+            total: 16,
+            registered: 12,
+            open: 4,
+            waitlist: 0,
+          },
+          status: 'REGISTRATION',
+          route: `/tournaments?event=${cupTournamentId}`,
+        },
+      ]);
+      const app = await buildApp({
+        config,
+        logger: createLogger('booking-routes-test', 'silent'),
+        pool: fakePool(),
+        authService: {
+          issueVivaAccessToken: vi.fn().mockResolvedValue({ accessToken: 'delegated-user-token' }),
+        } as never,
+        bookingPreferencesRepository: {
+          get: vi.fn().mockResolvedValue(defaults),
+          getPlayerLevel: vi.fn().mockResolvedValue(null),
+          getRecommendationProfile: vi
+            .fn()
+            .mockResolvedValue({ preferences: defaults, playerLevel: null }),
+          update: vi.fn(),
+        },
+        gameReadRepository: {
+          getCardProjection: vi.fn(),
+          listPublicCardProjections: vi.fn(),
+          listViewerCardProjections: vi.fn(),
+          listRecommendationCardProjections: vi.fn().mockResolvedValue({
+            candidates: [],
+            history: [],
+          }),
+        },
+        exerciseRecommendationSource: {
+          readDate: vivaReadDate,
+          readStationExternalId: () => 'private-station-10',
+        },
+        bookingScreenMappingRepository: {
+          resolve: mappingUnavailable
+            ? vi.fn().mockRejectedValue(new Error('Photo station mapping unavailable'))
+            : vi.fn().mockResolvedValue({
+                bookings: [],
+                games: [],
+                stations: [
+                  {
+                    externalId: 'private-station-10',
+                    stationId: '60000000-0000-4000-8000-000000000001',
+                  },
+                ],
+              }),
+        },
+        locationRepository: {
+          readRecommendationPhotos: photosUnavailable
+            ? vi.fn().mockRejectedValue(new Error('Photo storage unavailable'))
+            : vi.fn().mockResolvedValue(
+                new Map([
+                  [
+                    '60000000-0000-4000-8000-000000000001',
+                    [
+                      {
+                        assetId: '80000000-0000-4000-8000-000000000001',
+                        eventType: 'TRAINING',
+                        isActive: true,
+                        sortOrder: 0,
+                      },
+                    ],
+                  ],
+                ]),
+              ),
+        } as never,
+        tournamentSummarySource: { readDate: cupReadDate },
+      });
+      apps.push(app);
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/user/api/v1/local-padel/recommendations/bookings?limit=6',
+        headers: { authorization: `Bearer ${await accessToken(['games.play'])}` },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        items: [
+          {
+            kind: 'TRAINING',
+            activity: { id: trainingId, title: 'Групповая тренировка' },
+            ...(photosUnavailable || mappingUnavailable
+              ? {}
+              : {
+                  cardImageUrl:
+                    '/public/api/v1/local-padel/location-media/80000000-0000-4000-8000-000000000001',
+                }),
+          },
+          {
+            kind: 'TOURNAMENT',
+            activity: { id: cupTournamentId, title: 'Турнир из ЦУП' },
+          },
+        ],
+      });
+      expect(response.body).not.toContain(vivaTournamentId);
+      expect(response.body).not.toContain('Турнир из Viva');
+      expect(response.body).not.toContain('private-station-10');
+      if (photosUnavailable || mappingUnavailable)
+        expect(response.body).not.toContain('cardImageUrl');
+      expect(vivaReadDate).toHaveBeenCalledTimes(7);
+      expect(cupReadDate).toHaveBeenCalledTimes(7);
+    },
+  );
 
   it('returns PadlHub host media URLs and proxies the provider image', async () => {
     const activityId = '50000000-0000-4000-8000-000000000001';

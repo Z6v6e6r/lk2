@@ -161,12 +161,16 @@ function gamePresentation(
     schedule: formatSchedule(game.startsAt, game.endsAt, game.timezone),
     kindLabel: game.kind === 'COACH_GAME' ? 'Игра с тренером' : 'Игра',
     kindTone: 'game',
-    heroUrl: recommendationCover(
-      game.station.name,
-      game.kind === 'COACH_GAME' ? 'COACH_GAME' : 'GAME',
-      game.id,
-      gameHeroUrl,
-    ),
+    heroUrl:
+      item.cardImageUrl ??
+      (item.cardImageUrl === null
+        ? gameHeroUrl
+        : recommendationCover(
+            game.station.name,
+            game.kind === 'COACH_GAME' ? 'COACH_GAME' : 'GAME',
+            game.id,
+            gameHeroUrl,
+          )),
     stationCourtLabel: `${game.station.name}${game.station.shortAddress ? `, ${game.station.shortAddress}` : game.court?.name ? ` · ${game.court.name}` : ''}`,
     levelHostLabel:
       game.levelRange?.from && game.levelRange?.to && game.levelRange.from !== game.levelRange.to
@@ -222,12 +226,18 @@ function activityPresentation(
     schedule: formatSchedule(activity.startsAt, activity.endsAt, activity.timezone),
     kindLabel,
     kindTone: activity.kind === 'TOURNAMENT' ? 'tournament' : 'training',
-    heroUrl: recommendationCover(
-      activity.station.name,
-      activity.kind,
-      activity.id,
-      activity.kind === 'TOURNAMENT' ? tournamentHeroUrl : trainingHeroUrl,
-    ),
+    heroUrl:
+      item.cardImageUrl ??
+      (item.cardImageUrl === null
+        ? activity.kind === 'TOURNAMENT'
+          ? tournamentHeroUrl
+          : trainingHeroUrl
+        : recommendationCover(
+            activity.station.name,
+            isCoachGameActivity(activity) ? 'COACH_GAME' : activity.kind,
+            activity.id,
+            activity.kind === 'TOURNAMENT' ? tournamentHeroUrl : trainingHeroUrl,
+          )),
     stationCourtLabel: `${activity.station.name}${activity.court?.name ? ` · ${activity.court.name}` : ''}`,
     ...(levelHostLabel ? { levelHostLabel } : {}),
     // The recommendation contract exposes an activity host, not its participant roster.
@@ -284,7 +294,20 @@ export function RecommendationGridCard({
       aria-labelledby={titleId}
     >
       <div className="recommendation-grid-card__hero">
-        <img src={presentation.heroUrl} alt="" />
+        <img
+          src={presentation.heroUrl}
+          alt=""
+          onError={(event) => {
+            const fallback =
+              item.kind === 'GAME'
+                ? gameHeroUrl
+                : item.kind === 'TOURNAMENT'
+                  ? tournamentHeroUrl
+                  : trainingHeroUrl;
+            if (event.currentTarget.getAttribute('src') !== fallback)
+              event.currentTarget.src = fallback;
+          }}
+        />
         <time
           dateTime={presentation.startsAt}
           aria-label={`Дата события: ${presentation.schedule.dateAccessibleLabel}`}
