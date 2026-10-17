@@ -16,6 +16,89 @@ worker can later refresh only those rosters while their canonical revision has n
 local change or unknown baseline is quarantined as a conflict; the worker never overwrites it.
 This is not a client feature switch and never writes back to legacy Mongo/Node-RED.
 
+## One-game private observation
+
+For an independently authorized read, reuse `LegacyGamesMongoAdapter.readGameObservation({
+tenantKey, gameId, operationId? })` with the operator's selected LK1 source ID. Resolve the existing
+tenant-owned `integration.external_entity_map` (`LK_LEGACY_SNAPSHOT`, `game`) first; its raw/hash
+aliases must point to the same canonical `games.games.id`. Do not infer a mapping from a phone,
+court time, hash alone or a supplied request. This method neither verifies authorization nor creates
+a mapping. The internal CLI below calls this existing method; no HTTP endpoint, credential
+acquisition or import is added.
+
+The source is fixed to `games.lk_games`. The read uses primary/majority, no retries, a single-client
+pool and 1–5000ms connection/socket/query timeouts. It selects exactly `tenantKey + id`, caps results
+at two to detect duplicates, and retrieves at most five pseudonymized participant IDs plus the
+source array count. Names, phones, avatars, payment payloads, keys and tokens are excluded. Null
+tenant requires an explicitly selected BSON-null tenant; missing tenant is never a wildcard. Legacy
+rows without that field remain unobserved under this selector.
+
+An optional selected operation is read only from `games.lk_legacy_game_commands`, by exact
+tenant/game/operation, after matching `game.legacyCommand.lastOperationId`. Other operation owners,
+an older operation, absence, ambiguity or unavailable permission stay `UNKNOWN`; no ledger search
+or fallback is attempted. Source game/command state is an observation, never booking, benefit or
+settlement proof. Those three remain explicitly `UNKNOWN`, including for source state `PAID` or
+`SUCCEEDED`. The game and operation have separate observation timestamps; these reads do not form
+an atomic snapshot. Participant-row count is not an active-membership count, and five keys are a
+bounded diagnostic sample, not a full roster when the source count is larger.
+
+Retain results only at the approved protected evidence destination: pseudonyms and source game ID
+remain private integration identifiers. A real read still requires the exact selected target,
+operator, IDs, allowed fields, read-only database/network role and time window. Do not inspect or
+export credential/URI values, probe production writes, create a fixture or enable a writer. Database
+ACL/network enforcement belongs to the operator; a read-only method is not an ACL guarantee.
+
+### Internal one-game CLI
+
+Source entrypoint: `packages/legacy-games-adapter/src/game-observation-cli.ts`. From the reviewed
+checkout with the existing Node/tsx dependencies, the exact command shape is:
+
+```sh
+node --import tsx packages/legacy-games-adapter/src/game-observation-cli.ts \
+  --game-id APPROVED_LK1_SOURCE_GAME_ID \
+  --tenant-key APPROVED_EXACT_SOURCE_TENANT_KEY \
+  --operation-id APPROVED_LINKED_BRIDGE_OPERATION_UUID
+```
+
+These placeholders are not executable target evidence. The command must be run only by the
+authorized operator, on the selected target and within its approved read scope/time window, after
+verifying the existing tenant-owned canonical mapping and database/network read-only role. Missing
+target, operator/role, exact IDs, mapping or actual read grant is **DEFERRED**. Source readiness or
+LOCAL synthetic IDs never supply those inputs. CLI flags neither assert nor establish a role or
+authorization; there is no `--read-only` authorization flag.
+
+The URI is read only from the existing protected, injected `LEGACY_GAMES_MONGODB_URI` locator.
+Do not put its value in command arguments, shell history, files, stdout/stderr or a report. The CLI
+does not load `.env`, retrieve secrets, provision credentials, verify ACLs, create a role, or open
+SSH. Run this source command only where execution of the reviewed checkout/dependencies is
+approved; it does not add a built image or install source on a host. Do not substitute a production
+env for a LOCAL validation run.
+
+`--game-id` and exactly one of `--tenant-key` or `--tenant-null` are required. `--tenant-null`
+selects explicit BSON-null only and requires separately verified evidence for that source tenant;
+it never matches a missing tenant field. `--operation-id` is optional and accepts one UUID for the
+existing `lk_legacy_game_commands` bridge owner only. Omit it if no exact bridge receipt is selected;
+the observer reports `NOT_SELECTED`. Subscription-booking and split-leave operations have different
+owners; this CLI does not follow them. All other/duplicate flags, positional arguments, URI,
+collection/projection/query overrides, wildcards, ranges and malformed selectors are rejected
+before reading the locator or constructing a client.
+
+The CLI executes one observer invocation. Fixed collections, result limits, projection,
+primary/majority reads, 5000ms deadlines, no retries and client close in `finally` are owned by that
+existing method. stdout contains one line of its existing private JSON evidence only; retain it
+only at the operator-approved protected destination, never shared logs or a public PR. stderr
+contains constant CLI error codes, never a raw exception, URI, contacts or provider payload. Exit
+`2` means selector/config unavailable; `1` means unavailable/ambiguous observation or a redacted
+execution/output error; `0` means a completed `FOUND` or `NOT_FOUND` read. `NOT_FOUND` is neither
+no-effects proof nor permission to retry a business command. Partial/unlinked command evidence and
+booking/benefit/settlement remain `UNKNOWN` even with exit `0`.
+
+LOCAL verification uses only owned synthetic driver I/O, including the real CLI parser/dispatch,
+failure redaction, fixed reads/limits and close. The actual Node/tsx launch is checked only with
+invalid selectors or no protected env, so it cannot connect. Existing observer checks remain
+separate reused evidence; no actual Mongo/SSH/DB/provider read, fixture, provisioning, container,
+signing, host install, merge or deploy is performed by this development step.
+
 ## Preconditions
 
 - A reviewed change and an approved backup/rollback plan exist for the target environment.

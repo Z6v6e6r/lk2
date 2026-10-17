@@ -71,6 +71,154 @@ export interface LegacyGamesMongoAdapterOptions {
   }) => void;
 }
 
+/** Private operator diagnostic, never a game DTO or financial confirmation. */
+export interface LegacyGameObservation {
+  readonly status: 'FOUND' | 'NOT_FOUND' | 'AMBIGUOUS' | 'UNAVAILABLE';
+  readonly observedAt: string;
+  readonly source: 'games.lk_games';
+  readonly game: {
+    readonly sourceId: string;
+    readonly revision: number | null;
+    readonly updatedAt: string | null;
+    readonly sourceState: string | null;
+    readonly archived: boolean | null;
+    readonly capacity: 2 | 4 | null;
+    readonly participantRowCount: number | null;
+    readonly participantKeys: readonly string[];
+    readonly organizerKey: string | null;
+    readonly exerciseAssociationKey: string | null;
+  } | null;
+  readonly operation: {
+    readonly source: 'games.lk_legacy_game_commands';
+    readonly observedAt: string | null;
+    readonly status: 'OBSERVED' | 'UNKNOWN';
+    readonly sourceState: string | null;
+    readonly reason:
+      'NOT_SELECTED' | 'LINK_UNPROVEN' | 'NOT_FOUND' | 'AMBIGUOUS' | 'SOURCE_UNAVAILABLE' | null;
+  };
+  readonly booking: 'UNKNOWN';
+  readonly benefit: 'UNKNOWN';
+  readonly settlement: 'UNKNOWN';
+}
+
+const OBSERVATION_GAME_PROJECTION = {
+  _id: 0,
+  id: 1,
+  tenantKey: 1,
+  revision: 1,
+  updatedAt: 1,
+  status: 1,
+  archived: 1,
+  capacity: 1,
+  'metadata.gameFormat': 1,
+  'metadata.vivaExerciseId': 1,
+  'booking.vivaExerciseId': 1,
+  'legacyCommand.lastOperationId': 1,
+  'organizer.id': 1,
+  participantRowCount: { $cond: [{ $isArray: '$participants' }, { $size: '$participants' }, null] },
+  participantIds: {
+    $map: {
+      input: { $slice: [{ $cond: [{ $isArray: '$participants' }, '$participants', []] }, 5] },
+      as: 'participant',
+      in: '$$participant.id',
+    },
+  },
+} satisfies Document;
+
+function observationState(value: unknown): string | null {
+  return typeof value === 'string' &&
+    [
+      'PAID',
+      'CANCELLED',
+      'PAYMENT_PENDING',
+      'CONFIRMED',
+      'PENDING',
+      'UNKNOWN',
+      'FAILED',
+      'SUCCEEDED',
+      'REJECTED',
+      'PREPARED',
+      'APPLYING',
+      'RECEIVED',
+    ].includes(value)
+    ? value
+    : null;
+}
+
+interface RawGameObservation extends Document {
+  readonly id?: unknown;
+  readonly tenantKey?: unknown;
+  readonly revision?: unknown;
+  readonly updatedAt?: unknown;
+  readonly status?: unknown;
+  readonly archived?: unknown;
+  readonly capacity?: unknown;
+  readonly participantRowCount?: unknown;
+  readonly participantIds?: readonly unknown[];
+  readonly organizer?: { readonly id?: unknown };
+  readonly metadata?: { readonly gameFormat?: unknown; readonly vivaExerciseId?: unknown };
+  readonly booking?: { readonly vivaExerciseId?: unknown };
+  readonly legacyCommand?: { readonly lastOperationId?: unknown };
+}
+
+interface RawCommandObservation extends Document {
+  readonly tenantKey?: unknown;
+  readonly legacyGameId?: unknown;
+  readonly operationId?: unknown;
+  readonly state?: unknown;
+}
+
+function observationGame(raw: RawGameObservation, sourceId: string): LegacyGameObservation['game'] {
+  const storedCapacity = raw.capacity === 2 || raw.capacity === 4 ? raw.capacity : null;
+  const formatCapacity =
+    raw.metadata?.gameFormat === 'singles' ? 2 : raw.metadata?.gameFormat === 'doubles' ? 4 : null;
+  const exerciseIds = [
+    ...new Set(
+      [raw.metadata?.vivaExerciseId, raw.booking?.vivaExerciseId].filter(
+        (id): id is string => typeof id === 'string' && uuidValue(id) === id,
+      ),
+    ),
+  ];
+  return {
+    sourceId,
+    revision:
+      typeof raw.revision === 'number' && Number.isSafeInteger(raw.revision) && raw.revision > 0
+        ? raw.revision
+        : null,
+    updatedAt: isoInstant(raw.updatedAt) ?? null,
+    sourceState: observationState(raw.status),
+    archived: typeof raw.archived === 'boolean' ? raw.archived : null,
+    capacity:
+      storedCapacity && formatCapacity && storedCapacity !== formatCapacity
+        ? null
+        : (storedCapacity ?? formatCapacity),
+    participantRowCount:
+      typeof raw.participantRowCount === 'number' &&
+      Number.isSafeInteger(raw.participantRowCount) &&
+      raw.participantRowCount >= 0
+        ? raw.participantRowCount
+        : null,
+    participantKeys: [
+      ...new Set(
+        (Array.isArray(raw.participantIds) ? raw.participantIds : [])
+          .slice(0, 5)
+          .filter(
+            (id): id is string =>
+              typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(id),
+          )
+          .map((id) => localVivaProfileAssociationId(id)),
+      ),
+    ],
+    organizerKey:
+      typeof raw.organizer?.id === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(raw.organizer.id)
+        ? localVivaProfileAssociationId(raw.organizer.id)
+        : null,
+    exerciseAssociationKey:
+      exerciseIds.length === 1 ? localVivaExerciseAssociationId(exerciseIds[0]!) : null,
+  };
+}
+
 export interface VivaExerciseOccurrence {
   readonly exerciseExternalId: string;
   readonly startsAt: string;
@@ -589,6 +737,161 @@ export class LegacyGamesMongoAdapter {
     const attempts = options.maxAttempts ?? 2;
     if (!Number.isInteger(attempts) || attempts < 1 || attempts > 2) {
       throw new Error('LEGACY_GAMES_MAX_ATTEMPTS_INVALID');
+    }
+  }
+
+  /**
+   * One explicitly authorized source ID only. Caller resolves the existing LK2 mapping first;
+   * this method grants no authorization, establishes no mapping and never follows a phone/slot.
+   * Null is an explicit BSON-null tenant selector, not a wildcard or missing-tenant fallback.
+   * The two reads are separately timed observations, not a cross-collection atomic snapshot.
+   */
+  public async readGameObservation(input: {
+    readonly tenantKey: string | null;
+    readonly gameId: string;
+    readonly operationId?: string;
+  }): Promise<LegacyGameObservation> {
+    if (
+      !input ||
+      typeof input.gameId !== 'string' ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(input.gameId) ||
+      (input.tenantKey !== null &&
+        (typeof input.tenantKey !== 'string' ||
+          !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(input.tenantKey))) ||
+      (input.operationId !== undefined &&
+        (typeof input.operationId !== 'string' ||
+          uuidValue(input.operationId) !== input.operationId))
+    ) {
+      throw new Error('LEGACY_GAME_OBSERVATION_ID_INVALID');
+    }
+    if (
+      (this.options.dbName ?? 'games') !== 'games' ||
+      (this.options.collectionName ?? 'lk_games') !== 'lk_games'
+    ) {
+      throw new Error('LEGACY_GAME_OBSERVATION_SOURCE_INVALID');
+    }
+    const timeoutMs = this.options.timeoutMs ?? 5_000;
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 5_000) {
+      throw new Error('LEGACY_GAME_OBSERVATION_TIMEOUT_INVALID');
+    }
+    const result: LegacyGameObservation = {
+      status: 'UNAVAILABLE',
+      observedAt: new Date().toISOString(),
+      source: 'games.lk_games',
+      game: null,
+      operation: {
+        source: 'games.lk_legacy_game_commands',
+        observedAt: null,
+        status: 'UNKNOWN',
+        sourceState: null,
+        reason: input.operationId ? 'LINK_UNPROVEN' : 'NOT_SELECTED',
+      },
+      booking: 'UNKNOWN',
+      benefit: 'UNKNOWN',
+      settlement: 'UNKNOWN',
+    };
+    // No application retry, driver retry, credential acquisition, logging of URI/error, or write.
+    let client: MongoClient | undefined;
+    try {
+      client = new MongoClient(this.options.uri, {
+        serverSelectionTimeoutMS: timeoutMs,
+        connectTimeoutMS: timeoutMs,
+        socketTimeoutMS: timeoutMs,
+        maxPoolSize: 1,
+        retryReads: false,
+        readPreference: 'primary',
+        readConcern: { level: 'majority' },
+      });
+      await client.connect();
+      const db = client.db('games');
+      const rows = await db
+        .collection('lk_games')
+        .aggregate<RawGameObservation>(
+          [
+            {
+              $match: {
+                id: input.gameId,
+                tenantKey: input.tenantKey === null ? { $type: 10 } : input.tenantKey,
+              },
+            },
+            { $limit: 2 },
+            { $project: OBSERVATION_GAME_PROJECTION },
+          ],
+          { maxTimeMS: timeoutMs },
+        )
+        .toArray();
+      const observedAt = new Date().toISOString();
+      if (rows.length !== 1)
+        return { ...result, observedAt, status: rows.length ? 'AMBIGUOUS' : 'NOT_FOUND' };
+      const row = rows[0]!;
+      // Defense against a mismatched projection/read driver; absence never widens tenant scope.
+      if (
+        row.id !== input.gameId ||
+        !Object.hasOwn(row, 'tenantKey') ||
+        row.tenantKey !== input.tenantKey
+      ) {
+        return { ...result, observedAt, status: 'AMBIGUOUS' };
+      }
+      const found = {
+        ...result,
+        observedAt,
+        status: 'FOUND' as const,
+        game: observationGame(row, input.gameId),
+      };
+      if (!input.operationId || row.legacyCommand?.lastOperationId !== input.operationId)
+        return found;
+      try {
+        const commands = await db
+          .collection<RawCommandObservation>('lk_legacy_game_commands')
+          .find(
+            {
+              tenantKey: input.tenantKey === null ? { $type: 10 } : input.tenantKey,
+              legacyGameId: input.gameId,
+              operationId: input.operationId,
+            },
+            {
+              projection: { _id: 0, tenantKey: 1, legacyGameId: 1, operationId: 1, state: 1 },
+              maxTimeMS: timeoutMs,
+            },
+          )
+          .limit(2)
+          .toArray();
+        const command = commands.length === 1 ? commands[0] : undefined;
+        const valid =
+          command &&
+          Object.hasOwn(command, 'tenantKey') &&
+          command.tenantKey === input.tenantKey &&
+          command.legacyGameId === input.gameId &&
+          command.operationId === input.operationId &&
+          observationState(command.state);
+        return {
+          ...found,
+          operation: {
+            ...result.operation,
+            observedAt: new Date().toISOString(),
+            status: valid ? 'OBSERVED' : 'UNKNOWN',
+            sourceState: valid ? observationState(command.state) : null,
+            reason: valid ? null : commands.length ? 'AMBIGUOUS' : 'NOT_FOUND',
+          },
+        };
+      } catch {
+        return {
+          ...found,
+          operation: {
+            ...result.operation,
+            observedAt: new Date().toISOString(),
+            reason: 'SOURCE_UNAVAILABLE',
+          },
+        };
+      }
+    } catch {
+      return {
+        ...result,
+        observedAt: new Date().toISOString(),
+        operation: { ...result.operation, reason: 'SOURCE_UNAVAILABLE' },
+      };
+    } finally {
+      await client?.close().catch(() => undefined);
     }
   }
 
