@@ -77,7 +77,9 @@ describe('Android native bridge adapter', () => {
       participants: [{ avatarUrl: config.apiBaseUrl + photo, route: '/profile/synthetic-account' }],
     });
     expect(native.request).toHaveBeenCalledOnce();
-    expect(observe).toHaveBeenCalledWith({ section: 'profile', failure: null });
+    expect(observe).toHaveBeenLastCalledWith(
+      expect.objectContaining({ section: 'profile', failure: null, complete: true }),
+    );
   });
 
   it('uses only the native plugin and strips credential response headers', async () => {

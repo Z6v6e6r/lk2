@@ -52,6 +52,49 @@ one delegation refresh and one replay of that GET. Other provider failures have 
 fallback; result/complete lost responses may replay only the same payload and idempotency key.
 Partial failure never completes a projection or returns an invented empty result.
 
+### Bounded ordinary read observations
+
+The source diagnostics for literal `GET /profile` and `GET /bookings/upcoming` reuse
+`onReadObservation`. They retain at most five events per section in React memory, with the first
+GET and the latest events preserved. A new read replaces that section's trace; cancellation,
+logout and session remount clear it. No observation enters storage, console, analytics or a
+provider. Query variants, commands and other sections do not enter this diagnostic path.
+
+The collapsed details show status or a closed transport/native error, normalized section path,
+local `observedAt`, trusted native cache/network/local origin, and matching source-GET correlation.
+Locally synthesized signed-out responses carry `local`; an older bridge without provenance stays
+`unknown`, even when it supplies an HTTP-shaped status.
+Body inspection is capped at 1 MiB and keeps only reviewed top-level contract field names. Values,
+unknown names, nested fields, credentials, provider identifiers and signed URLs are omitted.
+Content-Type, Cache-Control and Retry-After are canonicalized; `ABSENT` means missing and `OTHER`
+means an unsupported or invalid value was redacted. Cache-Control is passed through both existing
+response-header allowlists, while Set-Cookie remains native-only.
+
+The native runner returns three immutable success booleans only after its existing job, relay and
+completion validations. The plugin exposes only the ordered constants `JOB_ACCEPTED`,
+`RELAY_ACCEPTED`, `COMPLETED`, after the trusted-page and cancellation-epoch checks. They are terminal
+acknowledgements, not captured internal HTTP responses or execution timestamps. The ordinary final
+GET is recorded separately. Legacy `{state: "refreshed"}` remains supported and leaves individual
+native milestones unknown. Failure exposes only the existing closed code and the original GET
+correlation, never an internal job correlation. No additional read, job, POST or retry is added.
+
+These observations do not prove SDK decoding, screen rendering, installed APK identity, effective
+tenant/API configuration or server revision. The UI labels screen rendering unconfirmed. Capture
+requires a separately authorized operator/device/account and the full ordinary session/job scope;
+do not create another job for diagnosis. Record artifact binding separately. Source readiness and
+synthetic checks are neither `CAPTURED` nor `BINDING_VERIFIED`.
+
+The accepted APK 1.13/code14 was built before this observation enhancement. Its functional
+Profile/My Records/reopen acceptance remains valid; these additional details require a separately
+authorized new build and device verification.
+
+Version 1.14/code15 packages these bounded observations under the same application ID, public
+API/tenant configuration and controlled-test debug certificate. Its build receipt must identify
+the source commit, APK SHA-256, packaged configuration and newly executed native/JS checks.
+APK identity/configuration inspection is local artifact evidence; physical Profile/My Records/reopen
+acceptance and installed artifact/API binding remain separate until observed on the allocated
+test device/account. Do not relabel terminal native acknowledgements as captured internal responses.
+
 Version 1.10/code11 corrects a 1.9 contract mismatch: delegated Viva access tokens are opaque,
 not necessarily JWTs with a `tenant_key` claim. Native code accepts only bounded Bearer-safe token
 bytes from the authenticated endpoint and keeps the fixed plan tenant/host and current user lease.

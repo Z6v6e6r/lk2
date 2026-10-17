@@ -1,7 +1,11 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
-import { createNativeApiFetch, type NativeReadFailure } from './native-api-fetch.js';
+import {
+  createNativeApiFetch,
+  type NativeReadFailure,
+  type NativeReadObservation,
+} from './native-api-fetch.js';
 import { installMobileNavigation } from './navigation.js';
 import type { MobileRuntimeConfig } from './runtime-config.js';
 import { MobileCacheNotice } from './MobileCacheNotice.js';
@@ -34,9 +38,15 @@ function MobileSession({
   const [staleReads, setStaleReads] = useState<StaleMobileReads>({});
   const [readDiagnostics, setReadDiagnostics] = useState<{
     failures: Partial<Record<'profile' | 'bookings', NativeReadFailure>>;
+    observations: Partial<Record<'profile' | 'bookings', NativeReadObservation>>;
     expanded: boolean;
-  }>({ failures: {}, expanded: false });
+  }>({ failures: {}, observations: {}, expanded: false });
   const readFailures = readDiagnostics.failures;
+  const diagnosticSections = [
+    ...new Set([...Object.keys(readFailures), ...Object.keys(readDiagnostics.observations)]),
+  ] as ('profile' | 'bookings')[];
+  const diagnosticLabel =
+    Object.keys(readFailures).length > 0 ? 'Сведения об ошибке загрузки' : 'Сведения о загрузке';
   const [dataGeneration, setDataGeneration] = useState(0);
   const [devicePush, setDevicePush] = useState(initialAndroidPushState);
   const { gateway, push } = useMemo(() => {
@@ -57,15 +67,24 @@ function MobileSession({
       onSessionExpired();
     };
     const nativeFetch = native
-      ? createNativeApiFetch(config, undefined, expire, reads.observe, ({ section, failure }) => {
+      ? createNativeApiFetch(config, undefined, expire, reads.observe, (observation) => {
+          const { section, failure, trace, complete } = observation;
           if (expired) return;
           setReadDiagnostics((current) => {
             const next = { ...current.failures };
-            if (failure) next[section] = failure;
-            else delete next[section];
+            if (complete !== false) {
+              if (failure) next[section] = failure;
+              else delete next[section];
+            }
+            const observations = { ...current.observations };
+            if (trace?.length) observations[section] = observation;
+            else delete observations[section];
             return {
               failures: next,
-              expanded: Object.keys(next).length > 0 && current.expanded,
+              observations,
+              expanded:
+                (Object.keys(next).length > 0 || Object.keys(observations).length > 0) &&
+                current.expanded,
             };
           });
         })
@@ -111,7 +130,7 @@ function MobileSession({
       async logout() {
         // Hide account data immediately; an interrupted revoke must be retried, never called success.
         setBlocked('logout');
-        setReadDiagnostics({ failures: {}, expanded: false });
+        setReadDiagnostics({ failures: {}, observations: {}, expanded: false });
         setPending(true);
         try {
           await nativeFetch?.cancelUpcomingBookingsRefresh?.();
@@ -163,8 +182,8 @@ function MobileSession({
   return (
     <>
       <MobileCacheNotice stale={staleReads} />
-      {Object.keys(readFailures).length > 0 && (
-        <aside className="mobile-cache-notice" role="note" aria-label="Сведения об ошибке загрузки">
+      {diagnosticSections.length > 0 && (
+        <aside className="mobile-cache-notice" role="note" aria-label={diagnosticLabel}>
           <button
             type="button"
             aria-expanded={readDiagnostics.expanded}
@@ -173,23 +192,68 @@ function MobileSession({
               setReadDiagnostics((current) => ({ ...current, expanded: !current.expanded }))
             }
           >
-            Сведения об ошибке загрузки
+            {diagnosticLabel}
           </button>
           <div id="mobile-read-diagnostics">
             {readDiagnostics.expanded && (
               <ul>
-                {Object.entries(readFailures).map(([section, failure]) => (
-                  <li key={section}>
-                    <strong>{section === 'profile' ? 'Профиль' : 'Мои записи'}</strong>
-                    <p className="mobile-error-code">
-                      {failure.status === undefined ? '' : `HTTP ${failure.status}; `}
-                      Код ошибки: {failure.code}
-                    </p>
-                    {failure.correlationId && (
-                      <p className="mobile-error-code">Код запроса: {failure.correlationId}</p>
-                    )}
-                  </li>
-                ))}
+                {diagnosticSections.map((section) => {
+                  const failure = readFailures[section];
+                  const observation = readDiagnostics.observations[section];
+                  return (
+                    <li key={section}>
+                      <strong>{section === 'profile' ? 'Профиль' : 'Мои записи'}</strong>
+                      {failure && (
+                        <p className="mobile-error-code">
+                          {failure.status === undefined ? '' : `HTTP ${failure.status}; `}
+                          Код ошибки: {failure.code}
+                        </p>
+                      )}
+                      {failure?.correlationId && (
+                        <p className="mobile-error-code">Код запроса: {failure.correlationId}</p>
+                      )}
+                      {observation?.trace && (
+                        <>
+                          <p>Путь: {observation.path}. Показ экрана: не подтверждён.</p>
+                          <p>
+                            Время — локальное получение ответа или ACK; HTTP этапов native job
+                            неизвестен.
+                          </p>
+                          <ol>
+                            {observation.trace.map((event, index) => (
+                              <li key={index}>
+                                <p>
+                                  {event.stage}; {event.source}; {event.outcome};{' '}
+                                  {event.status === undefined
+                                    ? 'HTTP неизвестен'
+                                    : `${event.source === 'network' ? 'HTTP' : 'Статус'} ${event.status}`}
+                                </p>
+                                <p>{event.observedAt}</p>
+                                {event.code && <p>Код: {event.code}</p>}
+                                {event.correlationId && (
+                                  <p>Код исходного GET: {event.correlationId}</p>
+                                )}
+                                {event.headers && (
+                                  <p>
+                                    Content-Type: {event.headers.contentType}; Cache-Control:{' '}
+                                    {event.headers.cacheControl}; Retry-After:{' '}
+                                    {event.headers.retryAfter}
+                                  </p>
+                                )}
+                                {event.shape && (
+                                  <p>
+                                    Форма: {event.shape}; поля:{' '}
+                                    {event.fields?.join(', ') || 'нет разрешённых полей'}
+                                  </p>
+                                )}
+                              </li>
+                            ))}
+                          </ol>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
