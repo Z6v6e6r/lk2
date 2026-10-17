@@ -231,7 +231,10 @@ describe('Games management User API', () => {
       commandId,
       operation: { type: 'CREATE_GAME', status: 'SUCCEEDED', gameId },
       replayed: false,
+      game: null,
     });
+    expect(response.json<{ operation: unknown }>().operation).not.toHaveProperty('booking');
+    expect(response.json<{ operation: unknown }>().operation).not.toHaveProperty('bookingId');
     const input = create.mock.calls[0]?.[0] as CreateStoredGameInput | undefined;
     expect(input).toMatchObject({
       tenantId,
@@ -339,46 +342,49 @@ describe('Games management User API', () => {
     expect(conflict.json()).toMatchObject({ code: 'IDEMPOTENCY_KEY_REUSED' });
   });
 
-  it('rejects paid or caller-extended create payloads before persistence', async () => {
-    const create = vi.fn();
-    const app = await appWith(repository(), managementRepository({ create }));
-    const headers = {
-      authorization: `Bearer ${await accessToken()}`,
-      'idempotency-key': 'games-api-create-rejected-0001',
-    };
-    const basePayload = {
-      title: 'Платная игра',
-      kind: 'FRIENDLY',
-      visibility: 'PUBLIC',
-      stationId: '11111111-1111-4111-8111-111111111111',
-      startsAt: '2027-08-15T15:00:00.000Z',
-      endsAt: '2027-08-15T16:30:00.000Z',
-      timezone: 'Europe/Moscow',
-      capacity: 4,
-      levelRange: null,
-      paymentMode: 'SPLIT',
-      waitlistEnabled: true,
-    };
+  it.each(['SPLIT', 'SUBSCRIPTION', 'ORGANIZER_PAYS'])(
+    'rejects %s or caller-extended create payloads before persistence',
+    async (paymentMode) => {
+      const create = vi.fn();
+      const app = await appWith(repository(), managementRepository({ create }));
+      const headers = {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': 'games-api-create-rejected-0001',
+      };
+      const basePayload = {
+        title: 'Платная игра',
+        kind: 'FRIENDLY',
+        visibility: 'PUBLIC',
+        stationId: '11111111-1111-4111-8111-111111111111',
+        startsAt: '2027-08-15T15:00:00.000Z',
+        endsAt: '2027-08-15T16:30:00.000Z',
+        timezone: 'Europe/Moscow',
+        capacity: 4,
+        levelRange: null,
+        paymentMode,
+        waitlistEnabled: true,
+      };
 
-    const paid = await app.inject({
-      method: 'POST',
-      url: '/user/api/v1/local-padel/games',
-      headers,
-      payload: basePayload,
-    });
-    expect(paid.statusCode).toBe(409);
-    expect(paid.json()).toMatchObject({ code: 'GAME_PAYMENT_REQUIRED' });
+      const paid = await app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/games',
+        headers,
+        payload: basePayload,
+      });
+      expect(paid.statusCode).toBe(409);
+      expect(paid.json()).toMatchObject({ code: 'GAME_PAYMENT_REQUIRED' });
 
-    const injected = await app.inject({
-      method: 'POST',
-      url: '/user/api/v1/local-padel/games',
-      headers: { ...headers, 'idempotency-key': 'games-api-create-rejected-0002' },
-      payload: { ...basePayload, paymentMode: 'NO_PAYMENT', organizerUserId: userId },
-    });
-    expect(injected.statusCode).toBe(400);
-    expect(injected.json()).toMatchObject({ code: 'INVALID_REQUEST' });
-    expect(create).not.toHaveBeenCalled();
-  });
+      const injected = await app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/games',
+        headers: { ...headers, 'idempotency-key': 'games-api-create-rejected-0002' },
+        payload: { ...basePayload, paymentMode: 'NO_PAYMENT', organizerUserId: userId },
+      });
+      expect(injected.statusCode).toBe(400);
+      expect(injected.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+      expect(create).not.toHaveBeenCalled();
+    },
+  );
 
   it('cancels through the authenticated organizer command and preserves stable rejection codes', async () => {
     const cancel = vi.fn().mockResolvedValue({
