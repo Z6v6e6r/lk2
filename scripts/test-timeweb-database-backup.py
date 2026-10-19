@@ -1233,7 +1233,10 @@ class NamespacePureTests(unittest.TestCase):
         altered=copy.deepcopy(NS_IMAGE);altered['RepoDigests']=[]
         m.namespace_image(altered,NS_IMAGE)
         with self.assertRaises(m.Stop):m.namespace_image(altered)
-        for key,value in [('Id','sha256:'+'b'*64),('RootFS',{'Type':'layers','Layers':['sha256:'+'b'*64]}),('Env',['PATH=/foreign'])]:
+        # A containerd-image-store host reports the manifest digest while a classic isolated daemon
+        # assigns the config digest: the exact ID may differ, the import binding is the journal event.
+        drift=copy.deepcopy(altered);drift['Id']='sha256:'+'b'*64;m.namespace_image(drift,NS_IMAGE)
+        for key,value in [('RootFS',{'Type':'layers','Layers':['sha256:'+'b'*64]}),('Env',['PATH=/foreign'])]:
             bad=copy.deepcopy(altered);bad[key]=value
             with self.subTest(key=key),self.assertRaises(m.Stop):m.namespace_image(bad,NS_IMAGE)
 
@@ -1560,11 +1563,11 @@ class NamespaceScenario(DiskScenario):
         if args[0]=='ps':return self.container.encode() if self.created else b''
         return DiskScenario.docker(self,args,code,**kwargs)
 
-    def row(self,plan):
+    def row(self,plan,image_id=None):
         if not self.created:return None
         state='running'if self.running else 'exited'if self.stopped else 'created'
         row=disk_restore_row({**plan,'mount':plan['isolation']['pgdata']},self.container,state)
-        row['Image']=row['Config']['Image']=NS_IMAGE['Id'];row['HostConfig'].update(CgroupParent=plan['isolation']['slice'],CgroupnsMode='private')
+        row['Image']=row['Config']['Image']=image_id or NS_IMAGE['Id'];row['HostConfig'].update(CgroupParent=plan['isolation']['slice'],CgroupnsMode='private')
         return row
 
     def start(self,p,op,j):
@@ -1618,7 +1621,7 @@ class NamespaceScenario(DiskScenario):
         assert self.daemon;j.add('IMAGE_TRANSFER_INTENT');self.trip('NS_IMAGE_TRANSFER');self.trip('NS_IMAGE_TRANSFER',True);j.add('IMAGE_LOADED',source=NS_IMAGE,imported=NS_IMAGE)
 
     def attest(self,p,op,j):
-        return {'storage':m.disk_storage_attest(p,j),'container':self.row(p),'synthetic':True}
+        return {'storage':m.disk_storage_attest(p,j),'container':self.row(p,m.namespace_current_image_id(p,j)),'synthetic':True}
 
     def daemon_stop(self,p,op,j):
         assert not self.created

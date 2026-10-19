@@ -620,9 +620,11 @@ def namespace_image(value, source=None):
     if source is None:
         need(restore_image_admitted(value), 'NS_IMAGE_SOURCE')
     else:
-        # docker save/load need not retain RepoDigests. The config ID and ordered
-        # layer chain bind the import to the independently admitted source digest.
-        need(all(value[k] == source[k] for k in ['Id', 'Os', 'Architecture', 'Size', 'RootFS', 'Env']), 'NS_IMAGE_IMPORT')
+        # docker save/load need not retain RepoDigests. A containerd-image-store host reports
+        # the manifest digest while a classic isolated daemon assigns the config digest, so the
+        # platform/size/ordered layer chain/environment bind the import; the exact imported ID is
+        # then recorded by the IMAGE_LOADED journal event and reused for container custody.
+        need(all(value[k] == source[k] for k in ['Os', 'Architecture', 'Size', 'RootFS', 'Env']), 'NS_IMAGE_IMPORT')
     return value
 
 
@@ -1294,22 +1296,39 @@ def namespace_image_transfer(p, op, journal):
     need(namespace_frozen_source(p)==frozen and namespace_image(strict(docker(['image','inspect','--format',NS_IMAGE_FORMAT,PG_IMAGE])))==source, 'NS_TRANSFER_SOURCE_DRIFT')
     imported = namespace_image(strict(namespace_docker(p, ['image', 'inspect', '--format', NS_IMAGE_FORMAT, source['Id']])), source)
     need(os.statvfs(p['mount']).f_bavail * os.statvfs(p['mount']).f_frsize >= p['restoreDataBytes'], 'NS_RESTORE_CAPACITY')
+    ids = namespace_docker(p, ['image', 'ls', '-aq', '--no-trunc']).decode().split()
+    need(len(ids) == 1 and HASH.fullmatch(ids[0]), 'NS_IMAGE_DISCOVERY')
+    imported = namespace_image(strict(namespace_docker(p, ['image', 'inspect', '--format', NS_IMAGE_FORMAT, ids[0]])), source)
+    need(imported['Id'] == ids[0], 'NS_IMAGE_DISCOVERY')
     journal.add('IMAGE_LOADED', source=source, imported=imported)
 
 
-def namespace_container_args(p):
+def namespace_current_image_id(p, journal):
+    event = journal.find('IMAGE_LOADED')
+    return event['imported']['Id'] if event is not None else None
+
+
+def namespace_imported_image(p, journal):
+    event = journal.find('IMAGE_LOADED')
+    need(event is not None, 'NS_IMAGE_IMPORT_MISSING')
+    imported = event['imported']
+    need(namespace_image(imported, p['isolation']['image']) == imported, 'NS_IMAGE_IMPORT')
+    return imported
+
+
+def namespace_container_args(p, image_id=None):
     value = {**p, 'mount': p['isolation']['pgdata']}; args = disk_container_args(value)
-    args[args.index(PG_IMAGE)] = p['isolation']['image']['Id']
+    args[args.index(PG_IMAGE)] = image_id or p['isolation']['image']['Id']
     args[1:1] = ['--pull', 'never', '--cgroup-parent', p['isolation']['slice'], '--cgroupns', 'private']
     return args
 
 
-def namespace_container_lookup(p):
+def namespace_container_lookup(p, image_id=None):
     ids = namespace_docker(p, ['ps', '-aq', '--no-trunc']).decode().split()
     need(len(ids) <= 1 and all(HASH.fullmatch(v) for v in ids), 'NS_CONTAINER_COUNT')
     if not ids:return None
     row = strict(namespace_docker(p, ['inspect', '--format', NS_RESTORE_FORMAT, ids[0]]))
-    need(row['Id'] == ids[0] and row['Image'] == row['Config']['Image'] == p['isolation']['image']['Id']
+    need(row['Id'] == ids[0] and row['Image'] == row['Config']['Image'] == (image_id or p['isolation']['image']['Id'])
          and row['HostConfig']['CgroupParent'] == p['isolation']['slice'] and row['HostConfig']['CgroupnsMode'] == 'private', 'NS_CONTAINER_IMAGE_CGROUP')
     legacy = {**row, 'Config': {**row['Config'], 'Image': PG_IMAGE}}
     validate_disk_container(legacy, {**p, 'mount': p['isolation']['pgdata']})
@@ -1376,7 +1395,7 @@ def namespace_runtime_mounts_empty():
 
 def namespace_running_attestation(p, op, journal):
     isolation = namespace_daemon_identity(p, op); storage = disk_storage_attest(p, journal)
-    row = namespace_container_lookup(p); need(row is not None and row['State']['Status'] == 'running', 'NS_CONTAINER_STATE')
+    row = namespace_container_lookup(p, namespace_current_image_id(p, journal)); need(row is not None and row['State']['Status'] == 'running', 'NS_CONTAINER_STATE')
     container = namespace_process(row['State']['Pid'], root=False)
     need(container['cgroup'] == '0::/' + p['isolation']['slice'] + '/docker-' + row['Id'] + '.scope', 'NS_CONTAINER_CGROUP')
     cg = Path('/sys/fs/cgroup')/p['isolation']['slice']/('docker-' + row['Id'] + '.scope')
@@ -1421,7 +1440,7 @@ def namespace_running_attestation(p, op, journal):
               'containerMount': mount(container['pid'], '/var/lib/postgresql/data', '/pgdata')}
     projection = disk_container_projection(row); projection['Image'] = row['Image']
     projection['HostConfig'].update(CgroupParent=p['isolation']['slice'], CgroupnsMode='private')
-    need(namespace_daemon_identity(p, op) == isolation and namespace_container_lookup(p) == row
+    need(namespace_daemon_identity(p, op) == isolation and namespace_container_lookup(p, namespace_current_image_id(p, journal)) == row
          and namespace_process(container['pid'],root=False)==container
          and [namespace_process(v['pid'],root=False) for v in container_members]==container_members
          and namespace_network(container['pid']) == network_inode
@@ -1482,7 +1501,7 @@ def namespace_daemon_stop(p, op, journal):
     previous=journal.find('DAEMON_STOP_INTENT')
     if previous is None:
         need(namespace_control(p,'daemon-receipt.json').exists(), 'NS_DAEMON_START_MANUAL_STOP')
-        need(namespace_container_lookup(p) is None, 'NS_STOP_CONTAINER_PRESENT')
+        need(namespace_container_lookup(p, namespace_current_image_id(p, journal)) is None, 'NS_STOP_CONTAINER_PRESENT')
         identity=namespace_daemon_identity(p,op)
         need(not identity['managed']['shims'], 'NS_STOP_SHIM_PRESENT')
         journal.add('DAEMON_STOP_INTENT',identity=identity)
@@ -2374,7 +2393,7 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
         # Exclusion follows exact containment/custody verification, never a caller-selected ID.
         ignored = None
         if restore is not None:
-            row = namespace_container_lookup(plan) if is_namespace_operation(op) else disk_container_lookup(plan)
+            row = namespace_container_lookup(plan, namespace_current_image_id(plan, journal)) if is_namespace_operation(op) else disk_container_lookup(plan)
             need(row is not None and row['Id'] == restore, 'DISK_RESTORE_ID_DRIFT')
             if not cleanup:
                 proof = namespace_running_attestation(plan, op, journal) if is_namespace_operation(op) else disk_running_attestation(plan, journal)
@@ -2857,8 +2876,9 @@ def execute_namespace(op, request_bytes, file_sha):
         namespace_daemon_start(plan, op, journal)
         namespace_image_transfer(plan, op, journal)
         journal.add('RESTORE_CREATE_INTENT')
-        container = namespace_docker(plan, namespace_container_args(plan), 'DISK_RESTORE_CREATE').decode().strip()
-        row = namespace_container_lookup(plan)
+        image_id = namespace_imported_image(plan, journal)['Id']
+        container = namespace_docker(plan, namespace_container_args(plan, image_id), 'DISK_RESTORE_CREATE').decode().strip()
+        row = namespace_container_lookup(plan, image_id)
         need(row is not None and row['Id'] == container and row['State']['Status'] == 'created', 'DISK_RESTORE_CREATE_UNPROVEN')
         journal.add('RESTORE_CREATED', containerId=container)
         disk_storage_attest(plan, journal)
@@ -2866,7 +2886,7 @@ def execute_namespace(op, request_bytes, file_sha):
         namespace_docker(plan, ['start', container], 'DISK_RESTORE_START')
         ready = False
         for _ in range(45):
-            row = namespace_container_lookup(plan)
+            row = namespace_container_lookup(plan, image_id)
             need(row is not None and row['Id'] == container and row['State']['Status'] == 'running', 'DISK_RESTORE_START_UNPROVEN')
             try:
                 namespace_docker(plan, ['exec', container, 'pg_isready', '--username=phub_restore', '--dbname=phub_restore'], 'DISK_RESTORE_READY')
@@ -2923,7 +2943,7 @@ def namespace_cleanup(plan, op, journal, guard):
     stopped = journal.find('DAEMON_STOPPED') is not None
     if started and not stopped and namespace_control(plan,'daemon-start.json').exists():
         need(namespace_control(plan,'daemon-receipt.json').exists(), 'NS_DAEMON_START_MANUAL_STOP')
-        if journal.find('DAEMON_STOP_INTENT') is None:row=namespace_container_lookup(plan)
+        if journal.find('DAEMON_STOP_INTENT') is None:row=namespace_container_lookup(plan, namespace_current_image_id(plan, journal))
         else:row=None
     else:row=None
     created = journal.find('RESTORE_CREATED')
@@ -2942,14 +2962,14 @@ def namespace_cleanup(plan, op, journal, guard):
             namespace_running_attestation(plan, op, journal)
             journal.once('CONTAINER_STOP_INTENT', containerId=row['Id'])
             namespace_docker(plan, ['stop', '--time', '30', row['Id']], 'NS_CONTAINER_STOP')
-            row = namespace_container_lookup(plan)
+            row = namespace_container_lookup(plan, namespace_current_image_id(plan, journal))
             need(row is not None and row['State']['Status'] == 'exited', 'NS_CONTAINER_STOP_UNKNOWN')
         else:need(row['State']['Status'] in ('created', 'exited'), 'NS_RESTORE_STATE')
         need(namespace_runtime_mounts(plan, journal, namespace_alias_rows())['network'] is None, 'NS_RUNTIME_UNBOUND')
         journal.once('CONTAINER_STOPPED', containerId=row['Id'])
         journal.once('CONTAINER_REMOVE_INTENT', containerId=row['Id'])
         namespace_docker(plan, ['rm', row['Id']], 'NS_CONTAINER_REMOVE')
-        need(namespace_container_lookup(plan) is None, 'NS_CONTAINER_REMOVE_UNKNOWN')
+        need(namespace_container_lookup(plan, namespace_current_image_id(plan, journal)) is None, 'NS_CONTAINER_REMOVE_UNKNOWN')
         need(namespace_runtime_mounts(plan, journal, namespace_alias_rows())['network'] is None, 'NS_RUNTIME_UNBOUND')
         journal.once('CONTAINER_REMOVED', containerId=row['Id'])
     elif created is not None:
