@@ -1051,7 +1051,7 @@ def namespace_fixture():
         'MemoryMax':str(2*1024**3),'MemorySwapMax':'0','TasksMax':'256','Delegate':'yes','CPUQuotaPerSecUSec':'1s','KillMode':'control-group',
         'SendSIGKILL':'yes','Restart':'no','TimeoutStopUSec':'30s','LimitCORE':'0','UMask':'0077','User':'root','Group':'root',
         'WorkingDirectory':plan['work'],'StandardInput':'null','StandardOutput':'null','StandardError':'null','Slice':r['slice'],'Transient':'yes',
-        'NRestarts':'0','Result':'success','ExecMainCode':'0','ExecMainStatus':'0','PrivateNetwork':'yes'}
+        'NRestarts':'0','Result':'success','ExecMainCode':'0','ExecMainStatus':'0','PrivateNetwork':'yes','PrivateMounts':'no'}
     sl={'LoadState':'loaded','ActiveState':'active','ControlGroup':'/'+r['slice'],'Transient':'yes','MemoryMax':str(4*1024**3),'MemorySwapMax':'0','TasksMax':'384','CPUQuotaPerSecUSec':'2s'}
     def bounds(group,mem,pids,cpu):return {'identity':{'dev':29,'ino':1000+pids,'uid':0,'gid':0,'mode':0o40755},'path':'/sys/fs/cgroup'+group,
         'memory.max':str(mem),'memory.swap.max':'0','pids.max':str(pids),'cpu.max':str(cpu*100000)+' 100000'}
@@ -1242,6 +1242,10 @@ class NamespacePureTests(unittest.TestCase):
         self.assertRegex(p['isolation']['slice'],r'^phubdiskrestore[a-f0-9]{24}\.slice$')
         self.assertIn('--slice='+p['isolation']['slice'],args)
         self.assertIn('--property=SendSIGKILL=yes',args);self.assertIn('--property=Restart=no',args)
+        # systemd 259 otherwise creates a private mount namespace for PrivateNetwork=yes; the
+        # supervisor's initial-namespace proof requires the host mount namespace, while network
+        # isolation must remain enabled.
+        self.assertIn('--property=PrivateNetwork=yes',args);self.assertIn('--property=PrivateMounts=no',args)
         self.assertIn('--property=MemoryMax=2147483648',args);self.assertIn('--property=TasksMax=256',args)
         self.assertEqual(cfg['hosts'],['unix:///media/.runtime/docker.sock']);self.assertEqual(cfg['cgroup-parent'],p['isolation']['slice'])
         self.assertEqual(cfg['storage-driver'],'vfs');self.assertFalse(cfg['iptables']);self.assertFalse(cfg['live-restore'])

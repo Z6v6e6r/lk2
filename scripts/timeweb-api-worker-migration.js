@@ -1642,6 +1642,7 @@ const NS_UNIT_KEYS = [
   'ExecMainCode',
   'ExecMainStatus',
   'PrivateNetwork',
+  'PrivateMounts',
 ];
 const NS_SLICE_KEYS = [
   'LoadState',
@@ -1912,6 +1913,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
       StandardOutput: 'null',
       StandardError: 'null',
       PrivateNetwork: 'yes',
+      PrivateMounts: 'no',
       Slice: i.slice,
       Transient: 'yes',
       NRestarts: '0',
