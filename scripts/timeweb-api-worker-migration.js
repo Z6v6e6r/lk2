@@ -2006,7 +2006,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
     socket.nlink !== 1 ||
     !same(r.isolation.info, {
       DockerRootDir: i.dataRoot,
-      Driver: 'native',
+      Driver: 'vfs',
       CgroupDriver: 'systemd',
       LiveRestoreEnabled: false,
     })
