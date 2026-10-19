@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
@@ -148,7 +148,7 @@ describe('shared LK2 Android UI', () => {
     expect(
       await screen.findByRole('searchbox', { name: 'Поиск по чатам' }, { timeout: 5000 }),
     ).toBeInTheDocument();
-    expect(conversations).toHaveBeenCalled();
+    await waitFor(() => expect(conversations).toHaveBeenCalled());
     expect(
       screen.queryByText('Раздел появится в следующей версии приложения'),
     ).not.toBeInTheDocument();

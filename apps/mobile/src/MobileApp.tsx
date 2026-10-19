@@ -1,7 +1,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { App } from '../../web/src/App.js';
 import { createBrowserAuthGateway } from '../../web/src/auth-gateway.js';
-import { createNativeApiFetch } from './native-api-fetch.js';
+import { createNativeApiFetch, type NativeReadFailure } from './native-api-fetch.js';
 import { installMobileNavigation } from './navigation.js';
 import type { MobileRuntimeConfig } from './runtime-config.js';
 import { MobileCacheNotice } from './MobileCacheNotice.js';
@@ -32,6 +32,11 @@ function MobileSession({
   const [pending, setPending] = useState(false);
   const [restoreFailure, setRestoreFailure] = useState<ReturnType<typeof sessionFailureDetails>>();
   const [staleReads, setStaleReads] = useState<StaleMobileReads>({});
+  const [readDiagnostics, setReadDiagnostics] = useState<{
+    failures: Partial<Record<'profile' | 'bookings', NativeReadFailure>>;
+    expanded: boolean;
+  }>({ failures: {}, expanded: false });
+  const readFailures = readDiagnostics.failures;
   const [dataGeneration, setDataGeneration] = useState(0);
   const [devicePush, setDevicePush] = useState(initialAndroidPushState);
   const { gateway, push } = useMemo(() => {
@@ -51,17 +56,27 @@ function MobileSession({
       window.history.replaceState({}, '', '/');
       onSessionExpired();
     };
+    const nativeFetch = native
+      ? createNativeApiFetch(config, undefined, expire, reads.observe, ({ section, failure }) => {
+          if (expired) return;
+          setReadDiagnostics((current) => {
+            const next = { ...current.failures };
+            if (failure) next[section] = failure;
+            else delete next[section];
+            return {
+              failures: next,
+              expanded: Object.keys(next).length > 0 && current.expanded,
+            };
+          });
+        })
+      : undefined;
     const service = createBrowserAuthGateway({
       baseUrl: config.apiBaseUrl,
       tenantKey: config.tenantKey,
       appVersion: config.appVersion,
       platform: native ? 'android' : 'web',
       nativeSessionTransport: native,
-      ...(native
-        ? {
-            fetchImplementation: createNativeApiFetch(config, undefined, expire, reads.observe),
-          }
-        : {}),
+      ...(nativeFetch ? { fetchImplementation: nativeFetch } : {}),
     });
     if (!native) return { gateway: service, push: undefined };
     const nativeGateway = {
@@ -96,8 +111,10 @@ function MobileSession({
       async logout() {
         // Hide account data immediately; an interrupted revoke must be retried, never called success.
         setBlocked('logout');
+        setReadDiagnostics({ failures: {}, expanded: false });
         setPending(true);
         try {
+          await nativeFetch?.cancelUpcomingBookingsRefresh?.();
           await controller?.beforeLogout();
           await service.logout();
           expire();
@@ -146,6 +163,38 @@ function MobileSession({
   return (
     <>
       <MobileCacheNotice stale={staleReads} />
+      {Object.keys(readFailures).length > 0 && (
+        <aside className="mobile-cache-notice" role="note" aria-label="Сведения об ошибке загрузки">
+          <button
+            type="button"
+            aria-expanded={readDiagnostics.expanded}
+            aria-controls="mobile-read-diagnostics"
+            onClick={() =>
+              setReadDiagnostics((current) => ({ ...current, expanded: !current.expanded }))
+            }
+          >
+            Сведения об ошибке загрузки
+          </button>
+          <div id="mobile-read-diagnostics">
+            {readDiagnostics.expanded && (
+              <ul>
+                {Object.entries(readFailures).map(([section, failure]) => (
+                  <li key={section}>
+                    <strong>{section === 'profile' ? 'Профиль' : 'Мои записи'}</strong>
+                    <p className="mobile-error-code">
+                      {failure.status === undefined ? '' : `HTTP ${failure.status}; `}
+                      Код ошибки: {failure.code}
+                    </p>
+                    {failure.correlationId && (
+                      <p className="mobile-error-code">Код запроса: {failure.correlationId}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </aside>
+      )}
       <App
         key={dataGeneration}
         gateway={gateway}

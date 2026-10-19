@@ -48,7 +48,27 @@ public class AndroidHttpSenderTest {
         }
     }
 
+    @Test public void serverDateStaysNativeAndDuplicateDatesAreClosedInvalid() throws Exception {
+        AndroidSessionPolicy.Request request = new AndroidSessionPolicy.Request(AndroidSessionTest.ROOT + "/profile", "GET",
+            Collections.singletonMap("accept", "application/json"), null, AndroidSessionPolicy.Operation.API);
+        String date = "Mon, 12 Oct 2026 11:00:00 GMT";
+        Loopback single = sendToLoopbackResponse(request, "Date: " + date + "\r\n");
+        assertEquals(date, single.response.headers.get("date"));
+        assertFalse(single.response.forBridge().headers.containsKey("date"));
+        Loopback duplicate = sendToLoopbackResponse(request, "Date: " + date + "\r\nDate: " + date + "\r\n");
+        assertEquals("", duplicate.response.headers.get("date"));
+        assertFalse(duplicate.response.forBridge().headers.containsKey("date"));
+    }
+
+    private static final class Loopback {
+        final String captured;
+        final AndroidSessionEngine.Response response;
+        Loopback(String captured, AndroidSessionEngine.Response response) { this.captured = captured; this.response = response; }
+    }
     private String sendToLoopback(AndroidSessionPolicy.Request request) throws Exception {
+        return sendToLoopbackResponse(request, "").captured;
+    }
+    private Loopback sendToLoopbackResponse(AndroidSessionPolicy.Request request, String responseHeaders) throws Exception {
         String alias = "padlhub-http-test-" + UUID.randomUUID();
         KeyStore keys = KeyStore.getInstance("AndroidKeyStore"); keys.load(null);
         KeyPairGenerator generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore");
@@ -93,7 +113,7 @@ public class AndroidHttpSenderTest {
                     captured.append('\n').append(body);
                     // Fastify accepts empty text/plain but rejects the implicit form media type.
                     int status = (type == null && length == 0) || ("text/plain".equals(type) && length == 0) || ("application/json".equals(type) && length > 0) ? 200 : 415;
-                    socket.getOutputStream().write(("HTTP/1.1 " + status + " Test\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").getBytes(StandardCharsets.UTF_8));
+                    socket.getOutputStream().write(("HTTP/1.1 " + status + " Test\r\nContent-Type: application/json\r\nContent-Length: 2\r\n" + responseHeaders + "Connection: close\r\n\r\n{}").getBytes(StandardCharsets.UTF_8));
                     socket.getOutputStream().flush();
                     return captured.toString();
                 }
@@ -110,7 +130,7 @@ public class AndroidHttpSenderTest {
             catch (AndroidSessionPolicy.Failure error) { wire.get(10, TimeUnit.SECONDS); throw error; }
             String captured = wire.get(10, TimeUnit.SECONDS);
             assertEquals(captured, 200, response.status);
-            return captured;
+            return new Loopback(captured, response);
         } finally {
             HttpsURLConnection.setDefaultSSLSocketFactory(previousFactory);
             HttpsURLConnection.setDefaultHostnameVerifier(previousVerifier);

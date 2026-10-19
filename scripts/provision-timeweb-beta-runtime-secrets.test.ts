@@ -17,6 +17,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadConfig, loadRealtimeConfig, loadWorkerConfig } from '../packages/config/src/index.js';
 import {
+  describeTimewebRuntimeSecretSet,
+  validateTimewebFcmSecretDelta,
+  transitionPreparedTimewebRuntimeSecrets,
   parseTimewebSecretEnvironment,
   provisionTimewebBetaRuntimeSecrets,
   validateTimewebRuntimeEnvironments,
@@ -187,6 +190,22 @@ describe('Timeweb beta runtime secret provisioner', () => {
       schema: 'PHUB_TIMEWEB_SECRET_SET_V1',
       releaseId,
     });
+  });
+
+  it('prepares the documented isolated candidate with an explicit private sibling backupRoot', () => {
+    const value = fixture(),
+      parent = join(value.root, 'timeweb-beta-candidates', releaseId),
+      targetDir = join(parent, 'timeweb-beta'),
+      backupRoot = join(parent, 'backups');
+    mkdirSync(join(value.root, 'timeweb-beta-candidates'), { mode: 0o700 });
+    const result = provisionTimewebBetaRuntimeSecrets(
+      options(value, { targetDir, backupRoot, expectedCurrentReleaseId: null }),
+    );
+    expect(result.previousBackedUp).toBe(false);
+    expect(installedReleaseId(targetDir)).toBe(releaseId);
+    expect(lstatSync(parent).mode & 0o777).toBe(0o700);
+    expect(lstatSync(targetDir).mode & 0o777).toBe(0o700);
+    expect(existsSync(value.targetDir)).toBe(false);
   });
 
   it(
@@ -560,4 +579,156 @@ describe('Timeweb beta runtime secret provisioner', () => {
     expect(() => parseTimewebSecretEnvironment('ONE=value')).toThrow('terminal_newline');
     expect(() => parseTimewebSecretEnvironment('ONE=value\n\n')).toThrow('terminal_newline');
   });
+});
+
+describe('prepared API + Worker secret-set swap', () => {
+  function prepared() {
+    const value = fixture();
+    mkdirSync(value.targetParent, { mode: 0o700 });
+    mkdirSync(value.targetDir, { mode: 0o700 });
+    mkdirSync(value.backupRoot, { mode: 0o700 });
+    const candidateRelease = `${'a'.repeat(40)}-123-1`,
+      candidateDir = join(
+        value.targetParent,
+        'timeweb-beta-candidates',
+        candidateRelease,
+        'timeweb-beta',
+      );
+    mkdirSync(candidateDir, { mode: 0o700, recursive: true });
+    const next = safeRuntimeEnvironments();
+    for (const service of ['api', 'worker']) next[service]!.FCM_ENABLED = 'true';
+    for (const [service, name] of Object.entries({
+      api: 'api.env',
+      worker: 'worker.env',
+      realtime: 'realtime.env',
+      migrator: 'migrator.env',
+    })) {
+      writeFileSync(join(value.targetDir, name), encodeEnvironment(value.environments[service]!), {
+        mode: 0o600,
+      });
+      writeFileSync(join(candidateDir, name), encodeEnvironment(next[service]!), { mode: 0o600 });
+    }
+    for (const [path, id] of [
+      [value.targetDir, releaseId],
+      [candidateDir, candidateRelease],
+    ])
+      writeFileSync(
+        join(path!, '.release-identity.json'),
+        JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId: id }) + '\n',
+        { mode: 0o600 },
+      );
+    const previous = describeTimewebRuntimeSecretSet(value.targetDir, uid, gid),
+      candidate = describeTimewebRuntimeSecretSet(candidateDir, uid, gid),
+      backupDir = join(value.backupRoot, `${releaseId}--replaced-by--${candidateRelease}`),
+      planSha256 = 'b'.repeat(64),
+      lockPath = join(value.targetParent, '.timeweb-beta.provision.lock');
+    const swap = {
+      targetDir: value.targetDir,
+      candidateDir,
+      backupDir,
+      previous,
+      candidate,
+      planSha256,
+      expectedUid: uid,
+      expectedGid: gid,
+    };
+    writeFileSync(
+      lockPath,
+      JSON.stringify({
+        schema: 'PHUB_TIMEWEB_RUNTIME_SWAP_LOCK_V1',
+        planSha256,
+        targetDir: value.targetDir,
+        candidateDir,
+        backupDir,
+        previous,
+        candidate,
+      }) + '\n',
+      { mode: 0o600 },
+    );
+    return { value, swap, lockPath };
+  }
+  it('accepts only the FCM delta, moves original inodes, and reverses byte-exactly', () => {
+    const f = prepared();
+    validateTimewebFcmSecretDelta(f.swap.targetDir, f.swap.candidateDir, uid, gid);
+    transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' });
+    expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.candidate);
+    transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'restore' });
+    expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
+    expect(existsSync(f.swap.backupDir)).toBe(false);
+  });
+  it.each(['previous-moved', 'candidate-moved', 'candidate-returned', 'previous-restored'])(
+    'recovers a crash after %s with no overwrite',
+    (phase) => {
+      const f = prepared();
+      if (phase.startsWith('candidate-returned') || phase === 'previous-restored')
+        transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' });
+      expect(() =>
+        transitionPreparedTimewebRuntimeSecrets({
+          ...f.swap,
+          direction: ['candidate-returned', 'previous-restored'].includes(phase)
+            ? 'restore'
+            : 'install',
+          afterRename: (p) => {
+            if (p === phase) throw Error('power loss');
+          },
+        }),
+      ).toThrow('power loss');
+      transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'restore' });
+      expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
+      expect(describeTimewebRuntimeSecretSet(f.swap.candidateDir, uid, gid)).toEqual(
+        f.swap.candidate,
+      );
+    },
+  );
+  it.each([
+    'JWT_ACCESS_SECRET',
+    'NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID',
+    'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS',
+    'FCM_ENVIRONMENT',
+  ])('rejects unrelated or production change %s before swapping', (key) => {
+    const f = prepared(),
+      path = join(f.swap.candidateDir, 'api.env'),
+      env = parseTimewebSecretEnvironment(readFileSync(path));
+    env[key] = key === 'FCM_ENVIRONMENT' ? 'PRODUCTION' : 'synthetic-changed';
+    writeFileSync(path, encodeEnvironment(env));
+    expect(() =>
+      validateTimewebFcmSecretDelta(f.swap.targetDir, f.swap.candidateDir, uid, gid),
+    ).toThrow();
+    expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
+  });
+  it('rejects a symlink destination, changed snapshot and foreign lock without unlinking', () => {
+    const f = prepared();
+    symlinkSync(join(f.value.root, 'missing'), f.swap.backupDir);
+    expect(() =>
+      transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' }),
+    ).toThrow();
+    expect(lstatSync(f.swap.backupDir).isSymbolicLink()).toBe(true);
+    rmSync(f.swap.backupDir);
+    writeFileSync(f.lockPath, 'foreign\n');
+    expect(() =>
+      transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' }),
+    ).toThrow('swap_lock_identity');
+    expect(readFileSync(f.lockPath, 'utf8')).toBe('foreign\n');
+  });
+  it.each(['hardlink', 'public-mode', 'extra-file', 'inode-replaced'])(
+    'rejects %s secret-set drift',
+    (mode) => {
+      const f = prepared(),
+        path = join(f.swap.candidateDir, 'api.env');
+      if (mode === 'hardlink') linkSync(path, join(f.value.root, 'hardlink'));
+      else if (mode === 'public-mode') chmodSync(path, 0o644);
+      else if (mode === 'extra-file')
+        writeFileSync(join(f.swap.candidateDir, 'extra'), 'x', { mode: 0o600 });
+      else {
+        const bytes = readFileSync(path);
+        renameSync(path, join(f.value.root, 'old'));
+        writeFileSync(path, bytes, { mode: 0o600 });
+        writeFileSync(path, 'FCM_ENABLED=true\n');
+      }
+      expect(() =>
+        transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' }),
+      ).toThrow();
+      expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
+    },
+  );
 });
