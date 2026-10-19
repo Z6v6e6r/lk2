@@ -9,6 +9,7 @@ import shutil
 import json
 import os
 import socket
+import time
 from pathlib import Path
 import stat
 import subprocess
@@ -1239,6 +1240,18 @@ class NamespacePureTests(unittest.TestCase):
         for key,value in [('RootFS',{'Type':'layers','Layers':['sha256:'+'b'*64]}),('Env',['PATH=/foreign'])]:
             bad=copy.deepcopy(altered);bad[key]=value
             with self.subTest(key=key),self.assertRaises(m.Stop):m.namespace_image(bad,NS_IMAGE)
+
+    @unittest.skipUnless(Path('/proc/self/stat').exists(),'requires Linux procfs')
+    def test_transient_zombie_children_are_not_runtime_members(self):
+        proc=subprocess.Popen([sys.executable,'-c','pass']);self.addCleanup(lambda:proc.wait())
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            state=(Path('/proc')/str(proc.pid)/'stat').read_text().rsplit(')',1)[1].split()[0]
+            if state=='Z':break
+            time.sleep(0.02)
+        self.assertEqual(state,'Z')
+        self.assertEqual(m.namespace_live_pids([proc.pid,os.getpid()]),[os.getpid()])
+        self.assertEqual(m.namespace_live_pids([2**30]),[])
 
     def test_closed_unit_slice_and_daemon_paths_cannot_touch_host_runtime(self):
         p=self.plan();cfg=m.namespace_config(p);args=m.namespace_unit_args(p,'/reviewed/helper.py')
