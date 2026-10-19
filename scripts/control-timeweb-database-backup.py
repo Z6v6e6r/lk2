@@ -1311,10 +1311,17 @@ def namespace_image_transfer(p, op, journal):
     # The isolated classic store assigns its own config-digest ID on load; discover it instead of
     # looking up the host-visible manifest digest.
     ids = namespace_docker(p, ['image', 'ls', '-aq', '--no-trunc']).decode().split()
-    need(len(ids) == 1 and HASH.fullmatch(ids[0]), 'NS_IMAGE_DISCOVERY')
-    imported = namespace_image(strict(namespace_docker(p, ['image', 'inspect', '--format', NS_IMAGE_FORMAT, ids[0]])), source)
-    need(imported['Id'] == ids[0], 'NS_IMAGE_DISCOVERY')
+    need(len(ids) == 1, 'NS_IMAGE_DISCOVERY')
+    image_id = namespace_image_id(ids[0])
+    imported = namespace_image(strict(namespace_docker(p, ['image', 'inspect', '--format', NS_IMAGE_FORMAT, image_id])), source)
+    need(imported['Id'] == image_id, 'NS_IMAGE_DISCOVERY')
     journal.add('IMAGE_LOADED', source=source, imported=imported)
+
+
+def namespace_image_id(value):
+    # `docker image ls -aq --no-trunc` prints the sha256: prefixed digest; container IDs are bare.
+    need(re.fullmatch(r'sha256:[a-f0-9]{64}', value or ''), 'NS_IMAGE_ID')
+    return value
 
 
 def namespace_current_image_id(p, journal):

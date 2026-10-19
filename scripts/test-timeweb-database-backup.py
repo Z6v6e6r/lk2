@@ -1241,6 +1241,12 @@ class NamespacePureTests(unittest.TestCase):
             bad=copy.deepcopy(altered);bad[key]=value
             with self.subTest(key=key),self.assertRaises(m.Stop):m.namespace_image(bad,NS_IMAGE)
 
+    def test_image_discovery_accepts_docker_prefixed_digests_only(self):
+        digest='sha256:'+'a'*64
+        self.assertEqual(m.namespace_image_id(digest),digest)
+        for value in ['a'*64,digest.upper(),'sha256:'+'a'*63,'']:
+            with self.subTest(value=value),self.assertRaises(m.Stop):m.namespace_image_id(value)
+
     @unittest.skipUnless(Path('/proc/self/stat').exists(),'requires Linux procfs')
     def test_transient_zombie_children_are_not_runtime_members(self):
         proc=subprocess.Popen([sys.executable,'-c','pass']);self.addCleanup(lambda:proc.wait())
