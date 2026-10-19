@@ -1776,7 +1776,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
   ]);
   namespaceImage(i.image);
   const data = Math.max(512 * 1024 ** 2, p.databaseBytes * 3 + 256 * 1024 ** 2),
-    runtime = Math.max(512 * 1024 ** 2, i.image.Size * 3 + 256 * 1024 ** 2),
+    runtime = Math.max(2 * 1024 ** 3, i.image.Size * 3 + 256 * 1024 ** 2),
     total = data + runtime;
   const image =
     Math.ceil((total + Math.max(512 * 1024 ** 2, Math.ceil(total / 20))) / (4 * 1024 ** 2)) *

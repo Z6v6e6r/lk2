@@ -632,7 +632,7 @@ def namespace_sizing(database_bytes, memory, free, image, after_dump=False):
     namespace_image(image)
     need(memory >= DISK_MEMORY + NS_DAEMON_MEMORY + 2 * 1024**3, 'NS_MEMORY_CAPACITY')
     base = disk_sizing(database_bytes, memory, free, after_dump=False)
-    runtime = max(512 * 1024**2, image['Size'] * 3 + 256 * 1024**2)
+    runtime = max(2 * 1024**3, image['Size'] * 3 + 256 * 1024**2)
     total = base['restoreDataBytes'] + runtime
     base['imageBytes'] = ((total + max(512 * 1024**2, (total + 19)//20) + 4*1024**2-1)//(4*1024**2))*(4*1024**2)
     need(free >= (base['imageBytes'] if after_dump else base['dumpLimitBytes']) + DISK_HEADROOM, 'NS_DISK_CAPACITY')
