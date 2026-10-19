@@ -1294,8 +1294,9 @@ def namespace_image_transfer(p, op, journal):
         save.stdout.close()
         if not load.stdin.closed:load.stdin.close()
     need(namespace_frozen_source(p)==frozen and namespace_image(strict(docker(['image','inspect','--format',NS_IMAGE_FORMAT,PG_IMAGE])))==source, 'NS_TRANSFER_SOURCE_DRIFT')
-    imported = namespace_image(strict(namespace_docker(p, ['image', 'inspect', '--format', NS_IMAGE_FORMAT, source['Id']])), source)
     need(os.statvfs(p['mount']).f_bavail * os.statvfs(p['mount']).f_frsize >= p['restoreDataBytes'], 'NS_RESTORE_CAPACITY')
+    # The isolated classic store assigns its own config-digest ID on load; discover it instead of
+    # looking up the host-visible manifest digest.
     ids = namespace_docker(p, ['image', 'ls', '-aq', '--no-trunc']).decode().split()
     need(len(ids) == 1 and HASH.fullmatch(ids[0]), 'NS_IMAGE_DISCOVERY')
     imported = namespace_image(strict(namespace_docker(p, ['image', 'inspect', '--format', NS_IMAGE_FORMAT, ids[0]])), source)
