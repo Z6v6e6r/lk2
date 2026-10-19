@@ -132,6 +132,10 @@ function MobileSession({
   useEffect(() => {
     return push?.mount();
   }, [push]);
+  useEffect(() => {
+    // Child router effects run first, so an early cold-start tap route is applied after it subscribes.
+    push?.navigationReady();
+  }, [push]);
   if (blocked) {
     return (
       <main className="mobile-status">

@@ -59,6 +59,9 @@ export function createAndroidPushController(
   let alive = true;
   let snapshot = initialAndroidPushState;
   let operation: Promise<void> | undefined;
+  let navigationReady = false;
+  let sessionActive = false;
+  let pendingRoute: string | undefined;
   const update = (next: Partial<AndroidPushSnapshot>): void => {
     snapshot = { ...snapshot, ...next };
     if (alive) publish(snapshot);
@@ -153,21 +156,45 @@ export function createAndroidPushController(
       });
       if (enabled && status.state === 'subscribed') await register(false);
     });
-  const open = async (): Promise<void> => {
-    const { route } = await transport.takeOpened();
-    if (!alive || !route) return;
+  const applyRoute = (route: string): void => {
     window.history.pushState({}, '', safeNotificationRoute(route));
     window.dispatchEvent(new PopStateEvent('popstate'));
   };
+  const flushOpened = (): void => {
+    if (!alive || !navigationReady || !sessionActive || !pendingRoute) return;
+    const route = pendingRoute;
+    pendingRoute = undefined;
+    applyRoute(route);
+  };
+  const open = async (): Promise<void> => {
+    const { route } = await transport.takeOpened();
+    if (!alive || !route) return;
+    // The native open capability is one use. A cold-start intent can arrive before the app router
+    // subscribes and the saved session is restored, so keep the canonical route until both are ready.
+    if (!navigationReady || !sessionActive) {
+      pendingRoute = safeNotificationRoute(route);
+      flushOpened();
+      return;
+    }
+    applyRoute(route);
+  };
   return {
     refresh,
+    navigationReady: (): void => {
+      navigationReady = true;
+      flushOpened();
+    },
     sessionReady: (): void => {
+      sessionActive = true;
+      flushOpened();
       void Promise.resolve(operation)
         .catch(() => undefined)
         .then(refresh)
         .catch(() => undefined);
     },
     sessionExpired: (): void => {
+      sessionActive = false;
+      pendingRoute = undefined;
       void transport.suspend().catch(() => undefined);
     },
     enable: () => run(() => register(true)),
