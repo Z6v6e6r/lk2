@@ -1,17 +1,32 @@
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { parseStrictJson } from './strict-json.js';
 import { API_WORKER_BRIDGE as bridge } from './timeweb-api-worker-upgrade.js';
 export const hash = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
 export const id = `${bridge.candidateSha}-${bridge.publicationRunId}-1`;
 export const root = '/opt/phub/timeweb-beta';
 const names = ['.release-identity.json', 'api.env', 'migrator.env', 'realtime.env', 'worker.env'];
-export const ledger = readdirSync('packages/database/migrations')
-  .filter((v) => v.endsWith('.sql'))
-  .sort()
-  .map((filename) => ({
-    filename,
-    checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
-  }));
+// This operation is frozen to the published candidate, not today's migration directory.
+const frozenLedger = parseStrictJson<{
+  sourceSha: string;
+  sourceTree: string;
+  ledger: { filename: string; checksum: string }[];
+}>(
+  readFileSync(
+    new URL('./fixtures/timeweb-api-worker-ledger-11954ffd.json', import.meta.url),
+    'utf8',
+  ),
+);
+if (
+  frozenLedger.sourceSha !== bridge.candidateSha ||
+  frozenLedger.sourceTree !== bridge.candidateTree ||
+  frozenLedger.ledger.length !== 101 ||
+  hash(frozenLedger.ledger.map((row) => `${row.filename}|${row.checksum}\n`).join('')) !==
+    bridge.ledgerSha256
+) {
+  throw new Error('Frozen API/Worker test ledger does not match the published candidate');
+}
+export const ledger = frozenLedger.ledger;
 export const operation = () => ({
   schema: 'PHUB_TIMEWEB_API_WORKER_OPERATION_V1',
   target: { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 },

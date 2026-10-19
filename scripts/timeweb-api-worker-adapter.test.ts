@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   credential: vi.fn(),
   ambient: vi.fn(),
   ci: vi.fn(),
+  controllerGitConfig: vi.fn(),
+  controllerSourceAuthority: vi.fn(),
   exec: vi.fn(),
   spawn: vi.fn(),
   readdir: vi.fn(),
@@ -55,7 +57,11 @@ vi.mock('./render-timeweb-beta-release-env.js', () => ({
   assertNoAmbientComposeOverrides: mocks.ambient,
   assertNoAmbientDockerOverrides: mocks.ambient,
 }));
-vi.mock('./verify-source-ci.js', () => ({ verifySourceCi: mocks.ci }));
+vi.mock('./verify-source-ci.js', () => ({
+  verifySourceCi: mocks.ci,
+  assertControllerPromotionGitConfig: mocks.controllerGitConfig,
+  readControllerSourceAuthority: mocks.controllerSourceAuthority,
+}));
 vi.mock('node:child_process', () => ({ execFileSync: mocks.exec, spawn: mocks.spawn }));
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof fs>();
@@ -248,6 +254,8 @@ function setup(phase = 'WORKER_ACTIVE') {
   mocks.open.mockReturnValue(42);
   mocks.close.mockReturnValue(undefined);
   mocks.fsync.mockReturnValue(undefined);
+  mocks.secure.mockReturnValue({ isDirectory: () => true });
+  mocks.controllerSourceAuthority.mockResolvedValue({ status: 'VERIFIED' });
   const stat = {
     dev: 1,
     ino: 6,
@@ -296,7 +304,14 @@ function setup(phase = 'WORKER_ACTIVE') {
   });
   mocks.git.mockImplementation((args: string[]) => {
     if (args[0] === 'rev-parse' && args[1] === 'HEAD') return f.op.controllerSha;
+    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return `${root}/standard/source`;
+    if (args[0] === 'rev-parse' && args[1] === '--absolute-git-dir')
+      return `${root}/standard/source/.git`;
+    if (args[0] === 'rev-parse' && args[1] === '--path-format=absolute')
+      return `${root}/standard/source/.git`;
     if (args[0] === 'rev-parse') return bridge.candidateTree;
+    if (args[0] === 'status') return '';
+    if (args[0] === 'ls-files') return '';
     if (args[0] === 'diff')
       return `:100644 100644 ${'a'.repeat(40)} ${'b'.repeat(40)} M\0scripts/timeweb-api-worker-upgrade.js\0`;
     return '';
@@ -457,6 +472,19 @@ describe('production adapter with all host/network operations intercepted', () =
       )[0]?.[0],
     ).toEqual(['stop', '--time', '60', f.f.op.expectedWorker.id]);
   });
+  it('rejects a non-directory controller Git custody before Docker or authority reads', async () => {
+    setup();
+    mocks.secure.mockImplementation((path: string) => ({
+      isDirectory: () => path !== `${root}/standard/source/.git`,
+    }));
+    await expect(
+      runManualApiWorkerUpgrade('recover', `${root}/operator/api-worker-upgrade.json`),
+    ).rejects.toThrow('API_WORKER_CONTROLLER_GIT_CUSTODY');
+    expect(mocks.docker).not.toHaveBeenCalled();
+    expect(mocks.github).not.toHaveBeenCalled();
+    expect(mocks.controllerGitConfig).not.toHaveBeenCalled();
+    expect(mocks.controllerSourceAuthority).not.toHaveBeenCalled();
+  });
   it.each(['credential drift', 'excluded drift', 'provision drift', 'controller drift'])(
     'contains Worker before failing closed on %s',
     async (mode) => {
@@ -471,7 +499,12 @@ describe('production adapter with all host/network operations intercepted', () =
           args[0] === 'ps' && args[1] === '-q' ? 'foreign-id' : original(args),
         );
       } else if (mode === 'provision drift') f.files.set(f.provisionPath, Buffer.from('foreign\n'));
-      else mocks.git.mockReturnValue('wrong');
+      else {
+        const original = mocks.git.getMockImplementation()! as (args: string[]) => string;
+        mocks.git.mockImplementation((args: string[]) =>
+          args[0] === 'rev-parse' && args[1] === 'HEAD' ? 'wrong' : original(args),
+        );
+      }
       await expect(
         runManualApiWorkerUpgrade('recover', `${root}/operator/api-worker-upgrade.json`),
       ).rejects.toThrow();

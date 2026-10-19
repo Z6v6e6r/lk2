@@ -57,8 +57,11 @@ displaying generic text. Registration/revoke keys persist until acknowledged; lo
 before network waits. Installation ownership transfer revokes the previous endpoint without
 retargeting its pending deliveries. The native token is not stored by PadlHub in its metadata file.
 Notification taps require a one-use random native capability bound to the delivered account and
-canonical route. Forged activity extras cannot select a route. On refresh, denied OS permission
-suspends the active endpoint locally and revokes it through the authenticated API.
+canonical route. Forged activity extras cannot select a route. The capability is consumed once, so a
+cold-start tap route is held by the client until the app router has subscribed and the saved session
+is restored, then applied; a tap during an expired session is discarded instead of surviving into the
+next account. On refresh, denied OS permission suspends the active endpoint locally and revokes it
+through the authenticated API.
 
 One delivery is claimed per 60-second lease. Token acquisition, HTTP and response parsing share a
 bounded operation deadline. Retry-After is capped at one hour; circuit-open deferral does not consume

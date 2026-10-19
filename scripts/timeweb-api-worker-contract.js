@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
+import { validateControllerPromotion } from './verify-source-ci.js';
 const ROOT = '/opt/phub/timeweb-beta',
   HASH = /^[a-f0-9]{64}$/,
   SHA = /^[a-f0-9]{40}$/,
@@ -92,8 +93,8 @@ export const API_WORKER_CI_DOWNLOAD_PATCH = Object.freeze([
     newOid: 'e2abfd6adac5d742b38ea16e8cb3d1dbb90c0982',
   }),
 ]);
-// The four reader files were already in the API/Worker closure, but the narrower
-// migration BASE closure admits them only with the exact CI pair as one six-blob unit.
+// The five reader files were already in the API/Worker closure, but the narrower
+// migration BASE closure admits them only with the exact CI pair as one seven-blob unit.
 export const API_WORKER_CI_READER_PATCH = Object.freeze([
   Object.freeze({
     path: 'scripts/timeweb-api-worker-upgrade.js',
@@ -101,7 +102,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: '6420f1d4b5d5c905563d23921c61ce68be2ca28b',
-    newOid: 'd7c2da4e1bb353de041e8b51d9b8e0a56bea046a',
+    newOid: '5a2e148c5f82f291e329545989ef1136974d17a1',
   }),
   Object.freeze({
     path: 'scripts/timeweb-api-worker-upgrade.d.ts',
@@ -109,7 +110,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: '151a183b17349c57a4d23cd58b03dd33be0e1172',
-    newOid: '63a5ad2d64f5db337a0e5c74b43738d36ed18dfe',
+    newOid: 'cb7711e1dd145acb9b1beefc74e3d643ecbb5d60',
   }),
   Object.freeze({
     path: 'scripts/timeweb-api-worker-upgrade.test.ts',
@@ -117,7 +118,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: 'e446cc167a63ee54e9352dc38589e414f1aa7247',
-    newOid: '02f3927005dac547fb74b6955e2ddc69ee4d2deb',
+    newOid: '1e9e3e958b39ad80a6f68c0f51efef45308cfa86',
   }),
   Object.freeze({
     path: 'scripts/timeweb-api-worker-adapter.test.ts',
@@ -125,7 +126,46 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: 'dba09b8571260d1cb817971ce6a15a42a70f1032',
-    newOid: '57eb46c5588837b3177759f2aca6e6724651a382',
+    newOid: 'e858abd81817cef9d6d62eca98b965f7bbce0c6e',
+  }),
+  Object.freeze({
+    path: 'scripts/timeweb-api-web-upgrade.js',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: 'c3da47a8fa4c95d06081d1a189c28b2ec8afa55e',
+    newOid: 'c97b7c4c9afc3f2c0b2a09543954dc8215c579a7',
+  }),
+]);
+// Controller promotion keeps the frozen release source closure unchanged. These are
+// admitted only as exact, independently pinned patch groups; final OIDs are set by
+// the integration owner after the verifier/test pair and Android test are frozen.
+export const API_WORKER_CONTROLLER_PROMOTION_PATCH = Object.freeze([
+  Object.freeze({
+    path: 'scripts/verify-source-ci.js',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: 'ed4ad7fa0c27caba918a9a4a6f5d151d3a996ac4',
+    newOid: '31b891b4856dd95ecf849af0b13e609a281cbac1',
+  }),
+  Object.freeze({
+    path: 'scripts/verify-source-ci.test.ts',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: 'deddc6be4d875375e813abe13a345311029d71bb',
+    newOid: '63f207f3c05aa12fdf852fa0f898f14f4fb53282',
+  }),
+]);
+export const API_WORKER_ANDROID_CHAT_TEST_PATCH = Object.freeze([
+  Object.freeze({
+    path: 'apps/mobile/src/MobileApp.test.tsx',
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldOid: '35f557d6da06916e3a411129786e51a76cdd2ae0',
+    newOid: '541fe96a4f895044faa123e157d4b1aa6ef38ad2',
   }),
 ]);
 // One inert fixture-readiness correction for the frozen Android bridge; both regular blobs
@@ -352,7 +392,13 @@ export function withoutExactCiDownloadPatch(entries) {
   if (!Array.isArray(entries) || !entries.length) fail('CONTROLLER_DELTA');
   return withoutPinnedControllerPatch(
     withoutPinnedControllerPatch(
-      withoutPinnedControllerPatch(entries, API_WORKER_REHEARSAL_READINESS_PATCH),
+      withoutPinnedControllerPatch(
+        withoutPinnedControllerPatch(
+          withoutPinnedControllerPatch(entries, API_WORKER_CONTROLLER_PROMOTION_PATCH),
+          API_WORKER_ANDROID_CHAT_TEST_PATCH,
+        ),
+        API_WORKER_REHEARSAL_READINESS_PATCH,
+      ),
       API_WORKER_NATIVE_BOOKINGS_PATCH,
     ),
     API_WORKER_CI_DOWNLOAD_PATCH,
@@ -362,7 +408,13 @@ export function withoutExactMigrationCiPatch(entries) {
   if (!Array.isArray(entries) || !entries.length) fail('CONTROLLER_DELTA');
   return withoutPinnedControllerPatch(
     withoutPinnedControllerPatch(
-      withoutPinnedControllerPatch(entries, API_WORKER_REHEARSAL_READINESS_PATCH),
+      withoutPinnedControllerPatch(
+        withoutPinnedControllerPatch(
+          withoutPinnedControllerPatch(entries, API_WORKER_CONTROLLER_PROMOTION_PATCH),
+          API_WORKER_ANDROID_CHAT_TEST_PATCH,
+        ),
+        API_WORKER_REHEARSAL_READINESS_PATCH,
+      ),
       API_WORKER_NATIVE_BOOKINGS_PATCH,
     ),
     [...API_WORKER_CI_DOWNLOAD_PATCH, ...API_WORKER_CI_READER_PATCH],
@@ -383,6 +435,7 @@ export function validateApiWorkerOperation(op, now) {
     'target',
     'controllerSha',
     'controllerSourceCiRunId',
+    ...(op?.controllerPromotion === undefined ? [] : ['controllerPromotion']),
     'candidateSha',
     'candidateTree',
     'sourceCiRunId',
@@ -408,6 +461,11 @@ export function validateApiWorkerOperation(op, now) {
     !ID.test(op.expectedCurrentSecretSetReleaseId ?? '')
   )
     fail('IDENTITY');
+  if (op.controllerPromotion !== undefined)
+    validateControllerPromotion(op.controllerPromotion, {
+      controllerSha: op.controllerSha,
+      controllerSourceCiRunId: op.controllerSourceCiRunId,
+    });
   for (const key of [
     'candidateSha',
     'candidateTree',
@@ -549,6 +607,7 @@ export function assertPlan(plan, op, operationBytes) {
     'schema',
     'operationSha256',
     'controllerSha',
+    ...(op.controllerPromotion === undefined ? [] : ['controllerPromotionSha256']),
     'manifestSha256',
     'artifactDigest',
     'composeSha256',
@@ -568,6 +627,9 @@ export function assertPlan(plan, op, operationBytes) {
     plan.schema !== 'PHUB_TIMEWEB_API_WORKER_PLAN_V1' ||
     plan.operationSha256 !== hash(operationBytes) ||
     plan.controllerSha !== op.controllerSha ||
+    (op.controllerPromotion === undefined
+      ? false
+      : plan.controllerPromotionSha256 !== op.controllerPromotion.sha256) ||
     plan.manifestSha256 !== op.manifestSha256 ||
     plan.artifactDigest !== op.artifactDigest ||
     !same(plan.previous.api, op.expectedApi) ||

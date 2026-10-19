@@ -115,12 +115,18 @@ export function validateControllerBridge(candidate, bridge, entries) {
 const environment = {
   PATH: '/usr/bin:/bin',
   HOME: '/root',
+  LANG: 'C',
   DOCKER_CONFIG: '/root/.docker',
   DOCKER_HOST: 'unix:///var/run/docker.sock',
   COMPOSE_PROFILES: '',
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_NO_REPLACE_OBJECTS: '1',
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_NO_LAZY_FETCH: '1',
+  GIT_NO_PROMISOR_FETCH: '1',
+  GIT_GRAFT_FILE: '/dev/null',
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: '',
 };
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (code) => {
@@ -577,18 +583,39 @@ function command(program, args, opts = {}) {
     ...opts,
   });
 }
-const git = (args) =>
-  command('/usr/bin/git', [
-    '-c',
-    'core.hooksPath=/dev/null',
-    '-c',
-    'core.fsmonitor=false',
-    ...args,
-  ]).trim();
+const git = (args) => {
+  const neutral = equal(args, [
+    '--git-dir=/dev/null',
+    'config',
+    '--file',
+    SOURCE + '/.git/config',
+    '--no-includes',
+    '--null',
+    '--list',
+  ]);
+  if (args[0] === '--git-dir=/dev/null' && !neutral) fail('git_config_path');
+  const result = command(
+    '/usr/bin/git',
+    [
+      '-c',
+      'core.hooksPath=/dev/null',
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.commitGraph=false',
+      '-c',
+      'protocol.allow=never',
+      ...args,
+    ],
+    { cwd: neutral ? '/' : SOURCE },
+  );
+  return neutral ? result : result.trim();
+};
+Object.defineProperty(git, 'sourcePath', { value: SOURCE });
 const docker = (args) => command('/usr/bin/docker', args);
 export async function githubPublic(path) {
   if (
-    !/^actions\/runs\/[1-9][0-9]*(?:\/attempts\/1\/jobs\?per_page=100|\/artifacts\?per_page=100)?$/.test(
+    !/^(?:actions\/runs\/[1-9][0-9]*(?:\/attempts\/1\/jobs\?per_page=100|\/artifacts\?per_page=100)?|pulls\/[1-9][0-9]*)$/.test(
       path,
     )
   )
