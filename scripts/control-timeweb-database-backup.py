@@ -658,14 +658,14 @@ def namespace_plan(op, raw, sizing, image):
 def namespace_config(p):
     r = p['isolation']; suffix = p['operationSha256'][:24]
     return {'hosts': ['unix:///media/.runtime/docker.sock'], 'pidfile': r['pidFile'],
-        'data-root': r['dataRoot'], 'exec-root': r['execRoot'], 'storage-driver': 'native',
+        'data-root': r['dataRoot'], 'exec-root': r['execRoot'], 'storage-driver': 'vfs',
         'bridge': 'none', 'iptables': False, 'ip6tables': False, 'ip-forward': False,
         'ip-masq': False, 'userland-proxy': False, 'live-restore': False,
         'shutdown-timeout': 30, 'group': 'root', 'log-driver': 'none',
         'exec-opts': ['native.cgroupdriver=systemd'], 'cgroup-parent': r['slice'],
         'default-cgroupns-mode': 'private', 'default-runtime': 'runc', 'no-new-privileges': True,
         'containerd-namespace': 'phub-' + suffix,
-        'features': {'containerd-snapshotter': True}}
+        'features': {'containerd-snapshotter': False}}
 
 
 def namespace_unit_args(p, tool):
@@ -1116,7 +1116,7 @@ def namespace_daemon_identity(p, op):
     need(namespace_network(process['pid']) == admission['network']['supervisorNamespace'], 'NS_DAEMON_NETWORK')
     need(strict(read_secure(namespace_control(p, 'daemon.json'))) == namespace_config(p), 'NS_DAEMON_CONFIG')
     info = strict(namespace_docker(p, ['info', '--format', '{"DockerRootDir":{{json .DockerRootDir}},"Driver":{{json .Driver}},"CgroupDriver":{{json .CgroupDriver}},"LiveRestoreEnabled":{{json .LiveRestoreEnabled}}}']))
-    need(info == {'DockerRootDir': p['isolation']['dataRoot'], 'Driver': 'native', 'CgroupDriver': 'systemd', 'LiveRestoreEnabled': False}, 'NS_DAEMON_INFO')
+    need(info == {'DockerRootDir': p['isolation']['dataRoot'], 'Driver': 'vfs', 'CgroupDriver': 'systemd', 'LiveRestoreEnabled': False}, 'NS_DAEMON_INFO')
     return {'admission':admission, 'process':process, 'socket':namespace_socket(p), 'info':info,
             'managed':namespace_managed(p, admission, process)}
 
