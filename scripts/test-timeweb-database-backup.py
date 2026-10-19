@@ -1062,7 +1062,7 @@ def namespace_fixture():
     managed={'containerd':child,'config':{'version':2,'root':r['dataRoot']+'/containerd/daemon','state':r['execRoot']+'/containerd/daemon',
               'address':r['execRoot']+'/containerd/containerd.sock','disabledPlugins':['io.containerd.grpc.v1.cri']},'configSha256':'d'*64,'shims':[shim]}
     socket={'dev':64775,'ino':7003,'uid':0,'gid':0,'mode':0o140660,'nlink':1}
-    isolation={'admission':admission,'process':daemon,'socket':socket,'info':{'DockerRootDir':r['dataRoot'],'Driver':'vfs','CgroupDriver':'systemd','LiveRestoreEnabled':False},'managed':managed}
+    isolation={'admission':admission,'process':daemon,'socket':socket,'info':{'DockerRootDir':r['dataRoot'],'Driver':'native','CgroupDriver':'systemd','LiveRestoreEnabled':False},'managed':managed}
     def mounts(target,root='/'):
         return '1 0 8:1 / / rw - ext4 /dev/root rw\n41 1 253:7 '+root+' '+target+' rw,nosuid,nodev,noexec,noatime - ext4 '+plan['mapperPath']+' rw\n'
     broker_m=mounts(plan['mount']);container_m=mounts('/var/lib/postgresql/data','/pgdata')
@@ -1248,7 +1248,7 @@ class NamespacePureTests(unittest.TestCase):
         self.assertIn('--property=PrivateNetwork=yes',args);self.assertIn('--property=PrivateMounts=no',args)
         self.assertIn('--property=MemoryMax=2147483648',args);self.assertIn('--property=TasksMax=256',args)
         self.assertEqual(cfg['hosts'],['unix:///media/.runtime/docker.sock']);self.assertEqual(cfg['cgroup-parent'],p['isolation']['slice'])
-        self.assertEqual(cfg['storage-driver'],'vfs');self.assertFalse(cfg['iptables']);self.assertFalse(cfg['live-restore'])
+        self.assertEqual(cfg['storage-driver'],'native');self.assertEqual(cfg['features'],{'containerd-snapshotter':True});self.assertFalse(cfg['iptables']);self.assertFalse(cfg['live-restore'])
         for key in ['data-root','exec-root','pidfile']:self.assertTrue(cfg[key].startswith('/media/.runtime/'))
         self.assertNotIn('containerd-plugins-namespace',cfg);self.assertNotIn('containerd-plugin-namespace',cfg)
         for endpoint in [cfg['hosts'][0].removeprefix('unix://'),p['isolation']['socket'],
