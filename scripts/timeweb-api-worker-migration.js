@@ -1534,7 +1534,9 @@ function namespaceImage(v, source = null) {
     // A containerd-image-store host reports the manifest digest while a classic isolated daemon
     // assigns the config digest. Platform/size/ordered layers/environment bind the import; the
     // exact private ID is recorded by IMAGE_LOADED and must be used for container custody.
-    if (['Os', 'Architecture', 'Size', 'RootFS', 'Env'].some((k) => !same(v[k], source[k])))
+    // Reported Size is store-dependent (containerd store = compressed manifest, classic = unpacked);
+    // platform, ordered layers and environment bind the import.
+    if (['Os', 'Architecture', 'RootFS', 'Env'].some((k) => !same(v[k], source[k])))
       stop('NS_IMAGE_IMPORT');
   } else if (
     !Array.isArray(v.RepoDigests) ||

@@ -622,9 +622,10 @@ def namespace_image(value, source=None):
     else:
         # docker save/load need not retain RepoDigests. A containerd-image-store host reports
         # the manifest digest while a classic isolated daemon assigns the config digest, so the
-        # platform/size/ordered layer chain/environment bind the import; the exact imported ID is
-        # then recorded by the IMAGE_LOADED journal event and reused for container custody.
-        need(all(value[k] == source[k] for k in ['Os', 'Architecture', 'Size', 'RootFS', 'Env']), 'NS_IMAGE_IMPORT')
+        # platform/ordered layer chain/environment bind the import; the exact imported ID is then
+        # recorded by the IMAGE_LOADED journal event and reused for container custody. Reported
+        # Size is store-dependent (containerd store = compressed manifest, classic = unpacked).
+        need(all(value[k] == source[k] for k in ['Os', 'Architecture', 'RootFS', 'Env']), 'NS_IMAGE_IMPORT')
     return value
 
 
