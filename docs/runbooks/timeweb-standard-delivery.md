@@ -1141,9 +1141,15 @@ Its aggregate cap is 4 GiB, 384 tasks, 2 CPUs and no swap. The supervisor servic
 Before mutation, read back systemd properties and kernel cgroup limits. No persistent drop-in,
 restart, ambient unit property or caller-selected cgroup parent is accepted.
 
-The temporary root Docker daemon uses only an operation-derived Unix socket, vfs storage,
-data/exec roots inside the private LUKS mount, and fixed root-private configuration. It has no
-bridge, iptables, IP forwarding, live restore or logs. The generated managed-containerd config
+The temporary root Docker daemon uses only an operation-derived Unix socket, containerd
+snapshotter storage (`storage-driver: native`, `features.containerd-snapshotter: true`), data/exec
+roots inside the private LUKS mount, and fixed root-private configuration. The private content
+store lives under the same `data-root` inside the encrypted image, so it starts empty and never
+reads the host containerd content store. This also keeps image identity stable: a host Docker
+daemon on the containerd image store reports `image inspect .Id` as the manifest digest and
+`docker save` exports an OCI archive; a classic vfs loader would assign the config digest instead
+and every import would fail with `NS_DOCKER_READ`. It has no bridge, iptables, IP forwarding,
+live restore or logs. The generated managed-containerd config
 must bind its root/state/socket to these same paths with CRI disabled and no imports or proxy
 plugins. Prove dockerd/containerd/shim executable, full argv, owner, start ticks, namespace,
 service cgroup and complete member inventory. Unknown generated config or runtime version stops.
@@ -1202,7 +1208,8 @@ ordered rootfs layers, platform, size and image environment; retained RepoDigest
 Create by config ID with `--pull never`, retaining the existing container containment contract.
 
 Capacity requires 6 GiB available RAM: restore 2 GiB, daemon 2 GiB, host headroom 2 GiB.
-The encrypted image additionally reserves `max(512 MiB, image.Size * 3 + 256 MiB)` for vfs.
+The encrypted image additionally reserves `max(512 MiB, image.Size * 3 + 256 MiB)` for the
+private containerd snapshotter content store and unpacked layers.
 Retain the full dump/file/allocation/free-space checks and 5 GiB disk reserve; the mount root
 is 0700 and only its `pgdata` subdirectory is made accessible to the PostgreSQL user.
 
