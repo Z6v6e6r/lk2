@@ -674,6 +674,10 @@ def namespace_unit_args(p, tool):
         'SendSIGKILL': 'yes', 'TimeoutStopSec': '30s', 'MemoryAccounting': 'yes', 'MemoryMax': str(NS_DAEMON_MEMORY),
         'MemorySwapMax': '0', 'TasksAccounting': 'yes', 'TasksMax': '256',
         'CPUAccounting': 'yes', 'CPUQuota': '100%', 'LimitCORE': '0', 'UMask': '0077', 'PrivateNetwork': 'yes',
+        # systemd 259 gives a PrivateNetwork=yes unit its own mount namespace. The supervisor must
+        # start in the host mount namespace because it proves that identity before unsharing and
+        # making / private; PrivateMounts=no keeps the network namespace without that mount split.
+        'PrivateMounts': 'no',
         'StandardInput': 'null', 'StandardOutput': 'null', 'StandardError': 'null'}
     return ['/usr/bin/systemd-run', '--unit=' + r['unit'], '--service-type=exec', '--collect',
         '--quiet', '--slice=' + r['slice'], '--uid=root', '--gid=root', '--working-directory=' + p['work'],
@@ -722,7 +726,7 @@ NS_UNIT_KEYS = ['LoadState', 'ActiveState', 'SubState', 'MainPID', 'InvocationID
     'MemoryMax', 'MemorySwapMax', 'TasksMax', 'Delegate', 'CPUQuotaPerSecUSec', 'KillMode',
     'SendSIGKILL', 'Restart', 'TimeoutStopUSec', 'LimitCORE', 'UMask', 'User', 'Group',
     'WorkingDirectory', 'StandardInput', 'StandardOutput', 'StandardError', 'Slice',
-    'Transient', 'NRestarts', 'Result', 'ExecMainCode', 'ExecMainStatus', 'PrivateNetwork']
+    'Transient', 'NRestarts', 'Result', 'ExecMainCode', 'ExecMainStatus', 'PrivateNetwork', 'PrivateMounts']
 NS_SLICE_KEYS = ['LoadState', 'ActiveState', 'ControlGroup', 'Transient', 'MemoryMax', 'MemorySwapMax', 'TasksMax', 'CPUQuotaPerSecUSec']
 
 
@@ -797,7 +801,7 @@ def namespace_supervisor_identity(p, op):
          and re.fullmatch(r'[a-f0-9]{32}', value['InvocationID'] or '')
          and value['ControlGroup'] == '/' + p['isolation']['slice'] + '/' + p['isolation']['unit']
          and all(value[k] == v for k,v in {'SendSIGKILL':'yes','Restart':'no','TimeoutStopUSec':'30s','LimitCORE':'0',
-             'UMask':'0077','PrivateNetwork':'yes','User':'root','Group':'root','WorkingDirectory':p['work'], 'StandardInput':'null',
+             'UMask':'0077','PrivateNetwork':'yes','PrivateMounts':'no','User':'root','Group':'root','WorkingDirectory':p['work'], 'StandardInput':'null',
              'StandardOutput':'null','StandardError':'null','Slice':p['isolation']['slice'],'Transient':'yes',
              'NRestarts':'0','Result':'success','ExecMainCode':'0','ExecMainStatus':'0'}.items()), 'NS_UNIT_CUSTODY')
     process = namespace_process(int(value['MainPID']))

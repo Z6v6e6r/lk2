@@ -1103,6 +1103,12 @@ mode creates a PID1-owned supervisor, unshares only its mount namespace, then ru
 `mount --make-rprivate /` inside that namespace before creating storage. It never changes host
 propagation or restarts the system Docker daemon. A parent crash leaves the supervisor holding
 the namespace for a separately authorized reconciliation; it does not replay the operation.
+The supervisor unit must also carry `PrivateMounts=no` (the renderer pins it): on systemd 259 a
+`PrivateNetwork=yes` unit otherwise receives its own mount namespace, which contradicts the
+frozen initial-mount-namespace proof and stops the operation with
+`NS_SUPERVISOR_INITIAL_NAMESPACE`. `PrivateMounts=no` keeps the required private network namespace;
+the supervisor still creates its private mount namespace explicitly with `unshare` and
+`mount --make-rprivate /`, so host propagation is never changed.
 
 The fixed request fields remain closed. These distinct schemas and confirmations are required:
 
