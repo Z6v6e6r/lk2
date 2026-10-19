@@ -1197,9 +1197,13 @@ daemon start keeps the operation fenced for exact-owner reconciliation.
 The source client always reads the fixed system Docker socket; the restore client always names
 the temporary socket. There is no fallback. Stream only the already admitted pinned PostgreSQL
 image between clients, with a byte cap, timeout, bounded relay memory and parent-death signal.
-No image tar or credential enters the work directory. Import admission compares config ID,
-ordered rootfs layers, platform, size and image environment; retained RepoDigests are not assumed.
-Create by config ID with `--pull never`, retaining the existing container containment contract.
+No image tar or credential enters the work directory. Import admission compares ordered rootfs
+layers, platform, size and image environment with the admitted source; retained RepoDigests are not
+assumed. The exact private-store image ID may differ from the host-visible ID: a host Docker daemon
+on the containerd image store reports the manifest digest while the isolated classic store assigns
+the config digest. The accepted private ID is recorded by the `IMAGE_LOADED` journal event and is
+the only ID used for container creation, stop/remove and every readback custody check. Create by
+that recorded ID with `--pull never`, retaining the existing container containment contract.
 
 Capacity requires 6 GiB available RAM: restore 2 GiB, daemon 2 GiB, host headroom 2 GiB.
 The encrypted image additionally reserves `max(512 MiB, image.Size * 3 + 256 MiB)` for vfs.

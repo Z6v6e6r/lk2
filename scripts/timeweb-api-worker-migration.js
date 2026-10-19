@@ -1410,7 +1410,7 @@ export function validateDiskRestoreKernelSnapshot(row, attestation, actual) {
     stop('DISK_NAMESPACE_DRIFT');
 }
 
-function validateNamespaceContainer(c, p, sha) {
+function validateNamespaceContainer(c, p, sha, imageId) {
   exact(c, ['Id', 'Config', 'HostConfig', 'Mounts', 'State', 'Image']);
   exact(c.Config, ['Image', 'User', 'Volumes', 'Labels', 'Env', 'Cmd', 'Entrypoint']);
   exact(c.HostConfig, [...diskHostKeys, 'CgroupParent', 'CgroupnsMode']);
@@ -1490,7 +1490,7 @@ function validateNamespaceContainer(c, p, sha) {
   });
   if (
     !HASH.test(c.Id ?? '') ||
-    c.Image !== p.isolation.image.Id ||
+    c.Image !== imageId ||
     c.Config.Image !== c.Image ||
     c.Config.User !== 'postgres' ||
     c.State.Status !== 'running' ||
@@ -1531,7 +1531,10 @@ function namespaceImage(v, source = null) {
   )
     stop('NS_IMAGE');
   if (source) {
-    if (['Id', 'Os', 'Architecture', 'Size', 'RootFS', 'Env'].some((k) => !same(v[k], source[k])))
+    // A containerd-image-store host reports the manifest digest while a classic isolated daemon
+    // assigns the config digest. Platform/size/ordered layers/environment bind the import; the
+    // exact private ID is recorded by IMAGE_LOADED and must be used for container custody.
+    if (['Os', 'Architecture', 'Size', 'RootFS', 'Env'].some((k) => !same(v[k], source[k])))
       stop('NS_IMAGE_IMPORT');
   } else if (
     !Array.isArray(v.RepoDigests) ||
@@ -2059,7 +2062,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
   namespaceMount(k.daemonMount, p.mount, '/', p, r.storage.mapper);
   namespaceMount(k.containerMount, '/var/lib/postgresql/data', '/pgdata', p, r.storage.mapper);
   validateNamespaceRuntimeProof(value);
-  validateNamespaceContainer(r.container, p, sha);
+  validateNamespaceContainer(r.container, p, sha, r.image.imported.Id);
   if (r.container.State.Pid !== k.containerProcess.pid) stop('NS_CONTAINER_PID');
   return { ...value, requestSha256: sha, id: r.container.Id };
 }
@@ -2637,7 +2640,7 @@ function inspectNamespaceRestoreKernel(value) {
     'inspect',
     '--format',
     imageFormat,
-    p.isolation.image.Id,
+    r.image.imported.Id,
   ]);
   const raw = privateRead(['inspect', r.container.Id]);
   if (!Array.isArray(raw) || raw.length !== 1) stop('NS_CONTAINER_COUNT');

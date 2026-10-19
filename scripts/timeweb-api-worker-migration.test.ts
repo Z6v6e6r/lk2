@@ -771,6 +771,24 @@ describe('private namespace restore V2 independent contract', () => {
     expect(validateMigrationBackupRestoreReference(raw, f.expected, f.reference)).toBe('namespace');
     expect(() => validateNamespaceRestoreKernelSnapshot(proof, f.actual)).not.toThrow();
   });
+  it('accepts the classic-store config digest bound to the contained image import', () => {
+    const f = namespaceFixture(),
+      raw = Buffer.from(f.operationBase64, 'base64'),
+      value = structuredClone(f.value) as {
+        readback: {
+          image: { imported: { Id: string } };
+          container: { Image: string; Config: { Image: string } };
+        };
+      },
+      imported = 'sha256:' + 'c'.repeat(64);
+    value.readback.image.imported.Id = imported;
+    value.readback.container.Image = imported;
+    value.readback.container.Config.Image = imported;
+    expect(() => validateDiskRestoreReadback(value, f.expected, f.reference, raw)).not.toThrow();
+    const drifted = structuredClone(value);
+    drifted.readback.container.Image = (f.value as typeof value).readback.image.imported.Id;
+    expect(() => validateDiskRestoreReadback(drifted, f.expected, f.reference, raw)).toThrow();
+  });
   it('refuses downgrade, a host parent slice, escaped containerd and every unit/cgroup custody drift', () => {
     const f = namespaceFixture(),
       raw = Buffer.from(f.operationBase64, 'base64');
