@@ -272,4 +272,72 @@ describe('Android push controller', () => {
     expect(removes).toHaveLength(4);
     expect(removes.every((remove) => remove.mock.calls.length === 1)).toBe(true);
   });
+
+  it('defers a cold-start tap route until navigation and the restored session are ready', async () => {
+    const auth = gateway();
+    const { transport } = plugin({
+      takeOpened: vi
+        .fn()
+        .mockResolvedValue({ route: '/chats/22222222-2222-4222-8222-222222222222' }),
+    });
+    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const cleanup = controller.mount();
+    await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
+    expect(windowStub.history.pushState).not.toHaveBeenCalled();
+
+    controller.navigationReady();
+    expect(windowStub.history.pushState).not.toHaveBeenCalled();
+
+    controller.sessionReady();
+    await vi.waitFor(() =>
+      expect(windowStub.history.pushState).toHaveBeenCalledWith(
+        {},
+        '',
+        '/chats/22222222-2222-4222-8222-222222222222',
+      ),
+    );
+    expect(windowStub.history.pushState).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it('applies a warm notification tap route immediately once ready', async () => {
+    const auth = gateway();
+    const { transport, callbacks } = plugin({
+      takeOpened: vi.fn().mockResolvedValue({ route: '/notifications' }),
+    });
+    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const cleanup = controller.mount();
+    await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
+    controller.navigationReady();
+    controller.sessionReady();
+    await vi.waitFor(() =>
+      expect(windowStub.history.pushState).toHaveBeenCalledWith({}, '', '/notifications'),
+    );
+    windowStub.history.pushState.mockClear();
+
+    callbacks.notificationOpened[0]?.();
+    await vi.waitFor(() =>
+      expect(windowStub.history.pushState).toHaveBeenCalledWith({}, '', '/notifications'),
+    );
+    cleanup();
+  });
+
+  it('drops a buffered tap route when the session expires before it can be applied', async () => {
+    const auth = gateway();
+    const { transport } = plugin({
+      takeOpened: vi.fn().mockResolvedValue({ route: '/notifications' }),
+    });
+    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const cleanup = controller.mount();
+    await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
+
+    controller.navigationReady();
+    controller.sessionExpired();
+    controller.sessionReady();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(windowStub.history.pushState).not.toHaveBeenCalled();
+    cleanup();
+  });
 });

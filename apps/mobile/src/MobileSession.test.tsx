@@ -12,6 +12,7 @@ vi.mock('./android-push.js', () => ({
   initialAndroidPushState: { enabled: false, state: 'unsupported', busy: false },
   createAndroidPushController: () => ({
     mount: () => () => undefined,
+    navigationReady: () => undefined,
     sessionReady: () => undefined,
     sessionExpired: () => undefined,
     beforeLogout: () => calls.beforeLogout(),
