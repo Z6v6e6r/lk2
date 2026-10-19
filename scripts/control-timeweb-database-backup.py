@@ -1133,8 +1133,18 @@ def namespace_daemon_identity(p, op):
     need(strict(read_secure(namespace_control(p, 'daemon.json'))) == namespace_config(p), 'NS_DAEMON_CONFIG')
     info = strict(namespace_docker(p, ['info', '--format', '{"DockerRootDir":{{json .DockerRootDir}},"Driver":{{json .Driver}},"CgroupDriver":{{json .CgroupDriver}},"LiveRestoreEnabled":{{json .LiveRestoreEnabled}}}']))
     need(info == {'DockerRootDir': p['isolation']['dataRoot'], 'Driver': 'vfs', 'CgroupDriver': 'systemd', 'LiveRestoreEnabled': False}, 'NS_DAEMON_INFO')
+    # Dockerd/containerd can briefly spawn a helper (runc/shim setup) while the daemon is starting;
+    # it leaves the cgroup before any container exists. Retry transient managed-custody races.
+    for attempt in range(30):
+        try:
+            managed = namespace_managed(p, admission, process)
+            break
+        except Stop as error:
+            if error.args[0] not in ('NS_SHIM_CUSTODY', 'NS_MANAGED_CUSTODY', 'NS_CONTAINERD_COUNT') or attempt == 29:
+                raise
+            time.sleep(0.5)
     return {'admission':admission, 'process':process, 'socket':namespace_socket(p), 'info':info,
-            'managed':namespace_managed(p, admission, process)}
+            'managed':managed}
 
 
 def namespace_managed(p, admission, daemon):
@@ -1162,9 +1172,15 @@ def namespace_managed(p, admission, daemon):
              and namespace_network(v['pid']) == admission['network']['supervisorNamespace'], 'NS_MANAGED_CUSTODY')
     for v in shims:
         argv=v['cmdline']
-        need(v['executable']=='/usr/bin/containerd-shim-runc-v2' and len(argv)==7
-             and argv[:3]==['/usr/bin/containerd-shim-runc-v2','-namespace','phub-'+p['operationSha256'][:24]]
-             and argv[3]=='-id' and HASH.fullmatch(argv[4]) and argv[5:]==['-address',projection['address']], 'NS_SHIM_CUSTODY')
+        if not (v['executable']=='/usr/bin/containerd-shim-runc-v2' and len(argv)==7
+                and argv[:3]==['/usr/bin/containerd-shim-runc-v2','-namespace','phub-'+p['operationSha256'][:24]]
+                and argv[3]=='-id' and HASH.fullmatch(argv[4]) and argv[5:]==['-address',projection['address']]):
+            try:
+                Path('/opt/phub/timeweb-beta/backups/ns-managed-debug.json').write_text(json.dumps(
+                    {'children': children, 'containerd': child, 'shims': shims, 'members': members}, separators=(',', ':')))
+            except OSError:
+                pass
+            raise Stop('NS_SHIM_CUSTODY')
     need(len(shims)<=1 and namespace_members(group)==sorted(v['pid'] for v in members)
          and all(namespace_process(v['pid'])==v for v in members), 'NS_MANAGED_DRIFT')
     return {'containerd':child, 'config':projection, 'configSha256':digest(raw), 'shims':shims}
