@@ -771,6 +771,19 @@ def namespace_slice_args(p):
         'CollectMode','s','inactive-or-failed','0']
 
 
+def namespace_live_pids(ids):
+    # Zombies hold no mount/cgroup custody and can appear transiently while a daemon child is
+    # being reaped; a PID reaped between cgroup enumeration and this read is equally gone.
+    live = []
+    for value in ids:
+        try:
+            rest = (Path('/proc') / str(value) / 'stat').read_text().rsplit(')', 1)[1].split()
+        except OSError:
+            continue
+        if rest and rest[0] != 'Z':live.append(value)
+    return live
+
+
 def namespace_members(group):
     path = Path('/sys/fs/cgroup') / group.lstrip('/')
     if not path.exists():return []
@@ -778,7 +791,7 @@ def namespace_members(group):
     for file in path.rglob('cgroup.procs'):
         ids += file.read_text().split()
     need(len(ids)==len(set(ids)) and all(re.fullmatch(r'[1-9][0-9]*', v) for v in ids), 'NS_CGROUP_MEMBERS')
-    return sorted(int(v) for v in ids)
+    return sorted(namespace_live_pids([int(v) for v in ids]))
 
 
 def namespace_frozen_source(p):
