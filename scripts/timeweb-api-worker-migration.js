@@ -1059,7 +1059,10 @@ export function validateLegacyBackupRestoreMounts(row) {
       (v) => v.Type !== 'tmpfs' || v.RW !== true || !targets.includes(v.Destination),
     ) ||
     new Set(row.Mounts.map((v) => v.Destination)).size !== row.Mounts.length ||
-    !((row.State.Status === 'created' && row.Mounts.length === 0) || row.Mounts.length === 3)
+    !(
+      (row.State.Status === 'created' && row.Mounts.length === 0) ||
+      [1, 3].includes(row.Mounts.length)
+    )
   )
     stop('BACKUP_RESTORE_MOUNTS');
 }
@@ -1214,8 +1217,8 @@ export function validateDiskRestoreReadback(value, expected, reference, operatio
     !same(h.Tmpfs, tmpfs) ||
     (!empty(c.Config.Volumes) && !same(c.Config.Volumes, { '/var/lib/postgresql/data': {} })) ||
     !Array.isArray(c.Mounts) ||
-    c.Mounts.length !== 3 ||
-    new Set(c.Mounts.map((v) => v.Destination)).size !== 3
+    ![1, 3].includes(c.Mounts.length) ||
+    new Set(c.Mounts.map((v) => v.Destination)).size !== c.Mounts.length
   )
     stop('DISK_CONTAINMENT');
   const bind = c.Mounts.filter((v) => v.Type === 'bind'),
@@ -1226,8 +1229,9 @@ export function validateDiskRestoreReadback(value, expected, reference, operatio
     bind[0].Destination !== '/var/lib/postgresql/data' ||
     bind[0].RW !== true ||
     bind[0].Propagation !== 'rprivate' ||
-    temps.length !== 2 ||
-    !same(temps.map((v) => v.Destination).sort(), Object.keys(tmpfs).sort()) ||
+    ![0, 2].includes(temps.length) ||
+    (temps.length > 0 &&
+      !same(temps.map((v) => v.Destination).sort(), Object.keys(tmpfs).sort())) ||
     temps.some((v) => v.RW !== true)
   )
     stop('DISK_CONTAINMENT_MOUNTS');
@@ -1446,8 +1450,8 @@ function validateNamespaceContainer(c, p, sha, imageId) {
     !same(h.Tmpfs, tmpfs) ||
     (!empty(c.Config.Volumes) && !same(c.Config.Volumes, { '/var/lib/postgresql/data': {} })) ||
     !Array.isArray(c.Mounts) ||
-    c.Mounts.length !== 3 ||
-    new Set(c.Mounts.map((v) => v.Destination)).size !== 3
+    ![1, 3].includes(c.Mounts.length) ||
+    new Set(c.Mounts.map((v) => v.Destination)).size !== c.Mounts.length
   )
     stop('DISK_CONTAINMENT');
   const bind = c.Mounts.filter((v) => v.Type === 'bind'),
@@ -1458,8 +1462,9 @@ function validateNamespaceContainer(c, p, sha, imageId) {
     bind[0].Destination !== '/var/lib/postgresql/data' ||
     bind[0].RW !== true ||
     bind[0].Propagation !== 'rprivate' ||
-    temps.length !== 2 ||
-    !same(temps.map((v) => v.Destination).sort(), Object.keys(tmpfs).sort()) ||
+    ![0, 2].includes(temps.length) ||
+    (temps.length > 0 &&
+      !same(temps.map((v) => v.Destination).sort(), Object.keys(tmpfs).sort())) ||
     temps.some((v) => v.RW !== true)
   )
     stop('DISK_CONTAINMENT_MOUNTS');

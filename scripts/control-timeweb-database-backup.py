@@ -297,7 +297,9 @@ def validate_disk_container(row, plan):
          and binds[0].get('RW') is True and binds[0].get('Propagation') == 'rprivate'
          and len(mounts) == len({v.get('Destination') for v in mounts})
          and len(mounts) == len(binds) + len(temps)
-         and ((len(temps) == 0 and row['State']['Status'] == 'created')
+         # Docker 29 reports tmpfs only through HostConfig.Tmpfs (verified on the host), while
+         # older clients also listed them in Mounts; accept both, the HostConfig set is exact.
+         and (len(temps) == 0
               or len(temps) == 2 and {v.get('Destination') for v in temps} == set(DISK_COMMON_TMPFS))
          and all(v.get('RW') is True for v in temps), 'DISK_RESTORE_MOUNTS')
 
@@ -1172,15 +1174,9 @@ def namespace_managed(p, admission, daemon):
              and namespace_network(v['pid']) == admission['network']['supervisorNamespace'], 'NS_MANAGED_CUSTODY')
     for v in shims:
         argv=v['cmdline']
-        if not (v['executable']=='/usr/bin/containerd-shim-runc-v2' and len(argv)==7
-                and argv[:3]==['/usr/bin/containerd-shim-runc-v2','-namespace','phub-'+p['operationSha256'][:24]]
-                and argv[3]=='-id' and HASH.fullmatch(argv[4]) and argv[5:]==['-address',projection['address']]):
-            try:
-                Path('/opt/phub/timeweb-beta/backups/ns-managed-debug.json').write_text(json.dumps(
-                    {'children': children, 'containerd': child, 'shims': shims, 'members': members}, separators=(',', ':')))
-            except OSError:
-                pass
-            raise Stop('NS_SHIM_CUSTODY')
+        need(v['executable']=='/usr/bin/containerd-shim-runc-v2' and len(argv)==7
+             and argv[:3]==['/usr/bin/containerd-shim-runc-v2','-namespace','phub-'+p['operationSha256'][:24]]
+             and argv[3]=='-id' and HASH.fullmatch(argv[4]) and argv[5:]==['-address',projection['address']], 'NS_SHIM_CUSTODY')
     need(len(shims)<=1 and namespace_members(group)==sorted(v['pid'] for v in members)
          and all(namespace_process(v['pid'])==v for v in members), 'NS_MANAGED_DRIFT')
     return {'containerd':child, 'config':projection, 'configSha256':digest(raw), 'shims':shims}
@@ -1369,7 +1365,17 @@ def namespace_container_lookup(p, image_id=None):
     need(row['Id'] == ids[0] and row['Image'] == row['Config']['Image'] == (image_id or p['isolation']['image']['Id'])
          and row['HostConfig']['CgroupParent'] == p['isolation']['slice'] and row['HostConfig']['CgroupnsMode'] == 'private', 'NS_CONTAINER_IMAGE_CGROUP')
     legacy = {**row, 'Config': {**row['Config'], 'Image': PG_IMAGE}}
-    validate_disk_container(legacy, {**p, 'mount': p['isolation']['pgdata']})
+    try:
+        validate_disk_container(legacy, {**p, 'mount': p['isolation']['pgdata']})
+    except Stop as error:
+        try:
+            Path('/opt/phub/timeweb-beta/backups/ns-container-debug.json').write_text(json.dumps(
+                {'code': error.args[0], 'expectedMount': p['isolation']['pgdata'], 'mounts': row.get('Mounts'),
+                 'hostConfigMounts': {k: row.get('HostConfig', {}).get(k) for k in ['Binds', 'Tmpfs', 'ReadonlyRootfs']},
+                 'state': row.get('State')}, separators=(',', ':')))
+        except OSError:
+            pass
+        raise
     return row
 
 
