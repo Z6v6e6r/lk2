@@ -2352,7 +2352,7 @@ def execute_tmpfs(op, request_bytes, file_sha):
         docker(['exec','-i',container,'pg_restore','--list'],'DUMP_TOC',stdin=stream,stdout=subprocess.DEVNULL,timeout=120)
     with dump_stream(incoming,dump_sha) as stream:
         docker(['exec','-i',container,'pg_restore','--username=phub_restore','--dbname=phub_restore',
-                '--no-owner','--no-acl','--exit-on-error'],'RESTORE',stdin=stream,stdout=subprocess.DEVNULL,timeout=600)
+                '--no-owner','--no-acl','--exit-on-error'],'RESTORE',stdin=stream,stdout=subprocess.DEVNULL,timeout=3600)
     restored=ledger_bytes(docker(['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore',
                                  '--no-psqlrc','--tuples-only','--no-align','--set=ON_ERROR_STOP=1','--command='+LEDGER_SQL],'RESTORED_LEDGER'))
     need(restored==before and ledger_bytes(source_query(SOURCE_LEDGER))==before,'LEDGER_MISMATCH')
@@ -2764,7 +2764,7 @@ def execute_disk(op, request_bytes, file_sha):
     journal.add('RESTORE_INTENT', containerId=container)
     with dump_stream(incoming, dump_sha) as stream:
         docker(['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
-                '--no-owner', '--no-acl', '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=600)
+                '--no-owner', '--no-acl', '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
     restored = ledger_bytes(docker(['exec', container, 'psql', '-X', '--username=phub_restore', '--dbname=phub_restore',
                                   '--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', '--command=' + LEDGER_SQL], 'RESTORED_LEDGER'))
     need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
@@ -2949,7 +2949,7 @@ def execute_namespace(op, request_bytes, file_sha):
         journal.add('RESTORE_INTENT', containerId=container)
         with dump_stream(incoming, dump_sha) as stream:
             namespace_docker(plan, ['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
-                    '--no-owner', '--no-acl', '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=600)
+                    '--no-owner', '--no-acl', '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
         restored = ledger_bytes(namespace_docker(plan, ['exec', container, 'psql', '-X', '--username=phub_restore', '--dbname=phub_restore',
                                       '--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', '--command=' + LEDGER_SQL], 'RESTORED_LEDGER'))
         need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
