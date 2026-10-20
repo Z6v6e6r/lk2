@@ -568,14 +568,21 @@ def disk_running_attestation(plan, journal):
 
 
 def proof_retry(work, compute, expected):
-    # Docker/namespace readbacks can briefly lag container start bookkeeping; retry the whole
-    # readback a few times and retain the diff when it is genuinely stable.
-    value = compute()
+    # Docker/namespace readbacks can briefly lag container start bookkeeping or hit a member
+    # leaving the cgroup; retry the whole readback and retain the diff when it is stable.
+    value = None
     for attempt in range(10):
+        try:
+            value = compute()
+        except Stop as error:
+            if error.args[0] not in ('NS_PID', 'NS_MANAGED_DRIFT', 'NS_MANAGED_CUSTODY', 'NS_SHIM_CUSTODY',
+                                     'NS_CONTAINERD_COUNT', 'NS_PROCESS_ARGV') or attempt == 9:
+                raise
+            time.sleep(1)
+            continue
         if value == expected:
             return value
         time.sleep(1)
-        value = compute()
     try:
         Path(work / 'storage-proof-drift.json').write_text(json.dumps(
             {'expected': expected, 'actual': value}, separators=(',', ':')))
@@ -1170,7 +1177,7 @@ def namespace_daemon_identity(p, op):
             break
         except Stop as error:
             if error.args[0] not in ('NS_SHIM_CUSTODY', 'NS_MANAGED_CUSTODY', 'NS_CONTAINERD_COUNT',
-                                     'NS_MANAGED_DRIFT', 'NS_PROCESS_ARGV') or attempt == 29:
+                                     'NS_MANAGED_DRIFT', 'NS_PROCESS_ARGV', 'NS_PID') or attempt == 29:
                 raise
             time.sleep(0.5)
     return {'admission':admission, 'process':process, 'socket':namespace_socket(p), 'info':info,
