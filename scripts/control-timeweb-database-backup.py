@@ -1169,7 +1169,8 @@ def namespace_daemon_identity(p, op):
             managed = namespace_managed(p, admission, process)
             break
         except Stop as error:
-            if error.args[0] not in ('NS_SHIM_CUSTODY', 'NS_MANAGED_CUSTODY', 'NS_CONTAINERD_COUNT') or attempt == 29:
+            if error.args[0] not in ('NS_SHIM_CUSTODY', 'NS_MANAGED_CUSTODY', 'NS_CONTAINERD_COUNT',
+                                     'NS_MANAGED_DRIFT', 'NS_PROCESS_ARGV') or attempt == 29:
                 raise
             time.sleep(0.5)
     return {'admission':admission, 'process':process, 'socket':namespace_socket(p), 'info':info,
