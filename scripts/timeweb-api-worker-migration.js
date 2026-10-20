@@ -825,7 +825,7 @@ function identity(v) {
     startedAt: v.State.StartedAt,
   };
 }
-function snapshotRow(v) {
+function snapshotRow(v, includeNetwork = true) {
   return {
     identity: identity(v),
     status: v.State.Status,
@@ -835,7 +835,7 @@ function snapshotRow(v) {
         config: v.Config,
         host: v.HostConfig,
         mounts: v.Mounts,
-        network: v.NetworkSettings,
+        ...(includeNetwork ? { network: v.NetworkSettings } : {}),
       }),
     ),
   };
@@ -2906,7 +2906,7 @@ function productionOps(op, owner, ignoredRestore = null) {
             worker = snapshotRow(row);
           }
         } else {
-          excluded.push(snapshotRow(row));
+          excluded.push(snapshotRow(row, false));
           if (row.Id === bridge.postgresId) {
             if (
               row.Config.Image !== bridge.postgresImage ||
