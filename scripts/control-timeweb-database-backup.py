@@ -571,7 +571,7 @@ def proof_retry(work, compute, expected):
     # Docker/namespace readbacks can briefly lag container start bookkeeping; retry the whole
     # readback a few times and retain the diff when it is genuinely stable.
     value = compute()
-    for attempt in range(5):
+    for attempt in range(10):
         if value == expected:
             return value
         time.sleep(1)
@@ -2468,8 +2468,10 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
             row = namespace_container_lookup(plan, namespace_current_image_id(plan, journal)) if is_namespace_operation(op) else disk_container_lookup(plan)
             need(row is not None and row['Id'] == restore, 'DISK_RESTORE_ID_DRIFT')
             if not cleanup:
-                proof = namespace_running_attestation(plan, op, journal) if is_namespace_operation(op) else disk_running_attestation(plan, journal)
-                need(proof == strict(read_secure(work / 'restore-storage-proof.json'))['readback'], 'DISK_STORAGE_PROOF_DRIFT')
+                stored = strict(read_secure(work / 'restore-storage-proof.json'))['readback']
+                proof = proof_retry(work, lambda: (namespace_running_attestation(plan, op, journal)
+                                                   if is_namespace_operation(op) else disk_running_attestation(plan, journal)), stored)
+                need(proof == stored, 'DISK_STORAGE_PROOF_DRIFT')
             ignored = None if is_namespace_operation(op) else row['Id']
         rows = []
         ids = docker(['ps', '-aq', '--no-trunc']).decode().split()
