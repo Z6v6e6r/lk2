@@ -834,7 +834,9 @@ function snapshotRow(v, includeNetwork = true) {
       canonical({
         config: v.Config,
         host: v.HostConfig,
-        mounts: v.Mounts,
+        mounts: [...v.Mounts].sort((a, b) =>
+          String(a.Destination).localeCompare(String(b.Destination)),
+        ),
         ...(includeNetwork ? { network: v.NetworkSettings } : {}),
       }),
     ),
