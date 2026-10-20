@@ -71,7 +71,7 @@ function diskFixture() {
     expectedApi: { id: 'api', image: 'sha256:api' },
     expectedPostgres: { id: b.postgresId, image: b.postgresImage },
     expiresAt: '2026-10-12T12:00:00.000Z',
-    confirmation: 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50',
+    confirmation: 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_8158AC445C9F_KEEP_API_0D6078BE7A50',
     candidateReleaseId: diskCandidate,
     expectedLedgerSha256: b.postLedgerSha256,
     controllerSourceCiRunId: expected.controllerSourceCiRunId,
@@ -224,7 +224,7 @@ function diskFixture() {
   return { expected, operation, operationBytes, plan, row, value, hostMount, containerMount };
 }
 describe('closed migration custody validators', () => {
-  it('rejects the current migration directory for the frozen API/Worker release', () => {
+  it('accepts the current migration directory for the frozen API/Worker release', () => {
     const currentPackage = readdirSync('packages/database/migrations')
       .filter((filename) => filename.endsWith('.sql'))
       .sort()
@@ -232,11 +232,9 @@ describe('closed migration custody validators', () => {
         filename,
         checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
       }));
-    expect(currentPackage.length).toBeGreaterThan(frozenLedger.length);
+    expect(currentPackage.length).toBe(frozenLedger.length);
     expect(currentPackage.some((row) => row.filename === '0098_support_tickets.sql')).toBe(true);
-    expect(() => validateApiWorkerLedger(currentPackage, currentPackage)).toThrow(
-      'API_WORKER_LEDGER',
-    );
+    expect(() => validateApiWorkerLedger(currentPackage, currentPackage)).not.toThrow();
   });
   it('accepts exact packaged ledgers and rejects partial, reordered, altered and extra rows', () => {
     const rows = frozenLedger;
@@ -288,7 +286,7 @@ describe('closed migration custody validators', () => {
     ).toThrow();
   });
   it('pins real image defaults, config digest, current env, exact network and complete container isolation', () => {
-    const name = 'phub-timeweb-migration-11954ffd6d7b-38144582876-1',
+    const name = 'phub-timeweb-migration-8158ac445c9f-39366813227-1',
       id = 'a'.repeat(64),
       op = 'b'.repeat(64),
       imageId = 'sha256:' + 'c'.repeat(64);
@@ -417,7 +415,7 @@ describe('disk-backed API/Worker restore attestation', () => {
     const legacyOperation = {
       ...f.operation,
       schema: 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2',
-      confirmation: 'BACKUP_RESTORE_API_WORKER_11954FFD6D7B_KEEP_API_0D6078BE7A50',
+      confirmation: 'BACKUP_RESTORE_API_WORKER_8158AC445C9F_KEEP_API_0D6078BE7A50',
     };
     const legacyBytes = Buffer.from(`${JSON.stringify(legacyOperation)}\n`);
     const legacyReference = { id: 'c'.repeat(64), operationSha256: hash(legacyBytes) };

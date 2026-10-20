@@ -149,7 +149,7 @@ describe('Timeweb backup/isolated restore preparation', () => {
         expect(fixture.status, fixture.stderr).toBe(0);
         const { transaction } = parseStrictJson<{ transaction: string }>(fixture.stdout);
         expect(transaction).toMatch(
-          /11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1-api-worker$/u,
+          /8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1-api-worker$/u,
         );
         const program = `
         import assert from 'node:assert/strict';
@@ -165,7 +165,7 @@ describe('Timeweb backup/isolated restore preparation', () => {
         const transaction=process.argv[1], candidate=process.argv[2], baseline=process.argv[3];
         const receiptPath=transaction+'/database-backup-receipt.json', bytes=fs.readFileSync(receiptPath), receipt=JSON.parse(bytes);
         const hash=(v)=>createHash('sha256').update(v).digest('hex');
-        const packaged=JSON.parse(readFileSync('scripts/fixtures/timeweb-api-worker-ledger-11954ffd.json','utf8')).ledger;
+        const packaged=JSON.parse(readFileSync('scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json','utf8')).ledger;
         assert.equal(validateUpgradeBackup(transaction,{releaseId:baseline}).path,receiptPath);
         validateApiWorkerBackupLedger(receipt,packaged);
         for(const [key,value] of [['sourceLedgerSha256','f'.repeat(64)],['restoredLedgerSha256','f'.repeat(64)],['restoreImage','postgres:latest']]) {
@@ -178,7 +178,7 @@ describe('Timeweb backup/isolated restore preparation', () => {
         const moved=transaction+'-manual-move'; fs.mkdirSync(moved); fs.copyFileSync(transaction+'/database.pgcustom',moved+'/database.pgcustom'); fs.copyFileSync(receiptPath,moved+'/database-backup-receipt.json');
         assert.throws(()=>validateUpgradeBackup(moved,{releaseId:baseline}));
         assert.equal(receipt.backupFile,transaction+'/database.pgcustom');
-        assert.equal(candidate,'11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1');
+        assert.equal(candidate,'8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1');
         console.log(JSON.stringify({status:'API_WORKER_CONSUMER_COMPATIBILITY_PASS',negativeCases:5}));
       `;
         const result = spawnSync(
@@ -188,7 +188,7 @@ describe('Timeweb backup/isolated restore preparation', () => {
             '-e',
             program,
             transaction,
-            '11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1',
+            '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1',
             '0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1',
           ],
           { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },

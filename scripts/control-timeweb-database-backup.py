@@ -20,12 +20,12 @@ ROOT = Path('/opt/phub/timeweb-beta')
 REQUEST = ROOT / 'operator/database-backup-restore.json'
 LOCK = ROOT / 'standard/active'
 BASELINE = '0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1'
-API_WORKER_CANDIDATE = '11954ffd6d7bf7bd9b198e7e68d2123011f091c1-38144582876-1'  # gitleaks:allow public Git/OCI release identity
+API_WORKER_CANDIDATE = '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1'  # gitleaks:allow public Git/OCI release identity
 # This is the canonical JSON tuple digest, not the textual migration-manifest digest.
-API_WORKER_LEDGER_SHA256 = '34e0fb1115e0066733c6ede34ab1d9fb8fcc2842f2df192fbaefc03a97ce1c2d'
+API_WORKER_LEDGER_SHA256 = 'b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85'
 API_WORKER_PRE_LEDGER_SHA256 = '025c5ee129bd583131192439d991f0dbbba4fbd19c31c1215bca5adcee9ce17c'
-MIGRATION_BASE_SHA = '72ca7789b2a4cd93537b442f75c1b8258fce13a0'
-MIGRATION_BASE_TREE = '8a79178d7e340c4ce7008bbf2c0b2b411e704572'
+MIGRATION_BASE_SHA = '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d'
+MIGRATION_BASE_TREE = 'b9ef484b4d0a9e5c8913cc2cdd79ee39b1800537'
 API_WORKER_MIGRATION_CONTROLLER_FILES = frozenset([
     'scripts/control-timeweb-database-backup.py', 'scripts/control-timeweb-database-backup.test.ts',
     'scripts/test-timeweb-database-backup.py', 'scripts/timeweb-api-worker-migration.d.ts',
@@ -33,6 +33,7 @@ API_WORKER_MIGRATION_CONTROLLER_FILES = frozenset([
     'scripts/timeweb-api-worker-migration.adapter.test.ts', 'scripts/timeweb-api-worker-migration-role.js',
     'scripts/timeweb-api-worker-migration-role.d.ts', 'scripts/timeweb-api-worker-migration-role.test.ts',
     'scripts/timeweb-api-worker-contract.js', 'scripts/run-timeweb-standard-delivery.js',
+    'scripts/timeweb-api-worker.fixture.ts', 'scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json',
     'docs/runbooks/timeweb-standard-delivery.md', 'docs/runbooks/android-chats-fcm.md',
 ])
 # Independent one-use exact CI pair; never add these paths to the ordinary allowlist.
@@ -1862,15 +1863,15 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     need(allow_expired or 1200 <= expires - now <= 3600, 'EXPIRY')
     confirmation = ('BACKUP_RESTORE_' + match[1][:12].upper() + '_KEEP_API_0D6078BE7A50'
                     if mode == 'web' else
-                    'BACKUP_RESTORE_API_WORKER_11954FFD6D7B_KEEP_API_0D6078BE7A50')
+                    'BACKUP_RESTORE_API_WORKER_8158AC445C9F_KEEP_API_0D6078BE7A50')
     if schema == DISK_PRE_SCHEMA:
         confirmation = 'BACKUP_RESTORE_PRE99_DISK_LUKS2_KEEP_API_0D6078BE7A50'
     elif schema == DISK_POST_SCHEMA:
-        confirmation = 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50'
+        confirmation = 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_8158AC445C9F_KEEP_API_0D6078BE7A50'
     if schema == NS_PRE_SCHEMA:
         confirmation = 'BACKUP_RESTORE_PRE99_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_KEEP_API_0D6078BE7A50'
     elif schema == NS_POST_SCHEMA:
-        confirmation = 'BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_11954FFD6D7B_KEEP_API_0D6078BE7A50'
+        confirmation = 'BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_8158AC445C9F_KEEP_API_0D6078BE7A50'
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 

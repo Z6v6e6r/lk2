@@ -55,11 +55,11 @@ const REQUEST = `${ROOT}/operator/api-worker-migration.json`,
   ACTIVE = `${ROOT}/standard/active`;
 const PROVISION = '/etc/phub/.timeweb-beta.provision.lock';
 const MIGRATOR_IMAGE =
-  'ghcr.io/z6v6e6r/phub-migrator@sha256:d14be0d6f3d114c9268466e75af09e89811bdcea6801c507f7a2b88c5102aaa3';
+  'ghcr.io/z6v6e6r/phub-migrator@sha256:e3d23565c928baa331e409d27dac48ac6f9821ea2288e3c45bc72c3694af79aa';
 const PRE_LEDGER = '025c5ee129bd583131192439d991f0dbbba4fbd19c31c1215bca5adcee9ce17c';
-const POST_LEDGER = '34e0fb1115e0066733c6ede34ab1d9fb8fcc2842f2df192fbaefc03a97ce1c2d';
-const BASE_SHA = '72ca7789b2a4cd93537b442f75c1b8258fce13a0',
-  BASE_TREE = '8a79178d7e340c4ce7008bbf2c0b2b411e704572';
+const POST_LEDGER = 'b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85';
+const BASE_SHA = '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d',
+  BASE_TREE = 'b9ef484b4d0a9e5c8913cc2cdd79ee39b1800537';
 const HASH = /^[a-f0-9]{64}$/,
   SHA = /^[a-f0-9]{40}$/;
 const hash = (v) => createHash('sha256').update(v).digest('hex');
@@ -173,7 +173,7 @@ export function validateApiWorkerMigrationOperation(op, at) {
     !/^[a-f0-9]{40}-[1-9][0-9]*-1$/.test(op.expectedSecretSetReleaseId ?? '') ||
     !Object.values(op.expectedSecretSetFiles).every((v) => HASH.test(v ?? '')) ||
     op.confirmation !==
-      'MIGRATE_0096_0097_11954FFD6D7B_FROM_0D6078BE7A50_NO_API_WORKER_SECRET_OR_FCM_CHANGE'
+      'MIGRATE_0096_0097_0098_8158AC445C9F_FROM_0D6078BE7A50_NO_API_WORKER_SECRET_OR_FCM_CHANGE'
   )
     stop('CONFIRMATION');
   const expiry = Date.parse(op.expiresAt);
@@ -206,7 +206,7 @@ export function validateMigrationControllerClosure(entries) {
   }
 }
 export function validateApiWorkerMigrationLedger(rows, expected) {
-  if (!Array.isArray(rows) || ![99, 101].includes(rows.length)) stop('LEDGER_COUNT');
+  if (!Array.isArray(rows) || ![99, 102].includes(rows.length)) stop('LEDGER_COUNT');
   const tuples = rows.map((v) => {
     exact(v, ['filename', 'checksum']);
     if (!/^[0-9]{4}_[a-z0-9_]+\.sql$/.test(v.filename ?? '') || !HASH.test(v.checksum ?? ''))
@@ -1045,7 +1045,7 @@ export function validateMigrationBackupRestoreReference(operationBytes, expected
     !same(backupMigrationTuple(op, expected), expected) ||
     op.expectedLedgerSha256 !== POST_LEDGER ||
     op.toolCommit !== op.controllerSha ||
-    op.confirmation !== 'BACKUP_RESTORE_API_WORKER_11954FFD6D7B_KEEP_API_0D6078BE7A50'
+    op.confirmation !== 'BACKUP_RESTORE_API_WORKER_8158AC445C9F_KEEP_API_0D6078BE7A50'
   )
     stop('BACKUP_REFERENCE');
   return 'legacy';
@@ -1115,7 +1115,7 @@ export function validateDiskRestoreReadback(value, expected, reference, operatio
     !same(value.migration, backupMigrationTuple(op, expected)) ||
     op.toolCommit !== op.controllerSha ||
     op.expectedLedgerSha256 !== POST_LEDGER ||
-    op.confirmation !== 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50' ||
+    op.confirmation !== 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_8158AC445C9F_KEEP_API_0D6078BE7A50' ||
     !same(op.target, { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 })
   )
     stop('DISK_OPERATION');
@@ -1732,7 +1732,7 @@ function validateNamespaceRestoreReadback(value, expected, reference, operationB
     op.toolCommit !== op.controllerSha ||
     op.expectedLedgerSha256 !== POST_LEDGER ||
     op.confirmation !==
-      'BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_11954FFD6D7B_KEEP_API_0D6078BE7A50' ||
+      'BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_8158AC445C9F_KEEP_API_0D6078BE7A50' ||
     !same(op.target, { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 })
   )
     stop('NS_OPERATION');
