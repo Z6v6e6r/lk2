@@ -567,6 +567,28 @@ def disk_running_attestation(plan, journal):
     return {'storage': storage, 'kernel': kernel, 'container': disk_container_projection(row)}
 
 
+def proof_equivalent(expected, actual):
+    # A restore workload spawns short-lived PostgreSQL backends; the contained member set may grow
+    # while every originally attested process keeps its exact identity. Require that superset
+    # relation and exact equality for all other readback fields.
+    if not isinstance(expected, dict) or not isinstance(actual, dict):
+        return expected == actual
+    ek, ak = expected.get('kernel'), actual.get('kernel')
+    if not isinstance(ek, dict) or not isinstance(ak, dict):
+        return expected == actual
+    em, am = ek.get('containerMembers'), ak.get('containerMembers')
+    e_rest = {k: v for k, v in expected.items() if k != 'kernel'}
+    a_rest = {k: v for k, v in actual.items() if k != 'kernel'}
+    e_kernel = {k: v for k, v in ek.items() if k != 'containerMembers'}
+    a_kernel = {k: v for k, v in ak.items() if k != 'containerMembers'}
+    if e_rest != a_rest or e_kernel != a_kernel:
+        return False
+    if not isinstance(em, list) or not isinstance(am, list) or not all(isinstance(v, dict) for v in em + am):
+        return em == am
+    by_pid = {v.get('pid'): v for v in am}
+    return len(am) >= len(em) and all(by_pid.get(v.get('pid')) == v for v in em)
+
+
 def proof_retry(work, compute, expected):
     # Docker/namespace readbacks can briefly lag container start bookkeeping or hit a member
     # leaving the cgroup; retry the whole readback and retain the diff when it is stable.
@@ -580,7 +602,7 @@ def proof_retry(work, compute, expected):
                 raise
             time.sleep(1)
             continue
-        if value == expected:
+        if proof_equivalent(expected, value):
             return value
         time.sleep(1)
     try:
@@ -613,7 +635,7 @@ def disk_verify_reference(op, request_bytes, file_sha):
          and sorted(p.name for p in LOCK.iterdir()) == ['backup-restore.json']
          and read_secure(LOCK / 'backup-restore.json') == encoded(lock['marker']), 'DISK_LOCK_DRIFT')
     readback = proof_retry(work, lambda: disk_running_attestation(plan, journal), proof['readback'])
-    need(readback == proof['readback'] and read_secure(work / 'restore-storage-proof.json') == proof_bytes
+    need(proof_equivalent(proof['readback'], readback) and read_secure(work / 'restore-storage-proof.json') == proof_bytes
          and read_secure(REQUEST) == request_bytes, 'DISK_STORAGE_PROOF_DRIFT')
     return {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V1', 'operationSha256': sha,
             'storageProofSha256': digest(proof_bytes), 'plan': plan, 'readback': readback,
@@ -2478,7 +2500,7 @@ def disk_context(op, request_bytes, plan, journal, allow_expired=False):
                 stored = strict(read_secure(work / 'restore-storage-proof.json'))['readback']
                 proof = proof_retry(work, lambda: (namespace_running_attestation(plan, op, journal)
                                                    if is_namespace_operation(op) else disk_running_attestation(plan, journal)), stored)
-                need(proof == stored, 'DISK_STORAGE_PROOF_DRIFT')
+                need(proof_equivalent(stored, proof), 'DISK_STORAGE_PROOF_DRIFT')
             ignored = None if is_namespace_operation(op) else row['Id']
         rows = []
         ids = docker(['ps', '-aq', '--no-trunc']).decode().split()
@@ -3144,7 +3166,7 @@ def namespace_verify_reference(op, raw, file_sha):
          and proof['operationSha256'] == plan['operationSha256'] and proof['planSha256'] == digest(plan_bytes), 'NS_STORAGE_PROOF')
     # Read-only callers must already be in the independently proven runtime namespace.
     value = proof_retry(work, lambda: namespace_running_attestation(plan, op, journal), proof['readback'])
-    need(value == proof['readback'] and read_secure(work/'restore-storage-proof.json') == proof_bytes
+    need(proof_equivalent(proof['readback'], value) and read_secure(work/'restore-storage-proof.json') == proof_bytes
          and read_secure(REQUEST) == raw, 'NS_PROOF_DRIFT')
     return {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V2', 'operationSha256': digest(raw),
             'storageProofSha256': digest(proof_bytes), 'plan': plan, 'readback': value,
