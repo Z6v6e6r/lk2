@@ -441,7 +441,7 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
     c?.Image !== MIGRATOR_IMAGE ||
     c.User !== 'appuser' ||
     c.WorkingDir !== '/app' ||
-    !same(c.Entrypoint, k === 'migration' ? null : ['node']) ||
+    !same(c.Entrypoint, k === 'migration' ? null : ['node']) && !(k === 'migration' && same(c.Entrypoint, ['docker-entrypoint.sh'])) ||
     !same(c.Cmd, cmd) ||
     c.Labels?.['phub.migration-operation'] !== operationSha ||
     c.Labels?.['phub.migration-kind'] !== k ||
@@ -2769,7 +2769,7 @@ function productionOps(op, owner, ignoredRestore = null) {
       v.Config?.Labels?.['org.opencontainers.image.revision'] !== op.candidateSha ||
       v.Config.User !== 'appuser' ||
       v.Config.WorkingDir !== '/app' ||
-      v.Config.Entrypoint !== null ||
+      !(v.Config.Entrypoint === null || same(v.Config.Entrypoint, ['docker-entrypoint.sh'])) ||
       !same(v.Config.Cmd, ['node', 'apps/migrator/dist/main.js']) ||
       !/^sha256:[a-f0-9]{64}$/.test(v.Id)
     )
