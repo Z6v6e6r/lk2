@@ -171,7 +171,6 @@ export function validateMigrationRoleReadback(value, kind, target, runtimeRole) 
       'replication',
       'bypassRls',
       'privilegedMembership',
-      'canCreateDatabaseObjects',
     ].some((key) => value[key] !== false) ||
     value.wireRoleName.startsWith('pg_') ||
     value.delegableRoles !== 0 ||
@@ -188,6 +187,7 @@ export function validateMigrationRoleReadback(value, kind, target, runtimeRole) 
     stop();
   if (kind === 'runtime') {
     if (
+      value.canCreateDatabaseObjects !== false ||
       value.publicCreate !== false ||
       [
         'controllableBusinessSchemas',
@@ -205,6 +205,7 @@ export function validateMigrationRoleReadback(value, kind, target, runtimeRole) 
   } else {
     exact(value.capabilities, capabilities);
     if (
+      value.canCreateDatabaseObjects !== true ||
       value.publicCreate !== true ||
       value.profileCreate !== true ||
       value.identityCreate !== true ||
