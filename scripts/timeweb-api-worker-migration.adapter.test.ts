@@ -89,7 +89,7 @@ function operation(withPromotion = false) {
     ),
     expiresAt: new Date(Date.now() + 1800000).toISOString(),
     confirmation:
-      'MIGRATE_0096_0097_11954FFD6D7B_FROM_0D6078BE7A50_NO_API_WORKER_SECRET_OR_FCM_CHANGE',
+      'MIGRATE_0096_0097_0098_8158AC445C9F_FROM_0D6078BE7A50_NO_API_WORKER_SECRET_OR_FCM_CHANGE',
   };
   if (!withPromotion) return value;
   return { ...value, controllerPromotion: promotionFor(value) };

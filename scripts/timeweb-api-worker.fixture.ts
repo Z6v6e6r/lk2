@@ -13,14 +13,14 @@ const frozenLedger = parseStrictJson<{
   ledger: { filename: string; checksum: string }[];
 }>(
   readFileSync(
-    new URL('./fixtures/timeweb-api-worker-ledger-11954ffd.json', import.meta.url),
+    new URL('./fixtures/timeweb-api-worker-ledger-8158ac44.json', import.meta.url),
     'utf8',
   ),
 );
 if (
   frozenLedger.sourceSha !== bridge.candidateSha ||
   frozenLedger.sourceTree !== bridge.candidateTree ||
-  frozenLedger.ledger.length !== 101 ||
+  frozenLedger.ledger.length !== 102 ||
   hash(frozenLedger.ledger.map((row) => `${row.filename}|${row.checksum}\n`).join('')) !==
     bridge.ledgerSha256
 ) {
@@ -62,7 +62,7 @@ export const operation = () => ({
   fcmEnvironment: 'SANDBOX',
   expiresAt: '2026-10-11T20:30:00.000Z',
   confirmation:
-    'UPGRADE_API_WORKER_11954FFD6D7B_FROM_0D6078BE7A50_FF42C9E9A238_GLOBAL_FCM_ON_TENANT_PROVIDER_GATES_OFF_NO_SEND',
+    'UPGRADE_API_WORKER_8158AC445C9F_FROM_0D6078BE7A50_FF42C9E9A238_GLOBAL_FCM_ON_TENANT_PROVIDER_GATES_OFF_NO_SEND',
 });
 export function capsuleFixture() {
   const op = operation(),

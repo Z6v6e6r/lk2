@@ -28,15 +28,15 @@ LEDGER=[['0001_initial.sql','c'*64],['0002_next.sql','d'*64]]
 OP={'schema':'PHUB_TIMEWEB_BACKUP_OPERATION_V1','target':m.TARGET,'toolCommit':'1'*40,'toolFileSha256':'2'*64,'releaseId':'3'*40+'-38060874880-1','controllerSha':'3'*40,'controllerTree':'4'*40,'controllerConfigSha256':'5'*64,'expectedBoundarySha256':'6'*64,'toolProofSha256':'7'*64,'toolInstallationSha256':'8'*64,'expectedApi':API,'expectedPostgres':PG,'expiresAt':'2026-10-10T16:00:00.000Z','confirmation':'BACKUP_RESTORE_'+'3'*12+'_KEEP_API_0D6078BE7A50'}
 NOW=m.utc('2026-10-10T15:20:00.000Z')
 # The old release's synthetic ledger must not grow when main gains a new migration.
-FROZEN_API_WORKER=json.loads(Path(__file__).with_name('fixtures').joinpath('timeweb-api-worker-ledger-11954ffd.json').read_text())
+FROZEN_API_WORKER=json.loads(Path(__file__).with_name('fixtures').joinpath('timeweb-api-worker-ledger-8158ac44.json').read_text())
 assert FROZEN_API_WORKER['sourceSha']==m.API_WORKER_CANDIDATE.split('-',1)[0]
 API_WORKER_LEDGER=[[row['filename'],row['checksum']] for row in FROZEN_API_WORKER['ledger']]
-assert len(API_WORKER_LEDGER)==101
+assert len(API_WORKER_LEDGER)==102
 assert m.digest(m.encoded(API_WORKER_LEDGER))==m.API_WORKER_LEDGER_SHA256
 OP_API={**OP,'schema':'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2','candidateReleaseId':m.API_WORKER_CANDIDATE,
         'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256,
         'controllerSourceCiRunId':'38170498441','migrationPlanSha256':'a'*64,'migrationSuccessSha256':'b'*64,
-        'confirmation':'BACKUP_RESTORE_API_WORKER_11954FFD6D7B_KEEP_API_0D6078BE7A50'}
+        'confirmation':'BACKUP_RESTORE_API_WORKER_8158AC445C9F_KEEP_API_0D6078BE7A50'}
 del OP_API['releaseId']
 
 
@@ -124,7 +124,7 @@ class PureTests(unittest.TestCase):
     def test_api_worker_request_is_closed_to_the_candidate_and_json_ledger(self):
         actual=m.validate_operation(v2_operation(),NOW,'2'*64)
         self.assertEqual(m.operation_mode(actual),('api-worker',m.API_WORKER_CANDIDATE))
-        for key,value in [('candidateReleaseId','4'*40+'-38144582876-1'),('expectedLedgerSha256','f'*64),
+        for key,value in [('candidateReleaseId','4'*40+'-39366813227-1'),('expectedLedgerSha256','f'*64),
                           ('confirmation','BACKUP_RESTORE_API_WORKER_KEEP_API')]:
             with self.subTest(key=key):
                 op=copy.deepcopy(OP_API);op[key]=value
@@ -541,7 +541,7 @@ class SourceWitnessTests(unittest.TestCase):
 def disk_operation(post=False):
     if post:
         return {**v2_operation(), 'schema': m.DISK_POST_SCHEMA,
-                'confirmation': 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_11954FFD6D7B_KEEP_API_0D6078BE7A50'}
+                'confirmation': 'BACKUP_RESTORE_API_WORKER_DISK_LUKS2_8158AC445C9F_KEEP_API_0D6078BE7A50'}
     op = {**OP, 'schema': m.DISK_PRE_SCHEMA, 'toolCommit': OP['controllerSha'],
           'controllerSourceCiRunId': '38060874880', 'expectedLedgerSha256': m.API_WORKER_PRE_LEDGER_SHA256,
           'confirmation': 'BACKUP_RESTORE_PRE99_DISK_LUKS2_KEEP_API_0D6078BE7A50'}
@@ -776,7 +776,7 @@ class DiskPureTests(unittest.TestCase):
 class DiskScenario(Scenario):
     """Only Linux/Docker primitives are simulated; capsule/journal/publish/lock I/O is real."""
     def __init__(self,directory,post=False,fault=None):
-        super().__init__(directory,None,disk_operation(post),API_WORKER_LEDGER if post else API_WORKER_LEDGER[:-2])
+        super().__init__(directory,None,disk_operation(post),API_WORKER_LEDGER if post else API_WORKER_LEDGER[:-3])
         self.fault=fault;self.loop=None;self.mapper=None;self.mounted=False;self.stopped=False
         with patch.object(m,'ROOT',self.root):
             self.plan=m.disk_plan(self.op,m.encoded(self.op),m.disk_sizing(1024,10**12,50*1024**3))
@@ -1027,7 +1027,7 @@ class DiskPipelineTests(unittest.TestCase):
 
 def namespace_operation(post=False):
     op=disk_operation(post); op['schema']=m.NS_POST_SCHEMA if post else m.NS_PRE_SCHEMA
-    op['confirmation']='BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_11954FFD6D7B_KEEP_API_0D6078BE7A50' if post else 'BACKUP_RESTORE_PRE99_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_KEEP_API_0D6078BE7A50'
+    op['confirmation']='BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_8158AC445C9F_KEEP_API_0D6078BE7A50' if post else 'BACKUP_RESTORE_PRE99_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_KEEP_API_0D6078BE7A50'
     return op
 
 

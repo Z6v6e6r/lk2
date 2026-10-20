@@ -12,21 +12,21 @@ const fail = (code) => {
   throw new Error(`API_WORKER_${code}`);
 };
 export const API_WORKER_BRIDGE = Object.freeze({
-  candidateSha: '11954ffd6d7bf7bd9b198e7e68d2123011f091c1',
-  candidateTree: 'f5f5b2b5227018cf237de4fb8d7fe0f8ef53d1d5',
-  sourceCiRunId: '38141799775',
-  publicationRunId: '38144582876',
-  artifactId: '11705270641',
-  artifactDigest: 'sha256:922c969b4ba3d5dfcb14874dd58574125e6f4bbba8ac9cdb73dd517fd3dbfe85',
-  manifestSha256: '2d7aee9ece1b6f1001052b5d4ec1914c58159d2844310a255cd3d113c984214a',
+  candidateSha: '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d',
+  candidateTree: 'b9ef484b4d0a9e5c8913cc2cdd79ee39b1800537',
+  sourceCiRunId: '39341613054',
+  publicationRunId: '39366813227',
+  artifactId: '12239737469',
+  artifactDigest: 'sha256:bee5c953ee606a107f2b052bb6c6693a007f5c97795df19c9740324e6803a029',
+  manifestSha256: 'fb5425a7e48b94a14bef4dc78e6c4aa573c008414b73ba23a335294ef4fc7de8',
   apiSource: '0d6078be7a50ed3f5761d66071527be003bd568f', // gitleaks:allow public Git revision
   apiRelease: '0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1', // gitleaks:allow public OCI release label
   apiDigest: 'sha256:a2563721aa46a7785d9ad00d98f002040cbd884446761bb5d7bbdf18a7a43c69',
   workerSource: 'ff42c9e9a23895d94889f2982224d21a41be8255',
   workerDigest: 'sha256:b22baaeb97729c131c1159f55c6fc4c174b54846585cd3f7975bf5bcf9898006',
-  candidateApiDigest: 'sha256:7f68ac35eefce73ce1936a86567fc5af7674f0e92f01e793ec1ed3aa7d9ec45f',
-  candidateWorkerDigest: 'sha256:85325e6ee73456e329e54efa644614c8683c08dc01c18f4428c2217c65702d3a',
-  ledgerSha256: '564a58bc61c95c04496ca607697aba375e89e3b874ee171cd50a38c3387a3bf9',
+  candidateApiDigest: 'sha256:47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839',
+  candidateWorkerDigest: 'sha256:72b9a03aaf95afab5711a8f489b56affe0be4d79eb5af513abe4966eb7695416',
+  ledgerSha256: 'a3cd57e09bb6cc24db4d7c4d3ec8b7a3014d4d82ae289b9179d8194dfdb266d4',
   postgresId: 'fe614a3312e446e8036243be3781590bfe90b5da037b83580abd410d4514e84c',
   postgresImage:
     'docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685',
@@ -45,6 +45,7 @@ export const API_WORKER_CONTROLLER_FILES = new Set([
   'scripts/timeweb-api-worker-upgrade.d.ts',
   'scripts/timeweb-api-worker-adapter.test.ts',
   'scripts/timeweb-api-worker.fixture.ts',
+  'scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json',
   'scripts/timeweb-api-worker-contract.js',
   'scripts/timeweb-api-worker-upgrade.js',
   'scripts/timeweb-api-worker-upgrade.test.ts',
@@ -63,6 +64,8 @@ export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([
   'scripts/test-timeweb-database-backup.py',
   'scripts/timeweb-api-worker-contract.js',
   'scripts/run-timeweb-standard-delivery.js',
+  'scripts/timeweb-api-worker.fixture.ts',
+  'scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json',
   'scripts/timeweb-api-worker-migration.d.ts',
   'scripts/timeweb-api-worker-migration.js',
   'scripts/timeweb-api-worker-migration.test.ts',
@@ -503,7 +506,7 @@ export function validateApiWorkerOperation(op, now) {
     fail('EXPIRY');
   if (
     op.confirmation !==
-    'UPGRADE_API_WORKER_11954FFD6D7B_FROM_0D6078BE7A50_FF42C9E9A238_GLOBAL_FCM_ON_TENANT_PROVIDER_GATES_OFF_NO_SEND'
+    'UPGRADE_API_WORKER_8158AC445C9F_FROM_0D6078BE7A50_FF42C9E9A238_GLOBAL_FCM_ON_TENANT_PROVIDER_GATES_OFF_NO_SEND'
   )
     fail('CONFIRMATION');
   return op;
@@ -526,7 +529,7 @@ export function validateApiWorkerControllerDelta(entries) {
     fail('CONTROLLER_DELTA');
 }
 export function validateApiWorkerLedger(applied, packaged) {
-  if (!Array.isArray(applied) || !Array.isArray(packaged) || packaged.length !== 101)
+  if (!Array.isArray(applied) || !Array.isArray(packaged) || packaged.length !== 102)
     fail('LEDGER');
   const canonical = (values) =>
     values.map((v) => {
