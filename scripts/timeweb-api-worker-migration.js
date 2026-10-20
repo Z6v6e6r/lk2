@@ -441,7 +441,8 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
     c?.Image !== MIGRATOR_IMAGE ||
     c.User !== 'appuser' ||
     c.WorkingDir !== '/app' ||
-    !same(c.Entrypoint, k === 'migration' ? null : ['node']) && !(k === 'migration' && same(c.Entrypoint, ['docker-entrypoint.sh'])) ||
+    (!same(c.Entrypoint, k === 'migration' ? null : ['node']) &&
+      !(k === 'migration' && same(c.Entrypoint, ['docker-entrypoint.sh']))) ||
     !same(c.Cmd, cmd) ||
     c.Labels?.['phub.migration-operation'] !== operationSha ||
     c.Labels?.['phub.migration-kind'] !== k ||
