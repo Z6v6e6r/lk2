@@ -305,7 +305,7 @@ describe('closed migration custody validators', () => {
         Image: b.migratorImage,
         User: 'appuser',
         WorkingDir: '/app',
-        Entrypoint: null,
+        Entrypoint: ['docker-entrypoint.sh'],
         Cmd: ['node', 'apps/migrator/dist/main.js'],
         Env: spec.env,
         Volumes: null,
