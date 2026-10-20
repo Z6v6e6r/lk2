@@ -567,6 +567,23 @@ def disk_running_attestation(plan, journal):
     return {'storage': storage, 'kernel': kernel, 'container': disk_container_projection(row)}
 
 
+def proof_retry(work, compute, expected):
+    # Docker/namespace readbacks can briefly lag container start bookkeeping; retry the whole
+    # readback a few times and retain the diff when it is genuinely stable.
+    value = compute()
+    for attempt in range(5):
+        if value == expected:
+            return value
+        time.sleep(1)
+        value = compute()
+    try:
+        Path(work / 'storage-proof-drift.json').write_text(json.dumps(
+            {'expected': expected, 'actual': value}, separators=(',', ':')))
+    except OSError:
+        pass
+    return value
+
+
 def disk_verify_reference(op, request_bytes, file_sha):
     """Read-only, independent entry for the Node proof reader. Derives all paths/IDs locally."""
     need(op['schema'] == DISK_POST_SCHEMA, 'DISK_POST_ATTESTATION_ONLY')
@@ -588,7 +605,7 @@ def disk_verify_reference(op, request_bytes, file_sha):
     need(lock is not None and same_storage(secure(LOCK, 'dir', 0o700), lock['identity'])
          and sorted(p.name for p in LOCK.iterdir()) == ['backup-restore.json']
          and read_secure(LOCK / 'backup-restore.json') == encoded(lock['marker']), 'DISK_LOCK_DRIFT')
-    readback = disk_running_attestation(plan, journal)
+    readback = proof_retry(work, lambda: disk_running_attestation(plan, journal), proof['readback'])
     need(readback == proof['readback'] and read_secure(work / 'restore-storage-proof.json') == proof_bytes
          and read_secure(REQUEST) == request_bytes, 'DISK_STORAGE_PROOF_DRIFT')
     return {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V1', 'operationSha256': sha,
@@ -3116,7 +3133,7 @@ def namespace_verify_reference(op, raw, file_sha):
     need(proof['schema'] == 'PHUB_TIMEWEB_DISK_RESTORE_STORAGE_PROOF_V2'
          and proof['operationSha256'] == plan['operationSha256'] and proof['planSha256'] == digest(plan_bytes), 'NS_STORAGE_PROOF')
     # Read-only callers must already be in the independently proven runtime namespace.
-    value = namespace_running_attestation(plan, op, journal)
+    value = proof_retry(work, lambda: namespace_running_attestation(plan, op, journal), proof['readback'])
     need(value == proof['readback'] and read_secure(work/'restore-storage-proof.json') == proof_bytes
          and read_secure(REQUEST) == raw, 'NS_PROOF_DRIFT')
     return {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V2', 'operationSha256': digest(raw),
