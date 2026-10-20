@@ -695,14 +695,23 @@ def namespace_unit_args(p, tool):
 def namespace_process(pid, root=True):
     need(type(pid) is int and 0 < pid < 2**31, 'NS_PID')
     base = Path('/proc') / str(pid)
-    start = (base/'stat').read_text().rsplit(')', 1)[1].split()[19]
-    status = (base/'status').read_text()
+    # A live process can briefly expose an empty /proc/<pid>/cmdline while exec completes; retry
+    # that transition instead of failing custody, and turn a disappearing PID into a stable code.
+    for attempt in range(20):
+        try:
+            start = (base/'stat').read_text().rsplit(')', 1)[1].split()[19]
+            status = (base/'status').read_text()
+            argv = (base/'cmdline').read_bytes()
+        except OSError:
+            raise Stop('NS_PID') from None
+        if 0 < len(argv) <= 65536 and argv.endswith(b'\0'):
+            break
+        time.sleep(0.05)
     uids = re.search(r'^Uid:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)$', status, re.M)
     gids = re.search(r'^Gid:\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)$', status, re.M)
     need(uids is not None and gids is not None, 'NS_PROCESS_OWNER')
     uid, gid = [int(v) for v in uids.groups()], [int(v) for v in gids.groups()]
     need((uid == gid == [0]*4) if root else all(v != 0 for v in uid + gid), 'NS_PROCESS_OWNER')
-    argv = (base/'cmdline').read_bytes()
     need(0 < len(argv) <= 65536 and argv.endswith(b'\0'), 'NS_PROCESS_ARGV')
     value = {'pid': pid, 'startTicks': start, 'executable': os.readlink(base/'exe'),
         'cmdline': argv[:-1].decode().split('\0'), 'mountNamespace': os.stat(base/'ns/mnt').st_ino,
