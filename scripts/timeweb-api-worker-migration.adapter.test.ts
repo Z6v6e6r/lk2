@@ -114,7 +114,7 @@ function role(kind: string) {
     uuidExecute: true,
     privilegedMembership: false,
     delegableRoles: 0,
-    canCreateDatabaseObjects: false,
+    canCreateDatabaseObjects: kind === 'runtime' ? false : true,
     controllableBusinessSchemas: 0,
     controllableBusinessRelations: 0,
     dangerousBusinessRelationPrivileges: 0,

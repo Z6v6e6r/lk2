@@ -23,7 +23,7 @@ const fixture = () => ({
   uuidExecute: true,
   privilegedMembership: false,
   delegableRoles: 0,
-  canCreateDatabaseObjects: false,
+  canCreateDatabaseObjects: true,
   controllableBusinessSchemas: 2,
   controllableBusinessRelations: 1,
   dangerousBusinessRelationPrivileges: 1,
@@ -66,7 +66,7 @@ describe('derived catalog role proof', () => {
     for (const edit of [
       { superuser: true },
       { delegableRoles: 1 },
-      { canCreateDatabaseObjects: true },
+      { canCreateDatabaseObjects: false },
       { publicCreate: false },
       { publicUsage: false },
       { uuidExecute: false },
@@ -137,6 +137,7 @@ it('rejects runtime business DDL/ownership and predefined role identity', () => 
     wireRoleName: 'phub_runtime',
     currentRoleName: 'phub_runtime',
     sessionRoleName: 'phub_runtime',
+    canCreateDatabaseObjects: false,
     profileCreate: false,
     identityCreate: false,
     publicCreate: false,
@@ -149,6 +150,7 @@ it('rejects runtime business DDL/ownership and predefined role identity', () => 
   };
   expect(() => validateMigrationRoleReadback(value, 'runtime', target)).not.toThrow();
   for (const edit of [
+    { canCreateDatabaseObjects: true },
     { controllableBusinessSchemas: 1 },
     { controllableBusinessRelations: 1 },
     { dangerousBusinessRelationPrivileges: 1 },
