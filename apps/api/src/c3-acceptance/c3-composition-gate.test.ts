@@ -61,6 +61,16 @@ const rosterRepository = {
 
 const conditionsOwner = {} as never;
 
+const issueActorToken = async () => ({
+  token: `c3-synthetic-actor-token-${randomUUID()}`,
+  expiresAt: new Date(Date.now() + 45_000).toISOString(),
+});
+
+const completeBoundary = () =>
+  boundary({
+    resolveProviderClientSubscriptionId: async () => randomUUID(),
+  });
+
 function target(overrides: Record<string, unknown> = {}) {
   return {
     providerExerciseId: 'c3-synthetic-exercise',
@@ -140,19 +150,43 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
       rosterRepository: rosterRepository as never,
     };
     expect(createGameCommercialJoinRuntime(base)).toBeUndefined();
-    expect(
-      createGameCommercialJoinRuntime({ ...base, conditionsOwner, ownerBoundary: boundary() }),
-    ).toBeDefined();
     expect(createGameCommercialJoinRuntime({ ...base, conditionsOwner })).toBeUndefined();
     expect(createGameCommercialJoinRuntime({ ...base, ownerBoundary: boundary() })).toBeUndefined();
+    // Missing actor-token issuer: the owner could never execute, so the runtime must stay absent.
+    expect(
+      createGameCommercialJoinRuntime({
+        ...base,
+        conditionsOwner,
+        ownerBoundary: completeBoundary(),
+      }),
+    ).toBeUndefined();
+    // Missing provider-subscription resolver: half-composed, same fail-closed rule.
+    expect(
+      createGameCommercialJoinRuntime({
+        ...base,
+        conditionsOwner,
+        ownerBoundary: boundary(),
+        issueActorToken,
+      }),
+    ).toBeUndefined();
     expect(
       createGameCommercialJoinRuntime({
         ...base,
         config: config({ GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: undefined }),
         conditionsOwner,
-        ownerBoundary: boundary(),
+        ownerBoundary: completeBoundary(),
+        issueActorToken,
       }),
     ).toBeUndefined();
+    // Every required dependency present: the runtime exists.
+    expect(
+      createGameCommercialJoinRuntime({
+        ...base,
+        conditionsOwner,
+        ownerBoundary: completeBoundary(),
+        issueActorToken,
+      }),
+    ).toBeDefined();
   });
 
   it('P0-GATEc: a complete composition exposes real ports and performs no network call', async () => {
@@ -163,13 +197,16 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
       pool: {} as Pool,
       rosterRepository: rosterRepository as never,
       conditionsOwner,
-      ownerBoundary: boundary(),
+      ownerBoundary: completeBoundary(),
+      issueActorToken,
     });
     expect(runtime).toBeDefined();
     expect(runtime?.repository).toBe(rosterRepository);
     expect(runtime?.conditionsOwner).toBe(conditionsOwner);
     expect(typeof runtime?.owner.execute).toBe('function');
     expect(typeof runtime?.owner.read).toBe('function');
+    // The pre-dispatch provider-subscription resolution is part of the owner port (C1 c36877f9).
+    expect(typeof runtime?.owner.resolveProviderClientSubscriptionId).toBe('function');
     expect(fetchDouble).not.toHaveBeenCalled();
   });
 
