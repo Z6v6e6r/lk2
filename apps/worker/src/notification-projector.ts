@@ -21,6 +21,7 @@ const CONSUMER_NAME = 'notification-intent-projector-v1';
 interface RuntimeRow extends QueryResultRow {
   readonly in_app_enabled: boolean;
   readonly web_push_enabled: boolean;
+  readonly android_push_enabled: boolean;
 }
 
 interface RuleRow extends QueryResultRow {
@@ -350,6 +351,10 @@ export async function applyNotificationSourceEvent(options: {
     readonly appId: string;
     readonly environment: 'SANDBOX' | 'PRODUCTION';
   };
+  readonly androidPush?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+  };
   /** Delivery clock for quiet hours; injectable so a replay test can pin the local window. */
   readonly now?: Date;
 }): Promise<NotificationProjectionResult> {
@@ -370,6 +375,10 @@ async function applyNotificationSourceEventInTransaction(options: {
   readonly pool: Pool;
   readonly event: NotificationSourceEvent;
   readonly webPush?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+  };
+  readonly androidPush?: {
     readonly appId: string;
     readonly environment: 'SANDBOX' | 'PRODUCTION';
   };
@@ -438,7 +447,7 @@ async function applyNotificationSourceEventInTransaction(options: {
     }
 
     const runtime = await client.query<RuntimeRow>(
-      `select in_app_enabled, web_push_enabled
+      `select in_app_enabled, web_push_enabled, android_push_enabled
          from notifications.tenant_runtime_settings
         where tenant_id = $1`,
       [event.tenantId],
@@ -446,7 +455,9 @@ async function applyNotificationSourceEventInTransaction(options: {
     const inAppRuntimeEnabled = runtime.rows[0]?.in_app_enabled ?? false;
     const webPushRuntimeEnabled =
       Boolean(options.webPush) && (runtime.rows[0]?.web_push_enabled ?? false);
-    if (!inAppRuntimeEnabled && !webPushRuntimeEnabled) {
+    const androidPushRuntimeEnabled =
+      Boolean(options.androidPush) && (runtime.rows[0]?.android_push_enabled ?? false);
+    if (!inAppRuntimeEnabled && !webPushRuntimeEnabled && !androidPushRuntimeEnabled) {
       await client.query(
         `update audit.inbox_events
             set processed_at = now()
@@ -487,7 +498,9 @@ async function applyNotificationSourceEventInTransaction(options: {
     for (const rule of rules.rows) {
       const inAppRequested = inAppRuntimeEnabled && rule.effective_channels.includes('IN_APP');
       const webPushRequested = webPushRuntimeEnabled && rule.effective_channels.includes('PUSH');
-      if (!inAppRequested && !webPushRequested) {
+      const androidPushRequested =
+        androidPushRuntimeEnabled && rule.effective_channels.includes('PUSH');
+      if (!inAppRequested && !webPushRequested && !androidPushRequested) {
         skippedRules += 1;
         continue;
       }
@@ -548,12 +561,17 @@ async function applyNotificationSourceEventInTransaction(options: {
         };
         const deliverInApp = inAppRequested && (rule.mandatory || preferenceEnabled('IN_APP'));
         const quietPush =
-          webPushRequested && !rule.mandatory && preferenceEnabled('PUSH') && quietActive('PUSH');
+          (webPushRequested || androidPushRequested) &&
+          !rule.mandatory &&
+          preferenceEnabled('PUSH') &&
+          quietActive('PUSH');
         const deliverPush =
-          webPushRequested && (rule.mandatory || preferenceEnabled('PUSH')) && !quietPush;
+          (webPushRequested || androidPushRequested) &&
+          (rule.mandatory || preferenceEnabled('PUSH')) &&
+          !quietPush;
         if (quietPush) quietSuppressed += 1;
         const endpoints =
-          deliverPush && options.webPush
+          deliverPush && (options.webPush || options.androidPush)
             ? await client.query<IdRow>(
                 `select e.id
                    from integration.notification_endpoints e
@@ -564,17 +582,21 @@ async function applyNotificationSourceEventInTransaction(options: {
                     and e.channel = 'PUSH'
                     and e.status = 'ACTIVE'
                     and a.channel = 'PUSH'
-                    and a.platform = 'WEB'
-                    and a.provider = 'WEB_PUSH'
-                    and a.app_id = $3
-                    and a.environment = $4
+                    and ((a.platform = 'WEB' and a.provider = 'WEB_PUSH' and $3::boolean)
+                      or (a.platform = 'ANDROID' and a.provider = 'FCM' and $4::boolean))
+                    and a.app_id = case when a.platform = 'WEB' then $5 else $6 end
+                    and a.environment = case when a.platform = 'WEB' then $7 else $8 end
                     and a.status = 'ACTIVE'
                   order by e.created_at`,
                 [
                   event.tenantId,
                   recipientUserId,
-                  options.webPush.appId,
-                  options.webPush.environment,
+                  Boolean(webPushRequested && options.webPush),
+                  Boolean(androidPushRequested && options.androidPush),
+                  options.webPush?.appId ?? '',
+                  options.androidPush?.appId ?? '',
+                  options.webPush?.environment ?? 'SANDBOX',
+                  options.androidPush?.environment ?? 'SANDBOX',
                 ],
               )
             : { rows: [] as IdRow[] };

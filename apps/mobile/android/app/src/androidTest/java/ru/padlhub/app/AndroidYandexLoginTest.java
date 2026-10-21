@@ -69,7 +69,7 @@ public class AndroidYandexLoginTest {
         f.journal.failWrite = false;
         String launch = f.login.start(true, true);
         assertEquals(ORIGIN + ROOT + "/auth/viva/android/launch?code=" + CODE, launch);
-        JSONObject start = new JSONObject(f.requests.get(0).body);
+        JSONObject start = new JSONObject(new String(f.requests.get(0).body, StandardCharsets.UTF_8));
         assertEquals(AndroidYandexLogin.challenge(f.journal.value.verifier), start.getString("codeChallenge"));
         assertFalse(start.has("codeVerifier"));
         assertFalse(launch.contains(f.journal.value.verifier));
@@ -111,7 +111,7 @@ public class AndroidYandexLoginTest {
         f.restart(); f.failExchange = false;
         assertEquals("complete", f.login.status());
         Request replay = f.requests.get(2);
-        assertEquals(lost.body, replay.body);
+        assertArrayEquals(lost.body, replay.body);
         assertEquals(lost.headers.get("idempotency-key"), replay.headers.get("idempotency-key"));
         assertEquals(REFRESH, f.credentials.value.value);
         assertNull(f.journal.value);

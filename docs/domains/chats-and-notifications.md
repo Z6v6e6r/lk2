@@ -136,8 +136,9 @@ sequence и `recipientUserIds`), а получатели резолвятся п
 PUSH delivery jobs, VAPID adapter, bounded retries, circuit breaker и инвалидирование 404/410.
 Ручной срез ЦУП добавляет отдельный `phub-admin` JWT audience, tenant-scoped permission
 `notifications.manage`, поиск получателей по телефону без сохранения входных номеров,
-идемпотентную кампанию и прямую транзакционную проекцию в inbox/Web Push deliveries. APNs/FCM и
-клиентские `DISPLAYED`/`OPENED` receipts остаются следующими этапами.
+идемпотентную кампанию и прямую транзакционную проекцию в inbox/Web Push/Android FCM deliveries.
+Android использует существующий зашифрованный endpoint и FCM HTTP v1 worker; канал закрывают
+global/tenant/provider gates. APNs и нативные `DISPLAYED`/`OPENED` receipts остаются следующими этапами.
 
 Пользовательская лента перепроверяется при возврате фокуса/видимости вкладки и каждые 15 секунд,
 поэтому новые inbox items появляются без ручной перезагрузки. Системное уведомление вне вкладки
@@ -401,8 +402,9 @@ notifications остаются NO-GO независимо от наличия sc
    найденного человека, попадает в счётчик как не добавившее получателя, тогда как preview
    возвращает точные списки `unresolvedPhones` и `unresolvedUserIds`.
 3. Команда кампании требует `Idempotency-Key`. API ещё раз разрешает получателей внутри tenant
-   transaction, проверяет runtime/provider gates и отклоняет APNs/FCM, пока соответствующий adapter
-   не реализован. Request hash включает `userIds` только когда они переданы, поэтому телефонный
+   transaction, проверяет runtime/provider gates и отклоняет APNs, пока adapter не реализован.
+   Android выбирает только активные `ANDROID/FCM` endpoints текущего app/environment, независимо
+   от Web Push. Request hash включает `userIds` только когда они переданы, поэтому телефонный
    запрос сохраняет прежний hash и повтор уже начатой команды остаётся replay, а не conflict.
 4. Campaign, recipient rows, intents, inbox items, pending Web Push deliveries, audit и outbox
    записываются в одной PostgreSQL transaction. RabbitMQ получает только campaign/intent/delivery
@@ -732,8 +734,9 @@ p95 < 2 s после commit; 99.9% intent либо доставлен хотя �
    версиями templates/rules остаётся следующей задачей.
 6. **Web/iOS/Android push:** Web Push endpoint API, шифрование, VAPID adapter, retry/circuit,
    provider-acceptance receipt, quiet hours канала `PUSH`, mute конкретного разговора и клиентские
-   display/open receipts реализованы за выключенными global/tenant/provider gates. APNs/FCM
-   остаются следующим подэтапом.
+   display/open receipts реализованы за выключенными global/tenant/provider gates. Android FCM
+   HTTP v1 и ручная отправка из ЦУП реализованы за независимыми gates; acceptance не доказывает
+   показ/открытие на устройстве. APNs остаётся следующим подэтапом.
 7. **Moderation/control:** reports, ЦУП queue, reversible auto-policy, immutable decisions и затем
    один external provider в `SIGNAL_ONLY` режиме.
 

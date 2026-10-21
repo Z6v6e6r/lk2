@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "fastify": "5.12.4",
-    "sharp": "0.35.4"
+    "sharp": "0.35.5"
   },
   "scripts": {
     "build": "npm run contracts:generate && npm run build:packages && npm run build:apps",
@@ -69,6 +69,7 @@
     "notifications:friendship:provision": "node --env-file-if-exists=.env --import tsx scripts/provision-friendship-notifications.ts",
     "notifications:icons:generate": "node --import tsx scripts/generate-notification-icons.ts",
     "notifications:web-push:provider:set": "node --env-file-if-exists=.env --import tsx scripts/configure-web-push-provider.ts",
+    "notifications:android-push:provider:set": "node --env-file-if-exists=.env --import tsx scripts/configure-android-push-provider.ts",
     "notifications:web-push:secrets:provision": "node --import tsx scripts/provision-local-web-push-secrets.ts",
     "timeweb:beta:secrets:provision": "node scripts/provision-timeweb-beta-runtime-secrets.js",
     "timeweb:beta:release-env:render": "node scripts/render-timeweb-beta-release-env.js",

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IOSAuthApp } from './IOSAuthApp.js';
 import type { IOSSessionPlugin } from './session.js';
 import {
@@ -13,6 +13,11 @@ import {
   viewerId,
   config,
 } from './testing/cabinet-fixtures.js';
+
+// Transform the shared lazy-loaded screens before the UI assertions' one-second budget.
+beforeAll(async () => {
+  await import('./IOSCabinet.js');
+});
 
 beforeEach(() => {
   vi.stubGlobal('scrollTo', vi.fn());
@@ -43,13 +48,18 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     const session = syntheticSession(request);
     await session.restore();
     render(<IOSAuthApp session={session} />);
-    const nav = await screen.findByRole('navigation', { name: 'Основная навигация' });
+    // Home replaces its loading Page; query navigation only after that replacement.
+    await screen.findByRole('main', { name: 'Главная' });
+    const nav = screen.getByRole('navigation', { name: 'Основная навигация' });
+    expect(nav).toBeInTheDocument();
     expect(within(nav).getAllByRole('link')).toHaveLength(3);
     expect(screen.queryByRole('link', { name: 'Создать игру' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Чаты' })).toBeNull();
     fireEvent.click(within(nav).getByRole('link', { name: 'Профиль' }));
-    await screen.findByRole('heading', { name: 'Анна Петрова' });
-    const subscriptions = screen.getByRole('region', { name: 'Подписки и абонементы' });
+    // Home and Profile share the name heading; await a region unique to the destination.
+    const subscriptions = await screen.findByRole('region', { name: 'Подписки и абонементы' });
+    expect(window.location.pathname).toBe('/profile');
+    expect(screen.getByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
     expect(within(subscriptions).getByRole('status')).toHaveTextContent(
       'Загружаем действующие подписки…',
     );

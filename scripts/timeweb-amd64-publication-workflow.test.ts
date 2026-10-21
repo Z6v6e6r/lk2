@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { globSync, readFileSync } from 'node:fs';
+import { access, chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -236,7 +236,8 @@ describe('Timeweb amd64 publication workflow', () => {
       'utf8',
     );
     expect(readinessHelper).toContain('readonly MAX_ATTEMPTS=5');
-    expect(readinessHelper).toContain('readonly TOTAL_RETRY_BUDGET_SECONDS=29');
+    expect(readinessHelper).toContain('readonly INSPECT_TIMEOUT_SECONDS=15');
+    expect(readinessHelper).toContain('readonly TOTAL_RETRY_BUDGET_SECONDS=79');
     expect(readinessHelper).toContain('readonly KILL_AFTER_SECONDS=1');
     expect(readinessHelper.match(/--kill-after="\$\{KILL_AFTER_SECONDS\}s"/gu)).toHaveLength(3);
     expect(readinessHelper).toContain('docker buildx inspect "$builder_name" --bootstrap');
@@ -307,6 +308,20 @@ describe('Timeweb amd64 publication workflow', () => {
     });
     expect(canonicalStep?.if).toBeUndefined();
     expect(canonicalStep?.['continue-on-error']).toBeUndefined();
+
+    const internalIndex = publicationSteps.findIndex(({ id }) => id === 'artifact');
+    const internalStep = publicationSteps[internalIndex];
+    expect(internalIndex).toBeGreaterThan(generationIndex);
+    expect(internalIndex).toBeLessThan(canonicalIndex);
+    expect(internalStep?.uses).toBe(canonicalStep?.uses);
+    expect(internalStep?.with).toEqual({
+      name: 'timeweb-amd64-publication-${{ github.run_id }}-${{ github.run_attempt }}',
+      path: 'timeweb-amd64-publication-manifest.json\ntimeweb-amd64-publication-checksums.txt\npublication-evidence/images\n',
+      'if-no-files-found': 'error',
+      'retention-days': 90,
+    });
+    expect(internalStep?.if).toBeUndefined();
+    expect(internalStep?.['continue-on-error']).toBeUndefined();
 
     expect(workflow).toContain('default: source_check_only');
     expect(workflow).toContain("inputs.operation == 'publish'");
@@ -1064,6 +1079,84 @@ describe('Timeweb amd64 publication workflow', () => {
     }
   });
 
+  it('preserves the complete five-image custody in the uploaded internal artifact', async () => {
+    const workflow = parse(
+      await readFile(
+        new URL('../.github/workflows/publish-timeweb-amd64-images.yaml', import.meta.url),
+        'utf8',
+      ),
+    ) as {
+      readonly jobs: {
+        readonly 'publication-manifest': {
+          readonly steps: readonly {
+            readonly id?: string;
+            readonly with?: { readonly path?: string };
+          }[];
+        };
+      };
+    };
+    const selection = workflow.jobs['publication-manifest'].steps
+      .find(({ id }) => id === 'artifact')
+      ?.with?.path?.trim()
+      .split('\n');
+    expect(selection).toBeDefined();
+    const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-upload-custody-'));
+    const source = join(directory, 'source');
+    const uploaded = join(directory, 'uploaded');
+    const images = join(source, 'publication-evidence/images');
+    try {
+      await mkdir(images, { recursive: true });
+      for (const name of [
+        'timeweb-amd64-publication-manifest.json',
+        'timeweb-amd64-publication-checksums.txt',
+      ])
+        await writeFile(join(source, name), 'synthetic fixture\n');
+      for (const component of ['web', 'api', 'worker', 'realtime', 'migrator']) {
+        const lines: string[] = [];
+        for (const suffix of [
+          'image.json',
+          'provenance.json',
+          'sbom.spdx.json',
+          'provenance-material-diagnostic.json',
+          'buildkit-readiness/attempt-1.stderr.txt',
+          'buildkit-readiness/summary.txt',
+        ]) {
+          const name = `${component}-${suffix}`;
+          const contents = `${component}:${suffix}\n`;
+          await mkdir(dirname(join(images, name)), { recursive: true });
+          await writeFile(join(images, name), contents);
+          lines.push(
+            `${createHash('sha256').update(contents).digest('hex')}  publication-evidence/${name}`,
+          );
+        }
+        await writeFile(
+          join(images, `${component}-evidence-checksums.txt`),
+          `${lines.join('\n')}\n`,
+        );
+      }
+      // Apply the actual upload selection; checking the complete pre-upload tree misses packaging loss.
+      for (const selected of globSync(selection!, { cwd: source })) {
+        const destination = join(uploaded, selected);
+        await mkdir(dirname(destination), { recursive: true });
+        await cp(join(source, selected), destination, { recursive: true });
+      }
+      const uploadedImages = join(uploaded, 'publication-evidence/images');
+      const verify = () =>
+        spawnSync(process.execPath, [publicationEvidenceValidator, uploadedImages], {
+          encoding: 'utf8',
+        });
+      const complete = verify();
+      expect(complete.status, complete.stderr).toBe(0);
+      // Removing a referenced nested diagnostic must remain fail-closed after extraction.
+      await rm(join(uploadedImages, 'web-buildkit-readiness/summary.txt'));
+      const incomplete = verify();
+      expect(incomplete.status).not.toBe(0);
+      expect(incomplete.stderr).toContain('reason=evidence_unavailable');
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it('rejects tampered, path-substituted, or unreferenced downloaded publication evidence', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'phub-timeweb-publication-evidence-'));
     const imagesDirectory = join(directory, 'images');
@@ -1636,7 +1729,7 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(probe).toContain('node scripts/verify-timeweb-provenance-materials.js verify');
     expect(probe).toContain('authorizesPublication: false');
     expect(probe).toContain('authorizesDeploy: false');
-    expect(probe).toContain('docker buildx rm "$BUILDER_NAME"');
+    expect(probe).toContain('docker buildx rm --force --timeout 60s "$BUILDER_NAME"');
     expect(document.jobs?.['pr-gate']?.needs).toEqual(
       expect.arrayContaining([
         'quality',

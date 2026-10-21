@@ -5,12 +5,12 @@
 Это проверенный срез задачи, а не разрешение на merge, deploy или следующий auth-инкремент.
 При возобновлении заново проверить текущие main, task head и владельца миграционной цепочки.
 
-| Этап                                           | Проверенный статус                                                                                      |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| КЯ-01a: внутренние контакты                    | [PR #342](https://github.com/Z6v6e6r/lk2/pull/342) merged                                               |
-| КЯ-01b: чтение собственных контактов           | [PR #344](https://github.com/Z6v6e6r/lk2/pull/344) merged                                               |
-| КЯ-02a/04: отзыв сессий и enrolled-email login | [PR #347](https://github.com/Z6v6e6r/lk2/pull/347) merged                                               |
-| КЯ-04: внутренний proof/reset                  | [PR #349](https://github.com/Z6v6e6r/lk2/pull/349) OPEN / Draft; интеграция с актуальным main не готова |
+| Этап                                           | Проверенный статус                                                                                                        |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| КЯ-01a: внутренние контакты                    | [PR #342](https://github.com/Z6v6e6r/lk2/pull/342) merged                                                                 |
+| КЯ-01b: чтение собственных контактов           | [PR #344](https://github.com/Z6v6e6r/lk2/pull/344) merged                                                                 |
+| КЯ-02a/04: отзыв сессий и enrolled-email login | [PR #347](https://github.com/Z6v6e6r/lk2/pull/347) merged                                                                 |
+| КЯ-04: внутренний proof/reset                  | [PR #349](https://github.com/Z6v6e6r/lk2/pull/349) OPEN / Draft; исходники интегрированы, применимые проверки выполняются |
 
 ### Что готово и какое доказательство сохраняется
 
@@ -32,32 +32,38 @@ TTL/attempt limits, generation fence, atomic consume/hash update/revoke-all/rece
 5 010 PASS / 258 skipped / одна ошибка Docker-parser при отсутствующем daemon. Повторного запуска
 при актуализации нет. STAGING / PROVIDER / PRODUCTION и device acceptance не выполнялись этой задачей.
 
-### Почему прежнее «готов к merge» устарело
+### Интеграция с main на 21 октября
 
-Свежий `origin/main` — `0484c8159d2b21f9f2844ddcfe1bc7c0397c60f0`; общий предок —
-`5393fae90d00639d9128557bb5ae67d02f84abbf`. GitHub сообщает CONFLICTING / DIRTY для #349.
-Обе стороны добавляют database build/export и TypeScript path entries в
-`packages/database/package.json` и `tsconfig.json`: нужно сохранить и support-tickets, и password-reset.
+В собственную ветку интегрирован `origin/main` — `0484c8159d2b21f9f2844ddcfe1bc7c0397c60f0`
+без переписывания истории. Конфликты в `packages/database/package.json` и `tsconfig.json`
+разрешены с сохранением обеих capabilities: support-tickets и password-reset. Чужие ветки и
+первичный dirty checkout не менялись.
 
-Main уже содержит `0098_support_tickets.sql`; PR добавляет `0098_local_password_reset_proofs.sql`.
-Migrator сортирует полные имена файлов и учитывает их в ledger по filename/checksum: одинаковый
-числовой префикс сам по себе не доказывает runtime-ошибку. Однако порядок/номер новой миграции
-и canonical rehearsal нужно согласовать с текущей цепочкой; старое доказательство 0097→0098
-не сертифицирует upgrade после support. Уже опубликованные/применённые миграции не переименовывать.
+Main содержит `0098_support_tickets.sql`. Только новая reset-миграция переименована из
+`0098_local_password_reset_proofs.sql` в `0099_local_password_reset_proofs.sql`; SQL bytes и
+checksum сохранены. На проверенном срезе номер 0099 не занят в main или миграциях открытых PR.
+Существующие опубликованные/применённые миграции и реальные ledgers не изменялись.
 
-### Текущее ограниченное задание: подготовить #349 к слиянию
+Canonical rehearsal теперь проверяет цепочку через support 0098 → reset 0099: сохранность
+синтетических credentials, sessions, support tickets/messages; откат при drift объекта; apply,
+checksum-once/no-op reapply и откат следующего failed DDL. Основной service/repository reset не
+менялся. Полные новые результаты LOCAL/CI и specialist review фиксируются в #349; исходный
+зелёный CI выше не подменяет проверки интегрированного head.
 
-1. Проверить свежие main/head, чистоту собственного worktree, владельцев общих файлов и миграций;
-   согласовать последовательность с support activation #400. Не менять чужие ветки/файлы.
-2. Без force-push интегрировать main в собственную ветку; сохранить обе database capabilities и
-   path mappings. Выбрать совместимое имя/порядок только новой reset-миграции и обновить её ссылки.
-3. Проверить canonical migration apply/reapply/rollback на новой цепочке, tenant RLS, atomic reset,
-   concurrency/replay, revocation и denial cases. Переиспользовать неизменённые результаты;
-   для изменённой интеграции получить применимые specialist review и exact-head CI.
-4. После отсутствия конфликтов и успешных обязательных gates представить один пакет на решение
-   владельца о merge. Merge, публикация, реальные миграции/ACL и deploy — отдельные переходы.
+### Критерии завершения подготовки #349
 
-Актуализация документа не выполняет пункты 1–4 и не начинает новый auth-инкремент.
+- Сохранены обе database capabilities, root export и прежний identity/session контракт.
+- Проверена новая canonical migration chain с RLS/default-deny, atomic reset/revoke-all,
+  concurrency/replay и rollback cases; выполнены применимые source gates и migration review.
+- Новый task head отправлен в ту же ветку; GitHub не показывает конфликтов, обязательный CI
+  успешен. Неизменённое доказательство переиспользуется явно, без лишних повторных прогонов.
+- После этих проверок — отдельное решение владельца о merge. Публикация, реальные миграции/ACL,
+  deploy и восстановление для пользователей не выполняются этой задачей.
+
+Контрактный запрос владельцу support activation #400: перед его последующей интеграцией проверить
+закреплённый filename/checksum inventory и compatibility transitions с добавленной миграцией 0099.
+Его прежние exact-inventory проверки относятся к прежней цепочке. Не расширять guards автоматически;
+файлы и ветка #400 этой задачей не меняются. Сообщения другим чатам не отправляются.
 
 ### После принятия #349: отдельный продуктовый инкремент
 

@@ -62,6 +62,46 @@ public class AndroidStartupTest {
         } finally { activity.runOnUiThread(activity::finish); }
     }
 
+    @Test public void storageFailureShowsSafeCodeAndRetryPreservesCredentialUntilConfirmed401() throws Exception {
+        org.junit.Assume.assumeTrue("true".equals(InstrumentationRegistry.getArguments().getString("configuredApp")));
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        MainActivity activity = (MainActivity) instrumentation.startActivitySync(
+            new Intent(instrumentation.getTargetContext(), MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        try {
+            awaitJs(activity, "document.body.innerText.includes('Войти по СМС')");
+            AndroidSessionTest.MemoryStore credentials = new AndroidSessionTest.MemoryStore();
+            credentials.value = new AndroidSessionTest().credential();
+            credentials.failWrite = true;
+            java.util.concurrent.atomic.AtomicInteger sends = new java.util.concurrent.atomic.AtomicInteger();
+            AndroidSessionPolicy policy = new AndroidSessionTest().policy();
+            AndroidSessionEngine.Sender sender = request -> { sends.incrementAndGet(); return AndroidSessionEngine.Response.signedOut(); };
+            AndroidSessionEngine engine = new AndroidSessionEngine(policy, credentials, sender);
+            AndroidYandexLogin oauth = new AndroidYandexLogin(policy, engine, sender, new AndroidYandexLoginTest.Journal());
+            PadlHubAndroidSessionPlugin plugin = (PadlHubAndroidSessionPlugin) activity.getBridge().getPlugin("PadlHubAndroidSession").getInstance();
+            for (String name : new String[] { "engine", "oauth" }) {
+                java.lang.reflect.Field field = PadlHubAndroidSessionPlugin.class.getDeclaredField(name); field.setAccessible(true);
+                field.set(plugin, name.equals("engine") ? engine : oauth);
+            }
+            activity.runOnUiThread(() -> activity.getBridge().getWebView().loadUrl("https://localhost/"));
+            awaitJs(activity, "document.body.innerText.includes('Код ошибки: NATIVE_STORAGE_UNAVAILABLE')");
+            assertEquals("true", evaluate(activity, "document.querySelector('[role=alert]').textContent.includes('защищённые данные') && !document.body.innerText.includes('Проверьте подключение')"));
+            assertEquals("true", evaluate(activity, "document.documentElement.scrollWidth <= window.innerWidth && document.querySelector('button').getBoundingClientRect().height >= 48"));
+            assertEquals("true", evaluate(activity, "!document.body.innerText.includes('synthetic_refresh') && !JSON.stringify(localStorage).includes('synthetic_refresh') && !JSON.stringify(sessionStorage).includes('synthetic_refresh')"));
+            assertNotNull(credentials.value); assertEquals(0, sends.get());
+            capture("storage-failure-diagnostic.png");
+            activity.runOnUiThread(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+            awaitJs(activity, "window.innerWidth > window.innerHeight");
+            evaluate(activity, "document.querySelector('button').focus(); true");
+            assertEquals("true", evaluate(activity, "document.documentElement.scrollWidth <= window.innerWidth && document.activeElement === document.querySelector('button')"));
+            capture("storage-failure-diagnostic-landscape.png");
+            activity.runOnUiThread(() -> activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED));
+            credentials.failWrite = false;
+            evaluate(activity, "Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === 'Повторить').click(); true");
+            awaitJs(activity, "document.body.innerText.includes('Войти по СМС')");
+            assertNull(credentials.value); assertEquals(1, sends.get());
+        } finally { activity.runOnUiThread(activity::finish); }
+    }
+
     @Test public void optionalReadOnlyNativeTlsProbeDoesNotSendOtpOrCredentials() throws Exception {
         org.junit.Assume.assumeTrue("true".equals(InstrumentationRegistry.getArguments().getString("liveReadOnlyProbe")));
         AndroidHttpSender sender = new AndroidHttpSender("https://lk2.padlhub.su");

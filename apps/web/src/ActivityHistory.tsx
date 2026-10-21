@@ -14,6 +14,7 @@ import { PlayerLevelAvatar } from './PlayerLevelAvatar.js';
 export type ActivityHistoryLoader = (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
 
 interface ActivityHistoryPanelProps {
+  readonly initialKind?: ActivityHistoryKind | 'ALL';
   readonly active: boolean;
   readonly loadHistory: ActivityHistoryLoader;
 }
@@ -226,8 +227,9 @@ function HistoryItem({ item }: { readonly item: ActivityHistoryItem }): React.JS
 export function ActivityHistoryPanel({
   active,
   loadHistory,
+  initialKind = 'ALL',
 }: ActivityHistoryPanelProps): React.JSX.Element {
-  const [kind, setKind] = useState<ActivityHistoryKind | 'ALL'>('ALL');
+  const [kind, setKind] = useState<ActivityHistoryKind | 'ALL'>(initialKind);
   const [status, setStatus] = useState<ActivityHistoryStatus>('COMPLETED');
   const [page, setPage] = useState<ActivityHistoryPage | null>(null);
   const [loading, setLoading] = useState(false);

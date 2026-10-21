@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { BookingActivityCard } from './BookingRecommendations.js';
 import { GameCard, type GameCardAction, type GameCardModel } from './GameCard.js';
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
+import { GameJoinSubscriptionPicker } from './GameJoinSubscriptionPicker.js';
 import {
   MainBottomNavigation,
   UpcomingBookingCard,
@@ -26,6 +27,7 @@ import type {
   PlayerLevelState,
   PublicGameCard,
 } from './auth-gateway.js';
+import { readGamesListNavigation, saveGamesListNavigation } from './games-list-navigation.js';
 import { usePaginatedEventSearch } from './usePaginatedEventSearch.js';
 
 type GamesTab = 'DISCOVER' | 'UPCOMING';
@@ -94,7 +96,7 @@ type GamesCatalogQuery = Omit<EventCatalogQuery, 'surface' | 'kinds'> & {
 
 type GamesCatalogMetadata = Pick<
   EventCatalogPage,
-  'state' | 'totalMatched' | 'facets' | 'sourceStatus'
+  'state' | 'totalMatched' | 'facets' | 'sourceStatus' | 'staleAt'
 >;
 
 function mergeStations(
@@ -269,19 +271,36 @@ export function GamesPage({
   eventId,
   chatNavigationScope,
 }: GamesPageProps): React.JSX.Element {
-  const [tab, setTab] = useState<GamesTab>('DISCOVER');
-  const [selectedKinds, setSelectedKinds] = useState<readonly GameKindFilter[]>([]);
-  const [selectedStationIds, setSelectedStationIds] = useState<readonly string[]>([]);
+  const navigationKey = `phub.games-list.v1:${chatNavigationScope?.tenantKey ?? 'local'}:${chatNavigationScope?.userId ?? 'local'}`;
+  const [savedNavigation] = useState(() => readGamesListNavigation(navigationKey));
+  const restoringNavigation = useRef(savedNavigation);
+  const loadedPages = useRef(0);
+  const [catalogExpired, setCatalogExpired] = useState(false);
+  const [tab, setTab] = useState<GamesTab>(savedNavigation?.tab ?? 'DISCOVER');
+  const [selectedKinds, setSelectedKinds] = useState<readonly GameKindFilter[]>(
+    savedNavigation?.selectedKinds ?? [],
+  );
+  const [selectedStationIds, setSelectedStationIds] = useState<readonly string[]>(
+    savedNavigation?.selectedStationIds ?? [],
+  );
   const [stations, setStations] = useState<
     readonly { readonly id: string; readonly name: string }[]
   >([]);
-  const [levelRange, setLevelRange] = useState<GameLevelRangeFilter>('ALL');
-  const [ownLevelFilter, setOwnLevelFilter] = useState<CatalogLevel | null>(null);
+  const [levelRange, setLevelRange] = useState<GameLevelRangeFilter>(
+    savedNavigation?.levelRange ?? 'ALL',
+  );
+  const [ownLevelFilter, setOwnLevelFilter] = useState<CatalogLevel | null>(
+    savedNavigation?.ownLevelFilter ?? null,
+  );
   const [ownLevelFilterLoading, setOwnLevelFilterLoading] = useState(false);
-  const [startsAfter, setStartsAfter] = useState<GameStartAfterFilter>('ALL');
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [selectedDate, setSelectedDate] = useState<string | null>(() => dateKey(new Date()));
-  const [includeFull, setIncludeFull] = useState(false);
+  const [startsAfter, setStartsAfter] = useState<GameStartAfterFilter>(
+    savedNavigation?.startsAfter ?? 'ALL',
+  );
+  const [filtersOpen, setFiltersOpen] = useState(savedNavigation?.filtersOpen ?? false);
+  const [selectedDate, setSelectedDate] = useState<string | null>(() =>
+    savedNavigation ? savedNavigation.selectedDate : dateKey(new Date()),
+  );
+  const [includeFull, setIncludeFull] = useState(savedNavigation?.includeFull ?? false);
   const [games, setGames] = useState<readonly GameCardModel[]>([]);
   const [detail, setDetail] = useState<ViewerGameCard | null>(null);
   const [eventBooking, setEventBooking] = useState<HomeUpcomingItem | null>(null);
@@ -292,6 +311,33 @@ export function GamesPage({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<GameDetailTab>('GAME');
+  const joinSelectionScope = JSON.stringify([
+    gameId,
+    chatNavigationScope?.tenantKey,
+    chatNavigationScope?.userId,
+  ]);
+  const [joinSelection, setJoinSelection] = useState<{
+    scope: string;
+    gateway: AuthGateway;
+    id?: string;
+  } | null>(null);
+  if (
+    joinSelection &&
+    (joinSelection.scope !== joinSelectionScope || joinSelection.gateway !== gateway)
+  ) {
+    setJoinSelection(null);
+  }
+  const selectedSubscriptionId =
+    joinSelection?.scope === joinSelectionScope && joinSelection.gateway === gateway
+      ? joinSelection.id
+      : undefined;
+  const joinConditionsClient = useMemo(
+    () =>
+      gateway.getGameJoinConditions
+        ? { getGameJoinConditions: gateway.getGameJoinConditions }
+        : undefined,
+    [gateway],
+  );
   const [reloadToken, setReloadToken] = useState(0);
   const [levelRecovery, setLevelRecovery] = useState<{
     readonly action: 'JOIN' | 'JOIN_WAITLIST';
@@ -384,11 +430,17 @@ export function GamesPage({
     [catalogEnabled, catalogQuery, reloadToken],
   );
   const loadCatalogPage = useCallback(
-    async (query: GamesCatalogQuery, request: { readonly cursor?: string }) => {
+    async (
+      query: GamesCatalogQuery,
+      request: { readonly cursor?: string; readonly signal?: AbortSignal },
+    ) => {
       if (!catalogEnabled) return { items: [] as readonly EventCatalogItem[], nextCursor: null };
       const page = request.cursor
         ? await gateway.continueEventCatalog(request.cursor, query.limit)
         : await gateway.listEventCatalog(query);
+      if (!request.signal?.aborted) {
+        loadedPages.current = request.cursor ? loadedPages.current + 1 : 1;
+      }
       return {
         items: page.items,
         nextCursor: page.nextCursor,
@@ -397,6 +449,7 @@ export function GamesPage({
           totalMatched: page.totalMatched,
           facets: page.facets,
           sourceStatus: page.sourceStatus,
+          staleAt: page.staleAt,
         } satisfies GamesCatalogMetadata,
       };
     },
@@ -412,6 +465,7 @@ export function GamesPage({
     errorPhase: catalogErrorPhase,
     loadMore: loadMoreCatalog,
     retry: retryCatalog,
+    restart: restartCatalog,
   } = usePaginatedEventSearch<GamesCatalogQuery, EventCatalogItem, GamesCatalogMetadata>({
     queryKey: catalogQueryKey,
     query: catalogQuery,
@@ -422,6 +476,75 @@ export function GamesPage({
         : item.kind === 'TOURNAMENT'
           ? `TOURNAMENT:${item.tournament.id}`
           : `COACH_GAME:${item.activity.id}`,
+  });
+
+  useEffect(() => {
+    if (gameId || eventId) return;
+    const remember = (): void =>
+      saveGamesListNavigation(navigationKey, {
+        tab,
+        selectedKinds,
+        selectedStationIds,
+        selectedDate,
+        levelRange,
+        ownLevelFilter,
+        startsAfter,
+        includeFull,
+        filtersOpen,
+        pages: Math.max(1, loadedPages.current),
+        scrollY: restoringNavigation.current?.scrollY ?? window.scrollY,
+      });
+    window.addEventListener('pagehide', remember);
+    // Capture internal links before a full document navigation (including the detail link).
+    const rememberLink = (event: MouseEvent): void => {
+      if (event.target instanceof Element && event.target.closest('a[href]')) remember();
+    };
+    document.addEventListener('click', rememberLink, true);
+    return () => {
+      window.removeEventListener('pagehide', remember);
+      document.removeEventListener('click', rememberLink, true);
+    };
+  }, [
+    gameId,
+    eventId,
+    navigationKey,
+    tab,
+    selectedKinds,
+    selectedStationIds,
+    selectedDate,
+    levelRange,
+    ownLevelFilter,
+    startsAfter,
+    includeFull,
+    filtersOpen,
+  ]);
+
+  useEffect(() => {
+    if (gameId || eventId || !catalogMetadata) return;
+    const expiresAt = Date.parse(catalogMetadata.staleAt);
+    const update = (): void => setCatalogExpired(expiresAt <= Date.now());
+    update();
+    const timer = window.setTimeout(update, Math.max(0, expiresAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [gameId, eventId, catalogMetadata]);
+
+  useEffect(() => {
+    const saved = restoringNavigation.current;
+    if (!saved || gameId || eventId) return;
+    const pending =
+      tab === 'DISCOVER' ? catalogLoading || catalogLoadingMore : loading || loadingMore;
+    const failed = tab === 'DISCOVER' ? catalogError : error;
+    const cursor = tab === 'DISCOVER' ? catalogNextCursor : nextCursor;
+    if (pending || failed) return;
+    if (loadedPages.current < saved.pages && cursor) {
+      void loadMore();
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: saved.scrollY, behavior: 'instant' });
+      restoringNavigation.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
   });
 
   useEffect(() => {
@@ -550,6 +673,7 @@ export function GamesPage({
         if (!active) return;
         const pending = tab === 'UPCOMING' ? pendingViewerGame.current : null;
         const hasPending = pending ? page.items.some((item) => item.id === pending.id) : false;
+        loadedPages.current = 1;
         setGames(pending && !hasPending ? [pending, ...page.items] : page.items);
         setStations((current) =>
           mergeStations(
@@ -582,6 +706,7 @@ export function GamesPage({
     try {
       const page = await gateway.listMyGames({ scope: tab, limit: 20, cursor: nextCursor });
       const pageItems = page.items;
+      loadedPages.current += 1;
       setGames((current) => [...current, ...pageItems]);
       setStations((current) =>
         mergeStations(
@@ -636,6 +761,7 @@ export function GamesPage({
         : `Станции: ${selectedStations.length}`;
 
   function beginFilterChange(): void {
+    restoringNavigation.current = null;
     setError(null);
   }
 
@@ -1291,16 +1417,37 @@ export function GamesPage({
           </p>
         ) : null}
         {detail ? (
-          <GameDetailView
-            activeTab={detailTab}
-            busy={busyGameId === detail.id}
-            game={detail}
-            onAction={(action) => void handleAction(action, detail)}
-            onChatOpen={() => void openGameChat(detail)}
-            onChatNavigate={(conversationId) => rememberCardGameChat(detail, conversationId)}
-            onSubmit={submitResult}
-            onTabChange={setDetailTab}
-          />
+          <>
+            {detail.id === gameId && detailTab === 'GAME' && joinConditionsClient ? (
+              <GameJoinSubscriptionPicker
+                key={`subscription:${joinSelectionScope}`}
+                gateway={gateway}
+                {...(selectedSubscriptionId ? { value: selectedSubscriptionId } : {})}
+                onChange={(id) =>
+                  setJoinSelection({
+                    scope: joinSelectionScope,
+                    gateway,
+                    ...(id ? { id } : {}),
+                  })
+                }
+              />
+            ) : null}
+            <GameDetailView
+              key={`conditions:${joinSelectionScope}`}
+              {...(detail.id === gameId && joinConditionsClient ? { joinConditionsClient } : {})}
+              {...(detail.id === gameId && selectedSubscriptionId
+                ? { subscriptionInstanceId: selectedSubscriptionId }
+                : {})}
+              activeTab={detailTab}
+              busy={busyGameId === detail.id}
+              game={detail}
+              onAction={(action) => void handleAction(action, detail)}
+              onChatOpen={() => void openGameChat(detail)}
+              onChatNavigate={(conversationId) => rememberCardGameChat(detail, conversationId)}
+              onSubmit={submitResult}
+              onTabChange={setDetailTab}
+            />
+          </>
         ) : null}
         <MainBottomNavigation active="games" gamesDestination="games" />
         {renderLevelRecoveryDialog()}
@@ -1369,6 +1516,7 @@ export function GamesPage({
               if (tab === value) return;
               setLoading(true);
               setError(null);
+              restoringNavigation.current = null;
               setTab(value);
             }}
           >
@@ -1397,7 +1545,7 @@ export function GamesPage({
                 }}
               >
                 <strong>Все</strong>
-                <span>даты</span>
+                <span>15 дней</span>
               </button>
               {days.map((day) => (
                 <button
@@ -1630,6 +1778,22 @@ export function GamesPage({
           {error}
         </p>
       ) : null}
+      {error && tab === 'UPCOMING' ? (
+        <button
+          className="games-load-more"
+          type="button"
+          onClick={() => {
+            setError(null);
+            if (nextCursor) void loadMore();
+            else {
+              setLoading(true);
+              setReloadToken((current) => current + 1);
+            }
+          }}
+        >
+          Повторить загрузку
+        </button>
+      ) : null}
       {notice ? (
         <p className="games-message" role="status">
           {notice}
@@ -1637,9 +1801,25 @@ export function GamesPage({
       ) : null}
       {tab === 'DISCOVER' && catalogError ? (
         <p className="games-message is-error" role="alert">
-          События временно недоступны.{' '}
+          {catalogErrorPhase === 'more'
+            ? 'Не удалось загрузить следующую страницу. Уже загруженные события сохранены.'
+            : 'События временно недоступны.'}{' '}
           <button type="button" onClick={() => void retryCatalog()}>
             Повторить
+          </button>
+        </p>
+      ) : null}
+      {tab === 'DISCOVER' && catalogMetadata && catalogExpired ? (
+        <p className="games-message" role="status">
+          Данные могли измениться. Обновите список, чтобы проверить свободные места.{' '}
+          <button
+            type="button"
+            onClick={() => {
+              restoringNavigation.current = null;
+              void restartCatalog();
+            }}
+          >
+            Обновить список
           </button>
         </p>
       ) : null}
@@ -1649,6 +1829,13 @@ export function GamesPage({
         </p>
       ) : null}
 
+      {tab === 'DISCOVER' && catalogMetadata ? (
+        <p className="games-message" role="status">
+          Показано {catalogItems.length}
+          {catalogMetadata.totalMatched !== null ? ` из ${catalogMetadata.totalMatched}` : ''}{' '}
+          событий.
+        </p>
+      ) : null}
       <section
         className="games-list"
         aria-live="polite"
@@ -1661,6 +1848,7 @@ export function GamesPage({
         ) : null}
         {!(tab === 'DISCOVER' ? catalogLoading : loading) &&
         !(tab === 'DISCOVER' && catalogError) &&
+        !(tab === 'UPCOMING' && error) &&
         visibleEvents.length === 0 ? (
           <div className="games-empty">
             <span aria-hidden="true">◌</span>

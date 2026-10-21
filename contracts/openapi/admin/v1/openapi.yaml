@@ -1229,6 +1229,134 @@ paths:
     $ref: ./level-eligibility.yaml#/HistoryPath
   /admin/api/v1/{tenantKey}/level-eligibility/{activityType}/rollback:
     $ref: ./level-eligibility.yaml#/RollbackPath
+  /admin/api/v1/{tenantKey}/support/tickets:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+    get:
+      tags:
+        - support
+      operationId: listAdminSupportTickets
+      summary: List support tickets with current support.read or support.manage permission
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/AdminPlatform
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Cursor
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Limit
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Status
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Category
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Priority
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Query
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/TicketPage
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/support/tickets/{ticketId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+      - $ref: ../../common/support-tickets.yaml#/components/parameters/TicketId
+    get:
+      tags:
+        - support
+      operationId: getAdminSupportTicket
+      summary: Read a support ticket with internal notes; current admin permission required
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/AdminPlatform
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Before
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/Ticket
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+    patch:
+      tags:
+        - support
+      operationId: updateAdminSupportTicket
+      summary: Update ticket metadata/status with expectedVersion and current support.manage
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/AdminPlatform
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/IdempotencyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/support-tickets.yaml#/components/schemas/Update
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/Ticket
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '410':
+          $ref: ../../common/support-tickets.yaml#/components/responses/CommandExpired
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+      description:
+        ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
+        ticket before an explicit fresh command.'
+  /admin/api/v1/{tenantKey}/support/tickets/{ticketId}/messages:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+      - $ref: ../../common/support-tickets.yaml#/components/parameters/TicketId
+    post:
+      tags:
+        - support
+      operationId: sendAdminSupportTicketMessage
+      summary: Send a public reply or internal note with current support.manage
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/AdminPlatform
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/IdempotencyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/support-tickets.yaml#/components/schemas/AdminMessage
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/Ticket
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '410':
+          $ref: ../../common/support-tickets.yaml#/components/responses/CommandExpired
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+      description:
+        ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
+        ticket before an explicit fresh command.'
 components:
   securitySchemes:
     PadlHubAdminJwt:

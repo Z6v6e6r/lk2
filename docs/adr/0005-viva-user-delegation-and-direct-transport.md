@@ -115,6 +115,11 @@ failure metadata. It has tenant RLS and is never exposed through an API response
 payload or analytics event. A rotation updates the delegation row atomically; concurrent refreshes
 are single-flight/locked per delegation.
 
+ADR 0023's owner-approved Android `MY_BOOKINGS` exception may consume the same short-lived user
+delegation inside Java memory only. It adds no delegated scope or durable credential. The token and
+raw responses do not cross the native bridge; the refresh token remains encrypted server-side.
+Other native operations retain the browser-only delegation boundary.
+
 ### Direct-Viva exception
 
 While a tenant's operation policy is `VIVA_PRIMARY` and the corresponding feature flag is enabled,

@@ -6,6 +6,7 @@ import { GiftCertificateWorkspace } from './GiftCertificateWorkspace.js';
 import { LocationsWorkspace } from './LocationsWorkspace.js';
 import { LevelEligibilityWorkspace } from './LevelEligibilityWorkspace.js';
 import { CommunityModerationWorkspace } from './CommunityModerationWorkspace.js';
+import { SupportTicketsPanel } from './SupportTicketsPanel.js';
 import {
   createNotificationAdminClient,
   type AdminNotificationCampaignAccepted,
@@ -36,7 +37,7 @@ const channelCopy: Readonly<
   },
   ANDROID_PUSH: {
     title: 'Android',
-    description: 'Push через Firebase Cloud Messaging',
+    description: 'Push на Android; текст доступен в центре уведомлений',
     icon: 'A',
   },
   IOS_PUSH: {
@@ -52,7 +53,7 @@ const channelCopy: Readonly<
 };
 
 const reasonCopy: Readonly<Record<string, string>> = {
-  GLOBAL_RUNTIME_DISABLED: 'Web Push выключен на сервере',
+  GLOBAL_RUNTIME_DISABLED: 'Канал выключен на сервере',
   TENANT_RUNTIME_DISABLED: 'Канал выключен для организации',
   PROVIDER_NOT_CONFIGURED: 'Не настроена учётная запись провайдера',
   FCM_ADAPTER_NOT_IMPLEMENTED: 'FCM ещё не подключён',
@@ -187,7 +188,7 @@ function NotificationWorkspace(props: {
   readonly onLogout: () => void;
 }): React.JSX.Element {
   const [activeArea, setActiveArea] = useState<
-    'notifications' | 'gift-certificates' | 'communities' | 'settings' | 'levels'
+    'notifications' | 'gift-certificates' | 'communities' | 'settings' | 'levels' | 'support'
   >('settings');
   const [capabilities, setCapabilities] = useState<AdminNotificationCapabilities>();
   const [phonesText, setPhonesText] = useState('');
@@ -204,6 +205,13 @@ function NotificationWorkspace(props: {
   const [error, setError] = useState<string>();
   const phones = useMemo(() => parsePhones(phonesText), [phonesText]);
   const parsedUserIds = useMemo(() => parseUserIds(userIdsText), [userIdsText]);
+  const canReadSupport =
+    props.session.context.roles.includes('admin') &&
+    (props.session.context.permissions.includes('support.read') ||
+      props.session.context.permissions.includes('support.manage'));
+  const canManageSupport =
+    props.session.context.roles.includes('admin') &&
+    props.session.context.permissions.includes('support.manage');
   const userIds = parsedUserIds.ids;
   const selector = useMemo(
     () => ({
@@ -319,6 +327,15 @@ function NotificationWorkspace(props: {
             >
               <span>♙</span> Сообщества
             </button>
+            {canReadSupport ? (
+              <button
+                type="button"
+                className={`nav-item ${activeArea === 'support' ? 'active' : ''}`}
+                onClick={() => setActiveArea('support')}
+              >
+                <span>?</span> Техподдержка
+              </button>
+            ) : null}
             <button
               type="button"
               className={`nav-item ${activeArea === 'notifications' ? 'active' : ''}`}
@@ -358,6 +375,8 @@ function NotificationWorkspace(props: {
 
       {activeArea === 'levels' ? (
         <LevelEligibilityWorkspace client={client} />
+      ) : activeArea === 'support' && canReadSupport ? (
+        <SupportTicketsPanel client={client} canManage={canManageSupport} />
       ) : activeArea === 'settings' ? (
         <LocationsWorkspace client={client} />
       ) : activeArea === 'communities' ? (

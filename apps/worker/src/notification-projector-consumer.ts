@@ -31,6 +31,10 @@ async function handleMessage(options: {
     readonly appId: string;
     readonly environment: 'SANDBOX' | 'PRODUCTION';
   };
+  readonly androidPush?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+  };
 }): Promise<void> {
   let decoded: unknown;
   try {
@@ -65,6 +69,7 @@ async function handleMessage(options: {
       pool: options.pool,
       event: parsed.data,
       ...(options.webPush ? { webPush: options.webPush } : {}),
+      ...(options.androidPush ? { androidPush: options.androidPush } : {}),
     });
     if (result.outcome === 'revision_conflict') {
       options.logger.error(
@@ -109,6 +114,10 @@ export async function registerNotificationProjectorConsumer(options: {
   readonly pool: Pool;
   readonly logger: Logger;
   readonly webPush?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+  };
+  readonly androidPush?: {
     readonly appId: string;
     readonly environment: 'SANDBOX' | 'PRODUCTION';
   };

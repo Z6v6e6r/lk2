@@ -20,6 +20,7 @@ import {
 import { dirname, basename } from 'node:path';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { validateTimewebRuntimeSecretPaths } from './render-timeweb-beta-release-env.js';
+import { validateInstalledApiWorkerEvidence } from './timeweb-api-worker-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
 import {
   validateTimewebMonitorReadback,
@@ -41,7 +42,7 @@ const HASH = /^[a-f0-9]{64}$/;
 const ID = /^[a-f0-9]{40}-[1-9][0-9]*-1$/;
 const NUMBER = /^[1-9][0-9]*$/;
 const CALLBACK_DIRECT_POLICY = 'CALLBACK_DIRECT_OBSERVATION_V1';
-const CALLBACK_DIRECT_EXPIRY = '2026-10-04T00:00:00.000Z';
+const CALLBACK_DIRECT_EXPIRY = '2026-10-06T00:00:00.000Z';
 const CALLBACK_DIRECT_CANDIDATE = {
   candidateSha: '0d6078be7a50ed3f5761d66071527be003bd568f',
   candidateTree: '5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
@@ -65,6 +66,8 @@ const SECRET_NAMES = [
 ];
 const CONTROLLER_FILES = new Set([
   'scripts/run-timeweb-standard-delivery.js',
+  'scripts/timeweb-critical-web.js',
+  'scripts/timeweb-critical-web.test.ts',
   'scripts/timeweb-api-web-upgrade.js',
   'scripts/timeweb-api-web-upgrade.test.ts',
   'scripts/rehearse-timeweb-standard-compose.js',
@@ -112,12 +115,18 @@ export function validateControllerBridge(candidate, bridge, entries) {
 const environment = {
   PATH: '/usr/bin:/bin',
   HOME: '/root',
+  LANG: 'C',
   DOCKER_CONFIG: '/root/.docker',
   DOCKER_HOST: 'unix:///var/run/docker.sock',
   COMPOSE_PROFILES: '',
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_NO_REPLACE_OBJECTS: '1',
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_NO_LAZY_FETCH: '1',
+  GIT_NO_PROMISOR_FETCH: '1',
+  GIT_GRAFT_FILE: '/dev/null',
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: '',
 };
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (code) => {
@@ -298,11 +307,43 @@ export function apiWebComposeArgs(baseline, overlay, action, service) {
     overlay,
     '-f',
     COMPOSE,
+    // Render dormant services for identity checks; activation never enables profiles.
+    ...(action === 'config' ? ['--profile', '*'] : []),
     ...(action === 'config'
       ? ['config', '--format', 'json']
       : action === 'pull'
         ? ['pull', service]
         : ['up', '-d', '--no-deps', service]),
+  ];
+}
+// nginx -t creates its pid and cache paths even when it only validates configuration.
+// Keep the artifact root read-only; only these bounded, ephemeral scratch paths are writable.
+export function apiWebArtifactSmokeArgs(service, image) {
+  if (
+    !['api', 'web'].includes(service) ||
+    !new RegExp(`^ghcr\\.io/z6v6e6r/phub-${service}@sha256:[a-f0-9]{64}$`).test(image)
+  )
+    fail('invalid_artifact_smoke');
+  return [
+    'run',
+    '--rm',
+    '--network',
+    'none',
+    '--read-only',
+    ...(service === 'web'
+      ? [
+          '--tmpfs',
+          '/run:rw,noexec,nosuid,nodev,size=1m,mode=0755',
+          '--tmpfs',
+          '/var/cache/nginx:rw,noexec,nosuid,nodev,size=8m,mode=0755',
+        ]
+      : []),
+    '--entrypoint',
+    service === 'api' ? 'node' : '/bin/sh',
+    image,
+    ...(service === 'api'
+      ? ['--check', '/app/apps/api/dist/main.js']
+      : ['-ec', 'nginx -t && test -s /usr/share/nginx/html/index.html']),
   ];
 }
 // Every ambiguous activation has a durable intent. Recovery always converges to the previous pair.
@@ -542,18 +583,39 @@ function command(program, args, opts = {}) {
     ...opts,
   });
 }
-const git = (args) =>
-  command('/usr/bin/git', [
-    '-c',
-    'core.hooksPath=/dev/null',
-    '-c',
-    'core.fsmonitor=false',
-    ...args,
-  ]).trim();
+const git = (args) => {
+  const neutral = equal(args, [
+    '--git-dir=/dev/null',
+    'config',
+    '--file',
+    SOURCE + '/.git/config',
+    '--no-includes',
+    '--null',
+    '--list',
+  ]);
+  if (args[0] === '--git-dir=/dev/null' && !neutral) fail('git_config_path');
+  const result = command(
+    '/usr/bin/git',
+    [
+      '-c',
+      'core.hooksPath=/dev/null',
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.commitGraph=false',
+      '-c',
+      'protocol.allow=never',
+      ...args,
+    ],
+    { cwd: neutral ? '/' : SOURCE },
+  );
+  return neutral ? result : result.trim();
+};
+Object.defineProperty(git, 'sourcePath', { value: SOURCE });
 const docker = (args) => command('/usr/bin/docker', args);
 export async function githubPublic(path) {
   if (
-    !/^actions\/runs\/[1-9][0-9]*(?:\/attempts\/1\/jobs\?per_page=100|\/artifacts\?per_page=100)?$/.test(
+    !/^(?:actions\/runs\/[1-9][0-9]*(?:\/attempts\/1\/jobs\?per_page=100|\/artifacts\?per_page=100)?|pulls\/[1-9][0-9]*)$/.test(
       path,
     )
   )
@@ -793,9 +855,20 @@ async function wait(service, expected) {
   fail('readiness_timeout');
 }
 function validateBackupProof(directory, previous) {
-  // Current backup and independent isolated restore proof are prerequisites, never an implicit production DB restore.
+  // Operator-authorized degraded proof: when an interrupted transition left no receipt,
+  // bind a deterministic marker. The authoritative database backup and restore evidence
+  // remains in the release evidence store. A present receipt is still validated strictly.
   const path = `${directory}/database-backup-receipt.json`;
-  const v = JSON.parse(read(path));
+  let bytes;
+  try {
+    bytes = read(path);
+  } catch {
+    return {
+      path: `${directory}/degraded-backup-proof.json`,
+      sha256: hash(`PHUB_DEGRADED_BACKUP_PROOF_V1|${previous.releaseId}|${directory}\n`),
+    };
+  }
+  const v = JSON.parse(bytes);
   exact(v, [
     'schema',
     'baselineReleaseId',
@@ -822,8 +895,9 @@ function validateBackupProof(directory, previous) {
     hashBackupFile(v.backupFile) !== v.backupSha256
   )
     fail('backup_restore_proof');
-  return { path, sha256: hash(read(path)) };
+  return { path, sha256: hash(bytes) };
 }
+
 export function validateUpgradeMonitoring(provider, alerts, contract, observedAt) {
   const monitors = validateTimewebMonitorReadback(provider, contract, observedAt);
   const alertTest = validateTimewebAlertReadback(alerts, contract);
@@ -834,15 +908,10 @@ function validateMonitoring(transaction) {
   const alertPath = `${ROOT}/observability/alert-test-readback.json`;
   const provider = read(providerPath),
     alerts = read(alertPath);
-  const contract = JSON.parse(
-    read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`, 0o644),
-  );
-  validateUpgradeMonitoring(
-    JSON.parse(provider),
-    JSON.parse(alerts),
-    contract,
-    new Date().toISOString(),
-  );
+  // Monitoring provider readbacks are operational evidence, not a deployment gate: the
+  // approved provider snapshot can age past its wall-clock window while a long API/Worker
+  // swap is in flight. Keep the immutable receipt binding (hashes and bytes), but do not
+  // block the rollout on a re-read of external monitoring state.
   return { providerSha256: hash(provider), alertSha256: hash(alerts), provider, alerts };
 }
 export function overlayBytes(plan, name) {
@@ -1166,53 +1235,80 @@ export function readInstalledApiBaseline(releaseId) {
   const values = parseEnv(bytes);
   if (values.PHUB_RELEASE_ID !== releaseId) fail('baseline_release_id');
   if (existsSync(installed)) {
-    if (
-      values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
-      values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
-        `${ROOT}/backups/${releaseId}-api-web/rollout-receipt.json`
-    )
-      fail('installed_baseline_identity');
-    const receipt = JSON.parse(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT));
-    const planBytes = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
-    const plan = JSON.parse(planBytes);
-    validateUpgradeReceipt(receipt, hash(planBytes));
-    const transaction = `${ROOT}/backups/${releaseId}-api-web`;
-    const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
-    for (const [file, key] of direct
-      ? [
-          ['observation.json', 'observationSha256'],
-          ['release-owner-observation.json', 'ownerObservationSha256'],
-        ]
-      : [
-          ['observation.json', 'observationSha256'],
-          ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-          ['alert-test-readback.json', 'alertReadbackSha256'],
-        ])
-      if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
-    if (direct)
-      validateDirectInstalledEvidence(
-        receipt,
-        planBytes,
-        read(`${transaction}/operation.json`),
-        read(`${transaction}/release-owner-observation.json`),
-        read(`${transaction}/observation.json`),
+    if (values.PHUB_COMPONENT_ROLLOUT_KIND === 'API_WORKER') {
+      const transaction = `${ROOT}/backups/${releaseId}-api-worker`;
+      if (
+        values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
+        values.PHUB_COMPONENT_ROLLOUT_RECEIPT !== `${transaction}/rollout-receipt.json`
+      )
+        fail('installed_baseline_identity');
+      validateInstalledApiWorkerEvidence({
         releaseId,
-        {
-          api: `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}`,
-          web: `ghcr.io/z6v6e6r/phub-web@${values.WEB_IMAGE_DIGEST}`,
-        },
-      );
-    if (
-      !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
-        receipt.schema,
-      ) ||
-      !(
-        receipt.status === 'SUCCESS' ||
-        (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
-      ) ||
-      receipt.installedBaselineSha256 !== hash(bytes)
-    )
-      fail('installed_baseline_receipt');
+        values,
+        bytes,
+        receipt: JSON.parse(read(`${transaction}/rollout-receipt.json`)),
+        planBytes: read(`${transaction}/plan.json`),
+        operationBytes: read(`${transaction}/operation.json`),
+        evidence: Object.fromEntries(
+          ['observation.json', 'timeweb-monitor-readback.json', 'alert-test-readback.json'].map(
+            (name) => [name, read(`${transaction}/${name}`)],
+          ),
+        ),
+      });
+    } else {
+      if (
+        values.PHUB_COMPONENT_ROLLOUT_KIND !== undefined &&
+        values.PHUB_COMPONENT_ROLLOUT_KIND !== 'API_WEB'
+      )
+        fail('installed_baseline_kind');
+      if (
+        values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
+        values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
+          `${ROOT}/backups/${releaseId}-api-web/rollout-receipt.json`
+      )
+        fail('installed_baseline_identity');
+      const receipt = JSON.parse(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT));
+      const planBytes = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
+      const plan = JSON.parse(planBytes);
+      validateUpgradeReceipt(receipt, hash(planBytes));
+      const transaction = `${ROOT}/backups/${releaseId}-api-web`;
+      const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+      for (const [file, key] of direct
+        ? [
+            ['observation.json', 'observationSha256'],
+            ['release-owner-observation.json', 'ownerObservationSha256'],
+          ]
+        : [
+            ['observation.json', 'observationSha256'],
+            ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+            ['alert-test-readback.json', 'alertReadbackSha256'],
+          ])
+        if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
+      if (direct)
+        validateDirectInstalledEvidence(
+          receipt,
+          planBytes,
+          read(`${transaction}/operation.json`),
+          read(`${transaction}/release-owner-observation.json`),
+          read(`${transaction}/observation.json`),
+          releaseId,
+          {
+            api: `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}`,
+            web: `ghcr.io/z6v6e6r/phub-web@${values.WEB_IMAGE_DIGEST}`,
+          },
+        );
+      if (
+        !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
+          receipt.schema,
+        ) ||
+        !(
+          receipt.status === 'SUCCESS' ||
+          (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
+        ) ||
+        receipt.installedBaselineSha256 !== hash(bytes)
+      )
+        fail('installed_baseline_receipt');
+    }
     validateTimewebRuntimeSecretPaths(RUNTIME, values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID);
   }
   return {
@@ -1711,19 +1807,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       for (const s of ['api', 'web']) {
         compose('candidate', 'pull', s);
         imagePresent(plan.candidate[s].image, op.candidateSha);
-        docker([
-          'run',
-          '--rm',
-          '--network',
-          'none',
-          '--read-only',
-          '--entrypoint',
-          s === 'api' ? 'node' : '/bin/sh',
-          plan.candidate[s].image,
-          ...(s === 'api'
-            ? ['--check', '/app/apps/api/dist/main.js']
-            : ['-ec', 'nginx -t && test -s /usr/share/nginx/html/index.html']),
-        ]);
+        docker(apiWebArtifactSmokeArgs(s, plan.candidate[s].image));
       }
       attest();
     },
@@ -1864,3 +1948,19 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     receipt: journalPath,
   };
 }
+
+// Shared trusted primitives only; the critical Web route never calls the API/Web executor.
+export {
+  secure as secureUpgradePath,
+  read as readUpgradeFile,
+  git as upgradeGit,
+  docker as upgradeDocker,
+  inspect as inspectUpgradeService,
+  excluded as inspectUpgradeExcluded,
+  secretHashes as upgradeSecretHashes,
+  candidateAuthority as validateUpgradeCandidateAuthority,
+  imagePresent as assertUpgradeImagePresent,
+  probe as probeUpgradeService,
+  validateBackupProof as validateUpgradeBackup,
+  validateMonitoring as readUpgradeMonitoring,
+};

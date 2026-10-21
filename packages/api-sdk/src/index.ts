@@ -7,11 +7,53 @@ export type PasswordLoginRequest = components['schemas']['PasswordLoginRequest']
 export type AuthenticatedSession = components['schemas']['AuthenticatedSession'];
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
 export type UserContext = components['schemas']['UserContext'];
+export interface SupportTicketMessage {
+  readonly id: string;
+  readonly body: string;
+  readonly authorRole: 'USER' | 'AGENT' | 'SYSTEM';
+  readonly internal: boolean;
+  readonly createdAt: string;
+}
+export interface SupportTicketEvent {
+  readonly id: string;
+  readonly kind: string;
+  readonly createdAt: string;
+  readonly description?: string;
+}
+export interface SupportTicketSummary {
+  readonly closedAt?: string | null;
+  readonly conversationPurgedAt?: string | null;
+  readonly id: string;
+  readonly subject: string;
+  readonly category: 'TECHNICAL' | 'ACCOUNT' | 'BOOKING' | 'BILLING' | 'OTHER';
+  readonly status: 'OPEN' | 'IN_PROGRESS' | 'WAITING_USER' | 'RESOLVED' | 'CLOSED';
+  readonly priority: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
+  readonly assignedTo: string | null;
+  readonly tags: readonly string[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly resolvedAt: string | null;
+  readonly autoCloseAt: string | null;
+  readonly version: number;
+}
+export interface SupportTicket extends SupportTicketSummary {
+  readonly messages: readonly SupportTicketMessage[];
+  readonly history: readonly SupportTicketEvent[];
+  readonly nextMessageCursor?: string;
+}
+export interface SupportTicketPage {
+  readonly items: readonly SupportTicketSummary[];
+  readonly nextCursor?: string;
+}
+export type BookedOperationReadOutcome = components['schemas']['BookedOperationReadOutcome'];
+export type BookedOperationAdmissionRequest =
+  components['schemas']['BookedOperationAdmissionRequest'];
 export type UserRuntimeCapabilities = components['schemas']['UserRuntimeCapabilities'];
 export type RealtimeTicket = components['schemas']['RealtimeTicket'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
 export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
+export type GameJoinConditions = components['schemas']['GameJoinConditions'];
 export type GameTestCourtList = components['schemas']['GameTestCourtList'];
 export type LocationDetail = components['schemas']['LocationDetail'];
 export type CommunityMembershipPage = components['schemas']['CommunityMembershipPage'];
@@ -198,6 +240,20 @@ export type NotificationPreferencesUpdateRequest =
 export type WebPushConfiguration = components['schemas']['WebPushConfiguration'];
 export type WebPushEndpointRegistration = components['schemas']['WebPushEndpointRegistration'];
 export type WebPushEndpointCommandResult = components['schemas']['WebPushEndpointCommandResult'];
+/** Additive Android endpoint contract until the generated OpenAPI snapshot is refreshed in integration. */
+export interface AndroidPushConfiguration {
+  readonly enabled: boolean;
+  readonly reason?:
+    | 'GLOBAL_GATE_DISABLED'
+    | 'TENANT_GATE_DISABLED'
+    | 'PROVIDER_NOT_CONFIGURED'
+    | 'RUNTIME_UNAVAILABLE';
+}
+export interface AndroidPushEndpointRegistration {
+  readonly installationId: string;
+  readonly token: string;
+}
+export type AndroidPushEndpointCommandResult = WebPushEndpointCommandResult;
 export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
@@ -418,6 +474,28 @@ export class ApiClientError extends Error {
   }
 }
 
+// Admission can be durably PREPARED even when its response is lost. This is
+// recovery information for the existing JOIN attempt, never permission to buy again.
+export class BookedOperationAdmissionUncertainError extends ApiClientError {
+  public readonly operationStatus = 'UNKNOWN' as const;
+  public readonly recoveryAction = 'KEEP_SAME_ATTEMPT' as const;
+  public readonly canStartNewPurchase = false;
+
+  public constructor(
+    public readonly request: BookedOperationAdmissionRequest,
+    public readonly idempotencyKey: string,
+    correlationId: string,
+  ) {
+    super(
+      'Статус операции не подтверждён. Сохраните текущую попытку; новую покупку не начинайте.',
+      503,
+      'BOOKED_OPERATION_ADMISSION_UNAVAILABLE',
+      correlationId,
+    );
+    this.name = 'BookedOperationAdmissionUncertainError';
+  }
+}
+
 export class CommunityEventGapExpiredError extends ApiClientError {
   public readonly recoveryAction = 'FULL_CANONICAL_RELOAD' as const;
 
@@ -529,6 +607,7 @@ export class PadlHubApiClient {
   private readonly apiRoot: string;
   private readonly apiV2Root: string;
   private readonly publicApiRoot: string;
+  private readonly adminApiRoot: string;
   private accessToken: string | undefined;
   private refreshInFlight: Promise<AuthenticatedSession> | undefined;
 
@@ -538,6 +617,7 @@ export class PadlHubApiClient {
     this.apiRoot = `${options.baseUrl.replace(/\/$/, '')}/user/api/v1/${encodeURIComponent(options.tenantKey)}`;
     this.apiV2Root = `${options.baseUrl.replace(/\/$/, '')}/user/api/v2/${encodeURIComponent(options.tenantKey)}`;
     this.publicApiRoot = `${options.baseUrl.replace(/\/$/, '')}/public/api/v1/${encodeURIComponent(options.tenantKey)}`;
+    this.adminApiRoot = `${options.baseUrl.replace(/\/$/, '')}/admin/api/v1/${encodeURIComponent(options.tenantKey)}`;
     this.accessToken = options.initialAccessToken?.trim() || undefined;
   }
 
@@ -1358,6 +1438,20 @@ export class PadlHubApiClient {
     );
   }
 
+  public getGameJoinConditions(
+    gameId: string,
+    input: { readonly expectedRevision: number; readonly subscriptionInstanceId: string },
+  ): Promise<GameJoinConditions> {
+    const query = new URLSearchParams({
+      expectedRevision: String(input.expectedRevision),
+      subscriptionInstanceId: input.subscriptionInstanceId,
+    });
+    return this.request<GameJoinConditions>(
+      `/games/${encodeURIComponent(gameId)}/join-conditions?${query.toString()}`,
+      { auth: 'required', cache: 'no-store', retryOnUnauthorized: false },
+    );
+  }
+
   public getGame(gameId: string): Promise<GameCard> {
     return this.request<{ readonly game: GameCard }>(`/games/${encodeURIComponent(gameId)}`).then(
       ({ game }) => game,
@@ -1432,6 +1526,36 @@ export class PadlHubApiClient {
 
   public getGameOperation(operationId: string): Promise<GameCommandResult> {
     return this.request<GameCommandResult>(`/game-operations/${encodeURIComponent(operationId)}`);
+  }
+
+  public getBookedOperation(operationId: string): Promise<BookedOperationReadOutcome> {
+    return this.request<BookedOperationReadOutcome>(
+      `/booked-operations/${encodeURIComponent(operationId)}`,
+      { cache: 'no-store' },
+    );
+  }
+  public async admitBookedOperation(
+    body: BookedOperationAdmissionRequest,
+    idempotencyKey: string,
+  ): Promise<BookedOperationReadOutcome> {
+    const attempt = Object.freeze({ ...body, target: Object.freeze({ ...body.target }) });
+    try {
+      return await this.request<BookedOperationReadOutcome>('/booked-operation-admissions', {
+        method: 'POST',
+        body: JSON.stringify(attempt),
+        idempotencyKey,
+        retryOnUnauthorized: false,
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+      });
+    } catch (error) {
+      if (error instanceof ApiClientError && error.status < 500) throw error;
+      throw new BookedOperationAdmissionUncertainError(
+        attempt,
+        idempotencyKey,
+        error instanceof ApiClientError ? error.correlationId : '',
+      );
+    }
   }
 
   public listGameTestCourts(): Promise<GameTestCourtList> {
@@ -2139,6 +2263,106 @@ export class PadlHubApiClient {
     return this.request<NotificationInboxPage>(`/notifications${suffix}`);
   }
 
+  public listSupportTickets(
+    input: {
+      readonly cursor?: string;
+      readonly status?: SupportTicketSummary['status'];
+      readonly category?: SupportTicketSummary['category'];
+      readonly priority?: SupportTicketSummary['priority'];
+      readonly query?: string;
+    } = {},
+  ): Promise<SupportTicketPage> {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(input)) if (v) q.set(k, v);
+    return this.request<SupportTicketPage>(`/support/tickets${q.size ? `?${q}` : ''}`, {
+      cache: 'no-store',
+    });
+  }
+  public getSupportTicket(id: string, before?: string): Promise<SupportTicket> {
+    return this.request<SupportTicket>(
+      `/support/tickets/${encodeURIComponent(id)}${before ? `?before=${encodeURIComponent(before)}` : ''}`,
+      { cache: 'no-store' },
+    );
+  }
+  public createSupportTicket(
+    input: {
+      readonly subject: string;
+      readonly category: SupportTicketSummary['category'];
+      readonly body: string;
+    },
+    idempotencyKey: string,
+  ): Promise<SupportTicket> {
+    return this.request<SupportTicket>('/support/tickets', {
+      method: 'POST',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+    });
+  }
+  public sendSupportTicketMessage(
+    id: string,
+    input: { readonly body: string; readonly expectedVersion: number },
+    idempotencyKey: string,
+  ): Promise<SupportTicket> {
+    return this.request<SupportTicket>(`/support/tickets/${encodeURIComponent(id)}/messages`, {
+      method: 'POST',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+    });
+  }
+  public listAdminSupportTickets(
+    input: {
+      readonly cursor?: string;
+      readonly status?: SupportTicketSummary['status'];
+      readonly category?: SupportTicketSummary['category'];
+      readonly priority?: SupportTicketSummary['priority'];
+      readonly query?: string;
+    } = {},
+  ): Promise<SupportTicketPage> {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(input)) if (v) q.set(k, v);
+    return this.requestFromRoot<SupportTicketPage>(
+      this.adminApiRoot,
+      `/support/tickets${q.size ? `?${q}` : ''}`,
+      { cache: 'no-store' },
+    );
+  }
+  public getAdminSupportTicket(id: string, before?: string): Promise<SupportTicket> {
+    return this.requestFromRoot<SupportTicket>(
+      this.adminApiRoot,
+      `/support/tickets/${encodeURIComponent(id)}${before ? `?before=${encodeURIComponent(before)}` : ''}`,
+      { cache: 'no-store' },
+    );
+  }
+  public updateAdminSupportTicket(
+    id: string,
+    input: {
+      readonly expectedVersion: number;
+      readonly status?: SupportTicketSummary['status'];
+      readonly priority?: SupportTicketSummary['priority'];
+      readonly category?: SupportTicketSummary['category'];
+      readonly assignedTo?: string | null;
+      readonly tags?: readonly string[];
+    },
+    idempotencyKey: string,
+  ): Promise<SupportTicket> {
+    return this.requestFromRoot<SupportTicket>(
+      this.adminApiRoot,
+      `/support/tickets/${encodeURIComponent(id)}`,
+      { method: 'PATCH', idempotencyKey, body: jsonRequestBody(input) },
+    );
+  }
+  public sendAdminSupportTicketMessage(
+    id: string,
+    input: { readonly body: string; readonly internal: boolean; readonly expectedVersion: number },
+    idempotencyKey: string,
+  ): Promise<SupportTicket> {
+    return this.requestFromRoot<SupportTicket>(
+      this.adminApiRoot,
+      `/support/tickets/${encodeURIComponent(id)}/messages`,
+      { method: 'POST', idempotencyKey, body: jsonRequestBody(input) },
+    );
+  }
+
   public markNotificationsRead(throughId: string): Promise<NotificationReadCursorResult> {
     const idempotencyKey = createCorrelationId();
     return this.retryOnceOnNetworkFailure(() =>
@@ -2193,6 +2417,54 @@ export class PadlHubApiClient {
           method: 'DELETE',
           idempotencyKey,
         },
+      ),
+    );
+  }
+
+  public uploadConversationMediaBytes(
+    conversationId: string,
+    mediaId: string,
+    bytes: Blob,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ): Promise<{ readonly uploaded: true }> {
+    return this.request(
+      `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/bytes`,
+      {
+        method: 'PUT',
+        idempotencyKey,
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: bytes,
+        ...(signal ? { signal } : {}),
+      },
+    );
+  }
+
+  public getAndroidPushConfiguration(): Promise<AndroidPushConfiguration> {
+    return this.request<AndroidPushConfiguration>('/notification-endpoints/android/config');
+  }
+
+  public registerAndroidPushEndpoint(
+    input: AndroidPushEndpointRegistration,
+    idempotencyKey: string,
+  ): Promise<AndroidPushEndpointCommandResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AndroidPushEndpointCommandResult>('/notification-endpoints/android', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public revokeAndroidPushEndpoint(
+    installationId: string,
+    idempotencyKey: string,
+  ): Promise<AndroidPushEndpointCommandResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AndroidPushEndpointCommandResult>(
+        `/notification-endpoints/android/${encodeURIComponent(installationId)}`,
+        { method: 'DELETE', idempotencyKey },
       ),
     );
   }

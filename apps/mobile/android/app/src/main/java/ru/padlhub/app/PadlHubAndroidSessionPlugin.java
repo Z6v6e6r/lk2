@@ -24,6 +24,13 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
     private AndroidHttpSender sender;
     private AndroidYandexLogin oauth;
     private volatile boolean callbackStorageFailed;
+    /** Does not touch credentials or the queue; it only makes an active refresh result unusable. */
+    private volatile long upcomingRefreshEpoch;
+    private final AndroidUpcomingBookingsRefresh.Circuits upcomingCircuits = new AndroidUpcomingBookingsRefresh.Circuits();
+    // One active + one pending redacted batch; rejected telemetry never blocks a product read.
+    private final java.util.concurrent.ThreadPoolExecutor upcomingMetrics = new java.util.concurrent.ThreadPoolExecutor(
+        1, 1, 30, java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(1),
+        new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     private String failedCallback;
 
     @Override public void load() {
@@ -79,15 +86,28 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                 String path = call.getString("path");
                 String method = call.getString("method");
                 String body = call.getString("body");
+                String bodyBase64 = call.getString("bodyBase64");
+                if (body != null && bodyBase64 != null) throw AndroidSessionPolicy.rejected();
+                final byte[] binaryBody = bodyBase64 == null ? null : decodeBinaryBody(bodyBase64);
                 // Reject malformed requests before they occupy the serial lifecycle queue.
-                policy.request(path, method, headers, body);
+                if (binaryBody == null) policy.request(path, method, headers, body);
+                else policy.requestBinary(path, method, headers, binaryBody);
+                if ("DELETE".equals(method) && (policy.authRoot + "/session").equals(path)) {
+                    // Cancel a long native-only refresh before it reaches the serial queue.
+                    upcomingRefreshEpoch++;
+                    new AndroidPushState(getContext(), policy).suspend();
+                }
                 queue.execute(() -> {
                     try {
                         if (oauth == null || callbackStorageFailed) throw new Failure("NATIVE_STORAGE_UNAVAILABLE");
-                        AndroidSessionPolicy.Request checked = policy.request(path, method, headers, body);
+                        AndroidSessionPolicy.Request checked = binaryBody == null
+                            ? policy.request(path, method, headers, body)
+                            : policy.requestBinary(path, method, headers, binaryBody);
                         if (checked.operation == AndroidSessionPolicy.Operation.LOGOUT) engine.prepareLogout(checked.headers.get("idempotency-key"));
                         oauth.beforeRequest(checked.operation);
-                        AndroidSessionEngine.Response response = engine.request(path, method, headers, body);
+                        AndroidSessionEngine.Response response = binaryBody == null
+                            ? engine.request(path, method, headers, body)
+                            : engine.requestBinary(path, method, headers, binaryBody);
                         JSObject safeHeaders = new JSObject();
                         for (Map.Entry<String, String> entry : response.headers.entrySet()) safeHeaders.put(entry.getKey(), entry.getValue());
                         JSObject result = new JSObject().put("status", response.status)
@@ -107,6 +127,58 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                 call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
             }
         });
+    }
+
+    @PluginMethod public void refreshUpcomingBookings(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!trustedPage() || policy == null || engine == null || sender == null || call.getData().length() != 0) {
+                call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
+                return;
+            }
+            try {
+                final long epoch = upcomingRefreshEpoch;
+                queue.execute(() -> {
+                    try {
+                        if (oauth == null || callbackStorageFailed) throw new Failure("NATIVE_STORAGE_UNAVAILABLE");
+                        AndroidSessionEngine.NativeAccess access = engine.nativeAccess();
+                        new AndroidUpcomingBookingsRefresh(policy, engine, sender, upcomingCircuits, upcomingMetrics).run(access, () -> {
+                            if (epoch != upcomingRefreshEpoch) throw new Failure("NATIVE_OPERATION_CANCELLED");
+                        });
+                        getActivity().runOnUiThread(() -> {
+                            if (trustedPage() && epoch == upcomingRefreshEpoch) call.resolve(new JSObject().put("state", "refreshed"));
+                            else call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
+                        });
+                    } catch (Failure error) { call.reject("Native refresh unavailable", error.code); }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException ignored) { call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED"); }
+        });
+    }
+
+    @PluginMethod public void cancelUpcomingBookingsRefresh(PluginCall call) {
+        getActivity().runOnUiThread(() -> {
+            if (!trustedPage() || call.getData().length() != 0) {
+                call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
+                return;
+            }
+            upcomingRefreshEpoch++;
+            call.resolve(new JSObject().put("state", "cancelled"));
+        });
+    }
+
+    private static byte[] decodeBinaryBody(String value) throws Failure {
+        // This is an internal Capacitor encoding only. It is never sent to the API as JSON.
+        int maxEncoded = ((15 * 1024 * 1024 + 2) / 3) * 4;
+        if (value.length() == 0 || value.length() > maxEncoded || value.length() % 4 != 0
+            || !value.matches("[A-Za-z0-9+/]*={0,2}")
+            || (value.indexOf('=') >= 0 && value.indexOf('=') < value.length() - 2)) throw AndroidSessionPolicy.rejected();
+        int padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+        long decodedLength = ((long) value.length() / 4) * 3 - padding;
+        if (decodedLength < 1 || decodedLength > 15L * 1024 * 1024) throw AndroidSessionPolicy.rejected();
+        try {
+            byte[] decoded = Base64.decode(value, Base64.NO_WRAP);
+            if (decoded.length != decodedLength || !Base64.encodeToString(decoded, Base64.NO_WRAP).equals(value)) throw AndroidSessionPolicy.rejected();
+            return decoded;
+        } catch (IllegalArgumentException ignored) { throw AndroidSessionPolicy.rejected(); }
     }
 
     @PluginMethod public void startYandexLogin(PluginCall call) { oauthCall(call, "start"); }
@@ -183,7 +255,9 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
     }
 
     @Override protected void handleOnDestroy() {
+        upcomingRefreshEpoch++;
         queue.shutdownNow();
+        upcomingMetrics.shutdownNow();
         if (sender != null) sender.close();
     }
 }

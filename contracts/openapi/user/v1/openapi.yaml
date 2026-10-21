@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.25.0
+  version: 1.26.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -32,6 +32,152 @@ tags:
   - name: subscriptions
     description: Non-binding WARN-only subscription-runtime checks through a server-owned actor delegation.
 paths:
+  /{tenantKey}/booked-operation-admissions:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [bookings]
+      operationId: admitBookedOperation
+      summary: Admit one existing game request before booking or payment
+      description: |
+        Requires games.play and an active session. Server resolves the canonical game
+        revision and synced Viva mapping. The owner independently validates target,
+        exactly one owned eligible subscription, tariff and policy, then persists the
+        canonical binding in its existing PREPARED receipt before any business action.
+        PENDING means admission only; it does not mean booked, paid or a new LK2 game.
+        Reuse the same key and body after a lost response. No automatic business retry.
+        Default-disabled until owner dependencies are explicitly connected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BookedOperationAdmissionRequest'
+      responses:
+        '202':
+          description: The owner has durably admitted the request, with no business continuation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookedOperationReadOutcome'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/booked-operations/{operationId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - in: path
+        name: operationId
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [bookings]
+      operationId: getBookedOperation
+      summary: Read the owner's durable receipt for an existing commercial attempt
+      description: |
+        Requires games.play, an active PadlHub session and the server-owned synced Viva
+        actor mapping. The read is default-deny until the dedicated owner boundary is
+        connected and the receipt has a trusted canonical PadlHub operation association.
+        Caller-provided actor fields and query parameters are rejected. This endpoint
+        never invokes creation, booking, debit, payment or the legacy POST router.
+        CONFIRMED means owner booking receipt confirmation, not a newly created LK2 game.
+        asOf is the durable receipt timestamp, not a monotonic revision. UNKNOWN, missing
+        status, 404 and 503 never authorize retrying a commercial creation.
+      responses:
+        '200':
+          description: Actor-scoped owner receipt status.
+          headers:
+            Cache-Control:
+              description: Actor-bound receipts must not be stored.
+              schema:
+                type: string
+                const: no-store
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookedOperationReadOutcome'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/games/{gameId}/join-conditions:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - in: path
+        name: gameId
+        required: true
+        schema: { type: string, format: uuid }
+      - in: query
+        name: expectedRevision
+        required: true
+        schema: { type: integer, minimum: 1, maximum: 9007199254740991 }
+      - in: query
+        name: subscriptionInstanceId
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [games]
+      operationId: getGameJoinConditions
+      summary: Read personal advisory conditions for one existing 90-minute game
+      description: |
+        Requires an authenticated active PadlHub session, games.play and tenant membership.
+        Both public identifiers are PadlHub UUIDs. One trusted owner resolver must prove the
+        exact LK1 game, server-derived schedule and a unique owned post-enforcement HUB instance.
+        Missing, ambiguous, foreign or stale context fails closed before an upstream read.
+        The fixed LK1 price preview only reads provider/Mongo state. It cannot JOIN, reserve,
+        debit, pay or create an operation. No price, actor, tenant or provider ID is caller-selected.
+        revision is the LK2 aggregate revision rechecked after the preview; ownerRevision is null
+        because LK1 does not provide one. The amount is always advisory, never a payment mandate.
+        Missing amount remains null. No source hash is represented as deployed owner evidence.
+        The route returns 503 until its trusted owner dependency is explicitly wired.
+      responses:
+        '200':
+          description: Non-binding actor-bound advisory; no JOIN or payment authority.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameJoinConditions' }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          description: Game/selection revision changed or quote expired; refresh conditions.
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/subscription-runtime/quote:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -2489,10 +2635,18 @@ paths:
       operationId: readStationSupportAttachment
       summary: Read one station support picture as WebP
       description: |
-        Answers a redirect to a short-lived signed URL in the private media bucket. The object key is
+        Browser clients receive a redirect to a short-lived signed URL in the private media bucket.
+        Android clients receive bounded private image bytes through PadlHub. The object key is
         rebuilt from the caller's own verified identity, so a viewer can only ever read a picture
         stored for them.
       responses:
+        '200':
+          description: Android-only bounded WebP bytes, with private no-store cache policy.
+          content:
+            image/webp:
+              schema:
+                type: string
+                format: binary
         '302':
           description: Short-lived signed storage URL.
           headers:
@@ -2506,6 +2660,8 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Forbidden
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/conversations:
@@ -2703,6 +2859,77 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/conversations/{conversationId}/media/{mediaId}/bytes:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: conversationId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: mediaId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: X-App-Platform
+        in: header
+        required: true
+        schema: { type: string, const: android }
+    put:
+      tags: [messaging]
+      operationId: uploadConversationMediaBytes
+      summary: Upload one issued Android attachment through the authenticated PadlHub API
+      description: |
+        Raw bytes only, at most 15 MiB. Current conversation membership, uploader, upload expiry,
+        declared size and SHA-256 are verified before an immutable private storage write.
+        Ambiguous storage results reconcile the existing object; clients replay the same command key.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary, maxLength: 15728640 }
+      responses:
+        '201':
+          description: Bytes uploaded to the issued quarantine object.
+          content:
+            application/json:
+              schema:
+                {
+                  type: object,
+                  additionalProperties: false,
+                  required: [uploaded],
+                  properties: { uploaded: { type: boolean, const: true } },
+                }
+        '200':
+          description: Idempotent replay or reconciled previous storage write.
+          content:
+            application/json:
+              schema:
+                {
+                  type: object,
+                  additionalProperties: false,
+                  required: [uploaded],
+                  properties: { uploaded: { type: boolean, const: true } },
+                }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '422':
+          description: Uploaded size or SHA-256 differs from the issued intent.
+          content:
+            application/json:
+              schema:
+                $ref: ../../common/components.yaml#/components/schemas/ApiError
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/conversations/{conversationId}/media/{mediaId}/finalize:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -2832,13 +3059,19 @@ paths:
     get:
       tags: [messaging]
       operationId: openConversationMediaContent
-      summary: Redirect to a short-lived signed URL for one READY attachment
+      summary: Read one READY attachment through an authorized content route
       description: |
         Allowed only for a current conversation member while the carrying message is neither
         deleted nor hidden by moderation and no direction of a direct pair blocks the reader. Images
         are delivered inline, files always as a download. The redirect target expires within
-        minutes and must not be cached by clients.
+        minutes and must not be cached by clients. Android requests return bounded raw bytes
+        directly with private, no-store and nosniff headers; browser requests retain the redirect.
       responses:
+        '200':
+          description: Android attachment bytes, at most 15 MiB, with the stored content type.
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
         '302':
           description: Short-lived signed object URL.
           headers:
@@ -2854,6 +3087,8 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/Forbidden
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/conversations/{conversationId}/messages:
@@ -3400,6 +3635,88 @@ paths:
           $ref: '#/components/responses/CommandConflict'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/android/config:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getAndroidPushConfiguration
+      summary: Get the effective Android FCM capability for the authenticated installation
+      responses:
+        '200':
+          description: Android FCM capability after server-owned gates are evaluated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AndroidPushConfiguration'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/android:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: registerAndroidPushEndpoint
+      summary: Register or rotate the authenticated Android FCM installation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AndroidPushEndpointRegistration'
+      responses:
+        '200':
+          description: Stored result of the idempotent Android registration command.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPushEndpointCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/android/{installationId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: installationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: revokeAndroidPushEndpoint
+      summary: Revoke Android FCM for one authenticated installation
+      responses:
+        '200':
+          description: Stored idempotent revoke result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPushEndpointCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/games:
@@ -5138,8 +5455,226 @@ paths:
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/tickets:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+    get:
+      tags:
+        - support
+      operationId: listSupportTickets
+      summary: List only the authenticated user’s support tickets
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Cursor
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Limit
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Status
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Category
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Priority
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Query
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/UserTicketPage
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+    post:
+      tags:
+        - support
+      operationId: createSupportTicket
+      summary: Create a support ticket and first message
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/IdempotencyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/support-tickets.yaml#/components/schemas/Create
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/UserTicket
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '410':
+          $ref: ../../common/support-tickets.yaml#/components/responses/CommandExpired
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+      description:
+        ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
+        ticket before an explicit fresh command.'
+  /{tenantKey}/support/tickets/{ticketId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/support-tickets.yaml#/components/parameters/TicketId
+    get:
+      tags:
+        - support
+      operationId: getSupportTicket
+      summary: Read an owned ticket excluding all internal staff metadata
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Before
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/UserTicket
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/support/tickets/{ticketId}/messages:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/support-tickets.yaml#/components/parameters/TicketId
+    post:
+      tags:
+        - support
+      operationId: sendSupportTicketMessage
+      summary: Reply to an owned ticket; resolved or closed tickets reopen
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/IdempotencyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/support-tickets.yaml#/components/schemas/UserMessage
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/UserTicket
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '410':
+          $ref: ../../common/support-tickets.yaml#/components/responses/CommandExpired
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+      description:
+        ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
+        ticket before an explicit fresh command.'
 components:
   schemas:
+    GameJoinConditions:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          gameId,
+          revision,
+          ownerRevision,
+          subscriptionInstanceId,
+          eligibility,
+          reasonCode,
+          subscriptionApplied,
+          price,
+          freeMinutes,
+          paidMinutes,
+          evaluatedAt,
+          expiresAt,
+          nonBinding,
+          requiresReservationRecheck,
+          source,
+          providerMode,
+        ]
+      properties:
+        gameId: { type: string, format: uuid }
+        revision:
+          type: integer
+          minimum: 1
+          description: LK2 aggregate revision, never an LK1 producer revision.
+        ownerRevision: { type: 'null' }
+        subscriptionInstanceId: { type: string, format: uuid }
+        eligibility: { type: string, enum: [AVAILABLE, UNAVAILABLE, LIMIT_USED] }
+        reasonCode: { type: [string, 'null'] }
+        subscriptionApplied: { type: boolean }
+        price:
+          type: object
+          additionalProperties: false
+          required: [status, amountMinor, currency, confirmed]
+          properties:
+            status: { type: string, enum: [ADVISORY, MISSING] }
+            amountMinor: { type: [integer, 'null'], minimum: 0, maximum: 9007199254740991 }
+            currency: { type: string, const: RUB }
+            confirmed: { type: boolean, const: false }
+        freeMinutes: { type: integer, minimum: 0, maximum: 90 }
+        paidMinutes: { type: integer, minimum: 0, maximum: 90 }
+        evaluatedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        nonBinding: { type: boolean, const: true }
+        requiresReservationRecheck: { type: boolean, const: true }
+        source: { type: string, const: LK1_PRICE_PREVIEW }
+        providerMode: { type: string, enum: [MOCK, LIVE] }
+    BookedOperationAdmissionRequest:
+      type: object
+      additionalProperties: false
+      required: [action, target, paymentIntent]
+      properties:
+        action:
+          type: string
+          const: JOIN_GAME
+        paymentIntent:
+          type: string
+          const: USE_SUBSCRIPTION
+        target:
+          type: object
+          additionalProperties: false
+          required: [id, expectedRevision]
+          properties:
+            id:
+              type: string
+              format: uuid
+            expectedRevision:
+              type: integer
+              minimum: 1
+              maximum: 9007199254740991
+    BookedOperationReadOutcome:
+      type: object
+      additionalProperties: false
+      required: [contractVersion, operationId, status, asOf, reason]
+      properties:
+        contractVersion:
+          type: integer
+          const: 1
+        operationId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING, UNKNOWN, CONFIRMED]
+        asOf:
+          type: [string, 'null']
+          format: date-time
+          description: Durable updatedAt; null only when UNKNOWN and the timestamp is unavailable.
+        reason:
+          type: string
+          enum: [OWNER_PENDING, RECONCILIATION_REQUIRED, OWNER_BOOKING_CONFIRMED]
     ManagedSubscriptionWarnQuoteRequest:
       type: object
       additionalProperties: false
@@ -6639,6 +7174,9 @@ components:
         firstName:
           type: [string, 'null']
           maxLength: 100
+        lastName:
+          type: [string, 'null']
+          maxLength: 100
         avatarUrl:
           type: [string, 'null']
           pattern: '^(https?://.+|/public/api/v1/media/profile-photos/[0-9a-f-]{36}/[0-9a-f-]{36})$'
@@ -7943,8 +8481,8 @@ components:
           const: PUT
         url:
           type: string
-          format: uri
-          description: Single-use signed quarantine upload URL. Send every required header verbatim.
+          format: uri-reference
+          description: Browser signed quarantine URL or Android relative PadlHub byte-relay URL; never a provider grant on Android.
         requiredHeaders:
           type: object
           additionalProperties:
@@ -8280,6 +8818,35 @@ components:
               PROVIDER_NOT_CONFIGURED,
               RUNTIME_UNAVAILABLE,
             ]
+    AndroidPushConfiguration:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+        reason:
+          type: string
+          enum:
+            [
+              GLOBAL_GATE_DISABLED,
+              TENANT_GATE_DISABLED,
+              PROVIDER_NOT_CONFIGURED,
+              RUNTIME_UNAVAILABLE,
+            ]
+    AndroidPushEndpointRegistration:
+      type: object
+      additionalProperties: false
+      required: [installationId, token]
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        token:
+          type: string
+          minLength: 32
+          maxLength: 4096
+          description: Opaque FCM registration token. Provider and project selection remain server-owned.
     WebPushEndpointRegistration:
       type: object
       additionalProperties: false

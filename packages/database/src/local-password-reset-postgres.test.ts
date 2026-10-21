@@ -558,7 +558,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
       ).rows[0],
     ).toEqual({ rolsuper: false, rolbypassrls: false, rolinherit: false });
   });
-  it('applies canonical 0097→0098, preserves credentials/sessions, rejects drift and reapplies as no-op', async () => {
+  it('upgrades canonical support 0098→reset 0099, preserves credentials/sessions/support, rejects drift and reapplies as no-op', async () => {
     const database = `reset_rehearsal_${randomUUID().replaceAll('-', '')}`;
     const directory = await mkdtemp(resolve(tmpdir(), 'kya04-reset-migrations-'));
     const migrations = resolve(directory, 'packages/database/migrations');
@@ -566,7 +566,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
     fixtureUrl.pathname = `/${database}`;
     let fixture: Pool | undefined;
     let created = false;
-    const name = '0098_local_password_reset_proofs.sql';
+    const name = '0099_local_password_reset_proofs.sql';
     try {
       await admin.query<Record<string, unknown>>(`create database ${database}`);
       created = true;
@@ -576,7 +576,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
       const files = (await readdir(source))
         .filter((file) => /^\d+.*\.sql$/.test(file) && file < name)
         .sort();
-      expect(files.at(-1)).toBe('0097_local_email_password_login.sql');
+      expect(files.at(-1)).toBe('0098_support_tickets.sql');
       for (const file of files) await copyFile(resolve(source, file), resolve(migrations, file));
       const migrate = () =>
         promisify(execFile)(
@@ -602,7 +602,8 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
       const legacyTenant = randomUUID(),
         legacyUser = randomUUID(),
         legacyCredential = randomUUID(),
-        legacySession = randomUUID();
+        legacySession = randomUUID(),
+        legacyTicket = randomUUID();
       await fixture.query<Record<string, unknown>>(
         "insert into identity.tenants (id,tenant_key,display_name) values ($1,$2,'Synthetic reset upgrade')",
         [legacyTenant, `reset-upgrade-${legacyTenant}`],
@@ -619,11 +620,21 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
         "insert into identity.refresh_sessions (id,tenant_id,user_id,family_id,token_hash,expires_at) values ($1,$2,$3,$1,$4,now()+interval '1 day')",
         [legacySession, legacyTenant, legacyUser, digest()],
       );
+      await fixture.query<Record<string, unknown>>(
+        "insert into support.tickets (tenant_id,id,owner_user_id,subject,category) values ($1,$2,$3,'Synthetic reset upgrade','ACCOUNT')",
+        [legacyTenant, legacyTicket, legacyUser],
+      );
+      await fixture.query<Record<string, unknown>>(
+        "insert into support.messages (tenant_id,ticket_id,body,author_id,author_role) values ($1,$2,'Synthetic preserved support message',$3,'USER')",
+        [legacyTenant, legacyTicket, legacyUser],
+      );
       const legacy = async () =>
         (
           await fixture!.query<Record<string, unknown>>(`select
         (select jsonb_agg(to_jsonb(c)) from identity.local_email_credentials c) as credentials,
-        (select jsonb_agg(to_jsonb(s)) from identity.refresh_sessions s) as sessions`)
+        (select jsonb_agg(to_jsonb(s)) from identity.refresh_sessions s) as sessions,
+        (select jsonb_agg(to_jsonb(t)) from support.tickets t) as tickets,
+        (select jsonb_agg(to_jsonb(m)) from support.messages m) as messages`)
         ).rows;
       const original = await legacy();
       const before = (

@@ -5,6 +5,7 @@ import type { Pool, QueryResultRow } from 'pg';
 
 import { DEAD_LETTER_QUEUE } from './broker-topology.js';
 import type { WebPushProviderOutcome } from './web-push-adapter.js';
+import type { FcmProviderOutcome } from './fcm-adapter.js';
 
 export const WORKER_OPERATIONAL_METRICS_INTERVAL_MS = 15_000;
 const METRICS_TENANT_CONCURRENCY = 4;
@@ -71,6 +72,10 @@ export const WORKER_METRIC_INSTRUMENTS = {
   bookingReminderSchedulerDurationMilliseconds:
     'phub.worker.booking_reminder.duration_milliseconds',
   webPushCycleSuccess: 'phub.worker.web_push.cycle_success',
+  fcmCycleSuccess: 'phub.worker.fcm.cycle_success',
+  fcmCycleFailures: 'phub.worker.fcm.cycle_failures',
+  fcmProviderOutcomes: 'phub.worker.fcm.provider_outcomes',
+  fcmCycleDurationMilliseconds: 'phub.worker.fcm.cycle_duration_milliseconds',
   webPushCycleFailures: 'phub.worker.web_push.cycle_failures',
   webPushTenantFailures: 'phub.worker.web_push.tenant_failures',
   webPushProviderOutcomes: 'phub.worker.web_push.provider_outcomes',
@@ -462,6 +467,11 @@ export interface WorkerMetricRecorder {
     durationMilliseconds: number,
     failed: boolean,
   ): void;
+  recordFcmCycle(durationMilliseconds: number, failed: boolean): void;
+  recordFcmProviderOutcome(
+    environment: 'SANDBOX' | 'PRODUCTION',
+    outcome: FcmProviderOutcome,
+  ): void;
   recordWebPushProviderOutcome(
     environment: 'SANDBOX' | 'PRODUCTION',
     outcome: WebPushProviderOutcome,
@@ -620,6 +630,12 @@ export function createWorkerMetricRecorder(options: {
     WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerDurationMilliseconds,
   );
   const webPushCycleSuccess = meter.createGauge(WORKER_METRIC_INSTRUMENTS.webPushCycleSuccess);
+  const fcmCycleSuccess = meter.createGauge(WORKER_METRIC_INSTRUMENTS.fcmCycleSuccess);
+  const fcmCycleFailures = meter.createCounter(WORKER_METRIC_INSTRUMENTS.fcmCycleFailures);
+  const fcmProviderOutcomes = meter.createCounter(WORKER_METRIC_INSTRUMENTS.fcmProviderOutcomes);
+  const fcmCycleDuration = meter.createHistogram(
+    WORKER_METRIC_INSTRUMENTS.fcmCycleDurationMilliseconds,
+  );
   const webPushCycleFailures = meter.createCounter(WORKER_METRIC_INSTRUMENTS.webPushCycleFailures);
   const webPushTenantFailures = meter.createCounter(
     WORKER_METRIC_INSTRUMENTS.webPushTenantFailures,
@@ -727,6 +743,14 @@ export function createWorkerMetricRecorder(options: {
       if (failedTenants > 0) webPushTenantFailures.add(failedTenants, instanceAttributes);
       webPushRounds.record(rounds, instanceAttributes);
       webPushCycleDuration.record(durationMilliseconds, instanceAttributes);
+    },
+    recordFcmCycle(durationMilliseconds, failed) {
+      fcmCycleSuccess.record(failed ? 0 : 1, instanceAttributes);
+      if (failed) fcmCycleFailures.add(1, instanceAttributes);
+      fcmCycleDuration.record(durationMilliseconds, instanceAttributes);
+    },
+    recordFcmProviderOutcome(environment, outcome) {
+      fcmProviderOutcomes.add(1, { ...instanceAttributes, environment, outcome });
     },
     recordWebPushProviderOutcome(environment, outcome) {
       webPushProviderOutcomes.add(1, {

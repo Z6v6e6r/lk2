@@ -69,6 +69,34 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('reads an existing commercial attempt without creating on unavailable status', async () => {
+    const operationId = 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea';
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        contractVersion: 1,
+        operationId,
+        status: 'UNKNOWN',
+        asOf: null,
+        reason: 'RECONCILIATION_REQUIRED',
+      }),
+    );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    expect(await client.getBookedOperation(operationId)).toMatchObject({ status: 'UNKNOWN' });
+    fetchImplementation.mockResolvedValue(
+      jsonResponse({ code: 'BOOKED_OPERATION_NOT_FOUND' }, 404),
+    );
+    await expect(client.getBookedOperation(operationId)).rejects.toThrow();
+    for (const [url, init] of fetchImplementation.mock.calls) {
+      expect(requestUrl(url)).toBe(
+        `https://api.padlhub.test/user/api/v1/local-padel/booked-operations/${operationId}`,
+      );
+      expect(init?.method ?? 'GET').toBe('GET');
+      expect(init?.cache).toBe('no-store');
+      expect(init?.body).toBeUndefined();
+    }
+  });
   it('retries friendship removal with the same key and displayed generation', async () => {
     const target = '6a81e965-c508-4321-812c-4be323606a70';
     const expectedCreatedAt = '2026-09-17T10:00:00.000Z';

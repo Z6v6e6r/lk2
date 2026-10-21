@@ -10,7 +10,7 @@ import type {
   HomeBookingRecommendationFilters,
 } from '../../../web/src/auth-gateway.js';
 import type { IOSSession } from './session.js';
-import { resolveCabinetMedia } from './cabinet-media.js';
+import { resolveCabinetMedia } from '../cabinet-media.js';
 
 function requireViewer(actual: string, expected: string): void {
   if (actual !== expected)
@@ -23,6 +23,7 @@ export function selfProfile(profile: UserProfile): PlayerProfileView {
       userId: profile.userId,
       displayName: profile.displayName,
       ...(profile.firstName === undefined ? {} : { firstName: profile.firstName }),
+      ...(profile.lastName === undefined ? {} : { lastName: profile.lastName }),
       ...(profile.avatarUrl === undefined ? {} : { avatarUrl: profile.avatarUrl }),
       ...(profile.level === undefined ? {} : { level: profile.level }),
     },

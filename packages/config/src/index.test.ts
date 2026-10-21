@@ -1272,6 +1272,13 @@ describe('loadConfig', () => {
     ).toThrow('Invalid application configuration');
   });
 
+  it('keeps FCM disabled by default and requires server-side configuration before enabling it', () => {
+    expect(loadConfig(validEnvironment).FCM_ENABLED).toBe(false);
+    expect(() => loadConfig({ ...validEnvironment, FCM_ENABLED: 'true' })).toThrow(
+      'FCM_ENABLED requires runtime configuration',
+    );
+  });
+
   it('loads private Web Push material from mounted secret files', () => {
     const directory = mkdtempSync(join(tmpdir(), 'phub-web-push-config-'));
     const privateKeyPath = join(directory, 'vapid-private-key');

@@ -182,6 +182,11 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     // Web Push belongs to the beta runtime contract: a VAPID pair and the endpoint-encryption keyring
     // stay stable for the lifetime of the browser subscriptions that were already handed to a push
     // service, so the provisioner requires them even while a tenant gate keeps push closed.
+    FCM_ENABLED: 'false',
+    FCM_PROJECT_ID: 'padlhub',
+    FCM_APP_ID: 'ru.padlhub.app',
+    FCM_ENVIRONMENT: 'SANDBOX',
+    FCM_CREDENTIAL_FILE: '/run/phub/fcm-service-account.json',
     WEB_PUSH_ENABLED: 'true',
     WEB_PUSH_ENVIRONMENT: 'SANDBOX',
     WEB_PUSH_APP_ID: 'padlhub-web',
@@ -234,6 +239,11 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     S3_ACCESS_KEY: 'synthetic-media-access-key',
     S3_SECRET_KEY: 'synthetic-media-secret-key',
     // The worker signs the Web Push request, so it needs the same VAPID pair and keyring as the API.
+    FCM_ENABLED: 'false',
+    FCM_PROJECT_ID: 'padlhub',
+    FCM_APP_ID: 'ru.padlhub.app',
+    FCM_ENVIRONMENT: 'SANDBOX',
+    FCM_CREDENTIAL_FILE: '/run/phub/fcm-service-account.json',
     WEB_PUSH_ENABLED: 'true',
     WEB_PUSH_ENVIRONMENT: 'SANDBOX',
     WEB_PUSH_APP_ID: 'padlhub-web',

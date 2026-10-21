@@ -7,12 +7,13 @@ The native shell uses the repository's Capacitor 8.4.1, Java, JDK 21 and Android
 
 The existing Home, profile/level history, bookings/history, notifications and location screens
 are enabled. Other sections display an explicit unavailable screen. This is an implementation
-stage toward the complete LK2 product, not a reduced product scope. The inherited icon/splash
-assets remain Capacitor placeholders.
+stage toward the complete LK2 product, not a reduced product scope. Android launcher icons use
+the existing PadlHub mark; splash assets remain Capacitor placeholders.
 
 Phone OTP uses the existing PadlHub challenge, verify, refresh and revoke endpoints. Android
 requests go through `PadlHubAndroidSession` and system HTTPS, without browser fetch, shared cookie
-jars, CORS changes, provider access or redirects. Native code independently validates the exact
+jars, CORS changes or redirects. Provider access is limited to the fixed My Bookings exception
+below. Native code independently validates the exact
 origin, tenant, method, positive route list, headers and auth bodies. Only the bundled
 `https://localhost` main document can use the modern Capacitor bridge; the legacy all-frame
 JavaScript interface is removed, frames/objects are disallowed, bridge logging and WebView
@@ -29,10 +30,64 @@ revokes the successor. Credentials are cleared before the logout marker, only af
 revocation, session expiry or refresh 401. Network/5xx/storage errors retain recovery state and
 show retry, never a false successful logout or a new login over an uncertain saved session.
 
-Native mode does not initiate Viva delegation/provider jobs, web OAuth recovery, browser Web Push,
+Native mode does not initiate general Viva delegation/provider jobs, web OAuth recovery, browser Web Push,
 payment creation/handoffs or attachment flows. Java permits only current canonical reads and
 notification preference/read-cursor commands. New routes require an explicit native review.
 Web retains its existing transport; persistent Android mode requires an injected native fetch.
+
+### My Bookings refresh
+
+The owner-approved ADR 0023 exception adds one no-argument native operation. An exact
+`GET /bookings/upcoming` with an absent or stale projection may call it; unrelated reads, denial,
+query variants and fresh projections do not. Java validates the current authenticated lease,
+server routing plan and one 120-second `MY_BOOKINGS` command, then performs the existing fixed
+list/details reads on the user's device. Token and raw provider payload stay in invocation RAM;
+generic `request` still rejects delegation and read-job POST routes. Only the native runner can
+use those internal steps. It validates and relays at most 50 active bookings, completes the
+PadlHub job, returns a closed acknowledgement, and the ordinary PadlHub GET supplies the UI data.
+
+Logout and abort immediately cancel the read epoch. Every network boundary and submission checks
+principal, session generation, credential journals and monotonic deadlines. A provider 401 permits
+one delegation refresh and one replay of that GET. Other provider failures have no retry or server
+fallback; result/complete lost responses may replay only the same payload and idempotency key.
+Partial failure never completes a projection or returns an invented empty result.
+
+Version 1.10/code11 corrects a 1.9 contract mismatch: delegated Viva access tokens are opaque,
+not necessarily JWTs with a `tenant_key` claim. Native code accepts only bounded Bearer-safe token
+bytes from the authenticated endpoint and keeps the fixed plan tenant/host and current user lease.
+Rejected responses expose only one reviewed stage code, never raw payload or credential details.
+
+Version 1.11/code12 corrects the job expiry check: a valid server-issued 120-second job must not
+be rejected merely because the phone clock differs. Plan, job and delegation use the `Date` from
+their own authenticated HTTPS response, deduct its one-second precision and the complete monotonic
+request/processing interval, and retain the original lifetime caps. Malformed/duplicate dates fail
+closed; absent dates retain the strict wall-clock path. Check skew in both directions, expired and
+excessive lifetimes, response binding and cancellation after a device clock change.
+
+Version 1.12/code13 is a diagnostic build for the unresolved physical-device job rejection.
+It splits that job-stage rejection into ten closed reasons: transport framing/bounds, media type,
+JSON, screen/concurrency contract, command, identifiers, expiry format, Date, expired lifetime and
+excessive lifetime. The accepted response set and all read/expiry/session checks remain unchanged.
+No raw response, field name/value, header, URL, provider ID or token becomes a diagnostic. The UI
+correlation is the original `/bookings/upcoming` request; internal native job requests have their
+own correlation IDs. This build is not evidence that the phone issue is fixed.
+
+Version 1.13/code14 corrects another native/API mismatch: `/auth/viva/access` publishes the
+provider credential expiry without a one-hour maximum. Android now accepts a valid longer expiry,
+but limits token use to the current validated plan/job deadline (at most 120 seconds); provider 401
+reissue cannot extend that deadline. Own-response Date, conservative transit/precision deduction,
+strict missing-Date wall fallback, expiry rejection and token grammar/size checks remain in force.
+Nine additional closed delegation diagnostics distinguish transport, media, JSON, root contract,
+token grammar/size, expiry format, Date, expired credential and invalid timing arithmetic. No
+credential, response value, timestamp or parser exception is exposed. This fixes a reproducible
+contract defect; the phone's actual token TTL and acceptance remain unconfirmed.
+
+Version 1.13/code14 preserves `ru.padlhub.app`, existing Firebase registration, media, push and
+debug-signing identity. Verify the fixed provider host and tenant, protocol/body bounds, 401 versus
+403 handling, exact replay, logout/account changes and token/payload absence in bridge/errors/store
+with native instrumentation. Physical-device acceptance must separately open My Records and
+Profile, then reopen the app; source/CI/build do not prove the installed API gates or native Viva
+transport work.
 Internal links use same-document history; Android Back uses WebView history then backgrounds
 the task at its root.
 
@@ -128,8 +183,8 @@ VITE_PHUB_API_BASE_URL=https://lk2.padlhub.su VITE_PHUB_TENANT_KEY=local-padel n
 ```
 
 `android:debug` bundles local assets, syncs the same public configuration into Android, then
-builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.4/code 5 replaces
-version 1.3/code 4 using the existing local debug signature. No release keys
+builds `apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk`. Version 1.6/code 7 replaces
+versions 1.4/code 5 and 1.5/code 6 using the existing local debug signature. No release keys
 are created. Always inspect the packaged `capacitor.config.json`, manifest and signature.
 
 Builds have **no implicit API target**. Missing configuration displays a setup message. The native
@@ -157,6 +212,26 @@ do not remove Android's debuggable application flag. Use a test account, then lo
 intent and credential storage cannot be written, the app blocks the current session and reports
 failure; no successful logout is claimed. Corrupt/unavailable secure storage fails closed.
 
+Session-check failures show a fixed diagnostic code distinguishing native network, TLS, secure
+storage/cache, rejected requests/responses and HTTP status. Only allowlisted native constants and
+numeric HTTP status reach this screen; raw errors, causes, server codes, correlation values and
+credentials are omitted. Retry preserves native credentials and recovery journals. This diagnostic
+does not prove that a failure on a user's device has been repaired.
+
+Native session refresh/logout send empty POST/DELETE with explicit `Content-Type: text/plain`. Android's
+`HttpsURLConnection` otherwise adds `application/x-www-form-urlencoded`, which the API's Fastify
+parser rejects with HTTP 415 before session validation. Empty JSON is also invalid. Keep lifecycle
+calls bodyless and leave JSON OTP/OAuth payloads unchanged. `AndroidHttpSenderTest` checks the actual
+Android HTTPS wire format against an ephemeral loopback certificate; the API auth-route test
+checks refresh rotation and logout with this format. These tests use synthetic credentials only.
+
 Games/tournaments/training, chats/media, payment return navigation, additional App Links and FCM remain
 subsequent complete increments using existing APIs. Release signing, store publication, live SMS,
 payments, merge and deployment require their applicable authority and delivery gates.
+
+The fixed My Bookings transport also uses session-bound memory-only circuits with monotonic backoff
+(1, 2, 4, 8, 16 seconds) for provider failures. It reports only the existing closed routing outcome
+fields to PadlHub after projection completion in a bounded background queue; telemetry is best-effort,
+has no retries, and cannot change session/projection
+state. Active detail IDs follow the browser contract's 128-character bound; cancelled list entries
+are never requested as details. No additional provider operation or server permission is added.

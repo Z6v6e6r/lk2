@@ -22,6 +22,7 @@ import type {
 } from '@phub/communities';
 import { checkDatabaseReady } from '@phub/database';
 import type { ContactReader } from '@phub/database/contacts';
+import type { SupportTicketRepository } from '@phub/database/support-tickets';
 import type {
   ClientRoutingPlanRepository,
   CommunityLogoMediaRepository,
@@ -149,11 +150,13 @@ import { registerMessagingRoutes } from './messaging/messaging-routes.js';
 import type { RealtimeTicketIssuer } from './messaging/realtime-ticket-issuer.js';
 import type { TrainerAvatarMediaStore } from './trainer-avatar-media-store.js';
 import { registerStationSupportRoutes } from './support/station-support-routes.js';
+import { registerSupportTicketRoutes } from './support/support-ticket-routes.js';
 import type { StationSupportProvider } from './support/station-support-provider.js';
 import type { StationSupportMediaStore } from './support/station-support-media.js';
 import type { StationSupportRepository } from './support/station-support-repository.js';
 import { registerNotificationRoutes } from './notifications/notification-routes.js';
 import { registerWebPushRoutes } from './notifications/web-push-routes.js';
+import { registerAndroidPushRoutes } from './notifications/android-push-routes.js';
 import { registerProfilePrivacyRoutes } from './profile/profile-privacy-routes.js';
 import { registerProfileFriendshipRoutes } from './profile/profile-friendship-routes.js';
 import { registerProfileLevelHistoryRoutes } from './profile/profile-level-history-routes.js';
@@ -180,7 +183,19 @@ import {
   type TournamentSummarySource,
 } from './tournaments/tournament-summary-routes.js';
 import type { SubscriptionRuntimeActorDelegationIssuer } from './subscriptions/subscription-runtime-actor-delegation-issuer.js';
+import {
+  registerGameJoinConditionsRoutes,
+  type GameJoinConditionsRouteOptions,
+} from './games/game-join-conditions-routes.js';
 import { registerSubscriptionRuntimeWarnRoutes } from './subscriptions/subscription-runtime-warn-routes.js';
+import {
+  registerBookedOperationReadRoutes,
+  type BookedOperationReadRouteOptions,
+} from './subscriptions/booked-operation-read-routes.js';
+import {
+  registerBookedOperationAdmissionRoutes,
+  type BookedOperationAdmissionRouteOptions,
+} from './subscriptions/booked-operation-admission-routes.js';
 
 interface PadlHubClaims extends JWTPayload {
   readonly sub: string;
@@ -287,6 +302,7 @@ export interface BuildAppOptions {
   /** Proxies the legacy station-support dialogs CUP operators answer; absent means the tab is closed. */
   readonly stationSupportProvider?: StationSupportProvider;
   readonly stationSupportRepository?: StationSupportRepository;
+  readonly supportTicketRepository?: SupportTicketRepository;
   /**
    * Chat pictures for that contour. Absent when the deployment has no media bucket; the tab then
    * keeps working as text-only instead of failing.
@@ -375,7 +391,13 @@ export interface BuildAppOptions {
     SubscriptionRuntimeActorDelegationIssuer,
     'issue'
   >;
+  readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
+  readonly bookedOperationRead?: Omit<
+    BookedOperationReadRouteOptions,
+    'authenticatedTenantHandlers'
+  >;
+  readonly bookedOperationAdmission?: Omit<BookedOperationAdmissionRouteOptions, 'commandHandlers'>;
 }
 
 function clientPlatform(request: FastifyRequest): ClientPlatform {
@@ -1062,6 +1084,18 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });
+  registerBookedOperationReadRoutes(app as unknown as FastifyInstance, {
+    ...options.bookedOperationRead,
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
+  registerBookedOperationAdmissionRoutes(app as unknown as FastifyInstance, {
+    ...options.bookedOperationAdmission,
+    commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
+  });
+  registerGameJoinConditionsRoutes(app as unknown as FastifyInstance, {
+    ...(options.gameJoinConditionsOwner ? { owner: options.gameJoinConditionsOwner } : {}),
+    authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
+  });
   registerSubscriptionRuntimeWarnRoutes(app as unknown as FastifyInstance, {
     mode: options.config.SUBSCRIPTION_RUNTIME_WARN_MODE,
     ...(options.subscriptionRuntimeActorContextRepository
@@ -1257,6 +1291,22 @@ export async function buildApp(options: BuildAppOptions) {
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
+  registerAndroidPushRoutes(app as unknown as FastifyInstance, {
+    ...(options.notificationEndpointRepository
+      ? { repository: options.notificationEndpointRepository }
+      : {}),
+    ...(options.notificationEndpointCipher ? { cipher: options.notificationEndpointCipher } : {}),
+    enabledGlobally: options.config.FCM_ENABLED,
+    maxEndpointsPerUser: options.config.WEB_PUSH_ENDPOINTS_PER_USER_MAX,
+    selector: {
+      appId: options.config.FCM_APP_ID,
+      environment: options.config.FCM_ENVIRONMENT,
+      platform: 'ANDROID',
+      provider: 'FCM',
+    },
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
   registerAdminNotificationRoutes(app as unknown as FastifyInstance, {
     ...(options.adminNotificationRepository
       ? { repository: options.adminNotificationRepository }
@@ -1269,6 +1319,11 @@ export async function buildApp(options: BuildAppOptions) {
     webPushAppId: options.config.WEB_PUSH_APP_ID,
     webPushEnvironment: options.config.WEB_PUSH_ENVIRONMENT,
     authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    androidPush: {
+      globallyEnabled: options.config.FCM_ENABLED && Boolean(options.notificationEndpointCipher),
+      appId: options.config.FCM_APP_ID,
+      environment: options.config.FCM_ENVIRONMENT,
+    },
     commandHandlers: [
       authenticateAdmin,
       authorizeNotificationAdmin,
@@ -1315,6 +1370,13 @@ export async function buildApp(options: BuildAppOptions) {
       resolveTenant,
       requireIdempotencyKey,
     ],
+  });
+  registerSupportTicketRoutes(app as unknown as FastifyInstance, {
+    ...(options.supportTicketRepository ? { repository: options.supportTicketRepository } : {}),
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+    adminAuthenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
+    adminCommandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
   });
   registerGiftCertificateRoutes(app as unknown as FastifyInstance, {
     ...(options.giftCertificateCatalogRepository

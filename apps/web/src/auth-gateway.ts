@@ -80,6 +80,8 @@ import type {
   UserUpcomingBookings,
   UserContext as ApiUserContext,
   WebPushConfiguration,
+  AndroidPushConfiguration,
+  AndroidPushEndpointRegistration,
   WebPushEndpointCommandResult,
   WebPushEndpointRegistration,
 } from '@phub/api-sdk';
@@ -473,6 +475,10 @@ export interface LegalAcceptance {
 }
 
 export interface AuthGateway {
+  readonly listSupportTickets?: PadlHubApiClient['listSupportTickets'];
+  readonly getSupportTicket?: PadlHubApiClient['getSupportTicket'];
+  readonly createSupportTicket?: PadlHubApiClient['createSupportTicket'];
+  readonly sendSupportTicketMessage?: PadlHubApiClient['sendSupportTicketMessage'];
   readonly restoreSession: () => Promise<AuthenticatedSession | null>;
   readonly requestCode: (phoneE164: string) => Promise<PhoneChallenge>;
   readonly verifyCode: (input: {
@@ -568,6 +574,7 @@ export interface AuthGateway {
   }) => Promise<GameCardPage>;
   readonly getActivityHistory: (input?: ActivityHistoryQuery) => Promise<ActivityHistoryPage>;
   readonly getGame: (gameId: string) => Promise<GameCard>;
+  readonly getGameJoinConditions?: PadlHubApiClient['getGameJoinConditions'];
   readonly createGame: (
     input: CreateGameRequest,
     options?: { readonly idempotencyKey?: string },
@@ -725,6 +732,13 @@ export interface AuthGateway {
     input: MessagingMediaUploadRequest,
     idempotencyKey: string,
   ) => Promise<MessagingMediaUploadResult>;
+  readonly uploadConversationMediaBytes?: (
+    conversationId: string,
+    mediaId: string,
+    bytes: Blob,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   readonly finalizeConversationMediaUpload: (
     conversationId: string,
     mediaId: string,
@@ -758,6 +772,15 @@ export interface AuthGateway {
     input: NotificationPreferencesUpdateRequest,
   ) => Promise<NotificationPreferencesView>;
   readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
+  readonly getAndroidPushConfiguration?: () => Promise<AndroidPushConfiguration>;
+  readonly registerAndroidPushEndpoint?: (
+    input: AndroidPushEndpointRegistration,
+    idempotencyKey: string,
+  ) => Promise<WebPushEndpointCommandResult>;
+  readonly revokeAndroidPushEndpoint?: (
+    installationId: string,
+    idempotencyKey: string,
+  ) => Promise<WebPushEndpointCommandResult>;
   readonly registerWebPushEndpoint: (
     input: WebPushEndpointRegistration,
   ) => Promise<WebPushEndpointCommandResult>;
@@ -853,6 +876,7 @@ function buildSelfPlayerProfileView(profile: UserProfile): PlayerProfileView {
       userId: profile.userId,
       displayName: profile.displayName,
       ...(profile.firstName !== undefined ? { firstName: profile.firstName } : {}),
+      ...(profile.lastName !== undefined ? { lastName: profile.lastName } : {}),
       ...(profile.avatarUrl !== undefined ? { avatarUrl: profile.avatarUrl } : {}),
       ...(profile.level === undefined
         ? {}
@@ -1207,6 +1231,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       playerProfilePromises.clear();
       vivaReauthorizationStarted = false;
       vivaAccessPromise = undefined;
+      homeDashboardPromise = undefined;
       principalGeneration += 1;
     }
     currentUserId = session.context.userId;
@@ -1246,7 +1271,24 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
   function loadSelfProfile(): Promise<UserProfile> {
     if (!currentUserId) return Promise.reject(new Error('AUTH_REQUIRED'));
-    if (nativeClient) return client.getUserProfile();
+    if (nativeClient) {
+      const userId = currentUserId;
+      const generation = principalGeneration;
+      return client.getUserProfile().then((profile) => {
+        if (generation !== principalGeneration || currentUserId !== userId) {
+          throw new Error('AUTH_PRINCIPAL_CHANGED');
+        }
+        if (profile.userId !== userId) {
+          throw new ApiClientError(
+            'Account does not match',
+            403,
+            'NATIVE_ACCOUNT_MISMATCH',
+            'native',
+          );
+        }
+        return profile;
+      });
+    }
     if (selfProfilePromise && selfProfileExpiresAt > Date.now()) return selfProfilePromise;
     const userId = currentUserId;
     const generation = principalGeneration;
@@ -2085,9 +2127,13 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getHomeBase() {
       if (homeBasePromise) return homeBasePromise;
+      const generation = principalGeneration;
       const request = client
         .getHomeBase()
         .then((homeBase) => {
+          if (nativeClient && generation !== principalGeneration) {
+            throw new Error('AUTH_PRINCIPAL_CHANGED');
+          }
           if (!currentUserId || homeBase.viewerUserId !== currentUserId) {
             throw new Error('HOME_BASE_VIEWER_MISMATCH');
           }
@@ -2102,9 +2148,32 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     getHomeDashboard() {
       if (homeDashboardPromise) return homeDashboardPromise;
-      const request = client.getHomeDashboard().finally(() => {
-        if (homeDashboardPromise === request) homeDashboardPromise = undefined;
-      });
+      const generation = principalGeneration;
+      const userId = currentUserId;
+      const tenantId = currentTenantId;
+      const request = client
+        .getHomeDashboard()
+        .then((dashboard) => {
+          if (
+            generation !== principalGeneration ||
+            userId !== currentUserId ||
+            tenantId !== currentTenantId
+          ) {
+            throw new Error('AUTH_PRINCIPAL_CHANGED');
+          }
+          if (nativeClient && dashboard.profile.userId !== userId) {
+            throw new ApiClientError(
+              'Account does not match',
+              403,
+              'NATIVE_ACCOUNT_MISMATCH',
+              'native',
+            );
+          }
+          return dashboard;
+        })
+        .finally(() => {
+          if (homeDashboardPromise === request) homeDashboardPromise = undefined;
+        });
       homeDashboardPromise = request;
       return request;
     },
@@ -2188,6 +2257,9 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getGame(gameId);
     },
 
+    // The advisory capability stays absent until its API owner is deployed and explicitly enabled.
+    // Synthetic/local gateways may supply the optional method to preview the panel.
+
     createGame(input, options) {
       return client.createGame(input, options);
     },
@@ -2245,6 +2317,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getLocation(locationId);
     },
 
+    listSupportTickets: (filters) => client.listSupportTickets(filters),
+    getSupportTicket: (id, before) => client.getSupportTicket(id, before),
+    createSupportTicket: (input, key) => client.createSupportTicket(input, key),
+    sendSupportTicketMessage: (id, input, key) => client.sendSupportTicketMessage(id, input, key),
     listMyCommunities(cursor, limit = 20) {
       if (cursor) return client.listMyCommunities({ limit, cursor });
       const pending = communityMembershipPagePromises.get(limit);
@@ -2419,21 +2495,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     listStationSupportStations() {
-      if (nativeClient) return nativeUnavailable();
       return client
         .request<{ readonly items: readonly StationSupportStation[] }>('/support/stations')
         .then((page) => page.items);
     },
 
     listStationSupportDialogs() {
-      if (nativeClient) return nativeUnavailable();
       return client
         .request<{ readonly items: readonly StationSupportDialog[] }>('/support/dialogs')
         .then((page) => page.items);
     },
 
     listStationSupportMessages(dialogId: string, before?: string) {
-      if (nativeClient) return nativeUnavailable();
       const suffix = before ? `?before=${encodeURIComponent(before)}` : '';
       return client
         .request<{
@@ -2449,7 +2522,6 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     sendStationSupportMessage(command: StationSupportSendCommand) {
-      if (nativeClient) return nativeUnavailable();
       const payload: Record<string, unknown> = { text: command.text };
       if (command.stationId) payload.stationId = command.stationId;
       if (command.dialogId) payload.dialogId = command.dialogId;
@@ -2467,12 +2539,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     uploadStationSupportAttachment(input) {
-      if (nativeClient) return nativeUnavailable();
       return client.uploadStationSupportAttachment(input);
     },
 
     loadStationSupportAttachment(attachmentId) {
-      if (nativeClient) return nativeUnavailable();
       return client.downloadStationSupportAttachment(attachmentId);
     },
 
@@ -2535,7 +2605,6 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     issueConversationMediaUpload(conversationId, input, idempotencyKey) {
-      if (nativeClient) return nativeUnavailable();
       return retryMessagingCommand((signal) =>
         client.request<MessagingMediaUploadResult>(
           `/conversations/${encodeURIComponent(conversationId)}/media/uploads`,
@@ -2550,7 +2619,6 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     finalizeConversationMediaUpload(conversationId, mediaId, declaredByteSize, idempotencyKey) {
-      if (nativeClient) return nativeUnavailable();
       return retryMessagingCommand((signal) =>
         client.request<MessagingMediaAsset>(
           `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/finalize`,
@@ -2565,15 +2633,26 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getConversationMedia(conversationId, mediaId) {
-      if (nativeClient) return nativeUnavailable();
       return client.request<MessagingMediaAsset>(
         `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}`,
       );
     },
 
     loadConversationMedia(conversationId, mediaId) {
-      if (nativeClient) return nativeUnavailable();
       return client.downloadConversationMedia(conversationId, mediaId);
+    },
+
+    async uploadConversationMediaBytes(conversationId, mediaId, bytes, idempotencyKey, signal) {
+      if (!nativeClient) return nativeUnavailable();
+      await retryMessagingCommand((attemptSignal) =>
+        client.uploadConversationMediaBytes(
+          conversationId,
+          mediaId,
+          bytes,
+          idempotencyKey,
+          signal ? AbortSignal.any([signal, attemptSignal]) : attemptSignal,
+        ),
+      );
     },
 
     markConversationRead(conversationId, throughSequence, idempotencyKey) {
@@ -2648,6 +2727,19 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getWebPushConfiguration();
     },
 
+    getAndroidPushConfiguration() {
+      if (!nativeClient) return nativeUnavailable();
+      return client.getAndroidPushConfiguration();
+    },
+    registerAndroidPushEndpoint(input, idempotencyKey) {
+      if (!nativeClient) return nativeUnavailable();
+      return client.registerAndroidPushEndpoint(input, idempotencyKey);
+    },
+    revokeAndroidPushEndpoint(installationId, idempotencyKey) {
+      if (!nativeClient) return nativeUnavailable();
+      return client.revokeAndroidPushEndpoint(installationId, idempotencyKey);
+    },
+
     registerWebPushEndpoint(input) {
       if (nativeClient) return nativeUnavailable();
       return client.registerWebPushEndpoint(input);
@@ -2660,6 +2752,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     async logout() {
       if (nativeClient) {
+        // Invalidate account reads before waiting for native revocation/recovery.
+        principalGeneration += 1;
+        currentUserId = undefined;
+        currentTenantId = undefined;
         client.clearAccessToken();
         if (options.nativeSessionTransport) await client.revokeSession();
       } else await client.revokeSession();
@@ -2684,7 +2780,7 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       currentTenantId = undefined;
       vivaReauthorizationStarted = false;
       vivaAccessPromise = undefined;
-      principalGeneration += 1;
+      if (!nativeClient) principalGeneration += 1;
       try {
         window.sessionStorage.removeItem(VIVA_REAUTH_RETURN_PATH_STORAGE_KEY);
         window.sessionStorage.removeItem(VIVA_REAUTH_ATTEMPT_STORAGE_KEY);

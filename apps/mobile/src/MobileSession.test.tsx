@@ -4,19 +4,33 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-import type { NativeCacheObservation } from './native-api-fetch.js';
+import type { NativeCacheObservation, NativeReadObservation } from './native-api-fetch.js';
 import type { ReactNode } from 'react';
 import type { StartAndroidYandexLogin } from './AndroidLoginGate.js';
+import { sanitizedNativeSessionError } from './session-failure.js';
+vi.mock('./android-push.js', () => ({
+  initialAndroidPushState: { enabled: false, state: 'unsupported', busy: false },
+  createAndroidPushController: () => ({
+    mount: () => () => undefined,
+    navigationReady: () => undefined,
+    sessionReady: () => undefined,
+    sessionExpired: () => undefined,
+    beforeLogout: () => calls.beforeLogout(),
+  }),
+}));
 vi.mock('./AndroidLoginGate.js', () => ({
   AndroidLoginGate: ({ children }: { children: (start: StartAndroidYandexLogin) => ReactNode }) =>
     children(() => Promise.resolve()),
 }));
 const calls = vi.hoisted(() => ({
+  cancelBookings: vi.fn(),
+  beforeLogout: vi.fn<() => Promise<void>>(),
   restore: vi.fn(),
   logout: vi.fn(),
   home: vi.fn(),
   locations: vi.fn(),
   observe: undefined as ((observation: NativeCacheObservation) => void) | undefined,
+  observeRead: undefined as ((observation: NativeReadObservation) => void) | undefined,
 }));
 vi.mock('./native-api-fetch.js', () => ({
   createNativeApiFetch: (
@@ -24,9 +38,11 @@ vi.mock('./native-api-fetch.js', () => ({
     _plugin: unknown,
     _expired: unknown,
     observe: typeof calls.observe,
+    observeRead: typeof calls.observeRead,
   ) => {
     calls.observe = observe;
-    return vi.fn();
+    calls.observeRead = observeRead;
+    return Object.assign(vi.fn(), { cancelUpcomingBookingsRefresh: calls.cancelBookings });
   },
 }));
 vi.mock('../../web/src/auth-gateway.js', () => ({
@@ -89,6 +105,10 @@ const config = {
   appVersion: 'test',
 };
 beforeEach(() => {
+  calls.cancelBookings.mockReset().mockResolvedValue(undefined);
+  calls.beforeLogout.mockReset().mockResolvedValue(undefined);
+  calls.observe = undefined;
+  calls.observeRead = undefined;
   calls.restore.mockReset().mockResolvedValue(null);
   calls.logout.mockReset().mockResolvedValue(undefined);
   calls.home.mockReset().mockResolvedValue({});
@@ -108,6 +128,7 @@ it('hides account data immediately and retries failed logout without remounting 
   fireEvent.click(await screen.findByRole('button', { name: 'Выйти' }));
   expect(await screen.findByText('Завершаем выход…')).toBeInTheDocument();
   expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
+  await waitFor(() => expect(calls.logout).toHaveBeenCalledOnce());
   reject(new Error('network unavailable'));
   expect(await screen.findByRole('alert')).toHaveTextContent('Выход ещё не завершён');
   expect(calls.restore).toHaveBeenCalledOnce();
@@ -125,6 +146,21 @@ it('offers restoration retry while preserving a transient storage/network error'
   expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
   expect(await screen.findByText('Личные данные тестового аккаунта')).toBeInTheDocument();
+});
+
+it('shows a safe storage diagnostic, hides account data and retries without logout', async () => {
+  calls.restore.mockRejectedValueOnce(
+    sanitizedNativeSessionError({ code: 'NATIVE_STORAGE_UNAVAILABLE', message: 'private' }),
+  );
+  render(<MobileApp config={config} native />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('защищённые данные');
+  expect(screen.getByText('Код ошибки: NATIVE_STORAGE_UNAVAILABLE')).toBeInTheDocument();
+  expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent('private');
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+  expect(await screen.findByText('Личные данные тестового аккаунта')).toBeInTheDocument();
+  expect(calls.logout).not.toHaveBeenCalled();
+  expect(calls.restore).toHaveBeenCalledTimes(2);
 });
 
 it('discards retained screen state after a denied cached read without revoking the account', async () => {
@@ -175,4 +211,119 @@ it('clears a retained snapshot after SDK parsing fails on a malformed HTTP 200, 
   await waitFor(() => expect(calls.home).toHaveBeenCalledTimes(3));
   expect(calls.restore).toHaveBeenCalledTimes(2);
   expect(calls.logout).not.toHaveBeenCalled();
+});
+
+it('reveals diagnostics only on request and clears each section independently', async () => {
+  render(<MobileApp config={config} native />);
+  await screen.findByRole('button', { name: 'Выйти' });
+  const correlationId = '00000000-0000-4000-8000-000000000003';
+  act(() => {
+    calls.observeRead?.({
+      section: 'profile',
+      failure: { status: 503, code: 'PROFILE_PROJECTION_STALE', correlationId },
+    });
+    calls.observeRead?.({
+      section: 'bookings',
+      failure: { status: 200, code: 'BOOKINGS_UNAVAILABLE' },
+    });
+  });
+  const details = screen.getByRole('button', { name: 'Сведения об ошибке загрузки' });
+  expect(details).toHaveAttribute('aria-expanded', 'false');
+  expect(document.getElementById(details.getAttribute('aria-controls')!)).toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent('PROFILE_PROJECTION_STALE');
+  expect(document.body).not.toHaveTextContent(correlationId);
+  fireEvent.click(details);
+  expect(details).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByText('HTTP 503; Код ошибки: PROFILE_PROJECTION_STALE')).toBeInTheDocument();
+  expect(screen.getByText('HTTP 200; Код ошибки: BOOKINGS_UNAVAILABLE')).toBeInTheDocument();
+  expect(screen.getByText(`Код запроса: ${correlationId}`)).toBeInTheDocument();
+  act(() => calls.observeRead?.({ section: 'profile', failure: null }));
+  expect(document.body).not.toHaveTextContent('PROFILE_PROJECTION_STALE');
+  expect(document.body).toHaveTextContent('BOOKINGS_UNAVAILABLE');
+  act(() => calls.observeRead?.({ section: 'bookings', failure: null }));
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  act(() =>
+    calls.observeRead?.({ section: 'profile', failure: { code: 'NATIVE_NETWORK_UNAVAILABLE' } }),
+  );
+  expect(screen.getByRole('button', { name: 'Сведения об ошибке загрузки' })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  expect(document.body).not.toHaveTextContent('NATIVE_NETWORK_UNAVAILABLE');
+  expect(calls.restore).toHaveBeenCalledOnce();
+  expect(calls.logout).not.toHaveBeenCalled();
+});
+
+it('clears expanded diagnostics immediately on logout and on the subsequent session remount', async () => {
+  let reject!: (reason: Error) => void;
+  calls.logout.mockImplementationOnce(
+    () =>
+      new Promise((_, failure) => {
+        reject = failure;
+      }),
+  );
+  render(<MobileApp config={config} native />);
+  await screen.findByRole('button', { name: 'Выйти' });
+  const oldObserveRead = calls.observeRead;
+  act(() =>
+    calls.observeRead?.({
+      section: 'profile',
+      failure: { status: 503, code: 'PROFILE_PROJECTION_STALE' },
+    }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Сведения об ошибке загрузки' }));
+  expect(document.body).toHaveTextContent('PROFILE_PROJECTION_STALE');
+  fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  expect(document.body).not.toHaveTextContent('PROFILE_PROJECTION_STALE');
+  await waitFor(() => expect(calls.logout).toHaveBeenCalledOnce());
+  reject(new Error('network unavailable'));
+  await screen.findByRole('alert');
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+  await waitFor(() => expect(calls.restore).toHaveBeenCalledTimes(2));
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  act(() =>
+    oldObserveRead?.({ section: 'profile', failure: { code: 'PROFILE_PROJECTION_STALE' } }),
+  );
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  act(() =>
+    calls.observeRead?.({ section: 'bookings', failure: { code: 'BOOKINGS_UNAVAILABLE' } }),
+  );
+  expect(screen.getByRole('button', { name: 'Сведения об ошибке загрузки' })).toHaveAttribute(
+    'aria-expanded',
+    'false',
+  );
+  expect(document.body).not.toHaveTextContent('BOOKINGS_UNAVAILABLE');
+});
+
+it('does not attach native read diagnostics to the browser session', async () => {
+  render(<MobileApp config={config} native={false} />);
+  await screen.findByRole('button', { name: 'Выйти' });
+  expect(calls.observeRead).toBeUndefined();
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
+});
+
+it('retires native bookings before push cleanup or session logout can wait', async () => {
+  let cancelled!: () => void;
+  calls.cancelBookings.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        cancelled = resolve;
+      }),
+  );
+  render(<MobileApp config={config} native />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Выйти' }));
+  await waitFor(() => expect(calls.cancelBookings).toHaveBeenCalledOnce());
+  expect(screen.queryByText('Личные данные тестового аккаунта')).not.toBeInTheDocument();
+  expect(calls.beforeLogout).not.toHaveBeenCalled();
+  expect(calls.logout).not.toHaveBeenCalled();
+  act(() => cancelled());
+  await waitFor(() => expect(calls.logout).toHaveBeenCalledOnce());
+  expect(calls.beforeLogout).toHaveBeenCalledOnce();
+  expect(calls.cancelBookings.mock.invocationCallOrder[0]).toBeLessThan(
+    calls.beforeLogout.mock.invocationCallOrder[0]!,
+  );
+  expect(calls.beforeLogout.mock.invocationCallOrder[0]).toBeLessThan(
+    calls.logout.mock.invocationCallOrder[0]!,
+  );
 });

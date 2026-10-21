@@ -45,6 +45,19 @@ export interface MessagingMediaObjectStore {
     readonly expiresAt: string;
   }): Promise<MessagingMediaUploadGrant>;
   inspectCurrentVersion(objectKey: string): Promise<MessagingMediaUploadedObject | undefined>;
+  /** Writes the quarantine source once. The caller owns neither its key nor storage headers. */
+  putSourceObject(input: {
+    readonly objectKey: string;
+    readonly contentType: string;
+    readonly body: Buffer;
+    readonly sha256: string;
+    readonly mediaId: string;
+  }): Promise<MessagingMediaUploadedObject>;
+  /** Reads one exact READY version for an authenticated API relay. */
+  readDelivery(input: {
+    readonly delivery: MessagingMediaDelivery;
+    readonly maxBytes: number;
+  }): Promise<Buffer>;
   createDeliveryUrl(input: {
     readonly delivery: MessagingMediaDelivery;
     readonly expiresInSeconds: number;
@@ -94,6 +107,42 @@ function checksumHex(
     return signedMetadataValue;
   }
   return null;
+}
+
+type BoundedObjectBody = AsyncIterable<Uint8Array> & {
+  readonly destroy?: (error?: Error) => void;
+  readonly cancel?: (reason?: unknown) => Promise<void>;
+};
+
+export async function readBoundedObjectBody(
+  body: BoundedObjectBody,
+  declaredBytes: number | undefined,
+  maxBytes: number,
+): Promise<Buffer> {
+  if (
+    declaredBytes === undefined ||
+    !Number.isSafeInteger(declaredBytes) ||
+    declaredBytes < 1 ||
+    declaredBytes > maxBytes
+  ) {
+    throw new Error('MESSAGING_MEDIA_OBJECT_SIZE_INVALID');
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of body) {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      const error = new Error('MESSAGING_MEDIA_OBJECT_TOO_LARGE');
+      body.destroy?.(error);
+      void body.cancel?.(error);
+      throw error;
+    }
+    chunks.push(Buffer.from(chunk));
+  }
+  // The declared length rejects malformed streams before allocation, while the running total
+  // rejects a lying/chunked response before an unbounded body can reach Buffer.concat.
+  if (total < 1 || total !== declaredBytes) throw new Error('MESSAGING_MEDIA_OBJECT_SIZE_INVALID');
+  return Buffer.concat(chunks, total);
 }
 
 /** Strips control characters and quotes that could break out of the header value. */
@@ -268,6 +317,62 @@ export class S3MessagingMediaObjectStore implements MessagingMediaObjectStore {
       if (httpStatus(error) === 404) return undefined;
       throw error;
     }
+  }
+
+  public async putSourceObject(input: {
+    readonly objectKey: string;
+    readonly contentType: string;
+    readonly body: Buffer;
+    readonly sha256: string;
+    readonly mediaId: string;
+  }): Promise<MessagingMediaUploadedObject> {
+    await this.ensureReady();
+    if (input.body.byteLength < 1 || input.body.byteLength > this.options.maxBytes) {
+      throw new Error('MESSAGING_MEDIA_OBJECT_SIZE_INVALID');
+    }
+    const result = await this.internalClient.send(
+      new PutObjectCommand({
+        Bucket: this.options.bucket,
+        Key: input.objectKey,
+        Body: input.body,
+        ContentType: input.contentType,
+        ContentLength: input.body.byteLength,
+        CacheControl: 'private, no-store',
+        IfNoneMatch: '*',
+        Metadata: {
+          'padlhub-media-id': input.mediaId,
+          'padlhub-sha256': input.sha256,
+        },
+        ChecksumSHA256: checksumBase64(input.sha256),
+      }),
+    );
+    return {
+      byteSize: input.body.byteLength,
+      contentType: input.contentType,
+      etag: requiredText(result.ETag, 'MESSAGING_MEDIA_OBJECT_ETAG_MISSING'),
+      versionId: requiredText(result.VersionId, 'MESSAGING_MEDIA_OBJECT_VERSION_MISSING'),
+      checksumSha256: input.sha256,
+    };
+  }
+
+  public async readDelivery(input: {
+    readonly delivery: MessagingMediaDelivery;
+    readonly maxBytes: number;
+  }): Promise<Buffer> {
+    await this.ensureReady();
+    const result = await this.internalClient.send(
+      new GetObjectCommand({
+        Bucket: this.options.bucket,
+        Key: input.delivery.objectKey,
+        VersionId: input.delivery.objectVersion,
+      }),
+    );
+    if (!result.Body) throw new Error('MESSAGING_MEDIA_OBJECT_MISSING');
+    return readBoundedObjectBody(
+      result.Body as BoundedObjectBody,
+      result.ContentLength,
+      input.maxBytes,
+    );
   }
 
   public async createDeliveryUrl(input: {

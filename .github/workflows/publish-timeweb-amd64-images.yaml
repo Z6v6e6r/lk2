@@ -874,17 +874,7 @@ jobs:
           path: |
             timeweb-amd64-publication-manifest.json
             timeweb-amd64-publication-checksums.txt
-            publication-evidence/images/*-oci-index.json
-            publication-evidence/images/*-runtime-manifest.json
-            publication-evidence/images/*-attestation-digests.txt
-            publication-evidence/images/*-attestation-layer-digests.txt
-            publication-evidence/images/*-attestation-layers.tsv
-            publication-evidence/images/*-attestation-manifests/*.json
-            publication-evidence/images/*-attestation-statements/*.json
-            publication-evidence/images/*-provenance.json
-            publication-evidence/images/*-sbom.spdx.json
-            publication-evidence/images/*-image.json
-            publication-evidence/images/*-evidence-checksums.txt
+            publication-evidence/images
           if-no-files-found: error
           retention-days: 90
       - id: canonical

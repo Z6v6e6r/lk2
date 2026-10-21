@@ -42,6 +42,14 @@ The browser is a transport participant, not the data owner:
 4. commands remain PadlHub API operations;
 5. the resulting screen DTO contains only PadlHub UUIDs and opaque cursors.
 
+For Android upcoming bookings only, the owner-approved exception in ADR 0023 permits a fixed
+native implementation of the same `MY_BOOKINGS` chain. The server-issued job, operation vocabulary,
+tenant/user binding, bounds, normalizer and projection writer remain the same. Java confines the
+token and raw response to invocation memory; a closed acknowledgement causes an ordinary PadlHub
+projection reread. The generic JavaScript request bridge is not extended to delegation or job POST
+routes. History, recommendations and every other direct-read operation retain their existing
+transport contracts.
+
 The implementation enables `schedule.read` inside authenticated, short-lived `FOR_ME` and
 `GROUP_TRAININGS` jobs, the fixed `bookings.read -> bookings.details.read` chain inside
 `MY_BOOKINGS`, and one bounded `bookings.history.read` page inside `ACTIVITY_HISTORY`. It does not

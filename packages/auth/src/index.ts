@@ -190,6 +190,8 @@ export function assertNoExternalIdentityToken(tokens: TokenPair & { vivaToken?: 
  * carries them, and an admin audience additionally requires the `admin` role.
  */
 export const ADMIN_ONLY_PERMISSIONS = [
+  'support.read',
+  'support.manage',
   'notifications.manage',
   'locations.read',
   'locations.manage',

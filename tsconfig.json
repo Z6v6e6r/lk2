@@ -39,6 +39,7 @@
       "@phub/viva-client-adapter": ["packages/viva-client-adapter/src/index.ts"],
       "@phub/database/contacts": ["packages/database/src/contact-reader.ts"],
       "@phub/database/password-login": ["packages/database/src/local-password-login-repository.ts"],
+      "@phub/database/support-tickets": ["packages/database/src/support-ticket-repository.ts"],
       "@phub/database/password-reset": ["packages/database/src/local-password-reset-repository.ts"]
     },
     "types": ["node", "vitest/globals"]

@@ -237,7 +237,7 @@ later credential generation fails closed. No additional durable password verifie
 Internal persistence methods are trusted service capabilities, not browser inputs or attestation
 booleans. Proof consumption cannot be authorized merely by passing `verified: true`.
 
-0098 is an empty expand migration with plain CREATE, bounded lock/statement timeouts, FORCE tenant
+0099 is an empty expand migration with plain CREATE, bounded lock/statement timeouts, FORCE tenant
 RLS, exact composite proof/receipt ownership and command constraints, and an index only over the
 new table. It does not grant rights or modify existing users/credentials/sessions/delegations.
 Binary rollback leaves the ledger/schema in place; use forward repair, never drop proof or receipt
@@ -255,3 +255,21 @@ enrollment, uniform externally observable recovery errors/timing, abuse limits, 
 public Origin/intent/idempotency/body contracts, real resource/ACL checks and client UX. Internal
 neutral issuance DTOs alone are not proof of a safe public enumeration contract. There is no
 production enrollment, real email, migration, ACL mutation or background delivery in this increment.
+
+### Integration after support migration 0098
+
+The reset-only task was updated on 21 October 2026 against main `0484c815`. Its unpublished
+reset migration moved from `0098_local_password_reset_proofs.sql` to
+`0099_local_password_reset_proofs.sql`, preserving the SQL bytes/checksum; the existing support
+migration and applied ledgers were not renamed or edited. The canonical upgrade rehearsal now
+applies through `0098_support_tickets.sql`, seeds synthetic credentials, refresh sessions and
+support ticket/message data, then verifies reset 0099 apply, drift rollback, checksum-once/no-op
+reapply and later failed-DDL rollback without changing those preexisting rows.
+
+The database build/export and TypeScript mapping retain both support-tickets and password-reset
+capabilities. Runtime reset/login behavior and the root database export remain unchanged.
+Before subsequent integration of support activation #400, its owner must review the pinned
+filename/checksum inventory and compatibility transitions against this added migration; its
+previous exact-inventory proof cannot authorize a different ledger. Do not widen those guards
+or modify that owner's branch here. Production activation still requires its own reviewed
+artifact, backup/ledger/ACL gates and exact-target authority.

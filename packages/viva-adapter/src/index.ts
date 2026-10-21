@@ -272,3 +272,5 @@ export class VivaAdapter implements VivaIntegrationPort {
     throw new Error(finalError?.message ?? 'EXTERNAL_SOURCE_REQUEST_FAILED');
   }
 }
+
+export * from './game-subscription-selection.js';

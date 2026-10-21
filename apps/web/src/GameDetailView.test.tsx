@@ -82,6 +82,7 @@ describe('GameDetailView', () => {
 
     expect(screen.getByLabelText('Стоимость места: 2 300 ₽')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Вступить в игру' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Мои условия участия' })).toBeNull();
   });
 
   it('keeps the match overview and result entry in two explicit tabs', async () => {

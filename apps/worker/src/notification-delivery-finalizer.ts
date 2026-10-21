@@ -30,10 +30,12 @@ export async function deferNotificationDeliveryWithoutAttempt(options: {
   readonly pool: Pool;
   readonly job: ClaimedNotificationDelivery;
   readonly retryAfterMs: number;
-  readonly errorCode: 'WEB_PUSH_CIRCUIT_OPEN';
+  readonly errorCode: 'WEB_PUSH_CIRCUIT_OPEN' | 'FCM_CIRCUIT_OPEN';
 }): Promise<'retry' | 'stale'> {
   const retryAfterMs = Math.max(1_000, Math.min(Math.trunc(options.retryAfterMs), 3_600_000));
   return withTenantTransaction(options.pool, options.job.tenantId, async (client) => {
+    // No provider call has occurred. Preserve the baseline claim-generation fence:
+    // a reclaim increments attempt_count, so an older deferrer cannot match it.
     const updated = await client.query(
       `update notifications.deliveries
           set state = 'PENDING',
@@ -171,7 +173,15 @@ export async function finalizeNotificationDelivery(options: {
       attemptOutcome = retryable ? 'RETRYABLE_FAILURE' : 'TERMINAL_FAILURE';
       deliveryState = retryable ? 'PENDING' : 'DEAD';
       if (retryable) {
-        const delayMs = notificationRetryDelayMs(options.job.attemptNo, options.retryBaseMs);
+        const providerDelay =
+          options.result.outcome === 'retryable_failure' &&
+          Number.isFinite(options.result.retryAfterMs)
+            ? Math.max(0, Math.min(options.result.retryAfterMs ?? 0, 3_600_000))
+            : 0;
+        const delayMs = Math.max(
+          notificationRetryDelayMs(options.job.attemptNo, options.retryBaseMs),
+          providerDelay,
+        );
         const updated = await client.query(
           `update notifications.deliveries
               set state = 'PENDING',

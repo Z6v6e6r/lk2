@@ -82,6 +82,9 @@ import {
 const BookingsPage = lazy(() =>
   import('./BookingsPage.js').then((module) => ({ default: module.BookingsPage })),
 );
+const SupportPage = lazy(() =>
+  import('./SupportPage.js').then((module) => ({ default: module.SupportPage })),
+);
 const ChatsPage = lazy(() =>
   import('./ChatsPage.js').then((module) => ({ default: module.ChatsPage })),
 );
@@ -151,6 +154,7 @@ type ProtectedRoute =
       readonly conversationId?: string;
     }
   | { readonly kind: 'notifications' }
+  | { readonly kind: 'support'; readonly ticketId?: string }
   | { readonly kind: 'communities' }
   | { readonly kind: 'community'; readonly communityId: string }
   | { readonly kind: 'community-invite' }
@@ -193,6 +197,11 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
     return { kind: 'chats', mode: 'thread', conversationId: chatMatch[1] };
   }
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
+  if (normalizedPath === '/support') return { kind: 'support' };
+  const supportMatch = normalizedPath.match(
+    /^\/support\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (supportMatch?.[1]) return { kind: 'support', ticketId: supportMatch[1] };
   if (normalizedPath === '/communities') return { kind: 'communities' };
   if (normalizedPath === '/community-invite') return { kind: 'community-invite' };
   const communityMatch = normalizedPath.match(
@@ -644,6 +653,14 @@ export interface AppProps {
   readonly tenantKey: string;
   readonly realtimeBaseUrl?: string;
   readonly realtimeUrl?: string;
+  readonly devicePush?: {
+    readonly enabled: boolean;
+    readonly state: WebPushBrowserState;
+    readonly busy: boolean;
+    readonly error?: string;
+    readonly enable: () => void;
+    readonly disable: () => void;
+  };
 }
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
@@ -662,6 +679,7 @@ export function App({
   tenantKey,
   realtimeBaseUrl,
   realtimeUrl,
+  devicePush,
 }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
   const communityRealtimeTransport = useMemo(() => {
@@ -848,8 +866,10 @@ export function App({
     'home-v3',
     'profile',
     'profile-level-history',
+    'support',
     'bookings',
     'notifications',
+    'chats',
     'locations',
     'location',
   ]);
@@ -1165,13 +1185,30 @@ export function App({
             setProfileCommunitiesError('Не удалось загрузить сообщества.');
           },
         );
-        void Promise.resolve().then(() => {
-          if (!active) return;
-          setProfileSubscriptions(null);
-          setProfileSubscriptionsError(
-            'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
+        if (clientPlatform === 'android') {
+          void gateway.getHomeDashboard().then(
+            (dashboard) => {
+              if (!active) return;
+              setProfileSubscriptions(dashboard.subscriptions);
+              setProfileSubscriptionsError(null);
+            },
+            () => {
+              if (!active) return;
+              setProfileSubscriptions(null);
+              setProfileSubscriptionsError(
+                'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
+              );
+            },
           );
-        });
+        } else {
+          void Promise.resolve().then(() => {
+            if (!active) return;
+            setProfileSubscriptions(null);
+            setProfileSubscriptionsError(
+              'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
+            );
+          });
+        }
         void gateway.listProfileFriends(8).then(
           (page) => {
             if (!active) return;
@@ -1543,8 +1580,12 @@ export function App({
       loadConversations();
       void Promise.allSettled([
         gateway.listNotifications(),
-        gateway.getWebPushConfiguration(),
-        getWebPushBrowserState(serviceWorkerUrl),
+        clientPlatform === 'android'
+          ? Promise.resolve({ enabled: false })
+          : gateway.getWebPushConfiguration(),
+        clientPlatform === 'android'
+          ? Promise.resolve('unsupported' as const)
+          : getWebPushBrowserState(serviceWorkerUrl),
         gateway.listProfileFriendRequests(),
         gateway.listProfileFriendRequests(8, 'outgoing'),
         gateway.getNotificationPreferences(),
@@ -1714,6 +1755,7 @@ export function App({
   }, [
     gateway,
     chatsReloadToken,
+    clientPlatform,
     protectedRoute.kind,
     realtimeBaseUrl,
     requestedConversationId,
@@ -1993,9 +2035,26 @@ export function App({
         mediaType: issued.media.mediaType,
         progress: 0,
       });
-      const transfer = putChatAttachmentBytes(issued.upload, file, (progress) => {
-        if (isActive()) updateChatAttachment(localId, { progress });
-      });
+      const transfer =
+        clientPlatform === 'android'
+          ? (() => {
+              const upload = gateway.uploadConversationMediaBytes;
+              if (!upload) throw new Error('NATIVE_REQUEST_REJECTED');
+              const controller = new AbortController();
+              return {
+                promise: upload(
+                  conversationId,
+                  mediaId,
+                  file,
+                  createMessagingCommandId(),
+                  controller.signal,
+                ),
+                abort: () => controller.abort(),
+              };
+            })()
+          : putChatAttachmentBytes(issued.upload, file, (progress) => {
+              if (isActive()) updateChatAttachment(localId, { progress });
+            });
       chatAttachmentAbortRef.current.set(localId, transfer.abort);
       try {
         await transfer.promise;
@@ -2528,6 +2587,7 @@ export function App({
       }
       return (
         <ProfilePage
+          subscriptionRenewalAvailable={clientPlatform === 'web'}
           profile={userProfile}
           logoutBusy={state.busy === 'logout'}
           notificationUnreadCount={(notifications?.unreadCount ?? 0) + friendRequests.length}
@@ -2544,6 +2604,7 @@ export function App({
           subscriptionsError={profileSubscriptionsError}
           communities={profileCommunities}
           communitiesError={profileCommunitiesError}
+          loadCommunityPage={gateway.listMyCommunities}
           friends={profileFriends}
           friendship={profileFriendship}
           friendsBusy={profileFriendsBusy}
@@ -2656,7 +2717,7 @@ export function App({
                   {notificationsError}
                 </p>
               ) : (
-                <p role="status">Проверяем ленту и Web Push…</p>
+                <p role="status">Проверяем ленту и уведомления…</p>
               )}
             </section>
           </main>
@@ -2665,11 +2726,12 @@ export function App({
       return (
         <NotificationsPage
           page={notifications}
-          webPush={webPushConfiguration}
-          browserState={webPushBrowserState}
+          webPush={devicePush ? { enabled: devicePush.enabled } : webPushConfiguration}
+          browserState={devicePush?.state ?? webPushBrowserState}
+          platform={clientPlatform}
           conversations={notificationConversations}
-          busy={notificationsBusy}
-          error={notificationsError}
+          busy={notificationsBusy || Boolean(devicePush?.busy)}
+          error={devicePush?.error ?? notificationsError}
           inboxUnavailable={notificationsInboxUnavailable}
           preferences={notificationPreferences}
           preferencesBusy={notificationPreferencesBusy}
@@ -2680,12 +2742,22 @@ export function App({
           friendRequestBusyId={friendRequestBusyId}
           onAcceptFriendRequest={handleAcceptFriendRequest}
           onDeclineFriendRequest={handleDeclineFriendRequest}
-          onEnableWebPush={handleEnableWebPush}
-          onDisableWebPush={handleDisableWebPush}
+          onEnableWebPush={devicePush?.enable ?? handleEnableWebPush}
+          onDisableWebPush={devicePush?.disable ?? handleDisableWebPush}
           onSavePreferences={handleSaveNotificationPreferences}
           onMarkAllRead={handleMarkAllNotificationsRead}
           onRetryInbox={handleRetryNotificationInbox}
           onOpenNotification={handleOpenNotification}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'support') {
+      return (
+        <SupportPage
+          key={state.session.context.user.id}
+          gateway={gateway}
+          readOnly={realAccountPreview}
+          {...(protectedRoute.ticketId ? { initialTicketId: protectedRoute.ticketId } : {})}
         />
       );
     }
