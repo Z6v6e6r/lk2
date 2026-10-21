@@ -290,14 +290,12 @@ describe('notification User API', () => {
       logger: createLogger('notification-api-test', 'silent'),
       pool: fakePool(),
       notificationRepository: repository({
-        getRuntimeSettings: vi
-          .fn()
-          .mockResolvedValue({
-            inAppEnabled: false,
-            webPushEnabled: false,
-            iosPushEnabled: false,
-            androidPushEnabled: true,
-          }),
+        getRuntimeSettings: vi.fn().mockResolvedValue({
+          inAppEnabled: false,
+          webPushEnabled: false,
+          iosPushEnabled: false,
+          androidPushEnabled: true,
+        }),
       }),
       notificationPreferenceRepository: preferenceRepository(),
     });
