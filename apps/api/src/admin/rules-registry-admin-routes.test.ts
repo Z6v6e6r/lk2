@@ -55,6 +55,26 @@ async function token(permissions: readonly string[]): Promise<string> {
     .sign(new TextEncoder().encode(config.JWT_ACCESS_SECRET));
 }
 
+interface RegistryBody {
+  level: { source: string; status: string; sportCode?: string };
+  subscriptions: { source: string; status: string; reason?: string; registry?: unknown };
+  legacy: {
+    source: string;
+    status: string;
+    authority?: string;
+    products?: number;
+    rules?: number;
+    repo?: { sha: string; url: string; date: string };
+  };
+}
+
+interface LegacyBody {
+  schemaVersion: number;
+  source: string;
+  authority: string;
+  inventory: { products: unknown[]; rules: Array<Record<string, unknown>> };
+}
+
 function levelRepository(): LevelEligibilityPolicyRepository {
   return {
     getState: vi.fn().mockResolvedValue(levelState),
@@ -89,7 +109,7 @@ describe('rules registry admin route', () => {
       headers: await adminHeaders(),
     });
     expect(response.statusCode).toBe(200);
-    const body = response.json();
+    const body = JSON.parse(response.body) as RegistryBody;
     expect(body.level).toMatchObject({ source: 'LK2_LEVEL', status: 'OK', sportCode: 'PADEL' });
     expect(body.subscriptions).toMatchObject({
       source: 'CUP_PUBLISHED',
@@ -97,6 +117,16 @@ describe('rules registry admin route', () => {
       registry,
     });
     expect(read).toHaveBeenCalledTimes(1);
+    expect(body.legacy).toMatchObject({
+      source: 'LK1_INVENTORY',
+      status: 'OK',
+      authority: 'INVENTORY_ONLY',
+    });
+    expect(typeof body.legacy.repo?.sha).toBe('string');
+    expect(typeof body.legacy.repo?.url).toBe('string');
+    expect(typeof body.legacy.repo?.date).toBe('string');
+    expect(body.legacy.products ?? 0).toBeGreaterThan(0);
+    expect(body.legacy.rules ?? 0).toBeGreaterThan(0);
     expect(response.headers['cache-control']).toBe('no-store');
   });
 
@@ -117,12 +147,39 @@ describe('rules registry admin route', () => {
       headers: await adminHeaders(),
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().level).toMatchObject({ status: 'OK' });
-    expect(response.json().subscriptions).toEqual({
+    const unavailable = JSON.parse(response.body) as RegistryBody;
+    expect(unavailable.level).toMatchObject({ status: 'OK' });
+    expect(unavailable.subscriptions).toEqual({
       source: 'CUP_PUBLISHED',
       status: 'UNAVAILABLE',
       reason: 'SUBSCRIPTION_POLICY_REGISTRY_UNAVAILABLE',
     });
+  });
+
+  it('serves the LK1 inventory snapshot as explicit intake evidence', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('rules-registry-admin-test', 'silent'),
+      pool: fakePool(),
+      levelEligibilityPolicyRepository: levelRepository(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/legacy-rules-inventory',
+      headers: await adminHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as LegacyBody;
+    expect(body).toMatchObject({
+      schemaVersion: 1,
+      source: 'LK1_INVENTORY',
+      authority: 'INVENTORY_ONLY',
+    });
+    expect(body.inventory.products.length).toBeGreaterThan(0);
+    expect(body.inventory.rules.length).toBeGreaterThan(0);
+    expect(body.inventory.rules[0]).toHaveProperty('ruleId');
+    expect(body.inventory.rules[0]).toHaveProperty('evidence');
   });
 
   it('does not present missing sources as empty data', async () => {
@@ -138,12 +195,13 @@ describe('rules registry admin route', () => {
       headers: await adminHeaders(),
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().level).toEqual({
+    const missing = JSON.parse(response.body) as RegistryBody;
+    expect(missing.level).toEqual({
       source: 'LK2_LEVEL',
       status: 'UNAVAILABLE',
       reason: 'LEVEL_ELIGIBILITY_REPOSITORY_NOT_CONFIGURED',
     });
-    expect(response.json().subscriptions).toEqual({
+    expect(missing.subscriptions).toEqual({
       source: 'CUP_PUBLISHED',
       status: 'UNAVAILABLE',
       reason: 'SUBSCRIPTION_POLICY_REGISTRY_NOT_CONFIGURED',
@@ -180,5 +238,12 @@ describe('rules registry admin route', () => {
       headers: { 'x-app-platform': 'cup-admin' },
     });
     expect(unauthenticated.statusCode).toBe(401);
+
+    const legacyWithoutPermission = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/legacy-rules-inventory',
+      headers: await adminHeaders(['eligibility.read']),
+    });
+    expect(legacyWithoutPermission.statusCode).toBe(403);
   });
 });
