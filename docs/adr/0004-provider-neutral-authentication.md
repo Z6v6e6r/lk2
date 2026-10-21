@@ -80,6 +80,10 @@ Android uses the existing server-owned Viva/Yandex provider flow through a one-u
 An additional independent native S256 challenge binds the provider result to its initiating APK.
 The browser callback issues only a metadata-backed 120-second code in a verified HTTPS App Link
 fragment; it never discloses PadlHub/Viva credentials or sets the PadlHub refresh cookie in the browser.
+When that App Link is not claimed on a device, the static page offers only a user-initiated
+`padlhub://oauth/yandex` return, which native code strictly rewrites into the same callback URL; the
+code stays bound to the device-held S256 verifier and state, so the browser still receives no
+credential and no new trust path is opened.
 Only the native HTTPS exchange, with the verifier/state and first idempotency key, receives the
 existing session response. Same-key recovery requires the exact active, unrotated session on every
 attempt. The encrypted native attempt journal is cleared only after atomic Keystore credential

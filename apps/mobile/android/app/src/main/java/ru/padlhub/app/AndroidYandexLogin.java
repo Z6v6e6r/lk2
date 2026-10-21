@@ -18,7 +18,11 @@ import static ru.padlhub.app.AndroidSessionEngine.Response;
 /** Native-only PKCE custody. Invoked on the same serial queue as refresh and logout. */
 final class AndroidYandexLogin {
     static final long MAX_AGE = 600_000;
-    static final Pattern CALLBACK = Pattern.compile("^https://lk2\\.padlhub\\.su/android/oauth/yandex#code=([A-Za-z0-9_-]{43})&state=([A-Za-z0-9_-]{43})$");
+    static final String TARGET = "https://lk2.padlhub.su/android/oauth/yandex";
+    static final Pattern CALLBACK = Pattern.compile("^" + Pattern.quote(TARGET) + "#code=([A-Za-z0-9_-]{43})&state=([A-Za-z0-9_-]{43})$");
+    // The static fallback page opens this scheme when Android does not claim the verified App Link.
+    // A stolen code is useless without the attempt's S256 verifier and matching state.
+    static final Pattern FALLBACK = Pattern.compile("^padlhub://oauth/yandex\\?code=([A-Za-z0-9_-]{43})&state=([A-Za-z0-9_-]{43})$");
     static final class Pending {
         final String state, verifier, startKey, exchangeKey, code;
         final long expiresAt;
@@ -75,6 +79,15 @@ final class AndroidYandexLogin {
             if (error instanceof Failure) throw (Failure) error;
             throw new Failure("NATIVE_RESPONSE_REJECTED");
         }
+    }
+
+    /** Canonical HTTPS callback for the verified App Link or the native fallback scheme, else null. */
+    static String callbackUrl(String raw) {
+        if (raw == null || raw.length() > 256) return null;
+        if (CALLBACK.matcher(raw).matches()) return raw;
+        Matcher fallback = FALLBACK.matcher(raw);
+        if (!fallback.matches()) return null;
+        return TARGET + "#code=" + fallback.group(1) + "&state=" + fallback.group(2);
     }
 
     boolean callback(String raw) throws Failure {
