@@ -117,8 +117,9 @@ No client secret, Viva token, browser refresh cookie, WebView OAuth page or new 
    metadata-only, 120-second handoff; they never create a Viva access handoff or browser refresh cookie.
 4. The callback redirects to the verified App Link
    `https://lk2.padlhub.su/android/oauth/yandex#code=…&state=…`. The fragment does not reach HTTP logs.
-   There is no custom-scheme fallback. If Android does not claim the link, the static page removes
-   its fragment from history and explains how to enable supported links and restart login.
+   If Android does not claim the link, the static page explains the device state and offers a
+   user-initiated return described in [browser fallback return](#browser-fallback-return). It never
+   completes login itself and removes the fragment from the address bar and history.
 5. Native validates the exact URI/attempt and persists the callback before exchange. POST
    `/auth/viva/android/exchange` proves PKCE and binds the first exchange key atomically. The same
    key recovers a lost response only while the exact session is active, unrotated and unrevoked.
@@ -131,6 +132,33 @@ expiry is allowed. Process recreation retains the same verifier, callback and id
 crash after credential storage uses its matching attempt marker and does not repeat exchange.
 Logout durably records intent before clearing OAuth state, then uses existing revocation recovery.
 Old, cancelled, foreign, malformed or duplicate callbacks cannot replace an account or pending code.
+
+### Browser fallback return
+
+Android claims the App Link only where Digital Asset Link verification succeeded on that device. A
+VPN or proxy during installation, a differently signed APK, disabled supported links, or a browser
+without App Link dispatch leaves the one-time fragment on the web page; users then saw a dead end
+that only asked them to change Android settings and start again. The page still never completes
+login: the S256 verifier exists only inside the encrypted native attempt journal.
+
+The page keeps the fragment out of the address bar, history and any request and places it only in the
+app-return link. For an exact `#code=<43>&state=<43>` fragment it shows a user-initiated
+**Открыть приложение** action that opens `padlhub://oauth/yandex?code=…&state=…`, one retry of the
+App Link itself, a note that the code expires quickly, and instructions for supported links,
+VPN/proxy, updating the app and the SMS alternative. Without a code it reports that the login must be
+restarted instead of offering a dead action.
+
+The APK registers `padlhub://oauth/yandex` (exact scheme/host/path, `BROWSABLE`, no `autoVerify`) and
+accepts only the exact query grammar before rewriting it to the canonical App Link callback URL.
+Custody, attempt expiry, state comparison, PKCE exchange and journal semantics are unchanged; an app
+that intercepts the code still cannot exchange it without the verifier. Malformed, extended,
+reordered, uppercased or non-canonical fallback intents are ignored exactly like foreign App Links.
+The fallback is a transport for the same callback, not a new login or credential path.
+
+A release carrying this fallback needs an APK `versionCode` above the currently distributed build;
+no version is assigned by this source change. `1.14/code 15` is currently used by the unmerged
+read-observation Draft PR #386, so the release owner chooses the next free version when assembling
+the APK.
 
 ### Deployment and certificate prerequisites
 
@@ -152,7 +180,11 @@ canonicalization behind the TLS ingress otherwise redirects to its internal HTTP
 The response is `no-store` and `no-referrer`; a missing fallback file must return 404 rather than
 the SPA shell. Also check HEAD, the trailing-slash path and the unchanged association file.
 The Docker-enabled CI fixture exercises the shipped nginx configuration; the browser test executes
-the fallback's fragment cleanup with synthetic values. Neither proves device App Link dispatch.
+the fallback's fragment cleanup, fallback action, malformed-input rejection and restart guidance with
+synthetic values. Neither proves device App Link dispatch or a browser's custom-scheme launch. On a
+controlled device, start an authorized login while the App Link is unverified or unsupported, check
+that **Открыть приложение** opens the app and completes the existing exchange, and that a malformed,
+extended or replayed fallback intent changes nothing; then restore the association.
 
 After an approved Web/API rollout, require `/.well-known/assetlinks.json` to return HTTPS 200,
 JSON and the exact packaged APK certificate without redirects. On a controlled Android device,
