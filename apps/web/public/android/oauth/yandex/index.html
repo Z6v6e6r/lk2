@@ -5,18 +5,135 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="referrer" content="no-referrer" />
     <title>Вход в ПадлхАБ</title>
-    <script>
-      // An unclaimed App Link must not retain the one-time fragment in browser history.
-      history.replaceState(null, '', location.pathname);
-    </script>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 32px 20px 40px;
+        background: #fbfbfa;
+        color: #1c1b1f;
+        font:
+          17px/1.45 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 520px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0 0 16px;
+        font-size: 30px;
+        line-height: 1.2;
+      }
+      h2 {
+        margin: 28px 0 10px;
+        font-size: 19px;
+      }
+      p,
+      ol {
+        margin: 0 0 16px;
+      }
+      ol {
+        padding-left: 22px;
+      }
+      li {
+        margin-bottom: 8px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .button {
+        display: block;
+        width: 100%;
+        min-height: 52px;
+        padding: 15px 18px;
+        border-radius: 16px;
+        background: #6f4bd8;
+        color: #ffffff;
+        font-weight: 600;
+        text-align: center;
+        text-decoration: none;
+      }
+      .button:focus-visible,
+      .retry:focus-visible {
+        outline: 3px solid #1c1b1f;
+        outline-offset: 2px;
+      }
+      .retry {
+        display: inline-block;
+        min-height: 44px;
+        padding: 10px 0;
+        color: #4b3ea8;
+      }
+      .notice {
+        padding: 12px 16px;
+        border-radius: 12px;
+        background: #f1ecff;
+      }
+      .hint {
+        color: #5c5766;
+        font-size: 15px;
+      }
+    </style>
   </head>
   <body>
     <main>
       <h1>Вернитесь в приложение ПадлхАБ</h1>
-      <p>
-        Если приложение не открылось, разрешите ему открывать поддерживаемые ссылки в настройках
-        Android и начните вход заново.
+      <p id="lead">
+        Браузер не передал вход приложению автоматически. Нажмите кнопку — вход продолжится в
+        приложении.
       </p>
+      <a class="button" id="open-app" href="https://lk2.padlhub.su/android/oauth/yandex">
+        Открыть приложение
+      </a>
+      <p class="hint" id="expiry" hidden>
+        Код входа действует ограниченное время — нажмите кнопку сразу.
+      </p>
+      <a class="retry" id="retry" hidden href="https://lk2.padlhub.su/android/oauth/yandex">
+        Не открылось? Попробуйте открыть ссылку входа ещё раз
+      </a>
+      <p class="notice" id="no-code" hidden>
+        Код входа не найден. Начните вход заново в приложении.
+      </p>
+      <h2>Если приложение не открылось</h2>
+      <ol>
+        <li>
+          В настройках Android откройте «Приложения → ПадлхАБ → Открывать по умолчанию» и разрешите
+          открытие поддерживаемых ссылок.
+        </li>
+        <li>Отключите VPN или прокси и начните вход заново.</li>
+        <li>Обновите приложение до последней версии.</li>
+        <li>Если вход через Яндекс ID не завершается, вернитесь в приложение и войдите по СМС.</li>
+      </ol>
     </main>
+    <script>
+      (function () {
+        var TARGET = 'https://lk2.padlhub.su/android/oauth/yandex';
+        var match = /^#code=([A-Za-z0-9_-]{43})&state=([A-Za-z0-9_-]{43})$/.exec(location.hash);
+        // The one-time credential must not stay in browser history; it lives only in this page.
+        history.replaceState(null, '', location.pathname);
+        if (!match) {
+          document.getElementById('lead').hidden = true;
+          document.getElementById('open-app').hidden = true;
+          document.getElementById('no-code').hidden = false;
+          return;
+        }
+        var open = document.getElementById('open-app');
+        open.setAttribute('href', 'padlhub://oauth/yandex?code=' + match[1] + '&state=' + match[2]);
+        open.hidden = false;
+        document.getElementById('expiry').hidden = false;
+        var retry = document.getElementById('retry');
+        retry.setAttribute('href', TARGET + '#code=' + match[1] + '&state=' + match[2]);
+        retry.hidden = false;
+      })();
+    </script>
   </body>
 </html>

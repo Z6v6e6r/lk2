@@ -38,6 +38,14 @@
                 <data android:scheme="https" android:host="lk2.padlhub.su" android:path="/android/oauth/yandex" />
             </intent-filter>
 
+            <!-- Browser fallback for devices where Android does not claim the verified App Link. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="padlhub" android:host="oauth" android:path="/yandex" />
+            </intent-filter>
+
         </activity>
 
         <provider

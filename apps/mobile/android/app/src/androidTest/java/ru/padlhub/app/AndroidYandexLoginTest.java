@@ -176,7 +176,7 @@ public class AndroidYandexLoginTest {
         } finally { store.clear(); }
     }
 
-    @Test public void effectiveManifestResolvesOnlyTheHttpsAppLinkPath() {
+    @Test public void effectiveManifestResolvesOnlyTheTwoYandexCallbackForms() {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         Intent valid = new Intent(Intent.ACTION_VIEW, Uri.parse(TARGET + "#code=" + CODE + "&state=" + token('s')))
             .addCategory(Intent.CATEGORY_BROWSABLE).setPackage(context.getPackageName());
@@ -184,6 +184,13 @@ public class AndroidYandexLoginTest {
         valid.setData(Uri.parse("https://lk2.padlhub.su/other"));
         assertNull(context.getPackageManager().resolveActivity(valid, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY));
         valid.setData(Uri.parse("ru.padlhub.app:/oauth/yandex"));
+        assertNull(context.getPackageManager().resolveActivity(valid, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY));
+        // The browser fallback resolves only through the exact scheme/host/path filter.
+        valid.setData(Uri.parse("padlhub://oauth/yandex?code=" + CODE + "&state=" + token('s')));
+        assertNotNull(context.getPackageManager().resolveActivity(valid, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY));
+        valid.setData(Uri.parse("padlhub://oauth/other?code=" + CODE + "&state=" + token('s')));
+        assertNull(context.getPackageManager().resolveActivity(valid, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY));
+        valid.setData(Uri.parse("padlhub://oauth/yandex/?code=" + CODE + "&state=" + token('s')));
         assertNull(context.getPackageManager().resolveActivity(valid, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY));
     }
 }

@@ -220,18 +220,18 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
 
     private void receiveOAuthIntent(Intent intent) {
         if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction()) || intent.getData() == null || oauth == null) return;
-        String raw = intent.getDataString();
-        if (raw == null || !raw.startsWith("https://lk2.padlhub.su/android/oauth/yandex")) return;
+        String canonical = AndroidYandexLogin.callbackUrl(intent.getDataString());
+        if (canonical == null) return;
         try {
             queue.execute(() -> {
                 try {
-                    if (oauth.callback(raw)) {
+                    if (oauth.callback(canonical)) {
                         callbackStorageFailed = false;
                         getActivity().runOnUiThread(() -> { intent.setData(null); notifyListeners("yandexLoginChanged", new JSObject()); });
                     }
                 } catch (Failure ignored) {
                     // Keep the intent for an explicit status retry if durable callback custody failed.
-                    failedCallback = raw;
+                    failedCallback = canonical;
                     callbackStorageFailed = true;
                     getActivity().runOnUiThread(() -> notifyListeners("yandexLoginChanged", new JSObject()));
                 }
