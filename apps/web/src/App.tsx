@@ -2892,6 +2892,7 @@ export function App({
         <GamesPage
           gateway={gateway}
           chatNavigationScope={{ tenantKey, userId: context.user.id }}
+          joinPrincipal={{ tenantId: context.tenant.id, userId: context.user.id }}
           {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
           {...(eventId ? { eventId } : {})}
         />

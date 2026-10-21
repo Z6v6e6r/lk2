@@ -585,6 +585,14 @@ export interface AuthGateway {
     expectedRevision?: number,
     invitationId?: string,
   ) => Promise<GameCommandResult>;
+  /**
+   * Paid JOIN through the existing owner of booking/entitlement (HANDOFF-C1 §2.2/§2.5). The caller
+   * owns the idempotency key: a lost response is recovered by `getPaidJoinOperation`, never by a new
+   * POST. Optional capability: a gateway without it keeps the fail-closed free-join path.
+   */
+  readonly joinPaidGame?: PadlHubApiClient['joinPaidGame'];
+  /** Readback of the same commercial operation by its original idempotency key. */
+  readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
   readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
   readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
@@ -2270,6 +2278,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     joinGame(gameId, expectedRevision, invitationId) {
       return client.joinGame(gameId, expectedRevision, invitationId);
+    },
+
+    joinPaidGame(gameId, input, idempotencyKey) {
+      return client.joinPaidGame(gameId, input, idempotencyKey);
+    },
+
+    getPaidJoinOperation(gameId, idempotencyKey) {
+      return client.getPaidJoinOperation(gameId, idempotencyKey);
     },
 
     leaveGame(gameId) {

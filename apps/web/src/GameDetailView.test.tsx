@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
 import type { GameCard } from './auth-gateway.js';
+import type { GameJoinFlowState } from './game-join-flow.js';
 
 const PLAYERS = [
   ['f75b4e2a-9c98-4b26-85b6-ae58e0edca24', 'Анна'],
@@ -303,5 +304,104 @@ describe('GameDetailView', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Подтвердить результат' }));
     expect(onAction).toHaveBeenCalledWith('CONFIRM_RESULT');
+  });
+});
+
+describe('GameDetailView paid join flow', () => {
+  const paidGame: GameCard = {
+    ...game,
+    surface: 'DISCOVER',
+    displayState: 'FINDING_PLAYERS',
+    priceSummary: { amountMinor: 250000, currency: 'RUB' },
+    viewerRelation: 'NONE',
+    viewerPaymentState: 'NOT_REQUIRED',
+    capacity: { total: 4, occupied: 2, reserved: 0, open: 2, waitlistCount: 0 },
+    participants: game.participants.slice(0, 2),
+    resultSummary: null,
+    allowedActions: ['OPEN_DETAILS', 'JOIN'],
+    conversation: null,
+  };
+
+  function renderWithFlow(flow: GameJoinFlowState, onConfirmConsent = vi.fn()): void {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={paidGame}
+        joinFlow={flow}
+        joinFlowBusy={false}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onChatNavigate={vi.fn()}
+        onJoinConsent={onConfirmConsent}
+        onJoinConsentCancel={vi.fn()}
+        onJoinStatusCheck={vi.fn()}
+        onJoinRetry={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+  }
+
+  it('shows the server-owned amount and only sends an explicit consent', async () => {
+    const onConfirmConsent = vi.fn();
+    renderWithFlow(
+      {
+        kind: 'NEEDS_CONSENT',
+        consent: { amountMinor: 250000, currency: 'RUB' },
+        subscriptionInstanceId: '66666666-6666-4666-8666-666666666666',
+        message: '',
+      },
+      onConfirmConsent,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Подтверждение стоимости' })).toBeVisible();
+    expect(screen.getByText('2 500 ₽')).toBeVisible();
+    // The ordinary JOIN button is replaced while consent owns the action.
+    expect(screen.queryByRole('button', { name: 'Вступить в игру' })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^Подтвердить/ }));
+    expect(onConfirmConsent).toHaveBeenCalledWith({ amountMinor: 250000, currency: 'RUB' });
+  });
+
+  it('shows status-checking and never a replacement purchase button after an unknown outcome', () => {
+    renderWithFlow({
+      kind: 'WAIT_FOR_RECONCILIATION',
+      reason: 'UNKNOWN',
+      retryAfterSeconds: 5,
+      message: 'Статус операции не подтверждён. Повторная оплата недоступна.',
+    });
+
+    expect(screen.getByRole('heading', { name: 'Проверяем статус оплаты' })).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent(/Повторная оплата недоступна/);
+    expect(screen.queryByRole('button', { name: 'Вступить в игру' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Оплатить место' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Проверить статус' })).toBeVisible();
+  });
+
+  it('shows service blocking separately from the payment contour', () => {
+    renderWithFlow({
+      kind: 'SERVICE_BLOCKED',
+      message: 'Эта услуга недоступна по правилам клуба. Оплата не снимает этот запрет.',
+    });
+
+    expect(screen.getByRole('heading', { name: 'Услуга недоступна' })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(/по правилам клуба/);
+    expect(screen.queryByText(/Платёжный контур/)).toBeNull();
+  });
+
+  it('keeps the ordinary JOIN button when there is no paid flow state', () => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={paidGame}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Вступить в игру' })).toBeVisible();
   });
 });

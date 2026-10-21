@@ -6,6 +6,14 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GamesPage } from './GamesPage.js';
+import { buildMockHomeDashboard } from '../../api/src/home/home-dashboard.js';
+import {
+  beginGameJoinAttempt,
+  loadGameJoinAttempt,
+  markGameJoinAttemptDispatchStarted,
+  resolveGameJoinAttempt,
+  type GameJoinAttemptPrincipal,
+} from './game-join-attempt.js';
 import type { BookingRecommendationActivity } from './booking-activity-kind.js';
 import { consumeGameChatNavigation } from './game-chat-navigation.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
@@ -1226,4 +1234,465 @@ it('ignores invalid saved filters instead of sending them to the catalog', async
   expect(api.listEventCatalog).toHaveBeenCalledWith(
     expect.objectContaining({ kinds: ['GAME', 'COACH_GAME', 'TOURNAMENT'] }),
   );
+});
+
+const PAID_GAME_ID = '99999999-9999-4999-8999-999999999901';
+const PAID_SUBSCRIPTION_ID = '99999999-9999-4999-8999-999999999902';
+const PAID_OPERATION_ID = '99999999-9999-4999-8999-999999999903';
+const PAID_TENANT_ID = '99999999-9999-4999-8999-999999999904';
+const PAID_USER_ID = '99999999-9999-4999-8999-999999999905';
+const PAID_ATTEMPT_KEY = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const paidPrincipal: GameJoinAttemptPrincipal = {
+  tenantId: PAID_TENANT_ID,
+  userId: PAID_USER_ID,
+};
+
+const paidGame: ViewerGameCard = {
+  id: PAID_GAME_ID,
+  revision: 4,
+  surface: 'DISCOVER',
+  displayState: 'FINDING_PLAYERS',
+  title: 'Платная игра по подписке',
+  kind: 'FRIENDLY',
+  visibility: 'PUBLIC',
+  startsAt: '2099-09-21T04:00:00Z',
+  endsAt: '2099-09-21T05:30:00Z',
+  timezone: 'Europe/Moscow',
+  station: { id: game.station.id, name: game.station.name, shortAddress: null },
+  court: { id: '99999999-9999-4999-8999-999999999906', name: 'Корт' },
+  levelRange: null,
+  rosterState: 'OPEN',
+  capacity: { total: 4, occupied: 2, reserved: 0, open: 2, waitlistCount: 0 },
+  participants: [],
+  priceSummary: { amountMinor: 300000, currency: 'RUB' },
+  viewerRelation: 'NONE',
+  viewerPaymentState: 'NOT_REQUIRED',
+  resultSummary: null,
+  badges: [],
+  allowedActions: ['OPEN_DETAILS', 'JOIN'],
+  deepLink: `/games/${PAID_GAME_ID}`,
+  conversation: null,
+};
+
+function paidHome(): ReturnType<typeof buildMockHomeDashboard> {
+  return {
+    ...buildMockHomeDashboard({
+      tenantId: PAID_TENANT_ID,
+      userId: PAID_USER_ID,
+      displayName: 'Синтетический игрок',
+      phoneLast4: '0000',
+      roles: ['client'],
+      permissions: ['games.play'],
+    }),
+    subscriptions: [
+      {
+        id: PAID_SUBSCRIPTION_ID,
+        title: 'Подписка для проверки',
+        status: 'active',
+        remainingUnits: 4,
+        validUntil: '2099-12-31T00:00:00.000Z',
+        route: `/subscriptions/${PAID_SUBSCRIPTION_ID}`,
+      },
+    ],
+  };
+}
+
+function paidConditions(amountMinor: number): Record<string, unknown> {
+  return {
+    gameId: PAID_GAME_ID,
+    revision: paidGame.revision,
+    ownerRevision: null,
+    subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+    eligibility: 'AVAILABLE',
+    reasonCode: null,
+    subscriptionApplied: true,
+    price: { status: 'ADVISORY', amountMinor, currency: 'RUB', confirmed: false },
+    freeMinutes: 60,
+    paidMinutes: 30,
+    evaluatedAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    nonBinding: true,
+    requiresReservationRecheck: true,
+    requiresPriceConsent: true,
+    source: 'LK1_PRICE_PREVIEW',
+    providerMode: 'MOCK',
+  };
+}
+
+function ownerConfirmedCommercial(): Record<string, unknown> {
+  return {
+    attemptState: 'OWNER_CONFIRMED',
+    reservation: null,
+    price: { amountMinor: 250000, currency: 'RUB', consent: 'SETTLED' },
+    receipt: null,
+    reason: null,
+  };
+}
+
+function unknownCommercial(): Record<string, unknown> {
+  return {
+    attemptState: 'UNKNOWN',
+    reservation: null,
+    price: { amountMinor: 250000, currency: 'RUB', consent: 'SETTLED' },
+    receipt: null,
+    reason: 'RECONCILIATION_REQUIRED',
+  };
+}
+
+function joinOperation(
+  status: string,
+  options: {
+    readonly wait?: boolean;
+    readonly code?: string;
+    readonly commercial?: Record<string, unknown> | null;
+  } = {},
+): Record<string, unknown> {
+  const now = '2026-10-21T08:00:00.000Z';
+  return {
+    commandId: PAID_OPERATION_ID,
+    operation: {
+      id: PAID_OPERATION_ID,
+      type: 'JOIN_GAME',
+      status,
+      gameId: PAID_GAME_ID,
+      aggregateRevision: status === 'SUCCEEDED' ? 5 : null,
+      createdAt: now,
+      updatedAt: now,
+      nextAction: options.wait
+        ? { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: 1 }
+        : { type: 'NONE' },
+      error: options.code ? { code: options.code, message: 'rejected' } : null,
+      commercial: options.commercial ?? null,
+    },
+    game: null,
+    replayed: false,
+  };
+}
+
+function paidJoinGateway(
+  options: {
+    readonly conditions?: () => unknown;
+    readonly joinPaidGame?: ReturnType<typeof vi.fn>;
+    readonly getPaidJoinOperation?: ReturnType<typeof vi.fn>;
+    readonly getGame?: ReturnType<typeof vi.fn>;
+  } = {},
+): AuthGateway {
+  return {
+    ...gateway(),
+    getHomeDashboard: vi.fn().mockResolvedValue(paidHome()),
+    getGame: options.getGame ?? vi.fn().mockResolvedValue(paidGame),
+    getGameJoinConditions: vi.fn(
+      options.conditions ?? (() => Promise.resolve(paidConditions(250000))),
+    ),
+    joinPaidGame:
+      options.joinPaidGame ??
+      vi
+        .fn()
+        .mockResolvedValue(joinOperation('SUCCEEDED', { commercial: ownerConfirmedCommercial() })),
+    getPaidJoinOperation:
+      options.getPaidJoinOperation ??
+      vi
+        .fn()
+        .mockResolvedValue(
+          joinOperation('UNKNOWN', { wait: true, commercial: unknownCommercial() }),
+        ),
+    getGameOperation: vi.fn(),
+    joinGame: vi.fn().mockResolvedValue(joinOperation('SUCCEEDED', { commercial: null })),
+  } as unknown as AuthGateway;
+}
+
+async function openPaidConsent(
+  api: AuthGateway,
+  user: ReturnType<typeof userEvent.setup>,
+): Promise<void> {
+  render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+  const picker = await screen.findByRole('combobox', { name: 'Выберите подписку' });
+  await user.selectOptions(picker, PAID_SUBSCRIPTION_ID);
+  await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+  await screen.findByRole('heading', { name: 'Подтверждение стоимости' }, { timeout: 3_000 });
+}
+
+describe('GamesPage paid JOIN', () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('shows the server-owned price, never posts before consent, and dispatches once', async () => {
+    const user = userEvent.setup();
+    const dispatch = deferred<unknown>();
+    const joinPaidGame = vi.fn().mockReturnValue(dispatch.promise);
+    const api = paidJoinGateway({ joinPaidGame });
+    await openPaidConsent(api, user);
+
+    // The price came from the conditions response, not from the client.
+    expect(
+      within(screen.getByRole('region', { name: 'Подтверждение стоимости' })).getByText(/2\s*500/, {
+        selector: 'strong',
+      }),
+    ).toBeVisible();
+    expect(joinPaidGame).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: /^Подтвердить/ }));
+    // While the request is in flight the consent panel is replaced by the dispatch status.
+    expect(await screen.findByRole('heading', { name: 'Отправляем запись' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /^Подтвердить/ })).toBeNull();
+    expect(joinPaidGame).toHaveBeenCalledTimes(1);
+    const [gameIdArg, inputArg, keyArg] = joinPaidGame.mock.calls[0] as [
+      string,
+      {
+        expectedRevision: number;
+        subscriptionInstanceId: string;
+        priceConsent: { amountMinor: number; currency: string };
+      },
+      string,
+    ];
+    expect(gameIdArg).toBe(PAID_GAME_ID);
+    expect(inputArg).toEqual({
+      expectedRevision: 4,
+      subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+      priceConsent: { amountMinor: 250000, currency: 'RUB' },
+    });
+    expect(keyArg).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/);
+    dispatch.resolve(joinOperation('SUCCEEDED', { commercial: ownerConfirmedCommercial() }));
+
+    expect(await screen.findByText(/Вы в игре/, {}, { timeout: 3_000 })).toBeVisible();
+    // Custody is released only after a trusted server signal.
+    expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
+  });
+
+  it('keeps custody and offers no purchase after a lost response', async () => {
+    const user = userEvent.setup();
+    const dispatchKeys: string[] = [];
+    const joinPaidGame = vi.fn((gameIdValue: string, _input: unknown, idempotencyKey: string) => {
+      dispatchKeys.push(idempotencyKey);
+      return Promise.reject(
+        Object.assign(new Error('owner unavailable'), {
+          code: 'GAME_OWNER_UNAVAILABLE',
+          operationStatus: 'UNKNOWN',
+          recoveryAction: 'KEEP_SAME_ATTEMPT',
+          canStartNewPurchase: false,
+          gameId: gameIdValue,
+          idempotencyKey,
+        }),
+      );
+    });
+    const api = paidJoinGateway({ joinPaidGame });
+    await openPaidConsent(api, user);
+    await user.click(screen.getByRole('button', { name: /^Подтвердить/ }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Проверяем статус оплаты' }, { timeout: 3_000 }),
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Вступить в игру' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Проверить статус' })).toBeVisible();
+
+    const retained = loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID);
+    expect(retained?.state).toBe('UNKNOWN');
+    expect(retained?.idempotencyKey).toBe(dispatchKeys[0]);
+    expect(retained?.dispatchStartedAt).toBeDefined();
+    expect(joinPaidGame).toHaveBeenCalledTimes(1);
+  });
+
+  it('recovers an existing unresolved attempt on mount without resending the POST', async () => {
+    const seeded = await beginGameJoinAttempt(
+      paidPrincipal,
+      {
+        gameId: PAID_GAME_ID,
+        expectedRevision: paidGame.revision,
+        subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+        priceConsent: { amountMinor: 250000, currency: 'RUB' },
+      },
+      window.localStorage,
+      { createIdempotencyKey: () => PAID_ATTEMPT_KEY },
+    );
+    markGameJoinAttemptDispatchStarted(paidPrincipal, seeded.attempt, window.localStorage);
+    resolveGameJoinAttempt(
+      paidPrincipal,
+      seeded.attempt,
+      { state: 'UNKNOWN', operationId: PAID_OPERATION_ID },
+      window.localStorage,
+    );
+    const joinPaidGame = vi.fn();
+    const getPaidJoinOperation = vi
+      .fn()
+      .mockResolvedValue(joinOperation('UNKNOWN', { wait: true, commercial: unknownCommercial() }));
+    const api = paidJoinGateway({ joinPaidGame, getPaidJoinOperation });
+
+    render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+
+    expect(
+      await screen.findByRole('heading', { name: 'Проверяем статус оплаты' }, { timeout: 3_000 }),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(getPaidJoinOperation).toHaveBeenCalledWith(PAID_GAME_ID, PAID_ATTEMPT_KEY),
+    );
+    expect(joinPaidGame).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Вступить в игру' })).toBeNull();
+    // The original attempt is still the only custody record.
+    expect(
+      loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)?.idempotencyKey,
+    ).toBe(PAID_ATTEMPT_KEY);
+  });
+
+  it('requires a fresh explicit consent when the server price changed', async () => {
+    const user = userEvent.setup();
+    let currentAmount = 250000;
+    const keys: string[] = [];
+    const joinPaidGame = vi.fn((_gameIdValue: string, _input: unknown, idempotencyKey: string) => {
+      keys.push(idempotencyKey);
+      if (keys.length === 1) {
+        currentAmount = 300000;
+        return Promise.reject(
+          Object.assign(new Error('price changed'), {
+            code: 'GAME_PRICE_CONFIRMATION_REQUIRED',
+          }),
+        );
+      }
+      return Promise.resolve(
+        joinOperation('SUCCEEDED', { commercial: ownerConfirmedCommercial() }),
+      );
+    });
+    const api = paidJoinGateway({
+      joinPaidGame,
+      conditions: () => Promise.resolve(paidConditions(currentAmount)),
+    });
+    await openPaidConsent(api, user);
+    await user.click(screen.getByRole('button', { name: /^Подтвердить/ }));
+    // The old consent is discarded; the new server amount is shown for a new explicit tap.
+    expect(
+      await screen.findByRole('heading', { name: 'Подтверждение стоимости' }, { timeout: 3_000 }),
+    ).toBeVisible();
+    expect(
+      within(await screen.findByRole('region', { name: 'Подтверждение стоимости' })).getByText(
+        /3\s*000/,
+        { selector: 'strong' },
+      ),
+    ).toBeVisible();
+    expect(joinPaidGame).toHaveBeenCalledTimes(1);
+    expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /^Подтвердить/ }));
+    expect(await screen.findByText(/Вы в игре/, {}, { timeout: 3_000 })).toBeVisible();
+    expect(joinPaidGame).toHaveBeenCalledTimes(2);
+    expect(new Set(keys).size).toBe(2);
+    expect(joinPaidGame.mock.calls[1]?.[1]).toMatchObject({
+      priceConsent: { amountMinor: 300000, currency: 'RUB' },
+    });
+  });
+
+  it('shows a service block separately from the payment contour', async () => {
+    const user = userEvent.setup();
+    const api = paidJoinGateway({
+      joinPaidGame: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('blocked'), { code: 'GAME_SERVICE_BLOCKED' })),
+    });
+    await openPaidConsent(api, user);
+    await user.click(screen.getByRole('button', { name: /^Подтвердить/ }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Услуга недоступна' }, { timeout: 3_000 }),
+    ).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(/по правилам клуба/);
+    expect(screen.queryByRole('heading', { name: 'Оплата пока недоступна' })).toBeNull();
+    // A definite server rejection leaves no purchase custody behind.
+    expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
+  });
+
+  it('shows the payment contour as unavailable, not as a service block', async () => {
+    const user = userEvent.setup();
+    const api = paidJoinGateway({
+      joinPaidGame: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('unavailable'), { code: 'GAME_PAYMENT_REQUIRED' }),
+        ),
+    });
+    await openPaidConsent(api, user);
+    await user.click(screen.getByRole('button', { name: /^Подтвердить/ }));
+
+    expect(
+      await screen.findByRole('heading', { name: 'Оплата пока недоступна' }, { timeout: 3_000 }),
+    ).toBeVisible();
+    expect(screen.queryByText(/по правилам клуба/)).toBeNull();
+  });
+
+  it('keeps the untouched free JOIN when the gateway also supports paid join', async () => {
+    const base = gateway();
+    const freeGame = {
+      ...game,
+      id: '99999999-9999-4999-8999-999999999907',
+      deepLink: '/games/99999999-9999-4999-8999-999999999907',
+      startsAt: '2099-09-21T04:00:00Z',
+      endsAt: '2099-09-21T05:30:00Z',
+      displayState: 'FINDING_PLAYERS',
+      priceSummary: null,
+      viewerRelation: 'NONE',
+      viewerPaymentState: 'NOT_REQUIRED',
+      resultSummary: null,
+      conversation: null,
+    } as ViewerGameCard;
+    const getGameJoinConditions = vi.fn();
+    const joinPaidGame = vi.fn();
+    const getPaidJoinOperation = vi.fn();
+    const joinGame = vi.fn().mockResolvedValue({
+      commandId: PAID_OPERATION_ID,
+      operation: {
+        id: PAID_OPERATION_ID,
+        type: 'JOIN_GAME',
+        status: 'SUCCEEDED',
+        gameId: freeGame.id,
+        aggregateRevision: freeGame.revision,
+        createdAt: '2026-10-21T08:00:00.000Z',
+        updatedAt: '2026-10-21T08:00:00.000Z',
+        nextAction: { type: 'NONE' },
+        error: null,
+        commercial: null,
+      },
+      game: null,
+      replayed: false,
+    });
+    const api: AuthGateway = {
+      ...base,
+      getHomeDashboard: vi.fn().mockResolvedValue(paidHome()),
+      getGame: vi.fn().mockResolvedValue(freeGame),
+      getGameJoinConditions,
+      joinPaidGame,
+      getPaidJoinOperation,
+      joinGame,
+    };
+    const user = userEvent.setup();
+
+    render(<GamesPage gateway={api} gameId={freeGame.id} joinPrincipal={paidPrincipal} />);
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+
+    await waitFor(() =>
+      expect(api.joinGame).toHaveBeenCalledWith(freeGame.id, freeGame.revision, undefined),
+    );
+    expect(joinPaidGame).not.toHaveBeenCalled();
+    expect(getGameJoinConditions).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Вы в игре/)).toBeVisible();
+  });
+
+  it('asks for a subscription first and re-enables JOIN after an explicit selection', async () => {
+    const user = userEvent.setup();
+    const api = paidJoinGateway();
+    render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+    await user.click(await screen.findByRole('button', { name: 'Вступить в игру' }));
+
+    expect(await screen.findByRole('heading', { name: 'Нужна подписка' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Вступить в игру' })).toBeNull();
+    expect(api.joinPaidGame).not.toHaveBeenCalled();
+
+    await user.selectOptions(
+      await screen.findByRole('combobox', { name: 'Выберите подписку' }),
+      PAID_SUBSCRIPTION_ID,
+    );
+    const joinButton = await screen.findByRole('button', { name: 'Вступить в игру' });
+    await user.click(joinButton);
+    expect(
+      await screen.findByRole('heading', { name: 'Подтверждение стоимости' }, { timeout: 3_000 }),
+    ).toBeVisible();
+    expect(api.joinPaidGame).not.toHaveBeenCalled();
+  });
 });
