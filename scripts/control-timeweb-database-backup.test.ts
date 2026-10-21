@@ -116,6 +116,11 @@ describe('Timeweb backup/isolated restore preparation', () => {
         fs.writeFileSync(path,bytes);
         assert.throws(()=>validateUpgradeBackup(directory,{releaseId:'other'}));
         assert.equal(validateUpgradeBackup(directory,{releaseId:receipt.baselineReleaseId}).path,path);
+        // Beta may bind a deterministic degraded marker; production must fail closed without a receipt.
+        fs.renameSync(path,path+'.held');
+        assert.ok(validateUpgradeBackup(directory,{releaseId:receipt.baselineReleaseId},'beta').path.endsWith('degraded-backup-proof.json'));
+        assert.throws(()=>validateUpgradeBackup(directory,{releaseId:receipt.baselineReleaseId},'production'));
+        fs.renameSync(path+'.held',path);
         console.log(JSON.stringify({status:'CONSUMER_COMPATIBILITY_PASS',negativeCases:negatives.length+1}));
       `;
         const result = spawnSync(

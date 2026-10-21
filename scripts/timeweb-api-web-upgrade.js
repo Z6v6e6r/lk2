@@ -144,6 +144,7 @@ export function validateApiWebOperation(value) {
   exact(value, [
     'schema',
     'target',
+    ...(value?.profile === undefined ? [] : ['profile']),
     'controllerSha',
     'candidateSha',
     'candidateTree',
@@ -158,6 +159,7 @@ export function validateApiWebOperation(value) {
   ]);
   if (
     value.schema !== 'PHUB_TIMEWEB_API_WEB_OPERATION_V1' ||
+    (value.profile !== undefined && value.profile !== 'beta' && value.profile !== 'production') ||
     value.target !== 'lk2.padlhub.su' ||
     ![value.controllerSha, value.candidateSha, value.candidateTree].every((v) =>
       SHA.test(v ?? ''),
@@ -192,6 +194,7 @@ export function validateDirectApiWebOperation(value, requireUnexpired = false) {
   exact(value, [
     'schema',
     'target',
+    ...(value?.profile === undefined ? [] : ['profile']),
     'controllerSha',
     'candidateSha',
     'candidateTree',
@@ -208,6 +211,7 @@ export function validateDirectApiWebOperation(value, requireUnexpired = false) {
   ]);
   if (
     value.schema !== 'PHUB_TIMEWEB_API_WEB_OPERATION_V2' ||
+    (value.profile !== undefined && value.profile !== 'beta' && value.profile !== 'production') ||
     value.target !== 'lk2.padlhub.su' ||
     !SHA.test(value.controllerSha ?? '') ||
     value.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
@@ -854,7 +858,7 @@ async function wait(service, expected) {
   }
   fail('readiness_timeout');
 }
-function validateBackupProof(directory, previous) {
+function validateBackupProof(directory, previous, profile = 'beta') {
   // Operator-authorized degraded proof: when an interrupted transition left no receipt,
   // bind a deterministic marker. The authoritative database backup and restore evidence
   // remains in the release evidence store. A present receipt is still validated strictly.
@@ -863,6 +867,7 @@ function validateBackupProof(directory, previous) {
   try {
     bytes = read(path);
   } catch {
+    if (profile === 'production') fail('backup_restore_proof_missing');
     return {
       path: `${directory}/degraded-backup-proof.json`,
       sha256: hash(`PHUB_DEGRADED_BACKUP_PROOF_V1|${previous.releaseId}|${directory}\n`),
@@ -903,15 +908,28 @@ export function validateUpgradeMonitoring(provider, alerts, contract, observedAt
   const alertTest = validateTimewebAlertReadback(alerts, contract);
   validateTimewebMonitoringEvidence({ monitors, alertTest }, contract, observedAt);
 }
-function validateMonitoring(transaction) {
+function validateMonitoring(transaction, profile = 'beta') {
   const providerPath = `${ROOT}/observability/timeweb-monitor-readback.json`;
   const alertPath = `${ROOT}/observability/alert-test-readback.json`;
   const provider = read(providerPath),
     alerts = read(alertPath);
-  // Monitoring provider readbacks are operational evidence, not a deployment gate: the
-  // approved provider snapshot can age past its wall-clock window while a long API/Worker
-  // swap is in flight. Keep the immutable receipt binding (hashes and bytes), but do not
-  // block the rollout on a re-read of external monitoring state.
+  if (profile === 'production') {
+    // Production keeps the full provider-readback contract: real monitor ids, alert delivery,
+    // acknowledgement and recovery semantics. The snapshot is validated against its own
+    // readAt, so a long apply cannot invalidate it by wall-clock age (the beta lesson).
+    const contract = parseStrictJson(
+      read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`),
+    );
+    const providerValue = parseStrictJson(provider);
+    validateUpgradeMonitoring(
+      providerValue,
+      parseStrictJson(alerts),
+      contract,
+      providerValue.readAt,
+    );
+  }
+  // Beta records monitoring as evidence: keep immutable hash binding, but do not block on a
+  // re-read of external monitoring state.
   return { providerSha256: hash(provider), alertSha256: hash(alerts), provider, alerts };
 }
 export function overlayBytes(plan, name) {
@@ -1341,6 +1359,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   }
   const opBytes = read(recoveredTransaction ? `${recoveredTransaction}/operation.json` : REQUEST);
   const op = validateApiWebOperation(JSON.parse(opBytes));
+  const profile = op.profile ?? 'beta';
   if (mode === 'deploy' && isDirectOperation(op)) validateDirectApiWebOperation(op, true);
   if (
     config.schema !== 1 ||
@@ -1541,10 +1560,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       )
         fail('baseline_drift');
     }
-    const backup = validateBackupProof(transaction, previousApi);
+    const backup = validateBackupProof(transaction, previousApi, profile);
     const direct = isDirectOperation(op);
     let ownerBytes;
-    if (!direct) validateMonitoring(transaction);
+    if (!direct) validateMonitoring(transaction, profile);
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
     }
@@ -1851,7 +1870,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           await probe(s, true);
         }
         attest();
-        validateMonitoring(transaction);
+        validateMonitoring(transaction, profile);
         if (round < 60) await delay(15000);
       }
       for (const s of ['api', 'web']) {
@@ -1859,7 +1878,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         if (sorted[Math.ceil(sorted.length * 0.95) - 1] > (s === 'api' ? 1500 : 1000))
           fail('latency_threshold');
       }
-      const finalMonitoring = validateMonitoring(transaction);
+      const finalMonitoring = validateMonitoring(transaction, profile);
       durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
       durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
       durable(
