@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react';
 
-import { ChatCategoryIcon } from './ChatCategoryIcon.js';
 import {
   MAX_CHAT_ATTACHMENTS,
   describeChatAttachmentRejections,
@@ -164,7 +163,14 @@ export function ChatComposer({
             title={atAttachmentLimit ? 'Достигнут лимит вложений' : 'Прикрепить файл'}
             onClick={() => fileInputRef.current?.click()}
           >
-            <span aria-hidden="true">+</span>
+            <span className={styles.attachIcon} aria-hidden="true">
+              <svg width="32" height="32" viewBox="0 0 32 32" fill="currentColor">
+                <path d="M14 16.6666H10.6667C10.2985 16.6666 10 16.3681 10 15.9999C10 15.6317 10.2985 15.3333 10.6667 15.3333H14V16.6666Z" />
+                <path d="M21.3333 15.3333C21.7015 15.3333 22 15.6317 22 15.9999C22 16.3681 21.7015 16.6666 21.3333 16.6666H15.3333V15.3333H21.3333Z" />
+                <path d="M16.6678 21.3333C16.6678 21.7015 16.3693 22 16.0011 22C15.6329 22 15.3345 21.7015 15.3345 21.3333V15.3333H16.6678V21.3333Z" />
+                <path d="M16.0011 10C16.3693 10 16.6678 10.2985 16.6678 10.6667V14H15.3345V10.6667C15.3345 10.2985 15.6329 10 16.0011 10Z" />
+              </svg>
+            </span>
           </button>
         ) : null}
         <textarea
@@ -185,7 +191,18 @@ export function ChatComposer({
           title="Отправить"
           disabled={!canSend}
         >
-          <ChatCategoryIcon name="SEND" />
+          <span className={styles.sendIcon} aria-hidden="true">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <path
+                d="M21 15L16 10L11 15M16 21V10"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeMiterlimit="10"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
         </button>
       </div>
       <small id="chat-composer-hint" className="sr-only">
