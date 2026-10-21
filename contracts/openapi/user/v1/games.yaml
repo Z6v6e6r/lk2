@@ -189,6 +189,45 @@ paths:
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 
+  /{tenantKey}/games/{gameId}/join-operation:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    get:
+      tags: [games]
+      operationId: getGameJoinOperation
+      summary: Read the original paid JOIN attempt by its idempotency key
+      description: |
+        Recovery read for a paid JOIN whose response was lost. The server derives the operation id
+        from the original Idempotency-Key, so the client never guesses it. The read never reserves,
+        dispatches, confirms, releases or fails an attempt; an unresolved outcome stays UNKNOWN with
+        WAIT_FOR_RECONCILIATION and the caller must not start a new purchase.
+      responses:
+        '200':
+          description: Original operation, including an unresolved (UNKNOWN) outcome.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameCommandResult' }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
   /{tenantKey}/games/{gameId}/participants/me:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

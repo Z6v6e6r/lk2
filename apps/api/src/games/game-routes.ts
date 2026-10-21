@@ -812,7 +812,7 @@ export function registerGameRoutes(
       const currentGameId = gameId(request, reply);
       if (!currentGameId) return reply;
       const key = request.headers['idempotency-key'];
-      if (typeof key !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(key)) {
+      if (typeof key !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$/.test(key)) {
         return sendApiError(
           request,
           reply,
@@ -846,7 +846,7 @@ export function registerGameRoutes(
           owner: options.commercialJoin.owner,
         },
       );
-      if (!recovered) {
+      if (!recovered || recovered.operation.gameId !== currentGameId) {
         return sendApiError(
           request,
           reply,

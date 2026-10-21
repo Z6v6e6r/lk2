@@ -149,7 +149,8 @@ export interface CommercialJoinOwnerPort {
     readonly idempotencyKey: string;
     readonly correlationId: string;
     readonly gameId: string;
-    readonly legacyGameId: string;
+    /** Canonical PadlHub game id. The owner adapter resolves its provider mapping server-side. */
+    readonly targetGameId: string;
     readonly subscriptionInstanceId: string;
     readonly price: CommercialJoinPrice;
   }): Promise<CommercialJoinOwnerOutcome>;
@@ -398,6 +399,10 @@ export async function executeCommercialJoin(
     // purchase is not implemented yet: both stay fail-closed on the existing beta guard.
     return commercialFailure('GAME_PAYMENT_REQUIRED');
   }
+  if (Date.parse(conditions.expiresAt) <= now()) {
+    // The advisory price window closed between the read and the command: force a fresh consent.
+    return commercialFailure('GAME_PRICE_CONFIRMATION_REQUIRED');
+  }
   const serverAmountMinor = conditions.price.amountMinor;
   if (
     input.priceConsent.amountMinor !== serverAmountMinor ||
@@ -501,7 +506,7 @@ export async function executeCommercialJoin(
           reservation,
           { amountMinor: serverAmountMinor, currency: 'RUB', consent: 'SETTLED' },
           null,
-          'RECONCILIATION_REQUIRED',
+          'GAME_RECONCILIATION_REQUIRED',
         ),
         replayed: true,
       }),
@@ -516,7 +521,7 @@ export async function executeCommercialJoin(
       idempotencyKey: input.idempotencyKey,
       correlationId: input.correlationId,
       gameId: input.gameId,
-      legacyGameId: conditions.gameId,
+      targetGameId: conditions.gameId,
       subscriptionInstanceId: input.subscriptionInstanceId,
       price,
     });
@@ -577,7 +582,7 @@ export async function executeCommercialJoin(
         reservation,
         { amountMinor: serverAmountMinor, currency: 'RUB', consent: 'SETTLED' },
         null,
-        'RECONCILIATION_REQUIRED',
+        'GAME_RECONCILIATION_REQUIRED',
       ),
       replayed: false,
     }),
@@ -685,7 +690,13 @@ export async function readCommercialJoinOperation(
     createdAt: updatedAt,
     updatedAt,
     retryAfterSeconds: 5,
-    commercial: attemptView('UNKNOWN', attempt.reservation, price, null, 'RECONCILIATION_REQUIRED'),
+    commercial: attemptView(
+      'UNKNOWN',
+      attempt.reservation,
+      price,
+      null,
+      'GAME_RECONCILIATION_REQUIRED',
+    ),
     replayed: true,
   });
 }

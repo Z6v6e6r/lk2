@@ -3812,6 +3812,8 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1publish
   /{tenantKey}/games/{gameId}/join:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join
+  /{tenantKey}/games/{gameId}/join-operation:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join-operation
   /{tenantKey}/games/{gameId}/participants/me:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1participants~1me
   /{tenantKey}/games/{gameId}/waitlist:
