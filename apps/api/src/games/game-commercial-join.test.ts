@@ -166,6 +166,7 @@ describe('commercial JOIN orchestration', () => {
       retryAfterSeconds: 5,
     });
     expect(result.body.replayed).toBe(true);
+    // A repeat is purely local: no replacement dispatch and no owner read.
     expect(owner.calls).toEqual([]);
   });
 

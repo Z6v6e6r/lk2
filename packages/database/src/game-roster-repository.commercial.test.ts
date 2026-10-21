@@ -463,9 +463,19 @@ describe('game roster commercial paid join', () => {
     expect(
       query.mock.calls.some(([text]) => text.includes('insert into eligibility.payment_snapshots')),
     ).toBe(false);
+    // Parity with the free join: the refusal is durable (FAILED command row + audit) so it is
+    // observable and a repeat with the same key replays the refusal, but nothing is reserved.
     expect(
-      query.mock.calls.some(([text]) => text.includes('insert into games.command_idempotency')),
-    ).toBe(false);
+      query.mock.calls.some(
+        ([text]) =>
+          text.includes('insert into games.command_idempotency') && text.includes("'FAILED'"),
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(
+        ([text]) => text.includes('insert into audit.audit_log') && text.includes("'REJECTED'"),
+      ),
+    ).toBe(true);
   });
 
   it('finalizes the durable attempt from trusted confirmation evidence inside the same transaction', async () => {
@@ -889,6 +899,106 @@ describe('game roster commercial paid join', () => {
       transitioned: false,
     });
     expect(writtenStatements(query)).toEqual([]);
+  });
+
+  it('reconciles a trusted receipt when the unresolved paid attempt outlived the reservation ttl', async () => {
+    // Earlier than the fixture's database_now (2026-08-01T10:00:00Z): expired by owner-clock.
+    const expiredAt = '2026-08-01T09:50:00.000Z';
+    const { pool } = poolWithHandler((text) => {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('payment_snapshot_exists')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: expiredAt,
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('from eligibility.payment_snapshots snapshot') &&
+        text.includes("command.state = 'IN_PROGRESS'")
+      ) {
+        return { rows: [{ id: operationId }] };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence')) {
+        return { rows: [{ id: evidenceId }] };
+      }
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
+      }
+      if (text.includes('update games.seat_reservations')) return { rowCount: 1 };
+      if (text.includes('update games.payment_confirmation_evidence')) return { rowCount: 1 };
+      if (text.includes('from eligibility.payment_snapshots')) {
+        return { rows: [{ operation_id: operationId }] };
+      }
+      if (text.includes('update games.command_idempotency')) return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    // The paid attempt kept the seat ACTIVE after TTL by design; the trusted receipt must finalize
+    // the original operation instead of being rejected as an expired reservation.
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(
+        confirmPaymentInput({ operationId: 'viva-transaction-expired-1' }),
+      ),
+    ).resolves.toMatchObject({
+      outcome: 'applied',
+      viewerRelation: 'PARTICIPANT',
+      reservationId,
+    });
+  });
+
+  it('still rejects an expired reservation that has no unresolved paid attempt', async () => {
+    // Earlier than the fixture's database_now (2026-08-01T10:00:00Z): expired by owner-clock.
+    const expiredAt = '2026-08-01T09:50:00.000Z';
+    const { pool } = poolWithHandler((text) => {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('payment_snapshot_exists')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: expiredAt,
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('from eligibility.payment_snapshots snapshot') &&
+        text.includes("command.state = 'IN_PROGRESS'")
+      ) {
+        return { rows: [] };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence')) {
+        return { rows: [{ id: evidenceId }] };
+      }
+      if (text.includes('update games.payment_confirmation_evidence')) return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(
+        confirmPaymentInput({ operationId: 'viva-transaction-expired-2' }),
+      ),
+    ).resolves.toMatchObject({ outcome: 'rejected', code: 'GAME_RESERVATION_EXPIRED' });
   });
 
   it('rejects an invalid reservation ttl before opening a transaction', async () => {
