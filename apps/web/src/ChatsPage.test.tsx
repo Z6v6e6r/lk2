@@ -743,7 +743,7 @@ describe('ChatsPage', () => {
             id: '88888888-8888-4888-8888-888888888888',
             body: 'Когда свободен корт?',
             author: 'STATION',
-            authorName: 'Поддержка ПадлХАБ',
+            authorName: 'Поддержка ПадлхАБ',
             createdAt: '2026-09-22T10:00:00.000Z',
             attachments: [],
           },
@@ -760,7 +760,7 @@ describe('ChatsPage', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
-    expect(await screen.findByRole('list', { name: 'Станции и каналы ПадлХАБ' })).toBeVisible();
+    expect(await screen.findByRole('list', { name: 'Станции и каналы ПадлхАБ' })).toBeVisible();
     expect(screen.getByText('Когда свободен корт?')).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Ясенево/ }));
     expect(await screen.findByText('Когда свободен корт?')).toBeVisible();
@@ -774,7 +774,7 @@ describe('ChatsPage', () => {
     );
     // The station composer accepts pictures now, and the answer names the operator who wrote it.
     expect(screen.getByRole('button', { name: 'Прикрепить файл' })).toBeVisible();
-    expect(screen.getByText('Поддержка ПадлХАБ')).toBeVisible();
+    expect(screen.getByText('Поддержка ПадлхАБ')).toBeVisible();
   });
 
   it('shows a station dialog with correspondence in the unfiltered tab and opens it from there', async () => {
@@ -800,7 +800,7 @@ describe('ChatsPage', () => {
             id: '88888888-8888-4888-8888-888888888888',
             body: 'Корт свободен в 19:00.',
             author: 'STATION',
-            authorName: 'Поддержка ПадлХАБ',
+            authorName: 'Поддержка ПадлхАБ',
             createdAt: '2026-09-22T10:00:00.000Z',
             attachments: [],
           },
@@ -993,7 +993,7 @@ describe('ChatsPage', () => {
             id: '88888888-8888-4888-8888-888888888888',
             body: '',
             author: 'STATION',
-            authorName: 'ПадлХАБ • Супервайзер',
+            authorName: 'ПадлхАБ • Супервайзер',
             createdAt: '2026-09-22T10:00:00.000Z',
             attachments: [
               {
@@ -1229,7 +1229,7 @@ describe('ChatsPage', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
-    const list = await screen.findByRole('list', { name: 'Станции и каналы ПадлХАБ' });
+    const list = await screen.findByRole('list', { name: 'Станции и каналы ПадлхАБ' });
     expect(within(list).getByText('Ясенево')).toBeVisible();
     expect(within(list).getByText('Нагатинская')).toBeVisible();
     expect(within(list).getAllByText('Начните переписку')).toHaveLength(2);
@@ -1316,7 +1316,7 @@ describe('ChatsPage', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Станции' }));
-    const list = await screen.findByRole('list', { name: 'Станции и каналы ПадлХАБ' });
+    const list = await screen.findByRole('list', { name: 'Станции и каналы ПадлхАБ' });
     expect(within(list).getByText('Когда свободен корт?')).toBeVisible();
     expect(within(list).getByText('Без станции')).toBeVisible();
 
@@ -1824,7 +1824,7 @@ describe('ChatsPage communities tab', () => {
         id: '99999999-9999-4999-8999-999999999999',
         body: 'Буферизованный ответ станции',
         author: 'STATION',
-        authorName: 'Поддержка ПадлХАБ',
+        authorName: 'Поддержка ПадлхАБ',
         createdAt: '2026-09-27T11:00:00.000Z',
         attachments: [],
       },

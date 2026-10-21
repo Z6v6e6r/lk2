@@ -117,7 +117,7 @@ describe('legacy station support client', () => {
       phoneDigits: '79990000001',
       externalUserId: 'user-1',
       externalChatId: 'lk2:user-1',
-      displayName: 'Игрок ПадлХАБ',
+      displayName: 'Игрок ПадлхАБ',
       text: 'Здравствуйте',
       stationId: 'Yasenevo',
       stationName: 'Ясенево',
@@ -195,7 +195,7 @@ describe('legacy station support client', () => {
         phoneDigits: '79990000001',
         externalUserId: 'user-1',
         externalChatId: 'lk2:user-1',
-        displayName: 'Игрок ПадлХАБ',
+        displayName: 'Игрок ПадлхАБ',
         text: 'Здравствуйте',
         stationId: 'Yasenevo',
         stationName: 'Ясенево',
@@ -222,7 +222,7 @@ describe('legacy station support client', () => {
         phoneDigits: '79990000001',
         externalUserId: 'user-1',
         externalChatId: 'lk2:user-1',
-        displayName: 'Игрок ПадлХАБ',
+        displayName: 'Игрок ПадлхАБ',
         text: 'Здравствуйте',
         stationId: 'Yasenevo',
         stationName: 'Ясенево',
@@ -278,7 +278,7 @@ describe('legacy station support client', () => {
               direction: 'OUTBOUND',
               authorType: 'ADMIN',
               text: '',
-              sender: { id: 'operator-1', name: 'ПадлХАБ • Супервайзер' },
+              sender: { id: 'operator-1', name: 'ПадлхАБ • Супервайзер' },
               createdTs: 1_758_532_800_000,
               attachments: [
                 {
@@ -304,7 +304,7 @@ describe('legacy station support client', () => {
       beforeTs: 1,
       correlationId: 'correlation-1',
     });
-    expect(messages[0]?.senderName).toBe('ПадлХАБ • Супервайзер');
+    expect(messages[0]?.senderName).toBe('ПадлхАБ • Супервайзер');
     expect(messages[0]?.attachments).toEqual([
       expect.objectContaining({ type: 'IMAGE', name: 'мяч.png', mimeType: 'image/png', size: 12 }),
       expect.objectContaining({ type: 'IMAGE', name: 'фото.png', mimeType: null, size: null }),
@@ -320,7 +320,7 @@ describe('legacy station support client', () => {
       phoneDigits: '79990000001',
       externalUserId: 'user-1',
       externalChatId: 'lk2:user-1',
-      displayName: 'Игрок ПадлХАБ',
+      displayName: 'Игрок ПадлхАБ',
       text: 'Фото: корт.png',
       stationId: 'Yasenevo',
       stationName: 'Ясенево',

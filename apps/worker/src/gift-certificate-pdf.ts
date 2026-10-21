@@ -169,9 +169,9 @@ export async function renderGiftCertificatePdf(input: GiftCertificatePdfInput): 
       margin: 0,
       info: {
         Title: `Подарочный сертификат ${input.certificateNumber}`,
-        Author: 'PadlHub',
-        Subject: 'Подарочный сертификат PadlHub',
-        Creator: 'PadlHub certificate issuer',
+        Author: 'ПадлхАБ',
+        Subject: 'Подарочный сертификат ПадлхАБ',
+        Creator: 'ПадлхАБ — выпуск сертификатов',
         CreationDate: new Date(0),
         ModDate: new Date(0),
       },

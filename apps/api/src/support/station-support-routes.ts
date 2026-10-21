@@ -830,7 +830,7 @@ export function registerStationSupportRoutes(
           phoneDigits: phone,
           externalUserId: current.userId,
           externalChatId: `lk2:${current.userId}`,
-          displayName: 'Игрок ПадлХАБ',
+          displayName: 'Игрок ПадлхАБ',
           text: sentText,
           stationId: target.stationId,
           stationName: target.stationName,

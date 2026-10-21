@@ -316,7 +316,7 @@ export function TrainingsPage({
           ←
         </a>
         <div>
-          <span>ПаделХАБ</span>
+          <span>ПадлхАБ</span>
           <h1>Тренировки</h1>
         </div>
         <span className="games-header__spacer" aria-hidden="true" />

@@ -1060,7 +1060,7 @@ function ProfileBalanceCard({ balance }: { readonly balance: string | null }): R
         </svg>
       </button>
       <p id="profile-balance-information" hidden={!informationOpen}>
-        Текущий баланс вашего счёта в ПадлХАБ.
+        Текущий баланс вашего счёта в ПадлхАБ.
       </p>
     </section>
   );
@@ -1269,7 +1269,7 @@ function SportPicker({
               {!option.available
                 ? 'Пока недоступен'
                 : option.sport === 'PADEL'
-                  ? 'Текущий кабинет ПаделХАБ'
+                  ? 'Текущий кабинет ПадлхАБ'
                   : 'Отдельный спортивный профиль'}
             </small>
           </span>
@@ -2396,7 +2396,7 @@ export function ProfilePage({
                   />
                   <ProfileAction
                     title="Открыть чат"
-                    description="Перейти в личный чат ПадлХАБ"
+                    description="Перейти в личный чат ПадлхАБ"
                     capability={access.chat}
                   />
                 </div>

@@ -57,7 +57,7 @@ export function LocationsPage({
               </i>
             </span>
             <span className="location-directory-copy">
-              <small>{location.city ?? 'ПаделХАБ'}</small>
+              <small>{location.city ?? 'ПадлхАБ'}</small>
               <strong>{location.title}</strong>
               <i>
                 Открыть карточку <b>→</b>

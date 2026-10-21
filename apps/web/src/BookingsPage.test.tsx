@@ -46,7 +46,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={bookings}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={loadHistory}
         loadRecommendations={loadRecommendations}
       />,
@@ -76,7 +76,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={{ ...bookings, state: 'UNAVAILABLE', items: [] }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={vi.fn().mockResolvedValue({ items: [], nextCursor: null })}
         loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
       />,
@@ -91,7 +91,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={{ ...bookings, state: 'READY', items: [] }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={vi.fn().mockResolvedValue({ items: [], nextCursor: null })}
         loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
       />,
@@ -107,7 +107,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={bookings}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={loadHistory}
         loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
       />,
@@ -126,7 +126,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={bookings}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={loadHistory}
         loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
       />,

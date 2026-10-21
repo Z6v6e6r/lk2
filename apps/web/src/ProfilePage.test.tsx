@@ -376,9 +376,9 @@ describe('ProfilePage', () => {
     expect(information).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(information);
     expect(information).toHaveAttribute('aria-expanded', 'true');
-    expect(within(card).getByText('Текущий баланс вашего счёта в ПадлХАБ.')).toBeVisible();
+    expect(within(card).getByText('Текущий баланс вашего счёта в ПадлхАБ.')).toBeVisible();
     fireEvent.click(information);
-    expect(within(card).getByText('Текущий баланс вашего счёта в ПадлХАБ.')).not.toBeVisible();
+    expect(within(card).getByText('Текущий баланс вашего счёта в ПадлхАБ.')).not.toBeVisible();
   });
 
   it('renders a placeholder for a balance the local read did not observe', () => {
@@ -550,7 +550,7 @@ describe('ProfilePage', () => {
         name: 'Друзья',
       }),
     ).toBeVisible();
-    expect(screen.queryByText('ПаделХАБ')).not.toBeInTheDocument();
+    expect(screen.queryByText('ПадлхАБ')).not.toBeInTheDocument();
     expect(screen.queryByText('•••• 5826')).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Мария Соколова · C' })).toHaveAttribute(
       'href',

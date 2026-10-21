@@ -390,7 +390,7 @@ async function listPendingRequests(
   const result = await client.query<FriendRequestRow>(
     `select request.id,
             ${peerColumn} as peer_user_id,
-            coalesce(nullif(btrim(summary.display_name), ''), 'Игрок ПадлХАБ') as display_name,
+            coalesce(nullif(btrim(summary.display_name), ''), 'Игрок ПадлхАБ') as display_name,
             summary.level_label,
             photo.delivery_id,
             request.created_at
@@ -694,7 +694,7 @@ export function createProfileFriendshipRepository(pool: Pool): ProfileFriendship
               limit $3
            )
            select f.user_id,
-                  coalesce(nullif(btrim(s.display_name), ''), 'Игрок ПадлХАБ') as display_name,
+                  coalesce(nullif(btrim(s.display_name), ''), 'Игрок ПадлхАБ') as display_name,
                   s.level_label,
                   p.delivery_id,
                   f.created_at

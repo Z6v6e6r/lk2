@@ -21,7 +21,7 @@ function notification(overrides: Partial<NotificationItem> & { readonly id: stri
   return {
     category: 'MESSAGING',
     title: 'Новое сообщение',
-    body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+    body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
     createdAt: '2026-09-20T10:00:00+03:00',
     ...overrides,
   } satisfies NotificationItem;
@@ -81,7 +81,7 @@ describe('notification presentation mapping', () => {
           id: '33333333-3333-4333-8333-333333333333',
           category: 'FRIENDSHIP',
           title: 'Заявка в друзья',
-          body: 'Откройте ПадлХАБ, чтобы ответить.',
+          body: 'Откройте ПадлхАБ, чтобы ответить.',
         }),
       ]),
     ).toEqual([
@@ -233,7 +233,7 @@ describe('notification grouping', () => {
 
     expect(presentation).toMatchObject({
       meta: '1 новое сообщение',
-      preview: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+      preview: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
     });
   });
 
@@ -275,7 +275,7 @@ describe('notification feed entries', () => {
           id: '11111111-1111-4111-8111-111111111111',
           category: 'FRIENDSHIP',
           title: 'Заявка в друзья',
-          body: 'Откройте ПадлХАБ, чтобы ответить.',
+          body: 'Откройте ПадлхАБ, чтобы ответить.',
         }),
       ),
     ).toBe(true);
@@ -285,7 +285,7 @@ describe('notification feed entries', () => {
           id: '22222222-2222-4222-8222-222222222222',
           category: 'FRIENDSHIP',
           title: 'Заявка принята',
-          body: 'Теперь вы друзья в ПадлХАБ.',
+          body: 'Теперь вы друзья в ПадлхАБ.',
         }),
       ),
     ).toBe(false);

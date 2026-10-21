@@ -143,11 +143,11 @@ function TournamentView({
         <span className="tournament-detail__organizer-avatar" aria-hidden="true">
           <img src={organizer?.avatarUrl ?? organizerFallback} alt="" />
           <span>
-            {playerInitials(organizer?.displayName ?? tournament.trainerName ?? 'ПадлХАБ')}
+            {playerInitials(organizer?.displayName ?? tournament.trainerName ?? 'ПадлхАБ')}
           </span>
         </span>
         <span>
-          <strong>{organizer?.displayName ?? tournament.trainerName ?? 'ПадлХАБ'}</strong>
+          <strong>{organizer?.displayName ?? tournament.trainerName ?? 'ПадлхАБ'}</strong>
           <small>@НИКНЭЙМ</small>
         </span>
         <em>ОРГАНИЗАТОР</em>
@@ -326,7 +326,7 @@ export function TournamentDetailPage({
       <span className={stateError ? undefined : 'loader'} aria-hidden="true" />
       <h1>{stateError ? 'Карточка недоступна' : 'Открываем турнир'}</h1>
       <p role={stateError ? 'alert' : 'status'}>
-        {stateError ?? 'Получаем актуальные данные ПадлХАБ…'}
+        {stateError ?? 'Получаем актуальные данные ПадлхАБ…'}
       </p>
       {stateError ? <a href="/games">К событиям</a> : null}
     </main>

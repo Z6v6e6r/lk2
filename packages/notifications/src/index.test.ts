@@ -484,13 +484,13 @@ describe('notification domain contracts', () => {
     expect(
       renderNotificationTemplate({
         titleTemplate: 'Новое сообщение',
-        bodyTemplate: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+        bodyTemplate: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
         deepLinkTemplate: MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
         payload: { conversationId },
       }),
     ).toEqual({
       title: 'Новое сообщение',
-      body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+      body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
       deepLink: `/chats/${conversationId}`,
     });
     expect(MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY).toBe('MESSAGING');
@@ -545,7 +545,7 @@ describe('notification domain contracts', () => {
     });
     expect(rendered).toEqual({
       title: 'Заявка в друзья',
-      body: 'Откройте ПадлХАБ, чтобы ответить.',
+      body: 'Откройте ПадлхАБ, чтобы ответить.',
       deepLink: '/notifications',
     });
     // The rendered notification never names the requester or a profile detail.

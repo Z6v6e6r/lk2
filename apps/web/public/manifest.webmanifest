@@ -1,7 +1,7 @@
 {
-  "name": "PadlHub",
-  "short_name": "PadlHub",
-  "description": "Брони, игры, сообщества и уведомления PadlHub",
+  "name": "ПадлхАБ",
+  "short_name": "ПадлхАБ",
+  "description": "Брони, игры, сообщества и уведомления ПадлхАБ",
   "lang": "ru",
   "start_url": "/",
   "scope": "/",

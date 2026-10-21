@@ -182,7 +182,7 @@ export function registerProfileFriendshipRoutes(
           reply,
           409,
           'PROFILE_FRIEND_TARGET_UNREACHABLE',
-          'Игрок ещё не входил в ПадлХАБ, и связь с его прежней записью не найдена: заявку сохранить нельзя.',
+          'Игрок ещё не входил в ПадлхАБ, и связь с его прежней записью не найдена: заявку сохранить нельзя.',
         );
       }
       if (result.outcome === 'idempotency_conflict') {
