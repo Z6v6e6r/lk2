@@ -225,7 +225,13 @@ function diskFixture() {
   return { expected, operation, operationBytes, plan, row, value, hostMount, containerMount };
 }
 describe('closed migration custody validators', () => {
-  it('accepts the current migration directory for the frozen API/Worker release', () => {
+  it('accepts frozen packaged SQL and rejects the extended current migration directory', () => {
+    const approvedPackage = frozenLedger.map(({ filename }) => ({
+      filename,
+      checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
+    }));
+    expect(approvedPackage).toEqual(frozenLedger);
+    expect(() => validateApiWorkerLedger(approvedPackage, approvedPackage)).not.toThrow();
     const currentPackage = readdirSync('packages/database/migrations')
       .filter((filename) => filename.endsWith('.sql'))
       .sort()
@@ -233,9 +239,21 @@ describe('closed migration custody validators', () => {
         filename,
         checksum: hash(readFileSync(`packages/database/migrations/${filename}`)),
       }));
-    expect(currentPackage.length).toBe(frozenLedger.length);
-    expect(currentPackage.some((row) => row.filename === '0098_support_tickets.sql')).toBe(true);
-    expect(() => validateApiWorkerLedger(currentPackage, currentPackage)).not.toThrow();
+    expect(currentPackage).toHaveLength(frozenLedger.length + 1);
+    expect(
+      currentPackage
+        .filter((row) => !frozenLedger.some((approved) => approved.filename === row.filename))
+        .map((row) => row.filename),
+    ).toEqual(['0099_local_password_reset_proofs.sql']);
+    expect(() => validateApiWorkerLedger(currentPackage, currentPackage)).toThrow(
+      'API_WORKER_LEDGER',
+    );
+    expect(() => validateApiWorkerLedger(currentPackage, approvedPackage)).toThrow(
+      'API_WORKER_LEDGER',
+    );
+    expect(() => validateApiWorkerLedger(approvedPackage, currentPackage)).toThrow(
+      'API_WORKER_LEDGER',
+    );
   });
   it('accepts exact packaged ledgers and rejects partial, reordered, altered and extra rows', () => {
     const rows = frozenLedger;
