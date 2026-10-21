@@ -46,6 +46,22 @@ const CATEGORY_PRESENTATION: Readonly<Record<string, NotificationCategoryPresent
     marker: 'Ч',
     tone: 'accent',
   },
+  // Chat categories of the messaging ruleset v3: they keep the single "Чаты" feed filter, because
+  // the feed groups rows by conversation destination, while the settings screen shows them apart.
+  CHAT_DIRECT: {
+    filter: 'MESSAGING',
+    filterLabel: 'Чаты',
+    categoryLabel: 'Личный чат',
+    marker: 'Л',
+    tone: 'accent',
+  },
+  CHAT_GAME: {
+    filter: 'MESSAGING',
+    filterLabel: 'Чаты',
+    categoryLabel: 'Чат игры',
+    marker: 'И',
+    tone: 'accent',
+  },
   FRIENDSHIP: {
     filter: 'FRIENDSHIP',
     filterLabel: 'Друзья',

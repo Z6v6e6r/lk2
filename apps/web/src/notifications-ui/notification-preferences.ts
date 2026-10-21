@@ -34,10 +34,23 @@ export interface NotificationCategorySettings {
 }
 
 const CATEGORY_SETTINGS: Readonly<Record<string, NotificationCategorySettings>> = {
+  // The messaging ruleset v3 splits chats by context, so a loud game chat can be muted without
+  // losing a private message. `MESSAGING` stays mapped because a tenant that has not re-provisioned
+  // its ruleset still delivers the aggregated category, and an unmapped key would show raw by name.
   MESSAGING: {
     title: 'Чаты',
     description: 'Личные диалоги и чаты игр',
     icon: 'chat',
+  },
+  CHAT_DIRECT: {
+    title: 'Личные диалоги',
+    description: 'Сообщения и новые личные чаты',
+    icon: 'chat',
+  },
+  CHAT_GAME: {
+    title: 'Чаты игр',
+    description: 'Сообщения и новые чаты ваших игр',
+    icon: 'game',
   },
   GAME: {
     title: 'Игры',
