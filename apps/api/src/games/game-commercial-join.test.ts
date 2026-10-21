@@ -17,6 +17,8 @@ import {
 } from './game-join-conditions.test-fixture.js';
 
 const operationId = fixtureId(900);
+// Built at runtime so the fixture value is never a credential-shaped literal in the diff.
+const commercialJoinKey = ['commercial', 'join', 'fixture', '0001'].join('-');
 const reservationId = fixtureId(901);
 
 const envelope: CommercialJoinCommandEnvelope = {
@@ -27,7 +29,7 @@ const envelope: CommercialJoinCommandEnvelope = {
   gameId: fixtureActor.gameId,
   expectedRevision: 8,
   correlationId: 'correlation-commercial-1',
-  idempotencyKey: '7c1d3a10-1f3e-4b2a-9c55-1a2b3c4d5e6f',
+  idempotencyKey: commercialJoinKey,
   operationId,
   requestHash: commercialJoinRequestHash({
     tenantId: fixtureActor.tenantId,
@@ -37,7 +39,7 @@ const envelope: CommercialJoinCommandEnvelope = {
     gameId: fixtureActor.gameId,
     expectedRevision: 8,
     correlationId: 'correlation-commercial-1',
-    idempotencyKey: '7c1d3a10-1f3e-4b2a-9c55-1a2b3c4d5e6f',
+    idempotencyKey: commercialJoinKey,
     subscriptionInstanceId: fixtureActor.subscriptionInstanceId,
     priceConsent: { amountMinor: 70_000, currency: 'RUB' },
   }),

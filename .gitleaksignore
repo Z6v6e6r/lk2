@@ -16,3 +16,5 @@ aa105bd26d2aeb3d66a18df12a95fdff200947b9:apps/api/src/subscriptions/subscription
 # Commit-scoped fingerprints for the historical commits; the working tree no longer uses them.
 90ba06a485d4ca5d84adaddd93dab75cf72ebda5:apps/api/src/games/game-commercial-join.test.ts:generic-api-key:30
 90ba06a485d4ca5d84adaddd93dab75cf72ebda5:apps/api/src/games/game-commercial-join.test.ts:generic-api-key:40
+f9dadb20ccfd34d60167d823fb453bd8813015bb:apps/api/src/games/game-commercial-join.test.ts:generic-api-key:30
+f9dadb20ccfd34d60167d823fb453bd8813015bb:apps/api/src/games/game-commercial-join.test.ts:generic-api-key:40
