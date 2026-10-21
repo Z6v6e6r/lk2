@@ -86,7 +86,13 @@ function dependencies(
 ) {
   const fixture = createJoinConditionsFixture();
   return {
-    ...(overrides.issueActorToken ? { issueActorToken: overrides.issueActorToken } : {}),
+    issueActorToken:
+      overrides.issueActorToken ??
+      (() =>
+        Promise.resolve({
+          token: ACTOR_TOKEN,
+          expiresAt: new Date(Date.now() + 30_000).toISOString(),
+        })),
     config: {
       ...config,
       GAME_COMMERCIAL_JOIN_OWNER_BASE_URL:
@@ -142,6 +148,42 @@ describe('commercial JOIN runtime composition', () => {
 
   it('stays undefined without the existing delegation boundary', () => {
     expect(createGameCommercialJoinRuntime(dependencies({ ownerBoundary: null }))).toBeUndefined();
+  });
+
+  it('stays undefined without a user-scoped token issuer', () => {
+    const fixture = createJoinConditionsFixture();
+    const runtime = createGameCommercialJoinRuntime({
+      config,
+      pool: {} as Parameters<typeof createGameCommercialJoinRuntime>[0]['pool'],
+      rosterRepository: rosterRepository(),
+      conditionsOwner: fixture.owner,
+      ownerBoundary: boundary(),
+    });
+    expect(runtime).toBeUndefined();
+  });
+
+  it('stays undefined without a provider subscription resolver', () => {
+    const fixture = createJoinConditionsFixture();
+    const runtime = createGameCommercialJoinRuntime({
+      config,
+      pool: {} as Parameters<typeof createGameCommercialJoinRuntime>[0]['pool'],
+      rosterRepository: rosterRepository(),
+      conditionsOwner: fixture.owner,
+      ownerBoundary: {
+        delegationIssuer: {
+          issueBookedOperationAdmission: () => Promise.resolve('delegation'),
+          issueBookedOperationRead: () => Promise.resolve('delegation'),
+        },
+        actorContextRepository: boundary().actorContextRepository,
+        ...(boundary().targetRepository ? { targetRepository: boundary().targetRepository } : {}),
+      },
+      issueActorToken: () =>
+        Promise.resolve({
+          token: ACTOR_TOKEN,
+          expiresAt: new Date(Date.now() + 30_000).toISOString(),
+        }),
+    });
+    expect(runtime).toBeUndefined();
   });
 
   it('stays undefined without an owner base url', () => {

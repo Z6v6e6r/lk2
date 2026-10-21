@@ -150,12 +150,7 @@ export function createBookedOperationOwner(options: {
   }) => Promise<CommercialJoinActorToken>;
   readonly onMetric?: (
     outcome:
-      | 'execute_pending'
-      | 'execute_unknown'
-      | 'read'
-      | 'read_failure'
-      | 'actor_token_unavailable'
-      | 'actor_token_unbound',
+      'execute_pending' | 'execute_unknown' | 'read' | 'read_failure' | 'actor_token_unavailable',
   ) => void;
 }): CommercialJoinOwnerPort {
   const admissionClient = new BookedOperationAdmissionClient({
@@ -332,6 +327,10 @@ export function createGameCommercialJoinRuntime(
   const { config } = options;
   if (!config.GAME_COMMERCIAL_JOIN_ENABLED) return undefined;
   if (!options.conditionsOwner || !options.ownerBoundary) return undefined;
+  // Without an attributable user credential and a server-side provider subscription mapping the
+  // owner cannot execute the booking, so a half-composed runtime must keep the old fail-closed guard.
+  if (!options.issueActorToken) return undefined;
+  if (!options.ownerBoundary.resolveProviderClientSubscriptionId) return undefined;
   const baseUrl = config.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL;
   if (!baseUrl) return undefined;
   const owner = createBookedOperationOwner({
