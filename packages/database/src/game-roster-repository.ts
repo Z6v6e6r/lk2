@@ -1722,6 +1722,10 @@ export function createGameRosterRepository(
             input.gameId,
           ],
         );
+        // A single-use personal invitation used for this bypass is consumed atomically with the
+        // durable attempt: replaying the same key cannot spend it twice, and a definitive owner
+        // failure cannot hand the same invitation to a second paid enrollment.
+        await consumePersonalInvitation(client, input.tenantId, eligibility.validatedInvitationId);
         const revision = await bumpRevision(client, input);
         const base = eventBase(input, input.operationId, revision, now);
         await appendEvent(client, {

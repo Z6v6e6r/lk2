@@ -143,21 +143,28 @@ export interface CommercialJoinAttemptView {
  * The executor MUST be idempotent by `operationId` and MUST NOT be retried by LK2.
  * It cannot report success: confirmation arrives only as a trusted receipt.
  */
+export interface CommercialJoinOwnerActor {
+  readonly tenantId: string;
+  readonly tenantKey: string;
+  readonly userId: string;
+  readonly sessionId: string;
+  readonly gameId: string;
+  readonly expectedRevision: number;
+}
+
 export interface CommercialJoinOwnerPort {
   execute(input: {
+    readonly actor: CommercialJoinOwnerActor;
     readonly operationId: string;
     readonly idempotencyKey: string;
     readonly correlationId: string;
-    readonly gameId: string;
-    /** Canonical PadlHub game id. The owner adapter resolves its provider mapping server-side. */
-    readonly targetGameId: string;
     readonly subscriptionInstanceId: string;
     readonly price: CommercialJoinPrice;
   }): Promise<CommercialJoinOwnerOutcome>;
   read(input: {
+    readonly actor: CommercialJoinOwnerActor;
     readonly operationId: string;
     readonly correlationId: string;
-    readonly gameId: string;
   }): Promise<CommercialJoinOwnerOutcome | null>;
 }
 
@@ -254,6 +261,16 @@ export function commercialFailure(
   code: CommercialJoinFailureCode,
 ): Extract<CommercialJoinResult, { kind: 'failed' }> {
   return { kind: 'failed', code, message: FAILURE_MESSAGES[code] };
+}
+
+/**
+ * Owner preview reason codes that prohibit the service itself. Kept intentionally narrow: extending
+ * this table is a product rule (NEEDS_PRODUCT_RULE), not an implementation detail.
+ */
+export const SERVICE_PROHIBITION_REASON_CODES: readonly string[] = ['SERVICE_BLOCKED'];
+
+export function isServiceProhibitionReason(reasonCode: string | null): boolean {
+  return reasonCode !== null && SERVICE_PROHIBITION_REASON_CODES.includes(reasonCode);
 }
 
 export function isCommercialFailureCode(value: string): value is CommercialJoinFailureCode {
@@ -395,8 +412,12 @@ export async function executeCommercialJoin(
     return commercialFailure('GAME_PAYMENT_REQUIRED');
   }
   if (conditions.eligibility !== 'AVAILABLE' || conditions.price.amountMinor === null) {
-    // Service policy and missing entitlement are deliberately different outcomes, but a full-price
-    // purchase is not implemented yet: both stay fail-closed on the existing beta guard.
+    // A prohibited service is a rule decision, not a payment problem: paying never removes it.
+    // Broader `reasonCode -> LK2 code` mapping is NEEDS_PRODUCT_RULE; only the explicit service
+    // prohibition is separated here. A benefit-only refusal keeps the fail-closed beta guard.
+    if (isServiceProhibitionReason(conditions.reasonCode)) {
+      return commercialFailure('GAME_SERVICE_BLOCKED');
+    }
     return commercialFailure('GAME_PAYMENT_REQUIRED');
   }
   if (Date.parse(conditions.expiresAt) <= now()) {
@@ -517,11 +538,17 @@ export async function executeCommercialJoin(
   let outcome: CommercialJoinOwnerOutcome;
   try {
     outcome = await dependencies.owner.execute({
+      actor: {
+        tenantId: input.tenantId,
+        tenantKey: input.tenantKey,
+        userId: input.userId,
+        sessionId: input.sessionId,
+        gameId: input.gameId,
+        expectedRevision: input.expectedRevision,
+      },
       operationId: begin.operationId,
       idempotencyKey: input.idempotencyKey,
       correlationId: input.correlationId,
-      gameId: input.gameId,
-      targetGameId: conditions.gameId,
       subscriptionInstanceId: input.subscriptionInstanceId,
       price,
     });
@@ -595,7 +622,9 @@ export async function executeCommercialJoin(
 export async function readCommercialJoinOperation(
   input: {
     readonly tenantId: string;
+    readonly tenantKey: string;
     readonly actorUserId: string;
+    readonly sessionId: string;
     readonly operationId: string;
     readonly correlationId: string;
   },
@@ -664,9 +693,16 @@ export async function readCommercialJoinOperation(
   }
   const ownerPending = await dependencies.owner
     .read({
+      actor: {
+        tenantId: input.tenantId,
+        tenantKey: input.tenantKey,
+        userId: input.actorUserId,
+        sessionId: input.sessionId,
+        gameId: attempt.gameId,
+        expectedRevision: 0,
+      },
       operationId: attempt.commandId,
       correlationId: input.correlationId,
-      gameId: attempt.gameId,
     })
     .then((ownerState) => ownerState?.status === 'PENDING')
     .catch(() => false);

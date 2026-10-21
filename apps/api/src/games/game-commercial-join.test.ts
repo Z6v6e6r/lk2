@@ -295,7 +295,9 @@ describe('commercial JOIN readback', () => {
     const body = await readCommercialJoinOperation(
       {
         tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
         actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
         operationId,
         correlationId: 'correlation-read-1',
       },
@@ -308,7 +310,9 @@ describe('commercial JOIN readback', () => {
     const body = await readCommercialJoinOperation(
       {
         tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
         actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
         operationId,
         correlationId: 'correlation-read-2',
       },
@@ -330,7 +334,9 @@ describe('commercial JOIN readback', () => {
     const body = await readCommercialJoinOperation(
       {
         tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
         actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
         operationId,
         correlationId: 'correlation-read-3',
       },
@@ -346,7 +352,9 @@ describe('commercial JOIN readback', () => {
     const body = await readCommercialJoinOperation(
       {
         tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
         actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
         operationId,
         correlationId: 'correlation-read-4',
       },
@@ -367,7 +375,9 @@ describe('commercial JOIN readback', () => {
     const body = await readCommercialJoinOperation(
       {
         tenantId: fixtureActor.tenantId,
+        tenantKey: 'synthetic',
         actorUserId: fixtureActor.userId,
+        sessionId: fixtureActor.sessionId,
         operationId,
         correlationId: 'correlation-read-5',
       },

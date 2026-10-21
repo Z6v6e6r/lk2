@@ -1,0 +1,222 @@
+import type { AppConfig } from '@phub/config';
+import type {
+  BookedOperationAdmissionTargetRepository,
+  GameRosterRepository,
+  SubscriptionRuntimeActorContextRepository,
+} from '@phub/database';
+import { createBookedOperationAdmissionTargetRepository } from '../../../../packages/database/src/booked-operation-admission-target-repository.js';
+import {
+  BookedOperationAdmissionClient,
+  BookedOperationReadClient,
+  BookedOperationReadError,
+  type BookedOperationAdmissionRequest,
+} from '@phub/subscription-runtime-adapter';
+
+import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
+import type {
+  CommercialJoinOwnerOutcome,
+  CommercialJoinOwnerPort,
+} from './game-commercial-join.js';
+import type { GameJoinConditionsOwner } from './game-join-conditions.js';
+import type { GameCommercialJoinOptions } from './game-routes.js';
+
+/**
+ * Runtime composition of the commercial JOIN path.
+ *
+ * Owner: C1 (commercial server path). Purpose: let the paid JOIN reach the existing owner of
+ * booking/entitlement through the already-issued actor delegation instead of inventing a second
+ * executor. Activation: `GAME_COMMERCIAL_JOIN_ENABLED=true` plus the existing delegation material
+ * (`SUBSCRIPTION_RUNTIME_DELEGATION_*`, composed by the subscription-runtime WARN boundary) and the
+ * join-conditions owner. Removal/review condition: remove when a dedicated booked-operation owner
+ * adapter replaces the WARN boundary reuse, or when the owner receiver contract lands.
+ *
+ * Fail-closed: without every dependency the factory returns `undefined`, so the routes keep
+ * answering `GAME_PAYMENT_REQUIRED` exactly as before.
+ */
+
+type CommercialJoinConfig = Pick<
+  AppConfig,
+  | 'APP_ENV'
+  | 'GAME_COMMERCIAL_JOIN_ENABLED'
+  | 'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL'
+  | 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS'
+>;
+
+export interface GameCommercialJoinOwnerBoundary {
+  readonly delegationIssuer: Pick<
+    SubscriptionRuntimeActorDelegationIssuer,
+    'issueBookedOperationAdmission' | 'issueBookedOperationRead'
+  >;
+  readonly actorContextRepository: Pick<SubscriptionRuntimeActorContextRepository, 'resolve'>;
+  readonly targetRepository?: BookedOperationAdmissionTargetRepository;
+}
+
+export interface GameCommercialJoinRuntimeOptions {
+  readonly config: CommercialJoinConfig;
+  readonly pool: Parameters<typeof createBookedOperationAdmissionTargetRepository>[0];
+  readonly rosterRepository: Pick<
+    GameRosterRepository,
+    'beginPaidJoin' | 'getPaidJoinAttempt' | 'failPaidJoinAttempt'
+  >;
+  readonly conditionsOwner?: GameJoinConditionsOwner;
+  readonly ownerBoundary?: GameCommercialJoinOwnerBoundary;
+}
+
+function environment(config: CommercialJoinConfig): 'development' | 'production' {
+  return config.APP_ENV === 'local' || config.APP_ENV === 'ci' ? 'development' : 'production';
+}
+
+/**
+ * Adapter onto the existing owner contract. It never reports success: a booking id, an HTTP 200 or
+ * an owner "confirmed" answer cannot make the LK2 attempt SUCCEEDED — only a trusted receipt can,
+ * and that receipt arrives through the legacy owner channel.
+ */
+export function createBookedOperationOwner(options: {
+  readonly baseUrl: string;
+  readonly timeoutMs: number;
+  readonly environment: 'development' | 'production';
+  readonly boundary: Omit<GameCommercialJoinOwnerBoundary, 'targetRepository'>;
+  readonly targetRepository: BookedOperationAdmissionTargetRepository;
+  readonly onMetric?: (
+    outcome: 'execute_pending' | 'execute_unknown' | 'read' | 'read_failure',
+  ) => void;
+}): CommercialJoinOwnerPort {
+  const admissionClient = new BookedOperationAdmissionClient({
+    baseUrl: options.baseUrl,
+    environment: options.environment,
+    timeoutMs: options.timeoutMs,
+    ...(options.onMetric
+      ? { onMetric: (metric) => options.onMetric?.(`execute_${metric}` as never) }
+      : {}),
+  });
+  const readClient = new BookedOperationReadClient({
+    baseUrl: options.baseUrl,
+    environment: options.environment,
+    timeoutMs: options.timeoutMs,
+  });
+
+  const resolveActor = async (actor: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly sessionId: string;
+  }) => options.boundary.actorContextRepository.resolve(actor);
+
+  return {
+    async execute(input) {
+      const context = await resolveActor({
+        tenantId: input.actor.tenantId,
+        userId: input.actor.userId,
+        sessionId: input.actor.sessionId,
+      });
+      // An unproven actor context must not book anything, and it must not lose the attempt either.
+      if (context.outcome !== 'ok')
+        return { status: 'UNKNOWN' } satisfies CommercialJoinOwnerOutcome;
+      const target = await options.targetRepository.resolve({
+        tenantId: input.actor.tenantId,
+        targetId: input.actor.gameId,
+        expectedRevision: input.actor.expectedRevision,
+      });
+      // The game has no verified owner mapping: this is not a chargeable target, so fail closed
+      // without keeping a seat for an operation that can never be executed.
+      if (!target) return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
+      if (!target.admissible) return { status: 'REJECTED', code: 'GAME_SERVICE_BLOCKED' };
+      const request: BookedOperationAdmissionRequest = {
+        action: 'JOIN_GAME',
+        target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
+        paymentIntent: 'USE_SUBSCRIPTION',
+      };
+      try {
+        const actorDelegation =
+          await options.boundary.delegationIssuer.issueBookedOperationAdmission({
+            tenantId: input.actor.tenantId,
+            tenantKey: input.actor.tenantKey,
+            userId: input.actor.userId,
+            sessionId: input.actor.sessionId,
+            providerClientId: context.providerClientId,
+            providerMappingId: context.providerMappingId,
+            providerExerciseId: target.providerExerciseId,
+            targetMappingId: target.targetMappingId,
+            targetVersion: target.targetVersion,
+            startsAt: target.startsAt,
+            durationMinutes: target.durationMinutes,
+            capacity: target.capacity,
+            admissible: target.admissible,
+            operationId: input.operationId,
+            correlationId: input.correlationId,
+            idempotencyKey: input.idempotencyKey,
+            request,
+          });
+        await admissionClient.admit(request, {
+          actorDelegation,
+          correlationId: input.correlationId,
+          operationId: input.operationId,
+        });
+        options.onMetric?.('execute_pending');
+        return { status: 'PENDING' };
+      } catch {
+        // A conflict or an unavailable owner is not a definitive rejection: keep the attempt and let
+        // readback reconcile it. Only an explicit REJECTED outcome may terminate the operation.
+        options.onMetric?.('execute_unknown');
+        return { status: 'UNKNOWN' };
+      }
+    },
+    async read(input) {
+      const context = await resolveActor({
+        tenantId: input.actor.tenantId,
+        userId: input.actor.userId,
+        sessionId: input.actor.sessionId,
+      });
+      if (context.outcome !== 'ok') return { status: 'UNKNOWN' };
+      try {
+        const actorDelegation = await options.boundary.delegationIssuer.issueBookedOperationRead({
+          tenantId: input.actor.tenantId,
+          tenantKey: input.actor.tenantKey,
+          userId: input.actor.userId,
+          sessionId: input.actor.sessionId,
+          providerClientId: context.providerClientId,
+          providerMappingId: context.providerMappingId,
+          operationId: input.operationId,
+          correlationId: input.correlationId,
+        });
+        const outcome = await readClient.read(input.operationId, {
+          actorDelegation,
+          correlationId: input.correlationId,
+        });
+        options.onMetric?.('read');
+        if (outcome.status === 'PENDING') return { status: 'PENDING' };
+        // CONFIRMED means the owner booking exists; the LK2 participation is still finalized only by
+        // the trusted receipt, so the client keeps waiting instead of being told SUCCEEDED.
+        if (outcome.status === 'CONFIRMED') return { status: 'PENDING' };
+        return { status: 'UNKNOWN' };
+      } catch (error) {
+        if (error instanceof BookedOperationReadError && error.status === 404) return null;
+        options.onMetric?.('read_failure');
+        return { status: 'UNKNOWN' };
+      }
+    },
+  };
+}
+
+export function createGameCommercialJoinRuntime(
+  options: GameCommercialJoinRuntimeOptions,
+): GameCommercialJoinOptions | undefined {
+  const { config } = options;
+  if (!config.GAME_COMMERCIAL_JOIN_ENABLED) return undefined;
+  if (!options.conditionsOwner || !options.ownerBoundary) return undefined;
+  const baseUrl = config.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL;
+  if (!baseUrl) return undefined;
+  const owner = createBookedOperationOwner({
+    baseUrl,
+    timeoutMs: config.GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS,
+    environment: environment(config),
+    boundary: options.ownerBoundary,
+    targetRepository:
+      options.ownerBoundary.targetRepository ??
+      createBookedOperationAdmissionTargetRepository(options.pool),
+  });
+  return {
+    repository: options.rosterRepository as unknown as GameCommercialJoinOptions['repository'],
+    conditionsOwner: options.conditionsOwner,
+    owner,
+  };
+}

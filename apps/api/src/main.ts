@@ -67,6 +67,7 @@ import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
 import { createGameJoinConditionsRuntime } from './games/game-join-conditions-runtime.js';
+import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
@@ -608,6 +609,24 @@ const subscriptionRuntimeWarnBoundary = (() => {
   };
 })();
 const gameJoinConditionsOwner = createGameJoinConditionsRuntime({ config, pool, authService });
+// Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
+// existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
+const gameCommercialJoin = gameRosterRepository
+  ? createGameCommercialJoinRuntime({
+      config,
+      pool,
+      rosterRepository: gameRosterRepository,
+      ...(gameJoinConditionsOwner ? { conditionsOwner: gameJoinConditionsOwner } : {}),
+      ...(subscriptionRuntimeWarnBoundary
+        ? {
+            ownerBoundary: {
+              delegationIssuer: subscriptionRuntimeWarnBoundary.delegationIssuer,
+              actorContextRepository: subscriptionRuntimeWarnBoundary.actorContextRepository,
+            },
+          }
+        : {}),
+    })
+  : undefined;
 const app = await buildApp({
   config,
   logger,
@@ -615,6 +634,7 @@ const app = await buildApp({
   ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
+  ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(subscriptionRuntimeWarnBoundary
     ? {
         subscriptionRuntimeActorContextRepository:

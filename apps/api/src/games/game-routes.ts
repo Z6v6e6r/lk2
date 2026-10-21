@@ -108,6 +108,13 @@ function principal(request: FastifyRequest): { tenantId: string; userId: string 
   return current.tenantId && userId ? { tenantId: current.tenantId, userId } : undefined;
 }
 
+function sessionId(request: FastifyRequest): string {
+  const current = request as FastifyRequest & {
+    readonly padlHubClaims?: { readonly sid?: string };
+  };
+  return current.padlHubClaims?.sid ?? '';
+}
+
 function idempotencyKey(request: FastifyRequest): string {
   const value = request.headers['idempotency-key'];
   if (typeof value !== 'string') throw new Error('GAME_IDEMPOTENCY_PREHANDLER_MISSING');
@@ -833,7 +840,9 @@ export function registerGameRoutes(
       const recovered = await readCommercialJoinOperation(
         {
           tenantId: current.tenantId,
+          tenantKey: (request.params as { tenantKey: string }).tenantKey,
           actorUserId: current.userId,
+          sessionId: sessionId(request),
           operationId: commercialOperationId({
             tenantId: current.tenantId,
             userId: current.userId,
@@ -902,7 +911,9 @@ export function registerGameRoutes(
         const commercialBody = await readCommercialJoinOperation(
           {
             tenantId: current.tenantId,
+            tenantKey: (request.params as { tenantKey: string }).tenantKey,
             actorUserId: current.userId,
+            sessionId: sessionId(request),
             operationId,
             correlationId: request.id,
           },
