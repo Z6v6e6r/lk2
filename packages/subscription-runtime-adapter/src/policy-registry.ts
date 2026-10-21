@@ -58,6 +58,8 @@ export interface SubscriptionPolicyRegistryItem {
   /** Immutable compiled runtime projection of the current publication; opaque to LK2. */
   readonly rules: Record<string, unknown> | null;
   readonly surfaces: readonly string[];
+  /** Verified provider product ids bound to this subscription type, when CUP exposes them. */
+  readonly providerProductIds?: readonly string[];
   readonly versions: readonly SubscriptionPolicyRegistryVersion[];
   readonly instances: {
     readonly total: number;
@@ -204,6 +206,11 @@ function assertItem(value: unknown): void {
     !(value.rules === null || record(value.rules)) ||
     !Array.isArray(value.surfaces) ||
     !value.surfaces.every((surface) => typeof surface === 'string') ||
+    !(
+      value.providerProductIds === undefined ||
+      (Array.isArray(value.providerProductIds) &&
+        value.providerProductIds.every((id) => typeof id === 'string'))
+    ) ||
     !Array.isArray(value.versions) ||
     !record(value.instances) ||
     !nonNegative(value.instances.total) ||
