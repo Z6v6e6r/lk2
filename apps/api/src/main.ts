@@ -617,8 +617,7 @@ const subscriptionPolicyRegistryClient = config.SUBSCRIPTION_POLICY_REGISTRY_ENA
       integrationToken: config.SUBSCRIPTION_POLICY_REGISTRY_INTEGRATION_TOKEN as string,
       timeoutMs: config.SUBSCRIPTION_POLICY_REGISTRY_TIMEOUT_MS,
       environment: config.APP_ENV === 'local' ? 'development' : 'production',
-      onMetric: (metric) =>
-        logger.info({ metric }, 'subscription policy registry read'),
+      onMetric: (metric) => logger.info({ metric }, 'subscription policy registry read'),
     })
   : undefined;
 const gameJoinConditionsOwner = createGameJoinConditionsRuntime({ config, pool, authService });

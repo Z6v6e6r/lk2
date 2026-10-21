@@ -32,11 +32,7 @@ export interface SubscriptionPolicyRegistryVersion {
   readonly modelVersion: 2 | 3;
   readonly effectiveAt: string;
   readonly applyTo: 'NEW_ONLY' | 'ACTIVE_AND_NEW';
-  readonly publicationState:
-    | 'PUBLISHED'
-    | 'SUPERSEDED'
-    | 'DISABLED_FOR_NEW_OPERATIONS'
-    | null;
+  readonly publicationState: 'PUBLISHED' | 'SUPERSEDED' | 'DISABLED_FOR_NEW_OPERATIONS' | null;
 }
 
 export interface SubscriptionPolicyRegistryLastDecision {
@@ -131,9 +127,7 @@ function assertPublication(value: unknown): void {
     typeof value.publicationId !== 'string' ||
     typeof value.policyDigest !== 'string' ||
     !positive(value.policyVersion) ||
-    !['PUBLISHED', 'SUPERSEDED', 'DISABLED_FOR_NEW_OPERATIONS'].includes(
-      String(value.state),
-    ) ||
+    !['PUBLISHED', 'SUPERSEDED', 'DISABLED_FOR_NEW_OPERATIONS'].includes(String(value.state)) ||
     !instant(value.effectiveAt) ||
     !['NEW_ONLY', 'ACTIVE_AND_NEW'].includes(String(value.applyTo)) ||
     !instant(value.publishedAt) ||
@@ -280,12 +274,16 @@ export class SubscriptionPolicyRegistryClient {
       timeoutMs < 100 ||
       timeoutMs > 10_000
     )
-      throw new SubscriptionPolicyRegistryError('SUBSCRIPTION_POLICY_REGISTRY_CONFIGURATION_INVALID');
+      throw new SubscriptionPolicyRegistryError(
+        'SUBSCRIPTION_POLICY_REGISTRY_CONFIGURATION_INVALID',
+      );
     let baseUrl: URL;
     try {
       baseUrl = new URL(options.baseUrl);
     } catch {
-      throw new SubscriptionPolicyRegistryError('SUBSCRIPTION_POLICY_REGISTRY_CONFIGURATION_INVALID');
+      throw new SubscriptionPolicyRegistryError(
+        'SUBSCRIPTION_POLICY_REGISTRY_CONFIGURATION_INVALID',
+      );
     }
     const localHttp =
       (options.environment === 'development' || options.environment === 'test') &&
@@ -298,7 +296,9 @@ export class SubscriptionPolicyRegistryClient {
       baseUrl.search ||
       baseUrl.pathname !== '/'
     )
-      throw new SubscriptionPolicyRegistryError('SUBSCRIPTION_POLICY_REGISTRY_CONFIGURATION_INVALID');
+      throw new SubscriptionPolicyRegistryError(
+        'SUBSCRIPTION_POLICY_REGISTRY_CONFIGURATION_INVALID',
+      );
     this.baseUrl = baseUrl;
     this.integrationToken = token;
     this.timeoutMs = timeoutMs;
@@ -345,29 +345,21 @@ export class SubscriptionPolicyRegistryClient {
       const body = await response.text();
       if (Buffer.byteLength(body, 'utf8') > 1_048_576) {
         this.emit('failure', startedAt, statusClass);
-        throw new SubscriptionPolicyRegistryError(
-          'SUBSCRIPTION_POLICY_REGISTRY_RESPONSE_INVALID',
-        );
+        throw new SubscriptionPolicyRegistryError('SUBSCRIPTION_POLICY_REGISTRY_RESPONSE_INVALID');
       }
       let parsed: unknown;
       try {
         parsed = JSON.parse(body) as unknown;
       } catch {
         this.emit('failure', startedAt, statusClass);
-        throw new SubscriptionPolicyRegistryError(
-          'SUBSCRIPTION_POLICY_REGISTRY_RESPONSE_INVALID',
-        );
+        throw new SubscriptionPolicyRegistryError('SUBSCRIPTION_POLICY_REGISTRY_RESPONSE_INVALID');
       }
       const result = parseSubscriptionPolicyRegistryResult(parsed);
       this.emit('success', startedAt, statusClass);
       return result;
     } catch (error) {
       if (error instanceof SubscriptionPolicyRegistryError) throw error;
-      this.emit(
-        controller.signal.aborted ? 'timeout' : 'failure',
-        startedAt,
-        undefined,
-      );
+      this.emit(controller.signal.aborted ? 'timeout' : 'failure', startedAt, undefined);
       throw new SubscriptionPolicyRegistryError(
         controller.signal.aborted
           ? 'SUBSCRIPTION_POLICY_REGISTRY_TIMEOUT'
