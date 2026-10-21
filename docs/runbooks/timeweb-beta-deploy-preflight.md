@@ -1,8 +1,8 @@
 # Beta deploy preflight (read-only fitness check)
 
 Companion to [ADR 0025](../adr/0025-two-profile-timeweb-delivery.md). Use for the `beta` profile
-before any approved transition. This document is the checklist; the automated command is added in
-the next step of the ADR migration plan.
+before any approved transition. This document is the checklist; the automated read-only command is
+`scripts/preflight-timeweb-beta-deploy.ts` (see below).
 
 Preflight is **read-only**. It must never restart a container, write to the database, publish an
 image, change a lock or alter a secret. Every category below reports `GO` or the exact missing
@@ -10,6 +10,33 @@ input, so the operator learns the full gap list in minutes instead of discoverin
 
 Evidence labels: `LOCAL`, `CI`, `STAGING`, `PROVIDER`, `PRODUCTION` are distinct; never report one as
 another.
+
+## Automated command
+
+Run the read-only check from the enrolled controller source on the target host:
+
+```sh
+cd /opt/phub/timeweb-beta/standard/source
+node --import tsx scripts/preflight-timeweb-beta-deploy.ts \
+  --profile=beta --phase=rollout
+```
+
+Options:
+
+- `--profile=beta|production` (default `beta`);
+- `--phase=pre-migration|post-migration|rollout` — selects the expected ledger
+  (`025c5ee1…` for pre-migration, `b9bfd91a…` for the 102-row post-migration/rollout state);
+- `--candidate-dir=/etc/phub/timeweb-beta-candidates/<release-id>/timeweb-beta` — validates the
+  prepared candidate secret set and FCM delta;
+- `--expected-current-secret-set=<release-id>` — pins the installed `.release-identity.json`;
+- `--ci-run-id=<github-run-id>` with `GITHUB_TOKEN`/`GH_TOKEN` — verifies the controller main-push CI;
+- `--json` — machine-readable report; `--pg-container`, `--root`, `--source`, `--config`, `--env-dir`,
+  `--candidate-release-id` override host defaults for staging or tests.
+
+Exit codes: `0` = `GO` (only warnings/evidence gaps), `1` = `NO_GO` (at least one blocker),
+`2` = the preflight itself could not run. The command never mutates the host, database, secrets,
+images or locks; it is safe to run before every attempt and after a failed attempt to see what was
+left behind.
 
 ## 1. Authority and target (PRODUCTION)
 
