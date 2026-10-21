@@ -564,10 +564,12 @@ describe('Game Lifecycle Atlas critical classification', () => {
       'utf8',
     );
     const joinStart = source.indexOf('    join(input) {');
-    const confirmPaymentStart = source.indexOf('    confirmPayment(input) {', joinStart);
+    // Bound the slice to the join method itself: the separate paid-join writer that follows it is a
+    // different command and must not be mistaken for the legacy join body.
+    const joinEnd = source.indexOf('\n    },\n\n', joinStart);
     expect(joinStart).toBeGreaterThan(-1);
-    expect(confirmPaymentStart).toBeGreaterThan(joinStart);
-    const joinSource = source.slice(joinStart, confirmPaymentStart);
+    expect(joinEnd).toBeGreaterThan(joinStart);
+    const joinSource = source.slice(joinStart, joinEnd);
     expect(joinSource).toContain("prepared.game.payment_mode === 'SPLIT'");
     expect(joinSource).toContain("prepared.game.payment_mode === 'SUBSCRIPTION'");
     expect(joinSource).toContain("'GAME_PAYMENT_REQUIRED'");
