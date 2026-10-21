@@ -338,7 +338,7 @@ export function probeBootstrap(options: BootstrapOptions, deps: PreflightDeps): 
   const capacity = evaluateCapacity(
     databaseBytes,
     Number(memory) * 1024,
-    stats.bavail * stats.frsize,
+    stats.bavail * stats.bsize,
   );
   const fcmPath = '/etc/phub/timeweb-beta-fcm/fcm-service-account.json';
   return {

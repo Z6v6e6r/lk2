@@ -36,6 +36,10 @@ function parseArgs(argv: readonly string[]): Options {
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
+    if (token === '--json') {
+      values.set('json', '1');
+      continue;
+    }
     if (!token?.startsWith('--')) fail(`Invalid argument ${token ?? '<missing>'}`);
     const separator = token.indexOf('=');
     if (separator > 2) {
@@ -107,7 +111,7 @@ function availableMemory(options: Options): number {
 function freeDisk(options: Options): number {
   if (options.freeDisk !== undefined) return options.freeDisk;
   const stats = statfsSync(options.root);
-  return stats.bavail * stats.frsize;
+  return stats.bavail * stats.bsize;
 }
 
 function main(argv: readonly string[]): number {
