@@ -92,10 +92,7 @@ export interface SyntheticTenant {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** Creates an isolated synthetic tenant with four members in the C3 test database. */
-export async function seedSyntheticTenant(
-  pool: Pool,
-  label = 'base',
-): Promise<SyntheticTenant> {
+export async function seedSyntheticTenant(pool: Pool, label = 'base'): Promise<SyntheticTenant> {
   const tenantId = randomUUID();
   const tenantKey = `c3-${label}-${tenantId.slice(0, 8)}`;
   const actor = (): SyntheticActor => ({ userId: randomUUID(), sessionId: randomUUID() });
@@ -157,15 +154,11 @@ export interface SeededGame {
 }
 
 /** Inserts one synthetic paid/free game row in the C3 test database. */
-export async function seedSyntheticGame(
-  pool: Pool,
-  input: SeedGameInput,
-): Promise<SeededGame> {
+export async function seedSyntheticGame(pool: Pool, input: SeedGameInput): Promise<SeededGame> {
   const gameId = randomUUID();
   const startsAt = input.startsAt ?? new Date(Date.now() + 2 * 60 * 60 * 1000);
   const endsAt = new Date(startsAt.getTime() + (input.durationMinutes ?? 90) * 60_000);
-  const joinCutoffAt =
-    input.joinCutoffAt ?? new Date(startsAt.getTime() - 30 * 60_000);
+  const joinCutoffAt = input.joinCutoffAt ?? new Date(startsAt.getTime() - 30 * 60_000);
   const stationId = randomUUID();
   await withTenantTransaction(pool, input.tenantId, async (client) => {
     await client.query(

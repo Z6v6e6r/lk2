@@ -67,7 +67,8 @@ export function syntheticQuote(input: SyntheticQuoteInput = {}): ConditionsQuote
   }
   const amountMinor = input.amountMinor ?? 0;
   const freeMinutes =
-    input.freeMinutes ?? (amountMinor > 0 ? C3_SYNTHETIC_FREE_MINUTES : C3_SYNTHETIC_FREE_GAME_MINUTES);
+    input.freeMinutes ??
+    (amountMinor > 0 ? C3_SYNTHETIC_FREE_MINUTES : C3_SYNTHETIC_FREE_GAME_MINUTES);
   const paidMinutes = input.paidMinutes ?? C3_SYNTHETIC_FREE_GAME_MINUTES - freeMinutes;
   return {
     status: 'AVAILABLE',
@@ -248,9 +249,7 @@ export interface JoinConditionsReadInput {
   readonly subscriptionInstanceId: string;
 }
 
-export function getJoinConditions(
-  input: JoinConditionsReadInput,
-): Promise<LightMyRequestResponse> {
+export function getJoinConditions(input: JoinConditionsReadInput): Promise<LightMyRequestResponse> {
   const query =
     `?expectedRevision=${input.expectedRevision}` +
     `&subscriptionInstanceId=${input.subscriptionInstanceId}`;

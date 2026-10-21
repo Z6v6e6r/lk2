@@ -143,12 +143,8 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
     expect(
       createGameCommercialJoinRuntime({ ...base, conditionsOwner, ownerBoundary: boundary() }),
     ).toBeDefined();
-    expect(
-      createGameCommercialJoinRuntime({ ...base, conditionsOwner }),
-    ).toBeUndefined();
-    expect(
-      createGameCommercialJoinRuntime({ ...base, ownerBoundary: boundary() }),
-    ).toBeUndefined();
+    expect(createGameCommercialJoinRuntime({ ...base, conditionsOwner })).toBeUndefined();
+    expect(createGameCommercialJoinRuntime({ ...base, ownerBoundary: boundary() })).toBeUndefined();
     expect(
       createGameCommercialJoinRuntime({
         ...base,
@@ -210,7 +206,9 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
     });
     expect(outcome).toEqual({ status: 'PENDING' });
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe('http://127.0.0.1:59999/lk/integrations/v1/booked-operation-admissions');
+    expect(calls[0]?.url).toBe(
+      'http://127.0.0.1:59999/lk/integrations/v1/booked-operation-admissions',
+    );
     const headers = calls[0]?.init.headers as Record<string, string>;
     expect(headers['X-Subscription-Actor-Delegation']).toBe('c3-synthetic-delegation-admission');
     expect(headers['X-Correlation-ID']).toBe('c3-composition-correlation-0001');
@@ -265,18 +263,34 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
       timeoutMs: 1_000,
       environment: 'development',
       boundary: boundary({
-        targetRepository: { async resolve() { return null; } },
+        targetRepository: {
+          async resolve() {
+            return null;
+          },
+        },
       }),
-      targetRepository: { async resolve() { return null; } },
+      targetRepository: {
+        async resolve() {
+          return null;
+        },
+      },
     });
     const serviceBlocked = createBookedOperationOwner({
       baseUrl: 'http://127.0.0.1:59999',
       timeoutMs: 1_000,
       environment: 'development',
       boundary: boundary({
-        targetRepository: { async resolve() { return target({ admissible: false }); } },
+        targetRepository: {
+          async resolve() {
+            return target({ admissible: false });
+          },
+        },
       }),
-      targetRepository: { async resolve() { return target({ admissible: false }); } },
+      targetRepository: {
+        async resolve() {
+          return target({ admissible: false });
+        },
+      },
     });
     const execute = (owner: ReturnType<typeof createBookedOperationOwner>) =>
       owner.execute({
