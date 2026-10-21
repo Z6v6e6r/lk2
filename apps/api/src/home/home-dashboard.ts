@@ -96,7 +96,7 @@ export function buildMockHomeDashboard(input: HomeDashboardInput) {
         kind: 'game' as const,
         title: 'Название игры',
         startsAt: addMilliseconds(now, 26 * 60 * 60 * 1_000),
-        venue: 'ПаделХАБ · корт 2',
+        venue: 'ПадлхАБ · корт 2',
         status: 'confirmed' as const,
         route: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
         participants: [
@@ -126,7 +126,7 @@ export function buildMockHomeDashboard(input: HomeDashboardInput) {
         kind: 'training' as const,
         title: 'Название игры #2',
         startsAt: addMilliseconds(now, 74 * 60 * 60 * 1_000),
-        venue: 'ПаделХАБ · корт 4',
+        venue: 'ПадлхАБ · корт 4',
         status: 'confirmed' as const,
         route: '/trainings/081d6c55-aad7-459f-a350-8f905a0532d6',
         participants: [

@@ -139,7 +139,7 @@ function MobileSession({
   if (blocked) {
     return (
       <main className="mobile-status">
-        <h1>ПадлХАБ</h1>
+        <h1>ПадлхАБ</h1>
         <p role={pending ? 'status' : 'alert'}>
           {pending
             ? 'Завершаем выход…'

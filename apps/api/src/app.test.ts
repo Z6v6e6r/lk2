@@ -613,7 +613,7 @@ describe('health endpoints', () => {
             user: {
               id: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
               tenantId,
-              displayName: 'Игрок ПадлХАБ',
+              displayName: 'Игрок ПадлхАБ',
             },
             roles: ['client'],
             permissions: ['profile.read'],
@@ -658,7 +658,7 @@ describe('health endpoints', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       userId: '49d4e88c-7d52-4c1c-8f80-2fc99b42f9ca',
-      displayName: 'Игрок ПадлХАБ',
+      displayName: 'Игрок ПадлхАБ',
       currency: 'RUB',
       level: { assessmentRequired: false },
     });

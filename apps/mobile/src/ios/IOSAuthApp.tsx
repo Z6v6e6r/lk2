@@ -26,10 +26,10 @@ function Frame({ children }: { readonly children: ReactNode }): React.JSX.Elemen
     <div className="ios-auth-surface">
       <div className="login-page">
         <main className="login-layout">
-          <section className="login-layout__intro" aria-label="ПадлХАБ">
+          <section className="login-layout__intro" aria-label="ПадлхАБ">
             <div className="login-layout__intro-inner">
               <div className="desktop-logo">
-                <img className="ph-logo" src={logo} alt="ПадлХАБ" />
+                <img className="ph-logo" src={logo} alt="ПадлхАБ" />
               </div>
               <h1 className="intro-title">
                 Играй.
@@ -47,7 +47,7 @@ function Frame({ children }: { readonly children: ReactNode }): React.JSX.Elemen
           <section className="login-layout__auth" aria-label="Личный кабинет">
             <div className="auth-card">
               <div className="mobile-logo">
-                <img className="ph-logo" src={logo} alt="ПадлХАБ" />
+                <img className="ph-logo" src={logo} alt="ПадлхАБ" />
               </div>
               {children}
             </div>

@@ -154,7 +154,7 @@ describe('Home return to profile', () => {
           {...independentSectionProps}
           dashboard={homeBase}
           layoutVariant={layoutVariant}
-          tenantName="ПадлХАБ"
+          tenantName="ПадлхАБ"
           notificationUnreadCount={0}
           logoutBusy={false}
           onActivateUpcoming={activateUpcoming}
@@ -208,7 +208,7 @@ describe('Home community search', () => {
           ...homeBase,
           capabilities: { ...homeBase.capabilities, canViewCommunities: true },
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -235,7 +235,7 @@ describe('Home promotion carousel', () => {
       <HomeDashboardPage
         {...independentSectionProps}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -281,7 +281,7 @@ describe('Home progressive navigation', () => {
     render(
       <HomeDashboardPage
         {...independentSectionProps}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -324,7 +324,7 @@ describe('Home progressive navigation', () => {
           promotions: { status: 'UNAVAILABLE' },
           capabilities: { ...homeBase.capabilities, canViewCommunities: true },
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -362,7 +362,7 @@ describe('Home progressive navigation', () => {
             },
           },
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -388,7 +388,7 @@ describe('Home progressive navigation', () => {
           },
           capabilities: { ...homeBase.capabilities, canViewCommunities: true },
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -424,7 +424,7 @@ describe('Home progressive navigation', () => {
             { id: 'offers', title: 'Предложения', route: '/offers' },
           ],
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -466,7 +466,7 @@ describe('Home progressive navigation', () => {
       <HomeDashboardPage
         {...independentSectionProps}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         loadBookingRecommendations={loadBookingRecommendations}
         logoutBusy={false}
@@ -489,7 +489,7 @@ describe('Home progressive navigation', () => {
       <HomeDashboardPage
         {...independentSectionProps}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         layoutVariant="v3"
         notificationUnreadCount={0}
         loadBookingRecommendations={loadBookingRecommendations}
@@ -518,7 +518,7 @@ describe('Home progressive navigation', () => {
       <HomeDashboardPage
         {...independentSectionProps}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         loadBookingRecommendations={loadBookingRecommendations}
         logoutBusy={false}
@@ -569,7 +569,7 @@ describe('Home progressive navigation', () => {
           ...homeBase,
           capabilities: { ...homeBase.capabilities, canViewCommunities: true },
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         layoutVariant="v2"
         notificationUnreadCount={0}
         logoutBusy={false}
@@ -622,7 +622,7 @@ describe('Home progressive navigation', () => {
       const props = {
         ...independentSectionProps,
         dashboard: homeBase,
-        tenantName: 'ПадлХАБ',
+        tenantName: 'ПадлхАБ',
         layoutVariant,
         notificationUnreadCount: 0,
         loadBookingRecommendations,
@@ -701,7 +701,7 @@ describe('Home progressive navigation', () => {
         <HomeDashboardPage
           {...independentSectionProps}
           dashboard={homeBase}
-          tenantName="ПадлХАБ"
+          tenantName="ПадлхАБ"
           layoutVariant="v3"
           notificationUnreadCount={0}
           logoutBusy={false}
@@ -759,7 +759,7 @@ describe('Home progressive navigation', () => {
           ...homeBase,
           capabilities: { ...homeBase.capabilities, canViewCommunities: true },
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         layoutVariant="v3"
         notificationUnreadCount={0}
         loadBookingRecommendations={loadBookingRecommendations}
@@ -799,7 +799,7 @@ describe('Home progressive navigation', () => {
       <HomeDashboardPage
         {...independentSectionProps}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         layoutVariant="v3"
         recommendationDisplay="ROWS"
         notificationUnreadCount={0}
@@ -844,7 +844,7 @@ describe('Home progressive navigation', () => {
             { id: 'offers', title: 'Предложения', route: '/offers' },
           ],
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         layoutVariant="v3"
         notificationUnreadCount={0}
         logoutBusy={false}
@@ -925,7 +925,7 @@ describe('Home progressive navigation', () => {
       <HomeDashboardPage
         {...independentSectionProps}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         loadBookingRecommendations={loadBookingRecommendations}
         logoutBusy={false}
@@ -964,7 +964,7 @@ describe('Home progressive navigation', () => {
       <HomeDashboardPage
         {...independentSectionProps}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         loadBookingRecommendations={loadBookingRecommendations}
         logoutBusy={false}
@@ -1005,7 +1005,7 @@ describe('Home viewer profile honesty', () => {
           },
         }}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -1036,7 +1036,7 @@ describe('Home viewer profile honesty', () => {
           },
         }}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -1058,7 +1058,7 @@ describe('Home upcoming bookings', () => {
           state: 'UNAVAILABLE',
           message: 'Источник записей временно недоступен.',
         }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onRetryUpcoming={onRetryUpcoming}
@@ -1080,7 +1080,7 @@ describe('Home upcoming bookings', () => {
       kind: 'training',
       title: 'Последняя доступная тренировка',
       startsAt: '2026-07-20T08:30:00.000Z',
-      venue: 'ПаделХАБ · центральный корт',
+      venue: 'ПадлхАБ · центральный корт',
       status: 'confirmed',
       route: '/trainings/55555555-5555-4555-8555-555555555555',
     };
@@ -1089,7 +1089,7 @@ describe('Home upcoming bookings', () => {
         {...independentSectionProps}
         dashboard={homeBase}
         upcoming={{ state: 'STALE', value: { ...defaultUpcoming, items: [staleItem] } }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -1107,7 +1107,7 @@ describe('Home upcoming bookings', () => {
       <HomeDashboardPage
         {...independentSectionProps}
         dashboard={homeBase}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -1138,7 +1138,7 @@ describe('Home upcoming bookings', () => {
         kind: 'tournament',
         title: 'Кубок выходного дня',
         startsAt: '2026-07-19T08:30:00.000Z',
-        venue: 'ПаделХАБ · центральный корт',
+        venue: 'ПадлхАБ · центральный корт',
         status: 'payment_required',
         route: '/tournaments/44444444-4444-4444-8444-444444444444',
       },
@@ -1148,7 +1148,7 @@ describe('Home upcoming bookings', () => {
         {...independentSectionProps}
         dashboard={homeBase}
         upcoming={readyUpcoming(upcoming)}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -1177,7 +1177,7 @@ describe('Home upcoming bookings', () => {
 
     const tournamentCard = screen.getByRole('article', { name: 'Кубок выходного дня' });
     expect(within(tournamentCard).getByText('Турнир · Нужна оплата')).toBeInTheDocument();
-    expect(within(tournamentCard).getByText('ПаделХАБ')).toBeInTheDocument();
+    expect(within(tournamentCard).getByText('ПадлхАБ')).toBeInTheDocument();
     expect(tournamentCard.querySelector('time')).toHaveAttribute('datetime', upcoming[1]?.startsAt);
 
     expect(container.querySelectorAll('.fh-event img')).toHaveLength(0);
@@ -1200,7 +1200,7 @@ describe('Home upcoming bookings', () => {
         {...independentSectionProps}
         dashboard={homeBase}
         upcoming={readyUpcoming(upcoming)}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -1230,7 +1230,7 @@ describe('Home upcoming bookings', () => {
         kind: 'game',
         title: 'Воскресный турнир',
         startsAt: '2026-07-19T08:30:00.000Z',
-        venue: 'ПаделХАБ · центральный корт',
+        venue: 'ПадлхАБ · центральный корт',
         status: 'waitlist',
         route: '/tournaments/44444444-4444-4444-8444-444444444444',
       },
@@ -1240,7 +1240,7 @@ describe('Home upcoming bookings', () => {
         {...independentSectionProps}
         dashboard={homeBase}
         upcoming={readyUpcoming(upcoming)}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}
@@ -1344,7 +1344,7 @@ describe('Home upcoming bookings', () => {
         kind: 'game',
         title: 'Игра с составом',
         startsAt: '2026-07-19T08:30:00.000Z',
-        venue: 'ПаделХАБ · центральный корт',
+        venue: 'ПадлхАБ · центральный корт',
         status: 'confirmed',
         route: '/games/44444444-4444-4444-8444-444444444444',
         participants: [
@@ -1376,7 +1376,7 @@ describe('Home upcoming bookings', () => {
         kind: 'training',
         title: 'Запись без состава',
         startsAt: '2026-07-20T08:30:00.000Z',
-        venue: 'ПаделХАБ · центральный корт',
+        venue: 'ПадлхАБ · центральный корт',
         status: 'confirmed',
         route: '/trainings/55555555-5555-4555-8555-555555555555',
       },
@@ -1386,7 +1386,7 @@ describe('Home upcoming bookings', () => {
         {...independentSectionProps}
         dashboard={homeBase}
         upcoming={readyUpcoming(upcoming)}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         notificationUnreadCount={0}
         logoutBusy={false}
         onLogout={vi.fn()}

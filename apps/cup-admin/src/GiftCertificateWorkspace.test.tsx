@@ -33,7 +33,7 @@ const draft = {
       title: 'Классический',
       description: null,
       imageUrl: 'https://cdn.padlhub.test/gifts/classic.webp',
-      alt: 'Подарочный сертификат ПаделХАБ',
+      alt: 'Подарочный сертификат ПадлхАБ',
       codeXPercent: 5.1,
       codeYPercent: 88,
       amountXPercent: 78.3,

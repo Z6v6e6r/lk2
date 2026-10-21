@@ -144,7 +144,7 @@ export const homeDashboard: HomeDashboard = {
       kind: 'game',
       title: 'Американо · уровень C',
       startsAt: '2099-10-16T18:00:00.000Z',
-      venue: 'ПаделХАБ · корт 2',
+      venue: 'ПадлхАБ · корт 2',
       status: 'confirmed',
       route: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
     },

@@ -26,14 +26,14 @@ public final class PadlHubMessagingService extends FirebaseMessagingService {
                 if (!state.accept(message.getData())) return;
                 NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
                 if (Build.VERSION.SDK_INT >= 26)
-                    manager.createNotificationChannel(new NotificationChannel(CHANNEL, "События ПадлХАБ", NotificationManager.IMPORTANCE_DEFAULT));
+                    manager.createNotificationChannel(new NotificationChannel(CHANNEL, "События ПадлхАБ", NotificationManager.IMPORTANCE_DEFAULT));
                 Intent intent = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     .putExtra(AndroidPushState.OPEN_KEY, state.openKey(message.getData().get("deliveryId")));
                 String delivery = message.getData().get("deliveryId");
                 intent.setData(android.net.Uri.parse("padlhub-push://delivery/" + delivery));
                 PendingIntent open = PendingIntent.getActivity(this, delivery.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
                 manager.notify(delivery, 0, new NotificationCompat.Builder(this, CHANNEL)
-                    .setSmallIcon(R.drawable.ic_stat_padlhub).setContentTitle("ПадлХАБ")
+                    .setSmallIcon(R.drawable.ic_stat_padlhub).setContentTitle("ПадлхАБ")
                     .setContentText("У вас новое уведомление").setContentIntent(open).setAutoCancel(true)
                     .setVisibility(NotificationCompat.VISIBILITY_PRIVATE).build());
             } catch (Exception ignored) { /* Fail closed; no payload, token or exception logging. */ }

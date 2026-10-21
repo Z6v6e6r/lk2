@@ -334,7 +334,7 @@ export function registerMessagingRoutes(
           reply,
           409,
           'CHAT_PARTICIPANT_UNREACHABLE',
-          'Игрок ещё не входил в ПадлХАБ: он не увидит диалог, пока не войдёт в приложение.',
+          'Игрок ещё не входил в ПадлхАБ: он не увидит диалог, пока не войдёт в приложение.',
         );
       }
       if (result.outcome === 'target_chat_access_required') {
@@ -518,7 +518,7 @@ export function registerMessagingRoutes(
           reply,
           409,
           'CHAT_PARTICIPANT_UNREACHABLE',
-          'Игрок ещё не входил в ПадлХАБ: он не увидит сообщение, пока не войдёт в приложение.',
+          'Игрок ещё не входил в ПадлхАБ: он не увидит сообщение, пока не войдёт в приложение.',
         );
       }
       if (result.outcome === 'idempotency_conflict') return conflict(request, reply);

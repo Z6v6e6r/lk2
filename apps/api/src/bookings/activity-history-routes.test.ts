@@ -491,7 +491,7 @@ describe('activity history routes', () => {
             startsAt: '2026-07-20T09:00:00.000Z',
             endsAt: '2026-07-20T10:00:00.000Z',
             title: 'Локальная игра',
-            venueName: 'ПадлХАБ',
+            venueName: 'ПадлхАБ',
             route: '/games/11111111-1111-4111-8111-111111111111',
             gameId: '11111111-1111-4111-8111-111111111111',
             tournamentId: null,

@@ -281,7 +281,11 @@ The sole closed exception is candidate `5429a69c` through bridge
 with pinned `100644 blob` identities. They are never imported or executed by the controller.
 The bridge-to-controller range remains controller-only; subsequent changes to these files reject.
 This ancestry exception does not alter runtime validation, admit 0096, publish a different image
-or authorize another bridge. The separate exact runtime proof below is the sole 0096 allowance.
+or authorize another bridge. The Python backup helper no longer keeps a hand-maintained copy
+of these frozen tuples: `scripts/generate-timeweb-backup-pins.ts` renders its marked block from
+`scripts/timeweb-api-worker-contract.js`, and a CI drift test fails if the two differ. Update the
+contract and run the generator; never hand-edit the generated block. The separate exact runtime
+proof below is the sole 0096 allowance.
 A second, independent one-time runtime compatibility proof is closed to previous API and Web
 source `c43e9dc8da3eb19a1684ed28e989aafacdb5d8bf`, candidate
 `0d6078be7a50ed3f5761d66071527be003bd568f`, tree `5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`.

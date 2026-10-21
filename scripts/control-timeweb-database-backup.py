@@ -26,17 +26,27 @@ API_WORKER_LEDGER_SHA256 = 'b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe
 API_WORKER_PRE_LEDGER_SHA256 = '025c5ee129bd583131192439d991f0dbbba4fbd19c31c1215bca5adcee9ce17c'
 MIGRATION_BASE_SHA = '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d'
 MIGRATION_BASE_TREE = 'b9ef484b4d0a9e5c8913cc2cdd79ee39b1800537'
+# BEGIN GENERATED DELIVERY PINS (scripts/generate-timeweb-backup-pins.ts)
+# Source: scripts/timeweb-api-worker-contract.js. Do not edit this block by hand;
+# run `node --import tsx scripts/generate-timeweb-backup-pins.ts --write`.
 API_WORKER_MIGRATION_CONTROLLER_FILES = frozenset([
-    'scripts/control-timeweb-database-backup.py', 'scripts/control-timeweb-database-backup.test.ts',
-    'scripts/test-timeweb-database-backup.py', 'scripts/timeweb-api-worker-migration.d.ts',
-    'scripts/timeweb-api-worker-migration.js', 'scripts/timeweb-api-worker-migration.test.ts',
-    'scripts/timeweb-api-worker-migration.adapter.test.ts', 'scripts/timeweb-api-worker-migration-role.js',
-    'scripts/timeweb-api-worker-migration-role.d.ts', 'scripts/timeweb-api-worker-migration-role.test.ts',
-    'scripts/timeweb-api-worker-contract.js', 'scripts/run-timeweb-standard-delivery.js',
-    'scripts/timeweb-api-worker.fixture.ts', 'scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json',
-    'docs/runbooks/timeweb-standard-delivery.md', 'docs/runbooks/android-chats-fcm.md',
+    'docs/runbooks/android-chats-fcm.md',
+    'docs/runbooks/timeweb-standard-delivery.md',
+    'scripts/control-timeweb-database-backup.py',
+    'scripts/control-timeweb-database-backup.test.ts',
+    'scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json',
+    'scripts/run-timeweb-standard-delivery.js',
+    'scripts/test-timeweb-database-backup.py',
+    'scripts/timeweb-api-worker-contract.js',
+    'scripts/timeweb-api-worker-migration-role.d.ts',
+    'scripts/timeweb-api-worker-migration-role.js',
+    'scripts/timeweb-api-worker-migration-role.test.ts',
+    'scripts/timeweb-api-worker-migration.adapter.test.ts',
+    'scripts/timeweb-api-worker-migration.d.ts',
+    'scripts/timeweb-api-worker-migration.js',
+    'scripts/timeweb-api-worker-migration.test.ts',
+    'scripts/timeweb-api-worker.fixture.ts',
 ])
-# Independent one-use exact CI pair; never add these paths to the ordinary allowlist.
 API_WORKER_CI_DOWNLOAD_PATCH = {
     '.github/workflows/pull-request.yaml': {'path': '.github/workflows/pull-request.yaml', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '632bed8b410a3ac3e42a7ba7e607e80f8004f30d', 'newOid': 'bd9cba78c1d9dbcb37fd2abf93f4e8a4ae3e4f87'},
     'scripts/pull-request-ci-workflow.test.ts': {'path': 'scripts/pull-request-ci-workflow.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'caf2f124bbc58e4225feca1ad38100ed07991787', 'newOid': 'e2abfd6adac5d742b38ea16e8cb3d1dbb90c0982'},
@@ -55,12 +65,10 @@ API_WORKER_CONTROLLER_PROMOTION_PATCH = {
 API_WORKER_ANDROID_CHAT_TEST_PATCH = {
     'apps/mobile/src/MobileApp.test.tsx': {'path': 'apps/mobile/src/MobileApp.test.tsx', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '35f557d6da06916e3a411129786e51a76cdd2ae0', 'newOid': '541fe96a4f895044faa123e157d4b1aa6ef38ad2'},
 }
-# One inert fixture correction; the exact regular pair is never a generic path allowance.
 API_WORKER_REHEARSAL_READINESS_PATCH = {
     'scripts/rehearse-timeweb-standard-compose.js': {'path': 'scripts/rehearse-timeweb-standard-compose.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '98c63003b8736bc1da48abfa9be5ee1e7bd6b005', 'newOid': 'df0f4dd006a229a55b517043042e7715127678eb'},
     'scripts/timeweb-standard-compose.test.ts': {'path': 'scripts/timeweb-standard-compose.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ba60973d95649afa3b81ac035e55b043cddc6285', 'newOid': '0e7ac3a12722d6250dd989e6d4dd9aed5b82bfac'},
 }
-# Independent duplicate of the frozen atomic native source tuple.
 API_WORKER_NATIVE_BOOKINGS_PATCH = {
     'apps/mobile/android/app/build.gradle': {'path': 'apps/mobile/android/app/build.gradle', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'b5451e4334bc50c083e6b0d45cecf156d7e632e3', 'newOid': '70eb7c9f09bea9bc0aa8c26a67ae31c7595e7f15'},
     'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidHttpSenderTest.java': {'path': 'apps/mobile/android/app/src/androidTest/java/ru/padlhub/app/AndroidHttpSenderTest.java', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '03b6967ef337078b1359ea9109440fd4d41b910b', 'newOid': 'ea5763e2fce0556717f01be1e1db03200f110755'},
@@ -83,6 +91,8 @@ API_WORKER_NATIVE_BOOKINGS_PATCH = {
     'docs/adr/0023-browser-only-viva-end-user-transport.md': {'path': 'docs/adr/0023-browser-only-viva-end-user-transport.md', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '8f875c98a5524a25497bbf26e7c983bae5804530', 'newOid': 'b7bde1f395ae00ec5b7f195065d752c4a00c3af2'},
     'docs/runbooks/android-development.md': {'path': 'docs/runbooks/android-development.md', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6ee27c15223fda5d3239db8d1693ea727b69e355', 'newOid': 'c98d269710dabda6924e1524c7d9a45a16d407f4'},
 }
+# END GENERATED DELIVERY PINS
+
 PG_ID = 'fe614a3312e446e8036243be3781590bfe90b5da037b83580abd410d4514e84c'
 PG_IMAGE = 'docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685'
 API_BASELINE = {'id': '6f7197c220269281e0268f1fbe9881a3cb6fa863c3a5a928ca2d47ef363132c0',

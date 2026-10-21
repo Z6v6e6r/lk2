@@ -1608,7 +1608,7 @@ export async function buildApp(options: BuildAppOptions) {
         return buildMockHomeDashboard({
           tenantId,
           userId,
-          displayName: user?.displayName ?? 'Игрок ПадлХАБ',
+          displayName: user?.displayName ?? 'Игрок ПадлхАБ',
           phoneLast4: user?.phoneLast4 ?? '0000',
           roles: request.padlHubClaims?.roles ?? [],
           permissions: request.padlHubClaims?.permissions ?? [],
@@ -1627,7 +1627,7 @@ export async function buildApp(options: BuildAppOptions) {
         reply.header('Cache-Control', 'private, max-age=15, stale-while-revalidate=45');
         return buildLocalHomeProfile({
           userId,
-          displayName: summary?.displayName?.trim() || user?.displayName || 'Игрок ПадлХАБ',
+          displayName: summary?.displayName?.trim() || user?.displayName || 'Игрок ПадлхАБ',
           ...(summary
             ? {
                 avatarUrl: stableProfilePhotoUrl({
@@ -1745,7 +1745,7 @@ export async function buildApp(options: BuildAppOptions) {
         const profile = buildMockHomeDashboard({
           tenantId,
           userId: targetUserId,
-          displayName: user?.displayName ?? 'Игрок ПадлХАБ',
+          displayName: user?.displayName ?? 'Игрок ПадлхАБ',
           phoneLast4: user?.phoneLast4 ?? '0000',
           roles: request.padlHubClaims?.roles ?? [],
           permissions,
@@ -1868,7 +1868,7 @@ export async function buildApp(options: BuildAppOptions) {
           buildMockHomeDashboard({
             tenantId,
             userId,
-            displayName: user?.displayName ?? 'Игрок ПадлХАБ',
+            displayName: user?.displayName ?? 'Игрок ПадлхАБ',
             phoneLast4: user?.phoneLast4 ?? '0000',
             roles: request.padlHubClaims?.roles ?? [],
             permissions: request.padlHubClaims?.permissions ?? [],
@@ -2012,7 +2012,7 @@ export async function buildApp(options: BuildAppOptions) {
         return buildMockHomeDashboard({
           tenantId,
           userId,
-          displayName: user?.displayName ?? 'Игрок ПадлХАБ',
+          displayName: user?.displayName ?? 'Игрок ПадлхАБ',
           phoneLast4: user?.phoneLast4 ?? '0000',
           roles: request.padlHubClaims?.roles ?? [],
           permissions: request.padlHubClaims?.permissions ?? [],

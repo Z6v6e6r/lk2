@@ -25,7 +25,7 @@ const request = {
   }),
   notification: {
     id: '44444444-4444-4444-8444-444444444444',
-    title: 'ПаделХАБ',
+    title: 'ПадлхАБ',
     preview: 'Новое оповещение',
     deepLink: '/notifications',
   },
@@ -86,7 +86,7 @@ describe('Web Push delivery adapter', () => {
     await expect(adapter.send(request)).resolves.toEqual({ outcome: 'accepted' });
     expect(JSON.parse(String(sendImplementation.mock.calls[0]?.[1]))).toEqual({
       notificationId: request.notification.id,
-      title: 'ПаделХАБ',
+      title: 'ПадлхАБ',
       preview: 'Новое оповещение',
       deepLink: '/notifications',
     });

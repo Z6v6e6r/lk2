@@ -189,7 +189,7 @@ export async function runPromotionHomeSyncCycle(input: {
               id: promotionId,
               eyebrow: 'Акция',
               title: item.title,
-              description: 'Специальное предложение ПадлХАБ.',
+              description: 'Специальное предложение ПадлхАБ.',
               actionLabel: 'Подробнее',
               route: item.href,
               tone: 'lime',

@@ -453,7 +453,7 @@ export function CommunityDetailPage({
           </span>
           <span>{visibilityLabel(detail.visibility)}</span>
           <h1>{detail.title}</h1>
-          {detail.isVerified ? <b>Проверено PadlHub</b> : null}
+          {detail.isVerified ? <b>Проверено ПадлхАБ</b> : null}
         </div>
       </header>
 
