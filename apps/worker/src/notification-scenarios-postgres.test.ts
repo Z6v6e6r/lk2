@@ -4,10 +4,50 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTenantTransaction } from '@phub/database';
 import { createNotificationScenarioRepository } from '@phub/database/notification-scenarios';
 import type { NotificationScenarioInput } from '@phub/domain/notification-scenarios';
+import { bookingNotificationSourceEventSchema } from '@phub/notifications';
 import {
   ingestNotificationScenarioEvent,
   runNotificationScenarioBatch,
 } from './notification-scenarios.js';
+
+function bookingFixture(
+  tenant: string,
+  recipient: string,
+  target = randomUUID(),
+  revision = '1',
+  type = 'booking.confirmed.v1',
+) {
+  return bookingNotificationSourceEventSchema.parse({
+    id: randomUUID(),
+    type,
+    tenantId: tenant,
+    aggregateId: target,
+    occurredAt: new Date().toISOString(),
+    correlationId: `scenario-test-${randomUUID()}`,
+    payload: {
+      bookingId: target,
+      revision,
+      recipientUserIds: [recipient],
+      serviceTitle: 'Синтетическая тренировка',
+      startsAt: new Date(Date.now() + 3_600_000).toISOString(),
+      timezone: 'Europe/Moscow',
+      locationName: 'Синтетический клуб',
+      ...(type === 'booking.changed.v1' ? { changedFields: ['STARTS_AT'] } : {}),
+    },
+  });
+}
+
+describe('scenario physical fixture contracts without a database', () => {
+  it.each(['booking.confirmed.v1', 'booking.changed.v1'])(
+    'validates %s against the canonical source contract before physical execution',
+    (type) => {
+      const fact = bookingFixture(randomUUID(), randomUUID(), randomUUID(), '2', type);
+      expect(fact.type).toBe(type);
+      if (fact.type === 'booking.changed.v1')
+        expect(fact.payload.changedFields).toEqual(['STARTS_AT']);
+    },
+  );
+});
 
 // Only the already-declared, empty Actions service is eligible. Never inherit a local/shared URL.
 function ciUrl(): string | undefined {
@@ -68,26 +108,8 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
       idempotencyKey: key,
       correlationId: `scenario-test-${sequence++}`,
     });
-  function event(target = randomUUID(), revision = '1', type = 'booking.confirmed.v1') {
-    return {
-      id: randomUUID(),
-      type,
-      tenantId: tenant,
-      aggregateId: target,
-      occurredAt: new Date().toISOString(),
-      correlationId: `scenario-test-${randomUUID()}`,
-      payload: {
-        bookingId: target,
-        revision,
-        recipientUserIds: [recipient],
-        serviceTitle: 'Синтетическая тренировка',
-        startsAt: new Date(Date.now() + 3_600_000).toISOString(),
-        timezone: 'Europe/Moscow',
-        locationName: 'Синтетический клуб',
-        ...(type === 'booking.changed.v1' ? { changedFields: ['TIME'] } : {}),
-      },
-    };
-  }
+  const event = (target = randomUUID(), revision = '1', type = 'booking.confirmed.v1') =>
+    bookingFixture(tenant, recipient, target, revision, type);
   beforeAll(async () => {
     await owner.query(
       `create role ${role} login password '${password}' nosuperuser nobypassrls nocreatedb nocreaterole noinherit`,
