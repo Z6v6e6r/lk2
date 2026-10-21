@@ -363,7 +363,7 @@ class PureTests(unittest.TestCase):
 
 class Scenario:
     def __init__(self, directory, fault=None, operation=OP, ledger=LEDGER):
-        self.root=Path(directory);self.fault=fault;self.calls=[];self.container='e'*64
+        self.runtime_api=copy.deepcopy(operation['expectedApi']);self.root=Path(directory);self.fault=fault;self.calls=[];self.container='e'*64
         self.ledger=ledger
         self.created=False;self.running=False;self.query_count=0;self.api_reads=0
         for path in ['operator','standard','backups','standard/source','standard/source/.git']:(self.root/path).mkdir(parents=True,exist_ok=True)
@@ -382,13 +382,13 @@ class Scenario:
     def command(self,args,code,**kwargs):
         self.calls.append(args)
         if args[0]=='/usr/bin/git':
-            if args[-1]=='HEAD':return (OP['controllerSha']+'\n').encode()
-            if args[-1]=='HEAD^{tree}':return (OP['controllerTree']+'\n').encode()
+            if args[-1]=='HEAD':return (self.op['controllerSha']+'\n').encode()
+            if args[-1]=='HEAD^{tree}':return (self.op['controllerTree']+'\n').encode()
             return b''
         raise AssertionError('unmocked command: '+repr(args))
 
     def service_row(self,api):
-        v=API if api else PG
+        v=self.runtime_api if api else PG
         return {'Id':v['id'],'Image':v['imageId'],'Config':{'Image':v['image'],'Labels':{'phub.release-id':v['releaseId'],'org.opencontainers.image.revision':v['revision'],'com.docker.compose.project':'phub-timeweb-beta' if api else 'phub-timeweb-beta-dependencies','com.docker.compose.service':'api' if api else 'postgres'}},'RestartCount':v['restarts'],'State':{'Status':'running','StartedAt':v['startedAt'],'Health':{'Status':'healthy'}}}
 
     def docker(self,args,code='DOCKER_READ',**kwargs):
@@ -400,8 +400,8 @@ class Scenario:
             if '--filter' in args:
                 filters=' '.join(args)
                 if 'migrator' in filters:return b'a'*64 if self.fault=='migrator' else b''
-                return API['id'].encode() if 'service=api' in filters else m.PG_ID.encode()
-            return ('\n'.join([API['id'],m.PG_ID]+([self.container]if self.created else []))).encode()
+                return self.runtime_api['id'].encode() if 'service=api' in filters else m.PG_ID.encode()
+            return ('\n'.join([self.runtime_api['id'],m.PG_ID]+([self.container]if self.created else []))).encode()
         if args[0]=='inspect':
             target=args[-1]
             self.assert_no_environment(args)
@@ -409,8 +409,8 @@ class Scenario:
                 row=restore_row(self.container,m.digest(m.encoded(self.op)),self.tmpfs,'running' if self.running else 'created')
                 if not self.running and any(a[1]=='stop' for a in self.calls if len(a)>1):row['State']['Status']='exited'
             else:
-                row=self.service_row(target==API['id'])
-                if target==API['id']:
+                row=self.service_row(target==self.runtime_api['id'])
+                if target==self.runtime_api['id']:
                     self.api_reads+=1
                     if self.fault=='runtime-drift' and self.api_reads>=4:row['RestartCount']=1
             return m.encoded(row)
@@ -1572,7 +1572,7 @@ class NamespaceScenario(DiskScenario):
         if args[:2]==['image','inspect']:
             return m.encoded(NS_IMAGE if m.NS_IMAGE_FORMAT in args else {'Os':'linux','Architecture':'amd64','RepoDigests':[m.PG_IMAGE]})
         if args[0]=='ps' and '--filter' not in args:
-            return ('\n'.join([API['id'],m.PG_ID]+([self.container] if self.host_collision and self.created else []))).encode()
+            return ('\n'.join([self.runtime_api['id'],m.PG_ID]+([self.container] if self.host_collision and self.created else []))).encode()
         return super().docker(args,code,**kwargs)
 
     def private_docker(self,plan,args,code='NS_READ',**kwargs):
@@ -1987,9 +1987,164 @@ class ProfileIdentity(unittest.TestCase):
             changed = dict(API, **{key: 'changed'})
             self.assertFalse(m.same_api_worker_identity(changed, API, 'beta'))
 
+
+CURRENT_API = {**API, 'id':'9'*64, 'image':m.WEB8158_IMAGE, 'imageId':'sha256:'+'8'*64,
+               'releaseId':m.API_WORKER_CANDIDATE, 'revision':m.MIGRATION_BASE_SHA,
+               'startedAt':'2026-10-21T08:00:00.000000000Z'}
+OP_WEB8158 = {**OP, 'schema':m.WEB8158_SCHEMA, 'profile':'production',
+              'toolCommit':OP['controllerSha'], 'releaseId':OP['controllerSha']+'-11-1',
+              'controllerSourceCiRunId':'11', 'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256,
+              'expectedApi':CURRENT_API,
+              'confirmation':'BACKUP_RESTORE_WEB8158_'+'3'*12+'_KEEP_API_8158AC445C9F'}
+
+
+def current_web_scenario(directory, namespace=False, fault=None):
+    if not namespace:
+        return Scenario(directory, fault, OP_WEB8158, API_WORKER_LEDGER)
+    scenario = NamespaceScenario(directory, post=True, fault=fault)
+    scenario.op = copy.deepcopy(OP_WEB8158)
+    scenario.op['schema'] = m.NS_WEB8158_SCHEMA
+    scenario.op['confirmation'] = 'BACKUP_RESTORE_WEB8158_PRIVATE_NAMESPACE_'+'3'*12+'_KEEP_API_8158AC445C9F'
+    scenario.runtime_api = copy.deepcopy(CURRENT_API)
+    scenario.op['controllerConfigSha256'] = m.digest(scenario.config)
+    scenario.op['expectedBoundarySha256'] = m.digest(m.encoded(sorted([scenario.service_row(True),scenario.service_row(False)],key=lambda r:r['Id'])))
+    scenario.request.write_bytes(m.encoded(scenario.op))
+    with patch.object(m,'ROOT',scenario.root):
+        scenario.plan=m.namespace_plan(scenario.op,m.encoded(scenario.op),m.namespace_sizing(1024,10**12,50*1024**3,NS_IMAGE),NS_IMAGE)
+    return scenario
+
+
+class CurrentWebBackupTests(unittest.TestCase):
+    def test_exact_strict_request_and_mode_routing(self):
+        for schema in (m.WEB8158_SCHEMA,m.NS_WEB8158_SCHEMA):
+            op=copy.deepcopy(OP_WEB8158);op['schema']=schema
+            if schema==m.NS_WEB8158_SCHEMA:
+                op['confirmation']='BACKUP_RESTORE_WEB8158_PRIVATE_NAMESPACE_'+'3'*12+'_KEEP_API_8158AC445C9F'
+            self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+            self.assertEqual(m.operation_mode(op),('web',op['releaseId']))
+            self.assertEqual(m.is_namespace_operation(op),schema==m.NS_WEB8158_SCHEMA)
+            self.assertEqual(m.is_disk_operation(op),schema==m.NS_WEB8158_SCHEMA)
+            self.assertEqual(m.disk_ledger_sha(op),m.API_WORKER_LEDGER_SHA256)
+            self.assertIsNone(m.v2_migration_proof(op,b'capsule',Path('/not-used')))
+            changes=[lambda v:v.pop('profile'),lambda v:v.update(profile='beta'),lambda v:v.update(profile='unknown'),
+                     lambda v:v.update(expectedLedgerSha256=m.API_WORKER_PRE_LEDGER_SHA256),
+                     lambda v:v['expectedApi'].update(image=API['image']),lambda v:v['expectedApi'].update(releaseId=m.BASELINE),
+                     lambda v:v['expectedApi'].update(restarts=1),lambda v:v['expectedApi'].update(revision='f'*40),
+                     lambda v:v['expectedApi'].update(startedAt='unbound'),lambda v:v.update(toolCommit='f'*40),
+                     lambda v:v.update(controllerSourceCiRunId='12'),lambda v:v.update(confirmation='yes'),
+                     lambda v:v.update(migrationPlanSha256='a'*64),lambda v:v.update(extra=True)]
+            for change in changes:
+                bad=copy.deepcopy(op);change(bad)
+                with self.subTest(schema=schema,change=change):
+                    with self.assertRaises(m.Stop):m.validate_operation(bad,NOW,'2'*64)
+
+    def test_raw_capacity_selection_and_fail_closed_limits(self):
+        self.assertEqual(m.web8158_restore_schema(1024,10**12,10**12,NS_IMAGE),m.WEB8158_SCHEMA)
+        self.assertEqual(m.web8158_restore_schema(3*1024**3,8*1024**3,60*1024**3,NS_IMAGE),m.NS_WEB8158_SCHEMA)
+        for db,memory,disk in [(0,10**12,10**12),(3*1024**3,1024**3,60*1024**3),(3*1024**3,8*1024**3,1024)]:
+            with self.assertRaises(m.Stop):m.web8158_restore_schema(db,memory,disk,NS_IMAGE)
+
+    def test_both_engines_publish_current_api_ledger_and_bound_request(self):
+        for namespace in (False,True):
+            with self.subTest(namespace=namespace),tempfile.TemporaryDirectory(prefix='phub-current-web-') as directory:
+                scenario=current_web_scenario(directory,namespace)
+                result=scenario.invoke()
+                canonical=scenario.root/'backups'/(OP_WEB8158['releaseId']+'-web')
+                receipt=json.loads((canonical/'database-backup-receipt.json').read_bytes())
+                self.assertEqual(receipt['baselineReleaseId'],m.API_WORKER_CANDIDATE)
+                self.assertEqual(receipt['sourceLedgerSha256'],m.API_WORKER_LEDGER_SHA256)
+                self.assertEqual(receipt['restoredLedgerSha256'],m.API_WORKER_LEDGER_SHA256)
+                self.assertEqual((canonical/'backup-operation.json').read_bytes(),m.encoded(scenario.op))
+                self.assertEqual(receipt['backupFile'],str(canonical/'database.pgcustom'))
+                self.assertFalse(result['authorizesDeploy'])
+                self.assertFalse((scenario.root/'standard/active').exists())
+
+    def test_tmpfs_wrong_ledger_stops_before_dump_and_preserves_uncertainty(self):
+        with tempfile.TemporaryDirectory(prefix='phub-current-web-') as directory:
+            scenario=current_web_scenario(directory);scenario.ledger=API_WORKER_LEDGER[:-1]
+            with self.assertRaisesRegex(m.Stop,'API_WORKER_LEDGER'):scenario.invoke()
+            self.assertTrue((scenario.root/'standard/active').exists())
+            self.assertFalse(any(m.SOURCE_DUMP in a for a in scenario.calls))
+
+    def test_current_api_runtime_drift_never_dumps_or_false_succeeds(self):
+        with tempfile.TemporaryDirectory(prefix='phub-current-web-') as directory:
+            scenario=current_web_scenario(directory,fault='runtime-drift')
+            with self.assertRaisesRegex(m.Stop,'RUNTIME_DRIFT'):scenario.invoke()
+            self.assertFalse(any(m.SOURCE_DUMP in a for a in scenario.calls))
+
+    def test_snapshot_drift_is_detected_at_entry_and_during_guards(self):
+        for namespace in (False,True):
+            for field in ('id','imageId','startedAt','restarts'):
+                with self.subTest(namespace=namespace,field=field),tempfile.TemporaryDirectory(prefix='phub-current-web-') as directory:
+                    scenario=current_web_scenario(directory,namespace)
+                    original=scenario.service_row
+                    reads=[0]
+                    def row(api):
+                        value=original(api)
+                        if api:
+                            reads[0]+=1
+                            if reads[0]>=3:
+                                if field=='id':value['Id']='f'*64
+                                elif field=='imageId':value['Image']='sha256:'+'f'*64
+                                elif field=='startedAt':value['State']['StartedAt']='2026-10-21T09:00:00.000000000Z'
+                                else:value['RestartCount']=1
+                        return value
+                    scenario.service_row=row
+                    with self.assertRaises(m.Stop):scenario.invoke()
+                    self.assertFalse((scenario.root/'backups'/(OP_WEB8158['releaseId']+'-web')/'database-backup-receipt.json').exists())
+
+    def test_namespace_lost_ack_reconciles_without_replaying_dump_or_restore(self):
+        for phase in ('RESTORE_STARTED','PUBLISH_READY','PUBLISHED'):
+            with self.subTest(phase=phase),tempfile.TemporaryDirectory(prefix='phub-current-web-') as directory:
+                scenario=current_web_scenario(directory,True,'after:PHASE_'+phase)
+                with self.assertRaises(m.Stop):scenario.invoke()
+                self.assertTrue((scenario.root/'standard/active').exists())
+                before=[a for a in scenario.privcalls if a[0] in ('create','start') or 'pg_restore' in a]
+                dumps=[a for a in scenario.calls if m.SOURCE_DUMP in a]
+                scenario.fault=None;scenario.invoke(True)
+                self.assertEqual(before,[a for a in scenario.privcalls if a[0] in ('create','start') or 'pg_restore' in a])
+                self.assertEqual(dumps,[a for a in scenario.calls if m.SOURCE_DUMP in a])
+                self.assertFalse((scenario.root/'standard/active').exists())
+
+    def test_source_is_authenticated_before_fixed_node_import(self):
+        calls=[]
+        def command(args,code,**kw):
+            calls.append((args,kw))
+            if args[0]=='/usr/bin/node':return b'WEB8158_SOURCE_VERIFIED'
+            if args[-1]=='HEAD':return OP_WEB8158['controllerSha'].encode()
+            if args[-1]=='HEAD^{tree}':return OP_WEB8158['controllerTree'].encode()
+            if args[-2:]==['ls-files','-z']:return b'scripts/timeweb-critical-web.js\0'
+            return b''
+        info=SimpleNamespace(st_mode=stat.S_IFREG|0o644)
+        with patch.object(m,'command',side_effect=command),patch.object(m,'secure',return_value=info):
+            m.web8158_source(OP_WEB8158)
+        args,kw=calls[-1]
+        self.assertEqual(args[:2],['/usr/bin/node','--input-type=module'])
+        self.assertIn('/opt/phub/timeweb-beta/standard/source/scripts/timeweb-critical-web.js',args[-1])
+        self.assertEqual(kw['input_data'],m.encoded(OP_WEB8158));self.assertEqual(kw['timeout'],30)
+        self.assertNotIn('NODE_OPTIONS',kw['environment']);self.assertNotIn('DOCKER_HOST',kw['environment'])
+        for failure in ('dirty','wrong-head','bad-output','node-failure'):
+            def bad(args,code,**kw):
+                if failure=='dirty' and '--porcelain' in args:return b'M scripts/timeweb-critical-web.js'
+                if failure=='wrong-head' and args[-1]=='HEAD':return b'f'*40
+                if args[0]=='/usr/bin/node':
+                    if failure=='node-failure':raise m.Stop('WEB8158_SOURCE')
+                    if failure=='bad-output':return b'WEB8158_SOURCE_VERIFIED trailing'
+                return command(args,code,**kw)
+            calls.clear()
+            with patch.object(m,'command',side_effect=bad),patch.object(m,'secure',return_value=info):
+                with self.assertRaises(m.Stop):m.web8158_source(OP_WEB8158)
+            if failure in ('dirty','wrong-head'):self.assertFalse(any(a[0]=='/usr/bin/node' for a,k in calls))
+
 if __name__=='__main__':
     if len(sys.argv)==2 and sys.argv[1]=='--emit-namespace-fixture':
         print(json.dumps(namespace_fixture()))
+    elif len(sys.argv)==3 and sys.argv[1] in ('--emit-web8158-fixture','--emit-web8158-namespace-fixture'):
+        destination=Path(sys.argv[2]).resolve(strict=True)
+        m.need(destination.is_relative_to(Path(tempfile.gettempdir()).resolve()) and destination.name.startswith('phub-backup-consumer-'), 'TEST_FIXTURE_PATH')
+        scenario=current_web_scenario(destination,sys.argv[1]=='--emit-web8158-namespace-fixture')
+        scenario.invoke()
+        print(json.dumps({'transaction':str(destination/'backups'/(OP_WEB8158['releaseId']+'-web'))}))
     elif len(sys.argv)==3 and sys.argv[1]=='--emit-consumer-fixture':
         destination=Path(sys.argv[2]).resolve(strict=True)
         m.need(destination.is_relative_to(Path(tempfile.gettempdir()).resolve()) and destination.name.startswith('phub-backup-consumer-'), 'TEST_FIXTURE_PATH')
