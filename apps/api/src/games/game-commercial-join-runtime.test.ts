@@ -27,13 +27,13 @@ function boundary(
     readonly admissible?: boolean;
     readonly mapped?: boolean;
     readonly providerSubscriptionId?: string | undefined;
-    readonly issued?: Array<Record<string, unknown>>;
+    readonly issued?: unknown[];
   } = {},
 ) {
   const boundary: GameCommercialJoinOwnerBoundary = {
     delegationIssuer: {
       issueBookedOperationAdmission: (input) => {
-        overrides.issued?.push(input as unknown as Record<string, unknown>);
+        overrides.issued?.push(input);
         return Promise.resolve('delegation');
       },
       issueBookedOperationRead: () => Promise.resolve('delegation'),
@@ -184,7 +184,7 @@ describe('commercial JOIN runtime composition', () => {
 
   it('binds a user-scoped actor token to the admission envelope and never leaks it', async () => {
     const calls: Array<{ readonly token?: string; readonly sha256?: string }> = [];
-    const issued: Array<Record<string, unknown>> = [];
+    const issued: unknown[] = [];
     const runtime = createGameCommercialJoinRuntime(
       dependencies({
         ownerBoundary: {
