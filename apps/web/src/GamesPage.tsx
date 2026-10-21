@@ -1441,6 +1441,7 @@ export function GamesPage({
               activeTab={detailTab}
               busy={busyGameId === detail.id}
               game={detail}
+              {...(chatNavigationScope?.userId ? { viewerUserId: chatNavigationScope.userId } : {})}
               onAction={(action) => void handleAction(action, detail)}
               onChatOpen={() => void openGameChat(detail)}
               onChatNavigate={(conversationId) => rememberCardGameChat(detail, conversationId)}
