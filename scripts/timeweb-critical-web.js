@@ -54,22 +54,17 @@ const NUMBER = /^[1-9][0-9]*$/;
 export const WEB_COMPATIBILITY = Object.freeze({
   baselineSource: '0d6078be7a50ed3f5761d66071527be003bd568f',
   baselineTree: '5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
-  runtimeSource: '8960afe24211372320006fc4c5b18905923672f5',
-  runtimeTree: 'bf0988012cfce0f14811491a14ae46fa57fe5541',
-  runtimeDeltaSha256: 'c71dcfeb564b648ff78305680af3d3a37477a2d54e1db8101662c2b1d6e11fec',
+  runtimeSource: '6f8209fa5129edb72fd537c87983ba49b397bdd4',
+  runtimeTree: '13f551df97d794c16fb0ad05ece505f39f91c88e',
+  runtimeDeltaSha256: '9a35bad47b9c03b0d87b6cc35a85df29ae93712627769b9f384a139eaaf834cc',
 });
-// These are not build inputs: Web npm scripts/imports do not execute these controller/test files.
-// The publisher YAML is excluded by .dockerignore; its test is not executed by the Web build.
-// Everything else in COPY . . is frozen to the reviewed runtime tree, including all tests/deps.
+// Web npm scripts/imports do not execute these controller/test files; their copied bytes may vary.
+// Application, contract, build-script and dependency inputs stay frozen to the reviewed tree.
+// Require this complete modified-only tail; publication/controller helpers are already in the anchor.
 export const WEB_CONTROLLER_FILES = new Set([
   'scripts/timeweb-critical-web.js',
   'scripts/timeweb-critical-web.test.ts',
-  'scripts/rehearse-timeweb-standard-compose.js',
-  'scripts/run-timeweb-standard-delivery.js',
-  'scripts/timeweb-api-web-upgrade.js',
   'docs/runbooks/timeweb-standard-delivery.md',
-  '.github/workflows/publish-timeweb-amd64-images.yaml',
-  'scripts/timeweb-amd64-publication-workflow.test.ts',
 ]);
 function exact(value, keys) {
   if (
@@ -145,7 +140,11 @@ export function validateCriticalWebOperation(op, now) {
   return op;
 }
 export function validateWebControllerDelta(entries) {
-  if (!entries.every((v) => ['A', 'M'].includes(v.status) && WEB_CONTROLLER_FILES.has(v.path)))
+  if (
+    entries.length !== WEB_CONTROLLER_FILES.size ||
+    new Set(entries.map((v) => v.path)).size !== WEB_CONTROLLER_FILES.size ||
+    !entries.every((v) => v.status === 'M' && WEB_CONTROLLER_FILES.has(v.path))
+  )
     fail('SOURCE_DELTA');
 }
 export function validateCriticalWebSource(op, runGit = git) {
@@ -193,7 +192,10 @@ export function validateCriticalWebSource(op, runGit = git) {
     })),
   );
   for (let i = 1; i < parts.length; i += 2) {
-    if (!/^100644 blob [a-f0-9]{40}\t/.test(runGit(['ls-tree', op.candidateSha, '--', parts[i]])))
+    const [metadata, path, ...extra] = runGit(['ls-tree', op.candidateSha, '--', parts[i]]).split(
+      '\t',
+    );
+    if (extra.length || !/^100644 blob [a-f0-9]{40}$/.test(metadata) || path !== parts[i])
       fail('CONTROLLER_FILE_MODE');
   }
 }
