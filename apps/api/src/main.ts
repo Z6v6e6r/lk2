@@ -625,6 +625,18 @@ const gameCommercialJoin = gameRosterRepository
             },
           }
         : {}),
+      // Short-lived, user-scoped provider credential for exactly one operation. The runtime refuses
+      // to execute without it, so an unwired OAuth contour cannot produce an unattributable write.
+      issueActorToken: async (actor) => {
+        const issued = await authService.issueVivaAccessToken({
+          tenantKey: actor.tenantKey,
+          tenantId: actor.tenantId,
+          userId: actor.userId,
+          sessionId: actor.sessionId,
+          correlationId: actor.correlationId,
+        });
+        return { token: issued.accessToken, expiresAt: issued.expiresAt };
+      },
     })
   : undefined;
 const app = await buildApp({

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { AppConfig } from '@phub/config';
 import type {
   BookedOperationAdmissionTargetRepository,
@@ -10,6 +12,7 @@ import {
   BookedOperationReadClient,
   BookedOperationReadError,
   type BookedOperationAdmissionRequest,
+  type BookedOperationReadOutcome,
 } from '@phub/subscription-runtime-adapter';
 
 import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
@@ -42,6 +45,31 @@ type CommercialJoinConfig = Pick<
   | 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS'
 >;
 
+/** User-scoped, backend-issued provider credential handed to the owner for exactly one operation. */
+export interface CommercialJoinActorToken {
+  readonly token: string;
+  readonly expiresAt: string;
+}
+
+/**
+ * Admission transport port. The default implementation wraps the shared booked-operation client and
+ * intentionally cannot send the actor token yet: adding `X-Subscription-Actor-Token` and the matching
+ * `actor_token_sha256` claim is the pending wire-contract extension owned by D0. A transport that can
+ * carry the token is injected here once that contract exists, without touching this adapter again.
+ */
+export interface BookedOperationAdmissionTransport {
+  admit(
+    request: BookedOperationAdmissionRequest,
+    envelope: {
+      readonly actorDelegation: string;
+      readonly correlationId: string;
+      readonly operationId: string;
+      readonly actorToken?: CommercialJoinActorToken;
+      readonly actorTokenSha256?: string;
+    },
+  ): Promise<BookedOperationReadOutcome>;
+}
+
 export interface GameCommercialJoinOwnerBoundary {
   readonly delegationIssuer: Pick<
     SubscriptionRuntimeActorDelegationIssuer,
@@ -49,6 +77,18 @@ export interface GameCommercialJoinOwnerBoundary {
   >;
   readonly actorContextRepository: Pick<SubscriptionRuntimeActorContextRepository, 'resolve'>;
   readonly targetRepository?: BookedOperationAdmissionTargetRepository;
+  readonly admissionTransport?: BookedOperationAdmissionTransport;
+}
+
+/** Stable binding of a user-scoped token; the owner verifies the claim against the header value. */
+export function bookedOperationActorTokenBinding(actorToken: CommercialJoinActorToken): {
+  readonly actorTokenSha256: string;
+  readonly actorTokenExpiresAt: string;
+} {
+  return {
+    actorTokenSha256: `sha256:${createHash('sha256').update(actorToken.token, 'utf8').digest('hex')}`,
+    actorTokenExpiresAt: actorToken.expiresAt,
+  };
 }
 
 export interface GameCommercialJoinRuntimeOptions {
@@ -60,6 +100,18 @@ export interface GameCommercialJoinRuntimeOptions {
   >;
   readonly conditionsOwner?: GameJoinConditionsOwner;
   readonly ownerBoundary?: GameCommercialJoinOwnerBoundary;
+  /**
+   * Issues the short-lived, user-scoped provider credential for exactly this operation. Wired from
+   * the existing `AuthService.issueVivaAccessToken`; when absent the flow keeps today's fail-closed
+   * behaviour and never sends an unattributable provider write.
+   */
+  readonly issueActorToken?: (actor: {
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly correlationId: string;
+  }) => Promise<CommercialJoinActorToken>;
 }
 
 function environment(config: CommercialJoinConfig): 'development' | 'production' {
@@ -77,8 +129,21 @@ export function createBookedOperationOwner(options: {
   readonly environment: 'development' | 'production';
   readonly boundary: Omit<GameCommercialJoinOwnerBoundary, 'targetRepository'>;
   readonly targetRepository: BookedOperationAdmissionTargetRepository;
+  readonly issueActorToken?: (actor: {
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly correlationId: string;
+  }) => Promise<CommercialJoinActorToken>;
   readonly onMetric?: (
-    outcome: 'execute_pending' | 'execute_unknown' | 'read' | 'read_failure',
+    outcome:
+      | 'execute_pending'
+      | 'execute_unknown'
+      | 'read'
+      | 'read_failure'
+      | 'actor_token_unavailable'
+      | 'actor_token_unbound',
   ) => void;
 }): CommercialJoinOwnerPort {
   const admissionClient = new BookedOperationAdmissionClient({
@@ -89,6 +154,12 @@ export function createBookedOperationOwner(options: {
       ? { onMetric: (metric) => options.onMetric?.(`execute_${metric}` as never) }
       : {}),
   });
+  // Until the wire contract can carry the token, the shared client is the only transport and the
+  // token binding is computed but not transmitted. The metric keeps that state observable.
+  const admissionTransport: BookedOperationAdmissionTransport = options.boundary
+    .admissionTransport ?? {
+    admit: (request, envelope) => admissionClient.admit(request, envelope),
+  };
   const readClient = new BookedOperationReadClient({
     baseUrl: options.baseUrl,
     environment: options.environment,
@@ -146,10 +217,38 @@ export function createBookedOperationOwner(options: {
             idempotencyKey: input.idempotencyKey,
             request,
           });
-        await admissionClient.admit(request, {
+        let actorToken: CommercialJoinActorToken | undefined;
+        if (options.issueActorToken) {
+          if (!options.boundary.admissionTransport) {
+            // The token cannot be bound to the wire yet (D0 contract pending); keep the observable
+            // state instead of silently dropping the credential.
+            options.onMetric?.('actor_token_unbound');
+          } else {
+            try {
+              actorToken = await options.issueActorToken({
+                tenantId: input.actor.tenantId,
+                tenantKey: input.actor.tenantKey,
+                userId: input.actor.userId,
+                sessionId: input.actor.sessionId,
+                correlationId: input.correlationId,
+              });
+            } catch {
+              // No credential, no attributable provider write: unresolved, never failed.
+              options.onMetric?.('actor_token_unavailable');
+              return { status: 'UNKNOWN' };
+            }
+          }
+        }
+        await admissionTransport.admit(request, {
           actorDelegation,
           correlationId: input.correlationId,
           operationId: input.operationId,
+          ...(actorToken
+            ? {
+                actorToken,
+                actorTokenSha256: bookedOperationActorTokenBinding(actorToken).actorTokenSha256,
+              }
+            : {}),
         });
         options.onMetric?.('execute_pending');
         return { status: 'PENDING' };
@@ -213,6 +312,7 @@ export function createGameCommercialJoinRuntime(
     targetRepository:
       options.ownerBoundary.targetRepository ??
       createBookedOperationAdmissionTargetRepository(options.pool),
+    ...(options.issueActorToken ? { issueActorToken: options.issueActorToken } : {}),
   });
   return {
     repository: options.rosterRepository as unknown as GameCommercialJoinOptions['repository'],

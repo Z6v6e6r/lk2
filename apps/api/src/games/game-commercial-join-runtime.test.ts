@@ -61,10 +61,18 @@ function dependencies(
     readonly conditionsOwner?: boolean;
     readonly ownerBoundary?: GameCommercialJoinOwnerBoundary | null;
     readonly baseUrl?: string | null;
+    readonly issueActorToken?: (actor: {
+      readonly tenantId: string;
+      readonly tenantKey: string;
+      readonly userId: string;
+      readonly sessionId: string;
+      readonly correlationId: string;
+    }) => Promise<{ token: string; expiresAt: string }>;
   } = {},
 ) {
   const fixture = createJoinConditionsFixture();
   return {
+    ...(overrides.issueActorToken ? { issueActorToken: overrides.issueActorToken } : {}),
     config: {
       ...config,
       GAME_COMMERCIAL_JOIN_OWNER_BASE_URL:
@@ -156,5 +164,83 @@ describe('commercial JOIN runtime composition', () => {
         price,
       }),
     ).resolves.toEqual({ status: 'REJECTED', code: 'GAME_SERVICE_BLOCKED' });
+  });
+
+  it('binds a user-scoped actor token to the admission envelope and never leaks it', async () => {
+    const calls: Array<{ readonly token?: string; readonly sha256?: string }> = [];
+    const runtime = createGameCommercialJoinRuntime(
+      dependencies({
+        ownerBoundary: {
+          ...boundary(),
+          admissionTransport: {
+            admit: (_request, envelope) => {
+              calls.push({
+                ...(envelope.actorToken ? { token: envelope.actorToken.token } : {}),
+                ...(envelope.actorTokenSha256 ? { sha256: envelope.actorTokenSha256 } : {}),
+              });
+              return Promise.resolve({
+                contractVersion: 1,
+                operationId: fixtureId(30),
+                status: 'PENDING',
+                asOf: new Date().toISOString(),
+                reason: 'OWNER_PENDING',
+              });
+            },
+          },
+        },
+        issueActorToken: () =>
+          Promise.resolve({
+            token: 'user-scoped-actor-token-value',
+            expiresAt: new Date(Date.now() + 30_000).toISOString(),
+          }),
+      }),
+    );
+    const outcome = await runtime!.owner.execute({
+      actor,
+      operationId: fixtureId(30),
+      idempotencyKey: 'commercial-join-runtime-key-03',
+      correlationId: 'correlation-runtime-03',
+      subscriptionInstanceId: fixtureId(31),
+      price,
+    });
+    expect(outcome).toEqual({ status: 'PENDING' });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.token).toBe('user-scoped-actor-token-value');
+    expect(calls[0]?.sha256).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(JSON.stringify(outcome)).not.toContain('user-scoped-actor-token-value');
+  });
+
+  it('treats an unavailable actor token as unresolved and dispatches nothing', async () => {
+    const calls: string[] = [];
+    const runtime = createGameCommercialJoinRuntime(
+      dependencies({
+        ownerBoundary: {
+          ...boundary(),
+          admissionTransport: {
+            admit: () => {
+              calls.push('admit');
+              return Promise.resolve({
+                contractVersion: 1,
+                operationId: fixtureId(32),
+                status: 'PENDING',
+                asOf: new Date().toISOString(),
+                reason: 'OWNER_PENDING',
+              });
+            },
+          },
+        },
+        issueActorToken: () => Promise.reject(new Error('oauth contour unavailable')),
+      }),
+    );
+    const outcome = await runtime!.owner.execute({
+      actor,
+      operationId: fixtureId(32),
+      idempotencyKey: 'commercial-join-runtime-key-04',
+      correlationId: 'correlation-runtime-04',
+      subscriptionInstanceId: fixtureId(33),
+      price,
+    });
+    expect(outcome).toEqual({ status: 'UNKNOWN' });
+    expect(calls).toEqual([]);
   });
 });
