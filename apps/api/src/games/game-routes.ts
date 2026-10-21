@@ -16,6 +16,17 @@ import { GAME_KINDS, GAME_PLAYER_LEVELS, GAME_VISIBILITIES } from '@phub/games';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
+import { subscriptionRuntimeIdempotencyKeySha256 } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
+import {
+  commercialJoinRequestHash,
+  commercialOperationId,
+  executeCommercialJoin,
+  readCommercialJoinOperation,
+  type CommercialJoinFailureCode,
+  type CommercialJoinOwnerPort,
+  type CommercialJoinRepositoryPort,
+} from './game-commercial-join.js';
+import type { GameJoinConditionsOwner } from './game-join-conditions.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -112,22 +123,52 @@ function gameId(request: FastifyRequest, reply: FastifyReply): string | undefine
   return value;
 }
 
-function parseJoinBody(
-  request: FastifyRequest,
-  reply: FastifyReply,
-): { readonly expectedRevision?: number; readonly invitationId?: string } | undefined {
+interface ParsedJoinBody {
+  readonly expectedRevision?: number;
+  readonly invitationId?: string;
+  readonly subscriptionInstanceId?: string;
+  readonly priceConsent?: { readonly amountMinor: number; readonly currency: 'RUB' };
+}
+
+const JOIN_BODY_KEYS = new Set([
+  'expectedRevision',
+  'invitationId',
+  'subscriptionInstanceId',
+  'priceConsent',
+]);
+
+function parsePriceConsent(value: unknown): { amountMinor: number; currency: 'RUB' } | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).sort().join(',') !== 'amountMinor,currency' ||
+    !Number.isSafeInteger(record.amountMinor) ||
+    Number(record.amountMinor) < 0 ||
+    record.currency !== 'RUB'
+  )
+    return undefined;
+  return { amountMinor: Number(record.amountMinor), currency: 'RUB' };
+}
+
+function parseJoinBody(request: FastifyRequest, reply: FastifyReply): ParsedJoinBody | undefined {
   if (request.body === undefined || request.body === null) return {};
   if (typeof request.body !== 'object' || Array.isArray(request.body)) {
     sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная команда входа в игру.');
     return undefined;
   }
   const body = request.body as Record<string, unknown>;
+  const priceConsent =
+    body.priceConsent === undefined ? undefined : parsePriceConsent(body.priceConsent);
   if (
-    Object.keys(body).some((key) => key !== 'expectedRevision' && key !== 'invitationId') ||
+    Object.keys(body).some((key) => !JOIN_BODY_KEYS.has(key)) ||
     (body.expectedRevision !== undefined &&
       (!Number.isSafeInteger(body.expectedRevision) || Number(body.expectedRevision) < 0)) ||
     (body.invitationId !== undefined &&
-      (typeof body.invitationId !== 'string' || !UUID_PATTERN.test(body.invitationId)))
+      (typeof body.invitationId !== 'string' || !UUID_PATTERN.test(body.invitationId))) ||
+    (body.subscriptionInstanceId !== undefined &&
+      (typeof body.subscriptionInstanceId !== 'string' ||
+        !UUID_PATTERN.test(body.subscriptionInstanceId))) ||
+    (body.priceConsent !== undefined && priceConsent === undefined)
   ) {
     sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная команда входа в игру.');
     return undefined;
@@ -137,8 +178,32 @@ function parseJoinBody(
       ? {}
       : { expectedRevision: Number(body.expectedRevision) }),
     ...(typeof body.invitationId === 'string' ? { invitationId: body.invitationId } : {}),
+    ...(typeof body.subscriptionInstanceId === 'string'
+      ? { subscriptionInstanceId: body.subscriptionInstanceId }
+      : {}),
+    ...(priceConsent === undefined ? {} : { priceConsent }),
   };
 }
+
+const COMMERCIAL_FAILURE_STATUS: Readonly<Record<CommercialJoinFailureCode, number>> = {
+  GAME_PAYMENT_REQUIRED: 409,
+  GAME_PRICE_CONFIRMATION_REQUIRED: 409,
+  GAME_SUBSCRIPTION_SELECTION_REQUIRED: 409,
+  GAME_SERVICE_BLOCKED: 409,
+  GAME_RECONCILIATION_REQUIRED: 409,
+  GAME_COMMERCIAL_ATTEMPT_CONFLICT: 409,
+  GAME_OWNER_UNAVAILABLE: 503,
+  GAME_ALREADY_RESERVED: 409,
+  GAME_REVISION_CONFLICT: 409,
+  GAME_NOT_FOUND: 404,
+  GAME_NOT_JOINABLE: 409,
+  GAME_JOIN_CUTOFF_PASSED: 409,
+  GAME_FULL: 409,
+  GAME_ALREADY_JOINED: 409,
+  GAME_PAYMENT_MODE_MISMATCH: 409,
+  GAME_RESERVATION_EXPIRED: 409,
+  GAME_RESERVATION_NOT_FOUND: 409,
+};
 
 type CreateGamePayload = Omit<
   CreateStoredGameInput,
@@ -436,12 +501,19 @@ function rejected(
   );
 }
 
+export interface GameCommercialJoinOptions {
+  readonly repository: CommercialJoinRepositoryPort;
+  readonly conditionsOwner: GameJoinConditionsOwner;
+  readonly owner: CommercialJoinOwnerPort;
+}
+
 export function registerGameRoutes(
   app: FastifyInstance,
   options: {
     readonly repository?: UserRosterRepository;
     readonly managementRepository?: UserManagementRepository;
     readonly testCourtRepository?: GameTestCourtRepository;
+    readonly commercialJoin?: GameCommercialJoinOptions;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
@@ -570,6 +642,7 @@ export function registerGameRoutes(
       input: Parameters<UserRosterRepository['join']>[0],
     ) => Promise<GameRosterCommandResult>,
     parseBody = false,
+    commercialJoin = false,
   ) => {
     app.route({
       method,
@@ -586,6 +659,100 @@ export function registerGameRoutes(
         if (!options.repository) return unavailable(request, reply);
         const payload = parseBody ? parseJoinBody(request, reply) : {};
         if (!payload) return reply;
+        if (
+          commercialJoin &&
+          (payload.subscriptionInstanceId !== undefined || payload.priceConsent !== undefined)
+        ) {
+          // Paid participation goes through the existing owner of booking/entitlement. Until that
+          // composition exists the previous GAME_PAYMENT_REQUIRED guard stays in force.
+          if (!options.commercialJoin) {
+            return sendApiError(
+              request,
+              reply,
+              409,
+              'GAME_PAYMENT_REQUIRED',
+              'Платёжный контур этой игры пока недоступен.',
+            );
+          }
+          const expectedRevision = payload.expectedRevision;
+          if (expectedRevision === undefined) {
+            return sendApiError(
+              request,
+              reply,
+              400,
+              'INVALID_REQUEST',
+              'Обновите карточку игры: отсутствует актуальная ревизия.',
+            );
+          }
+          const operationId = commercialOperationId({
+            tenantId: current.tenantId,
+            userId: current.userId,
+            idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(idempotencyKey(request)),
+          });
+          const result = await executeCommercialJoin(
+            {
+              tenantId: current.tenantId,
+              tenantKey: (request.params as { tenantKey: string }).tenantKey,
+              userId: current.userId,
+              sessionId:
+                (request as FastifyRequest & { padlHubClaims?: { sid?: string } }).padlHubClaims
+                  ?.sid ?? '',
+              gameId: currentGameId,
+              expectedRevision,
+              correlationId: request.id,
+              idempotencyKey: idempotencyKey(request),
+              operationId,
+              requestHash: commercialJoinRequestHash({
+                tenantId: current.tenantId,
+                tenantKey: (request.params as { tenantKey: string }).tenantKey,
+                userId: current.userId,
+                sessionId:
+                  (request as FastifyRequest & { padlHubClaims?: { sid?: string } }).padlHubClaims
+                    ?.sid ?? '',
+                gameId: currentGameId,
+                expectedRevision,
+                correlationId: request.id,
+                idempotencyKey: idempotencyKey(request),
+                ...(payload.subscriptionInstanceId === undefined
+                  ? {}
+                  : { subscriptionInstanceId: payload.subscriptionInstanceId }),
+                ...(payload.priceConsent === undefined
+                  ? {}
+                  : { priceConsent: payload.priceConsent }),
+                ...(payload.invitationId === undefined
+                  ? {}
+                  : { invitationId: payload.invitationId }),
+              }),
+              ...(payload.subscriptionInstanceId === undefined
+                ? {}
+                : { subscriptionInstanceId: payload.subscriptionInstanceId }),
+              ...(payload.priceConsent === undefined ? {} : { priceConsent: payload.priceConsent }),
+              ...(payload.invitationId === undefined ? {} : { invitationId: payload.invitationId }),
+            },
+            {
+              repository: options.commercialJoin.repository,
+              conditionsOwner: options.commercialJoin.conditionsOwner,
+              owner: options.commercialJoin.owner,
+            },
+          );
+          if (result.kind === 'failed') {
+            return sendApiError(
+              request,
+              reply,
+              COMMERCIAL_FAILURE_STATUS[result.code],
+              result.code,
+              result.message,
+            );
+          }
+          const acceptedBody = result.body;
+          const httpStatus =
+            acceptedBody.operation.status === 'SUCCEEDED'
+              ? 200
+              : acceptedBody.operation.status === 'FAILED'
+                ? 409
+                : 202;
+          return reply.status(httpStatus).send(acceptedBody);
+        }
         // Check current stored access before repository replay as well as new admission.
         if (
           (type === 'JOIN_GAME' || type === 'JOIN_WAITLIST') &&
@@ -628,6 +795,68 @@ export function registerGameRoutes(
     'JOIN_GAME',
     (repository, input) => repository.join(input),
     true,
+    true,
+  );
+
+  // Recovery by the original key: the client keeps the key even when the JOIN response was lost,
+  // so it can read the same commercial operation without ever sending a replacement POST.
+  app.get(
+    '/user/api/v1/:tenantKey/games/:gameId/join-operation',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current) {
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      }
+      const currentGameId = gameId(request, reply);
+      if (!currentGameId) return reply;
+      const key = request.headers['idempotency-key'];
+      if (typeof key !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(key)) {
+        return sendApiError(
+          request,
+          reply,
+          400,
+          'INVALID_REQUEST',
+          'Передайте исходный Idempotency-Key операции.',
+        );
+      }
+      if (!options.commercialJoin) {
+        return sendApiError(
+          request,
+          reply,
+          409,
+          'GAME_PAYMENT_REQUIRED',
+          'Платёжный контур этой игры пока недоступен.',
+        );
+      }
+      const recovered = await readCommercialJoinOperation(
+        {
+          tenantId: current.tenantId,
+          actorUserId: current.userId,
+          operationId: commercialOperationId({
+            tenantId: current.tenantId,
+            userId: current.userId,
+            idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(key),
+          }),
+          correlationId: request.id,
+        },
+        {
+          repository: options.commercialJoin.repository,
+          owner: options.commercialJoin.owner,
+        },
+      );
+      if (!recovered) {
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'GAME_OPERATION_NOT_FOUND',
+          'Операция не найдена.',
+        );
+      }
+      return recovered;
+    },
   );
   command(
     'DELETE',
@@ -669,6 +898,21 @@ export function registerGameRoutes(
         );
       }
       if (!options.repository && !options.managementRepository) return unavailable(request, reply);
+      if (options.commercialJoin) {
+        const commercialBody = await readCommercialJoinOperation(
+          {
+            tenantId: current.tenantId,
+            actorUserId: current.userId,
+            operationId,
+            correlationId: request.id,
+          },
+          {
+            repository: options.commercialJoin.repository,
+            owner: options.commercialJoin.owner,
+          },
+        );
+        if (commercialBody) return commercialBody;
+      }
       const managementOperation = await options.managementRepository?.getManagementOperation({
         tenantId: current.tenantId,
         actorUserId: current.userId,

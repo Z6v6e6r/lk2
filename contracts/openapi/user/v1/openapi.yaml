@@ -5600,6 +5600,7 @@ components:
           expiresAt,
           nonBinding,
           requiresReservationRecheck,
+          requiresPriceConsent,
           source,
           providerMode,
         ]
@@ -5629,6 +5630,9 @@ components:
         expiresAt: { type: string, format: date-time }
         nonBinding: { type: boolean, const: true }
         requiresReservationRecheck: { type: boolean, const: true }
+        requiresPriceConsent:
+          type: boolean
+          description: The server-owned price must be explicitly acknowledged before a paid JOIN.
         source: { type: string, const: LK1_PRICE_PREVIEW }
         providerMode: { type: string, enum: [MOCK, LIVE] }
     BookedOperationAdmissionRequest:

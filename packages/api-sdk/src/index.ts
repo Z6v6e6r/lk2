@@ -496,6 +496,33 @@ export class BookedOperationAdmissionUncertainError extends ApiClientError {
   }
 }
 
+export class GameJoinAttemptUncertainError extends ApiClientError {
+  public readonly operationStatus = 'UNKNOWN' as const;
+  public readonly recoveryAction = 'KEEP_SAME_ATTEMPT' as const;
+  public readonly canStartNewPurchase = false;
+
+  public constructor(
+    public readonly gameId: string,
+    public readonly idempotencyKey: string,
+    correlationId: string,
+  ) {
+    super(
+      'Статус записи не подтверждён. Сохраните текущую попытку и проверьте статус операции.',
+      503,
+      'GAME_OWNER_UNAVAILABLE',
+      correlationId,
+    );
+    this.name = 'GameJoinAttemptUncertainError';
+  }
+}
+
+export interface PaidGameJoinRequest {
+  readonly expectedRevision: number;
+  readonly subscriptionInstanceId: string;
+  readonly priceConsent: { readonly amountMinor: number; readonly currency: 'RUB' };
+  readonly invitationId?: string;
+}
+
 export class CommunityEventGapExpiredError extends ApiClientError {
   public readonly recoveryAction = 'FULL_CANONICAL_RELOAD' as const;
 
@@ -1482,6 +1509,50 @@ export class PadlHubApiClient {
     invitationId?: string,
   ): Promise<GameCommandResult> {
     return this.gameCommand(gameId, '/join', 'POST', { expectedRevision, invitationId });
+  }
+
+  /**
+   * Paid JOIN through the existing owner of booking/entitlement. The caller owns the idempotency key:
+   * a lost response must be recovered by reading the same operation, never by a new POST with a new key.
+   * Network retries and auth-refresh replays are disabled for this command.
+   */
+  public async joinPaidGame(
+    gameId: string,
+    input: PaidGameJoinRequest,
+    idempotencyKey: string,
+  ): Promise<GameCommandResult> {
+    const attempt = Object.freeze({
+      ...input,
+      priceConsent: Object.freeze({ ...input.priceConsent }),
+    });
+    try {
+      return await this.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}/join`, {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(attempt),
+        retryOnUnauthorized: false,
+        cache: 'no-store',
+      });
+    } catch (error) {
+      if (error instanceof ApiClientError && error.status < 500) throw error;
+      throw new GameJoinAttemptUncertainError(
+        gameId,
+        idempotencyKey,
+        error instanceof ApiClientError ? error.correlationId : '',
+      );
+    }
+  }
+
+  /**
+   * Recovery by the original key. Returns the same commercial operation even when the JOIN response
+   * was lost; it never dispatches a replacement booking.
+   */
+  public getPaidJoinOperation(gameId: string, idempotencyKey: string): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(`/games/${encodeURIComponent(gameId)}/join-operation`, {
+      cache: 'no-store',
+      retryOnUnauthorized: false,
+      idempotencyKey,
+    });
   }
 
   public leaveGame(gameId: string): Promise<GameCommandResult> {
