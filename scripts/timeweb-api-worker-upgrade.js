@@ -818,8 +818,8 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       !same(candidateSecrets.files, op.candidateSecretHashes)
     )
       fail('PREPARED_SECRETS');
-    backupProof(transaction, op.expectedApi);
-    monitoring(transaction);
+    backupProof(transaction, op.expectedApi, profile);
+    monitoring(transaction, profile);
     const packagedLedger = readdirSync(`${SOURCE}/packages/database/migrations`)
       .filter((v) => v.endsWith('.sql'))
       .sort()
@@ -1052,15 +1052,16 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     preflight: async () => {
       fixedAttest();
       await database();
-      backupProof(transaction, op.expectedApi);
+      backupProof(transaction, op.expectedApi, profile);
       let backupReceipt = null;
       try {
         backupReceipt = parseStrictJson(read(`${transaction}/database-backup-receipt.json`));
       } catch {
-        // Degraded proof path (operator-authorized): no fresh transaction receipt exists.
+        // Beta degraded proof path (operator-authorized): no fresh transaction receipt exists.
+        // Production never reaches this branch: backupProof() fails first.
       }
       if (backupReceipt !== null) validateApiWorkerBackupLedger(backupReceipt, plan.packagedLedger);
-      monitoring(transaction);
+      monitoring(transaction, profile);
     },
     pullAndSmoke: async () => {
       for (const service of ['api', 'worker']) {
