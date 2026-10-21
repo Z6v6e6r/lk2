@@ -314,6 +314,30 @@ async function readRawWireRows(
   });
 }
 
+/**
+ * Wraps the real roster repository so a case can prove whether a durable attempt was even started.
+ * The proxy only observes `beginPaidJoin`; every other method is delegated unchanged.
+ */
+function withBeginCounter(inner: GameRosterRepository): {
+  readonly repository: GameRosterRepository;
+  readonly beginCalls: () => number;
+} {
+  let calls = 0;
+  const repository = new Proxy(inner, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver) as unknown;
+      if (property === 'beginPaidJoin' && typeof value === 'function') {
+        return (...args: unknown[]) => {
+          calls += 1;
+          return (value as (...innerArgs: unknown[]) => unknown).apply(target, args);
+        };
+      }
+      return value;
+    },
+  });
+  return { repository, beginCalls: () => calls };
+}
+
 c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, () => {
   let pool: Pool;
   const apps: C3App[] = [];
@@ -337,6 +361,7 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
     conditions: ReturnType<typeof createConditionsDouble>;
     subscriptionInstanceId: string;
     rosterRepository: GameRosterRepository;
+    beginCalls: () => number;
   }> {
     const tenant = await seedSyntheticTenant(pool, label);
     const game = await seedSyntheticGame(pool, {
@@ -360,12 +385,14 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
         reasonCode: null,
       },
     });
+    const counted = withBeginCounter(createGameRosterRepository(pool));
     return {
       tenant,
       game,
       conditions,
       subscriptionInstanceId,
-      rosterRepository: createGameRosterRepository(pool),
+      rosterRepository: counted.repository,
+      beginCalls: counted.beginCalls,
     };
   }
 
@@ -481,7 +508,9 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
     expect(envelope.operationId).toBe(body.commandId);
     expect(envelope.correlationId).toBe(correlationId);
 
-    // Durable attempt + ACTIVE reservation exist before/with the external effect.
+    // Durable attempt + ACTIVE reservation exist before/with the external effect, and the
+    // durable attempt was started exactly once.
+    expect(seeded.beginCalls()).toBe(1);
     const saved = await readSavedState(pool, {
       tenantId: seeded.tenant.tenantId,
       gameId: seeded.game.gameId,
@@ -632,24 +661,20 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
     expect(wire.transportDouble?.calls).toHaveLength(0);
     expect(wire.issuerDouble.readInputs).toHaveLength(0);
 
+    // C1 c36877f9: the provider-subscription mapping is resolved BEFORE the durable attempt, so an
+    // unmapped selection is a pure refusal: no attempt, no seat, no snapshot, no audit/outbox.
+    expect(seeded.beginCalls()).toBe(0);
     const saved = await readSavedState(pool, {
       tenantId: seeded.tenant.tenantId,
       gameId: seeded.game.gameId,
     });
-    // No chargeable/live effect: no seat held, no participation, no trusted evidence.
-    expect(saved.activeReservations).toBe(0);
+    expect(saved.commandRows).toBe(0);
+    expect(saved.reservations).toBe(0);
+    expect(saved.paymentSnapshots).toBe(0);
+    expect(saved.auditEvents).toBe(0);
+    expect(saved.outboxEvents).toBe(0);
     expect(saved.participations).toBe(0);
     expect(saved.paymentEvidence).toBe(0);
-    // The durable attempt is terminal, not an open operation the client could pay later.
-    const commands = await readCommandRows(pool, {
-      tenantId: seeded.tenant.tenantId,
-      gameId: seeded.game.gameId,
-    });
-    expect(commands).toHaveLength(1);
-    expect(commands[0]).toMatchObject({
-      state: 'FAILED',
-      error_code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED',
-    });
   });
 
   it('W2b: an unmapped subscription selection must not create reservation/snapshot/command rows', async () => {
@@ -680,26 +705,33 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
     expect(response.statusCode).toBe(409);
     expect(response.json().code).toBe('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
 
-    // Acceptance condition (C3 handoff, wire-contract round): the provider-subscription mapping is
-    // a selection problem, so it must be resolved before the durable attempt and leave no
-    // reservation/snapshot/command row at all. Observed on 9dd937e7: beginPaidJoin runs first and
-    // the owner-side mapping check then fails the attempt (rows stay FAILED/CANCELLED).
+    // Acceptance condition (C1 c36877f9, was C3-WIRE-P2-1 on 9dd937e7): the provider-subscription
+    // mapping is resolved before the durable attempt, so an unmapped selection leaves zero rows —
+    // no command idempotency row, no reservation in ANY state, no snapshot, no audit REJECTED,
+    // no outbox event — and beginPaidJoin is never called.
+    expect(seeded.beginCalls()).toBe(0);
     const saved = await readSavedState(pool, {
       tenantId: seeded.tenant.tenantId,
       gameId: seeded.game.gameId,
     });
-    expect(
-      saved.commandRows,
-      'DEVIATION 9dd937e7: an unmapped provider subscription already began and then failed the attempt (command row exists)',
-    ).toBe(0);
-    expect(
-      saved.reservations,
-      'DEVIATION 9dd937e7: an unmapped provider subscription left a cancelled seat reservation',
-    ).toBe(0);
-    expect(
-      saved.paymentSnapshots,
-      'DEVIATION 9dd937e7: an unmapped provider subscription left a payment snapshot',
-    ).toBe(0);
+    expect(saved.commandRows).toBe(0);
+    expect(saved.reservations).toBe(0);
+    expect(saved.activeReservations).toBe(0);
+    expect(saved.paymentSnapshots).toBe(0);
+    expect(saved.auditEvents).toBe(0);
+    expect(saved.outboxEvents).toBe(0);
+    expect(saved.participations).toBe(0);
+    expect(saved.paymentEvidence).toBe(0);
+    const reservations = await readReservations(pool, {
+      tenantId: seeded.tenant.tenantId,
+      gameId: seeded.game.gameId,
+    });
+    expect(reservations).toHaveLength(0);
+    const commands = await readCommandRows(pool, {
+      tenantId: seeded.tenant.tenantId,
+      gameId: seeded.game.gameId,
+    });
+    expect(commands).toHaveLength(0);
   });
 
   it('W2c: token unavailable -> 202 UNKNOWN with the durable attempt preserved and no dispatch', async () => {
