@@ -1,125 +1,116 @@
-# handoff-C2 — коммерческий CREATE/JOIN в ЛК2
+# handoff-C2 — подключённый коммерческий JOIN ЛК2
 
-## Статус
+## Статус и точный источник
 
-**C2 НЕ ЗАКРЫТА. Подготовлена независимая часть UI_LOCAL. Коммерческое подключение и интеграционная приёмка ожидают handoff-C1.**
+**C2 в работе: поддерживаемый C1 сценарий JOIN реализован и проверен UI_LOCAL; independent specialist re-review PASS. Полный LOCAL check PASS. Собственные Draft PR/CI фиксируются отдельным exact-head delivery readback, не подменяются CI C1. Полный коммерческий CREATE/full-price/private court не реализованы — принятый owner-контракт их не предоставляет.**
 
 - Репозиторий: `Z6v6e6r/lk2`.
-- Worktree: `/Users/zver/Documents/Приложение ПаделхАБ/.worktrees/c2-commercial-ui-20261021`.
 - Ветка: `codex/c2-commercial-ui-20261021`.
-- Исходный HEAD: `03b4484e35dd7909d78285b2fded0751d2c3d57c` (свежий origin/main в начале работы).
-- Текущие изменения локальные, не закоммичены. Push, PR, merge, deploy и публикация не выполнялись.
-- MODEL_ROUTE: parent. Независимая advisory-презентация — FAST. Будущее подключение коммерческой команды/ledger — CRITICAL, требует соответствующих проверок и независимого review.
-- Пользователь сообщил: «С1 идет в дипсик». Готовый handoff-C1 не предоставлен; незакоммиченные файлы другого владельца не импортировались.
+- Worktree: `/Users/zver/Documents/Приложение ПаделхАБ/.worktrees/c2-commercial-ui-20261021`.
+- Принятый точный handoff-C1: `214324a31a94dbeaab1541be6e48457126050908`, Draft PR #447.
+- Проверяемое source/index tree C2: `fa57ca03cd33b28cf89a3c9666c6d97370ee8c50`.
+- Исторический advisory checkpoint: `2ec55a8cd505956cca8d0e941c611d6108e7cc68`. Commercial source commit: `5b5ec80a2b0e16c77c7f0a4fe4cd1a1ff4f9c447`, tree точно совпадает с reviewed/tested `fa57ca03...`. Этот финальный report меняет только запрошенный handoff; source evidence переиспользуется без ложного утверждения о повторном прогоне.
+- На повторной remote-проверке C1 уже `39e0baf8a5a13f68ff8165a53145b24d1d273007`. Его CI прочитан: green. Дополнительные два коммита затрагивают только API/database owner и их tests; C2 остаётся на переданном `214324a3`, не импортирует новый tip молча. CI C1 не является CI C2.
+- Риск: CRITICAL только затронутого клиентского command/custody/consent boundary; preview/advisory presentation — FAST. D0/C1 ownership не расширялось.
 
-## Владение и пересечения, проверенные до исходных изменений
+## Владение и изменённые файлы
 
-Основной checkout содержит многочисленные чужие изменения; не редактировался.
+Основной грязный checkout и worktree C1 не менялись. До исходных изменений проверялись PR #391/#355 (CREATE), #364/#404 (JOIN/detail), #442/#403/#399 (общая навигация); после точного handoff унаследован flow C1, а не создан второй runtime ledger/controller.
 
-| Область                        | Фактические файлы                                                  | Действие C2                                                 |
-| ------------------------------ | ------------------------------------------------------------------ | ----------------------------------------------------------- |
-| CREATE                         | `apps/web/src/CreateGamePage.tsx`                                  | Только чтение; пересечение PR #391/#355                     |
-| Существующий NO_PAYMENT ledger | `apps/web/src/create-game-attempt.ts`, `.test.ts`                  | Только чтение и запуск существующих unit-тестов             |
-| JOIN и readback карточки       | `apps/web/src/GamesPage.tsx`                                       | Только чтение; PR #364/#404                                 |
-| Карточка/состав                | `apps/web/src/GameDetailView.tsx`                                  | Только чтение; PR #404/#364                                 |
-| Свой продукт                   | `apps/web/src/GameJoinSubscriptionPicker.tsx`, `.css`, `.test.tsx` | Только чтение, тесты и synthetic preview                    |
-| Advisory-условия               | `apps/web/src/GameJoinConditionsPanel.tsx`                         | Единственный изменённый runtime-файл C2                     |
-| Транспорт                      | `apps/web/src/auth-gateway.ts`, SDK                                | Владение C1; C2 не менял                                    |
-| Общая навигация                | `apps/web/src/App.tsx`                                             | Не менялась; пересечения #442/#403/#399 и текущая работа C1 |
+C2 delta от `214324a3`:
 
-Дополнительно создан `apps/web/src/GameJoinConditionsPanel.ui.test.tsx` и этот запрошенный handoff-артефакт.
+| Файлы                                                | Назначение                                                                                           |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `apps/web/src/GameJoinConditionsPanel.tsx`           | Advisory deadline, поздний ответ, MISSING/zero/limit copy                                            |
+| `apps/web/src/GameJoinConditionsPanel.ui.test.tsx`   | Loading/empty/error/timeout/retry/zero/benefit tests                                                 |
+| `apps/web/src/GameJoinFlowPanel.tsx`, `.ui.test.tsx` | Consent/status presentation, zero due, keyboard confirmation, confirmed-but-updating                 |
+| `apps/web/src/GamesPage.tsx`, `.test.tsx`            | Подключённый JOIN lifecycle, account/gateway/game lifetime, условия, deadline, readback, projections |
+| `apps/web/src/game-join-attempt.ts`, `.test.ts`      | Principal-wide Web Locks, исходный ключ и неизменяемый operation binding, client custody             |
+| `apps/web/src/game-join-flow.ts`, `.test.ts`         | Строгий parser квитанции, consent expiry/revision, семантические состояния                           |
+| `apps/web/src/GameDetailView.test.tsx`               | Адаптация inherited consent fixtures                                                                 |
+| `output/c2-commercial-ui-20261021/handoff-C2.md`     | Запрошенный итоговый handoff, заменяет раннюю advisory-only версию                                   |
 
-При последующей проверке worktree C1 обнаружены его новые клиентские файлы:
+Не менялись server, правила D0, OpenAPI, SDK, `auth-gateway.ts`, auth core, `App.tsx`/общая навигация, package/lockfile, CI, config/env, signing и native-конфигурация. Генерация ignored contract types выполнялась штатной командой из неизменённых OpenAPI.
 
-- `apps/web/src/GameJoinFlowPanel.tsx`;
-- `apps/web/src/game-join-attempt.ts`, `.test.ts`;
-- `apps/web/src/game-join-flow.ts`, `.test.ts`;
-- изменения `App.tsx`, `GameDetailView.tsx`, `GamesPage.tsx` и соответствующих тестов.
+## Рабочее поведение поддерживаемого JOIN
 
-**Нужна явная передача/разделение этих файлов. C2 не создаёт второй flow/ledger и не редактирует worktree C1.** Последний прочитанный коммит C1: `90ba06a4` (server-owned paid JOIN), перед ним `6c2d9104` (durable paid-join repository). Это наблюдаемые промежуточные коммиты, не принятый handoff и не подтверждение готовности SDK/контракта.
+1. Используется существующий picker конкретного собственного продукта. Суммы, покрытие и причины приходят от C1; правила, скидки и право полной оплаты на клиенте не вычисляются.
+2. Advisory без цены/согласия не превращается в free JOIN. Коммерческий entry point fail-closed, не вызывает legacy free command.
+3. Zero due явно означает использование подписки, а не бесплатную игру. LIMIT_USED не объявляет запрет услуги и не разрешает альтернативную оплату.
+4. Service denial, benefit denial, изменившаяся цена и непроверенные условия различаются в пределах переданных C1 outcome codes. Неизвестное правило/unsupported full-price остаётся unavailable, не додумывается.
+5. Явное подтверждение хранит expiry/revision/выбранный продукт. На confirm просроченное или изменившееся согласие сбрасывается и условия явно перепроверяются без submit.
+6. Исходная попытка/ключ сохраняются до dispatch. Все ledger mutations и dispatch сериализованы principal-wide Web Lock, включая разные игры. Без Web Locks нет unsafe localStorage fallback: команда fail-closed.
+7. Зависшие conditions GET, original-operation GET и JOIN POST ограничены 8-секундным UI deadline. Таймаут POST означает UNKNOWN, не отмену серверной операции; прежний ключ не теряется, replacement POST не выполняется.
+8. Return URL не подтверждает PAID. Refresh/reopen и восстановление после утраты operationId используют GET исходной операции по прежнему ключу. Временный `GAME_OPERATION_NOT_FOUND` удерживает custody и не даёт начать новую оплату.
+9. Tenant/user/gateway/game-scoped lifetime исключает позднее согласие/результат другого аккаунта или предыдущей игры. Storage содержит минимальную identity/payload/consent/key/state, не токены и не платёжные секреты.
+10. Каждый parsed operation result связывается с актуальной persisted custody под lock до классификации. Ответ для другого operationId не объявляет успех и не удаляет исходную попытку.
+11. Trusted success отделён от сходимости карточки, состава и confirmed personal booking: состояние `CONFIRMED_UPDATING` удерживает custody и предлагает только GET-проверку. Busy освобождается и при stale/error/timeout проекций; старый task не снимает busy нового.
+12. Итоговый success показывается только при подходящей server revision, self membership/roster и подтверждённой personal booking. Проекции не вычисляются клиентом и не сливаются с неподтверждённым ответом команды.
 
-## Реализовано C2
+## Проверки и атрибуция доказательств
 
-1. Зависшая проверка advisory-условий прекращает loading через 8 секунд, показывает отдельный timeout и разрешает только явную повторную проверку.
-2. Поздний результат после timeout игнорируется и не возвращает цену в UI; автоматического retry нет. Это UI deadline: транспортный запрос не объявляется отменённым, поскольку существующий SDK-метод здесь не предоставляет signal.
-3. При `price.status = MISSING` сумма не отображается, даже если некорректный ответ содержит `amountMinor`.
-4. Нулевая предварительная цена явно не называется бесплатной игрой и не даёт разрешения на запись/оплату.
-5. `LIMIT_USED` объясняет исчерпание льготы, не приравнивает его к запрету услуги и не разрешает самостоятельно другую цену.
-6. Добавлены шесть UI-тестов; runtime-заглушек, расчёта скидок, команд оплаты или нового API нет.
+### LOCAL — тесты и static checks
 
-Существующий `GameJoinConditions` является `nonBinding: true`, `price.confirmed: false`, `requiresReservationRecheck: true`. Он не даёт безопасной основы для коммерческого submit или подтверждения текущих условий.
+- Targeted suite: 8 files, **123 PASS / 2 SKIP**. Оба skipped требуют реального `LK1_JOIN_EVALUATOR_SOURCE`; реальный evaluator не подключался.
+- После test-only устранения `require-await` повторены четыре новых regression tests: **4 PASS**. Они воспроизводили RED до исправления: pending A → success B; pending A → failure B; success readback со stale projections и заблокированной кнопкой; поздний old-game result после смены маршрута.
+- Web typecheck и affected ESLint: PASS. Prettier/diff check: PASS.
+- Общий build/typecheck/lint/format/contract/runtime-import checks выполнены внутри финального `npm run check`: PASS на замороженном `fa57ca03...`.
+- Existing NO_PAYMENT create ledger characterization: **15 PASS**, результат раннего этапа, не повторно выдан за commercial CREATE acceptance.
+- Preliminary staged-diff Gitleaks: repo-pinned `ghcr.io/gitleaks/gitleaks@sha256:e1b35e12a8c6fa8901f060459cfb6b2fc4c484d3afbe3b029733a3bbfab07055`, redacted stdin, exit 0, no leaks. Это не заменяет complete committed-range scan перед push.
+- Independent review исходного `bc515cef7e9a44645eb01ef5b3ab49ae36d95849`: FAILED на stale operation-ID binding и locked recovery button. Замечания воспроизведены и исправлены. Bounded specialist re-review нового `fa57ca03cd33b28cf89a3c9666c6d97370ee8c50`: **PASS**, без security/logic blockers; parent readback подтвердил совпадение index/worktree. `c2-independent-rereview.json` сохраняет source identity, findings и static-only limits. Nonblocking follow-up: дополнительные точные interleavings write failure/смена binding при ожидании lock.
+- Полный `npm run check`: первая попытка использовала другой Node из background PATH; вторая, на Node 24, завершилась **21 FAIL / 5994 PASS / 258 SKIP**. Все 21 failure — `scripts/verify-source-ci.test.ts`, `CONTROLLER_PROMOTION_GIT_METADATA`.
+- Диагностика второй попытки: фактический inherited TMPDIR был `/var/...`, canonical realpath — `/private/var/...`; custody test запрещает этот alias. Тот же неизменённый файл с `TMPDIR=/Users/zver/.hermes/cache/scratch` дал **60 PASS**. Никакой trust check или release script не ослаблялся.
+- Третья полная попытка: **`npm run check` PASS**, Node `v24.21.0`, `--no-experimental-webstorage`, canonical task scratch, minimal env без DB/provider/verification flags. **621 test files PASS / 21 SKIP; 6019 tests PASS / 258 SKIP**. Source/index/worktree `fa57ca03...` совпали до и после выполнения. Log SHA256 `a456a840f87ab171e532ee1116d75471d2bf4aaa75fc4176b804f57a5957a791`; metadata: `c2-full-check-final-result.json`. Ранние неуспешные попытки сохранены отдельно, не выданы за PASS.
 
-## Проверки — LOCAL / UI_LOCAL
+Данные C3 пользователя (58 PASS, 3 BLOCKED на старом C1) не запускались C2 повторно и не выдаются за собственную интеграционную приёмку. Реальная БД/owner/provider не использовались.
 
-Команды выполнены из worktree C2 на Node `v24.21.0`, npm `11.19.0`.
+### UI_LOCAL — фактический Chromium
 
-- `npm ci --ignore-scripts`: установлен зафиксированный dependency graph; package/lockfile не изменялись. npm сообщил 27 advisories (15 moderate, 10 high, 2 critical); `npm audit fix` не запускался. Это вывод установки, не отдельный security audit.
-- `npm run contracts:generate`: успешно; только генерация из неизменённого контракта, без правок исходных OpenAPI/SDK. Были предупреждения существующих операций без 2XX.
-- `vitest run ...GameJoinConditionsPanel.ui.test.tsx ...GameJoinConditionsPanel.test.tsx ...GameJoinSubscriptionPicker.test.tsx`: **22 passed, 2 skipped**, три файла. Оба skipped требуют `LK1_JOIN_EVALUATOR_SOURCE`; источник реального LK1 не предоставлялся.
-- `vitest run apps/web/src/create-game-attempt.test.ts`: **15 passed**. Это характеристика существующего NO_PAYMENT ledger с in-memory Storage/serialLocks, НЕ browser two-tab и НЕ коммерческий CREATE/JOIN restart.
-- Изменения timeout, MISSING, zero и LIMIT_USED получили ожидаемый RED перед минимальной реализацией, затем GREEN. Две другие проверки характеризуют отсутствие запроса без выбора и явный retry/double tap.
-- Affected ESLint: PASS после исправления одной test-only `require-await` ошибки.
-- `tsc -p tsconfig.web-app.json --noEmit`: PASS.
-- `npm run build -w @phub/web`: PASS.
-- `git diff --check`: PASS.
+Backend-free fixture импортирует реальный `GamesPage`, компоненты и CSS из дерева `fa57ca03...`; fake gateway существует только в scratch preview. Chrome `155.0.8059.85`, task-owned profile, native Web Locks, общий storage двух page targets. HTTP(S) блокирован, network requests 0, runtime exceptions 0.
 
-### Фактический browser preview
+Машинный результат: `c2-connected-browser-results.json`, source tree и bundle SHA256 привязаны к фактическому прогону.
 
-Backend-free fixture импортирует реальные React-компоненты C2 и существующий `styles.css`; synthetic doubles находятся только в scratch preview. База/OTP/provider не запускались. Task-owned headless Chromium, отдельный профиль, локальные file-ресурсы; HTTP(S) блокирован.
+- Фактические widths 375/1280, без horizontal overflow.
+- Concurrent confirm в двух вкладках: одна synthetic command, один исходный key; reopen с `?status=paid&payment=success` — только GET того же key, без success из URL.
+- Synthetic server success при отстающей карточке: `CONFIRMED_UPDATING`, ручная GET-проверка доступна; после изменения synthetic server projections — подтверждённая карточка/состав/личная запись, без второй команды.
+- Другой principal не отображает прежнюю попытку.
+- Native CDP Tab фокусирует именно реальную кнопку подтверждения с `:focus-visible`; Enter confirmation проверена компонентным UI-тестом.
+- Получены 11 connected screenshots: шесть full-context и пять scrolled-panel viewport captures. Последние позволяют осмотреть панель без артефакта fixed bottom nav в full-page screenshot. Содержимое полностью synthetic, без клиентских ПДн.
+- Сохраняются девять ранних advisory screenshots; это отдельный предыдущий source preview, не подмена доказательства нового connected flow.
 
-- 375×1000: available, zero, benefit denied, limit, empty products, error, timeout, expired.
-- 1280×1000: available (существующая центрированная колонка приложения сохранена).
-- 9 screenshots; `documentElement.scrollWidth` не превышает фактический viewport ни в одном из этих состояний.
-- Console exceptions: 0. HTTP(S) requests: 0.
-- Screenshot zero/375 и available/1280 просмотрены: текст и кнопка не обрезаны.
-- Browser Tab проверен на preview-selector. Полный keyboard lifecycle реального коммерческого flow, включая сохранение фокуса после retry/платёжного возврата, НЕ принят. UI double tap проверен компонентным тестом, не выдан за native/device evidence.
-- Browser loading проверен unit-тестом; screenshot loading не заявляется.
+Ни synthetic server receipt, ни браузерный return/reopen не доказывают реальные платежи, приёмку Android/iOS, auth refresh по сети или готовность owner receivers.
 
-Артефакты: `/Users/zver/.hermes/artifacts/c2-commercial-ui-20261021/` — screenshots, `browser-results.json`, пакет handoff и исходный patch.
+## Матрица исходного результата
 
-Полный `npm run check`, CI, STAGING, PROVIDER и PRODUCTION не выполнялись для этой независимой FAST advisory-правки. Подключение CRITICAL-команды ещё не начиналось.
+| Требование                                                       | Результат                                                                                                                               |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Станция/слот/открытый или приватный формат/разрешённый расчёт | Существующий CREATE/NO_PAYMENT сохранён. Коммерческий CREATE/full-price/private court BLOCKED принятым owner-контрактом, не эмулируется |
+| 2. Конкретный собственный продукт                                | Поддерживаемый JOIN подключён к существующему picker/команде C1                                                                         |
+| 3–4. Покрытие, цена и раздельные причины                         | Реализовано в пределах C1 response semantics; альтернативное право полной оплаты не придумывается                                       |
+| 5. Явное актуальное согласие                                     | Реализовано с expiry/revision/product guard и server recheck                                                                            |
+| 6. Одна команда и сохранённый ключ                               | Реализовано; unit + native browser two-tab synthetic evidence                                                                           |
+| 7. Оплата/processing/success/rejection/UNKNOWN                   | Реализована клиентская state machine; real provider не принят                                                                           |
+| 8. Return/close/reopen/original readback                         | UI_LOCAL и client regression coverage; реальные payment redirect/process kill/native transport не приняты                               |
+| 9. Card/roster/personal booking                                  | Реализован server-read convergence gate; интеграционная сходимость реального backend не принята                                         |
 
-## Матрица исходных требований
+## Native handoff
 
-| Требование                                                           | Статус                                                                                                                                                |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Станция, слот, открытый/приватный формат, разрешённый расчёт      | Существующий CREATE имеет станцию/время/формат и NO_PAYMENT; коммерческий слот и разрешённые сервером способы не подключены                           |
-| 2. Конкретный собственный продукт                                    | Существующий JOIN-picker протестирован; коммерческая передача выбора команде ожидает C1                                                               |
-| 3. Покрытие/доплата/полная цена/причина                              | Advisory уже показывается; исправлены MISSING/zero/лимит. Подтверждённые доплата/полная цена отсутствуют до C1                                        |
-| 4. Услуга запрещена / льгота недоступна / другая цена / не проверено | Проверка/error/timeout/льгота различимы; текущий advisory-контракт не подтверждает отдельные serviceAllowed/alternativePrice, клиент их не выдумывает |
-| 5. Подтверждение актуальных условий                                  | Не подключено: нужен authoritative quote/consent C1, не advisory-checkbox                                                                             |
-| 6. Одна команда с сохранённым исходным ключом                        | Существующий NO_PAYMENT ledger охарактеризован; коммерческий JOIN/CREATE ждёт передачи владения C1                                                    |
-| 7. Оплата/обработка/успех/отказ/UNKNOWN                              | Коммерческий flow ещё не принят/не подключён C2                                                                                                       |
-| 8. Return/reopen/readback исходной операции                          | Нужен handoff-C1, включая lookup после потери operationId. Return URL не используется как PAID                                                        |
-| 9. Карточка/участники/личная запись после серверного результата      | Не принято; нужно authoritative readback и проверка сходимости всех трёх проекций                                                                     |
+### Android — общий Web экран
 
-Нельзя интерпретировать этот пакет как готовый рабочий коммерческий CREATE/JOIN.
+`apps/mobile/src/main.tsx` → `shared-app-entry.tsx` → `MobileApp.tsx` импортирует общий Web `App`/gateway. Передать владельцу `apps/mobile/src/MobileApp.tsx`, `apps/mobile/src/native-api-fetch.ts`, `apps/mobile/src/navigation.ts`, `apps/mobile/src/shared-app-entry.tsx`.
 
-## Необходимый вход handoff-C1
+Проверить на устройстве Web Locks/storage origin, process kill→reopen и тот же original key, payment deep-link/back/cancel, offline/timeout/UNKNOWN, double tap, logout→другой tenant/user, новую сессию того же principal, отсутствие mutation replay в native/auth refresh transport, доступность keyboard/accessibility и card/roster/bookings после server readback. Отсутствие Web Locks fail-closed, не повод делать небезопасный fallback в C2.
 
-1. Зафиксированный commit/PR с контрактом, SDK и общим транспортом; точные экспортируемые типы и методы, не промежуточные файлы.
-2. Authoritative проверка станции/слота/формата/способа расчёта и конкретного продукта; отдельные семантики service denial, benefit denial, alternative price и temporarily unverified. Не заставлять UI выводить их из reason text.
-3. Серверный quote/consent: ревизия, expiry, серверные суммы, валюта, покрытие и exact echo/подтверждение; реакция на expired/stale quote без новой команды.
-4. Единственная команда с caller-supplied исходным idempotency key; SDK не должен повторять mutation через retry/refresh.
-5. GET-only readback исходной операции по сохранённому ключу/identity, включая потерю ответа до получения operationId; точные final/nonfinal/UNKNOWN и подтверждённый сервером отказ без side effect.
-6. Оплата: разрешённый nextAction/return, возврат/отмена/закрытие и UNKNOWN/reconciliation. Return URL не является финансовым доказательством.
-7. Условия подтверждённого результата и версия для readback карточки, состава и личной записи.
-8. Передача C2 указанных клиентских flow/ledger-файлов либо подтверждение, что C1 их исключает. Общую навигацию менять только последовательно одним владельцем.
+### iOS — отдельный read-only cabinet
 
-## Mobile handoff — точные файлы и ещё открытые кейсы
+`apps/mobile/src/main.tsx` → `ios/IOSAuthApp.tsx` → `ios/IOSCabinet.tsx`; игра выводится через `GameCard readOnly`, это не `GamesPage`/`CreateGamePage`.
 
-### Android
+Точные файлы владельцу: `apps/mobile/src/ios/IOSCabinet.tsx`, `ios/cabinet-data.ts`, `ios/IOSAuthApp.tsx`, `ios/IOSCabinet.test.tsx`, `ios/IOSAuthApp.test.tsx`. Нужна отдельная scoped интеграция в существующий cabinet: собственный продукт/условия/consent, service vs benefit denial, payment return/cancel/background/kill/reopen, original-key GET-only recovery без mutation replay, account/tenant isolation, подтверждённые card/roster/bookings, native viewport/keyboard/accessibility. C2 эти файлы и native config/signing не меняла.
 
-`apps/mobile/src/main.tsx:19-20` → `shared-app-entry.tsx` → `MobileApp.tsx:2-3` импортирует общий Web `App`/gateway. Общие Web-компоненты используются Android-сценарием, но это НЕ доказательство работы Web Locks/хранилища/deep-link/native transport на устройстве.
+## Открытые границы и запреты
 
-Передать Android-владельцу после C1: `apps/mobile/src/MobileApp.tsx`, `apps/mobile/src/native-api-fetch.ts`, `apps/mobile/src/navigation.ts`, `apps/mobile/src/shared-app-entry.tsx`. Проверить исходную tenant/user attempt после process kill/reopen, payment return/deep-link/back/cancel, отключённую сеть/timeout, double tap, logout→другой аккаунт, новую сессию того же аккаунта, поддержку межконтекстной блокировки, отсутствие mutation replay в native transport, обновление карточки/состава/личной записи только после readback. Native config/signing C2 не менял.
-
-### iOS — отдельный путь
-
-`apps/mobile/src/main.tsx:9-17` → `ios/IOSAuthApp.tsx` → `ios/IOSCabinet.tsx`. В `IOSCabinet.tsx:460-469` игра показывается через `GameCard readOnly`; текст прямо говорит, что запись/оплата/управление ещё не подключены. Это НЕ общий `GamesPage`/`CreateGamePage`.
-
-Точные файлы владельцу: `apps/mobile/src/ios/IOSCabinet.tsx`, `ios/cabinet-data.ts`, `ios/IOSAuthApp.tsx`, `ios/IOSCabinet.test.tsx`, `ios/IOSAuthApp.test.tsx`. Нужна отдельная scoped интеграция в существующий cabinet без платформенной переработки. Кейсы: собственный продукт/quote/consent, заблокированная услуга vs недоступная льгота, возврат/отмена оплаты, background/kill/reopen с прежним ключом, offline/UNKNOWN, смена аккаунта/tenant, повторное открытие по ссылке, подтверждённые roster/bookings/card, keyboard/accessibility/native viewport. C2 этот путь не менял; Android/iOS приёмка отсутствует.
-
-## Границы
-
-Реальных платежей, OTP, внешних записей, миграций/fixture DB, merge, deploy, публикации, signing/native-конфигурации не было. Токены/платёжные секреты/клиентские ПДн в artifacts, localStorage или логи этой работой не добавлялись. Документ является промежуточным handoff-C2 и списком точных зависимостей, не финальным acceptance.
+- По принятому `214324a3` остаются blockers C1: commercial CREATE/full-price/private court, trusted late `CONFIRM_PAYMENT` B3 и реальные LK1/ph-admin admission/read receivers. Более новый C1 `39e0baf8` содержит owner fixes, но нового exact handoff/приёмки C2 ещё нет; старые blockers не объявляются автоматически закрытыми.
+- Флаг по умолчанию OFF; C2 его не меняла.
+- LOCAL check и independent re-review текущего source tree PASS. Собственный Draft PR/CI проверяется по точному head отдельно; результаты доставки — в `c2-delivery.json`/PR. Остаётся C3 backend/provider/native acceptance в разрешённой среде.
+- Реальных платежей, OTP, миграций, live/shared DB/provider writes, merge, deploy, image/app publication не выполнялось.
+- Этот документ фиксирует готовый UI_LOCAL поддерживаемого JOIN и открытые контрактные/интеграционные границы. Это не разрешение включать коммерцию и не утверждение о полной готовности commercial CREATE/JOIN.
