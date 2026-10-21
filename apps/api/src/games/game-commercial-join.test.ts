@@ -27,7 +27,7 @@ const envelope: CommercialJoinCommandEnvelope = {
   gameId: fixtureActor.gameId,
   expectedRevision: 8,
   correlationId: 'correlation-commercial-1',
-  idempotencyKey: 'commercial-join-key-0001',
+  idempotencyKey: '7c1d3a10-1f3e-4b2a-9c55-1a2b3c4d5e6f',
   operationId,
   requestHash: commercialJoinRequestHash({
     tenantId: fixtureActor.tenantId,
@@ -37,7 +37,7 @@ const envelope: CommercialJoinCommandEnvelope = {
     gameId: fixtureActor.gameId,
     expectedRevision: 8,
     correlationId: 'correlation-commercial-1',
-    idempotencyKey: 'commercial-join-key-0001',
+    idempotencyKey: '7c1d3a10-1f3e-4b2a-9c55-1a2b3c4d5e6f',
     subscriptionInstanceId: fixtureActor.subscriptionInstanceId,
     priceConsent: { amountMinor: 70_000, currency: 'RUB' },
   }),
