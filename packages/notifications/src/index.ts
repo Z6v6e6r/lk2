@@ -190,7 +190,7 @@ export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
       key: 'messaging.conversation.created',
       sourceEventType: 'messaging.conversation.created.v1',
       title: 'Новый чат',
-      body: 'Откройте чат в ПадлХАБ, чтобы ответить.',
+      body: 'Откройте чат в ПадлхАБ, чтобы ответить.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
@@ -201,7 +201,7 @@ export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
       key: 'messaging.message.created',
       sourceEventType: 'messaging.message.created.v1',
       title: 'Новое сообщение',
-      body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+      body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
@@ -262,7 +262,7 @@ export const FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT = {
       key: 'profile.friend_request.created',
       sourceEventType: 'profile.friend_request.created.v1',
       title: 'Заявка в друзья',
-      body: 'Откройте ПадлХАБ, чтобы ответить.',
+      body: 'Откройте ПадлхАБ, чтобы ответить.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
@@ -276,7 +276,7 @@ export const FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT = {
       key: 'profile.friendship.created',
       sourceEventType: 'profile.friendship.created.v1',
       title: 'Заявка принята',
-      body: 'Теперь вы друзья в ПадлХАБ. Откройте профиль игрока, чтобы написать сообщение.',
+      body: 'Теперь вы друзья в ПадлхАБ. Откройте профиль игрока, чтобы написать сообщение.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',

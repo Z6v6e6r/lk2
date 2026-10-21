@@ -69,7 +69,7 @@ self.addEventListener('push', function handlePush(event) {
     typeof payload.notificationId === 'string' ? payload.notificationId : 'unknown';
   var deepLink = self.phubSafeDeepLink(payload.deepLink);
   event.waitUntil(
-    self.phubShowNotification(typeof payload.title === 'string' ? payload.title : 'ПаделХАБ', {
+    self.phubShowNotification(typeof payload.title === 'string' ? payload.title : 'ПадлхАБ', {
       body: typeof payload.preview === 'string' ? payload.preview : 'Новое оповещение',
       tag: 'phub-notification-' + notificationId,
       // A repeat of the same notification replaces the older one and alerts again instead of

@@ -1242,7 +1242,7 @@ export function ChatsPage({
         {autoOpenDirect && hasExplicitRecipient && !error ? (
           <section className={styles.directStart} role="status" aria-live="polite">
             <h1>Открываем диалог…</h1>
-            <p>Создаём личный чат ПадлХАБ с выбранным игроком.</p>
+            <p>Создаём личный чат ПадлхАБ с выбранным игроком.</p>
           </section>
         ) : (
           <section className={styles.directStart} aria-labelledby="chat-direct-start-title">
@@ -1251,7 +1251,7 @@ export function ChatsPage({
             {hasExplicitRecipient ? (
               <>
                 <p>
-                  Получатель выбран безопасной ссылкой ПадлХАБ. Контактные идентификаторы остаются
+                  Получатель выбран безопасной ссылкой ПадлхАБ. Контактные идентификаторы остаются
                   скрыты.
                 </p>
                 <button

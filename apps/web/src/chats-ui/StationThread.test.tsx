@@ -29,7 +29,7 @@ function message(index: number): StationSupportMessage {
     id: `message-${index}`,
     body: `Сообщение ${index}`,
     author: 'STATION',
-    authorName: 'Поддержка ПадлХАБ',
+    authorName: 'Поддержка ПадлхАБ',
     createdAt: `2026-09-24T0${index}:00:00.000Z`,
     attachments: [],
   };

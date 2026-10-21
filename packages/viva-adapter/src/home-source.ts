@@ -210,7 +210,7 @@ function bounded(value: string, maxLength: number): string {
 
 function venue(name: string, address: string): string {
   const joined = [name.trim(), address.trim()].filter(Boolean).join(' · ');
-  return bounded(joined || 'ПаделХАБ', 160);
+  return bounded(joined || 'ПадлхАБ', 160);
 }
 
 function bookingStatus(

@@ -39,7 +39,7 @@ async function start(): Promise<void> {
   } catch {
     content = (
       <main className="mobile-status">
-        <h1>ПадлХАБ</h1>
+        <h1>ПадлхАБ</h1>
         <p role="alert">
           Эта сборка ещё не подключена к сервису. Для входа потребуется настроенная версия
           приложения.

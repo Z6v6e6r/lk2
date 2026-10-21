@@ -866,7 +866,7 @@ describe('messaging User API', () => {
     expect(response.json()).toMatchObject({
       code: 'CHAT_PARTICIPANT_UNREACHABLE',
       message:
-        'Игрок ещё не входил в ПадлХАБ: он не увидит сообщение, пока не войдёт в приложение.',
+        'Игрок ещё не входил в ПадлхАБ: он не увидит сообщение, пока не войдёт в приложение.',
     });
     expect(sendMessage).toHaveBeenCalledOnce();
   });

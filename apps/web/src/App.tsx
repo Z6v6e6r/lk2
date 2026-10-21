@@ -417,7 +417,7 @@ function chatUiError(error: unknown, operation: ChatOperation): ChatUiError {
       message:
         code === 'CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED'
           ? 'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.'
-          : 'Игрок ещё не входил в ПадлХАБ: он не увидит диалог, пока не войдёт в приложение.',
+          : 'Игрок ещё не входил в ПадлхАБ: он не увидит диалог, пока не войдёт в приложение.',
     };
   }
   if (
@@ -590,7 +590,7 @@ function userMessage(
 }
 
 function Brand(): React.JSX.Element {
-  return <img className="brand" src={padlHubLogoUrl} alt="ПадлХАБ" />;
+  return <img className="brand" src={padlHubLogoUrl} alt="ПадлхАБ" />;
 }
 
 function CommunityRuntimeUnavailablePage(): React.JSX.Element {
@@ -2640,7 +2640,7 @@ export function App({
                   {bookingsError}
                 </p>
               ) : (
-                <p role="status">Получаем актуальные данные ПаделХАБ…</p>
+                <p role="status">Получаем актуальные данные ПадлхАБ…</p>
               )}
             </section>
           </main>
@@ -2957,7 +2957,7 @@ export function App({
             <h1 id="route-title">{title}</h1>
             <p>
               {protectedRoute.kind === 'section'
-                ? 'Раздел подключается к API ПаделХАБ.'
+                ? 'Раздел подключается к API ПадлхАБ.'
                 : 'Проверьте адрес или вернитесь на Главную.'}
             </p>
             <a className="secondary-button logout-button" href="/">

@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'ru.padlhub.app',
-  appName: 'PadlHub',
+  appName: 'ПадлхАБ',
   webDir: 'dist',
   server: { androidScheme: 'https' },
   // Capacitor's debug bridge logs response bodies, including the short-lived access JWT.

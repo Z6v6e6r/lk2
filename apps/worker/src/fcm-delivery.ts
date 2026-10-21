@@ -103,7 +103,7 @@ export async function runFcmDeliveryBatch(options: {
               endpoint: options.cipher.decrypt(row.address_ciphertext, row.encryption_key_id),
               notification: {
                 id: row.notification_id,
-                title: 'ПадлХАБ',
+                title: 'ПадлхАБ',
                 preview: 'Новое уведомление',
                 ...(row.deep_link ? { deepLink: row.deep_link } : {}),
               },

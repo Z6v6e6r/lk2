@@ -104,7 +104,7 @@ function providerMessage(
     dialogId,
     direction: 'OUTBOUND',
     authorType: 'ADMIN',
-    senderName: 'Поддержка ПадлХАБ',
+    senderName: 'Поддержка ПадлхАБ',
     text: 'Добрый день! Корт свободен в 19:00.',
     attachments: [],
     createdAt: MESSAGE_CREATED_AT,
@@ -872,7 +872,7 @@ describe('station support pictures', () => {
         listMessages: vi.fn().mockResolvedValue([
           providerMessage({
             text: '',
-            senderName: 'ПадлХАБ • Супервайзер',
+            senderName: 'ПадлхАБ • Супервайзер',
             attachments: [
               {
                 type: 'IMAGE',
@@ -899,7 +899,7 @@ describe('station support pictures', () => {
       }[];
     }>();
     const message = body.items[0]!;
-    expect(message.authorName).toBe('ПадлХАБ • Супервайзер');
+    expect(message.authorName).toBe('ПадлхАБ • Супервайзер');
     expect(message.attachments).toHaveLength(1);
     expect(message.attachments[0]).toMatchObject({
       fileName: 'мяч.png',

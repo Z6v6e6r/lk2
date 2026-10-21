@@ -111,7 +111,7 @@ describe('shared LK2 Android UI', () => {
           tenant: {
             id: '00000000-0000-4000-8000-000000000002',
             key: 'local-padel',
-            name: 'ПадлХАБ',
+            name: 'ПадлхАБ',
           },
           roles: ['client'],
           permissions: [],
@@ -136,7 +136,7 @@ describe('shared LK2 Android UI', () => {
     vi.spyOn(gateway, 'restoreSession').mockResolvedValue({
       context: {
         user: { id: '00000000-0000-4000-8000-000000000001', displayName: 'Тестовый игрок' },
-        tenant: { id: '00000000-0000-4000-8000-000000000002', key: 'local-padel', name: 'ПадлХАБ' },
+        tenant: { id: '00000000-0000-4000-8000-000000000002', key: 'local-padel', name: 'ПадлхАБ' },
         roles: ['client'],
         permissions: [],
       },
