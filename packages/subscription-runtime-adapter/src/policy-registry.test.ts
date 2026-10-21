@@ -47,6 +47,15 @@ function item() {
       total: 2,
       byPolicyVersion: [{ policyVersion: 3, count: 2 }],
     },
+    lastQuoteDecision: {
+      at: '2026-10-02T10:00:00.000Z',
+      outcome: 'RETRY_LATER',
+      serviceAllowed: false,
+      subscriptionBenefitAllowed: false,
+      blockers: ['POLICY_UNAVAILABLE'],
+      policyVersion: null,
+      policyDigest: null,
+    },
     lastDecision: {
       at: '2026-10-01T10:00:00.000Z',
       source: 'LEDGER',
@@ -116,6 +125,10 @@ describe('CUP published-policy registry client', () => {
       { ...result(), totals: { ...result().totals, instances: -1 } },
       { ...result(), items: [{ ...item(), publication: { ...item().publication, state: 'X' } }] },
       { ...result(), items: [{ ...item(), versions: [{ policyVersion: 0 }] }] },
+      {
+        ...result(),
+        items: [{ ...item(), lastQuoteDecision: { ...item().lastQuoteDecision, blockers: 'x' } }],
+      },
     ];
     for (const body of cases)
       expect(() => parseSubscriptionPolicyRegistryResult(body)).toThrow(

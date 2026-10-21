@@ -71,6 +71,16 @@ export interface SubscriptionPolicyRegistryItem {
     }[];
   };
   readonly lastDecision: SubscriptionPolicyRegistryLastDecision | null;
+  /** Newest persisted quote decision for this subscription type, when the operator view exposes it. */
+  readonly lastQuoteDecision?: {
+    readonly at: string;
+    readonly outcome: string;
+    readonly serviceAllowed: boolean;
+    readonly subscriptionBenefitAllowed: boolean;
+    readonly blockers: readonly string[];
+    readonly policyVersion: number | null;
+    readonly policyDigest: string | null;
+  } | null;
 }
 
 export interface SubscriptionPolicyRegistryResult {
@@ -172,6 +182,22 @@ function assertLastDecision(value: unknown): void {
     invalid();
 }
 
+function assertLastQuoteDecision(value: unknown): void {
+  if (value === undefined || value === null) return;
+  if (
+    !record(value) ||
+    !instant(value.at) ||
+    typeof value.outcome !== 'string' ||
+    typeof value.serviceAllowed !== 'boolean' ||
+    typeof value.subscriptionBenefitAllowed !== 'boolean' ||
+    !Array.isArray(value.blockers) ||
+    !value.blockers.every((blocker) => typeof blocker === 'string') ||
+    !(value.policyVersion === null || positive(value.policyVersion)) ||
+    !(value.policyDigest === null || typeof value.policyDigest === 'string')
+  )
+    invalid();
+}
+
 function assertItem(value: unknown): void {
   if (
     !record(value) ||
@@ -197,6 +223,7 @@ function assertItem(value: unknown): void {
   assertPublication(value.publication);
   value.versions.forEach(assertVersion);
   assertLastDecision(value.lastDecision);
+  assertLastQuoteDecision(value.lastQuoteDecision);
 }
 
 export function parseSubscriptionPolicyRegistryResult(
