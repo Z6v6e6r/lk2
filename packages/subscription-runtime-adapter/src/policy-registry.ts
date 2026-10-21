@@ -72,6 +72,7 @@ export interface SubscriptionPolicyRegistryItem {
   /** Newest persisted quote decision for this subscription type, when the operator view exposes it. */
   readonly lastQuoteDecision?: {
     readonly at: string;
+    readonly channel?: 'LK2' | 'LK1';
     readonly outcome: string;
     readonly serviceAllowed: boolean;
     readonly subscriptionBenefitAllowed: boolean;
@@ -183,6 +184,7 @@ function assertLastQuoteDecision(value: unknown): void {
   if (
     !record(value) ||
     !instant(value.at) ||
+    !(value.channel === undefined || value.channel === 'LK2' || value.channel === 'LK1') ||
     typeof value.outcome !== 'string' ||
     typeof value.serviceAllowed !== 'boolean' ||
     typeof value.subscriptionBenefitAllowed !== 'boolean' ||
