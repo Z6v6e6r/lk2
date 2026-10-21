@@ -2,7 +2,9 @@
 
 Companion to [ADR 0025](../adr/0025-two-profile-timeweb-delivery.md). Use for the `beta` profile
 before any approved transition. This document is the checklist; the automated read-only command is
-`scripts/preflight-timeweb-beta-deploy.ts` (see below).
+`scripts/preflight-timeweb-beta-deploy.ts` (see below). Host prerequisites (roles, secret sets, FCM
+custody, monitoring evidence) are covered by the
+[bootstrap readiness plan](timeweb-beta-bootstrap.md).
 
 Preflight is **read-only**. It must never restart a container, write to the database, publish an
 image, change a lock or alter a secret. Every category below reports `GO` or the exact missing
