@@ -3,7 +3,7 @@ import type {
   NotificationScenarioInput,
   NotificationScenarioView,
   NotificationScenarioRunView,
-} from '@phub/domain';
+} from '@phub/domain/notification-scenarios';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { NotificationAdminClient } from './notification-admin-client.js';

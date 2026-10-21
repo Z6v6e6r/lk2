@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createNotificationScenarioRepository, withTenantTransaction } from '@phub/database';
-import type { NotificationScenarioInput } from '@phub/domain';
+import { withTenantTransaction } from '@phub/database';
+import { createNotificationScenarioRepository } from '@phub/database/notification-scenarios';
+import type { NotificationScenarioInput } from '@phub/domain/notification-scenarios';
 import {
   ingestNotificationScenarioEvent,
   runNotificationScenarioBatch,

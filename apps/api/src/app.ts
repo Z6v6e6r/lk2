@@ -84,7 +84,7 @@ import { z } from 'zod';
 
 import { registerAuthRoutes } from './auth/auth-routes.js';
 import { registerNotificationScenarioRoutes } from './admin/notification-scenario-routes.js';
-import type { NotificationScenarioRepository } from '@phub/database';
+import type { NotificationScenarioRepository } from '@phub/database/notification-scenarios';
 
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';

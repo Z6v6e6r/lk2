@@ -2,7 +2,7 @@ import type {
   NotificationScenarioInput,
   NotificationScenarioView,
   NotificationScenarioRunView,
-} from '@phub/domain';
+} from '@phub/domain/notification-scenarios';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession,

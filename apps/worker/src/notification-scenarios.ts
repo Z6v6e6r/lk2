@@ -1,8 +1,8 @@
+import { resolveScenarioIntentStates } from '@phub/database/notification-scenarios';
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
   listNotificationFriendCandidates,
-  resolveScenarioIntentStates,
   readNotificationGameCandidate,
   withTenantTransaction,
 } from '@phub/database';
@@ -11,7 +11,7 @@ import {
   notificationScenarioInputSchema,
   notificationScenarioSchedule,
   type NotificationScenarioInput,
-} from '@phub/domain';
+} from '@phub/domain/notification-scenarios';
 import {
   gameDomainEventSchema,
   projectGameCard,

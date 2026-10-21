@@ -5,7 +5,7 @@ import {
   type NotificationScenarioInput,
   type NotificationScenarioView,
   type NotificationScenarioRunView,
-} from '@phub/domain';
+} from '@phub/domain/notification-scenarios';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
 import { withTenantTransaction } from './connection.js';

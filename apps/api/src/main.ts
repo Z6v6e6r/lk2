@@ -1,9 +1,9 @@
+import { createNotificationScenarioRepository } from '@phub/database/notification-scenarios';
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { RedisPasswordLoginLimiter } from './auth/password-login-limiter.js';
 import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   createAdminNotificationRepository,
-  createNotificationScenarioRepository,
   createActivityHistoryRepository,
   createBookingPreferencesRepository,
   createBookingScreenMappingRepository,

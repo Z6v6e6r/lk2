@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
-import type { NotificationScenarioInput } from '@phub/domain';
+import type { NotificationScenarioInput } from '@phub/domain/notification-scenarios';
 import type { GameCardProjectionInput } from '@phub/games';
 
 const owner = vi.hoisted(() => ({

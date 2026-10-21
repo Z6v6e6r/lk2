@@ -308,7 +308,7 @@ describe('notification User API', () => {
     expect(response.statusCode).toBe(200);
     expect(
       response
-        .json()
+        .json<{ categories: { channels: { channel: string; available: boolean }[] }[] }>()
         .categories.flatMap(
           (category: { channels: { channel: string; available: boolean }[] }) => category.channels,
         )

@@ -1,5 +1,8 @@
-import { NOTIFICATION_SCENARIO_CATALOG, notificationScenarioInputSchema } from '@phub/domain';
-import type { NotificationScenarioRepository } from '@phub/database';
+import {
+  NOTIFICATION_SCENARIO_CATALOG,
+  notificationScenarioInputSchema,
+} from '@phub/domain/notification-scenarios';
+import type { NotificationScenarioRepository } from '@phub/database/notification-scenarios';
 import type { FastifyInstance, FastifyRequest, FastifyReply, preHandlerHookHandler } from 'fastify';
 import { z } from 'zod';
 
