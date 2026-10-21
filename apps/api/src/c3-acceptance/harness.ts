@@ -423,6 +423,12 @@ export interface C3AppOptions {
   readonly owner: OwnerDouble;
   /** Omit to keep the previously shipped fail-closed behaviour (no commercial composition). */
   readonly commercialJoin?: boolean;
+  /**
+   * Exact composition built by the shipped `createGameCommercialJoinRuntime` factory. When given it
+   * is wired as-is, so the real HTTP route runs the production factory output instead of a
+   * hand-assembled test object.
+   */
+  readonly commercialJoinRuntime?: GameCommercialJoinOptions;
   readonly rosterRepository?: GameRosterRepository;
   readonly managementRepository?: GameRepository;
 }
@@ -440,13 +446,14 @@ export async function buildC3App(pool: Pool, options: C3AppOptions): Promise<C3A
   const rosterRepository = options.rosterRepository ?? createGameRosterRepository(pool);
   const managementRepository = options.managementRepository ?? createGameRepository(pool);
   const gameCommercialJoin: GameCommercialJoinOptions | undefined =
-    options.commercialJoin === false
+    options.commercialJoinRuntime ??
+    (options.commercialJoin === false
       ? undefined
       : {
           repository: rosterRepository as unknown as GameCommercialJoinOptions['repository'],
           conditionsOwner: options.conditions.owner,
           owner: options.owner.owner,
-        };
+        });
   const app = await buildApp({
     config,
     logger: silentLogger(),
