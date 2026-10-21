@@ -148,18 +148,14 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
       }),
     });
     expect(foreignSelection.statusCode).toBe(409);
-    // The pinned slice fails closed on the conditions mapping ("owner unavailable"); it never
-    // reserves for a selection the owner did not confirm for this actor.
-    expect([
-      'GAME_SUBSCRIPTION_SELECTION_REQUIRED',
-      'GAME_PAYMENT_REQUIRED',
-      'GAME_JOIN_CONDITIONS_MAPPING_UNAVAILABLE',
-    ]).toContain(foreignSelection.json().code);
+    // C1 41157c5e (P2.1): an unmapped/foreign selection is a selection problem, not a payment
+    // problem. It never reserves for a selection the owner did not confirm for this actor.
+    expect(foreignSelection.json().code).toBe('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
     expect(conditions.calls.readPreview).toBe(0);
     expect(owner.calls.execute).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(emptyState);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      emptyState,
+    );
 
     // (b) A price consent without any server-owned subscription selection is refused explicitly.
     const missingSelection = await postJoin({
@@ -176,9 +172,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     expect(missingSelection.statusCode).toBe(409);
     expect(missingSelection.json().code).toBe('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
     expect(owner.calls.execute).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(emptyState);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      emptyState,
+    );
 
     // (c) The owner resolves no selection at all for this actor (not owned / foreign product).
     const noSelectionConditions = conditionsWithoutOwnedSelection(
@@ -205,15 +201,12 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
       }),
     });
     expect(noOwnedSelection.statusCode).toBe(409);
-    expect([
-      'GAME_SUBSCRIPTION_SELECTION_REQUIRED',
-      'GAME_PAYMENT_REQUIRED',
-      'GAME_JOIN_CONDITIONS_MAPPING_UNAVAILABLE',
-    ]).toContain(noOwnedSelection.json().code);
+    // C1 41157c5e (P2.1): the same stable selection code when the owner resolves no selection.
+    expect(noOwnedSelection.json().code).toBe('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
     expect(noSelectionOwner.calls.execute).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(emptyState);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      emptyState,
+    );
   });
 
   it('E2: a token without the path tenant is refused with TENANT_ACCESS_DENIED and writes nothing', async () => {
@@ -249,9 +242,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     expect(response.json().code).toBe('TENANT_ACCESS_DENIED');
     expect(owner.calls.execute).toBe(0);
     expect(conditions.calls.resolveSelection).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenantA.tenantId, gameId: game.gameId }),
-    ).toEqual(beforeA);
+    expect(await readSavedState(pool, { tenantId: tenantA.tenantId, gameId: game.gameId })).toEqual(
+      beforeA,
+    );
     expect(await readSavedState(pool, { tenantId: tenantB.tenantId })).toEqual(beforeB);
 
     // The advisory preview path is tenant-scoped the same way.
@@ -266,9 +259,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     expect(preview.statusCode).toBe(403);
     expect(preview.json().code).toBe('TENANT_ACCESS_DENIED');
     expect(conditions.calls.resolveSelection).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenantA.tenantId, gameId: game.gameId }),
-    ).toEqual(beforeA);
+    expect(await readSavedState(pool, { tenantId: tenantA.tenantId, gameId: game.gameId })).toEqual(
+      beforeA,
+    );
   });
 
   it('E3: another actor cannot read a foreign operation and the readback mutates nothing', async () => {
@@ -344,9 +337,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     expect(own.json().operation.id).toBe(operationId);
     expect(own.json().operation.status).toBe('PROCESSING');
     expect(owner.calls.read).toBe(1);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(before);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      before,
+    );
   });
 
   it('E4: actor/price/version spoofing is rejected or ignored and never decides the command', async () => {
@@ -379,9 +372,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     expect(priceSpoof.statusCode).toBe(409);
     expect(priceSpoof.json().code).toBe('GAME_PRICE_CONFIRMATION_REQUIRED');
     expect(owner.calls.execute).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(emptyState);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      emptyState,
+    );
 
     // (b) The body tries to name another actor/tenant: strict parsing rejects the command.
     const actorSpoof = await postJoin({
@@ -415,9 +408,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     expect(tenantSpoof.statusCode).toBe(400);
     expect(tenantSpoof.json().code).toBe('INVALID_REQUEST');
     expect(owner.calls.execute).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(emptyState);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      emptyState,
+    );
 
     // (c) Spoofed identity/tenant headers are ignored: the server uses the JWT subject.
     const spoofedHeaders = await postJoin({
@@ -478,9 +471,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     expect(staleRevision.statusCode).toBe(409);
     expect(staleRevision.json().code).toBe('GAME_REVISION_CONFLICT');
     expect(owner.calls.execute).toBe(1);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(afterJoin);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      afterJoin,
+    );
     expect(
       await readReservations(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
     ).toHaveLength(1);
@@ -553,9 +546,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     expect(nestedForgery.statusCode).toBe(400);
     expect(nestedForgery.json().code).toBe('INVALID_REQUEST');
     expect(owner.calls.execute).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(emptyState);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      emptyState,
+    );
 
     // (b) An arbitrary client "return callback" path is not a payment confirmation.
     const returnCallback = await app.inject({
@@ -566,9 +559,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     });
     expect(returnCallback.statusCode).toBe(404);
     expect(owner.calls.execute).toBe(0);
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(emptyState);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      emptyState,
+    );
 
     // (c) After a real reservation, forged client fields still cannot confirm it.
     const reserved = await postJoin({
@@ -617,9 +610,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     });
     expect(forgedConfirm.statusCode).toBe(400);
     expect(forgedConfirm.json().code).toBe('INVALID_REQUEST');
-    expect(
-      await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(afterReserve);
+    expect(await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      afterReserve,
+    );
     const unresolvedReadback = await getGameOperation({
       app,
       tenantKey: tenant.tenantKey,
@@ -628,9 +621,7 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     });
     expect(unresolvedReadback.statusCode).toBe(200);
     expect(unresolvedReadback.json().operation.status).not.toBe('SUCCEEDED');
-    expect(unresolvedReadback.json().operation.commercial.attemptState).not.toBe(
-      'OWNER_CONFIRMED',
-    );
+    expect(unresolvedReadback.json().operation.commercial.attemptState).not.toBe('OWNER_CONFIRMED');
 
     // (d) Only the trusted owner receipt (legacy CONFIRM_PAYMENT) applies the participation.
     const reservationId = (
@@ -754,9 +745,9 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
     // Nothing changed: no confirmation, no participation, no evidence, same operations/reservations.
     const after = await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId });
     expect(after).toEqual(before);
-    expect(
-      await readCommandRows(pool, { tenantId: tenant.tenantId, gameId: game.gameId }),
-    ).toEqual(commandsBefore);
+    expect(await readCommandRows(pool, { tenantId: tenant.tenantId, gameId: game.gameId })).toEqual(
+      commandsBefore,
+    );
     const reservations = await readReservations(pool, {
       tenantId: tenant.tenantId,
       gameId: game.gameId,
@@ -819,9 +810,7 @@ c3DatabaseDescribe(`C3 paid JOIN authorization acceptance (${C3_FIXTURE_VERSION}
       gameId: levelBlocked.game.gameId,
     });
     expect(
-      decisionsBeforeConfirm.find(
-        (decision) => decision.reasonCode === 'PERSONAL_INVITE_BYPASS',
-      ),
+      decisionsBeforeConfirm.find((decision) => decision.reasonCode === 'PERSONAL_INVITE_BYPASS'),
     ).toMatchObject({ status: 'ALLOWED', outcome: 'BYPASS', invitationId });
 
     // The trusted legacy receipt finalizes the participation on the original reservation.
