@@ -139,7 +139,7 @@ function fakeDeps(scenario: Scenario = {}): PreflightDeps {
         size: files.get(path)?.length ?? 1,
         isFile: () => true,
       }) as never,
-    statvfs: () => ({ bavail: 45 * GIB, frsize: 1 }) as never,
+    statvfs: () => ({ bavail: 45 * GIB, bsize: 1 }) as never,
   };
 }
 
@@ -225,7 +225,7 @@ describe('preflight checks', () => {
 
   it('blocks an impossible restore capacity on a large database', () => {
     const deps = fakeDeps({ databaseBytes: Math.round(9.5 * GIB) });
-    deps.statvfs = () => ({ bavail: 20 * GIB, frsize: 1 }) as never;
+    deps.statvfs = () => ({ bavail: 20 * GIB, bsize: 1 }) as never;
     const checks = runPreflight(options(), deps);
     expect(checks.find((c) => c.id === 'restore-mode')?.status).toBe('BLOCKER');
   });
