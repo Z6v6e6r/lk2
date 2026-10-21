@@ -1263,3 +1263,97 @@ owned strict HTTP-helper rejection immediately after Compose returns before read
 error brand distinguishes that rejection from generic errors, missing errors or spoofed names/codes.
 Both paths require the exact newly recreated owned running `sleep 60` fixture with `starting` or
 `unhealthy` health. Unexpected exit/status/identity/command/health fails with bounded diagnostics. A failed first-attempt main CI remains ineligible; rerunning it does not grant delivery.
+
+## Closed Web-only release over installed API 8158
+
+This source preparation does not enroll a controller/helper, publish images, produce a live backup,
+activate Web, migrate, send notifications, change permissions/secrets or modify routing. Those
+transitions keep their exact-target authority and fresh host prerequisites. Automatic eligibility
+and the original critical-Web V1 pins are unchanged. PR #374 and #401 are historical patterns, not
+eligible sources for this mixed installed runtime.
+
+The separate `PHUB_TIMEWEB_CRITICAL_API8158_WEB_OPERATION_V1` schema uses the same request keys and
+manual `--critical-web` / recovery / reconcile entry as V1. It pins API release
+`8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1` and API digest
+`sha256:47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839` independently of Web
+rollback release `0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1`, source
+`0d6078be7a50ed3f5761d66071527be003bd568f`, tree
+`5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`, Web digest
+`sha256:af11244292c1e0d50308eff3794fc643a97c551ceb263a05a58ead4e22f04127`.
+Its reviewed whole-runtime anchor is `45c97d18c67c268c216f4defe9642b26874df4d6`, tree
+`be1cd848bb2f1f8945b2f16d1329d27cfa34b3a4`; exact trimmed raw no-renames NUL delta from Web baseline
+has SHA-256 `8c1ace1da375102f6dd31351286b338e03be4c2f1d25d84c726fd445aeb4c589`.
+A containing merge must preserve that anchor and change exactly six existing regular `100644` files:
+`timeweb-critical-web.js`, its test, `control-timeweb-database-backup.py`,
+`test-timeweb-database-backup.py`, `control-timeweb-database-backup.test.ts` (all under `scripts/`),
+and this runbook. Additions, subsets, duplicate paths, renames, deletions, other build/runtime/workflow
+changes reject. Later main drift requires renewed compatibility review; never advance pins merely
+to pass a gate. Candidate/controller must equal exact current main and have full first-attempt push CI.
+Confirmation is `UPGRADE_API8158_WEB_<CANDIDATE12>_FROM_<PREVIOUS_WEB_DIGEST_LAST12>_KEEP_API_8158AC445C9F`
+with uppercase hexadecimal segments.
+
+The Web uses the existing Home subscription selection (not a complete canonical subscriptions list),
+existing JOIN/LEAVE delegation, and branding/participant rendering. SDK, user-v1 OpenAPI, lockfile and
+Web Dockerfile match API8158. Production Web omits the advisory join-conditions capability. No password
+login/reset/contact writer is exposed. Support routes exist in API8158, but before activation obtain
+fresh read-only proof of migration `0098_support_tickets` and its live tables/role boundary. Missing
+support schema is not authority to migrate as part of this Web-only release. Authenticated product
+journeys and native/store acceptance remain separate from source/CI/HTTP health evidence.
+
+### Current-API backup producer
+
+The canonical producer adds two explicit, production-only schemas:
+
+- `PHUB_TIMEWEB_BACKUP_WEB_API8158_V1`: existing network-none tmpfs restore engine.
+- `PHUB_TIMEWEB_BACKUP_WEB_API8158_DISK_NAMESPACE_V1`: existing encrypted-disk restore in the private
+  systemd/Docker namespace, with existing custody, cleanup, uncertainty and reconciliation gates.
+
+Both use the common V1 backup request fields plus mandatory `profile: "production"`, `releaseId`,
+`controllerSourceCiRunId`, `expectedLedgerSha256`. `toolCommit == controllerSha`, and `releaseId` is
+`<controllerSha>-<controllerSourceCiRunId>-1`, NOT the publication release id. The ledger is exactly
+102 rows with canonical tuple digest
+`b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85`.
+No new migration proof fields belong in these Web schemas. Bind fresh complete API/Postgres snapshots
+(id, image, imageId, releaseId, revision, zero restarts, startedAt); the API source/release/digest and
+Postgres image are pinned, while snapshot identities are reattested exactly throughout. Before
+executing installed JavaScript, the producer authenticates the root-owned controller checkout,
+HEAD/tree, clean status and every tracked file, then invokes the fixed source validator with clean
+environment/JSON stdin. It rejects an active migrator or any unrelated container-boundary drift.
+
+Choose the schema from fresh raw database size, available memory, disk and immutable restore-image
+facts using the producer's pure `web8158_restore_schema` function: tmpfs if its existing capacity
+formula passes, otherwise private namespace only if `namespace_sizing` passes. The legacy restore
+planner's schema and ambiguous `namespace`/`disk` labels must NOT be copied into this request.
+There is no automatic fallback after a failed execution. Insufficient capacity/custody stops before
+activation; a local capacity calculation does not prove Linux restore capability.
+
+Confirmations are `BACKUP_RESTORE_WEB8158_<CONTROLLER12>_KEEP_API_8158AC445C9F` for tmpfs and
+`BACKUP_RESTORE_WEB8158_PRIVATE_NAMESPACE_<CONTROLLER12>_KEEP_API_8158AC445C9F` for private disk.
+Existing standalone tool source-proof/installation, operation expiry, exact command/target and manual
+entry rules remain mandatory. Live tool installation and backup/restore execution require separate
+authority. Never retimestamp, copy or rewrite a previous receipt to fit the new request.
+
+Both producers retain the validated request bytes as `backup-operation.json` beside the canonical
+receipt/dump under `backups/<controllerSha>-<sourceCiRunId>-1-web`. The receipt binds installed API8158
+and the exact restored/source ledger. A namespace publication carries that unchanged request only
+after verified restore and storage cleanup. The Web transaction remains
+`backups/<candidateSha>-<publicationRunId>-1-web`; it reads the original producer directory and binds
+receipt, dump hash, request hash, source/controller/CI and complete API snapshot. Recovery uses the
+same immutable binding. A missing, stale, copied, foreign, degraded or different-ledger proof rejects.
+
+### Strict observation and activation prerequisites
+
+The closed Web route explicitly requests production backup validation, including the original V1.
+It reads the tracked observability contract as `0644`, provider/alert inputs as root-only `0600`,
+and validates their contents against actual wall time. Shared beta defaults cannot weaken this route.
+The approved trusted provider-readback process must refresh snapshots within the existing 30-second
+freshness budget through preparation, activation, all 61 rounds over 900 seconds, and final receipt.
+A one-shot snapshot is insufficient. Missing/stale provider data, active incidents, invalid alerts
+or credentials in readback stop; no direct-observation or degraded-backup waiver is introduced.
+
+Before live execution verify the installed API_WORKER descriptor/receipt, full unchanged API/Worker/
+Realtime/ingress/dependency identities, secrets, no active lock/migrator, canonical same-run artifact,
+prior Web image, fresh current-API backup, and actual Compose rendering with the installed descriptor
+and existing FCM credential source. Pull/smoke/up remain Web-only; `up -d --no-deps web` never applies
+rendered backend labels/images. Retain the exact prior Web digest for rollback. Product QA includes
+Home/profile/subscriptions/support; health checks do not prove those authenticated journeys.
