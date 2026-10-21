@@ -64,7 +64,10 @@ import { notificationReceiptSecret } from '@phub/notifications';
 import { createRuntimeNotificationEndpointCipher } from './notifications/runtime-endpoint-cipher.js';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
 import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
-import { ManagedSubscriptionRuntimeQuoteClient } from '@phub/subscription-runtime-adapter';
+import {
+  ManagedSubscriptionRuntimeQuoteClient,
+  SubscriptionPolicyRegistryClient,
+} from '@phub/subscription-runtime-adapter';
 import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
@@ -621,6 +624,17 @@ const subscriptionRuntimeWarnBoundary = (() => {
     }),
   };
 })();
+const subscriptionPolicyRegistryClient = config.SUBSCRIPTION_POLICY_REGISTRY_ENABLED
+  ? new SubscriptionPolicyRegistryClient({
+      enabled: true,
+      baseUrl: config.SUBSCRIPTION_POLICY_REGISTRY_BASE_URL as string,
+      integrationToken: config.SUBSCRIPTION_POLICY_REGISTRY_INTEGRATION_TOKEN as string,
+      timeoutMs: config.SUBSCRIPTION_POLICY_REGISTRY_TIMEOUT_MS,
+      environment: config.APP_ENV === 'local' ? 'development' : 'production',
+      onMetric: (metric) =>
+        logger.info({ metric }, 'subscription policy registry read'),
+    })
+  : undefined;
 const gameJoinConditionsOwner = createGameJoinConditionsRuntime({ config, pool, authService });
 // Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
 // existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
@@ -674,6 +688,7 @@ const app = await buildApp({
   ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
   phoneSubjectLinkService,
+  ...(subscriptionPolicyRegistryClient ? { subscriptionPolicyRegistryClient } : {}),
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
   ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(subscriptionRuntimeWarnBoundary
