@@ -4,6 +4,7 @@ import {
   validateApiWorkerControllerDelta,
   validateApiWorkerLedger,
   parseApiWorkerControllerDiff,
+  sameApiWorkerDeploymentIdentity,
   type ApiWorkerControllerDiffEntry,
 } from './timeweb-api-worker-upgrade.js';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -981,5 +982,38 @@ describe('exact inert Compose readiness pair', () => {
       for (const validate of validators)
         expect(() => validate(parseApiWorkerControllerDiff(raw))).toThrow();
     }
+  });
+});
+
+describe('beta immutable deployment identity', () => {
+  const actual = {
+    id: 'a'.repeat(64),
+    image: 'ghcr.io/z6v6e6r/phub-api@sha256:' + '1'.repeat(64),
+    imageId: 'sha256:' + '1'.repeat(64),
+    releaseId: '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d-39366813227-1',
+    revision: '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d',
+    restarts: 0,
+    startedAt: '2026-10-21T00:00:00.000000000Z',
+  };
+  const restarted = {
+    ...actual,
+    id: 'b'.repeat(64),
+    restarts: 3,
+    startedAt: '2026-10-21T04:00:00.000000000Z',
+  };
+
+  it('lets a beta restart keep the release proof while production stays exact', () => {
+    expect(sameApiWorkerDeploymentIdentity(restarted, actual, 'production')).toBe(false);
+    expect(sameApiWorkerDeploymentIdentity(restarted, actual, 'beta')).toBe(true);
+    expect(sameApiWorkerDeploymentIdentity(actual, actual, 'beta')).toBe(true);
+  });
+
+  it('still rejects a different image, revision or release under the beta profile', () => {
+    for (const key of ['image', 'imageId', 'revision', 'releaseId'] as const) {
+      expect(sameApiWorkerDeploymentIdentity({ ...actual, [key]: 'changed' }, actual, 'beta')).toBe(
+        false,
+      );
+    }
+    expect(sameApiWorkerDeploymentIdentity(null, actual, 'beta')).toBe(false);
   });
 });

@@ -28,6 +28,7 @@ import {
   validateApiWorkerControllerDelta,
   parseApiWorkerControllerDiff,
   withoutExactMigrationCiPatch,
+  sameApiWorkerDeploymentIdentity,
 } from './timeweb-api-worker-contract.js';
 import { acquireApiWorkerExecutor } from './timeweb-api-worker-upgrade.js';
 import {
@@ -113,6 +114,7 @@ export function validateApiWorkerMigrationOperation(op, at) {
     'controllerTree',
     'controllerSourceCiRunId',
     ...(op?.controllerPromotion === undefined ? [] : ['controllerPromotion']),
+    ...(op?.profile === undefined ? [] : ['profile']),
     'candidateSha',
     'candidateTree',
     'sourceCiRunId',
@@ -131,6 +133,7 @@ export function validateApiWorkerMigrationOperation(op, at) {
   exact(op.target, ['hostname', 'serverId', 'projectId']);
   if (
     op.schema !== 'PHUB_TIMEWEB_API_WORKER_MIGRATION_OPERATION_V1' ||
+    (op.profile !== undefined && op.profile !== 'beta' && op.profile !== 'production') ||
     !same(op.target, { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 }) ||
     !SHA.test(op.controllerSha ?? '') ||
     !SHA.test(op.controllerTree ?? '') ||
@@ -569,9 +572,10 @@ export async function runMigrationAdapter(mode, operationBytes, ops) {
     await ops.authority(op);
     const runtime = await ops.snapshot(),
       secrets = await ops.secrets();
+    const profile = op.profile ?? 'production';
     if (
-      !same(runtime.api.identity, op.expectedApi) ||
-      !same(runtime.worker.identity, op.expectedWorker) ||
+      !sameApiWorkerDeploymentIdentity(runtime.api.identity, op.expectedApi, profile) ||
+      !sameApiWorkerDeploymentIdentity(runtime.worker.identity, op.expectedWorker, profile) ||
       secrets.releaseId !== op.expectedSecretSetReleaseId ||
       !same(secrets.files, op.expectedSecretSetFiles)
     )
