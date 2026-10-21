@@ -348,6 +348,8 @@ describe('GameDetailView paid join flow', () => {
     renderWithFlow(
       {
         kind: 'NEEDS_CONSENT',
+        expiresAt: '2099-10-21T08:00:00.000Z',
+        revision: 7,
         consent: { amountMinor: 250000, currency: 'RUB' },
         subscriptionInstanceId: '66666666-6666-4666-8666-666666666666',
         message: '',
