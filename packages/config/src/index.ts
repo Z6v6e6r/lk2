@@ -808,9 +808,7 @@ export function loadConfig(
   }
   if (parsed.data.SUBSCRIPTION_POLICY_REGISTRY_ENABLED) {
     if (parsed.data.APP_ENV === 'production') {
-      throw new Error(
-        'SUBSCRIPTION_POLICY_REGISTRY_ENABLED is not activated for production',
-      );
+      throw new Error('SUBSCRIPTION_POLICY_REGISTRY_ENABLED is not activated for production');
     }
     if (
       !parsed.data.SUBSCRIPTION_POLICY_REGISTRY_BASE_URL ||
