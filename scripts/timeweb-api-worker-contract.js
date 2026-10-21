@@ -137,7 +137,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: 'c3da47a8fa4c95d06081d1a189c28b2ec8afa55e',
-    newOid: 'c97b7c4c9afc3f2c0b2a09543954dc8215c579a7',
+    newOid: 'e3818a1cdfbf04c5269c892e75375260da2d4e9d',
   }),
 ]);
 // Controller promotion keeps the frozen release source closure unchanged. These are
