@@ -78,6 +78,18 @@ export interface GameCommercialJoinOwnerBoundary {
   readonly actorContextRepository: Pick<SubscriptionRuntimeActorContextRepository, 'resolve'>;
   readonly targetRepository?: BookedOperationAdmissionTargetRepository;
   readonly admissionTransport?: BookedOperationAdmissionTransport;
+  /**
+   * Server-side resolution of the provider client subscription id for the selected product. Without
+   * it the owner cannot execute the subscription booking, so the flow fails closed before dispatch.
+   */
+  readonly resolveProviderClientSubscriptionId?: (input: {
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly gameId: string;
+    readonly subscriptionInstanceId: string;
+  }) => Promise<string | undefined>;
 }
 
 /** Stable binding of a user-scoped token; the owner verifies the claim against the header value. */
@@ -191,11 +203,45 @@ export function createBookedOperationOwner(options: {
       // without keeping a seat for an operation that can never be executed.
       if (!target) return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
       if (!target.admissible) return { status: 'REJECTED', code: 'GAME_SERVICE_BLOCKED' };
+      // The selected product must have a server-side provider subscription mapping; otherwise the
+      // owner cannot execute the booking and the user has to pick a different product.
+      let providerClientSubscriptionId: string | undefined;
+      if (options.issueActorToken) {
+        providerClientSubscriptionId = await options.boundary.resolveProviderClientSubscriptionId?.(
+          {
+            tenantId: input.actor.tenantId,
+            tenantKey: input.actor.tenantKey,
+            userId: input.actor.userId,
+            sessionId: input.actor.sessionId,
+            gameId: input.actor.gameId,
+            subscriptionInstanceId: input.subscriptionInstanceId,
+          },
+        );
+        if (!providerClientSubscriptionId) {
+          return { status: 'REJECTED', code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED' };
+        }
+      }
       const request: BookedOperationAdmissionRequest = {
         action: 'JOIN_GAME',
         target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
         paymentIntent: 'USE_SUBSCRIPTION',
       };
+      let actorToken: CommercialJoinActorToken | undefined;
+      if (options.issueActorToken) {
+        try {
+          actorToken = await options.issueActorToken({
+            tenantId: input.actor.tenantId,
+            tenantKey: input.actor.tenantKey,
+            userId: input.actor.userId,
+            sessionId: input.actor.sessionId,
+            correlationId: input.correlationId,
+          });
+        } catch {
+          // No credential, no attributable provider write: unresolved, never failed.
+          options.onMetric?.('actor_token_unavailable');
+          return { status: 'UNKNOWN' };
+        }
+      }
       try {
         const actorDelegation =
           await options.boundary.delegationIssuer.issueBookedOperationAdmission({
@@ -216,39 +262,23 @@ export function createBookedOperationOwner(options: {
             correlationId: input.correlationId,
             idempotencyKey: input.idempotencyKey,
             request,
+            ...(actorToken === undefined || providerClientSubscriptionId === undefined
+              ? {}
+              : {
+                  actorToken,
+                  providerClientSubscriptionId,
+                }),
           });
-        let actorToken: CommercialJoinActorToken | undefined;
-        if (options.issueActorToken) {
-          if (!options.boundary.admissionTransport) {
-            // The token cannot be bound to the wire yet (D0 contract pending); keep the observable
-            // state instead of silently dropping the credential.
-            options.onMetric?.('actor_token_unbound');
-          } else {
-            try {
-              actorToken = await options.issueActorToken({
-                tenantId: input.actor.tenantId,
-                tenantKey: input.actor.tenantKey,
-                userId: input.actor.userId,
-                sessionId: input.actor.sessionId,
-                correlationId: input.correlationId,
-              });
-            } catch {
-              // No credential, no attributable provider write: unresolved, never failed.
-              options.onMetric?.('actor_token_unavailable');
-              return { status: 'UNKNOWN' };
-            }
-          }
-        }
         await admissionTransport.admit(request, {
           actorDelegation,
           correlationId: input.correlationId,
           operationId: input.operationId,
-          ...(actorToken
-            ? {
+          ...(actorToken === undefined
+            ? {}
+            : {
                 actorToken,
                 actorTokenSha256: bookedOperationActorTokenBinding(actorToken).actorTokenSha256,
-              }
-            : {}),
+              }),
         });
         options.onMetric?.('execute_pending');
         return { status: 'PENDING' };

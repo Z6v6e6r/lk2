@@ -173,7 +173,8 @@ export type CommercialJoinOwnerOutcome =
   | { readonly status: 'UNKNOWN' }
   | {
       readonly status: 'REJECTED';
-      readonly code: 'GAME_SERVICE_BLOCKED' | 'GAME_PAYMENT_REQUIRED';
+      readonly code:
+        'GAME_SERVICE_BLOCKED' | 'GAME_PAYMENT_REQUIRED' | 'GAME_SUBSCRIPTION_SELECTION_REQUIRED';
     };
 
 export interface CommercialJoinCommandEnvelope {

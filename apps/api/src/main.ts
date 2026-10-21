@@ -68,6 +68,7 @@ import Redis from 'ioredis';
 import { buildApp } from './app.js';
 import { createGameJoinConditionsRuntime } from './games/game-join-conditions-runtime.js';
 import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
+import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
@@ -622,6 +623,21 @@ const gameCommercialJoin = gameRosterRepository
             ownerBoundary: {
               delegationIssuer: subscriptionRuntimeWarnBoundary.delegationIssuer,
               actorContextRepository: subscriptionRuntimeWarnBoundary.actorContextRepository,
+              // The provider subscription mapping is resolved server-side for the selected product;
+              // without it the owner cannot execute and the flow fails closed before dispatch.
+              resolveProviderClientSubscriptionId: async (input) => {
+                const context = await createGameJoinConditionsContextRepository(
+                  pool,
+                  config.VIVA_AUTH_TENANT_KEY ?? 'iSkq6G',
+                ).resolve({
+                  tenantId: input.tenantId,
+                  userId: input.userId,
+                  sessionId: input.sessionId,
+                  gameId: input.gameId,
+                  subscriptionInstanceId: input.subscriptionInstanceId,
+                });
+                return context?.providerSubscriptionId;
+              },
             },
           }
         : {}),
