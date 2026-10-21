@@ -284,6 +284,41 @@ describe('notification User API', () => {
     });
   });
 
+  it('allows Android-only tenants to manage PUSH preferences and quiet hours', async () => {
+    const app = await buildApp({
+      config,
+      logger: createLogger('notification-api-test', 'silent'),
+      pool: fakePool(),
+      notificationRepository: repository({
+        getRuntimeSettings: vi
+          .fn()
+          .mockResolvedValue({
+            inAppEnabled: false,
+            webPushEnabled: false,
+            iosPushEnabled: false,
+            androidPushEnabled: true,
+          }),
+      }),
+      notificationPreferenceRepository: preferenceRepository(),
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/user/api/v1/local-padel/notifications/preferences',
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(
+      response
+        .json()
+        .categories.flatMap(
+          (category: { channels: { channel: string; available: boolean }[] }) => category.channels,
+        )
+        .filter((channel: { channel: string }) => channel.channel === 'PUSH')
+        .every((channel: { available: boolean }) => channel.available),
+    ).toBe(true);
+  });
+
   it('marks a channel unavailable when its tenant runtime gate is off', async () => {
     const app = await buildApp({
       config,

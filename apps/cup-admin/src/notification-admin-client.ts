@@ -1,3 +1,8 @@
+import type {
+  NotificationScenarioInput,
+  NotificationScenarioView,
+  NotificationScenarioRunView,
+} from '@phub/domain';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
 import type {
   AuthenticatedSession,
@@ -230,6 +235,24 @@ export interface AdminCommunityMediaReadGrant {
 }
 
 export interface NotificationAdminClient {
+  listNotificationScenarios(): Promise<{
+    readonly items: readonly NotificationScenarioView[];
+    readonly catalog: readonly {
+      readonly type: string;
+      readonly available: boolean;
+      readonly reason: string | null;
+    }[];
+    readonly runtimeEnabled: boolean;
+  }>;
+  saveNotificationScenario(input: {
+    readonly id?: string;
+    readonly expectedVersion: number;
+    readonly definition: NotificationScenarioInput;
+    readonly idempotencyKey: string;
+  }): Promise<NotificationScenarioView>;
+  listNotificationScenarioRuns(): Promise<{
+    readonly items: readonly NotificationScenarioRunView[];
+  }>;
   restoreSession(): Promise<AuthenticatedSession | null>;
   requestCode(phone: string): Promise<AuthChallenge>;
   verifyCode(challengeId: string, code: string): Promise<AuthenticatedSession>;
@@ -479,6 +502,25 @@ export function createNotificationAdminClient(
     },
     logout() {
       return userClient.revokeSession();
+    },
+    listNotificationScenarios() {
+      return adminRequest('/notifications/scenarios');
+    },
+    saveNotificationScenario(input) {
+      return adminRequest(
+        `/notifications/scenarios${input.id ? `/${input.id}` : ''}`,
+        {
+          method: input.id ? 'PUT' : 'POST',
+          body: JSON.stringify({
+            expectedVersion: input.expectedVersion,
+            definition: input.definition,
+          }),
+        },
+        input.idempotencyKey,
+      );
+    },
+    listNotificationScenarioRuns() {
+      return adminRequest('/notifications/scenarios/runs');
     },
     getCapabilities() {
       return adminRequest<AdminNotificationCapabilities>('/notifications/capabilities');

@@ -51,7 +51,9 @@ function preferenceView(input: {
       enabled: preference?.enabled ?? true,
       timezone: preference?.timezone ?? NOTIFICATION_PREFERENCE_DEFAULT_TIMEZONE,
       available:
-        rule.channel === 'IN_APP' ? input.runtime.inAppEnabled : input.runtime.webPushEnabled,
+        rule.channel === 'IN_APP'
+          ? input.runtime.inAppEnabled
+          : input.runtime.webPushEnabled || input.runtime.androidPushEnabled,
       ...(preference?.quietFrom && preference.quietUntil
         ? { quietFrom: preference.quietFrom, quietUntil: preference.quietUntil }
         : {}),
@@ -129,7 +131,8 @@ async function notificationRuntime(
   tenantId: string,
 ): Promise<NotificationRuntimeSettings | undefined> {
   const settings = await repository.getRuntimeSettings(tenantId);
-  if (settings.inAppEnabled || settings.webPushEnabled) return settings;
+  if (settings.inAppEnabled || settings.webPushEnabled || settings.androidPushEnabled)
+    return settings;
   sendApiError(request, reply, 404, 'NOTIFICATIONS_DISABLED', 'Раздел оповещений не включён.');
   return undefined;
 }

@@ -457,6 +457,8 @@ const environmentSchema = z.object({
     .min(1_000)
     .max(3_600_000)
     .default(5_000),
+  // Notifications owner: enable after scenario migration/rehearsal; review after first pilot.
+  NOTIFICATION_SCENARIOS_ENABLED: booleanFromEnvironment,
   WEB_PUSH_ENABLED: booleanFromEnvironment,
   WEB_PUSH_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
   WEB_PUSH_APP_ID: z.string().min(1).max(300).default('padlhub-web'),

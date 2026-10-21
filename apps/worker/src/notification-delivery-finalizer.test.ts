@@ -97,6 +97,37 @@ describe('notification delivery finalizer', () => {
     expect(sql).not.toContain('select state');
   });
 
+  it('keeps a deferred scenario invisible to old workers after an open circuit', async () => {
+    const { pool, queries } = fakePool(1);
+    expect(
+      await deferNotificationDeliveryWithoutAttempt({
+        pool,
+        job: { ...job, scenarioDelivery: true },
+        retryAfterMs: 30_000,
+        errorCode: 'WEB_PUSH_CIRCUIT_OPEN',
+      }),
+    ).toBe('retry');
+    const sql = queries.find((entry) => entry.text.includes("set state = 'PENDING'"))?.text;
+    expect(sql).toContain("next_attempt_at = 'infinity'::timestamptz, scenario_available_at");
+    expect(sql).toContain('attempt_count = $3 - 1');
+  });
+  it('keeps a retryable scenario invisible to old workers after a provider error', async () => {
+    const { pool, queries } = fakePool(1);
+    expect(
+      await finalizeNotificationDelivery({
+        pool,
+        job: { ...job, scenarioDelivery: true },
+        transport: 'WEB_PUSH',
+        platform: 'WEB',
+        result: { outcome: 'retryable_failure', errorCode: 'WEB_PUSH_TIMEOUT' },
+        maxAttempts: 5,
+        retryBaseMs: 1000,
+      }),
+    ).toBe('retry');
+    expect(queries.find((entry) => entry.text.includes("set state = 'PENDING'"))?.text).toContain(
+      "next_attempt_at = 'infinity'::timestamptz, scenario_available_at",
+    );
+  });
   it('does not decrement a circuit-suppressed attempt after a newer claim fenced it out', async () => {
     const { pool, queries } = fakePool(0);
 

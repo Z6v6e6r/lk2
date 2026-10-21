@@ -55,6 +55,11 @@ export type DatabaseRoleBoundaryScope = 'core' | 'media';
 export type PostMigrationRuntimeTableSnapshot = {
   readonly schemaName: 'notifications' | 'messaging' | 'integration';
   readonly relationName:
+    | 'scenarios'
+    | 'scenario_versions'
+    | 'scenario_commands'
+    | 'scenario_contexts'
+    | 'scenario_runs'
     | 'booking_notification_projection_fences'
     | 'game_notification_projection_fences'
     | 'booking_reminder_schedules'
@@ -68,6 +73,11 @@ export type PostMigrationRuntimeTableSnapshot = {
     | 'community_logo_observation_watermarks'
     | 'media_cutover_state';
   readonly policyName:
+    | 'scenarios_tenant'
+    | 'scenario_versions_tenant'
+    | 'scenario_commands_tenant'
+    | 'scenario_contexts_tenant'
+    | 'scenario_runs_tenant'
     | 'booking_notification_projection_fences_tenant_isolation'
     | 'game_notification_projection_fences_tenant_isolation'
     | 'booking_reminder_schedules_tenant_isolation'
@@ -278,6 +288,36 @@ export function assertDatabaseRoleBoundary(
 }
 
 const expectedCorePostMigrationTables = [
+  {
+    schemaName: 'notifications',
+    relationName: 'scenarios',
+    policyName: 'scenarios_tenant',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'notifications',
+    relationName: 'scenario_versions',
+    policyName: 'scenario_versions_tenant',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'notifications',
+    relationName: 'scenario_commands',
+    policyName: 'scenario_commands_tenant',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'notifications',
+    relationName: 'scenario_contexts',
+    policyName: 'scenario_contexts_tenant',
+    requiresTenantRls: true,
+  },
+  {
+    schemaName: 'notifications',
+    relationName: 'scenario_runs',
+    policyName: 'scenario_runs_tenant',
+    requiresTenantRls: true,
+  },
   {
     schemaName: 'notifications',
     relationName: 'booking_notification_projection_fences',
@@ -1087,6 +1127,11 @@ async function inspectPostMigrationRuntimeTables(
     }>(
       `with expected(schema_name, relation_name, policy_name, requires_tenant_rls) as (
          values
+           ('notifications'::text, 'scenarios'::text, 'scenarios_tenant'::text, true),
+           ('notifications'::text, 'scenario_versions'::text, 'scenario_versions_tenant'::text, true),
+           ('notifications'::text, 'scenario_commands'::text, 'scenario_commands_tenant'::text, true),
+           ('notifications'::text, 'scenario_contexts'::text, 'scenario_contexts_tenant'::text, true),
+           ('notifications'::text, 'scenario_runs'::text, 'scenario_runs_tenant'::text, true),
            (
              'notifications'::text,
              'booking_notification_projection_fences'::text,

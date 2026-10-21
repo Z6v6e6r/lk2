@@ -88,3 +88,5 @@ export type {
   GameJoinConditionsContextInput,
   GameJoinConditionsContext,
 } from './game-join-conditions-context-repository.js';
+
+export * from './notification-scenario-repository.js';

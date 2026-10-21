@@ -39,6 +39,11 @@ const CATEGORY_SETTINGS: Readonly<Record<string, NotificationCategorySettings>> 
     description: 'Личные диалоги и чаты игр',
     icon: 'chat',
   },
+  GAME_RECOMMENDATION: {
+    title: 'Приглашения в игры',
+    description: 'Подходящие публичные игры друзей',
+    icon: 'game',
+  },
   GAME: {
     title: 'Игры',
     description: 'Участие, отмена игры, изменения состава',

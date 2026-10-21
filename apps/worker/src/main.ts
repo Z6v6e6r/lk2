@@ -57,6 +57,8 @@ import { runGiftCertificateSandboxDeliveryBatch } from './gift-certificate-deliv
 import { expireCommunityDirectInviteBatch } from './community-direct-invite-expiry.js';
 import { registerGiftCertificateIssuerConsumer } from './gift-certificate-issuer-consumer.js';
 import { registerLocationHomeProjectorConsumer } from './location-home-projector-consumer.js';
+import { registerNotificationScenarioConsumer } from './notification-scenario-consumer.js';
+import { runNotificationScenarioBatch } from './notification-scenarios.js';
 import { registerNotificationProjectorConsumer } from './notification-projector-consumer.js';
 import { runBookingReminderSchedulerBatch } from './booking-reminder-scheduler.js';
 import {
@@ -438,6 +440,8 @@ await registerNotificationProjectorConsumer({
     ? { androidPush: { appId: config.FCM_APP_ID, environment: config.FCM_ENVIRONMENT } }
     : {}),
 });
+if (config.NOTIFICATION_SCENARIOS_ENABLED)
+  await registerNotificationScenarioConsumer({ channel: consumerChannel, pool, logger });
 if (giftCertificateRuntime) {
   await registerGiftCertificateIssuerConsumer({
     channel: consumerChannel,
@@ -1042,6 +1046,46 @@ const runBookingReminderCycle = async (): Promise<void> => {
   }
 };
 
+let scenarioTenantOffset = 0;
+const runScenarioCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.NOTIFICATION_SCENARIOS_ENABLED) return;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active=true order by id',
+    );
+    const count = tenants.rows.length;
+    for (let index = 0; index < count && !shuttingDown; index++) {
+      const tenantId = tenants.rows[(scenarioTenantOffset + index) % count]!.id;
+      try {
+        await runNotificationScenarioBatch({
+          pool,
+          tenantId,
+          ...(webPushRuntime
+            ? {
+                webPush: {
+                  appId: config.WEB_PUSH_APP_ID,
+                  environment: config.WEB_PUSH_ENVIRONMENT,
+                },
+              }
+            : {}),
+          ...(activeFcmRuntime
+            ? { androidPush: { appId: config.FCM_APP_ID, environment: config.FCM_ENVIRONMENT } }
+            : {}),
+        });
+      } catch {
+        logger.error(
+          { tenantId, code: 'SCENARIO_CYCLE_FAILED' },
+          'notification scenario tenant cycle failed',
+        );
+      }
+    }
+    scenarioTenantOffset = count ? (scenarioTenantOffset + 1) % count : 0;
+  } catch {
+    logger.error({ code: 'SCENARIO_CYCLE_FAILED' }, 'notification scenario cycle failed');
+  } finally {
+    if (!shuttingDown) setTimeout(() => void runScenarioCycle(), 15_000);
+  }
+};
 const runWebPushCycle = async (): Promise<void> => {
   if (shuttingDown || !webPushRuntime) return;
   const startedAt = Date.now();
@@ -1060,6 +1104,7 @@ const runWebPushCycle = async (): Promise<void> => {
           tenantId,
           appId: config.WEB_PUSH_APP_ID,
           environment: config.WEB_PUSH_ENVIRONMENT,
+          scenarioPolicyEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
           cipher: webPushRuntime.cipher,
           adapter: webPushRuntime.adapter,
           maxAttempts: config.WEB_PUSH_MAX_ATTEMPTS,
@@ -1121,6 +1166,7 @@ const runFcmCycle = async (): Promise<void> => {
             tenantId,
             appId: config.FCM_APP_ID,
             environment: config.FCM_ENVIRONMENT,
+            scenarioPolicyEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
             cipher: activeFcmRuntime.cipher,
             adapter: activeFcmRuntime.adapter,
             maxAttempts: config.FCM_MAX_ATTEMPTS,
@@ -1356,6 +1402,7 @@ process.once('SIGTERM', () => void shutdown('SIGTERM'));
 process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
 void runBookingReminderCycle();
+void runScenarioCycle();
 if (telemetry) void runOperationalMetricsCycle();
 void runProfilePhotoMaintenance();
 void runCommunitySyncCycle();

@@ -128,6 +128,7 @@ async function readPreferences(
 
 export function createNotificationPreferenceRepository(
   pool: Pool,
+  options: { readonly scenariosEnabled?: boolean } = {},
 ): NotificationPreferenceRepository {
   return {
     listConfigurableChannels(tenantId) {
@@ -150,7 +151,17 @@ export function createNotificationPreferenceRepository(
                   and t.active = true
                   and channel.value in ('IN_APP', 'PUSH')
                union
-               select 'ADMIN_MESSAGE' as category, channel.value as channel
+${
+  options.scenariosEnabled
+    ? `               select case when s.definition->>'trigger'='FRIEND_GAME_PUBLISHED' then 'GAME_RECOMMENDATION' else 'BOOKING' end as category,
+                      case when c.value='IN_APP' then 'IN_APP' else 'PUSH' end as channel
+                 from notifications.scenarios s
+                 cross join lateral jsonb_array_elements_text(s.definition->'channels') c(value)
+                where s.tenant_id=$1 and s.active=true
+               union
+`
+    : ''
+}               select 'ADMIN_MESSAGE' as category, channel.value as channel
                  from unnest(array['IN_APP', 'PUSH']::text[]) as channel(value)
              ) configurable
             order by category, channel`,

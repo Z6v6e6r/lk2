@@ -3,6 +3,7 @@ import { RedisPasswordLoginLimiter } from './auth/password-login-limiter.js';
 import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
 import {
   createAdminNotificationRepository,
+  createNotificationScenarioRepository,
   createActivityHistoryRepository,
   createBookingPreferencesRepository,
   createBookingScreenMappingRepository,
@@ -658,7 +659,9 @@ const app = await buildApp({
     : {}),
   clientRoutingPlanRepository,
   notificationRepository: createNotificationInboxRepository(pool),
-  notificationPreferenceRepository: createNotificationPreferenceRepository(pool),
+  notificationPreferenceRepository: createNotificationPreferenceRepository(pool, {
+    scenariosEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
+  }),
   messagingRepository: createMessagingRepository(pool),
   messagingModerationRepository: createMessagingModerationRepository(pool),
   ...(chatMediaObjectStore
@@ -670,6 +673,7 @@ const app = await buildApp({
   realtimeTicketIssuer: new RedisRealtimeTicketIssuer(redis, config),
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
   adminNotificationRepository: createAdminNotificationRepository(pool),
+  notificationScenarioRepository: createNotificationScenarioRepository(pool),
   locationRepository: createLocationRepository(pool),
   ...(stationSupportProvider ? { stationSupportProvider } : {}),
   ...(stationSupportRepository ? { stationSupportRepository } : {}),

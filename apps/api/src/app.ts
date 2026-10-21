@@ -83,6 +83,9 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 
 import { registerAuthRoutes } from './auth/auth-routes.js';
+import { registerNotificationScenarioRoutes } from './admin/notification-scenario-routes.js';
+import type { NotificationScenarioRepository } from '@phub/database';
+
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
 import { registerLevelEligibilityAdminRoutes } from './admin/level-eligibility-admin-routes.js';
@@ -292,6 +295,7 @@ export interface BuildAppOptions {
   readonly notificationEndpointCipher?: NotificationEndpointCipher;
   /** Signs the per-delivery receipt tokens the service worker reports displays and clicks with. */
   readonly notificationReceiptSecret?: string;
+  readonly notificationScenarioRepository?: NotificationScenarioRepository;
   readonly adminNotificationRepository?: AdminNotificationRepository;
   readonly messagingRepository?: MessagingRepository;
   readonly messagingMediaRepository?: MessagingMediaRepository;
@@ -1306,6 +1310,19 @@ export async function buildApp(options: BuildAppOptions) {
     },
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerNotificationScenarioRoutes(app as unknown as FastifyInstance, {
+    ...(options.notificationScenarioRepository
+      ? { repository: options.notificationScenarioRepository }
+      : {}),
+    runtimeEnabled: options.config.NOTIFICATION_SCENARIOS_ENABLED,
+    authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    commandHandlers: [
+      authenticateAdmin,
+      authorizeNotificationAdmin,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
   });
   registerAdminNotificationRoutes(app as unknown as FastifyInstance, {
     ...(options.adminNotificationRepository

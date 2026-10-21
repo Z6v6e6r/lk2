@@ -212,7 +212,45 @@ const userBlockCommands: PostMigrationRuntimeTableSnapshot = {
   ],
 };
 
+const scenarioTables: readonly PostMigrationRuntimeTableSnapshot[] = [
+  {
+    ...reminderSchedule,
+    schemaName: 'notifications',
+    relationName: 'scenarios',
+    policyName: 'scenarios_tenant',
+    policies: [{ ...reminderSchedule.policies[0]!, name: 'scenarios_tenant' }],
+  },
+  {
+    ...reminderSchedule,
+    schemaName: 'notifications',
+    relationName: 'scenario_versions',
+    policyName: 'scenario_versions_tenant',
+    policies: [{ ...reminderSchedule.policies[0]!, name: 'scenario_versions_tenant' }],
+  },
+  {
+    ...reminderSchedule,
+    schemaName: 'notifications',
+    relationName: 'scenario_commands',
+    policyName: 'scenario_commands_tenant',
+    policies: [{ ...reminderSchedule.policies[0]!, name: 'scenario_commands_tenant' }],
+  },
+  {
+    ...reminderSchedule,
+    schemaName: 'notifications',
+    relationName: 'scenario_contexts',
+    policyName: 'scenario_contexts_tenant',
+    policies: [{ ...reminderSchedule.policies[0]!, name: 'scenario_contexts_tenant' }],
+  },
+  {
+    ...reminderSchedule,
+    schemaName: 'notifications',
+    relationName: 'scenario_runs',
+    policyName: 'scenario_runs_tenant',
+    policies: [{ ...reminderSchedule.policies[0]!, name: 'scenario_runs_tenant' }],
+  },
+];
 const runtimeTables: readonly PostMigrationRuntimeTableSnapshot[] = [
+  ...scenarioTables,
   projectionFence,
   gameProjectionFence,
   reminderSchedule,
@@ -696,6 +734,26 @@ describe('database role boundary', () => {
       hasExactTenantIsolationPolicy('booking_reminder_schedules_tenant_isolation', [policy]),
     ).toBe(false);
   });
+
+  it.each(scenarioTables.map((table) => table.relationName))(
+    'checks the new %s table independently',
+    (relationName) => {
+      expect(() =>
+        assertPostMigrationRuntimeBoundary(
+          runtimeTables.map((table) =>
+            table.relationName === relationName ? { ...table, exists: false } : table,
+          ),
+        ),
+      ).toThrow('POST_MIGRATION_RUNTIME_TABLE_MISSING');
+      expect(() =>
+        assertPostMigrationRuntimeBoundary(
+          runtimeTables.map((table) =>
+            table.relationName === relationName ? { ...table, forceRls: false } : table,
+          ),
+        ),
+      ).toThrow('POST_MIGRATION_RUNTIME_TABLE_RLS_INVALID');
+    },
+  );
 
   it('rejects an extra policy even when the canonical policy is present', () => {
     expect(

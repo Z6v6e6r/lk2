@@ -22,6 +22,7 @@ export interface ClaimedNotificationDelivery {
   readonly endpointId: string;
   readonly attemptNo: number;
   readonly startedAt: string;
+  readonly scenarioDelivery?: boolean;
 }
 
 export type NotificationDeliveryFinalization = 'sent' | 'retry' | 'dead' | 'stale';
@@ -40,7 +41,7 @@ export async function deferNotificationDeliveryWithoutAttempt(options: {
       `update notifications.deliveries
           set state = 'PENDING',
               attempt_count = $3 - 1,
-              next_attempt_at = now() + ($4::integer * interval '1 millisecond'),
+              ${options.job.scenarioDelivery ? "next_attempt_at = 'infinity'::timestamptz, scenario_available_at" : 'next_attempt_at'} = now() + ($4::integer * interval '1 millisecond'),
               lease_expires_at = null,
               updated_at = now(),
               last_error_code = $5
@@ -185,7 +186,7 @@ export async function finalizeNotificationDelivery(options: {
         const updated = await client.query(
           `update notifications.deliveries
               set state = 'PENDING',
-                  next_attempt_at = now() + ($4::integer * interval '1 millisecond'),
+                  ${options.job.scenarioDelivery ? "next_attempt_at = 'infinity'::timestamptz, scenario_available_at" : 'next_attempt_at'} = now() + ($4::integer * interval '1 millisecond'),
                   lease_expires_at = null,
                   updated_at = now(),
                   last_error_code = $5
