@@ -75,6 +75,7 @@ import {
   API_WORKER_CI_READER_PATCH,
   API_WORKER_CONTROLLER_PROMOTION_PATCH,
   API_WORKER_ANDROID_CHAT_TEST_PATCH,
+  sameApiWorkerDeploymentIdentity,
   validateApiWorkerLedger,
   validateApiWorkerReceipt,
   assertPlan,
@@ -88,6 +89,7 @@ export {
   API_WORKER_CI_READER_PATCH,
   API_WORKER_CONTROLLER_PROMOTION_PATCH,
   API_WORKER_ANDROID_CHAT_TEST_PATCH,
+  sameApiWorkerDeploymentIdentity,
   validateApiWorkerLedger,
   validateApiWorkerReceipt,
   validateInstalledApiWorkerEvidence,
@@ -478,7 +480,7 @@ async function probe(service) {
   const value = parseStrictJson(await response.text());
   if (response.status !== 200 || value.status !== 'ready') fail('READINESS');
 }
-async function waitService(service, expected) {
+async function waitService(service, expected, profile) {
   for (let i = 0; i < 45; i++) {
     const value = inspectService(service);
     if (
@@ -486,7 +488,7 @@ async function waitService(service, expected) {
       value.identity.revision !== expected.revision ||
       value.identity.releaseId !== expected.releaseId ||
       value.identity.imageId !== localImageId(expected.image) ||
-      value.identity.restarts !== 0
+      (profile !== 'beta' && value.identity.restarts !== 0)
     )
       fail('RUNTIME_IDENTITY');
     if (value.status === 'running' && value.health === 'healthy') {
@@ -725,6 +727,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       parseStrictJson(opBytes),
       mode === 'deploy' ? Date.now() : undefined,
     );
+  const profile = op.profile ?? 'production';
   const config = parseStrictJson(read('/etc/phub/timeweb-beta-standard-delivery.json').toString());
   if (
     config.schema !== 1 ||
@@ -794,7 +797,11 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     for (const service of ['api', 'worker']) {
       const actual = inspectService(service);
       if (
-        !same(actual.identity, op[service === 'api' ? 'expectedApi' : 'expectedWorker']) ||
+        !sameApiWorkerDeploymentIdentity(
+          actual.identity,
+          op[service === 'api' ? 'expectedApi' : 'expectedWorker'],
+          profile,
+        ) ||
         actual.status !== 'running' ||
         actual.health !== 'healthy'
       )
@@ -1086,7 +1093,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       known(service);
       if (!same(secretSet(RUNTIME), plan.candidateSecrets)) fail('SECRET_DRIFT');
       compose('candidate', service);
-      const active = await waitService(service, plan.candidate[service]);
+      const active = await waitService(service, plan.candidate[service], profile);
       durable(
         `${transaction}/candidate-${service}.identity.json`,
         `${JSON.stringify(active.identity)}\n`,
@@ -1101,22 +1108,22 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       if (!same(secretSet(RUNTIME), plan.previousSecrets)) fail('SECRET_RESTORE');
       imagePresent(plan.previous[service].image, plan.previous[service].revision);
       compose('previous', service);
-      await waitService(service, plan.previous[service]);
+      await waitService(service, plan.previous[service], profile);
     },
     attestPrevious: async () => {
       immutableAttest();
       if (!['PREPARING', 'PREPARED', 'ABORTED'].includes(currentPhase)) fixedAttest();
       if (!same(secretSet(RUNTIME), plan.previousSecrets)) fail('SECRET_RESTORE');
       for (const service of ['api', 'worker']) {
-        const actual = await waitService(service, plan.previous[service]);
+        const actual = await waitService(service, plan.previous[service], profile);
         if (
           ['PREPARING', 'PREPARED', 'ABORTED'].includes(currentPhase) &&
-          !same(actual.identity, plan.previous[service])
+          !sameApiWorkerDeploymentIdentity(actual.identity, plan.previous[service], profile)
         )
           fail('PREIMAGE');
       }
       const worker = inspectService('worker');
-      if (!same(worker.identity, plan.previous.worker))
+      if (!sameApiWorkerDeploymentIdentity(worker.identity, plan.previous.worker, profile))
         validateApiWorkerMount(worker.mounts, '/dev/null');
     },
     attestCandidate: async () => {
@@ -1124,11 +1131,12 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       await database();
       if (!same(secretSet(RUNTIME), plan.candidateSecrets)) fail('SECRET_DRIFT');
       for (const service of ['api', 'worker']) {
-        const actual = await waitService(service, plan.candidate[service]);
+        const actual = await waitService(service, plan.candidate[service], profile);
         if (
-          !same(
+          !sameApiWorkerDeploymentIdentity(
             actual.identity,
             parseStrictJson(read(`${transaction}/candidate-${service}.identity.json`)),
+            profile,
           )
         )
           fail('OBSERVATION_IDENTITY');

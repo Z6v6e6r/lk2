@@ -42,8 +42,8 @@ API_WORKER_CI_DOWNLOAD_PATCH = {
     'scripts/pull-request-ci-workflow.test.ts': {'path': 'scripts/pull-request-ci-workflow.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'caf2f124bbc58e4225feca1ad38100ed07991787', 'newOid': 'e2abfd6adac5d742b38ea16e8cb3d1dbb90c0982'},
 }
 API_WORKER_CI_READER_PATCH = {
-    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': '8c9d94b6462aa9a770d95ae66ef717b69d4d1c83'},
-    'scripts/timeweb-api-worker-upgrade.d.ts': {'path': 'scripts/timeweb-api-worker-upgrade.d.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '151a183b17349c57a4d23cd58b03dd33be0e1172', 'newOid': 'cb7711e1dd145acb9b1beefc74e3d643ecbb5d60'},
+    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': '26f9d14fb5261883737aa155bd6c9a504bce93e3'},
+    'scripts/timeweb-api-worker-upgrade.d.ts': {'path': 'scripts/timeweb-api-worker-upgrade.d.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '151a183b17349c57a4d23cd58b03dd33be0e1172', 'newOid': '623b76b0381e1ebef70b5731674a682f72e2b237'},
     'scripts/timeweb-api-worker-upgrade.test.ts': {'path': 'scripts/timeweb-api-worker-upgrade.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'e446cc167a63ee54e9352dc38589e414f1aa7247', 'newOid': '1e9e3e958b39ad80a6f68c0f51efef45308cfa86'},
     'scripts/timeweb-api-worker-adapter.test.ts': {'path': 'scripts/timeweb-api-worker-adapter.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'dba09b8571260d1cb817971ce6a15a42a70f1032', 'newOid': 'e858abd81817cef9d6d62eca98b965f7bbce0c6e'},
     'scripts/timeweb-api-web-upgrade.js': {'path': 'scripts/timeweb-api-web-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'c3da47a8fa4c95d06081d1a189c28b2ec8afa55e', 'newOid': 'f9d175bff0142075c68af9e8fc3164a08d36b35b'},
@@ -1860,21 +1860,32 @@ def promotion_expected(op):
     return {'controllerPromotionSha256': op['controllerPromotion']['sha256']} if 'controllerPromotion' in op else {}
 
 
+def same_api_worker_identity(actual, expected, profile):
+    # The beta profile binds immutable image identities only. Restarts change the container id,
+    # restart counter and StartedAt; they must not invalidate a still-valid release proof.
+    if profile != 'beta':
+        return actual == expected
+    return all(actual.get(key) == expected.get(key) for key in ('image', 'imageId', 'releaseId', 'revision'))
+
+
 def validate_operation(value, now, file_sha, allow_expired=False):
     common = ['schema', 'target', 'toolCommit', 'toolFileSha256', 'controllerSha',
               'toolProofSha256', 'toolInstallationSha256', 'controllerTree',
               'controllerConfigSha256', 'expectedBoundarySha256', 'expectedApi',
               'expectedPostgres', 'expiresAt', 'confirmation']
     schema = value.get('schema') if isinstance(value, dict) else None
+    profile = value.get('profile', 'production')
+    need(profile in ('beta', 'production'), 'PROFILE')
+    optional = ['profile'] if 'profile' in value else []
     if isinstance(value, dict) and 'controllerPromotion' in value:
         need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
         common += ['controllerPromotion']
     if schema == 'PHUB_TIMEWEB_BACKUP_OPERATION_V1':
-        exact(value, common + ['releaseId'])
+        exact(value, common + ['releaseId'] + optional)
         mode = 'web'
         release_id = value['releaseId']
     elif schema in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA):
-        exact(value, common + ['releaseId', 'controllerSourceCiRunId', 'expectedLedgerSha256'])
+        exact(value, common + ['releaseId', 'controllerSourceCiRunId', 'expectedLedgerSha256'] + optional)
         mode = 'web'
         release_id = value['releaseId']
         need(re.fullmatch(r'[1-9][0-9]*', value['controllerSourceCiRunId'] or '')
@@ -1883,7 +1894,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and value['toolCommit'] == value['controllerSha'], 'DISK_PRE99_OPERATION')
     elif schema in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA, NS_POST_SCHEMA):
         extra=['candidateReleaseId', 'expectedLedgerSha256','controllerSourceCiRunId','migrationPlanSha256','migrationSuccessSha256']
-        exact(value, common + extra)
+        exact(value, common + extra + optional)
         mode = 'api-worker'
         release_id = value['candidateReleaseId']
         need(release_id == API_WORKER_CANDIDATE and value['expectedLedgerSha256'] == API_WORKER_LEDGER_SHA256,
@@ -1909,9 +1920,10 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         exact(value[key], fields)
         row = value[key]
         need(HASH.fullmatch(row['id'] or '') and re.fullmatch(r'sha256:[a-f0-9]{64}', row['imageId'] or '')
-             and type(row['restarts']) is int and row['restarts'] == 0 and isinstance(row['startedAt'], str), 'BASELINE')
+             and type(row['restarts']) is int and (row['restarts'] == 0 or profile == 'beta')
+             and isinstance(row['startedAt'], str), 'BASELINE')
     api, pg = value['expectedApi'], value['expectedPostgres']
-    need(api == API_BASELINE, 'API_BASELINE')
+    need(same_api_worker_identity(api, API_BASELINE, profile), 'API_BASELINE')
     need(pg == PG_BASELINE, 'POSTGRES_BASELINE')
     expires = utc(value['expiresAt'])
     need(allow_expired or 1200 <= expires - now <= 3600, 'EXPIRY')

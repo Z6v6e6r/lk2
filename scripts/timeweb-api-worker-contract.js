@@ -105,7 +105,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: '6420f1d4b5d5c905563d23921c61ce68be2ca28b',
-    newOid: '8c9d94b6462aa9a770d95ae66ef717b69d4d1c83',
+    newOid: '26f9d14fb5261883737aa155bd6c9a504bce93e3',
   }),
   Object.freeze({
     path: 'scripts/timeweb-api-worker-upgrade.d.ts',
@@ -113,7 +113,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: '151a183b17349c57a4d23cd58b03dd33be0e1172',
-    newOid: 'cb7711e1dd145acb9b1beefc74e3d643ecbb5d60',
+    newOid: '623b76b0381e1ebef70b5731674a682f72e2b237',
   }),
   Object.freeze({
     path: 'scripts/timeweb-api-worker-upgrade.test.ts',
@@ -432,6 +432,13 @@ export function exact(v, keys) {
   )
     fail('FIELDS');
 }
+export function sameApiWorkerDeploymentIdentity(actual, expected, profile = 'production') {
+  if (!actual || !expected) return false;
+  if (profile === 'production') return same(actual, expected);
+  return ['image', 'imageId', 'releaseId', 'revision'].every(
+    (key) => actual[key] === expected[key],
+  );
+}
 export function validateApiWorkerOperation(op, now) {
   exact(op, [
     'schema',
@@ -439,6 +446,7 @@ export function validateApiWorkerOperation(op, now) {
     'controllerSha',
     'controllerSourceCiRunId',
     ...(op?.controllerPromotion === undefined ? [] : ['controllerPromotion']),
+    ...(op?.profile === undefined ? [] : ['profile']),
     'candidateSha',
     'candidateTree',
     'sourceCiRunId',
@@ -457,6 +465,7 @@ export function validateApiWorkerOperation(op, now) {
   exact(op.target, ['hostname', 'serverId', 'projectId']);
   if (
     op.schema !== 'PHUB_TIMEWEB_API_WORKER_OPERATION_V1' ||
+    (op.profile !== undefined && op.profile !== 'beta' && op.profile !== 'production') ||
     !same(op.target, { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 }) ||
     !SHA.test(op.controllerSha ?? '') ||
     !/^[1-9][0-9]*$/.test(op.controllerSourceCiRunId ?? '') ||

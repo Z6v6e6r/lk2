@@ -1977,6 +1977,16 @@ class ControllerPromotionBindingTests(unittest.TestCase):
             m.validate_operation(op, NOW, '2'*64)
 
 
+
+class ProfileIdentity(unittest.TestCase):
+    def test_beta_ignores_restart_posture_but_not_image(self):
+        restarted = dict(API, id='f' * 64, restarts=2, startedAt='2026-10-21T04:00:00.000000000Z')
+        self.assertFalse(m.same_api_worker_identity(restarted, API, 'production'))
+        self.assertTrue(m.same_api_worker_identity(restarted, API, 'beta'))
+        for key in ('image', 'imageId', 'releaseId', 'revision'):
+            changed = dict(API, **{key: 'changed'})
+            self.assertFalse(m.same_api_worker_identity(changed, API, 'beta'))
+
 if __name__=='__main__':
     if len(sys.argv)==2 and sys.argv[1]=='--emit-namespace-fixture':
         print(json.dumps(namespace_fixture()))

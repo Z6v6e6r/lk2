@@ -118,3 +118,9 @@ export function runManualApiWorkerUpgrade(
   mode: string,
   requestPath: string,
 ): Promise<{ status: string; receipt: string }>;
+
+export function sameApiWorkerDeploymentIdentity(
+  actual: unknown,
+  expected: unknown,
+  profile?: 'beta' | 'production',
+): boolean;
