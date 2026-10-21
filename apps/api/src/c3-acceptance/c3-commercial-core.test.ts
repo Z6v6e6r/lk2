@@ -177,6 +177,57 @@ c3DatabaseDescribe(`C3 commercial JOIN acceptance (${C3_FIXTURE_VERSION})`, () =
     expect(owner.calls.execute).toBe(0);
   });
 
+  it('P0-COMPOSE: absent commercial composition keeps the real paid JOIN fail-closed', async () => {
+    const tenant = await freshTenant('p0compose');
+    const game = await paidGame(tenant, 'SPLIT');
+    const subscriptionInstanceId = randomUUID();
+    const conditions = createConditionsDouble({
+      revision: game.revision,
+      legacyGameId: game.legacyGameId,
+      startsAt: game.startsAt,
+      subscriptionInstanceId,
+      quote: {
+        status: 'AVAILABLE',
+        basePriceMinor: SYNTHETIC_BASE_PRICE_MINOR,
+        amountMinor: 0,
+        freeMinutes: 90,
+        paidMinutes: 0,
+        reasonCode: null,
+      },
+    });
+    const owner = createOwnerDouble();
+    // `commercialJoin: false` reproduces the shipped `main.ts` composition on candidate SHA:
+    // the port is absent, so the previous fail-closed guard must stay in force.
+    const { app } = await compose({ tenant, conditions, owner, commercialJoin: false });
+    const token = await c3AccessToken({
+      tenantId: tenant.tenantId,
+      userId: tenant.playerA.userId,
+      sessionId: tenant.playerA.sessionId,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/${tenant.tenantKey}/games/${game.gameId}/join`,
+      headers: c3Headers({ token, idempotencyKey: c3IdempotencyKey('p0compose') }),
+      payload: {
+        expectedRevision: game.revision,
+        subscriptionInstanceId,
+        priceConsent: { amountMinor: 0, currency: 'RUB' },
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().code).toBe('GAME_PAYMENT_REQUIRED');
+    const saved = await readSavedState(pool, { tenantId: tenant.tenantId, gameId: game.gameId });
+    expect(saved.reservations).toBe(0);
+    expect(saved.paymentSnapshots).toBe(0);
+    expect(saved.commandRows).toBe(0);
+    expect(saved.participations).toBe(0);
+    expect(owner.calls.execute).toBe(0);
+    expect(conditions.calls.resolveSelection).toBe(0);
+    expect(conditions.calls.readPreview).toBe(0);
+  });
+
   it('A2a: subscription JOIN without surcharge reserves a seat and calls the owner exactly once', async () => {
     const tenant = await freshTenant('a2a');
     const game = await paidGame(tenant, 'SPLIT');
