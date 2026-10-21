@@ -22,6 +22,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { API_WORKER_MIGRATION_BRIDGE as bridge } from './timeweb-api-worker-migration.js';
+import { evaluateCapacity } from './timeweb-restore-capacity.js';
 
 export const PRE_LEDGER = '025c5ee129bd583131192439d991f0dbbba4fbd19c31c1215bca5adcee9ce17c'; // gitleaks:allow
 export const POST_LEDGER = 'b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85'; // gitleaks:allow
@@ -39,10 +40,10 @@ export const FCM_KEYS = [
   'FCM_ENVIRONMENT',
   'FCM_CREDENTIAL_FILE',
 ] as const;
-const GIB = 1024 ** 3;
-const MIB = 1024 ** 2;
 
 export type Profile = 'beta' | 'production';
+export { evaluateCapacity };
+
 export type Phase = 'pre-migration' | 'post-migration' | 'rollout';
 export type CheckStatus = 'GO' | 'WARN' | 'BLOCKER' | 'EVIDENCE';
 
@@ -76,15 +77,6 @@ export interface PreflightDeps {
   readdir(path: string): string[];
   stat(path: string): Stats;
   statvfs(path: string): StatsFs;
-}
-
-export interface CapacityVerdict {
-  readonly databaseBytes: number;
-  readonly availableMemory: number;
-  readonly freeDisk: number;
-  readonly tmpfsBytes: number;
-  readonly model: 'namespace' | 'disk' | 'none';
-  readonly detail: string;
 }
 
 export const defaultDeps: PreflightDeps = {
@@ -121,28 +113,6 @@ export function canonicalLedgerDigest(rows: readonly (readonly [string, string])
 
 export function expectedLedger(phase: Phase): string {
   return phase === 'pre-migration' ? PRE_LEDGER : POST_LEDGER;
-}
-
-export function evaluateCapacity(
-  databaseBytes: number,
-  availableMemory: number,
-  freeDisk: number,
-): CapacityVerdict {
-  // Mirrors control-timeweb-database-backup.py:capacity() for the namespace restore mode.
-  const tmpfsBytes = Math.max(512 * MIB, databaseBytes * 3 + 256 * MIB);
-  const namespace =
-    availableMemory >= tmpfsBytes + 2 * GIB && freeDisk >= databaseBytes * 2 + 5 * GIB;
-  // Disk (LUKS/loop) restore is the fallback for databases that cannot fit the tmpfs formula.
-  const disk = freeDisk >= databaseBytes * 2 + 5 * GIB;
-  const model = namespace ? 'namespace' : disk ? 'disk' : 'none';
-  const detail = [
-    `db=${(databaseBytes / GIB).toFixed(2)}GiB`,
-    `memAvailable=${(availableMemory / GIB).toFixed(2)}GiB`,
-    `tmpfs=${(tmpfsBytes / GIB).toFixed(2)}GiB`,
-    `freeDisk=${(freeDisk / GIB).toFixed(2)}GiB`,
-    `model=${model}`,
-  ].join(' ');
-  return { databaseBytes, availableMemory, freeDisk, tmpfsBytes, model, detail };
 }
 
 function check(category: string, id: string, status: CheckStatus, detail: string): Check {

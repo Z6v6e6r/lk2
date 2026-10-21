@@ -38,6 +38,27 @@ Exit codes: `0` = `GO` (only warnings/evidence gaps), `1` = `NO_GO` (at least on
 images or locks; it is safe to run before every attempt and after a failed attempt to see what was
 left behind.
 
+## Restore mode planner
+
+The restore operation schema is selected from the real database size and host capacity, never from
+the previous attempt:
+
+```sh
+cd /opt/phub/timeweb-beta/standard/source
+node --import tsx scripts/plan-timeweb-beta-restore.ts --phase=post101 --json
+```
+
+The planner is read-only. It prints `storageMode` (`namespace` or `disk`), the exact operation
+`schema` (`PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_V1` / `..._DISK_NAMESPACE_V2` for post-101,
+`PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_V1` / `..._DISK_NAMESPACE_V2` for pre-99) and
+the capacity detail. It exits `1` with `NO_RESTORE_CAPACITY` before any mutation when neither mode
+fits the host. Use the printed schema in the backup-restore operation request; do not hand-edit the
+schema after the planner decided it.
+
+The planner and the preflight share `scripts/timeweb-restore-capacity.ts`. The namespace (tmpfs)
+mode stays the first choice for small databases; disk (LUKS/loop) becomes the default automatically
+once `3 × pg_database_size + reserve` no longer fits available memory.
+
 ## 1. Authority and target (PRODUCTION)
 
 - [ ] Exact target is `lk2.padlhub.su`, server `8886471`, project `262717`, host
@@ -80,9 +101,10 @@ left behind.
 - [ ] Verified pre-transition backup exists, and its receipt passes the profile validator
       (ledger digests, baseline identity, dump hash). If the profile allows a degraded proof, the
       authorization and the missing-receipt reason are recorded in the receipt/operation.
-- [ ] Restore mode is chosen from real database size and host capacity:
-      `disk (LUKS/loop)` when `pg_database_size` cannot satisfy the tmpfs formula; preflight prints
-      database bytes, available RAM, free disk and the required reserve.
+- [ ] Restore mode is chosen by the read-only planner from real database size and host capacity
+      (`node --import tsx scripts/plan-timeweb-beta-restore.ts --phase=... --json`); the emitted
+      `schema` is copied into the operation request unchanged. Preflight prints database bytes,
+      available RAM, free disk and the required reserve.
 - [ ] Disk restore prerequisites are present: `cryptsetup`, loop devices, LVM/dm tools, private mount
       propagation path for the chosen execution namespace, and sufficient free space for image and
       dump.
