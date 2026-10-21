@@ -74,6 +74,7 @@ export const WORKER_METRIC_INSTRUMENTS = {
   webPushCycleSuccess: 'phub.worker.web_push.cycle_success',
   fcmCycleSuccess: 'phub.worker.fcm.cycle_success',
   fcmCycleFailures: 'phub.worker.fcm.cycle_failures',
+  extendedNotificationOutcomes: 'phub.worker.notifications.extended_outcomes',
   fcmProviderOutcomes: 'phub.worker.fcm.provider_outcomes',
   fcmCycleDurationMilliseconds: 'phub.worker.fcm.cycle_duration_milliseconds',
   webPushCycleFailures: 'phub.worker.web_push.cycle_failures',
@@ -467,6 +468,10 @@ export interface WorkerMetricRecorder {
     durationMilliseconds: number,
     failed: boolean,
   ): void;
+  recordExtendedNotificationOutcome(
+    transport: 'APNS' | 'YANDEX_SMTP' | 'VIVA_READ',
+    code: string,
+  ): void;
   recordFcmCycle(durationMilliseconds: number, failed: boolean): void;
   recordFcmProviderOutcome(
     environment: 'SANDBOX' | 'PRODUCTION',
@@ -630,6 +635,9 @@ export function createWorkerMetricRecorder(options: {
     WORKER_METRIC_INSTRUMENTS.bookingReminderSchedulerDurationMilliseconds,
   );
   const webPushCycleSuccess = meter.createGauge(WORKER_METRIC_INSTRUMENTS.webPushCycleSuccess);
+  const extendedNotificationOutcomes = meter.createCounter(
+    WORKER_METRIC_INSTRUMENTS.extendedNotificationOutcomes,
+  );
   const fcmCycleSuccess = meter.createGauge(WORKER_METRIC_INSTRUMENTS.fcmCycleSuccess);
   const fcmCycleFailures = meter.createCounter(WORKER_METRIC_INSTRUMENTS.fcmCycleFailures);
   const fcmProviderOutcomes = meter.createCounter(WORKER_METRIC_INSTRUMENTS.fcmProviderOutcomes);
@@ -743,6 +751,9 @@ export function createWorkerMetricRecorder(options: {
       if (failedTenants > 0) webPushTenantFailures.add(failedTenants, instanceAttributes);
       webPushRounds.record(rounds, instanceAttributes);
       webPushCycleDuration.record(durationMilliseconds, instanceAttributes);
+    },
+    recordExtendedNotificationOutcome(transport, code) {
+      extendedNotificationOutcomes.add(1, { ...instanceAttributes, transport, code });
     },
     recordFcmCycle(durationMilliseconds, failed) {
       fcmCycleSuccess.record(failed ? 0 : 1, instanceAttributes);

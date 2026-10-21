@@ -170,7 +170,7 @@ async function claimBatch(options: {
   return withTenantTransaction(options.pool, options.tenantId, async (client) => {
     const result = await client.query<DeliveryRow>(
       `select d.id, d.intent_id, d.endpoint_id, d.attempt_count,
-              ${options.scenarioPolicyEnabled ? 'd.scenario_available_at is not null' : 'false'} as scenario_delivery,
+              ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} as scenario_delivery,
               a.id as provider_account_id,
               e.status as endpoint_status, e.address_ciphertext, e.encryption_key_id,
               coalesce(inbox.id, i.id) as notification_id,
@@ -206,7 +206,7 @@ async function claimBatch(options: {
               from notifications.tenant_runtime_settings runtime
              where runtime.tenant_id = d.tenant_id and runtime.web_push_enabled = true
           )
-        order by ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_available_at,d.next_attempt_at)' : 'd.next_attempt_at'}, d.created_at
+        order by ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at,d.next_attempt_at)' : 'd.next_attempt_at'}, d.created_at
         for update of d skip locked
         limit $4`,
       [options.tenantId, options.appId, options.environment, options.batchSize],

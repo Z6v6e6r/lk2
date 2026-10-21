@@ -86,6 +86,7 @@ final class PadlHubBridgeTests: XCTestCase {
     let bridge = try XCTUnwrap(controller.bridge)
     let plugin = try XCTUnwrap(bridge.plugin(withName: "PadlHubSession") as? CAPBridgedPlugin)
     XCTAssertEqual(plugin.jsName, "PadlHubSession")
+    XCTAssertNotNil(bridge.plugin(withName:"PadlHubIOSPush"))
     XCTAssertFalse(bridge.config.loggingEnabled)
     XCTAssertNotNil(bridge.plugin(withName: "PadlHubViewport"))
   }

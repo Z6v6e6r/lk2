@@ -23,6 +23,7 @@ import {
   quietHoursActive,
   renderNotificationTemplate,
   type NotificationSourceEvent,
+  type NotificationEndpointCipher,
 } from '@phub/notifications';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
@@ -37,10 +38,22 @@ export const SCENARIO_SOURCE_KEYS = [
 /** A canonical run join and legacy infinity keep mixed/older workers from bypassing policy. */
 export function scenarioDeliveryDueSql(enabled?: boolean): string {
   return enabled
-    ? `(d.next_attempt_at <= now() or (d.scenario_available_at <= now() and d.next_attempt_at='infinity'::timestamptz and exists(select 1 from notifications.scenario_runs scenario_run where scenario_run.tenant_id=d.tenant_id and scenario_run.intent_id=d.intent_id and scenario_run.id::text=i.render_data->>'scenarioRunId')))`
+    ? `(d.next_attempt_at <= now() or (coalesce(d.scenario_v2_available_at,d.scenario_available_at) <= now() and d.next_attempt_at='infinity'::timestamptz and exists(select 1 from notifications.scenario_runs scenario_run where scenario_run.tenant_id=d.tenant_id and scenario_run.intent_id=d.intent_id and scenario_run.id::text=i.render_data->>'scenarioRunId')))`
     : 'd.next_attempt_at <= now()';
 }
 export interface ScenarioTransportSettings {
+  readonly iosPush?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+    readonly credentialRef: string;
+  };
+  readonly email?: {
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+    readonly credentialRef: string;
+    readonly cipher: NotificationEndpointCipher;
+  };
+  readonly staffTasksEnabled?: boolean;
   readonly webPush?: { readonly appId: string; readonly environment: 'SANDBOX' | 'PRODUCTION' };
   readonly androidPush?: { readonly appId: string; readonly environment: 'SANDBOX' | 'PRODUCTION' };
 }
@@ -49,6 +62,7 @@ interface ScenarioRow extends QueryResultRow {
   version: number;
   definition: NotificationScenarioInput;
   template_id: string;
+  extended_runtime?: boolean;
 }
 interface ContextRow extends QueryResultRow {
   target_id: string;
@@ -66,7 +80,7 @@ interface RunRow extends QueryResultRow {
   recipient_user_id: string;
   target_id: string;
   source_event_id: string;
-  context_kind: 'BOOKING' | 'GAME';
+  context_kind: 'BOOKING' | 'GAME' | 'LIFECYCLE';
   context_revision: string;
   state: string;
   reason: string | null;
@@ -83,6 +97,7 @@ interface RunRow extends QueryResultRow {
   template_id: string;
   active: boolean;
   current_version: number;
+  extended_runtime?: boolean;
 }
 interface Preference extends QueryResultRow {
   channel: string;
@@ -182,7 +197,7 @@ export function matchesFriendScenario(
 
 async function scenarios(client: PoolClient, tenantId: string): Promise<ScenarioRow[]> {
   const result = await client.query<ScenarioRow>(
-    `select s.id,s.version,s.definition,v.template_id from notifications.scenarios s join notifications.scenario_versions v on v.tenant_id=s.tenant_id and v.scenario_id=s.id and v.version=s.version where s.tenant_id=$1 and s.active=true order by s.id`,
+    `select s.id,s.version,s.definition,v.template_id,s.extended_runtime from notifications.scenarios s join notifications.scenario_versions v on v.tenant_id=s.tenant_id and v.scenario_id=s.id and v.version=s.version where s.tenant_id=$1 and (s.active=true or s.extended_active=true) order by s.id`,
     [tenantId],
   );
   return result.rows.map((row) => ({
@@ -215,7 +230,7 @@ async function addRun(
     startsAt: data.startsAt,
   });
   await client.query(
-    `insert into notifications.scenario_runs(tenant_id,scenario_id,scenario_version,recipient_user_id,target_id,source_event_id,context_kind,context_revision,rendered_title,rendered_body,deep_link,due_at,expires_at) values($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,$11,$12,$13) on conflict(tenant_id,scenario_id,source_event_id,recipient_user_id) do nothing`,
+    `insert into notifications.scenario_runs(tenant_id,scenario_id,scenario_version,recipient_user_id,target_id,source_event_id,context_kind,context_revision,rendered_title,rendered_body,deep_link,due_at,expires_at,state) values($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,$11,$12,$13,$14) on conflict(tenant_id,scenario_id,source_event_id,recipient_user_id) do nothing`,
     [
       event.tenantId,
       scenario.id,
@@ -230,6 +245,7 @@ async function addRun(
       kind === 'GAME' ? `/games/${event.aggregateId}` : '/bookings',
       schedule.dueAt,
       schedule.expiresAt,
+      scenario.extended_runtime ? 'EXTENDED_PENDING' : 'PENDING',
     ],
   );
 }
@@ -278,7 +294,7 @@ export async function ingestNotificationScenarioEvent(
       );
     } else if (event.type === 'game.cancelled.v1') {
       await client.query(
-        `update notifications.scenario_runs set state=case when state='PENDING' then 'CANCELLED' else state end,reason='GAME_CANCELLED',updated_at=now() where tenant_id=$1 and target_id=$2 and context_kind='GAME' and state in ('PENDING','QUEUED')`,
+        `update notifications.scenario_runs set state=case when state in ('PENDING','EXTENDED_PENDING') then 'CANCELLED' else state end,reason='GAME_CANCELLED',updated_at=now() where tenant_id=$1 and target_id=$2 and context_kind='GAME' and state in ('PENDING','EXTENDED_PENDING','QUEUED')`,
         [event.tenantId, event.aggregateId],
       );
       await suppressPendingDeliveries(client, event.tenantId, event.aggregateId, 'GAME_CANCELLED');
@@ -344,7 +360,7 @@ export async function ingestNotificationScenarioEvent(
       );
       if (kind === 'BOOKING') {
         await client.query(
-          `update notifications.scenario_runs set state=case when state='PENDING' then 'CANCELLED' else state end,reason='SOURCE_CHANGED',updated_at=now() where tenant_id=$1 and target_id=$2 and context_kind='BOOKING' and context_revision<$3::numeric and state in ('PENDING','QUEUED')`,
+          `update notifications.scenario_runs set state=case when state in ('PENDING','EXTENDED_PENDING') then 'CANCELLED' else state end,reason='SOURCE_CHANGED',updated_at=now() where tenant_id=$1 and target_id=$2 and context_kind='BOOKING' and context_revision<$3::numeric and state in ('PENDING','EXTENDED_PENDING','QUEUED')`,
           [event.tenantId, event.aggregateId, revision],
         );
         await suppressPendingDeliveries(
@@ -501,7 +517,25 @@ async function runValidity(
     [tenantId, run.recipient_user_id],
   );
   if (active.rowCount !== 1) return 'RECIPIENT_INACTIVE';
-  if (run.context_kind === 'BOOKING') {
+  if (run.context_kind === 'LIFECYCLE') {
+    const source = await client.query<{
+      revision: string;
+      payload: { valid: boolean; checkedAt: string; recipientUserId: string };
+    }>(
+      `select revision::text,payload from notifications.scenario_contexts where tenant_id=$1 and kind='LIFECYCLE' and target_id=$2`,
+      [tenantId, run.target_id],
+    );
+    const current = source.rows[0];
+    if (
+      !current ||
+      current.revision !== run.context_revision ||
+      current.payload.valid !== true ||
+      current.payload.recipientUserId !== run.recipient_user_id
+    )
+      return 'SOURCE_CHANGED';
+    const age = now.getTime() - Date.parse(current.payload.checkedAt);
+    if (!Number.isFinite(age) || age < 0 || age > 600_000) return 'SOURCE_STALE';
+  } else if (run.context_kind === 'BOOKING') {
     const context = await client.query<{
       revision: string;
       event_type: string;
@@ -553,7 +587,7 @@ async function preferences(
   if (!result.rows.some((row) => row.channel === 'PUSH')) {
     // The Web settings expose one quiet window; new categories inherit the last saved window.
     const quiet = await client.query<Preference>(
-      `select 'PUSH' channel,true enabled,left(quiet_from::text,5) quiet_from,left(quiet_until::text,5) quiet_until,timezone from notifications.user_preferences where tenant_id=$1 and user_id=$2 and channel='PUSH' order by updated_at desc,category limit 1`,
+      `select 'PUSH' channel,${notificationScenarioCategory(run.definition) === 'BIRTHDAY' ? 'false' : 'true'} enabled,left(quiet_from::text,5) quiet_from,left(quiet_until::text,5) quiet_until,timezone from notifications.user_preferences where tenant_id=$1 and user_id=$2 and channel='PUSH' order by updated_at desc,category limit 1`,
       [tenantId, run.recipient_user_id],
     );
     result.rows.push(...quiet.rows);
@@ -581,14 +615,17 @@ async function queueRun(
   const category = notificationScenarioCategory(run.definition);
   const prefs = await preferences(client, tenantId, run);
   const enabled = (channel: string): boolean =>
-    prefs.find((p) => p.channel === channel)?.enabled !== false;
+    category === 'BIRTHDAY' || channel === 'EMAIL'
+      ? prefs.find((p) => p.channel === channel)?.enabled === true
+      : prefs.find((p) => p.channel === channel)?.enabled !== false;
   const runtime = (
     await client.query<{
       in_app_enabled: boolean;
       web_push_enabled: boolean;
       android_push_enabled: boolean;
+      ios_push_enabled: boolean;
     }>(
-      `select in_app_enabled,web_push_enabled,android_push_enabled from notifications.tenant_runtime_settings where tenant_id=$1`,
+      `select in_app_enabled,web_push_enabled,android_push_enabled,ios_push_enabled from notifications.tenant_runtime_settings where tenant_id=$1`,
       [tenantId],
     )
   ).rows[0];
@@ -602,6 +639,19 @@ async function queueRun(
       [tenantId, run.id],
     );
     return;
+  }
+  if (!['BOOKING', 'GAME_RECOMMENDATION'].includes(category)) {
+    const sent = await client.query<{ count: string }>(
+      `select count(*)::text count from notifications.scenario_runs r join notifications.scenario_versions v on v.tenant_id=r.tenant_id and v.scenario_id=r.scenario_id and v.version=r.scenario_version join notifications.templates t on t.tenant_id=v.tenant_id and t.id=v.template_id where r.tenant_id=$1 and r.recipient_user_id=$2 and t.category=$3 and r.queued_at>$4::timestamptz-interval '24 hours'`,
+      [tenantId, run.recipient_user_id, category, now],
+    );
+    if (Number(sent.rows[0]?.count ?? 0) >= run.definition.dailyLimit) {
+      await client.query(
+        `update notifications.scenario_runs set state='SUPPRESSED',reason='FREQUENCY_LIMIT',updated_at=now() where tenant_id=$1 and id=$2`,
+        [tenantId, run.id],
+      );
+      return;
+    }
   }
   if (category === 'GAME_RECOMMENDATION') {
     const sent = await client.query<{ count: string; duplicate: boolean }>(
@@ -620,41 +670,91 @@ async function queueRun(
       return;
     }
   }
-  const preference = prefs.find((p) => p.channel === 'PUSH');
-  const nextPush = preference ? nextScenarioPushTime(now, preference) : now;
-  const quiet = nextPush.getTime() > now.getTime();
-  const allowPush =
-    enabled('PUSH') &&
-    (!quiet || run.definition.quietHours === 'DEFER') &&
-    nextPush < new Date(run.expires_at);
-  let endpoint: { id: string } | undefined;
-  if (allowPush)
-    for (const channel of run.definition.channels) {
+  let nextPush = now;
+  let quiet = false;
+  let endpoint: { id: string; channel: 'PUSH' | 'EMAIL' } | undefined;
+  for (const channel of run.definition.channels) {
+    const logical = channel === 'EMAIL' ? 'EMAIL' : 'PUSH';
+    if (!enabled(logical)) continue;
+    const pref = prefs.find((p) => p.channel === logical);
+    const availableAt = pref ? nextScenarioPushTime(now, pref) : now;
+    if (
+      availableAt >= new Date(run.expires_at) ||
+      (availableAt > now && run.definition.quietHours === 'SKIP')
+    ) {
+      quiet = availableAt > now;
+      continue;
+    }
+    if (channel === 'EMAIL' && settings.email) {
+      const providers = await client.query<{ id: string }>(
+        `select id from integration.notification_provider_accounts where tenant_id=$1 and channel='EMAIL' and platform is null and provider='YANDEX_SMTP' and app_id=$2 and environment=$3 and credential_ref=$4 and status='ACTIVE' limit 2`,
+        [tenantId, settings.email.appId, settings.email.environment, settings.email.credentialRef],
+      );
+      const verified = await client.query<{ email_key: string }>(
+        `select email_key from identity.local_email_credentials where tenant_id=$1 and user_id=$2 and status='ACTIVE' and email_verified_at<=clock_timestamp()`,
+        [tenantId, run.recipient_user_id],
+      );
+      if (providers.rows.length !== 1 || verified.rows.length !== 1) continue;
+      const address = verified.rows[0]!.email_key;
+      const encrypted = settings.email.cipher.encrypt(address);
+      const stored = await client.query<{ id: string }>(
+        `insert into integration.notification_endpoints(tenant_id,user_id,provider_account_id,channel,address_ciphertext,address_hash,encryption_key_id,last_confirmed_at) values($1,$2,$3,'EMAIL',$4,$5,$6,now()) on conflict(tenant_id,user_id,provider_account_id,address_hash) do update set address_ciphertext=excluded.address_ciphertext,encryption_key_id=excluded.encryption_key_id,status='ACTIVE',last_confirmed_at=now(),updated_at=now() returning id`,
+        [
+          tenantId,
+          run.recipient_user_id,
+          providers.rows[0]!.id,
+          encrypted.ciphertext,
+          createHash('sha256').update(address).digest('hex'),
+          encrypted.keyId,
+        ],
+      );
+      if (stored.rows[0]) endpoint = { id: stored.rows[0].id, channel: 'EMAIL' };
+    } else {
       const configuration =
         channel === 'WEB_PUSH' && runtime?.web_push_enabled
           ? settings.webPush
           : channel === 'ANDROID_PUSH' && inApp && runtime?.android_push_enabled
             ? settings.androidPush
-            : undefined;
+            : channel === 'IOS_PUSH' && inApp && runtime?.ios_push_enabled
+              ? settings.iosPush
+              : undefined;
       if (!configuration) continue;
       const result = await client.query<{ id: string }>(
-        `select e.id from integration.notification_endpoints e join integration.notification_provider_accounts a on a.tenant_id=e.tenant_id and a.id=e.provider_account_id where e.tenant_id=$1 and e.user_id=$2 and e.channel='PUSH' and e.status='ACTIVE' and a.status='ACTIVE' and a.platform=$3 and a.app_id=$4 and a.environment=$5 and a.provider=$6 order by e.updated_at desc,e.id limit 1`,
+        `select e.id from integration.notification_endpoints e join integration.notification_provider_accounts a on a.tenant_id=e.tenant_id and a.id=e.provider_account_id where e.tenant_id=$1 and e.user_id=$2 and e.channel='PUSH' and e.status='ACTIVE' and a.status='ACTIVE' and a.platform=$3 and a.app_id=$4 and a.environment=$5 and a.provider=$6 and ($7::text is null or a.credential_ref=$7) order by e.updated_at desc,e.id limit 1`,
         [
           tenantId,
           run.recipient_user_id,
-          channel === 'WEB_PUSH' ? 'WEB' : 'ANDROID',
+          channel === 'WEB_PUSH' ? 'WEB' : channel === 'IOS_PUSH' ? 'IOS' : 'ANDROID',
           configuration.appId,
           configuration.environment,
-          channel === 'WEB_PUSH' ? 'WEB_PUSH' : 'FCM',
+          channel === 'WEB_PUSH' ? 'WEB_PUSH' : channel === 'IOS_PUSH' ? 'APNS' : 'FCM',
+          channel === 'IOS_PUSH' ? settings.iosPush!.credentialRef : null,
         ],
       );
-      endpoint = result.rows[0];
-      if (endpoint) break;
+      if (result.rows[0]) endpoint = { id: result.rows[0].id, channel: 'PUSH' };
     }
-  if (!inApp && !endpoint) {
+    if (endpoint) {
+      nextPush = availableAt;
+      quiet = availableAt > now;
+      break;
+    }
+  }
+  const staffTask =
+    settings.staffTasksEnabled === true &&
+    run.definition.channels.includes('STAFF_TASK') &&
+    (category !== 'BIRTHDAY' || prefs.some((p) => p.enabled));
+  if (!inApp && !endpoint && !staffTask) {
     await client.query(
       `update notifications.scenario_runs set state='SUPPRESSED',reason=$3,updated_at=now() where tenant_id=$1 and id=$2`,
-      [tenantId, run.id, quiet ? 'QUIET_HOURS' : 'NO_ALLOWED_CHANNEL'],
+      [
+        tenantId,
+        run.id,
+        quiet
+          ? 'QUIET_HOURS'
+          : run.definition.channels.some((c) => c === 'SMS' || c === 'TELEGRAM')
+            ? 'STUB_CHANNEL_UNAVAILABLE'
+            : 'NO_ALLOWED_CHANNEL',
+      ],
     );
     return;
   }
@@ -695,9 +795,37 @@ async function queueRun(
   }
   if (endpoint)
     await client.query(
-      `insert into notifications.deliveries(tenant_id,intent_id,channel,endpoint_id,next_attempt_at,scenario_available_at) values($1,$2,'PUSH',$3,'infinity'::timestamptz,$4)`,
-      [tenantId, intentId, endpoint.id, nextPush],
+      `insert into notifications.deliveries(tenant_id,intent_id,channel,endpoint_id,next_attempt_at,scenario_available_at,scenario_v2_available_at) values($1,$2,$6,$3,'infinity'::timestamptz,case when $5 then null else $4::timestamptz end,case when $5 then $4::timestamptz else null end)`,
+      [tenantId, intentId, endpoint.id, nextPush, run.extended_runtime === true, endpoint.channel],
     );
+  if (staffTask) {
+    await client.query("select set_config('app.support_internal_access','on',true)");
+    const ticketId = randomUUID();
+    await client.query(
+      `insert into support.tickets(tenant_id,id,owner_user_id,subject,category,internal_only,tags) values($1,$2,$3,$4,'OTHER',true,array['trigger-scenario'])`,
+      [tenantId, ticketId, run.recipient_user_id, run.rendered_title],
+    );
+    await client.query(
+      `insert into support.messages(tenant_id,ticket_id,body,author_role,internal) values($1,$2,$3,'SYSTEM',true)`,
+      [tenantId, ticketId, run.rendered_body],
+    );
+    await client.query(
+      `insert into notifications.scenario_staff_tasks(tenant_id,run_id,ticket_id) values($1,$2,$3)`,
+      [tenantId, run.id, ticketId],
+    );
+    await client.query(
+      `insert into support.history(tenant_id,ticket_id,kind,internal) values($1,$2,'support.ticket.created.v1',true)`,
+      [tenantId, ticketId],
+    );
+    await client.query(
+      `insert into audit.audit_log(tenant_id,action,resource_type,resource_id,result,correlation_id,new_value) values($1,'SCENARIO_STAFF_TASK_CREATED','SUPPORT_TICKET',$2,'SUCCESS',$3,$4::jsonb)`,
+      [tenantId, ticketId, `scenario-${run.id}`, JSON.stringify({ runId: run.id, ticketId })],
+    );
+    await client.query(
+      `insert into audit.outbox_events(tenant_id,event_type,aggregate_id,correlation_id,payload) values($1,'support.ticket.created.v1',$2,$3,$4::jsonb)`,
+      [tenantId, ticketId, `scenario-${run.id}`, JSON.stringify({ ticketId, internal: true })],
+    );
+  }
   const deadline = new Date(
     Math.min(
       now.getTime() + run.definition.goalWindowMinutes * 60_000,
@@ -722,7 +850,7 @@ async function queueRun(
   );
 }
 
-const runSelect = `select r.*,v.definition,v.template_id,s.active,s.version current_version from notifications.scenario_runs r join notifications.scenario_versions v on v.tenant_id=r.tenant_id and v.scenario_id=r.scenario_id and v.version=r.scenario_version join notifications.scenarios s on s.tenant_id=r.tenant_id and s.id=r.scenario_id`;
+const runSelect = `select r.*,v.definition,v.template_id,(s.active or s.extended_active) active,s.extended_runtime,s.version current_version from notifications.scenario_runs r join notifications.scenario_versions v on v.tenant_id=r.tenant_id and v.scenario_id=r.scenario_id and v.version=r.scenario_version join notifications.scenarios s on s.tenant_id=r.tenant_id and s.id=r.scenario_id`;
 export async function runNotificationScenarioBatch(
   options: ScenarioTransportSettings & {
     readonly pool: Pool;
@@ -739,7 +867,7 @@ export async function runNotificationScenarioBatch(
     ]);
     await fanoutFriendGames(client, options.tenantId, now);
     const runs = await client.query<RunRow>(
-      `${runSelect} where r.tenant_id=$1 and r.state='PENDING' and least(r.due_at,r.expires_at)<=$2 order by least(r.due_at,r.expires_at),r.id for update of r skip locked limit 20`,
+      `${runSelect} where r.tenant_id=$1 and r.state in ('PENDING','EXTENDED_PENDING') and least(r.due_at,r.expires_at)<=$2 order by least(r.due_at,r.expires_at),r.id for update of r skip locked limit 20`,
       [options.tenantId, now],
     );
     for (const run of runs.rows) await queueRun(client, options.tenantId, run, options, now);
@@ -758,6 +886,8 @@ export async function checkScenarioPushDelivery(options: {
   readonly deliveryId: string;
   readonly attemptNo: number;
   readonly enabled: boolean;
+  readonly channel?: 'EMAIL' | 'PUSH';
+  readonly dispatchFence?: boolean;
   readonly now?: Date;
 }): Promise<'SEND' | 'DEFERRED' | 'SUPPRESSED' | 'STALE'> {
   return withTenantTransaction(options.pool, options.tenantId, async (client) => {
@@ -787,9 +917,15 @@ export async function checkScenarioPushDelivery(options: {
     let nextPush = now;
     if (!reason && run) {
       const pref = (await preferences(client, options.tenantId, run)).find(
-        (p) => p.channel === 'PUSH',
+        (p) => p.channel === (options.channel ?? 'PUSH'),
       );
-      if (pref?.enabled === false) reason = 'OPTED_OUT';
+      if (
+        pref?.enabled === false ||
+        ((options.channel === 'EMAIL' ||
+          notificationScenarioCategory(run.definition) === 'BIRTHDAY') &&
+          pref?.enabled !== true)
+      )
+        reason = 'OPTED_OUT';
       if (pref) nextPush = nextScenarioPushTime(now, pref);
       if (
         nextPush > now &&
@@ -805,14 +941,14 @@ export async function checkScenarioPushDelivery(options: {
     if (!reason && nextPush <= now) {
       // Policy checks can wait for locks: give the single bounded provider call a fresh lease.
       const renewed = await client.query(
-        `update notifications.deliveries set lease_expires_at=clock_timestamp()+interval '60 seconds',updated_at=clock_timestamp() where tenant_id=$1 and id=$2 and state='SENDING' and attempt_count=$3 and lease_expires_at>clock_timestamp() returning 1`,
+        `update notifications.deliveries set lease_expires_at=clock_timestamp()+interval '60 seconds',${options.dispatchFence ? 'scenario_dispatch_started_at=clock_timestamp(),' : ''}updated_at=clock_timestamp() where tenant_id=$1 and id=$2 and state='SENDING' and attempt_count=$3 and lease_expires_at>clock_timestamp() returning 1`,
         [options.tenantId, options.deliveryId, options.attemptNo],
       );
       if (renewed.rowCount !== 1) return 'STALE';
       return 'SEND';
     }
     const result = await client.query<{ intent_id: string }>(
-      `update notifications.deliveries set state=$4,next_attempt_at='infinity'::timestamptz,scenario_available_at=$5,completed_at=case when $4='SUPPRESSED' then now() else null end,lease_expires_at=null,attempt_count=attempt_count-1,last_error_code=$6,updated_at=now() where tenant_id=$1 and id=$2 and state='SENDING' and attempt_count=$3 returning intent_id`,
+      `update notifications.deliveries set state=$4,next_attempt_at='infinity'::timestamptz,scenario_available_at=case when scenario_v2_available_at is null then $5::timestamptz else null end,scenario_v2_available_at=case when scenario_v2_available_at is not null then $5::timestamptz else null end,completed_at=case when $4='SUPPRESSED' then now() else null end,lease_expires_at=null,attempt_count=attempt_count-1,last_error_code=$6,updated_at=now() where tenant_id=$1 and id=$2 and state='SENDING' and attempt_count=$3 returning intent_id`,
       [
         options.tenantId,
         options.deliveryId,

@@ -15,12 +15,15 @@ const labels: Record<string, string> = {
   BOOKING_STARTS: 'Относительно начала занятия',
   FRIEND_GAME_PUBLISHED: 'Друг опубликовал игру',
   FIRST_ATTENDANCE: 'Первое посещение',
+  TRAINING_ATTENDED: 'Подтверждено посещение тренировки',
   SUBSCRIPTION_ENDS: 'Окончание подписки',
   BIRTHDAY: 'День рождения',
   MATCHING_GAME: 'Подходящая игра',
 };
 const states: Record<string, string> = {
   PENDING: 'Ожидает',
+  EXTENDED_PENDING: 'Ожидает',
+  CREATED: 'Создано',
   QUEUED: 'Передано в доставку',
   SUPPRESSED: 'Пропущено',
   CANCELLED: 'Отменено',
@@ -56,6 +59,11 @@ const channelLabels = {
   IN_APP: 'Центр уведомлений',
   WEB_PUSH: 'Web Push',
   ANDROID_PUSH: 'Android Push',
+  IOS_PUSH: 'iOS Push',
+  EMAIL: 'Email',
+  STAFF_TASK: 'Обращение сотруднику в ЦУП',
+  SMS: 'SMS — заглушка',
+  TELEGRAM: 'Telegram — заглушка',
 } as const;
 function blank(): NotificationScenarioInput {
   return {
@@ -286,7 +294,11 @@ export function NotificationScenariosWorkspace({
                     setDefinition((current) => ({
                       ...current,
                       trigger,
-                      delayMinutes: trigger === 'BOOKING_STARTS' ? -120 : 0,
+                      delayMinutes: ['BOOKING_STARTS', 'SUBSCRIPTION_ENDS', 'BIRTHDAY'].includes(
+                        trigger,
+                      )
+                        ? -120
+                        : 0,
                       goal: trigger === 'FRIEND_GAME_PUBLISHED' ? 'GAME_JOINED' : 'NONE',
                       channels:
                         trigger === 'FRIEND_GAME_PUBLISHED'
@@ -316,12 +328,18 @@ export function NotificationScenariosWorkspace({
                   <input
                     type="number"
                     required
-                    min={definition.trigger === 'BOOKING_STARTS' ? -43200 : 0}
+                    min={
+                      ['BOOKING_STARTS', 'SUBSCRIPTION_ENDS', 'BIRTHDAY'].includes(
+                        definition.trigger,
+                      )
+                        ? -43200
+                        : 0
+                    }
                     max={43200}
                     value={definition.delayMinutes}
                     onChange={(e) => change('delayMinutes', Number(e.target.value))}
                   />
-                  <small>Минус — до начала, плюс — после события.</small>
+                  <small>Минус — до события, плюс — после события.</small>
                 </label>
                 <label>
                   Срок актуальности, минут
@@ -363,9 +381,17 @@ export function NotificationScenariosWorkspace({
                     <input
                       type="checkbox"
                       checked={definition.channels.includes(channel)}
+                      aria-description={
+                        channel === 'SMS' || channel === 'TELEGRAM'
+                          ? 'Канал недоступен, подключение отложено'
+                          : undefined
+                      }
                       disabled={
                         channel === 'IN_APP' &&
-                        (definition.channels.includes('ANDROID_PUSH') || definition.goal !== 'NONE')
+                        (definition.channels.some(
+                          (c) => c === 'ANDROID_PUSH' || c === 'IOS_PUSH',
+                        ) ||
+                          definition.goal !== 'NONE')
                       }
                       onChange={(e) =>
                         change(
@@ -374,7 +400,9 @@ export function NotificationScenariosWorkspace({
                             ? [
                                 ...new Set([
                                   ...definition.channels,
-                                  ...(channel === 'ANDROID_PUSH' ? ['IN_APP' as const] : []),
+                                  ...(channel === 'ANDROID_PUSH' || channel === 'IOS_PUSH'
+                                    ? ['IN_APP' as const]
+                                    : []),
                                   channel,
                                 ]),
                               ]
@@ -386,8 +414,8 @@ export function NotificationScenariosWorkspace({
                   </label>
                 ))}
                 <small>
-                  Центр уведомлений и один доступный push. Приоритет push определяется порядком
-                  выбора каналов.
+                  Центр уведомлений и один доступный внешний канал: push или email. Приоритет
+                  определяется порядком выбора. Обращение в ЦУП создаётся отдельно.
                 </small>
               </fieldset>
               <label>
@@ -398,8 +426,8 @@ export function NotificationScenariosWorkspace({
                     change('quietHours', e.target.value as NotificationScenarioInput['quietHours'])
                   }
                 >
-                  <option value="DEFER">Отложить push до разрешённого времени</option>
-                  <option value="SKIP">Пропустить push</option>
+                  <option value="DEFER">Отложить push или email до разрешённого времени</option>
+                  <option value="SKIP">Пропустить push или email</option>
                 </select>
               </label>
               {definition.trigger === 'FRIEND_GAME_PUBLISHED' ? (
@@ -530,9 +558,19 @@ export function NotificationScenariosWorkspace({
                     </td>
                     <td>
                       {run.deliveryStates.map((d) => (
-                        <div key={`${d.channel}:${d.state}`}>
-                          {d.channel === 'IN_APP' ? 'В кабинете' : 'Push'}:{' '}
-                          {states[d.state] ?? d.state} ({d.count})
+                        <div key={`${d.channel}:${d.state}:${d.errorCode ?? ''}`}>
+                          {d.channel === 'IN_APP'
+                            ? 'В кабинете'
+                            : d.channel === 'EMAIL'
+                              ? 'Email'
+                              : d.channel === 'STAFF_TASK'
+                                ? 'Обращение в ЦУП'
+                                : 'Push'}
+                          :{' '}
+                          {d.errorCode?.endsWith('_OUTCOME_UNKNOWN')
+                            ? 'Результат неизвестен, без автоматического повтора'
+                            : (states[d.state] ?? d.state)}{' '}
+                          ({d.count})
                         </div>
                       ))}
                     </td>

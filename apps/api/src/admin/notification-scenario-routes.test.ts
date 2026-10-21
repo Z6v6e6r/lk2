@@ -109,8 +109,8 @@ describe('notification scenario admin boundary', () => {
   });
   it.each([
     { mandatory: true },
-    { channels: ['SMS'] },
-    { trigger: 'SUBSCRIPTION_ENDS' },
+    { channels: ['UNKNOWN_CHANNEL'] },
+    { trigger: 'FIRST_ATTENDANCE' },
     { body: '{{phone}}' },
   ])('rejects unsupported settings %j', async (patch) => {
     const { app, repository } = await fixture();
@@ -122,6 +122,28 @@ describe('notification scenario admin boundary', () => {
     });
     expect(result.statusCode).toBe(400);
     expect(repository.save).not.toHaveBeenCalled();
+  });
+  it.each([
+    { trigger: 'SUBSCRIPTION_ENDS', delayMinutes: -1440, channels: ['EMAIL'] },
+    { trigger: 'BIRTHDAY', delayMinutes: -1440, channels: ['IN_APP', 'IOS_PUSH'] },
+    { trigger: 'TRAINING_ATTENDED', delayMinutes: 0, channels: ['STAFF_TASK'] },
+    { trigger: 'BOOKING_CONFIRMED', delayMinutes: 0, channels: ['SMS', 'TELEGRAM'] },
+  ])('accepts supported extended definitions %j without dispatching', async (patch) => {
+    const { app, repository } = await fixture();
+    const result = await app.inject({
+      method: 'POST',
+      url: root,
+      headers: await headers(),
+      payload: { expectedVersion: 0, definition: { ...definition, ...patch } },
+    });
+    expect(result.statusCode).toBe(200);
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        actorUserId: userId,
+        definition: expect.objectContaining(patch) as unknown,
+      }),
+    );
   });
   it('uses verified tenant/actor and propagates version/idempotency', async () => {
     const { app, repository } = await fixture();

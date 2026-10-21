@@ -76,7 +76,7 @@ describe('support ticket transaction boundaries', () => {
     const { repository, calls } = fixture();
     await repository.get({ tenantId, ticketId, ownerUserId: userId, admin: false });
     const ticketIndex = calls.findIndex((call) => call.sql.includes('from support.tickets'));
-    expect(calls[ticketIndex]?.sql).toContain('owner_user_id=$3 for share');
+    expect(calls[ticketIndex]?.sql).toContain('owner_user_id=$3 and internal_only=false for share');
     expect(ticketIndex).toBeLessThan(
       calls.findIndex((call) => call.sql.includes('from support.messages')),
     );
@@ -97,7 +97,7 @@ describe('support ticket transaction boundaries', () => {
       JSON.stringify([tenantId, userId, command.idempotencyKey]),
     ]);
     expect(sql.find((item) => item.includes('from support.tickets'))).toContain(
-      'owner_user_id=$3 for update',
+      'owner_user_id=$3 and internal_only=false for update',
     );
     const receiptIndex = sql.findIndex((item) => item.startsWith('insert into support.commands'));
     for (const prefix of [

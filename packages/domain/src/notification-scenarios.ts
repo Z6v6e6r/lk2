@@ -6,6 +6,9 @@ export const NOTIFICATION_SCENARIO_TRIGGERS = [
   'BOOKING_CANCELLED',
   'BOOKING_STARTS',
   'FRIEND_GAME_PUBLISHED',
+  'SUBSCRIPTION_ENDS',
+  'BIRTHDAY',
+  'TRAINING_ATTENDED',
 ] as const;
 export const notificationScenarioInputSchema = z
   .object({
@@ -16,9 +19,20 @@ export const notificationScenarioInputSchema = z
     title: z.string().trim().min(1).max(300),
     body: z.string().trim().min(1).max(8_000),
     channels: z
-      .array(z.enum(['IN_APP', 'WEB_PUSH', 'ANDROID_PUSH']))
+      .array(
+        z.enum([
+          'IN_APP',
+          'WEB_PUSH',
+          'ANDROID_PUSH',
+          'IOS_PUSH',
+          'EMAIL',
+          'STAFF_TASK',
+          'SMS',
+          'TELEGRAM',
+        ]),
+      )
       .min(1)
-      .max(3)
+      .max(8)
       .refine(
         (channels) => new Set(channels).size === channels.length,
         'Каналы не должны повторяться',
@@ -31,17 +45,24 @@ export const notificationScenarioInputSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.channels.includes('ANDROID_PUSH') && !value.channels.includes('IN_APP'))
+    if (
+      value.channels.some((c) => c === 'ANDROID_PUSH' || c === 'IOS_PUSH') &&
+      !value.channels.includes('IN_APP')
+    )
       ctx.addIssue({
         code: 'custom',
         path: ['channels'],
-        message: 'Android Push требует сообщение в центре уведомлений',
+        message: 'Мобильный Push требует сообщение в центре уведомлений',
       });
-    if (value.delayMinutes < 0 && value.trigger !== 'BOOKING_STARTS') {
+    if (
+      value.delayMinutes < 0 &&
+      !['BOOKING_STARTS', 'SUBSCRIPTION_ENDS', 'BIRTHDAY'].includes(value.trigger)
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['delayMinutes'],
-        message: 'Отрицательная задержка доступна относительно начала занятия',
+        message:
+          'Отрицательная задержка доступна до начала занятия, окончания абонемента или дня рождения',
       });
     }
     if (value.goal !== 'NONE' && !value.channels.includes('IN_APP'))
@@ -90,17 +111,12 @@ export interface NotificationScenarioRunView {
     readonly channel: string;
     readonly state: string;
     readonly count: number;
+    readonly errorCode?: string | null;
   }[];
 }
 export const NOTIFICATION_SCENARIO_CATALOG = [
   ...NOTIFICATION_SCENARIO_TRIGGERS.map((type) => ({ type, available: true, reason: null })),
   { type: 'FIRST_ATTENDANCE', available: false, reason: 'Нет подтверждённого события посещения' },
-  {
-    type: 'SUBSCRIPTION_ENDS',
-    available: false,
-    reason: 'Нет канонического источника срока подписки для рассылок',
-  },
-  { type: 'BIRTHDAY', available: false, reason: 'Нет подтверждённого источника даты рождения' },
   {
     type: 'MATCHING_GAME',
     available: false,
@@ -111,7 +127,16 @@ export const NOTIFICATION_SCENARIO_CATALOG = [
 export function notificationScenarioCategory(
   definition: Pick<NotificationScenarioInput, 'trigger'>,
 ): string {
-  return definition.trigger === 'FRIEND_GAME_PUBLISHED' ? 'GAME_RECOMMENDATION' : 'BOOKING';
+  return (
+    (
+      {
+        FRIEND_GAME_PUBLISHED: 'GAME_RECOMMENDATION',
+        SUBSCRIPTION_ENDS: 'SUBSCRIPTION',
+        BIRTHDAY: 'BIRTHDAY',
+        TRAINING_ATTENDED: 'TRAINING_ATTENDANCE',
+      } as Record<string, string>
+    )[definition.trigger] ?? 'BOOKING'
+  );
 }
 
 export function notificationScenarioSchedule(input: {

@@ -915,6 +915,7 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.notificationPreferenceRepository
       ? { preferenceRepository: options.notificationPreferenceRepository }
       : {}),
+    emailEnabled: options.config.SMTP_ENABLED,
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
@@ -1307,6 +1308,24 @@ export async function buildApp(options: BuildAppOptions) {
       environment: options.config.FCM_ENVIRONMENT,
       platform: 'ANDROID',
       provider: 'FCM',
+    },
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerAndroidPushRoutes(app as unknown as FastifyInstance, {
+    platform: 'IOS',
+    ...(options.notificationEndpointRepository
+      ? { repository: options.notificationEndpointRepository }
+      : {}),
+    ...(options.notificationEndpointCipher ? { cipher: options.notificationEndpointCipher } : {}),
+    enabledGlobally: options.config.APNS_ENABLED,
+    maxEndpointsPerUser: options.config.WEB_PUSH_ENDPOINTS_PER_USER_MAX,
+    selector: {
+      appId: options.config.APNS_APP_ID,
+      environment: options.config.APNS_ENVIRONMENT,
+      platform: 'IOS',
+      provider: 'APNS',
+      credentialRef: options.config.APNS_CREDENTIAL_REF,
     },
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { AndroidPushProviderSelector, NotificationEndpointRepository } from '@phub/database';
+import { z } from 'zod';
 import { androidFcmTokenSchema, type NotificationEndpointCipher } from '@phub/notifications';
 import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
@@ -26,13 +27,14 @@ function commandHash(
   payload: string,
 ): string {
   return createHash('sha256')
-    .update(`${command}:ANDROID:${selector.appId}:${selector.environment}:${payload}`)
+    .update(`${command}:${selector.platform}:${selector.appId}:${selector.environment}:${payload}`)
     .digest('hex');
 }
 
-export function registerAndroidPushRoutes(
+export function registerNativePushRoutes(
   app: FastifyInstance,
   options: {
+    readonly platform?: 'IOS' | 'ANDROID';
     readonly repository?: NotificationEndpointRepository;
     readonly cipher?: NotificationEndpointCipher;
     readonly enabledGlobally: boolean;
@@ -42,15 +44,40 @@ export function registerAndroidPushRoutes(
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
 ): void {
+  const ios = options.platform === 'IOS';
+  if (
+    options.selector.platform !== (ios ? 'IOS' : 'ANDROID') ||
+    options.selector.provider !== (ios ? 'APNS' : 'FCM') ||
+    (ios && !options.selector.credentialRef)
+  )
+    throw new Error('NATIVE_PUSH_SELECTOR_INVALID');
+  const root = '/user/api/v1/:tenantKey/notification-endpoints/' + (ios ? 'ios' : 'android');
+  const prefix = ios ? 'IOS_PUSH' : 'ANDROID_PUSH';
+  const registerEndpoint = ios
+    ? options.repository?.registerWebPush.bind(options.repository)
+    : options.repository?.registerAndroidPush?.bind(options.repository);
+  const revokeEndpoint = ios
+    ? options.repository?.revokeWebPush.bind(options.repository)
+    : options.repository?.revokeAndroidPush?.bind(options.repository);
+  const getCapabilities = ios
+    ? options.repository?.getIosPushCapabilities?.bind(options.repository)
+    : options.repository?.getAndroidPushCapabilities?.bind(options.repository);
+  const tokenSchema = ios
+    ? z
+        .string()
+        .regex(/^[a-f0-9]{32,1024}$/i)
+        .refine((value) => value.length % 2 === 0)
+        .transform((value) => value.toLowerCase())
+    : androidFcmTokenSchema;
   app.get(
-    '/user/api/v1/:tenantKey/notification-endpoints/android/config',
+    root + '/config',
     { preHandler: [...options.authenticatedTenantHandlers] },
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       if (!currentPrincipal(request))
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
-      const capabilities = options.repository?.getAndroidPushCapabilities
-        ? await options.repository.getAndroidPushCapabilities(
+      const capabilities = getCapabilities
+        ? await getCapabilities(
             (currentPrincipal(request) as { tenantId: string }).tenantId,
             options.selector,
           )
@@ -75,114 +102,98 @@ export function registerAndroidPushRoutes(
           };
     },
   );
-  app.post(
-    '/user/api/v1/:tenantKey/notification-endpoints/android',
-    { preHandler: [...options.commandHandlers] },
-    async (request, reply) => {
-      reply.header('Cache-Control', 'no-store');
-      const principal = currentPrincipal(request);
-      if (!principal)
-        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
-      if (!options.enabledGlobally || !options.repository?.registerAndroidPush || !options.cipher) {
-        return sendApiError(
-          request,
-          reply,
-          404,
-          'ANDROID_PUSH_DISABLED',
-          'Android Push не включён.',
-        );
-      }
-      const capabilities = options.repository.getAndroidPushCapabilities
-        ? await options.repository.getAndroidPushCapabilities(principal.tenantId, options.selector)
-        : undefined;
-      if (!capabilities?.tenantEnabled)
-        return sendApiError(
-          request,
-          reply,
-          404,
-          'ANDROID_PUSH_DISABLED',
-          'Android Push не включён.',
-        );
-      if (!capabilities.providerConfigured)
-        return sendApiError(
-          request,
-          reply,
-          503,
-          'ANDROID_PUSH_PROVIDER_UNAVAILABLE',
-          'Провайдер Android Push не настроен.',
-        );
-      const body = request.body as Record<string, unknown> | null;
-      if (
-        !body ||
-        Array.isArray(body) ||
-        Object.keys(body).length !== 2 ||
-        typeof body.installationId !== 'string' ||
-        !UUID_PATTERN.test(body.installationId)
-      ) {
-        return sendApiError(
-          request,
-          reply,
-          400,
-          'ANDROID_PUSH_TOKEN_INVALID',
-          'Некорректный токен Android Push.',
-        );
-      }
-      const installationId = body.installationId;
-      const token = androidFcmTokenSchema.safeParse(body.token);
-      if (!token.success)
-        return sendApiError(
-          request,
-          reply,
-          400,
-          'ANDROID_PUSH_TOKEN_INVALID',
-          'Некорректный токен Android Push.',
-        );
-      const idempotencyKey = request.headers['idempotency-key'];
-      if (typeof idempotencyKey !== 'string')
-        return sendApiError(
-          request,
-          reply,
-          400,
-          'IDEMPOTENCY_KEY_REQUIRED',
-          'Для этой операции требуется корректный Idempotency-Key.',
-        );
-      const encrypted = options.cipher.encrypt(token.data);
-      const result = await options.repository.registerAndroidPush({
-        tenantId: principal.tenantId,
-        userId: principal.userId,
-        selector: options.selector,
-        installationId,
-        ciphertext: encrypted.ciphertext,
-        addressHash: createHash('sha256').update(token.data).digest('hex'),
-        encryptionKeyId: encrypted.keyId,
-        endpointsPerUserMax: options.maxEndpointsPerUser,
-        requestHash: commandHash('REGISTER', options.selector, `${installationId}:${token.data}`),
-        idempotencyKey,
-        correlationId: request.id,
-      });
-      if (result.outcome === 'idempotency_conflict')
-        return sendApiError(
-          request,
-          reply,
-          409,
-          'IDEMPOTENCY_KEY_REUSED',
-          'Idempotency-Key уже использован для другой команды.',
-        );
-      if (result.outcome === 'endpoint_limit_reached')
-        return sendApiError(
-          request,
-          reply,
-          409,
-          'ANDROID_PUSH_ENDPOINT_LIMIT_REACHED',
-          'Достигнут лимит Android-устройств.',
-        );
-      if (result.outcome !== 'updated')
-        return sendApiError(request, reply, 500, 'INTERNAL_ERROR', 'Внутренняя ошибка сервиса.');
-      return result;
-    },
-  );
+  app.post(root, { preHandler: [...options.commandHandlers] }, async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const principal = currentPrincipal(request);
+    if (!principal)
+      return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+    if (!options.enabledGlobally || !registerEndpoint || !options.cipher) {
+      return sendApiError(request, reply, 404, prefix + '_DISABLED', 'Push не включён.');
+    }
+    const capabilities = getCapabilities
+      ? await getCapabilities(principal.tenantId, options.selector)
+      : undefined;
+    if (!capabilities?.tenantEnabled)
+      return sendApiError(request, reply, 404, prefix + '_DISABLED', 'Push не включён.');
+    if (!capabilities.providerConfigured)
+      return sendApiError(
+        request,
+        reply,
+        503,
+        prefix + '_PROVIDER_UNAVAILABLE',
+        'Провайдер Push не настроен.',
+      );
+    const body = request.body as Record<string, unknown> | null;
+    if (
+      !body ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 2 ||
+      typeof body.installationId !== 'string' ||
+      !UUID_PATTERN.test(body.installationId)
+    ) {
+      return sendApiError(
+        request,
+        reply,
+        400,
+        prefix + '_TOKEN_INVALID',
+        'Некорректный токен Push.',
+      );
+    }
+    const installationId = body.installationId;
+    const token = tokenSchema.safeParse(body.token);
+    if (!token.success)
+      return sendApiError(
+        request,
+        reply,
+        400,
+        prefix + '_TOKEN_INVALID',
+        'Некорректный токен Push.',
+      );
+    const idempotencyKey = request.headers['idempotency-key'];
+    if (typeof idempotencyKey !== 'string')
+      return sendApiError(
+        request,
+        reply,
+        400,
+        'IDEMPOTENCY_KEY_REQUIRED',
+        'Для этой операции требуется корректный Idempotency-Key.',
+      );
+    const encrypted = options.cipher.encrypt(token.data);
+    const result = await registerEndpoint({
+      tenantId: principal.tenantId,
+      userId: principal.userId,
+      selector: options.selector,
+      installationId,
+      ciphertext: encrypted.ciphertext,
+      addressHash: createHash('sha256').update(token.data).digest('hex'),
+      encryptionKeyId: encrypted.keyId,
+      endpointsPerUserMax: options.maxEndpointsPerUser,
+      requestHash: commandHash('REGISTER', options.selector, `${installationId}:${token.data}`),
+      idempotencyKey,
+      correlationId: request.id,
+    });
+    if (result.outcome === 'idempotency_conflict')
+      return sendApiError(
+        request,
+        reply,
+        409,
+        'IDEMPOTENCY_KEY_REUSED',
+        'Idempotency-Key уже использован для другой команды.',
+      );
+    if (result.outcome === 'endpoint_limit_reached')
+      return sendApiError(
+        request,
+        reply,
+        409,
+        prefix + '_ENDPOINT_LIMIT_REACHED',
+        'Достигнут лимит устройств.',
+      );
+    if (result.outcome !== 'updated')
+      return sendApiError(request, reply, 500, 'INTERNAL_ERROR', 'Внутренняя ошибка сервиса.');
+    return result;
+  });
   app.delete(
-    '/user/api/v1/:tenantKey/notification-endpoints/android/:installationId',
+    root + '/:installationId',
     { preHandler: [...options.commandHandlers] },
     async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
@@ -196,14 +207,8 @@ export function registerAndroidPushRoutes(
         !UUID_PATTERN.test(installationId) ||
         typeof idempotencyKey !== 'string'
       )
-        return sendApiError(
-          request,
-          reply,
-          400,
-          'INVALID_REQUEST',
-          'Некорректная команда Android Push.',
-        );
-      if (!options.repository?.revokeAndroidPush)
+        return sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная команда Push.');
+      if (!revokeEndpoint)
         return sendApiError(
           request,
           reply,
@@ -211,7 +216,7 @@ export function registerAndroidPushRoutes(
           'NOTIFICATIONS_UNAVAILABLE',
           'Уведомления временно недоступны.',
         );
-      const result = await options.repository.revokeAndroidPush({
+      const result = await revokeEndpoint({
         tenantId: principal.tenantId,
         userId: principal.userId,
         selector: options.selector,
@@ -236,3 +241,5 @@ export function registerAndroidPushRoutes(
     },
   );
 }
+
+export const registerAndroidPushRoutes = registerNativePushRoutes;

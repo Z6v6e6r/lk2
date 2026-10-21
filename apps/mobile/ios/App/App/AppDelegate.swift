@@ -1,8 +1,11 @@
 import UIKit
 import Capacitor
+import UserNotifications
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate {
+    func application(_ application:UIApplication,didRegisterForRemoteNotificationsWithDeviceToken deviceToken:Data){PadlHubIOSPushHub.shared.registered(deviceToken)}
+    func application(_ application:UIApplication,didFailToRegisterForRemoteNotificationsWithError error:Error){/* No token or raw error logging; retry on next foreground. */}
 
     var window: UIWindow?
     private var privacyShields: [UIView] = []
@@ -26,6 +29,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        UNUserNotificationCenter.current().delegate=PadlHubIOSPushHub.shared
         // Override point for customization after application launch.
         return true
     }

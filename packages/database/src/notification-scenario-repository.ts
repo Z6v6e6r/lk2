@@ -79,6 +79,7 @@ export function createNotificationScenarioRepository(pool: Pool): NotificationSc
           "select set_config('lock_timeout','5s',true),set_config('statement_timeout','15s',true)",
         );
         await assertScenarioAdmin(client, input.tenantId, input.actorUserId);
+        await client.query("select set_config('app.notification_extended_writer','on',true)");
         await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
           `scenario-admin:${input.tenantId}`,
         ]);
@@ -119,7 +120,7 @@ export function createNotificationScenarioRepository(pool: Pool): NotificationSc
         }
         const version = input.expectedVersion + 1;
         const result = await client.query<ScenarioRow>(
-          `insert into notifications.scenarios(tenant_id,id,version,definition,active,updated_by) values($1,$2,$3,$4::jsonb,$5,$6) on conflict(tenant_id,id) do update set version=excluded.version,definition=excluded.definition,active=excluded.active,updated_by=excluded.updated_by,updated_at=now() returning id,version,definition,updated_at`,
+          `insert into notifications.scenarios(tenant_id,id,version,definition,active,updated_by,extended_runtime,extended_active) values($1,$2,$3,$4::jsonb,false,$6,true,$5) on conflict(tenant_id,id) do update set version=excluded.version,definition=excluded.definition,active=false,extended_runtime=true,extended_active=excluded.extended_active,updated_by=excluded.updated_by,updated_at=now() returning id,version,definition,updated_at`,
           [
             input.tenantId,
             id,
@@ -138,7 +139,17 @@ export function createNotificationScenarioRepository(pool: Pool): NotificationSc
             notificationScenarioCategory(input.definition),
             [
               ...new Set(
-                input.definition.channels.map((c) => (c === 'IN_APP' ? 'IN_APP' : 'PUSH')),
+                input.definition.channels.some(
+                  (c) => !['STAFF_TASK', 'SMS', 'TELEGRAM'].includes(c),
+                )
+                  ? [
+                      ...new Set(
+                        input.definition.channels
+                          .filter((c) => !['STAFF_TASK', 'SMS', 'TELEGRAM'].includes(c))
+                          .map((c) => (c === 'IN_APP' || c === 'EMAIL' ? c : 'PUSH')),
+                      ),
+                    ]
+                  : ['IN_APP'],
               ),
             ],
             input.definition.title,
@@ -159,7 +170,7 @@ export function createNotificationScenarioRepository(pool: Pool): NotificationSc
         );
         // A revision change never rewrites a pending run's immutable definition.
         await client.query(
-          `update notifications.scenario_runs set state='CANCELLED',reason='SCENARIO_REVISED',updated_at=now() where tenant_id=$1 and scenario_id=$2 and state='PENDING'`,
+          `update notifications.scenario_runs set state='CANCELLED',reason='SCENARIO_REVISED',updated_at=now() where tenant_id=$1 and scenario_id=$2 and state in ('PENDING','EXTENDED_PENDING')`,
           [input.tenantId, id],
         );
         const suppressed = await client.query<{ intent_id: string }>(
@@ -196,7 +207,7 @@ export function createNotificationScenarioRepository(pool: Pool): NotificationSc
     runs(tenantId, scenarioId) {
       return withTenantTransaction(pool, tenantId, async (client) => {
         const result = await client.query<RunRow>(
-          `select r.*,coalesce((select jsonb_agg(x) from (select channel,state,count(*)::integer count from notifications.deliveries d where d.tenant_id=r.tenant_id and d.intent_id=r.intent_id group by channel,state) x),'[]'::jsonb) delivery_states from notifications.scenario_runs r where r.tenant_id=$1 and ($2::uuid is null or r.scenario_id=$2) order by r.created_at desc,r.id desc limit 100`,
+          `select r.*,coalesce((select jsonb_agg(x) from (select channel,state,count(*)::integer count,last_error_code as "errorCode" from notifications.deliveries d where d.tenant_id=r.tenant_id and d.intent_id=r.intent_id group by channel,state,last_error_code union all select 'STAFF_TASK' channel,'CREATED' state,1::integer count,null::text as "errorCode" from notifications.scenario_staff_tasks st where st.tenant_id=r.tenant_id and st.run_id=r.id) x),'[]'::jsonb) delivery_states from notifications.scenario_runs r where r.tenant_id=$1 and ($2::uuid is null or r.scenario_id=$2) order by r.created_at desc,r.id desc limit 100`,
           [tenantId, scenarioId ?? null],
         );
         return result.rows.map((r) => ({

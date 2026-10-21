@@ -216,6 +216,28 @@ const scenarioTables: readonly PostMigrationRuntimeTableSnapshot[] = [
   {
     ...reminderSchedule,
     schemaName: 'notifications',
+    relationName: 'scenario_source_sync',
+    policyName: 'scenario_source_sync_tenant',
+    policies: [{ ...reminderSchedule.policies[0]!, name: 'scenario_source_sync_tenant' }],
+  },
+  {
+    ...reminderSchedule,
+    schemaName: 'notifications',
+    relationName: 'scenario_source_keys',
+    policyName: 'scenario_source_keys_tenant',
+    policies: [{ ...reminderSchedule.policies[0]!, name: 'scenario_source_keys_tenant' }],
+  },
+  {
+    ...reminderSchedule,
+    schemaName: 'notifications',
+    relationName: 'scenario_staff_tasks',
+    policyName: 'scenario_staff_tasks_tenant',
+    policies: [{ ...reminderSchedule.policies[0]!, name: 'scenario_staff_tasks_tenant' }],
+  },
+
+  {
+    ...reminderSchedule,
+    schemaName: 'notifications',
     relationName: 'scenarios',
     policyName: 'scenarios_tenant',
     policies: [{ ...reminderSchedule.policies[0]!, name: 'scenarios_tenant' }],

@@ -135,6 +135,7 @@ export class SupportTicketPermissionError extends Error {
 interface TicketRow extends QueryResultRow {
   id: string;
   owner_user_id: string;
+  internal_only: boolean;
   subject: string;
   category: SupportTicketCategory;
   status: SupportTicketStatus;
@@ -169,7 +170,7 @@ interface ReceiptRow extends QueryResultRow {
   result_json: SupportTicketView;
 }
 const columns =
-  'id,owner_user_id,subject,category,status,priority,assigned_to,tags,created_at::text,updated_at::text,resolved_at::text,auto_close_at::text,closed_at::text,conversation_purged_at::text,version';
+  'id,owner_user_id,internal_only,subject,category,status,priority,assigned_to,tags,created_at::text,updated_at::text,resolved_at::text,auto_close_at::text,closed_at::text,conversation_purged_at::text,version';
 const timestamp = (value: string): string => new Date(value).toISOString();
 const nullableTimestamp = (value: string | null): string | null =>
   value === null ? null : timestamp(value);
@@ -235,6 +236,7 @@ async function hasSupportPermission(
      and ($3=any(p.permissions) or ($3='support.read' and 'support.manage'=any(p.permissions))) for share of p,u`,
     [tenantId, userId, permission],
   );
+  if (row) await client.query("select set_config('app.support_internal_access','on',true)");
   return row !== undefined;
 }
 async function requireAdminRead(
@@ -254,7 +256,7 @@ async function findTicket(
 ): Promise<TicketRow | undefined> {
   return queryOne<TicketRow>(
     client,
-    `select ${columns} from support.tickets where tenant_id=$1 and id=$2${ownerUserId ? ' and owner_user_id=$3' : ''}${lock === 'share' ? ' for share' : lock ? ' for update' : ''}`,
+    `select ${columns} from support.tickets where tenant_id=$1 and id=$2${ownerUserId ? ' and owner_user_id=$3 and internal_only=false' : ''}${lock === 'share' ? ' for share' : lock ? ' for update' : ''}`,
     ownerUserId ? [tenantId, id, ownerUserId] : [tenantId, id],
   );
 }
@@ -366,6 +368,11 @@ async function notifyOwner(
     readonly sourceEventId: string;
   },
 ): Promise<void> {
+  const visible = await client.query(
+    `select 1 from support.tickets where tenant_id=$1 and id=$2 and internal_only=false`,
+    [input.tenantId, input.ticketId],
+  );
+  if (visible.rowCount !== 1) return;
   // The fixed module-owned template is materialized safely even when two tickets notify concurrently.
   await client.query(
     `insert into notifications.templates(tenant_id,template_key,version,locale,category,channels,title_template,body_template,deep_link_template,active)
@@ -510,7 +517,7 @@ export function createSupportTicketRepository(pool: Pool): SupportTicketReposito
         const clauses: string[] = [];
         if (input.ownerUserId) {
           values.push(input.ownerUserId);
-          clauses.push(`owner_user_id=$${values.length}`);
+          clauses.push(`owner_user_id=$${values.length} and internal_only=false`);
         }
         for (const [column, value] of [
           ['status', input.status],
@@ -579,7 +586,7 @@ export function createSupportTicketRepository(pool: Pool): SupportTicketReposito
           return { outcome: 'rate_limited' };
         const active = await queryOne<{ count: number }>(
           client,
-          `select count(*)::integer as count from support.tickets where tenant_id=$1 and owner_user_id=$2 and status<>'CLOSED'`,
+          `select count(*)::integer as count from support.tickets where tenant_id=$1 and owner_user_id=$2 and internal_only=false and status<>'CLOSED'`,
           [input.tenantId, input.ownerUserId],
         );
         if ((active?.count ?? 0) >= 10) return { outcome: 'ticket_limit' };
@@ -637,7 +644,7 @@ export function createSupportTicketRepository(pool: Pool): SupportTicketReposito
           [input.tenantId, input.ticketId],
         );
         if ((size?.count ?? 0) >= 1000) return { outcome: 'content_limit' };
-        const internal = input.admin && input.internal === true;
+        const internal = input.admin && (input.internal === true || row.internal_only);
         if (
           internal &&
           row.status === 'CLOSED' &&
@@ -774,6 +781,7 @@ export function createSupportTicketRepository(pool: Pool): SupportTicketReposito
     },
     async purgeClosedBatch(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query("select set_config('app.support_internal_access','on',true)");
         const rows = (
           await client.query<{ id: string }>(
             `select id from support.tickets where tenant_id=$1 and status='CLOSED' and closed_at<=now()-interval '24 months' and (conversation_purged_at is null or conversation_purged_at<closed_at) order by closed_at,id limit $2 for update skip locked`,
@@ -809,6 +817,7 @@ export function createSupportTicketRepository(pool: Pool): SupportTicketReposito
     },
     async closeResolvedBatch(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        await client.query("select set_config('app.support_internal_access','on',true)");
         const rows = (
           await client.query<{ id: string; owner_user_id: string }>(
             `select id,owner_user_id from support.tickets where tenant_id=$1 and status='RESOLVED' and auto_close_at<=now() order by auto_close_at,id limit $2 for update skip locked`,

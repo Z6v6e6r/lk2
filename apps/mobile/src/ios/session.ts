@@ -11,7 +11,8 @@ export interface IOSConfiguration {
 }
 
 interface NativeRequest {
-  readonly operation: 'challenge' | 'verify' | 'refresh' | 'logout' | 'context' | 'read';
+  readonly operation:
+    'challenge' | 'verify' | 'refresh' | 'logout' | 'context' | 'read' | 'notification';
   readonly challengeId?: string;
   readonly resource?: string;
   readonly resourceId?: string;
@@ -45,12 +46,28 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
     const method = init?.method ?? 'GET';
     let operation: NativeRequest['operation'];
     let challengeId: string | undefined;
+    let notification: { resource: string; resourceId?: string } | undefined;
     if (read) operation = 'read';
     else if (path === '/auth/challenges' && method === 'POST') operation = 'challenge';
     else if (path === '/auth/session/refresh' && method === 'POST') operation = 'refresh';
     else if (path === '/auth/session' && method === 'DELETE') operation = 'logout';
     else if (path === '/context' && method === 'GET') operation = 'context';
-    else {
+    else if (path === '/notification-endpoints/ios' && method === 'POST') {
+      operation = 'notification';
+      notification = { resource: 'pushRegister' };
+    } else if (
+      /^\/notification-endpoints\/ios\/[a-f0-9-]{36}$/i.test(path) &&
+      method === 'DELETE'
+    ) {
+      operation = 'notification';
+      notification = { resource: 'pushRevoke', resourceId: path.split('/').at(-1)! };
+    } else if (path === '/notifications/preferences' && method === 'PUT') {
+      operation = 'notification';
+      notification = { resource: 'preferencesUpdate' };
+    } else if (path === '/notifications/read-cursor' && method === 'PUT') {
+      operation = 'notification';
+      notification = { resource: 'readCursor' };
+    } else {
       const match = /^\/auth\/challenges\/([a-f0-9-]{36})\/verify$/i.exec(path);
       if (!match || method !== 'POST') throw rejectedRequest();
       operation = 'verify';
@@ -63,6 +80,7 @@ export function createIOSFetch(config: IOSConfiguration, plugin: IOSSessionPlugi
       const result = await plugin.request({
         operation,
         ...(read ?? {}),
+        ...(notification ?? {}),
         ...(challengeId ? { challengeId } : {}),
         headers: Object.fromEntries(new Headers(init?.headers).entries()),
         ...(typeof init?.body === 'string' ? { body: init.body } : {}),

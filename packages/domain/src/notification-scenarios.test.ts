@@ -39,9 +39,8 @@ describe('notification scenario contract', () => {
   it.each([
     { mandatory: true },
     { trigger: 'FIRST_ATTENDANCE' },
-    { trigger: 'SUBSCRIPTION_ENDS' },
     { trigger: 'BOOKING_CONFIRMED' },
-    { channels: ['SMS'] },
+    { channels: ['IOS_PUSH'] },
     { channels: ['ANDROID_PUSH'] },
     { channels: ['PUSH'] },
     { channels: ['WEB_PUSH', 'WEB_PUSH'] },
@@ -68,6 +67,20 @@ describe('notification scenario contract', () => {
         startsAt: '2026-10-22T16:00:00Z',
       });
       expect(schedule.expiresAt.getTime()).toBeGreaterThan(schedule.dueAt.getTime());
+    },
+  );
+  it.each(['SUBSCRIPTION_ENDS', 'BIRTHDAY'] as const)(
+    'allows before/after offsets for %s',
+    (trigger) => {
+      for (const delayMinutes of [-60, 0, 60])
+        expect(
+          notificationScenarioInputSchema.safeParse({
+            ...definition,
+            trigger,
+            delayMinutes,
+            channels: ['EMAIL'],
+          }).success,
+        ).toBe(true);
     },
   );
   it('rejects a missing time anchor', () =>

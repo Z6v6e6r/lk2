@@ -118,7 +118,7 @@ describe('mixed-fleet scenario delivery fence', () => {
   });
   it('requires a canonical run and legacy infinity before selecting a scenario', () => {
     const sql = scenarioDeliveryDueSql(true);
-    expect(sql).toContain('d.scenario_available_at <= now()');
+    expect(sql).toContain('coalesce(d.scenario_v2_available_at,d.scenario_available_at) <= now()');
     expect(sql).toContain("d.next_attempt_at='infinity'::timestamptz");
     expect(sql).toContain('scenario_run.intent_id=d.intent_id');
     expect(sql).toContain('scenario_run.tenant_id=d.tenant_id');

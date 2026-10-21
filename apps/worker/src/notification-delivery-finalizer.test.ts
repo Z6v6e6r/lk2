@@ -68,6 +68,47 @@ function fakePool(
 }
 
 describe('notification delivery finalizer', () => {
+  it.each(['APNS', 'YANDEX_SMTP'] as const)(
+    'never retries %s after an ambiguous dispatch',
+    async (transport) => {
+      const { pool, queries } = fakePool(1);
+      const code = transport === 'APNS' ? 'APNS_OUTCOME_UNKNOWN' : 'SMTP_OUTCOME_UNKNOWN';
+      expect(
+        await finalizeNotificationDelivery({
+          pool,
+          job: { ...job, scenarioDelivery: true },
+          transport,
+          platform: transport === 'APNS' ? 'IOS' : null,
+          result: { outcome: 'terminal_failure', errorCode: code, invalidate: false },
+          maxAttempts: 5,
+          retryBaseMs: 1000,
+        }),
+      ).toBe('dead');
+      const update = queries.find((q) => q.text.includes("set state = 'DEAD'"));
+      expect(update?.text).not.toContain('scenario_dispatch_started_at = null');
+      expect(update?.values).toContain(code);
+      expect(queries.some((q) => q.text.includes('delivery_receipts'))).toBe(false);
+    },
+  );
+  it('makes a proven SMTP rejection reclaimable while preserving v2 parking', async () => {
+    const { pool, queries } = fakePool(1);
+    expect(
+      await finalizeNotificationDelivery({
+        pool,
+        job: { ...job, scenarioDelivery: true },
+        transport: 'YANDEX_SMTP',
+        platform: null,
+        result: { outcome: 'retryable_failure', errorCode: 'SMTP_PROVIDER_RETRYABLE' },
+        maxAttempts: 5,
+        retryBaseMs: 1000,
+      }),
+    ).toBe('retry');
+    const update = queries.find((q) => q.text.includes("set state = 'PENDING'"));
+    expect(update?.text).toContain('scenario_dispatch_started_at = null');
+    expect(update?.text).toContain('scenario_v2_available_at = case');
+    expect(update?.text).toContain("next_attempt_at='infinity'");
+  });
+
   it('defers an expired but unreclaimed circuit-suppressed claim without attempt evidence', async () => {
     const { pool, queries } = fakePool(1);
 
@@ -108,7 +149,7 @@ describe('notification delivery finalizer', () => {
       }),
     ).toBe('retry');
     const sql = queries.find((entry) => entry.text.includes("set state = 'PENDING'"))?.text;
-    expect(sql).toContain("next_attempt_at = 'infinity'::timestamptz, scenario_available_at");
+    expect(sql).toContain("next_attempt_at='infinity'::timestamptz");
     expect(sql).toContain('attempt_count = $3 - 1');
   });
   it('keeps a retryable scenario invisible to old workers after a provider error', async () => {
@@ -125,7 +166,7 @@ describe('notification delivery finalizer', () => {
       }),
     ).toBe('retry');
     expect(queries.find((entry) => entry.text.includes("set state = 'PENDING'"))?.text).toContain(
-      "next_attempt_at = 'infinity'::timestamptz, scenario_available_at",
+      "next_attempt_at='infinity'::timestamptz",
     );
   });
   it('does not decrement a circuit-suppressed attempt after a newer claim fenced it out', async () => {

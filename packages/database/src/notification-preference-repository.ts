@@ -7,7 +7,7 @@ import { withTenantTransaction } from './connection.js';
  * is the only writer and the aggregate stays tenant-scoped: every statement runs inside a
  * tenant transaction and the table is protected by RLS with FORCE RLS.
  */
-export type NotificationPreferenceChannel = 'IN_APP' | 'PUSH';
+export type NotificationPreferenceChannel = 'IN_APP' | 'PUSH' | 'EMAIL';
 
 export interface NotificationPreferenceChannelRule {
   readonly category: string;
@@ -63,7 +63,7 @@ interface ChannelRuleRow extends QueryResultRow {
 const DEFAULT_TIMEZONE = 'Europe/Moscow';
 
 function isChannel(value: string): value is NotificationPreferenceChannel {
-  return value === 'IN_APP' || value === 'PUSH';
+  return value === 'IN_APP' || value === 'PUSH' || value === 'EMAIL';
 }
 
 function mapPreference(row: PreferenceRow): NotificationPreferenceRecord | undefined {
@@ -117,7 +117,7 @@ async function readPreferences(
             timezone
        from notifications.user_preferences
       where tenant_id = $1 and user_id = $2
-        and channel in ('IN_APP', 'PUSH')
+        and channel in ('IN_APP', 'PUSH','EMAIL')
       order by category, channel`,
     [tenantId, userId],
   );
@@ -153,11 +153,11 @@ export function createNotificationPreferenceRepository(
                union
 ${
   options.scenariosEnabled
-    ? `               select case when s.definition->>'trigger'='FRIEND_GAME_PUBLISHED' then 'GAME_RECOMMENDATION' else 'BOOKING' end as category,
-                      case when c.value='IN_APP' then 'IN_APP' else 'PUSH' end as channel
+    ? `               select case s.definition->>'trigger' when 'FRIEND_GAME_PUBLISHED' then 'GAME_RECOMMENDATION' when 'BIRTHDAY' then 'BIRTHDAY' when 'SUBSCRIPTION_ENDS' then 'SUBSCRIPTION' when 'TRAINING_ATTENDED' then 'TRAINING_ATTENDANCE' else 'BOOKING' end as category,
+                      case when c.value in ('IN_APP','EMAIL') then c.value else 'PUSH' end as channel
                  from notifications.scenarios s
                  cross join lateral jsonb_array_elements_text(s.definition->'channels') c(value)
-                where s.tenant_id=$1 and s.active=true
+                where s.tenant_id=$1 and (s.active=true or s.extended_active=true) and c.value in ('IN_APP','EMAIL','WEB_PUSH','ANDROID_PUSH','IOS_PUSH')
                union
 `
     : ''
@@ -168,7 +168,11 @@ ${
           [tenantId],
         );
         return result.rows
-          .filter((row) => isChannel(row.channel))
+          .filter(
+            (row) =>
+              isChannel(row.channel) &&
+              (row.channel !== 'EMAIL' || options.scenariosEnabled === true),
+          )
           .map((row) => ({
             category: row.category,
             channel: row.channel as NotificationPreferenceChannel,

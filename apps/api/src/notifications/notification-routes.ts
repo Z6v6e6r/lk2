@@ -12,6 +12,7 @@ import {
   isSupportedNotificationTimeZone,
   notificationPreferenceCategoryUpdateSchema,
 } from '@phub/notifications';
+import { z } from 'zod';
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from 'fastify';
 
 import { sendApiError } from '../http-errors.js';
@@ -33,10 +34,22 @@ interface NotificationPreferenceCategoryView {
   readonly channels: readonly NotificationPreferenceChannelView[];
 }
 
+const extendedPreferenceSchema = notificationPreferenceCategoryUpdateSchema.extend({
+  channels: z
+    .array(
+      notificationPreferenceCategoryUpdateSchema.shape.channels.element.extend({
+        channel: z.enum(['IN_APP', 'PUSH', 'EMAIL']),
+      }),
+    )
+    .min(1)
+    .max(3),
+});
+
 function preferenceView(input: {
   readonly configurable: readonly NotificationPreferenceChannelRule[];
   readonly stored: readonly NotificationPreferenceRecord[];
   readonly runtime: NotificationRuntimeSettings;
+  readonly emailEnabled?: boolean;
 }): { readonly categories: readonly NotificationPreferenceCategoryView[] } {
   const storedByKey = new Map(
     input.stored.map((preference) => [`${preference.category}:${preference.channel}`, preference]),
@@ -48,12 +61,16 @@ function preferenceView(input: {
     channels.push({
       channel: rule.channel,
       // An absent row is the server default: the recipient allows the channel.
-      enabled: preference?.enabled ?? true,
+      enabled: preference?.enabled ?? (rule.channel !== 'EMAIL' && rule.category !== 'BIRTHDAY'),
       timezone: preference?.timezone ?? NOTIFICATION_PREFERENCE_DEFAULT_TIMEZONE,
       available:
         rule.channel === 'IN_APP'
           ? input.runtime.inAppEnabled
-          : input.runtime.webPushEnabled || input.runtime.androidPushEnabled,
+          : rule.channel === 'EMAIL'
+            ? input.emailEnabled === true
+            : input.runtime.webPushEnabled ||
+              input.runtime.androidPushEnabled ||
+              input.runtime.iosPushEnabled,
       ...(preference?.quietFrom && preference.quietUntil
         ? { quietFrom: preference.quietFrom, quietUntil: preference.quietUntil }
         : {}),
@@ -131,7 +148,12 @@ async function notificationRuntime(
   tenantId: string,
 ): Promise<NotificationRuntimeSettings | undefined> {
   const settings = await repository.getRuntimeSettings(tenantId);
-  if (settings.inAppEnabled || settings.webPushEnabled || settings.androidPushEnabled)
+  if (
+    settings.inAppEnabled ||
+    settings.webPushEnabled ||
+    settings.androidPushEnabled ||
+    settings.iosPushEnabled
+  )
     return settings;
   sendApiError(request, reply, 404, 'NOTIFICATIONS_DISABLED', 'Раздел оповещений не включён.');
   return undefined;
@@ -142,6 +164,7 @@ export function registerNotificationRoutes(
   options: {
     readonly repository?: NotificationInboxRepository;
     readonly preferenceRepository?: NotificationPreferenceRepository;
+    readonly emailEnabled?: boolean;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
@@ -297,7 +320,12 @@ export function registerNotificationRoutes(
           userId: current.userId,
         }),
       ]);
-      return preferenceView({ configurable, stored, runtime });
+      return preferenceView({
+        configurable,
+        stored,
+        runtime,
+        emailEnabled: options.emailEnabled === true,
+      });
     },
   );
 
@@ -327,7 +355,7 @@ export function registerNotificationRoutes(
         Object.keys(body).length !== 1 ||
         !Array.isArray(body.categories) ||
         body.categories.length === 0 ||
-        body.categories.length > 8
+        body.categories.length > 32
       ) {
         return sendApiError(
           request,
@@ -343,7 +371,7 @@ export function registerNotificationRoutes(
       const entries: NotificationPreferenceUpdate[] = [];
       const seen = new Set<string>();
       for (const candidate of body.categories) {
-        const parsed = notificationPreferenceCategoryUpdateSchema.safeParse(candidate);
+        const parsed = extendedPreferenceSchema.safeParse(candidate);
         if (!parsed.success) {
           return sendApiError(
             request,
@@ -412,7 +440,12 @@ export function registerNotificationRoutes(
         entries,
         correlationId: request.id,
       });
-      return preferenceView({ configurable, stored, runtime });
+      return preferenceView({
+        configurable,
+        stored,
+        runtime,
+        emailEnabled: options.emailEnabled === true,
+      });
     },
   );
 }

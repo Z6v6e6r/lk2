@@ -34,7 +34,7 @@ import styles from './notifications-ui/NotificationsUi.module.css';
 import type { WebPushBrowserState } from './web-push-client.js';
 
 interface NotificationsPageProps {
-  readonly platform?: 'web' | 'android';
+  readonly platform?: 'web' | 'android' | 'ios';
   readonly page: NotificationInboxPage;
   readonly webPush: WebPushConfiguration;
   readonly browserState: WebPushBrowserState;

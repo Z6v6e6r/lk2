@@ -67,7 +67,7 @@ export async function runFcmDeliveryBatch(options: {
   const jobs = await withTenantTransaction(options.pool, options.tenantId, async (client) => {
     const found = await client.query<Row>(
       `select d.id, d.intent_id, d.endpoint_id, d.attempt_count, a.id provider_account_id,
-              ${options.scenarioPolicyEnabled ? 'd.scenario_available_at is not null' : 'false'} scenario_delivery,
+              ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} scenario_delivery,
               e.status endpoint_status, e.address_ciphertext, e.encryption_key_id,
               coalesce(inbox.id, i.id) notification_id, i.rendered_deep_link deep_link
          from notifications.deliveries d join notifications.intents i on i.tenant_id=d.tenant_id and i.id=d.intent_id
@@ -79,7 +79,7 @@ export async function runFcmDeliveryBatch(options: {
           and a.channel='PUSH' and a.platform='ANDROID' and a.provider='FCM' and a.app_id=$2 and a.environment=$3 and a.status='ACTIVE'
           and e.status in ('ACTIVE','INVALID','REVOKED')
           and exists (select 1 from notifications.tenant_runtime_settings r where r.tenant_id=d.tenant_id and r.android_push_enabled=true)
-        order by ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_available_at,d.next_attempt_at)' : 'd.next_attempt_at'},d.created_at for update of d skip locked limit $4`,
+        order by ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at,d.next_attempt_at)' : 'd.next_attempt_at'},d.created_at for update of d skip locked limit $4`,
       // One provider call per lease: queued jobs must not expire before their serial send starts.
       [options.tenantId, options.appId, options.environment, 1],
     );

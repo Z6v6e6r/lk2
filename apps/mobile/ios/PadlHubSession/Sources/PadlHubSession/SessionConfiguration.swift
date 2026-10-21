@@ -34,7 +34,7 @@ public struct SessionConfiguration: Sendable {
 }
 
 public enum SessionOperation: String, Sendable {
-  case challenge, verify, refresh, logout, context, read
+  case challenge, verify, refresh, logout, context, read, notification
 }
 
 public struct SessionRequest: Sendable {
@@ -43,16 +43,18 @@ public struct SessionRequest: Sendable {
   public let headers: [String: String]
   public let body: String?
   public let read: CabinetRead?
+  public let notification: NotificationCommand?
 
   public init(
     operation: SessionOperation, challengeID: String? = nil,
-    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil
+    headers: [String: String] = [:], body: String? = nil, read: CabinetRead? = nil, notification: NotificationCommand? = nil
   ) {
     self.operation = operation
     self.challengeID = challengeID
     self.headers = headers
     self.body = body
     self.read = read
+    self.notification = notification
   }
 
   func urlRequest(configuration: SessionConfiguration) throws -> URLRequest {
@@ -75,12 +77,17 @@ public struct SessionRequest: Sendable {
     case .context:
       path = "/user/api/v1/\(configuration.tenant)/context"
       method = "GET"
+    case .notification:
+      guard let notification else {throw SessionFailure.request}
+      path = try notification.path(configuration: configuration)
+      method = notification.method
     case .read:
       guard read != nil else { throw SessionFailure.request }
       method = "GET"
     }
     guard challengeID == nil || operation == .verify,
       read == nil || operation == .read,
+      notification == nil || operation == .notification,
       let url = try read?.url(configuration: configuration) ?? URL(string: configuration.origin + path)
     else { throw SessionFailure.request }
     var request = URLRequest(
@@ -99,7 +106,12 @@ public struct SessionRequest: Sendable {
       else { throw SessionFailure.request }
       normalized[name] = value
     }
-    if operation == .context || (operation == .read && read?.resource.isPublic == false) {
+    if operation == .notification {
+      guard let authorization=normalized["authorization"], authorization.hasPrefix("Bearer "), authorization.count>7,
+        let key=normalized["idempotency-key"],key.range(of:"^[A-Za-z0-9._:-]{16,128}$",options:.regularExpression) != nil else {throw SessionFailure.request}
+      request.setValue(authorization,forHTTPHeaderField:"Authorization")
+      request.setValue(key,forHTTPHeaderField:"Idempotency-Key")
+    } else if operation == .context || (operation == .read && read?.resource.isPublic == false) {
       guard let authorization = normalized["authorization"], authorization.hasPrefix("Bearer "),
         authorization.count > 7
       else { throw SessionFailure.request }
@@ -145,6 +157,9 @@ public struct SessionRequest: Sendable {
       }
       request.httpBody = data
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    } else if operation == .notification {
+      request.httpBody = try notification?.validatedBody(body)
+      if request.httpBody != nil {request.setValue("application/json",forHTTPHeaderField:"Content-Type")}
     } else if body != nil {
       throw SessionFailure.request
     }
