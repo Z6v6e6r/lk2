@@ -237,11 +237,34 @@ export function registerRulesRegistryAdminRoutes(
         );
         return undefined;
       }
+      let subscriptions: RegistrySubscriptionSource;
+      if (!options.subscriptionPolicyRegistryClient) {
+        subscriptions = {
+          source: 'CUP_PUBLISHED',
+          status: 'UNAVAILABLE',
+          reason: 'SUBSCRIPTION_POLICY_REGISTRY_NOT_CONFIGURED',
+        };
+      } else {
+        try {
+          subscriptions = {
+            source: 'CUP_PUBLISHED',
+            status: 'OK',
+            registry: await options.subscriptionPolicyRegistryClient.read(correlationId(request)),
+          };
+        } catch {
+          subscriptions = {
+            source: 'CUP_PUBLISHED',
+            status: 'UNAVAILABLE',
+            reason: 'SUBSCRIPTION_POLICY_REGISTRY_UNAVAILABLE',
+          };
+        }
+      }
       return {
         schemaVersion: 1,
         source: 'LK1_INVENTORY',
         authority: 'INVENTORY_ONLY',
         inventory,
+        coverage: legacyRulesCoverage(subscriptions),
       };
     },
   );

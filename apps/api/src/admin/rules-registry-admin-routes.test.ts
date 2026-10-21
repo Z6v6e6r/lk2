@@ -84,6 +84,7 @@ interface LegacyBody {
   source: string;
   authority: string;
   inventory: { products: unknown[]; rules: Array<Record<string, unknown>> };
+  coverage: { status: string; reason?: string; coveredProducts?: number };
 }
 
 function levelRepository(): LevelEligibilityPolicyRepository {
@@ -261,6 +262,57 @@ describe('rules registry admin route', () => {
     expect(body.inventory.rules.length).toBeGreaterThan(0);
     expect(body.inventory.rules[0]).toHaveProperty('ruleId');
     expect(body.inventory.rules[0]).toHaveProperty('evidence');
+    expect(body.coverage).toMatchObject({
+      status: 'UNAVAILABLE',
+      reason: 'SUBSCRIPTIONS_UNAVAILABLE',
+    });
+  });
+
+  it('adds published-policy coverage to the legacy inventory endpoint', async () => {
+    const item = {
+      subscriptionTypeId: 'subscription_type:annual',
+      code: 'ANNUAL_HUB',
+      title: 'Годовой HUB',
+      description: null,
+      state: 'ACTIVE' as const,
+      currentPolicyVersion: 3,
+      publication: {
+        publicationId: 'publication:annual-v3',
+        policyVersion: 3,
+        policyDigest: `sha256:${'a'.repeat(64)}`,
+        state: 'PUBLISHED' as const,
+        effectiveAt: '2026-10-01T00:00:00.000Z',
+        applyTo: 'NEW_ONLY' as const,
+        publishedAt: '2026-10-01T00:00:00.000Z',
+        supersededAt: null,
+        runtimeCompatibility: null,
+      },
+      rules: null,
+      surfaces: ['CREATE_GAME', 'JOIN_GAME'],
+      providerProductIds: ['db7a5250-7369-4f43-8ac5-9111be24bc74'],
+      versions: [],
+      instances: { total: 0, byPolicyVersion: [] },
+      lastDecision: null,
+      lastQuoteDecision: null,
+    };
+    const app = await buildApp({
+      config,
+      logger: createLogger('rules-registry-admin-test', 'silent'),
+      pool: fakePool(),
+      levelEligibilityPolicyRepository: levelRepository(),
+      subscriptionPolicyRegistryClient: {
+        read: vi.fn().mockResolvedValue({ ...registry, items: [item] }),
+      },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/legacy-rules-inventory',
+      headers: await adminHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as LegacyBody;
+    expect(body.coverage).toMatchObject({ status: 'OK', coveredProducts: 1 });
   });
 
   it('does not present missing sources as empty data', async () => {
