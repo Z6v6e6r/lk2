@@ -8,6 +8,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandl
 import { z } from 'zod';
 
 import { sendApiError } from '../http-errors.js';
+import {
+  legacyRulesInventorySummary,
+  readLegacyRulesInventory,
+  type LegacyRulesInventorySummary,
+} from './legacy-rules-inventory-read.js';
 
 const sportCodeSchema = z
   .string()
@@ -46,6 +51,7 @@ export interface RulesRegistryAdminResponse {
   readonly generatedAt: string;
   readonly level: RegistryLevelSource | RegistryLevelUnavailable;
   readonly subscriptions: RegistrySubscriptionSource;
+  readonly legacy: LegacyRulesInventorySummary;
 }
 
 function principal(request: FastifyRequest): { tenantId: string; actorUserId: string } | undefined {
@@ -142,6 +148,33 @@ export function registerRulesRegistryAdminRoutes(
         generatedAt: new Date().toISOString(),
         level,
         subscriptions,
+        legacy: legacyRulesInventorySummary(),
+      };
+    },
+  );
+
+  app.get(
+    '/admin/api/v1/:tenantKey/legacy-rules-inventory',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      if (!requireRegistryRead(request, reply)) return undefined;
+      const inventory = readLegacyRulesInventory();
+      if (!inventory) {
+        sendApiError(
+          request,
+          reply,
+          503,
+          'LEGACY_RULES_INVENTORY_INVALID',
+          'Срез действующих правил LK1 недоступен.',
+        );
+        return undefined;
+      }
+      return {
+        schemaVersion: 1,
+        source: 'LK1_INVENTORY',
+        authority: 'INVENTORY_ONLY',
+        inventory,
       };
     },
   );
