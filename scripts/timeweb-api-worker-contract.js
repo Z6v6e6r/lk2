@@ -105,7 +105,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: '6420f1d4b5d5c905563d23921c61ce68be2ca28b',
-    newOid: '5a2e148c5f82f291e329545989ef1136974d17a1',
+    newOid: '8c9d94b6462aa9a770d95ae66ef717b69d4d1c83',
   }),
   Object.freeze({
     path: 'scripts/timeweb-api-worker-upgrade.d.ts',

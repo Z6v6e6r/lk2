@@ -42,7 +42,7 @@ API_WORKER_CI_DOWNLOAD_PATCH = {
     'scripts/pull-request-ci-workflow.test.ts': {'path': 'scripts/pull-request-ci-workflow.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'caf2f124bbc58e4225feca1ad38100ed07991787', 'newOid': 'e2abfd6adac5d742b38ea16e8cb3d1dbb90c0982'},
 }
 API_WORKER_CI_READER_PATCH = {
-    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': '5a2e148c5f82f291e329545989ef1136974d17a1'},
+    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': '8c9d94b6462aa9a770d95ae66ef717b69d4d1c83'},
     'scripts/timeweb-api-worker-upgrade.d.ts': {'path': 'scripts/timeweb-api-worker-upgrade.d.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '151a183b17349c57a4d23cd58b03dd33be0e1172', 'newOid': 'cb7711e1dd145acb9b1beefc74e3d643ecbb5d60'},
     'scripts/timeweb-api-worker-upgrade.test.ts': {'path': 'scripts/timeweb-api-worker-upgrade.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'e446cc167a63ee54e9352dc38589e414f1aa7247', 'newOid': '1e9e3e958b39ad80a6f68c0f51efef45308cfa86'},
     'scripts/timeweb-api-worker-adapter.test.ts': {'path': 'scripts/timeweb-api-worker-adapter.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'dba09b8571260d1cb817971ce6a15a42a70f1032', 'newOid': 'e858abd81817cef9d6d62eca98b965f7bbce0c6e'},

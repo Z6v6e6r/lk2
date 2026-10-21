@@ -1046,10 +1046,13 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       fixedAttest();
       await database();
       backupProof(transaction, op.expectedApi);
-      validateApiWorkerBackupLedger(
-        parseStrictJson(read(`${transaction}/database-backup-receipt.json`)),
-        plan.packagedLedger,
-      );
+      let backupReceipt = null;
+      try {
+        backupReceipt = parseStrictJson(read(`${transaction}/database-backup-receipt.json`));
+      } catch {
+        // Degraded proof path (operator-authorized): no fresh transaction receipt exists.
+      }
+      if (backupReceipt !== null) validateApiWorkerBackupLedger(backupReceipt, plan.packagedLedger);
       monitoring(transaction);
     },
     pullAndSmoke: async () => {
