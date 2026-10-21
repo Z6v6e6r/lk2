@@ -142,6 +142,8 @@ describe('paid JOIN consent', () => {
       { kind: 'IDLE' },
       {
         type: 'CONDITIONS_CONSENT_REQUIRED',
+        expiresAt: conditions().expiresAt,
+        revision: 7,
         consent: check.consent!,
         subscriptionInstanceId: check.subscriptionInstanceId!,
       },
@@ -153,6 +155,8 @@ describe('paid JOIN consent', () => {
   it('rejects a consent for a different amount and never auto-accepts a changed price', () => {
     const state: GameJoinFlowState = {
       kind: 'NEEDS_CONSENT',
+      expiresAt: conditions().expiresAt,
+      revision: 7,
       consent: CONSENT,
       subscriptionInstanceId: SUBSCRIPTION_ID,
       message: '',
@@ -231,6 +235,40 @@ describe('paid JOIN consent', () => {
 });
 
 describe('trusted paid success', () => {
+  it('preserves service-denial semantics in readback as well as thrown errors', () => {
+    const result = classifyGameJoinOperation(
+      operation('FAILED', {
+        commercial: null,
+        error: { code: 'GAME_SERVICE_BLOCKED', message: 'blocked' },
+      }),
+      { paid: true },
+    );
+    expect(result.state.kind).toBe('SERVICE_BLOCKED');
+    expect(result.custody).toBe('DISCARD');
+  });
+  it('retains original custody when readback cannot yet find a dispatched operation', () => {
+    const plan = classifyGameJoinErrorCode('GAME_OPERATION_NOT_FOUND', { paid: true });
+    expect(plan.custody).toBe('KEEP');
+    expect(plan.state.kind).toBe('WAIT_FOR_RECONCILIATION');
+  });
+  it.each([
+    {},
+    { provider: 'OTHER', status: 'CONFIRMED', confirmedAt: '2026-10-21T08:00:01Z' },
+    { provider: 'VIVA', status: 'PENDING', confirmedAt: '2026-10-21T08:00:01Z' },
+    { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: 'invalid' },
+  ])('does not manufacture a confirmed receipt from %j', (receipt) => {
+    const raw = operation('SUCCEEDED');
+    const parsed = readGameJoinCommandResult({
+      ...raw,
+      operation: {
+        ...raw.operation,
+        commercial: { attemptState: 'UNKNOWN', receipt, reason: null },
+      },
+    });
+    expect(parsed).not.toBeNull();
+    expect(classifyGameJoinOperation(parsed!, { paid: true }).trustedSuccess).toBe(false);
+  });
+
   it.each([
     [
       'receipt',
@@ -399,10 +437,10 @@ describe('separate blocked states', () => {
     expect(unknownFree.state.kind).toBe('FAILED');
   });
 
-  it('treats an operation-not-found readback as no durable operation', () => {
+  it('does not allow a new purchase from a point-in-time missing readback', () => {
     const plan = classifyGameJoinErrorCode('GAME_OPERATION_NOT_FOUND', { paid: true });
-    expect(plan.custody).toBe('DISCARD');
-    expect(plan.state).toEqual(expect.objectContaining({ kind: 'FAILED' }));
+    expect(plan.custody).toBe('KEEP');
+    expect(plan.state).toEqual(expect.objectContaining({ kind: 'WAIT_FOR_RECONCILIATION' }));
   });
 });
 

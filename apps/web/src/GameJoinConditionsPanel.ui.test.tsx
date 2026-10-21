@@ -24,6 +24,7 @@ function quote(): GameJoinConditions {
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     nonBinding: true,
     requiresReservationRecheck: true,
+    requiresPriceConsent: true,
     source: 'LK1_PRICE_PREVIEW',
     providerMode: 'MOCK',
   };

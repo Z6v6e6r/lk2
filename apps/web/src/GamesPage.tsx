@@ -35,6 +35,8 @@ import {
   classifyGameJoinOperation,
   ensureFreshGameJoinConsent,
   gameJoinConditionsUnavailableMessage,
+  gameJoinServiceBlockedMessage,
+  gameJoinPaymentUnavailableMessage,
   gameJoinFlowBlocksPurchase,
   gameJoinRecoveryState,
   gameJoinRequiresPaidFlow,
@@ -300,6 +302,22 @@ function initialDetailTab(game: ViewerGameCard): GameDetailTab {
   return Date.parse(game.endsAt) <= Date.now() ? 'RESULT' : 'GAME';
 }
 
+function withJoinDeadline<T>(pending: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('JOIN_RESPONSE_TIMEOUT')), 8_000);
+    pending.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error('JOIN_REQUEST_FAILED'));
+      },
+    );
+  });
+}
+
 export interface GamesPageProps {
   readonly gateway: AuthGateway;
   readonly gameId?: string;
@@ -313,7 +331,23 @@ export interface GamesPageProps {
   readonly joinPrincipal?: GameJoinAttemptPrincipal;
 }
 
-export function GamesPage({
+export function GamesPage(props: GamesPageProps): React.JSX.Element {
+  const identity = JSON.stringify([
+    props.gameId,
+    props.eventId,
+    props.joinPrincipal?.tenantId,
+    props.joinPrincipal?.userId,
+    props.chatNavigationScope?.tenantKey,
+    props.chatNavigationScope?.userId,
+  ]);
+  const [scope, setScope] = useState({ identity, gateway: props.gateway, generation: 0 });
+  if (scope.identity !== identity || scope.gateway !== props.gateway) {
+    setScope({ identity, gateway: props.gateway, generation: scope.generation + 1 });
+  }
+  return <GamesPageContent key={scope.generation} {...props} />;
+}
+
+function GamesPageContent({
   gateway,
   gameId,
   eventId,
@@ -418,6 +452,13 @@ export function GamesPage({
   const joinConditionsInFlight = useRef(false);
   const readbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const readbackGeneration = useRef(0);
+  const joinPageActive = useRef(true);
+  useEffect(() => {
+    joinPageActive.current = true;
+    return () => {
+      joinPageActive.current = false;
+    };
+  }, []);
   const detailJoinFlow = detail && joinFlow?.gameId === detail.id ? joinFlow.flow : undefined;
   // While custody/consent owns the action the subscription choice must not look like a fresh purchase.
   const joinCustodyActive =
@@ -809,17 +850,6 @@ export function GamesPage({
       setJoinFlow((current) => (current && current.gameId !== gameIdValue ? null : current));
       return;
     }
-    if (attempt.state === 'SUCCEEDED') {
-      discardJoinCustody(attempt);
-      setJoinFlow((current) => (current && current.gameId === gameIdValue ? null : current));
-      return;
-    }
-    if (attempt.state === 'PENDING' && attempt.dispatchStartedAt === undefined) {
-      // The POST was never started, so no server side effect can exist for this frozen request.
-      discardJoinCustody(attempt);
-      setJoinFlow((current) => (current && current.gameId === gameIdValue ? null : current));
-      return;
-    }
     setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
     await pollJoinOperation(gameIdValue, attempt, { remainingAttempts: 3, delayMs: 0 });
   }
@@ -1045,19 +1075,22 @@ export function GamesPage({
     setJoinFlow({ gameId: gameIdValue, flow });
   }
 
-  function discardJoinCustody(attempt: GameJoinAttempt | null): void {
+  async function discardJoinCustody(attempt: GameJoinAttempt | null): Promise<void> {
     if (!attempt || !joinPrincipal || !joinStorage) return;
     try {
-      discardGameJoinAttempt(joinPrincipal, attempt, joinStorage, { allowUnresolved: true });
+      await discardGameJoinAttempt(joinPrincipal, attempt, joinStorage, { allowUnresolved: true });
     } catch {
       // The durable entry stays; a later mount re-reads the same server operation instead of paying again.
     }
   }
 
-  function markJoinUnresolved(attempt: GameJoinAttempt | null, operationId?: string): void {
+  async function markJoinUnresolved(
+    attempt: GameJoinAttempt | null,
+    operationId?: string,
+  ): Promise<void> {
     if (!attempt || !joinPrincipal || !joinStorage) return;
     try {
-      resolveGameJoinAttempt(
+      await resolveGameJoinAttempt(
         joinPrincipal,
         attempt,
         operationId === undefined ? { state: 'UNKNOWN' } : { state: 'UNKNOWN', operationId },
@@ -1068,53 +1101,117 @@ export function GamesPage({
     }
   }
 
-  function completeJoinSuccess(
+  async function bindJoinOperation(
+    attempt: GameJoinAttempt | null,
+    result: GameJoinCommandResultView,
+  ): Promise<GameJoinAttempt> {
+    if (!attempt || !joinPrincipal || !joinStorage || result.operation.gameId !== attempt.gameId) {
+      throw new GameJoinAttemptError('ATTEMPT_STATE_CHANGED');
+    }
+    // Resolve against current custody under its lock, not the stale object captured by polling.
+    return resolveGameJoinAttempt(
+      joinPrincipal,
+      attempt,
+      { state: 'PENDING', operationId: result.operation.id },
+      joinStorage,
+    );
+  }
+
+  async function completeJoinSuccess(
     gameIdValue: string,
     attempt: GameJoinAttempt | null,
     operationId: string | null,
-  ): void {
-    if (attempt && joinPrincipal && joinStorage) {
-      try {
-        const resolved = resolveGameJoinAttempt(
-          joinPrincipal,
-          attempt,
-          operationId === null ? { state: 'SUCCEEDED' } : { state: 'SUCCEEDED', operationId },
-          joinStorage,
-        );
-        discardGameJoinAttempt(joinPrincipal, resolved, joinStorage);
-      } catch {
-        // The success is trusted from the server; a stale entry only causes a readback on mount.
-      }
-    }
+    minimumRevision: number | null,
+  ): Promise<void> {
+    if (!joinPageActive.current) return;
     clearJoinReadback();
-    setJoinFlow(null);
-    setJoinBusy(false);
-    setNotice('Вы в игре. Состав и доступные действия обновлены.');
-    setReloadToken((current) => current + 1);
+    const generation = readbackGeneration.current;
+    setJoinBusy(true);
+    try {
+      setJoinFlowFor(gameIdValue, { kind: 'CONFIRMED_UPDATING' });
+      if (attempt && joinPrincipal && joinStorage) {
+        try {
+          await resolveGameJoinAttempt(
+            joinPrincipal,
+            attempt,
+            operationId === null ? { state: 'SUCCEEDED' } : { state: 'SUCCEEDED', operationId },
+            joinStorage,
+          );
+        } catch {
+          setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
+          return;
+        }
+      }
+      try {
+        const [card, bookings] = await Promise.all([
+          withJoinDeadline(gateway.getGame(gameIdValue)),
+          withJoinDeadline(gateway.getUpcomingBookings()),
+        ]);
+        if (!joinPageActive.current || generation !== readbackGeneration.current) return;
+        if (
+          card.id !== gameIdValue ||
+          minimumRevision === null ||
+          !Number.isSafeInteger(minimumRevision) ||
+          card.revision < minimumRevision ||
+          !['PARTICIPANT', 'ORGANIZER'].includes(card.viewerRelation) ||
+          !card.participants.some((player) => player.userId === joinPrincipal?.userId)
+        )
+          return;
+        if (
+          bookings.state !== 'READY' ||
+          !Number.isFinite(Date.parse(bookings.staleAt)) ||
+          Date.parse(bookings.staleAt) <= Date.now() ||
+          !bookings.items.some(
+            (item) =>
+              item.gameId === gameIdValue &&
+              item.status === 'confirmed' &&
+              item.roster?.state === 'READY' &&
+              (item.roster.revision ?? -1) >= minimumRevision,
+          )
+        )
+          return;
+        setDetail(card);
+        setGames((current) => current.map((item) => (item.id === card.id ? card : item)));
+      } catch {
+        // Receipt confirmed, projections unavailable: keep custody and do not offer JOIN.
+        return;
+      }
+      setJoinFlow(null);
+      setNotice('Вы в игре. Состав и доступные действия обновлены.');
+    } finally {
+      if (joinPageActive.current && generation === readbackGeneration.current) setJoinBusy(false);
+    }
   }
 
-  function applyJoinOperationResult(
+  async function applyJoinOperationResult(
     gameIdValue: string,
     attempt: GameJoinAttempt | null,
     result: GameJoinCommandResultView,
-  ): void {
+  ): Promise<void> {
+    const boundAttempt = await bindJoinOperation(attempt, result);
+    if (!joinPageActive.current) return;
     const classification = classifyGameJoinOperation(result, { paid: true });
     if (classification.trustedSuccess) {
-      completeJoinSuccess(gameIdValue, attempt, result.operation.id);
+      await completeJoinSuccess(
+        gameIdValue,
+        boundAttempt,
+        result.operation.id,
+        result.operation.aggregateRevision,
+      );
       return;
     }
     if (classification.custody === 'KEEP') {
-      markJoinUnresolved(attempt, result.operation.id);
+      await markJoinUnresolved(boundAttempt, result.operation.id);
       setJoinFlowFor(gameIdValue, classification.state);
-      if (classification.state.kind === 'WAIT_FOR_RECONCILIATION' && attempt) {
-        void pollJoinOperation(gameIdValue, attempt, {
+      if (classification.state.kind === 'WAIT_FOR_RECONCILIATION') {
+        void pollJoinOperation(gameIdValue, boundAttempt, {
           remainingAttempts: 4,
           delayMs: classification.state.retryAfterSeconds * 1000,
         });
       }
       return;
     }
-    discardJoinCustody(attempt);
+    await discardJoinCustody(boundAttempt);
     setJoinFlowFor(gameIdValue, classification.state);
     setReloadToken((current) => current + 1);
   }
@@ -1143,30 +1240,43 @@ export function GamesPage({
     if (generation !== readbackGeneration.current) return;
     setJoinBusy(true);
     try {
-      let raw = await gateway.getPaidJoinOperation(gameIdValue, attempt.idempotencyKey);
+      let raw = await withJoinDeadline(
+        gateway.getPaidJoinOperation(gameIdValue, attempt.idempotencyKey),
+      );
       if (generation !== readbackGeneration.current) return;
       if (
         gateway.reconcilePaidJoinOperation &&
         ['UNKNOWN', 'PROCESSING'].includes(raw.operation.status)
       ) {
-        raw = await gateway.reconcilePaidJoinOperation(raw.operation.id);
+        raw = await withJoinDeadline(gateway.reconcilePaidJoinOperation(raw.operation.id));
       }
       if (generation !== readbackGeneration.current) return;
       const result = readGameJoinCommandResult(raw);
-      if (!result) {
+      if (
+        !result ||
+        result.operation.gameId !== gameIdValue ||
+        (attempt.operationId && result.operation.id !== attempt.operationId)
+      ) {
         setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
         return;
       }
+      const boundAttempt = await bindJoinOperation(attempt, result);
+      if (generation !== readbackGeneration.current) return;
       const classification = classifyGameJoinOperation(result, { paid: true });
       if (classification.trustedSuccess) {
-        completeJoinSuccess(gameIdValue, attempt, result.operation.id);
+        await completeJoinSuccess(
+          gameIdValue,
+          boundAttempt,
+          result.operation.id,
+          result.operation.aggregateRevision,
+        );
         return;
       }
-      markJoinUnresolved(attempt, result.operation.id);
+      await markJoinUnresolved(boundAttempt, result.operation.id);
       setJoinFlowFor(gameIdValue, classification.state);
       if (classification.state.kind === 'WAIT_FOR_RECONCILIATION') {
         if (options.remainingAttempts > 1) {
-          void pollJoinOperation(gameIdValue, attempt, {
+          void pollJoinOperation(gameIdValue, boundAttempt, {
             remainingAttempts: options.remainingAttempts - 1,
             delayMs: classification.state.retryAfterSeconds * 1000,
           });
@@ -1174,17 +1284,15 @@ export function GamesPage({
         return;
       }
       if (classification.custody === 'DISCARD') {
-        discardJoinCustody(attempt);
+        await discardJoinCustody(boundAttempt);
         setReloadToken((current) => current + 1);
       }
     } catch (cause) {
       if (generation !== readbackGeneration.current) return;
       if (errorCode(cause) === 'GAME_OPERATION_NOT_FOUND') {
-        // Only a proven "nothing durable exists under this key" allows a fresh explicit attempt.
-        discardJoinCustody(attempt);
+        // GET can overtake the original POST; absence is not proof of a terminal no-write outcome.
         const plan = classifyGameJoinErrorCode('GAME_OPERATION_NOT_FOUND', { paid: true });
         setJoinFlowFor(gameIdValue, plan.state);
-        setReloadToken((current) => current + 1);
         return;
       }
       setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
@@ -1226,10 +1334,6 @@ export function GamesPage({
       setError('Сохранённая попытка записи не найдена. Можно записаться заново.');
       return;
     }
-    if (attempt.state === 'SUCCEEDED') {
-      completeJoinSuccess(game.id, attempt, attempt.operationId ?? null);
-      return;
-    }
     setJoinFlowFor(game.id, gameJoinRecoveryState());
     await pollJoinOperation(game.id, attempt, { remainingAttempts: 2, delayMs: 0 });
   }
@@ -1267,16 +1371,26 @@ export function GamesPage({
     joinConditionsInFlight.current = true;
     setJoinBusy(true);
     try {
-      const raw = await gateway.getGameJoinConditions(game.id, {
-        expectedRevision: game.revision,
-        subscriptionInstanceId,
-      });
+      const raw = await withJoinDeadline(
+        gateway.getGameJoinConditions(game.id, {
+          expectedRevision: game.revision,
+          subscriptionInstanceId,
+        }),
+      );
+      if (!joinPageActive.current) return 'handled';
       const conditions = readGameJoinConditions(raw);
       if (!conditions) {
         setJoinFlowFor(game.id, {
           kind: 'FAILED',
           code: 'GAME_JOIN_CONDITIONS_UNAVAILABLE',
           message: gameJoinConditionsUnavailableMessage(),
+        });
+        return 'handled';
+      }
+      if (conditions.reasonCode === 'SERVICE_BLOCKED') {
+        setJoinFlowFor(game.id, {
+          kind: 'SERVICE_BLOCKED',
+          message: gameJoinServiceBlockedMessage(),
         });
         return 'handled';
       }
@@ -1294,6 +1408,8 @@ export function GamesPage({
             { kind: 'IDLE' },
             {
               type: 'CONDITIONS_CONSENT_REQUIRED',
+              expiresAt: conditions.expiresAt,
+              revision: conditions.revision,
               consent: check.consent,
               subscriptionInstanceId: check.subscriptionInstanceId,
             },
@@ -1302,9 +1418,13 @@ export function GamesPage({
         return 'handled';
       }
       if (check.kind === 'FREE') {
-        // The server does not ask for consent, so the untouched free JOIN path stays in force.
-        setJoinFlow((current) => (current && current.gameId === game.id ? null : current));
-        return 'legacy';
+        // This entry point belongs to a commercial card. Missing consent is not NO_PAYMENT.
+        setJoinFlowFor(game.id, {
+          kind: 'FAILED',
+          code: 'GAME_JOIN_CONDITIONS_UNAVAILABLE',
+          message: gameJoinConditionsUnavailableMessage(),
+        });
+        return 'handled';
       }
       setJoinFlowFor(game.id, {
         kind: 'FAILED',
@@ -1342,6 +1462,16 @@ export function GamesPage({
     const flow = game ? joinFlowFor(game.id) : undefined;
     if (!game || !flow || flow.kind !== 'NEEDS_CONSENT') return;
     if (!joinPrincipal || !joinStorage || !gateway.joinPaidGame) return;
+    if (
+      !Number.isFinite(Date.parse(flow.expiresAt)) ||
+      Date.parse(flow.expiresAt) <= Date.now() ||
+      flow.revision !== game.revision ||
+      flow.subscriptionInstanceId !== selectedSubscriptionId
+    ) {
+      setJoinFlow(null);
+      await startPaidJoin(game, { allowDuringDispatch: true });
+      return;
+    }
     if (!ensureFreshGameJoinConsent(flow.consent, consent)) return;
     const dispatching = reduceGameJoinFlow(flow, { type: 'CONSENT_GIVEN', consent });
     if (dispatching.kind !== 'DISPATCHING') {
@@ -1362,6 +1492,7 @@ export function GamesPage({
           gameId: game.id,
           expectedRevision: game.revision,
           subscriptionInstanceId: flow.subscriptionInstanceId,
+          // Consent is bound to the checked revision; the equality guard above forbids rebinding.
           priceConsent: { amountMinor: flow.consent.amountMinor, currency: 'RUB' },
           ...(game.id === gameId && invitationId ? { invitationId } : {}),
         },
@@ -1380,22 +1511,26 @@ export function GamesPage({
         joinStorage,
         joinLockManager,
         async (dispatchAttempt) => {
+          if (!joinPageActive.current) throw new GameJoinAttemptError('ATTEMPT_STATE_CHANGED');
           if (!gateway.joinPaidGame) throw new Error('PAID_JOIN_UNAVAILABLE');
-          return gateway.joinPaidGame(
-            game.id,
-            {
-              expectedRevision: game.revision,
-              subscriptionInstanceId: dispatchAttempt.subscriptionInstanceId,
-              priceConsent: {
-                amountMinor: dispatchAttempt.priceConsent.amountMinor,
-                currency: 'RUB',
+          return withJoinDeadline(
+            gateway.joinPaidGame(
+              game.id,
+              {
+                expectedRevision: game.revision,
+                subscriptionInstanceId: dispatchAttempt.subscriptionInstanceId,
+                priceConsent: {
+                  amountMinor: dispatchAttempt.priceConsent.amountMinor,
+                  currency: 'RUB',
+                },
+                ...(game.id === gameId && invitationId ? { invitationId } : {}),
               },
-              ...(game.id === gameId && invitationId ? { invitationId } : {}),
-            },
-            dispatchAttempt.idempotencyKey,
+              dispatchAttempt.idempotencyKey,
+            ),
           );
         },
       );
+      if (!joinPageActive.current) return;
       if (!dispatchOutcome.dispatched) {
         setJoinFlowFor(game.id, gameJoinRecoveryState());
         if (dispatchOutcome.attempt) {
@@ -1407,18 +1542,29 @@ export function GamesPage({
         return;
       }
       const result = readGameJoinCommandResult(dispatchOutcome.value);
-      if (!result) {
-        markJoinUnresolved(attempt);
+      if (!result || result.operation.gameId !== game.id) {
+        await markJoinUnresolved(attempt);
         setJoinFlowFor(game.id, gameJoinRecoveryState());
         if (attempt) {
           void pollJoinOperation(game.id, attempt, { remainingAttempts: 3, delayMs: 1000 });
         }
         return;
       }
-      applyJoinOperationResult(game.id, attempt, result);
+      await applyJoinOperationResult(game.id, attempt, result);
     } catch (cause) {
+      if (!joinPageActive.current) return;
       if (cause instanceof GameJoinAttemptError) {
-        // No POST left the client (the attempt could not even be stored/guarded): nothing to recover.
+        let existing: GameJoinAttempt | null = null;
+        try {
+          existing = loadGameJoinAttempt(joinPrincipal, joinStorage, game.id);
+        } catch {
+          /* Preserve unreadable storage; no command may replace it. */
+        }
+        if (existing) {
+          setJoinFlowFor(game.id, gameJoinRecoveryState());
+          void pollJoinOperation(game.id, existing, { remainingAttempts: 1, delayMs: 0 });
+          return;
+        }
         setJoinFlowFor(game.id, {
           kind: 'FAILED',
           code: cause.code,
@@ -1429,7 +1575,7 @@ export function GamesPage({
       }
       if (readUncertainGameJoinError(cause)) {
         // Lost response / owner 5xx: the POST must not be repeated; recover by the same key.
-        markJoinUnresolved(attempt);
+        await markJoinUnresolved(attempt);
         setJoinFlowFor(game.id, gameJoinRecoveryState());
         if (attempt) {
           void pollJoinOperation(game.id, attempt, { remainingAttempts: 4, delayMs: 1000 });
@@ -1438,8 +1584,8 @@ export function GamesPage({
       }
       const plan = classifyGameJoinErrorCode(errorCode(cause), { paid: true });
       if (attempt) {
-        if (plan.custody === 'KEEP') markJoinUnresolved(attempt);
-        else discardJoinCustody(attempt);
+        if (plan.custody === 'KEEP') await markJoinUnresolved(attempt);
+        else await discardJoinCustody(attempt);
       }
       if (plan.reloadConditions) {
         setJoinFlowFor(game.id, plan.state);
@@ -1521,12 +1667,14 @@ export function GamesPage({
     )
       return;
     if (action === 'CANCEL' && !window.confirm('Отменить игру для всех участников?')) return;
-    if (
-      action === 'JOIN' &&
-      canPaidJoin &&
-      detail?.id === game.id &&
-      gameJoinRequiresPaidFlow(game)
-    ) {
+    if (action === 'JOIN' && detail?.id === game.id && gameJoinRequiresPaidFlow(game)) {
+      if (!canPaidJoin) {
+        setJoinFlowFor(game.id, {
+          kind: 'PAYMENT_UNAVAILABLE',
+          message: gameJoinPaymentUnavailableMessage(),
+        });
+        return;
+      }
       const decision = await startPaidJoin(game);
       if (decision === 'handled') return;
     }
