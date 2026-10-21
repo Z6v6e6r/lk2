@@ -58,7 +58,8 @@ export const WEB_COMPATIBILITY = Object.freeze({
   runtimeTree: 'bf0988012cfce0f14811491a14ae46fa57fe5541',
   runtimeDeltaSha256: 'c71dcfeb564b648ff78305680af3d3a37477a2d54e1db8101662c2b1d6e11fec',
 });
-// Closed mixed-runtime release. Original V1 pins and automatic eligibility stay unchanged.
+// Closed mixed-runtime release anchored on merged main after PR #449. Original V1 pins and
+// automatic eligibility stay unchanged.
 export const API8158_WEB_COMPATIBILITY = Object.freeze({
   baselineSource: '0d6078be7a50ed3f5761d66071527be003bd568f',
   baselineTree: '5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
@@ -70,9 +71,9 @@ export const API8158_WEB_COMPATIBILITY = Object.freeze({
   webImage:
     'ghcr.io/z6v6e6r/phub-web@sha256:af11244292c1e0d50308eff3794fc643a97c551ceb263a05a58ead4e22f04127',
   ledgerSha256: 'b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85',
-  runtimeSource: '45c97d18c67c268c216f4defe9642b26874df4d6',
-  runtimeTree: 'be1cd848bb2f1f8945b2f16d1329d27cfa34b3a4',
-  runtimeDeltaSha256: '8c1ace1da375102f6dd31351286b338e03be4c2f1d25d84c726fd445aeb4c589',
+  runtimeSource: '6c6bbe52fc61412ab134286b4c733561f9f9a49a',
+  runtimeTree: 'f86007b0ea16550c66a2f42fc9c71fc233f9710e',
+  runtimeDeltaSha256: 'd728bbd99d9384765aab100ed9f74e71fd91d7c9ef0d92e2ebe18f7d6c9eda36',
 });
 export const API8158_WEB_SCHEMA = 'PHUB_TIMEWEB_CRITICAL_API8158_WEB_OPERATION_V1';
 export const API8158_WEB_CONTROLLER_FILES = new Set([

@@ -1280,9 +1280,14 @@ rollback release `0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1`, sourc
 `0d6078be7a50ed3f5761d66071527be003bd568f`, tree
 `5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`, Web digest
 `sha256:af11244292c1e0d50308eff3794fc643a97c551ceb263a05a58ead4e22f04127`.
-Its reviewed whole-runtime anchor is `45c97d18c67c268c216f4defe9642b26874df4d6`, tree
-`be1cd848bb2f1f8945b2f16d1329d27cfa34b3a4`; exact trimmed raw no-renames NUL delta from Web baseline
-has SHA-256 `8c1ace1da375102f6dd31351286b338e03be4c2f1d25d84c726fd445aeb4c589`.
+Its reviewed whole-runtime anchor is `6c6bbe52fc61412ab134286b4c733561f9f9a49a`, tree
+`f86007b0ea16550c66a2f42fc9c71fc233f9710e`; exact trimmed raw no-renames NUL delta from Web baseline
+has SHA-256 `d728bbd99d9384765aab100ed9f74e71fd91d7c9ef0d92e2ebe18f7d6c9eda36`. The anchor contains
+merged PR #449, whose whole Web delta is the static
+`apps/web/public/android/oauth/yandex/index.html` fallback page: HTML served at the exact Android
+callback path with no API call, credential, storage, network request or automatic navigation; it only
+offers a user-initiated `padlhub://oauth/yandex` return with the unchanged one-time code/state. Web
+runtime and API8158 compatibility are otherwise unchanged from the previous anchor.
 A containing merge must preserve that anchor and change exactly six existing regular `100644` files:
 `timeweb-critical-web.js`, its test, `control-timeweb-database-backup.py`,
 `test-timeweb-database-backup.py`, `control-timeweb-database-backup.test.ts` (all under `scripts/`),
