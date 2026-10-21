@@ -13,7 +13,7 @@ import {
 function bookingFixture(
   tenant: string,
   recipient: string,
-  target = randomUUID(),
+  target: string = randomUUID(),
   revision = '1',
   type = 'booking.confirmed.v1',
 ) {
@@ -108,7 +108,7 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
       idempotencyKey: key,
       correlationId: `scenario-test-${sequence++}`,
     });
-  const event = (target = randomUUID(), revision = '1', type = 'booking.confirmed.v1') =>
+  const event = (target: string = randomUUID(), revision = '1', type = 'booking.confirmed.v1') =>
     bookingFixture(tenant, recipient, target, revision, type);
   beforeAll(async () => {
     await owner.query(
