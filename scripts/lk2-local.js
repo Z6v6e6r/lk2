@@ -209,7 +209,8 @@ export function makeModel(
     POSTGRES_USER: 'phub',
     POSTGRES_PASSWORD: 'local-synthetic-only',
   };
-  postgres.healthcheck.test = ['CMD', 'pg_isready', '-U', 'phub', '-d', 'phub'];
+  // initdb's temporary postmaster accepts Unix sockets before the final TCP server starts.
+  postgres.healthcheck.test = ['CMD', 'pg_isready', '-h', '127.0.0.1', '-U', 'phub', '-d', 'phub'];
   const redis = structuredClone(base.services.redis);
   for (const service of [postgres, redis]) {
     service.ports = [];

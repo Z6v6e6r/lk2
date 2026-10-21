@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 
+import { GameCreationOperation } from './GameCreationOperation.js';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
-import type { AuthGateway, CreateGameRequest } from './auth-gateway.js';
+import type { AuthGateway, CreateGameRequest, GameCommandResult } from './auth-gateway.js';
 import {
+  bindCreateGameOperation,
   browserCreateGameAttemptLockManager,
   clearCreateGameAttempt,
   CreateGameAttemptError,
+  isCreateGameOperation,
   loadCreateGameAttempt,
   prepareCreateGameAttempt,
   resolveCreateGameAttempt,
   type CreateGameAttemptLockManager,
   type CreateGameAttemptPrincipal,
   type PendingCreateGameAttempt,
+  type CreateGameAttempt,
 } from './create-game-attempt.js';
 
 const LEVELS = ['D', 'D+', 'C', 'C+', 'B', 'B+', 'A'] as const;
@@ -70,10 +74,25 @@ function browserAttemptStorage(): Storage | undefined {
   }
 }
 
-export function CreateGamePage({
+function browserNavigate(url: string): void {
+  window.location.assign(url);
+}
+
+export function CreateGamePage(
+  props: Parameters<typeof CreateGamePageForPrincipal>[0],
+): React.JSX.Element {
+  return (
+    <CreateGamePageForPrincipal
+      key={`${props.principal.tenantId}:${props.principal.userId}`}
+      {...props}
+    />
+  );
+}
+
+function CreateGamePageForPrincipal({
   gateway,
   principal,
-  navigate = (url) => window.location.assign(url),
+  navigate = browserNavigate,
   attemptStorage,
   attemptLockManager,
 }: {
@@ -142,15 +161,144 @@ export function CreateGamePage({
   const [activeAttempt, setActiveAttempt] = useState<PendingCreateGameAttempt | null>(
     restoredPending,
   );
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(
+    Boolean(restoredPending || (restoredResolved && !explicitNewIntent)),
+  );
   const [error, setError] = useState<string | null>(
     restored.error ? commandError(restored.error) : null,
   );
   const [notice, setNotice] = useState<string | null>(
     restoredPending
-      ? 'Найдена незавершённая попытка. Проверьте сохранённые параметры и повторите восстановление тем же ключом.'
+      ? 'Найдена исходная попытка. Проверяем её состояние без нового создания.'
       : null,
   );
+
+  const [operationStatus, setOperationStatus] = useState<
+    'ACCEPTED' | 'PROCESSING' | 'FAILED' | 'UNKNOWN' | null
+  >(restoredPending?.operationId ? 'UNKNOWN' : null);
+
+  const generation = useRef(0);
+  const activeRead = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      generation.current += 1;
+      activeRead.current?.abort();
+    },
+    [],
+  );
+
+  const applyResult = useCallback(
+    async (result: GameCommandResult, attempt: CreateGameAttempt, token: number) => {
+      if (token !== generation.current) return;
+      if (
+        !storage ||
+        !isCreateGameOperation(result, attempt.operationId) ||
+        (attempt.gameId && result.operation.gameId !== attempt.gameId) ||
+        !('recovery' in result) ||
+        (result.recovery as { paymentMode?: unknown } | null)?.paymentMode !== 'NO_PAYMENT'
+      ) {
+        setOperationStatus('UNKNOWN');
+        setError('Ответ операции не подтверждён. Прежние параметры и ключ сохранены.');
+        return;
+      }
+      if (attempt.state === 'RESOLVED') {
+        if (result.operation.status !== 'SUCCEEDED') {
+          setOperationStatus('UNKNOWN');
+          return;
+        }
+        navigate(`/games/${encodeURIComponent(attempt.gameId)}?created=1&recovered=1`);
+        return;
+      }
+      if (result.operation.status !== 'SUCCEEDED') {
+        const bound = await bindCreateGameOperation(
+          scopedPrincipal,
+          attempt,
+          result.operation.id,
+          storage,
+          lockManager,
+          result.operation.gameId ?? undefined,
+          () => token === generation.current,
+        );
+        if (token !== generation.current) return;
+        setActiveAttempt(bound);
+        setNotice(null);
+        setOperationStatus(result.operation.status);
+        return;
+      }
+      // This is success of the NO_PAYMENT beta command only, never booking confirmation.
+      await resolveCreateGameAttempt(
+        scopedPrincipal,
+        attempt,
+        result.operation.gameId!,
+        storage,
+        lockManager,
+        { operationId: result.operation.id, isCurrent: () => token === generation.current },
+      );
+      if (token !== generation.current) return;
+      setActiveAttempt(null);
+      setOperationStatus(null);
+      const recovered = result.replayed ? '&recovered=1' : '';
+      navigate(
+        `/games/${encodeURIComponent(result.operation.gameId!)}?created=1&revision=${result.operation.aggregateRevision}${recovered}`,
+      );
+    },
+    [scopedPrincipal, storage, lockManager, navigate],
+  );
+
+  const checkOriginal = useCallback(
+    async (attempt: CreateGameAttempt) => {
+      const token = ++generation.current;
+      activeRead.current?.abort();
+      const controller = new AbortController();
+      activeRead.current = controller;
+      setBusy(true);
+      setError(null);
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      try {
+        if (!gateway.getGameCreateOperation) throw new Error('CREATE_READ_DISABLED');
+        const aborted = new Promise<never>((_, reject) => {
+          controller.signal.addEventListener(
+            'abort',
+            () => reject(new Error('CREATE_READ_TIMEOUT')),
+            { once: true },
+          );
+        });
+        const result = await Promise.race([
+          gateway.getGameCreateOperation(attempt.idempotencyKey, controller.signal),
+          aborted,
+        ]);
+        if (token === generation.current) await applyResult(result, attempt, token);
+      } catch {
+        if (token === generation.current) {
+          setOperationStatus('UNKNOWN');
+          setError(
+            'Не удалось проверить прежнюю операцию. Результат неизвестен; исходный ключ сохранён. Новый запрос создания не отправлен.',
+          );
+        }
+      } finally {
+        clearTimeout(timeout);
+        if (token === generation.current) {
+          setBusy(false);
+          setNotice(null);
+        }
+      }
+    },
+    [gateway, applyResult],
+  );
+
+  useEffect(() => {
+    let current = true;
+    queueMicrotask(() => {
+      if (!current) return;
+      if (restoredPending) void checkOriginal(restoredPending);
+      else if (restoredResolved && !explicitNewIntent) void checkOriginal(restoredResolved);
+    });
+    return () => {
+      current = false;
+      generation.current += 1;
+      activeRead.current?.abort();
+    };
+  }, [restoredPending, restoredResolved, explicitNewIntent, checkOriginal]);
 
   useEffect(() => {
     if (!explicitNewIntent || typeof window === 'undefined') return;
@@ -162,11 +310,6 @@ export function CreateGamePage({
       `${url.pathname}${url.search}${url.hash}`,
     );
   }, [explicitNewIntent]);
-
-  useEffect(() => {
-    if (!restoredResolved || explicitNewIntent) return;
-    navigate(`/games/${encodeURIComponent(restoredResolved.gameId)}?created=1&recovered=1`);
-  }, [explicitNewIntent, navigate, restoredResolved]);
 
   useEffect(() => {
     let active = true;
@@ -200,6 +343,11 @@ export function CreateGamePage({
   async function submit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (busy) return;
+    const recoveryAttempt = activeAttempt ?? (!explicitNewIntent ? restoredResolved : null);
+    if (recoveryAttempt) {
+      await checkOriginal(recoveryAttempt);
+      return;
+    }
     if (!storage || !lockManager || restored.error) {
       setError(
         commandError(
@@ -213,24 +361,27 @@ export function CreateGamePage({
     }
     setError(null);
     setNotice(null);
+    setOperationStatus(null);
     const start = new Date(startsAt);
     const end = new Date(endsAt);
     if (
-      !stationId ||
-      !title.trim() ||
-      Number.isNaN(start.getTime()) ||
-      Number.isNaN(end.getTime()) ||
-      end <= start ||
-      (start <= new Date() && !activeAttempt)
+      !activeAttempt?.operationId &&
+      (!stationId ||
+        !title.trim() ||
+        Number.isNaN(start.getTime()) ||
+        Number.isNaN(end.getTime()) ||
+        end <= start ||
+        (start <= new Date() && !activeAttempt))
     ) {
       setError('Проверьте название, станцию и будущее время игры.');
       return;
     }
-    if ((levelFrom && !levelTo) || (!levelFrom && levelTo)) {
+    if (!activeAttempt?.operationId && ((levelFrom && !levelTo) || (!levelFrom && levelTo))) {
       setError('Укажите обе границы уровня или оставьте любой уровень.');
       return;
     }
     if (
+      !activeAttempt?.operationId &&
       levelFrom &&
       levelTo &&
       LEVELS.indexOf(levelFrom as (typeof LEVELS)[number]) >
@@ -239,32 +390,36 @@ export function CreateGamePage({
       setError('Начальный уровень не может быть выше конечного.');
       return;
     }
-    const input: CreateGameRequest = {
-      title: title.trim(),
-      kind: 'FRIENDLY',
-      visibility,
-      stationId,
-      ...(courtId ? { courtId } : {}),
-      startsAt: start.toISOString(),
-      endsAt: end.toISOString(),
-      timezone:
-        restoredPayload?.timezone ??
-        Intl.DateTimeFormat().resolvedOptions().timeZone ??
-        'Europe/Moscow',
-      capacity,
-      paymentMode: 'NO_PAYMENT',
-      waitlistEnabled,
-      levelRange:
-        levelFrom && levelTo
-          ? {
-              from: levelFrom as (typeof LEVELS)[number],
-              to: levelTo as (typeof LEVELS)[number],
-            }
-          : null,
-    };
+    const input: CreateGameRequest = activeAttempt?.operationId
+      ? activeAttempt.payload
+      : {
+          title: title.trim(),
+          kind: 'FRIENDLY',
+          visibility,
+          stationId,
+          ...(courtId ? { courtId } : {}),
+          startsAt: start.toISOString(),
+          endsAt: end.toISOString(),
+          timezone:
+            restoredPayload?.timezone ??
+            Intl.DateTimeFormat().resolvedOptions().timeZone ??
+            'Europe/Moscow',
+          capacity,
+          paymentMode: 'NO_PAYMENT',
+          waitlistEnabled,
+          levelRange:
+            levelFrom && levelTo
+              ? {
+                  from: levelFrom as (typeof LEVELS)[number],
+                  to: levelTo as (typeof LEVELS)[number],
+                }
+              : null,
+        };
     setBusy(true);
+    const submitGeneration = generation.current;
     let attempt: PendingCreateGameAttempt | undefined;
     try {
+      let createdHere = false;
       const prepared = await prepareCreateGameAttempt(
         scopedPrincipal,
         input,
@@ -273,62 +428,65 @@ export function CreateGamePage({
         {
           mountedAttempt: activeAttempt,
           allowNewIntent: explicitNewIntent,
+          onNewAttempt: () => {
+            createdHere = true;
+          },
         },
       );
+      if (submitGeneration !== generation.current) return;
       if (prepared.state === 'RESOLVED') {
-        setActiveAttempt(null);
-        navigate(`/games/${encodeURIComponent(prepared.gameId)}?created=1&recovered=1`);
-        setBusy(false);
+        await checkOriginal(prepared);
         return;
       }
       attempt = prepared;
       setActiveAttempt(prepared);
-      const result = await gateway.createGame(attempt.payload, {
-        idempotencyKey: attempt.idempotencyKey,
-      });
-      if (result.operation.status === 'FAILED') {
-        const failure = Object.assign(new Error('Create game failed'), {
-          code: result.operation.error?.code,
-        });
-        if (isTerminalNoCommitError(failure)) {
-          await clearCreateGameAttempt(scopedPrincipal, attempt, storage, lockManager);
-          setActiveAttempt(null);
-          setError(`Создание отклонено: ${commandError(failure)} Игра не создана.`);
-        } else if (errorCode(failure) === 'IDEMPOTENCY_KEY_REUSED') {
-          setError(commandError(failure));
-        } else {
-          setError(
-            'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
-          );
-        }
-        setBusy(false);
+      // Another tab may already own this prepared key. Any saved attempt uses read only.
+      if (!createdHere) {
+        await checkOriginal(attempt);
         return;
       }
-      if (
-        !result.operation.gameId ||
-        ['ACCEPTED', 'PROCESSING'].includes(result.operation.status)
-      ) {
-        setError(
-          'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
+      const token = ++generation.current;
+      const controller = new AbortController();
+      activeRead.current = controller;
+      const timeout = setTimeout(() => controller.abort(), 8_000);
+      try {
+        const aborted = new Promise<never>((_, reject) =>
+          controller.signal.addEventListener(
+            'abort',
+            () => reject(new Error('CREATE_RESPONSE_TIMEOUT')),
+            { once: true },
+          ),
         );
-        setBusy(false);
-        return;
+        const result = await Promise.race([
+          gateway.createGame(attempt.payload, {
+            idempotencyKey: attempt.idempotencyKey,
+            signal: controller.signal,
+          }),
+          aborted,
+        ]);
+        if (token !== generation.current) return;
+        if (!isCreateGameOperation(result)) throw new Error('CREATE_RESPONSE_UNTRUSTED');
+        const bound = await bindCreateGameOperation(
+          scopedPrincipal,
+          attempt,
+          result.operation.id,
+          storage,
+          lockManager,
+          result.operation.gameId ?? undefined,
+          () => token === generation.current,
+        );
+        if (token !== generation.current) return;
+        setActiveAttempt(bound);
+        setOperationStatus(
+          result.operation.status === 'SUCCEEDED' ? 'UNKNOWN' : result.operation.status,
+        );
+        await checkOriginal(bound);
+      } finally {
+        clearTimeout(timeout);
       }
-      await resolveCreateGameAttempt(
-        scopedPrincipal,
-        attempt,
-        result.operation.gameId,
-        storage,
-        lockManager,
-      );
-      setActiveAttempt(null);
-      const recovered = result.replayed ? '&recovered=1' : '';
-      const revision = result.operation.aggregateRevision ?? 0;
-      navigate(
-        `/games/${encodeURIComponent(result.operation.gameId)}?created=1&revision=${revision}${recovered}`,
-      );
+      setBusy(false);
     } catch (cause) {
-      if (attempt && isTerminalNoCommitError(cause)) {
+      if (attempt && !attempt.operationId && isTerminalNoCommitError(cause)) {
         try {
           await clearCreateGameAttempt(scopedPrincipal, attempt, storage, lockManager);
           setActiveAttempt(null);
@@ -340,6 +498,9 @@ export function CreateGamePage({
         setError(commandError(cause));
       } else if (errorCode(cause) === 'IDEMPOTENCY_KEY_REUSED') {
         setError(commandError(cause));
+      } else if (attempt?.operationId) {
+        setOperationStatus('UNKNOWN');
+        setError('Не удалось проверить прежнюю операцию. Новый запрос создания не отправлен.');
       } else {
         setError(
           'Связь прервалась, результат неизвестен. Сохранённые параметры и ключ оставлены — повторите восстановление.',
@@ -370,6 +531,13 @@ export function CreateGamePage({
         </div>
       </header>
 
+      <aside className="games-message" aria-label="Создание игры с бронированием">
+        <strong>Игра с бронированием пока недоступна</strong>
+        <p>
+          Выбор разрешённого слота и подтверждение брони ещё не подключены. Форма ниже создаёт
+          только beta-игру без бронирования корта.
+        </p>
+      </aside>
       <form className="game-create-form" onSubmit={(event) => void submit(event)} noValidate>
         {locationsError ? (
           <p className="games-message is-error" role="alert">
@@ -381,6 +549,7 @@ export function CreateGamePage({
             {error}
           </p>
         ) : null}
+        {operationStatus ? <GameCreationOperation status={operationStatus} /> : null}
         {notice ? (
           <p className="games-message" role="status">
             {notice}
@@ -536,9 +705,13 @@ export function CreateGamePage({
         <button
           className="game-detail-primary"
           type="submit"
-          disabled={busy || Boolean(locationsError)}
+          disabled={busy || (!activeAttempt && !restoredResolved && Boolean(locationsError))}
         >
-          {busy ? 'Создаём игру…' : 'Создать игру'}
+          {busy
+            ? 'Проверяем операцию…'
+            : activeAttempt || (!explicitNewIntent && restoredResolved)
+              ? 'Проверить прежнюю операцию'
+              : 'Создать игру'}
         </button>
       </form>
       <MainBottomNavigation active="games" gamesDestination="games" />

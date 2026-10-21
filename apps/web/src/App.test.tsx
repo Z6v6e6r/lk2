@@ -1021,6 +1021,10 @@ describe('PadlHub web authentication', () => {
         },
       ],
     });
+    const readOriginal = vi
+      .fn<NonNullable<AuthGateway['getGameCreateOperation']>>()
+      .mockRejectedValue(new Error('synthetic API unavailable'));
+    const createGame = vi.fn<AuthGateway['createGame']>();
     const otherSession: AuthenticatedSession = {
       context: {
         ...session.context,
@@ -1032,6 +1036,8 @@ describe('PadlHub web authentication', () => {
         gateway={createGateway({
           restoreSession: vi.fn().mockResolvedValue(otherSession),
           listLocations,
+          getGameCreateOperation: readOriginal,
+          createGame,
         })}
         tenantKey="padlhub"
       />,
@@ -1046,12 +1052,17 @@ describe('PadlHub web authentication', () => {
         gateway={createGateway({
           restoreSession: vi.fn().mockResolvedValue(session),
           listLocations,
+          getGameCreateOperation: readOriginal,
+          createGame,
         })}
         tenantKey="padlhub"
       />,
     );
     expect(await screen.findByDisplayValue('Черновик только Анны')).toBeVisible();
-    expect(screen.getByText(/Найдена незавершённая попытка/)).toBeVisible();
+    expect(await screen.findByRole('button', { name: 'Проверить прежнюю операцию' })).toBeVisible();
+    expect(readOriginal).toHaveBeenCalledOnce();
+    expect(readOriginal.mock.calls[0]?.[0]).toBe('create-logical-attempt-key-0001');
+    expect(createGame).not.toHaveBeenCalled();
   });
 
   it('keeps local Home Base visible when profile and upcoming reads are unavailable', async () => {

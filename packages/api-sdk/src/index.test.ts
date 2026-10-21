@@ -69,6 +69,30 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('reads the original CREATE with the saved key in a header, no body or command replay', async () => {
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ recovery: { paymentMode: 'NO_PAYMENT' } }));
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const signal = new AbortController().signal;
+    await client.getGameCreateOperation('synthetic-p2-original-key-0001', signal);
+    const [url, init] = fetchImplementation.mock.calls[0]!;
+    expect(requestUrl(url)).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/game-create-operation',
+    );
+    expect(init?.method).toBe('GET');
+    expect(init?.cache).toBe('no-store');
+    expect(init?.body).toBeUndefined();
+    expect(init?.signal).toBe(signal);
+    expect(new Headers(init?.headers).get('Idempotency-Key')).toBe(
+      'synthetic-p2-original-key-0001',
+    );
+    fetchImplementation.mockResolvedValue(jsonResponse({ code: 'AUTH_REQUIRED' }, 401));
+    await expect(client.getGameCreateOperation('synthetic-p2-original-key-0001')).rejects.toThrow();
+    expect(fetchImplementation).toHaveBeenCalledTimes(2); // no session-refresh or CREATE fallback
+  });
   it('reads an existing commercial attempt without creating on unavailable status', async () => {
     const operationId = 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea';
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
@@ -562,7 +586,7 @@ describe('PadlHubApiClient authentication boundary', () => {
     });
   });
 
-  it('reuses one idempotency key when a free create is retried after a network failure', async () => {
+  it('does not replay a free CREATE after ambiguous network failure', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {
       calls.push({ input, ...(init === undefined ? {} : { init }) });
@@ -601,23 +625,16 @@ describe('PadlHubApiClient authentication boundary', () => {
       waitlistEnabled: true,
     };
 
-    await client.createGame(input);
-
-    expect(calls).toHaveLength(2);
-    expect(calls.map(({ input: request }) => requestUrl(request))).toEqual([
+    await expect(client.createGame(input)).rejects.toThrow('network disconnected');
+    expect(calls).toHaveLength(1);
+    expect(requestUrl(calls[0]!.input)).toBe(
       'https://api.padlhub.test/user/api/v1/local-padel/games',
-      'https://api.padlhub.test/user/api/v1/local-padel/games',
-    ]);
-    const keys = calls.map(({ init }) => new Headers(init?.headers).get('Idempotency-Key'));
-    expect(keys[0]).toBeTruthy();
-    expect(keys[1]).toBe(keys[0]);
-    expect(calls.map(({ init }) => JSON.parse(stringRequestBody(init?.body)) as unknown)).toEqual([
-      input,
-      input,
-    ]);
+    );
+    expect(new Headers(calls[0]!.init?.headers).get('Idempotency-Key')).toBeTruthy();
+    expect(JSON.parse(stringRequestBody(calls[0]!.init?.body))).toEqual(input);
   });
 
-  it('keeps a caller-owned create key across transport retry and later replay', async () => {
+  it('keeps a caller-owned create key for read recovery after response loss', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {
       calls.push({ input, ...(init === undefined ? {} : { init }) });
@@ -641,15 +658,51 @@ describe('PadlHubApiClient authentication boundary', () => {
       waitlistEnabled: true,
     };
 
-    await client.createGame(input, { idempotencyKey: 'create-logical-attempt-key-0001' });
-    await client.createGame(input, { idempotencyKey: 'create-logical-attempt-key-0001' });
-
-    expect(calls).toHaveLength(3);
+    await expect(
+      client.createGame(input, { idempotencyKey: 'create-logical-attempt-key-0001' }),
+    ).rejects.toThrow('response lost');
+    await client.getGameCreateOperation('create-logical-attempt-key-0001');
+    expect(calls).toHaveLength(2);
+    expect(calls.map(({ init }) => init?.method ?? 'GET')).toEqual(['POST', 'GET']);
     expect(calls.map(({ init }) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
       'create-logical-attempt-key-0001',
       'create-logical-attempt-key-0001',
-      'create-logical-attempt-key-0001',
     ]);
+    expect(calls[1]!.init?.body).toBeUndefined();
+  });
+
+  it('never sends another POST after abort and an account token change before late network rejection', async () => {
+    let reject!: (error: Error) => void;
+    const fetchImplementation = vi.fn<typeof fetch>().mockReturnValue(
+      new Promise<Response>((_, r) => {
+        reject = r;
+      }),
+    );
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const controller = new AbortController();
+    const pending = client.createGame(
+      {
+        title: 'Synthetic P2',
+        kind: 'FRIENDLY',
+        visibility: 'PUBLIC',
+        stationId: '11111111-1111-4111-8111-111111111111',
+        startsAt: '2027-08-15T15:00:00Z',
+        endsAt: '2027-08-15T16:30:00Z',
+        timezone: 'Europe/Moscow',
+        capacity: 4,
+        paymentMode: 'NO_PAYMENT',
+        waitlistEnabled: true,
+      },
+      { idempotencyKey: 'synthetic-p2-original-key-0001', signal: controller.signal },
+    );
+    controller.abort();
+    client.setAccessToken('synthetic-other-account-token');
+    reject(new TypeError('late network failure'));
+    await expect(pending).rejects.toThrow('late network failure');
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+    expect(fetchImplementation.mock.calls[0]![1]?.signal).toBe(controller.signal);
   });
 
   it('sends free-game cancellation through the authenticated idempotent command boundary', async () => {

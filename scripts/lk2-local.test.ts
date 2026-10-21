@@ -71,6 +71,16 @@ describe('local preview isolation boundary', () => {
     expect(one.networks.data).toMatchObject({ internal: true });
     expect(one.networks.data).not.toHaveProperty('name');
     expect(one.services.postgres.ports).toEqual([]);
+    expect(one.services.postgres.healthcheck?.test).toEqual([
+      'CMD',
+      'pg_isready',
+      '-h',
+      '127.0.0.1',
+      '-U',
+      'phub',
+      '-d',
+      'phub',
+    ]);
     expect(one.services.redis.ports).toEqual([]);
     expect(one.services.api).not.toHaveProperty('ports');
     expect(one.services.web.ports).toEqual(['127.0.0.1:5173:5173']);
