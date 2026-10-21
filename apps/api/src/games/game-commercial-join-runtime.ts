@@ -179,7 +179,27 @@ export function createBookedOperationOwner(options: {
     readonly sessionId: string;
   }) => options.boundary.actorContextRepository.resolve(actor);
 
+  const resolveProviderClientSubscriptionId = async (input: {
+    readonly actor: {
+      readonly tenantId: string;
+      readonly tenantKey: string;
+      readonly userId: string;
+      readonly sessionId: string;
+      readonly gameId: string;
+    };
+    readonly subscriptionInstanceId: string;
+  }): Promise<string | undefined> =>
+    options.boundary.resolveProviderClientSubscriptionId?.({
+      tenantId: input.actor.tenantId,
+      tenantKey: input.actor.tenantKey,
+      userId: input.actor.userId,
+      sessionId: input.actor.sessionId,
+      gameId: input.actor.gameId,
+      subscriptionInstanceId: input.subscriptionInstanceId,
+    });
+
   return {
+    resolveProviderClientSubscriptionId,
     async execute(input) {
       const context = await resolveActor({
         tenantId: input.actor.tenantId,
@@ -200,21 +220,20 @@ export function createBookedOperationOwner(options: {
       if (!target.admissible) return { status: 'REJECTED', code: 'GAME_SERVICE_BLOCKED' };
       // The selected product must have a server-side provider subscription mapping; otherwise the
       // owner cannot execute the booking and the user has to pick a different product.
-      let providerClientSubscriptionId: string | undefined;
-      if (options.issueActorToken) {
-        providerClientSubscriptionId = await options.boundary.resolveProviderClientSubscriptionId?.(
-          {
-            tenantId: input.actor.tenantId,
-            tenantKey: input.actor.tenantKey,
-            userId: input.actor.userId,
-            sessionId: input.actor.sessionId,
-            gameId: input.actor.gameId,
-            subscriptionInstanceId: input.subscriptionInstanceId,
-          },
-        );
-        if (!providerClientSubscriptionId) {
-          return { status: 'REJECTED', code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED' };
-        }
+      const providerClientSubscriptionId =
+        input.providerClientSubscriptionId ??
+        (options.issueActorToken
+          ? await options.boundary.resolveProviderClientSubscriptionId?.({
+              tenantId: input.actor.tenantId,
+              tenantKey: input.actor.tenantKey,
+              userId: input.actor.userId,
+              sessionId: input.actor.sessionId,
+              gameId: input.actor.gameId,
+              subscriptionInstanceId: input.subscriptionInstanceId,
+            })
+          : undefined);
+      if (options.issueActorToken && !providerClientSubscriptionId) {
+        return { status: 'REJECTED', code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED' };
       }
       const request: BookedOperationAdmissionRequest = {
         action: 'JOIN_GAME',

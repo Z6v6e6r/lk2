@@ -153,6 +153,16 @@ export interface CommercialJoinOwnerActor {
 }
 
 export interface CommercialJoinOwnerPort {
+  /**
+   * Optional pre-dispatch resolution of the selected product's provider subscription mapping. When
+   * present it runs BEFORE any LK2 row is written, so an unmapped selection is refused without
+   * creating a command row, reservation or payment snapshot.
+   */
+  resolveProviderClientSubscriptionId?(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly subscriptionInstanceId: string;
+    readonly correlationId: string;
+  }): Promise<string | undefined>;
   execute(input: {
     readonly actor: CommercialJoinOwnerActor;
     readonly operationId: string;
@@ -160,6 +170,7 @@ export interface CommercialJoinOwnerPort {
     readonly correlationId: string;
     readonly subscriptionInstanceId: string;
     readonly price: CommercialJoinPrice;
+    readonly providerClientSubscriptionId?: string;
   }): Promise<CommercialJoinOwnerOutcome>;
   read(input: {
     readonly actor: CommercialJoinOwnerActor;
@@ -467,7 +478,33 @@ export async function executeCommercialJoin(
     expiresAt: conditions.expiresAt,
   };
 
-  // 2. Durable attempt + seat reservation. The operation exists before the owner call.
+  // 2. The selected product must be executable by the owner. Resolve its provider subscription
+  //    mapping BEFORE any durable row so an unmapped selection is a pure refusal, not a dead attempt.
+  let resolvedProviderClientSubscriptionId: string | undefined;
+  if (dependencies.owner.resolveProviderClientSubscriptionId) {
+    try {
+      resolvedProviderClientSubscriptionId =
+        await dependencies.owner.resolveProviderClientSubscriptionId({
+          actor: {
+            tenantId: input.tenantId,
+            tenantKey: input.tenantKey,
+            userId: input.userId,
+            sessionId: input.sessionId,
+            gameId: input.gameId,
+            expectedRevision: input.expectedRevision,
+          },
+          subscriptionInstanceId: input.subscriptionInstanceId,
+          correlationId: input.correlationId,
+        });
+    } catch {
+      return commercialFailure('GAME_PAYMENT_REQUIRED');
+    }
+    if (!resolvedProviderClientSubscriptionId) {
+      return commercialFailure('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
+    }
+  }
+
+  // 3. Durable attempt + seat reservation. The operation exists before the owner call.
   let begin: CommercialJoinBeginResult;
   try {
     begin = await dependencies.repository.beginPaidJoin({
@@ -562,7 +599,7 @@ export async function executeCommercialJoin(
     };
   }
 
-  // 3. The existing owner executes exactly this operation. No retry, no replacement key.
+  // 4. The existing owner executes exactly this operation. No retry, no replacement key.
   let outcome: CommercialJoinOwnerOutcome;
   try {
     outcome = await dependencies.owner.execute({
@@ -579,6 +616,9 @@ export async function executeCommercialJoin(
       correlationId: input.correlationId,
       subscriptionInstanceId: input.subscriptionInstanceId,
       price,
+      ...(resolvedProviderClientSubscriptionId === undefined
+        ? {}
+        : { providerClientSubscriptionId: resolvedProviderClientSubscriptionId }),
     });
   } catch {
     outcome = { status: 'UNKNOWN' };
