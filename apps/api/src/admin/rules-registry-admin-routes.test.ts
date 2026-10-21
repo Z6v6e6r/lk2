@@ -57,6 +57,17 @@ async function token(permissions: readonly string[]): Promise<string> {
 
 interface RegistryBody {
   level: { source: string; status: string; sportCode?: string };
+  legacyCoverage: {
+    status: string;
+    reason?: string;
+    coveredProducts?: number;
+    uncoveredProducts?: number;
+    products?: Array<{
+      productId: string;
+      providerProductIds: string[];
+      coveredBy: Array<{ subscriptionTypeId: string; policyVersion: number | null }>;
+    }>;
+  };
   subscriptions: { source: string; status: string; reason?: string; registry?: unknown };
   legacy: {
     source: string;
@@ -127,6 +138,9 @@ describe('rules registry admin route', () => {
     expect(typeof body.legacy.repo?.date).toBe('string');
     expect(body.legacy.products ?? 0).toBeGreaterThan(0);
     expect(body.legacy.rules ?? 0).toBeGreaterThan(0);
+    expect(body.legacyCoverage.status).toBe('OK');
+    expect(body.legacyCoverage.coveredProducts).toBe(0);
+    expect(body.legacyCoverage.uncoveredProducts).toBeGreaterThan(0);
     expect(response.headers['cache-control']).toBe('no-store');
   });
 
@@ -153,6 +167,73 @@ describe('rules registry admin route', () => {
       source: 'CUP_PUBLISHED',
       status: 'UNAVAILABLE',
       reason: 'SUBSCRIPTION_POLICY_REGISTRY_UNAVAILABLE',
+    });
+  });
+
+  it('matches LK1 products to published CUP policies by provider product id', async () => {
+    const item = {
+      subscriptionTypeId: 'subscription_type:annual',
+      code: 'ANNUAL_HUB',
+      title: 'Годовой HUB',
+      description: null,
+      state: 'ACTIVE' as const,
+      currentPolicyVersion: 3,
+      publication: {
+        publicationId: 'publication:annual-v3',
+        policyVersion: 3,
+        policyDigest: `sha256:${'a'.repeat(64)}`,
+        state: 'PUBLISHED' as const,
+        effectiveAt: '2026-10-01T00:00:00.000Z',
+        applyTo: 'NEW_ONLY' as const,
+        publishedAt: '2026-10-01T00:00:00.000Z',
+        supersededAt: null,
+        runtimeCompatibility: null,
+      },
+      rules: null,
+      surfaces: ['CREATE_GAME', 'JOIN_GAME'],
+      providerProductIds: ['db7a5250-7369-4f43-8ac5-9111be24bc74'],
+      versions: [
+        {
+          policyVersion: 3,
+          status: 'PUBLISHED' as const,
+          modelVersion: 3 as const,
+          effectiveAt: '2026-10-01T00:00:00.000Z',
+          applyTo: 'NEW_ONLY' as const,
+          publicationState: 'PUBLISHED' as const,
+        },
+      ],
+      instances: { total: 0, byPolicyVersion: [] },
+      lastDecision: null,
+      lastQuoteDecision: null,
+    };
+    const matching: SubscriptionPolicyRegistryResult = {
+      ...registry,
+      items: [item],
+    };
+    const app = await buildApp({
+      config,
+      logger: createLogger('rules-registry-admin-test', 'silent'),
+      pool: fakePool(),
+      levelEligibilityPolicyRepository: levelRepository(),
+      subscriptionPolicyRegistryClient: { read: vi.fn().mockResolvedValue(matching) },
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/admin/api/v1/local-padel/rules-registry?sportCode=PADEL',
+      headers: await adminHeaders(),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = JSON.parse(response.body) as RegistryBody;
+    expect(body.legacyCoverage.status).toBe('OK');
+    expect(body.legacyCoverage.coveredProducts).toBe(1);
+    const hub = body.legacyCoverage.products?.find(
+      (product) => product.productId === 'lk1:hub-annual',
+    );
+    expect(hub?.providerProductIds).toContain('db7a5250-7369-4f43-8ac5-9111be24bc74');
+    expect(hub?.coveredBy[0]).toMatchObject({
+      subscriptionTypeId: 'subscription_type:annual',
+      policyVersion: 3,
     });
   });
 

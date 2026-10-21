@@ -46,12 +46,38 @@ interface RegistryLevelUnavailable {
   readonly reason: string;
 }
 
+export interface LegacyProductCoverage {
+  readonly productId: string;
+  readonly name: string;
+  readonly status: string;
+  readonly providerProductIds: readonly string[];
+  readonly coveredBy: ReadonlyArray<{
+    readonly subscriptionTypeId: string;
+    readonly code: string;
+    readonly title: string;
+    readonly policyVersion: number | null;
+    readonly publicationId: string | null;
+    readonly applyTo: string | null;
+    readonly publicationState: string | null;
+  }>;
+}
+
+export type LegacyRulesCoverage =
+  | {
+      readonly status: 'OK';
+      readonly products: readonly LegacyProductCoverage[];
+      readonly coveredProducts: number;
+      readonly uncoveredProducts: number;
+    }
+  | { readonly status: 'UNAVAILABLE'; readonly reason: string };
+
 export interface RulesRegistryAdminResponse {
   readonly schemaVersion: 1;
   readonly generatedAt: string;
   readonly level: RegistryLevelSource | RegistryLevelUnavailable;
   readonly subscriptions: RegistrySubscriptionSource;
   readonly legacy: LegacyRulesInventorySummary;
+  readonly legacyCoverage: LegacyRulesCoverage;
 }
 
 function principal(request: FastifyRequest): { tenantId: string; actorUserId: string } | undefined {
@@ -81,6 +107,46 @@ function correlationId(request: FastifyRequest): string {
   const header = request.headers['x-correlation-id'];
   if (typeof header === 'string' && correlationIdPattern.test(header)) return header;
   return randomUUID();
+}
+
+function legacyRulesCoverage(subscriptions: RegistrySubscriptionSource): LegacyRulesCoverage {
+  const inventory = readLegacyRulesInventory();
+  if (!inventory) {
+    return { status: 'UNAVAILABLE', reason: 'LEGACY_RULES_INVENTORY_INVALID' };
+  }
+  if (subscriptions.status !== 'OK' || !subscriptions.registry) {
+    return { status: 'UNAVAILABLE', reason: 'SUBSCRIPTIONS_UNAVAILABLE' };
+  }
+  const items = subscriptions.registry.items;
+  const products = inventory.products.map((product): LegacyProductCoverage => {
+    const providerProductIds = product.vivaProductIds ?? [];
+    const coveredBy = items
+      .filter((item) =>
+        providerProductIds.some((id) => (item.providerProductIds ?? []).includes(id)),
+      )
+      .map((item) => ({
+        subscriptionTypeId: item.subscriptionTypeId,
+        code: item.code,
+        title: item.title,
+        policyVersion: item.publication?.policyVersion ?? null,
+        publicationId: item.publication?.publicationId ?? null,
+        applyTo: item.publication?.applyTo ?? null,
+        publicationState: item.publication?.state ?? null,
+      }));
+    return {
+      productId: product.productId,
+      name: product.name,
+      status: product.status,
+      providerProductIds,
+      coveredBy,
+    };
+  });
+  return {
+    status: 'OK',
+    products,
+    coveredProducts: products.filter((product) => product.coveredBy.length > 0).length,
+    uncoveredProducts: products.filter((product) => product.coveredBy.length === 0).length,
+  };
 }
 
 export function registerRulesRegistryAdminRoutes(
@@ -149,6 +215,7 @@ export function registerRulesRegistryAdminRoutes(
         level,
         subscriptions,
         legacy: legacyRulesInventorySummary(),
+        legacyCoverage: legacyRulesCoverage(subscriptions),
       };
     },
   );
