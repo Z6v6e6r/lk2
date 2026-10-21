@@ -269,8 +269,12 @@ describe('closed Web over installed API8158', () => {
     const {execFileSync}=await import('node:child_process');
     const raw=execFileSync('git',['diff','--raw','--no-abbrev','--no-renames','-z',current.baselineSource,current.runtimeSource],{encoding:'utf8'}).trim();
     const delta=[...API8158_WEB_CONTROLLER_FILES].map(path=>'M\\0'+path+'\\0').join('');
-    const runGit=args=>args[0]==='rev-parse' ? args[1]===op.candidateSha+'^{tree}' ? op.candidateTree : execFileSync('git',args,{encoding:'utf8'}).trim() : args[0]==='merge-base' ? execFileSync('git',args[args.length-1]===op.candidateSha ? [...args.slice(0,-1),current.runtimeSource] : args,{encoding:'utf8'}).trim() : args[0]==='diff' ? args.includes('--raw') ? raw : delta : args[0]==='ls-tree' ? '100644 blob '+'e'.repeat(40)+'\\t'+args.at(-1) : '';
+    const real=args=>execFileSync('git',args,{encoding:'utf8'}).trim();
+    // The ancestry check must use the real checked-out candidate, never the anchor itself.
+    const runGit=args=>args[0]==='rev-parse' ? args[1]===op.candidateSha+'^{tree}' ? op.candidateTree : real(args) : args[0]==='merge-base' ? real([...args.slice(0,-1),args.at(-1)===op.candidateSha?'HEAD':args.at(-1)]) : args[0]==='diff' ? args.includes('--raw') ? raw : delta : args[0]==='ls-tree' ? '100644 blob '+'e'.repeat(40)+'\\t'+args.at(-1) : '';
     validateCriticalWebSource(op,runGit);
+    // A candidate that does not descend from the reviewed anchor must reject.
+    assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='merge-base' ? real([...args.slice(0,-1),current.baselineSource]) : runGit(args)));
     for(const mode of ['100755','120000','160000']) assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='ls-tree' ? mode+' blob '+'e'.repeat(40)+'\\t'+args.at(-1) : runGit(args)),/CONTROLLER_FILE_MODE/);
     assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='ls-tree' ? '100644 blob '+'e'.repeat(40)+'\\t'+'other' : runGit(args)),/CONTROLLER_FILE_MODE/);
     assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='diff'&&args.includes('--raw') ? raw+'changed' : runGit(args)),/RUNTIME_PROOF/);

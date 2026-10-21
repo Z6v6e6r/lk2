@@ -1283,11 +1283,16 @@ rollback release `0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1`, sourc
 Its reviewed whole-runtime anchor is `6c6bbe52fc61412ab134286b4c733561f9f9a49a`, tree
 `f86007b0ea16550c66a2f42fc9c71fc233f9710e`; exact trimmed raw no-renames NUL delta from Web baseline
 has SHA-256 `d728bbd99d9384765aab100ed9f74e71fd91d7c9ef0d92e2ebe18f7d6c9eda36`. The anchor contains
-merged PR #449, whose whole Web delta is the static
-`apps/web/public/android/oauth/yandex/index.html` fallback page: HTML served at the exact Android
+merged PR #449. Its Web runtime/bundle delta is the static
+`apps/web/public/android/oauth/yandex/index.html` fallback page (HTML served at the exact Android
 callback path with no API call, credential, storage, network request or automatic navigation; it only
-offers a user-initiated `padlhub://oauth/yandex` return with the unchanged one-time code/state. Web
-runtime and API8158 compatibility are otherwise unchanged from the previous anchor.
+offers a user-initiated `padlhub://oauth/yandex` return with the unchanged one-time code/state); the
+same PR also changes the inert `apps/web/src/AndroidOAuthFallback.test.ts`, which is not a bundle
+input. Web runtime and API8158 compatibility are otherwise unchanged from the previous anchor.
+Pairing with the app build is explicit: the page's primary return action completes login only on APKs
+that contain PR #449 (`padlhub://oauth/yandex` intent filter and FALLBACK parser); older app builds
+receive only the retry link, supported-links/VPN/update guidance and the SMS alternative, and the
+existing https App Link remains the primary return path in every case.
 A containing merge must preserve that anchor and change exactly six existing regular `100644` files:
 `timeweb-critical-web.js`, its test, `control-timeweb-database-backup.py`,
 `test-timeweb-database-backup.py`, `control-timeweb-database-backup.test.ts` (all under `scripts/`),
