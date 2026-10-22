@@ -82,7 +82,7 @@ function operation() {
   const revision = '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d';
   const baseline = (service: 'api' | 'worker' | 'postgres') => {
     const digest = {
-      api: '47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839',
+      api: '47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839', // gitleaks:allow public OCI image digest
       worker: '72b9a03aaf95afab5711a8f489b56affe0be4d79eb5af513abe4966eb7695416',
       postgres: 'cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685',
     }[service];
@@ -447,6 +447,7 @@ describe('notification-only Timeweb profile', () => {
       'NOTIFICATION_LIFECYCLE_VIVA_ENABLED',
       'NOTIFICATION_STAFF_TASKS_ENABLED',
       'APNS_ENABLED',
+      'GAME_COMMERCIAL_JOIN_ENABLED',
     ])
       expect(() => assertNotificationRuntimeOff(flag + '=true\n')).toThrow('ACTIVATION_FORBIDDEN');
     expect(() => assertNotificationRuntimeOff('SMTP_ENABLED=false\nSMTP_ENABLED=true\n')).toThrow();

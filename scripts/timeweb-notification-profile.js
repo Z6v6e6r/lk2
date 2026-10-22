@@ -64,7 +64,7 @@ export const notificationSecretNames = [
 export function validateNotificationBaseline(row, service) {
   notificationExact(row, notificationIdFields);
   const refs = {
-    api: '47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839',
+    api: '47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839', // gitleaks:allow public OCI image digest
     worker: '72b9a03aaf95afab5711a8f489b56affe0be4d79eb5af513abe4966eb7695416',
     postgres: 'cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685',
   };
@@ -582,6 +582,7 @@ export function assertNotificationRuntimeOff(bytes) {
     'APNS_ENABLED',
     'SMTP_ENABLED',
     'LOCAL_PASSWORD_RESET_ENABLED',
+    'GAME_COMMERCIAL_JOIN_ENABLED',
   ];
   const seen = new Set();
   for (const line of bytes.toString().trimEnd().split('\n')) {

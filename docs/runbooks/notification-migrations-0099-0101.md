@@ -175,6 +175,14 @@ An empty or incomplete golden file is a hard stop before server mutation. Four c
 are generated from the independent mixed-owner CI fixture, reviewed, frozen, and then checked by
 both the strict image and host probes. They must never be learned from the live database at apply.
 
+The frozen checkpoints were captured by the successful `quality-full` job's mixed-owner PG16 fixture
+in CI run `39817124073`, exact head `5b3a450da600c579866c6a3cf192d5bb906b64b8`, diagnostic artifact
+`12441769908` (archive SHA256 `4f310b763881cdb6110ecb4b73f68115260124e3f120f5d133ca44bed27cc84c`).
+Its 12 ordered chunks bind compact JSON SHA256
+`508c9101751d004c07885f36c454ef46fca65e9a9918d1196b40a38a7ff956b4`; checkpoints 102/103/104/105
+contain 26/78/194/248 catalog rows. The same test physically restored full owners/ACLs in isolation.
+An independent strict-runner replay against this frozen file remains a required consuming CI check.
+
 The new pre-105 backup uses `backups/<controllerSha>-<sourceCiRunId>-1-notification-pre105`.
 It retains a full custom dump including owners and ACLs. In a separate ephemeral PostgreSQL
 cluster, an allowlisted role closure is created with NOLOGIN/NOSUPERUSER/NOBYPASSRLS/NOINHERIT
