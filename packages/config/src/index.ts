@@ -206,6 +206,15 @@ const environmentSchema = z.object({
     .max(3_600_000)
     .default(60_000),
   PARTICIPATION_COMMAND_EXPIRY_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
+  // Commercial paid CREATE/JOIN through the existing owner of booking/entitlement.
+  // Owner: C1 commercial server path. Purpose: compose the owner adapter for the paid JOIN slice.
+  // Activation: only with the existing delegation material and a join-conditions owner present;
+  // otherwise the runtime factory returns undefined and the route stays fail-closed.
+  // Removal/review condition: replace when a dedicated booked-operation owner adapter lands, and
+  // review this flag no later than the next delivery batch.
+  GAME_COMMERCIAL_JOIN_ENABLED: booleanFromEnvironment,
+  GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: z.string().url().optional(),
+  GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(5_000).default(3_000),
   ACTIVITY_HISTORY_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_SYNC_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: booleanFromEnvironment,

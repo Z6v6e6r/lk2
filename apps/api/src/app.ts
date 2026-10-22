@@ -126,6 +126,7 @@ import {
 } from './event-avatar-media.js';
 import { registerCoachGameSummaryRoutes } from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
+import type { GameCommercialJoinOptions } from './games/game-routes.js';
 import { registerLegacyGameRosterBridgeRoutes } from './games/legacy-game-roster-bridge-routes.js';
 import type { LegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
 import { registerGameResultRoutes } from './games/game-result-routes.js';
@@ -396,6 +397,7 @@ export interface BuildAppOptions {
     'issue'
   >;
   readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
+  readonly gameCommercialJoin?: GameCommercialJoinOptions;
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
   readonly bookedOperationRead?: Omit<
     BookedOperationReadRouteOptions,
@@ -1086,6 +1088,7 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.gameCommandRepository
       ? { managementRepository: options.gameCommandRepository }
       : {}),
+    ...(options.gameCommercialJoin ? { commercialJoin: options.gameCommercialJoin } : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });

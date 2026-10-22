@@ -68,6 +68,8 @@ import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
 import { createGameJoinConditionsRuntime } from './games/game-join-conditions-runtime.js';
+import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
+import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
@@ -609,6 +611,51 @@ const subscriptionRuntimeWarnBoundary = (() => {
   };
 })();
 const gameJoinConditionsOwner = createGameJoinConditionsRuntime({ config, pool, authService });
+// Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
+// existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
+const gameCommercialJoin = gameRosterRepository
+  ? createGameCommercialJoinRuntime({
+      config,
+      pool,
+      rosterRepository: gameRosterRepository,
+      ...(gameJoinConditionsOwner ? { conditionsOwner: gameJoinConditionsOwner } : {}),
+      ...(subscriptionRuntimeWarnBoundary
+        ? {
+            ownerBoundary: {
+              delegationIssuer: subscriptionRuntimeWarnBoundary.delegationIssuer,
+              actorContextRepository: subscriptionRuntimeWarnBoundary.actorContextRepository,
+              // The provider subscription mapping is resolved server-side for the selected product;
+              // without it the owner cannot execute and the flow fails closed before dispatch.
+              resolveProviderClientSubscriptionId: async (input) => {
+                const context = await createGameJoinConditionsContextRepository(
+                  pool,
+                  config.VIVA_AUTH_TENANT_KEY ?? 'iSkq6G',
+                ).resolve({
+                  tenantId: input.tenantId,
+                  userId: input.userId,
+                  sessionId: input.sessionId,
+                  gameId: input.gameId,
+                  subscriptionInstanceId: input.subscriptionInstanceId,
+                });
+                return context?.providerSubscriptionId;
+              },
+            },
+          }
+        : {}),
+      // Short-lived, user-scoped provider credential for exactly one operation. The runtime refuses
+      // to execute without it, so an unwired OAuth contour cannot produce an unattributable write.
+      issueActorToken: async (actor) => {
+        const issued = await authService.issueVivaAccessToken({
+          tenantKey: actor.tenantKey,
+          tenantId: actor.tenantId,
+          userId: actor.userId,
+          sessionId: actor.sessionId,
+          correlationId: actor.correlationId,
+        });
+        return { token: issued.accessToken, expiresAt: issued.expiresAt };
+      },
+    })
+  : undefined;
 const app = await buildApp({
   config,
   logger,
@@ -616,6 +663,7 @@ const app = await buildApp({
   ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
+  ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(subscriptionRuntimeWarnBoundary
     ? {
         subscriptionRuntimeActorContextRepository:

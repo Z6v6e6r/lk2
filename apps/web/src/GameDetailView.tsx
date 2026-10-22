@@ -5,6 +5,9 @@ import {
 } from './GameJoinConditionsPanel.js';
 
 import { GameResultEditor } from './GameResultEditor.js';
+import { GameJoinFlowPanel } from './GameJoinFlowPanel.js';
+import { gameJoinBlockedLabel, type GameJoinFlowState } from './game-join-flow.js';
+import type { GameJoinPriceConsent } from './game-join-attempt.js';
 import { GameScoreSummary } from './GameScoreSummary.js';
 import { EventGameTypeIcon } from './GameTypeBadge.js';
 import { ChatIcon, EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
@@ -318,6 +321,12 @@ function GameTab(props: {
   readonly onRemoveParticipant: (userId: string) => void;
   readonly onReplaceParticipant: (currentUserId: string, nextUserId: string) => void;
   readonly onResultOpen: () => void;
+  readonly joinFlow?: GameJoinFlowState;
+  readonly joinFlowBusy?: boolean;
+  readonly onJoinConsent?: (consent: GameJoinPriceConsent) => void;
+  readonly onJoinConsentCancel?: () => void;
+  readonly onJoinStatusCheck?: () => void;
+  readonly onJoinRetry?: () => void;
 }): React.JSX.Element {
   const {
     busy,
@@ -331,6 +340,12 @@ function GameTab(props: {
     onRemoveParticipant,
     onReplaceParticipant,
     onResultOpen,
+    joinFlow,
+    joinFlowBusy = false,
+    onJoinConsent,
+    onJoinConsentCancel,
+    onJoinStatusCheck,
+    onJoinRetry,
   } = props;
   const [lineupPicker, setLineupPicker] = useState<LineupPickerState | null>(null);
   const gameConversation = game.conversation;
@@ -342,6 +357,8 @@ function GameTab(props: {
       : primaryAction
         ? ACTION_LABELS[primaryAction]
         : undefined;
+  const joinBlocked = joinFlow ? gameJoinBlockedLabel(joinFlow) : null;
+  const primaryBlocked = primaryAction === 'JOIN' && joinBlocked !== null;
   const pairCount = Math.max(1, Math.ceil(game.capacity.total / 2));
   const participantById = new Map(
     game.participants.map((participant) => [participant.userId, participant]),
@@ -580,8 +597,22 @@ function GameTab(props: {
         ) : null}
       </section>
 
+      {joinFlow ? (
+        <GameJoinFlowPanel
+          flow={joinFlow}
+          busy={busy || joinFlowBusy}
+          {...(onJoinConsent ? { onConfirmConsent: onJoinConsent } : {})}
+          {...(onJoinConsentCancel ? { onCancelConsent: onJoinConsentCancel } : {})}
+          {...(onJoinStatusCheck ? { onCheckStatus: onJoinStatusCheck } : {})}
+          {...(onJoinRetry ? { onRetry: onJoinRetry } : {})}
+        />
+      ) : null}
+
       <div className="game-detail-actions">
-        {primaryAction && primaryLabel ? (
+        {primaryAction && primaryLabel && primaryBlocked ? (
+          // Custody or consent owns the next action: no duplicate purchase button is rendered.
+          <p className="game-detail-state">{joinBlocked}</p>
+        ) : primaryAction && primaryLabel ? (
           <button
             className="game-detail-primary"
             type="button"
@@ -738,6 +769,12 @@ function ResultTab(props: {
 export function GameDetailView(props: {
   readonly joinConditionsClient?: GameJoinConditionsClient;
   readonly subscriptionInstanceId?: string;
+  readonly joinFlow?: GameJoinFlowState;
+  readonly joinFlowBusy?: boolean;
+  readonly onJoinConsent?: (consent: GameJoinPriceConsent) => void;
+  readonly onJoinConsentCancel?: () => void;
+  readonly onJoinStatusCheck?: () => void;
+  readonly onJoinRetry?: () => void;
   readonly activeTab: GameDetailTab;
   readonly busy: boolean;
   readonly game: GameCard;
@@ -854,6 +891,14 @@ export function GameDetailView(props: {
             onRemoveParticipant={removeParticipant}
             onReplaceParticipant={replaceParticipant}
             onResultOpen={() => onTabChange('RESULT')}
+            {...(props.joinFlow ? { joinFlow: props.joinFlow } : {})}
+            {...(props.joinFlowBusy === undefined ? {} : { joinFlowBusy: props.joinFlowBusy })}
+            {...(props.onJoinConsent ? { onJoinConsent: props.onJoinConsent } : {})}
+            {...(props.onJoinConsentCancel
+              ? { onJoinConsentCancel: props.onJoinConsentCancel }
+              : {})}
+            {...(props.onJoinStatusCheck ? { onJoinStatusCheck: props.onJoinStatusCheck } : {})}
+            {...(props.onJoinRetry ? { onJoinRetry: props.onJoinRetry } : {})}
           />
         ) : (
           <ResultTab
