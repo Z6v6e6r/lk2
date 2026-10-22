@@ -1,6 +1,17 @@
 # handoff-C2 — подключённый коммерческий JOIN ЛК2
 
-## Статус и точный источник
+## Продолжение 22 октября 2026 — интеграция merged C1
+
+- Собственная C2-ветка обновлена обычным merge актуального `origin/main` `599ed7210d84b4aec6e5d0aa6382db5ff3d98909`; integration commit `88fc9b4b`. Опубликованная история не переписана, protected branch не менялась. C1 #447 уже merged; ниже сохранена история приёмки от 21 октября, а не описание текущего main.
+- Актуальный C1 source исправляет конкретные прежние blockers late receipt после TTL, actor-token transmission и runtime composition. Это source-вывод, не доказательство реального provider settlement или готовности всех owner receivers.
+- После интеграции выполнены JOIN/detail/ledger/conditions/picker/panel tests и C1 commercial JOIN/runtime/admission tests: **11 files PASS, 169 tests PASS / 2 SKIP**. Web typecheck и `git diff --check` PASS. Оба skipped не стали интеграционной приёмкой.
+- Найден и исправлен test-only wall-clock dependency: capacity/eviction regression задаёт одно и то же время при записи и перечитывании. Runtime TTL/custody не менялись; полный check от 21 октября не выдаётся за проверку нового integration tree.
+- Новый `npm run check` на frozen index `f0dcf7753c44873e3a8e4156fb790b2901454579`: все `source:static` gates PASS (generation, format, lint, typecheck, contract lint, build, runtime imports); итог **exit 1** на двух 5000 ms timeout в неизменённом `scripts/provision-timeweb-beta-runtime-secrets.test.ts`. Полный прогон: **6085 PASS / 281 SKIP / 2 timeout**, source/index unchanged. Изолированный повтор того же файла с прежним timeout и без product/release edits: **63 PASS**. Это не выдаётся за повторный зелёный `npm run check`; exact-head CI нового delivery head проверяется отдельно.
+- Android использует общий экран, но его `AndroidSessionPolicy` и `native-api-fetch.ts` сейчас не пропускают существующий commercial JOIN/readback contract. На iOS остаются отдельный read-only cabinet и read-only native session policy. Ранее полученные browser screenshots этого не проверяют.
+- Пользователь отдельно разрешил дальнейшую реализацию серверного контракта/SDK/native policies на task-ветках. Правила D0, real payments/OTP, protected merge, публикация и deploy этим разрешением не охвачены. Текущий C2 integration increment сам эти owner/native файлы не меняет.
+- Commercial CREATE/full-price/private court, real owner/provider acceptance и native acceptance остаются **OPEN**. Полный результат двух направлений не объявляется завершённым.
+
+## Историческая приёмка 21 октября — статус и точный источник
 
 **C2 в работе: поддерживаемый C1 сценарий JOIN реализован и проверен UI_LOCAL; independent specialist re-review PASS. Полный LOCAL check PASS. Собственные Draft PR/CI фиксируются отдельным exact-head delivery readback, не подменяются CI C1. Полный коммерческий CREATE/full-price/private court не реализованы — принятый owner-контракт их не предоставляет.**
 
