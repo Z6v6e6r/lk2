@@ -832,12 +832,9 @@ describe('commercial JOIN API environment contract', () => {
       SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'x'.repeat(513),
       SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'bad audience',
     })) {
-      expect(() =>
-        validateTimewebRuntimeEnvironments(
-          { ...env, api: { ...env.api, [key]: value } },
-          { host, tenantKey },
-        ),
-      ).toThrow();
+      const candidate = structuredClone(env);
+      candidate.api![key] = value;
+      expect(() => validateTimewebRuntimeEnvironments(candidate, { host, tenantKey })).toThrow();
     }
   });
   it('rejects delegation material outside the API service', () => {
