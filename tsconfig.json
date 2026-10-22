@@ -40,7 +40,14 @@
       "@phub/database/contacts": ["packages/database/src/contact-reader.ts"],
       "@phub/database/password-login": ["packages/database/src/local-password-login-repository.ts"],
       "@phub/database/support-tickets": ["packages/database/src/support-ticket-repository.ts"],
-      "@phub/database/password-reset": ["packages/database/src/local-password-reset-repository.ts"]
+      "@phub/database/password-reset": ["packages/database/src/local-password-reset-repository.ts"],
+      "@phub/domain/notification-scenarios": ["packages/domain/src/notification-scenarios.ts"],
+      "@phub/database/notification-scenarios": [
+        "packages/database/src/notification-scenario-repository.ts"
+      ],
+      "@phub/viva-adapter/notification-lifecycle": [
+        "packages/viva-adapter/src/notification-lifecycle-source.ts"
+      ]
     },
     "types": ["node", "vitest/globals"]
   },

@@ -22,6 +22,7 @@ export interface ClaimedNotificationDelivery {
   readonly endpointId: string;
   readonly attemptNo: number;
   readonly startedAt: string;
+  readonly scenarioDelivery?: boolean;
 }
 
 export type NotificationDeliveryFinalization = 'sent' | 'retry' | 'dead' | 'stale';
@@ -30,7 +31,7 @@ export async function deferNotificationDeliveryWithoutAttempt(options: {
   readonly pool: Pool;
   readonly job: ClaimedNotificationDelivery;
   readonly retryAfterMs: number;
-  readonly errorCode: 'WEB_PUSH_CIRCUIT_OPEN' | 'FCM_CIRCUIT_OPEN';
+  readonly errorCode: string;
 }): Promise<'retry' | 'stale'> {
   const retryAfterMs = Math.max(1_000, Math.min(Math.trunc(options.retryAfterMs), 3_600_000));
   return withTenantTransaction(options.pool, options.job.tenantId, async (client) => {
@@ -39,8 +40,9 @@ export async function deferNotificationDeliveryWithoutAttempt(options: {
     const updated = await client.query(
       `update notifications.deliveries
           set state = 'PENDING',
+              scenario_dispatch_started_at = null,
               attempt_count = $3 - 1,
-              next_attempt_at = now() + ($4::integer * interval '1 millisecond'),
+              ${options.job.scenarioDelivery ? "scenario_available_at = case when scenario_v2_available_at is null then now() + ($4::integer * interval '1 millisecond') else null end, scenario_v2_available_at = case when scenario_v2_available_at is not null then now() + ($4::integer * interval '1 millisecond') else null end, next_attempt_at='infinity'::timestamptz" : "next_attempt_at=now() + ($4::integer * interval '1 millisecond')"},
               lease_expires_at = null,
               updated_at = now(),
               last_error_code = $5
@@ -139,8 +141,8 @@ export async function finalizeNotificationDelivery(options: {
   readonly pool: Pool;
   readonly job: ClaimedNotificationDelivery;
   readonly result: PushDeliveryResult;
-  readonly platform: NotificationPushPlatform;
-  readonly transport: 'WEB_PUSH' | 'APNS' | 'FCM';
+  readonly platform: NotificationPushPlatform | null;
+  readonly transport: 'WEB_PUSH' | 'APNS' | 'FCM' | 'YANDEX_SMTP';
   readonly maxAttempts: number;
   readonly retryBaseMs: number;
 }): Promise<NotificationDeliveryFinalization> {
@@ -185,7 +187,8 @@ export async function finalizeNotificationDelivery(options: {
         const updated = await client.query(
           `update notifications.deliveries
               set state = 'PENDING',
-                  next_attempt_at = now() + ($4::integer * interval '1 millisecond'),
+                  scenario_dispatch_started_at = null,
+                  ${options.job.scenarioDelivery ? "scenario_available_at = case when scenario_v2_available_at is null then now() + ($4::integer * interval '1 millisecond') else null end, scenario_v2_available_at = case when scenario_v2_available_at is not null then now() + ($4::integer * interval '1 millisecond') else null end, next_attempt_at='infinity'::timestamptz" : "next_attempt_at=now() + ($4::integer * interval '1 millisecond')"},
                   lease_expires_at = null,
                   updated_at = now(),
                   last_error_code = $5

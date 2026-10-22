@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
+import type * as CapacitorCore from '@capacitor/core';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IOSAuthApp } from './IOSAuthApp.js';
@@ -13,6 +14,32 @@ import {
   viewerId,
   config,
 } from './testing/cabinet-fixtures.js';
+
+const nativePush = vi.hoisted(() => ({
+  status: vi.fn(
+    async () =>
+      await Promise.resolve({
+        configured: false,
+        installationId: 'synthetic-installation',
+        pendingRevoke: false,
+        state: 'unsupported',
+      }),
+  ),
+  suspend: vi.fn(
+    async () =>
+      await Promise.resolve({ installationId: 'synthetic-installation', pendingRevoke: false }),
+  ),
+  takeOpened: vi.fn(async () => await Promise.resolve({})),
+  addListener: vi.fn(async () => await Promise.resolve({ remove: async () => {} })),
+}));
+vi.mock('@capacitor/core', async (importOriginal) => {
+  const original = await importOriginal<typeof CapacitorCore>();
+  return {
+    ...original,
+    registerPlugin: (name: string) =>
+      name === 'PadlHubIOSPush' ? nativePush : original.registerPlugin(name),
+  };
+});
 
 // Transform the shared lazy-loaded screens before the UI assertions' one-second budget.
 beforeAll(async () => {
@@ -96,6 +123,12 @@ describe('iOS cabinet with the real shared screens and one native session', () =
     await screen.findByRole('heading', { name: 'Хаб Селигерская' });
     fireEvent.click(screen.getByRole('link', { name: 'Профиль' }));
     await screen.findByRole('heading', { name: 'Анна Петрова' });
+    nativePush.suspend.mockRejectedValueOnce(new Error('SYNTHETIC_REVOKE_UNAVAILABLE'));
+    fireEvent.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Не удалось отключить уведомления перед выходом',
+    );
+    expect(request.mock.calls.some(([input]) => input.operation === 'logout')).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
     await screen.findByLabelText('Номер телефона');
     expect(screen.queryByText('Анна Петрова')).toBeNull();

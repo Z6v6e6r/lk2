@@ -2540,6 +2540,35 @@ export class PadlHubApiClient {
     );
   }
 
+  public getIOSPushConfiguration(): Promise<AndroidPushConfiguration> {
+    return this.request<AndroidPushConfiguration>('/notification-endpoints/ios/config');
+  }
+
+  public registerIOSPushEndpoint(
+    input: AndroidPushEndpointRegistration,
+    idempotencyKey: string,
+  ): Promise<AndroidPushEndpointCommandResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AndroidPushEndpointCommandResult>('/notification-endpoints/ios', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public revokeIOSPushEndpoint(
+    installationId: string,
+    idempotencyKey: string,
+  ): Promise<AndroidPushEndpointCommandResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AndroidPushEndpointCommandResult>(
+        `/notification-endpoints/ios/${encodeURIComponent(installationId)}`,
+        { method: 'DELETE', idempotencyKey },
+      ),
+    );
+  }
+
   private async performSessionRefresh(): Promise<AuthenticatedSession> {
     try {
       const idempotencyKey = createCorrelationId();

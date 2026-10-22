@@ -1,3 +1,13 @@
+import Redis from 'ioredis';
+import { VivaIdentityProvider } from '@phub/viva-adapter';
+import { VivaNotificationSource } from '@phub/viva-adapter/notification-lifecycle';
+import { ApnsDeliveryAdapter, ApnsTokenProvider } from './apns-adapter.js';
+import { YandexSmtpAdapter } from './yandex-smtp-adapter.js';
+import { runExtendedScenarioDelivery } from './extended-scenario-delivery.js';
+import {
+  runNotificationLifecycleSync,
+  runNotificationAttendanceSync,
+} from './notification-lifecycle-sync.js';
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
@@ -57,6 +67,8 @@ import { runGiftCertificateSandboxDeliveryBatch } from './gift-certificate-deliv
 import { expireCommunityDirectInviteBatch } from './community-direct-invite-expiry.js';
 import { registerGiftCertificateIssuerConsumer } from './gift-certificate-issuer-consumer.js';
 import { registerLocationHomeProjectorConsumer } from './location-home-projector-consumer.js';
+import { registerNotificationScenarioConsumer } from './notification-scenario-consumer.js';
+import { runNotificationScenarioBatch } from './notification-scenarios.js';
 import { registerNotificationProjectorConsumer } from './notification-projector-consumer.js';
 import { runBookingReminderSchedulerBatch } from './booking-reminder-scheduler.js';
 import {
@@ -371,6 +383,53 @@ const activeFcmRuntime = fcmRuntime
       }),
     }
   : undefined;
+const extendedCipher =
+  config.APNS_ENABLED || config.SMTP_ENABLED
+    ? createNotificationEndpointCipher({
+        serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS!,
+        activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
+      })
+    : undefined;
+const apnsRuntime = config.APNS_ENABLED
+  ? new ApnsDeliveryAdapter({
+      topic: config.APNS_APP_ID,
+      environment: config.APNS_ENVIRONMENT,
+      timeoutMs: 5000,
+      tokenProvider: await ApnsTokenProvider.create(config.APNS_CREDENTIAL_FILE!),
+      onOutcome: (code) => workerMetrics.recordExtendedNotificationOutcome('APNS', code),
+    })
+  : undefined;
+const smtpRuntime = config.SMTP_ENABLED
+  ? await YandexSmtpAdapter.create({
+      credentialFile: config.SMTP_CREDENTIAL_FILE!,
+      timeoutMs: 5000,
+      onOutcome: (code) => workerMetrics.recordExtendedNotificationOutcome('YANDEX_SMTP', code),
+    })
+  : undefined;
+const lifecycleRuntime = config.NOTIFICATION_LIFECYCLE_VIVA_ENABLED
+  ? {
+      source: new VivaNotificationSource({
+        providerTenantKey: config.VIVA_AUTH_TENANT_KEY,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
+        onOutcome: (code) => workerMetrics.recordExtendedNotificationOutcome('VIVA_READ', code),
+      }),
+      provider: new VivaIdentityProvider({
+        mode: config.VIVA_MODE,
+        baseUrl: config.VIVA_AUTH_BASE_URL,
+        oauthScopes: config.VIVA_OAUTH_SCOPES,
+        realm: config.VIVA_AUTH_REALM,
+        clientId: config.VIVA_AUTH_CLIENT_ID,
+        channel: config.VIVA_AUTH_CHANNEL,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
+        devPhoneE164: config.AUTH_DEV_PHONE_E164,
+        devOtpCode: config.AUTH_DEV_OTP_CODE,
+      }),
+    }
+  : undefined;
+const lifecycleRedis = lifecycleRuntime
+  ? new Redis(config.REDIS_URL, { enableOfflineQueue: false, maxRetriesPerRequest: 1 })
+  : undefined;
+let attendanceNextAt = 0;
 const connection = await connect(config.RABBITMQ_URL);
 const channel = await connection.createConfirmChannel();
 const consumerChannel = await connection.createChannel();
@@ -438,6 +497,8 @@ await registerNotificationProjectorConsumer({
     ? { androidPush: { appId: config.FCM_APP_ID, environment: config.FCM_ENVIRONMENT } }
     : {}),
 });
+if (config.NOTIFICATION_SCENARIOS_ENABLED)
+  await registerNotificationScenarioConsumer({ channel: consumerChannel, pool, logger });
 if (giftCertificateRuntime) {
   await registerGiftCertificateIssuerConsumer({
     channel: consumerChannel,
@@ -1042,6 +1103,123 @@ const runBookingReminderCycle = async (): Promise<void> => {
   }
 };
 
+const runLifecycleCycle = async (): Promise<void> => {
+  if (shuttingDown || !lifecycleRuntime) return;
+  try {
+    if (lifecycleRuntime) {
+      try {
+        await runNotificationLifecycleSync({
+          pool,
+          redis: lifecycleRedis!,
+          config,
+          ...lifecycleRuntime,
+        });
+      } catch {
+        logger.error(
+          { code: 'VIVA_NOTIFICATION_SYNC_FAILED' },
+          'notification lifecycle sync failed',
+        );
+      }
+      if (Date.now() >= attendanceNextAt) {
+        attendanceNextAt = Date.now() + 60_000;
+        try {
+          await runNotificationAttendanceSync({ pool, config, source: lifecycleRuntime.source });
+        } catch {
+          logger.error(
+            { code: 'VIVA_NOTIFICATION_ATTENDANCE_FAILED' },
+            'notification attendance sync failed',
+          );
+        }
+      }
+    }
+  } finally {
+    if (!shuttingDown) setTimeout(() => void runLifecycleCycle(), 60_000);
+  }
+};
+let scenarioTenantOffset = 0;
+const runScenarioCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.NOTIFICATION_SCENARIOS_ENABLED) return;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active=true order by id',
+    );
+    const count = tenants.rows.length;
+    for (let index = 0; index < count && !shuttingDown; index++) {
+      const tenantId = tenants.rows[(scenarioTenantOffset + index) % count]!.id;
+      try {
+        await runNotificationScenarioBatch({
+          pool,
+          tenantId,
+          staffTasksEnabled: config.NOTIFICATION_STAFF_TASKS_ENABLED,
+          ...(apnsRuntime
+            ? {
+                iosPush: {
+                  appId: config.APNS_APP_ID,
+                  environment: config.APNS_ENVIRONMENT,
+                  credentialRef: config.APNS_CREDENTIAL_REF,
+                },
+              }
+            : {}),
+          ...(smtpRuntime && extendedCipher
+            ? {
+                email: {
+                  appId: config.SMTP_APP_ID,
+                  environment: config.SMTP_ENVIRONMENT,
+                  credentialRef: config.SMTP_CREDENTIAL_REF,
+                  cipher: extendedCipher,
+                },
+              }
+            : {}),
+          ...(webPushRuntime
+            ? {
+                webPush: {
+                  appId: config.WEB_PUSH_APP_ID,
+                  environment: config.WEB_PUSH_ENVIRONMENT,
+                },
+              }
+            : {}),
+          ...(activeFcmRuntime
+            ? { androidPush: { appId: config.FCM_APP_ID, environment: config.FCM_ENVIRONMENT } }
+            : {}),
+        });
+        if (extendedCipher && apnsRuntime)
+          await runExtendedScenarioDelivery({
+            pool,
+            tenantId,
+            appId: config.APNS_APP_ID,
+            environment: config.APNS_ENVIRONMENT,
+            cipher: extendedCipher,
+            transport: 'APNS',
+            adapter: apnsRuntime,
+            enabled: true,
+            credentialRef: config.APNS_CREDENTIAL_REF,
+          });
+        if (extendedCipher && smtpRuntime)
+          await runExtendedScenarioDelivery({
+            pool,
+            tenantId,
+            appId: config.SMTP_APP_ID,
+            environment: config.SMTP_ENVIRONMENT,
+            cipher: extendedCipher,
+            transport: 'YANDEX_SMTP',
+            adapter: smtpRuntime,
+            enabled: true,
+            credentialRef: config.SMTP_CREDENTIAL_REF,
+          });
+      } catch {
+        logger.error(
+          { tenantId, code: 'SCENARIO_CYCLE_FAILED' },
+          'notification scenario tenant cycle failed',
+        );
+      }
+    }
+    scenarioTenantOffset = count ? (scenarioTenantOffset + 1) % count : 0;
+  } catch {
+    logger.error({ code: 'SCENARIO_CYCLE_FAILED' }, 'notification scenario cycle failed');
+  } finally {
+    if (!shuttingDown) setTimeout(() => void runScenarioCycle(), 15_000);
+  }
+};
 const runWebPushCycle = async (): Promise<void> => {
   if (shuttingDown || !webPushRuntime) return;
   const startedAt = Date.now();
@@ -1060,6 +1238,7 @@ const runWebPushCycle = async (): Promise<void> => {
           tenantId,
           appId: config.WEB_PUSH_APP_ID,
           environment: config.WEB_PUSH_ENVIRONMENT,
+          scenarioPolicyEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
           cipher: webPushRuntime.cipher,
           adapter: webPushRuntime.adapter,
           maxAttempts: config.WEB_PUSH_MAX_ATTEMPTS,
@@ -1121,6 +1300,7 @@ const runFcmCycle = async (): Promise<void> => {
             tenantId,
             appId: config.FCM_APP_ID,
             environment: config.FCM_ENVIRONMENT,
+            scenarioPolicyEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
             cipher: activeFcmRuntime.cipher,
             adapter: activeFcmRuntime.adapter,
             maxAttempts: config.FCM_MAX_ATTEMPTS,
@@ -1342,6 +1522,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
     channel.close(),
     connection.close(),
     pool.end(),
+    lifecycleRedis?.quit(),
     telemetry?.shutdown(),
   ]);
   const failedClosures = results.filter((result) => result.status === 'rejected').length;
@@ -1356,6 +1537,8 @@ process.once('SIGTERM', () => void shutdown('SIGTERM'));
 process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
 void runBookingReminderCycle();
+void runScenarioCycle();
+void runLifecycleCycle();
 if (telemetry) void runOperationalMetricsCycle();
 void runProfilePhotoMaintenance();
 void runCommunitySyncCycle();

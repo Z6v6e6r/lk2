@@ -139,7 +139,7 @@ final class SessionTransportTests: XCTestCase {
   private let anotherKey = "22222222-2222-4222-8222-222222222222"
   private let challenge = "33333333-3333-4333-8333-333333333333"
   private let sessionBody =
-    "{\"accessToken\":\"short-lived-access\",\"tokenType\":\"Bearer\",\"expiresAt\":\"2099-01-01T00:00:00Z\",\"user\":{\"id\":\"synthetic-user\",\"displayName\":\"Test\"},\"context\":{\"userId\":\"synthetic-user\",\"tenantId\":\"synthetic-tenant\"}}"
+    "{\"accessToken\":\"short-lived-access\",\"tokenType\":\"Bearer\",\"expiresAt\":\"2099-01-01T00:00:00Z\",\"user\":{\"id\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"displayName\":\"Test\"},\"context\":{\"userId\":\"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\",\"tenantId\":\"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\"}}"
 
   private func configuration() throws -> SessionConfiguration {
     try SessionConfiguration(origin: origin, tenant: tenant, appVersion: "1.0", appBuild: "1")

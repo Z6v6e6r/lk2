@@ -52,15 +52,20 @@ export function safeNotificationRoute(value: string): string {
 
 /** Provider tokens exist only during a registration call; native code owns all durable journals. */
 export function createAndroidPushController(
-  gateway: AuthGateway,
+  gateway: Pick<
+    AuthGateway,
+    'getAndroidPushConfiguration' | 'registerAndroidPushEndpoint' | 'revokeAndroidPushEndpoint'
+  >,
   publish: (state: AndroidPushSnapshot) => void,
   transport: AndroidPushPlugin = native,
+  platform: 'ANDROID' | 'IOS' = 'ANDROID',
 ) {
   let alive = true;
   let snapshot = initialAndroidPushState;
   let operation: Promise<void> | undefined;
   let navigationReady = false;
   let sessionActive = false;
+  let registrationEpoch = 0;
   let pendingRoute: string | undefined;
   const update = (next: Partial<AndroidPushSnapshot>): void => {
     snapshot = { ...snapshot, ...next };
@@ -81,13 +86,17 @@ export function createAndroidPushController(
       if (!(
         error instanceof ApiClientError &&
         error.status === 404 &&
-        error.code === 'ANDROID_PUSH_ENDPOINT_NOT_FOUND'
+        error.code === `${platform}_PUSH_ENDPOINT_NOT_FOUND`
       ))
         throw error;
     }
     await transport.finishRevoke({ idempotencyKey: pending.idempotencyKey });
   };
   const register = async (prompt: boolean): Promise<void> => {
+    const epoch = registrationEpoch;
+    const current = (): void => {
+      if (epoch !== registrationEpoch) throw new Error('NATIVE_PUSH_SESSION_REQUIRED');
+    };
     const status = await transport.status();
     if (!status.configured || !(await configuration())) {
       update({
@@ -98,15 +107,19 @@ export function createAndroidPushController(
       });
       return;
     }
+    current();
     await revoke(status);
+    current();
     const registration = await transport.registration({ requestPermission: prompt });
     if (!alive) return;
+    current();
     if (!gateway.registerAndroidPushEndpoint) throw new Error('NATIVE_PUSH_UNAVAILABLE');
     const result = await gateway.registerAndroidPushEndpoint(
       { installationId: registration.installationId, token: registration.token },
       registration.idempotencyKey,
     );
     if (!alive) return;
+    current();
     await transport.activate({
       idempotencyKey: registration.idempotencyKey,
       endpointId: result.endpointId,
@@ -193,6 +206,7 @@ export function createAndroidPushController(
         .catch(() => undefined);
     },
     sessionExpired: (): void => {
+      registrationEpoch++;
       sessionActive = false;
       pendingRoute = undefined;
       void transport.suspend().catch(() => undefined);
@@ -204,10 +218,12 @@ export function createAndroidPushController(
         update({ state: 'ready', busy: false, error: undefined });
       }),
     beforeLogout: async (): Promise<void> => {
+      registrationEpoch++;
+      sessionActive = false;
       // Suspension is durable and invalidates any late Firebase token callback before network waits.
       const pending = await transport.suspend();
       if (operation) await operation.catch(() => undefined);
-      await revoke(pending);
+      await revoke(platform === 'IOS' ? await transport.status() : pending);
     },
     mount(): () => void {
       alive = true;
