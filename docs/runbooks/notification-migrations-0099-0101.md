@@ -1,0 +1,161 @@
+# Notification migration package 0099–0101
+
+Preparation scope: one ordered expand-only package over the existing 102-row ledger through
+`0098_support_tickets.sql`. This document, descriptor and diagnostic do **not** authorize apply,
+role/ACL changes, controller enrollment, backup execution, publication or deployment.
+The frozen Timeweb 99→102 runner and backup schemas remain unchanged and reject this package.
+
+## Immutable inputs and checkpoints
+
+The machine-readable source of package inputs is
+[`notification-migrations-0099-0101.v1.json`](../../deploy/timeweb/notification-migrations-0099-0101.v1.json).
+The offline validator hashes the complete, sorted SQL catalog, its first 102 entries, each pending
+file and every checkpoint. Added, removed, reordered or modified SQL makes this package ineligible;
+the package must be reviewed again rather than accepting a mutable current-main catalog.
+
+| Step                                       | SQL checksum SHA-256                                               | Ledger rows | Ledger SHA-256                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------ | ----------- | ------------------------------------------------------------------ |
+| Before apply, through 0098                 | —                                                                  | 102         | `b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85` |
+| `0099_local_password_reset_proofs.sql`     | `1669477906e7787aa3a4d457cbb35936cdb26976e536f5d2dddb99076ac23306` | 103         | `30a0e396e35739c66291b7bc3143bb9ac9be584d4732ee01ed0dea82da7339f7` |
+| `0100_notification_scenarios.sql`          | `0ce280dd9c3fb348b8247728e2e1096399959752c8ecf10deb7a5f00429d5d5b` | 104         | `e5eacd1ea2514df2abe7d8abd89f1b54e103c8b12a1aacf6b4790622236516d8` |
+| `0101_notification_lifecycle_channels.sql` | `426bdec1c96a06dbf60a9815e944226e3ca37e6a0354a22f23ea21517962dcd4` | 105         | `7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd` |
+
+Ledger digest is SHA-256 of UTF-8 `JSON.stringify(rows.map(r => [r.filename,r.checksum])) + '\n'`,
+with rows ordered by filename. `applied_at` is preserved for existing rows and excluded from this hash.
+The final main commit, tree, exact-head CI, publication run, canonical manifest and five immutable
+image digests are separate execution inputs, frozen only after source integration. This descriptor
+neither substitutes an older publication nor pins a future controller to its own unknown commit.
+
+## Read-only diagnostic
+
+Target: Timeweb `lk2.padlhub.su`, server `8886471`, project `262717`, via the existing Tailscale
+management profile. CUP is a separate application at `https://padlhub.su/admin`; LK2's CUP harness
+is not that deployment target. Never copy SSH private keys, passwords or database URLs into reports.
+
+Through an already authorized read connection, run
+[`notification-migrations-0099-0101-diagnostic.sql`](../../deploy/timeweb/notification-migrations-0099-0101-diagnostic.sql)
+with `default_transaction_read_only=on`, `psql -X --no-psqlrc -qAt --set=ON_ERROR_STOP=1` and a
+15-second statement timeout. The script also opens a repeatable-read, read-only transaction. Save
+the single JSON result locally. It reads catalog metadata and migration checksums, never customer
+rows, credentials, password hashes, session contents or environment secrets. Do not obtain new
+credentials or widen access to run a diagnostic.
+
+Validate the saved JSON offline from the task checkout:
+
+```sh
+node --import tsx scripts/prepare-notification-migration-package.ts \
+  --diagnostic /absolute/path/diagnostic.json
+```
+
+Exit `2` means known diagnostic blockers. Malformed or unknown inputs throw. A diagnostic older
+than five minutes or dated in the future is blocked. Exit `0` means only that these preliminary
+diagnostic checks passed: every report still carries `authorizesApply:false`,
+`deploymentEligible:false` and explicit execution gaps. This is not the production preflight or
+postflight validator. Required parent key definitions/owners are checked, while function default
+ACLs are inventoried for review. The tool does not certify the full catalog, memberships or effective object ACLs.
+
+The tool has no database client, SSH subprocess, migration execution, operator request, enrollment
+hook, override or import from a live controller. It cannot repair a failed check.
+
+## Observed blockers and proposed role strategy
+
+Read-only snapshot **2026-10-22 13:41:49 UTC**, PostgreSQL 16, exact initial ledger 102:
+
+| Blocker                                 | Observed evidence                                                                                    | Required resolution before any DDL                                                      |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `RESET_DEFAULT_ACL_WOULD_WIDEN_RUNTIME` | `phub_migrator` defaults in `identity` grant `phub_runtime` SELECT/INSERT/UPDATE/DELETE              | The two new reset tables must remain owner-only; no general runtime or PUBLIC access    |
+| `DELIVERIES_DDL_OWNER_MISMATCH`         | `notifications.deliveries` belongs to `phub_beta`; `phub_migrator` has no effective owner privileges | A reviewed, explicitly authorized ownership strategy for this exact table               |
+| `CAPABILITY_notificationsSchema`        | Missing CREATE and/or USAGE for the migration role                                                   | Read both individual privileges; grant only the missing schema capabilities if approved |
+| `CAPABILITY_templatesReferences`        | Missing REFERENCES on `(tenant_id,id)` of `notifications.templates`                                  | Narrow column REFERENCES, with no runtime role change                                   |
+| `CAPABILITY_intentsReferences`          | Missing REFERENCES on `(tenant_id,id)` of `notifications.intents`                                    | Narrow column REFERENCES, with no runtime role change                                   |
+
+These facts expire; re-read them before proposing or executing any permission operation. An owner
+name alone does not prove lack of ALTER: the diagnostic checks effective owner-role USAGE as well.
+
+Proposed preparation for the next reviewed implementation, **not executable approval**:
+
+1. Keep the new identity tables owner-only. Design a transaction-bound 0099 wrapper that removes
+   the inherited runtime table defaults for creation and restores the exact previous defaults
+   before commit, while verifying actual reset-table ACLs. Existing identity tables must retain
+   their original ACLs. Do not modify the immutable 0099 SQL bytes or expose a partially granted
+   table between transactions. Default-ACL mutation needs its own explicit authorization.
+2. Grant the migration role only missing `notifications` schema capabilities and the two exact
+   composite REFERENCES capabilities. Do not make it a member of the broad `phub_beta` owner role.
+3. Prefer a separately reviewed transfer of **only** `notifications.deliveries` to the migration
+   owner, with an exact pre/post effective ACL matrix and rollback assessment. This changes live
+   ownership and requires explicit authority; this package does not perform or authorize it.
+4. Keep all eight new notification tables owner-only at expansion. Later runtime activation needs
+   a separate least-privilege grant matrix: mutable scenario tables SELECT/INSERT/UPDATE,
+   immutable versions/commands SELECT/INSERT, with no DELETE, PUBLIC or grant option. Reset
+   activation uses a distinct trusted reset owner under ADR 0004, never this notification role.
+
+Existing support table defaults are inventoried as a preimage; no support tables are created here.
+Function defaults are reviewed per resulting function: the two explicit PUBLIC revocations in
+0101 must remain, and the immutable-version trigger function is compared against the exact source
+catalog. No blanket default-ACL acceptance substitutes for actual `relacl`, `attacl` and function ACLs.
+
+## Execution sequence after prerequisites are resolved
+
+Follow the existing [Timeweb runbook](timeweb-lk2-beta.md),
+[publication custody](timeweb-amd64-image-publication.md) and
+[delivery ownership](delivery-batches.md). No second deployment system is introduced here.
+
+1. Approve the concrete role/ACL strategy; implement and review the missing 102→105 controller
+   mode and ledger-102 pre-0105 backup/restore schema in the existing engines. No legacy bridge
+   allowlist widening. Complete their source and rehearsal checks before freezing a release.
+2. Merge that complete reviewed source; freeze one final main SHA/tree with successful exact-head
+   full CI. Publish that source once through the canonical workflow, retaining its same-run
+   manifest, checksum and five digest-pinned images. Candidate/controller source, tree and CI must
+   match. Enroll only with exact live authority. Never build on the target or substitute `latest`.
+3. Refresh target SSH fingerprint, runtime identities/digests, restart/start times, ledger and role
+   diagnostics. Require exclusive release ownership. An active operation or missing terminal
+   receipt belongs to its existing owner: never delete its lock or overwrite its operator request.
+4. Create a fresh, verified ledger-102 pre-0105 backup and isolated restore through the reviewed canonical
+   engine. Bind receipt to final source, CI, target, database system identifier, Postgres digest,
+   source/restored ledger 102 and operation identity. Prove cleanup/custody and maximum age.
+   A provider snapshot, historical restore or mere backup-file existence is insufficient.
+5. Apply only the exact three SQL files in order, one transaction per file, through the reviewed
+   controller. Before start prove the 102 preimage and exact pending set. No automatic retry after
+   lost acknowledgement. Capture durable plan/start/success receipts and reconcile actual state.
+6. Require exact final ledger 105 and an exact reviewed post-DDL catalog: ten empty FORCE-RLS
+   tables, columns/defaults, keys/FKs, 27 indexes, eleven policies, three functions/five triggers,
+   eight `NOT VALID` checks including the two delivery fences, and the reviewed owner/ACL
+   matrix. Check no `internal_only=true` tickets and no scenario timestamps on old deliveries.
+   Row checks require an already approved read verification role; RLS-hidden zero rows are no proof.
+7. Only then update API/Worker with the same immutable manifest, preserving old digest rollback
+   inputs. Apply 0101 before the new API: support queries use `internal_only` even with scenario
+   flags off. Provider configuration, send flags, source polling, scenario enablement and real
+   outbound notifications remain off until their own activation gates pass.
+8. Verify API/Worker identities, readiness, logs, smoke and soak. Verify the separately deployed
+   real CUP in the browser. Merged CUP source alone is not a live UI acceptance result.
+
+## Partial failure and rollback
+
+| Observed exact ledger            | Meaning and recovery                                                                                                                                                        |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 102                              | No package file committed. Reconcile the original container/receipts before deciding on a new attempt. Failed 0099 must leave neither reset table.                          |
+| 103                              | 0099 committed; 0100 did not. Keep reset tables and old binaries. Verify exact ledger, owner/ACLs and failed transaction before a separately approved continuation.         |
+| 104                              | 0099/0100 committed; 0101 did not. Keep expand schema; do not start the new API/extended Worker. Compare old support checks, visibility column absence and delivery fences. |
+| 105                              | All files committed. Verify catalog/ACL/business preimage and the original operation's success proof; acknowledgement loss does not justify running another migrator.       |
+| Any other count/checksum/catalog | STOP/UNKNOWN; retain locks/evidence and investigate with the owner. No automatic repair, ledger editing, down migration or blind retry.                                     |
+
+Application rollback restores the captured old API/Worker digests through the reviewed controller
+and keeps all additive schema, RLS, privacy guards and ledger rows. Old workers do not discover
+new extended work; do not remove those fences. A database restore is a separate destructive data
+operation, requiring explicit authority and an assessment of writes after the backup, especially
+once new scenario/reset rows exist. Do not drop tables/columns or replay provider sends to recover.
+
+## Rehearsal and evidence limits
+
+The existing CI-only staged test in `packages/database/src/local-password-reset-postgres.test.ts`
+uses an owned disposable database and the real `scripts/migrate.ts`. It checks exact 102/103/104/105
+hashes; injects wrong-shape collisions into 0099's second table, 0100's fifth table and 0101 after
+its initial ALTER statements; proves transactional rollback and unchanged ledger timestamps;
+continues in order; preserves synthetic credentials/sessions/support; checks ten empty FORCE-RLS
+tables and no internal tickets; and proves a full repeat is a no-op. The existing 9999 rollback
+test stays in place. This is transaction evidence, not live role/ACL or restore certification.
+
+Pure tests cover observed ACL/ownership blockers, absent capabilities, malformed/stale diagnostics,
+unknown/reordered/duplicate/changed SQL and partial checkpoint handling. Local PostgreSQL tests
+remain skipped when the existing CI-only disposable-database guard is not satisfied. Do not forge
+CI environment variables to connect to a shared database or provision a new local DB implicitly.

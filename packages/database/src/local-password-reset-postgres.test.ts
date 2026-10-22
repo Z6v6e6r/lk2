@@ -8,6 +8,10 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  notificationLedgerCheckpoint,
+  type MigrationRow,
+} from '../../../scripts/notification-migration-package.js';
 
 import { createLocalPasswordLoginRepository } from './local-password-login-repository.js';
 import { withTenantTransaction } from './connection.js';
@@ -558,7 +562,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
       ).rows[0],
     ).toEqual({ rolsuper: false, rolbypassrls: false, rolinherit: false });
   });
-  it('upgrades canonical support 0098→reset 0099, preserves credentials/sessions/support, rejects drift and reapplies as no-op', async () => {
+  it('rehearses exact 102→103→104→105, rolls back each failed file and preserves credentials/sessions/support', async () => {
     const database = `reset_rehearsal_${randomUUID().replaceAll('-', '')}`;
     const directory = await mkdtemp(resolve(tmpdir(), 'kya04-reset-migrations-'));
     const migrations = resolve(directory, 'packages/database/migrations');
@@ -633,7 +637,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
           await fixture!.query<Record<string, unknown>>(`select
         (select jsonb_agg(to_jsonb(c)) from identity.local_email_credentials c) as credentials,
         (select jsonb_agg(to_jsonb(s)) from identity.refresh_sessions s) as sessions,
-        (select jsonb_agg(to_jsonb(t)) from support.tickets t) as tickets,
+        (select jsonb_agg(to_jsonb(t)-'internal_only') from support.tickets t) as tickets,
         (select jsonb_agg(to_jsonb(m)) from support.messages m) as messages`)
         ).rows;
       const original = await legacy();
@@ -642,6 +646,11 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
           'select filename,checksum,applied_at from schema_migrations order by filename',
         )
       ).rows;
+      const checkpoint = (rows: Record<string, unknown>[]) =>
+        notificationLedgerCheckpoint(
+          rows.map((r) => ({ filename: r.filename, checksum: r.checksum })) as MigrationRow[],
+        );
+      expect(checkpoint(before)).toBe(102);
       expect(
         (
           await fixture.query<Record<string, unknown>>(
@@ -676,7 +685,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
       const checksum = createHash('sha256')
         .update(await readFile(resolve(source, name)))
         .digest('hex');
-      const ledger = (
+      let ledger = (
         await fixture.query<Record<string, unknown>>(
           'select filename,checksum,applied_at from schema_migrations order by filename',
         )
@@ -685,6 +694,106 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
       expect(applied).toHaveLength(1);
       expect(applied[0]).toMatchObject({ filename: name, checksum });
       expect(applied[0]?.applied_at).toBeInstanceOf(Date);
+      expect(checkpoint(ledger)).toBe(103);
+      // Exercise the real migrator's per-file transaction, including failures after earlier DDL.
+      // No production ACL strategy is simulated or certified by this disposable owner fixture.
+      const catalog = async () =>
+        (
+          await fixture!.query<Record<string, unknown>>(`select
+          (select jsonb_agg(jsonb_build_object('name',c.oid::regclass::text,'kind',c.relkind,
+            'rls',c.relrowsecurity,'force',c.relforcerowsecurity) order by c.oid::regclass::text)
+            from pg_class c join pg_namespace n on n.oid=c.relnamespace
+            where n.nspname in ('identity','notifications','support')) as relations,
+          (select jsonb_agg(jsonb_build_object('table',a.attrelid::regclass::text,'name',a.attname,
+            'type',format_type(a.atttypid,a.atttypmod),'null',a.attnotnull,
+            'default',pg_get_expr(d.adbin,d.adrelid)) order by a.attrelid::regclass::text,a.attnum)
+            from pg_attribute a join pg_class c on c.oid=a.attrelid
+            join pg_namespace n on n.oid=c.relnamespace left join pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+            where n.nspname in ('identity','notifications','support') and a.attnum>0 and not a.attisdropped) as columns,
+          (select jsonb_agg(jsonb_build_object('table',k.conrelid::regclass::text,'name',k.conname,
+            'definition',pg_get_constraintdef(k.oid),'valid',k.convalidated) order by k.conrelid::regclass::text,k.conname)
+            from pg_constraint k join pg_namespace n on n.oid=k.connamespace
+            where n.nspname in ('identity','notifications','support')) as constraints,
+          (select jsonb_agg(jsonb_build_object('schema',n.nspname,'name',p.proname,'body',p.prosrc) order by n.nspname,p.proname,p.oid)
+            from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname in ('identity','notifications','support')) as functions,
+          (select jsonb_agg(pg_get_triggerdef(t.oid) order by t.tgrelid::regclass::text,t.tgname)
+            from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace
+            where not t.tgisinternal and n.nspname in ('identity','notifications','support')) as triggers,
+          (select jsonb_agg(jsonb_build_object('table',p.polrelid::regclass::text,'name',p.polname,
+            'qual',pg_get_expr(p.polqual,p.polrelid),'check',pg_get_expr(p.polwithcheck,p.polrelid)) order by p.polrelid::regclass::text,p.polname)
+            from pg_policy p join pg_class c on c.oid=p.polrelid join pg_namespace n on n.oid=c.relnamespace
+            where n.nspname in ('identity','notifications','support')) as policies`)
+        ).rows;
+      for (const step of [
+        {
+          name: '0100_notification_scenarios.sql',
+          collision: 'notifications.scenario_runs',
+          count: 104,
+        },
+        {
+          name: '0101_notification_lifecycle_channels.sql',
+          collision: 'notifications.scenario_source_sync',
+          count: 105,
+        },
+      ]) {
+        await copyFile(resolve(source, step.name), resolve(migrations, step.name));
+        await fixture.query(`create table ${step.collision} (wrong integer)`);
+        const preFailure = await catalog();
+        await expect(migrate()).rejects.toMatchObject({ code: 1 });
+        expect(await catalog()).toEqual(preFailure);
+        expect(
+          (
+            await fixture.query<Record<string, unknown>>(
+              'select filename,checksum,applied_at from schema_migrations order by filename',
+            )
+          ).rows,
+        ).toEqual(ledger);
+        expect(await legacy()).toEqual(original);
+        await fixture.query(`drop table ${step.collision}`);
+        expect((await migrate()).stdout.trim()).toBe(`Applied ${step.name}`);
+        const next = (
+          await fixture.query<Record<string, unknown>>(
+            'select filename,checksum,applied_at from schema_migrations order by filename',
+          )
+        ).rows;
+        expect(next.slice(0, ledger.length)).toEqual(ledger);
+        ledger = next;
+        expect(checkpoint(ledger)).toBe(step.count);
+        expect(await legacy()).toEqual(original);
+      }
+      const newTables = [
+        'identity.local_password_reset_proofs',
+        'identity.local_password_reset_receipts',
+        'notifications.scenarios',
+        'notifications.scenario_versions',
+        'notifications.scenario_commands',
+        'notifications.scenario_contexts',
+        'notifications.scenario_runs',
+        'notifications.scenario_source_sync',
+        'notifications.scenario_source_keys',
+        'notifications.scenario_staff_tasks',
+      ];
+      for (const table of newTables) {
+        expect(
+          (await fixture.query(`select count(*)::int as count from ${table}`)).rows[0],
+        ).toEqual({ count: 0 });
+        expect(
+          (
+            await fixture.query(
+              'select relrowsecurity,relforcerowsecurity from pg_class where oid=$1::regclass',
+              [table],
+            )
+          ).rows[0],
+        ).toEqual({ relrowsecurity: true, relforcerowsecurity: true });
+      }
+      expect(
+        (
+          await fixture.query(
+            'select count(*)::int as count from support.tickets where internal_only',
+          )
+        ).rows[0],
+      ).toEqual({ count: 0 });
       expect((await migrate()).stdout.trim()).toBe('');
       expect(
         (
