@@ -440,7 +440,7 @@ const url = disposableUrl();
           await expect(
             cli(r.cwd, r.migratorUrl, [
               notificationModeArgument,
-                  Buffer.from(JSON.stringify({ ...r.target, systemIdentifier: '1' })).toString(
+              Buffer.from(JSON.stringify({ ...r.target, systemIdentifier: '1' })).toString(
                 'base64',
               ),
             ]),
