@@ -26,12 +26,18 @@ function ConditionsContent(
   const [result, setResult] = useState<GameJoinConditions | null>(null);
   const [loading, setLoading] = useState(Boolean(client && subscriptionInstanceId));
   const [error, setError] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
   const [expired, setExpired] = useState(false);
   useEffect(() => {
     let disposed = false;
     if (!client || !subscriptionInstanceId) {
       return;
     }
+    const timeout = setTimeout(() => {
+      disposed = true;
+      setTimedOut(true);
+      setLoading(false);
+    }, 8_000);
     void client
       .getGameJoinConditions(gameId, { expectedRevision: revision, subscriptionInstanceId })
       .then((quote) => {
@@ -52,10 +58,14 @@ function ConditionsContent(
         if (!disposed) setError(true);
       })
       .finally(() => {
-        if (!disposed) setLoading(false);
+        if (!disposed) {
+          clearTimeout(timeout);
+          setLoading(false);
+        }
       });
     return () => {
       disposed = true;
+      clearTimeout(timeout);
     };
   }, [client, gameId, revision, subscriptionInstanceId]);
   useEffect(() => {
@@ -79,7 +89,11 @@ function ConditionsContent(
     SUBSCRIPTION_NOT_OWNED_OR_UNAVAILABLE: 'Выбранная подписка недоступна для этой игры.',
   };
   const money = current?.price.amountMinor;
-  const validAmount = typeof money === 'number' && Number.isSafeInteger(money) && money >= 0;
+  const validAmount =
+    current?.price.status === 'ADVISORY' &&
+    typeof money === 'number' &&
+    Number.isSafeInteger(money) &&
+    money >= 0;
   return (
     <section className="game-detail-card" aria-labelledby="game-join-conditions-title">
       <h2 id="game-join-conditions-title">Мои условия участия</h2>
@@ -88,6 +102,8 @@ function ConditionsContent(
           <p>Проверка выбранной подписки пока недоступна. Цена не подтверждена.</p>
         ) : loading ? (
           <p>Проверяем подписку…</p>
+        ) : timedOut ? (
+          <p>Проверка заняла слишком много времени. Условия и цена не подтверждены.</p>
         ) : error ? (
           <p>Условия и цена не подтверждены. Повторите проверку.</p>
         ) : expired ? (
@@ -102,6 +118,12 @@ function ConditionsContent(
                   : 'Применимость подписки требует подтверждения.'
                 : 'Подписка не применяется к этой игре.'}
             </p>
+            {current.eligibility === 'LIMIT_USED' ? (
+              <p>
+                Лимит льготы по подписке исчерпан. Это не подтверждает запрет услуги или возможность
+                оплаты по другой цене.
+              </p>
+            ) : null}
             {current.reasonCode ? (
               <p>
                 {denialLabels[current.reasonCode] ??
@@ -117,6 +139,12 @@ function ConditionsContent(
                   }).format(money / 100)}. Цена не подтверждена для оплаты.`
                 : 'Цена не подтверждена.'}
             </p>
+            {validAmount && money === 0 ? (
+              <p>
+                Нулевая предварительная цена не означает бесплатную игру. Итоговые условия
+                подтвердит сервер при записи.
+              </p>
+            ) : null}
             <p>
               Бесплатные минуты: {current.freeMinutes}. Платные минуты: {current.paidMinutes}.
             </p>

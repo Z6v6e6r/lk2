@@ -13,8 +13,8 @@
  *   new key while the client holds custody;
  * - a durable `dispatchStartedAt` marker is written before the HTTP POST, so custody can never be
  *   forgotten between "begin" and "the request may have reached the server";
- * - Web Locks make only one tab dispatch; without Web Locks the same marker plus the server-side
- *   idempotency key remain the safe fallback (no second tab starts a *new* purchase);
+ * - all ledger mutations and dispatch use the same principal-wide Web Lock; no unsafe
+ *   localStorage read/modify/write fallback is permitted when Web Locks are unavailable;
  * - strict parsing rejects unknown fields, so credentials or provider payloads can never be stored.
  */
 const LEDGER_VERSION = 1 as const;
@@ -360,9 +360,33 @@ export function gameJoinDispatchLockName(
   principal: GameJoinAttemptPrincipal,
   gameId: string,
 ): string {
-  return `${LEDGER_PREFIX}:dispatch:${encodeURIComponent(principal.tenantId)}:${encodeURIComponent(
+  if (!isUuid(gameId)) throw new GameJoinAttemptError('ATTEMPT_INVALID_INPUT');
+  return gameJoinLedgerLockName(principal);
+}
+
+function gameJoinLedgerLockName(principal: GameJoinAttemptPrincipal): string {
+  validatePrincipal(principal);
+  return `${LEDGER_PREFIX}:ledger:${encodeURIComponent(principal.tenantId)}:${encodeURIComponent(
     principal.userId,
-  )}:${encodeURIComponent(gameId)}`;
+  )}`;
+}
+
+async function withGameJoinLedgerLock<TResult>(
+  principal: GameJoinAttemptPrincipal,
+  manager: GameJoinAttemptLockManager | undefined,
+  run: () => TResult | PromiseLike<TResult>,
+): Promise<TResult> {
+  if (!manager) throw new GameJoinAttemptError('ATTEMPT_LOCK_UNAVAILABLE');
+  let entered = false;
+  try {
+    return await manager.request(gameJoinLedgerLockName(principal), { mode: 'exclusive' }, () => {
+      entered = true;
+      return run();
+    });
+  } catch (error) {
+    if (entered || error instanceof GameJoinAttemptError) throw error;
+    throw new GameJoinAttemptError('ATTEMPT_LOCK_UNAVAILABLE');
+  }
 }
 
 function canonicalRequestHashInput(
@@ -443,79 +467,86 @@ export async function beginGameJoinAttempt(
   options: {
     readonly now?: () => Date;
     readonly createIdempotencyKey?: () => string;
+    readonly lockManager?: GameJoinAttemptLockManager;
   } = {},
 ): Promise<{ readonly attempt: GameJoinAttempt; readonly created: boolean }> {
   validatePrincipal(principal);
   validateInput(input);
   const requestHash = await gameJoinRequestHash(principal, input);
-  const now = options.now?.() ?? new Date();
-  let ledger = readLedger(principal, storage, now);
-  const existing = findAttempt(ledger, input.gameId);
-  if (existing) {
-    const identical =
-      existing.requestHash === requestHash &&
-      existing.subscriptionInstanceId === input.subscriptionInstanceId &&
-      existing.priceConsent.amountMinor === input.priceConsent.amountMinor &&
-      existing.priceConsent.currency === input.priceConsent.currency;
-    if (identical) return { attempt: existing, created: false };
-    if (existing.state !== 'SUCCEEDED') {
-      throw new GameJoinAttemptError('ATTEMPT_UNRESOLVED');
-    }
-  }
-  if (ledger.attempts.length >= MAX_ATTEMPTS) {
-    // Only fully resolved successes may be evicted to make room; unresolved custody is never dropped.
-    const successes = ledger.attempts
-      .filter((attempt) => attempt.state === 'SUCCEEDED')
-      .sort(
-        (left, right) =>
-          Date.parse(left.resolvedAt ?? left.savedAt) -
-          Date.parse(right.resolvedAt ?? right.savedAt),
-      );
-    const evictCount = ledger.attempts.length - (MAX_ATTEMPTS - 1);
-    if (successes.length < evictCount) throw new GameJoinAttemptError('ATTEMPT_HISTORY_FULL');
-    const evictable = new Set(
-      successes.slice(0, evictCount).map((attempt) => attempt.idempotencyKey),
-    );
-    ledger = {
-      version: LEDGER_VERSION,
-      attempts: ledger.attempts.filter((attempt) => !evictable.has(attempt.idempotencyKey)),
-    };
-    if (ledger.attempts.length >= MAX_ATTEMPTS) {
-      throw new GameJoinAttemptError('ATTEMPT_HISTORY_FULL');
-    }
-  }
-  const createIdempotencyKey =
-    options.createIdempotencyKey ??
-    (() => {
-      if (typeof globalThis.crypto?.randomUUID !== 'function') {
-        throw new GameJoinAttemptError('ATTEMPT_CRYPTO_UNAVAILABLE');
+  return withGameJoinLedgerLock(
+    principal,
+    options.lockManager ?? browserGameJoinAttemptLockManager(),
+    () => {
+      const now = options.now?.() ?? new Date();
+      let ledger = readLedger(principal, storage, now);
+      const existing = findAttempt(ledger, input.gameId);
+      if (existing) {
+        const identical =
+          existing.requestHash === requestHash &&
+          existing.subscriptionInstanceId === input.subscriptionInstanceId &&
+          existing.priceConsent.amountMinor === input.priceConsent.amountMinor &&
+          existing.priceConsent.currency === input.priceConsent.currency;
+        if (identical) return { attempt: existing, created: false };
+        if (existing.state !== 'SUCCEEDED') {
+          throw new GameJoinAttemptError('ATTEMPT_UNRESOLVED');
+        }
       }
-      return globalThis.crypto.randomUUID();
-    });
-  const idempotencyKey = createIdempotencyKey();
-  if (!IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
-    throw new GameJoinAttemptError('ATTEMPT_INVALID_INPUT');
-  }
-  const attempt: GameJoinAttempt = {
-    state: 'PENDING',
-    tenantId: principal.tenantId,
-    actorId: principal.userId,
-    gameId: input.gameId,
-    idempotencyKey,
-    requestHash,
-    subscriptionInstanceId: input.subscriptionInstanceId,
-    priceConsent: { amountMinor: input.priceConsent.amountMinor, currency: 'RUB' },
-    savedAt: now.toISOString(),
-  };
-  writeLedger(storage, principal, replaceAttempt(ledger, attempt));
-  return { attempt, created: true };
+      if (ledger.attempts.length >= MAX_ATTEMPTS) {
+        // Only fully resolved successes may be evicted to make room; unresolved custody is never dropped.
+        const successes = ledger.attempts
+          .filter((attempt) => attempt.state === 'SUCCEEDED')
+          .sort(
+            (left, right) =>
+              Date.parse(left.resolvedAt ?? left.savedAt) -
+              Date.parse(right.resolvedAt ?? right.savedAt),
+          );
+        const evictCount = ledger.attempts.length - (MAX_ATTEMPTS - 1);
+        if (successes.length < evictCount) throw new GameJoinAttemptError('ATTEMPT_HISTORY_FULL');
+        const evictable = new Set(
+          successes.slice(0, evictCount).map((attempt) => attempt.idempotencyKey),
+        );
+        ledger = {
+          version: LEDGER_VERSION,
+          attempts: ledger.attempts.filter((attempt) => !evictable.has(attempt.idempotencyKey)),
+        };
+        if (ledger.attempts.length >= MAX_ATTEMPTS) {
+          throw new GameJoinAttemptError('ATTEMPT_HISTORY_FULL');
+        }
+      }
+      const createIdempotencyKey =
+        options.createIdempotencyKey ??
+        (() => {
+          if (typeof globalThis.crypto?.randomUUID !== 'function') {
+            throw new GameJoinAttemptError('ATTEMPT_CRYPTO_UNAVAILABLE');
+          }
+          return globalThis.crypto.randomUUID();
+        });
+      const idempotencyKey = createIdempotencyKey();
+      if (!IDEMPOTENCY_KEY_PATTERN.test(idempotencyKey)) {
+        throw new GameJoinAttemptError('ATTEMPT_INVALID_INPUT');
+      }
+      const attempt: GameJoinAttempt = {
+        state: 'PENDING',
+        tenantId: principal.tenantId,
+        actorId: principal.userId,
+        gameId: input.gameId,
+        idempotencyKey,
+        requestHash,
+        subscriptionInstanceId: input.subscriptionInstanceId,
+        priceConsent: { amountMinor: input.priceConsent.amountMinor, currency: 'RUB' },
+        savedAt: now.toISOString(),
+      };
+      writeLedger(storage, principal, replaceAttempt(ledger, attempt));
+      return { attempt, created: true };
+    },
+  );
 }
 
 /**
  * Writes the durable "a POST may be on the wire now" marker. A second caller that sees the marker
  * must read the original operation instead of sending another POST.
  */
-export function markGameJoinAttemptDispatchStarted(
+function markGameJoinAttemptDispatchStartedLocked(
   principal: GameJoinAttemptPrincipal,
   attempt: GameJoinAttempt,
   storage: Storage,
@@ -534,11 +565,24 @@ export function markGameJoinAttemptDispatchStarted(
   return marked;
 }
 
+export async function markGameJoinAttemptDispatchStarted(
+  principal: GameJoinAttemptPrincipal,
+  attempt: GameJoinAttempt,
+  storage: Storage,
+  options: { readonly now?: () => Date; readonly lockManager?: GameJoinAttemptLockManager } = {},
+): Promise<GameJoinAttempt> {
+  return withGameJoinLedgerLock(
+    principal,
+    options.lockManager ?? browserGameJoinAttemptLockManager(),
+    () => markGameJoinAttemptDispatchStartedLocked(principal, attempt, storage, options),
+  );
+}
+
 /**
  * Records the server-owned state of the same attempt. `SUCCEEDED` is only ever passed here after a
  * trusted server signal (`commercial.receipt` or `attemptState === 'OWNER_CONFIRMED'`).
  */
-export function resolveGameJoinAttempt(
+function resolveGameJoinAttemptLocked(
   principal: GameJoinAttemptPrincipal,
   attempt: GameJoinAttempt,
   resolution: GameJoinAttemptResolution,
@@ -553,11 +597,12 @@ export function resolveGameJoinAttempt(
   const ledger = readLedger(principal, storage, now);
   const current = assertSameAttempt(attempt, findAttempt(ledger, attempt.gameId));
   const operationId = resolution.operationId ?? current.operationId;
+  if (current.operationId && operationId !== current.operationId)
+    throw new GameJoinAttemptError('ATTEMPT_STATE_CHANGED');
+  if (current.state === 'SUCCEEDED') return current;
   const state: GameJoinAttemptState =
     resolution.state === 'PENDING' ? current.state : resolution.state;
-  if (state === 'SUCCEEDED' && current.state === 'SUCCEEDED' && current.resolvedAt !== undefined) {
-    return current;
-  }
+
   const resolved: GameJoinAttempt = {
     ...current,
     ...(operationId === undefined ? {} : { operationId }),
@@ -568,11 +613,25 @@ export function resolveGameJoinAttempt(
   return resolved;
 }
 
+export async function resolveGameJoinAttempt(
+  principal: GameJoinAttemptPrincipal,
+  attempt: GameJoinAttempt,
+  resolution: GameJoinAttemptResolution,
+  storage: Storage,
+  options: { readonly now?: () => Date; readonly lockManager?: GameJoinAttemptLockManager } = {},
+): Promise<GameJoinAttempt> {
+  return withGameJoinLedgerLock(
+    principal,
+    options.lockManager ?? browserGameJoinAttemptLockManager(),
+    () => resolveGameJoinAttemptLocked(principal, attempt, resolution, storage, options),
+  );
+}
+
 /**
  * Forgets the attempt. An unresolved attempt may only be discarded when the server gave a definite
  * rejection that created no purchase; recovery/custody paths must keep it.
  */
-export function discardGameJoinAttempt(
+function discardGameJoinAttemptLocked(
   principal: GameJoinAttemptPrincipal,
   attempt: GameJoinAttempt,
   storage: Storage,
@@ -592,11 +651,26 @@ export function discardGameJoinAttempt(
   });
 }
 
+export async function discardGameJoinAttempt(
+  principal: GameJoinAttemptPrincipal,
+  attempt: GameJoinAttempt,
+  storage: Storage,
+  options: {
+    readonly allowUnresolved?: boolean;
+    readonly lockManager?: GameJoinAttemptLockManager;
+  } = {},
+): Promise<void> {
+  return withGameJoinLedgerLock(
+    principal,
+    options.lockManager ?? browserGameJoinAttemptLockManager(),
+    () => discardGameJoinAttemptLocked(principal, attempt, storage, options),
+  );
+}
+
 /**
- * Dispatches the frozen attempt at most once. With Web Locks the lock + the durable
- * `dispatchStartedAt` marker make exactly one tab send the POST; without Web Locks the marker still
- * stops a repeat dispatch in the same tab and the server-side idempotency key keeps a concurrent tab
- * from creating a second purchase.
+ * Dispatches the frozen attempt at most once. The principal-wide Web Lock serializes creation,
+ * updates and dispatch across all games; the durable marker forbids a resend after lock release.
+ * Without Web Locks dispatch fails closed and leaves the original custody intact.
  */
 export async function withGameJoinDispatchGuard<TResult>(
   principal: GameJoinAttemptPrincipal,
@@ -620,7 +694,7 @@ export async function withGameJoinDispatchGuard<TResult>(
     }
     let marked: GameJoinAttempt;
     try {
-      marked = markGameJoinAttemptDispatchStarted(principal, attempt, storage, options);
+      marked = markGameJoinAttemptDispatchStartedLocked(principal, attempt, storage, options);
     } catch (error) {
       if (
         error instanceof GameJoinAttemptError &&
@@ -636,22 +710,5 @@ export async function withGameJoinDispatchGuard<TResult>(
     }
     return { dispatched: true, attempt: marked, value: await dispatch(marked) };
   };
-  if (!lockManager) return run();
-  let entered = false;
-  try {
-    return await lockManager.request(
-      gameJoinDispatchLockName(principal, gameId),
-      { mode: 'exclusive' },
-      () => {
-        entered = true;
-        return run();
-      },
-    );
-  } catch (error) {
-    // A dispatch/network failure inside the lock keeps its original meaning (the outcome may be
-    // unknown); only a failure to acquire the lock itself becomes ATTEMPT_LOCK_UNAVAILABLE.
-    if (error instanceof GameJoinAttemptError) throw error;
-    if (entered) throw error;
-    throw new GameJoinAttemptError('ATTEMPT_LOCK_UNAVAILABLE');
-  }
+  return withGameJoinLedgerLock(principal, lockManager, run);
 }
