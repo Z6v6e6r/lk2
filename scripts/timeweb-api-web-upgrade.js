@@ -1253,7 +1253,9 @@ export function readInstalledApiBaseline(releaseId) {
   const values = parseEnv(bytes);
   if (values.PHUB_RELEASE_ID !== releaseId) fail('baseline_release_id');
   if (existsSync(installed)) {
-    if (values.PHUB_COMPONENT_ROLLOUT_KIND === 'API_WORKER') {
+    if (
+      ['API_WORKER', 'API_WORKER_NOTIFICATION_0105'].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
+    ) {
       const transaction = `${ROOT}/backups/${releaseId}-api-worker`;
       if (
         values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||

@@ -159,3 +159,113 @@ Pure tests cover observed ACL/ownership blockers, absent capabilities, malformed
 unknown/reordered/duplicate/changed SQL and partial checkpoint handling. Local PostgreSQL tests
 remain skipped when the existing CI-only disposable-database guard is not satisfied. Do not forge
 CI environment variables to connect to a shared database or provision a new local DB implicitly.
+
+## Closed execution profile for 102→105
+
+The preparation descriptor above remains non-authorizing. The executing profiles live in the
+existing engines and use distinct schemas; none broadens the frozen 99→102 bridge:
+
+- `PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1` in the existing Python backup controller;
+- `PHUB_TIMEWEB_NOTIFICATION_0105_MIGRATION_OPERATION_V1` in the existing migration controller;
+- `PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V1` in the existing API/Worker controller.
+
+The reviewed source, controller and canonical publication must have exactly the same SHA/tree/CI.
+The operation binds raw package/golden hashes and immutable images from that canonical manifest.
+An empty or incomplete golden file is a hard stop before server mutation. Four catalog checkpoints
+are generated from the independent mixed-owner CI fixture, reviewed, frozen, and then checked by
+both the strict image and host probes. They must never be learned from the live database at apply.
+
+The frozen checkpoints were captured by the successful `quality-full` job's mixed-owner PG16 fixture
+in CI run `39817124073`, exact head `5b3a450da600c579866c6a3cf192d5bb906b64b8`, diagnostic artifact
+`12441769908` (archive SHA256 `4f310b763881cdb6110ecb4b73f68115260124e3f120f5d133ca44bed27cc84c`).
+Its 12 ordered chunks bind compact JSON SHA256
+`508c9101751d004c07885f36c454ef46fca65e9a9918d1196b40a38a7ff956b4`; checkpoints 102/103/104/105
+contain 26/78/194/248 catalog rows. The same test physically restored full owners/ACLs in isolation.
+An independent strict-runner replay against this frozen file remains a required consuming CI check.
+
+The new pre-105 backup uses `backups/<controllerSha>-<sourceCiRunId>-1-notification-pre105`.
+It retains a full custom dump including owners and ACLs. In a separate ephemeral PostgreSQL
+cluster, an allowlisted role closure is created with NOLOGIN/NOSUPERUSER/NOBYPASSRLS/NOINHERIT
+and no memberships. No passwords or global role attributes are copied. Database/language and
+trusted-extension prerequisites are reconstructed only inside that cluster; ordinary objects,
+ACLs and default privileges restore transactionally. A metadata-only security catalog compares
+DB/schema/type/relation/column/function ownership and ACLs, RLS/FORCE, complete policies,
+default ACLs and extension/language ownership. Large objects and security labels must be absent.
+Source ledger/security are rechecked after dump. Restore success alone is insufficient: the
+restored ledger and security catalog must match, and namespace/storage cleanup must be proven.
+The immutable receipt binds operation, target, dump, security/role-closure hashes and preimage.
+Late consumption rechecks current unit/slice/cgroup and storage absence, not just journal events.
+
+Only after that proof and a sealed capsule/shared ownership locks may the nested fixed bootstrap
+run: grant notifications USAGE/CREATE and four column REFERENCES to `phub_migrator`, and transfer
+only deliveries ownership. Runtime grants and memberships remain unchanged. The role preflight
+rejects incoming and outgoing membership, grant options, altered function defaults, or drift.
+The strict image accepts only the exact 105-file source catalog and target database/system ID.
+Each SQL file and ledger insert commits in its own transaction; 0099 removes/restores identity
+runtime defaults within that same transaction. No reset table is visible with inherited grants.
+DDL footprint is bounded at 256 MiB per existing affected relation, and all foreign relation locks
+on deliveries/tickets/messages must be absent immediately before migration start. SQL timeouts
+remain in force; a concurrent lock race still returns a partial checkpoint requiring reconciliation.
+
+Use the existing fixed entry points and request paths, with the new schema in each request:
+
+```sh
+python3 -I /opt/phub/timeweb-beta/operator/tools/<controllerSha>/control-timeweb-database-backup.py \
+  --execute /opt/phub/timeweb-beta/operator/database-backup-restore.json
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-migration /opt/phub/timeweb-beta/operator/api-worker-migration.json
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-migration-reconcile /opt/phub/timeweb-beta/operator/api-worker-migration.json
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker /opt/phub/timeweb-beta/operator/api-worker-upgrade.json
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-reconcile /opt/phub/timeweb-beta/operator/api-worker-upgrade.json
+```
+
+A bootstrap lost acknowledgement retains ownership for exact pre/post classification. A migration
+start acknowledgement loss never creates a second migration container. Postflight probes may adopt
+only the original exact operation/kind/image container; exited nonzero or foreign state stops.
+Success requires ledger105, exact golden105, ten owner-only empty FORCE-RLS tables, no scenario
+markers/internal tickets, fresh runtime+migrator post-probes and an immutable success receipt.
+Reconciliation verifies this evidence before releasing ownership. Checkpoints103/104 do not start
+the new API and never trigger automatic down migration.
+
+The API/Worker profile consumes that terminal reconciled migration proof and its verified pre102
+backup. Freshness is required before migration; later application recovery verifies immutable
+backup custody without making an old proof appear newly created. It preserves the exact secret
+set directory/inode/files/release ID and the actual FCM mount on both image sides. It never
+provisions/swaps credentials or changes provider/send/source/staff/reset flags. API and Worker
+image refs are separately bound to the same manifest; only inert migrator image metadata advances.
+Web and Realtime stay unchanged. The existing monitoring, readiness and 61-sample/15-minute soak
+remain mandatory. Application rollback restores previous image refs and keeps additive schema105.
+
+The global `/opt/phub/timeweb-beta/operator/database-backup-restore.json` is leased immutable
+from creation of the pre102 backup request until the final API/Worker `RECONCILED` receipt,
+including gaps between backup, migration and rollout. The exclusive release owner must not prepare,
+replace or execute another backup request during this lease. Every migration/rollout/recovery proof
+requires byte equality with the canonical `backup-operation.json`; drift stops and retains evidence
+and locks. Recovery may restore only those exact canonical bytes under the same exclusive owner,
+then reconcile the original operation. It never creates a replacement backup to repair that proof.
+
+This notification profile validates monitoring against the actual wall clock before preparation,
+each service activation, every observation round and final evidence capture. Initial provider and
+alert bytes/hashes are sealed in the plan/capsule. The alert bytes stay unchanged. Approved fresh
+provider captures may update only `readAt`, per-monitor `lastCheckAt` and
+`successfulConsecutiveRounds`; all are nondecreasing, identities/configuration stay exact, and
+incidents stay zero. A capture older than 30 seconds or checks older than 130 seconds stop the
+rollout. The approved read-only provider collector must keep these receipts current during the
+whole operation; copying old timestamps forward is forbidden. Before preparation, live Web and
+Realtime images must equal the unchanged digests in the receipt-verified API8158 descriptor.
+
+The fixed `notification-role-bootstrap-0105-inverse.sql` is a recovery artifact without a live
+entrypoint. It is eligible only at exact ledger102 before0099, with unchanged runtime/disabled
+transports, owned locks and exact saved bootstrap postimage. It restores only the original five
+capabilities in one transaction and must be followed by full saved preimage comparison. It is
+forbidden at103/104/105. A destructive production data restore remains a separate explicit action;
+never restore pre102 over writes made after cutover as an application rollback.
+
+The role-aware CI test additionally restores a full synthetic pre102 dump with original owner/ACL
+metadata in a network-isolated fresh cluster, exercises the fixed bootstrap inverse, and checks
+the strict image runner. The older staged SQL test characterizes transaction rollback with owned
+fixed SQL steps; the strict role-aware test is the executable 102→105 controller proof. CI evidence
+is not a claim that a live backup, migration, CUP rollout or deployment has already occurred.

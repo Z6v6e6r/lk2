@@ -109,6 +109,42 @@ class PureTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 self.assertFalse(m.restore_image_admitted({**canonical, **changes}))
 
+    def test_notification_pre102_profile_is_closed_and_keeps_legacy_profiles_frozen(self):
+        op={**copy.deepcopy(OP),'schema':m.NOTIFICATION_PRE105_SCHEMA,'profile':'production',
+            'toolCommit':OP['controllerSha'],'releaseId':OP['controllerSha']+'-100-1','controllerSourceCiRunId':'100',
+            'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256,'packageDescriptorSha256':'a'*64,'catalogsSha256':'b'*64,
+            'expectedApi':{**API,'image':m.WEB8158_IMAGE,'imageId':m.WEB8158_IMAGE.split('@')[1],
+                           'revision':m.MIGRATION_BASE_SHA,'releaseId':m.API_WORKER_CANDIDATE},
+            'confirmation':'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'}
+        self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertEqual(m.operation_mode(op),('notification-pre105',op['releaseId']))
+        self.assertTrue(m.is_namespace_operation(op));self.assertTrue(m.is_disk_operation(op))
+        self.assertEqual(m.disk_ledger_sha(op),m.API_WORKER_LEDGER_SHA256)
+        for change in ({'expectedLedgerSha256':m.API_WORKER_PRE_LEDGER_SHA256},{'expectedLedgerSha256':'0'*64},
+                       {'controllerPromotion':{}},{'profile':'beta'},{'catalogsSha256':'missing'},
+                       {'confirmation':'BACKUP'},{'unexpected':True},
+                       {'expectedPostgres':{**PG,'id':'a'*64}}):
+            with self.subTest(change=change):
+                with self.assertRaises(m.Stop):m.validate_operation({**op,**change},NOW,'2'*64)
+
+    def test_notification_restore_role_closure_is_private_restricted_and_quotes_ddl(self):
+        acl=[{'grantor':'phub_beta','grantee':'phub_beta','privilege':'CONNECT','grantable':False}]
+        security={'schema':'PHUB_NOTIFICATION_BACKUP_SECURITY_V1','roles':['phub_beta'],
+          'unsupported':{'largeObjects':0,'securityLabels':0},
+          'objects':[{'key':'database','kind':'database','owner':'phub_beta','props':{},'acl':acl}]}
+        self.assertEqual(m.validate_notification_security(security),security)
+        sql=m.notification_restore_prerequisites(security)
+        self.assertIn('nologin nosuperuser nobypassrls nocreatedb nocreaterole noreplication noinherit',sql)
+        self.assertIn('alter database phub_restore owner to "phub_beta"',sql)
+        self.assertNotIn('password',sql.lower());self.assertNotIn('membership',sql.lower())
+        missing_database_create={**security,'roles':['phub_beta','phub_runtime'],'objects':security['objects']+[{'key':'extension:pg_trgm','kind':'extension','owner':'phub_runtime','acl':[],'props':{'name':'pg_trgm','schema':'public','version':'1.6'}}]}
+        with self.assertRaisesRegex(m.Stop,'NOTIFICATION_SECURITY_EXTENSION_DATABASE_CREATE'):
+            m.notification_restore_prerequisites(missing_database_create)
+        for patch in ({'roles':['phub_restore']},{'roles':['unreviewed_role']},
+                      {'unsupported':{'largeObjects':1,'securityLabels':0}},
+                      {'unsupported':{'largeObjects':0,'securityLabels':1}}):
+            with self.assertRaises(m.Stop):m.notification_restore_prerequisites({**security,**patch})
+
     def test_exact_request(self):
         self.assertEqual(m.validate_operation(copy.deepcopy(OP),NOW,'2'*64),OP)
 

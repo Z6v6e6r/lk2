@@ -227,7 +227,7 @@ describe('preparation-only notification migration package 0099–0101', () => {
       'STALE_DIAGNOSTIC',
     );
   });
-  it('keeps the diagnostic query read-only and disconnected from all live controllers', async () => {
+  it('keeps the diagnostic and preparation CLI read-only and separate from closed execution profiles', async () => {
     const sql = await readFile(
       resolve('deploy/timeweb/notification-migrations-0099-0101-diagnostic.sql'),
       'utf8',
@@ -237,13 +237,15 @@ describe('preparation-only notification migration package 0099–0101', () => {
     expect(sql.replace(/--[^\n]*/g, '')).not.toMatch(
       /^\s*(?:create|alter|drop|grant|revoke|insert|update|delete|truncate|call|do)\s/im,
     );
+    expect(notificationMigrationPackage.preparationOnly).toBe(true);
+    expect(notificationMigrationPackage.authorizesApply).toBe(false);
     for (const name of [
       'timeweb-api-worker-migration.js',
       'control-timeweb-database-backup.py',
       'run-timeweb-standard-delivery.js',
     ]) {
       expect(await readFile(resolve('scripts', name), 'utf8')).not.toMatch(
-        /notification-migration-package|notification-migrations-0099/,
+        /prepare-notification-migration-package|notification-migrations-0099-0101-diagnostic\.sql/,
       );
     }
   });

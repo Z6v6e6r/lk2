@@ -3,6 +3,7 @@ import { defineConfig } from 'tsup';
 export default defineConfig({
   entry: [
     'src/main.ts',
+    'src/notification-migration-probe.ts',
     'src/communities-staged-rehearsal.ts',
     'src/verify-role-boundary.ts',
     'src/verify-media-runtime-role.ts',
