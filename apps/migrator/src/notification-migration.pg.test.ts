@@ -86,7 +86,16 @@ const url = disposableUrl();
         );
       async function securityRestoreRehearsal(db: Pool, database: string) {
         const sql = await readFile(resolve('scripts/notification-backup-security.sql'), 'utf8');
-        const security = (await db.query<Record<string, unknown>>(sql)).rows[0];
+        const source = await db.connect();
+        let security: Record<string, unknown> | undefined;
+        try {
+          await source.query('begin read only');
+          await source.query("set local search_path='pg_catalog'");
+          security = (await source.query<Record<string, unknown>>(sql)).rows[0];
+        } finally {
+          await source.query('rollback');
+          source.release();
+        }
         // The single json column is driver-decoded by pg.
         const value = Object.values(security!)[0];
         const preparation = execFileSync(
@@ -181,7 +190,14 @@ const url = disposableUrl();
             try {
               execFileSync(
                 'docker',
-                ['exec', id, 'pg_isready', '--username=phub_restore', '--dbname=phub_restore'],
+                [
+                  'exec',
+                  id,
+                  'pg_isready',
+                  '--host=127.0.0.1',
+                  '--username=phub_restore',
+                  '--dbname=phub_restore',
+                ],
                 { timeout: 3000, stdio: 'pipe' },
               );
               ready = true;
@@ -240,7 +256,7 @@ const url = disposableUrl();
           });
           const restored = JSON.parse(
             execFileSync('docker', psql, {
-              input: sql,
+              input: "set search_path='pg_catalog';\n" + sql,
               encoding: 'utf8',
               timeout: 15000,
               maxBuffer: 4000000,
@@ -389,7 +405,7 @@ const url = disposableUrl();
         (select jsonb_agg(to_jsonb(d)-array['scenario_available_at','scenario_dispatch_started_at','scenario_v2_available_at']) from notifications.deliveries d) as deliveries,
         (select relacl::text from pg_class where oid='identity.local_email_credentials'::regclass) as credential_acl`)
           ).rows;
-        if (suffix === 'reference') await securityRestoreRehearsal(db, database);
+        if (suffix === 'backup') await securityRestoreRehearsal(db, database);
         const bootstrap = await readFile(
           resolve('deploy/timeweb/notification-role-bootstrap-0105.sql'),
           'utf8',
@@ -659,6 +675,9 @@ const url = disposableUrl();
               code: '42501',
             });
         }
+        // Keep both independent acceptance checks: emit the SQL catalog before the full restore
+        // rehearsal, so a restore failure retains useful reference diagnostics without a live GO.
+        await setup('backup');
       } finally {
         await Promise.all(pools.map((p) => p.end()));
         for (const database of databases.reverse()) await admin.query(`drop database ${database}`);

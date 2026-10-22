@@ -2220,7 +2220,7 @@ def notification_security_sql():
 
 
 def notification_security_source():
-    shell=READ_ONLY+'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc -qAt --set=ON_ERROR_STOP=1 --command='+shlex.quote(notification_security_sql())
+    shell=READ_ONLY.replace('lock_timeout=2000','lock_timeout=2000 -c search_path=pg_catalog')+'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc -qAt --set=ON_ERROR_STOP=1 --command='+shlex.quote(notification_security_sql())
     value=strict(docker(['exec',PG_ID,'/bin/sh','-eu','-c',shell], 'NOTIFICATION_SECURITY_SOURCE'))
     validate_notification_security(value)
     return value
@@ -2331,7 +2331,7 @@ def notification_restore_extension_owners(value):
         end if;
       end loop;
     end """
-    return 'set standard_conforming_strings=on;do '+tag+' '+body.replace('__PROOF__',"'"+data+"'",1)+tag+';'
+    return "set standard_conforming_strings=on;set search_path='pg_catalog';do "+tag+' '+body.replace('__PROOF__',"'"+data+"'",1)+tag+';'
 
 def notification_backup_reference(op, raw, file_sha):
     need(op['schema']==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE');tool_custody(op)
@@ -3314,7 +3314,7 @@ def execute_namespace(op, request_bytes, file_sha):
         need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
         if security is not None:
             namespace_docker(plan,['exec','-i',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','--no-psqlrc','-q','--set=ON_ERROR_STOP=1'], 'NOTIFICATION_RESTORE_EXTENSION_OWNERS',input_data=notification_restore_extension_owners(security).encode(),stdout=subprocess.DEVNULL,timeout=30)
-            restored_security=strict(namespace_docker(plan,['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','--no-psqlrc','-qAt','--set=ON_ERROR_STOP=1','--command='+notification_security_sql()], 'NOTIFICATION_RESTORED_SECURITY'))
+            restored_security=strict(namespace_docker(plan,['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','--no-psqlrc','-qAt','--set=ON_ERROR_STOP=1',"--command=set search_path='pg_catalog';"+notification_security_sql()], 'NOTIFICATION_RESTORED_SECURITY'))
             need(restored_security==security, 'NOTIFICATION_RESTORED_SECURITY_MISMATCH')
             journal.add('SECURITY_RESTORE_VERIFIED',securitySha256=digest(encoded(security)),roleClosureSha256=digest(encoded(security['roles'])))
         guard(container)
