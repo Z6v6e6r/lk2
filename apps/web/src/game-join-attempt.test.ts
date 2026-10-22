@@ -383,6 +383,7 @@ describe('game join attempt ledger', () => {
 
   it('evicts the oldest resolved success instead of writing a ledger strict parse would reject', async () => {
     const storage = new MemoryStorage();
+    const observedAt = new Date('2026-10-21T08:01:00.000Z');
     for (let index = 0; index < 16; index += 1) {
       await beginGameJoinAttempt(
         PRINCIPAL,
@@ -394,7 +395,7 @@ describe('game join attempt ledger', () => {
         },
       );
     }
-    const ledger = readGameJoinAttemptLedger(PRINCIPAL, storage);
+    const ledger = readGameJoinAttemptLedger(PRINCIPAL, storage, { now: observedAt });
     expect(ledger.attempts).toHaveLength(16);
     for (const attempt of ledger.attempts) {
       resolveGameJoinAttempt(
@@ -407,11 +408,11 @@ describe('game join attempt ledger', () => {
     }
     const nextAttempt = await beginGameJoinAttempt(PRINCIPAL, input(), storage, {
       // Keep this capacity test inside the resolved-at retention window, independent of wall time.
-      now: () => new Date('2026-10-21T08:01:00.000Z'),
+      now: () => observedAt,
       createIdempotencyKey: () => KEY,
     });
     expect(nextAttempt.created).toBe(true);
-    const reRead = readGameJoinAttemptLedger(PRINCIPAL, storage);
+    const reRead = readGameJoinAttemptLedger(PRINCIPAL, storage, { now: observedAt });
     expect(reRead.attempts).toHaveLength(16);
     expect(reRead.attempts.some((attempt) => attempt.idempotencyKey === KEY)).toBe(true);
   });
