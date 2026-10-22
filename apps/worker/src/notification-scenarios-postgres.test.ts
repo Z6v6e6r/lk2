@@ -702,6 +702,14 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
     const account = randomUUID(),
       endpoint = randomUUID();
     await withTenantTransaction(owner, tenant, async (client) => {
+      // This test needs an opted-in inbox: native push intentionally requires it. The earlier
+      // opt-out regression leaves BOOKING/IN_APP disabled for this shared synthetic recipient.
+      await client.query(
+        `insert into notifications.user_preferences(tenant_id,user_id,category,channel,enabled)
+         values($1,$2,'BOOKING','IN_APP',true),($1,$2,'BOOKING','PUSH',true)
+         on conflict(tenant_id,user_id,category,channel) do update set enabled=true`,
+        [tenant, recipient],
+      );
       await client.query(
         `update notifications.tenant_runtime_settings set ios_push_enabled=true where tenant_id=$1`,
         [tenant],
@@ -721,6 +729,8 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
       tenantId: tenant,
       iosPush: { appId: 'synthetic-ios', environment: 'SANDBOX', credentialRef: 'synthetic-apns' },
     });
+    const runs = await createNotificationScenarioRepository(runtime).runs(tenant, scenario.id);
+    expect(runs.find((run) => run.targetId === source.aggregateId)?.state).toBe('QUEUED');
     const delivery = (
       await withTenantTransaction(owner, tenant, (client) =>
         client.query<{ id: string }>(
@@ -728,7 +738,9 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
           [tenant, scenario.id, source.id],
         ),
       )
-    ).rows[0]!;
+    ).rows[0];
+    expect(delivery).toBeDefined();
+    if (!delivery) throw new Error('SYNTHETIC_APNS_DELIVERY_MISSING');
     await withTenantTransaction(owner, tenant, (client) =>
       client.query(
         `update notifications.deliveries set state='SENDING',attempt_count=1,scenario_dispatch_started_at=clock_timestamp()-interval '2 minutes',lease_expires_at=clock_timestamp()-interval '1 minute' where tenant_id=$1 and id=$2`,
