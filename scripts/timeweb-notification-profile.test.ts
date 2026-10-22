@@ -433,6 +433,7 @@ describe('notification-only Timeweb profile', () => {
     const events: string[] = [],
       mark = (v: string) => () => {
         events.push(v);
+        return Promise.resolve();
       };
     const ops = {
       secretMode: 'preserve' as const,
@@ -440,6 +441,7 @@ describe('notification-only Timeweb profile', () => {
       pullAndSmoke: mark('pull'),
       journal: (v: string) => {
         events.push(v);
+        return Promise.resolve();
       },
       containWorker: mark('contain'),
       installSecrets: mark('verify'),

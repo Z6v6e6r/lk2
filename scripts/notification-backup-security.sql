@@ -27,7 +27,7 @@ with namespaces as (
   jsonb_build_object('kind',t.typtype)
  from pg_catalog.pg_type t join namespaces n on n.oid=t.typnamespace
  union all
- select 'default:'||pg_catalog.pg_get_userbyid(d.defaclrole)||':'||coalesce(n.nspname,'GLOBAL')||':'||d.defaclobjtype,'default',d.defaclrole,d.defaclacl,
+ select 'default:'||pg_catalog.pg_get_userbyid(d.defaclrole)||':'||coalesce(n.nspname,'GLOBAL')||':'||d.defaclobjtype::text,'default',d.defaclrole,d.defaclacl,
   jsonb_build_object('scope',coalesce(n.nspname,'GLOBAL'),'type',d.defaclobjtype)
  from pg_catalog.pg_default_acl d left join pg_catalog.pg_namespace n on n.oid=d.defaclnamespace
  where d.defaclnamespace=0 or n.oid in(select oid from namespaces)
