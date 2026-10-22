@@ -2186,7 +2186,7 @@ def web8158_source(op):
 
 
 _NOTIFICATION_SOURCE_CI = set()
-def notification_source(op):
+def _notification_source_program(op):
     # Root import closure is authenticated by the same existing source preamble.
     source = ROOT / 'standard/source'
     secure(source, 'dir'); secure(source / '.git', 'dir')
@@ -2200,11 +2200,27 @@ def notification_source(op):
             need(stat.S_ISREG(secure(source/relative).st_mode), 'NOTIFICATION_SOURCE')
     for dependency in ('node_modules/typescript/lib/typescript.js','node_modules/postcss/lib/postcss.js'):
         secure(source/dependency)
-    key=(op['controllerSha'],op['controllerTree'],op['controllerSourceCiRunId'])
-    program="import fs from 'node:fs';import {attestNotificationSource} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-notification-profile.js';import {upgradeGit as git,readUpgradeFile as read,secureUpgradePath as secure,githubPublic} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';import {readControllerSourceAuthority} from '/opt/phub/timeweb-beta/standard/source/scripts/verify-source-ci.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));const present=p=>{try{fs.lstatSync(p);return true}catch(e){if(e.code==='ENOENT')return false;throw e}};attestNotificationSource(op,{git,read,secure,present});" + ("await readControllerSourceAuthority(op,git,githubPublic);" if key not in _NOTIFICATION_SOURCE_CI else '') + "process.stdout.write('NOTIFICATION_SOURCE_VERIFIED');"
+    program="import fs from 'node:fs';import {attestNotificationSource} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-notification-profile.js';import {upgradeGit as git,readUpgradeFile as read,secureUpgradePath as secure} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));const present=p=>{try{fs.lstatSync(p);return true}catch(e){if(e.code==='ENOENT')return false;throw e}};attestNotificationSource(op,{git,read,secure,present});"
     environment={key:ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
+    return program,environment
+
+
+def notification_source(op):
+    program,environment=_notification_source_program(op)
+    key=(op['controllerSha'],op['controllerTree'],op['controllerSourceCiRunId'])
+    if key not in _NOTIFICATION_SOURCE_CI:
+        program+="import {githubPublic} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';import {readControllerSourceAuthority} from '/opt/phub/timeweb-beta/standard/source/scripts/verify-source-ci.js';await readControllerSourceAuthority(op,git,githubPublic);"
+    program+="process.stdout.write('NOTIFICATION_SOURCE_VERIFIED');"
     need(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_SOURCE',input_data=encoded(op),environment=environment,timeout=60)==b'NOTIFICATION_SOURCE_VERIFIED','NOTIFICATION_SOURCE')
     _NOTIFICATION_SOURCE_CI.add(key)
+
+
+def notification_terminal_source(op):
+    # Read-only terminal custody cannot grant or cache authority for a forward operation.
+    need(op.get('schema')==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    program,environment=_notification_source_program(op)
+    program+="process.stdout.write('NOTIFICATION_SOURCE_VERIFIED');"
+    need(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_SOURCE',input_data=encoded(op),environment=environment,timeout=60)==b'NOTIFICATION_SOURCE_VERIFIED','NOTIFICATION_SOURCE')
 
 
 def notification_preimage(op):
@@ -2334,7 +2350,7 @@ def notification_restore_extension_owners(value):
     return "set standard_conforming_strings=on;set search_path='pg_catalog';do "+tag+' '+body.replace('__PROOF__',"'"+data+"'",1)+tag+';'
 
 def notification_backup_reference(op, raw, file_sha):
-    need(op['schema']==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE');tool_custody(op)
+    need(op['schema']==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE');notification_terminal_tool_custody(op)
     work=ROOT/'backups'/('.disk-restore-'+digest(raw))
     need(read_secure(work/'backup-operation.json')==raw, 'NOTIFICATION_BACKUP_OPERATION')
     plan=namespace_validate_plan(op,raw,strict(read_secure(work/'disk-plan.json')))
@@ -2365,7 +2381,7 @@ def notification_backup_reference(op, raw, file_sha):
             'storageCleanupVerified':True,'reconciled':True}
 
 
-def tool_custody(op):
+def _tool_custody_local(op):
     path = ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py')
     receipt_path = path.parent/'installation-receipt.json'
     script_bytes = read_secure(path,0o755)
@@ -2380,10 +2396,22 @@ def tool_custody(op):
     expected = {key:getattr(info,'st_'+key) for key in ['dev','ino','uid','gid','mode','nlink','size']}
     need(receipt['metadata']==expected, 'TOOL_METADATA')
     verify_source_proof(receipt['sourceProof'],op,script_bytes)
+    return receipt_bytes
+
+
+def tool_custody(op):
+    receipt_bytes=_tool_custody_local(op)
     if is_web8158_operation(op):
         web8158_source(op)
     elif op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
         notification_source(op)
+    return receipt_bytes
+
+
+def notification_terminal_tool_custody(op):
+    need(op.get('schema')==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    receipt_bytes=_tool_custody_local(op)
+    notification_terminal_source(op)
     return receipt_bytes
 
 

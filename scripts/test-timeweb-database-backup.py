@@ -64,6 +64,93 @@ def source_proof(script=b'synthetic reviewed helper'):
             'commit':obj('commit',commit),'rootTree':obj('tree',root),'scriptsTree':obj('tree',scripts),'blob':{'oid':blob,'sha256':m.digest(script)}}
 
 
+class NotificationTerminalCustodyTests(unittest.TestCase):
+    def setUp(self):
+        temporary=tempfile.TemporaryDirectory(prefix='phub-notification-terminal-')
+        self.addCleanup(temporary.cleanup)
+        self.root=Path(temporary.name)
+        for name in ['operator','backups']:(self.root/name).mkdir()
+        self.source=self.root/'standard/source'
+        (self.source/'.git').mkdir(parents=True)
+        self.tracked=self.source/'scripts/helper.js'
+        for path in [self.tracked,self.source/'node_modules/typescript/lib/typescript.js',self.source/'node_modules/postcss/lib/postcss.js']:
+            path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic fixture')
+        self.op={**OP,'schema':m.NOTIFICATION_PRE105_SCHEMA,'controllerSourceCiRunId':'100'}
+        self.head=self.op['controllerSha'];self.tree=self.op['controllerTree'];self.status=b''
+        self.files=b'scripts/helper.js\0';self.programs=[];self.node_failure=None
+        for item in [patch.object(m,'ROOT',self.root),patch.object(m,'secure',side_effect=lambda path,*a,**k:Path(path).lstat()),
+                     patch.object(m,'command',side_effect=self.command),patch.object(m,'_NOTIFICATION_SOURCE_CI',set())]:
+            item.start();self.addCleanup(item.stop)
+
+    def command(self,args,code,**kwargs):
+        if args[0]=='/usr/bin/node':
+            self.programs.append(args[-1])
+            self.assertEqual(json.loads(kwargs['input_data']),self.op)
+            self.assertNotIn('NODE_OPTIONS',kwargs['environment'])
+            if self.node_failure:raise m.Stop(self.node_failure)
+            return b'NOTIFICATION_SOURCE_VERIFIED'
+        if args[-2:]==['rev-parse','HEAD']:return self.head.encode()
+        if args[-2:]==['rev-parse','HEAD^{tree}']:return self.tree.encode()
+        if args[-3:]==['status','--porcelain','--untracked-files=all']:return self.status
+        if args[-2:]==['ls-files','-z']:return self.files
+        raise AssertionError(args)
+
+    def test_terminal_is_offline_and_never_populates_forward_authority_cache(self):
+        for _ in range(2):m.notification_terminal_source(self.op)
+        self.assertEqual(m._NOTIFICATION_SOURCE_CI,set())
+        for program in self.programs:
+            self.assertIn('attestNotificationSource(op,{git,read,secure,present})',program)
+            self.assertNotIn('githubPublic',program);self.assertNotIn('readControllerSourceAuthority',program)
+        m.notification_source(self.op)
+        self.assertIn('await readControllerSourceAuthority(op,git,githubPublic)',self.programs[-1])
+        self.assertEqual(len(m._NOTIFICATION_SOURCE_CI),1)
+        m.notification_source(self.op)
+        self.assertNotIn('await readControllerSourceAuthority',self.programs[-1])
+        self.status=b' M scripts/helper.js'
+        with self.assertRaisesRegex(m.Stop,'NOTIFICATION_SOURCE'):m.notification_source(self.op)
+
+    def test_terminal_rejects_git_path_and_local_attestation_drift(self):
+        for field,value in [('head','f'*40),('tree','f'*40),('status',b'?? unexpected'),('files',b'../outside\0')]:
+            original=getattr(self,field);setattr(self,field,value)
+            with self.subTest(field=field),self.assertRaisesRegex(m.Stop,'NOTIFICATION_SOURCE'):
+                m.notification_terminal_source(self.op)
+            setattr(self,field,original)
+        self.tracked.unlink();self.tracked.mkdir()
+        with self.assertRaisesRegex(m.Stop,'NOTIFICATION_SOURCE'):m.notification_terminal_source(self.op)
+        self.tracked.rmdir();self.tracked.write_bytes(b'synthetic fixture')
+        # Enrollment/config, catalog, descriptor and import custody are checked by this local JS attestation.
+        for code in ['SOURCE_CONFIG','SOURCE_PACKAGE_DESCRIPTOR','SOURCE_GOLDEN','SOURCE_TRACKED_MODE']:
+            self.node_failure=code
+            with self.subTest(code=code),self.assertRaisesRegex(m.Stop,code):m.notification_terminal_source(self.op)
+        self.assertEqual(m._NOTIFICATION_SOURCE_CI,set())
+
+    def test_failed_remote_authority_never_caches_and_execute_stops_before_first_write(self):
+        self.node_failure='CONTROLLER_SOURCE_CI'
+        with self.assertRaisesRegex(m.Stop,'CONTROLLER_SOURCE_CI'):m.notification_source(self.op)
+        self.assertEqual(m._NOTIFICATION_SOURCE_CI,set())
+        with patch.object(m,'disk_prerequisites'),patch.object(m.os.path,'lexists',return_value=False),\
+             patch.object(m,'_tool_custody_local',return_value=b'installation'),\
+             patch.object(m.Path,'mkdir') as mkdir,patch.object(m,'atomic_exclusive') as write:
+            with self.assertRaisesRegex(m.Stop,'CONTROLLER_SOURCE_CI'):
+                m.disk_initialize(self.op,m.encoded(self.op),'a'*64)
+            mkdir.assert_not_called();write.assert_not_called()
+        self.assertIn('await readControllerSourceAuthority',self.programs[-1])
+
+    def test_only_notification_terminal_reference_uses_offline_custody(self):
+        with patch.object(m,'notification_terminal_tool_custody',side_effect=m.Stop('TERMINAL_CUSTODY')) as terminal,\
+             patch.object(m,'tool_custody') as forward:
+            with self.assertRaisesRegex(m.Stop,'TERMINAL_CUSTODY'):
+                m.notification_backup_reference(self.op,m.encoded(self.op),'a'*64)
+            terminal.assert_called_once_with(self.op);forward.assert_not_called()
+        with patch.object(m,'_tool_custody_local',return_value=b'installation') as local,\
+             patch.object(m,'notification_terminal_source') as source:
+            self.assertEqual(m.notification_terminal_tool_custody(self.op),b'installation')
+            local.assert_called_once_with(self.op);source.assert_called_once_with(self.op)
+            for schema in [OP['schema'],m.NS_WEB8158_SCHEMA,m.NS_POST_SCHEMA]:
+                with self.assertRaisesRegex(m.Stop,'NOTIFICATION_BACKUP_PROFILE'):
+                    m.notification_terminal_tool_custody({**self.op,'schema':schema})
+
+
 class PureTests(unittest.TestCase):
     def test_ledger_query_survives_real_shell_quoting(self):
         with tempfile.TemporaryDirectory(prefix='phub-ledger-shell-') as directory:
@@ -382,6 +469,17 @@ class PureTests(unittest.TestCase):
             with self.assertRaisesRegex(m.Stop,'TOOL_METADATA'):m.tool_custody(op)
         with patch.object(m,'read_secure',side_effect=lambda p,*args:script+b'changed' if p==path else encoded):
             with self.assertRaisesRegex(m.Stop,'TOOL_CUSTODY'):m.tool_custody(op)
+
+        notification={**op,'schema':m.NOTIFICATION_PRE105_SCHEMA}
+        info.st_ino=metadata['ino']
+        with patch.object(m,'read_secure',side_effect=lambda p,*args:script if p==path else encoded),\
+             patch.object(m,'secure',return_value=info),patch.object(m,'notification_terminal_source') as source:
+            self.assertEqual(m.notification_terminal_tool_custody(notification),encoded)
+            source.assert_called_once_with(notification)
+            info.st_ino=3
+            with self.assertRaisesRegex(m.Stop,'TOOL_METADATA'):m.notification_terminal_tool_custody(notification)
+        with patch.object(m,'read_secure',side_effect=lambda p,*args:script+b'changed' if p==path else encoded):
+            with self.assertRaisesRegex(m.Stop,'TOOL_CUSTODY'):m.notification_terminal_tool_custody(notification)
 
     def test_fixed_source_commands_are_read_only_and_noninteractive(self):
         for shell in [m.SOURCE_LEDGER,m.SOURCE_SIZE,m.SOURCE_DUMP]:
