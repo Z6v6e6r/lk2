@@ -383,6 +383,7 @@ describe('game join attempt ledger', () => {
 
   it('evicts the oldest resolved success instead of writing a ledger strict parse would reject', async () => {
     const storage = new MemoryStorage();
+    const now = new Date('2026-10-21T08:00:00.000Z');
     for (let index = 0; index < 16; index += 1) {
       await beginGameJoinAttempt(
         PRINCIPAL,
@@ -394,7 +395,7 @@ describe('game join attempt ledger', () => {
         },
       );
     }
-    const ledger = readGameJoinAttemptLedger(PRINCIPAL, storage);
+    const ledger = readGameJoinAttemptLedger(PRINCIPAL, storage, { now });
     expect(ledger.attempts).toHaveLength(16);
     for (const attempt of ledger.attempts) {
       resolveGameJoinAttempt(
@@ -402,15 +403,17 @@ describe('game join attempt ledger', () => {
         attempt,
         { state: 'SUCCEEDED', operationId: OPERATION_ID },
         storage,
-        { now: () => new Date('2026-10-21T08:00:00.000Z') },
+        { now: () => now },
       );
     }
     const nextAttempt = await beginGameJoinAttempt(PRINCIPAL, input(), storage, {
+      now: () => now,
       createIdempotencyKey: () => KEY,
     });
     expect(nextAttempt.created).toBe(true);
-    const reRead = readGameJoinAttemptLedger(PRINCIPAL, storage);
+    const reRead = readGameJoinAttemptLedger(PRINCIPAL, storage, { now });
     expect(reRead.attempts).toHaveLength(16);
+    expect(reRead.attempts.filter((attempt) => attempt.state === 'SUCCEEDED')).toHaveLength(15);
     expect(reRead.attempts.some((attempt) => attempt.idempotencyKey === KEY)).toBe(true);
   });
 
