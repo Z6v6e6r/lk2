@@ -159,3 +159,87 @@ Pure tests cover observed ACL/ownership blockers, absent capabilities, malformed
 unknown/reordered/duplicate/changed SQL and partial checkpoint handling. Local PostgreSQL tests
 remain skipped when the existing CI-only disposable-database guard is not satisfied. Do not forge
 CI environment variables to connect to a shared database or provision a new local DB implicitly.
+
+## Closed execution profile for 102→105
+
+The preparation descriptor above remains non-authorizing. The executing profiles live in the
+existing engines and use distinct schemas; none broadens the frozen 99→102 bridge:
+
+- `PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1` in the existing Python backup controller;
+- `PHUB_TIMEWEB_NOTIFICATION_0105_MIGRATION_OPERATION_V1` in the existing migration controller;
+- `PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V1` in the existing API/Worker controller.
+
+The reviewed source, controller and canonical publication must have exactly the same SHA/tree/CI.
+The operation binds raw package/golden hashes and immutable images from that canonical manifest.
+An empty or incomplete golden file is a hard stop before server mutation. Four catalog checkpoints
+are generated from the independent mixed-owner CI fixture, reviewed, frozen, and then checked by
+both the strict image and host probes. They must never be learned from the live database at apply.
+
+The new pre-105 backup uses `backups/<controllerSha>-<sourceCiRunId>-1-notification-pre105`.
+It retains a full custom dump including owners and ACLs. In a separate ephemeral PostgreSQL
+cluster, an allowlisted role closure is created with NOLOGIN/NOSUPERUSER/NOBYPASSRLS/NOINHERIT
+and no memberships. No passwords or global role attributes are copied. Database/language and
+trusted-extension prerequisites are reconstructed only inside that cluster; ordinary objects,
+ACLs and default privileges restore transactionally. A metadata-only security catalog compares
+DB/schema/type/relation/column/function ownership and ACLs, RLS/FORCE, complete policies,
+default ACLs and extension/language ownership. Large objects and security labels must be absent.
+Source ledger/security are rechecked after dump. Restore success alone is insufficient: the
+restored ledger and security catalog must match, and namespace/storage cleanup must be proven.
+The immutable receipt binds operation, target, dump, security/role-closure hashes and preimage.
+Late consumption rechecks current unit/slice/cgroup and storage absence, not just journal events.
+
+Only after that proof and a sealed capsule/shared ownership locks may the nested fixed bootstrap
+run: grant notifications USAGE/CREATE and four column REFERENCES to `phub_migrator`, and transfer
+only deliveries ownership. Runtime grants and memberships remain unchanged. The role preflight
+rejects incoming and outgoing membership, grant options, altered function defaults, or drift.
+The strict image accepts only the exact 105-file source catalog and target database/system ID.
+Each SQL file and ledger insert commits in its own transaction; 0099 removes/restores identity
+runtime defaults within that same transaction. No reset table is visible with inherited grants.
+DDL footprint is bounded at 256 MiB per existing affected relation, and all foreign relation locks
+on deliveries/tickets/messages must be absent immediately before migration start. SQL timeouts
+remain in force; a concurrent lock race still returns a partial checkpoint requiring reconciliation.
+
+Use the existing fixed entry points and request paths, with the new schema in each request:
+
+```sh
+python3 -I /opt/phub/timeweb-beta/operator/tools/<controllerSha>/control-timeweb-database-backup.py \
+  --execute /opt/phub/timeweb-beta/operator/database-backup-restore.json
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-migration /opt/phub/timeweb-beta/operator/api-worker-migration.json
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-migration-reconcile /opt/phub/timeweb-beta/operator/api-worker-migration.json
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker /opt/phub/timeweb-beta/operator/api-worker-upgrade.json
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-worker-reconcile /opt/phub/timeweb-beta/operator/api-worker-upgrade.json
+```
+
+A bootstrap lost acknowledgement retains ownership for exact pre/post classification. A migration
+start acknowledgement loss never creates a second migration container. Postflight probes may adopt
+only the original exact operation/kind/image container; exited nonzero or foreign state stops.
+Success requires ledger105, exact golden105, ten owner-only empty FORCE-RLS tables, no scenario
+markers/internal tickets, fresh runtime+migrator post-probes and an immutable success receipt.
+Reconciliation verifies this evidence before releasing ownership. Checkpoints103/104 do not start
+the new API and never trigger automatic down migration.
+
+The API/Worker profile consumes that terminal reconciled migration proof and its verified pre102
+backup. Freshness is required before migration; later application recovery verifies immutable
+backup custody without making an old proof appear newly created. It preserves the exact secret
+set directory/inode/files/release ID and the actual FCM mount on both image sides. It never
+provisions/swaps credentials or changes provider/send/source/staff/reset flags. API and Worker
+image refs are separately bound to the same manifest; only inert migrator image metadata advances.
+Web and Realtime stay unchanged. The existing monitoring, readiness and 61-sample/15-minute soak
+remain mandatory. Application rollback restores previous image refs and keeps additive schema105.
+
+The fixed `notification-role-bootstrap-0105-inverse.sql` is a recovery artifact without a live
+entrypoint. It is eligible only at exact ledger102 before0099, with unchanged runtime/disabled
+transports, owned locks and exact saved bootstrap postimage. It restores only the original five
+capabilities in one transaction and must be followed by full saved preimage comparison. It is
+forbidden at103/104/105. A destructive production data restore remains a separate explicit action;
+never restore pre102 over writes made after cutover as an application rollback.
+
+The role-aware CI test additionally restores a full synthetic pre102 dump with original owner/ACL
+metadata in a network-isolated fresh cluster, exercises the fixed bootstrap inverse, and checks
+the strict image runner. The older staged SQL test characterizes transaction rollback with owned
+fixed SQL steps; the strict role-aware test is the executable 102→105 controller proof. CI evidence
+is not a claim that a live backup, migration, CUP rollout or deployment has already occurred.

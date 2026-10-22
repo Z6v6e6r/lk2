@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -84,6 +84,177 @@ const url = disposableUrl();
             },
           },
         );
+      async function securityRestoreRehearsal(db: Pool, database: string) {
+        const sql = await readFile(resolve('scripts/notification-backup-security.sql'), 'utf8');
+        const security = (await db.query<Record<string, unknown>>(sql)).rows[0];
+        // The single json column is driver-decoded by pg.
+        const value = Object.values(security!)[0];
+        const preparation = execFileSync(
+          'python3',
+          [
+            '-I',
+            '-S',
+            '-B',
+            '-c',
+            "import importlib.util,json,sys;spec=importlib.util.spec_from_file_location('backup','scripts/control-timeweb-database-backup.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);sys.stdout.write(m.notification_restore_prerequisites(json.load(sys.stdin)))",
+          ],
+          { input: JSON.stringify(value), encoding: 'utf8', timeout: 10000, maxBuffer: 4000000 },
+        );
+        const sourceIds = execFileSync(
+          'docker',
+          ['ps', '-q', '--no-trunc', '--filter', 'ancestor=postgres:16-alpine'],
+          { encoding: 'utf8', timeout: 10000 },
+        )
+          .trim()
+          .split('\n');
+        if (sourceIds.length !== 1 || !/^[a-f0-9]{64}$/.test(sourceIds[0]!))
+          throw Error('NOTIFICATION_CI_POSTGRES_IDENTITY');
+        const sourceId = sourceIds[0]!,
+          imageId = execFileSync('docker', ['inspect', '--format', '{{.Image}}', sourceId], {
+            encoding: 'utf8',
+            timeout: 10000,
+          }).trim();
+        const dump = execFileSync(
+          'docker',
+          [
+            'exec',
+            sourceId,
+            'pg_dump',
+            '--username=phub',
+            '--dbname=' + database,
+            '--format=custom',
+            '--serializable-deferrable',
+          ],
+          { timeout: 30000, maxBuffer: 16000000 },
+        );
+        const name = 'notification-security-' + randomUUID();
+        let id: string | undefined;
+        try {
+          id = execFileSync(
+            'docker',
+            [
+              'create',
+              '--pull',
+              'never',
+              '--name',
+              name,
+              '--network',
+              'none',
+              '--read-only',
+              '--restart',
+              'no',
+              '--user',
+              'postgres',
+              '--cap-drop',
+              'ALL',
+              '--security-opt',
+              'no-new-privileges:true',
+              '--pids-limit',
+              '128',
+              '--memory',
+              '1g',
+              '--memory-swap',
+              '1g',
+              '--cpus',
+              '1',
+              '--tmpfs',
+              '/var/lib/postgresql/data:rw,nosuid,nodev,mode=1777,size=536870912',
+              '--tmpfs',
+              '/var/run/postgresql:rw,nosuid,nodev,mode=1777,size=16777216',
+              '--tmpfs',
+              '/tmp:rw,nosuid,nodev,mode=1777,size=16777216',
+              '--env',
+              'PGDATA=/var/lib/postgresql/data/restore',
+              '--env',
+              'POSTGRES_USER=phub_restore',
+              '--env',
+              'POSTGRES_DB=phub_restore',
+              '--env',
+              'POSTGRES_HOST_AUTH_METHOD=trust',
+              imageId,
+            ],
+            { encoding: 'utf8', timeout: 10000 },
+          ).trim();
+          execFileSync('docker', ['start', id], { timeout: 10000, stdio: 'pipe' });
+          let ready = false;
+          for (let i = 0; i < 45; i++) {
+            try {
+              execFileSync(
+                'docker',
+                ['exec', id, 'pg_isready', '--username=phub_restore', '--dbname=phub_restore'],
+                { timeout: 3000, stdio: 'pipe' },
+              );
+              ready = true;
+              break;
+            } catch {
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          }
+          if (!ready) throw Error('NOTIFICATION_CI_RESTORE_READY');
+          const psql = [
+            'exec',
+            '-i',
+            id,
+            'psql',
+            '-X',
+            '--username=phub_restore',
+            '--dbname=phub_restore',
+            '--no-psqlrc',
+            '-qAt',
+            '--set=ON_ERROR_STOP=1',
+          ];
+          execFileSync('docker', psql, {
+            input: preparation,
+            timeout: 15000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          execFileSync(
+            'docker',
+            [
+              'exec',
+              '-i',
+              id,
+              'pg_restore',
+              '--username=phub_restore',
+              '--dbname=phub_restore',
+              '--exit-on-error',
+              '--single-transaction',
+            ],
+            { input: dump, timeout: 60000, stdio: ['pipe', 'pipe', 'pipe'] },
+          );
+          const ownerSql = execFileSync(
+            'python3',
+            [
+              '-I',
+              '-S',
+              '-B',
+              '-c',
+              "import importlib.util,json,sys;spec=importlib.util.spec_from_file_location('backup','scripts/control-timeweb-database-backup.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);sys.stdout.write(m.notification_restore_extension_owners(json.load(sys.stdin)))",
+            ],
+            { input: JSON.stringify(value), encoding: 'utf8', timeout: 10000, maxBuffer: 4000000 },
+          );
+          execFileSync('docker', psql, {
+            input: ownerSql,
+            timeout: 15000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          const restored = JSON.parse(
+            execFileSync('docker', psql, {
+              input: sql,
+              encoding: 'utf8',
+              timeout: 15000,
+              maxBuffer: 4000000,
+            }),
+          ) as unknown;
+          expect(restored).toEqual(value);
+        } finally {
+          if (id)
+            execFileSync('docker', ['rm', '--force', '--volumes', id], {
+              timeout: 15000,
+              stdio: 'pipe',
+            });
+        }
+      }
       async function setup(suffix: string) {
         const database = `notification_${suffix}_${randomUUID().replaceAll('-', '')}`;
         await admin.query(`create database ${database}`);
@@ -218,6 +389,7 @@ const url = disposableUrl();
         (select jsonb_agg(to_jsonb(d)-array['scenario_available_at','scenario_dispatch_started_at','scenario_v2_available_at']) from notifications.deliveries d) as deliveries,
         (select relacl::text from pg_class where oid='identity.local_email_credentials'::regclass) as credential_acl`)
           ).rows;
+        if (suffix === 'reference') await securityRestoreRehearsal(db, database);
         const bootstrap = await readFile(
           resolve('deploy/timeweb/notification-role-bootstrap-0105.sql'),
           'utf8',
@@ -236,6 +408,12 @@ const url = disposableUrl();
             await db.query(grant.replace('grant ', 'revoke ').replace(' to ', ' from '));
           }
         }
+        await beta.query(bootstrap);
+        const inverse = await readFile(
+          resolve('deploy/timeweb/notification-role-bootstrap-0105-inverse.sql'),
+          'utf8',
+        );
+        await beta.query(inverse);
         await beta.query(bootstrap);
         for (const grant of [
           'grant phub_migrator to notification_outside',
@@ -403,7 +581,7 @@ const url = disposableUrl();
             expect(
               (
                 await f.db.query(`select count(*)::int as count from notifications.deliveries
-            where scenario_available_at is not null or scenario_dispatch_started_at is not null ${"${i > 1 ? 'or scenario_v2_available_at is not null' : ''}"}`)
+            where scenario_available_at is not null or scenario_dispatch_started_at is not null ${i > 1 ? 'or scenario_v2_available_at is not null' : ''}`)
               ).rows,
             ).toEqual([{ count: 0 }]);
           expect(await notificationDefaultAcls(f.migrator)).toEqual(defaults);

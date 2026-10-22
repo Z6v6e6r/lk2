@@ -62,6 +62,7 @@ export function readApiWorkerCapsule(bytes: Buffer): {
   plan: unknown;
 };
 export interface ApiWorkerTransitionOps {
+  secretMode?: 'preserve';
   preflight(): Promise<void>;
   pullAndSmoke(): Promise<void>;
   journal(phase: string): Promise<void>;
