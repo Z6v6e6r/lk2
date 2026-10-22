@@ -2264,6 +2264,8 @@ def notification_restore_prerequisites(value):
     database=next(row for row in value['objects'] if row['kind']=='database')
     sql+=['alter database phub_restore owner to '+quote(database['owner'])+';']+acl_sql(database,'DATABASE','phub_restore')
     for row in value['objects']:
+        if row['kind']=='extension':
+            need(any(a['privilege']=='CREATE' and a['grantee'] in (row['owner'],'PUBLIC') for a in database['acl']), 'NOTIFICATION_SECURITY_EXTENSION_DATABASE_CREATE')
         if row['kind']=='language':
             need(row['props']=={'name':'plpgsql'}, 'NOTIFICATION_SECURITY_LANGUAGE')
             sql+=['alter language plpgsql owner to '+quote(row['owner'])+';']+acl_sql(row,'LANGUAGE','plpgsql')
@@ -2271,19 +2273,65 @@ def notification_restore_prerequisites(value):
             need(row['props']['schema']=='pg_catalog', 'NOTIFICATION_SECURITY_EXTENSION')
             sql+=['drop extension plpgsql;','set session authorization '+quote(row['owner'])+';', 'create extension plpgsql with schema pg_catalog;','reset session authorization;']
         if row['kind']=='extension' and row['props']['name']!='plpgsql':
-            need(row['props']['name']=='pgcrypto' and row['props']['schema']=='public', 'NOTIFICATION_SECURITY_EXTENSION')
-            sql+=['grant usage,create on schema public to '+quote(row['owner'])+';','set session authorization '+quote(row['owner'])+';',"create extension if not exists pgcrypto with schema public version '"+row['props']['version'].replace("'","''")+"';",'reset session authorization;','revoke usage,create on schema public from '+quote(row['owner'])+';']
+            need(row['props']['name'] in ('pgcrypto','pg_trgm') and row['props']['schema']=='public', 'NOTIFICATION_SECURITY_EXTENSION')
+            sql+=['grant usage,create on schema public to '+quote(row['owner'])+';','set session authorization '+quote(row['owner'])+';',"create extension if not exists "+quote(row['props']['name'])+" with schema public version '"+row['props']['version'].replace("'","''")+"';",'reset session authorization;','revoke usage,create on schema public from '+quote(row['owner'])+';']
     return '\n'.join(sql)
 
 
 def notification_restore_extension_owners(value):
     validate_notification_security(value)
-    # Trusted extension scripts run as the bootstrap superuser. Executable identifiers below
-    # come only from the restored catalog; expected owners come from validated role closure.
+    # Only the fresh isolated restore cluster executes this metadata recovery block.
     data=json.dumps(value,separators=(',',':')).replace("'","''")
-    tag="$phub_"+digest(data.encode())[:24]+"$"
-    while tag in data:tag=tag[:-1]+"x$"
-    return "do "+tag+" declare r record; expected text; proof jsonb := '"+data+"'::jsonb; begin for r in select p.oid,p.prokind,n.nspname,p.proname,pg_get_function_identity_arguments(p.oid) as args from pg_proc p join pg_namespace n on n.oid=p.pronamespace where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema' loop select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o where o->>'key'='function:'||r.nspname||'.'||r.proname||'('||r.args||')'; if expected is not null and (select pg_get_userbyid(proowner)<>expected from pg_proc where oid=r.oid) then if r.prokind not in ('f','p') then raise exception 'NOTIFICATION_SECURITY_FUNCTION_KIND';end if; execute format('ALTER %s %s OWNER TO %I',case when r.prokind='p' then 'PROCEDURE' else 'FUNCTION' end,r.oid::regprocedure,expected);end if;end loop;end "+tag+";"
+    tag='$phub_'+digest(data.encode())[:24]+'$'
+    while tag in data:tag=tag[:-1]+'x$'
+    body="""declare r record; expected text; proof jsonb := __PROOF__::jsonb;
+    begin
+      for r in select p.oid,p.prokind,n.nspname,p.proname,pg_get_function_identity_arguments(p.oid) as args
+        from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema'
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o
+          where o->>'key'='function:'||r.nspname||'.'||r.proname||'('||r.args||')';
+        if expected is not null and (select pg_get_userbyid(proowner)<>expected from pg_proc where oid=r.oid) then
+          if r.prokind not in ('f','p') then raise exception 'NOTIFICATION_SECURITY_FUNCTION_KIND';end if;
+          execute format('ALTER %s %s OWNER TO %I',case when r.prokind='p' then 'PROCEDURE' else 'FUNCTION' end,r.oid::regprocedure,expected);
+        end if;
+      end loop;
+      for r in select t.oid,n.nspname,t.typname from pg_type t join pg_namespace n on n.oid=t.typnamespace
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema' and t.typtype in ('b','d','e') and t.typelem=0
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o where o->>'key'='type:'||r.nspname||'.'||r.typname;
+        if expected is not null and (select pg_get_userbyid(typowner)<>expected from pg_type where oid=r.oid) then
+          execute format('ALTER TYPE %s OWNER TO %I',r.oid::regtype,expected);
+        end if;
+      end loop;
+      for r in select o.oid,n.nspname,o.oprname,o.oprleft,o.oprright from pg_operator o join pg_namespace n on n.oid=o.oprnamespace
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema'
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o
+          where o->>'key'='operator:'||r.nspname||'.'||r.oprname||'('||(case when r.oprleft=0 then 'NONE' else r.oprleft::regtype::text end)||','||(case when r.oprright=0 then 'NONE' else r.oprright::regtype::text end)||')';
+        if expected is not null and (select pg_get_userbyid(oprowner)<>expected from pg_operator where oid=r.oid) then
+          execute format('ALTER OPERATOR %I.%s (%s,%s) OWNER TO %I',r.nspname,r.oprname,case when r.oprleft=0 then 'NONE' else r.oprleft::regtype::text end,case when r.oprright=0 then 'NONE' else r.oprright::regtype::text end,expected);
+        end if;
+      end loop;
+      for r in select c.oid,n.nspname,c.opcname,a.amname from pg_opclass c join pg_namespace n on n.oid=c.opcnamespace join pg_am a on a.oid=c.opcmethod
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema'
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o where o->>'key'='opclass:'||r.nspname||'.'||r.opcname||':'||r.amname;
+        if expected is not null and (select pg_get_userbyid(opcowner)<>expected from pg_opclass where oid=r.oid) then
+          execute format('ALTER OPERATOR CLASS %I.%I USING %I OWNER TO %I',r.nspname,r.opcname,r.amname,expected);
+        end if;
+      end loop;
+      for r in select f.oid,n.nspname,f.opfname,a.amname from pg_opfamily f join pg_namespace n on n.oid=f.opfnamespace join pg_am a on a.oid=f.opfmethod
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema'
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o where o->>'key'='opfamily:'||r.nspname||'.'||r.opfname||':'||r.amname;
+        if expected is not null and (select pg_get_userbyid(opfowner)<>expected from pg_opfamily where oid=r.oid) then
+          execute format('ALTER OPERATOR FAMILY %I.%I USING %I OWNER TO %I',r.nspname,r.opfname,r.amname,expected);
+        end if;
+      end loop;
+    end """
+    return 'set standard_conforming_strings=on;do '+tag+' '+body.replace('__PROOF__',"'"+data+"'",1)+tag+';'
 
 def notification_backup_reference(op, raw, file_sha):
     need(op['schema']==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE');tool_custody(op)

@@ -27,6 +27,15 @@ with namespaces as (
   jsonb_build_object('kind',t.typtype)
  from pg_catalog.pg_type t join namespaces n on n.oid=t.typnamespace
  union all
+ select 'operator:'||n.nspname||'.'||o.oprname||'('||(case when o.oprleft=0 then 'NONE' else o.oprleft::regtype::text end)||','||(case when o.oprright=0 then 'NONE' else o.oprright::regtype::text end)||')','operator',o.oprowner,null::aclitem[],'{}'::jsonb
+ from pg_catalog.pg_operator o join namespaces n on n.oid=o.oprnamespace
+ union all
+ select 'opclass:'||n.nspname||'.'||c.opcname||':'||a.amname,'opclass',c.opcowner,null::aclitem[],'{}'::jsonb
+ from pg_catalog.pg_opclass c join namespaces n on n.oid=c.opcnamespace join pg_catalog.pg_am a on a.oid=c.opcmethod
+ union all
+ select 'opfamily:'||n.nspname||'.'||f.opfname||':'||a.amname,'opfamily',f.opfowner,null::aclitem[],'{}'::jsonb
+ from pg_catalog.pg_opfamily f join namespaces n on n.oid=f.opfnamespace join pg_catalog.pg_am a on a.oid=f.opfmethod
+ union all
  select 'default:'||pg_catalog.pg_get_userbyid(d.defaclrole)||':'||coalesce(n.nspname,'GLOBAL')||':'||d.defaclobjtype::text,'default',d.defaclrole,d.defaclacl,
   jsonb_build_object('scope',coalesce(n.nspname,'GLOBAL'),'type',d.defaclobjtype)
  from pg_catalog.pg_default_acl d left join pg_catalog.pg_namespace n on n.oid=d.defaclnamespace

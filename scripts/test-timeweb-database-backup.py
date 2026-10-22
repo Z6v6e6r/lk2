@@ -137,6 +137,9 @@ class PureTests(unittest.TestCase):
         self.assertIn('nologin nosuperuser nobypassrls nocreatedb nocreaterole noreplication noinherit',sql)
         self.assertIn('alter database phub_restore owner to "phub_beta"',sql)
         self.assertNotIn('password',sql.lower());self.assertNotIn('membership',sql.lower())
+        missing_database_create={**security,'roles':['phub_beta','phub_runtime'],'objects':security['objects']+[{'key':'extension:pg_trgm','kind':'extension','owner':'phub_runtime','acl':[],'props':{'name':'pg_trgm','schema':'public','version':'1.6'}}]}
+        with self.assertRaisesRegex(m.Stop,'NOTIFICATION_SECURITY_EXTENSION_DATABASE_CREATE'):
+            m.notification_restore_prerequisites(missing_database_create)
         for patch in ({'roles':['phub_restore']},{'roles':['unreviewed_role']},
                       {'unsupported':{'largeObjects':1,'securityLabels':0}},
                       {'unsupported':{'largeObjects':0,'securityLabels':1}}):
