@@ -8,6 +8,7 @@ import {
   validateNotificationRoleReadback,
   assertNotificationRuntimeOff,
   notificationStateSql,
+  validateNotificationMonitoring,
 } from './timeweb-notification-profile.js';
 import {
   migrationCreateArgs,
@@ -22,11 +23,61 @@ import {
   readApiWorkerCapsule,
 } from './timeweb-api-worker-upgrade.js';
 import descriptor from '../deploy/timeweb/notification-migrations-0099-0101.v1.json';
+import monitoringContract from '../deploy/timeweb/api-web-observability.v1.json';
 import { createHash } from 'node:crypto';
 const hash = (v: string | Buffer) => createHash('sha256').update(v).digest('hex');
 const encoded = (v: unknown) => Buffer.from(JSON.stringify(v) + '\n');
 const target = { databaseName: 'synthetic', systemIdentifier: '12345' };
 const now = Date.parse('2026-10-22T12:00:00.000Z');
+function monitoringFixture() {
+  const provider = {
+    schema: 'PHUB_TIMEWEB_MONITOR_READBACK_V1',
+    source: 'timeweb-approved-read-only-readback',
+    readAt: new Date(now).toISOString(),
+    projectId: 262717,
+    monitors: monitoringContract.monitoring.monitors.map((m, i) => ({
+      providerMonitorId: [
+        '26ed404e-98e5-45c5-98e3-31b9dfd6f0f2',
+        'b25e28a0-02d8-49e4-a0a1-f49f62abc02c',
+      ][i],
+      name: m.name,
+      enabled: true,
+      type: 'HTTPS',
+      method: 'GET',
+      url: m.url,
+      expectedStatus: 200,
+      regions: ['ru-1', 'nl-1'],
+      intervalSeconds: 60,
+      timeoutSeconds: 10,
+      authorizationHeaderConfigured: true,
+      lastCheckAt: new Date(now - 1000).toISOString(),
+      successfulConsecutiveRounds: 10,
+      activeIncidentCount: 0,
+    })),
+  };
+  const at = (minutes: number) => new Date(now - minutes * 60000).toISOString();
+  const alerts = {
+    schema: 'PHUB_TIMEWEB_ALERT_READBACK_V1',
+    source: 'approved-delivery-and-provider-readback',
+    testId: 'synthetic-0105',
+    monitorNames: ['lk2-beta-api-ready', 'lk2-beta-web-root'],
+    triggeredAt: at(10),
+    deliveries: [
+      { channel: 'email', deliveredAt: at(9) },
+      { channel: 'telegram', deliveredAt: at(9) },
+    ],
+    acknowledgedAt: at(8),
+    acknowledgementKind: 'release-owner-observed-active-incident',
+    acknowledgedByRole: 'release-owner',
+    recoveredAt: at(7),
+    recoveryKind: 'provider-closed-after-all-regions-healthy',
+    recoveryDeliveries: [
+      { channel: 'email', deliveredAt: at(6) },
+      { channel: 'telegram', deliveredAt: at(6) },
+    ],
+  };
+  return { provider, alerts };
+}
 function operation() {
   const revision = '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d';
   const baseline = (service: 'api' | 'worker' | 'postgres') => {
@@ -286,6 +337,62 @@ function effects() {
   };
 }
 describe('notification-only Timeweb profile', () => {
+  it('requires fresh wall-clock monitoring and accepts only monotonic refreshes with fixed configuration and alert bytes', () => {
+    const { provider, alerts } = monitoringFixture();
+    const check = (p = provider, a = alerts, at = now, previous?: unknown) =>
+      validateNotificationMonitoring(
+        encoded(p),
+        encoded(a),
+        monitoringContract,
+        new Date(at).toISOString(),
+        previous,
+      );
+    const initial = check();
+    const refreshed = structuredClone(provider);
+    refreshed.readAt = new Date(now + 60000).toISOString();
+    for (const m of refreshed.monitors) {
+      m.lastCheckAt = refreshed.readAt;
+      m.successfulConsecutiveRounds++;
+    }
+    const next = check(refreshed, alerts, now + 60000, initial);
+    expect(next.alertSha256).toBe(initial.alertSha256);
+    expect(() => check(provider, alerts, now + 31000, initial)).toThrow();
+    expect(() => check({ ...provider, readAt: new Date(now - 31000).toISOString() })).toThrow();
+    for (const mutate of [
+      (p: typeof provider) => {
+        p.projectId++;
+      },
+      (p: typeof provider) => {
+        p.source = 'other';
+      },
+      (p: typeof provider) => {
+        p.monitors[0]!.providerMonitorId = 'changed';
+      },
+      (p: typeof provider) => {
+        p.monitors[0]!.regions = ['ru-2', 'nl-1'];
+      },
+      (p: typeof provider) => {
+        p.monitors[0]!.activeIncidentCount = 1;
+      },
+      (p: typeof provider) => {
+        p.monitors[0]!.lastCheckAt = new Date(now - 2000).toISOString();
+      },
+      (p: typeof provider) => {
+        p.monitors[0]!.successfulConsecutiveRounds = 9;
+      },
+      (p: typeof provider) => {
+        p.readAt = new Date(now - 1000).toISOString();
+      },
+    ]) {
+      const changed = structuredClone(provider);
+      mutate(changed);
+      expect(() => check(changed, alerts, now, initial)).toThrow();
+    }
+    expect(() => check(provider, { ...alerts, testId: 'replacement' }, now, initial)).toThrow(
+      'MONITORING_DRIFT',
+    );
+    expect(() => check(provider, alerts, now + 60000, next)).toThrow();
+  });
   it('requires same source, exact baseline, immutable digests and separate authority from old bridges', () => {
     expect(validateNotificationOperation(operation(), now)).toEqual(operation());
     for (const patch of [
@@ -536,6 +643,12 @@ describe('notification-only Timeweb profile', () => {
       },
       migratorImage: op.migratorImage,
       fcmCredentialSource: op.expectedFcmSource,
+      monitoring: validateNotificationMonitoring(
+        encoded(monitoringFixture().provider),
+        encoded(monitoringFixture().alerts),
+        monitoringContract,
+        new Date(now).toISOString(),
+      ),
     };
     const read = (value: unknown) =>
       readApiWorkerCapsule(Buffer.from(encodeApiWorkerCapsule(encoded(op), encoded(value))));

@@ -3,6 +3,7 @@ import {
   assertNotificationRuntimeOff,
   validateNotificationManifest,
   attestNotificationSource,
+  validateNotificationMonitoring,
 } from './timeweb-notification-profile.js';
 import { readNotificationMigrationProof } from './timeweb-api-worker-migration.js';
 // One explicit API+Worker mode of the enrolled controller, frozen to the reviewed Android bridge.
@@ -814,7 +815,19 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       ? RUNTIME
       : `/etc/phub/timeweb-beta-candidates/${id}/timeweb-beta`,
     backupDir = `/etc/phub/timeweb-beta-backups/${op.expectedCurrentSecretSetReleaseId}--replaced-by--${id}`;
-  let plan, baseline;
+  let plan, baseline, lastMonitoring;
+  const rolloutMonitoring = () => {
+    if (!notification) return monitoring(transaction, profile);
+    const current = validateNotificationMonitoring(
+      read(`${ROOT}/observability/timeweb-monitor-readback.json`),
+      read(`${ROOT}/observability/alert-test-readback.json`),
+      parseStrictJson(read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`, 0o644)),
+      new Date().toISOString(),
+      lastMonitoring ?? plan?.monitoring ?? capsule?.plan.monitoring,
+    );
+    lastMonitoring = current;
+    return current;
+  };
   if (mode === 'deploy') {
     if (existsSync(`${transaction}/preparation.json`)) {
       capsule = readApiWorkerCapsule(read(`${transaction}/preparation.json`));
@@ -857,6 +870,16 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     if (notification) {
       validateNotificationManifest(op, manifest);
       if (timewebFcmCredentialSource(RUNTIME) !== op.expectedFcmSource) fail('FCM_SOURCE');
+      for (const service of ['web', 'realtime']) {
+        const actual = inspectService(service);
+        if (
+          actual.identity.image !==
+            `ghcr.io/z6v6e6r/phub-${service}@${baseline.values[service.toUpperCase() + '_IMAGE_DIGEST']}` ||
+          actual.status !== 'running' ||
+          actual.health !== 'healthy'
+        )
+          fail('UNCHANGED_BASELINE_DRIFT');
+      }
     } else {
       secure(dirname(backupDir), 0o700);
       validateTimewebFcmSecretDelta(RUNTIME, candidateDir);
@@ -870,7 +893,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       fail('PREPARED_SECRETS');
     if (notification) readNotificationMigrationProof(op, { fresh: false });
     else backupProof(transaction, op.expectedApi, profile);
-    monitoring(transaction, profile);
+    const initialMonitoring = rolloutMonitoring();
     const packagedLedger = readdirSync(`${SOURCE}/packages/database/migrations`)
       .filter((v) => v.endsWith('.sql'))
       .sort()
@@ -915,6 +938,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
             migrationProof: readNotificationMigrationProof(op, { fresh: false }),
             migratorImage: op.migratorImage,
             fcmCredentialSource: op.expectedFcmSource,
+            monitoring: capsule?.plan.monitoring ?? initialMonitoring,
           }
         : {}),
       packagedLedger,
@@ -1146,7 +1170,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       }
       if (!notification && backupReceipt !== null)
         validateApiWorkerBackupLedger(backupReceipt, plan.packagedLedger);
-      monitoring(transaction, profile);
+      rolloutMonitoring();
     },
     pullAndSmoke: async () => {
       for (const service of ['api', 'worker']) {
@@ -1177,7 +1201,10 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     activate: async (service) => {
       await database();
       known(service);
-      if (notification) readNotificationMigrationProof(op, { fresh: false });
+      if (notification) {
+        readNotificationMigrationProof(op, { fresh: false });
+        rolloutMonitoring();
+      }
       if (!same(secretSet(RUNTIME), plan.candidateSecrets)) fail('SECRET_DRIFT');
       compose('candidate', service);
       const active = await waitService(service, plan.candidate[service], profile);
@@ -1242,17 +1269,18 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         inspectService('worker').mounts,
         notification ? plan.fcmCredentialSource : undefined,
       );
+      if (notification) rolloutMonitoring();
     },
     observe: async () => {
       const started = Date.now(),
         samples = [];
       for (let i = 0; i < 61; i++) {
         await ops.attestCandidate();
-        monitoring(transaction);
+        if (!notification) monitoring(transaction);
         samples.push(new Date().toISOString());
         if (i < 60) await delay(15000);
       }
-      const observed = monitoring(transaction);
+      const observed = notification ? rolloutMonitoring() : monitoring(transaction);
       durable(`${transaction}/timeweb-monitor-readback.json`, observed.provider, true);
       durable(`${transaction}/alert-test-readback.json`, observed.alerts, true);
       durable(

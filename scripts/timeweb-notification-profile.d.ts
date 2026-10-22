@@ -33,3 +33,11 @@ export function validateNotificationState(
   descriptor: string | Buffer,
 ): unknown;
 export function assertNotificationRuntimeOff(bytes: string | Buffer): boolean;
+export function validateNotificationMonitoringBinding(value: unknown): unknown;
+export function validateNotificationMonitoring(
+  provider: string | Buffer,
+  alerts: string | Buffer,
+  contract: unknown,
+  at: string,
+  previous?: unknown,
+): { provider: string; alerts: string; providerSha256: string; alertSha256: string };

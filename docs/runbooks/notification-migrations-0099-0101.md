@@ -231,6 +231,24 @@ image refs are separately bound to the same manifest; only inert migrator image 
 Web and Realtime stay unchanged. The existing monitoring, readiness and 61-sample/15-minute soak
 remain mandatory. Application rollback restores previous image refs and keeps additive schema105.
 
+The global `/opt/phub/timeweb-beta/operator/database-backup-restore.json` is leased immutable
+from creation of the pre102 backup request until the final API/Worker `RECONCILED` receipt,
+including gaps between backup, migration and rollout. The exclusive release owner must not prepare,
+replace or execute another backup request during this lease. Every migration/rollout/recovery proof
+requires byte equality with the canonical `backup-operation.json`; drift stops and retains evidence
+and locks. Recovery may restore only those exact canonical bytes under the same exclusive owner,
+then reconcile the original operation. It never creates a replacement backup to repair that proof.
+
+This notification profile validates monitoring against the actual wall clock before preparation,
+each service activation, every observation round and final evidence capture. Initial provider and
+alert bytes/hashes are sealed in the plan/capsule. The alert bytes stay unchanged. Approved fresh
+provider captures may update only `readAt`, per-monitor `lastCheckAt` and
+`successfulConsecutiveRounds`; all are nondecreasing, identities/configuration stay exact, and
+incidents stay zero. A capture older than 30 seconds or checks older than 130 seconds stop the
+rollout. The approved read-only provider collector must keep these receipts current during the
+whole operation; copying old timestamps forward is forbidden. Before preparation, live Web and
+Realtime images must equal the unchanged digests in the receipt-verified API8158 descriptor.
+
 The fixed `notification-role-bootstrap-0105-inverse.sql` is a recovery artifact without a live
 entrypoint. It is eligible only at exact ledger102 before0099, with unchanged runtime/disabled
 transports, owned locks and exact saved bootstrap postimage. It restores only the original five

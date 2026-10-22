@@ -2,6 +2,7 @@ import {
   NOTIFICATION_ROLLOUT_SCHEMA,
   NOTIFICATION_POST_LEDGER,
   validateNotificationOperation,
+  validateNotificationMonitoringBinding,
 } from './timeweb-notification-profile.js';
 import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
@@ -674,7 +675,9 @@ export function assertPlan(plan, op, operationBytes) {
     'packagedLedger',
     'unchangedImages',
     'createdAt',
-    ...(notification ? ['migrationProof', 'migratorImage', 'fcmCredentialSource'] : []),
+    ...(notification
+      ? ['migrationProof', 'migratorImage', 'fcmCredentialSource', 'monitoring']
+      : []),
   ]);
   if (
     plan.schema !==
@@ -726,6 +729,7 @@ export function assertPlan(plan, op, operationBytes) {
     fail('PLAN_IMAGES');
   validateApiWorkerLedger(plan.packagedLedger, plan.packagedLedger, op);
   if (notification) {
+    validateNotificationMonitoringBinding(plan.monitoring);
     if (
       !same(plan.previousSecrets, plan.candidateSecrets) ||
       plan.fcmCredentialSource !== op.expectedFcmSource ||

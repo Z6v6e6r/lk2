@@ -3,6 +3,11 @@ import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
 import { assertControllerPromotionGitConfig } from './verify-source-ci.js';
 import {
+  validateTimewebMonitorReadback,
+  validateTimewebAlertReadback,
+} from './produce-timeweb-api-web-observability-evidence.js';
+import { validateTimewebMonitoringEvidence } from './verify-timeweb-api-web-observability.js';
+import {
   NOTIFICATION_CATALOG_VERSION,
   NOTIFICATION_CATALOG_SQL,
   NOTIFICATION_DEFAULT_ACL_SQL,
@@ -586,4 +591,61 @@ export function assertNotificationRuntimeOff(bytes) {
     if (keys.includes(m[1]) && !['false', '0'].includes(m[2])) stop('ACTIVATION_FORBIDDEN');
   }
   return true;
+}
+
+export function validateNotificationMonitoringBinding(value) {
+  notificationExact(value, ['provider', 'alerts', 'providerSha256', 'alertSha256']);
+  for (const [name, key] of [
+    ['provider', 'providerSha256'],
+    ['alerts', 'alertSha256'],
+  ]) {
+    if (typeof value[name] !== 'string' || notificationHash(value[name]) !== value[key])
+      stop('MONITORING_BINDING');
+    parseStrictJson(value[name]);
+  }
+  return value;
+}
+
+// Only this new profile requires a current provider capture throughout activation/observation.
+// The legacy bridge's historical monitoring behavior is unchanged.
+export function validateNotificationMonitoring(providerBytes, alertBytes, contract, at, previous) {
+  const provider = providerBytes.toString(),
+    alerts = alertBytes.toString();
+  const value = parseStrictJson(provider),
+    alertValue = parseStrictJson(alerts);
+  const monitors = validateTimewebMonitorReadback(value, contract, at);
+  const alertTest = validateTimewebAlertReadback(alertValue, contract);
+  validateTimewebMonitoringEvidence({ monitors, alertTest }, contract, at);
+  const result = {
+    provider,
+    alerts,
+    providerSha256: notificationHash(provider),
+    alertSha256: notificationHash(alerts),
+  };
+  if (previous) {
+    validateNotificationMonitoringBinding(previous);
+    const old = parseStrictJson(previous.provider);
+    const fixed = (v) => ({
+      ...v,
+      readAt: null,
+      monitors: v.monitors.map((m) => ({
+        ...m,
+        lastCheckAt: null,
+        successfulConsecutiveRounds: null,
+      })),
+    });
+    if (
+      result.alertSha256 !== previous.alertSha256 ||
+      !notificationSame(fixed(value), fixed(old)) ||
+      Date.parse(value.readAt) < Date.parse(old.readAt)
+    )
+      stop('MONITORING_DRIFT');
+    for (let i = 0; i < value.monitors.length; i++)
+      if (
+        Date.parse(value.monitors[i].lastCheckAt) < Date.parse(old.monitors[i].lastCheckAt) ||
+        value.monitors[i].successfulConsecutiveRounds < old.monitors[i].successfulConsecutiveRounds
+      )
+        stop('MONITORING_REGRESSION');
+  }
+  return result;
 }

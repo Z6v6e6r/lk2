@@ -597,7 +597,7 @@ const url = disposableUrl();
             expect(
               (
                 await f.db.query(`select count(*)::int as count from notifications.deliveries
-            where scenario_available_at is not null or scenario_dispatch_started_at is not null ${i > 1 ? 'or scenario_v2_available_at is not null' : ''}`)
+            where scenario_available_at is not null ${i > 1 ? 'or scenario_dispatch_started_at is not null or scenario_v2_available_at is not null' : ''}`)
               ).rows,
             ).toEqual([{ count: 0 }]);
           expect(await notificationDefaultAcls(f.migrator)).toEqual(defaults);
