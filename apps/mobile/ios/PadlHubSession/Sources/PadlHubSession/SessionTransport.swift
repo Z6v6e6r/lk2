@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 final class RejectRedirects: NSObject, URLSessionTaskDelegate {
   func urlSession(
@@ -95,11 +96,11 @@ public actor SessionTransport {
       guard try currentCredential() == nil else { throw SessionFailure.request }
       let (data, response) = try await checkedSend(request)
       if response.statusCode == 200 {
-        try validateSessionBody(data)
-        try acceptCookie(response, previous: nil)
+        let accountHash=try validateSessionBody(data)
+        try acceptCookie(response, previous: nil, accountHash:accountHash)
       }
       return try bridgeResponse(data, response)
-    case .context, .read:
+    case .context, .read, .notification:
       guard let credential = try currentCredential(), credential.logoutKey == nil else {
         return .signedOut
       }
@@ -139,8 +140,9 @@ public actor SessionTransport {
     request.httpShouldHandleCookies = false
     let (data, response) = try await checkedSend(request)
     if response.statusCode == 200 {
-      try validateSessionBody(data)
-      try acceptCookie(response, previous: credential)
+      let accountHash=try validateSessionBody(data)
+      guard credential.accountHash==nil || credential.accountHash==accountHash else{try store.clear();throw SessionFailure.response}
+      try acceptCookie(response, previous: credential, accountHash:accountHash)
     } else if response.statusCode == 401 {
       try store.clear()
     }
@@ -173,7 +175,7 @@ public actor SessionTransport {
     return try bridgeResponse(data, response)
   }
 
-  private func acceptCookie(_ response: HTTPURLResponse, previous: RefreshCredential?) throws {
+  private func acceptCookie(_ response: HTTPURLResponse, previous: RefreshCredential?, accountHash:String) throws {
     guard let url = response.url, let raw = response.value(forHTTPHeaderField: "Set-Cookie") else {
       try store.clear()
       throw SessionFailure.response
@@ -195,19 +197,21 @@ public actor SessionTransport {
       RefreshCredential(
         version: 1, scope: configuration.keychainScope,
         value: cookie.value, expiresAt: expiry, refreshKey: nil,
-        logoutKey: previous?.logoutKey ?? pendingLogout))
+        logoutKey: previous?.logoutKey ?? pendingLogout,accountHash:accountHash))
   }
 
-  private func validateSessionBody(_ data: Data) throws {
+  private func validateSessionBody(_ data: Data) throws ->String {
     guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       let token = object["accessToken"] as? String, !token.isEmpty,
       object["tokenType"] as? String == "Bearer", object["expiresAt"] is String,
-      object["user"] is [String: Any], object["context"] is [String: Any],
+      let user=object["user"] as? [String:Any],let context=object["context"] as? [String:Any],
+      let userId=user["id"] as? String,let contextUser=context["userId"] as? String,userId==contextUser,UUID(uuidString:userId) != nil,let tenantId=context["tenantId"] as? String,UUID(uuidString:tenantId) != nil,
       Set(object.keys).isSubset(of: ["accessToken", "tokenType", "expiresAt", "user", "context"])
     else {
       try store.clear()
       throw SessionFailure.response
     }
+    return SHA256.hash(data:Data((configuration.keychainScope+"|"+userId.lowercased()+"|"+tenantId.lowercased()).utf8)).map{String(format:"%02x",$0)}.joined()
   }
 
   private func checkedSend(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {

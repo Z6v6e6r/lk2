@@ -9,9 +9,13 @@ export function createRuntimeNotificationEndpointCipher(
     | 'FCM_ENABLED'
     | 'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS'
     | 'NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID'
-  >,
+  > &
+    Partial<Pick<AppConfig, 'APNS_ENABLED' | 'SMTP_ENABLED'>>,
 ) {
-  return (config.WEB_PUSH_ENABLED || config.FCM_ENABLED) &&
+  return (config.WEB_PUSH_ENABLED ||
+    config.FCM_ENABLED ||
+    config.APNS_ENABLED ||
+    config.SMTP_ENABLED) &&
     config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
     ? createNotificationEndpointCipher({
         serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,

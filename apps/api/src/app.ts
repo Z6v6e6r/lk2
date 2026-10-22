@@ -83,6 +83,9 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 
 import { registerAuthRoutes } from './auth/auth-routes.js';
+import { registerNotificationScenarioRoutes } from './admin/notification-scenario-routes.js';
+import type { NotificationScenarioRepository } from '@phub/database/notification-scenarios';
+
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
 import { registerLevelEligibilityAdminRoutes } from './admin/level-eligibility-admin-routes.js';
@@ -293,6 +296,7 @@ export interface BuildAppOptions {
   readonly notificationEndpointCipher?: NotificationEndpointCipher;
   /** Signs the per-delivery receipt tokens the service worker reports displays and clicks with. */
   readonly notificationReceiptSecret?: string;
+  readonly notificationScenarioRepository?: NotificationScenarioRepository;
   readonly adminNotificationRepository?: AdminNotificationRepository;
   readonly messagingRepository?: MessagingRepository;
   readonly messagingMediaRepository?: MessagingMediaRepository;
@@ -913,6 +917,7 @@ export async function buildApp(options: BuildAppOptions) {
     ...(options.notificationPreferenceRepository
       ? { preferenceRepository: options.notificationPreferenceRepository }
       : {}),
+    emailEnabled: options.config.SMTP_ENABLED,
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
   });
@@ -1309,6 +1314,37 @@ export async function buildApp(options: BuildAppOptions) {
     },
     authenticatedTenantHandlers: [authenticate, resolveTenant],
     commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerAndroidPushRoutes(app as unknown as FastifyInstance, {
+    platform: 'IOS',
+    ...(options.notificationEndpointRepository
+      ? { repository: options.notificationEndpointRepository }
+      : {}),
+    ...(options.notificationEndpointCipher ? { cipher: options.notificationEndpointCipher } : {}),
+    enabledGlobally: options.config.APNS_ENABLED,
+    maxEndpointsPerUser: options.config.WEB_PUSH_ENDPOINTS_PER_USER_MAX,
+    selector: {
+      appId: options.config.APNS_APP_ID,
+      environment: options.config.APNS_ENVIRONMENT,
+      platform: 'IOS',
+      provider: 'APNS',
+      credentialRef: options.config.APNS_CREDENTIAL_REF,
+    },
+    authenticatedTenantHandlers: [authenticate, resolveTenant],
+    commandHandlers: [authenticate, resolveTenant, requireIdempotencyKey],
+  });
+  registerNotificationScenarioRoutes(app as unknown as FastifyInstance, {
+    ...(options.notificationScenarioRepository
+      ? { repository: options.notificationScenarioRepository }
+      : {}),
+    runtimeEnabled: options.config.NOTIFICATION_SCENARIOS_ENABLED,
+    authenticatedTenantHandlers: [authenticateAdmin, authorizeNotificationAdmin, resolveTenant],
+    commandHandlers: [
+      authenticateAdmin,
+      authorizeNotificationAdmin,
+      resolveTenant,
+      requireIdempotencyKey,
+    ],
   });
   registerAdminNotificationRoutes(app as unknown as FastifyInstance, {
     ...(options.adminNotificationRepository

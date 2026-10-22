@@ -2261,3 +2261,164 @@ select {
     padding: 18px;
   }
 }
+
+.scenario-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr);
+  gap: 20px;
+  align-items: start;
+}
+.scenario-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+.scenario-list button {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 5px;
+  overflow-wrap: anywhere;
+}
+.scenario-list button[aria-pressed='true'] {
+  outline: 2px solid #25754a;
+  outline-offset: 2px;
+}
+.scenario-form,
+.scenario-form > fieldset {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.scenario-form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.scenario-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.scenario-form .scenario-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.scenario-checkbox input {
+  width: 20px;
+  min-height: 20px;
+  height: 20px;
+}
+.scenario-preview {
+  border: 1px solid #dce5df;
+  border-radius: 14px;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.scenario-preview strong,
+.scenario-preview small {
+  display: block;
+}
+.scenario-journal {
+  margin-top: 24px;
+  min-width: 0;
+}
+.scenario-table-wrap {
+  overflow-x: auto;
+}
+.scenario-journal table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.scenario-journal th,
+.scenario-journal td {
+  padding: 12px;
+  border-bottom: 1px solid #dce5df;
+  vertical-align: top;
+}
+.scenario-journal td small {
+  display: block;
+  min-width: 140px;
+}
+.scenario-journal code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 800px) {
+  .scenario-grid,
+  .scenario-fields {
+    grid-template-columns: 1fr;
+  }
+  .scenario-workspace .section-heading {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
+
+.scenario-workspace .panel {
+  padding: 24px;
+}
+.scenario-workspace .section-heading {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.scenario-form > h2 {
+  margin: 0;
+}
+.scenario-list button {
+  padding: 12px;
+  border: 1px solid #dce5df;
+  border-radius: 12px;
+  background: #f6f8f5;
+  color: inherit;
+  min-height: 44px;
+}
+.scenario-workspace .notice {
+  padding: 14px 18px;
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: 12px;
+  background: #e8eee7;
+}
+.scenario-workspace .notice.danger {
+  background: #fff1ef;
+}
+.scenario-form legend {
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+@media (max-width: 600px) {
+  .scenario-workspace .panel {
+    padding: 18px;
+  }
+  .scenario-workspace h1 {
+    font-size: 30px;
+  }
+}
+
+.scenario-workspace button {
+  font: inherit;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid #dce5df;
+  border-radius: 12px;
+  background: #eef3ed;
+  color: inherit;
+  cursor: pointer;
+}
+.scenario-workspace button[type='submit'] {
+  background: #285c3c;
+  color: white;
+  border-color: #285c3c;
+  font-weight: 700;
+}
+.scenario-workspace :is(input, textarea, select, button):focus-visible {
+  outline: 2px solid #25754a;
+  outline-offset: 3px;
+}
