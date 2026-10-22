@@ -196,7 +196,9 @@ export async function assertNotificationRun(
   packaged: readonly MigrationRow[],
   expectedTarget: NotificationTarget,
 ): Promise<void> {
-  validateNotificationMigrationCatalog(packaged);
+  validateNotificationMigrationCatalog(
+    packaged.map(({ filename, checksum }) => ({ filename, checksum })),
+  );
   const target = parseNotificationTarget(expectedTarget);
   const observed = (
     await client.query<NotificationTarget>(
