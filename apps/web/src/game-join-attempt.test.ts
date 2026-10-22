@@ -406,6 +406,8 @@ describe('game join attempt ledger', () => {
       );
     }
     const nextAttempt = await beginGameJoinAttempt(PRINCIPAL, input(), storage, {
+      // Keep this capacity test inside the resolved-at retention window, independent of wall time.
+      now: () => new Date('2026-10-21T08:01:00.000Z'),
       createIdempotencyKey: () => KEY,
     });
     expect(nextAttempt.created).toBe(true);
