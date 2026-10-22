@@ -449,11 +449,13 @@ describe('game join attempt ledger', () => {
       );
     }
     const nextAttempt = await beginGameJoinAttempt(PRINCIPAL, input(), storage, {
-      now: () => now,
+      now: () => new Date('2026-10-21T08:01:00.000Z'),
       createIdempotencyKey: () => KEY,
     });
     expect(nextAttempt.created).toBe(true);
-    const reRead = readGameJoinAttemptLedger(PRINCIPAL, storage, { now });
+    const reRead = readGameJoinAttemptLedger(PRINCIPAL, storage, {
+      now: new Date('2026-10-21T08:01:00.000Z'),
+    });
     expect(reRead.attempts).toHaveLength(16);
     expect(reRead.attempts.filter((attempt) => attempt.state === 'SUCCEEDED')).toHaveLength(15);
     expect(reRead.attempts.some((attempt) => attempt.idempotencyKey === KEY)).toBe(true);
