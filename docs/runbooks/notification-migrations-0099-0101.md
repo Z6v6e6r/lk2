@@ -239,6 +239,15 @@ image refs are separately bound to the same manifest; only inert migrator image 
 Web and Realtime stay unchanged. The existing monitoring, readiness and 61-sample/15-minute soak
 remain mandatory. Application rollback restores previous image refs and keeps additive schema105.
 
+Forward backup execution, migration and API/Worker deployment require source CI authority before
+their first write. The notification-only `--attest-disk` path checks terminal custody locally:
+installed helper bytes, inode and Git-object installation proof; exact clean enrolled source,
+configuration, package descriptor and golden catalogs; terminal journal, kernel cleanup, receipt,
+preimage and dump hashes. It does not query GitHub again during the 61 soak samples or offline
+application recovery. This read-only proof neither caches nor grants forward execution authority;
+execute, supervisor and backup reconciliation keep the full source CI check. No operation field,
+CLI switch or environment option can disable that check. Legacy profiles retain their behavior.
+
 The global `/opt/phub/timeweb-beta/operator/database-backup-restore.json` is leased immutable
 from creation of the pre102 backup request until the final API/Worker `RECONCILED` receipt,
 including gaps between backup, migration and rollout. The exclusive release owner must not prepare,
