@@ -16,9 +16,7 @@ const config = {
 
 function rosterRepository() {
   return {
-    confirmPayment: async () => {
-      throw new Error('not expected');
-    },
+    confirmPayment: () => Promise.reject(new Error('not expected')),
     beginPaidJoin: () => Promise.reject(new Error('must not be called')),
     getPaidJoinAttempt: () => Promise.resolve(null),
     failPaidJoinAttempt: () => Promise.reject(new Error('must not be called')),

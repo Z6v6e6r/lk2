@@ -761,16 +761,15 @@ describe('commercial JOIN API environment contract', () => {
       Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${ring}\n`),
     );
     expect(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS).toBe(ring);
-    expect(JSON.parse(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!)['synthetic-key']).toBe(
-      privateKey,
-    );
+    const decoded: unknown = JSON.parse(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!);
+    expect(decoded).toEqual({ 'synthetic-key': privateKey });
   });
   it('accepts unchanged OFF and a complete conditional WARN/commercial boundary', () => {
     expect(() =>
       validateTimewebRuntimeEnvironments(safeRuntimeEnvironments(), { host, tenantKey }),
     ).not.toThrow();
     expect(() => validateTimewebRuntimeEnvironments(active(), { host, tenantKey })).not.toThrow();
-    expect(loadConfig(active().api!).GAME_COMMERCIAL_JOIN_ENABLED).toBe(true);
+    expect(loadConfig(active().api).GAME_COMMERCIAL_JOIN_ENABLED).toBe(true);
   });
   it.each([
     'SUBSCRIPTION_RUNTIME_BASE_URL',

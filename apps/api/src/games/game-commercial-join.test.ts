@@ -1,3 +1,4 @@
+import type { BookedOperationReceipt } from '@phub/subscription-runtime-adapter';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -449,7 +450,7 @@ const ownerReceipt = {
       ([key]) => !['startsAt', 'durationMinutes', 'capacity', 'admissible'].includes(key),
     ),
   ),
-} as import('@phub/subscription-runtime-adapter').BookedOperationReceipt;
+} as BookedOperationReceipt;
 const reconcileInput = {
   tenantId: envelope.tenantId,
   tenantKey: envelope.tenantKey,
@@ -470,45 +471,45 @@ function receiptDependencies(receipt = ownerReceipt) {
     reservation: { id: reservationId, state: 'ACTIVE', expiresAt: '2026-10-22T10:15:00.000Z' },
     receipt: null,
   };
-  const confirmPayment = vi.fn<NonNullable<CommercialJoinRepositoryPort['confirmPayment']>>(
-    async () => {
-      completed = true;
-      return {
-        outcome: 'applied',
-        commandId: fixtureId(905),
-        gameId: envelope.gameId,
-        revision: 10,
-        viewerRelation: 'PARTICIPANT',
-        participationId: fixtureId(906),
-        reservationId,
-        committedAt: receipt.verifiedAt,
-        replayed: false,
-      };
-    },
-  );
+  const confirmPayment = vi.fn<NonNullable<CommercialJoinRepositoryPort['confirmPayment']>>(() => {
+    completed = true;
+    return resolved({
+      outcome: 'applied' as const,
+      commandId: fixtureId(905),
+      gameId: envelope.gameId,
+      revision: 10,
+      viewerRelation: 'PARTICIPANT' as const,
+      participationId: fixtureId(906),
+      reservationId,
+      committedAt: receipt.verifiedAt,
+      replayed: false,
+    });
+  });
   const repo = repository({
-    getPaidJoinAttempt: async () =>
-      completed
-        ? {
-            ...attempt,
-            state: 'COMPLETED',
-            result: {
-              commandId: operationId,
-              gameId: envelope.gameId,
-              revision: 10,
-              viewerRelation: 'PARTICIPANT',
-              reservationId,
-              participationId: fixtureId(906),
-              committedAt: receipt.verifiedAt,
-            },
-            receipt: { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: receipt.verifiedAt },
-          }
-        : attempt,
+    getPaidJoinAttempt: () =>
+      resolved<CommercialJoinAttemptView>(
+        completed
+          ? {
+              ...attempt,
+              state: 'COMPLETED',
+              result: {
+                commandId: operationId,
+                gameId: envelope.gameId,
+                revision: 10,
+                viewerRelation: 'PARTICIPANT' as const,
+                reservationId,
+                participationId: fixtureId(906),
+                committedAt: receipt.verifiedAt,
+              },
+              receipt: { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: receipt.verifiedAt },
+            }
+          : attempt,
+      ),
     confirmPayment,
   });
   const owner = {
-    execute: vi.fn(async () => ({ status: 'UNKNOWN' as const })),
-    read: vi.fn(async () => ({ status: 'CONFIRMED' as const, receipt })),
+    execute: vi.fn(() => resolved({ status: 'UNKNOWN' as const })),
+    read: vi.fn(() => resolved({ status: 'CONFIRMED' as const, receipt })),
   };
   return { repository: repo.repository, owner, confirmPayment, calls: repo.calls };
 }
@@ -517,14 +518,14 @@ describe('explicit commercial receipt reconciliation', () => {
   it('freezes provider binding before reservation and passes the original reservation to the owner', async () => {
     const repo = repository();
     const beginPaidJoin = vi.fn(repo.repository.beginPaidJoin);
-    const execute = vi.fn(async () => ({ status: 'PENDING' as const }));
-    const prepare = vi.fn(async () => {
+    const execute = vi.fn(() => resolved({ status: 'PENDING' as const }));
+    const prepare = vi.fn(() => {
       expect(beginPaidJoin).not.toHaveBeenCalled();
-      return frozenBinding;
+      return resolved(frozenBinding);
     });
     await executeCommercialJoin(envelope, {
       ...dependencies({ ...repo.repository, beginPaidJoin }, ownerPort([]).owner),
-      owner: { prepare, execute, read: async () => null },
+      owner: { prepare, execute, read: () => resolved(null) },
     });
     expect(beginPaidJoin).toHaveBeenCalledWith(
       expect.objectContaining({ providerBinding: frozenBinding }),
@@ -554,14 +555,14 @@ describe('explicit commercial receipt reconciliation', () => {
       )?.operation.status,
     ).toBe('SUCCEEDED');
     expect(deps.confirmPayment).toHaveBeenCalledTimes(1);
+    expect(deps.confirmPayment.mock.calls[0]?.[0].evidence).toMatchObject({
+      operationId,
+      exerciseId: frozenBinding.providerExerciseId,
+    });
     expect(deps.confirmPayment).toHaveBeenCalledWith(
       expect.objectContaining({
         paidJoinBinding: frozenBinding,
         reservationId,
-        evidence: expect.objectContaining({
-          operationId,
-          exerciseId: frozenBinding.providerExerciseId,
-        }),
       }),
     );
     expect(deps.owner.execute).not.toHaveBeenCalled();
