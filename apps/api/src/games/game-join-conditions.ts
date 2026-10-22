@@ -189,6 +189,7 @@ export async function readGameJoinConditions(
           expiresAt: new Date(quote.expiresAt).toISOString(),
           nonBinding: true,
           requiresReservationRecheck: true,
+          requiresPriceConsent: true,
           source: 'LK1_PRICE_PREVIEW',
           providerMode: selection.providerMode,
         };

@@ -3812,6 +3812,8 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1publish
   /{tenantKey}/games/{gameId}/join:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join
+  /{tenantKey}/games/{gameId}/join-operation:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1join-operation
   /{tenantKey}/games/{gameId}/participants/me:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1participants~1me
   /{tenantKey}/games/{gameId}/waitlist:
@@ -5600,6 +5602,7 @@ components:
           expiresAt,
           nonBinding,
           requiresReservationRecheck,
+          requiresPriceConsent,
           source,
           providerMode,
         ]
@@ -5629,6 +5632,9 @@ components:
         expiresAt: { type: string, format: date-time }
         nonBinding: { type: boolean, const: true }
         requiresReservationRecheck: { type: boolean, const: true }
+        requiresPriceConsent:
+          type: boolean
+          description: The server-owned price must be explicitly acknowledged before a paid JOIN.
         source: { type: string, const: LK1_PRICE_PREVIEW }
         providerMode: { type: string, enum: [MOCK, LIVE] }
     BookedOperationAdmissionRequest:

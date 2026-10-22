@@ -113,15 +113,33 @@ export class BookedOperationAdmissionClient {
   }
   async admit(
     request: BookedOperationAdmissionRequest,
-    envelope: { actorDelegation: string; correlationId: string; operationId: string },
+    envelope: {
+      actorDelegation: string;
+      correlationId: string;
+      operationId: string;
+      /**
+       * Short-lived, user-scoped provider credential issued by the LK2 backend for exactly this
+       * operation. The signed delegation binds its sha256, so the owner refuses a swapped token.
+       */
+      actorToken?: Readonly<{ token: string; expiresAt: string }>;
+    },
   ): Promise<BookedOperationReadOutcome> {
     const body = parseBookedOperationAdmissionRequest(request);
     if (
       !uuid.test(envelope.operationId) ||
       !/^[!-~]{1,4096}$/.test(envelope.actorDelegation) ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(envelope.correlationId)
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(envelope.correlationId) ||
+      (envelope.actorToken !== undefined && !/^[!-~]{1,4096}$/.test(envelope.actorToken.token))
     )
       throw new BookedOperationAdmissionError(400);
+    if (envelope.actorToken !== undefined) {
+      const expiresAtMs = Date.parse(envelope.actorToken.expiresAt);
+      if (
+        !Number.isFinite(expiresAtMs) ||
+        new Date(expiresAtMs).toISOString() !== envelope.actorToken.expiresAt
+      )
+        throw new BookedOperationAdmissionError(400);
+    }
     if (this.openUntil > Date.now() || this.probeInFlight) {
       this.metric('circuit_open');
       throw new BookedOperationAdmissionError(503);
@@ -149,6 +167,9 @@ export class BookedOperationAdmissionClient {
             'Content-Type': 'application/json',
             'X-Correlation-ID': envelope.correlationId,
             'X-Subscription-Actor-Delegation': envelope.actorDelegation,
+            ...(envelope.actorToken === undefined
+              ? {}
+              : { 'X-Subscription-Actor-Token': envelope.actorToken.token }),
           },
           body: JSON.stringify(body),
         },
