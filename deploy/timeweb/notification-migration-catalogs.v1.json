@@ -1,0 +1,5 @@
+{
+  "schema": "PHUB_NOTIFICATION_MIGRATION_CATALOGS_V1",
+  "postgresMajor": 16,
+  "checkpoints": {}
+}

@@ -602,6 +602,45 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
             },
           },
         );
+      // SQL transaction characterization on the test-owned superuser fixture. The production
+      // ordinary CLI now refuses a nonempty 0099–0101 backlog; the role-aware strict runner is
+      // exercised separately by notification-migration.pg.test.ts.
+      const migrateSqlStep = async () => {
+        const applied = new Set(
+          (
+            await fixture!.query<{ filename: string }>(
+              'select filename from public.schema_migrations',
+            )
+          ).rows.map((r) => r.filename),
+        );
+        const pending = (await readdir(migrations))
+          .filter((f) => f.endsWith('.sql') && !applied.has(f))
+          .sort();
+        if (
+          pending.length !== 1 ||
+          ![
+            '0099_local_password_reset_proofs.sql',
+            '0100_notification_scenarios.sql',
+            '0101_notification_lifecycle_channels.sql',
+          ].includes(pending[0]!)
+        )
+          throw new Error('OWNED_SQL_CHARACTERIZATION_STEP');
+        const filename = pending[0]!,
+          sql = await readFile(resolve(migrations, filename), 'utf8');
+        await fixture!.query('begin');
+        try {
+          await fixture!.query(sql);
+          await fixture!.query(
+            'insert into public.schema_migrations(filename,checksum) values($1,$2)',
+            [filename, createHash('sha256').update(sql).digest('hex')],
+          );
+          await fixture!.query('commit');
+        } catch (error) {
+          await fixture!.query('rollback');
+          throw error;
+        }
+        return { stdout: `Applied ${filename}` };
+      };
       await migrate();
       const legacyTenant = randomUUID(),
         legacyUser = randomUUID(),
@@ -662,7 +701,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
       await fixture.query<Record<string, unknown>>(
         'create table identity.local_password_reset_receipts (wrong integer)',
       );
-      await expect(migrate()).rejects.toMatchObject({ code: 1 });
+      await expect(migrateSqlStep()).rejects.toMatchObject({ code: '42P07' });
       expect(
         (
           await fixture.query<Record<string, unknown>>(
@@ -680,7 +719,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
       await fixture.query<Record<string, unknown>>(
         'drop table identity.local_password_reset_receipts',
       );
-      expect((await migrate()).stdout.trim()).toBe(`Applied ${name}`);
+      expect((await migrateSqlStep()).stdout.trim()).toBe(`Applied ${name}`);
       expect(await legacy()).toEqual(original);
       const checksum = createHash('sha256')
         .update(await readFile(resolve(source, name)))
@@ -740,7 +779,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
         await copyFile(resolve(source, step.name), resolve(migrations, step.name));
         await fixture.query(`create table ${step.collision} (wrong integer)`);
         const preFailure = await catalog();
-        await expect(migrate()).rejects.toMatchObject({ code: 1 });
+        await expect(migrateSqlStep()).rejects.toMatchObject({ code: '42P07' });
         expect(await catalog()).toEqual(preFailure);
         expect(
           (
@@ -751,7 +790,7 @@ suite('internal password reset on disposable non-owner PostgreSQL', () => {
         ).toEqual(ledger);
         expect(await legacy()).toEqual(original);
         await fixture.query(`drop table ${step.collision}`);
-        expect((await migrate()).stdout.trim()).toBe(`Applied ${step.name}`);
+        expect((await migrateSqlStep()).stdout.trim()).toBe(`Applied ${step.name}`);
         const next = (
           await fixture.query<Record<string, unknown>>(
             'select filename,checksum,applied_at from schema_migrations order by filename',
