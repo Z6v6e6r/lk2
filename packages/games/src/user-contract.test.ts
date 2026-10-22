@@ -55,11 +55,11 @@ describe('authenticated games contract', () => {
     expect(contract.components.schemas.GamePlayerLevel?.enum).toEqual(GAME_PLAYER_LEVELS);
   });
 
-  it('requires idempotency and a stable conflict response for every command', () => {
+  it('requires idempotency and stable conflict or reconciliation state responses', () => {
     const commandMethods = ['post', 'put', 'patch', 'delete'] as const;
     let commandCount = 0;
 
-    for (const pathItem of Object.values(contract.paths)) {
+    for (const [path, pathItem] of Object.entries(contract.paths)) {
       for (const method of commandMethods) {
         const operation = pathItem[method];
         if (!operation) continue;
@@ -69,11 +69,16 @@ describe('authenticated games contract', () => {
           ...(operation.parameters ?? []),
         ].map((parameter) => parameter.$ref);
         expect(parameterReferences).toContain('#/components/parameters/IdempotencyKey');
-        expect(operation.responses).toHaveProperty('409');
+        if (path.endsWith('/game-operations/{operationId}/reconcile')) {
+          expect(method).toBe('post');
+          expect(operation.responses).toHaveProperty('200');
+        } else {
+          expect(operation.responses).toHaveProperty('409');
+        }
       }
     }
 
-    expect(commandCount).toBe(10);
+    expect(commandCount).toBe(11);
   });
 
   it('does not accept identity selectors, provider identifiers or caller-owned roster state', () => {
