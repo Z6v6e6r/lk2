@@ -92,13 +92,15 @@ export interface GameRosterUserCommandInput {
 
 export interface ConfirmGamePaymentInput extends GameRosterUserCommandInput {
   readonly reservationId: string;
+  /** Required for new paid JOIN snapshots. The repository validates it in the confirmation transaction. */
+  readonly paidJoinBinding?: PaidJoinProviderBinding;
   readonly evidence: {
     readonly provider: 'VIVA';
     readonly operationType: 'TRANSACTION' | 'SUBSCRIPTION_BOOKING';
     readonly operationId: string;
     readonly bookingId: string;
     readonly exerciseId?: string;
-    readonly clientPhoneE164: string;
+    readonly clientPhoneE164?: string;
     readonly evidenceHash: string;
     readonly verifiedAt: string;
     readonly verifiedBy: 'LEGACY_NODE_RED';
@@ -197,6 +199,21 @@ export interface PaidJoinPriceSnapshot {
  * in the same transaction before the API calls the external owner, so an ambiguous owner outcome is
  * recoverable instead of becoming a replacement payment.
  */
+export interface PaidJoinProviderBinding {
+  readonly providerClientId: string;
+  readonly providerMappingId: string;
+  readonly providerClientSubscriptionId: string;
+  readonly providerExerciseId: string;
+  readonly targetMappingId: string;
+  readonly targetVersion: string;
+  readonly startsAt: string;
+  readonly durationMinutes: number;
+  readonly capacity: number;
+  readonly admissible: boolean;
+  readonly requestSha256: string;
+  readonly idempotencyKeySha256: string;
+}
+
 export interface BeginPaidJoinInput {
   readonly tenantId: string;
   readonly actorUserId: string;
@@ -211,6 +228,7 @@ export interface BeginPaidJoinInput {
   readonly price: PaidJoinPriceSnapshot;
   readonly invitationId?: string;
   readonly reservationTtlSeconds: number;
+  readonly providerBinding?: PaidJoinProviderBinding;
 }
 
 export interface PaidJoinAttemptResult {
@@ -248,6 +266,7 @@ export type BeginPaidJoinResult =
   | { readonly outcome: 'reservation_conflict' };
 
 export interface PaidJoinAttemptView {
+  readonly providerBinding?: PaidJoinProviderBinding;
   readonly commandId: string;
   readonly gameId: string;
   readonly state: PaidJoinAttemptState;
@@ -307,6 +326,7 @@ interface LockedGameRow extends QueryResultRow {
   readonly revision: string | number;
   readonly lifecycle_state: GameLifecycleState;
   readonly starts_at: Date | string;
+  readonly ends_at: Date | string;
   readonly join_cutoff_at: Date | string | null;
   readonly capacity: number;
   readonly waitlist_enabled: boolean;
@@ -343,6 +363,10 @@ interface ConfirmableReservationRow extends ReservationRow {
   readonly payment_state: 'REQUIRES_ACTION' | 'PROCESSING' | 'PAID' | 'FAILED' | 'EXPIRED';
   readonly eligibility_decision_id: string | null;
   readonly payment_snapshot_exists: boolean;
+  readonly paid_snapshot?: {
+    operation_id: string;
+    provider_binding: PaidJoinProviderBinding | null;
+  };
 }
 
 interface PaymentEvidenceRow extends QueryResultRow {
@@ -425,6 +449,7 @@ interface PaidJoinReservationRow extends QueryResultRow {
   readonly state: PaidJoinReservationState;
   readonly payment_state: PaidJoinReservationPaymentState;
   readonly expires_at: Date | string;
+  readonly provider_binding?: PaidJoinProviderBinding;
 }
 
 interface PaidJoinReservationLockRow extends QueryResultRow {
@@ -630,7 +655,7 @@ async function lockGame(
 ): Promise<LockedGameRow | undefined> {
   return queryOne<LockedGameRow>(
     client,
-    `select id, station_id, court_id, revision, lifecycle_state, starts_at, join_cutoff_at,
+    `select id, station_id, court_id, revision, lifecycle_state, starts_at, ends_at, join_cutoff_at,
             capacity, waitlist_enabled, payment_mode, sport_code, level_from, level_to,
             min_level_id, max_level_id, now()::text as database_now
        from games.games
@@ -646,7 +671,7 @@ async function lockProcessGame(
 ): Promise<LockedGameRow | undefined> {
   return queryOne<LockedGameRow>(
     client,
-    `select id, station_id, court_id, revision, lifecycle_state, starts_at, join_cutoff_at,
+    `select id, station_id, court_id, revision, lifecycle_state, starts_at, ends_at, join_cutoff_at,
             capacity, waitlist_enabled, payment_mode, sport_code, level_from, level_to,
             min_level_id, max_level_id, now()::text as database_now
        from games.games
@@ -1262,6 +1287,7 @@ async function completePaidJoinAttempt(
     readonly revision: number;
     readonly participationId: string;
     readonly committedAt: string;
+    readonly expectedOperationId?: string;
   },
 ): Promise<void> {
   const snapshot = await queryOne<PaidJoinSnapshotRow>(
@@ -1277,8 +1303,10 @@ async function completePaidJoinAttempt(
       limit 1`,
     [input.tenantId, input.eligibilityDecisionId, input.actorUserId, input.gameId],
   );
+  if (input.expectedOperationId && snapshot?.operation_id !== input.expectedOperationId)
+    throw new Error('GAME_PAID_JOIN_COMPLETION_CONFLICT');
   if (!snapshot) return;
-  await client.query(
+  const completed = await client.query(
     `update games.command_idempotency
         set state = 'COMPLETED', result_payload = $4::jsonb, completed_at = now()
       where tenant_id = $1 and id = $2 and actor_user_id = $3
@@ -1302,6 +1330,15 @@ async function completePaidJoinAttempt(
       PAID_JOIN_COMMAND_TYPE,
     ],
   );
+  if (completed.rowCount !== 1) {
+    const existing = await queryOne<{ state: string }>(
+      client,
+      'select state from games.command_idempotency where tenant_id=$1 and id=$2 and actor_user_id=$3',
+      [input.tenantId, snapshot.operation_id, input.actorUserId],
+    );
+    if ((input.expectedOperationId || existing) && existing?.state !== 'COMPLETED')
+      throw new Error('GAME_PAID_JOIN_COMPLETION_CONFLICT');
+  }
 }
 
 async function loadPaidJoinAttempt(
@@ -1329,7 +1366,7 @@ async function loadPaidJoinAttempt(
   const reservationRow = await queryOne<PaidJoinReservationRow>(
     client,
     `select reservation.id, reservation.state, reservation.payment_state,
-            reservation.expires_at
+            reservation.expires_at, snapshot.snapshot->'providerBinding' as provider_binding
        from eligibility.payment_snapshots snapshot
        join games.seat_reservations reservation
          on reservation.tenant_id = snapshot.tenant_id
@@ -1363,6 +1400,9 @@ async function loadPaidJoinAttempt(
     }
   }
   return {
+    ...(reservationRow?.provider_binding
+      ? { providerBinding: reservationRow.provider_binding }
+      : {}),
     commandId: row.id,
     gameId: row.aggregate_id,
     state: row.state,
@@ -1676,6 +1716,39 @@ export function createGameRosterRepository(
           });
           return { outcome: 'rejected' as const, code: 'GAME_NOT_FOUND' as const };
         }
+        if (input.providerBinding) {
+          const binding = input.providerBinding;
+          const mappings = await client.query<{
+            id: string;
+            external_id: string;
+            external_version: string;
+          }>(
+            `select id, external_id, external_version from integration.external_entity_map
+              where tenant_id=$1 and internal_id=$2 and external_system='VIVA' and entity_type='exercise'
+                and sync_status='synced' and sync_error_code is null and last_synced_at is not null
+                and external_version is not null and external_version<>'' for share`,
+            [input.tenantId, input.gameId],
+          );
+          const mapping = mappings.rows.length === 1 ? mappings.rows[0] : undefined;
+          if (
+            !binding.admissible ||
+            !mapping ||
+            mapping.id !== binding.targetMappingId ||
+            mapping.external_id !== binding.providerExerciseId ||
+            mapping.external_version !== binding.targetVersion ||
+            timestamp(game.starts_at) !== binding.startsAt ||
+            game.capacity !== binding.capacity ||
+            (Date.parse(timestamp(game.ends_at)) - Date.parse(timestamp(game.starts_at))) /
+              60000 !==
+              binding.durationMinutes
+          ) {
+            return {
+              outcome: 'rejected' as const,
+              code: 'GAME_REVISION_CONFLICT' as const,
+              currentRevision,
+            };
+          }
+        }
         const facts = await loadRosterFacts(client, input);
         const now = timestamp(game.database_now);
         try {
@@ -1747,6 +1820,7 @@ export function createGameRosterRepository(
               decision: { decisionId: eligibility.decisionId, status: 'ALLOWED' },
               paymentMode: game.payment_mode,
               subscriptionInstanceId: input.subscriptionInstanceId,
+              ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
               price: input.price,
               ...(input.invitationId ? { invitationId: input.invitationId } : {}),
               correlationId: input.correlationId,
@@ -1929,7 +2003,15 @@ export function createGameRosterRepository(
                        and snapshot.player_id = games.seat_reservations.user_id
                        and snapshot.activity_type = 'GAME'
                        and snapshot.activity_id = games.seat_reservations.game_id
-                  ) as payment_snapshot_exists
+                  ) as payment_snapshot_exists,
+                  (select jsonb_build_object('operation_id', snapshot.operation_id,
+                            'provider_binding', snapshot.snapshot->'providerBinding')
+                     from eligibility.payment_snapshots snapshot
+                    where snapshot.tenant_id=games.seat_reservations.tenant_id
+                      and snapshot.decision_id=games.seat_reservations.eligibility_decision_id
+                      and snapshot.player_id=games.seat_reservations.user_id
+                      and snapshot.activity_type='GAME' and snapshot.activity_id=games.seat_reservations.game_id
+                    order by snapshot.created_at desc limit 1) as paid_snapshot
              from games.seat_reservations
             where tenant_id = $1 and game_id = $2 and id = $3 and user_id = $4
             for update`,
@@ -1957,6 +2039,73 @@ export function createGameRosterRepository(
             currentRevision,
           );
         }
+
+        let clientPhoneE164 = input.evidence.clientPhoneE164;
+        const paidSnapshot = reservation.paid_snapshot;
+        if (paidSnapshot?.provider_binding || input.paidJoinBinding) {
+          const original = paidSnapshot?.provider_binding;
+          const supplied = input.paidJoinBinding;
+          const matches =
+            original &&
+            supplied &&
+            Object.keys(original).every(
+              (key) =>
+                original[key as keyof PaidJoinProviderBinding] ===
+                supplied[key as keyof PaidJoinProviderBinding],
+            ) &&
+            Object.keys(original).length === Object.keys(supplied).length;
+          if (
+            !matches ||
+            paidSnapshot.operation_id !== input.evidence.operationId ||
+            input.evidence.operationType !== 'SUBSCRIPTION_BOOKING' ||
+            input.evidence.exerciseId !== original.providerExerciseId
+          ) {
+            return storeRejected(
+              client,
+              input,
+              commandType,
+              commandId,
+              'GAME_PAYMENT_EVIDENCE_CONFLICT',
+              true,
+              currentRevision,
+            );
+          }
+          const attempt = await queryOne<{ state: string }>(
+            client,
+            `select state from games.command_idempotency where tenant_id=$1 and id=$2 and actor_user_id=$3
+              and aggregate_id=$4 and command_type=$5 for update`,
+            [
+              input.tenantId,
+              paidSnapshot.operation_id,
+              input.actorUserId,
+              input.gameId,
+              PAID_JOIN_COMMAND_TYPE,
+            ],
+          );
+          if (!attempt || !['IN_PROGRESS', 'COMPLETED'].includes(attempt.state)) {
+            return storeRejected(
+              client,
+              input,
+              commandType,
+              commandId,
+              'GAME_PAYMENT_EVIDENCE_CONFLICT',
+              true,
+              currentRevision,
+            );
+          }
+          const actor = await queryOne<{ phone_e164: string | null }>(
+            client,
+            'select phone_e164 from profile.user_summaries where tenant_id=$1 and user_id=$2 for share',
+            [input.tenantId, input.actorUserId],
+          );
+          if (!actor?.phone_e164 || !/^\+[1-9][0-9]{7,14}$/.test(actor.phone_e164)) {
+            // A delayed verified-profile projection is repairable. Roll back so the
+            // fixed reconciliation key is not poisoned by a durable rejection.
+            throw new Error('GAME_PAYMENT_ACTOR_PHONE_UNAVAILABLE');
+          }
+          clientPhoneE164 = actor.phone_e164;
+        }
+        if (!clientPhoneE164) throw new Error('GAME_PAYMENT_ACTOR_PHONE_MISSING');
 
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `game-payment-evidence:${input.tenantId}:${input.evidence.provider}:${input.evidence.operationType}:${input.evidence.operationId}`,
@@ -2026,6 +2175,7 @@ export function createGameRosterRepository(
             gameId: input.gameId,
             reservationId: input.reservationId,
             eligibilityDecisionId: reservation.eligibility_decision_id,
+            ...(input.paidJoinBinding ? { expectedOperationId: input.evidence.operationId } : {}),
             revision: result.revision,
             participationId: result.participationId,
             committedAt: result.committedAt,
@@ -2079,7 +2229,7 @@ export function createGameRosterRepository(
             game.payment_mode,
             input.evidence.bookingId,
             input.evidence.exerciseId ?? null,
-            input.evidence.clientPhoneE164,
+            clientPhoneE164,
             input.evidence.amountMinor ?? null,
             input.evidence.currency ?? null,
             input.evidence.evidenceHash,

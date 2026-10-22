@@ -11,6 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { generateKeyPairSync } from 'node:crypto';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -731,4 +732,120 @@ describe('prepared API + Worker secret-set swap', () => {
       expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
     },
   );
+});
+
+describe('commercial JOIN API environment contract', () => {
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const ring = JSON.stringify({ 'synthetic-key': privateKey });
+  function active() {
+    const env = safeRuntimeEnvironments();
+    Object.assign(env.api!, {
+      SUBSCRIPTION_RUNTIME_WARN_MODE: 'WARN',
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'https://quote.example.test',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: Buffer.alloc(32, 4).toString('base64url'),
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: ring,
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic-key',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-owner',
+      GAME_COMMERCIAL_JOIN_ENABLED: 'true',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test',
+    });
+    return env;
+  }
+  it('preserves canonical multiline PKCS8 JSON byte for byte through env parsing', () => {
+    const parsed = parseTimewebSecretEnvironment(
+      Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${ring}\n`),
+    );
+    expect(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS).toBe(ring);
+    expect(JSON.parse(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!)['synthetic-key']).toBe(
+      privateKey,
+    );
+  });
+  it('accepts unchanged OFF and a complete conditional WARN/commercial boundary', () => {
+    expect(() =>
+      validateTimewebRuntimeEnvironments(safeRuntimeEnvironments(), { host, tenantKey }),
+    ).not.toThrow();
+    expect(() => validateTimewebRuntimeEnvironments(active(), { host, tenantKey })).not.toThrow();
+    expect(loadConfig(active().api!).GAME_COMMERCIAL_JOIN_ENABLED).toBe(true);
+  });
+  it.each([
+    'SUBSCRIPTION_RUNTIME_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE',
+    'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL',
+  ])('refuses incomplete activation missing %s', (key) => {
+    const env = active();
+    delete env.api![key];
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each([
+    { GAME_COMMERCIAL_JOIN_ENABLED: 'yes' },
+    { SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF' },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown-key' },
+    { SUBSCRIPTION_RUNTIME_BASE_URL: 'http://owner.example.test' },
+    { GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test/path' },
+    { SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: 'x'.repeat(4097) },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'x'.repeat(513) },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'invalid audience' },
+    { SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS: '999' },
+  ])('rejects incompatible activation input', (changes) => {
+    const env = active();
+    Object.assign(env.api!, changes);
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each(['{}', '[]', '{"key":{"nested":1}}', '{"key":"$expand"}', '{"key":"invalid"}'])(
+    'rejects malformed/unsafe keyring %s',
+    (value) => {
+      expect(() =>
+        parseTimewebSecretEnvironment(
+          Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${value}\n`),
+        ),
+      ).toThrow();
+    },
+  );
+  it('rejects noncanonical PEM even when the key is otherwise valid', () => {
+    for (const pem of [privateKey.trimEnd(), privateKey.replace(/(.{32})(.{32})/g, '$1\n$2')]) {
+      const value = JSON.stringify({ 'synthetic-key': pem });
+      expect(() =>
+        parseTimewebSecretEnvironment(
+          Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${value}\n`),
+        ),
+      ).toThrow();
+    }
+  });
+  it('validates dormant scalar settings while allowing a fully absent boundary', () => {
+    const env = active();
+    env.api!.SUBSCRIPTION_RUNTIME_WARN_MODE = 'OFF';
+    env.api!.GAME_COMMERCIAL_JOIN_ENABLED = 'false';
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
+    for (const [key, value] of Object.entries({
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'not-url',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'not-url',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: 'short',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'bad id',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'x'.repeat(513),
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'bad audience',
+    })) {
+      expect(() =>
+        validateTimewebRuntimeEnvironments(
+          { ...env, api: { ...env.api, [key]: value } },
+          { host, tenantKey },
+        ),
+      ).toThrow();
+    }
+  });
+  it('rejects delegation material outside the API service', () => {
+    const env = active();
+    env.worker!.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS = ring;
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
+      'unknown_key',
+    );
+  });
 });

@@ -11,6 +11,7 @@ const EXPECTED_UID = process.getuid?.() ?? -1;
 const PROTECTED_PATHS = Object.freeze([
   '.github/workflows/pull-request.yaml',
   'scripts/provision-timeweb-beta-runtime-secrets.js',
+  'scripts/timeweb-commercial-runtime-contract.js',
   'scripts/control-timeweb-operator-node-bootstrap.py',
   'scripts/control-timeweb-yandex-public-beta.js',
   'scripts/control-timeweb-yandex-public-beta.d.ts',

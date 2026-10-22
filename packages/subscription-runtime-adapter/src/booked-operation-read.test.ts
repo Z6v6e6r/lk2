@@ -126,3 +126,50 @@ describe('bounded commercial receipt GET client', () => {
     );
   });
 });
+
+describe('negotiated strict owner receipt', () => {
+  const receipt = {
+    contractVersion: 1,
+    source: 'LK1_SUBSCRIPTION_BOOKING_OWNER',
+    operationId,
+    tenantId: randomUUID(),
+    userId: randomUUID(),
+    gameId: randomUUID(),
+    reservationId: randomUUID(),
+    providerMappingId: randomUUID(),
+    targetMappingId: randomUUID(),
+    providerClientId: 'client-1',
+    providerClientSubscriptionId: 'subscription-1',
+    providerExerciseId: 'exercise-1',
+    bookingId: 'booking-1',
+    targetVersion: '2',
+    requestSha256: `sha256:${'a'.repeat(64)}`,
+    idempotencyKeySha256: `sha256:${'b'.repeat(64)}`,
+    verifiedAt: '2026-10-22T10:00:00.000Z',
+  };
+  const confirmed = {
+    ...outcome,
+    status: 'CONFIRMED',
+    reason: 'OWNER_BOOKING_CONFIRMED',
+    asOf: receipt.verifiedAt,
+    receipt,
+  };
+  it('requires explicit receipt negotiation and keeps the legacy parser strict', () => {
+    expect(() => parseBookedOperationReadOutcome(confirmed, operationId)).toThrow(
+      BookedOperationReadError,
+    );
+    expect(parseBookedOperationReadOutcome(confirmed, operationId, true).receipt).toEqual(receipt);
+  });
+  it.each([
+    { ...receipt, actorToken: 'forbidden' },
+    { ...receipt, phone: 'forbidden' },
+    { ...receipt, operationId: randomUUID() },
+    { ...receipt, verifiedAt: 'not-time' },
+    { ...receipt, requestSha256: 'bad' },
+    { ...receipt, reservationId: 'bad' },
+  ])('rejects malformed or extra receipt fields', (bad) => {
+    expect(() =>
+      parseBookedOperationReadOutcome({ ...confirmed, receipt: bad }, operationId, true),
+    ).toThrow(BookedOperationReadError);
+  });
+});

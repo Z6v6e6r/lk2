@@ -45,6 +45,7 @@ function isLeafWebPath(path) {
 function needsDeploymentContract(path) {
   return (
     /^apps\/(?:web|api|worker|realtime|migrator)\/Dockerfile$/u.test(path) ||
+    path === 'scripts/timeweb-commercial-runtime-contract.js' ||
     path === '.dockerignore' ||
     path.startsWith('deploy/timeweb/') ||
     path === '.github/workflows/pull-request.yaml' ||

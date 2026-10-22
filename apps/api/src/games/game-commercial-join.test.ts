@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   executeCommercialJoin,
   readCommercialJoinOperation,
+  reconcileCommercialJoinOperation,
   commercialJoinRequestHash,
   type CommercialJoinAttemptView,
   type CommercialJoinBeginResult,
@@ -417,4 +418,197 @@ describe('commercial JOIN readback', () => {
     expect(body?.operation.aggregateRevision).toBe(9);
     expect(body?.operation.commercial.attemptState).toBe('OWNER_CONFIRMED');
   });
+});
+
+const frozenBinding = {
+  providerClientId: 'provider-client',
+  providerMappingId: fixtureId(902),
+  providerClientSubscriptionId: fixtureId(903),
+  providerExerciseId: 'provider-exercise',
+  targetMappingId: fixtureId(904),
+  targetVersion: '7',
+  startsAt: '2026-12-01T10:00:00.000Z',
+  durationMinutes: 90,
+  capacity: 4,
+  admissible: true,
+  requestSha256: `sha256:${'a'.repeat(64)}`,
+  idempotencyKeySha256: `sha256:${'b'.repeat(64)}`,
+};
+const ownerReceipt = {
+  contractVersion: 1 as const,
+  source: 'LK1_SUBSCRIPTION_BOOKING_OWNER' as const,
+  operationId,
+  tenantId: envelope.tenantId,
+  userId: envelope.userId,
+  gameId: envelope.gameId,
+  reservationId,
+  bookingId: 'provider-booking',
+  verifiedAt: '2026-10-22T10:00:00.000Z',
+  ...Object.fromEntries(
+    Object.entries(frozenBinding).filter(
+      ([key]) => !['startsAt', 'durationMinutes', 'capacity', 'admissible'].includes(key),
+    ),
+  ),
+} as import('@phub/subscription-runtime-adapter').BookedOperationReceipt;
+const reconcileInput = {
+  tenantId: envelope.tenantId,
+  tenantKey: envelope.tenantKey,
+  actorUserId: envelope.userId,
+  sessionId: envelope.sessionId,
+  operationId,
+  correlationId: envelope.correlationId,
+};
+function receiptDependencies(receipt = ownerReceipt) {
+  let completed = false;
+  const attempt: CommercialJoinAttemptView = {
+    commandId: operationId,
+    gameId: envelope.gameId,
+    state: 'IN_PROGRESS',
+    result: null,
+    errorCode: null,
+    providerBinding: frozenBinding,
+    reservation: { id: reservationId, state: 'ACTIVE', expiresAt: '2026-10-22T10:15:00.000Z' },
+    receipt: null,
+  };
+  const confirmPayment = vi.fn<NonNullable<CommercialJoinRepositoryPort['confirmPayment']>>(
+    async () => {
+      completed = true;
+      return {
+        outcome: 'applied',
+        commandId: fixtureId(905),
+        gameId: envelope.gameId,
+        revision: 10,
+        viewerRelation: 'PARTICIPANT',
+        participationId: fixtureId(906),
+        reservationId,
+        committedAt: receipt.verifiedAt,
+        replayed: false,
+      };
+    },
+  );
+  const repo = repository({
+    getPaidJoinAttempt: async () =>
+      completed
+        ? {
+            ...attempt,
+            state: 'COMPLETED',
+            result: {
+              commandId: operationId,
+              gameId: envelope.gameId,
+              revision: 10,
+              viewerRelation: 'PARTICIPANT',
+              reservationId,
+              participationId: fixtureId(906),
+              committedAt: receipt.verifiedAt,
+            },
+            receipt: { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: receipt.verifiedAt },
+          }
+        : attempt,
+    confirmPayment,
+  });
+  const owner = {
+    execute: vi.fn(async () => ({ status: 'UNKNOWN' as const })),
+    read: vi.fn(async () => ({ status: 'CONFIRMED' as const, receipt })),
+  };
+  return { repository: repo.repository, owner, confirmPayment, calls: repo.calls };
+}
+
+describe('explicit commercial receipt reconciliation', () => {
+  it('freezes provider binding before reservation and passes the original reservation to the owner', async () => {
+    const repo = repository();
+    const beginPaidJoin = vi.fn(repo.repository.beginPaidJoin);
+    const execute = vi.fn(async () => ({ status: 'PENDING' as const }));
+    const prepare = vi.fn(async () => {
+      expect(beginPaidJoin).not.toHaveBeenCalled();
+      return frozenBinding;
+    });
+    await executeCommercialJoin(envelope, {
+      ...dependencies({ ...repo.repository, beginPaidJoin }, ownerPort([]).owner),
+      owner: { prepare, execute, read: async () => null },
+    });
+    expect(beginPaidJoin).toHaveBeenCalledWith(
+      expect.objectContaining({ providerBinding: frozenBinding }),
+    );
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({ providerBinding: frozenBinding, reservationId }),
+    );
+  });
+  it('keeps GET read-only even with a confirmed owner receipt', async () => {
+    const deps = receiptDependencies();
+    const result = await readCommercialJoinOperation(reconcileInput, deps);
+    expect(result?.operation.status).toBe('UNKNOWN');
+    expect(deps.confirmPayment).not.toHaveBeenCalled();
+    expect(deps.owner.execute).not.toHaveBeenCalled();
+  });
+  it('completes once from the original receipt and replays after a fresh session without rebooking', async () => {
+    const deps = receiptDependencies();
+    expect((await reconcileCommercialJoinOperation(reconcileInput, deps))?.operation.status).toBe(
+      'SUCCEEDED',
+    );
+    expect(
+      (
+        await reconcileCommercialJoinOperation(
+          { ...reconcileInput, sessionId: fixtureId(907) },
+          deps,
+        )
+      )?.operation.status,
+    ).toBe('SUCCEEDED');
+    expect(deps.confirmPayment).toHaveBeenCalledTimes(1);
+    expect(deps.confirmPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paidJoinBinding: frozenBinding,
+        reservationId,
+        evidence: expect.objectContaining({
+          operationId,
+          exerciseId: frozenBinding.providerExerciseId,
+        }),
+      }),
+    );
+    expect(deps.owner.execute).not.toHaveBeenCalled();
+    expect(deps.calls).not.toContain('failPaidJoinAttempt');
+  });
+  it('keeps a transient confirmation failure retryable and emits a redacted failure code', async () => {
+    const deps = receiptDependencies();
+    deps.confirmPayment.mockRejectedValueOnce(new Error('synthetic temporary projection failure'));
+    const metric = vi.fn();
+    expect(
+      (
+        await reconcileCommercialJoinOperation(reconcileInput, {
+          ...deps,
+          onReconciliationFailure: metric,
+        })
+      )?.operation.status,
+    ).toBe('UNKNOWN');
+    expect(metric).toHaveBeenCalledWith('GAME_CONFIRMATION_UNAVAILABLE');
+    expect((await reconcileCommercialJoinOperation(reconcileInput, deps))?.operation.status).toBe(
+      'SUCCEEDED',
+    );
+    expect(deps.owner.execute).not.toHaveBeenCalled();
+  });
+  it.each([
+    'operationId',
+    'tenantId',
+    'userId',
+    'gameId',
+    'reservationId',
+    'providerClientId',
+    'providerMappingId',
+    'providerClientSubscriptionId',
+    'providerExerciseId',
+    'targetMappingId',
+    'targetVersion',
+    'requestSha256',
+    'idempotencyKeySha256',
+  ] as const)(
+    'refuses a mismatched receipt %s without settlement, release or redispatch',
+    async (key) => {
+      const deps = receiptDependencies({ ...ownerReceipt, [key]: 'wrong' });
+      expect((await reconcileCommercialJoinOperation(reconcileInput, deps))?.operation.status).toBe(
+        'UNKNOWN',
+      );
+      expect(deps.confirmPayment).not.toHaveBeenCalled();
+      expect(deps.owner.execute).not.toHaveBeenCalled();
+      expect(deps.calls).not.toContain('failPaidJoinAttempt');
+    },
+  );
 });

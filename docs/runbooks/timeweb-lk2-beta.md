@@ -237,14 +237,29 @@ because the shared runtime config requires the complete Web Push key set wheneve
 `WEB_PUSH_ENABLED=true`. That places the push-signing key in the internet-facing API process; the
 alternative is a separate delivery-only config requirement, which stays a follow-up.
 
-`NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS` is the only secret whose value is a JSON object, and the
-provisioner admits exactly one flat identifier-to-base64 object for that key while it keeps rejecting
-`$`, `#`, `'`, backslash and whitespace for every value. The value must start with `{` so Compose
-treats it as unquoted and preserves the inner quotes; each entry must decode to exactly 32 bytes and
-the provisioner now rejects any other length or a non-canonical encoding. The Compose `env_file`
-round trip itself has no automated test: the provisioner unit tests cover the accepted character set
-and the keyring shape, and the byte-exact delivery to a container is manual LOCAL evidence only, so
-repeat it on the target before the first activation.
+The provisioner admits two narrowly validated JSON-object secrets. `NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS`
+is a flat identifier-to-canonical-base64 map of 32-byte keys. API-only
+`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS` is canonical `JSON.stringify({keyId: pkcs8Pem})`,
+with 1–8 RSA keys of at least 2048 bits, canonical PKCS8 PEM and escaped LF characters. It rejects
+nested values, duplicate/noncanonical JSON, interpolation/comment characters and non-RSA material.
+Both values begin with `{` so Compose retains the inner quotes. Keep `api.env` mode 0600 in its
+existing root-owned 0700 directory; do not place keys in Git, manifests, logs or other service envs.
+Verify the exact Compose env_file roundtrip with synthetic keys locally and repeat byte-hash readback
+on the authorized target before activation.
+
+Commercial JOIN remains disabled by default. `SUBSCRIPTION_RUNTIME_WARN_MODE=OFF` accepts absent
+commercial settings; any present value still has to satisfy its runtime schema. `WARN` requires
+`SUBSCRIPTION_RUNTIME_BASE_URL`, `SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN`, the delegation keyring,
+active key ID, issuer and audience. URLs must be HTTPS roots without userinfo/query/fragment.
+`GAME_COMMERCIAL_JOIN_ENABLED=true` additionally requires `GAMES_READ_ENABLED=true`,
+`GAMES_COMMANDS_ENABLED=true` and `GAME_COMMERCIAL_JOIN_OWNER_BASE_URL`. Provisioning and deployment
+validation share `scripts/timeweb-commercial-runtime-contract.js`; numeric settings use config bounds.
+
+This runtime-contract change is outside the narrow API/Web controller: it must continue to fail
+`runtime_definition_changed`. Use a separately authorized, reviewed runtime-definition transition,
+one immutable AMD64 manifest, fresh backup/restore and rollback proof, migration compatibility and
+no-write staging smoke. Source readiness does not authorize key provisioning, import, migration,
+publication, deploy or feature activation. Never use the Jetson ARM staging workflow for Timeweb.
 
 The default application model contains only web, API, and realtime. Worker is gated by profile
 `background`; migrator is gated by profile `migration`; neither is a dependency of a default

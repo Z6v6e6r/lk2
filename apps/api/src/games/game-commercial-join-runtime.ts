@@ -5,16 +5,19 @@ import type {
   BookedOperationAdmissionTargetRepository,
   GameRosterRepository,
   SubscriptionRuntimeActorContextRepository,
+  PaidJoinProviderBinding,
 } from '@phub/database';
 import { createBookedOperationAdmissionTargetRepository } from '../../../../packages/database/src/booked-operation-admission-target-repository.js';
 import {
   BookedOperationAdmissionClient,
   BookedOperationReadClient,
   BookedOperationReadError,
+  bookedOperationAdmissionRequestSha256,
   type BookedOperationAdmissionRequest,
   type BookedOperationReadOutcome,
 } from '@phub/subscription-runtime-adapter';
 
+import { subscriptionRuntimeIdempotencyKeySha256 } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
 import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
 import type {
   CommercialJoinOwnerOutcome,
@@ -108,7 +111,7 @@ export interface GameCommercialJoinRuntimeOptions {
   readonly pool: Parameters<typeof createBookedOperationAdmissionTargetRepository>[0];
   readonly rosterRepository: Pick<
     GameRosterRepository,
-    'beginPaidJoin' | 'getPaidJoinAttempt' | 'failPaidJoinAttempt'
+    'beginPaidJoin' | 'getPaidJoinAttempt' | 'failPaidJoinAttempt' | 'confirmPayment'
   >;
   readonly conditionsOwner?: GameJoinConditionsOwner;
   readonly ownerBoundary?: GameCommercialJoinOwnerBoundary;
@@ -200,6 +203,29 @@ export function createBookedOperationOwner(options: {
 
   return {
     resolveProviderClientSubscriptionId,
+    async prepare(input) {
+      const context = await resolveActor(input.actor);
+      if (context.outcome !== 'ok') return null;
+      const target = await options.targetRepository.resolve({
+        tenantId: input.actor.tenantId,
+        targetId: input.actor.gameId,
+        expectedRevision: input.actor.expectedRevision,
+      });
+      const providerClientSubscriptionId = await resolveProviderClientSubscriptionId(input);
+      if (!target || !target.admissible || !providerClientSubscriptionId) return null;
+      return {
+        ...target,
+        providerClientId: context.providerClientId,
+        providerMappingId: context.providerMappingId,
+        providerClientSubscriptionId,
+        requestSha256: bookedOperationAdmissionRequestSha256({
+          action: 'JOIN_GAME',
+          target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
+          paymentIntent: 'USE_SUBSCRIPTION',
+        }),
+        idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(input.idempotencyKey),
+      } satisfies PaidJoinProviderBinding;
+    },
     async execute(input) {
       const context = await resolveActor({
         tenantId: input.actor.tenantId,
@@ -209,18 +235,27 @@ export function createBookedOperationOwner(options: {
       // An unproven actor context must not book anything, and it must not lose the attempt either.
       if (context.outcome !== 'ok')
         return { status: 'UNKNOWN' } satisfies CommercialJoinOwnerOutcome;
-      const target = await options.targetRepository.resolve({
-        tenantId: input.actor.tenantId,
-        targetId: input.actor.gameId,
-        expectedRevision: input.actor.expectedRevision,
-      });
+      const target =
+        input.providerBinding ??
+        (await options.targetRepository.resolve({
+          tenantId: input.actor.tenantId,
+          targetId: input.actor.gameId,
+          expectedRevision: input.actor.expectedRevision,
+        }));
       // The game has no verified owner mapping: this is not a chargeable target, so fail closed
       // without keeping a seat for an operation that can never be executed.
       if (!target) return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
+      if (
+        input.providerBinding &&
+        (input.providerBinding.providerClientId !== context.providerClientId ||
+          input.providerBinding.providerMappingId !== context.providerMappingId)
+      )
+        return { status: 'UNKNOWN' };
       if (!target.admissible) return { status: 'REJECTED', code: 'GAME_SERVICE_BLOCKED' };
       // The selected product must have a server-side provider subscription mapping; otherwise the
       // owner cannot execute the booking and the user has to pick a different product.
       const providerClientSubscriptionId =
+        input.providerBinding?.providerClientSubscriptionId ??
         input.providerClientSubscriptionId ??
         (options.issueActorToken
           ? await options.boundary.resolveProviderClientSubscriptionId?.({
@@ -276,6 +311,7 @@ export function createBookedOperationOwner(options: {
             correlationId: input.correlationId,
             idempotencyKey: input.idempotencyKey,
             request,
+            ...(input.reservationId ? { reservationId: input.reservationId } : {}),
             ...(actorToken === undefined || providerClientSubscriptionId === undefined
               ? {}
               : {
@@ -320,15 +356,19 @@ export function createBookedOperationOwner(options: {
           providerMappingId: context.providerMappingId,
           operationId: input.operationId,
           correlationId: input.correlationId,
+          includeReceipt: true,
         });
         const outcome = await readClient.read(input.operationId, {
           actorDelegation,
           correlationId: input.correlationId,
+          includeReceipt: true,
         });
         options.onMetric?.('read');
         if (outcome.status === 'PENDING') return { status: 'PENDING' };
         // CONFIRMED means the owner booking exists; the LK2 participation is still finalized only by
         // the trusted receipt, so the client keeps waiting instead of being told SUCCEEDED.
+        if (outcome.status === 'CONFIRMED' && outcome.receipt)
+          return { status: 'CONFIRMED', receipt: outcome.receipt };
         if (outcome.status === 'CONFIRMED') return { status: 'PENDING' };
         return { status: 'UNKNOWN' };
       } catch (error) {
@@ -348,7 +388,7 @@ export function createGameCommercialJoinRuntime(
   if (!options.conditionsOwner || !options.ownerBoundary) return undefined;
   // Without an attributable user credential and a server-side provider subscription mapping the
   // owner cannot execute the booking, so a half-composed runtime must keep the old fail-closed guard.
-  if (!options.issueActorToken) return undefined;
+  if (!options.issueActorToken || !options.rosterRepository.confirmPayment) return undefined;
   if (!options.ownerBoundary.resolveProviderClientSubscriptionId) return undefined;
   const baseUrl = config.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL;
   if (!baseUrl) return undefined;

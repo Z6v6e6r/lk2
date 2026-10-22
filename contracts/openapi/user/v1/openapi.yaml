@@ -3828,6 +3828,8 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1result-submissions~1{submissionId}~1confirm
   /{tenantKey}/games/{gameId}/result-submissions/{submissionId}/dispute:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1result-submissions~1{submissionId}~1dispute
+  /{tenantKey}/game-operations/{operationId}/reconcile:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1game-operations~1{operationId}~1reconcile
   /{tenantKey}/game-operations/{operationId}:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-operations~1{operationId}
   /{tenantKey}/locations:

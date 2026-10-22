@@ -1121,7 +1121,7 @@ export function GamesPage({
 
   /**
    * Readback by the original idempotency key. This is the only action allowed after an unknown
-   * outcome: it repeats GET and never POSTs a replacement purchase.
+   * outcome: it reads the original attempt and explicitly reconciles its receipt without a new purchase.
    */
   async function pollJoinOperation(
     gameIdValue: string,
@@ -1143,7 +1143,14 @@ export function GamesPage({
     if (generation !== readbackGeneration.current) return;
     setJoinBusy(true);
     try {
-      const raw = await gateway.getPaidJoinOperation(gameIdValue, attempt.idempotencyKey);
+      let raw = await gateway.getPaidJoinOperation(gameIdValue, attempt.idempotencyKey);
+      if (generation !== readbackGeneration.current) return;
+      if (
+        gateway.reconcilePaidJoinOperation &&
+        ['UNKNOWN', 'PROCESSING'].includes(raw.operation.status)
+      ) {
+        raw = await gateway.reconcilePaidJoinOperation(raw.operation.id);
+      }
       if (generation !== readbackGeneration.current) return;
       const result = readGameJoinCommandResult(raw);
       if (!result) {
