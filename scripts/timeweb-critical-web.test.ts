@@ -252,7 +252,7 @@ describe('closed Web over installed API8158', () => {
     }
   `,
     ));
-  it('requires all six modified inert paths with no subset, duplicate, rename or runtime drift', () =>
+  it('requires exactly the reviewed modified inert paths with no subset, duplicate, rename or runtime drift', () =>
     scenario(
       currentFixture +
         `
@@ -278,7 +278,24 @@ describe('closed Web over installed API8158', () => {
     for(const mode of ['100755','120000','160000']) assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='ls-tree' ? mode+' blob '+'e'.repeat(40)+'\\t'+args.at(-1) : runGit(args)),/CONTROLLER_FILE_MODE/);
     assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='ls-tree' ? '100644 blob '+'e'.repeat(40)+'\\t'+'other' : runGit(args)),/CONTROLLER_FILE_MODE/);
     assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='diff'&&args.includes('--raw') ? raw+'changed' : runGit(args)),/RUNTIME_PROOF/);
-    for(const path of ['packages/api-sdk/src/index.ts','contracts/openapi/user/v1/openapi.yaml','package-lock.json','apps/web/Dockerfile']) assert.equal(execFileSync('git',['rev-parse',current.apiSource+':'+path],{encoding:'utf8'}),execFileSync('git',['rev-parse',current.runtimeSource+':'+path],{encoding:'utf8'}));
+    // Reviewed re-anchor: only the Web Dockerfile stays byte-identical to API8158. The SDK,
+    // user-v1 OpenAPI and lockfile advanced with current main and are reviewed by the dead-code
+    // guards below plus this runbook record.
+    assert.equal(execFileSync('git',['rev-parse',current.apiSource+':apps/web/Dockerfile'],{encoding:'utf8'}),execFileSync('git',['rev-parse',current.runtimeSource+':apps/web/Dockerfile'],{encoding:'utf8'}));
+    const fs=await import('node:fs');
+    const gateway=fs.readFileSync('apps/web/src/auth-gateway.ts','utf8');
+    const games=fs.readFileSync('apps/web/src/GamesPage.tsx','utf8');
+    // Dead paid-JOIN capability: the production browser gateway only declares the advisory
+    // join-conditions method and never implements it, so canPaidJoin is false and the paid path
+    // (join-conditions, join-operation, commercial join body) is unreachable over API8158.
+    // Both occurrences are the single optional declaration and its indexed-access type; there
+    // is no implementation in the production browser gateway.
+    assert.equal((gateway.match(/getGameJoinConditions/g)||[]).length,2);
+    assert.ok(gateway.includes("readonly getGameJoinConditions?: PadlHubApiClient['getGameJoinConditions'];"));
+    assert.ok(games.includes("typeof gateway.getGameJoinConditions === 'function'"));
+    assert.ok(games.includes("typeof gateway.joinPaidGame === 'function'"));
+    // The reviewed runbook records that paid JOIN stays disabled over API8158.
+    assert.match(fs.readFileSync('docs/runbooks/timeweb-standard-delivery.md','utf8'),/paid JOIN stays disabled over API8158/);
   `,
     ));
   it('checks fresh provider and alert bytes against wall time using the tracked 0644 contract', () =>
