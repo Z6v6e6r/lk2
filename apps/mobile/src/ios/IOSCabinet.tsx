@@ -180,7 +180,7 @@ function Home({
               bookings.value?.staleAt && Date.parse(bookings.value.staleAt) < bookings.receivedAt,
             ),
           )}
-          tenantName="ПадлХАБ"
+          tenantName="ПадлхАБ"
           layoutVariant="v3"
           notificationUnreadCount={0}
           notificationsAvailable={false}

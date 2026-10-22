@@ -304,7 +304,7 @@ function capacityChecks(
     if (!match) throw new Error('MemAvailable is missing from /proc/meminfo');
     const availableMemory = Number(match[1]) * 1024;
     const stats = deps.statvfs(options.root);
-    const freeDisk = stats.bavail * stats.frsize;
+    const freeDisk = stats.bavail * stats.bsize;
     const verdict = evaluateCapacity(databaseBytes, availableMemory, freeDisk);
     return [
       check(

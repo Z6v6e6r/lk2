@@ -166,6 +166,7 @@ describe('commercial JOIN orchestration', () => {
       retryAfterSeconds: 5,
     });
     expect(result.body.replayed).toBe(true);
+    // A repeat is purely local: no replacement dispatch and no owner read.
     expect(owner.calls).toEqual([]);
   });
 
@@ -237,6 +238,23 @@ describe('commercial JOIN orchestration', () => {
     const result = await executeCommercialJoin(envelope, dependencies(repo, owner.owner));
     expect(result).toMatchObject({ kind: 'failed', code: 'GAME_FULL' });
     expect(owner.calls).toEqual([]);
+  });
+
+  it('refuses an unmapped provider subscription before writing any durable row', async () => {
+    const { calls, repository: repo } = repository();
+    const owner = {
+      resolveProviderClientSubscriptionId: () => Promise.resolve(undefined),
+      execute: () => Promise.reject(new Error('must not dispatch')),
+      read: () => Promise.resolve(null),
+    };
+    const result = await executeCommercialJoin(envelope, {
+      repository: repo,
+      conditionsOwner: createJoinConditionsFixture().owner,
+      owner,
+      now: () => Date.now(),
+    });
+    expect(result).toMatchObject({ kind: 'failed', code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED' });
+    expect(calls).toEqual([]);
   });
 
   it('does not treat a missing commercial composition as success', async () => {

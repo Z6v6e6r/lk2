@@ -105,7 +105,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: '6420f1d4b5d5c905563d23921c61ce68be2ca28b',
-    newOid: '26f9d14fb5261883737aa155bd6c9a504bce93e3',
+    newOid: 'e95f3bfd126eaaf0cebb63ca934cf05949f83f62',
   }),
   Object.freeze({
     path: 'scripts/timeweb-api-worker-upgrade.d.ts',
@@ -137,7 +137,7 @@ export const API_WORKER_CI_READER_PATCH = Object.freeze([
     oldMode: '100644',
     newMode: '100644',
     oldOid: 'c3da47a8fa4c95d06081d1a189c28b2ec8afa55e',
-    newOid: 'f9d175bff0142075c68af9e8fc3164a08d36b35b',
+    newOid: '3a9c15e1b2fcef121a82122479c80b5c83a431c7',
   }),
 ]);
 // Controller promotion keeps the frozen release source closure unchanged. These are

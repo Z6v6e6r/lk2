@@ -489,7 +489,7 @@ export function LevelEligibilityWorkspace({
                   </dl>
                 ) : (
                   <small>
-                    Источник ещё не перенесён в PadlHub API; публикация BLOCK запрещена операционным
+                    Источник ещё не перенесён в API ПадлхАБ; публикация BLOCK запрещена операционным
                     регламентом.
                   </small>
                 )}

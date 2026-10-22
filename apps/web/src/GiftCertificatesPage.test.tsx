@@ -154,7 +154,7 @@ describe('GiftCertificatesPage', () => {
     const { container } = render(<GiftCertificatesPage gateway={gateway} surface="user" />);
 
     expect(await screen.findByRole('heading', { name: 'Подарочная карта' })).toBeVisible();
-    expect(screen.getByRole('img', { name: 'Пример двух подарочных карт ПадлХАБ' })).toBeVisible();
+    expect(screen.getByRole('img', { name: 'Пример двух подарочных карт ПадлхАБ' })).toBeVisible();
     expect(
       screen.queryByRole('heading', { name: 'Идеальный подарок без хлопот' }),
     ).not.toBeInTheDocument();

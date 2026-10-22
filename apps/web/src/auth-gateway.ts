@@ -844,7 +844,7 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
     tenant: {
       id: payload.tenantId,
       key: tenantKey,
-      name: tenantKey === 'local-padel' ? 'ПаделХАБ' : tenantKey,
+      name: tenantKey === 'local-padel' ? 'ПадлхАБ' : tenantKey,
     },
     roles: payload.roles,
     permissions: payload.permissions,

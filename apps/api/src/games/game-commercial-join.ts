@@ -153,6 +153,16 @@ export interface CommercialJoinOwnerActor {
 }
 
 export interface CommercialJoinOwnerPort {
+  /**
+   * Optional pre-dispatch resolution of the selected product's provider subscription mapping. When
+   * present it runs BEFORE any LK2 row is written, so an unmapped selection is refused without
+   * creating a command row, reservation or payment snapshot.
+   */
+  resolveProviderClientSubscriptionId?(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly subscriptionInstanceId: string;
+    readonly correlationId: string;
+  }): Promise<string | undefined>;
   execute(input: {
     readonly actor: CommercialJoinOwnerActor;
     readonly operationId: string;
@@ -160,6 +170,7 @@ export interface CommercialJoinOwnerPort {
     readonly correlationId: string;
     readonly subscriptionInstanceId: string;
     readonly price: CommercialJoinPrice;
+    readonly providerClientSubscriptionId?: string;
   }): Promise<CommercialJoinOwnerOutcome>;
   read(input: {
     readonly actor: CommercialJoinOwnerActor;
@@ -173,7 +184,8 @@ export type CommercialJoinOwnerOutcome =
   | { readonly status: 'UNKNOWN' }
   | {
       readonly status: 'REJECTED';
-      readonly code: 'GAME_SERVICE_BLOCKED' | 'GAME_PAYMENT_REQUIRED';
+      readonly code:
+        'GAME_SERVICE_BLOCKED' | 'GAME_PAYMENT_REQUIRED' | 'GAME_SUBSCRIPTION_SELECTION_REQUIRED';
     };
 
 export interface CommercialJoinCommandEnvelope {
@@ -362,6 +374,19 @@ function operationBody(input: {
   };
 }
 
+/** Single owner-read mapping shared by the repeat path and the readback path. */
+async function ownerIsPending(
+  dependencies: Pick<CommercialJoinDependencies, 'owner'>,
+  actor: CommercialJoinOwnerActor,
+  operationId: string,
+  correlationId: string,
+): Promise<boolean> {
+  return dependencies.owner
+    .read({ actor, operationId, correlationId })
+    .then((state) => state?.status === 'PENDING')
+    .catch(() => false);
+}
+
 /**
  * Executes one commercial JOIN. It returns either an accepted operation body (accepted even when the
  * outcome is still pending/unknown) or a stable failure the route maps onto an HTTP error.
@@ -402,12 +427,23 @@ export async function executeCommercialJoin(
       },
     );
   } catch (error) {
-    if (error instanceof GameJoinConditionsError && error.status === 409) {
-      return commercialFailure(
-        error.code === 'GAME_JOIN_CONDITIONS_REVISION_CHANGED'
-          ? 'GAME_REVISION_CONFLICT'
-          : 'GAME_RESERVATION_EXPIRED',
-      );
+    if (error instanceof GameJoinConditionsError) {
+      // A foreign, non-owned or unmappable subscription selection is a selection problem, not a
+      // payment problem: the client must pick a product it owns, not be told the game is unpayable.
+      if (
+        error.code === 'GAME_JOIN_CONDITIONS_MAPPING_UNAVAILABLE' ||
+        error.code === 'GAME_JOIN_CONDITIONS_SELECTION_INVALID' ||
+        error.code === 'JOIN_SELECTION_SUBSCRIPTIONS_INCOMPLETE'
+      ) {
+        return commercialFailure('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
+      }
+      if (error.status === 409) {
+        return commercialFailure(
+          error.code === 'GAME_JOIN_CONDITIONS_REVISION_CHANGED'
+            ? 'GAME_REVISION_CONFLICT'
+            : 'GAME_RESERVATION_EXPIRED',
+        );
+      }
     }
     return commercialFailure('GAME_PAYMENT_REQUIRED');
   }
@@ -442,7 +478,33 @@ export async function executeCommercialJoin(
     expiresAt: conditions.expiresAt,
   };
 
-  // 2. Durable attempt + seat reservation. The operation exists before the owner call.
+  // 2. The selected product must be executable by the owner. Resolve its provider subscription
+  //    mapping BEFORE any durable row so an unmapped selection is a pure refusal, not a dead attempt.
+  let resolvedProviderClientSubscriptionId: string | undefined;
+  if (dependencies.owner.resolveProviderClientSubscriptionId) {
+    try {
+      resolvedProviderClientSubscriptionId =
+        await dependencies.owner.resolveProviderClientSubscriptionId({
+          actor: {
+            tenantId: input.tenantId,
+            tenantKey: input.tenantKey,
+            userId: input.userId,
+            sessionId: input.sessionId,
+            gameId: input.gameId,
+            expectedRevision: input.expectedRevision,
+          },
+          subscriptionInstanceId: input.subscriptionInstanceId,
+          correlationId: input.correlationId,
+        });
+    } catch {
+      return commercialFailure('GAME_PAYMENT_REQUIRED');
+    }
+    if (!resolvedProviderClientSubscriptionId) {
+      return commercialFailure('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
+    }
+  }
+
+  // 3. Durable attempt + seat reservation. The operation exists before the owner call.
   let begin: CommercialJoinBeginResult;
   try {
     begin = await dependencies.repository.beginPaidJoin({
@@ -512,6 +574,9 @@ export async function executeCommercialJoin(
           : 'GAME_RECONCILIATION_REQUIRED';
       return commercialFailure(code);
     }
+    // A repeat is never a new attempt and never a replacement owner POST. It also does not read the
+    // owner: the authoritative unresolved-state read is the GET readback (`WAIT_FOR_RECONCILIATION`
+    // tells the client to poll it), so a replay stays purely local and side-effect free.
     return {
       kind: 'accepted',
       body: operationBody({
@@ -534,7 +599,7 @@ export async function executeCommercialJoin(
     };
   }
 
-  // 3. The existing owner executes exactly this operation. No retry, no replacement key.
+  // 4. The existing owner executes exactly this operation. No retry, no replacement key.
   let outcome: CommercialJoinOwnerOutcome;
   try {
     outcome = await dependencies.owner.execute({
@@ -551,6 +616,9 @@ export async function executeCommercialJoin(
       correlationId: input.correlationId,
       subscriptionInstanceId: input.subscriptionInstanceId,
       price,
+      ...(resolvedProviderClientSubscriptionId === undefined
+        ? {}
+        : { providerClientSubscriptionId: resolvedProviderClientSubscriptionId }),
     });
   } catch {
     outcome = { status: 'UNKNOWN' };
@@ -691,21 +759,19 @@ export async function readCommercialJoinOperation(
       replayed: true,
     });
   }
-  const ownerPending = await dependencies.owner
-    .read({
-      actor: {
-        tenantId: input.tenantId,
-        tenantKey: input.tenantKey,
-        userId: input.actorUserId,
-        sessionId: input.sessionId,
-        gameId: attempt.gameId,
-        expectedRevision: 0,
-      },
-      operationId: attempt.commandId,
-      correlationId: input.correlationId,
-    })
-    .then((ownerState) => ownerState?.status === 'PENDING')
-    .catch(() => false);
+  const ownerPending = await ownerIsPending(
+    dependencies,
+    {
+      tenantId: input.tenantId,
+      tenantKey: input.tenantKey,
+      userId: input.actorUserId,
+      sessionId: input.sessionId,
+      gameId: attempt.gameId,
+      expectedRevision: 0,
+    },
+    attempt.commandId,
+    input.correlationId,
+  );
   if (ownerPending) {
     return operationBody({
       operationId: attempt.commandId,

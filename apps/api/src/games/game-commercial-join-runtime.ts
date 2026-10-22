@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { AppConfig } from '@phub/config';
 import type {
   BookedOperationAdmissionTargetRepository,
@@ -10,6 +12,7 @@ import {
   BookedOperationReadClient,
   BookedOperationReadError,
   type BookedOperationAdmissionRequest,
+  type BookedOperationReadOutcome,
 } from '@phub/subscription-runtime-adapter';
 
 import type { SubscriptionRuntimeActorDelegationIssuer } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
@@ -42,6 +45,31 @@ type CommercialJoinConfig = Pick<
   | 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS'
 >;
 
+/** User-scoped, backend-issued provider credential handed to the owner for exactly one operation. */
+export interface CommercialJoinActorToken {
+  readonly token: string;
+  readonly expiresAt: string;
+}
+
+/**
+ * Admission transport port. The default implementation wraps the shared booked-operation client and
+ * intentionally cannot send the actor token yet: adding `X-Subscription-Actor-Token` and the matching
+ * `actor_token_sha256` claim is the pending wire-contract extension owned by D0. A transport that can
+ * carry the token is injected here once that contract exists, without touching this adapter again.
+ */
+export interface BookedOperationAdmissionTransport {
+  admit(
+    request: BookedOperationAdmissionRequest,
+    envelope: {
+      readonly actorDelegation: string;
+      readonly correlationId: string;
+      readonly operationId: string;
+      readonly actorToken?: CommercialJoinActorToken;
+      readonly actorTokenSha256?: string;
+    },
+  ): Promise<BookedOperationReadOutcome>;
+}
+
 export interface GameCommercialJoinOwnerBoundary {
   readonly delegationIssuer: Pick<
     SubscriptionRuntimeActorDelegationIssuer,
@@ -49,6 +77,30 @@ export interface GameCommercialJoinOwnerBoundary {
   >;
   readonly actorContextRepository: Pick<SubscriptionRuntimeActorContextRepository, 'resolve'>;
   readonly targetRepository?: BookedOperationAdmissionTargetRepository;
+  readonly admissionTransport?: BookedOperationAdmissionTransport;
+  /**
+   * Server-side resolution of the provider client subscription id for the selected product. Without
+   * it the owner cannot execute the subscription booking, so the flow fails closed before dispatch.
+   */
+  readonly resolveProviderClientSubscriptionId?: (input: {
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly gameId: string;
+    readonly subscriptionInstanceId: string;
+  }) => Promise<string | undefined>;
+}
+
+/** Stable binding of a user-scoped token; the owner verifies the claim against the header value. */
+export function bookedOperationActorTokenBinding(actorToken: CommercialJoinActorToken): {
+  readonly actorTokenSha256: string;
+  readonly actorTokenExpiresAt: string;
+} {
+  return {
+    actorTokenSha256: `sha256:${createHash('sha256').update(actorToken.token, 'utf8').digest('hex')}`,
+    actorTokenExpiresAt: actorToken.expiresAt,
+  };
 }
 
 export interface GameCommercialJoinRuntimeOptions {
@@ -60,6 +112,18 @@ export interface GameCommercialJoinRuntimeOptions {
   >;
   readonly conditionsOwner?: GameJoinConditionsOwner;
   readonly ownerBoundary?: GameCommercialJoinOwnerBoundary;
+  /**
+   * Issues the short-lived, user-scoped provider credential for exactly this operation. Wired from
+   * the existing `AuthService.issueVivaAccessToken`; when absent the flow keeps today's fail-closed
+   * behaviour and never sends an unattributable provider write.
+   */
+  readonly issueActorToken?: (actor: {
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly correlationId: string;
+  }) => Promise<CommercialJoinActorToken>;
 }
 
 function environment(config: CommercialJoinConfig): 'development' | 'production' {
@@ -77,8 +141,16 @@ export function createBookedOperationOwner(options: {
   readonly environment: 'development' | 'production';
   readonly boundary: Omit<GameCommercialJoinOwnerBoundary, 'targetRepository'>;
   readonly targetRepository: BookedOperationAdmissionTargetRepository;
+  readonly issueActorToken?: (actor: {
+    readonly tenantId: string;
+    readonly tenantKey: string;
+    readonly userId: string;
+    readonly sessionId: string;
+    readonly correlationId: string;
+  }) => Promise<CommercialJoinActorToken>;
   readonly onMetric?: (
-    outcome: 'execute_pending' | 'execute_unknown' | 'read' | 'read_failure',
+    outcome:
+      'execute_pending' | 'execute_unknown' | 'read' | 'read_failure' | 'actor_token_unavailable',
   ) => void;
 }): CommercialJoinOwnerPort {
   const admissionClient = new BookedOperationAdmissionClient({
@@ -89,6 +161,12 @@ export function createBookedOperationOwner(options: {
       ? { onMetric: (metric) => options.onMetric?.(`execute_${metric}` as never) }
       : {}),
   });
+  // Until the wire contract can carry the token, the shared client is the only transport and the
+  // token binding is computed but not transmitted. The metric keeps that state observable.
+  const admissionTransport: BookedOperationAdmissionTransport = options.boundary
+    .admissionTransport ?? {
+    admit: (request, envelope) => admissionClient.admit(request, envelope),
+  };
   const readClient = new BookedOperationReadClient({
     baseUrl: options.baseUrl,
     environment: options.environment,
@@ -101,7 +179,27 @@ export function createBookedOperationOwner(options: {
     readonly sessionId: string;
   }) => options.boundary.actorContextRepository.resolve(actor);
 
+  const resolveProviderClientSubscriptionId = async (input: {
+    readonly actor: {
+      readonly tenantId: string;
+      readonly tenantKey: string;
+      readonly userId: string;
+      readonly sessionId: string;
+      readonly gameId: string;
+    };
+    readonly subscriptionInstanceId: string;
+  }): Promise<string | undefined> =>
+    options.boundary.resolveProviderClientSubscriptionId?.({
+      tenantId: input.actor.tenantId,
+      tenantKey: input.actor.tenantKey,
+      userId: input.actor.userId,
+      sessionId: input.actor.sessionId,
+      gameId: input.actor.gameId,
+      subscriptionInstanceId: input.subscriptionInstanceId,
+    });
+
   return {
+    resolveProviderClientSubscriptionId,
     async execute(input) {
       const context = await resolveActor({
         tenantId: input.actor.tenantId,
@@ -120,11 +218,44 @@ export function createBookedOperationOwner(options: {
       // without keeping a seat for an operation that can never be executed.
       if (!target) return { status: 'REJECTED', code: 'GAME_PAYMENT_REQUIRED' };
       if (!target.admissible) return { status: 'REJECTED', code: 'GAME_SERVICE_BLOCKED' };
+      // The selected product must have a server-side provider subscription mapping; otherwise the
+      // owner cannot execute the booking and the user has to pick a different product.
+      const providerClientSubscriptionId =
+        input.providerClientSubscriptionId ??
+        (options.issueActorToken
+          ? await options.boundary.resolveProviderClientSubscriptionId?.({
+              tenantId: input.actor.tenantId,
+              tenantKey: input.actor.tenantKey,
+              userId: input.actor.userId,
+              sessionId: input.actor.sessionId,
+              gameId: input.actor.gameId,
+              subscriptionInstanceId: input.subscriptionInstanceId,
+            })
+          : undefined);
+      if (options.issueActorToken && !providerClientSubscriptionId) {
+        return { status: 'REJECTED', code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED' };
+      }
       const request: BookedOperationAdmissionRequest = {
         action: 'JOIN_GAME',
         target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
         paymentIntent: 'USE_SUBSCRIPTION',
       };
+      let actorToken: CommercialJoinActorToken | undefined;
+      if (options.issueActorToken) {
+        try {
+          actorToken = await options.issueActorToken({
+            tenantId: input.actor.tenantId,
+            tenantKey: input.actor.tenantKey,
+            userId: input.actor.userId,
+            sessionId: input.actor.sessionId,
+            correlationId: input.correlationId,
+          });
+        } catch {
+          // No credential, no attributable provider write: unresolved, never failed.
+          options.onMetric?.('actor_token_unavailable');
+          return { status: 'UNKNOWN' };
+        }
+      }
       try {
         const actorDelegation =
           await options.boundary.delegationIssuer.issueBookedOperationAdmission({
@@ -145,11 +276,23 @@ export function createBookedOperationOwner(options: {
             correlationId: input.correlationId,
             idempotencyKey: input.idempotencyKey,
             request,
+            ...(actorToken === undefined || providerClientSubscriptionId === undefined
+              ? {}
+              : {
+                  actorToken,
+                  providerClientSubscriptionId,
+                }),
           });
-        await admissionClient.admit(request, {
+        await admissionTransport.admit(request, {
           actorDelegation,
           correlationId: input.correlationId,
           operationId: input.operationId,
+          ...(actorToken === undefined
+            ? {}
+            : {
+                actorToken,
+                actorTokenSha256: bookedOperationActorTokenBinding(actorToken).actorTokenSha256,
+              }),
         });
         options.onMetric?.('execute_pending');
         return { status: 'PENDING' };
@@ -203,6 +346,10 @@ export function createGameCommercialJoinRuntime(
   const { config } = options;
   if (!config.GAME_COMMERCIAL_JOIN_ENABLED) return undefined;
   if (!options.conditionsOwner || !options.ownerBoundary) return undefined;
+  // Without an attributable user credential and a server-side provider subscription mapping the
+  // owner cannot execute the booking, so a half-composed runtime must keep the old fail-closed guard.
+  if (!options.issueActorToken) return undefined;
+  if (!options.ownerBoundary.resolveProviderClientSubscriptionId) return undefined;
   const baseUrl = config.GAME_COMMERCIAL_JOIN_OWNER_BASE_URL;
   if (!baseUrl) return undefined;
   const owner = createBookedOperationOwner({
@@ -213,6 +360,7 @@ export function createGameCommercialJoinRuntime(
     targetRepository:
       options.ownerBoundary.targetRepository ??
       createBookedOperationAdmissionTargetRepository(options.pool),
+    ...(options.issueActorToken ? { issueActorToken: options.issueActorToken } : {}),
   });
   return {
     repository: options.rosterRepository as unknown as GameCommercialJoinOptions['repository'],

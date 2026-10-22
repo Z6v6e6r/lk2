@@ -18,7 +18,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             shield.isOpaque = true
             shield.accessibilityIdentifier = "padlhub-privacy-shield"
             shield.isAccessibilityElement = true
-            shield.accessibilityLabel = "ПадлХАБ"
+            shield.accessibilityLabel = "ПадлхАБ"
             shield.accessibilityViewIsModal = true
             window.addSubview(shield)
             privacyShields.append(shield)

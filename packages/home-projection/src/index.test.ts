@@ -63,7 +63,7 @@ const components: readonly HomeProjectionComponentPayload[] = [
         kind: 'game',
         title: 'Игра',
         startsAt: '2026-07-16T12:00:00.000Z',
-        venue: 'ПаделХАБ',
+        venue: 'ПадлхАБ',
         status: 'confirmed',
         route: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
       },

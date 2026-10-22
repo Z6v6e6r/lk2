@@ -116,6 +116,11 @@ describe('Timeweb backup/isolated restore preparation', () => {
         fs.writeFileSync(path,bytes);
         assert.throws(()=>validateUpgradeBackup(directory,{releaseId:'other'}));
         assert.equal(validateUpgradeBackup(directory,{releaseId:receipt.baselineReleaseId}).path,path);
+        // Beta may bind a deterministic degraded marker; production must fail closed without a receipt.
+        fs.renameSync(path,path+'.held');
+        assert.ok(validateUpgradeBackup(directory,{releaseId:receipt.baselineReleaseId},'beta').path.endsWith('degraded-backup-proof.json'));
+        assert.throws(()=>validateUpgradeBackup(directory,{releaseId:receipt.baselineReleaseId},'production'));
+        fs.renameSync(path+'.held',path);
         console.log(JSON.stringify({status:'CONSUMER_COMPATIBILITY_PASS',negativeCases:negatives.length+1}));
       `;
         const result = spawnSync(
@@ -246,3 +251,41 @@ describe('Timeweb backup/isolated restore preparation', () => {
     });
   });
 });
+
+it.each(['--emit-web8158-fixture', '--emit-web8158-namespace-fixture'])(
+  'binds a current API backup from %s to the Web operation and rejects cross-operation proofs',
+  (fixtureMode) => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-backup-consumer-'));
+    try {
+      const fixture = spawnSync(
+        'python3',
+        ['-I', '-S', '-B', 'scripts/test-timeweb-database-backup.py', fixtureMode, directory],
+        { encoding: 'utf8', timeout: 20_000 },
+      );
+      expect(fixture.status, fixture.stderr).toBe(0);
+      const { transaction } = parseStrictJson<{ transaction: string }>(fixture.stdout);
+      const code = `
+        import assert from 'node:assert/strict';import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';
+        const original=fs.lstatSync;fs.lstatSync=p=>{const v=original(p);return Object.assign(Object.create(Object.getPrototypeOf(v)),v,{uid:0,gid:0,mode:(v.mode&~0o777)|(v.isDirectory()?0o700:0o600)});};syncBuiltinESMExports();
+        const {criticalWebBackup,API8158_WEB_SCHEMA}=await import('./scripts/timeweb-critical-web.js');
+        const directory=process.argv[1],path=directory+'/database-backup-receipt.json',capsule=directory+'/backup-operation.json';
+        const bytes=fs.readFileSync(path),opBytes=fs.readFileSync(capsule),receipt=JSON.parse(bytes),backup=JSON.parse(opBytes),api=backup.expectedApi;
+        const op={schema:API8158_WEB_SCHEMA,controllerSha:backup.controllerSha,candidateTree:backup.controllerTree,sourceCiRunId:backup.controllerSourceCiRunId};
+        const proof=criticalWebBackup(directory,api,op);assert.equal(proof.path,path);assert.equal(proof.operationPath,capsule);
+        for(const change of [{baselineReleaseId:'other'},{sourceLedgerSha256:'f'.repeat(64),restoredLedgerSha256:'f'.repeat(64)},{completedAt:new Date(Date.now()-3600001).toISOString()}]){fs.writeFileSync(path,JSON.stringify({...receipt,...change}));assert.throws(()=>criticalWebBackup(directory,api,op));}fs.writeFileSync(path,bytes);
+        for(const change of [v=>v.profile='beta',v=>v.controllerSourceCiRunId='12',v=>v.controllerTree='e'.repeat(40),v=>v.toolCommit='e'.repeat(40),v=>v.expectedApi.id='e'.repeat(64),v=>v.expectedApi.startedAt='changed',v=>v.expectedLedgerSha256='e'.repeat(64)]){const bad=structuredClone(backup);change(bad);fs.writeFileSync(capsule,JSON.stringify(bad));assert.throws(()=>criticalWebBackup(directory,api,op));}fs.writeFileSync(capsule,opBytes);
+        fs.renameSync(path,path+'.held');assert.throws(()=>criticalWebBackup(directory,api,op));fs.renameSync(path+'.held',path);
+        fs.renameSync(capsule,capsule+'.held');assert.throws(()=>criticalWebBackup(directory,api,op));fs.renameSync(capsule+'.held',capsule);
+        const moved=directory+'-copied';fs.mkdirSync(moved);fs.copyFileSync(path,moved+'/database-backup-receipt.json');fs.copyFileSync(directory+'/database.pgcustom',moved+'/database.pgcustom');fs.copyFileSync(capsule,moved+'/backup-operation.json');assert.throws(()=>criticalWebBackup(moved,api,op));
+        assert.equal(criticalWebBackup(directory,api,op).operationSha256,proof.operationSha256);
+      `;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', code, transaction], {
+        encoding: 'utf8',
+      });
+      expect(result.status, result.stderr).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+  45_000,
+);

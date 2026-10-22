@@ -11,7 +11,7 @@ const request = {
   endpoint: 'opaque-fcm-token',
   notification: {
     id: '44444444-4444-4444-8444-444444444444',
-    title: 'ПадлХАБ',
+    title: 'ПадлхАБ',
     preview: 'Новое уведомление',
   },
   data: {

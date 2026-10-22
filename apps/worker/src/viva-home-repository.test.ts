@@ -356,7 +356,7 @@ describe('Viva Home producer repository', () => {
               exerciseExternalId: externalExerciseId,
               title: 'Тренировка',
               startsAt: '2026-07-16T09:00:00+03:00',
-              venue: 'ПаделХАБ',
+              venue: 'ПадлхАБ',
               status: 'confirmed',
             },
           ],

@@ -1329,7 +1329,7 @@ function publicTournamentSummary(value: unknown): PublicTournamentSummary | unde
   const venue = (
     stringValue(item.studioName) ??
     stringValue(item.locationName)?.split(/\s+·\s+/u)[0] ??
-    'ПаделХАБ'
+    'ПадлхАБ'
   ).slice(0, 160);
   return {
     id,

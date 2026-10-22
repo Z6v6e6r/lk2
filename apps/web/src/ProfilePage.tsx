@@ -1060,7 +1060,7 @@ function ProfileBalanceCard({ balance }: { readonly balance: string | null }): R
         </svg>
       </button>
       <p id="profile-balance-information" hidden={!informationOpen}>
-        Текущий баланс вашего счёта в ПадлХАБ.
+        Текущий баланс вашего счёта в ПадлхАБ.
       </p>
     </section>
   );
@@ -1269,7 +1269,7 @@ function SportPicker({
               {!option.available
                 ? 'Пока недоступен'
                 : option.sport === 'PADEL'
-                  ? 'Текущий кабинет ПаделХАБ'
+                  ? 'Текущий кабинет ПадлхАБ'
                   : 'Отдельный спортивный профиль'}
             </small>
           </span>
@@ -1327,15 +1327,6 @@ function subscriptionDate(value: string | null): string | null {
   }).format(new Date(value));
 }
 
-function remainingVisitsLabel(value: number): string {
-  const lastTwoDigits = value % 100;
-  const lastDigit = value % 10;
-  if (lastTwoDigits >= 11 && lastTwoDigits <= 14) return `${value} посещений`;
-  if (lastDigit === 1) return `${value} посещение`;
-  if (lastDigit >= 2 && lastDigit <= 4) return `${value} посещения`;
-  return `${value} посещений`;
-}
-
 // User-supplied plan badges. Exact display titles select artwork only, never entitlements.
 // Viewports exclude transparent canvas padding; the original PNG pixel streams are unchanged.
 type SubscriptionBadge = {
@@ -1389,12 +1380,13 @@ function ProfileSubscriptions({
         <h2 id="profile-subscriptions-title">Подписки и абонементы</h2>
       </header>
 
+      <p className="profile-subscriptions-note">Неполная подборка с Главной: до 6 абонементов.</p>
       {error ? (
         <p role="alert">{error}</p>
       ) : !subscriptions ? (
         <p role="status">Загружаем действующие подписки…</p>
       ) : current.length === 0 ? (
-        <p>Действующих подписок пока нет.</p>
+        <p>В текущей подборке нет действующих абонементов.</p>
       ) : (
         <div className="profile-subscription-list">
           {current.map((subscription) => {
@@ -1430,14 +1422,14 @@ function ProfileSubscriptions({
                   </span>
                   <small>
                     {subscription.remainingUnits > 0
-                      ? `осталось ${remainingVisitsLabel(subscription.remainingUnits)}`
-                      : 'посещения закончились'}
-                    {validUntil ? ` · до ${validUntil}` : ''}
+                      ? `Остаток: ${subscription.remainingUnits} · единица не указана`
+                      : 'Остаток не подтверждён'}
+                    {validUntil ? ` · до ${validUntil}` : ' · срок не указан'}
                   </small>
                 </span>
                 <a
                   className="profile-subscription-open"
-                  href={subscription.route}
+                  href={`/subscriptions/${subscription.id}`}
                   aria-label={`${renewalAvailable ? 'Открыть подписку' : 'Подробнее о подписке'}: ${subscription.title}`}
                 >
                   <span aria-hidden="true">›</span>
@@ -1449,7 +1441,7 @@ function ProfileSubscriptions({
       )}
 
       <a className="profile-subscriptions-all" href="/subscriptions">
-        Купить подписку
+        Мои абонементы
       </a>
     </section>
   );
@@ -2404,7 +2396,7 @@ export function ProfilePage({
                   />
                   <ProfileAction
                     title="Открыть чат"
-                    description="Перейти в личный чат ПадлХАБ"
+                    description="Перейти в личный чат ПадлхАБ"
                     capability={access.chat}
                   />
                 </div>

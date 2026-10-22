@@ -61,7 +61,7 @@ describe('platform Home source persistence', () => {
         return [
           {
             id: locationId,
-            title: 'ПаделХАБ Селигерская',
+            title: 'ПадлхАБ Селигерская',
             short_title: 'Селигерская',
             court_count: 5,
             gallery: [],

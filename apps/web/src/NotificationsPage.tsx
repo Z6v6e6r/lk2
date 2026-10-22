@@ -203,7 +203,7 @@ export function NotificationsPage({
               <p>{notificationPushStatus(webPush, browserState, platform)}</p>
               {browserState === 'needs_install' ? (
                 <p className={styles.pushHint}>
-                  Откройте PadlHub в Safari, нажмите «Поделиться» → «На экран „Домой“» и включите
+                  Откройте ПадлхАБ в Safari, нажмите «Поделиться» → «На экран „Домой“» и включите
                   push уже из приложения: только так iOS разрешает уведомления.
                 </p>
               ) : null}

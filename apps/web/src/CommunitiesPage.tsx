@@ -224,7 +224,7 @@ export function CommunitiesPage({
           <section className="community-discovery" aria-labelledby="community-discovery-title">
             <header>
               <h2 id="community-discovery-title">Найти сообщество</h2>
-              <p>Поиск по каноническому каталогу PadlHub</p>
+              <p>Поиск по каноническому каталогу ПадлхАБ</p>
             </header>
             <form onSubmit={runDiscovery} role="search">
               <label htmlFor="community-search">Название сообщества</label>

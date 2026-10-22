@@ -142,7 +142,7 @@ export function StationDialogList({
         </div>
       ) : null}
       {rows.length > 0 || externalChats.length > 0 ? (
-        <ul className={styles.list} aria-label="Станции и каналы ПадлХАБ">
+        <ul className={styles.list} aria-label="Станции и каналы ПадлхАБ">
           {rows.map((row) => (
             <StationChatRowItem
               key={row.key}

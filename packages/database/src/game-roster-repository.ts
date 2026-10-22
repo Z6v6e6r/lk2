@@ -1060,6 +1060,52 @@ async function storeRejected(
   };
 }
 
+/**
+ * Durable, auditable refusal of a paid attempt that reached the eligibility decision. The command
+ * row keeps the caller's key so a repeat replays the refusal; no reservation, snapshot or owner call
+ * exists at this point.
+ */
+async function storePaidJoinRejection(
+  client: PoolClient,
+  input: BeginPaidJoinInput,
+  code: GameRosterCommandErrorCode,
+  currentRevision: number,
+): Promise<void> {
+  await client.query(
+    `insert into games.command_idempotency (
+       tenant_id, id, actor_user_id, principal_key, idempotency_key,
+       command_type, request_hash, aggregate_id, state, error_code, completed_at
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, 'FAILED', $9, now())
+     on conflict (tenant_id, principal_key, idempotency_key) do nothing`,
+    [
+      input.tenantId,
+      input.operationId,
+      input.actorUserId,
+      principalKey(input.actorUserId),
+      input.idempotencyKey,
+      PAID_JOIN_COMMAND_TYPE,
+      input.requestHash,
+      input.gameId,
+      code,
+    ],
+  );
+  await client.query(
+    `insert into audit.audit_log (
+       tenant_id, actor_id, action, resource_type, resource_id,
+       result, reason, correlation_id, new_value
+     ) values ($1, $2, $3, 'GAME', $4, 'REJECTED', $5, $6, $7::jsonb)`,
+    [
+      input.tenantId,
+      input.actorUserId,
+      PAID_JOIN_COMMAND_TYPE.toUpperCase().replaceAll('.', '_'),
+      input.gameId,
+      code,
+      input.correlationId,
+      JSON.stringify({ currentRevision }),
+    ],
+  );
+}
+
 async function appendEvent(client: PoolClient, rawEvent: unknown): Promise<void> {
   const event = gameDomainEventSchema.parse(rawEvent);
   await client.query(
@@ -1652,6 +1698,9 @@ export function createGameRosterRepository(
           options.onEligibilityDecision,
         );
         if (eligibility.deniedCode) {
+          // Parity with the free join command: an eligibility refusal of a paid attempt is durable
+          // and auditable, and a repeat with the same key replays the refusal instead of re-deciding.
+          await storePaidJoinRejection(client, input, eligibility.deniedCode, currentRevision);
           return {
             outcome: 'rejected' as const,
             code: eligibility.deniedCode,
@@ -2063,7 +2112,24 @@ export function createGameRosterRepository(
         }
         const now = timestamp(game.database_now);
         if (Date.parse(timestamp(reservation.expires_at)) <= Date.parse(now)) {
-          return rejectEvidence('GAME_RESERVATION_EXPIRED');
+          // A paid attempt with an unresolved owner outcome deliberately keeps its seat ACTIVE past
+          // the reservation TTL. A trusted receipt for exactly that attempt proves the charge, so it
+          // is reconciled into the original operation instead of being rejected as expired.
+          const pendingPaidAttempt = await queryOne<IdentifierRow>(
+            client,
+            `select command.id
+               from eligibility.payment_snapshots snapshot
+               join games.command_idempotency command
+                 on command.tenant_id = snapshot.tenant_id
+                and command.id = snapshot.operation_id
+              where snapshot.tenant_id = $1
+                and snapshot.decision_id = $2
+                and command.command_type = $3
+                and command.state = 'IN_PROGRESS'
+              limit 1`,
+            [input.tenantId, reservation.eligibility_decision_id, PAID_JOIN_COMMAND_TYPE],
+          );
+          if (!pendingPaidAttempt) return rejectEvidence('GAME_RESERVATION_EXPIRED');
         }
         const operationTypeAllowed =
           (game.payment_mode === 'SPLIT' &&

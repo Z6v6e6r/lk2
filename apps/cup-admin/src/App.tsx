@@ -32,7 +32,7 @@ const channelCopy: Readonly<
 > = {
   WEB_PUSH: {
     title: 'Web Push',
-    description: 'Браузеры с активной подпиской ПаделХАБ',
+    description: 'Браузеры с активной подпиской ПадлхАБ',
     icon: 'W',
   },
   ANDROID_PUSH: {
@@ -108,7 +108,7 @@ function LoginScreen(props: {
     <main className="login-shell">
       <section className="login-card">
         <div className="brand-mark">PH</div>
-        <p className="eyebrow">PadlHub ЦУП</p>
+        <p className="eyebrow">ПадлхАБ ЦУП</p>
         <h1>Операционный контур</h1>
         <p className="muted">Войдите под учётной записью с доступом в ЦУП.</p>
         {props.denied ? (
@@ -305,7 +305,7 @@ function NotificationWorkspace(props: {
           <div className="brand">
             <span className="brand-mark small">PH</span>
             <span>
-              <strong>PadlHub</strong>
+              <strong>ПадлхАБ</strong>
               <small>Центр управления</small>
             </span>
           </div>
@@ -400,7 +400,7 @@ function NotificationWorkspace(props: {
                 <span className="step">1</span>
                 <div>
                   <h2>Получатели</h2>
-                  <p>До 100 значений всего: номера или PadlHub ID, каждое с новой строки.</p>
+                  <p>До 100 значений всего: номера или ID ПадлхАБ, каждое с новой строки.</p>
                 </div>
               </div>
               <label>
@@ -417,7 +417,7 @@ function NotificationWorkspace(props: {
                 />
               </label>
               <label>
-                PadlHub ID пользователей
+                ID ПадлхАБ пользователей
                 <textarea
                   className="phones-input"
                   value={userIdsText}
@@ -433,7 +433,7 @@ function NotificationWorkspace(props: {
               </label>
               {parsedUserIds.invalid.length ? (
                 <div className="notice warning">
-                  Не похоже на PadlHub ID: {parsedUserIds.invalid.join(', ')}. Исправьте или удалите
+                  Не похоже на ID ПадлхАБ: {parsedUserIds.invalid.join(', ')}. Исправьте или удалите
                   эти значения — пока они здесь, отправка заблокирована.
                 </div>
               ) : null}
@@ -496,7 +496,7 @@ function NotificationWorkspace(props: {
                 />
               </label>
               <label>
-                Ссылка внутри ПаделХАБ
+                Ссылка внутри ПадлхАБ
                 <input
                   value={deepLink}
                   onChange={(event) => setDeepLink(event.target.value)}
@@ -516,7 +516,7 @@ function NotificationWorkspace(props: {
                 {!resolution ? (
                   <div className="empty-state">
                     <span>◎</span>
-                    <p>Добавьте номера или PadlHub ID и запустите проверку.</p>
+                    <p>Добавьте номера или ID ПадлхАБ и запустите проверку.</p>
                   </div>
                 ) : (
                   <>
@@ -556,7 +556,7 @@ function NotificationWorkspace(props: {
                     ) : null}
                     {unresolvedUserIds.length ? (
                       <div className="notice warning">
-                        Не найдены PadlHub ID: {unresolvedUserIds.join(', ')}
+                        Не найдены ID ПадлхАБ: {unresolvedUserIds.join(', ')}
                       </div>
                     ) : null}
                   </>

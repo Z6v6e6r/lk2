@@ -2,7 +2,9 @@
 
 Companion to [ADR 0025](../adr/0025-two-profile-timeweb-delivery.md). Use for the `beta` profile
 before any approved transition. This document is the checklist; the automated read-only command is
-`scripts/preflight-timeweb-beta-deploy.ts` (see below).
+`scripts/preflight-timeweb-beta-deploy.ts` (see below). Host prerequisites (roles, secret sets, FCM
+custody, monitoring evidence) are covered by the
+[bootstrap readiness plan](timeweb-beta-bootstrap.md).
 
 Preflight is **read-only**. It must never restart a container, write to the database, publish an
 image, change a lock or alter a secret. Every category below reports `GO` or the exact missing
@@ -37,6 +39,13 @@ Exit codes: `0` = `GO` (only warnings/evidence gaps), `1` = `NO_GO` (at least on
 `2` = the preflight itself could not run. The command never mutates the host, database, secrets,
 images or locks; it is safe to run before every attempt and after a failed attempt to see what was
 left behind.
+
+Every operation declares its profile explicitly. `profile=beta` records monitoring readbacks as
+evidence and may bind the deterministic degraded backup marker when a prior interrupted transition
+left no receipt. `profile=production` requires the full provider-readback contract and a fresh
+validated backup receipt; it fails closed without them. An api-worker operation without a profile is
+treated as production; a beta operation request must set `"profile": "beta"` so the relaxed gates are
+intentional.
 
 ## Restore mode planner
 

@@ -60,7 +60,7 @@ describe('profile normalization', () => {
       ),
     ).toMatchObject({
       userId: padlHubUserId,
-      displayName: 'Игрок ПадлХАБ',
+      displayName: 'Игрок ПадлхАБ',
       balanceMinor: -1500,
       level: { label: 'D', value: 0, assessmentRequired: true },
     });
@@ -199,7 +199,7 @@ describe('profile normalization', () => {
           kind: 'training',
           title: 'Групповая тренировка',
           startsAt: '2026-07-16T10:00:00.000Z',
-          venue: 'ПаделХАБ',
+          venue: 'ПадлхАБ',
           status: 'confirmed',
           route: '/bookings/e45a6c36-58f3-467a-9ac2-54e36143ccea',
         },

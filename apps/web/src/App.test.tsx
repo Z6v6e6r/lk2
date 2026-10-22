@@ -52,7 +52,7 @@ const session: AuthenticatedSession = {
     tenant: {
       id: '00000000-0000-4000-8000-000000000002',
       key: 'padlhub',
-      name: 'ПаделХАБ',
+      name: 'ПадлхАБ',
     },
     roles: ['client'],
     permissions: ['profile.read'],
@@ -92,7 +92,7 @@ const homeDashboard: HomeDashboard = {
       kind: 'game',
       title: 'Американо · уровень C',
       startsAt: '2026-07-16T18:00:00.000Z',
-      venue: 'ПаделХАБ · корт 2',
+      venue: 'ПадлхАБ · корт 2',
       status: 'confirmed',
       route: '/games/751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
     },
@@ -878,7 +878,7 @@ describe('PadlHub web authentication', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Проверяем сессию');
     expect(await screen.findByRole('heading', { name: 'Анна Петрова' })).toBeVisible();
-    expect(screen.getAllByText('ПаделХАБ').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('ПадлхАБ').length).toBeGreaterThan(0);
     expect(screen.getByRole('region', { name: 'Сообщества' })).toBeVisible();
     expect(screen.queryByRole('heading', { name: 'Сообщества' })).not.toBeInTheDocument();
     const homeActions = screen.getByRole('navigation', { name: 'Разделы клуба' });
@@ -1344,10 +1344,17 @@ describe('PadlHub web authentication', () => {
     expect(screen.getByText('Падел')).toBeVisible();
     expect(await screen.findByRole('heading', { name: 'Подписки и абонементы' })).toBeVisible();
     expect(
-      screen.getByText(
+      await screen.findByRole('link', { name: 'Открыть подписку: Лето · Падел · Спорт' }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText(
         'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
       ),
-    ).toBeVisible();
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Мои абонементы' })).toHaveAttribute(
+      'href',
+      '/subscriptions',
+    );
     expect(screen.queryByText('Действующих подписок пока нет.')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /^Открыть мои сообщества/ }));
     expect(
@@ -1375,7 +1382,7 @@ describe('PadlHub web authentication', () => {
     expect(gateway.getPlayerProfile).toHaveBeenCalledWith(session.context.user.id);
     expect(gateway.getProfilePrivacy).toHaveBeenCalledOnce();
     expect(gateway.listMyCommunities).toHaveBeenCalledOnce();
-    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
+    expect(gateway.getHomeDashboard).toHaveBeenCalledOnce();
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 
@@ -1943,7 +1950,7 @@ describe('PadlHub web authentication', () => {
           id: '11111111-1111-4111-8111-111111111111',
           category: 'MESSAGING',
           title: 'Новое сообщение',
-          body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+          body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
           deepLink: `/chats/${conversationId}`,
           createdAt: '2026-07-16T15:00:00.000Z',
         },
@@ -1951,7 +1958,7 @@ describe('PadlHub web authentication', () => {
           id: '33333333-3333-4333-8333-333333333333',
           category: 'MESSAGING',
           title: 'Новое сообщение',
-          body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+          body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
           deepLink: `/chats/${conversationId}`,
           createdAt: '2026-07-16T14:00:00.000Z',
         },
@@ -2136,10 +2143,55 @@ describe('PadlHub web authentication', () => {
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
     expect(await screen.findByRole('heading', { name: 'Страница не найдена' })).toBeVisible();
-    expect(screen.queryByText('Раздел подключается к API ПаделХАБ.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Раздел подключается к API ПадлхАБ.')).not.toBeInTheDocument();
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
     expect(gateway.getUpcomingBookings).not.toHaveBeenCalled();
     expect(gateway.getPlayerProfile).not.toHaveBeenCalled();
+  });
+
+  it('opens subscription list, canonical details and browser back from the current Home selection', async () => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    window.history.replaceState({}, '', '/profile');
+    window.history.pushState({}, '', '/subscriptions');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    const link = await screen.findByRole('link', {
+      name: 'Открыть абонемент Лето · Падел · Спорт',
+    });
+    fireEvent.click(link);
+    expect(window.location.pathname).toBe('/subscriptions/24793a5a-0931-4a76-8600-267015be0ac9');
+    expect(screen.getByRole('heading', { name: 'Лето · Падел · Спорт' })).toBeVisible();
+    fireEvent.click(screen.getByRole('link', { name: 'Назад к абонементам' }));
+    expect(await screen.findByRole('heading', { name: 'Мои абонементы' })).toBeVisible();
+    expect(gateway.getHomeDashboard).toHaveBeenCalledTimes(1);
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe('/profile'));
+    expect(gateway.getHomeBase).not.toHaveBeenCalled();
+  });
+
+  it('loads a subscription deep link using only the existing Home selection', async () => {
+    vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    window.history.replaceState({}, '', '/profile');
+    window.history.pushState({}, '', '/subscriptions/24793a5a-0931-4a76-8600-267015be0ac9');
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    expect(await screen.findByRole('heading', { name: 'Лето · Падел · Спорт' })).toBeVisible();
+    expect(gateway.getHomeDashboard).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('link', { name: 'Назад к абонементам' }));
+    expect(await screen.findByRole('heading', { name: 'Мои абонементы' })).toBeVisible();
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe('/profile'));
+  });
+
+  it.each([
+    '/subscriptions/not-a-uuid',
+    '/subscriptions/24793a5a-0931-4a76-8600-267015be0ac9/extra',
+  ])('rejects malformed subscription route %s without loading a selection', async (path) => {
+    window.history.replaceState({}, '', path);
+    const gateway = createGateway({ restoreSession: vi.fn().mockResolvedValue(session) });
+    render(<App gateway={gateway} tenantKey="padlhub" />);
+    expect(await screen.findByRole('heading', { name: 'Страница не найдена' })).toBeVisible();
+    expect(gateway.getHomeDashboard).not.toHaveBeenCalled();
   });
 
   it('loads the trainings route as a real PadlHub page without requesting Home', async () => {
@@ -2154,7 +2206,7 @@ describe('PadlHub web authentication', () => {
       'href',
       '/coaches',
     );
-    expect(screen.queryByText('Раздел подключается к API ПаделХАБ.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Раздел подключается к API ПадлхАБ.')).not.toBeInTheDocument();
     await waitFor(() => expect(gateway.listEventCatalog).toHaveBeenCalledTimes(1));
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
@@ -2250,7 +2302,7 @@ describe('PadlHub web authentication', () => {
     render(<App gateway={gateway} tenantKey="padlhub" />);
 
     expect(await screen.findByRole('heading', { name: 'Акции' })).toBeVisible();
-    expect(screen.getByText('Раздел подключается к API ПаделХАБ.')).toBeVisible();
+    expect(screen.getByText('Раздел подключается к API ПадлхАБ.')).toBeVisible();
     expect(gateway.getHomeBase).not.toHaveBeenCalled();
   });
 

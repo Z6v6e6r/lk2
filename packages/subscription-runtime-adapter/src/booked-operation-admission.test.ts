@@ -12,6 +12,7 @@ const envelope = {
   actorDelegation: 'synthetic-delegation',
   correlationId: 'b1-synthetic-correlation',
 };
+const ACTOR_TOKEN = ['synthetic', 'actor', 'token', 'value'].join('-');
 const outcome = {
   contractVersion: 1,
   operationId,
@@ -47,6 +48,38 @@ describe('admission bounded transport', () => {
     await expect(fixture(conflict).admit(body, envelope)).rejects.toMatchObject({ status: 409 });
     expect(conflict).toHaveBeenCalledTimes(1);
   });
+  it('forwards the user-scoped actor token only when the envelope carries it', async () => {
+    const captured: Array<HeadersInit | undefined> = [];
+    const transport = vi.fn<typeof fetch>().mockImplementation((_url, init) => {
+      captured.push(init?.headers);
+      return Promise.resolve(Response.json(outcome, { status: 202 }));
+    });
+
+    await fixture(transport).admit(body, envelope);
+    expect(new Headers(captured[0]).get('x-subscription-actor-token')).toBeNull();
+
+    captured.length = 0;
+    await fixture(transport).admit(body, {
+      ...envelope,
+      actorToken: { token: ACTOR_TOKEN, expiresAt: '2026-08-01T10:00:30.000Z' },
+    });
+    expect(new Headers(captured[0]).get('x-subscription-actor-token')).toBe(ACTOR_TOKEN);
+  });
+
+  it('refuses a malformed actor token envelope before any request', async () => {
+    for (const actorToken of [
+      { token: 'has space', expiresAt: '2026-08-01T10:00:30.000Z' },
+      { token: ACTOR_TOKEN, expiresAt: 'not-an-instant' },
+      { token: ACTOR_TOKEN, expiresAt: '2026-08-01T10:00:30Z' },
+    ]) {
+      const transport = vi.fn<typeof fetch>();
+      await expect(
+        fixture(transport).admit(body, { ...envelope, actorToken }),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(transport).not.toHaveBeenCalled();
+    }
+  });
+
   it('bounds response bytes and cancels the body', async () => {
     let cancelled = false;
     const stream = new ReadableStream({

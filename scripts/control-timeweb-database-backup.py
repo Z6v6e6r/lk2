@@ -52,11 +52,11 @@ API_WORKER_CI_DOWNLOAD_PATCH = {
     'scripts/pull-request-ci-workflow.test.ts': {'path': 'scripts/pull-request-ci-workflow.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'caf2f124bbc58e4225feca1ad38100ed07991787', 'newOid': 'e2abfd6adac5d742b38ea16e8cb3d1dbb90c0982'},
 }
 API_WORKER_CI_READER_PATCH = {
-    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': '26f9d14fb5261883737aa155bd6c9a504bce93e3'},
+    'scripts/timeweb-api-worker-upgrade.js': {'path': 'scripts/timeweb-api-worker-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '6420f1d4b5d5c905563d23921c61ce68be2ca28b', 'newOid': 'e95f3bfd126eaaf0cebb63ca934cf05949f83f62'},
     'scripts/timeweb-api-worker-upgrade.d.ts': {'path': 'scripts/timeweb-api-worker-upgrade.d.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '151a183b17349c57a4d23cd58b03dd33be0e1172', 'newOid': '623b76b0381e1ebef70b5731674a682f72e2b237'},
     'scripts/timeweb-api-worker-upgrade.test.ts': {'path': 'scripts/timeweb-api-worker-upgrade.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'e446cc167a63ee54e9352dc38589e414f1aa7247', 'newOid': '1e9e3e958b39ad80a6f68c0f51efef45308cfa86'},
     'scripts/timeweb-api-worker-adapter.test.ts': {'path': 'scripts/timeweb-api-worker-adapter.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'dba09b8571260d1cb817971ce6a15a42a70f1032', 'newOid': 'e858abd81817cef9d6d62eca98b965f7bbce0c6e'},
-    'scripts/timeweb-api-web-upgrade.js': {'path': 'scripts/timeweb-api-web-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'c3da47a8fa4c95d06081d1a189c28b2ec8afa55e', 'newOid': 'f9d175bff0142075c68af9e8fc3164a08d36b35b'},
+    'scripts/timeweb-api-web-upgrade.js': {'path': 'scripts/timeweb-api-web-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'c3da47a8fa4c95d06081d1a189c28b2ec8afa55e', 'newOid': '3a9c15e1b2fcef121a82122479c80b5c83a431c7'},
 }
 API_WORKER_CONTROLLER_PROMOTION_PATCH = {
     'scripts/verify-source-ci.js': {'path': 'scripts/verify-source-ci.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'ed4ad7fa0c27caba918a9a4a6f5d151d3a996ac4', 'newOid': '31b891b4856dd95ecf849af0b13e609a281cbac1'},
@@ -127,6 +127,18 @@ DISK_PRE_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_V1'
 DISK_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_V1'
 NS_PRE_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_NAMESPACE_V2'
 NS_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_NAMESPACE_V2'
+WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_V1'
+NS_WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_DISK_NAMESPACE_V1'
+WEB8158_IMAGE = 'ghcr.io/z6v6e6r/phub-api@sha256:47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839'
+
+
+def is_web8158_operation(op):
+    return op.get('schema') in (WEB8158_SCHEMA, NS_WEB8158_SCHEMA)
+
+
+def backup_baseline(op):
+    return op['expectedApi']['releaseId'] if is_web8158_operation(op) else BASELINE
+
 NS_DAEMON_MEMORY = 2 * 1024 ** 3
 DISK_MEMORY = 2 * 1024 ** 3
 DISK_HEADROOM = 5 * 1024 ** 3
@@ -141,7 +153,7 @@ DISK_TOOLS = {'loop': '/usr/sbin/losetup', 'crypt': '/usr/sbin/cryptsetup',
 
 
 def is_disk_operation(op):
-    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA)
+    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA)
 
 
 def disk_ledger_sha(op):
@@ -655,7 +667,7 @@ DISK_RESTORE_FORMAT = RESTORE_FORMAT.replace('"State":{"Status":{{json .State.St
 
 # Namespace V2 is deliberately separate from the existing tmpfs/DISK V1 contracts.
 def is_namespace_operation(op):
-    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA)
+    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA)
 
 
 NS_IMAGE_FORMAT = '{"Id":{{json .Id}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}},"Size":{{json .Size}},"RootFS":{{json .RootFS}},"Env":{{json .Config.Env}}}'
@@ -1832,7 +1844,7 @@ def now_iso():
 
 
 def operation_mode(value):
-    if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_V1', DISK_PRE_SCHEMA, NS_PRE_SCHEMA):
+    if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_V1', DISK_PRE_SCHEMA, NS_PRE_SCHEMA, WEB8158_SCHEMA, NS_WEB8158_SCHEMA):
         return 'web', value['releaseId']
     if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA, NS_POST_SCHEMA):
         return 'api-worker', value['candidateReleaseId']
@@ -1894,6 +1906,14 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         exact(value, common + ['releaseId'] + optional)
         mode = 'web'
         release_id = value['releaseId']
+    elif schema in (WEB8158_SCHEMA, NS_WEB8158_SCHEMA):
+        exact(value, common + ['releaseId', 'controllerSourceCiRunId', 'expectedLedgerSha256'] + optional)
+        mode = 'web'
+        release_id = value['releaseId']
+        need(value.get('profile') == 'production' and re.fullmatch(r'[1-9][0-9]*', value['controllerSourceCiRunId'] or '')
+             and release_id == value['controllerSha'] + '-' + value['controllerSourceCiRunId'] + '-1'
+             and value['expectedLedgerSha256'] == API_WORKER_LEDGER_SHA256
+             and value['toolCommit'] == value['controllerSha'], 'WEB8158_OPERATION')
     elif schema in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA):
         exact(value, common + ['releaseId', 'controllerSourceCiRunId', 'expectedLedgerSha256'] + optional)
         mode = 'web'
@@ -1933,8 +1953,17 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and type(row['restarts']) is int and (row['restarts'] == 0 or profile == 'beta')
              and isinstance(row['startedAt'], str), 'BASELINE')
     api, pg = value['expectedApi'], value['expectedPostgres']
-    need(same_api_worker_identity(api, API_BASELINE, profile), 'API_BASELINE')
-    need(pg == PG_BASELINE, 'POSTGRES_BASELINE')
+    if is_web8158_operation(value):
+        need(api['image'] == WEB8158_IMAGE and api['releaseId'] == API_WORKER_CANDIDATE
+             and api['revision'] == MIGRATION_BASE_SHA, 'API_BASELINE')
+        # Snapshots are request-bound and reattested in full before/throughout the operation.
+        need(pg['image'] == PG_IMAGE and pg['imageId'] == PG_BASELINE['imageId']
+             and pg['releaseId'] is None and pg['revision'] is None, 'POSTGRES_BASELINE')
+        for row in (api, pg):
+            need(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z', row['startedAt']), 'BASELINE_TIME')
+    else:
+        need(same_api_worker_identity(api, API_BASELINE, profile), 'API_BASELINE')
+        need(pg == PG_BASELINE, 'POSTGRES_BASELINE')
     expires = utc(value['expiresAt'])
     need(allow_expired or 1200 <= expires - now <= 3600, 'EXPIRY')
     confirmation = ('BACKUP_RESTORE_' + match[1][:12].upper() + '_KEEP_API_0D6078BE7A50'
@@ -1948,6 +1977,9 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         confirmation = 'BACKUP_RESTORE_PRE99_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_KEEP_API_0D6078BE7A50'
     elif schema == NS_POST_SCHEMA:
         confirmation = 'BACKUP_RESTORE_API_WORKER_PRIVATE_NAMESPACE_ISOLATED_DOCKERD_8158AC445C9F_KEEP_API_0D6078BE7A50'
+    if is_web8158_operation(value):
+        confirmation = ('BACKUP_RESTORE_WEB8158_' if schema == WEB8158_SCHEMA else
+                        'BACKUP_RESTORE_WEB8158_PRIVATE_NAMESPACE_') + match[1][:12].upper() + '_KEEP_API_8158AC445C9F'
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 
@@ -2019,6 +2051,18 @@ def ledger_bytes(data):
              and isinstance(row[1], str) and HASH.fullmatch(row[1]) and row[0] not in seen, 'LEDGER_ENTRY')
         seen.add(row[0])
     return encoded(sorted(rows, key=lambda row: row[0]))
+
+
+def web8158_restore_schema(database_bytes, available_memory, free_disk, image):
+    # Use raw capacity facts, not the legacy planner's misleading namespace/disk schema names.
+    try:
+        capacity(database_bytes, available_memory, free_disk)
+        return WEB8158_SCHEMA
+    except Stop as error:
+        if str(error) != 'CAPACITY':
+            raise
+    namespace_sizing(database_bytes, available_memory, free_disk, image)
+    return NS_WEB8158_SCHEMA
 
 
 def capacity(database_bytes, available_memory, free_disk):
@@ -2101,6 +2145,30 @@ def verify_source_proof(proof, op, script_bytes):
          and tree_entries(raw_objects['scriptsTree']).get('control-timeweb-database-backup.py')==('100644',proof['blob']['oid']), 'SCRIPT_BLOB')
 
 
+
+def web8158_source(op):
+    # Authenticate the entire import closure before executing the enrolled JavaScript as root.
+    source = ROOT / 'standard/source'
+    secure(source, 'dir'); secure(source / '.git', 'dir')
+    for dependency in ('node_modules/typescript/lib/typescript.js', 'node_modules/postcss/lib/postcss.js'):
+        secure(source / dependency)
+    prefix = ['/usr/bin/git','-C',str(source),'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
+    need(command(prefix + ['rev-parse','HEAD'], 'WEB8158_SOURCE').decode().strip() == op['controllerSha']
+         and command(prefix + ['rev-parse','HEAD^{tree}'], 'WEB8158_SOURCE').decode().strip() == op['controllerTree']
+         and not command(prefix + ['status','--porcelain','--untracked-files=all'], 'WEB8158_SOURCE').strip(), 'WEB8158_SOURCE')
+    for raw in command(prefix + ['ls-files','-z'], 'WEB8158_SOURCE').split(b'\0'):
+        if raw:
+            relative = Path(os.fsdecode(raw))
+            need(not relative.is_absolute() and '..' not in relative.parts, 'WEB8158_SOURCE')
+            info = secure(source / relative)
+            need(stat.S_ISREG(info.st_mode), 'WEB8158_SOURCE')
+    program = "import fs from 'node:fs';import {validateCriticalWebSource,API8158_WEB_SCHEMA} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-critical-web.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));validateCriticalWebSource({schema:API8158_WEB_SCHEMA,candidateSha:op.controllerSha,candidateTree:op.controllerTree});process.stdout.write('WEB8158_SOURCE_VERIFIED');"
+    environment = {key: ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
+    result = command(['/usr/bin/node','--input-type=module','-e',program], 'WEB8158_SOURCE',
+                     input_data=encoded(op), environment=environment, timeout=30)
+    need(result == b'WEB8158_SOURCE_VERIFIED', 'WEB8158_SOURCE')
+
+
 def tool_custody(op):
     path = ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py')
     receipt_path = path.parent/'installation-receipt.json'
@@ -2116,6 +2184,8 @@ def tool_custody(op):
     expected = {key:getattr(info,'st_'+key) for key in ['dev','ino','uid','gid','mode','nlink','size']}
     need(receipt['metadata']==expected, 'TOOL_METADATA')
     verify_source_proof(receipt['sourceProof'],op,script_bytes)
+    if is_web8158_operation(op):
+        web8158_source(op)
     return receipt_bytes
 
 
@@ -2383,7 +2453,7 @@ def execute_tmpfs(op, request_bytes, file_sha):
              and read_secure(LOCK/'backup-restore.json')==marker,'LOCK_DRIFT')
     guard(); owned_lock(); phase('LOCKED')
     before = ledger_bytes(source_query(SOURCE_LEDGER))
-    if mode == 'api-worker':
+    if mode == 'api-worker' or is_web8158_operation(op):
         need(digest(before) == API_WORKER_LEDGER_SHA256, 'API_WORKER_LEDGER')
     size_data = source_query(SOURCE_SIZE).decode().strip()
     need(re.fullmatch(r'[1-9][0-9]*',size_data),'DATABASE_SIZE')
@@ -2439,7 +2509,7 @@ def execute_tmpfs(op, request_bytes, file_sha):
     need(not os.path.lexists(final) and not os.path.lexists(receipt_path),'OUTPUT_EXISTS')
     os.rename(incoming,final);sync_directory(transaction)
     need(file_digest(final)==dump_sha,'FINAL_DUMP_CHANGED')
-    receipt={'schema':'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1','baselineReleaseId':BASELINE,
+    receipt={'schema':'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1','baselineReleaseId':backup_baseline(op),
              'completedAt':now_iso(),'backupFile':str(final),'backupSha256':dump_sha,'restoreVerified':True,
              'restoreImage':PG_IMAGE,'restoredLedgerSha256':digest(restored),'sourceLedgerSha256':digest(before)}
     exclusive(receipt_path,encoded(receipt))
@@ -2767,7 +2837,13 @@ def disk_publication(plan, journal):
     else:
         directory = publication
     secure(directory, 'dir', 0o700)
-    need(sorted(p.name for p in directory.iterdir()) == ['database-backup-receipt.json', 'database.pgcustom'], 'DISK_PUBLICATION_INVENTORY')
+    operation = read_secure(Path(plan['work']) / 'backup-operation.json')
+    current_web = is_web8158_operation(strict(operation))
+    inventory = ['database-backup-receipt.json', 'database.pgcustom']
+    if current_web:
+        inventory.append('backup-operation.json')
+        need(read_secure(directory / 'backup-operation.json') == operation, 'DISK_PUBLICATION_OPERATION')
+    need(sorted(p.name for p in directory.iterdir()) == sorted(inventory), 'DISK_PUBLICATION_INVENTORY')
     receipt = read_secure(directory / 'database-backup-receipt.json')
     need(digest(receipt) == ready['receiptSha256'] and file_digest(directory / 'database.pgcustom') == ready['dumpSha256'], 'DISK_PUBLICATION_DRIFT')
     value = strict(receipt)
@@ -2851,7 +2927,7 @@ def execute_disk(op, request_bytes, file_sha):
     journal.add('RESTORE_VERIFIED', containerId=container, ledgerSha256=digest(restored), dumpSha256=dump_sha)
     Path(plan['publication']).mkdir(mode=0o700); sync_directory(work)
     rename_noreplace(incoming, Path(plan['publication']) / 'database.pgcustom')
-    receipt = {'schema': 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1', 'baselineReleaseId': BASELINE,
+    receipt = {'schema': 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1', 'baselineReleaseId': backup_baseline(op),
                'completedAt': now_iso(), 'backupFile': str(Path(plan['canonical']) / 'database.pgcustom'),
                'backupSha256': dump_sha, 'restoreVerified': True, 'restoreImage': PG_IMAGE,
                'restoredLedgerSha256': digest(restored), 'sourceLedgerSha256': digest(restored)}
@@ -3036,10 +3112,12 @@ def execute_namespace(op, request_bytes, file_sha):
         journal.add('RESTORE_VERIFIED', containerId=container, ledgerSha256=digest(restored), dumpSha256=dump_sha)
         Path(plan['publication']).mkdir(mode=0o700); sync_directory(work)
         rename_noreplace(incoming, Path(plan['publication']) / 'database.pgcustom')
-        receipt = {'schema': 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1', 'baselineReleaseId': BASELINE,
+        receipt = {'schema': 'PHUB_TIMEWEB_DATABASE_BACKUP_RESTORE_V1', 'baselineReleaseId': backup_baseline(op),
                    'completedAt': now_iso(), 'backupFile': str(Path(plan['canonical']) / 'database.pgcustom'),
                    'backupSha256': dump_sha, 'restoreVerified': True, 'restoreImage': PG_IMAGE,
                    'restoredLedgerSha256': digest(restored), 'sourceLedgerSha256': digest(restored)}
+        if is_web8158_operation(op):
+            atomic_exclusive(Path(plan['publication']) / 'backup-operation.json', request_bytes)
         atomic_exclusive(Path(plan['publication']) / 'database-backup-receipt.json', encoded(receipt))
         journal.add('PUBLISH_READY', dumpSha256=dump_sha, receiptSha256=digest(encoded(receipt)))
         namespace_cleanup(plan, op, journal, guard)
