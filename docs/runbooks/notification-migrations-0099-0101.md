@@ -394,6 +394,13 @@ full security/default privileges and unchanged runtime and secret hashes. It rej
 preimage, drift or evidence of migration admission. Its first metadata write requires 20–60 minutes
 of request validity; an already sealed exact preparation may reconcile after expiry.
 
+Historical migrator containers are retained when they belong to the exact sealed 7cc container
+boundary and separately inspect as exited successfully, with no running, restarting, paused or dead
+state and PID zero. Two identical snapshots must agree on full container identities, label-filter
+membership and stopped state. The target 4e migration container must remain absent. A foreign
+container, label/image/start-time drift or nonzero exit status stops retirement before archive or
+unlink; no historical container is removed to satisfy this gate.
+
 A fixed preparation record owns the incoming archive namespace before its directory is created.
 The incoming directory gets an exact owner marker, then a durable ready record binds its inode
 and marker hash before rename without replacement. Foreign empty directories and mixed

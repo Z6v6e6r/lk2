@@ -2839,6 +2839,82 @@ class CurrentWebBackupTests(unittest.TestCase):
             if failure in ('dirty','wrong-head'):self.assertFalse(any(a[0]=='/usr/bin/node' for a,k in calls))
 
 
+class Pre105RetirementContainerTests(unittest.TestCase):
+    def fixture(self):
+        ids=['171d1f4502062c18989dea8b848992af4db19cab64a4026da0505d0db76375b8',
+             '282a39825fb79107fa28b2a6bcdea8308676c78c6f196ae20982a7a82b33884c']
+        rows=[{'Id':i,'Image':'sha256:'+str(n+1)*64,
+               'Config':{'Image':'registry.invalid/migrator@sha256:'+str(n+1)*64,
+                         'Labels':{'com.docker.compose.service':'migrator'}},
+               'RestartCount':0,'State':{'Status':'exited','StartedAt':'2026-01-01T00:00:00Z',
+                                        'Health':{'Status':None}}}for n,i in enumerate(ids)]
+        states={i:{'Id':i,'Status':'exited','Running':False,'ExitCode':0,'Dead':False,
+                   'Restarting':False,'Paused':False,'Pid':0}for i in ids}
+        baseline=m.digest(m.encoded(rows));calls=[];sample=[0]
+        def docker(args):
+            calls.append(args)
+            if args==['ps','-aq','--no-trunc']:
+                sample[0]+=1
+                return ('\n'.join(r['Id']for r in rows)+'\n').encode()
+            if args[0]=='ps':
+                if 'name=^/phub-timeweb-migration-4e8280deb8a1-39931088343-1$'in args:return b''
+                if args[1]=='-q':return b''
+                return ('\n'.join(ids)+'\n').encode()
+            if args[0]=='inspect':
+                if args[2]==m.INSPECT_FORMAT:return m.encoded(next(r for r in rows if r['Id']==args[-1]))
+                return m.encoded(states[args[-1]])
+            raise AssertionError(args)
+        return ids,rows,states,{'expectedBoundarySha256':baseline},docker,calls,sample
+
+    def test_exact_retained_successful_migrators_are_read_only_and_stable(self):
+        ids,rows,states,op,docker,calls,sample=self.fixture()
+        with patch.object(m,'docker',side_effect=docker),patch.object(m,'pre105_retirement_seal',side_effect=AssertionError('write')),\
+             patch.object(m,'atomic_exclusive',side_effect=AssertionError('write')),patch.object(Path,'unlink',side_effect=AssertionError('unlink')):
+            self.assertEqual(m.pre105_retirement_containers(op),rows)
+        self.assertEqual(sample[0],2)
+        self.assertEqual(sum(a[0]=='inspect'and a[2]!=m.INSPECT_FORMAT for a in calls),4)
+
+    def test_candidate_or_foreign_or_drift_or_unsafe_state_stops_before_write(self):
+        variants=['candidate','running-filter','foreign','disappeared','duplicate','malformed','label-filter',
+                  'image','label','started','restart-count','state-status','running','dead','restarting','paused',
+                  'pid','exit-code','exit-bool','inspect-id','second-state','second-membership','second-candidate',
+                  'second-running','second-image']
+        for variant in variants:
+            ids,rows,states,op,original,calls,sample=self.fixture()
+            if variant=='image':rows[0]['Image']='sha256:'+'f'*64
+            if variant=='label':rows[0]['Config']['Labels']={}
+            if variant=='started':rows[0]['State']['StartedAt']='changed'
+            if variant=='restart-count':rows[0]['RestartCount']=1
+            if variant=='state-status':states[ids[0]]['Status']='created'
+            if variant in ['running','dead','restarting','paused']:states[ids[0]][variant.capitalize()]=True
+            if variant=='pid':states[ids[0]]['Pid']=42
+            if variant=='exit-code':states[ids[0]]['ExitCode']=1
+            if variant=='exit-bool':states[ids[0]]['ExitCode']=False
+            if variant=='inspect-id':states[ids[0]]['Id']='f'*64
+            def docker(args):
+                candidate=args[0]=='ps'and any(a.startswith('name=')for a in args)
+                label=args[0]=='ps'and 'label=com.docker.compose.service=migrator'in args
+                if candidate and(variant=='candidate'or variant=='second-candidate'and sample[0]>=1):return (ids[0]+'\n').encode()
+                if label and args[1]=='-q'and(variant=='running-filter'or variant=='second-running'and sample[0]>=2):return(ids[0]+'\n').encode()
+                if args==['ps','-aq','--no-trunc']:
+                    if variant in ['foreign','duplicate','malformed','disappeared']:
+                        return ('\n'.join(ids+(['f'*64]if variant=='foreign'else[ids[0]]if variant=='duplicate'else['bad'])
+                                              if variant!='disappeared'else ids[:1])+'\n').encode()
+                    if variant=='second-membership'and sample[0]>=1:return(ids[0]+'\n').encode()
+                if label and args[1]=='-aq'and variant=='label-filter':return b''
+                if variant=='foreign'and args[0]=='inspect'and args[-1]=='f'*64:
+                    return m.encoded({**rows[0],'Id':'f'*64})
+                if args[0]=='inspect'and sample[0]>=2:
+                    if variant=='second-state'and args[2]!=m.INSPECT_FORMAT:return m.encoded({**states[args[-1]],'Running':True})
+                    if variant=='second-image'and args[2]==m.INSPECT_FORMAT:return m.encoded({**rows[0],'Image':'changed'})
+                return original(args)
+            with self.subTest(variant=variant),patch.object(m,'docker',side_effect=docker),\
+                 patch.object(m,'pre105_retirement_seal',side_effect=AssertionError('write')),\
+                 patch.object(m,'atomic_exclusive',side_effect=AssertionError('write')),\
+                 patch.object(Path,'unlink',side_effect=AssertionError('unlink')):
+                with self.assertRaises(m.Stop):m.pre105_retirement_containers(op)
+
+
 class Pre105RetirementTests(unittest.TestCase):
     """Real metadata state machine/syscalls; source/DB/kernel proof is synthetic."""
     def fixture(self):
