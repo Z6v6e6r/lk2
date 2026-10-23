@@ -126,6 +126,7 @@ function syntheticEnvironments(): Record<string, Record<string, string>> {
     });
   }
   Object.assign(environments.api!, {
+    SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF',
     LK2_BETA_HOST: target.hostname,
     TENANT_KEY: 'padlhub',
     JWT_REALTIME_AUDIENCE: 'phub-realtime',

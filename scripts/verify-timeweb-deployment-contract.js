@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseDocument } from 'yaml';
 
+import { validateTimewebCommercialRuntime } from './timeweb-commercial-runtime-contract.js';
 import { parseStrictJson } from './strict-json.js';
 import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
 import { validateTimewebObservabilityContract } from './verify-timeweb-api-web-observability.js';
@@ -1056,6 +1057,7 @@ export function validateRuntimeEnvironments(environments, contract, target) {
       if (values[key] !== 'OFF') reject(`env_${serviceName}_mode`);
   }
   validateTimewebFcmEnvironment(environments.api, environments.worker);
+  validateTimewebCommercialRuntime(environments.api, (reason) => reject(`env_${reason}`));
   for (const name of ['api', 'worker', 'realtime']) {
     if (environments[name].APP_ENV !== 'staging') reject(`env_${name}_app_env`);
   }

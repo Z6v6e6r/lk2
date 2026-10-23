@@ -1599,6 +1599,18 @@ export class PadlHubApiClient {
     return this.request<GameCommandResult>(`/game-operations/${encodeURIComponent(operationId)}`);
   }
 
+  public reconcilePaidJoinOperation(operationId: string): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(
+      `/game-operations/${encodeURIComponent(operationId)}/reconcile`,
+      {
+        method: 'POST',
+        idempotencyKey: `join-reconcile:${operationId}`,
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+      },
+    );
+  }
+
   public getBookedOperation(operationId: string): Promise<BookedOperationReadOutcome> {
     return this.request<BookedOperationReadOutcome>(
       `/booked-operations/${encodeURIComponent(operationId)}`,

@@ -144,6 +144,7 @@ describe('PR CI profile planner', () => {
   });
 
   it.each([
+    'scripts/timeweb-commercial-runtime-contract.js',
     'scripts/verify-timeweb-api-web-observability.js',
     'scripts/verify-timeweb-api-web-observability.d.ts',
     'scripts/verify-timeweb-api-web-observability.test.ts',

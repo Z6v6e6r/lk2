@@ -24,6 +24,10 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 
+import {
+  parseTimewebDelegationKeyring,
+  validateTimewebCommercialRuntime,
+} from './timeweb-commercial-runtime-contract.js';
 import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
 import { validateTimewebFcmEnvironment } from './verify-timeweb-deployment-contract.js';
 import {
@@ -194,6 +198,10 @@ function assertEndpointKeyringEntries(value) {
 }
 
 export function assertComposableSecretValue(key, value) {
+  if (key === 'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS') {
+    parseTimewebDelegationKeyring(value, fail);
+    return;
+  }
   if (/[#$'\\\s]/u.test(value)) fail('compose_metacharacter');
   if (!value.includes('"')) return;
   if (!JSON_OBJECT_SECRET_KEYS.has(key) || !JSON_OBJECT_SECRET_VALUE.test(value)) {
@@ -281,6 +289,7 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
   }
 
   const { api, worker, realtime, migrator } = environments;
+  validateTimewebCommercialRuntime(api, fail);
   const corsOrigins = readTimewebCorsOrigins(targetContract);
   if (!corsOrigins.ok) fail(corsOrigins.reason);
   if (
