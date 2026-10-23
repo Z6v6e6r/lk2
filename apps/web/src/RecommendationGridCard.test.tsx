@@ -2,8 +2,9 @@
 
 import '@testing-library/jest-dom/vitest';
 import coachGameBadgeUrl from './assets/recommendation-cards/coach-game-badge.svg';
+import gameHeroUrl from './assets/recommendation-cards/game-hero.webp';
 
-import { cleanup, render, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { BookingRecommendationPage } from './auth-gateway.js';
@@ -72,6 +73,49 @@ function recommendationPage(items: BookingRecommendationPage['items']): BookingR
 }
 
 describe('Home V3 recommendation photo grid', () => {
+  it('uses the configured station photo and recovers from a missing asset', () => {
+    const { container } = render(
+      <BookingRecommendations
+        compact
+        compactVisualVariant="photo-grid"
+        page={recommendationPage([
+          {
+            kind: 'GAME',
+            game: recommendationGame(),
+            reasons: [],
+            cardImageUrl:
+              '/public/api/v1/local-padel/location-media/80000000-0000-4000-8000-000000000001',
+          },
+        ])}
+      />,
+    );
+    const hero = container.querySelector('.recommendation-grid-card__hero img')!;
+    expect(hero).toHaveAttribute(
+      'src',
+      '/public/api/v1/local-padel/location-media/80000000-0000-4000-8000-000000000001',
+    );
+    fireEvent.error(hero);
+    expect(hero).toHaveAttribute('src', gameHeroUrl);
+    fireEvent.error(hero);
+    expect(hero).toHaveAttribute('src', gameHeroUrl);
+  });
+
+  it('uses the generic cover when station photos are explicitly disabled', () => {
+    const { container } = render(
+      <BookingRecommendations
+        compact
+        compactVisualVariant="photo-grid"
+        page={recommendationPage([
+          { kind: 'GAME', game: recommendationGame(), reasons: [], cardImageUrl: null },
+        ])}
+      />,
+    );
+    expect(container.querySelector('.recommendation-grid-card__hero img')).toHaveAttribute(
+      'src',
+      gameHeroUrl,
+    );
+  });
+
   it('keeps the badge day and weekday in the event timezone across midnight', () => {
     const game = recommendationGame({
       startsAt: '2026-08-29T22:00:00.000Z',

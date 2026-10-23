@@ -59,6 +59,10 @@ export interface BookingScreenScheduleReadResult {
   readonly commandId: string;
   readonly kind: 'schedule';
   readonly activities: readonly VivaExerciseRecommendation[];
+  readonly stationAssociations?: readonly {
+    readonly activityId: string;
+    readonly stationId: string;
+  }[];
   readonly gameAssociations?: readonly {
     readonly activityId: string;
     readonly gameId: string;

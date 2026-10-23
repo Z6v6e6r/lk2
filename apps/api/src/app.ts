@@ -384,6 +384,7 @@ export interface BuildAppOptions {
         | 'registerAvatarSource'
         | 'readTrainerAvatarSource'
         | 'registerTrainerAvatarSource'
+        | 'readStationExternalId'
       >
     >;
   readonly rateLimitRedis?: Redis;

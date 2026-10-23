@@ -447,6 +447,8 @@ export function normalizeVivaExerciseRecommendationPayload(
      * Provider identifiers must never be copied into the returned public recommendation DTO.
      */
     readonly onExerciseExternalId?: (activityId: string, externalId: string) => void;
+    /** Integration-only station identity; never infer identity from a display name. */
+    readonly onStationExternalId?: (activityId: string, externalId: string) => void;
   } = {},
 ): readonly VivaExerciseRecommendation[] {
   return exerciseArray(payload)
@@ -474,6 +476,11 @@ export function normalizeVivaExerciseRecommendationPayload(
       if (normalized && externalId) {
         options.onExerciseExternalId?.(normalized.id, externalId);
       }
+      const studio = recordValue(sourceItem?.studio);
+      const stationExternalId = stringValue(studio?.id) ?? stringValue(studio?.uuid);
+      if (normalized && stationExternalId) {
+        options.onStationExternalId?.(normalized.id, stationExternalId);
+      }
       return normalized ? [normalized] : [];
     })
     .sort(
@@ -492,6 +499,7 @@ class VivaExerciseSourceError extends Error {
 }
 
 export class VivaExerciseRecommendationSourceAdapter {
+  private readonly stationSources = new Map<string, { externalId: string; fetchedAt: number }>();
   private readonly fetchImplementation: typeof fetch;
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly now: () => number;
@@ -612,6 +620,14 @@ export class VivaExerciseRecommendationSourceAdapter {
         if (bytes.byteLength > 5 * 1_024 * 1_024) throw new VivaExerciseSourceError(false);
         const payload = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
         const items = normalizeVivaExerciseRecommendationPayload(payload, {
+          onStationExternalId: (activityId, externalId) => {
+            this.stationSources.delete(activityId);
+            this.stationSources.set(activityId, { externalId, fetchedAt: now });
+            while (this.stationSources.size > 5_000) {
+              const oldest = this.stationSources.keys().next().value;
+              if (oldest) this.stationSources.delete(oldest);
+            }
+          },
           onAvatarSource: (activityId, sourceUrl) =>
             this.rememberAvatarSource(activityId, sourceUrl, now),
           onTrainerAvatarSource: (activityId, source) =>
@@ -661,6 +677,16 @@ export class VivaExerciseRecommendationSourceAdapter {
       return undefined;
     }
     return value.source.sourceUrl;
+  }
+
+  public readStationExternalId(activityId: string): string | undefined {
+    const value = this.stationSources.get(activityId);
+    if (!value) return undefined;
+    if (this.now() - value.fetchedAt > 15 * 60 * 1_000) {
+      this.stationSources.delete(activityId);
+      return undefined;
+    }
+    return value.externalId;
   }
 
   public readTrainerAvatarSource(activityId: string): VivaTrainerAvatarSource | undefined {

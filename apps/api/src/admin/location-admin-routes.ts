@@ -123,6 +123,14 @@ function commandResult(
         'LOCATION_VERSION_CONFLICT',
         'Локацию уже изменил другой оператор. Обновите данные.',
       );
+    case 'media_invalid':
+      return sendApiError(
+        request,
+        reply,
+        422,
+        'LOCATION_RECOMMENDATION_MEDIA_INVALID',
+        'Выберите готовые медиафайлы вашей организации.',
+      );
     case 'publication_incomplete':
       return sendApiError(
         request,

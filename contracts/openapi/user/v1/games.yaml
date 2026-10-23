@@ -695,6 +695,10 @@ components:
       additionalProperties: false
       required: [kind, game, reasons]
       properties:
+        cardImageUrl:
+          type: [string, 'null']
+          maxLength: 2000
+          description: Stable PadlHub media path selected by station and event type. Null explicitly disables station-specific photos; omission uses the existing fallback.
         kind:
           type: string
           const: GAME
@@ -707,6 +711,10 @@ components:
       additionalProperties: false
       required: [kind, activity, reasons]
       properties:
+        cardImageUrl:
+          type: [string, 'null']
+          maxLength: 2000
+          description: Stable PadlHub media path selected by canonical station and event type. Null explicitly disables station-specific photos; omission uses the existing fallback.
         kind:
           type: string
           enum: [TRAINING, TOURNAMENT]
