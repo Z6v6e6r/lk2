@@ -10,6 +10,7 @@ export const JOIN_INSTALLED_KIND = 'API_WEB_JOIN_DORMANT_0105';
 export const JOIN_RUNTIME_ANCHOR = '518be74e95b1f00f0d04671b343318143a759e9c';
 export const JOIN_CONTROLLER_FILES = new Set([
   'scripts/timeweb-api-web-upgrade.js',
+  'scripts/timeweb-api-web-upgrade.d.ts',
   'scripts/timeweb-api-web-upgrade.test.ts',
   'scripts/timeweb-join-dormant-profile.js',
   'scripts/timeweb-join-dormant-profile.d.ts',
@@ -20,6 +21,7 @@ export const JOIN_CONTROLLER_FILES = new Set([
   'scripts/control-timeweb-database-backup.py',
   'scripts/test-timeweb-database-backup.py',
   'scripts/control-timeweb-database-backup.test.ts',
+  'scripts/rehearse-timeweb-backup-early-exit.py',
   'docs/runbooks/notification-migrations-0099-0101.md',
   'docs/runbooks/timeweb-standard-delivery.md',
   'docs/runbooks/timeweb-lk2-beta.md',

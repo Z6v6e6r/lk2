@@ -152,6 +152,7 @@ describe('bounded dormant JOIN profile', () => {
       newType: 'blob',
     };
     validateJoinRuntimeTail([e]);
+    validateJoinRuntimeTail([{ ...e, path: 'scripts/rehearse-timeweb-backup-early-exit.py' }]);
     for (const change of [
       { path: 'apps/api/src/main.ts' },
       { path: 'deploy/timeweb/compose.beta.yaml' },

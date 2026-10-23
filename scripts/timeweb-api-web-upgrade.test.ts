@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import type * as NativeFs from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 function scenario(body: string) {
@@ -610,7 +611,7 @@ it('reads a reconciled JOIN installed baseline and rejects descriptor, snapshot 
   const describe = vi.fn(() => snapshot),
     validatePaths = vi.fn();
   vi.doMock('node:fs', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('node:fs')>();
+    const actual = await importOriginal<typeof NativeFs>();
     return {
       ...actual,
       existsSync: (p: string) => files.has(p),
