@@ -151,6 +151,8 @@ function createWireTransportDouble(): WireTransportDouble {
 
 interface WireComposition {
   readonly runtime: NonNullable<ReturnType<typeof createGameCommercialJoinRuntime>>;
+  /** Server-verified target mapping id the owner binding froze before the reservation. */
+  readonly targetMappingId: string;
   readonly issuedToken: CommercialJoinActorToken;
   readonly providerSubscriptionId: string;
   readonly actorTokenInputs: ActorTokenInput[];
@@ -232,6 +234,7 @@ function composeWireRuntime(input: {
   if (!runtime) throw new Error('C3_WIRE_COMPOSITION_MISSING');
   return {
     runtime,
+    targetMappingId,
     issuedToken,
     providerSubscriptionId,
     actorTokenInputs,
@@ -396,6 +399,27 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
     };
   }
 
+  /**
+   * Seeds the server-side VIVA exercise mapping that the frozen provider binding is checked
+   * against inside the real `beginPaidJoin` writer (merged main, receipt reconciliation #455).
+   */
+  async function seedExerciseMapping(input: {
+    tenantId: string;
+    gameId: string;
+    mappingId: string;
+    startsAt: string;
+  }): Promise<void> {
+    await withTenantTransaction(pool, input.tenantId, async (client) => {
+      await client.query(
+        `insert into integration.external_entity_map (
+           tenant_id, id, external_system, entity_type, internal_id, external_id,
+           external_version, last_synced_at, sync_status, sync_error_code
+         ) values ($1, $2, 'VIVA', 'exercise', $3, 'c3-synthetic-exercise', 'v1', now(), 'synced', null)`,
+        [input.tenantId, input.mappingId, input.gameId],
+      );
+    });
+  }
+
   async function wireApp(input: {
     conditions: ReturnType<typeof createConditionsDouble>;
     runtime: NonNullable<ReturnType<typeof createGameCommercialJoinRuntime>>;
@@ -453,6 +477,12 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
       pool,
       rosterRepository: seeded.rosterRepository,
       conditionsOwner: seeded.conditions.owner,
+      startsAt: seeded.game.startsAt,
+    });
+    await seedExerciseMapping({
+      tenantId: seeded.tenant.tenantId,
+      gameId: seeded.game.gameId,
+      mappingId: wire.targetMappingId,
       startsAt: seeded.game.startsAt,
     });
     const composed = await wireApp({
@@ -547,6 +577,12 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
       startsAt: seeded.game.startsAt,
       useTransportDouble: false,
       issuer: realIssuer(),
+    });
+    await seedExerciseMapping({
+      tenantId: seeded.tenant.tenantId,
+      gameId: seeded.game.gameId,
+      mappingId: wire.targetMappingId,
+      startsAt: seeded.game.startsAt,
     });
     const composed = await wireApp({
       conditions: seeded.conditions,
@@ -743,6 +779,12 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
       startsAt: seeded.game.startsAt,
       tokenUnavailable: true,
     });
+    await seedExerciseMapping({
+      tenantId: seeded.tenant.tenantId,
+      gameId: seeded.game.gameId,
+      mappingId: wire.targetMappingId,
+      startsAt: seeded.game.startsAt,
+    });
     const composed = await wireApp({
       conditions: seeded.conditions,
       runtime: wire.runtime,
@@ -823,6 +865,12 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
       conditionsOwner: seeded.conditions.owner,
       startsAt: seeded.game.startsAt,
     });
+    await seedExerciseMapping({
+      tenantId: seeded.tenant.tenantId,
+      gameId: seeded.game.gameId,
+      mappingId: wire.targetMappingId,
+      startsAt: seeded.game.startsAt,
+    });
     const composed = await wireApp({
       conditions: seeded.conditions,
       runtime: wire.runtime,
@@ -888,6 +936,12 @@ c3DatabaseDescribe(`C3 commercial JOIN wire contract (${C3_FIXTURE_VERSION})`, (
       pool,
       rosterRepository: seeded.rosterRepository,
       conditionsOwner: seeded.conditions.owner,
+      startsAt: seeded.game.startsAt,
+    });
+    await seedExerciseMapping({
+      tenantId: seeded.tenant.tenantId,
+      gameId: seeded.game.gameId,
+      mappingId: wire.targetMappingId,
       startsAt: seeded.game.startsAt,
     });
     const composed = await wireApp({

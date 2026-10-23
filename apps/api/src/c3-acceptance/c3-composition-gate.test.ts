@@ -50,6 +50,11 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
 }
 
 const rosterRepository = {
+  // Merged main (#455) requires the receipt-confirmation port on the real writer before the
+  // runtime can be composed; construction must still never call it.
+  async confirmPayment(): Promise<never> {
+    throw new Error('C3 composition: repository must not be called during construction');
+  },
   async beginPaidJoin(): Promise<never> {
     throw new Error('C3 composition: repository must not be called during construction');
   },
