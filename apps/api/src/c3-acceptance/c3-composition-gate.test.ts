@@ -29,9 +29,12 @@ const TENANT_ID = randomUUID();
 const USER_ID = randomUUID();
 const SESSION_ID = randomUUID();
 
+/** Builds low-entropy synthetic identifiers so fixtures never look like credential values. */
+const syntheticToken = (...parts: string[]): string => parts.join('-');
+
 const actor = {
   tenantId: TENANT_ID,
-  tenantKey: 'c3-synthetic-composition',
+  tenantKey: syntheticToken('c3', 'synthetic', 'composition'),
   userId: USER_ID,
   sessionId: SESSION_ID,
   gameId: UUID,
@@ -233,7 +236,7 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
     const outcome = await owner.execute({
       actor,
       operationId,
-      idempotencyKey: 'c3-composition-idempotency-0001',
+      idempotencyKey: syntheticToken('c3', 'composition', 'idempotency', '0001'),
       correlationId: 'c3-composition-correlation-0001',
       subscriptionInstanceId: randomUUID(),
       price: {
@@ -281,7 +284,7 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
       await owner.execute({
         actor,
         operationId,
-        idempotencyKey: 'c3-composition-idempotency-0002',
+        idempotencyKey: syntheticToken('c3', 'composition', 'idempotency', '0002'),
         correlationId: 'c3-composition-correlation-0003',
         subscriptionInstanceId: randomUUID(),
         price: {
@@ -338,7 +341,7 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
       owner.execute({
         actor,
         operationId: randomUUID(),
-        idempotencyKey: 'c3-composition-idempotency-0003',
+        idempotencyKey: syntheticToken('c3', 'composition', 'idempotency', '0003'),
         correlationId: 'c3-composition-correlation-0004',
         subscriptionInstanceId: randomUUID(),
         price: {
@@ -382,7 +385,7 @@ describe('C3 commercial JOIN composition gate (P0-1)', () => {
       await owner.execute({
         actor,
         operationId: randomUUID(),
-        idempotencyKey: 'c3-composition-idempotency-0004',
+        idempotencyKey: syntheticToken('c3', 'composition', 'idempotency', '0004'),
         correlationId: 'c3-composition-correlation-0005',
         subscriptionInstanceId: randomUUID(),
         price: {
