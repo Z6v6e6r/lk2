@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,6 +20,7 @@ import { loadConfig, loadRealtimeConfig, loadWorkerConfig } from '../packages/co
 import {
   describeTimewebRuntimeSecretSet,
   validateTimewebFcmSecretDelta,
+  validateTimewebDormantJoinSecretDelta,
   transitionPreparedTimewebRuntimeSecrets,
   parseTimewebSecretEnvironment,
   provisionTimewebBetaRuntimeSecrets,
@@ -843,5 +844,129 @@ describe('commercial JOIN API environment contract', () => {
     expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
       'unknown_key',
     );
+  });
+});
+
+describe('dormant JOIN additions preserve the established secret set', () => {
+  const key = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const fingerprint = createHash('sha256')
+    .update(createPublicKey(key.publicKey).export({ type: 'spki', format: 'der' }))
+    .digest('hex');
+  function prepared() {
+    const f = fixture();
+    mkdirSync(f.targetDir, { mode: 0o700, recursive: true });
+    for (const [service, values] of Object.entries(safeRuntimeEnvironments()))
+      writeFileSync(join(f.targetDir, service + '.env'), encodeEnvironment(values), {
+        mode: 0o600,
+      });
+    writeFileSync(
+      join(f.targetDir, '.release-identity.json'),
+      JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId }) + '\n',
+      { mode: 0o600 },
+    );
+    const candidate = join(f.root, 'join-candidate');
+    mkdirSync(candidate, { mode: 0o700 });
+    for (const name of ['api.env', 'worker.env', 'realtime.env', 'migrator.env'])
+      writeFileSync(join(candidate, name), readFileSync(join(f.targetDir, name)), { mode: 0o600 });
+    writeFileSync(
+      join(candidate, '.release-identity.json'),
+      JSON.stringify({
+        schema: 'PHUB_TIMEWEB_SECRET_SET_V1',
+        releaseId: `${'9'.repeat(40)}-777-1`,
+      }) + '\n',
+      { mode: 0o600 },
+    );
+    const additions = {
+      GAME_COMMERCIAL_JOIN_ENABLED: 'false',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test',
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'https://quote.example.test',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: Buffer.alloc(32, 3).toString('base64url'),
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({ synthetic: key.privateKey }),
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-owner',
+    };
+    const old = readFileSync(join(candidate, 'api.env'), 'utf8');
+    const render = (extra = additions) =>
+      old +
+      Object.entries(extra)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n') +
+      '\n';
+    writeFileSync(join(candidate, 'api.env'), render());
+    const validate = (sha = fingerprint) =>
+      validateTimewebDormantJoinSecretDelta(f.targetDir, candidate, sha, uid, gid);
+    return { ...f, candidate, additions, old, render, validate };
+  }
+  it('accepts only dormant additions and never changes either directory', () => {
+    const f = prepared(),
+      before = [f.targetDir, f.candidate].map((p) => describeTimewebRuntimeSecretSet(p, uid, gid));
+    f.validate();
+    expect(
+      [f.targetDir, f.candidate].map((p) => describeTimewebRuntimeSecretSet(p, uid, gid)),
+    ).toEqual(before);
+  });
+  it.each(['worker.env', 'realtime.env', 'migrator.env'])('refuses changes to %s', (name) => {
+    const f = prepared();
+    writeFileSync(
+      join(f.candidate, name),
+      readFileSync(join(f.candidate, name), 'utf8') + 'UNEXPECTED_TEST_VALUE=1\n',
+    );
+    expect(() => f.validate()).toThrow('non_join_secret_delta');
+  });
+  it.each(['true', 'yes'])('refuses JOIN=%s', (value) => {
+    const f = prepared();
+    writeFileSync(
+      join(f.candidate, 'api.env'),
+      f.render({ ...f.additions, GAME_COMMERCIAL_JOIN_ENABLED: value }),
+    );
+    expect(() => f.validate()).toThrow();
+  });
+  it('refuses WARN, changed existing rows and deleted rows', () => {
+    const f = prepared();
+    for (const value of [
+      f
+        .render()
+        .replace('SUBSCRIPTION_RUNTIME_WARN_MODE=OFF', 'SUBSCRIPTION_RUNTIME_WARN_MODE=WARN'),
+      f.render().replace('APP_ENV=staging\n', ''),
+      '# changed prefix\n' + f.render(),
+    ]) {
+      writeFileSync(join(f.candidate, 'api.env'), value);
+      expect(() => f.validate()).toThrow();
+    }
+  });
+  it('refuses key rotation, extra tuning fields, an unknown active key, and incomplete material', () => {
+    const f = prepared();
+    for (const value of [
+      f.render() + 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS=1000\n',
+      f.render({ ...f.additions, SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown' }),
+      f.render({ ...f.additions, SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: '' }),
+    ]) {
+      writeFileSync(join(f.candidate, 'api.env'), value);
+      expect(() => f.validate()).toThrow();
+    }
+    writeFileSync(join(f.candidate, 'api.env'), f.render());
+    writeFileSync(
+      join(f.targetDir, 'api.env'),
+      f.old + 'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID=old-key\n',
+    );
+    expect(() => f.validate()).toThrow();
+  });
+  it('refuses a mismatching approved LK1 verifier fingerprint', () => {
+    const f = prepared();
+    expect(() => f.validate('0'.repeat(64))).toThrow('join_verifier_identity');
+  });
+  it.each(['symlink', 'hardlink'])('refuses a %s candidate env file', (kind) => {
+    const f = prepared(),
+      path = join(f.candidate, 'api.env'),
+      other = join(f.root, 'other.env');
+    renameSync(path, other);
+    if (kind === 'symlink') symlinkSync(other, path);
+    else linkSync(other, path);
+    expect(() => f.validate()).toThrow();
   });
 });

@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import type * as NativeFs from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
 
 function scenario(body: string) {
   const result = spawnSync(
@@ -420,4 +421,248 @@ describe('direct observation custody and failure recovery', () => {
       assert.throws(()=>validateDirectInstalledEvidence(receipt,planBytes,operationBytes,ownerBytes,Buffer.from('tampered'),releaseId,images));
       assert.throws(()=>validateDirectInstalledEvidence(receipt,planBytes,operationBytes,ownerBytes,observationBytes,'f'.repeat(40)+'-1-1',images));`);
   });
+});
+
+describe('dormant JOIN hooks in the existing API/Web transition', () => {
+  const fixture = `
+    const calls=[];let secrets='previous';let failed=false;
+    const event=async name=>{calls.push(name);if(name===failure&&!failed){failed=true;throw Error('injected')}};
+    const ops={secretMode:'join-dormant',preflight:()=>event('preflight'),pullAndSmoke:()=>event('pull'),journal:s=>event('journal:'+s),
+      installSecrets:async()=>{await event('installSecrets');secrets='candidate'},restoreSecrets:async()=>{await event('restoreSecrets');secrets='previous'},
+      activate:async s=>{assert.equal(secrets,'candidate');await event('activate:'+s)},observe:()=>event('observe'),attest:()=>event('attest'),
+      installBaseline:()=>event('baseline'),removeCandidateBaseline:()=>event('removeBaseline'),abort:()=>event('abort'),
+      restore:async s=>{assert.equal(secrets,'previous');await event('restore:'+s)},attestRestored:()=>event('restored')};
+  `;
+  it('seals secret intent before swapping and never starts Worker or a migrator', () => {
+    scenario(
+      `const failure='';${fixture}await runApiWebTransition(ops);assert.deepEqual(calls,['preflight','pull','journal:PREPARED','journal:SECRET_SWAP_INTENT','installSecrets','journal:SECRETS_ACTIVE','journal:API_INTENT','activate:api','journal:API_ACTIVE','journal:WEB_INTENT','activate:web','journal:OBSERVING','observe','attest','journal:BASELINE_INTENT','baseline','journal:SUCCESS']);`,
+    );
+  });
+  it.each([
+    'journal:SECRET_SWAP_INTENT',
+    'installSecrets',
+    'journal:SECRETS_ACTIVE',
+    'journal:API_INTENT',
+    'activate:api',
+    'journal:API_ACTIVE',
+    'journal:WEB_INTENT',
+    'activate:web',
+    'journal:OBSERVING',
+    'observe',
+    'attest',
+    'journal:BASELINE_INTENT',
+    'baseline',
+    'journal:SUCCESS',
+  ])('recovers lost ACK/failure at %s with old secrets before the previous API', (failure) => {
+    scenario(
+      `const failure=${JSON.stringify(failure)};${fixture}await assert.rejects(()=>runApiWebTransition(ops));const start=calls.indexOf('journal:ROLLBACK_INTENT');assert.ok(start>=0);assert.deepEqual(calls.slice(start),['journal:ROLLBACK_INTENT','restoreSecrets','restore:web','restore:api','removeBaseline','restored','journal:ROLLED_BACK']);assert.equal(secrets,'previous');`,
+    );
+  });
+  it.each(['preflight', 'pull', 'journal:PREPARED'])(
+    'aborts without secret or service writes before intent at %s',
+    (failure) => {
+      scenario(
+        `const failure=${JSON.stringify(failure)};${fixture}await assert.rejects(()=>runApiWebTransition(ops));assert.ok(calls.includes('abort'));assert.ok(!calls.includes('installSecrets'));assert.ok(!calls.some(v=>v.startsWith('activate:')));`,
+      );
+    },
+  );
+  it('continues API restoration when restoring Web fails, retaining failed ownership', () => {
+    scenario(
+      `const failure='restore:web';${fixture}await assert.rejects(()=>recoverApiWebTransition(ops),/rollback_failed/);assert.ok(calls.includes('restore:api'));assert.ok(!calls.includes('removeBaseline'));assert.equal(calls.at(-1),'journal:ROLLBACK_FAILED');`,
+    );
+  });
+  it('never recreates the old API if restoring the old secret inode failed', () => {
+    scenario(
+      `const failure='restoreSecrets';${fixture}await assert.rejects(()=>recoverApiWebTransition(ops),/rollback_failed/);assert.ok(!calls.includes('restore:api'));assert.equal(calls.at(-1),'journal:ROLLBACK_FAILED');`,
+    );
+  });
+  it.each(['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'BASELINE_INTENT'])(
+    'recognizes %s only for the bounded JOIN operation',
+    (phase) => {
+      scenario(
+        `const failure='';${fixture}assert.equal(await recoverApiWebPhase(${JSON.stringify(phase)},ops),'ROLLED_BACK');delete ops.secretMode;await assert.rejects(()=>recoverApiWebPhase(${JSON.stringify(phase)},ops),/invalid_recovery_phase/);`,
+      );
+    },
+  );
+  it('does not let legacy receipts claim secret swap phases or the JOIN schema', () => {
+    scenario(
+      `for(const schema of ['PHUB_TIMEWEB_API_WEB_RECEIPT_V1','PHUB_TIMEWEB_API_WEB_RECEIPT_V2'])assert.throws(()=>validateUpgradeReceipt({schema,status:'SECRET_SWAP_INTENT',planSha256:'a'.repeat(64),observedAt:new Date().toISOString()},'a'.repeat(64)));`,
+    );
+  });
+});
+
+it('reads a reconciled JOIN installed baseline and rejects descriptor, snapshot and measured-proof drift', async () => {
+  const { JOIN_OPERATION, JOIN_PLAN, JOIN_RECEIPT, joinHash, buildJoinInstalledDescriptor } =
+    await import('./timeweb-join-dormant-profile.js');
+  const root = '/opt/phub/timeweb-beta',
+    candidateId = `${operation.candidateSha}-${operation.publicationRunId}-1`;
+  const tx = `${root}/backups/${candidateId}-api-web`,
+    previousPath = `${root}/releases/${operation.expectedApi.releaseId}/installed-components.env`;
+  const bytes = (v: unknown) => Buffer.from(JSON.stringify(v));
+  const op = {
+    ...operation,
+    schema: JOIN_OPERATION,
+    expectedCurrentSecretSetReleaseId: operation.expectedApi.releaseId,
+    candidateSecretHashes: Object.fromEntries(
+      ['.release-identity.json', 'api.env', 'worker.env', 'realtime.env', 'migrator.env'].map(
+        (k) => [k, '7'.repeat(64)],
+      ),
+    ),
+    verifierPublicKeySha256: '8'.repeat(64),
+    notificationBundleSha256: '9'.repeat(64),
+    expectedExcludedSha256: '0'.repeat(64),
+    expiresAt: '2026-10-23T10:00:00.000Z',
+    confirmation: `DEPLOY_DORMANT_JOIN_API_WEB_${operation.candidateSha.slice(0, 12).toUpperCase()}_FROM_${operation.expectedApi.releaseId.slice(0, 12).toUpperCase()}_NO_JOIN_NO_PROVIDER_WRITES`,
+  };
+  const previous = {
+    PHUB_RELEASE_ID: operation.expectedApi.releaseId,
+    API_IMAGE_DIGEST: 'sha256:' + '1'.repeat(64),
+  };
+  const previousBytes = Buffer.from(
+    Object.entries(previous)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n') + '\n',
+  );
+  const snapshot = {
+    releaseId: candidateId,
+    device: 1,
+    inode: 10,
+    files: op.candidateSecretHashes,
+  };
+  const plan = {
+    schema: JOIN_PLAN,
+    controllerSha: op.controllerSha,
+    operationSha256: joinHash(bytes(op)),
+    baselinePath: previousPath,
+    baselineSha256: joinHash(previousBytes),
+    candidateSecrets: snapshot,
+    candidate: {
+      api: { image: 'ghcr.io/z6v6e6r/phub-api@sha256:' + 'a'.repeat(64) },
+      web: { image: 'ghcr.io/z6v6e6r/phub-web@sha256:' + 'b'.repeat(64) },
+    },
+    unchangedServiceImages: {
+      worker: 'ghcr.io/z6v6e6r/phub-worker@sha256:' + 'c'.repeat(64),
+      realtime: 'ghcr.io/z6v6e6r/phub-realtime@sha256:' + 'd'.repeat(64),
+    },
+    createdAt: '2026-10-23T09:00:00.000Z',
+  };
+  const planBytes = bytes(plan),
+    descriptor = buildJoinInstalledDescriptor(
+      previous,
+      plan,
+      candidateId,
+      `${tx}/rollout-receipt.json`,
+    );
+  const sample = {
+    privateMs: Array(61).fill(100),
+    publicMs: Array(61).fill(100),
+    timestamps: Array.from({ length: 61 }, (_, i) =>
+      new Date(Date.parse(plan.createdAt) + i * 15000).toISOString(),
+    ),
+    p95PrivateMs: 100,
+    p95PublicMs: 100,
+  };
+  const observation = bytes({
+    schema: 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1',
+    operationSha256: plan.operationSha256,
+    planSha256: joinHash(planBytes),
+    candidateSha: op.candidateSha,
+    startedAt: plan.createdAt,
+    completedAt: '2026-10-23T09:15:00.000Z',
+    elapsedSeconds: 900,
+    samples: { api: sample, web: sample },
+    serverErrors: 0,
+  });
+  const provider = bytes({ synthetic: 'provider' }),
+    alerts = bytes({ synthetic: 'alerts' });
+  const receipt = {
+    schema: JOIN_RECEIPT,
+    status: 'RECONCILED',
+    reconciledStatus: 'SUCCESS',
+    planSha256: joinHash(planBytes),
+    observedAt: '2026-10-23T09:16:00.000Z',
+    installedBaselineSha256: joinHash(descriptor),
+    observationSha256: joinHash(observation),
+    providerReadbackSha256: joinHash(provider),
+    alertReadbackSha256: joinHash(alerts),
+  };
+  const files = new Map<string, Buffer>([
+    [previousPath, previousBytes],
+    [`${root}/releases/${candidateId}/installed-components.env`, descriptor],
+    [`${tx}/operation.json`, bytes(op)],
+    [`${tx}/plan.json`, planBytes],
+    [`${tx}/rollout-receipt.json`, bytes(receipt)],
+    [`${tx}/observation.json`, observation],
+    [`${tx}/timeweb-monitor-readback.json`, provider],
+    [`${tx}/alert-test-readback.json`, alerts],
+  ]);
+  const stat = (path: string) => ({
+    uid: 0,
+    gid: 0,
+    mode: files.has(path) ? 0o600 : 0o700,
+    nlink: 1,
+    ino: 1,
+    dev: 1,
+    size: files.get(path)?.length ?? 0,
+    isSymbolicLink: () => false,
+    isDirectory: () => !files.has(path),
+    isFile: () => files.has(path),
+  });
+  const describe = vi.fn(() => snapshot),
+    validatePaths = vi.fn();
+  vi.doMock('node:fs', async (importOriginal) => {
+    const actual = await importOriginal<typeof NativeFs>();
+    return {
+      ...actual,
+      existsSync: (p: string) => files.has(p),
+      lstatSync: stat,
+      openSync: (p: string) => p,
+      fstatSync: stat,
+      readFileSync: (p: string) => {
+        const v = files.get(p);
+        if (!v) {
+          if (typeof p === 'string' && p.startsWith(root + '/'))
+            throw Error('unexpected fixture read');
+          return actual.readFileSync(p);
+        }
+        return v;
+      },
+      closeSync: () => {},
+    };
+  });
+  vi.doMock('./provision-timeweb-beta-runtime-secrets.js', async (importOriginal) => ({
+    ...(await importOriginal<object>()),
+    describeTimewebRuntimeSecretSet: describe,
+  }));
+  vi.doMock('./render-timeweb-beta-release-env.js', async (importOriginal) => ({
+    ...(await importOriginal<object>()),
+    validateTimewebRuntimeSecretPaths: validatePaths,
+  }));
+  try {
+    vi.resetModules();
+    const { readInstalledApiBaseline } = await import('./timeweb-api-web-upgrade.js');
+    expect(readInstalledApiBaseline(candidateId).bytes.equals(descriptor)).toBe(true);
+    expect(validatePaths).toHaveBeenCalledWith('/etc/phub/timeweb-beta', candidateId);
+    describe.mockReturnValueOnce({ ...snapshot, inode: 11 });
+    expect(() => readInstalledApiBaseline(candidateId)).toThrow('installed_join_lineage');
+    files.set(previousPath, Buffer.from('foreign'));
+    expect(() => readInstalledApiBaseline(candidateId)).toThrow('installed_join_lineage');
+    files.set(previousPath, previousBytes);
+    files.set(`${tx}/rollout-receipt.json`, bytes({ ...receipt, status: 'SUCCESS' }));
+    expect(() => readInstalledApiBaseline(candidateId)).toThrow();
+    files.set(`${tx}/rollout-receipt.json`, bytes(receipt));
+    files.set(
+      `${tx}/observation.json`,
+      bytes({ ...JSON.parse(observation.toString()), elapsedSeconds: 899 }),
+    );
+    expect(() => readInstalledApiBaseline(candidateId)).toThrow('OBSERVATION');
+    files.set(`${tx}/observation.json`, observation);
+    files.set(`${tx}/timeweb-monitor-readback.json`, bytes({ changed: true }));
+    expect(() => readInstalledApiBaseline(candidateId)).toThrow('installed_evidence_drift');
+  } finally {
+    vi.doUnmock('node:fs');
+    vi.doUnmock('./provision-timeweb-beta-runtime-secrets.js');
+    vi.doUnmock('./render-timeweb-beta-release-env.js');
+    vi.resetModules();
+  }
 });
