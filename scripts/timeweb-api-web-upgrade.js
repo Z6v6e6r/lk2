@@ -1270,9 +1270,10 @@ export function readInstalledApiBaseline(releaseId) {
         planBytes: read(`${transaction}/plan.json`),
         operationBytes: read(`${transaction}/operation.json`),
         evidence: Object.fromEntries(
-          ['observation.json', 'timeweb-monitor-readback.json', 'alert-test-readback.json'].map(
-            (name) => [name, read(`${transaction}/${name}`)],
-          ),
+          (values.PHUB_COMPONENT_ROLLOUT_KIND === 'API_WORKER_NOTIFICATION_0105'
+            ? ['observation.json']
+            : ['observation.json', 'timeweb-monitor-readback.json', 'alert-test-readback.json']
+          ).map((name) => [name, read(`${transaction}/${name}`)]),
         ),
       });
     } else {

@@ -19,7 +19,7 @@ import {
 export const NOTIFICATION_BACKUP_SCHEMA = 'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1';
 export const NOTIFICATION_MIGRATION_SCHEMA =
   'PHUB_TIMEWEB_NOTIFICATION_0105_MIGRATION_OPERATION_V1';
-export const NOTIFICATION_ROLLOUT_SCHEMA = 'PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V1';
+export const NOTIFICATION_ROLLOUT_SCHEMA = 'PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V2';
 export const NOTIFICATION_PRE_LEDGER =
   'b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85';
 export const NOTIFICATION_POST_LEDGER =
@@ -589,8 +589,15 @@ export function assertNotificationRuntimeOff(bytes) {
     const m = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line);
     if (!m || seen.has(m[1])) stop('ENV');
     seen.add(m[1]);
+    if (
+      (m[1].startsWith('SUBSCRIPTION_RUNTIME_') &&
+        !(m[1] === 'SUBSCRIPTION_RUNTIME_WARN_MODE' && m[2] === 'OFF')) ||
+      m[1].startsWith('GAME_COMMERCIAL_JOIN_OWNER_')
+    )
+      stop('ACTIVATION_FORBIDDEN');
     if (keys.includes(m[1]) && !['false', '0'].includes(m[2])) stop('ACTIVATION_FORBIDDEN');
   }
+  if (!seen.has('SUBSCRIPTION_RUNTIME_WARN_MODE')) stop('ACTIVATION_FORBIDDEN');
   return true;
 }
 
@@ -649,4 +656,84 @@ export function validateNotificationMonitoring(providerBytes, alertBytes, contra
         stop('MONITORING_REGRESSION');
   }
   return result;
+}
+
+// Release-scoped policy: absent provider history is explicitly excluded, never a passing check.
+export const NOTIFICATION_OBSERVATION_POLICY = Object.freeze({
+  providerHistory: 'NOT_COLLECTED_OUT_OF_RELEASE',
+  alertHistory: 'NOT_COLLECTED_OUT_OF_RELEASE',
+  runtimeReadiness: 'REQUIRED_EVERY_SAMPLE',
+  publicApiWebReadiness: 'REQUIRED_EVERY_SAMPLE',
+  samples: 61,
+  intervalMs: 15000,
+  minimumElapsedMs: 900000,
+  apiP95Ms: 1500,
+  webP95Ms: 1000,
+});
+export const NOTIFICATION_OBSERVATION_POLICY_SHA256 = notificationHash(
+  JSON.stringify(NOTIFICATION_OBSERVATION_POLICY),
+);
+export function validateNotificationObservationPolicy(value) {
+  notificationExact(value, Object.keys(NOTIFICATION_OBSERVATION_POLICY));
+  if (!notificationSame(value, NOTIFICATION_OBSERVATION_POLICY)) stop('OBSERVATION_POLICY');
+  return value;
+}
+export function validateNotificationObservation(value, operationSha256, planSha256) {
+  notificationExact(value, [
+    'schema',
+    'operationSha256',
+    'planSha256',
+    'observationPolicy',
+    'startedAt',
+    'completedAt',
+    'samples',
+    'providerActivation',
+    'deviceDelivery',
+  ]);
+  validateNotificationObservationPolicy(value.observationPolicy);
+  const time = (v) =>
+    typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(v)
+      ? Date.parse(v)
+      : NaN;
+  const start = time(value.startedAt),
+    end = time(value.completedAt);
+  if (
+    value.schema !== 'PHUB_TIMEWEB_NOTIFICATION_0105_OBSERVATION_V2' ||
+    !H.test(operationSha256) ||
+    !H.test(planSha256) ||
+    value.operationSha256 !== operationSha256 ||
+    value.planSha256 !== planSha256 ||
+    value.providerActivation !== false ||
+    value.deviceDelivery !== false ||
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    end - start < 900000 ||
+    !Array.isArray(value.samples) ||
+    value.samples.length !== 61
+  )
+    stop('OBSERVATION');
+  let previous;
+  for (const sample of value.samples) {
+    notificationExact(sample, ['observedAt', 'publicApiMs', 'publicWebMs']);
+    const at = time(sample.observedAt);
+    if (
+      !Number.isFinite(at) ||
+      at < start ||
+      at > end ||
+      (previous !== undefined && at - previous < 15000) ||
+      ![sample.publicApiMs, sample.publicWebMs].every(
+        (v) => Number.isFinite(v) && v >= 0 && v <= 10000,
+      )
+    )
+      stop('OBSERVATION');
+    previous = at;
+  }
+  for (const [key, limit] of [
+    ['publicApiMs', 1500],
+    ['publicWebMs', 1000],
+  ]) {
+    const values = value.samples.map((s) => s[key]).sort((a, b) => a - b);
+    if (values[Math.ceil(values.length * 0.95) - 1] > limit) stop('OBSERVATION_LATENCY');
+  }
+  return value;
 }

@@ -167,7 +167,7 @@ existing engines and use distinct schemas; none broadens the frozen 99→102 bri
 
 - `PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1` in the existing Python backup controller;
 - `PHUB_TIMEWEB_NOTIFICATION_0105_MIGRATION_OPERATION_V1` in the existing migration controller;
-- `PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V1` in the existing API/Worker controller.
+- `PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V2` in the existing API/Worker controller.
 
 The reviewed source, controller and canonical publication must have exactly the same SHA/tree/CI.
 The operation binds raw package/golden hashes and immutable images from that canonical manifest.
@@ -236,8 +236,9 @@ backup custody without making an old proof appear newly created. It preserves th
 set directory/inode/files/release ID and the actual FCM mount on both image sides. It never
 provisions/swaps credentials or changes provider/send/source/staff/reset flags. API and Worker
 image refs are separately bound to the same manifest; only inert migrator image metadata advances.
-Web and Realtime stay unchanged. The existing monitoring, readiness and 61-sample/15-minute soak
-remain mandatory. Application rollback restores previous image refs and keeps additive schema105.
+Web and Realtime stay unchanged. Runtime readiness, direct public API/Web probes and the 61-sample/15-minute soak
+remain mandatory. Timeweb provider/alert history collection is excluded from this release by the
+owner; excluded history is not evidence of passing provider monitoring. Application rollback restores previous image refs and keeps additive schema105.
 
 Forward backup execution, migration and API/Worker deployment require source CI authority before
 their first write. The notification-only `--attest-disk` path checks terminal custody locally:
@@ -256,15 +257,28 @@ requires byte equality with the canonical `backup-operation.json`; drift stops a
 and locks. Recovery may restore only those exact canonical bytes under the same exclusive owner,
 then reconcile the original operation. It never creates a replacement backup to repair that proof.
 
-This notification profile validates monitoring against the actual wall clock before preparation,
-each service activation, every observation round and final evidence capture. Initial provider and
-alert bytes/hashes are sealed in the plan/capsule. The alert bytes stay unchanged. Approved fresh
-provider captures may update only `readAt`, per-monitor `lastCheckAt` and
-`successfulConsecutiveRounds`; all are nondecreasing, identities/configuration stay exact, and
-incidents stay zero. A capture older than 30 seconds or checks older than 130 seconds stop the
-rollout. The approved read-only provider collector must keep these receipts current during the
-whole operation; copying old timestamps forward is forbidden. Before preparation, live Web and
-Realtime images must equal the unchanged digests in the receipt-verified API8158 descriptor.
+The notification V2 operation accepts only its V2 plan/receipt and a source-fixed observation
+policy. Timeweb provider and alert histories are explicitly `NOT_COLLECTED_OUT_OF_RELEASE`;
+no provider readback is consumed, copied, synthesized or reported as passing. Legacy profiles
+retain their existing monitoring contract. There is no operator/env switch to bypass evidence.
+Before preparation the old API/Worker must be ready and public API/Web probes must pass.
+Every one of 61 rounds attests exact candidate API/Worker identity, zero restarts, healthy
+containers, private ready JSON, preserved secrets/FCM and database proof, then directly probes
+public API ready JSON and the Web app marker. Sixty real waits of 15 seconds and elapsed time
+of at least 900 seconds are mandatory; public API/Web p95 limits remain 1500/1000 ms.
+The strict observation binds the operation and plan hashes and fixed policy. Its exact bytes/hash
+are verified before SUCCESS, at SUCCESS reconciliation and when consuming the installed baseline.
+After final lock removal, a repeated V2 reconciliation accepts only the byte-identical request,
+capsule, materialized plan/operation and terminal RECONCILED receipt. It reattests runtime and,
+for SUCCESS, descriptor/observation/public readiness, then returns the same receipt without writes.
+Old V1 notification capsules and provider-shaped evidence are rejected, including offline recovery;
+recovery retains the existing previous-image path and never manufactures a successful observation.
+The new commercial JOIN/subscription boundary must remain disabled: both env files explicitly
+set `SUBSCRIPTION_RUNTIME_WARN_MODE=OFF`, with no commercial owner/subscription runtime material.
+An inactive reconciliation route may exist in the current main API; it returns unavailable before
+any database/provider write. This release does not activate it or change that feature's contract.
+Before preparation, live Web and Realtime images must equal the unchanged digests in the
+receipt-verified API8158 descriptor.
 
 The fixed `notification-role-bootstrap-0105-inverse.sql` is a recovery artifact without a live
 entrypoint. It is eligible only at exact ledger102 before0099, with unchanged runtime/disabled

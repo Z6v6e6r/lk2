@@ -2,7 +2,9 @@ import {
   NOTIFICATION_ROLLOUT_SCHEMA,
   NOTIFICATION_POST_LEDGER,
   validateNotificationOperation,
-  validateNotificationMonitoringBinding,
+  validateNotificationObservationPolicy,
+  validateNotificationObservation,
+  NOTIFICATION_OBSERVATION_POLICY_SHA256,
 } from './timeweb-notification-profile.js';
 import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
@@ -594,8 +596,9 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
       ? [
           'installedBaselineSha256',
           'observationSha256',
-          'providerReadbackSha256',
-          'alertReadbackSha256',
+          ...(notification
+            ? ['observationPolicySha256']
+            : ['providerReadbackSha256', 'alertReadbackSha256']),
         ]
       : []),
   ]);
@@ -624,7 +627,7 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
   if (
     receipt.schema !==
       (notification
-        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V1'
+        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2'
         : 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1') ||
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
@@ -646,11 +649,18 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
     ![
       'installedBaselineSha256',
       'observationSha256',
-      'providerReadbackSha256',
-      'alertReadbackSha256',
+      ...(notification
+        ? ['observationPolicySha256']
+        : ['providerReadbackSha256', 'alertReadbackSha256']),
     ].every((k) => HASH.test(receipt[k] ?? ''))
   )
     fail('RECEIPT');
+  if (
+    notification &&
+    terminal === 'SUCCESS' &&
+    receipt.observationPolicySha256 !== NOTIFICATION_OBSERVATION_POLICY_SHA256
+  )
+    fail('RECEIPT_POLICY');
   return receipt;
 }
 
@@ -676,13 +686,13 @@ export function assertPlan(plan, op, operationBytes) {
     'unchangedImages',
     'createdAt',
     ...(notification
-      ? ['migrationProof', 'migratorImage', 'fcmCredentialSource', 'monitoring']
+      ? ['migrationProof', 'migratorImage', 'fcmCredentialSource', 'observationPolicy']
       : []),
   ]);
   if (
     plan.schema !==
       (notification
-        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V1'
+        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
         : 'PHUB_TIMEWEB_API_WORKER_PLAN_V1') ||
     plan.operationSha256 !== hash(operationBytes) ||
     plan.controllerSha !== op.controllerSha ||
@@ -729,7 +739,7 @@ export function assertPlan(plan, op, operationBytes) {
     fail('PLAN_IMAGES');
   validateApiWorkerLedger(plan.packagedLedger, plan.packagedLedger, op);
   if (notification) {
-    validateNotificationMonitoringBinding(plan.monitoring);
+    validateNotificationObservationPolicy(plan.observationPolicy);
     if (
       !same(plan.previousSecrets, plan.candidateSecrets) ||
       plan.fcmCredentialSource !== op.expectedFcmSource ||
@@ -789,6 +799,13 @@ export function validateInstalledApiWorkerEvidence({
     )
       fail('INSTALLED');
   const observation = parseStrictJson(evidence['observation.json']);
+  if (op.schema === NOTIFICATION_ROLLOUT_SCHEMA) {
+    validateNotificationObservation(observation, hash(operationBytes), hash(planBytes));
+    exact(evidence, ['observation.json']);
+    if (hash(evidence['observation.json']) !== receipt.observationSha256)
+      fail('INSTALLED_EVIDENCE');
+    return;
+  }
   exact(observation, [
     'schema',
     'startedAt',
