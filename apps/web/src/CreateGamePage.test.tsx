@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CreateGamePage } from './CreateGamePage.js';
 import type { AuthGateway, GameCommandResult } from './auth-gateway.js';
 import {
+  bindCreateGameOperation,
   createGameAttemptStorageKey,
   loadCreateGameAttemptLedger,
   prepareCreateGameAttempt,
@@ -123,6 +124,145 @@ afterEach(() => {
 });
 
 describe('CreateGamePage durable create recovery', () => {
+  it('labels commercial creation unavailable and never offers invented slots or prices', () => {
+    const createGame = vi.fn<AuthGateway['createGame']>();
+    page(createGame);
+    expect(
+      screen.getByRole('complementary', { name: 'Создание игры с бронированием' }),
+    ).toHaveTextContent('Игра с бронированием пока недоступна');
+    expect(screen.queryByLabelText('Разрешённый слот')).not.toBeInTheDocument();
+    expect(createGame).not.toHaveBeenCalled();
+  });
+
+  it.each(['ACCEPTED', 'PROCESSING', 'FAILED'] as const)(
+    'persists %s as unfinished even with gameId and recovers by GET after reopen',
+    async (status) => {
+      const accepted = result({ operation: { ...result().operation, status } });
+      const createGame = vi.fn<AuthGateway['createGame']>().mockResolvedValue(accepted);
+      const getGameOperation = vi
+        .fn<AuthGateway['getGameOperation']>()
+        .mockResolvedValueOnce(accepted)
+        .mockResolvedValueOnce(result({ replayed: true }));
+      const api = { ...gateway(createGame), getGameOperation };
+      const navigate = vi.fn();
+      const user = userEvent.setup();
+      const first = page(createGame, { api, navigate });
+      await screen.findByRole('option', { name: 'Селигерская' });
+      await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+      expect(
+        await screen.findByText(/Бронь корта не подтверждена|бронь корта не подтверждена/),
+      ).toBeVisible();
+      expect(navigate).not.toHaveBeenCalled();
+      const attempt = loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt;
+      expect(attempt?.operationId).toBe(accepted.operation.id);
+      first.unmount();
+      page(createGame, { api, navigate });
+      await waitFor(() => expect(getGameOperation).toHaveBeenCalledOnce());
+      const check = await screen.findByRole('button', { name: 'Проверить прежнюю операцию' });
+      await waitFor(() => expect(check).toBeEnabled());
+      await user.click(check);
+      await waitFor(() => expect(navigate).toHaveBeenCalledOnce());
+      expect(getGameOperation).toHaveBeenCalledTimes(2);
+      expect(getGameOperation).toHaveBeenLastCalledWith(accepted.operation.id);
+      expect(createGame).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(['unavailable', 'not-found', 'wrong-operation'] as const)(
+    'keeps accepted recovery read-only on %s',
+    async (failure) => {
+      const pending = await prepareCreateGameAttempt(
+        principal,
+        savedPayload(),
+        window.localStorage,
+        locks(),
+      );
+      if (pending.state !== 'PENDING') throw new Error('expected pending');
+      const operationId = result().operation.id;
+      await bindCreateGameOperation(principal, pending, operationId, window.localStorage, locks());
+      const createGame = vi.fn<AuthGateway['createGame']>();
+      const getGameOperation = vi.fn<AuthGateway['getGameOperation']>();
+      if (failure === 'wrong-operation')
+        getGameOperation.mockResolvedValue(
+          result({
+            operation: { ...result().operation, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+          }),
+        );
+      else
+        getGameOperation.mockRejectedValue(
+          Object.assign(new Error('read failed'), {
+            code: failure === 'not-found' ? 'GAME_OPERATION_NOT_FOUND' : undefined,
+          }),
+        );
+      const navigate = vi.fn();
+      const user = userEvent.setup();
+      page(createGame, { api: { ...gateway(createGame), getGameOperation }, navigate });
+      await screen.findByRole('alert');
+      await user.click(screen.getByRole('button', { name: 'Проверить прежнюю операцию' }));
+      await waitFor(() => expect(getGameOperation).toHaveBeenCalledTimes(2));
+      expect(createGame).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalled();
+      expect(
+        loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt?.operationId,
+      ).toBe(operationId);
+    },
+  );
+
+  it('checks the immutable accepted operation despite edited fields, lost catalog and seconds-bearing saved times', async () => {
+    const payload = {
+      ...savedPayload(),
+      startsAt: '2027-08-15T15:00:17.000Z',
+      endsAt: '2027-08-15T16:30:17.000Z',
+    };
+    const pending = await prepareCreateGameAttempt(
+      principal,
+      payload,
+      window.localStorage,
+      locks(),
+    );
+    if (pending.state !== 'PENDING') throw new Error('expected pending');
+    const operationId = result().operation.id;
+    await bindCreateGameOperation(principal, pending, operationId, window.localStorage, locks());
+    const createGame = vi.fn<AuthGateway['createGame']>();
+    const getGameOperation = vi
+      .fn<AuthGateway['getGameOperation']>()
+      .mockRejectedValue(new Error('offline'));
+    const api = {
+      ...gateway(createGame),
+      getGameOperation,
+      listLocations: vi.fn().mockResolvedValue({ items: [] }),
+    };
+    const user = userEvent.setup();
+    page(createGame, { api });
+    await screen.findByText(
+      'Не удалось проверить прежнюю операцию. Новый запрос создания не отправлен.',
+    );
+    await user.clear(screen.getByLabelText('Название'));
+    await user.clear(screen.getByLabelText('Начало'));
+    await user.click(screen.getByRole('button', { name: 'Проверить прежнюю операцию' }));
+    await waitFor(() => expect(getGameOperation).toHaveBeenCalledTimes(2));
+    expect(createGame).not.toHaveBeenCalled();
+    expect(
+      loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt?.payload,
+    ).toEqual(payload);
+  });
+
+  it('rejects an unrelated successful command without clearing the saved create intent', async () => {
+    const createGame = vi.fn<AuthGateway['createGame']>().mockResolvedValue(
+      result({
+        operation: { ...result().operation, type: 'JOIN_GAME' },
+      }),
+    );
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(createGame, { navigate });
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Ответ операции не подтверждён');
+    expect(navigate).not.toHaveBeenCalled();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toBeDefined();
+  });
+
   it('offers only server-returned test courts and creates a private game on the selected court', async () => {
     const createGame = vi.fn<AuthGateway['createGame']>().mockResolvedValue(result());
     const user = userEvent.setup();

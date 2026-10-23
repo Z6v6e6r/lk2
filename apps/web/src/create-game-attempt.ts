@@ -1,7 +1,7 @@
-import type { CreateGameRequest } from './auth-gateway.js';
+import type { CreateGameRequest, GameCommandResult } from './auth-gateway.js';
 
-const LEDGER_VERSION = 3 as const;
-// Keep the principal-scoped key stable so an older mounted tab fails closed on the v3 envelope.
+const LEDGER_VERSION = 4 as const;
+// Keep the key stable: older tabs fail closed once accepted-operation recovery writes v4.
 const ATTEMPT_STORAGE_PREFIX = 'phub.create-game-attempt.v2';
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,200}$/;
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
@@ -25,6 +25,7 @@ export interface PendingCreateGameAttempt {
   readonly createdAt: string;
   readonly startsAt: string;
   readonly payload: CreateGameRequest;
+  readonly operationId?: string;
 }
 
 export interface ResolvedCreateGameAttempt {
@@ -239,7 +240,10 @@ function parsePending(
       'createdAt',
       'startsAt',
       'payload',
+      'operationId',
     ]) ||
+    (value.operationId !== undefined &&
+      (typeof value.operationId !== 'string' || !UUID_PATTERN.test(value.operationId))) ||
     value.state !== 'PENDING' ||
     !isString(value.attemptId) ||
     !UUID_PATTERN.test(value.attemptId) ||
@@ -269,6 +273,7 @@ function parsePending(
     createdAt: new Date(value.createdAt).toISOString(),
     startsAt: payload.startsAt,
     payload,
+    ...(typeof value.operationId === 'string' ? { operationId: value.operationId } : {}),
   };
 }
 
@@ -334,8 +339,15 @@ function parseLedger(raw: string, principal: CreateGameAttemptPrincipal): Create
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, ['version', 'activeAttempt', 'resolvedAttempts']) ||
-    value.version !== LEDGER_VERSION ||
+    (value.version !== 3 && value.version !== LEDGER_VERSION) ||
     !Array.isArray(value.resolvedAttempts)
+  ) {
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  }
+  if (
+    value.version === 3 &&
+    isRecord(value.activeAttempt) &&
+    value.activeAttempt.operationId !== undefined
   ) {
     throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
   }
@@ -560,15 +572,47 @@ export async function prepareCreateGameAttempt(
   });
 }
 
+// An operation ID is a recovery handle, never proof of booking or payment.
+export async function bindCreateGameOperation(
+  principal: CreateGameAttemptPrincipal,
+  attempt: PendingCreateGameAttempt,
+  operationId: string,
+  storage: Storage,
+  lockManager: CreateGameAttemptLockManager | undefined,
+): Promise<PendingCreateGameAttempt> {
+  if (typeof operationId !== 'string' || !UUID_PATTERN.test(operationId))
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  assertPrincipal(principal, attempt);
+  await validatePendingFingerprint(attempt);
+  return withAttemptLock(principal, lockManager, async () => {
+    const ledger = readLedger(principal, storage);
+    const active = ledger.activeAttempt;
+    if (
+      !active ||
+      active.attemptId !== attempt.attemptId ||
+      active.idempotencyKey !== attempt.idempotencyKey ||
+      active.payloadFingerprint !== attempt.payloadFingerprint ||
+      (active.operationId !== undefined && active.operationId !== operationId)
+    ) {
+      throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
+    }
+    await validatePendingFingerprint(active);
+    const bound = { ...active, operationId };
+    writeLedger(storage, principal, { ...ledger, activeAttempt: bound });
+    return bound;
+  });
+}
+
 export async function resolveCreateGameAttempt(
   principal: CreateGameAttemptPrincipal,
   attempt: PendingCreateGameAttempt,
   gameId: string,
   storage: Storage,
   lockManager: CreateGameAttemptLockManager | undefined,
-  options: { readonly now?: () => Date } = {},
+  options: { readonly now?: () => Date; readonly operationId?: string } = {},
 ): Promise<ResolvedCreateGameAttempt> {
-  if (!UUID_PATTERN.test(gameId)) throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  if (typeof gameId !== 'string' || !UUID_PATTERN.test(gameId))
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
   assertPrincipal(principal, attempt);
   await validatePendingFingerprint(attempt);
   return withAttemptLock(principal, lockManager, () => {
@@ -588,6 +632,12 @@ export async function resolveCreateGameAttempt(
         throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
       }
       return existing;
+    }
+    if (
+      ledger.activeAttempt?.operationId &&
+      ledger.activeAttempt.operationId !== options.operationId
+    ) {
+      throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
     }
     if (
       ledger.activeAttempt &&
@@ -634,6 +684,7 @@ export async function clearCreateGameAttempt(
   await withAttemptLock(principal, lockManager, () => {
     const ledger = readLedger(principal, storage);
     if (!ledger.activeAttempt) return;
+    if (ledger.activeAttempt.operationId) throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
     if (
       ledger.activeAttempt.attemptId !== attempt.attemptId ||
       ledger.activeAttempt.idempotencyKey !== attempt.idempotencyKey ||
@@ -646,4 +697,31 @@ export async function clearCreateGameAttempt(
       resolvedAttempts: ledger.resolvedAttempts,
     });
   });
+}
+
+const OPERATION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// The current create command is beta-only. Even SUCCEEDED proves no court booking.
+export function isCreateGameOperation(
+  result: GameCommandResult,
+  expectedOperationId?: string,
+): boolean {
+  const operation = result?.operation;
+  return Boolean(
+    operation &&
+    typeof operation.id === 'string' &&
+    OPERATION_UUID.test(operation.id) &&
+    result.commandId === operation.id &&
+    (!expectedOperationId || expectedOperationId === operation.id) &&
+    operation.type === 'CREATE_GAME' &&
+    ['ACCEPTED', 'PROCESSING', 'SUCCEEDED', 'FAILED'].includes(operation.status) &&
+    (operation.gameId === null ||
+      (typeof operation.gameId === 'string' && OPERATION_UUID.test(operation.gameId))) &&
+    operation.nextAction?.type === 'NONE' &&
+    (operation.status !== 'SUCCEEDED' ||
+      (operation.gameId &&
+        operation.error === null &&
+        Number.isSafeInteger(operation.aggregateRevision) &&
+        (operation.aggregateRevision ?? 0) > 0)),
+  );
 }
