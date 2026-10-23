@@ -46,7 +46,14 @@ def rehearsal():
                     else:raise AssertionError('before-ACK state accepted')
                     m.command(m.namespace_slice_args(p),'FIXTURE_SLICE',timeout=15)
                     events['NAMESPACE_SLICE_START_INTENT']={};events['NAMESPACE_SLICE_READY']={'identity':m.namespace_slice(p)}
-                    m.command(m.namespace_unit_args(p,tool),'FIXTURE_UNIT',timeout=15)
+                    args=m.namespace_unit_args(p,tool)
+                    # systemd-run versions use different default Description prefixes.
+                    # Freeze the fixture description to the exact argv actually executed;
+                    # the production validator and frozen Timeweb evidence stay unchanged.
+                    argv=args[args.index('/usr/bin/python3'):]
+                    m.need(argv==['/usr/bin/python3','-I','-S','-B',str(tool),'--disk-runtime-supervisor',str(request),sha],'FIXTURE_ARGV')
+                    args.insert(1,'--description=[systemd-run] '+' '.join(argv))
+                    m.command(args,'FIXTURE_UNIT',timeout=15)
                     deadline=time.monotonic()+30
                     while time.monotonic()<deadline:
                         if network.exists() and m.namespace_unit(p)['LoadState']=='not-found':break
@@ -60,7 +67,10 @@ def rehearsal():
                     m.need(len(rows)==5,'FIXTURE_SYSTEMD_ROWS')
                     frozen=m.digest((json.dumps(rows,sort_keys=True,separators=(',',':'))+'\n').encode())
                     with patch.object(m,'NOTIFICATION_EARLY_SYSTEMD',frozen),patch.object(m,'NOTIFICATION_EARLY_INVOCATION',rows[0]['INVOCATION_ID']):
-                        m.notification_early_systemd(p,journal)
+                        try:m.notification_early_systemd(p,journal)
+                        except m.Stop:
+                            print(json.dumps({'fixtureSystemdMessages':[v.get('MESSAGE')for v in rows]}),file=sys.stderr)
+                            raise
                     source={'mountNamespace':os.stat('/proc/self/ns/mnt').st_ino}
                     original=m.command;injected=False
                     def stop_ack(args,code,**kwargs):
