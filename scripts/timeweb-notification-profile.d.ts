@@ -41,3 +41,12 @@ export function validateNotificationMonitoring(
   at: string,
   previous?: unknown,
 ): { provider: string; alerts: string; providerSha256: string; alertSha256: string };
+
+export const NOTIFICATION_OBSERVATION_POLICY: Readonly<Record<string, string | number>>;
+export const NOTIFICATION_OBSERVATION_POLICY_SHA256: string;
+export function validateNotificationObservationPolicy(value: unknown): unknown;
+export function validateNotificationObservation(
+  value: unknown,
+  operationSha256: string,
+  planSha256: string,
+): unknown;

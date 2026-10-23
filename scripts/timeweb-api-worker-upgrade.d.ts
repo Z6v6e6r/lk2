@@ -39,7 +39,11 @@ export function validateApiWorkerOperation(op: unknown, now?: number): unknown;
 export function validateApiWorkerControllerDelta(entries: unknown): void;
 export function validateApiWorkerLedger(applied: unknown, packaged: unknown): void;
 export function validateApiWorkerBackupLedger(receipt: unknown, packaged: unknown): void;
-export function validateApiWorkerReceipt(receipt: unknown, planSha256: string): unknown;
+export function validateApiWorkerReceipt(
+  receipt: unknown,
+  planSha256: string,
+  operation?: unknown,
+): unknown;
 export function validateApiWorkerDatabase(
   value: unknown,
   packaged: unknown,
@@ -125,3 +129,24 @@ export function sameApiWorkerDeploymentIdentity(
   expected: unknown,
   profile?: 'beta' | 'production',
 ): boolean;
+
+export function probeNotificationPublicReadiness(): Promise<{
+  publicApiMs: number;
+  publicWebMs: number;
+}>;
+export function observeNotificationRollout(options: {
+  attest: () => Promise<unknown>;
+  operationSha256: string;
+  planSha256: string;
+  probePublic?: () => Promise<{ publicApiMs: number; publicWebMs: number }>;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<unknown>;
+}): Promise<unknown>;
+
+export function readNotificationTerminalCapsule(
+  requestBytes: Buffer,
+  capsuleBytes: Buffer,
+  planBytes: Buffer,
+  operationBytes: Buffer,
+  receiptBytes: Buffer,
+): { op: unknown; plan: unknown };

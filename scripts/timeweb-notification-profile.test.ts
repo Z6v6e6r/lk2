@@ -7,6 +7,8 @@ import {
   validateNotificationOperation,
   validateNotificationRoleReadback,
   assertNotificationRuntimeOff,
+  NOTIFICATION_OBSERVATION_POLICY,
+  NOTIFICATION_OBSERVATION_POLICY_SHA256,
   notificationStateSql,
   validateNotificationMonitoring,
 } from './timeweb-notification-profile.js';
@@ -21,6 +23,8 @@ import {
   overlay,
   encodeApiWorkerCapsule,
   readApiWorkerCapsule,
+  readNotificationTerminalCapsule,
+  validateInstalledApiWorkerEvidence,
 } from './timeweb-api-worker-upgrade.js';
 import descriptor from '../deploy/timeweb/notification-migrations-0099-0101.v1.json';
 import monitoringContract from '../deploy/timeweb/api-web-observability.v1.json';
@@ -440,7 +444,11 @@ describe('notification-only Timeweb profile', () => {
     ).toThrow();
   });
   it('rejects feature activation without changing secrets or credentials', () => {
-    expect(assertNotificationRuntimeOff('DATABASE_URL=synthetic\nSMTP_ENABLED=false\n')).toBe(true);
+    expect(
+      assertNotificationRuntimeOff(
+        'DATABASE_URL=synthetic\nSMTP_ENABLED=false\nSUBSCRIPTION_RUNTIME_WARN_MODE=OFF\n',
+      ),
+    ).toBe(true);
     for (const flag of [
       'SMTP_ENABLED',
       'NOTIFICATION_SCENARIOS_ENABLED',
@@ -451,6 +459,16 @@ describe('notification-only Timeweb profile', () => {
     ])
       expect(() => assertNotificationRuntimeOff(flag + '=true\n')).toThrow('ACTIVATION_FORBIDDEN');
     expect(() => assertNotificationRuntimeOff('SMTP_ENABLED=false\nSMTP_ENABLED=true\n')).toThrow();
+    for (const line of [
+      'SUBSCRIPTION_RUNTIME_WARN_MODE=WARN',
+      'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN=synthetic',
+      'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=synthetic',
+      'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL=https://example.invalid',
+    ])
+      expect(() => assertNotificationRuntimeOff(line + '\n')).toThrow('ACTIVATION_FORBIDDEN');
+    expect(() => assertNotificationRuntimeOff('SMTP_ENABLED=false\n')).toThrow(
+      'ACTIVATION_FORBIDDEN',
+    );
   });
   it('generates read-only catalog and fixed strict migration commands', () => {
     const sql = notificationStateSql(
@@ -569,7 +587,7 @@ describe('notification-only Timeweb profile', () => {
     await recoverApiWorkerPhase('SECRETS_VERIFIED', ops);
     expect(events).toContain('PREVIOUS_SECRETS_VERIFIED');
     const plan = {
-      schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V1',
+      schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2',
       fcmCredentialSource: '/dev/null',
       previous: { api: { releaseId: 'old' }, worker: { image: 'repo@sha256:old' } },
       candidate: { api: { releaseId: 'new' }, worker: { image: 'repo@sha256:new' } },
@@ -603,7 +621,7 @@ describe('notification-only Timeweb profile', () => {
       readFileSync('scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json', 'utf8'),
     ) as { ledger: { filename: string; checksum: string }[] };
     const plan = {
-      schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V1',
+      schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2',
       operationSha256: hash(encoded(op)),
       controllerSha: op.controllerSha,
       manifestSha256: op.manifestSha256,
@@ -644,16 +662,163 @@ describe('notification-only Timeweb profile', () => {
       },
       migratorImage: op.migratorImage,
       fcmCredentialSource: op.expectedFcmSource,
-      monitoring: validateNotificationMonitoring(
-        encoded(monitoringFixture().provider),
-        encoded(monitoringFixture().alerts),
-        monitoringContract,
-        new Date(now).toISOString(),
-      ),
+      observationPolicy: NOTIFICATION_OBSERVATION_POLICY,
     };
     const read = (value: unknown) =>
       readApiWorkerCapsule(Buffer.from(encodeApiWorkerCapsule(encoded(op), encoded(value))));
     expect(read(plan).op).toEqual(op);
+    expect(() =>
+      read({ ...plan, schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V1' }),
+    ).toThrow();
+    expect(() => read({ ...plan, monitoring: {} })).toThrow();
+    expect(() =>
+      readApiWorkerCapsule(
+        Buffer.from(
+          encodeApiWorkerCapsule(
+            encoded({ ...op, schema: 'PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V1' }),
+            encoded(plan),
+          ),
+        ),
+      ),
+    ).toThrow();
+    const releaseId = `${op.candidateSha}-${op.publicationRunId}-1`;
+    const values = {
+      PHUB_RELEASE_ID: releaseId,
+      PHUB_COMPONENT_ROLLOUT_KIND: 'API_WORKER_NOTIFICATION_0105',
+      PHUB_COMPONENT_ROLLOUT_RECEIPT: `/opt/phub/timeweb-beta/backups/${releaseId}-api-worker/rollout-receipt.json`,
+      PHUB_RUNTIME_SECRET_SET_RELEASE_ID: secret.releaseId,
+      API_IMAGE_DIGEST: op.apiImage.split('@')[1]!,
+      WORKER_IMAGE_DIGEST: op.workerImage.split('@')[1]!,
+      MIGRATOR_IMAGE_DIGEST: op.migratorImage.split('@')[1]!,
+      ...plan.unchangedImages,
+    };
+    const bytes = encoded(values),
+      planBytes = encoded(plan),
+      operationBytes = encoded(op);
+    const observation = {
+      schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_OBSERVATION_V2',
+      operationSha256: hash(operationBytes),
+      planSha256: hash(planBytes),
+      observationPolicy: NOTIFICATION_OBSERVATION_POLICY,
+      startedAt: new Date(now).toISOString(),
+      completedAt: new Date(now + 900000).toISOString(),
+      samples: Array.from({ length: 61 }, (_, i) => ({
+        observedAt: new Date(now + i * 15000).toISOString(),
+        publicApiMs: 10,
+        publicWebMs: 20,
+      })),
+      providerActivation: false,
+      deviceDelivery: false,
+    };
+    const evidence = { 'observation.json': encoded(observation) };
+    const receipt = {
+      schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2',
+      status: 'SUCCESS',
+      planSha256: hash(planBytes),
+      observedAt: new Date(now + 900000).toISOString(),
+      installedBaselineSha256: hash(bytes),
+      observationSha256: hash(evidence['observation.json']),
+      observationPolicySha256: NOTIFICATION_OBSERVATION_POLICY_SHA256,
+    };
+    const installed = { releaseId, values, bytes, receipt, planBytes, operationBytes, evidence };
+    expect(() => validateInstalledApiWorkerEvidence(installed)).not.toThrow();
+    const reconciled = { ...receipt, status: 'RECONCILED', reconciledStatus: 'SUCCESS' };
+    expect(() =>
+      validateInstalledApiWorkerEvidence({ ...installed, receipt: reconciled }),
+    ).not.toThrow();
+    for (const changed of [
+      { ...observation, operationSha256: 'f'.repeat(64) },
+      { ...observation, planSha256: 'f'.repeat(64) },
+      {
+        ...observation,
+        observationPolicy: { ...NOTIFICATION_OBSERVATION_POLICY, providerHistory: 'PASS' },
+      },
+      { ...observation, providerActivation: true },
+    ])
+      expect(() =>
+        validateInstalledApiWorkerEvidence({
+          ...installed,
+          evidence: { 'observation.json': encoded(changed) },
+        }),
+      ).toThrow();
+    expect(() =>
+      validateInstalledApiWorkerEvidence({
+        ...installed,
+        evidence: {
+          'observation.json': Buffer.concat([evidence['observation.json'], Buffer.from(' ')]),
+        },
+      }),
+    ).toThrow('INSTALLED_EVIDENCE');
+    for (const file of ['timeweb-monitor-readback.json', 'alert-test-readback.json'])
+      expect(() =>
+        validateInstalledApiWorkerEvidence({
+          ...installed,
+          evidence: { ...evidence, [file]: encoded({}) },
+        }),
+      ).toThrow();
+    for (const changed of [
+      { receipt: { ...receipt, observationSha256: 'f'.repeat(64) } },
+      { receipt: { ...receipt, schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V1' } },
+      { planBytes: encoded({ ...plan, schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V1' }) },
+      {
+        operationBytes: encoded({
+          ...op,
+          schema: 'PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V1',
+        }),
+      },
+    ])
+      expect(() => validateInstalledApiWorkerEvidence({ ...installed, ...changed })).toThrow();
+    const capsuleBytes = Buffer.from(encodeApiWorkerCapsule(operationBytes, planBytes));
+    for (const status of ['SUCCESS', 'ROLLED_BACK', 'ABORTED']) {
+      const terminalReceipt = encoded(
+        status === 'SUCCESS'
+          ? reconciled
+          : {
+              schema: receipt.schema,
+              status: 'RECONCILED',
+              reconciledStatus: status,
+              planSha256: hash(planBytes),
+              observedAt: receipt.observedAt,
+            },
+      );
+      for (let repeat = 0; repeat < 2; repeat++)
+        expect(
+          readNotificationTerminalCapsule(
+            operationBytes,
+            capsuleBytes,
+            planBytes,
+            operationBytes,
+            terminalReceipt,
+          ).op,
+        ).toEqual(op);
+    }
+    for (const args of [
+      [
+        encoded({ ...op, expiresAt: 'changed' }),
+        capsuleBytes,
+        planBytes,
+        operationBytes,
+        encoded(reconciled),
+      ],
+      [
+        operationBytes,
+        capsuleBytes,
+        encoded({ ...plan, createdAt: 'changed' }),
+        operationBytes,
+        encoded(reconciled),
+      ],
+      [
+        operationBytes,
+        capsuleBytes,
+        planBytes,
+        encoded({ ...op, expiresAt: 'changed' }),
+        encoded(reconciled),
+      ],
+      [operationBytes, capsuleBytes, planBytes, operationBytes, encoded(receipt)],
+    ])
+      expect(() =>
+        readNotificationTerminalCapsule(...(args as [Buffer, Buffer, Buffer, Buffer, Buffer])),
+      ).toThrow();
     for (const service of ['api', 'worker'] as const) {
       const changed = structuredClone(plan);
       changed.candidate[service].image =
