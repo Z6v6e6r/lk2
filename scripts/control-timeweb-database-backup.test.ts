@@ -6,6 +6,20 @@ import { parseStrictJson } from './strict-json.js';
 import { describe, expect, it } from 'vitest';
 
 describe('Timeweb backup/isolated restore preparation', () => {
+  it.skipIf(process.platform !== 'linux' || process.env.GITHUB_ACTIONS !== 'true')(
+    'rehearses private networking and before/after owned slice stop ACK on the isolated CI host',
+    () => {
+      const result = spawnSync(
+        'sudo',
+        ['-n', 'python3', '-I', '-S', '-B', 'scripts/rehearse-timeweb-backup-early-exit.py'],
+        { encoding: 'utf8', timeout: 120_000, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } },
+      );
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      expect(parseStrictJson(result.stdout)).toMatchObject({ status: 'PHYSICAL_REHEARSAL_PASS' });
+    },
+    125_000,
+  );
+
   it.skipIf(process.env.TIMEWEB_STANDARD_DOCKER_VERIFY !== '1')(
     'captures containers without a healthcheck in the real Docker boundary',
     () => {

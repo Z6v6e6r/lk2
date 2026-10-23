@@ -20,6 +20,10 @@ const config: CapacitorConfig = {
       apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',
       tenantKey: process.env.VITE_PHUB_TENANT_KEY ?? '',
     },
+    PadlHubIOSPush: {
+      enabled: process.env.PADLHUB_IOS_PUSH_ENABLED === 'true',
+      scope: `${process.env.VITE_PHUB_API_BASE_URL ?? ''}|${process.env.VITE_PHUB_TENANT_KEY ?? ''}`,
+    },
     PadlHubSession: {
       apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',
       tenantKey: process.env.VITE_PHUB_TENANT_KEY ?? '',

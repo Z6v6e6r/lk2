@@ -110,7 +110,7 @@ describe('Android push controller', () => {
       }),
     });
     const publish = vi.fn();
-    const controller = createAndroidPushController(gateway() as never, publish, transport);
+    const controller = createAndroidPushController(gateway(), publish, transport);
     const cleanup = controller.mount();
     await vi.waitFor(() =>
       expect(publish).toHaveBeenLastCalledWith(
@@ -133,7 +133,7 @@ describe('Android push controller', () => {
       .mockResolvedValueOnce({ endpointId: 'endpoint-1' });
     const auth = gateway({ registerAndroidPushEndpoint });
     const { transport } = plugin();
-    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const controller = createAndroidPushController(auth, vi.fn(), transport);
 
     await expect(controller.enable()).rejects.toThrow('offline');
     expect(transport.activate).not.toHaveBeenCalled();
@@ -170,7 +170,7 @@ describe('Android push controller', () => {
         });
       }),
     });
-    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const controller = createAndroidPushController(auth, vi.fn(), transport);
     await controller.beforeLogout();
     expect(events).toEqual(['suspend', 'revoke']);
     expect(transport.finishRevoke).toHaveBeenCalledWith({ idempotencyKey: 'revoke-key-1' });
@@ -186,7 +186,7 @@ describe('Android push controller', () => {
         idempotencyKey: 'old-key',
       }),
     });
-    await createAndroidPushController(oldAccount as never, vi.fn(), oldPlugin.transport).refresh();
+    await createAndroidPushController(oldAccount, vi.fn(), oldPlugin.transport).refresh();
     expect(oldAccount.revokeAndroidPushEndpoint).not.toHaveBeenCalled();
     expect(oldPlugin.transport.finishRevoke).not.toHaveBeenCalled();
   });
@@ -201,22 +201,14 @@ describe('Android push controller', () => {
       }),
     });
     const nativeAuth = gateway();
-    await createAndroidPushController(
-      nativeAuth as never,
-      vi.fn(),
-      nativeDisabled.transport,
-    ).enable();
+    await createAndroidPushController(nativeAuth, vi.fn(), nativeDisabled.transport).enable();
     expect(nativeDisabled.transport.registration).not.toHaveBeenCalled();
 
     const serverDisabled = plugin();
     const serverAuth = gateway({
       getAndroidPushConfiguration: vi.fn().mockResolvedValue({ enabled: false }),
     });
-    await createAndroidPushController(
-      serverAuth as never,
-      vi.fn(),
-      serverDisabled.transport,
-    ).enable();
+    await createAndroidPushController(serverAuth, vi.fn(), serverDisabled.transport).enable();
     expect(serverDisabled.transport.registration).not.toHaveBeenCalled();
   });
 
@@ -246,7 +238,7 @@ describe('Android push controller', () => {
       }),
     });
     const publish = vi.fn();
-    await createAndroidPushController(auth as never, publish, transport).refresh();
+    await createAndroidPushController(auth, publish, transport).refresh();
     expect(transport.suspend).toHaveBeenCalledOnce();
     expect(auth.revokeAndroidPushEndpoint).toHaveBeenCalledWith('install-1', 'revoke-key-1');
     expect(transport.finishRevoke).toHaveBeenCalledWith({ idempotencyKey: 'revoke-key-1' });
@@ -259,7 +251,7 @@ describe('Android push controller', () => {
   it('removes the first listener set on a StrictMode-style remount', async () => {
     const auth = gateway();
     const { transport, removes } = plugin();
-    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const controller = createAndroidPushController(auth, vi.fn(), transport);
     const firstUnmount = controller.mount();
     await Promise.resolve();
     firstUnmount();
@@ -280,7 +272,7 @@ describe('Android push controller', () => {
         .fn()
         .mockResolvedValue({ route: '/chats/22222222-2222-4222-8222-222222222222' }),
     });
-    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const controller = createAndroidPushController(auth, vi.fn(), transport);
     const cleanup = controller.mount();
     await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
     expect(windowStub.history.pushState).not.toHaveBeenCalled();
@@ -305,7 +297,7 @@ describe('Android push controller', () => {
     const { transport, callbacks } = plugin({
       takeOpened: vi.fn().mockResolvedValue({ route: '/notifications' }),
     });
-    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const controller = createAndroidPushController(auth, vi.fn(), transport);
     const cleanup = controller.mount();
     await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
     controller.navigationReady();
@@ -327,7 +319,7 @@ describe('Android push controller', () => {
     const { transport } = plugin({
       takeOpened: vi.fn().mockResolvedValue({ route: '/notifications' }),
     });
-    const controller = createAndroidPushController(auth as never, vi.fn(), transport);
+    const controller = createAndroidPushController(auth, vi.fn(), transport);
     const cleanup = controller.mount();
     await vi.waitFor(() => expect(transport.takeOpened).toHaveBeenCalled());
 
@@ -341,3 +333,77 @@ describe('Android push controller', () => {
     cleanup();
   });
 });
+
+it('iOS logout fences a delayed enable before native registration and still revokes its tombstone', async () => {
+  let release: (value: { enabled: boolean }) => void = () => {};
+  const config = new Promise<{ enabled: boolean }>((resolve) => {
+    release = resolve;
+  });
+  const api = gateway({ getAndroidPushConfiguration: vi.fn(() => config) });
+  const native = plugin();
+  const controller = createAndroidPushController(api, vi.fn(), native.transport, 'IOS');
+  vi.mocked(native.transport.suspend).mockImplementation(() => {
+    const pending = {
+      configured: true,
+      state: 'prompt' as const,
+      installationId: 'install-1',
+      pendingRevoke: true,
+      idempotencyKey: 'revoke-key-1',
+    };
+    vi.mocked(native.transport.status).mockResolvedValue(pending);
+    return Promise.resolve(pending);
+  });
+  const enable = controller.enable().catch((error: unknown) => error);
+  await Promise.resolve();
+  await Promise.resolve();
+  const logout = controller.beforeLogout();
+  release({ enabled: true });
+  await enable;
+  await logout;
+  expect(native.transport.registration).not.toHaveBeenCalled();
+  expect(native.transport.activate).not.toHaveBeenCalled();
+  expect(api.registerAndroidPushEndpoint).not.toHaveBeenCalled();
+  expect(api.revokeAndroidPushEndpoint).toHaveBeenCalled();
+  expect(native.transport.finishRevoke).toHaveBeenCalled();
+});
+
+it.each(['accepted', 'rejected'] as const)(
+  'iOS rereads the current tombstone after a late %s ownership transfer',
+  async (outcome) => {
+    let release: (value: { endpointId: string }) => void = () => {};
+    let fail: (error: Error) => void = () => {};
+    const response = new Promise<{ endpointId: string }>((resolve, reject) => {
+      release = resolve;
+      fail = reject;
+    });
+    const api = gateway({ registerAndroidPushEndpoint: vi.fn(() => response) });
+    const native = plugin();
+    vi.mocked(native.transport.suspend).mockImplementation(() => {
+      const pending = {
+        configured: true,
+        state: 'prompt' as const,
+        installationId: 'install-1',
+        pendingRevoke: true,
+        idempotencyKey: 'current-account-revoke',
+      };
+      vi.mocked(native.transport.status).mockResolvedValue(pending);
+      return Promise.resolve(pending);
+    });
+    const controller = createAndroidPushController(api, vi.fn(), native.transport, 'IOS');
+    const enable = controller.enable().catch((error: unknown) => error);
+    await vi.waitFor(() => expect(api.registerAndroidPushEndpoint).toHaveBeenCalled());
+    const logout = controller.beforeLogout();
+    if (outcome === 'accepted') release({ endpointId: 'synthetic-endpoint' });
+    else fail(new TypeError('synthetic-offline'));
+    await enable;
+    await logout;
+    expect(native.transport.activate).not.toHaveBeenCalled();
+    expect(api.revokeAndroidPushEndpoint).toHaveBeenCalledWith(
+      'install-1',
+      'current-account-revoke',
+    );
+    expect(native.transport.finishRevoke).toHaveBeenCalledWith({
+      idempotencyKey: 'current-account-revoke',
+    });
+  },
+);

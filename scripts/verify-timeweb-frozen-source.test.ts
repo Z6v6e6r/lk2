@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -25,6 +26,17 @@ const exactObservation = {
 };
 
 describe('Timeweb frozen source authority', () => {
+  it('binds the shared commercial env validator as privileged executable source', () => {
+    const source = readFileSync(
+      resolve(repositoryRoot, 'scripts/verify-timeweb-frozen-source.js'),
+      'utf8',
+    );
+    const paths = source.slice(
+      source.indexOf('const PROTECTED_PATHS'),
+      source.indexOf('const trustedAuthorities'),
+    );
+    expect(paths).toContain("'scripts/timeweb-commercial-runtime-contract.js'");
+  });
   it('accepts only the exact clean current Git source', () => {
     expect(
       assertExactTimewebFrozenSource({

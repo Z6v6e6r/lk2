@@ -7,6 +7,8 @@ import type {
 import type { Logger } from 'pino';
 import type { Pool, QueryResultRow } from 'pg';
 
+import { checkScenarioPushDelivery, scenarioDeliveryDueSql } from './notification-scenarios.js';
+
 import {
   deferNotificationDeliveryWithoutAttempt,
   finalizeNotificationDelivery,
@@ -17,6 +19,7 @@ interface Row extends QueryResultRow {
   readonly intent_id: string;
   readonly endpoint_id: string;
   readonly attempt_count: number;
+  readonly scenario_delivery?: boolean;
   readonly provider_account_id: string;
   readonly endpoint_status: 'ACTIVE' | 'INVALID' | 'REVOKED';
   readonly address_ciphertext: Buffer;
@@ -58,23 +61,25 @@ export async function runFcmDeliveryBatch(options: {
   readonly adapter: NotificationPushDeliveryPort;
   readonly maxAttempts: number;
   readonly retryBaseMs: number;
+  readonly scenarioPolicyEnabled?: boolean;
   readonly batchSize?: number;
 }): Promise<{ claimed: number; sent: number; retried: number; dead: number; stale: number }> {
   const jobs = await withTenantTransaction(options.pool, options.tenantId, async (client) => {
     const found = await client.query<Row>(
       `select d.id, d.intent_id, d.endpoint_id, d.attempt_count, a.id provider_account_id,
+              ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} scenario_delivery,
               e.status endpoint_status, e.address_ciphertext, e.encryption_key_id,
               coalesce(inbox.id, i.id) notification_id, i.rendered_deep_link deep_link
          from notifications.deliveries d join notifications.intents i on i.tenant_id=d.tenant_id and i.id=d.intent_id
          join integration.notification_endpoints e on e.tenant_id=d.tenant_id and e.id=d.endpoint_id
          join integration.notification_provider_accounts a on a.tenant_id=e.tenant_id and a.id=e.provider_account_id
          left join notifications.inbox_items inbox on inbox.tenant_id=i.tenant_id and inbox.intent_id=i.id
-        where d.tenant_id=$1 and d.channel='PUSH' and d.next_attempt_at<=now()
+        where d.tenant_id=$1 and d.channel='PUSH' and ${scenarioDeliveryDueSql(options.scenarioPolicyEnabled)}
           and (d.state='PENDING' or (d.state='SENDING' and d.lease_expires_at<=now()))
           and a.channel='PUSH' and a.platform='ANDROID' and a.provider='FCM' and a.app_id=$2 and a.environment=$3 and a.status='ACTIVE'
           and e.status in ('ACTIVE','INVALID','REVOKED')
           and exists (select 1 from notifications.tenant_runtime_settings r where r.tenant_id=d.tenant_id and r.android_push_enabled=true)
-        order by d.next_attempt_at,d.created_at for update of d skip locked limit $4`,
+        order by ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at,d.next_attempt_at)' : 'd.next_attempt_at'},d.created_at for update of d skip locked limit $4`,
       // One provider call per lease: queued jobs must not expire before their serial send starts.
       [options.tenantId, options.appId, options.environment, 1],
     );
@@ -90,6 +95,21 @@ export async function runFcmDeliveryBatch(options: {
   let dead = 0;
   let stale = 0;
   for (const row of jobs) {
+    if (options.scenarioPolicyEnabled !== undefined) {
+      const decision = await checkScenarioPushDelivery({
+        pool: options.pool,
+        tenantId: options.tenantId,
+        deliveryId: row.id,
+        attemptNo: row.attempt_count + 1,
+        enabled: options.scenarioPolicyEnabled,
+      });
+      if (decision !== 'SEND') {
+        if (decision === 'DEFERRED') retried++;
+        else if (decision === 'STALE') stale++;
+        else dead++;
+        continue;
+      }
+    }
     const startedAt = new Date().toISOString();
     let result: PushDeliveryResult;
     try {
@@ -127,6 +147,7 @@ export async function runFcmDeliveryBatch(options: {
       endpointId: row.endpoint_id,
       attemptNo: row.attempt_count + 1,
       startedAt,
+      ...(row.scenario_delivery ? { scenarioDelivery: true } : {}),
     };
     const outcome =
       result.outcome === 'retryable_failure' && result.errorCode === 'FCM_CIRCUIT_OPEN'

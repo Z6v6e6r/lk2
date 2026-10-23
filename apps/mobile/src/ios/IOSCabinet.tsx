@@ -1,3 +1,10 @@
+import { registerPlugin } from '@capacitor/core';
+import {
+  createAndroidPushController,
+  initialAndroidPushState,
+  type AndroidPushPlugin,
+} from '../android-push.js';
+import { IOSNotifications } from './IOSNotifications.js';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthenticatedSession, PublicGameCardPage } from '@phub/api-sdk';
@@ -183,7 +190,7 @@ function Home({
           tenantName="ПадлхАБ"
           layoutVariant="v3"
           notificationUnreadCount={0}
-          notificationsAvailable={false}
+          notificationsAvailable={true}
           dateRecommendationsAvailable={false}
           navigation={<Navigation active="home" />}
           loadCommunityPage={data.communities}
@@ -230,7 +237,7 @@ function Profile({
           onLogout={onLogout}
           navigation={<Navigation active="profile" />}
           publicProfileOrigin={origin}
-          notificationsAvailable={false}
+          notificationsAvailable={true}
           subscriptions={dashboard.value?.subscriptions ?? null}
           friendsAvailable={false}
           subscriptionRenewalAvailable={false}
@@ -423,18 +430,62 @@ export function IOSCabinet({
 }): React.JSX.Element {
   const route = useCabinetRoute();
   const data = useMemo(() => createCabinetData(session, auth.user.id), [session, auth.user.id]);
+  const [push, setPush] = useState(initialAndroidPushState);
+  const [logoutError, setLogoutError] = useState<string>();
+  const controller = useMemo(
+    () =>
+      createAndroidPushController(
+        {
+          getAndroidPushConfiguration: () => session.read((api) => api.getIOSPushConfiguration()),
+          registerAndroidPushEndpoint: (input, key) =>
+            session.read((api) => api.registerIOSPushEndpoint(input, key)),
+          revokeAndroidPushEndpoint: (installation, key) =>
+            session.read((api) => api.revokeIOSPushEndpoint(installation, key)),
+        },
+        setPush,
+        registerPlugin<AndroidPushPlugin>('PadlHubIOSPush'),
+        'IOS',
+      ),
+    [session],
+  );
+  useEffect(() => {
+    const stop = controller.mount();
+    controller.navigationReady();
+    controller.sessionReady();
+    return () => {
+      controller.sessionExpired();
+      stop();
+    };
+  }, [controller]);
   const path = route.split('?')[0]!;
   const detail =
     /^\/(locations|games)\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i.exec(
       path,
     );
   const logout = () => {
-    void session.logout();
+    setLogoutError(undefined);
+    void controller
+      .beforeLogout()
+      .then(() => session.logout())
+      .catch(() =>
+        setLogoutError(
+          'Не удалось отключить уведомления перед выходом. Проверьте связь и повторите.',
+        ),
+      );
   };
   let content: ReactNode;
   if (path === '/') content = <Home data={data} auth={auth} onLogout={logout} />;
   else if (path === '/profile' || path === `/profile/${auth.user.id}`)
     content = <Profile data={data} origin={session.configuration.apiBaseUrl} onLogout={logout} />;
+  else if (path === '/notifications')
+    content = (
+      <IOSNotifications
+        session={session}
+        push={push}
+        onEnable={() => void controller.enable().catch(() => undefined)}
+        onDisable={() => void controller.disable().catch(() => undefined)}
+      />
+    );
   else if (path === '/bookings') content = <Bookings data={data} />;
   else if (path === '/games') content = <Games data={data} />;
   else if (path === '/history')
@@ -479,6 +530,7 @@ export function IOSCabinet({
     );
   return (
     <div className="ios-cabinet">
+      {logoutError ? <p role="alert">{logoutError}</p> : null}
       <div key={path}>{content}</div>
     </div>
   );

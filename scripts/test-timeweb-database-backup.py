@@ -64,6 +64,93 @@ def source_proof(script=b'synthetic reviewed helper'):
             'commit':obj('commit',commit),'rootTree':obj('tree',root),'scriptsTree':obj('tree',scripts),'blob':{'oid':blob,'sha256':m.digest(script)}}
 
 
+class NotificationTerminalCustodyTests(unittest.TestCase):
+    def setUp(self):
+        temporary=tempfile.TemporaryDirectory(prefix='phub-notification-terminal-')
+        self.addCleanup(temporary.cleanup)
+        self.root=Path(temporary.name)
+        for name in ['operator','backups']:(self.root/name).mkdir()
+        self.source=self.root/'standard/source'
+        (self.source/'.git').mkdir(parents=True)
+        self.tracked=self.source/'scripts/helper.js'
+        for path in [self.tracked,self.source/'node_modules/typescript/lib/typescript.js',self.source/'node_modules/postcss/lib/postcss.js']:
+            path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic fixture')
+        self.op={**OP,'schema':m.NOTIFICATION_PRE105_SCHEMA,'controllerSourceCiRunId':'100'}
+        self.head=self.op['controllerSha'];self.tree=self.op['controllerTree'];self.status=b''
+        self.files=b'scripts/helper.js\0';self.programs=[];self.node_failure=None
+        for item in [patch.object(m,'ROOT',self.root),patch.object(m,'secure',side_effect=lambda path,*a,**k:Path(path).lstat()),
+                     patch.object(m,'command',side_effect=self.command),patch.object(m,'_NOTIFICATION_SOURCE_CI',set())]:
+            item.start();self.addCleanup(item.stop)
+
+    def command(self,args,code,**kwargs):
+        if args[0]=='/usr/bin/node':
+            self.programs.append(args[-1])
+            self.assertEqual(json.loads(kwargs['input_data']),self.op)
+            self.assertNotIn('NODE_OPTIONS',kwargs['environment'])
+            if self.node_failure:raise m.Stop(self.node_failure)
+            return b'NOTIFICATION_SOURCE_VERIFIED'
+        if args[-2:]==['rev-parse','HEAD']:return self.head.encode()
+        if args[-2:]==['rev-parse','HEAD^{tree}']:return self.tree.encode()
+        if args[-3:]==['status','--porcelain','--untracked-files=all']:return self.status
+        if args[-2:]==['ls-files','-z']:return self.files
+        raise AssertionError(args)
+
+    def test_terminal_is_offline_and_never_populates_forward_authority_cache(self):
+        for _ in range(2):m.notification_terminal_source(self.op)
+        self.assertEqual(m._NOTIFICATION_SOURCE_CI,set())
+        for program in self.programs:
+            self.assertIn('attestNotificationSource(op,{git,read,secure,present})',program)
+            self.assertNotIn('githubPublic',program);self.assertNotIn('readControllerSourceAuthority',program)
+        m.notification_source(self.op)
+        self.assertIn('await readControllerSourceAuthority(op,git,githubPublic)',self.programs[-1])
+        self.assertEqual(len(m._NOTIFICATION_SOURCE_CI),1)
+        m.notification_source(self.op)
+        self.assertNotIn('await readControllerSourceAuthority',self.programs[-1])
+        self.status=b' M scripts/helper.js'
+        with self.assertRaisesRegex(m.Stop,'NOTIFICATION_SOURCE'):m.notification_source(self.op)
+
+    def test_terminal_rejects_git_path_and_local_attestation_drift(self):
+        for field,value in [('head','f'*40),('tree','f'*40),('status',b'?? unexpected'),('files',b'../outside\0')]:
+            original=getattr(self,field);setattr(self,field,value)
+            with self.subTest(field=field),self.assertRaisesRegex(m.Stop,'NOTIFICATION_SOURCE'):
+                m.notification_terminal_source(self.op)
+            setattr(self,field,original)
+        self.tracked.unlink();self.tracked.mkdir()
+        with self.assertRaisesRegex(m.Stop,'NOTIFICATION_SOURCE'):m.notification_terminal_source(self.op)
+        self.tracked.rmdir();self.tracked.write_bytes(b'synthetic fixture')
+        # Enrollment/config, catalog, descriptor and import custody are checked by this local JS attestation.
+        for code in ['SOURCE_CONFIG','SOURCE_PACKAGE_DESCRIPTOR','SOURCE_GOLDEN','SOURCE_TRACKED_MODE']:
+            self.node_failure=code
+            with self.subTest(code=code),self.assertRaisesRegex(m.Stop,code):m.notification_terminal_source(self.op)
+        self.assertEqual(m._NOTIFICATION_SOURCE_CI,set())
+
+    def test_failed_remote_authority_never_caches_and_execute_stops_before_first_write(self):
+        self.node_failure='CONTROLLER_SOURCE_CI'
+        with self.assertRaisesRegex(m.Stop,'CONTROLLER_SOURCE_CI'):m.notification_source(self.op)
+        self.assertEqual(m._NOTIFICATION_SOURCE_CI,set())
+        with patch.object(m,'disk_prerequisites'),patch.object(m.os.path,'lexists',return_value=False),\
+             patch.object(m,'_tool_custody_local',return_value=b'installation'),\
+             patch.object(m.Path,'mkdir') as mkdir,patch.object(m,'atomic_exclusive') as write:
+            with self.assertRaisesRegex(m.Stop,'CONTROLLER_SOURCE_CI'):
+                m.disk_initialize(self.op,m.encoded(self.op),'a'*64)
+            mkdir.assert_not_called();write.assert_not_called()
+        self.assertIn('await readControllerSourceAuthority',self.programs[-1])
+
+    def test_only_notification_terminal_reference_uses_offline_custody(self):
+        with patch.object(m,'notification_terminal_tool_custody',side_effect=m.Stop('TERMINAL_CUSTODY')) as terminal,\
+             patch.object(m,'tool_custody') as forward:
+            with self.assertRaisesRegex(m.Stop,'TERMINAL_CUSTODY'):
+                m.notification_backup_reference(self.op,m.encoded(self.op),'a'*64)
+            terminal.assert_called_once_with(self.op);forward.assert_not_called()
+        with patch.object(m,'_tool_custody_local',return_value=b'installation') as local,\
+             patch.object(m,'notification_terminal_source') as source:
+            self.assertEqual(m.notification_terminal_tool_custody(self.op),b'installation')
+            local.assert_called_once_with(self.op);source.assert_called_once_with(self.op)
+            for schema in [OP['schema'],m.NS_WEB8158_SCHEMA,m.NS_POST_SCHEMA]:
+                with self.assertRaisesRegex(m.Stop,'NOTIFICATION_BACKUP_PROFILE'):
+                    m.notification_terminal_tool_custody({**self.op,'schema':schema})
+
+
 class PureTests(unittest.TestCase):
     def test_ledger_query_survives_real_shell_quoting(self):
         with tempfile.TemporaryDirectory(prefix='phub-ledger-shell-') as directory:
@@ -108,6 +195,42 @@ class PureTests(unittest.TestCase):
         for changes in invalid:
             with self.subTest(changes=changes):
                 self.assertFalse(m.restore_image_admitted({**canonical, **changes}))
+
+    def test_notification_pre102_profile_is_closed_and_keeps_legacy_profiles_frozen(self):
+        op={**copy.deepcopy(OP),'schema':m.NOTIFICATION_PRE105_SCHEMA,'profile':'production',
+            'toolCommit':OP['controllerSha'],'releaseId':OP['controllerSha']+'-100-1','controllerSourceCiRunId':'100',
+            'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256,'packageDescriptorSha256':'a'*64,'catalogsSha256':'b'*64,
+            'expectedApi':{**API,'image':m.WEB8158_IMAGE,'imageId':m.WEB8158_IMAGE.split('@')[1],
+                           'revision':m.MIGRATION_BASE_SHA,'releaseId':m.API_WORKER_CANDIDATE},
+            'confirmation':'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'}
+        self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertEqual(m.operation_mode(op),('notification-pre105',op['releaseId']))
+        self.assertTrue(m.is_namespace_operation(op));self.assertTrue(m.is_disk_operation(op))
+        self.assertEqual(m.disk_ledger_sha(op),m.API_WORKER_LEDGER_SHA256)
+        for change in ({'expectedLedgerSha256':m.API_WORKER_PRE_LEDGER_SHA256},{'expectedLedgerSha256':'0'*64},
+                       {'controllerPromotion':{}},{'profile':'beta'},{'catalogsSha256':'missing'},
+                       {'confirmation':'BACKUP'},{'unexpected':True},
+                       {'expectedPostgres':{**PG,'id':'a'*64}}):
+            with self.subTest(change=change):
+                with self.assertRaises(m.Stop):m.validate_operation({**op,**change},NOW,'2'*64)
+
+    def test_notification_restore_role_closure_is_private_restricted_and_quotes_ddl(self):
+        acl=[{'grantor':'phub_beta','grantee':'phub_beta','privilege':'CONNECT','grantable':False}]
+        security={'schema':'PHUB_NOTIFICATION_BACKUP_SECURITY_V1','roles':['phub_beta'],
+          'unsupported':{'largeObjects':0,'securityLabels':0},
+          'objects':[{'key':'database','kind':'database','owner':'phub_beta','props':{},'acl':acl}]}
+        self.assertEqual(m.validate_notification_security(security),security)
+        sql=m.notification_restore_prerequisites(security)
+        self.assertIn('nologin nosuperuser nobypassrls nocreatedb nocreaterole noreplication noinherit',sql)
+        self.assertIn('alter database phub_restore owner to "phub_beta"',sql)
+        self.assertNotIn('password',sql.lower());self.assertNotIn('membership',sql.lower())
+        missing_database_create={**security,'roles':['phub_beta','phub_runtime'],'objects':security['objects']+[{'key':'extension:pg_trgm','kind':'extension','owner':'phub_runtime','acl':[],'props':{'name':'pg_trgm','schema':'public','version':'1.6'}}]}
+        with self.assertRaisesRegex(m.Stop,'NOTIFICATION_SECURITY_EXTENSION_DATABASE_CREATE'):
+            m.notification_restore_prerequisites(missing_database_create)
+        for patch in ({'roles':['phub_restore']},{'roles':['unreviewed_role']},
+                      {'unsupported':{'largeObjects':1,'securityLabels':0}},
+                      {'unsupported':{'largeObjects':0,'securityLabels':1}}):
+            with self.assertRaises(m.Stop):m.notification_restore_prerequisites({**security,**patch})
 
     def test_exact_request(self):
         self.assertEqual(m.validate_operation(copy.deepcopy(OP),NOW,'2'*64),OP)
@@ -346,6 +469,17 @@ class PureTests(unittest.TestCase):
             with self.assertRaisesRegex(m.Stop,'TOOL_METADATA'):m.tool_custody(op)
         with patch.object(m,'read_secure',side_effect=lambda p,*args:script+b'changed' if p==path else encoded):
             with self.assertRaisesRegex(m.Stop,'TOOL_CUSTODY'):m.tool_custody(op)
+
+        notification={**op,'schema':m.NOTIFICATION_PRE105_SCHEMA}
+        info.st_ino=metadata['ino']
+        with patch.object(m,'read_secure',side_effect=lambda p,*args:script if p==path else encoded),\
+             patch.object(m,'secure',return_value=info),patch.object(m,'notification_terminal_source') as source:
+            self.assertEqual(m.notification_terminal_tool_custody(notification),encoded)
+            source.assert_called_once_with(notification)
+            info.st_ino=3
+            with self.assertRaisesRegex(m.Stop,'TOOL_METADATA'):m.notification_terminal_tool_custody(notification)
+        with patch.object(m,'read_secure',side_effect=lambda p,*args:script+b'changed' if p==path else encoded):
+            with self.assertRaisesRegex(m.Stop,'TOOL_CUSTODY'):m.notification_terminal_tool_custody(notification)
 
     def test_fixed_source_commands_are_read_only_and_noninteractive(self):
         for shell in [m.SOURCE_LEDGER,m.SOURCE_SIZE,m.SOURCE_DUMP]:
@@ -1840,6 +1974,371 @@ class NamespaceSliceTerminalTests(unittest.TestCase):
             self.assertTrue((Path(s.plan['work'])/'database.pgcustom.incoming').exists());self.assertTrue((Path(s.plan['work'])/'backup-operation.json').exists())
             self.assertEqual(s.privcalls[private:],[])
             self.assertFalse(any(a[0]in (m.DISK_TOOLS['mkfs'],m.DISK_TOOLS['mount']) or 'luksFormat'in a or a[0]==m.DISK_TOOLS['crypt']and a[1]in ('open','close') or a[0]==m.DISK_TOOLS['loop']and '--detach'in a for a in s.calls[calls:]))
+
+
+
+class NotificationSupervisorAuthorityTests(unittest.TestCase):
+    def setUp(self):
+        temporary=tempfile.TemporaryDirectory(prefix='phub-notification-supervisor-')
+        self.addCleanup(temporary.cleanup);self.root=Path(temporary.name)
+        self.op={**copy.deepcopy(OP),'schema':m.NOTIFICATION_PRE105_SCHEMA,'profile':'production',
+            'toolCommit':OP['controllerSha'],'releaseId':OP['controllerSha']+'-100-1','controllerSourceCiRunId':'100',
+            'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256,'packageDescriptorSha256':'a'*64,'catalogsSha256':'b'*64,
+            'expectedApi':{**API,'image':m.WEB8158_IMAGE,'imageId':m.WEB8158_IMAGE.split('@')[1],
+                           'revision':m.MIGRATION_BASE_SHA,'releaseId':m.API_WORKER_CANDIDATE},
+            'confirmation':'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'}
+        self.raw=m.encoded(self.op);self.request=self.root/'operator/database-backup-restore.json'
+        self.request.parent.mkdir();self.request.write_bytes(self.raw)
+        for item in [patch.object(m,'ROOT',self.root),patch.object(m,'REQUEST',self.request),
+                     patch.object(m,'secure',side_effect=lambda path,*a,**k:Path(path).lstat()),
+                     patch.object(m,'rename_noreplace',side_effect=lambda source,dest:os.rename(source,dest)),
+                     patch.object(m,'_NOTIFICATION_SOURCE_CI',set()),patch.object(m,'_NOTIFICATION_BACKUP_AUTHORITY',None)]:
+            item.start();self.addCleanup(item.stop)
+        self.plan=m.namespace_plan(self.op,self.raw,m.namespace_sizing(3*1024**3,8*1024**3,40*1024**3,NS_IMAGE),NS_IMAGE)
+        self.work=Path(self.plan['work']);self.work.mkdir(parents=True)
+        for name,value in [('backup-operation.json',self.raw),('disk-plan.json',m.encoded(self.plan))]:
+            path=self.work/name;path.write_bytes(value);path.chmod(0o600)
+        self.request.chmod(0o600)
+        self.journal=m.DiskJournal(self.work,m.digest(self.raw));self.journal.add('LOCKED')
+
+    def host_custody(self,op):
+        self.assertEqual(op,self.op)
+        m._NOTIFICATION_SOURCE_CI.add((op['controllerSha'],op['controllerTree'],op['controllerSourceCiRunId']))
+
+    def handoff(self):
+        with patch.object(m,'tool_custody',side_effect=self.host_custody):
+            m.notification_host_backup_authority(self.op)
+            m.notification_seal_supervisor_authority(self.plan,self.op,self.journal)
+        for phase in ['NAMESPACE_SLICE_START_INTENT','NAMESPACE_SLICE_READY','NAMESPACE_UNIT_START_INTENT']:
+            self.journal.add(phase)
+
+    def verify(self,journal=None):
+        with patch.object(m,'tool_custody',side_effect=AssertionError('network forbidden')) as network,\
+             patch.object(m,'notification_terminal_tool_custody',return_value=b'installation') as local,\
+             patch.object(m,'namespace_supervisor_identity',return_value={'process':{'pid':os.getpid()}}):
+            value=m.namespace_supervisor_custody(self.op,self.raw,self.plan,journal or self.journal)
+            network.assert_not_called();local.assert_called_once_with(self.op)
+            return value
+
+    def test_exact_handoff_reaches_supervisor_without_network_or_forward_cache(self):
+        self.handoff();m._NOTIFICATION_SOURCE_CI.clear();m._NOTIFICATION_BACKUP_AUTHORITY=None
+        self.assertEqual(self.verify(),b'installation')
+        self.assertEqual(m._NOTIFICATION_SOURCE_CI,set());self.assertIsNone(m._NOTIFICATION_BACKUP_AUTHORITY)
+        self.assertIn('--property=PrivateNetwork=yes',m.namespace_unit_args(self.plan,'/fixed/tool'))
+
+    def test_remote_failure_never_seals_event_or_accepts_cached_authority(self):
+        with patch.object(m,'tool_custody',side_effect=m.Stop('CONTROLLER_SOURCE_CI')):
+            with self.assertRaisesRegex(m.Stop,'CONTROLLER_SOURCE_CI'):m.notification_host_backup_authority(self.op)
+        self.assertIsNone(self.journal.find('SOURCE_AUTHORITY_VERIFIED'))
+        self.assertIsNone(m._NOTIFICATION_BACKUP_AUTHORITY)
+        with patch.object(m,'tool_custody') as cached:
+            with self.assertRaisesRegex(m.Stop,'FRESH_HOST_AUTHORITY'):
+                m.notification_seal_supervisor_authority(self.plan,self.op,self.journal)
+            m._NOTIFICATION_SOURCE_CI.add((self.op['controllerSha'],self.op['controllerTree'],self.op['controllerSourceCiRunId']))
+            with self.assertRaisesRegex(m.Stop,'FRESH_HOST_AUTHORITY'):m.notification_host_backup_authority(self.op)
+            self.assertEqual(cached.call_count,1)
+
+    def test_missing_or_each_altered_event_field_is_rejected(self):
+        with self.assertRaisesRegex(m.Stop,'SUPERVISOR_AUTHORITY'):self.verify()
+        self.handoff();original=copy.deepcopy(self.journal.events)
+        for key in self.journal.find('SOURCE_AUTHORITY_VERIFIED'):
+            for change in ['missing','altered']:
+                with self.subTest(key=key,change=change):
+                    self.journal.events=copy.deepcopy(original)
+                    event=self.journal.find('SOURCE_AUTHORITY_VERIFIED')
+                    if change=='missing':del event[key]
+                    else:event[key]='drift'
+                    with self.assertRaisesRegex(m.Stop,'SUPERVISOR_AUTHORITY'):self.verify()
+        self.journal.events=original;self.journal.find('SOURCE_AUTHORITY_VERIFIED')['unexpected']=True
+        with self.assertRaisesRegex(m.Stop,'SUPERVISOR_AUTHORITY'):self.verify()
+
+    def test_reordered_duplicate_or_missing_intents_are_rejected(self):
+        self.handoff();original=copy.deepcopy(self.journal.events)
+        for phase in ['LOCKED','NAMESPACE_SLICE_START_INTENT','NAMESPACE_SLICE_READY','NAMESPACE_UNIT_START_INTENT']:
+            for change in ['missing','duplicate','reordered']:
+                with self.subTest(phase=phase,change=change):
+                    events=copy.deepcopy(original);index=next(i for i,e in enumerate(events) if e['phase']==phase)
+                    event=events.pop(index)
+                    if change=='duplicate':events.extend([event,event])
+                    elif change=='reordered':events.insert(0 if index else len(events),event)
+                    self.journal.events=events
+                    with self.assertRaisesRegex(m.Stop,'AUTHORITY_ORDER'):self.verify()
+
+    def test_exact_caller_and_local_custody_are_required(self):
+        self.handoff()
+        with patch.object(m,'notification_terminal_tool_custody',side_effect=m.Stop('LOCAL_DRIFT')),patch.object(m,'namespace_supervisor_identity',return_value={'process':{'pid':os.getpid()}}):
+            with self.assertRaisesRegex(m.Stop,'LOCAL_DRIFT'):
+                m.namespace_supervisor_custody(self.op,self.raw,self.plan,self.journal)
+        with patch.object(m,'notification_terminal_tool_custody'),patch.object(m,'namespace_supervisor_identity',return_value={'process':{'pid':os.getpid()+1}}):
+            with self.assertRaisesRegex(m.Stop,'SUPERVISOR_CALLER'):
+                m.namespace_supervisor_custody(self.op,self.raw,self.plan,self.journal)
+
+    def test_changed_request_capsule_and_plan_reject_before_child_work(self):
+        self.handoff()
+        for path in [self.request,self.work/'backup-operation.json',self.work/'disk-plan.json']:
+            before=path.read_bytes();path.write_bytes(b'{}')
+            try:
+                with self.subTest(path=path.name),self.assertRaises(m.Stop):self.verify()
+            finally:path.write_bytes(before)
+
+    def test_missing_handoff_or_wrong_process_never_imports_local_source(self):
+        with patch.object(m,'notification_terminal_tool_custody') as local:
+            with self.assertRaises(m.Stop):m.namespace_supervisor_custody(self.op,self.raw,self.plan,self.journal)
+            local.assert_not_called()
+        self.handoff()
+        with patch.object(m,'notification_terminal_tool_custody') as local,patch.object(m,'namespace_supervisor_identity',return_value={'process':{'pid':os.getpid()+1}}):
+            with self.assertRaises(m.Stop):m.namespace_supervisor_custody(self.op,self.raw,self.plan,self.journal)
+            local.assert_not_called()
+
+    def test_namespace_initialize_remote_failure_has_no_work_capsule_or_lock_writes(self):
+        with patch.object(m,'disk_prerequisites'),patch.object(m.os.path,'lexists',return_value=False),patch.object(m,'secure'),\
+             patch.object(m,'tool_custody',side_effect=m.Stop('CONTROLLER_SOURCE_CI')),\
+             patch.object(m.Path,'mkdir') as mkdir,patch.object(m,'atomic_exclusive') as write:
+            with self.assertRaisesRegex(m.Stop,'CONTROLLER_SOURCE_CI'):m.namespace_initialize(self.op,self.raw,'a'*64)
+            mkdir.assert_not_called();write.assert_not_called()
+
+    def test_namespace_start_cannot_start_slice_when_handoff_missing_or_drifted(self):
+        for altered in [False,True]:
+            if altered:
+                self.handoff();self.journal.events=self.journal.events[:2]
+                self.journal.find('SOURCE_AUTHORITY_VERIFIED')['controllerSha']='f'*40
+            with patch.object(m,'secure',return_value=SimpleNamespace(st_mode=0o100755)),patch.object(m,'namespace_require_absent'),\
+                 patch.object(m.Path,'mkdir'),patch.object(m,'sync_directory'),patch.object(m,'namespace_frozen_source'),\
+                 patch.object(m,'notification_seal_supervisor_authority'),patch.object(m,'read_secure',side_effect=lambda path,*a:Path(path).read_bytes()),patch.object(m,'command') as command:
+                with self.assertRaises(m.Stop):m.namespace_start(self.plan,self.op,self.journal)
+                command.assert_not_called()
+
+    def test_legacy_supervisor_retains_full_authority(self):
+        legacy=namespace_operation(True)
+        with patch.object(m,'tool_custody',return_value=b'legacy') as forward,\
+             patch.object(m,'notification_terminal_tool_custody') as local:
+            self.assertEqual(m.namespace_supervisor_custody(legacy,b'ignored',{},None),b'legacy')
+            forward.assert_called_once_with(legacy);local.assert_not_called()
+
+
+
+class NotificationEarlyExitRecoveryTests(unittest.TestCase):
+    def request(self):
+        return {'schema':'PHUB_NOTIFICATION_EARLY_EXIT_RECOVERY_V1','target':m.TARGET,
+            'toolCommit':'a'*40,'toolFileSha256':'b'*64,'toolProofSha256':'c'*64,
+            'toolInstallationSha256':'d'*64,'controllerSourceCiRunId':'123',
+            'operationSha256':m.NOTIFICATION_EARLY_OPERATION,'planSha256':m.NOTIFICATION_EARLY_PLAN,
+            'dryRunSha256':None,'expiresAt':'2026-10-23T10:30:00.000Z',
+            'confirmation':'RECONCILE_39DA_EARLY_EXIT_KEEP_SOURCE_518_NO_REPLAY'}
+
+    def test_recovery_accepts_only_closed_incident_request_and_source(self):
+        value=self.request();self.assertEqual(m.notification_early_request(value),value)
+        for key in value:
+            bad=copy.deepcopy(value);del bad[key]
+            with self.subTest(key=key),self.assertRaises(m.Stop):m.notification_early_request(bad)
+        for key,val in [('schema','OTHER'),('operationSha256','f'*64),('planSha256','f'*64),
+                        ('toolCommit',m.NOTIFICATION_EARLY_SOURCE),('controllerSourceCiRunId','main'),
+                        ('confirmation','REPLAY'),('dryRunSha256','invalid'),('target',{})]:
+            with self.subTest(key=key),self.assertRaises(m.Stop):m.notification_early_request({**value,key:val})
+        with self.assertRaises(m.Stop):m.notification_early_request({**value,'bypass':True})
+
+    def systemd_fixture(self):
+        p={'isolation':{'unit':'phub-disk-runtime-'+m.NOTIFICATION_EARLY_OPERATION[:24]+'.service'}}
+        tool=m.ROOT/'operator/tools'/m.NOTIFICATION_EARLY_SOURCE/'control-timeweb-database-backup.py'
+        message='Started '+p['isolation']['unit']+' - [systemd-run] /usr/bin/python3 -I -S -B '+str(tool)+' --disk-runtime-supervisor '+str(m.REQUEST)+' '+m.NOTIFICATION_EARLY_OPERATION+'.'
+        ids=['7d4958e842da4a758f6c1cdc7b36dcc5','39f53479d3a045ac8e11786248231fbf','98e322203f7a4ed290d09fe03c09fe15','d9b373ed55a64feb8242e02dbe79a49c','ae8f7b866b0347b9af31fe1c80b127c0']
+        rows=[{'_PID':'1','_UID':'0','_COMM':'systemd','_EXE':'/usr/lib/systemd/systemd',
+            'UNIT':p['isolation']['unit'],'MESSAGE_ID':mid,'_BOOT_ID':'0'*32,
+            'INVOCATION_ID':'a55ee92665594d59a2a247d6cbd6e818',
+            '__REALTIME_TIMESTAMP':str(1792741146000000+i),'__MONOTONIC_TIMESTAMP':str(100+i),
+            '__SEQNUM':str(10+i)} for i,mid in enumerate(ids)]
+        rows[1].update(MESSAGE=message,JOB_RESULT='done');rows[2].update(EXIT_CODE='exited',EXIT_STATUS='1')
+        journal=SimpleNamespace(events=[{}]*11+[{'observedAt':'2026-10-23T07:39:06.000Z'}])
+        return p,rows,journal
+
+    def systemd_verify(self,rows,p,journal,*,freeze=None):
+        frozen=m.digest((json.dumps(rows,sort_keys=True,separators=(',',':'))+'\n').encode()) if freeze is None else freeze
+        with patch.object(m,'command',return_value=b'\n'.join(m.encoded(r).strip() for r in rows)),\
+             patch.object(m,'NOTIFICATION_EARLY_SYSTEMD',frozen),\
+             patch.object(m.Path,'read_text',return_value='0'*32):
+            return m.notification_early_systemd(p,journal)
+
+    def test_trusted_systemd_exit_proof_requires_exact_argv_origin_order_and_single_invocation(self):
+        p,rows,journal=self.systemd_fixture();self.systemd_verify(rows,p,journal)
+        for key,bad in [('_PID','2'),('_UID','1'),('_COMM','other'),('_EXE','/tmp/systemd'),
+                        ('UNIT','other'),('MESSAGE_ID','other'),('_BOOT_ID','1'*32),('INVOCATION_ID','1'*32),
+                        ('__REALTIME_TIMESTAMP','1'),('__MONOTONIC_TIMESTAMP','1'),('__SEQNUM','1')]:
+            altered=copy.deepcopy(rows);altered[1][key]=bad
+            with self.subTest(key=key),self.assertRaises(m.Stop):self.systemd_verify(altered,p,journal)
+        for index,key,bad in [(1,'MESSAGE','other argv'),(1,'JOB_RESULT','failed'),(2,'EXIT_CODE','killed'),(2,'EXIT_STATUS','0')]:
+            altered=copy.deepcopy(rows);altered[index][key]=bad
+            with self.subTest(key=key),self.assertRaises(m.Stop):self.systemd_verify(altered,p,journal)
+        for altered in [[],rows[:2],rows+[rows[0]],list(reversed(rows))]:
+            with self.assertRaises(m.Stop):self.systemd_verify(altered,p,journal)
+        with self.assertRaisesRegex(m.Stop,'FROZEN'):self.systemd_verify(rows,p,journal,freeze='f'*64)
+
+    def test_readonly_dry_run_never_mutates_or_releases(self):
+        probe=(None,None,None,None,None,'a'*64,{})
+        with patch.object(m,'notification_early_probe',return_value=probe),\
+             patch.object(m,'namespace_release') as release,patch.object(m,'disk_release') as unlock,\
+             patch.object(m,'atomic_exclusive') as write:
+            result=m.notification_early_reconcile(self.request(),b'request')
+            self.assertEqual(result['status'],'EARLY_EXIT_DRY_RUN_ELIGIBLE');self.assertFalse(result['authorizesMutation'])
+            release.assert_not_called();unlock.assert_not_called();write.assert_not_called()
+
+    def test_probe_failure_or_changed_dry_run_stops_before_first_write(self):
+        with patch.object(m,'notification_early_probe',side_effect=m.Stop('EARLY_FOREIGN_STATE')),\
+             patch.object(m,'atomic_exclusive') as write:
+            with self.assertRaisesRegex(m.Stop,'FOREIGN_STATE'):m.notification_early_reconcile(self.request(),b'request',True)
+            write.assert_not_called()
+        journal=unittest.mock.Mock();guard=unittest.mock.Mock();probe=(None,None,journal,guard,None,'a'*64,{})
+        with patch.object(m,'notification_early_probe',return_value=probe):
+            with self.assertRaisesRegex(m.Stop,'EARLY_DRY_RUN'):m.notification_early_reconcile(self.request(),b'request',True)
+            journal.once.assert_not_called();guard.assert_not_called()
+
+    def test_reconcile_only_releases_owned_slice_then_aborts_and_unlocks_without_replay(self):
+        events={};order=[]
+        def once(phase,**metadata):
+            if phase in events:self.assertEqual(events[phase],metadata)
+            events[phase]=metadata;order.append(phase)
+        journal=SimpleNamespace(find=events.get,once=once)
+        guard=unittest.mock.Mock();owner=unittest.mock.Mock();op={};plan={}
+        classification={'recoveryRequestSha256':'f'*64}
+        probe=(op,plan,journal,guard,owner,'a'*64,classification)
+        value={**self.request(),'dryRunSha256':'a'*64}
+        def release(*args):once('NAMESPACE_SLICE_RELEASE_INTENT');once('NAMESPACE_SLICE_RELEASED')
+        def unlock(*args):once('UNLOCK_INTENT');once('RECONCILED')
+        with patch.object(m,'notification_early_probe',return_value=probe),patch.object(m,'namespace_release',side_effect=release),\
+             patch.object(m,'namespace_terminal'),patch.object(m,'disk_release',side_effect=unlock),\
+             patch.object(m.time,'time',return_value=m.utc(value['expiresAt'])-60),\
+             patch.object(m,'namespace_start') as start,patch.object(m,'namespace_enter') as enter,\
+             patch.object(m,'disk_cleanup_storage') as cleanup,patch.object(m,'docker') as docker:
+            result=m.notification_early_reconcile(value,b'request',True)
+            self.assertEqual(order,m.NOTIFICATION_EARLY_SUFFIX)
+            self.assertEqual(result['outcome'],'ABORTED_BEFORE_DUMP')
+            self.assertFalse(result['replayAllowed']);self.assertFalse(result['authorizesDeploy'])
+            start.assert_not_called();enter.assert_not_called();cleanup.assert_not_called();docker.assert_not_called()
+
+
+    def scenario(self):
+        # Production probe/context/journal/unlock execute against private fixture files;
+        # only external source/DB/kernel observations and slice stop are adapters.
+        stack=ExitStack();temporary=stack.enter_context(tempfile.TemporaryDirectory(prefix='phub-early-matrix-'))
+        root=Path(temporary);request=root/'operator/database-backup-restore.json';request.parent.mkdir()
+        source=root/'standard/source';(source/'.git').mkdir(parents=True)
+        lock=root/'standard/active';lock.mkdir(mode=0o700)
+        config=m.encoded({'schema':1,'enabled':True,'owner':'fixture','controllerSha':m.NOTIFICATION_EARLY_SOURCE})
+        op={**copy.deepcopy(OP),'schema':m.NOTIFICATION_PRE105_SCHEMA,'profile':'production',
+            'toolCommit':m.NOTIFICATION_EARLY_SOURCE,'controllerSha':m.NOTIFICATION_EARLY_SOURCE,
+            'toolFileSha256':'a88e88482052d5dbd39df1241b2aa4531be1014bbd5de9b2d94ef052be652909',
+            'controllerConfigSha256':m.digest(config),'releaseId':m.NOTIFICATION_EARLY_SOURCE+'-100-1','controllerSourceCiRunId':'100',
+            'expectedBoundarySha256':m.digest(m.encoded([])),
+            'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256,'packageDescriptorSha256':'a'*64,'catalogsSha256':'b'*64,
+            'expectedApi':{**API,'image':m.WEB8158_IMAGE,'imageId':m.WEB8158_IMAGE.split('@')[1],
+                           'revision':m.MIGRATION_BASE_SHA,'releaseId':m.API_WORKER_CANDIDATE},
+            'confirmation':'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'}
+        raw=m.encoded(op);request.write_bytes(raw);request.chmod(0o600)
+        def read(path,*args):return config if str(path)=='/etc/phub/timeweb-beta-standard-delivery.json' else Path(path).read_bytes()
+        def git(args,code,**kwargs):
+            if args[-2:]==['rev-parse','HEAD']:return op['controllerSha'].encode()
+            if args[-2:]==['rev-parse','HEAD^{tree}']:return op['controllerTree'].encode()
+            if args[-3:]==['status','--porcelain','--untracked-files=all'] or args[-2:]==['ls-files','-z']:return b''
+            raise AssertionError(args)
+        for item in [patch.object(m,'ROOT',root),patch.object(m,'REQUEST',request),patch.object(m,'LOCK',lock),
+                     patch.object(m,'NOTIFICATION_EARLY_OPERATION',m.digest(raw)),
+                     patch.object(m,'secure',side_effect=lambda path,*a,**k:Path(path).lstat()),
+                     patch.object(m,'read_secure',side_effect=read),patch.object(m,'command',side_effect=git),
+                     patch.object(m,'rename_noreplace',side_effect=lambda a,b:os.rename(a,b)),
+                     patch.object(m,'notification_early_source'),patch.object(m,'tool_custody',return_value=b'installation'),
+                     patch.object(m,'service',side_effect=lambda project,kind:op['expectedApi'] if kind=='api' else op['expectedPostgres']),
+                     patch.object(m,'docker',return_value=b''),patch.object(m,'v2_migration_proof',return_value={'fixture':True}),
+                     patch.object(m,'source_query',return_value=m.encoded(API_WORKER_LEDGER)),
+                     patch.object(m,'namespace_frozen_source',return_value={'fixture':True}),
+                     patch.object(m,'namespace_alias_baseline',return_value={'alias':True}),
+                     patch.object(m,'namespace_mask_baseline',return_value={'mask':True}),
+                     patch.object(m,'namespace_require_absent'),patch.object(m,'namespace_members',return_value=[]),
+                     patch.object(m,'disk_loop_rows',return_value=[]),
+                     patch.object(m,'notification_early_systemd',return_value=m.NOTIFICATION_EARLY_SYSTEMD)]:stack.enter_context(item)
+        plan=m.namespace_plan(op,raw,m.namespace_sizing(3*1024**3,8*1024**3,40*1024**3,NS_IMAGE),NS_IMAGE)
+        work=Path(plan['work']);work.mkdir(parents=True);Path(plan['isolation']['controlRoot']).mkdir(mode=0o700)
+        for name,data in [('backup-operation.json',raw),('disk-plan.json',m.encoded(plan)),('boundary.json',m.encoded({'sha256':op['expectedBoundarySha256']}))]:
+            (work/name).write_bytes(data);(work/name).chmod(0o600)
+        stack.enter_context(patch.object(m,'NOTIFICATION_EARLY_PLAN',m.digest(m.encoded(plan))))
+        journal=m.DiskJournal(work,m.digest(raw));marker={'fixture':True};(lock/'backup-restore.json').write_bytes(m.encoded(marker))
+        slice_id={'unit':{'fixture':True},'bounds':{'fixture':True}}
+        for phase in m.NOTIFICATION_EARLY_PHASES:
+            metadata={'identity':{'alias':True}} if phase=='ALIAS_BASELINE' else {'identity':{'mask':True}} if phase=='CONTAINERD_MASK_BASELINE' else {'proof':{'fixture':True}} if phase=='MIGRATION_ATTESTATION' else {'identity':m.storage_identity(lock.lstat()),'marker':marker} if phase=='LOCK_PREPARED' else {'identity':slice_id} if phase=='NAMESPACE_SLICE_READY' else {}
+            journal.add(phase,**metadata)
+        hashes=[m.digest((work/('disk-event-%04d.json'%i)).read_bytes()) for i in range(12)]
+        stack.enter_context(patch.object(m,'NOTIFICATION_EARLY_EVENTS',m.digest(m.encoded(hashes))))
+        state={'sliceActive':True,'stopFault':None,'faultApplied':False}
+        def show(name,keys):
+            if name==plan['isolation']['slice']:return {'ActiveState':'active' if state['sliceActive'] else 'inactive'}
+            fields={'LoadState':'not-found','ActiveState':'inactive','SubState':'dead','MainPID':'0'}
+            return {key:fields.get(key,'') for key in keys}
+        def terminal(*args):
+            if state['sliceActive']:raise m.Stop('SYNTHETIC_SLICE_ACTIVE')
+        def release(p,old,j):
+            if j.find('NAMESPACE_SLICE_RELEASED') is not None:return terminal()
+            j.once('NAMESPACE_SLICE_RELEASE_INTENT')
+            if state['stopFault'] is not None and not state['faultApplied']:
+                state['faultApplied']=True
+                if state['stopFault']=='after':state['sliceActive']=False
+                raise m.Stop('SYNTHETIC_ACK_UNKNOWN')
+            state['sliceActive']=False;j.once('NAMESPACE_SLICE_RELEASED')
+        for item in [patch.object(m,'namespace_show',side_effect=show),patch.object(m,'namespace_slice',return_value=slice_id),
+                     patch.object(m,'namespace_slice_terminal',side_effect=terminal),patch.object(m,'namespace_release',side_effect=release)]:stack.enter_context(item)
+        value=self.request();proof=m.notification_early_probe(value,b'preview')[5];value['dryRunSha256']=proof;recovery=m.encoded(value)
+        stack.enter_context(patch.object(m.time,'time',return_value=m.utc(value['expiresAt'])-60))
+        return stack,SimpleNamespace(root=root,work=work,lock=lock,op=op,raw=raw,plan=plan,journal=journal,state=state,value=value,recovery=recovery)
+
+    def test_real_probe_and_journal_cover_every_suffix_and_unlock_boundary(self):
+        for count in range(len(m.NOTIFICATION_EARLY_SUFFIX)+1):
+            lock_states=['present','empty','removed'] if count>=8 else ['present']
+            slice_states=[True,False] if count==4 else [count<5]
+            for lock_state in lock_states:
+                for active in slice_states:
+                    with self.subTest(count=count,lock=lock_state,active=active):
+                        stack,s=self.scenario()
+                        with stack:
+                            classification=m.notification_early_probe(s.value,s.recovery)[6]
+                            for index,phase in enumerate(m.NOTIFICATION_EARLY_SUFFIX[:count]):s.journal.add(phase,**(classification if index==0 else {}))
+                            s.state['sliceActive']=active
+                            if lock_state!='present':(s.lock/'backup-restore.json').unlink()
+                            if lock_state=='removed':s.lock.rmdir()
+                            result=m.notification_early_reconcile(s.value,s.recovery,True)
+                            self.assertEqual(result['outcome'],'ABORTED_BEFORE_DUMP');self.assertFalse(s.lock.exists())
+                            self.assertEqual([e['phase'] for e in m.DiskJournal(s.work,m.digest(s.raw)).events],m.NOTIFICATION_EARLY_PHASES+m.NOTIFICATION_EARLY_SUFFIX)
+                            self.assertEqual((s.work/'backup-operation.json').read_bytes(),s.raw)
+
+    def test_real_probe_resumes_before_and_after_slice_stop_lost_ack(self):
+        for fault in ['before','after']:
+            stack,s=self.scenario()
+            with stack:
+                s.state['stopFault']=fault
+                with self.assertRaisesRegex(m.Stop,'SYNTHETIC_ACK_UNKNOWN'):m.notification_early_reconcile(s.value,s.recovery,True)
+                self.assertTrue(s.lock.exists());self.assertEqual(s.state['sliceActive'],fault=='before')
+                result=m.notification_early_reconcile(s.value,s.recovery,True)
+                self.assertEqual(result['status'],'DISK_RECONCILED');self.assertFalse(s.lock.exists())
+
+    def test_real_probe_rejects_foreign_control_storage_events_and_missing_lock(self):
+        for drift in ['control','storage','phase','request','lock','systemd','member']:
+            stack,s=self.scenario()
+            with stack:
+                if drift=='control':(Path(s.plan['isolation']['controlRoot'])/'foreign.json').write_text('{}')
+                elif drift=='storage':Path(s.plan['image']).write_bytes(b'foreign')
+                elif drift=='phase':s.journal.add('DUMP_INTENT')
+                elif drift=='request':m.REQUEST.write_text('{}')
+                elif drift=='lock':(s.lock/'backup-restore.json').unlink();s.lock.rmdir()
+                elif drift=='systemd':stack.enter_context(patch.object(m,'notification_early_systemd',side_effect=m.Stop('EARLY_SYSTEMD_FROZEN')))
+                elif drift=='member':stack.enter_context(patch.object(m,'namespace_members',return_value=[123]))
+                before=sorted(p.name for p in s.work.iterdir())
+                with self.subTest(drift=drift),self.assertRaises(m.Stop):m.notification_early_reconcile(s.value,s.recovery,True)
+                self.assertEqual(sorted(p.name for p in s.work.iterdir()),before)
+
+    def test_recovery_entry_rejects_missing_host_ip_or_prerequisite_before_request_or_write(self):
+        for ips in [b'100.77.212.57',b'103.88.243.171']:
+            with patch.object(m.os,'getuid',return_value=0),patch.object(m.os,'uname',return_value=SimpleNamespace(nodename='msk-1-vm-z8ks',machine='x86_64')),patch.object(m,'command',return_value=ips),patch.object(m,'read_secure') as read,patch.object(m,'disk_prerequisites') as prerequisites:
+                with self.assertRaisesRegex(m.Stop,'EARLY_HOST'):m.notification_early_main()
+                read.assert_not_called();prerequisites.assert_not_called()
+        with patch.object(m.os,'getuid',return_value=0),patch.object(m.os,'uname',return_value=SimpleNamespace(nodename='msk-1-vm-z8ks',machine='x86_64')),patch.object(m,'command',return_value=b'100.77.212.57 103.88.243.171'),patch.object(m,'read_secure') as read,patch.object(m,'disk_prerequisites',side_effect=m.Stop('DISK_TOOL_CUSTODY')),patch.object(m,'disk_mutation_lock') as lock:
+            with self.assertRaisesRegex(m.Stop,'DISK_TOOL_CUSTODY'):m.notification_early_main()
+            read.assert_not_called();lock.assert_not_called()
 
 
 class MainEntryRegressionTests(unittest.TestCase):

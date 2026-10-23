@@ -191,3 +191,82 @@ describe('Android Push endpoint User API', () => {
     expect(input?.ciphertext.toString()).not.toContain('a'.repeat(32));
   });
 });
+
+describe('iOS APNs endpoint User API', () => {
+  it('validates APNs token and binds the server-owned credential selector', async () => {
+    const registered = vi.fn().mockResolvedValue({
+      outcome: 'updated',
+      endpointId,
+      installationId,
+      status: 'ACTIVE',
+      replayed: false,
+    });
+    const repo = repository({
+      getIosPushCapabilities: vi
+        .fn()
+        .mockResolvedValue({ tenantEnabled: true, providerConfigured: true }),
+      registerWebPush: registered,
+    });
+    const app = await buildApp({
+      config: {
+        ...config,
+        NOTIFICATION_SCENARIOS_ENABLED: true,
+        APNS_ENABLED: true,
+        APNS_CREDENTIAL_FILE: '/synthetic/apns.json',
+      },
+      logger: createLogger('ios-push-test', 'silent'),
+      pool: pool(),
+      notificationEndpointRepository: repo,
+      notificationEndpointCipher: createNotificationEndpointCipher({
+        serializedKeys: keyring,
+        activeKeyId: 'v1',
+      }),
+    });
+    apps.push(app);
+    const headers = {
+      authorization: `Bearer ${await token()}`,
+      'x-app-platform': 'ios',
+      'idempotency-key': 'synthetic-ios-register-0001',
+    };
+    const url = '/user/api/v1/local-padel/notification-endpoints/ios';
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url,
+          headers,
+          payload: { installationId, token: 'a'.repeat(33) },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(registered).not.toHaveBeenCalled();
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url,
+          headers,
+          payload: { installationId, token: 'A'.repeat(64) },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(registered).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId,
+        userId,
+        selector: expect.objectContaining({
+          platform: 'IOS',
+          provider: 'APNS',
+          credentialRef: config.APNS_CREDENTIAL_REF,
+        }) as unknown,
+      }),
+    );
+    const stored = registered.mock.calls[0]![0] as { ciphertext: Buffer; encryptionKeyId: string };
+    expect(
+      createNotificationEndpointCipher({ serializedKeys: keyring, activeKeyId: 'v1' }).decrypt(
+        stored.ciphertext,
+        stored.encryptionKeyId,
+      ),
+    ).toBe('a'.repeat(64));
+  });
+});

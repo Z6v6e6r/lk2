@@ -1,3 +1,11 @@
+import {
+  NOTIFICATION_ROLLOUT_SCHEMA,
+  NOTIFICATION_POST_LEDGER,
+  validateNotificationOperation,
+  validateNotificationObservationPolicy,
+  validateNotificationObservation,
+  NOTIFICATION_OBSERVATION_POLICY_SHA256,
+} from './timeweb-notification-profile.js';
 import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
 import { validateControllerPromotion } from './verify-source-ci.js';
@@ -440,6 +448,7 @@ export function sameApiWorkerDeploymentIdentity(actual, expected, profile = 'pro
   );
 }
 export function validateApiWorkerOperation(op, now) {
+  if (op?.schema === NOTIFICATION_ROLLOUT_SCHEMA) return validateNotificationOperation(op, now);
   exact(op, [
     'schema',
     'target',
@@ -537,7 +546,28 @@ export function validateApiWorkerControllerDelta(entries) {
   )
     fail('CONTROLLER_DELTA');
 }
-export function validateApiWorkerLedger(applied, packaged) {
+export function validateApiWorkerLedger(applied, packaged, operation) {
+  if (operation?.schema === NOTIFICATION_ROLLOUT_SCHEMA) {
+    validateNotificationOperation(operation);
+    if (
+      !Array.isArray(applied) ||
+      !Array.isArray(packaged) ||
+      packaged.length !== 105 ||
+      !same(applied, packaged)
+    )
+      fail('LEDGER');
+    for (const row of packaged) {
+      exact(row, ['filename', 'checksum']);
+      if (!/^[0-9]{4}_[a-z0-9_]+\.sql$/.test(row.filename ?? '') || !HASH.test(row.checksum ?? ''))
+        fail('LEDGER');
+    }
+    if (
+      hash(JSON.stringify(packaged.map((r) => [r.filename, r.checksum])) + '\n') !==
+      NOTIFICATION_POST_LEDGER
+    )
+      fail('LEDGER');
+    return;
+  }
   if (!Array.isArray(applied) || !Array.isArray(packaged) || packaged.length !== 102)
     fail('LEDGER');
   const canonical = (values) =>
@@ -553,7 +583,8 @@ export function validateApiWorkerLedger(applied, packaged) {
   if (hash(manifest) !== API_WORKER_BRIDGE.ledgerSha256 || !same(applied, packaged)) fail('LEDGER');
 }
 
-export function validateApiWorkerReceipt(receipt, planSha256) {
+export function validateApiWorkerReceipt(receipt, planSha256, operation) {
+  const notification = operation?.schema === NOTIFICATION_ROLLOUT_SCHEMA;
   const terminal = receipt.status === 'RECONCILED' ? receipt.reconciledStatus : receipt.status;
   exact(receipt, [
     'schema',
@@ -565,8 +596,9 @@ export function validateApiWorkerReceipt(receipt, planSha256) {
       ? [
           'installedBaselineSha256',
           'observationSha256',
-          'providerReadbackSha256',
-          'alertReadbackSha256',
+          ...(notification
+            ? ['observationPolicySha256']
+            : ['providerReadbackSha256', 'alertReadbackSha256']),
         ]
       : []),
   ]);
@@ -593,11 +625,22 @@ export function validateApiWorkerReceipt(receipt, planSha256) {
     'ABORTED',
   ];
   if (
-    receipt.schema !== 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1' ||
+    receipt.schema !==
+      (notification
+        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2'
+        : 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1') ||
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
     !Number.isFinite(Date.parse(receipt.observedAt)) ||
-    !phases.includes(terminal) ||
+    !(
+      notification
+        ? phases
+            .filter(
+              (p) => !['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'PREVIOUS_SECRETS'].includes(p),
+            )
+            .concat(['SECRETS_VERIFIED', 'PREVIOUS_SECRETS_VERIFIED'])
+        : phases
+    ).includes(terminal) ||
     (receipt.status === 'RECONCILED' && !['SUCCESS', 'ROLLED_BACK', 'ABORTED'].includes(terminal))
   )
     fail('RECEIPT');
@@ -606,15 +649,23 @@ export function validateApiWorkerReceipt(receipt, planSha256) {
     ![
       'installedBaselineSha256',
       'observationSha256',
-      'providerReadbackSha256',
-      'alertReadbackSha256',
+      ...(notification
+        ? ['observationPolicySha256']
+        : ['providerReadbackSha256', 'alertReadbackSha256']),
     ].every((k) => HASH.test(receipt[k] ?? ''))
   )
     fail('RECEIPT');
+  if (
+    notification &&
+    terminal === 'SUCCESS' &&
+    receipt.observationPolicySha256 !== NOTIFICATION_OBSERVATION_POLICY_SHA256
+  )
+    fail('RECEIPT_POLICY');
   return receipt;
 }
 
 export function assertPlan(plan, op, operationBytes) {
+  const notification = op.schema === NOTIFICATION_ROLLOUT_SCHEMA;
   exact(plan, [
     'schema',
     'operationSha256',
@@ -634,9 +685,15 @@ export function assertPlan(plan, op, operationBytes) {
     'packagedLedger',
     'unchangedImages',
     'createdAt',
+    ...(notification
+      ? ['migrationProof', 'migratorImage', 'fcmCredentialSource', 'observationPolicy']
+      : []),
   ]);
   if (
-    plan.schema !== 'PHUB_TIMEWEB_API_WORKER_PLAN_V1' ||
+    plan.schema !==
+      (notification
+        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
+        : 'PHUB_TIMEWEB_API_WORKER_PLAN_V1') ||
     plan.operationSha256 !== hash(operationBytes) ||
     plan.controllerSha !== op.controllerSha ||
     (op.controllerPromotion === undefined
@@ -656,8 +713,10 @@ export function assertPlan(plan, op, operationBytes) {
       plan.candidate[service].releaseId !==
         (service === 'api' ? `${op.candidateSha}-${op.publicationRunId}-1` : null) ||
       plan.candidate[service].revision !== op.candidateSha ||
-      plan.candidate[service].image !==
-        `ghcr.io/z6v6e6r/phub-${service}@${API_WORKER_BRIDGE[service === 'api' ? 'candidateApiDigest' : 'candidateWorkerDigest']}`
+      (notification
+        ? plan.candidate[service].image !== op[service + 'Image']
+        : plan.candidate[service].image !==
+          `ghcr.io/z6v6e6r/phub-${service}@${API_WORKER_BRIDGE[service === 'api' ? 'candidateApiDigest' : 'candidateWorkerDigest']}`)
     )
       fail('PLAN');
   }
@@ -674,11 +733,32 @@ export function assertPlan(plan, op, operationBytes) {
   exact(plan.unchangedImages, [
     'WEB_IMAGE_DIGEST',
     'REALTIME_IMAGE_DIGEST',
-    'MIGRATOR_IMAGE_DIGEST',
+    ...(notification ? [] : ['MIGRATOR_IMAGE_DIGEST']),
   ]);
   if (!Object.values(plan.unchangedImages).every((v) => /^sha256:[a-f0-9]{64}$/.test(v)))
     fail('PLAN_IMAGES');
-  validateApiWorkerLedger(plan.packagedLedger, plan.packagedLedger);
+  validateApiWorkerLedger(plan.packagedLedger, plan.packagedLedger, op);
+  if (notification) {
+    validateNotificationObservationPolicy(plan.observationPolicy);
+    if (
+      !same(plan.previousSecrets, plan.candidateSecrets) ||
+      plan.fcmCredentialSource !== op.expectedFcmSource ||
+      plan.migratorImage !== op.migratorImage ||
+      !same(plan.previousSecrets.files, op.candidateSecretHashes)
+    )
+      fail('PRESERVE_SECRETS');
+    exact(plan.migrationProof, [
+      'migrationPlanSha256',
+      'migrationSuccessSha256',
+      'migrationReceiptSha256',
+      'catalogSha256',
+      'backup',
+      'target',
+    ]);
+    for (const k of ['migrationPlanSha256', 'migrationSuccessSha256', 'migrationReceiptSha256'])
+      if (plan.migrationProof[k] !== op[k]) fail('MIGRATION_PROOF');
+    if (!HASH.test(plan.migrationProof.catalogSha256 ?? '')) fail('MIGRATION_PROOF');
+  }
 }
 export function validateInstalledApiWorkerEvidence({
   releaseId,
@@ -692,17 +772,21 @@ export function validateInstalledApiWorkerEvidence({
   const plan = parseStrictJson(planBytes.toString()),
     op = validateApiWorkerOperation(parseStrictJson(operationBytes.toString()));
   assertPlan(plan, op, operationBytes);
-  validateApiWorkerReceipt(receipt, hash(planBytes));
+  validateApiWorkerReceipt(receipt, hash(planBytes), op);
   if (
     releaseId !== `${op.candidateSha}-${op.publicationRunId}-1` ||
     values.PHUB_RELEASE_ID !== releaseId ||
     values.PHUB_RELEASE_SOURCE_SHA !== undefined ||
     values.PHUB_RELEASE_SOURCE_TREE !== undefined ||
     Object.entries(plan.unchangedImages).some(([k, v]) => values[k] !== v) ||
-    values.PHUB_COMPONENT_ROLLOUT_KIND !== 'API_WORKER' ||
+    values.PHUB_COMPONENT_ROLLOUT_KIND !==
+      (op.schema === NOTIFICATION_ROLLOUT_SCHEMA ? 'API_WORKER_NOTIFICATION_0105' : 'API_WORKER') ||
     values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
       `${ROOT}/backups/${releaseId}-api-worker/rollout-receipt.json` ||
-    values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID !== releaseId ||
+    values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID !==
+      (op.schema === NOTIFICATION_ROLLOUT_SCHEMA ? plan.previousSecrets.releaseId : releaseId) ||
+    (op.schema === NOTIFICATION_ROLLOUT_SCHEMA &&
+      values.MIGRATOR_IMAGE_DIGEST !== op.migratorImage.split('@')[1]) ||
     receipt.installedBaselineSha256 !== hash(bytes) ||
     !['SUCCESS', 'RECONCILED'].includes(receipt.status) ||
     (receipt.status === 'RECONCILED' && receipt.reconciledStatus !== 'SUCCESS')
@@ -715,6 +799,13 @@ export function validateInstalledApiWorkerEvidence({
     )
       fail('INSTALLED');
   const observation = parseStrictJson(evidence['observation.json']);
+  if (op.schema === NOTIFICATION_ROLLOUT_SCHEMA) {
+    validateNotificationObservation(observation, hash(operationBytes), hash(planBytes));
+    exact(evidence, ['observation.json']);
+    if (hash(evidence['observation.json']) !== receipt.observationSha256)
+      fail('INSTALLED_EVIDENCE');
+    return;
+  }
   exact(observation, [
     'schema',
     'startedAt',

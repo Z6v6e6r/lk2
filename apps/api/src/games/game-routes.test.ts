@@ -11,6 +11,7 @@ import { SignJWT } from 'jose';
 import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createJoinConditionsFixture } from './game-join-conditions.test-fixture.js';
 import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 
 const config = loadConfig({
@@ -50,9 +51,12 @@ function fakePool(): Pool {
   } as unknown as Pool;
 }
 
-async function accessToken(permissions: readonly string[] = ['games.play']): Promise<string> {
+async function accessToken(
+  permissions: readonly string[] = ['games.play'],
+  tenants: readonly string[] = [tenantId],
+): Promise<string> {
   return new SignJWT({
-    tenants: [tenantId],
+    tenants,
     roles: ['client'],
     permissions,
     sid: '55555555-5555-4555-8555-555555555555',
@@ -723,5 +727,94 @@ describe('Games roster User API', () => {
       actorUserId: userId,
       operationId: commandId,
     });
+  });
+});
+
+describe('paid JOIN reconciliation HTTP boundary', () => {
+  it('scopes recovery to the authenticated actor and never invokes an owner for a foreign attempt', async () => {
+    const getPaidJoinAttempt = vi.fn().mockResolvedValue(null);
+    const read = vi.fn();
+    const execute = vi.fn();
+    const confirmPayment = vi.fn();
+    const app = await buildApp({
+      config,
+      logger: createLogger('join-reconcile-test', 'silent'),
+      pool: fakePool(),
+      gameRosterRepository: repository(),
+      gameCommercialJoin: {
+        repository: {
+          beginPaidJoin: vi.fn(),
+          getPaidJoinAttempt,
+          failPaidJoinAttempt: vi.fn(),
+          confirmPayment,
+        },
+        conditionsOwner: createJoinConditionsFixture().owner,
+        owner: { read, execute },
+      },
+    });
+    apps.push(app);
+    const result = await app.inject({
+      method: 'POST',
+      url: `/user/api/v1/local-padel/game-operations/${commandId}/reconcile`,
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': `join-reconcile:${commandId}`,
+      },
+    });
+    expect(result.statusCode).toBe(404);
+    expect(getPaidJoinAttempt).toHaveBeenCalledWith({
+      tenantId,
+      actorUserId: userId,
+      operationId: commandId,
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(confirmPayment).not.toHaveBeenCalled();
+  });
+  it('requires authenticated tenant permission and never accepts client receipt fields', async () => {
+    const app = await appWith(repository());
+    const url = `/user/api/v1/local-padel/game-operations/${commandId}/reconcile`;
+    expect((await app.inject({ method: 'POST', url })).statusCode).toBe(401);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url,
+          headers: { authorization: `Bearer ${await accessToken([])}` },
+        })
+      ).statusCode,
+    ).toBe(403);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url,
+          headers: { authorization: `Bearer ${await accessToken(['games.play'], [gameId])}` },
+        })
+      ).statusCode,
+    ).toBe(403);
+    const headers = {
+      authorization: `Bearer ${await accessToken()}`,
+      'idempotency-key': `join-reconcile:${commandId}`,
+    };
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url,
+          headers,
+          payload: { receipt: { bookingId: 'untrusted' } },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url,
+          headers: { ...headers, 'idempotency-key': 'different-command-key' },
+        })
+      ).statusCode,
+    ).toBe(400);
   });
 });

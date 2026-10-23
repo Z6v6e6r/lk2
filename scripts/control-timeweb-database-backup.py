@@ -128,6 +128,7 @@ DISK_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_V1'
 NS_PRE_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_NAMESPACE_V2'
 NS_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_NAMESPACE_V2'
 WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_V1'
+NOTIFICATION_PRE105_SCHEMA = 'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1'
 NS_WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_DISK_NAMESPACE_V1'
 WEB8158_IMAGE = 'ghcr.io/z6v6e6r/phub-api@sha256:47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839'
 
@@ -137,7 +138,7 @@ def is_web8158_operation(op):
 
 
 def backup_baseline(op):
-    return op['expectedApi']['releaseId'] if is_web8158_operation(op) else BASELINE
+    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or op.get('schema') == NOTIFICATION_PRE105_SCHEMA else BASELINE
 
 NS_DAEMON_MEMORY = 2 * 1024 ** 3
 DISK_MEMORY = 2 * 1024 ** 3
@@ -153,7 +154,7 @@ DISK_TOOLS = {'loop': '/usr/sbin/losetup', 'crypt': '/usr/sbin/cryptsetup',
 
 
 def is_disk_operation(op):
-    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA)
+    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA)
 
 
 def disk_ledger_sha(op):
@@ -667,7 +668,7 @@ DISK_RESTORE_FORMAT = RESTORE_FORMAT.replace('"State":{"Status":{{json .State.St
 
 # Namespace V2 is deliberately separate from the existing tmpfs/DISK V1 contracts.
 def is_namespace_operation(op):
-    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA)
+    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA)
 
 
 NS_IMAGE_FORMAT = '{"Id":{{json .Id}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}},"Size":{{json .Size}},"RootFS":{{json .RootFS}},"Env":{{json .Config.Env}}}'
@@ -1325,6 +1326,9 @@ def namespace_start(p, op, journal):
     namespace_require_absent(p['isolation']['slice'])
     Path(p['isolation']['controlRoot']).mkdir(mode=0o700); sync_directory(p['work'])
     namespace_frozen_source(p)
+    if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+        notification_seal_supervisor_authority(p, op, journal)
+        notification_require_supervisor_authority(p, op, read_secure(REQUEST), journal, started=False)
     journal.add('NAMESPACE_SLICE_START_INTENT')
     command(namespace_slice_args(p), 'NS_SLICE_START', timeout=30)
     journal.add('NAMESPACE_SLICE_READY', identity=namespace_slice(p))
@@ -1742,7 +1746,8 @@ def namespace_supervisor_loop(op, raw, p):
     # No inherited stdio/flock, restart, parent-death signal or automatic recovery.
     while True:
         need(read_secure(REQUEST)==raw and namespace_supervisor_identity(p,op)==identity, 'NS_SUPERVISOR_DRIFT')
-        tool_custody(op); namespace_validate_plan(op,raw,strict(read_secure(Path(p['work'])/'disk-plan.json')))
+        namespace_supervisor_custody(op, raw, p, DiskJournal(p['work'], p['operationSha256']))
+        namespace_validate_plan(op,raw,strict(read_secure(Path(p['work'])/'disk-plan.json')))
         namespace_frozen_source(p)
         start = namespace_control(p, 'daemon-start.json')
         if start.exists() and daemon is None:
@@ -1844,6 +1849,8 @@ def now_iso():
 
 
 def operation_mode(value):
+    if value['schema'] == NOTIFICATION_PRE105_SCHEMA:
+        return 'notification-pre105', value['releaseId']
     if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_V1', DISK_PRE_SCHEMA, NS_PRE_SCHEMA, WEB8158_SCHEMA, NS_WEB8158_SCHEMA):
         return 'web', value['releaseId']
     if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA, NS_POST_SCHEMA):
@@ -1902,7 +1909,16 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if isinstance(value, dict) and 'controllerPromotion' in value:
         need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
         common += ['controllerPromotion']
-    if schema == 'PHUB_TIMEWEB_BACKUP_OPERATION_V1':
+    if schema == NOTIFICATION_PRE105_SCHEMA:
+        exact(value, common + ['releaseId','controllerSourceCiRunId','expectedLedgerSha256','packageDescriptorSha256','catalogsSha256'] + optional)
+        mode = 'notification-pre105'; release_id = value['releaseId']
+        need(value.get('profile') == 'production' and 'controllerPromotion' not in value
+             and re.fullmatch(r'[1-9][0-9]*', value['controllerSourceCiRunId'] or '')
+             and release_id == value['controllerSha'] + '-' + value['controllerSourceCiRunId'] + '-1'
+             and value['expectedLedgerSha256'] == API_WORKER_LEDGER_SHA256
+             and value['toolCommit'] == value['controllerSha']
+             and HASH.fullmatch(value['packageDescriptorSha256'] or '') and HASH.fullmatch(value['catalogsSha256'] or '') and value['expectedPostgres']['id']==PG_ID, 'NOTIFICATION_OPERATION')
+    elif schema == 'PHUB_TIMEWEB_BACKUP_OPERATION_V1':
         exact(value, common + ['releaseId'] + optional)
         mode = 'web'
         release_id = value['releaseId']
@@ -1953,7 +1969,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and type(row['restarts']) is int and (row['restarts'] == 0 or profile == 'beta')
              and isinstance(row['startedAt'], str), 'BASELINE')
     api, pg = value['expectedApi'], value['expectedPostgres']
-    if is_web8158_operation(value):
+    if is_web8158_operation(value) or schema == NOTIFICATION_PRE105_SCHEMA:
         need(api['image'] == WEB8158_IMAGE and api['releaseId'] == API_WORKER_CANDIDATE
              and api['revision'] == MIGRATION_BASE_SHA, 'API_BASELINE')
         # Snapshots are request-bound and reattested in full before/throughout the operation.
@@ -1980,6 +1996,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if is_web8158_operation(value):
         confirmation = ('BACKUP_RESTORE_WEB8158_' if schema == WEB8158_SCHEMA else
                         'BACKUP_RESTORE_WEB8158_PRIVATE_NAMESPACE_') + match[1][:12].upper() + '_KEEP_API_8158AC445C9F'
+    if schema == NOTIFICATION_PRE105_SCHEMA:
+        confirmation = 'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 
@@ -2014,6 +2032,8 @@ def validate_migration_controller_delta(data):
 
 def v2_migration_proof(op, request_bytes, source, restore=None):
     """Bind a post-0097 backup to a reconciled immutable migration proof before any dump."""
+    if op['schema'] == NOTIFICATION_PRE105_SCHEMA:
+        return notification_preimage(op)
     if op['schema'] not in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA, NS_POST_SCHEMA):
         return
     prefix=['/usr/bin/git','-C',str(source),'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
@@ -2169,7 +2189,270 @@ def web8158_source(op):
     need(result == b'WEB8158_SOURCE_VERIFIED', 'WEB8158_SOURCE')
 
 
-def tool_custody(op):
+_NOTIFICATION_SOURCE_CI = set()
+_NOTIFICATION_BACKUP_AUTHORITY = None
+def _notification_source_program(op):
+    # Root import closure is authenticated by the same existing source preamble.
+    source = ROOT / 'standard/source'
+    secure(source, 'dir'); secure(source / '.git', 'dir')
+    prefix = ['/usr/bin/git','-C',str(source),'-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false']
+    need(command(prefix+['rev-parse','HEAD'], 'NOTIFICATION_SOURCE').decode().strip()==op['controllerSha']
+         and command(prefix+['rev-parse','HEAD^{tree}'], 'NOTIFICATION_SOURCE').decode().strip()==op['controllerTree']
+         and not command(prefix+['status','--porcelain','--untracked-files=all'], 'NOTIFICATION_SOURCE').strip(), 'NOTIFICATION_SOURCE')
+    for raw in command(prefix+['ls-files','-z'], 'NOTIFICATION_SOURCE').split(b'\0'):
+        if raw:
+            relative=Path(os.fsdecode(raw));need(not relative.is_absolute() and '..' not in relative.parts, 'NOTIFICATION_SOURCE')
+            need(stat.S_ISREG(secure(source/relative).st_mode), 'NOTIFICATION_SOURCE')
+    for dependency in ('node_modules/typescript/lib/typescript.js','node_modules/postcss/lib/postcss.js'):
+        secure(source/dependency)
+    program="import fs from 'node:fs';import {attestNotificationSource} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-notification-profile.js';import {upgradeGit as git,readUpgradeFile as read,secureUpgradePath as secure} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));const present=p=>{try{fs.lstatSync(p);return true}catch(e){if(e.code==='ENOENT')return false;throw e}};attestNotificationSource(op,{git,read,secure,present});"
+    environment={key:ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
+    return program,environment
+
+
+def notification_source(op):
+    program,environment=_notification_source_program(op)
+    key=(op['controllerSha'],op['controllerTree'],op['controllerSourceCiRunId'])
+    if key not in _NOTIFICATION_SOURCE_CI:
+        program+="import {githubPublic} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';import {readControllerSourceAuthority} from '/opt/phub/timeweb-beta/standard/source/scripts/verify-source-ci.js';await readControllerSourceAuthority(op,git,githubPublic);"
+    program+="process.stdout.write('NOTIFICATION_SOURCE_VERIFIED');"
+    need(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_SOURCE',input_data=encoded(op),environment=environment,timeout=60)==b'NOTIFICATION_SOURCE_VERIFIED','NOTIFICATION_SOURCE')
+    _NOTIFICATION_SOURCE_CI.add(key)
+
+
+def notification_terminal_source(op):
+    # Read-only terminal custody cannot grant or cache authority for a forward operation.
+    need(op.get('schema')==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    program,environment=_notification_source_program(op)
+    program+="process.stdout.write('NOTIFICATION_SOURCE_VERIFIED');"
+    need(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_SOURCE',input_data=encoded(op),environment=environment,timeout=60)==b'NOTIFICATION_SOURCE_VERIFIED','NOTIFICATION_SOURCE')
+
+
+
+def notification_supervisor_authority(p, op, raw):
+    """Exact host-to-networkless-child handoff; never forward execution authority."""
+    need(op.get('schema') == NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    need(read_secure(REQUEST) == raw == read_secure(Path(p['work'])/'backup-operation.json')
+         and digest(raw) == p['operationSha256'], 'NOTIFICATION_SUPERVISOR_OPERATION')
+    plan_bytes = read_secure(Path(p['work'])/'disk-plan.json')
+    need(strict(plan_bytes) == p, 'NOTIFICATION_SUPERVISOR_PLAN')
+    namespace_validate_plan(op, raw, p)
+    return {'schema': 'PHUB_NOTIFICATION_SUPERVISOR_AUTHORITY_V1',
+            'sourceCheck': 'GITHUB_PUBLIC_SOURCE_CI_V1',
+            'operationSha256': digest(raw), 'planSha256': digest(plan_bytes),
+            **{key: op[key] for key in ('controllerSha', 'controllerTree', 'controllerSourceCiRunId',
+               'controllerConfigSha256', 'toolCommit', 'toolFileSha256', 'toolProofSha256',
+               'toolInstallationSha256', 'packageDescriptorSha256', 'catalogsSha256')}}
+
+
+
+def notification_host_backup_authority(op):
+    global _NOTIFICATION_BACKUP_AUTHORITY
+    need(op.get('schema') == NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    key = (op['controllerSha'], op['controllerTree'], op['controllerSourceCiRunId'])
+    need(_NOTIFICATION_BACKUP_AUTHORITY is None and key not in _NOTIFICATION_SOURCE_CI,
+         'NOTIFICATION_FRESH_HOST_AUTHORITY')
+    tool_custody(op)  # An uncached remote source CI check, before namespace_initialize writes.
+    need(key in _NOTIFICATION_SOURCE_CI, 'NOTIFICATION_FRESH_HOST_AUTHORITY')
+    _NOTIFICATION_BACKUP_AUTHORITY = digest(encoded(op))
+
+
+def notification_seal_supervisor_authority(p, op, journal):
+    # Host-only forward path: complete remote CI authority before the durable handoff.
+    tool_custody(op)
+    raw = read_secure(REQUEST)
+    need(_NOTIFICATION_BACKUP_AUTHORITY == digest(raw), 'NOTIFICATION_FRESH_HOST_AUTHORITY')
+    proof = notification_supervisor_authority(p, op, raw)
+    need(journal.find('LOCKED') is not None
+         and journal.find('NAMESPACE_SLICE_START_INTENT') is None
+         and journal.find('NAMESPACE_UNIT_START_INTENT') is None
+         and journal.find('SOURCE_AUTHORITY_VERIFIED') is None, 'NOTIFICATION_AUTHORITY_ORDER')
+    journal.add('SOURCE_AUTHORITY_VERIFIED', **proof)
+
+
+def notification_require_supervisor_authority(p, op, raw, journal, started=True):
+    expected = notification_supervisor_authority(p, op, raw)
+    need(journal.find('SOURCE_AUTHORITY_VERIFIED') == expected, 'NOTIFICATION_SUPERVISOR_AUTHORITY')
+    phases = [event['phase'] for event in journal.events]
+    need(phases.count('LOCKED') == phases.count('SOURCE_AUTHORITY_VERIFIED') == 1
+         and phases.index('LOCKED') < phases.index('SOURCE_AUTHORITY_VERIFIED'), 'NOTIFICATION_AUTHORITY_ORDER')
+    unit_phases = ['NAMESPACE_SLICE_START_INTENT', 'NAMESPACE_SLICE_READY', 'NAMESPACE_UNIT_START_INTENT']
+    if started:
+        need(all(phases.count(phase) == 1 for phase in unit_phases), 'NOTIFICATION_AUTHORITY_ORDER')
+        order = [phases.index(phase) for phase in ['SOURCE_AUTHORITY_VERIFIED', *unit_phases]]
+        need(order == sorted(order), 'NOTIFICATION_AUTHORITY_ORDER')
+    else:need(all(phase not in phases for phase in unit_phases), 'NOTIFICATION_AUTHORITY_ORDER')
+
+
+def namespace_supervisor_custody(op, raw, p, journal):
+    if op.get('schema') != NOTIFICATION_PRE105_SCHEMA:
+        return tool_custody(op)  # Legacy profiles keep their existing authority contract.
+    notification_require_supervisor_authority(p, op, raw, journal)
+    identity = namespace_supervisor_identity(p, op)
+    need(identity['process']['pid'] == os.getpid(), 'NOTIFICATION_SUPERVISOR_CALLER')
+    # No local source program executes until the handoff and exact child identity pass.
+    return notification_terminal_tool_custody(op)
+
+
+def notification_preimage(op):
+    program="import fs from 'node:fs';import {readNotificationDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-worker-migration.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readNotificationDatabaseState(op,'pre')));"
+    result=strict(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_PREIMAGE',input_data=encoded(op),timeout=30))
+    return {'state':result,'target':result['target'],'security':notification_security_source()}
+
+
+
+def notification_security_sql():
+    path=ROOT/'standard/source/scripts/notification-backup-security.sql'
+    return read_secure(path,0o644).decode()
+
+
+def notification_security_source():
+    shell=READ_ONLY.replace('lock_timeout=2000','lock_timeout=2000 -c search_path=pg_catalog')+'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc -qAt --set=ON_ERROR_STOP=1 --command='+shlex.quote(notification_security_sql())
+    value=strict(docker(['exec',PG_ID,'/bin/sh','-eu','-c',shell], 'NOTIFICATION_SECURITY_SOURCE'))
+    validate_notification_security(value)
+    return value
+
+
+def validate_notification_security(value):
+    exact(value,['schema','objects','roles','unsupported'])
+    need(value['unsupported']=={'largeObjects':0,'securityLabels':0}, 'NOTIFICATION_SECURITY_UNSUPPORTED')
+    need(value['schema']=='PHUB_NOTIFICATION_BACKUP_SECURITY_V1' and isinstance(value['objects'],list)
+         and 0<len(value['objects'])<=20000 and isinstance(value['roles'],list)
+         and value['roles']==sorted(set(value['roles'])) and 0<len(value['roles'])<=100, 'NOTIFICATION_SECURITY')
+    for role in value['roles']:
+        need(isinstance(role,str) and re.fullmatch(r'[a-z_][a-z0-9_]{0,62}',role)
+             and role in ('phub_beta','phub_migrator','phub_runtime','phub','postgres'), 'NOTIFICATION_SECURITY_ROLE')
+    keys=[]
+    for row in value['objects']:
+        exact(row,['key','kind','owner','props','acl']);keys.append(row['key'])
+        need(row['owner'] in value['roles'] or row['owner'].startswith('pg_'), 'NOTIFICATION_SECURITY_OWNER')
+        for acl in row['acl']:
+            exact(acl,['grantor','grantee','privilege','grantable'])
+            need(acl['grantor'] in value['roles'] or acl['grantor'].startswith('pg_'), 'NOTIFICATION_SECURITY_GRANTOR')
+            need(acl['grantee']=='PUBLIC' or acl['grantee'] in value['roles'] or acl['grantee'].startswith('pg_'), 'NOTIFICATION_SECURITY_GRANTEE')
+            need(type(acl['grantable']) is bool, 'NOTIFICATION_SECURITY_ACL')
+    need(keys==sorted(set(keys)), 'NOTIFICATION_SECURITY_ORDER')
+    return value
+
+
+def notification_restore_prerequisites(value):
+    validate_notification_security(value)
+    # All statements target the fresh isolated restore cluster, never the source connection.
+    quote=lambda v:'"'+v.replace('"','""')+'"'
+    sql=['create role '+quote(role)+' nologin nosuperuser nobypassrls nocreatedb nocreaterole noreplication noinherit;' for role in value['roles']]
+    def acl_sql(row,kind,name):
+        allowed={'CONNECT','CREATE','TEMPORARY'} if kind=='DATABASE' else {'USAGE'}
+        targets=sorted(set(['PUBLIC',row['owner']]+[a['grantee'] for a in row['acl']]))
+        lines=['revoke all privileges on '+kind+' '+name+' from '+','.join('PUBLIC' if r=='PUBLIC' else quote(r) for r in targets)+';']
+        for a in row['acl']:
+            need(a['privilege'] in allowed and a['grantor']==row['owner'], 'NOTIFICATION_SECURITY_PREREQUISITE_ACL')
+            lines.append('grant '+a['privilege']+' on '+kind+' '+name+' to '+('PUBLIC' if a['grantee']=='PUBLIC' else quote(a['grantee']))+(' with grant option' if a['grantable'] else '')+';')
+        return lines
+    database=next(row for row in value['objects'] if row['kind']=='database')
+    sql+=['alter database phub_restore owner to '+quote(database['owner'])+';']+acl_sql(database,'DATABASE','phub_restore')
+    for row in value['objects']:
+        if row['kind']=='extension':
+            need(any(a['privilege']=='CREATE' and a['grantee'] in (row['owner'],'PUBLIC') for a in database['acl']), 'NOTIFICATION_SECURITY_EXTENSION_DATABASE_CREATE')
+        if row['kind']=='language':
+            need(row['props']=={'name':'plpgsql'}, 'NOTIFICATION_SECURITY_LANGUAGE')
+            sql+=['alter language plpgsql owner to '+quote(row['owner'])+';']+acl_sql(row,'LANGUAGE','plpgsql')
+        if row['kind']=='extension' and row['props']['name']=='plpgsql':
+            need(row['props']['schema']=='pg_catalog', 'NOTIFICATION_SECURITY_EXTENSION')
+            sql+=['drop extension plpgsql;','set session authorization '+quote(row['owner'])+';', 'create extension plpgsql with schema pg_catalog;','reset session authorization;']
+        if row['kind']=='extension' and row['props']['name']!='plpgsql':
+            need(row['props']['name'] in ('pgcrypto','pg_trgm') and row['props']['schema']=='public', 'NOTIFICATION_SECURITY_EXTENSION')
+            sql+=['grant usage,create on schema public to '+quote(row['owner'])+';','set session authorization '+quote(row['owner'])+';',"create extension if not exists "+quote(row['props']['name'])+" with schema public version '"+row['props']['version'].replace("'","''")+"';",'reset session authorization;','revoke usage,create on schema public from '+quote(row['owner'])+';']
+    return '\n'.join(sql)
+
+
+def notification_restore_extension_owners(value):
+    validate_notification_security(value)
+    # Only the fresh isolated restore cluster executes this metadata recovery block.
+    data=json.dumps(value,separators=(',',':')).replace("'","''")
+    tag='$phub_'+digest(data.encode())[:24]+'$'
+    while tag in data:tag=tag[:-1]+'x$'
+    body="""declare r record; expected text; proof jsonb := __PROOF__::jsonb;
+    begin
+      for r in select p.oid,p.prokind,n.nspname,p.proname,pg_get_function_identity_arguments(p.oid) as args
+        from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema'
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o
+          where o->>'key'='function:'||r.nspname||'.'||r.proname||'('||r.args||')';
+        if expected is not null and (select pg_get_userbyid(proowner)<>expected from pg_proc where oid=r.oid) then
+          if r.prokind not in ('f','p') then raise exception 'NOTIFICATION_SECURITY_FUNCTION_KIND';end if;
+          execute format('ALTER %s %s OWNER TO %I',case when r.prokind='p' then 'PROCEDURE' else 'FUNCTION' end,r.oid::regprocedure,expected);
+        end if;
+      end loop;
+      for r in select t.oid,n.nspname,t.typname from pg_type t join pg_namespace n on n.oid=t.typnamespace
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema' and t.typtype in ('b','d','e') and t.typelem=0
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o where o->>'key'='type:'||r.nspname||'.'||r.typname;
+        if expected is not null and (select pg_get_userbyid(typowner)<>expected from pg_type where oid=r.oid) then
+          execute format('ALTER TYPE %s OWNER TO %I',r.oid::regtype,expected);
+        end if;
+      end loop;
+      for r in select o.oid,n.nspname,o.oprname,o.oprleft,o.oprright from pg_operator o join pg_namespace n on n.oid=o.oprnamespace
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema'
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o
+          where o->>'key'='operator:'||r.nspname||'.'||r.oprname||'('||(case when r.oprleft=0 then 'NONE' else r.oprleft::regtype::text end)||','||(case when r.oprright=0 then 'NONE' else r.oprright::regtype::text end)||')';
+        if expected is not null and (select pg_get_userbyid(oprowner)<>expected from pg_operator where oid=r.oid) then
+          execute format('ALTER OPERATOR %I.%s (%s,%s) OWNER TO %I',r.nspname,r.oprname,case when r.oprleft=0 then 'NONE' else r.oprleft::regtype::text end,case when r.oprright=0 then 'NONE' else r.oprright::regtype::text end,expected);
+        end if;
+      end loop;
+      for r in select c.oid,n.nspname,c.opcname,a.amname from pg_opclass c join pg_namespace n on n.oid=c.opcnamespace join pg_am a on a.oid=c.opcmethod
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema'
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o where o->>'key'='opclass:'||r.nspname||'.'||r.opcname||':'||r.amname;
+        if expected is not null and (select pg_get_userbyid(opcowner)<>expected from pg_opclass where oid=r.oid) then
+          execute format('ALTER OPERATOR CLASS %I.%I USING %I OWNER TO %I',r.nspname,r.opcname,r.amname,expected);
+        end if;
+      end loop;
+      for r in select f.oid,n.nspname,f.opfname,a.amname from pg_opfamily f join pg_namespace n on n.oid=f.opfnamespace join pg_am a on a.oid=f.opfmethod
+        where left(n.nspname,3)<>'pg_' and n.nspname<>'information_schema'
+      loop
+        select o->>'owner' into expected from jsonb_array_elements(proof->'objects') o where o->>'key'='opfamily:'||r.nspname||'.'||r.opfname||':'||r.amname;
+        if expected is not null and (select pg_get_userbyid(opfowner)<>expected from pg_opfamily where oid=r.oid) then
+          execute format('ALTER OPERATOR FAMILY %I.%I USING %I OWNER TO %I',r.nspname,r.opfname,r.amname,expected);
+        end if;
+      end loop;
+    end """
+    return "set standard_conforming_strings=on;set search_path='pg_catalog';do "+tag+' '+body.replace('__PROOF__',"'"+data+"'",1)+tag+';'
+
+def notification_backup_reference(op, raw, file_sha):
+    need(op['schema']==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE');notification_terminal_tool_custody(op)
+    work=ROOT/'backups'/('.disk-restore-'+digest(raw))
+    need(read_secure(work/'backup-operation.json')==raw, 'NOTIFICATION_BACKUP_OPERATION')
+    plan=namespace_validate_plan(op,raw,strict(read_secure(work/'disk-plan.json')))
+    journal=DiskJournal(work,plan['operationSha256'])
+    for phase in ('SECURITY_RESTORE_VERIFIED','RESTORE_VERIFIED','STORAGE_CLEANUP_VERIFIED','PUBLISHED','UNLOCK_INTENT','RECONCILED'):
+        need(journal.find(phase) is not None, 'NOTIFICATION_BACKUP_TERMINAL')
+    namespace_terminal(plan,journal)
+    namespace_require_no_unit_file(plan['isolation']['unit'])
+    unit=namespace_unit(plan)
+    need(unit['LoadState']=='not-found' and unit['ActiveState'] in ('inactive','failed') and unit['MainPID']=='0'
+         and unit['ControlGroup']=='', 'NOTIFICATION_NAMESPACE_UNIT_TERMINAL')
+    namespace_slice_terminal(plan,journal)
+    canonical=Path(plan['canonical']);secure(canonical,'dir',0o700)
+    need(sorted(p.name for p in canonical.iterdir())==sorted(['backup-operation.json','preimage-proof.json','database-backup-receipt.json','database.pgcustom']), 'NOTIFICATION_BACKUP_INVENTORY')
+    need(read_secure(canonical/'backup-operation.json')==raw, 'NOTIFICATION_BACKUP_OPERATION')
+    receipt_bytes=read_secure(canonical/'database-backup-receipt.json');receipt=strict(receipt_bytes)
+    preimage=read_secure(canonical/'preimage-proof.json');initial=journal.find('MIGRATION_ATTESTATION')['proof']
+    need(preimage==encoded(initial) and digest(preimage)==receipt['preimageSha256']
+         and journal.find('PUBLISH_READY')['receiptSha256']==journal.find('PUBLISHED')['receiptSha256']==digest(receipt_bytes)
+         and file_digest(canonical/'database.pgcustom')==receipt['backupSha256']==journal.find('RESTORE_VERIFIED')['dumpSha256']
+         and receipt['operationSha256']==digest(raw) and receipt['sourceLedgerSha256']==receipt['restoredLedgerSha256']==API_WORKER_LEDGER_SHA256
+         and receipt['target']==initial['target'] and receipt['restoreVerified'] is True
+         and receipt['securityPreimageSha256']==receipt['restoredSecuritySha256']==digest(encoded(initial['security']))==journal.find('SECURITY_RESTORE_VERIFIED')['securitySha256']
+         and receipt['roleClosureSha256']==digest(encoded(initial['security']['roles']))==journal.find('SECURITY_RESTORE_VERIFIED')['roleClosureSha256']
+         and receipt['restoreImage']==PG_IMAGE and receipt['schema']=='PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1', 'NOTIFICATION_BACKUP_PROOF')
+    return {'schema':'PHUB_TIMEWEB_NOTIFICATION_BACKUP_TERMINAL_V1','operationSha256':digest(raw),'receiptSha256':digest(receipt_bytes),
+            'preimageSha256':digest(preimage),'target':initial['target'],'sourceLedgerSha256':API_WORKER_LEDGER_SHA256,
+            'storageCleanupVerified':True,'reconciled':True}
+
+
+def _tool_custody_local(op):
     path = ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py')
     receipt_path = path.parent/'installation-receipt.json'
     script_bytes = read_secure(path,0o755)
@@ -2184,8 +2467,22 @@ def tool_custody(op):
     expected = {key:getattr(info,'st_'+key) for key in ['dev','ino','uid','gid','mode','nlink','size']}
     need(receipt['metadata']==expected, 'TOOL_METADATA')
     verify_source_proof(receipt['sourceProof'],op,script_bytes)
+    return receipt_bytes
+
+
+def tool_custody(op):
+    receipt_bytes=_tool_custody_local(op)
     if is_web8158_operation(op):
         web8158_source(op)
+    elif op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+        notification_source(op)
+    return receipt_bytes
+
+
+def notification_terminal_tool_custody(op):
+    need(op.get('schema')==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    receipt_bytes=_tool_custody_local(op)
+    notification_terminal_source(op)
     return receipt_bytes
 
 
@@ -2838,8 +3135,11 @@ def disk_publication(plan, journal):
         directory = publication
     secure(directory, 'dir', 0o700)
     operation = read_secure(Path(plan['work']) / 'backup-operation.json')
-    current_web = is_web8158_operation(strict(operation))
+    current_web = is_web8158_operation(strict(operation)) or strict(operation).get('schema') == NOTIFICATION_PRE105_SCHEMA
     inventory = ['database-backup-receipt.json', 'database.pgcustom']
+    if strict(operation).get('schema') == NOTIFICATION_PRE105_SCHEMA:
+        inventory.append('preimage-proof.json')
+        need(digest(read_secure(directory / 'preimage-proof.json')) == strict(read_secure(directory / 'database-backup-receipt.json'))['preimageSha256'], 'NOTIFICATION_PREIMAGE_PROOF')
     if current_web:
         inventory.append('backup-operation.json')
         need(read_secure(directory / 'backup-operation.json') == operation, 'DISK_PUBLICATION_OPERATION')
@@ -2877,7 +3177,7 @@ def execute_disk(op, request_bytes, file_sha):
     fd = os.open(incoming, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(os.dup(fd), 'wb') as stream:
-            docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
+            docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if op['schema']==NOTIFICATION_PRE105_SCHEMA else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
                    file_limit=plan['dumpLimitBytes'])
             stream.flush()
         os.fsync(fd)
@@ -2919,7 +3219,7 @@ def execute_disk(op, request_bytes, file_sha):
     journal.add('RESTORE_INTENT', containerId=container)
     with dump_stream(incoming, dump_sha) as stream:
         docker(['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
-                '--no-owner', '--no-acl', '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
+                *(['--no-owner','--no-acl'] if op['schema']!=NOTIFICATION_PRE105_SCHEMA else ['--single-transaction']), '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
     restored = ledger_bytes(docker(['exec', container, 'psql', '-X', '--username=phub_restore', '--dbname=phub_restore',
                                   '--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', '--command=' + LEDGER_SQL], 'RESTORED_LEDGER'))
     need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
@@ -2997,7 +3297,8 @@ def namespace_initialize(op, request_bytes, file_sha):
     need(not os.path.lexists(LOCK) and not os.path.lexists(work) and not os.path.lexists(canonical), 'EXISTING_STATE')
     for path in [ROOT, ROOT / 'standard', ROOT / 'operator', ROOT / 'backups']:
         secure(path, 'dir')
-    tool_custody(op)
+    if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:notification_host_backup_authority(op)
+    else:tool_custody(op)
     need(service('phub-timeweb-beta', 'api') == op['expectedApi']
          and service('phub-timeweb-beta-dependencies', 'postgres') == op['expectedPostgres'], 'RUNTIME_DRIFT')
     need(not docker(['ps', '-q', '--no-trunc', '--filter', 'label=com.docker.compose.service=migrator']).strip(), 'ACTIVE_MIGRATOR')
@@ -3058,7 +3359,7 @@ def execute_namespace(op, request_bytes, file_sha):
         try:
             with os.fdopen(os.dup(fd), 'wb') as stream:
                 namespace_frozen_source(plan)
-                docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
+                docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if op['schema']==NOTIFICATION_PRE105_SCHEMA else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
                        file_limit=plan['dumpLimitBytes'])
                 stream.flush()
             os.fsync(fd)
@@ -3102,12 +3403,20 @@ def execute_namespace(op, request_bytes, file_sha):
         with dump_stream(incoming, dump_sha) as stream:
             namespace_docker(plan, ['exec', '-i', container, 'pg_restore', '--list'], 'DUMP_TOC', stdin=stream, stdout=subprocess.DEVNULL, timeout=120)
         journal.add('RESTORE_INTENT', containerId=container)
+        security = journal.find('MIGRATION_ATTESTATION')['proof']['security'] if op['schema']==NOTIFICATION_PRE105_SCHEMA else None
+        if security is not None:
+            namespace_docker(plan,['exec','-i',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','--no-psqlrc','-q','--set=ON_ERROR_STOP=1'], 'NOTIFICATION_RESTORE_ROLES', input_data=notification_restore_prerequisites(security).encode(),stdout=subprocess.DEVNULL,timeout=60)
         with dump_stream(incoming, dump_sha) as stream:
             namespace_docker(plan, ['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
-                    '--no-owner', '--no-acl', '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
+                    *(['--no-owner','--no-acl'] if op['schema']!=NOTIFICATION_PRE105_SCHEMA else ['--single-transaction']), '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
         restored = ledger_bytes(namespace_docker(plan, ['exec', container, 'psql', '-X', '--username=phub_restore', '--dbname=phub_restore',
                                       '--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', '--command=' + LEDGER_SQL], 'RESTORED_LEDGER'))
         need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
+        if security is not None:
+            namespace_docker(plan,['exec','-i',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','--no-psqlrc','-q','--set=ON_ERROR_STOP=1'], 'NOTIFICATION_RESTORE_EXTENSION_OWNERS',input_data=notification_restore_extension_owners(security).encode(),stdout=subprocess.DEVNULL,timeout=30)
+            restored_security=strict(namespace_docker(plan,['exec',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','--no-psqlrc','-qAt','--set=ON_ERROR_STOP=1',"--command=set search_path='pg_catalog';"+notification_security_sql()], 'NOTIFICATION_RESTORED_SECURITY'))
+            need(restored_security==security, 'NOTIFICATION_RESTORED_SECURITY_MISMATCH')
+            journal.add('SECURITY_RESTORE_VERIFIED',securitySha256=digest(encoded(security)),roleClosureSha256=digest(encoded(security['roles'])))
         guard(container)
         journal.add('RESTORE_VERIFIED', containerId=container, ledgerSha256=digest(restored), dumpSha256=dump_sha)
         Path(plan['publication']).mkdir(mode=0o700); sync_directory(work)
@@ -3116,7 +3425,16 @@ def execute_namespace(op, request_bytes, file_sha):
                    'completedAt': now_iso(), 'backupFile': str(Path(plan['canonical']) / 'database.pgcustom'),
                    'backupSha256': dump_sha, 'restoreVerified': True, 'restoreImage': PG_IMAGE,
                    'restoredLedgerSha256': digest(restored), 'sourceLedgerSha256': digest(restored)}
-        if is_web8158_operation(op):
+        if op['schema'] == NOTIFICATION_PRE105_SCHEMA:
+            preimage = journal.find('MIGRATION_ATTESTATION')['proof']
+            receipt.update(schema='PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1',
+                           operationSha256=digest(request_bytes), target=preimage['target'],
+                           preimageSha256=digest(encoded(preimage)), packageDescriptorSha256=op['packageDescriptorSha256'],
+                           catalogsSha256=op['catalogsSha256'], aclRecovery='ISOLATED_OWNER_ACL_RESTORE_VERIFIED',
+                           securityPreimageSha256=digest(encoded(preimage['security'])), restoredSecuritySha256=digest(encoded(preimage['security'])),
+                           roleClosureSha256=digest(encoded(preimage['security']['roles'])))
+            atomic_exclusive(Path(plan['publication']) / 'preimage-proof.json', encoded(preimage))
+        if is_web8158_operation(op) or op['schema'] == NOTIFICATION_PRE105_SCHEMA:
             atomic_exclusive(Path(plan['publication']) / 'backup-operation.json', request_bytes)
         atomic_exclusive(Path(plan['publication']) / 'database-backup-receipt.json', encoded(receipt))
         journal.add('PUBLISH_READY', dumpSha256=dump_sha, receiptSha256=digest(encoded(receipt)))
@@ -3276,8 +3594,186 @@ def execute(op, request_bytes, file_sha):
     return execute_disk(op, request_bytes, file_sha) if is_disk_operation(op) else execute_tmpfs(op, request_bytes, file_sha)
 
 
+# One-operation compatibility reconciliation. This never changes the enrolled source,
+# restarts the failed unit, starts a daemon, creates storage or reads/writes DB data.
+NOTIFICATION_EARLY_OPERATION = '39da03f6c57cf76c2522f374e785203e268ce41d573573c3ba51f2cdd4f5e7a6'
+NOTIFICATION_EARLY_PLAN = '01a3e1eba8bd4d5bcaeff5a41c9547c79b6922347cf844ee51011a60296839a5'
+NOTIFICATION_EARLY_SOURCE = '518be74e95b1f00f0d04671b343318143a759e9c'
+NOTIFICATION_EARLY_EVENTS = '0be677be62a1627d6ee158d3275aedd2f36f1c1f885ce96df907b5ab1f078d1f'
+NOTIFICATION_EARLY_INVOCATION = 'a55ee92665594d59a2a247d6cbd6e818'
+NOTIFICATION_EARLY_SYSTEMD = '889bf401760e1dd7ec16180f179415a6f45ce1e66ea03561ad9e886b7ce71051'
+NOTIFICATION_EARLY_PHASES = ['PREPARED', 'SOURCE_DAEMON', 'SOURCE_NETWORK', 'ALIAS_BASELINE',
+    'CONTAINERD_MASK_BASELINE', 'MIGRATION_ATTESTATION', 'LOCK_PREPARED', 'LOCK_PUBLISH_INTENT',
+    'LOCKED', 'NAMESPACE_SLICE_START_INTENT', 'NAMESPACE_SLICE_READY', 'NAMESPACE_UNIT_START_INTENT']
+NOTIFICATION_EARLY_SUFFIX = ['EARLY_NAMESPACE_EXIT_CLASSIFIED', 'NAMESPACE_STORAGE_CLEANED',
+    'NAMESPACE_RELEASED', 'NAMESPACE_SLICE_RELEASE_INTENT', 'NAMESPACE_SLICE_RELEASED',
+    'STORAGE_CLEANUP_VERIFIED', 'ABORTED', 'UNLOCK_INTENT', 'RECONCILED']
+
+
+def notification_early_request(value):
+    exact(value, ['schema', 'target', 'toolCommit', 'toolFileSha256', 'toolProofSha256',
+                  'toolInstallationSha256', 'controllerSourceCiRunId', 'operationSha256',
+                  'planSha256', 'dryRunSha256', 'expiresAt', 'confirmation'])
+    need(value['schema'] == 'PHUB_NOTIFICATION_EARLY_EXIT_RECOVERY_V1' and value['target'] == TARGET
+         and value['operationSha256'] == NOTIFICATION_EARLY_OPERATION
+         and value['planSha256'] == NOTIFICATION_EARLY_PLAN
+         and value['confirmation'] == 'RECONCILE_39DA_EARLY_EXIT_KEEP_SOURCE_518_NO_REPLAY', 'EARLY_REQUEST')
+    need(SHA.fullmatch(value['toolCommit'] or '') and value['toolCommit'] != NOTIFICATION_EARLY_SOURCE
+         and re.fullmatch(r'[1-9][0-9]*', value['controllerSourceCiRunId'] or ''), 'EARLY_SOURCE')
+    for key in ['toolFileSha256', 'toolProofSha256', 'toolInstallationSha256']:
+        need(HASH.fullmatch(value[key] or ''), 'EARLY_TOOL')
+    need(value['dryRunSha256'] is None or HASH.fullmatch(value['dryRunSha256'] or ''), 'EARLY_DRY_RUN')
+    utc(value['expiresAt'])
+    return value
+
+
+def notification_early_source(value, op):
+    _tool_custody_local(value)
+    # Authenticate the still-enrolled 518 import closure, then check the new helper's
+    # main CI using the existing reader. No checkout/config swap and no CI bypass.
+    tool_custody(op)
+    program, environment = _notification_source_program(op)
+    program += "import {githubPublic} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';import {readControllerSourceAuthority} from '/opt/phub/timeweb-beta/standard/source/scripts/verify-source-ci.js';"
+    program += "await readControllerSourceAuthority({controllerSha:'" + value['toolCommit'] + "',controllerSourceCiRunId:'" + value['controllerSourceCiRunId'] + "'},git,githubPublic);process.stdout.write('EARLY_SOURCE_VERIFIED');"
+    need(command(['/usr/bin/node', '--input-type=module', '-e', program], 'EARLY_SOURCE',
+                 input_data=encoded(op), environment=environment, timeout=60) == b'EARLY_SOURCE_VERIFIED', 'EARLY_SOURCE')
+
+
+def notification_early_systemd(p, journal):
+    unit = p['isolation']['unit']
+    raw = command(['/usr/bin/journalctl', '--boot=0', '--unit=' + unit,
+                   '--output=json', '--no-pager'], 'EARLY_SYSTEMD', timeout=30)
+    need(0 < len(raw) < 1024**2, 'EARLY_SYSTEMD_SIZE')
+    rows = [strict(line) for line in raw.splitlines()]
+    canonical = (json.dumps(rows, sort_keys=True, separators=(',', ':'), ensure_ascii=True) + '\n').encode()
+    need(digest(canonical) == NOTIFICATION_EARLY_SYSTEMD and len(rows) == 5, 'EARLY_SYSTEMD_FROZEN')
+    ids = ['7d4958e842da4a758f6c1cdc7b36dcc5', '39f53479d3a045ac8e11786248231fbf',
+           '98e322203f7a4ed290d09fe03c09fe15', 'd9b373ed55a64feb8242e02dbe79a49c',
+           'ae8f7b866b0347b9af31fe1c80b127c0']
+    boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip().replace('-', '')
+    previous = [0, 0, 0]
+    for index, row in enumerate(rows):
+        need(all(row.get(k) == v for k, v in {'_PID': '1', '_UID': '0', '_COMM': 'systemd',
+             '_EXE': '/usr/lib/systemd/systemd', 'UNIT': unit, 'MESSAGE_ID': ids[index],
+             '_BOOT_ID': boot, 'INVOCATION_ID': NOTIFICATION_EARLY_INVOCATION}.items()), 'EARLY_SYSTEMD_ORIGIN')
+        current = [int(row[k]) for k in ['__REALTIME_TIMESTAMP', '__MONOTONIC_TIMESTAMP', '__SEQNUM']]
+        need(all(a < b for a, b in zip(previous, current)), 'EARLY_SYSTEMD_ORDER'); previous = current
+    intent = journal.events[11]
+    need(int(rows[0]['__REALTIME_TIMESTAMP']) / 1e6 >= utc(intent['observedAt'])
+         and rows[1].get('JOB_RESULT') == 'done' and rows[2].get('EXIT_CODE') == 'exited'
+         and rows[2].get('EXIT_STATUS') == '1', 'EARLY_SYSTEMD_EXIT')
+    tool = ROOT/'operator/tools'/NOTIFICATION_EARLY_SOURCE/'control-timeweb-database-backup.py'
+    expected = 'Started ' + unit + ' - [systemd-run] /usr/bin/python3 -I -S -B ' + str(tool) + ' --disk-runtime-supervisor ' + str(REQUEST) + ' ' + NOTIFICATION_EARLY_OPERATION + '.'
+    need(rows[1].get('MESSAGE') == expected, 'EARLY_SYSTEMD_ARGV')
+    return NOTIFICATION_EARLY_SYSTEMD
+
+
+def notification_early_probe(value, recovery_bytes):
+    raw = read_secure(REQUEST)
+    need(digest(raw) == NOTIFICATION_EARLY_OPERATION, 'EARLY_OPERATION')
+    op = validate_operation(strict(raw), time.time(),
+        'a88e88482052d5dbd39df1241b2aa4531be1014bbd5de9b2d94ef052be652909', allow_expired=True)
+    need(op['schema'] == NOTIFICATION_PRE105_SCHEMA and op['toolCommit'] == op['controllerSha']
+         == NOTIFICATION_EARLY_SOURCE, 'EARLY_OPERATION')
+    notification_early_source(value, op)
+    work = ROOT/'backups'/('.disk-restore-' + NOTIFICATION_EARLY_OPERATION)
+    plan_bytes = read_secure(work/'disk-plan.json')
+    need(digest(plan_bytes) == NOTIFICATION_EARLY_PLAN and read_secure(work/'backup-operation.json') == raw, 'EARLY_CAPSULE')
+    p = namespace_validate_plan(op, raw, strict(plan_bytes)); journal = DiskJournal(work, NOTIFICATION_EARLY_OPERATION)
+    phases = [event['phase'] for event in journal.events]
+    need(phases[:12] == NOTIFICATION_EARLY_PHASES and len(phases) >= 12
+         and phases[12:] == NOTIFICATION_EARLY_SUFFIX[:len(phases)-12]
+         and len(phases) <= 12 + len(NOTIFICATION_EARLY_SUFFIX), 'EARLY_PHASES')
+    hashes = [digest(read_secure(work/('disk-event-%04d.json' % i))) for i in range(12)]
+    need(digest(encoded(hashes)) == NOTIFICATION_EARLY_EVENTS, 'EARLY_JOURNAL')
+    expected_files = ['backup-operation.json', 'boundary.json', 'disk-plan.json', 'runtime-control']
+    expected_files += ['disk-event-%04d.json' % i for i in range(len(phases))]
+    need(sorted(path.name for path in work.iterdir()) == sorted(expected_files), 'EARLY_INVENTORY')
+    secure(p['isolation']['controlRoot'], 'dir', 0o700)
+    need(not any(Path(p['isolation']['controlRoot']).iterdir()), 'EARLY_CONTROL')
+    guard, owner = disk_context(op, raw, p, journal, allow_expired=True)
+    guard(cleanup=True, optional_lock=journal.find('UNLOCK_INTENT') is not None)
+    need(all(not os.path.lexists(p[key]) for key in ('image', 'mount', 'mapperPath', 'canonical', 'publication')), 'EARLY_STORAGE')
+    need(not any(row.get('back-file') == p['image'] for row in disk_loop_rows()), 'EARLY_LOOP')
+    source = namespace_frozen_source(p)
+    need(namespace_alias_baseline(source) == journal.find('ALIAS_BASELINE')['identity']
+         and namespace_mask_baseline(source) == journal.find('CONTAINERD_MASK_BASELINE')['identity'], 'EARLY_HOST_MOUNTS')
+    namespace_require_absent(p['isolation']['unit'])
+    unit = namespace_show(p['isolation']['unit'], NS_UNIT_KEYS + ['Job', 'FragmentPath', 'SourcePath', 'DropInPaths', 'UnitFileState'])
+    need(all(unit[k] == v for k, v in {'LoadState':'not-found', 'ActiveState':'inactive', 'SubState':'dead',
+         'MainPID':'0', 'ControlGroup':'', 'Job':'', 'FragmentPath':'', 'SourcePath':'', 'DropInPaths':'', 'UnitFileState':''}.items()), 'EARLY_UNIT')
+    group = '/'+p['isolation']['slice']+'/'+p['isolation']['unit']
+    need(not os.path.lexists('/sys/fs/cgroup'+group)
+         and not namespace_members('/'+p['isolation']['slice']), 'EARLY_CGROUP')
+    if journal.find('NAMESPACE_SLICE_RELEASE_INTENT') is None:
+        need(namespace_slice(p) == journal.find('NAMESPACE_SLICE_READY')['identity'], 'EARLY_SLICE')
+    else:
+        current = namespace_show(p['isolation']['slice'], NS_SLICE_KEYS)
+        if current['ActiveState'] == 'active':
+            need(journal.find('NAMESPACE_SLICE_RELEASED') is None
+                 and namespace_slice(p) == journal.find('NAMESPACE_SLICE_READY')['identity'], 'EARLY_SLICE')
+        else:namespace_slice_terminal(p, journal)
+    systemd_sha = notification_early_systemd(p, journal)
+    evidence = {'schema':'PHUB_NOTIFICATION_EARLY_EXIT_DRY_RUN_V1',
+        'operationSha256':NOTIFICATION_EARLY_OPERATION, 'planSha256':NOTIFICATION_EARLY_PLAN,
+        'initialJournalSha256':NOTIFICATION_EARLY_EVENTS, 'systemdJournalSha256':systemd_sha,
+        'controllerSha':op['controllerSha'], 'controllerConfigSha256':op['controllerConfigSha256'],
+        'toolInstallationSha256':op['toolInstallationSha256'], 'expectedBoundarySha256':op['expectedBoundarySha256'],
+        'lockIdentity':journal.find('LOCK_PREPARED')['identity'], 'sliceIdentity':journal.find('NAMESPACE_SLICE_READY')['identity']}
+    proof_sha = digest(encoded(evidence))
+    classification = {'recoveryRequestSha256':digest(recovery_bytes), 'dryRunSha256':proof_sha,
+        'classification':'UNIT_EXEC_EXITED_BEFORE_NAMESPACE_RECEIPT', 'systemdJournalSha256':systemd_sha}
+    for index, phase in enumerate(phases[12:]):
+        need(journal.find(phase) == (classification if index == 0 else {}), 'EARLY_RECOVERY_DRIFT')
+    return op, p, journal, guard, owner, proof_sha, classification
+
+
+def notification_early_reconcile(value, recovery_bytes, execute=False):
+    op, p, journal, guard, owner, proof_sha, classification = notification_early_probe(value, recovery_bytes)
+    if not execute:
+        return {'status':'EARLY_EXIT_DRY_RUN_ELIGIBLE', 'dryRunSha256':proof_sha,
+                'authorizesMutation':False, 'replayAllowed':False}
+    need(value['dryRunSha256'] == proof_sha, 'EARLY_DRY_RUN')
+    if journal.find('EARLY_NAMESPACE_EXIT_CLASSIFIED') is None:
+        need(0 < utc(value['expiresAt']) - time.time() <= 3600, 'EARLY_EXPIRED')
+    # All probes above run under the existing disk process lock before the first write.
+    journal.once('EARLY_NAMESPACE_EXIT_CLASSIFIED', **classification)
+    journal.once('NAMESPACE_STORAGE_CLEANED')
+    journal.once('NAMESPACE_RELEASED')  # Proven absent, never a guessed process adoption.
+    namespace_release(p, op, journal)  # Only stop the exact owned empty slice.
+    namespace_terminal(p, journal); guard(cleanup=True, optional_lock=journal.find('UNLOCK_INTENT') is not None)
+    journal.once('STORAGE_CLEANUP_VERIFIED'); journal.once('ABORTED')
+    disk_release(p, journal, owner)
+    return {'status':'DISK_RECONCILED', 'outcome':'ABORTED_BEFORE_DUMP',
+            'operationSha256':NOTIFICATION_EARLY_OPERATION, 'authorizesDeploy':False, 'replayAllowed':False}
+
+
+def notification_early_main():
+    need(os.getuid() == 0 and os.uname().nodename == 'msk-1-vm-z8ks'
+         and os.uname().machine == 'x86_64', 'EARLY_HOST')
+    ips = command(['/usr/bin/hostname', '-I'], 'EARLY_HOST').decode().split()
+    need('100.77.212.57' in ips and '103.88.243.171' in ips, 'EARLY_HOST')
+    disk_prerequisites(cleanup=True)
+    os.umask(0o077)
+    path = ROOT/'operator/notification-early-exit-recovery.json'
+    raw = read_secure(path); value = notification_early_request(strict(raw))
+    need(Path(__file__) == ROOT/'operator/tools'/value['toolCommit']/'control-timeweb-database-backup.py'
+         and digest(read_secure(Path(__file__), 0o755)) == value['toolFileSha256'], 'EARLY_TOOL_PATH')
+    execute = sys.argv[1] == '--reconcile-notification-early-exit'
+    def run():
+        need(read_secure(path) == raw, 'EARLY_REQUEST_DRIFT')
+        return notification_early_reconcile(value, raw, execute)
+    if execute:
+        with disk_mutation_lock():result = run()
+    else:result = run()
+    print(json.dumps(result, separators=(',', ':')))
+
+
 def main():
     need(sys.flags.optimize==0 and sys.flags.isolated==1, 'ISOLATED_NONOPTIMIZED_PYTHON_REQUIRED')
+    if len(sys.argv) == 3 and sys.argv[1] in ('--attest-notification-early-exit', '--reconcile-notification-early-exit'):
+        need(sys.argv[2] == str(ROOT/'operator/notification-early-exit-recovery.json'), 'EARLY_ENTRY')
+        notification_early_main(); return
     supervisor = len(sys.argv) == 4 and sys.argv[1] == '--disk-runtime-supervisor' and sys.argv[2] == str(REQUEST)
     need(os.getuid()==0 and (supervisor or len(sys.argv)==3 and sys.argv[1] in ('--execute', '--reconcile-disk', '--attest-disk') and sys.argv[2]==str(REQUEST)), 'ENTRY')
     os.umask(0o077)
@@ -3294,17 +3790,19 @@ def main():
         need('100.77.212.57' in ips and '103.88.243.171' in ips,'HOST')
     if supervisor:
         need(is_namespace_operation(op) and sys.argv[3]==digest(request_bytes) and time.time()<utc(op['expiresAt']), 'NS_SUPERVISOR_ENTRY')
-        tool_custody(op)
+        if op.get('schema') != NOTIFICATION_PRE105_SCHEMA:tool_custody(op)
         work = ROOT/'backups'/('.disk-restore-' + digest(request_bytes))
         need(read_secure(work/'backup-operation.json') == request_bytes, 'NS_SUPERVISOR_CAPSULE')
         plan = namespace_validate_plan(op, request_bytes, strict(read_secure(work/'disk-plan.json')))
         journal = DiskJournal(work, plan['operationSha256'])
         need(journal.find('NAMESPACE_UNIT_START_INTENT') is not None, 'NS_SUPERVISOR_INTENT')
+        if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+            namespace_supervisor_custody(op, request_bytes, plan, journal)
         namespace_supervisor(op, request_bytes, plan); return
     for sig in (signal.SIGTERM,signal.SIGINT):
         signal.signal(sig,lambda *_: (_ for _ in ()).throw(Stop('INTERRUPTED_UNCERTAIN')))
     if sys.argv[1] == '--attest-disk':
-        result = namespace_verify_reference(op, request_bytes, file_sha) if is_namespace_operation(op) else disk_verify_reference(op, request_bytes, file_sha)
+        result = notification_backup_reference(op, request_bytes, file_sha) if op['schema'] == NOTIFICATION_PRE105_SCHEMA else (namespace_verify_reference(op, request_bytes, file_sha) if is_namespace_operation(op) else disk_verify_reference(op, request_bytes, file_sha))
     elif sys.argv[1] == '--reconcile-disk':
         need(is_disk_operation(op), 'DISK_RECONCILIATION_ONLY')
         with disk_mutation_lock():

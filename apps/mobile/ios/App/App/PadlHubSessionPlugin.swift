@@ -69,9 +69,10 @@ public final class PadlHubSessionPlugin: CAPPlugin, CAPBridgedPlugin {
       }
       read = CabinetRead(resource: resource, id: call.getString("resourceId"), query: query)
     }
+    let notification = operation == .notification ? NotificationCommand(resource:call.getString("resource") ?? "",id:call.getString("resourceId")) : nil
     let request = SessionRequest(
       operation: operation, challengeID: call.getString("challengeId"),
-      headers: headers, body: call.getString("body"), read: read)
+      headers: headers, body: call.getString("body"), read: read, notification: notification)
     Task {
       do {
         let response = try await transport.request(request)
@@ -97,6 +98,7 @@ final class PadlHubBridgeViewController: CAPBridgeViewController {
 
   override func capacitorDidLoad() {
     bridge?.registerPluginInstance(PadlHubSessionPlugin())
+    bridge?.registerPluginInstance(PadlHubIOSPushPlugin())
     bridge?.registerPluginInstance(PadlHubViewportPlugin())
     // Contain the viewport itself so scrolling and position:fixed cannot cover system UI.
     guard let webView else { return }

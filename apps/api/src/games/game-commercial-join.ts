@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto';
 
-import { bookedOperationAdmissionId } from '@phub/subscription-runtime-adapter';
+import type {
+  PaidJoinProviderBinding,
+  ConfirmGamePaymentInput,
+  GameRosterCommandResult,
+} from '@phub/database';
+import {
+  bookedOperationAdmissionId,
+  type BookedOperationReceipt,
+} from '@phub/subscription-runtime-adapter';
 
 import {
   readGameJoinConditions,
@@ -70,6 +78,7 @@ export type CommercialJoinAttemptState =
 
 /** Server-side port onto the existing write owner of the games aggregate. */
 export interface CommercialJoinRepositoryPort {
+  confirmPayment?(input: ConfirmGamePaymentInput): Promise<GameRosterCommandResult>;
   beginPaidJoin(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -83,6 +92,7 @@ export interface CommercialJoinRepositoryPort {
     readonly price: CommercialJoinPrice;
     readonly invitationId?: string;
     readonly reservationTtlSeconds: number;
+    readonly providerBinding?: PaidJoinProviderBinding;
   }): Promise<CommercialJoinBeginResult>;
   getPaidJoinAttempt(input: {
     readonly tenantId: string;
@@ -129,6 +139,7 @@ export type CommercialJoinBeginResult =
   | { readonly outcome: 'reservation_conflict' };
 
 export interface CommercialJoinAttemptView {
+  readonly providerBinding?: PaidJoinProviderBinding;
   readonly commandId: string;
   readonly gameId: string;
   readonly state: 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
@@ -153,6 +164,12 @@ export interface CommercialJoinOwnerActor {
 }
 
 export interface CommercialJoinOwnerPort {
+  prepare?(input: {
+    readonly actor: CommercialJoinOwnerActor;
+    readonly subscriptionInstanceId: string;
+    readonly idempotencyKey: string;
+  }): Promise<PaidJoinProviderBinding | null>;
+
   /**
    * Optional pre-dispatch resolution of the selected product's provider subscription mapping. When
    * present it runs BEFORE any LK2 row is written, so an unmapped selection is refused without
@@ -171,6 +188,8 @@ export interface CommercialJoinOwnerPort {
     readonly subscriptionInstanceId: string;
     readonly price: CommercialJoinPrice;
     readonly providerClientSubscriptionId?: string;
+    readonly providerBinding?: PaidJoinProviderBinding;
+    readonly reservationId?: string;
   }): Promise<CommercialJoinOwnerOutcome>;
   read(input: {
     readonly actor: CommercialJoinOwnerActor;
@@ -180,6 +199,7 @@ export interface CommercialJoinOwnerPort {
 }
 
 export type CommercialJoinOwnerOutcome =
+  | { readonly status: 'CONFIRMED'; readonly receipt: BookedOperationReceipt }
   | { readonly status: 'PENDING' }
   | { readonly status: 'UNKNOWN' }
   | {
@@ -328,6 +348,7 @@ export interface CommercialJoinDependencies {
   readonly now?: () => number;
   readonly reservationTtlSeconds?: number;
   readonly reconciliationRetryAfterSeconds?: number;
+  readonly onReconciliationFailure?: (code: string) => void;
 }
 
 function attemptView(
@@ -481,7 +502,7 @@ export async function executeCommercialJoin(
   // 2. The selected product must be executable by the owner. Resolve its provider subscription
   //    mapping BEFORE any durable row so an unmapped selection is a pure refusal, not a dead attempt.
   let resolvedProviderClientSubscriptionId: string | undefined;
-  if (dependencies.owner.resolveProviderClientSubscriptionId) {
+  if (dependencies.owner.resolveProviderClientSubscriptionId && !dependencies.owner.prepare) {
     try {
       resolvedProviderClientSubscriptionId =
         await dependencies.owner.resolveProviderClientSubscriptionId({
@@ -504,6 +525,28 @@ export async function executeCommercialJoin(
     }
   }
 
+  let providerBinding: PaidJoinProviderBinding | undefined;
+  if (dependencies.owner.prepare) {
+    try {
+      const prepared = await dependencies.owner.prepare({
+        actor: {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          userId: input.userId,
+          sessionId: input.sessionId,
+          gameId: input.gameId,
+          expectedRevision: input.expectedRevision,
+        },
+        subscriptionInstanceId: input.subscriptionInstanceId,
+        idempotencyKey: input.idempotencyKey,
+      });
+      if (!prepared || !prepared.admissible) return commercialFailure('GAME_PAYMENT_REQUIRED');
+      providerBinding = prepared;
+    } catch {
+      return commercialFailure('GAME_PAYMENT_REQUIRED');
+    }
+  }
+
   // 3. Durable attempt + seat reservation. The operation exists before the owner call.
   let begin: CommercialJoinBeginResult;
   try {
@@ -520,6 +563,7 @@ export async function executeCommercialJoin(
       price,
       ...(input.invitationId === undefined ? {} : { invitationId: input.invitationId }),
       reservationTtlSeconds,
+      ...(providerBinding ? { providerBinding } : {}),
     });
   } catch {
     return commercialFailure('GAME_OWNER_UNAVAILABLE');
@@ -616,6 +660,8 @@ export async function executeCommercialJoin(
       correlationId: input.correlationId,
       subscriptionInstanceId: input.subscriptionInstanceId,
       price,
+      reservationId: begin.reservationId,
+      ...(providerBinding ? { providerBinding } : {}),
       ...(resolvedProviderClientSubscriptionId === undefined
         ? {}
         : { providerClientSubscriptionId: resolvedProviderClientSubscriptionId }),
@@ -801,4 +847,144 @@ export async function readCommercialJoinOperation(
     ),
     replayed: true,
   });
+}
+
+/** Explicit command: apply an exact trusted owner receipt, with no owner execute or provider POST. */
+export async function reconcileCommercialJoinOperation(
+  input: Parameters<typeof readCommercialJoinOperation>[0],
+  dependencies: Pick<
+    CommercialJoinDependencies,
+    'repository' | 'owner' | 'now' | 'onReconciliationFailure'
+  >,
+): Promise<CommercialJoinResponseBody | null> {
+  const attempt = await dependencies.repository.getPaidJoinAttempt({
+    tenantId: input.tenantId,
+    actorUserId: input.actorUserId,
+    operationId: input.operationId,
+  });
+  if (!attempt) return null;
+  const binding = attempt.providerBinding;
+  if (
+    attempt.state === 'IN_PROGRESS' &&
+    binding &&
+    attempt.reservation &&
+    dependencies.repository.confirmPayment
+  ) {
+    let owner: CommercialJoinOwnerOutcome | null = null;
+    try {
+      owner = await dependencies.owner.read({
+        actor: {
+          tenantId: input.tenantId,
+          tenantKey: input.tenantKey,
+          userId: input.actorUserId,
+          sessionId: input.sessionId,
+          gameId: attempt.gameId,
+          expectedRevision: 0,
+        },
+        operationId: input.operationId,
+        correlationId: input.correlationId,
+      });
+    } catch {
+      /* Ambiguous read never releases or retries the original attempt. */
+    }
+    if (owner?.status === 'CONFIRMED') {
+      const receipt = owner.receipt;
+      const exact =
+        receipt.operationId === attempt.commandId &&
+        receipt.tenantId === input.tenantId &&
+        receipt.userId === input.actorUserId &&
+        receipt.gameId === attempt.gameId &&
+        receipt.reservationId === attempt.reservation.id &&
+        (
+          [
+            'providerClientId',
+            'providerMappingId',
+            'providerClientSubscriptionId',
+            'providerExerciseId',
+            'targetMappingId',
+            'targetVersion',
+            'requestSha256',
+            'idempotencyKeySha256',
+          ] as const
+        ).every((key) => receipt[key] === binding[key]);
+      if (exact) {
+        const evidenceHash = createHash('sha256')
+          .update(JSON.stringify(Object.entries(receipt).sort(([a], [b]) => a.localeCompare(b))))
+          .digest('hex');
+        let confirmed: GameRosterCommandResult;
+        try {
+          confirmed = await dependencies.repository.confirmPayment({
+            tenantId: input.tenantId,
+            actorUserId: input.actorUserId,
+            gameId: attempt.gameId,
+            reservationId: attempt.reservation.id,
+            correlationId: input.correlationId,
+            idempotencyKey: `join-reconcile:${input.operationId}`,
+            requestHash: evidenceHash,
+            paidJoinBinding: binding,
+            evidence: {
+              provider: 'VIVA',
+              operationType: 'SUBSCRIPTION_BOOKING',
+              operationId: input.operationId,
+              bookingId: receipt.bookingId,
+              exerciseId: receipt.providerExerciseId,
+              evidenceHash,
+              verifiedAt: receipt.verifiedAt,
+              verifiedBy: 'LEGACY_NODE_RED',
+            },
+          });
+        } catch {
+          dependencies.onReconciliationFailure?.('GAME_CONFIRMATION_UNAVAILABLE');
+          return readCommercialJoinOperation(input, dependencies);
+        }
+        if (confirmed.outcome !== 'applied') {
+          dependencies.onReconciliationFailure?.(
+            confirmed.outcome === 'rejected' ? confirmed.code : 'GAME_PAYMENT_EVIDENCE_CONFLICT',
+          );
+          const unresolved = await readCommercialJoinOperation(input, dependencies);
+          if (unresolved)
+            return {
+              ...unresolved,
+              operation: {
+                ...unresolved.operation,
+                status: 'UNKNOWN',
+                commercial: {
+                  ...unresolved.operation.commercial,
+                  reason: 'GAME_RECONCILIATION_REQUIRED',
+                },
+                nextAction: { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: 30 },
+              },
+            };
+        }
+        // The trusted receipt was applied in this transaction. Return its confirmed aggregate
+        // revision directly: re-reading the attempt here can still observe the pre-completion
+        // projection and answer SUCCEEDED with `aggregateRevision: null`, which leaves the client
+        // permanently in CONFIRMED_UPDATING instead of converging the card.
+        if (confirmed.outcome === 'applied') {
+          const receiptView: CommercialJoinReceiptView = {
+            provider: 'VIVA',
+            status: 'CONFIRMED',
+            confirmedAt: receipt.verifiedAt,
+          };
+          return operationBody({
+            operationId: attempt.commandId,
+            status: 'SUCCEEDED',
+            gameId: attempt.gameId,
+            revision: confirmed.revision,
+            createdAt: confirmed.committedAt,
+            updatedAt: receipt.verifiedAt,
+            commercial: attemptView(
+              'OWNER_CONFIRMED',
+              attempt.reservation,
+              null,
+              receiptView,
+              null,
+            ),
+            replayed: false,
+          });
+        }
+      }
+    }
+  }
+  return readCommercialJoinOperation(input, dependencies);
 }

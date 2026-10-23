@@ -1012,3 +1012,144 @@ describe('game roster commercial paid join', () => {
     expect(connect).not.toHaveBeenCalled();
   });
 });
+
+describe('immutable paid JOIN confirmation binding', () => {
+  const binding = {
+    providerClientId: 'client-1',
+    providerMappingId: tenantId,
+    providerClientSubscriptionId: subscriptionInstanceId,
+    providerExerciseId: 'exercise-1',
+    targetMappingId: gameId,
+    targetVersion: '2',
+    startsAt: '2026-08-01T18:00:00.000Z',
+    durationMinutes: 90,
+    capacity: 4,
+    admissible: true,
+    requestSha256: `sha256:${'a'.repeat(64)}`,
+    idempotencyKeySha256: `sha256:${'b'.repeat(64)}`,
+  };
+  const input = (): ConfirmGamePaymentInput => {
+    const base = confirmPaymentInput();
+    return {
+      ...base,
+      paidJoinBinding: binding,
+      evidence: {
+        ...base.evidence,
+        operationType: 'SUBSCRIPTION_BOOKING',
+        operationId,
+        exerciseId: binding.providerExerciseId,
+      },
+    };
+  };
+  function database(
+    snapshotBinding: unknown = binding,
+    options: { phone?: string; state?: string; completion?: number } = {},
+  ) {
+    return poolWithHandler((text) => {
+      if (text.includes('payment_snapshot_exists'))
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+              paid_snapshot: { operation_id: operationId, provider_binding: snapshotBinding },
+            },
+          ],
+        };
+      if (text.includes('select state from games.command_idempotency'))
+        return { rows: [{ state: options.state ?? 'IN_PROGRESS' }] };
+      if (text.includes('from profile.user_summaries'))
+        return { rows: [{ phone_e164: options.phone ?? '+79000000002' }] };
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence'))
+        return { rows: [{ id: evidenceId }] };
+      if (text.includes('insert into games.participations'))
+        return { rows: [{ id: participationId }] };
+      if (text.includes('select snapshot.operation_id'))
+        return { rows: [{ operation_id: operationId }] };
+      if (text.includes('update games.command_idempotency'))
+        return { rowCount: options.completion ?? 1 };
+      if (
+        text.includes('update games.seat_reservations') ||
+        text.includes('update games.payment_confirmation_evidence')
+      )
+        return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SUBSCRIPTION' });
+    });
+  }
+  it('derives phone inside the transaction and atomically completes the original paid attempt', async () => {
+    const { pool, query } = database();
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(input()),
+    ).resolves.toMatchObject({ outcome: 'applied' });
+    const evidence = query.mock.calls.find(([text]) =>
+      text.includes('insert into games.payment_confirmation_evidence'),
+    );
+    expect(evidence?.[1]).toContain('+79000000002');
+    expect(evidence?.[1]).not.toContain(input().evidence.clientPhoneE164);
+    expect(
+      query.mock.calls.some(
+        ([text]) => text.includes('from profile.user_summaries') && text.includes('for share'),
+      ),
+    ).toBe(true);
+  });
+  it.each(Object.keys(binding))(
+    'refuses changed snapshot %s before storing evidence',
+    async (key) => {
+      const { pool, query } = database({ ...binding, [key]: 'wrong' });
+      await expect(
+        createGameRosterRepository(pool as never).confirmPayment(input()),
+      ).resolves.toMatchObject({ outcome: 'rejected', code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' });
+      expect(
+        query.mock.calls.some(([text]) =>
+          text.includes('insert into games.payment_confirmation_evidence'),
+        ),
+      ).toBe(false);
+    },
+  );
+  it('rejects a missing exercise and failed original attempt', async () => {
+    for (const changes of ['missing-exercise', 'failed-attempt']) {
+      const { pool, query } = database(binding, {
+        state: changes === 'failed-attempt' ? 'FAILED' : 'IN_PROGRESS',
+      });
+      const command = input();
+      if (changes === 'missing-exercise')
+        delete (command.evidence as { exerciseId?: string }).exerciseId;
+      await expect(
+        createGameRosterRepository(pool as never).confirmPayment(command),
+      ).resolves.toMatchObject({ outcome: 'rejected' });
+      expect(
+        query.mock.calls.some(([text]) => text.includes('insert into games.participations')),
+      ).toBe(false);
+    }
+  });
+  it('allows the same reconciliation key after a missing phone projection is repaired', async () => {
+    const missing = database(binding, { phone: '' });
+    await expect(
+      createGameRosterRepository(missing.pool as never).confirmPayment(input()),
+    ).rejects.toThrow('GAME_PAYMENT_ACTOR_PHONE_UNAVAILABLE');
+    expect(
+      missing.query.mock.calls.some(([text]) =>
+        text.includes('insert into games.command_idempotency'),
+      ),
+    ).toBe(false);
+    expect(missing.query.mock.calls.some(([text]) => text === 'rollback')).toBe(true);
+    const repaired = database();
+    await expect(
+      createGameRosterRepository(repaired.pool as never).confirmPayment(input()),
+    ).resolves.toMatchObject({ outcome: 'applied' });
+  });
+  it('rolls back if completion of the original command is lost', async () => {
+    const { pool, query } = database(binding, { completion: 0 });
+    await expect(createGameRosterRepository(pool as never).confirmPayment(input())).rejects.toThrow(
+      'GAME_PAID_JOIN_COMPLETION_CONFLICT',
+    );
+    expect(query.mock.calls.some(([text]) => text === 'rollback')).toBe(true);
+    expect(query.mock.calls.some(([text]) => text === 'commit')).toBe(false);
+  });
+});

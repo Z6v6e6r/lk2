@@ -9,11 +9,13 @@ export interface WebPushProviderSelector {
   readonly appId: string;
   readonly environment: WebPushEnvironment;
   /** Server-owned provider identity. Omitted only by legacy Web Push callers. */
-  readonly platform?: 'WEB' | 'ANDROID';
-  readonly provider?: 'WEB_PUSH' | 'FCM';
+  readonly platform?: 'WEB' | 'ANDROID' | 'IOS';
+  readonly provider?: 'WEB_PUSH' | 'FCM' | 'APNS';
+  readonly credentialRef?: string;
 }
 
-export type AndroidPushProviderSelector = Required<WebPushProviderSelector>;
+export type AndroidPushProviderSelector = Required<Omit<WebPushProviderSelector, 'credentialRef'>> &
+  Pick<WebPushProviderSelector, 'credentialRef'>;
 
 export interface WebPushEndpointCapabilities {
   readonly tenantEnabled: boolean;
@@ -46,6 +48,10 @@ export interface NotificationEndpointRepository {
   getWebPushCapabilities(
     tenantId: string,
     selector: WebPushProviderSelector,
+  ): Promise<WebPushEndpointCapabilities>;
+  getIosPushCapabilities?(
+    tenantId: string,
+    selector: AndroidPushProviderSelector,
   ): Promise<WebPushEndpointCapabilities>;
   getAndroidPushCapabilities?(
     tenantId: string,
@@ -98,8 +104,8 @@ export interface NotificationEndpointRepository {
 }
 
 function providerIdentity(selector: WebPushProviderSelector): {
-  readonly platform: 'WEB' | 'ANDROID';
-  readonly provider: 'WEB_PUSH' | 'FCM';
+  readonly platform: 'WEB' | 'ANDROID' | 'IOS';
+  readonly provider: 'WEB_PUSH' | 'FCM' | 'APNS';
 } {
   return {
     platform: selector.platform ?? 'WEB',
@@ -227,8 +233,7 @@ async function activeProvider(
   selector: WebPushProviderSelector,
 ): Promise<ProviderRow | undefined> {
   const identity = providerIdentity(selector);
-  return queryOne<ProviderRow>(
-    client,
+  const rows = await client.query<ProviderRow>(
     `select id
        from integration.notification_provider_accounts
       where tenant_id = $1
@@ -237,9 +242,17 @@ async function activeProvider(
         and provider = $5
         and app_id = $2
         and environment = $3
-        and status = 'ACTIVE'`,
-    [tenantId, selector.appId, selector.environment, identity.platform, identity.provider],
+        and status = 'ACTIVE' and ($6::text is null or credential_ref=$6) for share`,
+    [
+      tenantId,
+      selector.appId,
+      selector.environment,
+      identity.platform,
+      identity.provider,
+      selector.credentialRef ?? null,
+    ],
   );
+  return rows.rows.length === 1 ? rows.rows[0] : undefined;
 }
 
 export function createNotificationEndpointRepository(pool: Pool): NotificationEndpointRepository {
@@ -314,13 +327,38 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
       });
     },
 
+    getIosPushCapabilities(tenantId, selector) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const row = await queryOne<CapabilitiesRow>(
+          client,
+          `select coalesce(s.ios_push_enabled, false) as web_push_enabled,
+                  (select count(*)=1 from integration.notification_provider_accounts a
+                    where a.tenant_id = $1 and a.channel = 'PUSH' and a.platform = 'IOS'
+                      and a.provider = 'APNS' and a.app_id = $2 and a.environment = $3
+                      and a.status = 'ACTIVE' and a.credential_ref=$4) as provider_configured
+             from (select $1::uuid as tenant_id) input
+             left join notifications.tenant_runtime_settings s on s.tenant_id = input.tenant_id`,
+          [tenantId, selector.appId, selector.environment, selector.credentialRef ?? null],
+        );
+        return {
+          tenantEnabled: row?.web_push_enabled ?? false,
+          providerConfigured: row?.provider_configured ?? false,
+        };
+      });
+    },
+
     async registerWebPush(input) {
       try {
         return await withTenantTransaction(pool, input.tenantId, async (client) => {
           const provider = await activeProvider(client, input.tenantId, input.selector);
           if (!provider) return { outcome: 'provider_unavailable' };
           const identity = providerIdentity(input.selector);
-          const auditPrefix = identity.platform === 'ANDROID' ? 'ANDROID_PUSH' : 'WEB_PUSH';
+          const auditPrefix =
+            identity.platform === 'ANDROID'
+              ? 'ANDROID_PUSH'
+              : identity.platform === 'IOS'
+                ? 'IOS_PUSH'
+                : 'WEB_PUSH';
 
           // Serialize physical subscription ownership before the target-user lock.
           await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
@@ -569,7 +607,12 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
     revokeWebPush(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
         const identity = providerIdentity(input.selector);
-        const auditPrefix = identity.platform === 'ANDROID' ? 'ANDROID_PUSH' : 'WEB_PUSH';
+        const auditPrefix =
+          identity.platform === 'ANDROID'
+            ? 'ANDROID_PUSH'
+            : identity.platform === 'IOS'
+              ? 'IOS_PUSH'
+              : 'WEB_PUSH';
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `notification-endpoint:${input.userId}`,
         ]);
@@ -587,6 +630,7 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
               and a.provider = $7
               and a.app_id = $4
               and a.environment = $5
+              and ($8::text is null or a.credential_ref=$8)
             for update of e`,
           [
             input.tenantId,
@@ -596,6 +640,7 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
             input.selector.environment,
             identity.platform,
             identity.provider,
+            input.selector.credentialRef ?? null,
           ],
         );
         if (!endpoint) return { outcome: 'not_found' };

@@ -2,8 +2,83 @@ export const BOOKED_OPERATION_READ_PREFIX = '/lk/integrations/v1/booked-operatio
 export const BOOKED_OPERATION_READ_SCOPE = 'subscription-runtime.booked-operation.read';
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+/** Internal owner evidence, negotiated by a signed receipt_version claim. No credential or phone. */
+export interface BookedOperationReceipt {
+  readonly contractVersion: 1;
+  readonly source: 'LK1_SUBSCRIPTION_BOOKING_OWNER';
+  readonly operationId: string;
+  readonly tenantId: string;
+  readonly userId: string;
+  readonly gameId: string;
+  readonly reservationId: string;
+  readonly providerClientId: string;
+  readonly providerClientSubscriptionId: string;
+  readonly providerExerciseId: string;
+  readonly providerMappingId: string;
+  readonly targetMappingId: string;
+  readonly targetVersion: string;
+  readonly requestSha256: string;
+  readonly idempotencyKeySha256: string;
+  readonly bookingId: string;
+  readonly verifiedAt: string;
+}
+
+export function parseBookedOperationReceipt(
+  value: unknown,
+  operationId: string,
+): BookedOperationReceipt {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new BookedOperationReadError(503);
+  const row = value as Record<string, unknown>;
+  const ids = [
+    'operationId',
+    'tenantId',
+    'userId',
+    'gameId',
+    'reservationId',
+    'providerMappingId',
+    'targetMappingId',
+  ];
+  const providerIds = [
+    'providerClientId',
+    'providerClientSubscriptionId',
+    'providerExerciseId',
+    'bookingId',
+  ];
+  const hashes = ['requestSha256', 'idempotencyKeySha256'];
+  const keys = [
+    ...ids,
+    ...providerIds,
+    ...hashes,
+    'contractVersion',
+    'source',
+    'targetVersion',
+    'verifiedAt',
+  ];
+  if (
+    Object.keys(row).sort().join(',') !== keys.sort().join(',') ||
+    row.contractVersion !== 1 ||
+    row.source !== 'LK1_SUBSCRIPTION_BOOKING_OWNER' ||
+    row.operationId !== operationId ||
+    ids.some((key) => typeof row[key] !== 'string' || !uuidPattern.test(row[key])) ||
+    providerIds.some(
+      (key) =>
+        typeof row[key] !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(row[key]),
+    ) ||
+    hashes.some((key) => typeof row[key] !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(row[key])) ||
+    typeof row.targetVersion !== 'string' ||
+    !/^[A-Za-z0-9._:-]{1,128}$/.test(row.targetVersion) ||
+    typeof row.verifiedAt !== 'string' ||
+    !Number.isFinite(Date.parse(row.verifiedAt)) ||
+    new Date(row.verifiedAt).toISOString() !== row.verifiedAt
+  )
+    throw new BookedOperationReadError(503);
+  return row as unknown as BookedOperationReceipt;
+}
+
 export interface BookedOperationReadOutcome {
   readonly contractVersion: 1;
+  readonly receipt?: BookedOperationReceipt;
   readonly operationId: string;
   readonly status: 'PENDING' | 'UNKNOWN' | 'CONFIRMED';
   readonly asOf: string | null;
@@ -19,6 +94,7 @@ export class BookedOperationReadError extends Error {
 export function parseBookedOperationReadOutcome(
   value: unknown,
   operationId: string,
+  includeReceipt = false,
 ): BookedOperationReadOutcome {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new BookedOperationReadError(503);
@@ -33,7 +109,10 @@ export function parseBookedOperationReadOutcome(
     Number.isFinite(Date.parse(row.asOf)) &&
     new Date(row.asOf).toISOString() === row.asOf;
   if (
-    Object.keys(row).sort().join(',') !== 'asOf,contractVersion,operationId,reason,status' ||
+    Object.keys(row).sort().join(',') !==
+      (includeReceipt && row.receipt !== undefined
+        ? 'asOf,contractVersion,operationId,reason,receipt,status'
+        : 'asOf,contractVersion,operationId,reason,status') ||
     row.contractVersion !== 1 ||
     row.operationId !== operationId ||
     !uuidPattern.test(operationId) ||
@@ -43,6 +122,10 @@ export function parseBookedOperationReadOutcome(
     (!validTime && !(row.status === 'UNKNOWN' && row.asOf === null))
   ) {
     throw new BookedOperationReadError(503);
+  }
+  if (row.receipt !== undefined) {
+    if (!includeReceipt || row.status !== 'CONFIRMED') throw new BookedOperationReadError(503);
+    parseBookedOperationReceipt(row.receipt, operationId);
   }
   return row as unknown as BookedOperationReadOutcome;
 }
@@ -82,7 +165,7 @@ export class BookedOperationReadClient {
 
   async read(
     operationId: string,
-    envelope: { actorDelegation: string; correlationId: string },
+    envelope: { actorDelegation: string; correlationId: string; includeReceipt?: boolean },
   ): Promise<BookedOperationReadOutcome> {
     if (
       !uuidPattern.test(operationId) ||
@@ -129,7 +212,8 @@ export class BookedOperationReadClient {
           const chunk = await reader.read();
           if (chunk.done) break;
           length += chunk.value.length;
-          if (length > 2048) throw new BookedOperationReadError(503);
+          if (length > (envelope.includeReceipt ? 8192 : 2048))
+            throw new BookedOperationReadError(503);
           chunks.push(chunk.value);
         }
       } finally {
@@ -138,6 +222,7 @@ export class BookedOperationReadClient {
       const outcome = parseBookedOperationReadOutcome(
         JSON.parse(Buffer.concat(chunks).toString('utf8')),
         operationId,
+        envelope.includeReceipt,
       );
       this.resetIfUnchanged(failureVersion);
       this.emit('success');

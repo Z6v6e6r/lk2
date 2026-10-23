@@ -118,3 +118,37 @@ artifact or production activation is claimed. The isolated physical rehearsal ad
 covers real AuthService refresh/session, NOBYPASSRLS PG mappings, blocked-query timeout,
 majority owner Mongo write/read, HTTP/SDK replay, lost ACK/response and exact no-write GET
 snapshots. It is distinct from ordinary CI route/adapter/repository tests and live evidence.
+
+## Paid JOIN receipt reconciliation
+
+The internal LK2 commercial owner read negotiates `receipt_version: 1` in its signed read delegation.
+Legacy reads retain exactly five response fields. Only the negotiated internal response may add a
+strict receipt containing the original operation, tenant/user/game/reservation, provider actor,
+provider subscription/exercise, actor/target mapping IDs, target version, admission request/key hashes,
+stable booking ID and canonical verification time. Tokens, phone and raw provider bodies are forbidden.
+The public operation response continues to expose only its safe commercial view.
+
+Before reserving a seat, LK2 resolves and freezes the provider binding in the existing payment snapshot
+JSON. The game owner locks the game and rechecks its exact mapping/version before the reservation;
+its own revision bump cannot invalidate that original binding. LK1 delegates execution once, behind
+the durable ATTEMPTING marker, to the canonical local `/lk/subscription-bookings` owner. That owner
+retains user authentication, subscription ownership, exercise/category/date/daily limits, atomic
+claims, managed policy/entitlement rechecks and the separate Admin service credential.
+
+The negotiated read uses a second bounded Mongo FIND of the same owner collection, never a gateway
+POST. Exactly one matching canonical CONFIRMED row must have a booking ID, confirmation timestamp,
+completed/not-required activation and any managed entitlement confirmed. This recovers a gateway
+commit followed by an outer timeout/crash without repeating a booking. Missing, duplicate, cancelled,
+partial or mismatched evidence stays UNKNOWN and preserves attempt custody.
+
+`POST /user/api/v1/{tenantKey}/game-operations/{operationId}/reconcile` requires the ordinary authenticated
+tenant/session boundary and `Idempotency-Key: join-reconcile:{operationId}`. No receipt/actor/body fields
+are accepted from the client. It loads the original actor-owned attempt, checks every receipt binding,
+and invokes the existing CONFIRM_PAYMENT writer. That transaction rechecks the stored binding, exercise,
+original command and reservation, derives the actor phone from `profile.user_summaries`, then atomically
+stores evidence, confirms participation and completes the original paid command. Duplicate commands
+replay; ambiguous evidence never releases a seat or invokes owner execution. GET remains read-only.
+Paid SDK/Web recovery explicitly invokes this receipt command after recovering the original operation.
+
+Activation still requires matching LK1/LK2 signing custody, fresh source/CI, immutable deployment,
+no-write staging checks and a separate decision for any real booking/debit.

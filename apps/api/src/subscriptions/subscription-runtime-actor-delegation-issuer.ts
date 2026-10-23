@@ -119,7 +119,13 @@ export class SubscriptionRuntimeActorDelegationIssuer {
     readonly actorToken?: { readonly token: string; readonly expiresAt: string };
     /** Provider client subscription id resolved server-side for the selected product. */
     readonly providerClientSubscriptionId?: string;
+    readonly reservationId?: string;
   }): Promise<string> {
+    if (input.reservationId !== undefined && !uuidPattern.test(input.reservationId)) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
     const keyHash = subscriptionRuntimeIdempotencyKeySha256(input.idempotencyKey);
     if (
       ![
@@ -203,6 +209,7 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       target_duration_minutes: input.durationMinutes,
       target_capacity: input.capacity,
       target_admissible: input.admissible,
+      ...(input.reservationId ? { reservation_id: input.reservationId } : {}),
       ...(input.actorToken === undefined
         ? {}
         : {
@@ -235,6 +242,7 @@ export class SubscriptionRuntimeActorDelegationIssuer {
     readonly providerMappingId: string;
     readonly operationId: string;
     readonly correlationId: string;
+    readonly includeReceipt?: boolean;
   }): Promise<string> {
     if (
       ![
@@ -268,6 +276,7 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       provider_client_id: input.providerClientId,
       provider_mapping_id: input.providerMappingId,
       correlation_id: input.correlationId,
+      ...(input.includeReceipt ? { receipt_version: 1 } : {}),
     })
       .setProtectedHeader({
         alg: 'RS256',
