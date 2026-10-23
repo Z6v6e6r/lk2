@@ -263,6 +263,8 @@ replace or execute another backup request during this lease. Every migration/rol
 requires byte equality with the canonical `backup-operation.json`; drift stops and retains evidence
 and locks. Recovery may restore only those exact canonical bytes under the same exclusive owner,
 then reconcile the original operation. It never creates a replacement backup to repair that proof.
+The closed predecessor retirement below can terminate only its exact expired, unadmitted lease;
+it preserves the old canonical backup and requires a distinct new source/CI and fresh backup.
 
 The notification V2 operation accepts only its V2 plan/receipt and a source-fixed observation
 policy. Timeweb provider and alert histories are explicitly `NOT_COLLECTED_OUT_OF_RELEASE`;
@@ -354,3 +356,111 @@ The CI kernel rehearsal uses random transient units/slices and a private fixture
 an isolated Linux runner. It checks actual `PrivateNetwork`, trusted exit records and lost ACK
 before/after slice stop. Its output explicitly distinguishes that contour from the full recovery
 state machine, which uses synthetic files and mocked external observations in the Python suite.
+
+## Expired, unadmitted pre105 release: one closed retirement
+
+The successful backup `7ccbaeb4dc278f84ea76ef4b68b85dd349198cc9103c7e42c9f8b3fb551397a2`
+for controller `4e8280deb8a1175732ab4145c80256c85ef4e2c1` and expired migration request
+`bfc69d198b153b40bc67ae2ab7522d012064cf80681f3a23cc46f2e15ff906dd` have a separate
+terminal metadata transition. This is the only exception to the global request lease above.
+It never turns an expired request or stale backup into migration admission. Preserve the complete
+old canonical backup directory at its original path, including its operation, receipt and dump;
+its receipt remains a truthful recovery record. Do not replay backup execute or migration execute.
+
+Install the reviewed new helper alongside the old one with the normal Git-object installation
+proof. Keep the old clean source, configuration and runtime enrolled until retirement is complete.
+The old authenticated import closure checks the new helper's successful exact main CI; the new
+checkout cannot authorize itself. The fixed root-owned 0600 request is
+`operator/notification-pre105-retirement.json`, schema `PHUB_NOTIFICATION_PRE105_RETIREMENT_V1`.
+It has exactly `schema`, `target`, `toolCommit`, `toolFileSha256`, `toolProofSha256`,
+`toolInstallationSha256`, `controllerSourceCiRunId`, `backupOperationSha256`,
+`migrationOperationSha256`, `dryRunSha256`, `expiresAt`, and `confirmation`.
+The two operation hashes are the fixed predecessors above; confirmation is
+`RETIRE_EXPIRED_UNADMITTED_4E_KEEP_7CC_CANONICAL_BACKUP`. Use the usual isolated root Python
+entry with the installed helper and the same fixed request path:
+
+```text
+--attest-expired-notification-pre105
+--retire-expired-notification-pre105
+--attest-retired-notification-pre105
+```
+
+The first command is read-only; initially `dryRunSha256` may be null. Before execution, bind the
+returned `proofSha256` and freeze the new request bytes. Both existing process locks must be
+present and owned; neither command creates a missing lock. Execution reattests successful terminal
+backup cleanup and full canonical dump integrity, expired migration schema/bytes, absent migration
+transaction and containers, absent active/provision/other operation state, exact ledger102/catalog,
+full security/default privileges and unchanged runtime and secret hashes. It rejects any103+
+preimage, drift or evidence of migration admission. Its first metadata write requires 20–60 minutes
+of request validity; an already sealed exact preparation may reconcile after expiry.
+
+A fixed preparation record owns the incoming archive namespace before its directory is created.
+The incoming directory gets an exact owner marker, then a durable ready record binds its inode
+and marker hash before rename without replacement. Foreign empty directories and mixed
+incoming/final state stop. The archive name contains both predecessor hashes. It seals both raw
+requests and proof before `RETIRE_INTENT`,
+then seals an individual unlink intent and inode identity before each exact active-path unlink,
+fsyncs the parent, and records each unlink acknowledgement. Absence is recoverable only behind that
+file's owned intent and byte-identical archive. Fixed `.incoming` files resume only exact prefixes;
+foreign/mixed state stops without deleting it. The stable proof excludes boot identifiers; continuation reattests the same pre102/runtime facts
+without changing a sealed proof after a process or host restart. The terminal receipt truthfully says
+`PRE_ADMISSION_EXPIRED_RETIRED`, `canonicalBackupRetained:true`, `databaseMutated:false`, and
+`runtimeMutated:false`; it is not a migration ABORTED/SUCCESS receipt. Retain this archive,
+preparation, fixed retirement request, old helper/source custody and canonical backup.
+
+Before changing source enrollment, consume and pin the terminal receipt hash in the reviewed
+enrollment packet. Recheck unchanged preimage/runtime and absent fixed old requests; do not switch
+source over a partial retirement. The archive-aware read-only third command checks canonical
+identities and hashes after enrollment changes. The new backup/migration/publication must use the
+new independently green source identity, naturally giving a different canonical backup namespace.
+No file in the old namespace is moved or overwritten. New publication, enrollment and live stages
+retain their separate exact-source authority and current runbook prerequisites.
+
+## Migrator cache before a fresh pre105 backup
+
+After terminal retirement and new source enrollment, prepare the exact migrator image before
+starting a new backup freshness window. The fixed root-owned 0600
+`operator/notification-migrator-prefetch.json` has exactly:
+
+- `schema:PHUB_NOTIFICATION_MIGRATOR_PREFETCH_V1`;
+- `operation`: the normal notification migration schema with the exact new source CI,
+  canonical publication/manifest, digest, baseline identities, package/catalog and secret hashes;
+- `retirementReceiptSha256`: the reviewed terminal predecessor-retirement receipt hash;
+- `confirmation:PREFETCH_NOTIFICATION_MIGRATOR_KEEP_DATABASE_AND_RUNTIME`.
+
+The nested operation supplies immutable publication/runtime metadata. It is not the later
+`api-worker-migration.json`: that separate request is frozen after verified backup with a fresh
+expiry. All nested fields must match it byte-for-byte semantically except `expiresAt`.
+Run the installed standard runner with one of these flags and the fixed prefetch request path:
+
+```text
+--critical-notification-migrator-prefetch
+--critical-notification-migrator-prefetch-reconcile
+```
+
+The stage holds the API/Worker executor lock, requires no active backup/migration/rollout request,
+checks fresh source CI/canonical publication, archived backup custody, ledger102/golden preimage,
+OFF runtime settings and unchanged secrets/containers. Only this cache stage can pull the single
+`linux/amd64` migrator by immutable digest using the existing enrolled registry reader. It never
+creates/starts a container, prepares SQL/roles, swaps an env file or alters Docker credentials.
+Existing images must remain present. Durable original intent precedes the pull. Reconcile adopts
+an already complete strictly inspected image; an incomplete pull may resume only the same digest
+with original unexpired request, unchanged inputs and fresh authority. It never mints a new intent
+or silently pulls a different candidate.
+
+Evidence lives under root-only `standard/notification-prefetch/<source>-<publication>-1/` as
+`intent.json` and `receipt.json`, with fixed exact `.incoming` recovery. The returned proof is
+`migratorPrefetch:{requestSha256,receiptSha256,migratorImage,imageId}`. Put these exact four fields
+in the new pre105 backup operation. They are preserved in its plan, source-authority journal,
+backup receipt and terminal proof. The host reattests the image/receipt before its first backup
+write; the networkless supervisor only consumes the sealed handoff. Historical receipts without
+this binding remain available for read-only custody; new pre105 forward backup rejects them.
+Migration consumption checks the same proof hashes and immutable metadata plus the strict current
+image inspection. A cached pull does not relax the backup's one-hour freshness check or request TTL.
+
+For a fully cleaned private namespace, canonical reconciliation requires the original admission,
+completed daemon/container/mask/alias cleanup, absent storage/loop and unchanged host mount
+baselines, then enters the existing release/publication/unlock tail. It does not re-enter a removed
+alias. A stopped notification supervisor does not spawn verifier children that could race the
+host's sole-member release check; host full source/tool custody remains required. Existing
+uncertain pre-intent journal writes remain owned incident evidence rather than being deleted.
