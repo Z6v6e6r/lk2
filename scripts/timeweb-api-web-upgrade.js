@@ -31,18 +31,20 @@ import {
 } from './provision-timeweb-beta-runtime-secrets.js';
 import {
   JOIN_PLAN,
+  JOIN_POST105_BACKUP_SCHEMA,
   JOIN_RECEIPT,
   JOIN_INSTALLED_KIND,
   JOIN_RUNTIME_ANCHOR,
   isJoinOperation,
   validateJoinOperation,
   validateJoinRuntimeTail,
-  validateJoinNotificationBinding,
-  validateJoinBackupLedger,
+  validateJoinNotificationSnapshot,
   validateJoinReceipt,
   validateJoinRunningEnvironment,
   buildJoinInstalledDescriptor,
   validateJoinObservation,
+  validateJoinPost105BackupOperation,
+  validateJoinPost105BackupBundle,
 } from './timeweb-join-dormant-profile.js';
 import {
   validateTimewebMonitorReadback,
@@ -944,6 +946,96 @@ function validateBackupProof(directory, previous, profile = 'beta') {
   return { path, sha256: hash(bytes) };
 }
 
+// Read only the authenticated original POST105 bundle. The installed producer's terminal
+// attestation verifies its sealed journal and complete namespace/storage cleanup.
+// Forward admission only. Historical terminal backup attestation never calls this reader.
+export function readJoinNotificationBaseline(op) {
+  const post = op?.schema === JOIN_POST105_BACKUP_SCHEMA;
+  if (!post && !isJoinOperation(op)) fail('join_notification_profile');
+  const installed = readInstalledApiBaseline(op.expectedApi.releaseId);
+  const { bytes, values, secretSetReleaseId } = installed;
+  const tx = `${ROOT}/backups/${op.expectedApi.releaseId}-api-worker`;
+  const bundle = {
+    operation: read(`${tx}/operation.json`),
+    plan: read(`${tx}/plan.json`),
+    capsule: read(`${tx}/preparation.json`),
+    receipt: read(`${tx}/rollout-receipt.json`),
+    observation: read(`${tx}/observation.json`),
+    descriptor: bytes,
+    apiIdentity: read(`${tx}/candidate-api.identity.json`),
+    workerIdentity: read(`${tx}/candidate-worker.identity.json`),
+  };
+  if (existsSync('/etc/phub/.timeweb-beta.provision.lock')) fail('join_notification_snapshot');
+  const notificationBundleSha256 = validateJoinNotificationSnapshot(bundle, values, op, {
+    api: inspect('api'),
+    web: inspect('web'),
+    secretSet: describeTimewebRuntimeSecretSet(RUNTIME),
+    secretSetReleaseId,
+    excluded: excluded(),
+  });
+  return {
+    schema: 'PHUB_TIMEWEB_JOIN_NOTIFICATION_BASELINE_V1',
+    notificationBundleSha256,
+    notificationOperationSha256: hash(bundle.operation),
+    notificationPlanSha256: hash(bundle.plan),
+    notificationReceiptSha256: hash(bundle.receipt),
+    installedDescriptorSha256: hash(bytes),
+  };
+}
+
+export function readJoinPost105Backup(op, controllerTree, { fresh = true } = {}) {
+  const request = `${ROOT}/operator/database-backup-restore.json`;
+  const operation = read(request);
+  if (hash(operation) !== op.post105BackupOperationSha256) fail('join_backup_operation_drift');
+  const backupOp = validateJoinPost105BackupOperation(
+    parseStrictJson(operation),
+    op,
+    controllerTree,
+  );
+  const directory = `${ROOT}/backups/${backupOp.releaseId}-join-post105`;
+  secure(directory, 0o700);
+  if (!read(`${directory}/backup-operation.json`).equals(operation))
+    fail('join_backup_operation_drift');
+  const receipt = read(`${directory}/database-backup-receipt.json`);
+  const preimage = read(`${directory}/preimage-proof.json`);
+  const tool = `${ROOT}/operator/tools/${backupOp.toolCommit}/control-timeweb-database-backup.py`;
+  const toolBytes = read(tool, 0o755),
+    installation = read(`${dirname(tool)}/installation-receipt.json`);
+  if (
+    hash(toolBytes) !== backupOp.toolFileSha256 ||
+    hash(installation) !== backupOp.toolInstallationSha256
+  )
+    fail('join_backup_tool_drift');
+  let terminal;
+  try {
+    terminal = Buffer.from(
+      command('/usr/bin/python3', ['-I', '-S', '-B', tool, '--attest-disk', request], {
+        timeout: 60000,
+      }),
+    );
+  } catch {
+    fail('join_backup_producer_capability_or_terminal');
+  }
+  return validateJoinPost105BackupBundle(
+    {
+      operation,
+      receipt,
+      preimage,
+      terminal,
+      golden: read(`${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`, 0o644),
+      descriptor: read(`${SOURCE}/deploy/timeweb/notification-migrations-0099-0101.v1.json`, 0o644),
+    },
+    op,
+    controllerTree,
+    {
+      dumpSha256: hashBackupFile(`${directory}/database.pgcustom`),
+      toolSha256: hash(toolBytes),
+      installationSha256: hash(installation),
+    },
+    { fresh },
+  );
+}
+
 export function validateUpgradeMonitoring(provider, alerts, contract, observedAt) {
   const monitors = validateTimewebMonitorReadback(provider, contract, observedAt);
   const alertTest = validateTimewebAlertReadback(alerts, contract);
@@ -1702,22 +1794,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
           })),
         );
       }
-      const tx = `${ROOT}/backups/${previousApi.releaseId}-api-worker`;
-      validateJoinNotificationBinding(
-        {
-          operation: read(`${tx}/operation.json`),
-          plan: read(`${tx}/plan.json`),
-          capsule: read(`${tx}/preparation.json`),
-          receipt: read(`${tx}/rollout-receipt.json`),
-          observation: read(`${tx}/observation.json`),
-          descriptor: baselineBytes,
-          apiIdentity: read(`${tx}/candidate-api.identity.json`),
-          workerIdentity: read(`${tx}/candidate-worker.identity.json`),
-        },
-        values,
-        op,
-        excluded(),
-      );
+      readJoinNotificationBaseline(op);
       if (secretSetReleaseId !== op.expectedCurrentSecretSetReleaseId || existsSync(provisionLock))
         fail('join_secret_preimage');
       validateTimewebDormantJoinSecretDelta(RUNTIME, candidateDir, op.verifierPublicKeySha256);
@@ -1737,8 +1814,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       )
         fail('baseline_drift');
     }
-    const backup = validateBackupProof(transaction, previousApi, profile);
-    if (join) validateJoinBackupLedger(parseStrictJson(read(backup.path)));
+    const backup = join
+      ? readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']))
+      : validateBackupProof(transaction, previousApi, profile);
     const direct = isDirectOperation(op);
     let ownerBytes;
     if (!direct) validateMonitoring(transaction, profile);
@@ -2026,6 +2104,16 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       closeSync(fd);
     }
   };
+  const attestJoinBackup = () => {
+    if (
+      join &&
+      !equal(
+        readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']), { fresh: false }),
+        plan.backup,
+      )
+    )
+      fail('join_backup_drift');
+  };
   const ops = {
     journal,
     ...(join
@@ -2096,6 +2184,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     installBaseline: async () => {
       if (join) {
         attest();
+        attestJoinBackup();
         durable(`${directory}/installed-components.env`, expectedDescriptor, true);
         installedBaselineSha256 = hash(expectedDescriptor);
         return;
@@ -2139,6 +2228,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     },
     preflight: async () => {
       attest();
+      attestJoinBackup();
       for (const s of ['api', 'web']) {
         if (!equal(inspect(s), plan.previous[s])) fail('baseline_drift');
         imagePresent(plan.previous[s].image, plan.previous[s].releaseId.slice(0, 40));
@@ -2301,6 +2391,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   if (mode === 'reconcile') {
     await reconcileApiWebPhase(receipt, {
       attestTerminal: async (terminal) => {
+        attestJoinBackup();
         if (join)
           expectedSecrets = terminal === 'SUCCESS' ? plan.candidateSecrets : plan.previousSecrets;
         attest();

@@ -53,6 +53,7 @@ import {
   NOTIFICATION_MIGRATION_SCHEMA,
   assertNotificationRuntimeOff,
   NOTIFICATION_BACKUP_SCHEMA,
+  JOIN_POST105_BACKUP_SCHEMA,
   NOTIFICATION_PRE_LEDGER,
   NOTIFICATION_POST_LEDGER,
   validateNotificationOperation,
@@ -3967,8 +3968,15 @@ function postgresSql(sql, readOnly = true, postgresId = bridge.postgresId) {
   }
 }
 export function readNotificationDatabaseState(op, phase = 'pre') {
-  if (![NOTIFICATION_MIGRATION_SCHEMA, NOTIFICATION_BACKUP_SCHEMA].includes(op?.schema))
+  if (
+    ![
+      NOTIFICATION_MIGRATION_SCHEMA,
+      NOTIFICATION_BACKUP_SCHEMA,
+      JOIN_POST105_BACKUP_SCHEMA,
+    ].includes(op?.schema)
+  )
     stop('NOTIFICATION_PROFILE');
+  if (op.schema === JOIN_POST105_BACKUP_SCHEMA && phase !== 'post') stop('NOTIFICATION_PROFILE');
   if (op.schema === NOTIFICATION_MIGRATION_SCHEMA) sourceAttest(op);
   else attestNotificationSource(op, { git, read, secure, present });
   const value = postgresSql(

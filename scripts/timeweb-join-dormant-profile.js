@@ -1,9 +1,12 @@
 // A bounded policy for the existing API/Web executor, never another executor.
 import { createHash } from 'node:crypto';
 import { parseStrictJson } from './strict-json.js';
-import { NOTIFICATION_POST_LEDGER } from './timeweb-notification-profile.js';
+import {
+  NOTIFICATION_POST_LEDGER,
+  validateNotificationState,
+} from './timeweb-notification-profile.js';
 
-export const JOIN_OPERATION = 'PHUB_TIMEWEB_JOIN_DORMANT_API_WEB_OPERATION_V1';
+export const JOIN_OPERATION = 'PHUB_TIMEWEB_JOIN_DORMANT_API_WEB_OPERATION_V2';
 export const JOIN_PLAN = 'PHUB_TIMEWEB_JOIN_DORMANT_API_WEB_PLAN_V1';
 export const JOIN_RECEIPT = 'PHUB_TIMEWEB_JOIN_DORMANT_API_WEB_RECEIPT_V1';
 export const JOIN_INSTALLED_KIND = 'API_WEB_JOIN_DORMANT_0105';
@@ -18,6 +21,11 @@ export const JOIN_CONTROLLER_FILES = new Set([
   'scripts/provision-timeweb-beta-runtime-secrets.js',
   'scripts/provision-timeweb-beta-runtime-secrets.d.ts',
   'scripts/provision-timeweb-beta-runtime-secrets.test.ts',
+  'scripts/timeweb-notification-profile.js',
+  'scripts/timeweb-notification-profile.d.ts',
+  'scripts/timeweb-notification-profile.test.ts',
+  'scripts/timeweb-api-worker-migration.js',
+  'scripts/timeweb-api-worker-migration.test.ts',
   'scripts/control-timeweb-database-backup.py',
   'scripts/test-timeweb-database-backup.py',
   'scripts/control-timeweb-database-backup.test.ts',
@@ -86,6 +94,7 @@ export function validateJoinOperation(op, requireUnexpired = false, now = Date.n
     'verifierPublicKeySha256',
     'notificationBundleSha256',
     'expectedExcludedSha256',
+    'post105BackupOperationSha256',
     'expiresAt',
     'confirmation',
   ]);
@@ -102,6 +111,7 @@ export function validateJoinOperation(op, requireUnexpired = false, now = Date.n
       op.verifierPublicKeySha256,
       op.notificationBundleSha256,
       op.expectedExcludedSha256,
+      op.post105BackupOperationSha256,
     ].every((v) => H.test(v ?? '')) ||
     !ID.test(op.expectedCurrentSecretSetReleaseId ?? '')
   )
@@ -230,6 +240,33 @@ export function validateJoinNotificationBinding(bundle, values, op, currentExclu
   );
   if (digest !== op.notificationBundleSha256) fail('NOTIFICATION_BUNDLE');
   return digest;
+}
+// The sealed notification bundle is shared by JOIN preparation and post-0105 backup admission.
+export function validateJoinNotificationSnapshot(bundle, values, op, snapshot) {
+  exact(snapshot, ['api', 'web', 'secretSet', 'secretSetReleaseId', 'excluded']);
+  const post = op?.schema === JOIN_POST105_BACKUP_SCHEMA;
+  if (!post && !isJoinOperation(op)) fail('NOTIFICATION_PROFILE');
+  const { api, web, secretSet, secretSetReleaseId } = snapshot;
+  const plan = parseStrictJson(bundle.plan),
+    sealedApi = parseStrictJson(bundle.apiIdentity);
+  const fields = ['id', 'image', 'imageId', 'releaseId', 'revision', 'restarts', 'startedAt'];
+  const webFields = ['id', 'image', 'imageId', 'restarts', 'startedAt'];
+  const sealedWeb = plan.excluded?.find((v) => v.id === web.id);
+  if (
+    !sealedWeb ||
+    webFields.some((k) => web[k] !== sealedWeb[k]) ||
+    fields.some((k) => api[k] !== sealedApi[k]) ||
+    (post && fields.some((k) => api[k] !== op.expectedApi[k])) ||
+    (!post && ['id', 'image', 'releaseId'].some((k) => web[k] !== op.expectedWeb[k])) ||
+    web.revision !== web.releaseId?.slice(0, 40) ||
+    !ID.test(web.releaseId ?? '') ||
+    !same(secretSet, plan.previousSecrets)
+  )
+    fail('NOTIFICATION_SNAPSHOT');
+  const bindingOp = post
+    ? { ...op, expectedWeb: web, expectedCurrentSecretSetReleaseId: secretSetReleaseId }
+    : op;
+  return validateJoinNotificationBinding(bundle, values, bindingOp, snapshot.excluded);
 }
 export function validateJoinBackupLedger(receipt) {
   if (
@@ -386,4 +423,267 @@ export function buildJoinInstalledDescriptor(values, plan, id, journalPath) {
       .map(([k, v]) => `${k}=${v}`)
       .join('\n') + '\n',
   );
+}
+
+// Rich post-0105 proof remains at its original canonical location. Never project it into
+// the legacy nine-field V1 receipt or substitute a PRE102/degraded proof.
+export const JOIN_POST105_BACKUP_SCHEMA = 'PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1';
+export const JOIN_POST105_BACKUP_RECEIPT = 'PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1';
+export const JOIN_POST105_BACKUP_TERMINAL = 'PHUB_TIMEWEB_JOIN_POST105_BACKUP_TERMINAL_V1';
+const BACKUP_ROOT = '/opt/phub/timeweb-beta/backups';
+const PG_IMAGE =
+  'docker.io/library/postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685';
+const pythonBytes = (value) =>
+  Buffer.from(
+    (JSON.stringify(value) + '\n').replace(
+      /[\u007f-\uffff]/g,
+      (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
+    ),
+  );
+export function validateJoinPost105BackupOperation(op, join, controllerTree) {
+  exact(op, [
+    'schema',
+    'profile',
+    'target',
+    'toolCommit',
+    'toolFileSha256',
+    'toolProofSha256',
+    'toolInstallationSha256',
+    'controllerSha',
+    'controllerTree',
+    'controllerSourceCiRunId',
+    'controllerConfigSha256',
+    'expectedBoundarySha256',
+    'expectedApi',
+    'expectedPostgres',
+    'releaseId',
+    'expectedLedgerSha256',
+    'packageDescriptorSha256',
+    'catalogsSha256',
+    'expiresAt',
+    'confirmation',
+    'notificationBundleSha256',
+  ]);
+  exact(op.target, ['hostname', 'serverId', 'projectId']);
+  if (
+    op.schema !== JOIN_POST105_BACKUP_SCHEMA ||
+    op.profile !== 'production' ||
+    op.target.hostname !== 'lk2.padlhub.su' ||
+    op.target.serverId !== 8886471 ||
+    op.target.projectId !== 262717 ||
+    op.controllerSha !== join.controllerSha ||
+    op.toolCommit !== op.controllerSha ||
+    !S.test(op.controllerSha ?? '') ||
+    !S.test(controllerTree ?? '') ||
+    op.controllerTree !== controllerTree ||
+    typeof op.controllerSourceCiRunId !== 'string' ||
+    !N.test(op.controllerSourceCiRunId) ||
+    op.releaseId !== `${op.controllerSha}-${op.controllerSourceCiRunId}-1` ||
+    op.expectedLedgerSha256 !== NOTIFICATION_POST_LEDGER ||
+    op.notificationBundleSha256 !== join.notificationBundleSha256 ||
+    !utc(op.expiresAt) ||
+    op.confirmation !== 'BACKUP_RESTORE_JOIN_POST105_PRIVATE_NAMESPACE_KEEP_RUNTIME' ||
+    [
+      'toolFileSha256',
+      'toolProofSha256',
+      'toolInstallationSha256',
+      'controllerConfigSha256',
+      'expectedBoundarySha256',
+      'packageDescriptorSha256',
+      'catalogsSha256',
+      'notificationBundleSha256',
+    ].some((k) => !H.test(op[k] ?? ''))
+  )
+    fail('POST105_OPERATION');
+  for (const service of ['Api', 'Postgres']) {
+    const row = op['expected' + service];
+    exact(row, ['id', 'image', 'imageId', 'releaseId', 'revision', 'restarts', 'startedAt']);
+    if (
+      !H.test(row.id ?? '') ||
+      row.restarts !== 0 ||
+      typeof row.image !== 'string' ||
+      row.imageId !== row.image.split('@')[1] ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z$/.test(row.startedAt ?? '') ||
+      !Number.isFinite(Date.parse(row.startedAt)) ||
+      !utc(row.startedAt.slice(0, 23) + 'Z')
+    )
+      fail('POST105_BASELINE');
+  }
+  if (
+    ['id', 'image', 'releaseId'].some((k) => op.expectedApi[k] !== join.expectedApi[k]) ||
+    !ID.test(op.expectedApi.releaseId ?? '') ||
+    op.expectedApi.revision !== op.expectedApi.releaseId.slice(0, 40) ||
+    !/^ghcr.io\/z6v6e6r\/phub-api@sha256:[a-f0-9]{64}$/.test(op.expectedApi.image) ||
+    op.expectedPostgres.id !== 'fe614a3312e446e8036243be3781590bfe90b5da037b83580abd410d4514e84c' ||
+    op.expectedPostgres.image !== PG_IMAGE ||
+    op.expectedPostgres.revision !== null ||
+    op.expectedPostgres.releaseId !== null
+  )
+    fail('POST105_BASELINE');
+  return op;
+}
+export function validateJoinPost105BackupTerminal(value, receipt, receiptBytes, preimageBytes) {
+  exact(value, [
+    'schema',
+    'operationSha256',
+    'receiptSha256',
+    'preimageSha256',
+    'target',
+    'sourceLedgerSha256',
+    'storageCleanupVerified',
+    'reconciled',
+    'notificationBundleSha256',
+  ]);
+  if (
+    value.schema !== JOIN_POST105_BACKUP_TERMINAL ||
+    value.operationSha256 !== receipt.operationSha256 ||
+    value.receiptSha256 !== joinHash(receiptBytes) ||
+    value.preimageSha256 !== joinHash(preimageBytes) ||
+    !same(value.target, receipt.target) ||
+    value.sourceLedgerSha256 !== NOTIFICATION_POST_LEDGER ||
+    value.storageCleanupVerified !== true ||
+    value.reconciled !== true ||
+    value.notificationBundleSha256 !== receipt.notificationBundleSha256
+  )
+    fail('POST105_TERMINAL');
+  return value;
+}
+export function validateJoinPost105SecurityInventory(value) {
+  exact(value, ['schema', 'objects', 'roles', 'unsupported']);
+  exact(value.unsupported, ['largeObjects', 'securityLabels']);
+  const allowed = new Set(['phub_beta', 'phub_migrator', 'phub_runtime', 'phub', 'postgres']);
+  if (
+    value.schema !== 'PHUB_NOTIFICATION_BACKUP_SECURITY_V1' ||
+    value.unsupported.largeObjects !== 0 ||
+    value.unsupported.securityLabels !== 0 ||
+    !Array.isArray(value.roles) ||
+    value.roles.length < 1 ||
+    value.roles.length > 100 ||
+    !same(value.roles, [...new Set(value.roles)].sort()) ||
+    value.roles.some(
+      (role) =>
+        typeof role !== 'string' || !/^[a-z_][a-z0-9_]{0,62}$/.test(role) || !allowed.has(role),
+    ) ||
+    !Array.isArray(value.objects) ||
+    value.objects.length < 1 ||
+    value.objects.length > 20000
+  )
+    fail('POST105_SECURITY_INVENTORY');
+  const known = (role) =>
+    typeof role === 'string' && (value.roles.includes(role) || role.startsWith('pg_'));
+  const keys = [];
+  for (const row of value.objects) {
+    exact(row, ['key', 'kind', 'owner', 'props', 'acl']);
+    if (typeof row.key !== 'string' || !row.key || !known(row.owner) || !Array.isArray(row.acl))
+      fail('POST105_SECURITY_INVENTORY');
+    keys.push(row.key);
+    for (const acl of row.acl) {
+      exact(acl, ['grantor', 'grantee', 'privilege', 'grantable']);
+      if (
+        !known(acl.grantor) ||
+        !(acl.grantee === 'PUBLIC' || known(acl.grantee)) ||
+        typeof acl.grantable !== 'boolean'
+      )
+        fail('POST105_SECURITY_INVENTORY');
+    }
+  }
+  if (!same(keys, [...new Set(keys)].sort())) fail('POST105_SECURITY_INVENTORY');
+  return value;
+}
+export function validateJoinPost105BackupBundle(
+  bundle,
+  join,
+  controllerTree,
+  actual,
+  { fresh = true, now = Date.now() } = {},
+) {
+  exact(bundle, ['operation', 'receipt', 'preimage', 'golden', 'descriptor', 'terminal']);
+  exact(actual, ['dumpSha256', 'toolSha256', 'installationSha256']);
+  const op = validateJoinPost105BackupOperation(
+    parseStrictJson(bundle.operation),
+    join,
+    controllerTree,
+  );
+  const receipt = parseStrictJson(bundle.receipt),
+    preimage = parseStrictJson(bundle.preimage);
+  const directory = `${BACKUP_ROOT}/${op.releaseId}-join-post105`;
+  exact(receipt, [
+    'schema',
+    'baselineReleaseId',
+    'completedAt',
+    'backupFile',
+    'backupSha256',
+    'restoreVerified',
+    'restoreImage',
+    'restoredLedgerSha256',
+    'sourceLedgerSha256',
+    'operationSha256',
+    'target',
+    'preimageSha256',
+    'packageDescriptorSha256',
+    'catalogsSha256',
+    'aclRecovery',
+    'securityPreimageSha256',
+    'restoredSecuritySha256',
+    'roleClosureSha256',
+    'notificationBundleSha256',
+  ]);
+  if (
+    receipt.schema !== JOIN_POST105_BACKUP_RECEIPT ||
+    receipt.baselineReleaseId !== join.expectedApi.releaseId ||
+    receipt.operationSha256 !== joinHash(bundle.operation) ||
+    receipt.operationSha256 !== join.post105BackupOperationSha256 ||
+    receipt.preimageSha256 !== joinHash(bundle.preimage) ||
+    receipt.restoreVerified !== true ||
+    receipt.backupFile !== directory + '/database.pgcustom' ||
+    !H.test(receipt.backupSha256 ?? '') ||
+    receipt.backupSha256 !== actual.dumpSha256 ||
+    actual.toolSha256 !== op.toolFileSha256 ||
+    actual.installationSha256 !== op.toolInstallationSha256 ||
+    receipt.restoreImage !== PG_IMAGE ||
+    receipt.sourceLedgerSha256 !== NOTIFICATION_POST_LEDGER ||
+    receipt.restoredLedgerSha256 !== NOTIFICATION_POST_LEDGER ||
+    receipt.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+    op.packageDescriptorSha256 !== joinHash(bundle.descriptor) ||
+    receipt.catalogsSha256 !== op.catalogsSha256 ||
+    op.catalogsSha256 !== joinHash(bundle.golden) ||
+    receipt.aclRecovery !== 'ISOLATED_OWNER_ACL_RESTORE_VERIFIED' ||
+    receipt.notificationBundleSha256 !== join.notificationBundleSha256 ||
+    !utc(receipt.completedAt) ||
+    Date.parse(receipt.completedAt) > now ||
+    Date.parse(receipt.completedAt) > Date.parse(op.expiresAt) ||
+    (fresh && now - Date.parse(receipt.completedAt) > 3600000)
+  )
+    fail('POST105_BACKUP');
+  exact(preimage, ['state', 'target', 'security']);
+  validateNotificationState(preimage.state, 'post', bundle.golden, bundle.descriptor);
+  validateJoinPost105SecurityInventory(preimage.security);
+  if (
+    !same(preimage.target, preimage.state.target) ||
+    !same(preimage.target, receipt.target) ||
+    receipt.securityPreimageSha256 !== joinHash(pythonBytes(preimage.security)) ||
+    receipt.restoredSecuritySha256 !== receipt.securityPreimageSha256 ||
+    !Array.isArray(preimage.security?.roles) ||
+    receipt.roleClosureSha256 !== joinHash(pythonBytes(preimage.security.roles))
+  )
+    fail('POST105_SECURITY');
+  validateJoinPost105BackupTerminal(
+    parseStrictJson(bundle.terminal),
+    receipt,
+    bundle.receipt,
+    bundle.preimage,
+  );
+  return {
+    path: directory + '/database-backup-receipt.json',
+    sha256: joinHash(bundle.receipt),
+    operationSha256: joinHash(bundle.operation),
+    preimageSha256: joinHash(bundle.preimage),
+    dumpSha256: actual.dumpSha256,
+    toolSha256: actual.toolSha256,
+    installationSha256: actual.installationSha256,
+    terminalSha256: joinHash(bundle.terminal),
+    sourceLedgerSha256: NOTIFICATION_POST_LEDGER,
+    notificationBundleSha256: op.notificationBundleSha256,
+    completedAt: receipt.completedAt,
+  };
 }

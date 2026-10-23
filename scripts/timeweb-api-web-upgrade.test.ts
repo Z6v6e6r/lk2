@@ -511,6 +511,7 @@ it('reads a reconciled JOIN installed baseline and rejects descriptor, snapshot 
     verifierPublicKeySha256: '8'.repeat(64),
     notificationBundleSha256: '9'.repeat(64),
     expectedExcludedSha256: '0'.repeat(64),
+    post105BackupOperationSha256: 'a'.repeat(64),
     expiresAt: '2026-10-23T10:00:00.000Z',
     confirmation: `DEPLOY_DORMANT_JOIN_API_WEB_${operation.candidateSha.slice(0, 12).toUpperCase()}_FROM_${operation.expectedApi.releaseId.slice(0, 12).toUpperCase()}_NO_JOIN_NO_PROVIDER_WRITES`,
   };
