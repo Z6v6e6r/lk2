@@ -601,19 +601,18 @@ describe('explicit commercial receipt reconciliation', () => {
       reservation: { id: reservationId, state: 'ACTIVE', expiresAt: '2026-10-22T10:15:00.000Z' },
       receipt: { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: ownerReceipt.verifiedAt },
     };
-    const confirmPayment = vi.fn<NonNullable<CommercialJoinRepositoryPort['confirmPayment']>>(
-      () =>
-        resolved({
-          outcome: 'applied' as const,
-          commandId: fixtureId(905),
-          gameId: envelope.gameId,
-          revision: 11,
-          viewerRelation: 'PARTICIPANT' as const,
-          participationId: fixtureId(906),
-          reservationId,
-          committedAt: ownerReceipt.verifiedAt,
-          replayed: false,
-        }),
+    const confirmPayment = vi.fn<NonNullable<CommercialJoinRepositoryPort['confirmPayment']>>(() =>
+      resolved({
+        outcome: 'applied' as const,
+        commandId: fixtureId(905),
+        gameId: envelope.gameId,
+        revision: 11,
+        viewerRelation: 'PARTICIPANT' as const,
+        participationId: fixtureId(906),
+        reservationId,
+        committedAt: ownerReceipt.verifiedAt,
+        replayed: false,
+      }),
     );
     const repo = repository({
       getPaidJoinAttempt: () => resolved(laggingAttempt),
