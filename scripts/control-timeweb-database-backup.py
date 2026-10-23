@@ -1326,6 +1326,9 @@ def namespace_start(p, op, journal):
     namespace_require_absent(p['isolation']['slice'])
     Path(p['isolation']['controlRoot']).mkdir(mode=0o700); sync_directory(p['work'])
     namespace_frozen_source(p)
+    if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+        notification_seal_supervisor_authority(p, op, journal)
+        notification_require_supervisor_authority(p, op, read_secure(REQUEST), journal, started=False)
     journal.add('NAMESPACE_SLICE_START_INTENT')
     command(namespace_slice_args(p), 'NS_SLICE_START', timeout=30)
     journal.add('NAMESPACE_SLICE_READY', identity=namespace_slice(p))
@@ -1743,7 +1746,8 @@ def namespace_supervisor_loop(op, raw, p):
     # No inherited stdio/flock, restart, parent-death signal or automatic recovery.
     while True:
         need(read_secure(REQUEST)==raw and namespace_supervisor_identity(p,op)==identity, 'NS_SUPERVISOR_DRIFT')
-        tool_custody(op); namespace_validate_plan(op,raw,strict(read_secure(Path(p['work'])/'disk-plan.json')))
+        namespace_supervisor_custody(op, raw, p, DiskJournal(p['work'], p['operationSha256']))
+        namespace_validate_plan(op,raw,strict(read_secure(Path(p['work'])/'disk-plan.json')))
         namespace_frozen_source(p)
         start = namespace_control(p, 'daemon-start.json')
         if start.exists() and daemon is None:
@@ -2186,6 +2190,7 @@ def web8158_source(op):
 
 
 _NOTIFICATION_SOURCE_CI = set()
+_NOTIFICATION_BACKUP_AUTHORITY = None
 def _notification_source_program(op):
     # Root import closure is authenticated by the same existing source preamble.
     source = ROOT / 'standard/source'
@@ -2221,6 +2226,72 @@ def notification_terminal_source(op):
     program,environment=_notification_source_program(op)
     program+="process.stdout.write('NOTIFICATION_SOURCE_VERIFIED');"
     need(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_SOURCE',input_data=encoded(op),environment=environment,timeout=60)==b'NOTIFICATION_SOURCE_VERIFIED','NOTIFICATION_SOURCE')
+
+
+
+def notification_supervisor_authority(p, op, raw):
+    """Exact host-to-networkless-child handoff; never forward execution authority."""
+    need(op.get('schema') == NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    need(read_secure(REQUEST) == raw == read_secure(Path(p['work'])/'backup-operation.json')
+         and digest(raw) == p['operationSha256'], 'NOTIFICATION_SUPERVISOR_OPERATION')
+    plan_bytes = read_secure(Path(p['work'])/'disk-plan.json')
+    need(strict(plan_bytes) == p, 'NOTIFICATION_SUPERVISOR_PLAN')
+    namespace_validate_plan(op, raw, p)
+    return {'schema': 'PHUB_NOTIFICATION_SUPERVISOR_AUTHORITY_V1',
+            'sourceCheck': 'GITHUB_PUBLIC_SOURCE_CI_V1',
+            'operationSha256': digest(raw), 'planSha256': digest(plan_bytes),
+            **{key: op[key] for key in ('controllerSha', 'controllerTree', 'controllerSourceCiRunId',
+               'controllerConfigSha256', 'toolCommit', 'toolFileSha256', 'toolProofSha256',
+               'toolInstallationSha256', 'packageDescriptorSha256', 'catalogsSha256')}}
+
+
+
+def notification_host_backup_authority(op):
+    global _NOTIFICATION_BACKUP_AUTHORITY
+    need(op.get('schema') == NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    key = (op['controllerSha'], op['controllerTree'], op['controllerSourceCiRunId'])
+    need(_NOTIFICATION_BACKUP_AUTHORITY is None and key not in _NOTIFICATION_SOURCE_CI,
+         'NOTIFICATION_FRESH_HOST_AUTHORITY')
+    tool_custody(op)  # An uncached remote source CI check, before namespace_initialize writes.
+    need(key in _NOTIFICATION_SOURCE_CI, 'NOTIFICATION_FRESH_HOST_AUTHORITY')
+    _NOTIFICATION_BACKUP_AUTHORITY = digest(encoded(op))
+
+
+def notification_seal_supervisor_authority(p, op, journal):
+    # Host-only forward path: complete remote CI authority before the durable handoff.
+    tool_custody(op)
+    raw = read_secure(REQUEST)
+    need(_NOTIFICATION_BACKUP_AUTHORITY == digest(raw), 'NOTIFICATION_FRESH_HOST_AUTHORITY')
+    proof = notification_supervisor_authority(p, op, raw)
+    need(journal.find('LOCKED') is not None
+         and journal.find('NAMESPACE_SLICE_START_INTENT') is None
+         and journal.find('NAMESPACE_UNIT_START_INTENT') is None
+         and journal.find('SOURCE_AUTHORITY_VERIFIED') is None, 'NOTIFICATION_AUTHORITY_ORDER')
+    journal.add('SOURCE_AUTHORITY_VERIFIED', **proof)
+
+
+def notification_require_supervisor_authority(p, op, raw, journal, started=True):
+    expected = notification_supervisor_authority(p, op, raw)
+    need(journal.find('SOURCE_AUTHORITY_VERIFIED') == expected, 'NOTIFICATION_SUPERVISOR_AUTHORITY')
+    phases = [event['phase'] for event in journal.events]
+    need(phases.count('LOCKED') == phases.count('SOURCE_AUTHORITY_VERIFIED') == 1
+         and phases.index('LOCKED') < phases.index('SOURCE_AUTHORITY_VERIFIED'), 'NOTIFICATION_AUTHORITY_ORDER')
+    unit_phases = ['NAMESPACE_SLICE_START_INTENT', 'NAMESPACE_SLICE_READY', 'NAMESPACE_UNIT_START_INTENT']
+    if started:
+        need(all(phases.count(phase) == 1 for phase in unit_phases), 'NOTIFICATION_AUTHORITY_ORDER')
+        order = [phases.index(phase) for phase in ['SOURCE_AUTHORITY_VERIFIED', *unit_phases]]
+        need(order == sorted(order), 'NOTIFICATION_AUTHORITY_ORDER')
+    else:need(all(phase not in phases for phase in unit_phases), 'NOTIFICATION_AUTHORITY_ORDER')
+
+
+def namespace_supervisor_custody(op, raw, p, journal):
+    if op.get('schema') != NOTIFICATION_PRE105_SCHEMA:
+        return tool_custody(op)  # Legacy profiles keep their existing authority contract.
+    notification_require_supervisor_authority(p, op, raw, journal)
+    identity = namespace_supervisor_identity(p, op)
+    need(identity['process']['pid'] == os.getpid(), 'NOTIFICATION_SUPERVISOR_CALLER')
+    # No local source program executes until the handoff and exact child identity pass.
+    return notification_terminal_tool_custody(op)
 
 
 def notification_preimage(op):
@@ -3226,7 +3297,8 @@ def namespace_initialize(op, request_bytes, file_sha):
     need(not os.path.lexists(LOCK) and not os.path.lexists(work) and not os.path.lexists(canonical), 'EXISTING_STATE')
     for path in [ROOT, ROOT / 'standard', ROOT / 'operator', ROOT / 'backups']:
         secure(path, 'dir')
-    tool_custody(op)
+    if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:notification_host_backup_authority(op)
+    else:tool_custody(op)
     need(service('phub-timeweb-beta', 'api') == op['expectedApi']
          and service('phub-timeweb-beta-dependencies', 'postgres') == op['expectedPostgres'], 'RUNTIME_DRIFT')
     need(not docker(['ps', '-q', '--no-trunc', '--filter', 'label=com.docker.compose.service=migrator']).strip(), 'ACTIVE_MIGRATOR')
@@ -3522,8 +3594,186 @@ def execute(op, request_bytes, file_sha):
     return execute_disk(op, request_bytes, file_sha) if is_disk_operation(op) else execute_tmpfs(op, request_bytes, file_sha)
 
 
+# One-operation compatibility reconciliation. This never changes the enrolled source,
+# restarts the failed unit, starts a daemon, creates storage or reads/writes DB data.
+NOTIFICATION_EARLY_OPERATION = '39da03f6c57cf76c2522f374e785203e268ce41d573573c3ba51f2cdd4f5e7a6'
+NOTIFICATION_EARLY_PLAN = '01a3e1eba8bd4d5bcaeff5a41c9547c79b6922347cf844ee51011a60296839a5'
+NOTIFICATION_EARLY_SOURCE = '518be74e95b1f00f0d04671b343318143a759e9c'
+NOTIFICATION_EARLY_EVENTS = '0be677be62a1627d6ee158d3275aedd2f36f1c1f885ce96df907b5ab1f078d1f'
+NOTIFICATION_EARLY_INVOCATION = 'a55ee92665594d59a2a247d6cbd6e818'
+NOTIFICATION_EARLY_SYSTEMD = '889bf401760e1dd7ec16180f179415a6f45ce1e66ea03561ad9e886b7ce71051'
+NOTIFICATION_EARLY_PHASES = ['PREPARED', 'SOURCE_DAEMON', 'SOURCE_NETWORK', 'ALIAS_BASELINE',
+    'CONTAINERD_MASK_BASELINE', 'MIGRATION_ATTESTATION', 'LOCK_PREPARED', 'LOCK_PUBLISH_INTENT',
+    'LOCKED', 'NAMESPACE_SLICE_START_INTENT', 'NAMESPACE_SLICE_READY', 'NAMESPACE_UNIT_START_INTENT']
+NOTIFICATION_EARLY_SUFFIX = ['EARLY_NAMESPACE_EXIT_CLASSIFIED', 'NAMESPACE_STORAGE_CLEANED',
+    'NAMESPACE_RELEASED', 'NAMESPACE_SLICE_RELEASE_INTENT', 'NAMESPACE_SLICE_RELEASED',
+    'STORAGE_CLEANUP_VERIFIED', 'ABORTED', 'UNLOCK_INTENT', 'RECONCILED']
+
+
+def notification_early_request(value):
+    exact(value, ['schema', 'target', 'toolCommit', 'toolFileSha256', 'toolProofSha256',
+                  'toolInstallationSha256', 'controllerSourceCiRunId', 'operationSha256',
+                  'planSha256', 'dryRunSha256', 'expiresAt', 'confirmation'])
+    need(value['schema'] == 'PHUB_NOTIFICATION_EARLY_EXIT_RECOVERY_V1' and value['target'] == TARGET
+         and value['operationSha256'] == NOTIFICATION_EARLY_OPERATION
+         and value['planSha256'] == NOTIFICATION_EARLY_PLAN
+         and value['confirmation'] == 'RECONCILE_39DA_EARLY_EXIT_KEEP_SOURCE_518_NO_REPLAY', 'EARLY_REQUEST')
+    need(SHA.fullmatch(value['toolCommit'] or '') and value['toolCommit'] != NOTIFICATION_EARLY_SOURCE
+         and re.fullmatch(r'[1-9][0-9]*', value['controllerSourceCiRunId'] or ''), 'EARLY_SOURCE')
+    for key in ['toolFileSha256', 'toolProofSha256', 'toolInstallationSha256']:
+        need(HASH.fullmatch(value[key] or ''), 'EARLY_TOOL')
+    need(value['dryRunSha256'] is None or HASH.fullmatch(value['dryRunSha256'] or ''), 'EARLY_DRY_RUN')
+    utc(value['expiresAt'])
+    return value
+
+
+def notification_early_source(value, op):
+    _tool_custody_local(value)
+    # Authenticate the still-enrolled 518 import closure, then check the new helper's
+    # main CI using the existing reader. No checkout/config swap and no CI bypass.
+    tool_custody(op)
+    program, environment = _notification_source_program(op)
+    program += "import {githubPublic} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';import {readControllerSourceAuthority} from '/opt/phub/timeweb-beta/standard/source/scripts/verify-source-ci.js';"
+    program += "await readControllerSourceAuthority({controllerSha:'" + value['toolCommit'] + "',controllerSourceCiRunId:'" + value['controllerSourceCiRunId'] + "'},git,githubPublic);process.stdout.write('EARLY_SOURCE_VERIFIED');"
+    need(command(['/usr/bin/node', '--input-type=module', '-e', program], 'EARLY_SOURCE',
+                 input_data=encoded(op), environment=environment, timeout=60) == b'EARLY_SOURCE_VERIFIED', 'EARLY_SOURCE')
+
+
+def notification_early_systemd(p, journal):
+    unit = p['isolation']['unit']
+    raw = command(['/usr/bin/journalctl', '--boot=0', '--unit=' + unit,
+                   '--output=json', '--no-pager'], 'EARLY_SYSTEMD', timeout=30)
+    need(0 < len(raw) < 1024**2, 'EARLY_SYSTEMD_SIZE')
+    rows = [strict(line) for line in raw.splitlines()]
+    canonical = (json.dumps(rows, sort_keys=True, separators=(',', ':'), ensure_ascii=True) + '\n').encode()
+    need(digest(canonical) == NOTIFICATION_EARLY_SYSTEMD and len(rows) == 5, 'EARLY_SYSTEMD_FROZEN')
+    ids = ['7d4958e842da4a758f6c1cdc7b36dcc5', '39f53479d3a045ac8e11786248231fbf',
+           '98e322203f7a4ed290d09fe03c09fe15', 'd9b373ed55a64feb8242e02dbe79a49c',
+           'ae8f7b866b0347b9af31fe1c80b127c0']
+    boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip().replace('-', '')
+    previous = [0, 0, 0]
+    for index, row in enumerate(rows):
+        need(all(row.get(k) == v for k, v in {'_PID': '1', '_UID': '0', '_COMM': 'systemd',
+             '_EXE': '/usr/lib/systemd/systemd', 'UNIT': unit, 'MESSAGE_ID': ids[index],
+             '_BOOT_ID': boot, 'INVOCATION_ID': NOTIFICATION_EARLY_INVOCATION}.items()), 'EARLY_SYSTEMD_ORIGIN')
+        current = [int(row[k]) for k in ['__REALTIME_TIMESTAMP', '__MONOTONIC_TIMESTAMP', '__SEQNUM']]
+        need(all(a < b for a, b in zip(previous, current)), 'EARLY_SYSTEMD_ORDER'); previous = current
+    intent = journal.events[11]
+    need(int(rows[0]['__REALTIME_TIMESTAMP']) / 1e6 >= utc(intent['observedAt'])
+         and rows[1].get('JOB_RESULT') == 'done' and rows[2].get('EXIT_CODE') == 'exited'
+         and rows[2].get('EXIT_STATUS') == '1', 'EARLY_SYSTEMD_EXIT')
+    tool = ROOT/'operator/tools'/NOTIFICATION_EARLY_SOURCE/'control-timeweb-database-backup.py'
+    expected = 'Started ' + unit + ' - [systemd-run] /usr/bin/python3 -I -S -B ' + str(tool) + ' --disk-runtime-supervisor ' + str(REQUEST) + ' ' + NOTIFICATION_EARLY_OPERATION + '.'
+    need(rows[1].get('MESSAGE') == expected, 'EARLY_SYSTEMD_ARGV')
+    return NOTIFICATION_EARLY_SYSTEMD
+
+
+def notification_early_probe(value, recovery_bytes):
+    raw = read_secure(REQUEST)
+    need(digest(raw) == NOTIFICATION_EARLY_OPERATION, 'EARLY_OPERATION')
+    op = validate_operation(strict(raw), time.time(),
+        'a88e88482052d5dbd39df1241b2aa4531be1014bbd5de9b2d94ef052be652909', allow_expired=True)
+    need(op['schema'] == NOTIFICATION_PRE105_SCHEMA and op['toolCommit'] == op['controllerSha']
+         == NOTIFICATION_EARLY_SOURCE, 'EARLY_OPERATION')
+    notification_early_source(value, op)
+    work = ROOT/'backups'/('.disk-restore-' + NOTIFICATION_EARLY_OPERATION)
+    plan_bytes = read_secure(work/'disk-plan.json')
+    need(digest(plan_bytes) == NOTIFICATION_EARLY_PLAN and read_secure(work/'backup-operation.json') == raw, 'EARLY_CAPSULE')
+    p = namespace_validate_plan(op, raw, strict(plan_bytes)); journal = DiskJournal(work, NOTIFICATION_EARLY_OPERATION)
+    phases = [event['phase'] for event in journal.events]
+    need(phases[:12] == NOTIFICATION_EARLY_PHASES and len(phases) >= 12
+         and phases[12:] == NOTIFICATION_EARLY_SUFFIX[:len(phases)-12]
+         and len(phases) <= 12 + len(NOTIFICATION_EARLY_SUFFIX), 'EARLY_PHASES')
+    hashes = [digest(read_secure(work/('disk-event-%04d.json' % i))) for i in range(12)]
+    need(digest(encoded(hashes)) == NOTIFICATION_EARLY_EVENTS, 'EARLY_JOURNAL')
+    expected_files = ['backup-operation.json', 'boundary.json', 'disk-plan.json', 'runtime-control']
+    expected_files += ['disk-event-%04d.json' % i for i in range(len(phases))]
+    need(sorted(path.name for path in work.iterdir()) == sorted(expected_files), 'EARLY_INVENTORY')
+    secure(p['isolation']['controlRoot'], 'dir', 0o700)
+    need(not any(Path(p['isolation']['controlRoot']).iterdir()), 'EARLY_CONTROL')
+    guard, owner = disk_context(op, raw, p, journal, allow_expired=True)
+    guard(cleanup=True, optional_lock=journal.find('UNLOCK_INTENT') is not None)
+    need(all(not os.path.lexists(p[key]) for key in ('image', 'mount', 'mapperPath', 'canonical', 'publication')), 'EARLY_STORAGE')
+    need(not any(row.get('back-file') == p['image'] for row in disk_loop_rows()), 'EARLY_LOOP')
+    source = namespace_frozen_source(p)
+    need(namespace_alias_baseline(source) == journal.find('ALIAS_BASELINE')['identity']
+         and namespace_mask_baseline(source) == journal.find('CONTAINERD_MASK_BASELINE')['identity'], 'EARLY_HOST_MOUNTS')
+    namespace_require_absent(p['isolation']['unit'])
+    unit = namespace_show(p['isolation']['unit'], NS_UNIT_KEYS + ['Job', 'FragmentPath', 'SourcePath', 'DropInPaths', 'UnitFileState'])
+    need(all(unit[k] == v for k, v in {'LoadState':'not-found', 'ActiveState':'inactive', 'SubState':'dead',
+         'MainPID':'0', 'ControlGroup':'', 'Job':'', 'FragmentPath':'', 'SourcePath':'', 'DropInPaths':'', 'UnitFileState':''}.items()), 'EARLY_UNIT')
+    group = '/'+p['isolation']['slice']+'/'+p['isolation']['unit']
+    need(not os.path.lexists('/sys/fs/cgroup'+group)
+         and not namespace_members('/'+p['isolation']['slice']), 'EARLY_CGROUP')
+    if journal.find('NAMESPACE_SLICE_RELEASE_INTENT') is None:
+        need(namespace_slice(p) == journal.find('NAMESPACE_SLICE_READY')['identity'], 'EARLY_SLICE')
+    else:
+        current = namespace_show(p['isolation']['slice'], NS_SLICE_KEYS)
+        if current['ActiveState'] == 'active':
+            need(journal.find('NAMESPACE_SLICE_RELEASED') is None
+                 and namespace_slice(p) == journal.find('NAMESPACE_SLICE_READY')['identity'], 'EARLY_SLICE')
+        else:namespace_slice_terminal(p, journal)
+    systemd_sha = notification_early_systemd(p, journal)
+    evidence = {'schema':'PHUB_NOTIFICATION_EARLY_EXIT_DRY_RUN_V1',
+        'operationSha256':NOTIFICATION_EARLY_OPERATION, 'planSha256':NOTIFICATION_EARLY_PLAN,
+        'initialJournalSha256':NOTIFICATION_EARLY_EVENTS, 'systemdJournalSha256':systemd_sha,
+        'controllerSha':op['controllerSha'], 'controllerConfigSha256':op['controllerConfigSha256'],
+        'toolInstallationSha256':op['toolInstallationSha256'], 'expectedBoundarySha256':op['expectedBoundarySha256'],
+        'lockIdentity':journal.find('LOCK_PREPARED')['identity'], 'sliceIdentity':journal.find('NAMESPACE_SLICE_READY')['identity']}
+    proof_sha = digest(encoded(evidence))
+    classification = {'recoveryRequestSha256':digest(recovery_bytes), 'dryRunSha256':proof_sha,
+        'classification':'UNIT_EXEC_EXITED_BEFORE_NAMESPACE_RECEIPT', 'systemdJournalSha256':systemd_sha}
+    for index, phase in enumerate(phases[12:]):
+        need(journal.find(phase) == (classification if index == 0 else {}), 'EARLY_RECOVERY_DRIFT')
+    return op, p, journal, guard, owner, proof_sha, classification
+
+
+def notification_early_reconcile(value, recovery_bytes, execute=False):
+    op, p, journal, guard, owner, proof_sha, classification = notification_early_probe(value, recovery_bytes)
+    if not execute:
+        return {'status':'EARLY_EXIT_DRY_RUN_ELIGIBLE', 'dryRunSha256':proof_sha,
+                'authorizesMutation':False, 'replayAllowed':False}
+    need(value['dryRunSha256'] == proof_sha, 'EARLY_DRY_RUN')
+    if journal.find('EARLY_NAMESPACE_EXIT_CLASSIFIED') is None:
+        need(0 < utc(value['expiresAt']) - time.time() <= 3600, 'EARLY_EXPIRED')
+    # All probes above run under the existing disk process lock before the first write.
+    journal.once('EARLY_NAMESPACE_EXIT_CLASSIFIED', **classification)
+    journal.once('NAMESPACE_STORAGE_CLEANED')
+    journal.once('NAMESPACE_RELEASED')  # Proven absent, never a guessed process adoption.
+    namespace_release(p, op, journal)  # Only stop the exact owned empty slice.
+    namespace_terminal(p, journal); guard(cleanup=True, optional_lock=journal.find('UNLOCK_INTENT') is not None)
+    journal.once('STORAGE_CLEANUP_VERIFIED'); journal.once('ABORTED')
+    disk_release(p, journal, owner)
+    return {'status':'DISK_RECONCILED', 'outcome':'ABORTED_BEFORE_DUMP',
+            'operationSha256':NOTIFICATION_EARLY_OPERATION, 'authorizesDeploy':False, 'replayAllowed':False}
+
+
+def notification_early_main():
+    need(os.getuid() == 0 and os.uname().nodename == 'msk-1-vm-z8ks'
+         and os.uname().machine == 'x86_64', 'EARLY_HOST')
+    ips = command(['/usr/bin/hostname', '-I'], 'EARLY_HOST').decode().split()
+    need('100.77.212.57' in ips and '103.88.243.171' in ips, 'EARLY_HOST')
+    disk_prerequisites(cleanup=True)
+    os.umask(0o077)
+    path = ROOT/'operator/notification-early-exit-recovery.json'
+    raw = read_secure(path); value = notification_early_request(strict(raw))
+    need(Path(__file__) == ROOT/'operator/tools'/value['toolCommit']/'control-timeweb-database-backup.py'
+         and digest(read_secure(Path(__file__), 0o755)) == value['toolFileSha256'], 'EARLY_TOOL_PATH')
+    execute = sys.argv[1] == '--reconcile-notification-early-exit'
+    def run():
+        need(read_secure(path) == raw, 'EARLY_REQUEST_DRIFT')
+        return notification_early_reconcile(value, raw, execute)
+    if execute:
+        with disk_mutation_lock():result = run()
+    else:result = run()
+    print(json.dumps(result, separators=(',', ':')))
+
+
 def main():
     need(sys.flags.optimize==0 and sys.flags.isolated==1, 'ISOLATED_NONOPTIMIZED_PYTHON_REQUIRED')
+    if len(sys.argv) == 3 and sys.argv[1] in ('--attest-notification-early-exit', '--reconcile-notification-early-exit'):
+        need(sys.argv[2] == str(ROOT/'operator/notification-early-exit-recovery.json'), 'EARLY_ENTRY')
+        notification_early_main(); return
     supervisor = len(sys.argv) == 4 and sys.argv[1] == '--disk-runtime-supervisor' and sys.argv[2] == str(REQUEST)
     need(os.getuid()==0 and (supervisor or len(sys.argv)==3 and sys.argv[1] in ('--execute', '--reconcile-disk', '--attest-disk') and sys.argv[2]==str(REQUEST)), 'ENTRY')
     os.umask(0o077)
@@ -3540,12 +3790,14 @@ def main():
         need('100.77.212.57' in ips and '103.88.243.171' in ips,'HOST')
     if supervisor:
         need(is_namespace_operation(op) and sys.argv[3]==digest(request_bytes) and time.time()<utc(op['expiresAt']), 'NS_SUPERVISOR_ENTRY')
-        tool_custody(op)
+        if op.get('schema') != NOTIFICATION_PRE105_SCHEMA:tool_custody(op)
         work = ROOT/'backups'/('.disk-restore-' + digest(request_bytes))
         need(read_secure(work/'backup-operation.json') == request_bytes, 'NS_SUPERVISOR_CAPSULE')
         plan = namespace_validate_plan(op, request_bytes, strict(read_secure(work/'disk-plan.json')))
         journal = DiskJournal(work, plan['operationSha256'])
         need(journal.find('NAMESPACE_UNIT_START_INTENT') is not None, 'NS_SUPERVISOR_INTENT')
+        if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+            namespace_supervisor_custody(op, request_bytes, plan, journal)
         namespace_supervisor(op, request_bytes, plan); return
     for sig in (signal.SIGTERM,signal.SIGINT):
         signal.signal(sig,lambda *_: (_ for _ in ()).throw(Stop('INTERRUPTED_UNCERTAIN')))
