@@ -187,7 +187,7 @@ def disk_plan(op, request_bytes, sizing):
     work = ROOT / 'backups' / ('.disk-restore-' + sha)
     mapper = 'phub-restore-' + sha[:24]
     match = RELEASE.fullmatch(release)
-    return {'schema': 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V1', 'operationSha256': sha,
+    return {**({'migratorPrefetch':op['migratorPrefetch']} if 'migratorPrefetch' in op else {}), 'schema': 'PHUB_TIMEWEB_DISK_RESTORE_PLAN_V1', 'operationSha256': sha,
             'work': str(work), 'canonical': str(ROOT / 'backups' / (release + '-' + mode)),
             'pendingLock': str(ROOT / 'standard' / ('.disk-lock-' + sha)),
             'image': str(work / 'restore.luks'), 'mount': str(work / 'pgdata-mounted'),
@@ -1752,7 +1752,12 @@ def namespace_supervisor_loop(op, raw, p):
     # No inherited stdio/flock, restart, parent-death signal or automatic recovery.
     while True:
         need(read_secure(REQUEST)==raw and namespace_supervisor_identity(p,op)==identity, 'NS_SUPERVISOR_DRIFT')
-        namespace_supervisor_custody(op, raw, p, DiskJournal(p['work'], p['operationSha256']))
+        # Once its daemon has exited, this actor only holds the namespace until the
+        # host releases it. Do not spawn another source verifier in that terminal
+        # phase: it would race the host's exact sole-supervisor member check. The
+        # host still verifies full tool/source custody before release/publication.
+        if not stopped or not is_notification_backup(op):
+            namespace_supervisor_custody(op, raw, p, DiskJournal(p['work'], p['operationSha256']))
         namespace_validate_plan(op,raw,strict(read_secure(Path(p['work'])/'disk-plan.json')))
         namespace_frozen_source(p)
         start = namespace_control(p, 'daemon-start.json')
@@ -1905,6 +1910,14 @@ def same_api_worker_identity(actual, expected, profile):
     return all(actual.get(key) == expected.get(key) for key in ('image', 'imageId', 'releaseId', 'revision'))
 
 
+def validate_prefetch_binding(value):
+    exact(value,['requestSha256','receiptSha256','migratorImage','imageId'])
+    need(all(isinstance(value[k],str) and HASH.fullmatch(value[k]) for k in ('requestSha256','receiptSha256'))
+         and re.fullmatch(r'ghcr\.io/z6v6e6r/phub-migrator@sha256:[a-f0-9]{64}',value['migratorImage'] or '')
+         and re.fullmatch(r'sha256:[a-f0-9]{64}',value['imageId'] or ''), 'NOTIFICATION_PREFETCH_BINDING')
+    return value
+
+
 def validate_operation(value, now, file_sha, allow_expired=False):
     common = ['schema', 'target', 'toolCommit', 'toolFileSha256', 'controllerSha',
               'toolProofSha256', 'toolInstallationSha256', 'controllerTree',
@@ -1928,6 +1941,9 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and all(HASH.fullmatch(value[k] or '') for k in ('packageDescriptorSha256','catalogsSha256','notificationBundleSha256'))
              and value['expectedPostgres']['id'] == PG_ID, 'JOIN_POST105_OPERATION')
     elif schema == NOTIFICATION_PRE105_SCHEMA:
+        if 'migratorPrefetch' in value:
+            common += ['migratorPrefetch']
+            validate_prefetch_binding(value['migratorPrefetch'])
         exact(value, common + ['releaseId','controllerSourceCiRunId','expectedLedgerSha256','packageDescriptorSha256','catalogsSha256'] + optional)
         mode = 'notification-pre105'; release_id = value['releaseId']
         need(value.get('profile') == 'production' and 'controllerPromotion' not in value
@@ -2272,6 +2288,7 @@ def notification_supervisor_authority(p, op, raw):
         post = {'notificationBundleSha256':op['notificationBundleSha256'], 'baselineAdmissionSha256':digest(encoded(admission))}
     return {**post, 'schema': 'PHUB_NOTIFICATION_SUPERVISOR_AUTHORITY_V1',
             'sourceCheck': 'GITHUB_PUBLIC_SOURCE_CI_V1',
+            **({'migratorPrefetch':op['migratorPrefetch']} if 'migratorPrefetch' in op else {}),
             'operationSha256': digest(raw), 'planSha256': digest(plan_bytes),
             **{key: op[key] for key in ('controllerSha', 'controllerTree', 'controllerSourceCiRunId',
                'controllerConfigSha256', 'toolCommit', 'toolFileSha256', 'toolProofSha256',
@@ -2297,6 +2314,16 @@ def notification_host_backup_authority(op):
     if op['schema'] == JOIN_POST105_SCHEMA:join_post105_controller(op)
     tool_custody(op)  # An uncached remote source CI check, before namespace_initialize writes.
     need(key in _NOTIFICATION_SOURCE_CI, 'NOTIFICATION_FRESH_HOST_AUTHORITY')
+    if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+        validate_prefetch_binding(op.get('migratorPrefetch'))
+        # Cache preparation must finish before the backup's one-hour freshness
+        # window starts. This is a read-only image/runtime/receipt attestation;
+        # no pull is possible in the backup producer or its private supervisor.
+        program,environment = _notification_source_program(op)
+        program += "import {attestNotificationMigratorPrefetchForBackup} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-worker-migration.js';await attestNotificationMigratorPrefetchForBackup(op);process.stdout.write('MIGRATOR_PREFETCH_VERIFIED');"
+        need(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_MIGRATOR_PREFETCH',
+                     input_data=encoded(op),environment=environment,timeout=60)==b'MIGRATOR_PREFETCH_VERIFIED',
+             'NOTIFICATION_MIGRATOR_PREFETCH')
     _NOTIFICATION_BACKUP_AUTHORITY = digest(encoded(op))
 
 
@@ -2546,6 +2573,9 @@ def notification_backup_reference(op, raw, file_sha):
          and receipt['roleClosureSha256']==digest(encoded(initial['security']['roles']))==journal.find('SECURITY_RESTORE_VERIFIED')['roleClosureSha256']
          and receipt['restoreImage']==PG_IMAGE and receipt['schema']==('PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1' if op['schema']==JOIN_POST105_SCHEMA else 'PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1'), 'NOTIFICATION_BACKUP_PROOF')
     post = {}
+    if 'migratorPrefetch' in op:
+        need(receipt.get('migratorPrefetch') == plan.get('migratorPrefetch') == op['migratorPrefetch'], 'NOTIFICATION_PREFETCH_BINDING')
+        post['migratorPrefetch']=op['migratorPrefetch']
     if op['schema'] == JOIN_POST105_SCHEMA:
         need(receipt['notificationBundleSha256'] == op['notificationBundleSha256']
              and utc(receipt['completedAt']) <= utc(op['expiresAt']), 'JOIN_POST105_RECEIPT')
@@ -3544,6 +3574,7 @@ def execute_namespace(op, request_bytes, file_sha):
             if op['schema'] == JOIN_POST105_SCHEMA:
                 receipt['notificationBundleSha256'] = op['notificationBundleSha256']
                 need(utc(receipt['completedAt']) <= utc(op['expiresAt']), 'JOIN_POST105_PROOF_EXPIRED')
+            if 'migratorPrefetch' in op:receipt['migratorPrefetch']=op['migratorPrefetch']
             atomic_exclusive(Path(plan['publication']) / 'preimage-proof.json', encoded(preimage))
         if is_web8158_operation(op) or is_notification_backup(op):
             atomic_exclusive(Path(plan['publication']) / 'backup-operation.json', request_bytes)
@@ -3629,6 +3660,29 @@ def namespace_terminal(plan, journal):
     need(image is None or disk_loop(plan, image, optional=True) is None, 'NS_TERMINAL_LOOP')
 
 
+def namespace_postcleanup_attest(plan, op, journal):
+    """Read-only admission of a fully cleaned namespace whose release has not started."""
+    need(journal.find('NAMESPACE_STORAGE_CLEANED') is not None
+         and journal.find('NAMESPACE_RELEASE_INTENT') is None, 'NS_POSTCLEANUP_PREFIX')
+    for intent, complete in [('DAEMON_START_INTENT','DAEMON_STOPPED'),
+                             ('RESTORE_CREATE_INTENT','CONTAINER_REMOVED'),
+                             ('CONTAINERD_MASK_INTENT','CONTAINERD_MASK_UNMOUNTED'),
+                             ('ALIAS_MOUNT_INTENT','ALIAS_UNMOUNTED')]:
+        need(journal.find(intent) is None or journal.find(complete) is not None, 'NS_POSTCLEANUP_PROOF')
+    need(all(not os.path.lexists(plan[k]) for k in ('image','mount','mapperPath')), 'NS_POSTCLEANUP_STORAGE')
+    image = journal.find('IMAGE_CREATED')
+    need(image is None or disk_loop(plan,image['identity'],optional=True) is None, 'NS_POSTCLEANUP_LOOP')
+    admission = namespace_admission(plan,op)
+    ready=journal.find('NAMESPACE_READY')
+    need(ready is not None and admission == ready['receipt'], 'NS_POSTCLEANUP_ADMISSION')
+    namespace_alias_restored(journal); namespace_mask_restored(journal); namespace_runtime_mounts_empty()
+    supervisor = admission['supervisor']['process']
+    need(namespace_alias_baseline(supervisor) == journal.find('ALIAS_BASELINE')['identity'], 'NS_POSTCLEANUP_ALIAS')
+    namespace_mask_source_baseline(supervisor,journal.find('CONTAINERD_MASK_BASELINE')['identity'])
+    stopped = journal.find('DAEMON_STOPPED')
+    namespace_daemon_absent(plan,op,None if stopped is None else stopped['identity'])
+
+
 def reconcile_namespace(op, raw, file_sha):
     disk_prerequisites(cleanup=True)
     work = ROOT/'backups'/('.disk-restore-' + digest(raw))
@@ -3656,6 +3710,11 @@ def reconcile_namespace(op, raw, file_sha):
             journal.once('RECONCILED'); return {'status': 'DISK_RECONCILED', 'authorizesDeploy': False, 'replayAllowed': False}
     if journal.find('NAMESPACE_RELEASE_INTENT') is not None:
         namespace_release(plan, op, journal)
+    elif is_notification_backup(op) and journal.find('NAMESPACE_STORAGE_CLEANED') is not None and journal.find('NAMESPACE_UNIT_START_INTENT') is not None:
+        # The alias/mask and private daemon are already gone. Re-entering cleanup
+        # would demand the removed alias and strand an otherwise verified backup.
+        namespace_postcleanup_attest(plan,op,journal)
+        namespace_release(plan,op,journal)
     elif journal.find('NAMESPACE_UNIT_START_INTENT') is not None:
         # No guessed process adoption before the supervisor's owned durable receipt.
         admission = namespace_admission(plan, op)
@@ -3880,11 +3939,312 @@ def notification_early_main():
     print(json.dumps(result, separators=(',', ':')))
 
 
+# One closed bridge for the successful 7cc backup and never-admitted bfc request.
+# It retires only operator metadata; canonical backup and business data never move.
+PRE105_RETIRED_SOURCE = '4e8280deb8a1175732ab4145c80256c85ef4e2c1'
+PRE105_RETIRED_BACKUP = '7ccbaeb4dc278f84ea76ef4b68b85dd349198cc9103c7e42c9f8b3fb551397a2'
+PRE105_RETIRED_MIGRATION = 'bfc69d198b153b40bc67ae2ab7522d012064cf80681f3a23cc46f2e15ff906dd'
+PRE105_RETIRED_RECEIPT = 'b7e8159bb7e8bb0b27c61c110b0375e14bc012e2dd24ac12d29b7d5980efd41e'
+PRE105_RETIRED_PREIMAGE = '7bedc74a66bb0ec1ef2890616940ebdd1622e3e92fff0250df6f925d1d18216a'
+PRE105_RETIRED_TOOL = 'f5ad59fdbf2d24d7f04cdb838e709594d8c1b69a53eee18a84e42f4801a6096e'
+
+
+def pre105_retirement_paths():
+    operator=ROOT/'operator'
+    archive=operator/('pre105-retired-'+PRE105_RETIRED_BACKUP+'-'+PRE105_RETIRED_MIGRATION)
+    return operator/'notification-pre105-retirement.json', archive, operator/'notification-pre105-retirement-preparation.json'
+
+
+def pre105_retirement_request(value):
+    exact(value,['schema','target','toolCommit','toolFileSha256','toolProofSha256','toolInstallationSha256',
+                 'controllerSourceCiRunId','backupOperationSha256','migrationOperationSha256','dryRunSha256','expiresAt','confirmation'])
+    need(value['schema']=='PHUB_NOTIFICATION_PRE105_RETIREMENT_V1' and value['target']==TARGET
+         and value['backupOperationSha256']==PRE105_RETIRED_BACKUP
+         and value['migrationOperationSha256']==PRE105_RETIRED_MIGRATION
+         and value['confirmation']=='RETIRE_EXPIRED_UNADMITTED_4E_KEEP_7CC_CANONICAL_BACKUP', 'PRE105_RETIREMENT_REQUEST')
+    need(isinstance(value['toolCommit'],str) and SHA.fullmatch(value['toolCommit'])
+         and value['toolCommit']!=PRE105_RETIRED_SOURCE
+         and re.fullmatch(r'[1-9][0-9]*',value['controllerSourceCiRunId'] or ''), 'PRE105_RETIREMENT_SOURCE')
+    need(all(isinstance(value[k],str) and HASH.fullmatch(value[k]) for k in
+             ['toolFileSha256','toolProofSha256','toolInstallationSha256'])
+         and (value['dryRunSha256'] is None or isinstance(value['dryRunSha256'],str)
+              and HASH.fullmatch(value['dryRunSha256'])), 'PRE105_RETIREMENT_TOOL')
+    utc(value['expiresAt']);return value
+
+
+@contextmanager
+def pre105_retirement_locks():
+    # Never create a missing lock or accept a replacement while acquiring flock.
+    import fcntl
+    fds=[]
+    try:
+        for name in ['database-backup-disk-process.lock','api-worker-executor.lock']:
+            path=ROOT/'standard'/name;before=secure(path,mode=0o600)
+            fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW);fds.append(fd)
+            need(identity(before)==identity(os.fstat(fd))==identity(secure(path,mode=0o600)), 'PRE105_RETIREMENT_LOCK')
+            fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            need(identity(before)==identity(os.fstat(fd))==identity(secure(path,mode=0o600)), 'PRE105_RETIREMENT_LOCK')
+        yield
+    finally:
+        for fd in reversed(fds):os.close(fd)
+
+
+def pre105_retirement_seal(path,data):
+    """Fixed, exact owned prefixes; no random orphan, overwrite, truncate or delete."""
+    incoming=path.with_name(path.name+'.incoming')
+    if os.path.lexists(path):
+        need(not os.path.lexists(incoming) and read_secure(path)==data, 'PRE105_RETIREMENT_SEAL_DRIFT');return
+    if not os.path.lexists(incoming):
+        fd=os.open(incoming,os.O_RDWR|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600);os.close(fd);sync_directory(path.parent)
+    before=secure(incoming,mode=0o600);need(before.st_size<=len(data), 'PRE105_RETIREMENT_PREFIX')
+    fd=os.open(incoming,os.O_RDWR|os.O_NOFOLLOW)
+    try:
+        need(identity(before)==identity(os.fstat(fd))==identity(secure(incoming,mode=0o600)), 'PRE105_RETIREMENT_RACE')
+        prefix=os.read(fd,len(data)+1);need(len(prefix)==before.st_size and data.startswith(prefix), 'PRE105_RETIREMENT_PREFIX')
+        position=len(prefix)
+        while position<len(data):
+            count=os.write(fd,data[position:]);need(count>0,'PRE105_RETIREMENT_WRITE');position+=count
+        os.fsync(fd)
+    finally:os.close(fd)
+    need(read_secure(incoming)==data,'PRE105_RETIREMENT_READBACK')
+    rename_noreplace(incoming,path);sync_directory(path.parent)
+    need(read_secure(path)==data,'PRE105_RETIREMENT_READBACK')
+
+
+def pre105_retirement_probe(value):
+    _,archive,_=pre105_retirement_paths()
+    canonical=ROOT/'backups'/(PRE105_RETIRED_SOURCE+'-39927484426-1-notification-pre105')
+    raw=read_secure(canonical/'backup-operation.json')
+    need(digest(raw)==PRE105_RETIRED_BACKUP,'PRE105_RETIREMENT_BACKUP')
+    op=validate_operation(strict(raw),time.time(),PRE105_RETIRED_TOOL,allow_expired=True)
+    need(op['controllerSha']==op['toolCommit']==PRE105_RETIRED_SOURCE,'PRE105_RETIREMENT_OLD_SOURCE')
+    # Authentic old enrolled closure checks the new helper's independently green main CI.
+    # The new checkout is never imported to approve its own retirement authority.
+    notification_early_source(value,op)
+    enrollment=read_secure(ROOT/'operator/enrollments'/PRE105_RETIRED_SOURCE/'enrollment-receipt.json')
+    need(digest(enrollment)=='c55a818bd1f4e106a624e3647ae77da9edf2101bfe9e7e2204b1b0d465cde5c1','PRE105_RETIREMENT_ENROLLMENT')
+    terminal=notification_backup_reference(op,raw,PRE105_RETIRED_TOOL)
+    need(terminal['receiptSha256']==PRE105_RETIRED_RECEIPT
+         and terminal['preimageSha256']==PRE105_RETIRED_PREIMAGE
+         and terminal['sourceLedgerSha256']==API_WORKER_LEDGER_SHA256, 'PRE105_RETIREMENT_TERMINAL')
+    migration_path=ROOT/'operator/api-worker-migration.json'
+    migration=read_secure(migration_path if os.path.lexists(migration_path) else archive/'migration-request.json')
+    need(digest(migration)==PRE105_RETIRED_MIGRATION,'PRE105_RETIREMENT_MIGRATION')
+    candidate=strict(migration)
+    need(candidate['controllerSha']==candidate['candidateSha']==PRE105_RETIRED_SOURCE
+         and candidate['publicationRunId']=='39931088343' and time.time()>=utc(candidate['expiresAt']), 'PRE105_RETIREMENT_NOT_EXPIRED')
+    # All metadata is hash-pinned; the schema is independently checked by the OLD JS reader.
+    program,environment=_notification_source_program(op)
+    program+="import {assertNotificationRuntimeOff} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-notification-profile.js';for(const n of ['api.env','worker.env'])assertNotificationRuntimeOff(fs.readFileSync('/etc/phub/timeweb-beta/'+n));import {validateNotificationOperation} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-notification-profile.js';validateNotificationOperation(JSON.parse(Buffer.from('"+base64.b64encode(migration).decode()+"','base64')));process.stdout.write('EXPIRED_MIGRATION_VERIFIED');"
+    need(command(['/usr/bin/node','--input-type=module','-e',program], 'PRE105_RETIREMENT_MIGRATION_SCHEMA',input_data=raw,environment=environment,timeout=60)==b'EXPIRED_MIGRATION_VERIFIED','PRE105_RETIREMENT_MIGRATION_SCHEMA')
+    need(not os.path.lexists(LOCK) and not os.path.lexists('/etc/phub/.timeweb-beta.provision.lock'), 'PRE105_RETIREMENT_ACTIVE')
+    need(not os.path.lexists(ROOT/'backups'/(PRE105_RETIRED_SOURCE+'-39931088343-1-migration')), 'PRE105_RETIREMENT_ADMITTED')
+    need(all(not os.path.lexists(ROOT/'operator'/name) for name in
+        ['api-worker-upgrade.json','notification-early-exit-recovery.json','notification-migrator-prefetch.json']), 'PRE105_RETIREMENT_DEPENDENT_REQUEST')
+    need(not docker(['ps','-aq','--filter','name=^/phub-timeweb-migration-4e8280deb8a1-39931088343-1']).strip()
+         and not docker(['ps','-aq','--filter','label=com.docker.compose.service=migrator']).strip(), 'PRE105_RETIREMENT_CONTAINER')
+    secret_root=Path('/etc/phub/timeweb-beta');secure(secret_root,'dir',0o700)
+    need(sorted(p.name for p in secret_root.iterdir())==sorted(candidate['expectedSecretSetFiles'])
+         and all(digest(read_secure(secret_root/name))==sha for name,sha in candidate['expectedSecretSetFiles'].items()),'PRE105_RETIREMENT_SECRETS')
+    pre=notification_preimage(op)
+    need(digest(encoded(pre))==PRE105_RETIRED_PREIMAGE, 'PRE105_RETIREMENT_PREIMAGE')
+    need(service('phub-timeweb-beta','api')==op['expectedApi']
+         and service('phub-timeweb-beta-dependencies','postgres')==op['expectedPostgres'], 'PRE105_RETIREMENT_RUNTIME')
+    ids=sorted(docker(['ps','-aq','--no-trunc']).decode().split())
+    need(len(ids)==len(set(ids)) and all(HASH.fullmatch(i) for i in ids),'PRE105_RETIREMENT_CONTAINER_IDS')
+    boundary=[strict(docker(['inspect','--format',INSPECT_FORMAT,i])) for i in ids]
+    need(digest(encoded(boundary))==op['expectedBoundarySha256'], 'PRE105_RETIREMENT_BOUNDARY')
+    # notification_preimage includes source-gated OFF flags, full ledger/catalog/security,
+    # default privileges/role closure. Preserve and recheck canonical inode/hash custody.
+    identities={name:list(identity(secure(canonical/name,mode=0o600))) for name in
+                ['backup-operation.json','preimage-proof.json','database-backup-receipt.json','database.pgcustom']}
+    packet={'schema':'PHUB_NOTIFICATION_PRE105_RETIREMENT_PROOF_V1','backupOperationSha256':PRE105_RETIRED_BACKUP,
+            'migrationOperationSha256':PRE105_RETIRED_MIGRATION,'backupTerminal':terminal,
+            'canonicalPath':str(canonical),'canonicalIdentities':identities,'runtimeBoundarySha256':op['expectedBoundarySha256'],
+            'preimageSha256':digest(encoded(pre)),'ledgerSha256':API_WORKER_LEDGER_SHA256}
+    return raw,migration,packet
+
+
+def pre105_retirement_identity(value):
+    need(isinstance(value,list) and len(value)==9 and all(type(n) is int and n>=0 for n in value)
+         and value[2:4]==[0,0] and stat.S_ISREG(value[4]) and stat.S_IMODE(value[4])==0o600
+         and value[5]==1 and value[6]>0, 'PRE105_RETIRED_UNLINK_IDENTITY')
+
+
+def pre105_retirement_archive(archive,preparation,seed_bytes):
+    incoming=archive.with_name(archive.name+'.incoming')
+    ready=preparation.with_name(preparation.name+'.archive-ready.json')
+    need(not(os.path.lexists(archive) and os.path.lexists(incoming)), 'PRE105_RETIREMENT_MIXED_ARCHIVE')
+    if not os.path.lexists(archive):
+        if not os.path.lexists(incoming):
+            need(not os.path.lexists(ready),'PRE105_RETIREMENT_ARCHIVE_MISSING')
+            incoming.mkdir(mode=0o700);sync_directory(incoming.parent)
+        secure(incoming,'dir',0o700)
+        need(set(p.name for p in incoming.iterdir())<={'.owner.json','.owner.json.incoming'}, 'PRE105_RETIREMENT_INCOMING_INVENTORY')
+        pre105_retirement_seal(incoming/'.owner.json',seed_bytes)
+        expected={'identity':storage_identity(secure(incoming,'dir',0o700)),'ownerSha256':digest(seed_bytes)}
+        pre105_retirement_seal(ready,encoded(expected))
+        need(same_storage(secure(incoming,'dir',0o700),expected['identity'])
+             and read_secure(incoming/'.owner.json')==seed_bytes,'PRE105_RETIREMENT_ARCHIVE_RACE')
+        rename_noreplace(incoming,archive)
+    binding=strict(read_secure(ready));exact(binding,['identity','ownerSha256'])
+    need(same_storage(secure(archive,'dir',0o700),binding['identity']) and binding['ownerSha256']==digest(seed_bytes)
+         and read_secure(archive/'.owner.json')==seed_bytes,'PRE105_RETIREMENT_ARCHIVE_OWNER')
+
+
+def pre105_retirement_transition(raw,migration,packet,request_bytes,execute):
+    """Archive -> retire intent -> per-file unlink intent/ACK -> truthful terminal."""
+    request,archive,preparation=pre105_retirement_paths()
+    value=pre105_retirement_request(strict(request_bytes));proof=digest(encoded(packet))
+    seed={'schema':'PHUB_NOTIFICATION_PRE105_ARCHIVE_PREPARATION_V1','requestSha256':digest(request_bytes),
+          'proof':packet,'archivePath':str(archive)}
+    seed_bytes=encoded(seed)
+    if not execute:
+        ready=preparation.with_name(preparation.name+'.archive-ready.json')
+        need(not any(os.path.lexists(p) for p in [archive,archive.with_name(archive.name+'.incoming'),
+             preparation,preparation.with_name(preparation.name+'.incoming'),ready,ready.with_name(ready.name+'.incoming')]),
+             'PRE105_RETIREMENT_STARTED')
+        return {'status':'READONLY_PRE_ADMISSION_EXPIRED_RETIREMENT','proofSha256':proof,'proof':packet}
+    need(value['dryRunSha256']==proof,'PRE105_RETIREMENT_DRY_RUN')
+    if os.path.lexists(preparation):
+        need(read_secure(preparation)==seed_bytes,'PRE105_RETIREMENT_PREPARATION')
+    else:
+        need(not any(os.path.lexists(p) for p in [archive,archive.with_name(archive.name+'.incoming'),
+             preparation.with_name(preparation.name+'.archive-ready.json'),
+             preparation.with_name(preparation.name+'.archive-ready.json.incoming')]),'PRE105_RETIREMENT_FOREIGN_ARCHIVE')
+        need(1200<=utc(value['expiresAt'])-time.time()<=3600,'PRE105_RETIREMENT_EXPIRY')
+    need(read_secure(request)==request_bytes,'PRE105_RETIREMENT_REQUEST_DRIFT')
+    # An absent active file is recoverable only behind its already durable unlink intent.
+    # Terminal completion cannot absorb a reappeared request.
+    if os.path.lexists(archive):
+        need(os.path.lexists(preparation),'PRE105_RETIREMENT_FOREIGN_ARCHIVE')
+        secure(archive,'dir',0o700)
+        if os.path.lexists(archive/'receipt.json'):
+            need(not os.path.lexists(REQUEST) and not os.path.lexists(ROOT/'operator/api-worker-migration.json'),'PRE105_RETIREMENT_TERMINAL_REAPPEARED')
+    for label,path,data in [('migration',ROOT/'operator/api-worker-migration.json',migration),('backup',REQUEST,raw)]:
+        if not os.path.lexists(path):
+            need(os.path.lexists(preparation) and read_secure(preparation)==seed_bytes
+                 and read_secure(archive/(label+'-request.json'))==data
+                 and os.path.lexists(archive/(label+'-unlink-intent.json')),'PRE105_RETIREMENT_ABSENT_UNPROVEN')
+    pre105_retirement_seal(preparation,seed_bytes)
+    pre105_retirement_archive(archive,preparation,seed_bytes)
+    names=['.owner.json','backup-request.json','migration-request.json','proof.json','retire-intent.json',
+           'migration-unlink-intent.json','migration-unlinked.json','backup-unlink-intent.json','backup-unlinked.json','receipt.json']
+    allowed=set(names+[n+'.incoming' for n in names])
+    need(set(p.name for p in archive.iterdir())<=allowed,'PRE105_RETIREMENT_ARCHIVE_INVENTORY')
+    pre105_retirement_seal(archive/'backup-request.json',raw)
+    pre105_retirement_seal(archive/'migration-request.json',migration)
+    pre105_retirement_seal(archive/'proof.json',encoded(packet))
+    common={'requestSha256':digest(request_bytes),'proofSha256':proof,
+            'backupRequestSha256':digest(raw),'migrationRequestSha256':digest(migration)}
+    # Both exact raw requests and their full terminal proof are fsynced before RETIRE_INTENT.
+    pre105_retirement_seal(archive/'retire-intent.json',encoded(common))
+    for label,path,data in [('migration',ROOT/'operator/api-worker-migration.json',migration),('backup',REQUEST,raw)]:
+        intent=archive/(label+'-unlink-intent.json');done=archive/(label+'-unlinked.json')
+        if os.path.lexists(path):
+            before=secure(path,mode=0o600);need(read_secure(path)==data,'PRE105_RETIREMENT_UNLINK_BYTES')
+            entry={**common,'path':str(path),'identity':list(identity(before))}
+            pre105_retirement_seal(intent,encoded(entry))
+            need(list(identity(secure(path,mode=0o600)))==entry['identity'] and read_secure(path)==data,'PRE105_RETIREMENT_UNLINK_RACE')
+            path.unlink();sync_directory(path.parent)
+        else:
+            entry=strict(read_secure(intent));exact(entry,[*common,'path','identity'])
+            need({k:entry[k] for k in common}==common and entry['path']==str(path),'PRE105_RETIREMENT_UNLINK_PREFIX')
+            pre105_retirement_identity(entry['identity'])
+            sync_directory(path.parent)
+        need(not os.path.lexists(path),'PRE105_RETIREMENT_UNLINK_READBACK')
+        pre105_retirement_seal(done,encoded(entry))
+        # No canonical file or process is touched between metadata transitions.
+        need(pre105_retirement_probe(value)==(raw,migration,packet),'PRE105_RETIREMENT_POST_UNLINK')
+    receipt={**common,'schema':'PHUB_NOTIFICATION_PRE105_RETIREMENT_RECEIPT_V1',
+             'status':'PRE_ADMISSION_EXPIRED_RETIRED','archivePath':str(archive),
+             'archiveIdentity':storage_identity(secure(archive,'dir',0o700)),
+             'memberSha256':{name:digest(read_secure(archive/name)) for name in names if name!='receipt.json'},
+             'canonicalBackupRetained':True,'databaseMutated':False,'runtimeMutated':False}
+    pre105_retirement_seal(archive/'receipt.json',encoded(receipt))
+    need(set(p.name for p in archive.iterdir())==set(names) and
+         pre105_retirement_probe(value)==(raw,migration,packet),'PRE105_RETIREMENT_FINAL')
+    return {**receipt,'receiptSha256':digest(read_secure(archive/'receipt.json')),'authorizesDeploy':False}
+
+
+def pre105_retired_backup_attest(value):
+    """Archive-aware read-only custody after a controller enrollment change."""
+    _,archive,preparation=pre105_retirement_paths()
+    _tool_custody_local(value)
+    seed=strict(read_secure(preparation));receipt_bytes=read_secure(archive/'receipt.json');receipt=strict(receipt_bytes)
+    raw=read_secure(archive/'backup-request.json');migration=read_secure(archive/'migration-request.json')
+    packet=strict(read_secure(archive/'proof.json'));request_bytes=read_secure(pre105_retirement_paths()[0])
+    need(seed=={'schema':'PHUB_NOTIFICATION_PRE105_ARCHIVE_PREPARATION_V1','requestSha256':digest(request_bytes),
+                'proof':packet,'archivePath':str(archive)} and pre105_retirement_request(strict(request_bytes))==value,
+         'PRE105_RETIRED_PREPARATION')
+    common={'requestSha256':digest(request_bytes),'proofSha256':digest(encoded(packet)),
+            'backupRequestSha256':digest(raw),'migrationRequestSha256':digest(migration)}
+    names=['.owner.json','backup-request.json','migration-request.json','proof.json','retire-intent.json',
+           'migration-unlink-intent.json','migration-unlinked.json','backup-unlink-intent.json','backup-unlinked.json','receipt.json']
+    need(sorted(p.name for p in archive.iterdir())==sorted(names),'PRE105_RETIRED_INVENTORY')
+    need(read_secure(archive/'.owner.json')==encoded(seed),'PRE105_RETIRED_OWNER')
+    ready=strict(read_secure(preparation.with_name(preparation.name+'.archive-ready.json')))
+    need(ready=={'identity':storage_identity(secure(archive,'dir',0o700)),'ownerSha256':digest(encoded(seed))},'PRE105_RETIRED_ARCHIVE_IDENTITY')
+    need(digest(raw)==PRE105_RETIRED_BACKUP and digest(migration)==PRE105_RETIRED_MIGRATION
+         and read_secure(archive/'retire-intent.json')==encoded(common)
+         and receipt=={**common,'schema':'PHUB_NOTIFICATION_PRE105_RETIREMENT_RECEIPT_V1',
+            'status':'PRE_ADMISSION_EXPIRED_RETIRED','archivePath':str(archive),
+            'archiveIdentity':storage_identity(secure(archive,'dir',0o700)),
+            'memberSha256':{name:digest(read_secure(archive/name)) for name in names if name!='receipt.json'},
+            'canonicalBackupRetained':True,'databaseMutated':False,'runtimeMutated':False},'PRE105_RETIRED_RECEIPT')
+    for label,path in [('backup',REQUEST),('migration',ROOT/'operator/api-worker-migration.json')]:
+        entry=strict(read_secure(archive/(label+'-unlink-intent.json')))
+        exact(entry,[*common,'path','identity']);pre105_retirement_identity(entry['identity'])
+        need(read_secure(archive/(label+'-unlinked.json'))==encoded(entry) and
+             {k:entry[k] for k in common}==common and entry['path']==str(path),'PRE105_RETIRED_UNLINK')
+        # A later operation may legitimately use a fixed request path; never confuse
+        # it with the retired predecessor. Prefetch/first backup separately require absence.
+        need(not os.path.lexists(path) or digest(read_secure(path)) not in
+             (PRE105_RETIRED_BACKUP,PRE105_RETIRED_MIGRATION),'PRE105_RETIRED_REQUEST_REAPPEARED')
+    canonical=ROOT/'backups'/(PRE105_RETIRED_SOURCE+'-39927484426-1-notification-pre105')
+    need(packet['canonicalPath']==str(canonical) and packet['backupOperationSha256']==PRE105_RETIRED_BACKUP
+         and packet['migrationOperationSha256']==PRE105_RETIRED_MIGRATION
+         and packet['preimageSha256']==PRE105_RETIRED_PREIMAGE
+         and packet['ledgerSha256']==API_WORKER_LEDGER_SHA256,'PRE105_RETIRED_CANONICAL')
+    _tool_custody_local(strict(raw))
+    files=['backup-operation.json','preimage-proof.json','database-backup-receipt.json','database.pgcustom']
+    need(sorted(p.name for p in canonical.iterdir())==sorted(files)
+         and {n:list(identity(secure(canonical/n,mode=0o600))) for n in files}==packet['canonicalIdentities'], 'PRE105_RETIRED_CANONICAL_IDENTITY')
+    backup_receipt=read_secure(canonical/'database-backup-receipt.json')
+    need(read_secure(canonical/'backup-operation.json')==raw and digest(backup_receipt)==PRE105_RETIRED_RECEIPT
+         and digest(read_secure(canonical/'preimage-proof.json'))==PRE105_RETIRED_PREIMAGE
+         and file_digest(canonical/'database.pgcustom')==strict(backup_receipt)['backupSha256'], 'PRE105_RETIRED_CANONICAL_HASH')
+    return {'status':'RETIRED_CANONICAL_BACKUP_VERIFIED','receiptSha256':digest(receipt_bytes),
+            'canonicalBackupRetained':True,'databaseMutated':False,'runtimeMutated':False}
+
+
+def pre105_retirement_main():
+    need(os.getuid()==0 and os.uname().nodename=='msk-1-vm-z8ks' and os.uname().machine=='x86_64','PRE105_RETIREMENT_HOST')
+    ips=command(['/usr/bin/hostname','-I'],'PRE105_RETIREMENT_HOST').decode().split()
+    need('100.77.212.57' in ips and '103.88.243.171' in ips,'PRE105_RETIREMENT_HOST')
+    os.umask(0o077)
+    request,_,_=pre105_retirement_paths();request_bytes=read_secure(request)
+    value=pre105_retirement_request(strict(request_bytes))
+    need(Path(__file__)==ROOT/'operator/tools'/value['toolCommit']/'control-timeweb-database-backup.py'
+         and digest(read_secure(Path(__file__),0o755))==value['toolFileSha256'],'PRE105_RETIREMENT_TOOL_PATH')
+    # Read-only consumers can already hold the API/Worker executor lock. Immutable
+    # archive/canonical CAS readback needs no second acquisition of that same flock.
+    if sys.argv[1]=='--attest-retired-notification-pre105':
+        print(json.dumps(pre105_retired_backup_attest(value),separators=(',',':')));return
+    with pre105_retirement_locks():
+        raw,migration,packet=pre105_retirement_probe(value)
+        result=pre105_retirement_transition(raw,migration,packet,request_bytes,sys.argv[1]=='--retire-expired-notification-pre105')
+    print(json.dumps(result,separators=(',',':')))
+
+
 def main():
     need(sys.flags.optimize==0 and sys.flags.isolated==1, 'ISOLATED_NONOPTIMIZED_PYTHON_REQUIRED')
     if len(sys.argv) == 3 and sys.argv[1] in ('--attest-notification-early-exit', '--reconcile-notification-early-exit'):
         need(sys.argv[2] == str(ROOT/'operator/notification-early-exit-recovery.json'), 'EARLY_ENTRY')
         notification_early_main(); return
+    if len(sys.argv)==3 and sys.argv[1] in ('--attest-expired-notification-pre105','--retire-expired-notification-pre105','--attest-retired-notification-pre105'):
+        need(sys.argv[2]==str(ROOT/'operator/notification-pre105-retirement.json'),'PRE105_RETIREMENT_ENTRY')
+        pre105_retirement_main();return
     supervisor = len(sys.argv) == 4 and sys.argv[1] == '--disk-runtime-supervisor' and sys.argv[2] == str(REQUEST)
     need(os.getuid()==0 and (supervisor or len(sys.argv)==3 and sys.argv[1] in ('--execute', '--reconcile-disk', '--attest-disk') and sys.argv[2]==str(REQUEST)), 'ENTRY')
     os.umask(0o077)
