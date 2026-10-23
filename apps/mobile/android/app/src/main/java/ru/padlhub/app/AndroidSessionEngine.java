@@ -72,25 +72,29 @@ final class AndroidSessionEngine {
         final List<String> cookies;
         final byte[] body;
         final Cache cache;
+        final String source;
         Response(int status, Map<String, String> headers, List<String> cookies, byte[] body) {
             this(status, headers, cookies, body, null);
         }
         Response(int status, Map<String, String> headers, List<String> cookies, byte[] body, Cache cache) {
+            this(status, headers, cookies, body, cache, "network");
+        }
+        private Response(int status, Map<String, String> headers, List<String> cookies, byte[] body, Cache cache, String source) {
             this.status = status; this.headers = headers; this.cookies = cookies; this.body = body;
-            this.cache = cache;
+            this.cache = cache; this.source = source;
         }
         static Response signedOut() {
             return new Response(401, Collections.singletonMap("content-type", "application/json"), Collections.emptyList(),
-                "{\"code\":\"AUTH_SESSION_REVOKED\",\"message\":\"Войдите заново.\"}".getBytes(StandardCharsets.UTF_8));
+                "{\"code\":\"AUTH_SESSION_REVOKED\",\"message\":\"Войдите заново.\"}".getBytes(StandardCharsets.UTF_8), null, "local");
         }
-        static Response loggedOut() { return new Response(204, Collections.emptyMap(), Collections.emptyList(), new byte[0]); }
+        static Response loggedOut() { return new Response(204, Collections.emptyMap(), Collections.emptyList(), new byte[0], null, "local"); }
         Response forBridge() {
             Map<String, String> safe = new HashMap<>();
             for (Map.Entry<String, String> entry : headers.entrySet()) {
                 String key = entry.getKey().toLowerCase(Locale.ROOT);
-                if (key.equals("content-type") || key.equals("x-correlation-id") || key.equals("retry-after")) safe.put(key, entry.getValue());
+                if (key.equals("content-type") || key.equals("x-correlation-id") || key.equals("retry-after") || key.equals("cache-control")) safe.put(key, entry.getValue());
             }
-            return new Response(status, safe, Collections.emptyList(), body, cache);
+            return new Response(status, safe, Collections.emptyList(), body, cache, source);
         }
     }
 

@@ -388,8 +388,13 @@ describe('bounded Android profile and bookings diagnostics', () => {
   function fixture() {
     const native = { configuration: vi.fn(), request: vi.fn<AndroidSessionPlugin['request']>() };
     const observe = vi.fn<(observation: NativeReadObservation) => void>();
-    const fetch = createNativeApiFetch(config, native, undefined, undefined, observe);
-    return { native, observe, fetch };
+    const history = vi.fn<(observation: NativeReadObservation) => void>();
+    const fetch = createNativeApiFetch(config, native, undefined, undefined, (observation) => {
+      history(observation);
+      if (observation.complete !== false)
+        observe({ section: observation.section, failure: observation.failure });
+    });
+    return { native, observe, history, fetch };
   }
 
   it('preserves the SDK failure and original body while retaining only reviewed metadata', async () => {

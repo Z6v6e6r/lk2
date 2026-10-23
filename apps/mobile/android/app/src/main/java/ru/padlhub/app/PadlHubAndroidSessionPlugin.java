@@ -112,6 +112,7 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                         for (Map.Entry<String, String> entry : response.headers.entrySet()) safeHeaders.put(entry.getKey(), entry.getValue());
                         JSObject result = new JSObject().put("status", response.status)
                             .put("headers", safeHeaders)
+                            .put("source", response.source)
                             .put("body", Base64.encodeToString(response.body, Base64.NO_WRAP));
                         if (response.cache != null) result.put("cache", new JSObject()
                             .put("state", response.cache.stale ? "stale" : "fresh-cache").put("savedAt", response.cache.savedAt));
@@ -141,11 +142,13 @@ public final class PadlHubAndroidSessionPlugin extends Plugin {
                     try {
                         if (oauth == null || callbackStorageFailed) throw new Failure("NATIVE_STORAGE_UNAVAILABLE");
                         AndroidSessionEngine.NativeAccess access = engine.nativeAccess();
-                        new AndroidUpcomingBookingsRefresh(policy, engine, sender, upcomingCircuits, upcomingMetrics).run(access, () -> {
+                        AndroidUpcomingBookingsRefresh.Receipt receipt = new AndroidUpcomingBookingsRefresh(policy, engine, sender, upcomingCircuits, upcomingMetrics).run(access, () -> {
                             if (epoch != upcomingRefreshEpoch) throw new Failure("NATIVE_OPERATION_CANCELLED");
                         });
                         getActivity().runOnUiThread(() -> {
-                            if (trustedPage() && epoch == upcomingRefreshEpoch) call.resolve(new JSObject().put("state", "refreshed"));
+                            if (trustedPage() && epoch == upcomingRefreshEpoch && receipt.jobAccepted && receipt.relayAccepted && receipt.completed)
+                                call.resolve(new JSObject().put("state", "refreshed").put("milestones",
+                                    new org.json.JSONArray().put("JOB_ACCEPTED").put("RELAY_ACCEPTED").put("COMPLETED")));
                             else call.reject("Native request rejected", "NATIVE_REQUEST_REJECTED");
                         });
                     } catch (Failure error) { call.reject("Native refresh unavailable", error.code); }

@@ -14,6 +14,19 @@ import java.util.*;
 
 @RunWith(AndroidJUnit4.class)
 public class AndroidSessionTest {
+    @Test public void bridgeHeadersPermitCachePolicyButNeverCredentialsOrUnrelatedHeaders() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Cache-Control", "private, no-store"); headers.put("content-type", "application/json");
+        headers.put("retry-after", "15"); headers.put("x-correlation-id", "synthetic-correlation");
+        headers.put("authorization", "synthetic-private"); headers.put("cookie", "synthetic-private");
+        headers.put("set-cookie", "synthetic-private"); headers.put("x-debug", "synthetic-private");
+        Response safe = new Response(200, headers, Collections.singletonList("synthetic-private"), new byte[0]).forBridge();
+        assertEquals(new HashSet<>(Arrays.asList("cache-control", "content-type", "retry-after", "x-correlation-id")), safe.headers.keySet());
+        assertEquals("private, no-store", safe.headers.get("cache-control")); assertTrue(safe.cookies.isEmpty());
+        assertEquals("network", safe.source);
+        assertEquals("local", Response.signedOut().forBridge().source);
+    }
+
     static final String ORIGIN = "https://lk2.padlhub.su";
     static final String ROOT = "/user/api/v1/local-padel";
     static final String REFRESH = "synthetic_refresh_credential_00000000000000001";
