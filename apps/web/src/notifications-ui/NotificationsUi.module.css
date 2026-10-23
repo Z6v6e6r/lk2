@@ -307,6 +307,33 @@
   line-height: 1.35;
 }
 
+.itemHeading {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 8px;
+}
+
+.itemHeading time {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.itemPreview {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.itemPreview .itemBody {
+  display: inline;
+}
+
 .itemSubtitle {
   color: var(--notifications-accent);
   font-size: 11px;
