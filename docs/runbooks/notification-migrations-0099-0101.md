@@ -246,8 +246,15 @@ installed helper bytes, inode and Git-object installation proof; exact clean enr
 configuration, package descriptor and golden catalogs; terminal journal, kernel cleanup, receipt,
 preimage and dump hashes. It does not query GitHub again during the 61 soak samples or offline
 application recovery. This read-only proof neither caches nor grants forward execution authority;
-execute, supervisor and backup reconciliation keep the full source CI check. No operation field,
-CLI switch or environment option can disable that check. Legacy profiles retain their behavior.
+host execution and backup reconciliation keep the full source CI check. Before starting the
+networkless PRE105 supervisor, the host seals `SOURCE_AUTHORITY_VERIFIED` in the owned chained
+journal, binding the exact request, plan, controller/tree/CI, configuration and helper installation.
+Only that supervisor uses local source/tool custody plus this operation-specific handoff; it also
+proves its exact unit/process identity. Missing, altered or reordered proof stops before namespace
+admission or daemon start. The child never queries GitHub and never populates forward authority.
+No operation field, CLI switch or environment option can disable host CI checks. Legacy profiles
+retain their behavior. An older operation that failed before the namespace receipt remains owned
+and requires separately reviewed exact reconciliation; this change does not adopt or replay it.
 
 The global `/opt/phub/timeweb-beta/operator/database-backup-restore.json` is leased immutable
 from creation of the pre102 backup request until the final API/Worker `RECONCILED` receipt,
@@ -292,3 +299,58 @@ metadata in a network-isolated fresh cluster, exercises the fixed bootstrap inve
 the strict image runner. The older staged SQL test characterizes transaction rollback with owned
 fixed SQL steps; the strict role-aware test is the executable 102→105 controller proof. CI evidence
 is not a claim that a live backup, migration, CUP rollout or deployment has already occurred.
+
+## One-operation recovery for the 518 pre-admission exit
+
+The immutable `39da03f6c57cf76c2522f374e785203e268ce41d573573c3ba51f2cdd4f5e7a6`
+backup stopped after `NAMESPACE_UNIT_START_INTENT`, before its first namespace receipt or dump.
+Its original helper cannot reconcile this window. Keep the original request, capsule, twelve
+journal events, helper installation, source/config `518be74e` and owned lock unchanged.
+Do not repeat execute, recreate the unit, fabricate a receipt or enroll a new controller over it.
+
+The existing backup helper has a separate, closed compatibility entry point for **only** that
+operation, plan `01a3e1eba8bd4d5bcaeff5a41c9547c79b6922347cf844ee51011a60296839a5`
+and original twelve-event hash. Install the reviewed new helper alongside the old one, using its
+normal Git-object/installation proof; do not change the enrolled source/config. A root-owned
+0600 `/opt/phub/timeweb-beta/operator/notification-early-exit-recovery.json` binds its own exact
+helper commit/file/installation/proof, successful main CI run, original operation/plan, expiry,
+`dryRunSha256` and confirmation `RECONCILE_39DA_EARLY_EXIT_KEEP_SOURCE_518_NO_REPLAY`.
+Its schema is `PHUB_NOTIFICATION_EARLY_EXIT_RECOVERY_V1`; target remains the fixed Timeweb target.
+The initial read-only request may have `dryRunSha256:null`. Before the first execution, bind the
+returned hash in a fresh exact request; thereafter retain its identical bytes for all recovery.
+
+Run only after independent review and physical CI rehearsal, through `env -i` with the standard
+root Python isolation and installed helper path:
+
+```text
+--attest-notification-early-exit /opt/phub/timeweb-beta/operator/notification-early-exit-recovery.json
+--reconcile-notification-early-exit /opt/phub/timeweb-beta/operator/notification-early-exit-recovery.json
+```
+
+Attestation is read-only and returns `authorizesMutation:false`. It verifies both host IPs,
+cleanup tool/kernel custody, both helper/source CI authorities, exact request/plan/initial journal,
+owned lock and unchanged container/ledger preimage. It requires empty control inventory, absent
+storage/loop/mapper/publication, original host mount baselines, absent unit/job/cgroup, no slice
+members and exact owned slice identity. Five frozen structured PID1/systemd records must prove
+one exact invocation and argv with exit status 1; a text message or collected unit's default
+`Result=success` is insufficient. This classifies `UNIT_EXEC_EXITED_BEFORE_NAMESPACE_RECEIPT`,
+without treating a missing child receipt as proof of the precise exception that caused exit.
+
+Execution repeats all checks under the existing process lock and requires the exact dry-run hash
+and a request expiry within one hour before the first write. It records a distinct classification,
+proves storage absence and unit release, and stops only the exact owned empty slice through the
+existing lost-ACK-safe release path. It then records `ABORTED` and `RECONCILED` and releases only
+its owned global lock. Every suffix boundary, including marker/empty/removed lock after
+`UNLOCK_INTENT`, resumes the identical request without starting any unit, daemon, storage or dump.
+The journal and original request/capsule remain preserved. Missing/mutated evidence stops with
+ownership retained; no generic operator override or network fallback exists.
+
+After terminal readback, recheck unchanged ledger102/catalog26 and runtime before retiring the
+aborted request and enrolling the next source through the reviewed process. A new backup uses a
+new operation and fresh authority, never a replay. This recovery does not create a verified
+backup, authorize migrations/deployment or permit restoring the business database.
+
+The CI kernel rehearsal uses random transient units/slices and a private fixture directory on
+an isolated Linux runner. It checks actual `PrivateNetwork`, trusted exit records and lost ACK
+before/after slice stop. Its output explicitly distinguishes that contour from the full recovery
+state machine, which uses synthetic files and mocked external observations in the Python suite.
