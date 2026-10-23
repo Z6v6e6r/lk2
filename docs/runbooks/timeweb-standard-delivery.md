@@ -1387,3 +1387,99 @@ prior Web image, fresh current-API backup, and actual Compose rendering with the
 and existing FCM credential source. Pull/smoke/up remain Web-only; `up -d --no-deps web` never applies
 rendered backend labels/images. Retain the exact prior Web digest for rollback. Product QA includes
 Home/profile/subscriptions/support; health checks do not prove those authenticated journeys.
+
+## Dormant JOIN Web/env transition after notification 0105
+
+This is a bounded profile of the existing `--critical-api-web` executor. Source preparation
+is not permission to publish images, enroll a controller, provision secrets or change Timeweb.
+The operator must first receive explicit authority for the exact candidate and staging target,
+and exclusive custody from the active backup/deploy owner. JOIN and live remain disabled.
+
+The fixed request path remains `/opt/phub/timeweb-beta/operator/api-web-upgrade.json`.
+Use schema `PHUB_TIMEWEB_JOIN_DORMANT_API_WEB_OPERATION_V1` with the exact fields validated by
+`scripts/timeweb-join-dormant-profile.js`: target `lk2.padlhub.su`, enrolled `controllerSha`,
+canonical `candidateSha`/`candidateTree`, green `sourceCiRunId`, first-attempt `publicationRunId`,
+`artifactId`, `artifactDigest`, `manifestSha256`, actual `expectedApi` and `expectedWeb`
+(each `id`, immutable `image`, `releaseId`), `expectedCurrentSecretSetReleaseId`,
+`candidateSecretHashes` (all five existing secret-set files), `verifierPublicKeySha256`,
+`notificationBundleSha256`, `expectedExcludedSha256`, canonical UTC `expiresAt`, and confirmation
+`DEPLOY_DORMANT_JOIN_API_WEB_<CANDIDATE12_UPPER>_FROM_<OLD_API12_UPPER>_NO_JOIN_NO_PROVIDER_WRITES`.
+Forward execution requires an unexpired window of at most one hour. Recovery uses the sealed
+operation even after expiry and does not need GitHub availability.
+
+Prerequisites are deliberately strict:
+
+- A clean, reviewed, merged controller with main CI; one immutable canonical candidate and
+  first-attempt publication, with image provenance and offline API/Web smoke. Runtime is frozen
+  at source `518be74e95b1f00f0d04671b343318143a759e9c`. Both the terminal notification API source
+  and the new candidate must descend from this anchor. An older notification source such as
+  `6500726d` deliberately fails; it needs a separately reviewed compatibility proof. Later source
+  may change only the explicit
+  controller/test/runbook files in `JOIN_CONTROLLER_FILES`, including the separately owned Python
+  backup fixes. Application code, SQL, dependencies, Compose, executable modes, symlinks and
+  renames fail this profile. The old profiles and their closed historical proofs are unchanged.
+- A terminal `RECONCILED/SUCCESS` notification-0105 baseline. Hash the eight exact files
+  `operation`, `plan`, `capsule`, `receipt`, `observation`, `descriptor`, `apiIdentity` and
+  `workerIdentity` as done by `validateJoinNotificationBinding`; the operation binds the resulting
+  bundle digest. Actual API/Web and every excluded component must match that sealed lineage.
+  Worker, Realtime, Postgres and infrastructure cannot be adopted from an unverified live state.
+- A fresh strict backup independently restored against the exact **post-0105** ledger, with both
+  `sourceLedgerSha256` and `restoredLedgerSha256` equal to `NOTIFICATION_POST_LEDGER`. Existing
+  backup file hash, size, freshness and service identity checks still apply. There is no degraded
+  fallback. **A producer for this post-0105 proof is a separate backup capability prerequisite;
+  this JS preparation does not add it. Until available and verified, execution must stop.**
+- A separately authorized, securely prepared candidate secret directory at
+  `/etc/phub/timeweb-beta-candidates/<candidate-release-id>/timeweb-beta`. The profile never
+  creates keys or credentials. Old `api.env` bytes are an immutable prefix; append only the
+  missing JOIN/owner/delegation fields. Require `GAME_COMMERCIAL_JOIN_ENABLED=false`, existing
+  `SUBSCRIPTION_RUNTIME_WARN_MODE=OFF`, owner/quote base URLs, integration token, canonical RSA
+  private keyring, active key ID, issuer and audience. The active public SPKI DER fingerprint must
+  equal the separately approved verifier on `lk-primary-147`, even while JOIN is disabled.
+  Existing fields cannot be overwritten. Worker/Realtime/migrator env bytes remain identical;
+  only the release identity marker changes. Do not log any env values or key material.
+- Fresh strict provider monitoring and alert delivery evidence, the normal root-owned path and
+  filesystem checks, no migrator, no ambient Compose overrides, free shared deployment/provision
+  locks, and the verified rollback images. Profile evidence strictness uses the existing
+  `production` validators; the selected runtime remains staging and is not promoted to live.
+
+Under separately granted execution authority, invoke the unchanged controller entry points:
+
+```sh
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-web /opt/phub/timeweb-beta/operator/api-web-upgrade.json
+```
+
+The sealed plan binds the old descriptor, exact secret inode/device/file hashes, excluded
+runtime, candidate digests, backup and notification bundle. The executor obtains both locks,
+journals `SECRET_SWAP_INTENT`, uses the existing recoverable secret-directory swap, starts API
+then Web with `--no-deps`, and never restarts Worker/Realtime. Actual API process env is checked
+before and after activation and on every observation. It records 61 private and public samples
+per service across at least 900 measured seconds, separated by at least 15 seconds, with no
+restart or configuration drift. Both p95 values must be strictly below API 1500 ms / Web 1000 ms.
+The proof binds operation, plan, candidate and original authorization window. No provider-write
+or booking/debit probe belongs to this smoke. Use GET/OPTIONS contracts only; keep JOIN false.
+
+Before installing the descriptor it journals `BASELINE_INTENT`. The installed kind is
+`API_WEB_JOIN_DORMANT_0105`, retaining the verified Worker/Realtime digests and referencing
+separate operation/plan/observation/provider/alert evidence. It does not claim a canonical
+all-component release. `SUCCESS` retains both locks until explicit readback reconciliation:
+
+```sh
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-web-reconcile /opt/phub/timeweb-beta/operator/api-web-upgrade.json
+```
+
+Reconciliation validates the measured proof and exact terminal runtime/secret/descriptor state,
+writes `RECONCILED`, then releases owned locks. Repeating an already reconciled readback with
+the exact original request performs no activation and does not rewrite the receipt.
+
+For a failed or interrupted transaction, use `--critical-api-web-recover` and the same fixed
+request path under recovery authority. Recovery follows the sealed plan, restores Web and the
+old secret directory **before** restoring the old API, and removes only the exact owned candidate
+descriptor. A lost acknowledgement of either rename is resolved from exact inode layouts,
+including the temporary missing-target GAP. If Web restoration fails, API restoration is still
+attempted after secret restoration. If secret restoration fails, the old API is not started.
+Foreign files, inode drift or ambiguous layouts retain custody and fail closed. Partial recovery
+leaves `ROLLBACK_FAILED` and locks held. Missing sealed preparation evidence likewise preserves
+locks as `join_incomplete_preparation_preserved`; do not delete locks or retry deployment by hand.
+No part of this source profile authorizes JOIN activation, live rollout, real bookings or debits.
