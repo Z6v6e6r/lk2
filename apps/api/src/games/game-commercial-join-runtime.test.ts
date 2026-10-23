@@ -317,6 +317,43 @@ describe('commercial JOIN runtime composition', () => {
     expect(calls).toEqual([]);
   });
 
+  it('prepares a selection refusal for a product without a provider subscription mapping', async () => {
+    const runtime = createGameCommercialJoinRuntime(
+      dependencies({ ownerBoundary: boundary({ providerSubscriptionId: undefined }) }),
+    );
+    const prepared = await runtime!.owner.prepare!({
+      actor,
+      subscriptionInstanceId: fixtureId(43),
+      idempotencyKey: 'commercial-join-runtime-key-06',
+    });
+    // The route maps this to GAME_SUBSCRIPTION_SELECTION_REQUIRED, not GAME_PAYMENT_REQUIRED:
+    // the client has to pick another owned product.
+    expect(prepared).toEqual({ outcome: 'selection_required' });
+  });
+
+  it('prepares a generic refusal when the owner target is missing or inadmissible', async () => {
+    const runtime = createGameCommercialJoinRuntime(
+      dependencies({ ownerBoundary: boundary({ mapped: false }) }),
+    );
+    const prepared = await runtime!.owner.prepare!({
+      actor,
+      subscriptionInstanceId: fixtureId(44),
+      idempotencyKey: 'commercial-join-runtime-key-07',
+    });
+    expect(prepared).toEqual({ outcome: 'not_available' });
+
+    const inadmissible = createGameCommercialJoinRuntime(
+      dependencies({ ownerBoundary: boundary({ admissible: false }) }),
+    );
+    await expect(
+      inadmissible!.owner.prepare!({
+        actor,
+        subscriptionInstanceId: fixtureId(45),
+        idempotencyKey: 'commercial-join-runtime-key-08',
+      }),
+    ).resolves.toEqual({ outcome: 'not_available' });
+  });
+
   it('treats an unavailable actor token as unresolved and dispatches nothing', async () => {
     const calls: string[] = [];
     const runtime = createGameCommercialJoinRuntime(

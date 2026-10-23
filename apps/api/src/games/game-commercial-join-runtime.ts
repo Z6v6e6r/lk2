@@ -205,26 +205,33 @@ export function createBookedOperationOwner(options: {
     resolveProviderClientSubscriptionId,
     async prepare(input) {
       const context = await resolveActor(input.actor);
-      if (context.outcome !== 'ok') return null;
+      if (context.outcome !== 'ok') return { outcome: 'not_available' } as const;
       const target = await options.targetRepository.resolve({
         tenantId: input.actor.tenantId,
         targetId: input.actor.gameId,
         expectedRevision: input.actor.expectedRevision,
       });
       const providerClientSubscriptionId = await resolveProviderClientSubscriptionId(input);
-      if (!target || !target.admissible || !providerClientSubscriptionId) return null;
+      if (!target || !target.admissible) return { outcome: 'not_available' } as const;
+      // The selected product has no server-side provider subscription mapping. The owner cannot
+      // execute that selection, so the client must choose a different product (selection problem),
+      // not be told that payment is unavailable.
+      if (!providerClientSubscriptionId) return { outcome: 'selection_required' } as const;
       return {
-        ...target,
-        providerClientId: context.providerClientId,
-        providerMappingId: context.providerMappingId,
-        providerClientSubscriptionId,
-        requestSha256: bookedOperationAdmissionRequestSha256({
-          action: 'JOIN_GAME',
-          target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
-          paymentIntent: 'USE_SUBSCRIPTION',
-        }),
-        idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(input.idempotencyKey),
-      } satisfies PaidJoinProviderBinding;
+        outcome: 'prepared',
+        binding: {
+          ...target,
+          providerClientId: context.providerClientId,
+          providerMappingId: context.providerMappingId,
+          providerClientSubscriptionId,
+          requestSha256: bookedOperationAdmissionRequestSha256({
+            action: 'JOIN_GAME',
+            target: { id: input.actor.gameId, expectedRevision: input.actor.expectedRevision },
+            paymentIntent: 'USE_SUBSCRIPTION',
+          }),
+          idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(input.idempotencyKey),
+        } satisfies PaidJoinProviderBinding,
+      };
     },
     async execute(input) {
       const context = await resolveActor({
