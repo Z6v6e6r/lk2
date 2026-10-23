@@ -53,3 +53,37 @@ export function validateJoinObservation<T>(
   plan: Record<string, unknown>,
   planSha256: string,
 ): T;
+
+export const JOIN_POST105_BACKUP_SCHEMA: string;
+export const JOIN_POST105_BACKUP_RECEIPT: string;
+export const JOIN_POST105_BACKUP_TERMINAL: string;
+export function validateJoinPost105BackupOperation<T>(
+  op: T,
+  join: Record<string, unknown>,
+  controllerTree: string,
+): T;
+export function validateJoinPost105BackupTerminal<T>(
+  value: T,
+  receipt: Record<string, unknown>,
+  receiptBytes: Buffer,
+  preimageBytes: Buffer,
+): T;
+export function validateJoinPost105BackupBundle(
+  bundle: Record<
+    'operation' | 'receipt' | 'preimage' | 'golden' | 'descriptor' | 'terminal',
+    Buffer
+  >,
+  join: Record<string, unknown>,
+  controllerTree: string,
+  actual: { dumpSha256: string; toolSha256: string; installationSha256: string },
+  options?: { fresh?: boolean; now?: number },
+): Record<string, unknown>;
+
+export function validateJoinPost105SecurityInventory<T>(value: T): T;
+
+export function validateJoinNotificationSnapshot(
+  bundle: Record<string, Buffer>,
+  values: Record<string, string>,
+  op: Record<string, unknown>,
+  snapshot: Record<string, unknown>,
+): string;

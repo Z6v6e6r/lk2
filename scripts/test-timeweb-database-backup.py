@@ -1006,7 +1006,7 @@ class DiskScenario(Scenario):
         with ExitStack()as stack:
             for name,val in [('ROOT',self.root),('REQUEST',self.request),('LOCK',self.root/'standard/active')]:stack.enter_context(patch.object(m,name,val))
             for name,fn in [('secure',secure),('read_secure',self.read),('docker',self.docker),('command',self.command),('tool_custody',lambda op:b'validated-installation'),
-                            ('v2_migration_proof',lambda *a:None),('disk_prerequisites',lambda **kwargs:None),('disk_private_parent',lambda p:None),
+                            ('v2_migration_proof',lambda *a:getattr(self,'preimage',None)),('disk_prerequisites',lambda **kwargs:None),('disk_private_parent',lambda p:None),
                             ('disk_daemon_namespace',lambda:{'pid':44,'startTicks':'123','namespace':11}),
                             ('disk_expected_environment',lambda:disk_restore_row(self.plan)['Config']['Env']),
                             ('disk_memory_available',lambda:10**12),('disk_tool',self.tool),('disk_mapper',self.mapper_read),('disk_mount',self.mount_read),
@@ -2115,6 +2115,204 @@ class NotificationSupervisorAuthorityTests(unittest.TestCase):
             self.assertEqual(m.namespace_supervisor_custody(legacy,b'ignored',{},None),b'legacy')
             forward.assert_called_once_with(legacy);local.assert_not_called()
 
+
+
+def join_post105_operation():
+    return {**copy.deepcopy(OP),'schema':m.JOIN_POST105_SCHEMA,'profile':'production',
+        'toolCommit':OP['controllerSha'],'releaseId':OP['controllerSha']+'-100-1','controllerSourceCiRunId':'100',
+        'expectedLedgerSha256':m.JOIN_POST105_LEDGER,'packageDescriptorSha256':'a'*64,'catalogsSha256':'b'*64,
+        'notificationBundleSha256':'c'*64,
+        'expectedApi':{**API,'image':'ghcr.io/z6v6e6r/phub-api@sha256:'+'d'*64,'imageId':'sha256:'+'d'*64,
+                       'revision':'e'*40,'releaseId':'e'*40+'-200-1'},
+        'confirmation':'BACKUP_RESTORE_JOIN_POST105_PRIVATE_NAMESPACE_KEEP_RUNTIME'}
+
+
+def join_post105_baseline(op):
+    return {'schema':'PHUB_TIMEWEB_JOIN_NOTIFICATION_BASELINE_V1','notificationBundleSha256':op['notificationBundleSha256'],
+            'notificationOperationSha256':'1'*64,'notificationPlanSha256':'2'*64,
+            'notificationReceiptSha256':'3'*64,'installedDescriptorSha256':'4'*64}
+
+
+class JoinPost105Scenario(NamespaceScenario):
+    """Real namespace orchestrator/receipt/journal; synthetic Linux/DB/source readback only."""
+    def __init__(self,directory,fault=None):
+        super().__init__(directory,True,fault)
+        self.op=join_post105_operation();self.runtime_api=copy.deepcopy(self.op['expectedApi'])
+        self.config=m.encoded({'schema':1,'enabled':True,'owner':'synthetic','controllerSha':self.op['controllerSha']})
+        self.op['controllerConfigSha256']=m.digest(self.config)
+        self.op['expectedBoundarySha256']=m.digest(m.encoded(sorted([self.service_row(True),self.service_row(False)],key=lambda r:r['Id'])))
+        descriptor=json.loads(Path(__file__).parents[1].joinpath('deploy/timeweb/notification-migrations-0099-0101.v1.json').read_text())
+        self.ledger=copy.deepcopy(API_WORKER_LEDGER)+[[v['filename'],v['checksum']] for v in descriptor['steps']]
+        assert m.digest(m.encoded(self.ledger))==m.JOIN_POST105_LEDGER
+        self.request.write_bytes(m.encoded(self.op))
+        with patch.object(m,'ROOT',self.root):self.plan=m.namespace_plan(self.op,m.encoded(self.op),m.namespace_sizing(1024,10**12,50*1024**3,NS_IMAGE),NS_IMAGE)
+        self.preimage={'state':{'phase':'post','synthetic':True},'target':{'databaseName':'synthetic','systemIdentifier':'123'},
+                       'security':{'schema':'PHUB_NOTIFICATION_BACKUP_SECURITY_V1','roles':['phub_beta'],
+                         'objects':[{'key':'database','kind':'database','owner':'phub_beta','props':{},'acl':[]}],
+                         'unsupported':{'largeObjects':0,'securityLabels':0}}}
+        self.baseline_reads=0;self.baseline_drift=False;self.state_drift=False
+
+    def start(self,p,op,j):
+        proof=m.notification_supervisor_authority(p,op,m.encoded(op))
+        j.add('SOURCE_AUTHORITY_VERIFIED', **proof)
+        return super().start(p,op,j)
+
+    def baseline(self,op):
+        self.baseline_reads+=1
+        if self.baseline_drift and self.baseline_reads>1:raise m.Stop('JOIN_POST105_BASELINE_DRIFT')
+        return join_post105_baseline(op)
+
+    def docker(self,args,code='DOCKER_READ',**kwargs):
+        if code=='DUMP' and m.SOURCE_DUMP.replace(' --no-owner --no-acl','') in args:
+            self.calls.append(['/usr/bin/docker']+args);self.trip(code)
+            kwargs['stdout'].write(b'PGDMP synthetic full owner ACL fixture');self.trip(code,True);return b''
+        return super().docker(args,code,**kwargs)
+
+    def private_docker(self,plan,args,code='NS_READ',**kwargs):
+        if code in ('NOTIFICATION_RESTORE_ROLES','NOTIFICATION_RESTORE_EXTENSION_OWNERS','NOTIFICATION_RESTORED_SECURITY'):
+            assert self.private and self.unit and self.daemon
+            self.privcalls.append(args)
+            return m.encoded(self.preimage['security']) if code=='NOTIFICATION_RESTORED_SECURITY' else b''
+        return super().private_docker(plan,args,code,**kwargs)
+
+    def invoke(self,reconcile=False):
+        preimage={**self.preimage,'target':{'databaseName':'changed','systemIdentifier':'123'}} if self.state_drift else self.preimage
+        with patch.object(m,'notification_host_backup_authority'),patch.object(m,'join_post105_baseline',side_effect=self.baseline),\
+             patch.object(m,'notification_preimage',return_value=preimage),patch.object(m,'notification_security_sql',return_value='select synthetic'),patch.object(m,'now_iso',return_value='2026-10-10T15:30:00.000Z'):
+            return super().invoke(reconcile)
+
+
+class JoinPost105Tests(unittest.TestCase):
+    def scenario(self,fault=None):
+        tmp=tempfile.TemporaryDirectory(prefix='phub-join-post105-');self.addCleanup(tmp.cleanup)
+        return JoinPost105Scenario(tmp.name,fault)
+
+    def test_config_drift_or_invalid_schema_precedes_first_host_write(self):
+        op=join_post105_operation()
+        config={'schema':1,'enabled':True,'owner':'synthetic','controllerSha':op['controllerSha']}
+        for changes,refresh_hash in [({'owner':'changed'},False),({'enabled':False},True),({'schema':2},True),({'extra':True},True),({'owner':''},True)]:
+            raw=m.encoded({**config,**changes})
+            op['controllerConfigSha256']=m.digest(raw if refresh_hash else m.encoded(config))
+            with patch.object(m,'_NOTIFICATION_BACKUP_AUTHORITY',None),patch.object(m,'_NOTIFICATION_SOURCE_CI',set()),\
+                 patch.object(m,'read_secure',return_value=raw),patch.object(m,'tool_custody') as custody,\
+                 patch.object(m,'disk_prerequisites'),patch.object(m.os.path,'lexists',return_value=False),patch.object(m,'secure'),\
+                 patch.object(m.Path,'mkdir') as mkdir,patch.object(m,'atomic_exclusive') as write:
+                with self.subTest(changes=changes),self.assertRaises(m.Stop):m.namespace_initialize(op,m.encoded(op),'2'*64)
+                mkdir.assert_not_called();write.assert_not_called();custody.assert_not_called()
+
+    def test_closed_profile_dynamic_api_and_only_post105_ledger(self):
+        op=join_post105_operation();self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertTrue(m.is_namespace_operation(op));self.assertEqual(m.operation_mode(op),('join-post105',op['releaseId']))
+        self.assertEqual(m.disk_ledger_sha(op),m.JOIN_POST105_LEDGER)
+        for bad in [{'schema':m.NOTIFICATION_PRE105_SCHEMA},{'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256},
+                    {'notificationBundleSha256':'missing'},{'profile':'beta'},{'controllerPromotion':{}},
+                    {'confirmation':'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'},
+                    {'expectedPostgres':{**PG,'id':'f'*64}}, {'expectedApi':{**op['expectedApi'],'image':'api:latest'}},
+                    {'expectedApi':{**op['expectedApi'],'startedAt':'2026-02-31T00:00:00.000Z'}}]:
+            with self.subTest(bad=bad),self.assertRaises(m.Stop):m.validate_operation({**op,**bad},NOW,'2'*64)
+
+    def test_owner_acl_restore_publishes_original_rich_receipt_after_cleanup(self):
+        s=self.scenario();self.assertEqual(s.invoke()['status'],'BACKUP_RESTORE_VERIFIED')
+        self.assertEqual(s.baseline_reads,2)
+        canonical=Path(s.plan['canonical']);receipt=json.loads((canonical/'database-backup-receipt.json').read_bytes())
+        self.assertEqual(len(receipt),19);self.assertEqual(receipt['schema'],'PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1')
+        self.assertEqual(receipt['notificationBundleSha256'],s.op['notificationBundleSha256'])
+        self.assertEqual(receipt['sourceLedgerSha256'],m.JOIN_POST105_LEDGER)
+        self.assertEqual(receipt['baselineReleaseId'],s.op['expectedApi']['releaseId'])
+        self.assertEqual((canonical/'backup-operation.json').read_bytes(),m.encoded(s.op))
+        self.assertEqual((canonical/'preimage-proof.json').read_bytes(),m.encoded(s.preimage))
+        dump=next(a for a in s.calls if m.SOURCE_DUMP.replace(' --no-owner --no-acl','') in a)
+        self.assertNotIn('--no-owner',dump[-1]);self.assertNotIn('--no-acl',dump[-1])
+        restore=next(a for a in s.privcalls if 'pg_restore' in a and '--list' not in a)
+        self.assertIn('--single-transaction',restore);self.assertNotIn('--no-owner',restore);self.assertNotIn('--no-acl',restore)
+        phases=[v['phase'] for v in s.journal().events]
+        self.assertLess(phases.index('POST105_BASELINE_ADMITTED'),phases.index('LOCKED'))
+        self.assertLess(phases.index('DUMP_VERIFIED'),phases.index('POST105_BASELINE_RECHECKED'))
+        self.assertLess(phases.index('POST105_BASELINE_RECHECKED'),phases.index('RESTORE_INTENT'))
+        self.assertLess(phases.index('STORAGE_CLEANUP_VERIFIED'),phases.index('PUBLISHED'))
+
+    def test_postdump_runtime_or_state_drift_preserves_lock_and_never_restores(self):
+        for field in ('baseline_drift','state_drift'):
+            s=self.scenario();setattr(s,field,True)
+            with self.subTest(field=field),self.assertRaisesRegex(m.Stop,'JOIN_POST105_BASELINE_DRIFT'):s.invoke()
+            self.assertTrue((s.root/'standard/active').exists());self.assertFalse(Path(s.plan['canonical']).exists())
+            self.assertFalse(any('pg_restore' in a for a in s.privcalls))
+
+    def test_baseline_failure_precedes_first_namespace_write(self):
+        s=self.scenario()
+        with patch.object(s,'baseline',side_effect=m.Stop('JOIN_POST105_BASELINE')):
+            with self.assertRaisesRegex(m.Stop,'JOIN_POST105_BASELINE'):s.invoke()
+        self.assertFalse(Path(s.plan['work']).exists());self.assertFalse((s.root/'standard/active').exists())
+
+    def test_admission_and_recheck_are_exact_operation_bound_and_historical(self):
+        s=self.scenario();s.invoke();journal=s.journal()
+        with patch.object(m,'join_post105_baseline',side_effect=AssertionError('fresh baseline forbidden')),\
+             patch.object(m,'notification_preimage',side_effect=AssertionError('fresh DB forbidden')):
+            admitted=m.join_post105_admission(s.plan,s.op,journal,rechecked=True)
+            self.assertEqual(admitted['operationSha256'],s.plan['operationSha256'])
+            original=copy.deepcopy(journal.events)
+            for phase in ('POST105_BASELINE_ADMITTED','POST105_BASELINE_RECHECKED'):
+                journal.events=copy.deepcopy(original)
+                journal.find(phase)['operationSha256']='f'*64
+                with self.assertRaises(m.Stop):m.join_post105_admission(s.plan,s.op,journal,rechecked=True)
+            journal.events=copy.deepcopy(original)
+            journal.find('POST105_BASELINE_ADMITTED')['baseline']['notificationBundleSha256']='f'*64
+            with self.assertRaises(m.Stop):m.join_post105_admission(s.plan,s.op,journal,rechecked=True)
+
+    def test_missing_duplicate_or_reordered_admission_and_recheck_reject(self):
+        s=self.scenario();s.invoke();journal=s.journal();original=copy.deepcopy(journal.events)
+        for phase in ('POST105_BASELINE_ADMITTED','POST105_BASELINE_RECHECKED'):
+            for change in ('missing','duplicate','reordered'):
+                journal.events=copy.deepcopy(original)
+                index=next(i for i,v in enumerate(journal.events) if v['phase']==phase)
+                event=journal.events.pop(index)
+                if change=='duplicate':journal.events.insert(index,event);journal.events.insert(index,copy.deepcopy(event))
+                elif change=='reordered':journal.events.insert(0,event)
+                with self.subTest(phase=phase,change=change),self.assertRaises(m.Stop):
+                    m.join_post105_admission(s.plan,s.op,journal,rechecked=True)
+
+    def test_lost_publication_ack_recovery_never_repeats_dump_or_restore(self):
+        s=self.scenario('after:PHASE_PUBLISHED')
+        with self.assertRaises(m.Stop):s.invoke()
+        canonical=Path(s.plan['canonical']);self.assertTrue(canonical.exists());before=(canonical/'database-backup-receipt.json').read_bytes()
+        dumps=len([a for a in s.calls if m.SOURCE_DUMP.replace(' --no-owner --no-acl','') in a])
+        restores=len([a for a in s.privcalls if 'pg_restore' in a]);s.fault=None
+        s.invoke(reconcile=True)
+        self.assertEqual(before,(canonical/'database-backup-receipt.json').read_bytes())
+        self.assertEqual(dumps,len([a for a in s.calls if m.SOURCE_DUMP.replace(' --no-owner --no-acl','') in a]))
+        self.assertEqual(restores,len([a for a in s.privcalls if 'pg_restore' in a]))
+        self.assertIsNotNone(s.journal().find('RECONCILED'))
+
+    def test_terminal_after_app_change_is_offline_and_rejects_boundary_config_and_receipt_drift(self):
+        s=self.scenario();s.invoke();canonical=Path(s.plan['canonical'])
+        raw=m.encoded(s.op);read=s.read
+        with ExitStack() as stack:
+            for name,val in [('ROOT',s.root),('REQUEST',s.request)]:stack.enter_context(patch.object(m,name,val))
+            for name,fn in [('read_secure',read),('secure',lambda path,*a,**k:Path(path).lstat()),
+                ('notification_terminal_tool_custody',lambda op:b'installed'),('namespace_terminal',lambda *a:None),
+                ('namespace_require_no_unit_file',lambda *a:None),('namespace_slice_terminal',lambda *a:None),
+                ('namespace_unit',lambda *a:{'LoadState':'not-found','ActiveState':'inactive','MainPID':'0','ControlGroup':''})]:
+                stack.enter_context(patch.object(m,name,side_effect=fn))
+            for name in ('tool_custody','notification_source','join_post105_baseline','notification_preimage','service'):
+                stack.enter_context(patch.object(m,name,side_effect=AssertionError('forward/live read forbidden')))
+            terminal=m.notification_backup_reference(s.op,raw,'2'*64)
+            self.assertEqual(terminal['schema'],'PHUB_TIMEWEB_JOIN_POST105_BACKUP_TERMINAL_V1')
+            self.assertEqual(terminal['sourceLedgerSha256'],m.JOIN_POST105_LEDGER)
+            for path in (Path(s.plan['work'])/'boundary.json',canonical/'backup-operation.json',canonical/'database.pgcustom'):
+                before=path.read_bytes();path.write_bytes(b'{}')
+                with self.subTest(path=path.name),self.assertRaises(m.Stop):m.notification_backup_reference(s.op,raw,'2'*64)
+                path.write_bytes(before)
+            journal=s.journal();original=copy.deepcopy(journal.events)
+            for phase in ('SOURCE_AUTHORITY_VERIFIED','SECURITY_RESTORE_VERIFIED','RESTORE_VERIFIED','STORAGE_CLEANUP_VERIFIED','PUBLISHED','RECONCILED'):
+                journal.events=[v for v in copy.deepcopy(original) if v['phase']!=phase]
+                with patch.object(m,'DiskJournal',return_value=journal):
+                    with self.subTest(phase=phase),self.assertRaises(m.Stop):m.notification_backup_reference(s.op,raw,'2'*64)
+            journal.events=copy.deepcopy(original)
+            journal.find('SOURCE_AUTHORITY_VERIFIED')['baselineAdmissionSha256']='f'*64
+            with patch.object(m,'DiskJournal',return_value=journal):
+                with self.assertRaises(m.Stop):m.notification_backup_reference(s.op,raw,'2'*64)
+            s.config=m.encoded({**json.loads(s.config),'owner':'changed'})
+            with self.assertRaisesRegex(m.Stop,'CONTROLLER'):m.notification_backup_reference(s.op,raw,'2'*64)
 
 
 class NotificationEarlyExitRecoveryTests(unittest.TestCase):

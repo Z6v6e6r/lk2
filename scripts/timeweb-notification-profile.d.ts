@@ -1,3 +1,4 @@
+export const JOIN_POST105_BACKUP_SCHEMA: string;
 export const NOTIFICATION_BACKUP_SCHEMA: string;
 export const NOTIFICATION_MIGRATION_SCHEMA: string;
 export const NOTIFICATION_ROLLOUT_SCHEMA: string;

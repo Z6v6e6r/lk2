@@ -129,6 +129,11 @@ NS_PRE_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_MIGRATION_PRE99_DISK_NAMESPACE_V2
 NS_POST_SCHEMA = 'PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_DISK_NAMESPACE_V2'
 WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_V1'
 NOTIFICATION_PRE105_SCHEMA = 'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1'
+JOIN_POST105_SCHEMA = 'PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1'
+JOIN_POST105_LEDGER = '7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd'
+
+def is_notification_backup(op):
+    return op.get('schema') in (NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA)
 NS_WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_DISK_NAMESPACE_V1'
 WEB8158_IMAGE = 'ghcr.io/z6v6e6r/phub-api@sha256:47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839'
 
@@ -138,7 +143,7 @@ def is_web8158_operation(op):
 
 
 def backup_baseline(op):
-    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or op.get('schema') == NOTIFICATION_PRE105_SCHEMA else BASELINE
+    return op['expectedApi']['releaseId'] if is_web8158_operation(op) or is_notification_backup(op) else BASELINE
 
 NS_DAEMON_MEMORY = 2 * 1024 ** 3
 DISK_MEMORY = 2 * 1024 ** 3
@@ -154,10 +159,11 @@ DISK_TOOLS = {'loop': '/usr/sbin/losetup', 'crypt': '/usr/sbin/cryptsetup',
 
 
 def is_disk_operation(op):
-    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA)
+    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA)
 
 
 def disk_ledger_sha(op):
+    if op['schema'] == JOIN_POST105_SCHEMA:return JOIN_POST105_LEDGER
     return API_WORKER_PRE_LEDGER_SHA256 if op['schema'] in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA) else API_WORKER_LEDGER_SHA256
 
 
@@ -668,7 +674,7 @@ DISK_RESTORE_FORMAT = RESTORE_FORMAT.replace('"State":{"Status":{{json .State.St
 
 # Namespace V2 is deliberately separate from the existing tmpfs/DISK V1 contracts.
 def is_namespace_operation(op):
-    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA)
+    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA)
 
 
 NS_IMAGE_FORMAT = '{"Id":{{json .Id}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}},"Size":{{json .Size}},"RootFS":{{json .RootFS}},"Env":{{json .Config.Env}}}'
@@ -1326,7 +1332,7 @@ def namespace_start(p, op, journal):
     namespace_require_absent(p['isolation']['slice'])
     Path(p['isolation']['controlRoot']).mkdir(mode=0o700); sync_directory(p['work'])
     namespace_frozen_source(p)
-    if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+    if is_notification_backup(op):
         notification_seal_supervisor_authority(p, op, journal)
         notification_require_supervisor_authority(p, op, read_secure(REQUEST), journal, started=False)
     journal.add('NAMESPACE_SLICE_START_INTENT')
@@ -1849,6 +1855,8 @@ def now_iso():
 
 
 def operation_mode(value):
+    if value['schema'] == JOIN_POST105_SCHEMA:
+        return 'join-post105', value['releaseId']
     if value['schema'] == NOTIFICATION_PRE105_SCHEMA:
         return 'notification-pre105', value['releaseId']
     if value['schema'] in ('PHUB_TIMEWEB_BACKUP_OPERATION_V1', DISK_PRE_SCHEMA, NS_PRE_SCHEMA, WEB8158_SCHEMA, NS_WEB8158_SCHEMA):
@@ -1909,7 +1917,17 @@ def validate_operation(value, now, file_sha, allow_expired=False):
     if isinstance(value, dict) and 'controllerPromotion' in value:
         need(schema != 'PHUB_TIMEWEB_BACKUP_OPERATION_V1', 'CONTROLLER_PROMOTION_SCHEMA')
         common += ['controllerPromotion']
-    if schema == NOTIFICATION_PRE105_SCHEMA:
+    if schema == JOIN_POST105_SCHEMA:
+        exact(value, common + ['profile','releaseId','controllerSourceCiRunId','expectedLedgerSha256','packageDescriptorSha256','catalogsSha256','notificationBundleSha256'])
+        mode = 'join-post105'; release_id = value['releaseId']
+        need(value['profile'] == 'production' and 'controllerPromotion' not in value
+             and re.fullmatch(r'[1-9][0-9]*', value['controllerSourceCiRunId'] or '')
+             and release_id == value['controllerSha'] + '-' + value['controllerSourceCiRunId'] + '-1'
+             and value['expectedLedgerSha256'] == JOIN_POST105_LEDGER
+             and value['toolCommit'] == value['controllerSha']
+             and all(HASH.fullmatch(value[k] or '') for k in ('packageDescriptorSha256','catalogsSha256','notificationBundleSha256'))
+             and value['expectedPostgres']['id'] == PG_ID, 'JOIN_POST105_OPERATION')
+    elif schema == NOTIFICATION_PRE105_SCHEMA:
         exact(value, common + ['releaseId','controllerSourceCiRunId','expectedLedgerSha256','packageDescriptorSha256','catalogsSha256'] + optional)
         mode = 'notification-pre105'; release_id = value['releaseId']
         need(value.get('profile') == 'production' and 'controllerPromotion' not in value
@@ -1969,7 +1987,16 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and type(row['restarts']) is int and (row['restarts'] == 0 or profile == 'beta')
              and isinstance(row['startedAt'], str), 'BASELINE')
     api, pg = value['expectedApi'], value['expectedPostgres']
-    if is_web8158_operation(value) or schema == NOTIFICATION_PRE105_SCHEMA:
+    if schema == JOIN_POST105_SCHEMA:
+        need(re.fullmatch(r'ghcr\.io/z6v6e6r/phub-api@sha256:[a-f0-9]{64}', api['image'] or '')
+             and api['imageId'] == api['image'].split('@')[1]
+             and RELEASE.fullmatch(api['releaseId'] or '') and api['revision'] == api['releaseId'][:40], 'API_BASELINE')
+        need(pg['image'] == PG_IMAGE and pg['imageId'] == PG_BASELINE['imageId']
+             and pg['releaseId'] is None and pg['revision'] is None, 'POSTGRES_BASELINE')
+        for row in (api, pg):
+            need(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z', row['startedAt']) is not None, 'BASELINE_TIME')
+            utc(row['startedAt'][:23] + 'Z')
+    elif is_web8158_operation(value) or schema == NOTIFICATION_PRE105_SCHEMA:
         need(api['image'] == WEB8158_IMAGE and api['releaseId'] == API_WORKER_CANDIDATE
              and api['revision'] == MIGRATION_BASE_SHA, 'API_BASELINE')
         # Snapshots are request-bound and reattested in full before/throughout the operation.
@@ -1998,6 +2025,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
                         'BACKUP_RESTORE_WEB8158_PRIVATE_NAMESPACE_') + match[1][:12].upper() + '_KEEP_API_8158AC445C9F'
     if schema == NOTIFICATION_PRE105_SCHEMA:
         confirmation = 'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'
+    if schema == JOIN_POST105_SCHEMA:
+        confirmation = 'BACKUP_RESTORE_JOIN_POST105_PRIVATE_NAMESPACE_KEEP_RUNTIME'
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 
@@ -2032,7 +2061,7 @@ def validate_migration_controller_delta(data):
 
 def v2_migration_proof(op, request_bytes, source, restore=None):
     """Bind a post-0097 backup to a reconciled immutable migration proof before any dump."""
-    if op['schema'] == NOTIFICATION_PRE105_SCHEMA:
+    if is_notification_backup(op):
         return notification_preimage(op)
     if op['schema'] not in ('PHUB_TIMEWEB_BACKUP_OPERATION_API_WORKER_V2', DISK_POST_SCHEMA, NS_POST_SCHEMA):
         return
@@ -2222,7 +2251,7 @@ def notification_source(op):
 
 def notification_terminal_source(op):
     # Read-only terminal custody cannot grant or cache authority for a forward operation.
-    need(op.get('schema')==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    need(is_notification_backup(op), 'NOTIFICATION_BACKUP_PROFILE')
     program,environment=_notification_source_program(op)
     program+="process.stdout.write('NOTIFICATION_SOURCE_VERIFIED');"
     need(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_SOURCE',input_data=encoded(op),environment=environment,timeout=60)==b'NOTIFICATION_SOURCE_VERIFIED','NOTIFICATION_SOURCE')
@@ -2231,13 +2260,17 @@ def notification_terminal_source(op):
 
 def notification_supervisor_authority(p, op, raw):
     """Exact host-to-networkless-child handoff; never forward execution authority."""
-    need(op.get('schema') == NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    need(is_notification_backup(op), 'NOTIFICATION_BACKUP_PROFILE')
     need(read_secure(REQUEST) == raw == read_secure(Path(p['work'])/'backup-operation.json')
          and digest(raw) == p['operationSha256'], 'NOTIFICATION_SUPERVISOR_OPERATION')
     plan_bytes = read_secure(Path(p['work'])/'disk-plan.json')
     need(strict(plan_bytes) == p, 'NOTIFICATION_SUPERVISOR_PLAN')
     namespace_validate_plan(op, raw, p)
-    return {'schema': 'PHUB_NOTIFICATION_SUPERVISOR_AUTHORITY_V1',
+    post = {}
+    if op['schema'] == JOIN_POST105_SCHEMA:
+        admission = join_post105_admission(p, op)
+        post = {'notificationBundleSha256':op['notificationBundleSha256'], 'baselineAdmissionSha256':digest(encoded(admission))}
+    return {**post, 'schema': 'PHUB_NOTIFICATION_SUPERVISOR_AUTHORITY_V1',
             'sourceCheck': 'GITHUB_PUBLIC_SOURCE_CI_V1',
             'operationSha256': digest(raw), 'planSha256': digest(plan_bytes),
             **{key: op[key] for key in ('controllerSha', 'controllerTree', 'controllerSourceCiRunId',
@@ -2246,12 +2279,22 @@ def notification_supervisor_authority(p, op, raw):
 
 
 
+def join_post105_controller(op):
+    config = read_secure(Path('/etc/phub/timeweb-beta-standard-delivery.json'))
+    value = strict(config)
+    exact(value, ['schema','enabled','owner','controllerSha'])
+    need(digest(config) == op['controllerConfigSha256'] and value['schema'] == 1
+         and value['controllerSha'] == op['controllerSha'] and value['enabled'] is True
+         and isinstance(value['owner'], str) and value['owner'].strip(), 'JOIN_POST105_CONTROLLER')
+
+
 def notification_host_backup_authority(op):
     global _NOTIFICATION_BACKUP_AUTHORITY
-    need(op.get('schema') == NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    need(is_notification_backup(op), 'NOTIFICATION_BACKUP_PROFILE')
     key = (op['controllerSha'], op['controllerTree'], op['controllerSourceCiRunId'])
     need(_NOTIFICATION_BACKUP_AUTHORITY is None and key not in _NOTIFICATION_SOURCE_CI,
          'NOTIFICATION_FRESH_HOST_AUTHORITY')
+    if op['schema'] == JOIN_POST105_SCHEMA:join_post105_controller(op)
     tool_custody(op)  # An uncached remote source CI check, before namespace_initialize writes.
     need(key in _NOTIFICATION_SOURCE_CI, 'NOTIFICATION_FRESH_HOST_AUTHORITY')
     _NOTIFICATION_BACKUP_AUTHORITY = digest(encoded(op))
@@ -2285,7 +2328,7 @@ def notification_require_supervisor_authority(p, op, raw, journal, started=True)
 
 
 def namespace_supervisor_custody(op, raw, p, journal):
-    if op.get('schema') != NOTIFICATION_PRE105_SCHEMA:
+    if not is_notification_backup(op):
         return tool_custody(op)  # Legacy profiles keep their existing authority contract.
     notification_require_supervisor_authority(p, op, raw, journal)
     identity = namespace_supervisor_identity(p, op)
@@ -2294,8 +2337,57 @@ def namespace_supervisor_custody(op, raw, p, journal):
     return notification_terminal_tool_custody(op)
 
 
+def join_post105_baseline(op):
+    """Fresh read-only admission, never called by terminal/recovery attestation."""
+    need(op['schema'] == JOIN_POST105_SCHEMA, 'JOIN_POST105_PROFILE')
+    program, environment = _notification_source_program(op)
+    program += "import {readJoinNotificationBaseline} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';process.stdout.write(JSON.stringify(readJoinNotificationBaseline(op)));"
+    result = strict(command(['/usr/bin/node','--input-type=module','-e',program],
+                            'JOIN_POST105_BASELINE', input_data=encoded(op), environment=environment, timeout=60))
+    validate_join_post105_baseline(result, op)
+    return result
+
+
+def validate_join_post105_baseline(value, op):
+    exact(value, ['schema','notificationBundleSha256','notificationOperationSha256',
+                  'notificationPlanSha256','notificationReceiptSha256','installedDescriptorSha256'])
+    need(value['schema'] == 'PHUB_TIMEWEB_JOIN_NOTIFICATION_BASELINE_V1'
+         and value['notificationBundleSha256'] == op['notificationBundleSha256']
+         and all(HASH.fullmatch(value[k] or '') for k in value if k != 'schema'), 'JOIN_POST105_BASELINE')
+    return value
+
+
+def join_post105_admission(p, op, journal=None, rechecked=False):
+    """Verify historical sealed admission; performs no fresh API/env/CI checks."""
+    journal = journal if journal is not None else DiskJournal(Path(p['work']), p['operationSha256'])
+    admitted = journal.find('POST105_BASELINE_ADMITTED')
+    need(admitted is not None, 'JOIN_POST105_ADMISSION')
+    exact(admitted, ['operationSha256','baseline'])
+    need(admitted['operationSha256'] == p['operationSha256'], 'JOIN_POST105_ADMISSION')
+    validate_join_post105_baseline(admitted['baseline'], op)
+    phases = [event['phase'] for event in journal.events]
+    need(phases.count('POST105_BASELINE_ADMITTED') == 1
+         and phases.count('MIGRATION_ATTESTATION') == 1
+         and phases.index('MIGRATION_ATTESTATION') < phases.index('POST105_BASELINE_ADMITTED'), 'JOIN_POST105_ADMISSION_ORDER')
+    for phase in ('LOCKED','SOURCE_AUTHORITY_VERIFIED','NAMESPACE_UNIT_START_INTENT'):
+        if phase in phases:
+            need(phases.index('POST105_BASELINE_ADMITTED') < phases.index(phase), 'JOIN_POST105_ADMISSION_ORDER')
+    if rechecked:
+        need(journal.find('POST105_BASELINE_RECHECKED') == admitted
+             and phases.count('POST105_BASELINE_RECHECKED') == phases.count('DUMP_VERIFIED') == 1
+             and phases.index('DUMP_VERIFIED') < phases.index('POST105_BASELINE_RECHECKED') < phases.index('RESTORE_VERIFIED'), 'JOIN_POST105_RECHECK')
+    return admitted
+
+
+def join_post105_recheck(p, op, journal):
+    admitted = join_post105_admission(p, op, journal)
+    need(join_post105_baseline(op) == admitted['baseline']
+         and notification_preimage(op) == journal.find('MIGRATION_ATTESTATION')['proof'], 'JOIN_POST105_BASELINE_DRIFT')
+    journal.add('POST105_BASELINE_RECHECKED', **admitted)
+
+
 def notification_preimage(op):
-    program="import fs from 'node:fs';import {readNotificationDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-worker-migration.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readNotificationDatabaseState(op,'pre')));"
+    program="import fs from 'node:fs';import {readNotificationDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-worker-migration.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readNotificationDatabaseState(op,op.schema==='PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1'?'post':'pre')));"
     result=strict(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_PREIMAGE',input_data=encoded(op),timeout=30))
     return {'state':result,'target':result['target'],'security':notification_security_source()}
 
@@ -2421,13 +2513,19 @@ def notification_restore_extension_owners(value):
     return "set standard_conforming_strings=on;set search_path='pg_catalog';do "+tag+' '+body.replace('__PROOF__',"'"+data+"'",1)+tag+';'
 
 def notification_backup_reference(op, raw, file_sha):
-    need(op['schema']==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE');notification_terminal_tool_custody(op)
+    need(is_notification_backup(op), 'NOTIFICATION_BACKUP_PROFILE');notification_terminal_tool_custody(op)
     work=ROOT/'backups'/('.disk-restore-'+digest(raw))
     need(read_secure(work/'backup-operation.json')==raw, 'NOTIFICATION_BACKUP_OPERATION')
     plan=namespace_validate_plan(op,raw,strict(read_secure(work/'disk-plan.json')))
     journal=DiskJournal(work,plan['operationSha256'])
+    if op['schema'] == JOIN_POST105_SCHEMA:
+        join_post105_controller(op)
+        need(strict(read_secure(work/'boundary.json')) == {'sha256':op['expectedBoundarySha256']}, 'JOIN_POST105_BOUNDARY')
     for phase in ('SECURITY_RESTORE_VERIFIED','RESTORE_VERIFIED','STORAGE_CLEANUP_VERIFIED','PUBLISHED','UNLOCK_INTENT','RECONCILED'):
         need(journal.find(phase) is not None, 'NOTIFICATION_BACKUP_TERMINAL')
+    if op['schema'] == JOIN_POST105_SCHEMA:
+        join_post105_admission(plan, op, journal, rechecked=True)
+        notification_require_supervisor_authority(plan, op, raw, journal)
     namespace_terminal(plan,journal)
     namespace_require_no_unit_file(plan['isolation']['unit'])
     unit=namespace_unit(plan)
@@ -2442,13 +2540,18 @@ def notification_backup_reference(op, raw, file_sha):
     need(preimage==encoded(initial) and digest(preimage)==receipt['preimageSha256']
          and journal.find('PUBLISH_READY')['receiptSha256']==journal.find('PUBLISHED')['receiptSha256']==digest(receipt_bytes)
          and file_digest(canonical/'database.pgcustom')==receipt['backupSha256']==journal.find('RESTORE_VERIFIED')['dumpSha256']
-         and receipt['operationSha256']==digest(raw) and receipt['sourceLedgerSha256']==receipt['restoredLedgerSha256']==API_WORKER_LEDGER_SHA256
+         and receipt['operationSha256']==digest(raw) and receipt['sourceLedgerSha256']==receipt['restoredLedgerSha256']==disk_ledger_sha(op)
          and receipt['target']==initial['target'] and receipt['restoreVerified'] is True
          and receipt['securityPreimageSha256']==receipt['restoredSecuritySha256']==digest(encoded(initial['security']))==journal.find('SECURITY_RESTORE_VERIFIED')['securitySha256']
          and receipt['roleClosureSha256']==digest(encoded(initial['security']['roles']))==journal.find('SECURITY_RESTORE_VERIFIED')['roleClosureSha256']
-         and receipt['restoreImage']==PG_IMAGE and receipt['schema']=='PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1', 'NOTIFICATION_BACKUP_PROOF')
-    return {'schema':'PHUB_TIMEWEB_NOTIFICATION_BACKUP_TERMINAL_V1','operationSha256':digest(raw),'receiptSha256':digest(receipt_bytes),
-            'preimageSha256':digest(preimage),'target':initial['target'],'sourceLedgerSha256':API_WORKER_LEDGER_SHA256,
+         and receipt['restoreImage']==PG_IMAGE and receipt['schema']==('PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1' if op['schema']==JOIN_POST105_SCHEMA else 'PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1'), 'NOTIFICATION_BACKUP_PROOF')
+    post = {}
+    if op['schema'] == JOIN_POST105_SCHEMA:
+        need(receipt['notificationBundleSha256'] == op['notificationBundleSha256']
+             and utc(receipt['completedAt']) <= utc(op['expiresAt']), 'JOIN_POST105_RECEIPT')
+        post = {'notificationBundleSha256':op['notificationBundleSha256']}
+    return {**post,'schema':('PHUB_TIMEWEB_JOIN_POST105_BACKUP_TERMINAL_V1' if op['schema']==JOIN_POST105_SCHEMA else 'PHUB_TIMEWEB_NOTIFICATION_BACKUP_TERMINAL_V1'),'operationSha256':digest(raw),'receiptSha256':digest(receipt_bytes),
+            'preimageSha256':digest(preimage),'target':initial['target'],'sourceLedgerSha256':disk_ledger_sha(op),
             'storageCleanupVerified':True,'reconciled':True}
 
 
@@ -2474,13 +2577,13 @@ def tool_custody(op):
     receipt_bytes=_tool_custody_local(op)
     if is_web8158_operation(op):
         web8158_source(op)
-    elif op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+    elif is_notification_backup(op):
         notification_source(op)
     return receipt_bytes
 
 
 def notification_terminal_tool_custody(op):
-    need(op.get('schema')==NOTIFICATION_PRE105_SCHEMA, 'NOTIFICATION_BACKUP_PROFILE')
+    need(is_notification_backup(op), 'NOTIFICATION_BACKUP_PROFILE')
     receipt_bytes=_tool_custody_local(op)
     notification_terminal_source(op)
     return receipt_bytes
@@ -3135,9 +3238,9 @@ def disk_publication(plan, journal):
         directory = publication
     secure(directory, 'dir', 0o700)
     operation = read_secure(Path(plan['work']) / 'backup-operation.json')
-    current_web = is_web8158_operation(strict(operation)) or strict(operation).get('schema') == NOTIFICATION_PRE105_SCHEMA
+    current_web = is_web8158_operation(strict(operation)) or is_notification_backup(strict(operation))
     inventory = ['database-backup-receipt.json', 'database.pgcustom']
-    if strict(operation).get('schema') == NOTIFICATION_PRE105_SCHEMA:
+    if is_notification_backup(strict(operation)):
         inventory.append('preimage-proof.json')
         need(digest(read_secure(directory / 'preimage-proof.json')) == strict(read_secure(directory / 'database-backup-receipt.json'))['preimageSha256'], 'NOTIFICATION_PREIMAGE_PROOF')
     if current_web:
@@ -3177,7 +3280,7 @@ def execute_disk(op, request_bytes, file_sha):
     fd = os.open(incoming, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
         with os.fdopen(os.dup(fd), 'wb') as stream:
-            docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if op['schema']==NOTIFICATION_PRE105_SCHEMA else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
+            docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if is_notification_backup(op) else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
                    file_limit=plan['dumpLimitBytes'])
             stream.flush()
         os.fsync(fd)
@@ -3219,7 +3322,7 @@ def execute_disk(op, request_bytes, file_sha):
     journal.add('RESTORE_INTENT', containerId=container)
     with dump_stream(incoming, dump_sha) as stream:
         docker(['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
-                *(['--no-owner','--no-acl'] if op['schema']!=NOTIFICATION_PRE105_SCHEMA else ['--single-transaction']), '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
+                *(['--no-owner','--no-acl'] if not is_notification_backup(op) else ['--single-transaction']), '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
     restored = ledger_bytes(docker(['exec', container, 'psql', '-X', '--username=phub_restore', '--dbname=phub_restore',
                                   '--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', '--command=' + LEDGER_SQL], 'RESTORED_LEDGER'))
     need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
@@ -3297,7 +3400,7 @@ def namespace_initialize(op, request_bytes, file_sha):
     need(not os.path.lexists(LOCK) and not os.path.lexists(work) and not os.path.lexists(canonical), 'EXISTING_STATE')
     for path in [ROOT, ROOT / 'standard', ROOT / 'operator', ROOT / 'backups']:
         secure(path, 'dir')
-    if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:notification_host_backup_authority(op)
+    if is_notification_backup(op):notification_host_backup_authority(op)
     else:tool_custody(op)
     need(service('phub-timeweb-beta', 'api') == op['expectedApi']
          and service('phub-timeweb-beta-dependencies', 'postgres') == op['expectedPostgres'], 'RUNTIME_DRIFT')
@@ -3322,6 +3425,7 @@ def namespace_initialize(op, request_bytes, file_sha):
     need(not os.path.lexists(plan['pendingLock']), 'DISK_PENDING_LOCK_EXISTS')
     image = strict(docker(['image', 'inspect', '--format', '{"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}}}', PG_IMAGE]))
     need(restore_image_admitted(image), 'RESTORE_IMAGE')
+    post_baseline = join_post105_baseline(op) if op['schema'] == JOIN_POST105_SCHEMA else None
     work.mkdir(mode=0o700); sync_directory(work.parent)
     atomic_exclusive(work / 'backup-operation.json', request_bytes)
     atomic_exclusive(work / 'disk-plan.json', encoded(plan))
@@ -3334,6 +3438,8 @@ def namespace_initialize(op, request_bytes, file_sha):
     journal.add('CONTAINERD_MASK_BASELINE', identity=namespace_mask_baseline(daemon))
     attestation = v2_migration_proof(op, request_bytes, ROOT / 'standard/source')
     journal.add('MIGRATION_ATTESTATION', proof=attestation)
+    if post_baseline is not None:
+        journal.add('POST105_BASELINE_ADMITTED', operationSha256=digest(request_bytes), baseline=post_baseline)
     pending = Path(plan['pendingLock'])
     pending.mkdir(mode=0o700); sync_directory(pending.parent)
     marker = {'schema': 'PHUB_TIMEWEB_BACKUP_LOCK_V1', 'operationSha256': plan['operationSha256'],
@@ -3359,7 +3465,7 @@ def execute_namespace(op, request_bytes, file_sha):
         try:
             with os.fdopen(os.dup(fd), 'wb') as stream:
                 namespace_frozen_source(plan)
-                docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if op['schema']==NOTIFICATION_PRE105_SCHEMA else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
+                docker(['exec', PG_ID, '/bin/sh', '-eu', '-c', SOURCE_DUMP.replace(' --no-owner --no-acl','') if is_notification_backup(op) else SOURCE_DUMP], 'DUMP', stdout=stream, timeout=600,
                        file_limit=plan['dumpLimitBytes'])
                 stream.flush()
             os.fsync(fd)
@@ -3369,6 +3475,8 @@ def execute_namespace(op, request_bytes, file_sha):
         dump_sha = file_digest(incoming)
         namespace_frozen_source(plan)
         guard(); journal.add('DUMP_VERIFIED', dumpSha256=dump_sha)
+        if op['schema'] == JOIN_POST105_SCHEMA:
+            join_post105_recheck(plan, op, journal)
         disk_create_storage(plan, journal, guard)
         disk_storage_attest(plan, journal)
         namespace_alias_mount(plan, journal)
@@ -3403,12 +3511,12 @@ def execute_namespace(op, request_bytes, file_sha):
         with dump_stream(incoming, dump_sha) as stream:
             namespace_docker(plan, ['exec', '-i', container, 'pg_restore', '--list'], 'DUMP_TOC', stdin=stream, stdout=subprocess.DEVNULL, timeout=120)
         journal.add('RESTORE_INTENT', containerId=container)
-        security = journal.find('MIGRATION_ATTESTATION')['proof']['security'] if op['schema']==NOTIFICATION_PRE105_SCHEMA else None
+        security = journal.find('MIGRATION_ATTESTATION')['proof']['security'] if is_notification_backup(op) else None
         if security is not None:
             namespace_docker(plan,['exec','-i',container,'psql','-X','--username=phub_restore','--dbname=phub_restore','--no-psqlrc','-q','--set=ON_ERROR_STOP=1'], 'NOTIFICATION_RESTORE_ROLES', input_data=notification_restore_prerequisites(security).encode(),stdout=subprocess.DEVNULL,timeout=60)
         with dump_stream(incoming, dump_sha) as stream:
             namespace_docker(plan, ['exec', '-i', container, 'pg_restore', '--username=phub_restore', '--dbname=phub_restore',
-                    *(['--no-owner','--no-acl'] if op['schema']!=NOTIFICATION_PRE105_SCHEMA else ['--single-transaction']), '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
+                    *(['--no-owner','--no-acl'] if not is_notification_backup(op) else ['--single-transaction']), '--exit-on-error'], 'RESTORE', stdin=stream, stdout=subprocess.DEVNULL, timeout=3600)
         restored = ledger_bytes(namespace_docker(plan, ['exec', container, 'psql', '-X', '--username=phub_restore', '--dbname=phub_restore',
                                       '--no-psqlrc', '--tuples-only', '--no-align', '--set=ON_ERROR_STOP=1', '--command=' + LEDGER_SQL], 'RESTORED_LEDGER'))
         need(digest(restored) == plan['expectedLedgerSha256'] and file_digest(incoming) == dump_sha, 'LEDGER_MISMATCH')
@@ -3425,16 +3533,19 @@ def execute_namespace(op, request_bytes, file_sha):
                    'completedAt': now_iso(), 'backupFile': str(Path(plan['canonical']) / 'database.pgcustom'),
                    'backupSha256': dump_sha, 'restoreVerified': True, 'restoreImage': PG_IMAGE,
                    'restoredLedgerSha256': digest(restored), 'sourceLedgerSha256': digest(restored)}
-        if op['schema'] == NOTIFICATION_PRE105_SCHEMA:
+        if is_notification_backup(op):
             preimage = journal.find('MIGRATION_ATTESTATION')['proof']
-            receipt.update(schema='PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1',
+            receipt.update(schema=('PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1' if op['schema'] == JOIN_POST105_SCHEMA else 'PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1'),
                            operationSha256=digest(request_bytes), target=preimage['target'],
                            preimageSha256=digest(encoded(preimage)), packageDescriptorSha256=op['packageDescriptorSha256'],
                            catalogsSha256=op['catalogsSha256'], aclRecovery='ISOLATED_OWNER_ACL_RESTORE_VERIFIED',
                            securityPreimageSha256=digest(encoded(preimage['security'])), restoredSecuritySha256=digest(encoded(preimage['security'])),
                            roleClosureSha256=digest(encoded(preimage['security']['roles'])))
+            if op['schema'] == JOIN_POST105_SCHEMA:
+                receipt['notificationBundleSha256'] = op['notificationBundleSha256']
+                need(utc(receipt['completedAt']) <= utc(op['expiresAt']), 'JOIN_POST105_PROOF_EXPIRED')
             atomic_exclusive(Path(plan['publication']) / 'preimage-proof.json', encoded(preimage))
-        if is_web8158_operation(op) or op['schema'] == NOTIFICATION_PRE105_SCHEMA:
+        if is_web8158_operation(op) or is_notification_backup(op):
             atomic_exclusive(Path(plan['publication']) / 'backup-operation.json', request_bytes)
         atomic_exclusive(Path(plan['publication']) / 'database-backup-receipt.json', encoded(receipt))
         journal.add('PUBLISH_READY', dumpSha256=dump_sha, receiptSha256=digest(encoded(receipt)))
@@ -3790,19 +3901,19 @@ def main():
         need('100.77.212.57' in ips and '103.88.243.171' in ips,'HOST')
     if supervisor:
         need(is_namespace_operation(op) and sys.argv[3]==digest(request_bytes) and time.time()<utc(op['expiresAt']), 'NS_SUPERVISOR_ENTRY')
-        if op.get('schema') != NOTIFICATION_PRE105_SCHEMA:tool_custody(op)
+        if not is_notification_backup(op):tool_custody(op)
         work = ROOT/'backups'/('.disk-restore-' + digest(request_bytes))
         need(read_secure(work/'backup-operation.json') == request_bytes, 'NS_SUPERVISOR_CAPSULE')
         plan = namespace_validate_plan(op, request_bytes, strict(read_secure(work/'disk-plan.json')))
         journal = DiskJournal(work, plan['operationSha256'])
         need(journal.find('NAMESPACE_UNIT_START_INTENT') is not None, 'NS_SUPERVISOR_INTENT')
-        if op.get('schema') == NOTIFICATION_PRE105_SCHEMA:
+        if is_notification_backup(op):
             namespace_supervisor_custody(op, request_bytes, plan, journal)
         namespace_supervisor(op, request_bytes, plan); return
     for sig in (signal.SIGTERM,signal.SIGINT):
         signal.signal(sig,lambda *_: (_ for _ in ()).throw(Stop('INTERRUPTED_UNCERTAIN')))
     if sys.argv[1] == '--attest-disk':
-        result = notification_backup_reference(op, request_bytes, file_sha) if op['schema'] == NOTIFICATION_PRE105_SCHEMA else (namespace_verify_reference(op, request_bytes, file_sha) if is_namespace_operation(op) else disk_verify_reference(op, request_bytes, file_sha))
+        result = notification_backup_reference(op, request_bytes, file_sha) if is_notification_backup(op) else (namespace_verify_reference(op, request_bytes, file_sha) if is_namespace_operation(op) else disk_verify_reference(op, request_bytes, file_sha))
     elif sys.argv[1] == '--reconcile-disk':
         need(is_disk_operation(op), 'DISK_RECONCILIATION_ONLY')
         with disk_mutation_lock():
