@@ -51,6 +51,7 @@ export type BookedOperationAdmissionRequest =
 export type UserRuntimeCapabilities = components['schemas']['UserRuntimeCapabilities'];
 export type RealtimeTicket = components['schemas']['RealtimeTicket'];
 export type HomeDashboard = components['schemas']['HomeDashboard'];
+export type SubscriptionSelfPage = components['schemas']['SubscriptionSelfPage'];
 export type HomeBase = components['schemas']['HomeBase'];
 export type LocationList = components['schemas']['LocationList'];
 export type GameJoinConditions = components['schemas']['GameJoinConditions'];
@@ -1212,6 +1213,16 @@ export class PadlHubApiClient {
         body: jsonRequestBody({ limit, ...(phase ? { phase } : {}) }),
       },
     );
+  }
+
+  public async getSelfSubscriptions(
+    input: { readonly cursor?: string; readonly limit?: number } = {},
+  ): Promise<SubscriptionSelfPage> {
+    const query = new URLSearchParams();
+    if (input.limit !== undefined) query.set('limit', String(input.limit));
+    if (input.cursor !== undefined) query.set('cursor', input.cursor);
+    const suffix = query.size > 0 ? `?${query.toString()}` : '';
+    return this.request<SubscriptionSelfPage>(`/subscriptions${suffix}`, { cache: 'no-store' });
   }
 
   public async getHomeDashboard(): Promise<HomeDashboard> {

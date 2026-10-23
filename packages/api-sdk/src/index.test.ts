@@ -69,6 +69,39 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('reads canonical self subscription pages with encoded cursors and no-store', async () => {
+    const page = {
+      scope: 'CURRENT',
+      coverage: 'COMPLETE',
+      freshness: 'FRESH',
+      snapshot: {
+        id: '11111111-1111-4111-8111-111111111111',
+        asOf: '2026-10-15T10:00:00.000Z',
+        staleAt: '2026-10-15T10:05:00.000Z',
+      },
+      items: [],
+      page: { offset: 0, limit: 20, total: 0, hasMore: false, nextCursor: null },
+    };
+    const fetchImplementation = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(page)));
+    const client = createClient(fetchImplementation);
+    await expect(client.getSelfSubscriptions()).resolves.toEqual(page);
+    await client.getSelfSubscriptions({ limit: 7, cursor: 'opaque+signed/snapshot=?' });
+    const first = fetchImplementation.mock.calls[0];
+    const second = fetchImplementation.mock.calls[1];
+    expect(requestUrl(first![0])).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/subscriptions',
+    );
+    const url = new URL(requestUrl(second![0]));
+    expect(url.searchParams.get('limit')).toBe('7');
+    expect(url.searchParams.get('cursor')).toBe('opaque+signed/snapshot=?');
+    expect([...url.searchParams.keys()]).toEqual(['limit', 'cursor']);
+    for (const call of fetchImplementation.mock.calls) {
+      expect(call[1]?.method ?? 'GET').toBe('GET');
+      expect(call[1]?.cache).toBe('no-store');
+      expect(call[1]?.body).toBeUndefined();
+    }
+  });
+
   it('reads an existing commercial attempt without creating on unavailable status', async () => {
     const operationId = 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea';
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(

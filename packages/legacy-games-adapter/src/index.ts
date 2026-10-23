@@ -449,6 +449,31 @@ function participant(
   };
 }
 
+// LK1 c7aa9d37 scripts/nodered_games_nodes/fn_list_normalize.js owns this read predicate.
+// Missing/unknown statuses remain active; payment status is not a membership allowlist.
+const inactiveParticipantStatusMarkers = [
+  'CANCEL',
+  'DECLIN',
+  'FAIL',
+  'ERROR',
+  'EXPIRE',
+  'REFUND',
+  'REJECT',
+  'VOID',
+  'CLOSE',
+  'ARCHIVE',
+  'LEFT',
+  'REMOV',
+] as const;
+
+function isActiveLegacyParticipant(status: unknown): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Exact LK1 coercion deliberately keeps unknown stored values active.
+  const normalized = String(status || '')
+    .trim()
+    .toUpperCase();
+  return !inactiveParticipantStatusMarkers.some((marker) => normalized.includes(marker));
+}
+
 function mapLegacyGame(
   raw: RawLegacyGame,
   viewerPhoneE164?: string,
@@ -487,7 +512,10 @@ function mapLegacyGame(
   const participantMap = new Map<string, LegacyGameSourceParticipant>([
     [organizerExternalId, organizer],
   ]);
-  for (const item of raw.participants ?? []) {
+  const activeParticipants = (raw.participants ?? []).filter((item) =>
+    isActiveLegacyParticipant(item.status),
+  );
+  for (const item of activeParticipants) {
     const normalized = participant(item, organizerExternalId);
     if (normalized) {
       const existing = participantMap.get(normalized.externalId);
@@ -503,7 +531,7 @@ function mapLegacyGame(
   const participants = [...participantMap.values()].slice(0, capacity);
   const viewerPhone = normalizedPhoneKey(viewerPhoneE164);
   const viewerParticipantExternalId = viewerPhone
-    ? [raw.organizer, ...(raw.participants ?? [])].find(
+    ? [raw.organizer, ...activeParticipants].find(
         (item) =>
           // An empty or unusable stored `phoneNorm` must fall through to the plain phone.
           (normalizedPhoneKey(item?.phoneNorm) ?? normalizedPhoneKey(item?.phone)) ===
