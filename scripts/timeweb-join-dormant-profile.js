@@ -34,6 +34,19 @@ export const JOIN_CONTROLLER_FILES = new Set([
   'docs/runbooks/timeweb-standard-delivery.md',
   'docs/runbooks/timeweb-lk2-beta.md',
 ]);
+// PR468 adds only the reviewed notification-prefetch CLI/declarations here.
+// These paths remain outside the editable controller allowlist. Admit the two
+// exact regular-blob transitions together, never an arbitrary later runner edit.
+const NOTIFICATION_RECOVERY_BRIDGE = {
+  'scripts/run-timeweb-standard-delivery.js': {
+    oldOid: '8489049616f991e019b70a8199fcaa5dd4650aa8',
+    newOid: '13cae992f42fb040f221299eecb09ca98896ac39',
+  },
+  'scripts/timeweb-api-worker-migration.d.ts': {
+    oldOid: '9f776e939e9880fecf65738ec4c4f52923afe591',
+    newOid: '02465a0e0f2812efc547380729405199fda5e3f1',
+  },
+};
 export const JOIN_PHASES = [
   'PREPARING',
   'PREPARED',
@@ -150,7 +163,27 @@ export function validateJoinOperation(op, requireUnexpired = false, now = Date.n
   return op;
 }
 export function validateJoinRuntimeTail(entries) {
+  const bridge = entries.filter((e) => Object.hasOwn(NOTIFICATION_RECOVERY_BRIDGE, e.path));
+  if (
+    bridge.length &&
+    (bridge.length !== 2 ||
+      new Set(bridge.map((e) => e.path)).size !== 2 ||
+      bridge.some((e) => {
+        const pin = NOTIFICATION_RECOVERY_BRIDGE[e.path];
+        return (
+          e.status !== 'M' ||
+          e.oldMode !== '100644' ||
+          e.newMode !== '100644' ||
+          e.oldType !== 'blob' ||
+          e.newType !== 'blob' ||
+          e.oldOid !== pin.oldOid ||
+          e.newOid !== pin.newOid
+        );
+      }))
+  )
+    fail('RUNTIME_TAIL');
   for (const e of entries) {
+    if (Object.hasOwn(NOTIFICATION_RECOVERY_BRIDGE, e.path)) continue;
     if (
       !JOIN_CONTROLLER_FILES.has(e.path) ||
       !['A', 'M'].includes(e.status) ||

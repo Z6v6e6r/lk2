@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   JOIN_OPERATION,
   JOIN_PLAN,
   JOIN_RECEIPT,
   JOIN_INSTALLED_KIND,
+  JOIN_CONTROLLER_FILES,
   joinHash,
   validateJoinOperation,
   validateJoinRuntimeTail,
@@ -25,6 +27,26 @@ const sha = (c: string) => c.repeat(40),
   hash = (c: string) => c.repeat(64);
 const image = (service: string, c: string) => `ghcr.io/z6v6e6r/phub-${service}@sha256:${hash(c)}`;
 const id = (c: string) => `${sha(c)}-123-1`;
+const notificationRecoveryBridge = () =>
+  [
+    {
+      path: 'scripts/run-timeweb-standard-delivery.js',
+      oldOid: '8489049616f991e019b70a8199fcaa5dd4650aa8',
+      newOid: '13cae992f42fb040f221299eecb09ca98896ac39',
+    },
+    {
+      path: 'scripts/timeweb-api-worker-migration.d.ts',
+      oldOid: '9f776e939e9880fecf65738ec4c4f52923afe591',
+      newOid: '02465a0e0f2812efc547380729405199fda5e3f1',
+    },
+  ].map((row) => ({
+    ...row,
+    status: 'M',
+    oldMode: '100644',
+    newMode: '100644',
+    oldType: 'blob',
+    newType: 'blob',
+  }));
 function operation() {
   const op = {
     schema: JOIN_OPERATION,
@@ -172,6 +194,53 @@ describe('bounded dormant JOIN profile', () => {
     ])
       expect(() => validateJoinRuntimeTail([{ ...e, ...change }])).toThrow();
   });
+  it('accepts the exact PR468 source pair without opening either editable path', () => {
+    const pair = notificationRecoveryBridge();
+    validateJoinRuntimeTail(pair);
+    validateJoinRuntimeTail([...pair].reverse());
+    validateJoinRuntimeTail([
+      ...pair,
+      { ...pair[0], path: 'scripts/timeweb-join-dormant-profile.js' },
+    ]);
+    for (const row of pair) {
+      expect(JOIN_CONTROLLER_FILES.has(row.path)).toBe(false);
+      const source = readFileSync(new URL('../' + row.path, import.meta.url));
+      const oid = createHash('sha1').update(`blob ${source.length}\0`).update(source).digest('hex');
+      expect(oid).toBe(row.newOid);
+    }
+  });
+  it('rejects incomplete or duplicated compatibility pairs', () => {
+    const pair = notificationRecoveryBridge();
+    for (const entries of [[pair[0]], [pair[1]], [pair[0], pair[0]], [...pair, pair[1]]])
+      expect(() => validateJoinRuntimeTail(entries)).toThrow('JOIN_DORMANT_RUNTIME_TAIL');
+  });
+  it.each([
+    { oldOid: sha('a') },
+    { newOid: sha('a') },
+    { status: 'A' },
+    { status: 'D' },
+    { status: 'R100' },
+    { oldMode: '100755' },
+    { newMode: '100755' },
+    { newMode: '120000' },
+    { oldType: 'tree' },
+    { newType: 'commit' },
+  ])('rejects compatibility tuple drift %j on either path', (change) => {
+    for (const index of [0, 1]) {
+      const pair = notificationRecoveryBridge();
+      pair[index] = { ...pair[index], ...change };
+      expect(() => validateJoinRuntimeTail(pair)).toThrow('JOIN_DORMANT_RUNTIME_TAIL');
+    }
+  });
+  it.each(['apps/api/src/main.ts', 'deploy/timeweb/migrations/0106.sql', 'package-lock.json'])(
+    'rejects unrelated runtime change beside a valid compatibility pair: %s',
+    (path) => {
+      const pair = notificationRecoveryBridge();
+      expect(() => validateJoinRuntimeTail([...pair, { ...pair[0], path }])).toThrow(
+        'JOIN_DORMANT_RUNTIME_TAIL',
+      );
+    },
+  );
   it('binds full forward API/Web snapshots and the original secret inode set', () => {
     const f = notification();
     const plan = JSON.parse(f.bundle.plan.toString()) as {

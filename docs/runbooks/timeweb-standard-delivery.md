@@ -1418,6 +1418,15 @@ Prerequisites are deliberately strict:
   controller/test/runbook files in `JOIN_CONTROLLER_FILES`, including the separately owned Python
   backup fixes. Application code, SQL, dependencies, Compose, executable modes, symlinks and
   renames fail this profile. The old profiles and their closed historical proofs are unchanged.
+- PR468's notification-prefetch CLI and migration declarations have one closed compatibility
+  bridge in `validateJoinRuntimeTail`: both exact `100644/M` blob transitions must be present
+  together. The runner is pinned from `8489049616f991e019b70a8199fcaa5dd4650aa8` to
+  `13cae992f42fb040f221299eecb09ca98896ac39`; the migration declaration is pinned from
+  `9f776e939e9880fecf65738ec4c4f52923afe591` to `02465a0e0f2812efc547380729405199fda5e3f1`.
+  Neither path enters `JOIN_CONTROLLER_FILES`; partial pairs, duplicate entries and any later
+  blob, mode, status or object-type change still stop. This bridge applies to both the
+  candidate/controller tail and the anchor/terminal-notification tail. It supplies no migration,
+  enrollment or deployment authority and does not adopt any unverified runtime or backup.
 - A terminal `RECONCILED/SUCCESS` notification-0105 baseline. Hash the eight exact files
   `operation`, `plan`, `capsule`, `receipt`, `observation`, `descriptor`, `apiIdentity` and
   `workerIdentity` as done by `validateJoinNotificationBinding`; the operation binds the resulting
