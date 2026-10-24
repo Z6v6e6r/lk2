@@ -8,7 +8,10 @@ export const JOIN_PHASES: string[];
 export function joinHash(bytes: Buffer | string): string;
 export function isJoinOperation(op: unknown): boolean;
 export function validateJoinOperation<T>(op: T, requireUnexpired?: boolean, now?: number): T;
-export function validateJoinRuntimeTail(entries: unknown[]): void;
+export function validateJoinRuntimeTail(
+  entries: unknown[],
+  runtimeSource?: { fromSha: string; toSha: string; toTree: string },
+): void;
 export function validateJoinNotificationBinding(
   bundle: Record<
     | 'operation'

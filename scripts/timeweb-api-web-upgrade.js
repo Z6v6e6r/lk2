@@ -1792,6 +1792,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
             oldType: v.oldOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.oldOid]),
             newType: v.newOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.newOid]),
           })),
+          {
+            fromSha: JOIN_RUNTIME_ANCHOR,
+            toSha: sha,
+            toTree: git(['rev-parse', `${sha}^{tree}`]),
+          },
         );
       }
       readJoinNotificationBaseline(op);
