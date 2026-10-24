@@ -200,3 +200,15 @@ export function runNotificationMigrationAdapter(
   operationBytes: Buffer,
   ops: unknown,
 ): Promise<unknown>;
+export function runNotificationMigratorPrefetchAdapter(
+  mode: string,
+  requestBytes: Buffer,
+  ops: unknown,
+): Promise<unknown>;
+export function runManualNotificationMigratorPrefetch(
+  mode: string,
+  requestPath: string,
+): Promise<unknown>;
+export function attestNotificationMigratorPrefetchForBackup(operation: unknown): Promise<unknown>;
+
+export function sealNotificationPrefetchMetadata(path: string, bytes: Buffer): void;

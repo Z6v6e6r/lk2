@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   NOTIFICATION_MIGRATION_SCHEMA,
@@ -14,6 +17,7 @@ import {
 } from './timeweb-notification-profile.js';
 import {
   migrationCreateArgs,
+  runNotificationMigratorPrefetchAdapter,
   runNotificationMigrationAdapter,
   validateNotificationMigrationReceipt,
 } from './timeweb-api-worker-migration.js';
@@ -837,5 +841,208 @@ describe('notification-only Timeweb profile', () => {
     expect(() =>
       validateNotificationOperation({ ...operation(), schema: NOTIFICATION_ROLLOUT_SCHEMA }),
     ).toThrow();
+  });
+});
+
+describe('notification migrator cache before the backup freshness window', () => {
+  function fixture() {
+    const base = effects(),
+      files = new Map<string, Buffer>(),
+      events: string[] = [];
+    let image = false;
+    const request = encoded({
+      schema: 'PHUB_NOTIFICATION_MIGRATOR_PREFETCH_V1',
+      operation: base.op,
+      retirementReceiptSha256: 'a'.repeat(64),
+      confirmation: 'PREFETCH_NOTIFICATION_MIGRATOR_KEEP_DATABASE_AND_RUNTIME',
+    });
+    const oldImages = ['sha256:' + '2'.repeat(64)];
+    const ops = {
+      ...base.ops,
+      retirementReceipt: () => {},
+      prefetchUnused: () => {
+        events.push('unused');
+      },
+      authority: () => {
+        events.push('authority');
+      },
+      imageInventory: () => oldImages,
+      prefetchIntent: () => files.get('intent') ?? null,
+      writePrefetchIntent: (bytes: Buffer) => {
+        files.set('intent', bytes);
+        events.push('intent');
+      },
+      prefetchReceipt: () => files.get('receipt') ?? null,
+      writePrefetchReceipt: (bytes: Buffer) => {
+        files.set('receipt', bytes);
+        events.push('receipt');
+      },
+      pullMigrator: () => {
+        events.push('pull');
+        image = true;
+      },
+      prefetchImagePresent: () => image,
+      image: () => {
+        if (!image) throw Error('ABSENT_IMAGE');
+        return base.ops.image();
+      },
+    };
+    return { ...base, request, ops, files, events, oldImages };
+  }
+  it('seals original intent before the only pinned pull; never prepares SQL/container state', async () => {
+    const f = fixture();
+    expect(await runNotificationMigratorPrefetchAdapter('pull', f.request, f.ops)).toMatchObject({
+      status: 'MIGRATOR_PREFETCH_VERIFIED',
+      databaseMutated: false,
+      runtimeMutated: false,
+    });
+    expect(f.events.indexOf('intent')).toBeLessThan(f.events.indexOf('pull'));
+    expect(f.events.indexOf('pull')).toBeLessThan(f.events.indexOf('receipt'));
+    expect(f.isLocked()).toBe(false);
+    expect(f.getReceipt()).toBeNull();
+    expect(f.events.filter((x) => x === 'pull')).toHaveLength(1);
+    await expect(runNotificationMigratorPrefetchAdapter('pull', f.request, f.ops)).rejects.toThrow(
+      'USE_RECONCILE',
+    );
+    await runNotificationMigratorPrefetchAdapter('reconcile', f.request, f.ops);
+    expect(f.events.filter((x) => x === 'pull')).toHaveLength(1);
+  });
+  it.each([
+    'intent-before',
+    'intent-after',
+    'pull-before',
+    'pull-after',
+    'receipt-before',
+    'receipt-after',
+  ])('recovers lost ACK at %s under the same exact request', async (point) => {
+    const f = fixture(),
+      ops = { ...f.ops };
+    const wrap =
+      <Args extends unknown[]>(fn: (...args: Args) => void, label: string) =>
+      (...args: Args) => {
+        if (point === label + '-before') throw Error('ACK_LOST');
+        fn(...args);
+        if (point === label + '-after') throw Error('ACK_LOST');
+      };
+    ops.writePrefetchIntent = wrap(ops.writePrefetchIntent, 'intent');
+    ops.pullMigrator = wrap(ops.pullMigrator, 'pull');
+    ops.writePrefetchReceipt = wrap(ops.writePrefetchReceipt, 'receipt');
+    await expect(runNotificationMigratorPrefetchAdapter('pull', f.request, ops)).rejects.toThrow(
+      'ACK_LOST',
+    );
+    const mode = f.files.has('intent') ? 'reconcile' : 'pull';
+    await expect(
+      runNotificationMigratorPrefetchAdapter(mode, f.request, f.ops),
+    ).resolves.toMatchObject({ status: 'MIGRATOR_PREFETCH_VERIFIED' });
+    expect(f.files.has('receipt')).toBe(true);
+    expect(f.isLocked()).toBe(false);
+    expect(f.getReceipt()).toBeNull();
+  });
+  it('never resumes an incomplete pull with expired request or changed source/runtime/rollback images', async () => {
+    for (const boundary of ['expiry', 'authority', 'runtime', 'rollback', 'intent']) {
+      const f = fixture();
+      await expect(
+        runNotificationMigratorPrefetchAdapter('pull', f.request, {
+          ...f.ops,
+          pullMigrator: () => {
+            throw Error('network');
+          },
+        }),
+      ).rejects.toThrow();
+      const ops = { ...f.ops };
+      if (boundary === 'expiry') ops.time = () => now + 7200000;
+      if (boundary === 'authority')
+        ops.authority = () => {
+          throw Error('CI');
+        };
+      if (boundary === 'runtime')
+        ops.snapshot = () => ({
+          ...f.ops.snapshot(),
+          api: { ...f.ops.snapshot().api, identity: { ...f.op.expectedApi, restarts: 1 } },
+        });
+      if (boundary === 'rollback') ops.imageInventory = () => [];
+      if (boundary === 'intent')
+        f.files.set(
+          'intent',
+          encoded({ ...JSON.parse(f.files.get('intent')!.toString()), requestBase64: 'foreign' }),
+        );
+      await expect(
+        runNotificationMigratorPrefetchAdapter('reconcile', f.request, ops),
+      ).rejects.toThrow();
+      expect(f.events).not.toContain('pull');
+      expect(f.files.has('receipt')).toBe(false);
+    }
+  });
+  it('rejects receipt/inventory drift and never overwrites receipt evidence', async () => {
+    const f = fixture();
+    await runNotificationMigratorPrefetchAdapter('pull', f.request, f.ops);
+    const raw = f.files.get('receipt')!;
+    f.files.set(
+      'receipt',
+      encoded({ ...JSON.parse(raw.toString()), imageId: 'sha256:' + 'f'.repeat(64) }),
+    );
+    await expect(
+      runNotificationMigratorPrefetchAdapter('reconcile', f.request, f.ops),
+    ).rejects.toThrow('RECEIPT_DRIFT');
+    expect(f.events.filter((x) => x === 'receipt')).toHaveLength(1);
+    const other = fixture();
+    other.oldImages.push(other.oldImages[0]!);
+    await expect(
+      runNotificationMigratorPrefetchAdapter('pull', other.request, other.ops),
+    ).rejects.toThrow('IMAGE_INVENTORY');
+    expect(other.files.size).toBe(0);
+  });
+});
+
+describe('prefetch metadata filesystem recovery', () => {
+  it('resumes every partial write/fsync/rename and rejects foreign/mixed metadata', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'phub-prefetch-seal-'));
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `
+        import fs from 'node:fs';import {syncBuiltinESMExports} from 'node:module';import assert from 'node:assert/strict';
+        const directory=process.argv[1], logical='/opt/phub/timeweb-beta/standard/notification-prefetch/'+ 'a'.repeat(40)+'-123-1/receipt.json';
+        const root='/opt/phub/timeweb-beta', map=p=>typeof p==='string'&&p.startsWith(root)?directory+p.slice(root.length):p;
+        const original=Object.fromEntries(['lstatSync','openSync','existsSync','readFileSync','renameSync','writeSync','fsyncSync'].map(k=>[k,fs[k]]));
+        let counts={},failure=null;
+        const hit=k=>{counts[k]=(counts[k]??0)+1;if(failure?.[0]===k&&failure[1]===counts[k])throw Error('LOST_ACK');};
+        // Root-custody metadata is synthetic; real owned temporary files and syscalls are used.
+        fs.lstatSync=p=>{const q=['/opt','/opt/phub'].includes(p)?directory:map(p),s=original.lstatSync(q);return Object.assign(Object.create(Object.getPrototypeOf(s)),s,{uid:0,gid:0,mode:(s.mode&~0o777)|(s.isDirectory()?0o700:0o600)});};
+        fs.openSync=(p,...a)=>original.openSync(map(p),...a);
+        fs.existsSync=p=>original.existsSync(map(p));fs.readFileSync=(p,...a)=>original.readFileSync(map(p),...a);
+        fs.renameSync=(a,b)=>{assert.equal(original.existsSync(map(b)),false);original.renameSync(map(a),map(b));hit('rename');};
+        fs.fsyncSync=fd=>{original.fsyncSync(fd);hit('fsync');};
+        fs.writeSync=(fd,bytes,offset,length)=>{const n=original.writeSync(fd,bytes,offset,Math.max(1,Math.floor(length/2)));hit('write');return n;};
+        syncBuiltinESMExports();
+        const {sealNotificationPrefetchMetadata:seal}=await import('./scripts/timeweb-api-worker-migration.js');
+        const actual=map(logical);fs.mkdirSync(actual.slice(0,actual.lastIndexOf('/')),{recursive:true,mode:0o700});
+        const bytes=Buffer.from(JSON.stringify({schema:'SYNTHETIC_CACHE_RECEIPT',requestSha256:'b'.repeat(64)})+'\\n');
+        const reset=()=>{for(const p of [actual,actual+'.incoming'])if(original.existsSync(p))fs.unlinkSync(p);counts={};failure=null;};
+        seal(logical,bytes);const baseline={...counts};assert.deepEqual(fs.readFileSync(actual),bytes);
+        let windows=0;
+        for(const [kind,total]of Object.entries(baseline))for(let point=1;point<=total;point++){
+          reset();failure=[kind,point];assert.throws(()=>seal(logical,bytes),/LOST_ACK/);failure=null;
+          seal(logical,bytes);seal(logical,bytes);assert.deepEqual(fs.readFileSync(actual),bytes);assert.equal(original.existsSync(actual+'.incoming'),false);windows++;
+        }
+        reset();fs.writeFileSync(actual+'.incoming','foreign');assert.throws(()=>seal(logical,bytes),/PREFIX/);
+        reset();seal(logical,bytes);fs.writeFileSync(actual+'.incoming',bytes);assert.throws(()=>seal(logical,bytes),/DRIFT/);
+        assert.throws(()=>seal('/tmp/foreign.json',bytes),/PATH/);
+        process.stdout.write(JSON.stringify({status:'PREFETCH_METADATA_ACK_PASS',windows}));
+      `,
+          directory,
+        ],
+        { cwd: process.cwd(), encoding: 'utf8', timeout: 30000 },
+      );
+      expect(result.status, result.stderr + result.stdout).toBe(0);
+      const proof = JSON.parse(result.stdout) as { status: string; windows: number };
+      expect(proof).toMatchObject({ status: 'PREFETCH_METADATA_ACK_PASS' });
+      expect(proof.windows).toBeGreaterThan(5);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

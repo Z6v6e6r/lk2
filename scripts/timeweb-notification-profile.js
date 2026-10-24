@@ -16,6 +16,7 @@ import {
   NOTIFICATION_FUNCTION_DEFAULTS_SAFE_SQL,
   NOTIFICATION_REFERENCES_SAFE_SQL,
 } from './notification-migration-catalog.js';
+export const JOIN_POST105_BACKUP_SCHEMA = 'PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1';
 export const NOTIFICATION_BACKUP_SCHEMA = 'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1';
 export const NOTIFICATION_MIGRATION_SCHEMA =
   'PHUB_TIMEWEB_NOTIFICATION_0105_MIGRATION_OPERATION_V1';
@@ -26,9 +27,12 @@ export const NOTIFICATION_POST_LEDGER =
   '7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd';
 export const NOTIFICATION_SOURCE = '/opt/phub/timeweb-beta/standard/source';
 export const isNotificationOperation = (op) =>
-  [NOTIFICATION_BACKUP_SCHEMA, NOTIFICATION_MIGRATION_SCHEMA, NOTIFICATION_ROLLOUT_SCHEMA].includes(
-    op?.schema,
-  );
+  [
+    NOTIFICATION_BACKUP_SCHEMA,
+    JOIN_POST105_BACKUP_SCHEMA,
+    NOTIFICATION_MIGRATION_SCHEMA,
+    NOTIFICATION_ROLLOUT_SCHEMA,
+  ].includes(op?.schema);
 export const notificationHash = (v) => createHash('sha256').update(v).digest('hex');
 const H = /^[a-f0-9]{64}$/,
   S = /^[a-f0-9]{40}$/;
