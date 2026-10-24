@@ -1396,13 +1396,13 @@ The operator must first receive explicit authority for the exact candidate and s
 and exclusive custody from the active backup/deploy owner. JOIN and live remain disabled.
 
 The fixed request path remains `/opt/phub/timeweb-beta/operator/api-web-upgrade.json`.
-Use schema `PHUB_TIMEWEB_JOIN_DORMANT_API_WEB_OPERATION_V1` with the exact fields validated by
+Use schema `PHUB_TIMEWEB_JOIN_DORMANT_API_WEB_OPERATION_V2` with the exact fields validated by
 `scripts/timeweb-join-dormant-profile.js`: target `lk2.padlhub.su`, enrolled `controllerSha`,
 canonical `candidateSha`/`candidateTree`, green `sourceCiRunId`, first-attempt `publicationRunId`,
 `artifactId`, `artifactDigest`, `manifestSha256`, actual `expectedApi` and `expectedWeb`
 (each `id`, immutable `image`, `releaseId`), `expectedCurrentSecretSetReleaseId`,
 `candidateSecretHashes` (all five existing secret-set files), `verifierPublicKeySha256`,
-`notificationBundleSha256`, `expectedExcludedSha256`, canonical UTC `expiresAt`, and confirmation
+`notificationBundleSha256`, `expectedExcludedSha256`, `post105BackupOperationSha256`, canonical UTC `expiresAt`, and confirmation
 `DEPLOY_DORMANT_JOIN_API_WEB_<CANDIDATE12_UPPER>_FROM_<OLD_API12_UPPER>_NO_JOIN_NO_PROVIDER_WRITES`.
 Forward execution requires an unexpired window of at most one hour. Recovery uses the sealed
 operation even after expiry and does not need GitHub availability.
@@ -1418,6 +1418,31 @@ Prerequisites are deliberately strict:
   controller/test/runbook files in `JOIN_CONTROLLER_FILES`, including the separately owned Python
   backup fixes. Application code, SQL, dependencies, Compose, executable modes, symlinks and
   renames fail this profile. The old profiles and their closed historical proofs are unchanged.
+- PR468's notification-prefetch CLI and migration declarations have one closed compatibility
+  bridge in `validateJoinRuntimeTail`: both exact `100644/M` blob transitions must be present
+  together. The runner is pinned from `8489049616f991e019b70a8199fcaa5dd4650aa8` to
+  `13cae992f42fb040f221299eecb09ca98896ac39`; the migration declaration is pinned from
+  `9f776e939e9880fecf65738ec4c4f52923afe591` to `02465a0e0f2812efc547380729405199fda5e3f1`.
+  Neither path enters `JOIN_CONTROLLER_FILES`; partial pairs, duplicate entries and any later
+  blob, mode, status or object-type change still stop. This bridge applies to both the
+  candidate/controller tail and the anchor/terminal-notification tail. It supplies no migration,
+  enrollment or deployment authority and does not adopt any unverified runtime or backup.
+- PR469's Zod security/runtime patch has a separate closed fourteen-blob compatibility group:
+  eleven exact Zod 4.6.7 workspace pins, their root lock, the rebuilt trusted-inventory runtime and
+  the gift-catalog bounded-input regression. These paths stay outside `JOIN_CONTROLLER_FILES`.
+  The group is admitted only with held Git context from anchor `518be74e95b1f00f0d04671b343318143a759e9c`
+  to merged source `cccae751ad4134382b2e350db30e93e47099209d` / tree
+  `0403f08abcefdce80b7d9974e630238de6ac8eb0`. Every path must occur exactly once with the pinned
+  old/new blob OIDs and `M/100644/blob` metadata. Missing/duplicate peers, any later source/tree,
+  reverse transitions or changed bytes/status/type/mode fail closed. The two-file PR468 bridge
+  remains independently atomic. The candidate-to-controller call supplies no runtime-source
+  context and cannot consume the fourteen-file dependency/runtime exception. Only the
+  anchor-to-candidate and anchor-to-terminal-notification checks supply context derived from
+  held Git objects. This is adoption of one reviewed runtime security patch, not a generic
+  dependency allowlist or a new runtime anchor. Full green main CI, deterministic generated-bundle
+  rebuild/direct-execution denial and one canonical five-image publication for that exact source
+  remain required. This bridge grants no publication, enrollment, migration, secret or deployment
+  authority and cannot substitute earlier notification or POST105 receipts.
 - A terminal `RECONCILED/SUCCESS` notification-0105 baseline. Hash the eight exact files
   `operation`, `plan`, `capsule`, `receipt`, `observation`, `descriptor`, `apiIdentity` and
   `workerIdentity` as done by `validateJoinNotificationBinding`; the operation binds the resulting
@@ -1426,8 +1451,8 @@ Prerequisites are deliberately strict:
 - A fresh strict backup independently restored against the exact **post-0105** ledger, with both
   `sourceLedgerSha256` and `restoredLedgerSha256` equal to `NOTIFICATION_POST_LEDGER`. Existing
   backup file hash, size, freshness and service identity checks still apply. There is no degraded
-  fallback. **A producer for this post-0105 proof is a separate backup capability prerequisite;
-  this JS preparation does not add it. Until available and verified, execution must stop.**
+  fallback. Use the original rich POST105 producer receipt and terminal attestation described below;
+  a PRE102 receipt, projection, renamed directory or generic V1 receipt cannot satisfy this gate.
 - A separately authorized, securely prepared candidate secret directory at
   `/etc/phub/timeweb-beta-candidates/<candidate-release-id>/timeweb-beta`. The profile never
   creates keys or credentials. Old `api.env` bytes are an immutable prefix; append only the
@@ -1483,3 +1508,56 @@ Foreign files, inode drift or ambiguous layouts retain custody and fail closed. 
 leaves `ROLLBACK_FAILED` and locks held. Missing sealed preparation evidence likewise preserves
 locks as `join_incomplete_preparation_preserved`; do not delete locks or retry deployment by hand.
 No part of this source profile authorizes JOIN activation, live rollout, real bookings or debits.
+
+### Post-0105 restore proof for dormant JOIN
+
+The existing Python namespace backup engine has the bounded production profile
+`PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1`. It does not enroll itself or grant host authority.
+After the current backup/deploy owner releases custody and notification migration/API-Worker rollout
+is terminal `RECONCILED/SUCCESS`, obtain separate authority for this exact backup request and target.
+Keep JOIN, live and provider writes disabled throughout. Source tests alone are not a restore proof.
+
+Use the existing fixed request `/opt/phub/timeweb-beta/operator/database-backup-restore.json` and
+installed helper entry point. The request has the PRE105 tool/source/installation/config/boundary
+fields plus `notificationBundleSha256`, production `profile`, exact current seven-field API and
+Postgres snapshots, and `expectedLedgerSha256=NOTIFICATION_POST_LEDGER` (105 entries).
+`releaseId` is `<controllerSha>-<controllerSourceCiRunId>-1`; `toolCommit=controllerSha`;
+`confirmation=BACKUP_RESTORE_JOIN_POST105_PRIVATE_NAMESPACE_KEEP_RUNTIME`.
+`controllerPromotion` is forbidden. The original notification bundle authenticates the API baseline;
+there is no fallback to the old API8158 pin. Postgres retains its existing immutable identity pin.
+
+Before the first work-directory/lock write the producer requires fresh source CI, exact enrolled
+controller config bytes, original terminal notification evidence, full API identity, unchanged Web
+container identity, and the original runtime secret-set inode/file descriptor. Its durable
+`POST105_BASELINE_ADMITTED` record binds those hashes to the raw backup operation and is itself
+bound into the networkless supervisor handoff. After the dump, the same baseline and post-0105
+catalog/ledger/role/security preimage must still match before storage creation or restore.
+`POST105_BASELINE_RECHECKED` seals that second observation. Drift preserves the owned transaction
+for guarded recovery; it never retries dump/restore or adopts a new baseline.
+
+The producer uses the existing isolated namespace/daemon and full owner/ACL dump, prepares only
+allowlisted roles in the fresh restore cluster, restores in a single transaction, and compares the
+restored ledger, owners, ACLs and role closure to the original preimage. The original canonical
+`backups/<releaseId>-join-post105/` directory contains exactly `backup-operation.json`,
+`preimage-proof.json`, `database-backup-receipt.json` and `database.pgcustom`. The rich receipt schema
+is `PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1`; it binds the operation, notification bundle,
+post-0105 preimage, package/catalog descriptors, restored security/role hashes and actual dump.
+Completion must fall within the operation expiry; the JOIN consumer also requires receipt age
+at most one hour. Recovery never refreshes that timestamp or mints new forward authority.
+
+The same installed helper's existing `--attest-disk` entry returns
+`PHUB_TIMEWEB_JOIN_POST105_BACKUP_TERMINAL_V1` only after exact journal/handoff verification,
+restore/security verification, publication/reconciliation, and absence of the owned unit, slice,
+cgroup, mount, loop and mapper. This terminal check is read-only and uses the original artifacts;
+it does not call GitHub, inspect the former API/env baseline, or repopulate forward CI authority.
+A subsequent dormant JOIN API/env transition under the **same enrolled controller** leaves it
+verifiable. A later controller enrollment is outside that historical scope and requires an explicit
+custody/proof transition. Do not silently adopt a newer source/config.
+
+The JOIN V2 operation binds the raw backup request digest in `post105BackupOperationSha256`.
+The JS consumer reads the original four files, hashes the actual dump and installed helper receipt,
+requires the terminal attestation, and reattests this sealed reference before activation, before
+installed-baseline publication and during reconciliation. Legacy V1/degraded/PRE102 consumers and
+the frozen one-operation early-exit recovery remain unchanged. No staging readiness claim may be
+made until this producer actually completes its isolated restore and the dormant rollout/smoke
+has passed on Timeweb.

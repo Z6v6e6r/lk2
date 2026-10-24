@@ -22,6 +22,7 @@ from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('backup',Path(__file__).with_name('control-timeweb-database-backup.py'))
 m=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
+ORIGINAL_FILE_IDENTITY=m.identity
 API=copy.deepcopy(m.API_BASELINE)
 PG={'id':m.PG_ID,'image':m.PG_IMAGE,'imageId':m.PG_IMAGE.split('@')[1],'releaseId':None,'revision':None,'restarts':0,'startedAt':'2026-08-28T16:49:17.916395698Z'}
 LEDGER=[['0001_initial.sql','c'*64],['0002_next.sql','d'*64]]
@@ -1006,7 +1007,7 @@ class DiskScenario(Scenario):
         with ExitStack()as stack:
             for name,val in [('ROOT',self.root),('REQUEST',self.request),('LOCK',self.root/'standard/active')]:stack.enter_context(patch.object(m,name,val))
             for name,fn in [('secure',secure),('read_secure',self.read),('docker',self.docker),('command',self.command),('tool_custody',lambda op:b'validated-installation'),
-                            ('v2_migration_proof',lambda *a:None),('disk_prerequisites',lambda **kwargs:None),('disk_private_parent',lambda p:None),
+                            ('v2_migration_proof',lambda *a:getattr(self,'preimage',None)),('disk_prerequisites',lambda **kwargs:None),('disk_private_parent',lambda p:None),
                             ('disk_daemon_namespace',lambda:{'pid':44,'startTicks':'123','namespace':11}),
                             ('disk_expected_environment',lambda:disk_restore_row(self.plan)['Config']['Env']),
                             ('disk_memory_available',lambda:10**12),('disk_tool',self.tool),('disk_mapper',self.mapper_read),('disk_mount',self.mount_read),
@@ -1987,6 +1988,8 @@ class NotificationSupervisorAuthorityTests(unittest.TestCase):
             'expectedApi':{**API,'image':m.WEB8158_IMAGE,'imageId':m.WEB8158_IMAGE.split('@')[1],
                            'revision':m.MIGRATION_BASE_SHA,'releaseId':m.API_WORKER_CANDIDATE},
             'confirmation':'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'}
+        self.op['migratorPrefetch']={'requestSha256':'1'*64,'receiptSha256':'2'*64,
+            'migratorImage':'ghcr.io/z6v6e6r/phub-migrator@sha256:'+'3'*64,'imageId':'sha256:'+'4'*64}
         self.raw=m.encoded(self.op);self.request=self.root/'operator/database-backup-restore.json'
         self.request.parent.mkdir();self.request.write_bytes(self.raw)
         for item in [patch.object(m,'ROOT',self.root),patch.object(m,'REQUEST',self.request),
@@ -2006,7 +2009,9 @@ class NotificationSupervisorAuthorityTests(unittest.TestCase):
         m._NOTIFICATION_SOURCE_CI.add((op['controllerSha'],op['controllerTree'],op['controllerSourceCiRunId']))
 
     def handoff(self):
-        with patch.object(m,'tool_custody',side_effect=self.host_custody):
+        with patch.object(m,'tool_custody',side_effect=self.host_custody),\
+             patch.object(m,'_notification_source_program',return_value=('',{})),\
+             patch.object(m,'command',return_value=b'MIGRATOR_PREFETCH_VERIFIED'):
             m.notification_host_backup_authority(self.op)
             m.notification_seal_supervisor_authority(self.plan,self.op,self.journal)
         for phase in ['NAMESPACE_SLICE_START_INTENT','NAMESPACE_SLICE_READY','NAMESPACE_UNIT_START_INTENT']:
@@ -2115,6 +2120,204 @@ class NotificationSupervisorAuthorityTests(unittest.TestCase):
             self.assertEqual(m.namespace_supervisor_custody(legacy,b'ignored',{},None),b'legacy')
             forward.assert_called_once_with(legacy);local.assert_not_called()
 
+
+
+def join_post105_operation():
+    return {**copy.deepcopy(OP),'schema':m.JOIN_POST105_SCHEMA,'profile':'production',
+        'toolCommit':OP['controllerSha'],'releaseId':OP['controllerSha']+'-100-1','controllerSourceCiRunId':'100',
+        'expectedLedgerSha256':m.JOIN_POST105_LEDGER,'packageDescriptorSha256':'a'*64,'catalogsSha256':'b'*64,
+        'notificationBundleSha256':'c'*64,
+        'expectedApi':{**API,'image':'ghcr.io/z6v6e6r/phub-api@sha256:'+'d'*64,'imageId':'sha256:'+'d'*64,
+                       'revision':'e'*40,'releaseId':'e'*40+'-200-1'},
+        'confirmation':'BACKUP_RESTORE_JOIN_POST105_PRIVATE_NAMESPACE_KEEP_RUNTIME'}
+
+
+def join_post105_baseline(op):
+    return {'schema':'PHUB_TIMEWEB_JOIN_NOTIFICATION_BASELINE_V1','notificationBundleSha256':op['notificationBundleSha256'],
+            'notificationOperationSha256':'1'*64,'notificationPlanSha256':'2'*64,
+            'notificationReceiptSha256':'3'*64,'installedDescriptorSha256':'4'*64}
+
+
+class JoinPost105Scenario(NamespaceScenario):
+    """Real namespace orchestrator/receipt/journal; synthetic Linux/DB/source readback only."""
+    def __init__(self,directory,fault=None):
+        super().__init__(directory,True,fault)
+        self.op=join_post105_operation();self.runtime_api=copy.deepcopy(self.op['expectedApi'])
+        self.config=m.encoded({'schema':1,'enabled':True,'owner':'synthetic','controllerSha':self.op['controllerSha']})
+        self.op['controllerConfigSha256']=m.digest(self.config)
+        self.op['expectedBoundarySha256']=m.digest(m.encoded(sorted([self.service_row(True),self.service_row(False)],key=lambda r:r['Id'])))
+        descriptor=json.loads(Path(__file__).parents[1].joinpath('deploy/timeweb/notification-migrations-0099-0101.v1.json').read_text())
+        self.ledger=copy.deepcopy(API_WORKER_LEDGER)+[[v['filename'],v['checksum']] for v in descriptor['steps']]
+        assert m.digest(m.encoded(self.ledger))==m.JOIN_POST105_LEDGER
+        self.request.write_bytes(m.encoded(self.op))
+        with patch.object(m,'ROOT',self.root):self.plan=m.namespace_plan(self.op,m.encoded(self.op),m.namespace_sizing(1024,10**12,50*1024**3,NS_IMAGE),NS_IMAGE)
+        self.preimage={'state':{'phase':'post','synthetic':True},'target':{'databaseName':'synthetic','systemIdentifier':'123'},
+                       'security':{'schema':'PHUB_NOTIFICATION_BACKUP_SECURITY_V1','roles':['phub_beta'],
+                         'objects':[{'key':'database','kind':'database','owner':'phub_beta','props':{},'acl':[]}],
+                         'unsupported':{'largeObjects':0,'securityLabels':0}}}
+        self.baseline_reads=0;self.baseline_drift=False;self.state_drift=False
+
+    def start(self,p,op,j):
+        proof=m.notification_supervisor_authority(p,op,m.encoded(op))
+        j.add('SOURCE_AUTHORITY_VERIFIED', **proof)
+        return super().start(p,op,j)
+
+    def baseline(self,op):
+        self.baseline_reads+=1
+        if self.baseline_drift and self.baseline_reads>1:raise m.Stop('JOIN_POST105_BASELINE_DRIFT')
+        return join_post105_baseline(op)
+
+    def docker(self,args,code='DOCKER_READ',**kwargs):
+        if code=='DUMP' and m.SOURCE_DUMP.replace(' --no-owner --no-acl','') in args:
+            self.calls.append(['/usr/bin/docker']+args);self.trip(code)
+            kwargs['stdout'].write(b'PGDMP synthetic full owner ACL fixture');self.trip(code,True);return b''
+        return super().docker(args,code,**kwargs)
+
+    def private_docker(self,plan,args,code='NS_READ',**kwargs):
+        if code in ('NOTIFICATION_RESTORE_ROLES','NOTIFICATION_RESTORE_EXTENSION_OWNERS','NOTIFICATION_RESTORED_SECURITY'):
+            assert self.private and self.unit and self.daemon
+            self.privcalls.append(args)
+            return m.encoded(self.preimage['security']) if code=='NOTIFICATION_RESTORED_SECURITY' else b''
+        return super().private_docker(plan,args,code,**kwargs)
+
+    def invoke(self,reconcile=False):
+        preimage={**self.preimage,'target':{'databaseName':'changed','systemIdentifier':'123'}} if self.state_drift else self.preimage
+        with patch.object(m,'notification_host_backup_authority'),patch.object(m,'join_post105_baseline',side_effect=self.baseline),\
+             patch.object(m,'notification_preimage',return_value=preimage),patch.object(m,'notification_security_sql',return_value='select synthetic'),patch.object(m,'now_iso',return_value='2026-10-10T15:30:00.000Z'):
+            return super().invoke(reconcile)
+
+
+class JoinPost105Tests(unittest.TestCase):
+    def scenario(self,fault=None):
+        tmp=tempfile.TemporaryDirectory(prefix='phub-join-post105-');self.addCleanup(tmp.cleanup)
+        return JoinPost105Scenario(tmp.name,fault)
+
+    def test_config_drift_or_invalid_schema_precedes_first_host_write(self):
+        op=join_post105_operation()
+        config={'schema':1,'enabled':True,'owner':'synthetic','controllerSha':op['controllerSha']}
+        for changes,refresh_hash in [({'owner':'changed'},False),({'enabled':False},True),({'schema':2},True),({'extra':True},True),({'owner':''},True)]:
+            raw=m.encoded({**config,**changes})
+            op['controllerConfigSha256']=m.digest(raw if refresh_hash else m.encoded(config))
+            with patch.object(m,'_NOTIFICATION_BACKUP_AUTHORITY',None),patch.object(m,'_NOTIFICATION_SOURCE_CI',set()),\
+                 patch.object(m,'read_secure',return_value=raw),patch.object(m,'tool_custody') as custody,\
+                 patch.object(m,'disk_prerequisites'),patch.object(m.os.path,'lexists',return_value=False),patch.object(m,'secure'),\
+                 patch.object(m.Path,'mkdir') as mkdir,patch.object(m,'atomic_exclusive') as write:
+                with self.subTest(changes=changes),self.assertRaises(m.Stop):m.namespace_initialize(op,m.encoded(op),'2'*64)
+                mkdir.assert_not_called();write.assert_not_called();custody.assert_not_called()
+
+    def test_closed_profile_dynamic_api_and_only_post105_ledger(self):
+        op=join_post105_operation();self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertTrue(m.is_namespace_operation(op));self.assertEqual(m.operation_mode(op),('join-post105',op['releaseId']))
+        self.assertEqual(m.disk_ledger_sha(op),m.JOIN_POST105_LEDGER)
+        for bad in [{'schema':m.NOTIFICATION_PRE105_SCHEMA},{'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256},
+                    {'notificationBundleSha256':'missing'},{'profile':'beta'},{'controllerPromotion':{}},
+                    {'confirmation':'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'},
+                    {'expectedPostgres':{**PG,'id':'f'*64}}, {'expectedApi':{**op['expectedApi'],'image':'api:latest'}},
+                    {'expectedApi':{**op['expectedApi'],'startedAt':'2026-02-31T00:00:00.000Z'}}]:
+            with self.subTest(bad=bad),self.assertRaises(m.Stop):m.validate_operation({**op,**bad},NOW,'2'*64)
+
+    def test_owner_acl_restore_publishes_original_rich_receipt_after_cleanup(self):
+        s=self.scenario();self.assertEqual(s.invoke()['status'],'BACKUP_RESTORE_VERIFIED')
+        self.assertEqual(s.baseline_reads,2)
+        canonical=Path(s.plan['canonical']);receipt=json.loads((canonical/'database-backup-receipt.json').read_bytes())
+        self.assertEqual(len(receipt),19);self.assertEqual(receipt['schema'],'PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1')
+        self.assertEqual(receipt['notificationBundleSha256'],s.op['notificationBundleSha256'])
+        self.assertEqual(receipt['sourceLedgerSha256'],m.JOIN_POST105_LEDGER)
+        self.assertEqual(receipt['baselineReleaseId'],s.op['expectedApi']['releaseId'])
+        self.assertEqual((canonical/'backup-operation.json').read_bytes(),m.encoded(s.op))
+        self.assertEqual((canonical/'preimage-proof.json').read_bytes(),m.encoded(s.preimage))
+        dump=next(a for a in s.calls if m.SOURCE_DUMP.replace(' --no-owner --no-acl','') in a)
+        self.assertNotIn('--no-owner',dump[-1]);self.assertNotIn('--no-acl',dump[-1])
+        restore=next(a for a in s.privcalls if 'pg_restore' in a and '--list' not in a)
+        self.assertIn('--single-transaction',restore);self.assertNotIn('--no-owner',restore);self.assertNotIn('--no-acl',restore)
+        phases=[v['phase'] for v in s.journal().events]
+        self.assertLess(phases.index('POST105_BASELINE_ADMITTED'),phases.index('LOCKED'))
+        self.assertLess(phases.index('DUMP_VERIFIED'),phases.index('POST105_BASELINE_RECHECKED'))
+        self.assertLess(phases.index('POST105_BASELINE_RECHECKED'),phases.index('RESTORE_INTENT'))
+        self.assertLess(phases.index('STORAGE_CLEANUP_VERIFIED'),phases.index('PUBLISHED'))
+
+    def test_postdump_runtime_or_state_drift_preserves_lock_and_never_restores(self):
+        for field in ('baseline_drift','state_drift'):
+            s=self.scenario();setattr(s,field,True)
+            with self.subTest(field=field),self.assertRaisesRegex(m.Stop,'JOIN_POST105_BASELINE_DRIFT'):s.invoke()
+            self.assertTrue((s.root/'standard/active').exists());self.assertFalse(Path(s.plan['canonical']).exists())
+            self.assertFalse(any('pg_restore' in a for a in s.privcalls))
+
+    def test_baseline_failure_precedes_first_namespace_write(self):
+        s=self.scenario()
+        with patch.object(s,'baseline',side_effect=m.Stop('JOIN_POST105_BASELINE')):
+            with self.assertRaisesRegex(m.Stop,'JOIN_POST105_BASELINE'):s.invoke()
+        self.assertFalse(Path(s.plan['work']).exists());self.assertFalse((s.root/'standard/active').exists())
+
+    def test_admission_and_recheck_are_exact_operation_bound_and_historical(self):
+        s=self.scenario();s.invoke();journal=s.journal()
+        with patch.object(m,'join_post105_baseline',side_effect=AssertionError('fresh baseline forbidden')),\
+             patch.object(m,'notification_preimage',side_effect=AssertionError('fresh DB forbidden')):
+            admitted=m.join_post105_admission(s.plan,s.op,journal,rechecked=True)
+            self.assertEqual(admitted['operationSha256'],s.plan['operationSha256'])
+            original=copy.deepcopy(journal.events)
+            for phase in ('POST105_BASELINE_ADMITTED','POST105_BASELINE_RECHECKED'):
+                journal.events=copy.deepcopy(original)
+                journal.find(phase)['operationSha256']='f'*64
+                with self.assertRaises(m.Stop):m.join_post105_admission(s.plan,s.op,journal,rechecked=True)
+            journal.events=copy.deepcopy(original)
+            journal.find('POST105_BASELINE_ADMITTED')['baseline']['notificationBundleSha256']='f'*64
+            with self.assertRaises(m.Stop):m.join_post105_admission(s.plan,s.op,journal,rechecked=True)
+
+    def test_missing_duplicate_or_reordered_admission_and_recheck_reject(self):
+        s=self.scenario();s.invoke();journal=s.journal();original=copy.deepcopy(journal.events)
+        for phase in ('POST105_BASELINE_ADMITTED','POST105_BASELINE_RECHECKED'):
+            for change in ('missing','duplicate','reordered'):
+                journal.events=copy.deepcopy(original)
+                index=next(i for i,v in enumerate(journal.events) if v['phase']==phase)
+                event=journal.events.pop(index)
+                if change=='duplicate':journal.events.insert(index,event);journal.events.insert(index,copy.deepcopy(event))
+                elif change=='reordered':journal.events.insert(0,event)
+                with self.subTest(phase=phase,change=change),self.assertRaises(m.Stop):
+                    m.join_post105_admission(s.plan,s.op,journal,rechecked=True)
+
+    def test_lost_publication_ack_recovery_never_repeats_dump_or_restore(self):
+        s=self.scenario('after:PHASE_PUBLISHED')
+        with self.assertRaises(m.Stop):s.invoke()
+        canonical=Path(s.plan['canonical']);self.assertTrue(canonical.exists());before=(canonical/'database-backup-receipt.json').read_bytes()
+        dumps=len([a for a in s.calls if m.SOURCE_DUMP.replace(' --no-owner --no-acl','') in a])
+        restores=len([a for a in s.privcalls if 'pg_restore' in a]);s.fault=None
+        s.invoke(reconcile=True)
+        self.assertEqual(before,(canonical/'database-backup-receipt.json').read_bytes())
+        self.assertEqual(dumps,len([a for a in s.calls if m.SOURCE_DUMP.replace(' --no-owner --no-acl','') in a]))
+        self.assertEqual(restores,len([a for a in s.privcalls if 'pg_restore' in a]))
+        self.assertIsNotNone(s.journal().find('RECONCILED'))
+
+    def test_terminal_after_app_change_is_offline_and_rejects_boundary_config_and_receipt_drift(self):
+        s=self.scenario();s.invoke();canonical=Path(s.plan['canonical'])
+        raw=m.encoded(s.op);read=s.read
+        with ExitStack() as stack:
+            for name,val in [('ROOT',s.root),('REQUEST',s.request)]:stack.enter_context(patch.object(m,name,val))
+            for name,fn in [('read_secure',read),('secure',lambda path,*a,**k:Path(path).lstat()),
+                ('notification_terminal_tool_custody',lambda op:b'installed'),('namespace_terminal',lambda *a:None),
+                ('namespace_require_no_unit_file',lambda *a:None),('namespace_slice_terminal',lambda *a:None),
+                ('namespace_unit',lambda *a:{'LoadState':'not-found','ActiveState':'inactive','MainPID':'0','ControlGroup':''})]:
+                stack.enter_context(patch.object(m,name,side_effect=fn))
+            for name in ('tool_custody','notification_source','join_post105_baseline','notification_preimage','service'):
+                stack.enter_context(patch.object(m,name,side_effect=AssertionError('forward/live read forbidden')))
+            terminal=m.notification_backup_reference(s.op,raw,'2'*64)
+            self.assertEqual(terminal['schema'],'PHUB_TIMEWEB_JOIN_POST105_BACKUP_TERMINAL_V1')
+            self.assertEqual(terminal['sourceLedgerSha256'],m.JOIN_POST105_LEDGER)
+            for path in (Path(s.plan['work'])/'boundary.json',canonical/'backup-operation.json',canonical/'database.pgcustom'):
+                before=path.read_bytes();path.write_bytes(b'{}')
+                with self.subTest(path=path.name),self.assertRaises(m.Stop):m.notification_backup_reference(s.op,raw,'2'*64)
+                path.write_bytes(before)
+            journal=s.journal();original=copy.deepcopy(journal.events)
+            for phase in ('SOURCE_AUTHORITY_VERIFIED','SECURITY_RESTORE_VERIFIED','RESTORE_VERIFIED','STORAGE_CLEANUP_VERIFIED','PUBLISHED','RECONCILED'):
+                journal.events=[v for v in copy.deepcopy(original) if v['phase']!=phase]
+                with patch.object(m,'DiskJournal',return_value=journal):
+                    with self.subTest(phase=phase),self.assertRaises(m.Stop):m.notification_backup_reference(s.op,raw,'2'*64)
+            journal.events=copy.deepcopy(original)
+            journal.find('SOURCE_AUTHORITY_VERIFIED')['baselineAdmissionSha256']='f'*64
+            with patch.object(m,'DiskJournal',return_value=journal):
+                with self.assertRaises(m.Stop):m.notification_backup_reference(s.op,raw,'2'*64)
+            s.config=m.encoded({**json.loads(s.config),'owner':'changed'})
+            with self.assertRaisesRegex(m.Stop,'CONTROLLER'):m.notification_backup_reference(s.op,raw,'2'*64)
 
 
 class NotificationEarlyExitRecoveryTests(unittest.TestCase):
@@ -2634,6 +2837,345 @@ class CurrentWebBackupTests(unittest.TestCase):
             with patch.object(m,'command',side_effect=bad),patch.object(m,'secure',return_value=info):
                 with self.assertRaises(m.Stop):m.web8158_source(OP_WEB8158)
             if failure in ('dirty','wrong-head'):self.assertFalse(any(a[0]=='/usr/bin/node' for a,k in calls))
+
+
+class Pre105RetirementContainerTests(unittest.TestCase):
+    def fixture(self):
+        ids=['171d1f4502062c18989dea8b848992af4db19cab64a4026da0505d0db76375b8',
+             '282a39825fb79107fa28b2a6bcdea8308676c78c6f196ae20982a7a82b33884c']
+        rows=[{'Id':i,'Image':'sha256:'+str(n+1)*64,
+               'Config':{'Image':'registry.invalid/migrator@sha256:'+str(n+1)*64,
+                         'Labels':{'com.docker.compose.service':'migrator'}},
+               'RestartCount':0,'State':{'Status':'exited','StartedAt':'2026-01-01T00:00:00Z',
+                                        'Health':{'Status':None}}}for n,i in enumerate(ids)]
+        states={i:{'Id':i,'Status':'exited','Running':False,'ExitCode':0,'Dead':False,
+                   'Restarting':False,'Paused':False,'Pid':0}for i in ids}
+        baseline=m.digest(m.encoded(rows));calls=[];sample=[0]
+        def docker(args):
+            calls.append(args)
+            if args==['ps','-aq','--no-trunc']:
+                sample[0]+=1
+                return ('\n'.join(r['Id']for r in rows)+'\n').encode()
+            if args[0]=='ps':
+                if 'name=^/phub-timeweb-migration-4e8280deb8a1-39931088343-1$'in args:return b''
+                if args[1]=='-q':return b''
+                return ('\n'.join(ids)+'\n').encode()
+            if args[0]=='inspect':
+                if args[2]==m.INSPECT_FORMAT:return m.encoded(next(r for r in rows if r['Id']==args[-1]))
+                return m.encoded(states[args[-1]])
+            raise AssertionError(args)
+        return ids,rows,states,{'expectedBoundarySha256':baseline},docker,calls,sample
+
+    def test_exact_retained_successful_migrators_are_read_only_and_stable(self):
+        ids,rows,states,op,docker,calls,sample=self.fixture()
+        with patch.object(m,'docker',side_effect=docker),patch.object(m,'pre105_retirement_seal',side_effect=AssertionError('write')),\
+             patch.object(m,'atomic_exclusive',side_effect=AssertionError('write')),patch.object(Path,'unlink',side_effect=AssertionError('unlink')):
+            self.assertEqual(m.pre105_retirement_containers(op),rows)
+        self.assertEqual(sample[0],2)
+        self.assertEqual(sum(a[0]=='inspect'and a[2]!=m.INSPECT_FORMAT for a in calls),4)
+
+    def test_candidate_or_foreign_or_drift_or_unsafe_state_stops_before_write(self):
+        variants=['candidate','running-filter','foreign','disappeared','duplicate','malformed','label-filter',
+                  'image','label','started','restart-count','state-status','running','dead','restarting','paused',
+                  'pid','exit-code','exit-bool','inspect-id','second-state','second-membership','second-candidate',
+                  'second-running','second-image']
+        for variant in variants:
+            ids,rows,states,op,original,calls,sample=self.fixture()
+            if variant=='image':rows[0]['Image']='sha256:'+'f'*64
+            if variant=='label':rows[0]['Config']['Labels']={}
+            if variant=='started':rows[0]['State']['StartedAt']='changed'
+            if variant=='restart-count':rows[0]['RestartCount']=1
+            if variant=='state-status':states[ids[0]]['Status']='created'
+            if variant in ['running','dead','restarting','paused']:states[ids[0]][variant.capitalize()]=True
+            if variant=='pid':states[ids[0]]['Pid']=42
+            if variant=='exit-code':states[ids[0]]['ExitCode']=1
+            if variant=='exit-bool':states[ids[0]]['ExitCode']=False
+            if variant=='inspect-id':states[ids[0]]['Id']='f'*64
+            def docker(args):
+                candidate=args[0]=='ps'and any(a.startswith('name=')for a in args)
+                label=args[0]=='ps'and 'label=com.docker.compose.service=migrator'in args
+                if candidate and(variant=='candidate'or variant=='second-candidate'and sample[0]>=1):return (ids[0]+'\n').encode()
+                if label and args[1]=='-q'and(variant=='running-filter'or variant=='second-running'and sample[0]>=2):return(ids[0]+'\n').encode()
+                if args==['ps','-aq','--no-trunc']:
+                    if variant in ['foreign','duplicate','malformed','disappeared']:
+                        return ('\n'.join(ids+(['f'*64]if variant=='foreign'else[ids[0]]if variant=='duplicate'else['bad'])
+                                              if variant!='disappeared'else ids[:1])+'\n').encode()
+                    if variant=='second-membership'and sample[0]>=1:return(ids[0]+'\n').encode()
+                if label and args[1]=='-aq'and variant=='label-filter':return b''
+                if variant=='foreign'and args[0]=='inspect'and args[-1]=='f'*64:
+                    return m.encoded({**rows[0],'Id':'f'*64})
+                if args[0]=='inspect'and sample[0]>=2:
+                    if variant=='second-state'and args[2]!=m.INSPECT_FORMAT:return m.encoded({**states[args[-1]],'Running':True})
+                    if variant=='second-image'and args[2]==m.INSPECT_FORMAT:return m.encoded({**rows[0],'Image':'changed'})
+                return original(args)
+            with self.subTest(variant=variant),patch.object(m,'docker',side_effect=docker),\
+                 patch.object(m,'pre105_retirement_seal',side_effect=AssertionError('write')),\
+                 patch.object(m,'atomic_exclusive',side_effect=AssertionError('write')),\
+                 patch.object(Path,'unlink',side_effect=AssertionError('unlink')):
+                with self.assertRaises(m.Stop):m.pre105_retirement_containers(op)
+
+
+class Pre105RetirementTests(unittest.TestCase):
+    """Real metadata state machine/syscalls; source/DB/kernel proof is synthetic."""
+    def fixture(self):
+        temporary=tempfile.TemporaryDirectory(prefix='phub-pre105-retire-');self.addCleanup(temporary.cleanup)
+        root=Path(temporary.name);(root/'operator').mkdir(mode=0o700);(root/'standard').mkdir(mode=0o700)
+        raw=b'original synthetic backup request';migration=b'original synthetic migration request'
+        value={'schema':'PHUB_NOTIFICATION_PRE105_RETIREMENT_V1','target':m.TARGET,'toolCommit':'a'*40,
+            'toolFileSha256':'b'*64,'toolProofSha256':'c'*64,'toolInstallationSha256':'d'*64,
+            'controllerSourceCiRunId':'123','backupOperationSha256':m.PRE105_RETIRED_BACKUP,
+            'migrationOperationSha256':m.PRE105_RETIRED_MIGRATION,'dryRunSha256':None,
+            'expiresAt':m.now_iso(),'confirmation':'RETIRE_EXPIRED_UNADMITTED_4E_KEEP_7CC_CANONICAL_BACKUP'}
+        packet={'canonicalIdentities':{'dump':[1,2,3]},'ledger':'102','canonicalBackupRetained':True}
+        value['dryRunSha256']=m.digest(m.encoded(packet));value['expiresAt']=m.datetime.datetime.fromtimestamp(time.time()+2400,m.datetime.timezone.utc).isoformat(timespec='milliseconds').replace('+00:00','Z')
+        request_bytes=m.encoded(value)
+        for p,b in [(root/'operator/database-backup-restore.json',raw),(root/'operator/api-worker-migration.json',migration),
+                    (root/'operator/notification-pre105-retirement.json',request_bytes)]:p.write_bytes(b);p.chmod(0o600)
+        original_identity=ORIGINAL_FILE_IDENTITY
+        def root_identity(info):
+            row=list(original_identity(info));row[2:4]=[0,0];return tuple(row)
+        for item in [patch.object(m,'identity',side_effect=root_identity),patch.object(m,'ROOT',root),patch.object(m,'REQUEST',root/'operator/database-backup-restore.json'),
+                     patch.object(m,'secure',side_effect=lambda p,*a,**k:Path(p).lstat()),
+                     patch.object(m,'pre105_retirement_probe',return_value=(raw,migration,packet)),
+                     patch.object(m,'rename_noreplace',side_effect=lambda a,b:os.rename(a,b))]:
+            item.start();self.addCleanup(item.stop)
+        return root,raw,migration,packet,request_bytes
+
+    def run_transition(self,f,fail=None):
+        counts={};original_fsync=os.fsync;original_rename=m.rename_noreplace;original_unlink=Path.unlink;original_mkdir=Path.mkdir;original_write=os.write
+        def hit(name):
+            counts[name]=counts.get(name,0)+1
+            if fail==(name,counts[name]):raise RuntimeError('ACK_LOST')
+        def fsync(fd):original_fsync(fd);hit('fsync')
+        def rename(a,b):original_rename(a,b);hit('rename')
+        def unlink(p,*a,**k):original_unlink(p,*a,**k);hit('unlink')
+        def mkdir(p,*a,**k):original_mkdir(p,*a,**k);hit('mkdir')
+        def write(fd,b):n=original_write(fd,b[:max(1,len(b)//2)]);hit('write');return n
+        with patch.object(m.os,'fsync',side_effect=fsync),patch.object(m,'rename_noreplace',side_effect=rename),\
+             patch.object(m.Path,'unlink',new=unlink),patch.object(m.Path,'mkdir',new=mkdir),patch.object(m.os,'write',side_effect=write):
+            result=m.pre105_retirement_transition(*f[1:],execute=True)
+        return result,counts
+
+    def test_each_write_fsync_mkdir_rename_unlink_ack_resumes_only_owned_prefix(self):
+        f=self.fixture();result,counts=self.run_transition(f)
+        self.assertEqual(result['status'],'PRE_ADMISSION_EXPIRED_RETIRED');self.assertFalse(result['databaseMutated'])
+        # Reuse the same fixture root with all root patches unwound per subtest.
+        for name,count in counts.items():
+            for point in range(1,count+1):
+                with self.subTest(syscall=name,point=point):
+                    f=self.fixture()
+                    with self.assertRaisesRegex(RuntimeError,'ACK_LOST'):self.run_transition(f,(name,point))
+                    resumed,_=self.run_transition(f);again,_=self.run_transition(f)
+                    self.assertEqual(resumed,again);self.assertEqual(resumed['status'],'PRE_ADMISSION_EXPIRED_RETIRED')
+                    self.assertFalse((f[0]/'operator/database-backup-restore.json').exists())
+                    self.assertFalse((f[0]/'operator/api-worker-migration.json').exists())
+                    _,archive,_=m.pre105_retirement_paths()
+                    self.assertEqual((archive/'backup-request.json').read_bytes(),f[1]);self.assertEqual((archive/'migration-request.json').read_bytes(),f[2])
+        print('PRE105_RETIREMENT_ACK_WINDOWS_PASS',sum(counts.values()),counts)
+
+    def test_readonly_plan_and_every_request_field_fail_closed(self):
+        f=self.fixture();before=sorted(p.name for p in (f[0]/'operator').iterdir())
+        result=m.pre105_retirement_transition(*f[1:],execute=False)
+        self.assertEqual(result['status'],'READONLY_PRE_ADMISSION_EXPIRED_RETIREMENT')
+        self.assertEqual(sorted(p.name for p in (f[0]/'operator').iterdir()),before)
+        value=m.strict(f[4])
+        for key in value:
+            bad=dict(value);del bad[key]
+            with self.subTest(key=key),self.assertRaises(m.Stop):m.pre105_retirement_request(bad)
+        for key,val in [('schema','OTHER'),('backupOperationSha256','1'*64),('migrationOperationSha256','1'*64),
+                        ('toolCommit',m.PRE105_RETIRED_SOURCE),('controllerSourceCiRunId','main'),('confirmation','OVERWRITE')]:
+            with self.subTest(key=key),self.assertRaises(m.Stop):m.pre105_retirement_request({**value,key:val})
+
+    def test_foreign_partial_archive_unproven_absence_and_terminal_reappearance_stop(self):
+        for variant in ['foreign-incoming','foreign-empty-incoming','foreign-empty-archive','foreign-ready','foreign-ready-incoming','absent-migration','absent-backup','expired','proof-drift','foreign-archive','reappeared']:
+            f=self.fixture();request,archive,preparation=m.pre105_retirement_paths()
+            if variant=='foreign-ready':preparation.with_name(preparation.name+'.archive-ready.json').write_bytes(b'foreign')
+            if variant=='foreign-ready-incoming':preparation.with_name(preparation.name+'.archive-ready.json.incoming').write_bytes(b'foreign')
+            if variant=='foreign-empty-incoming':archive.with_name(archive.name+'.incoming').mkdir()
+            if variant=='foreign-empty-archive':archive.mkdir()
+            if variant=='foreign-incoming':preparation.with_name(preparation.name+'.incoming').write_bytes(b'foreign')
+            if variant=='absent-migration':(f[0]/'operator/api-worker-migration.json').unlink()
+            if variant=='absent-backup':m.REQUEST.unlink()
+            if variant=='expired':
+                value=m.strict(f[4]);value['expiresAt']='2026-01-01T00:00:00.000Z';f=(*f[:4],m.encoded(value));request.write_bytes(f[4])
+            if variant=='proof-drift':f=(*f[:3],{'ledger':'103'},f[4])
+            if variant=='foreign-archive':archive.mkdir();(archive/'foreign').write_bytes(b'unknown')
+            if variant=='reappeared':self.run_transition(f);m.REQUEST.write_bytes(f[1])
+            if variant in ['foreign-empty-incoming','foreign-empty-archive','foreign-ready','foreign-ready-incoming','foreign-incoming']:
+                with self.subTest(readonly=variant),self.assertRaises(m.Stop):m.pre105_retirement_transition(*f[1:],execute=False)
+            with self.subTest(variant=variant),self.assertRaises(m.Stop):self.run_transition(f)
+            if variant!='reappeared':self.assertFalse((archive/'receipt.json').exists())
+
+    def test_existing_lock_descriptors_reject_missing_and_replacement_after_flock(self):
+        import fcntl
+        f=self.fixture();root=f[0]
+        with self.assertRaises(FileNotFoundError):
+            with m.pre105_retirement_locks():pass
+        for name in ['database-backup-disk-process.lock','api-worker-executor.lock']:
+            path=root/'standard'/name;path.write_bytes(b'');path.chmod(0o600)
+        real=fcntl.flock
+        def replace(fd,flags):
+            real(fd,flags);path=root/'standard/database-backup-disk-process.lock'
+            path.rename(path.with_name(path.name+'.preserved'));path.write_bytes(b'new')
+        with patch.object(fcntl,'flock',side_effect=replace),self.assertRaisesRegex(m.Stop,'RETIREMENT_LOCK'):
+            with m.pre105_retirement_locks():pass
+
+
+class PostCleanupLostAck(Exception):pass
+class PostCleanupCase:
+ def __init__(self):
+  self.tmp=tempfile.TemporaryDirectory(prefix='7cc-tail-test-',dir=tempfile.gettempdir());self.root=Path(self.tmp.name);self.work=self.root/'backups'/('.disk-restore-'+m.digest(m.encoded({'schema':m.NOTIFICATION_PRE105_SCHEMA})));self.work.mkdir(mode=0o700,parents=True);self.pub=self.work/'publication';self.pub.mkdir(mode=0o700);self.lock=self.root/'active';self.lock.mkdir(mode=0o700);self.cg=self.root/'service-cgroup';self.cg.mkdir();self.op={'schema':m.NOTIFICATION_PRE105_SCHEMA};self.raw=m.encoded(self.op);self.sha=m.digest(self.raw);self.unit=True;self.slice=True;self.foreign=False;self.count={};self.fail=None;self.stack=ExitStack()
+  self.plan={'operationSha256':self.sha,'work':str(self.work),'canonical':str(self.root/'canonical'),'publication':str(self.pub),'image':str(self.root/'image'),'mount':str(self.root/'mount'),'mapperPath':str(self.root/'mapper'),'pendingLock':str(self.root/'never-created-pending-lock'),'expectedLedgerSha256':m.API_WORKER_LEDGER_SHA256,'isolation':{'unit':'owned.service','slice':'owned.slice'}}
+  self.admission={'supervisor':{'process':{'pid':885000000},'bounds':{'path':str(self.cg)}}}
+  for p,b in [(self.work/'backup-operation.json',self.raw),(self.work/'disk-plan.json',m.encoded(self.plan)),(self.pub/'backup-operation.json',self.raw),(self.pub/'preimage-proof.json',b'{}'),(self.pub/'database.pgcustom',b'IMMUTABLE SYNTHETIC DUMP'),(self.lock/'backup-restore.json',b'owned')]:p.write_bytes(b);p.chmod(0o600)
+  self.dumpSha=m.digest((self.pub/'database.pgcustom').read_bytes());r={'backupFile':str(Path(self.plan['canonical'])/'database.pgcustom'),'backupSha256':self.dumpSha,'sourceLedgerSha256':m.API_WORKER_LEDGER_SHA256,'restoredLedgerSha256':m.API_WORKER_LEDGER_SHA256,'preimageSha256':m.digest(b'{}')};self.receipt=m.encoded(r);(self.pub/'database-backup-receipt.json').write_bytes(self.receipt);(self.pub/'database-backup-receipt.json').chmod(0o600)
+  def secure(p,kind='file',mode=None):
+   p=Path(p);s=p.lstat();m.need(not p.is_symlink()and s.st_uid==os.getuid()and s.st_nlink>=1,'FIXTURE_CUSTODY');m.need(stat.S_ISDIR(s.st_mode)if kind=='dir'else stat.S_ISREG(s.st_mode),'FIXTURE_TYPE');m.need(mode is None or stat.S_IMODE(s.st_mode)==mode,'FIXTURE_MODE');return s
+  self.stack.enter_context(patch.object(m,'secure',side_effect=secure));self.stack.enter_context(patch.object(m,'LOCK',self.lock));self.stack.enter_context(patch.object(m,'ROOT',self.root))
+  # Kernel/syscall fixtures only; actual release, journal, publication, unlock and reconciliation execute.
+  original_stat=os.stat
+  def osstat(p,*a,**k):return SimpleNamespace(st_ino=1)if str(p)=='/proc/self/ns/mnt'else original_stat(p,*a,**k)
+  self.stack.enter_context(patch.object(m.os,'stat',side_effect=osstat))
+  for name,value in [('namespace_alias_restored',None),('namespace_mask_restored',None),('namespace_runtime_mounts_empty',None),('namespace_alias_baseline',{'alias':True}),('namespace_mask_source_baseline',None),('namespace_daemon_absent',None)]:self.stack.enter_context(patch.object(m,name,return_value=value))
+  self.stack.enter_context(patch.object(m,'namespace_frozen_source',return_value={'mountNamespace':1}))
+  self.stack.enter_context(patch.object(m,'namespace_admission',side_effect=lambda *a:self.admission))
+  self.stack.enter_context(patch.object(m,'namespace_members',side_effect=lambda *a:([885000000,999]if self.foreign else[885000000])if self.unit else[]))
+  self.stack.enter_context(patch.object(m,'namespace_unit',side_effect=lambda p:{'ActiveState':'active'if self.unit else'inactive','LoadState':'loaded'if self.unit else'not-found','MainPID':'885000000'if self.unit else'0'}))
+  self.stack.enter_context(patch.object(m,'namespace_show',side_effect=lambda *a:{'ActiveState':'active'if self.slice else'inactive'}));self.stack.enter_context(patch.object(m,'namespace_slice',return_value={'exact':True}))
+  def slice_terminal(*a):m.need(not self.slice and not self.unit,'SLICE_NOT_TERMINAL')
+  self.stack.enter_context(patch.object(m,'namespace_slice_terminal',side_effect=slice_terminal));self.stack.enter_context(patch.object(m,'disk_loop',return_value=None))
+  def command(args,*a,**k):
+   assert args[:2]==['/usr/bin/systemctl','stop'];self.hit('stop_before')
+   if args[2]=='owned.service':self.unit=False;self.cg.rmdir()
+   elif args[2]=='owned.slice':self.slice=False
+   else:raise AssertionError('foreign stop')
+   self.hit('stop_after');return b''
+  self.stack.enter_context(patch.object(m,'command',side_effect=command))
+  self.stack.enter_context(patch.object(m,'disk_prerequisites'));self.stack.enter_context(patch.object(m,'namespace_validate_plan',side_effect=lambda op,raw,plan:plan));self.stack.enter_context(patch.object(m,'disk_context',side_effect=lambda *a,**k:(self.guard,self.owned)))
+  def initial_rename(a,b):m.need(not os.path.lexists(b),'NOREPLACE');os.rename(a,b);m.sync_directory(Path(a).parent)
+  self.stack.enter_context(patch.object(m,'rename_noreplace',side_effect=initial_rename))
+  self.j=m.DiskJournal(self.work,self.sha)
+  for phase,meta in [('LOCK_PREPARED',{}),('NAMESPACE_SLICE_START_INTENT',{}),('NAMESPACE_SLICE_READY',{'identity':{'exact':True}}),('NAMESPACE_UNIT_START_INTENT',{}),('NAMESPACE_READY',{'receipt':self.admission}),('ALIAS_BASELINE',{'identity':{'alias':True}}),('CONTAINERD_MASK_BASELINE',{'identity':{'mask':True}}),('CONTAINERD_MASK_INTENT',{}),('CONTAINERD_MASK_UNMOUNTED',{}),('ALIAS_MOUNT_INTENT',{}),('ALIAS_UNMOUNTED',{}),('DAEMON_START_INTENT',{}),('DAEMON_STOPPED',{'identity':{'original':True}}),('RESTORE_CREATED',{'containerId':'original'}),('CONTAINER_REMOVE_INTENT',{}),('CONTAINER_REMOVED',{'containerId':'original'}),('RESTORE_VERIFIED',{}),('PUBLISH_READY',{'receiptSha256':m.digest(self.receipt),'dumpSha256':self.dumpSha}),('NAMESPACE_STORAGE_CLEANED',{})]:self.j.add(phase,**meta)
+  self.initial=(self.work/'backup-operation.json').read_bytes();self.baseCount=len(self.j.events)
+ def hit(self,key):
+  self.count[key]=self.count.get(key,0)+1
+  if self.fail==(key,self.count[key]):raise PostCleanupLostAck(self.fail)
+ def owned(self,optional=False):
+  j=m.DiskJournal(self.work,self.sha)
+  if not self.lock.exists():m.need(optional and j.find('UNLOCK_INTENT')is not None,'LOCK_MISSING');return False
+  marker=self.lock/'backup-restore.json';m.need((marker.exists()and marker.read_bytes()==b'owned')or(j.find('UNLOCK_INTENT')is not None and not list(self.lock.iterdir())),'LOCK_DRIFT');return True
+ def guard(self,**kwargs):
+  assert(self.work/'backup-operation.json').read_bytes()==self.initial;self.owned(kwargs.get('optional_lock',False))
+ def run(self,kind='compat',fail=None):
+  self.count={};self.fail=fail;realfsync=os.fsync;realrename=os.rename;realunlink=Path.unlink;realrmdir=Path.rmdir
+  def fsync(fd):realfsync(fd);self.hit('fsync')
+  def rename(a,b):m.need(not os.path.lexists(b),'NOREPLACE');realrename(a,b);self.hit('rename');m.sync_directory(Path(a).parent)
+  def unlink(p,*a,**k):r=realunlink(p,*a,**k);self.hit('unlink');return r
+  def rmdir(p,*a,**k):r=realrmdir(p,*a,**k);self.hit('rmdir');return r
+  with patch.object(m.os,'fsync',side_effect=fsync),patch.object(m,'rename_noreplace',side_effect=rename),patch.object(Path,'unlink',new=unlink),patch.object(Path,'rmdir',new=rmdir):
+   j=m.DiskJournal(self.work,self.sha)
+   m.reconcile_namespace(self.op,self.raw,'fixture-tool')
+  return dict(self.count)
+ def check(self):
+  j=m.DiskJournal(self.work,self.sha);assert j.find('RECONCILED')is not None;assert not self.lock.exists()and not self.unit and not self.slice
+  canonical=Path(self.plan['canonical']);assert m.digest((canonical/'database.pgcustom').read_bytes())==self.dumpSha;assert(canonical/'backup-operation.json').read_bytes()==self.raw;assert(self.work/'backup-operation.json').read_bytes()==self.initial
+ def close(self):self.stack.close();self.tmp.cleanup()
+
+class PostCleanupReleaseTests(unittest.TestCase):
+ def test_canonical_tail_and_each_ack_boundary_without_reentering_removed_alias(self):
+  c=PostCleanupCase()
+  try:
+   with patch.object(m,'namespace_enter',side_effect=AssertionError('ALIAS_REENTRY_FORBIDDEN')):
+    counts=c.run();c.check()
+  finally:c.close()
+  resumed=0;owned=0
+  for name,total in counts.items():
+   for point in range(1,total+1):
+    with self.subTest(syscall=name,point=point):
+     c=PostCleanupCase()
+     try:
+      with self.assertRaises(PostCleanupLostAck):c.run(fail=(name,point))
+      j=m.DiskJournal(c.work,c.sha)
+      if j.find('NAMESPACE_RELEASE_INTENT') is not None:
+       c.run();c.check();c.run();c.check();resumed+=1
+      else:
+       # Existing journal protocol retains uncertain pre-intent temporary files.
+       self.assertTrue(c.lock.exists() and c.unit and c.slice);owned+=1
+     finally:c.close()
+  print('POST_CLEANUP_CANONICAL_ACK_WINDOWS_PASS',sum(counts.values()),resumed,owned)
+ def test_missing_admission_storage_foreign_member_or_unfinished_cleanup_cannot_release(self):
+  for variant in ['ready','storage','foreign','daemon','alias']:
+   c=PostCleanupCase()
+   try:
+    j=m.DiskJournal(c.work,c.sha)
+    if variant=='ready':j.events=[e for e in j.events if e['phase']!='NAMESPACE_READY']
+    if variant=='daemon':j.events=[e for e in j.events if e['phase']!='DAEMON_STOPPED']
+    if variant=='alias':j.events=[e for e in j.events if e['phase']!='ALIAS_UNMOUNTED']
+    if variant=='storage':Path(c.plan['image']).write_bytes(b'foreign')
+    if variant=='foreign':c.foreign=True
+    with self.subTest(variant=variant),self.assertRaises(m.Stop):
+     m.namespace_postcleanup_attest(c.plan,c.op,j)
+     m.namespace_release(c.plan,c.op,j)
+    self.assertTrue(c.lock.exists() and c.unit and c.slice)
+   finally:c.close()
+
+
+class Pre105RetiredCustodyTests(unittest.TestCase):
+    fixture=Pre105RetirementTests.fixture
+    run_transition=Pre105RetirementTests.run_transition
+
+    def terminal(self):
+        root,raw,migration,_,request=self.fixture()
+        raw=m.encoded({'synthetic':'original backup operation'})
+        (root/'operator/database-backup-restore.json').write_bytes(raw)
+        canonical=root/'backups'/(m.PRE105_RETIRED_SOURCE+'-39927484426-1-notification-pre105');canonical.mkdir(parents=True,mode=0o700)
+        dump=b'isolated synthetic canonical dump';preimage=b'synthetic full-owner ACL preimage'
+        backup_receipt=m.encoded({'backupSha256':m.digest(dump)})
+        for name,data in [('backup-operation.json',raw),('preimage-proof.json',preimage),
+                          ('database-backup-receipt.json',backup_receipt),('database.pgcustom',dump)]:
+            path=canonical/name;path.write_bytes(data);path.chmod(0o600)
+        for name,value in [('PRE105_RETIRED_BACKUP',m.digest(raw)),('PRE105_RETIRED_MIGRATION',m.digest(migration)),
+                           ('PRE105_RETIRED_PREIMAGE',m.digest(preimage)),('PRE105_RETIRED_RECEIPT',m.digest(backup_receipt))]:
+            item=patch.object(m,name,value);item.start();self.addCleanup(item.stop)
+        packet={'backupOperationSha256':m.PRE105_RETIRED_BACKUP,'migrationOperationSha256':m.PRE105_RETIRED_MIGRATION,
+                'canonicalPath':str(canonical),'canonicalIdentities':{p.name:list(m.identity(p.lstat())) for p in canonical.iterdir()},
+                'preimageSha256':m.PRE105_RETIRED_PREIMAGE,'ledgerSha256':m.API_WORKER_LEDGER_SHA256}
+        value=m.strict(request);value.update(backupOperationSha256=m.PRE105_RETIRED_BACKUP,
+            migrationOperationSha256=m.PRE105_RETIRED_MIGRATION,dryRunSha256=m.digest(m.encoded(packet)))
+        request=m.encoded(value);(root/'operator/notification-pre105-retirement.json').write_bytes(request)
+        for item in [patch.object(m,'pre105_retirement_probe',return_value=(raw,migration,packet)),patch.object(m,'_tool_custody_local')]:
+            item.start();self.addCleanup(item.stop)
+        self.run_transition((root,raw,migration,packet,request))
+        return value,canonical,m.pre105_retirement_paths()[1]
+
+    def test_offline_canonical_attest_after_enrollment_never_queries_old_source_or_writes(self):
+        value,canonical,archive=self.terminal()
+        with patch.object(m,'notification_early_source',side_effect=AssertionError('old source no longer enrolled')),\
+             patch.object(m,'pre105_retirement_seal',side_effect=AssertionError('read-only')),\
+             patch.object(m.Path,'read_text',return_value='different-host-boot'):
+            proof=m.pre105_retired_backup_attest(value)
+            self.assertEqual(proof['status'],'RETIRED_CANONICAL_BACKUP_VERIFIED')
+            self.assertFalse(proof['databaseMutated']);self.assertTrue((canonical/'database.pgcustom').exists())
+
+    def test_terminal_extra_members_unlink_schema_identity_and_member_hash_drift_reject(self):
+        for variant in ['foreign','incoming','missing-identity','extra-field','forged-identity','member-hash','canonical-drift']:
+            value,canonical,archive=self.terminal()
+            if variant in ['foreign','incoming']:(archive/('foreign' if variant=='foreign' else 'receipt.json.incoming')).write_bytes(b'unknown')
+            if variant in ['missing-identity','extra-field','forged-identity','member-hash']:
+                intent=archive/'migration-unlink-intent.json';entry=m.strict(intent.read_bytes())
+                if variant=='missing-identity':del entry['identity']
+                if variant=='extra-field':entry['unknown']=True
+                if variant=='forged-identity':entry['identity']=[1,2]
+                if variant=='member-hash':entry['identity'][0]+=1
+                for name in ['migration-unlink-intent.json','migration-unlinked.json']:(archive/name).write_bytes(m.encoded(entry))
+                # Even rehashed foreign entry schemas/identities must be rejected independently.
+                if variant!='member-hash':
+                    receipt=m.strict((archive/'receipt.json').read_bytes())
+                    for name in ['migration-unlink-intent.json','migration-unlinked.json']:receipt['memberSha256'][name]=m.digest((archive/name).read_bytes())
+                    (archive/'receipt.json').write_bytes(m.encoded(receipt))
+            if variant=='canonical-drift':(canonical/'database.pgcustom').write_bytes(b'changed')
+            with self.subTest(variant=variant),self.assertRaises(m.Stop):m.pre105_retired_backup_attest(value)
+
 
 if __name__=='__main__':
     if len(sys.argv)==2 and sys.argv[1]=='--emit-namespace-fixture':
