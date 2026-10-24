@@ -1427,6 +1427,22 @@ Prerequisites are deliberately strict:
   blob, mode, status or object-type change still stop. This bridge applies to both the
   candidate/controller tail and the anchor/terminal-notification tail. It supplies no migration,
   enrollment or deployment authority and does not adopt any unverified runtime or backup.
+- PR469's Zod security/runtime patch has a separate closed fourteen-blob compatibility group:
+  eleven exact Zod 4.6.7 workspace pins, their root lock, the rebuilt trusted-inventory runtime and
+  the gift-catalog bounded-input regression. These paths stay outside `JOIN_CONTROLLER_FILES`.
+  The group is admitted only with held Git context from anchor `518be74e95b1f00f0d04671b343318143a759e9c`
+  to merged source `cccae751ad4134382b2e350db30e93e47099209d` / tree
+  `0403f08abcefdce80b7d9974e630238de6ac8eb0`. Every path must occur exactly once with the pinned
+  old/new blob OIDs and `M/100644/blob` metadata. Missing/duplicate peers, any later source/tree,
+  reverse transitions or changed bytes/status/type/mode fail closed. The two-file PR468 bridge
+  remains independently atomic. The candidate-to-controller call supplies no runtime-source
+  context and cannot consume the fourteen-file dependency/runtime exception. Only the
+  anchor-to-candidate and anchor-to-terminal-notification checks supply context derived from
+  held Git objects. This is adoption of one reviewed runtime security patch, not a generic
+  dependency allowlist or a new runtime anchor. Full green main CI, deterministic generated-bundle
+  rebuild/direct-execution denial and one canonical five-image publication for that exact source
+  remain required. This bridge grants no publication, enrollment, migration, secret or deployment
+  authority and cannot substitute earlier notification or POST105 receipts.
 - A terminal `RECONCILED/SUCCESS` notification-0105 baseline. Hash the eight exact files
   `operation`, `plan`, `capsule`, `receipt`, `observation`, `descriptor`, `apiIdentity` and
   `workerIdentity` as done by `validateJoinNotificationBinding`; the operation binds the resulting

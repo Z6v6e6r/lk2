@@ -47,6 +47,70 @@ const NOTIFICATION_RECOVERY_BRIDGE = {
     newOid: '02465a0e0f2812efc547380729405199fda5e3f1',
   },
 };
+// Exact PR469 Zod security/runtime patch, admitted only on its reviewed source edge.
+// It never permits dependency/generated-runtime edits in a candidate-to-controller tail.
+const REVIEWED_ZOD_RUNTIME_SOURCE = {
+  sha: 'cccae751ad4134382b2e350db30e93e47099209d',
+  tree: '0403f08abcefdce80b7d9974e630238de6ac8eb0',
+};
+const REVIEWED_ZOD_RUNTIME_BRIDGE = {
+  'apps/worker/package.json': {
+    oldOid: '0713ea75761e408a553b72038b19b200c01bcdb5',
+    newOid: '843c95768cf781a086b093cb81b90a61e181bc31',
+  },
+  'deploy/jetson/generated/communities-staging-role-split-trusted-inventory-runtime.mjs': {
+    oldOid: '77626917f7e3d14fdf98261c4830f92cc3e2f5ee',
+    newOid: '2a17685b07e3edb05231ea54c4a02299e222ebb3',
+  },
+  'package-lock.json': {
+    oldOid: '0bf8807982a8c5c4e02d7b2f136453120864b266',
+    newOid: '58862c3cae7880baa6ce01ddb7f465f35657c7c1',
+  },
+  'packages/communities/package.json': {
+    oldOid: 'd05064a59f4a7feba05dc0711f49975fa6243841',
+    newOid: '9a36387717e180685751bb9289aa769758f2f800',
+  },
+  'packages/config/package.json': {
+    oldOid: '9ce686c459e2cea82e6071a679c02376f8bfde64',
+    newOid: '79ff9d592398708d8fef54f7599b1c69fef2babe',
+  },
+  'packages/database/package.json': {
+    oldOid: '767781051a168a9ffb2fda3247900ae68c823c3e',
+    newOid: 'cb23cdf6726c61216873b37075199c8c92ba0295',
+  },
+  'packages/games/package.json': {
+    oldOid: 'a08dcd0ebca2f0658f74ed993489ffecfb5d5e93',
+    newOid: '2e721fa3fda25af4c84fb5fb4e9234f5339baea5',
+  },
+  'packages/gift-certificates/package.json': {
+    oldOid: '888ff46e39a0311986abd59c312d2f73bba1cb8c',
+    newOid: 'b5b9fb8303c011af1b2bfc2759abe5adee803570',
+  },
+  'packages/gift-certificates/src/index.test.ts': {
+    oldOid: '6de05ac10c64c5ce273f8780791a10b6a97b7d45',
+    newOid: '7c250ed9cf5dd19cf91adaf6c0c8e941c87321cc',
+  },
+  'packages/home-projection/package.json': {
+    oldOid: '3c8ef371d668697efcab3d5e63e90d879d30f88a',
+    newOid: '9a18f1b9038bd45bed8f9733a2c42b16a00b7361',
+  },
+  'packages/locations/package.json': {
+    oldOid: '5be3a5c5641d72baeaa4ff1f7bbf344af962f275',
+    newOid: '279ac8da38f7e471c66b2eb345ae2165a8a72ec0',
+  },
+  'packages/notifications/package.json': {
+    oldOid: '66a16c381c834943d65ec525e5044518d1cf1347',
+    newOid: 'd62c82cf4e4bdb3ee32df96433ddc306124ffc07',
+  },
+  'packages/viva-adapter/package.json': {
+    oldOid: 'ecb541f37b4f80129fff730b07efe46993bf86f9',
+    newOid: 'f3f244a9b2a0f8061a403835352e2d2fc9ecbf6a',
+  },
+  'packages/viva-client-adapter/package.json': {
+    oldOid: 'bfff8e7926440fc76dafadc7a7e2caba96157fe5',
+    newOid: '0b3f670d0d6c2395b481adf987253d32616f062f',
+  },
+};
 export const JOIN_PHASES = [
   'PREPARING',
   'PREPARED',
@@ -162,28 +226,49 @@ export function validateJoinOperation(op, requireUnexpired = false, now = Date.n
     fail('CONFIRMATION');
   return op;
 }
-export function validateJoinRuntimeTail(entries) {
-  const bridge = entries.filter((e) => Object.hasOwn(NOTIFICATION_RECOVERY_BRIDGE, e.path));
+export function validateJoinRuntimeTail(entries, runtimeSource) {
+  if (runtimeSource !== undefined) {
+    exact(runtimeSource, ['fromSha', 'toSha', 'toTree']);
+    if (
+      runtimeSource.fromSha !== JOIN_RUNTIME_ANCHOR ||
+      !S.test(runtimeSource.toSha ?? '') ||
+      !S.test(runtimeSource.toTree ?? '')
+    )
+      fail('RUNTIME_TAIL');
+  }
+  const zod = entries.filter((e) => Object.hasOwn(REVIEWED_ZOD_RUNTIME_BRIDGE, e.path));
   if (
-    bridge.length &&
-    (bridge.length !== 2 ||
-      new Set(bridge.map((e) => e.path)).size !== 2 ||
-      bridge.some((e) => {
-        const pin = NOTIFICATION_RECOVERY_BRIDGE[e.path];
-        return (
-          e.status !== 'M' ||
-          e.oldMode !== '100644' ||
-          e.newMode !== '100644' ||
-          e.oldType !== 'blob' ||
-          e.newType !== 'blob' ||
-          e.oldOid !== pin.oldOid ||
-          e.newOid !== pin.newOid
-        );
-      }))
+    zod.length &&
+    (!runtimeSource ||
+      runtimeSource.toSha !== REVIEWED_ZOD_RUNTIME_SOURCE.sha ||
+      runtimeSource.toTree !== REVIEWED_ZOD_RUNTIME_SOURCE.tree)
   )
     fail('RUNTIME_TAIL');
+  const bridges = [NOTIFICATION_RECOVERY_BRIDGE, REVIEWED_ZOD_RUNTIME_BRIDGE];
+  for (const pins of bridges) {
+    const bridge = entries.filter((e) => Object.hasOwn(pins, e.path));
+    const size = Object.keys(pins).length;
+    if (
+      bridge.length &&
+      (bridge.length !== size ||
+        new Set(bridge.map((e) => e.path)).size !== size ||
+        bridge.some((e) => {
+          const pin = pins[e.path];
+          return (
+            e.status !== 'M' ||
+            e.oldMode !== '100644' ||
+            e.newMode !== '100644' ||
+            e.oldType !== 'blob' ||
+            e.newType !== 'blob' ||
+            e.oldOid !== pin.oldOid ||
+            e.newOid !== pin.newOid
+          );
+        }))
+    )
+      fail('RUNTIME_TAIL');
+  }
   for (const e of entries) {
-    if (Object.hasOwn(NOTIFICATION_RECOVERY_BRIDGE, e.path)) continue;
+    if (bridges.some((pins) => Object.hasOwn(pins, e.path))) continue;
     if (
       !JOIN_CONTROLLER_FILES.has(e.path) ||
       !['A', 'M'].includes(e.status) ||
