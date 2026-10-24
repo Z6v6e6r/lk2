@@ -1599,6 +1599,18 @@ export class PadlHubApiClient {
     return this.request<GameCommandResult>(`/game-operations/${encodeURIComponent(operationId)}`);
   }
 
+  public reconcilePaidJoinOperation(operationId: string): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>(
+      `/game-operations/${encodeURIComponent(operationId)}/reconcile`,
+      {
+        method: 'POST',
+        idempotencyKey: `join-reconcile:${operationId}`,
+        cache: 'no-store',
+        retryOnUnauthorized: false,
+      },
+    );
+  }
+
   public getBookedOperation(operationId: string): Promise<BookedOperationReadOutcome> {
     return this.request<BookedOperationReadOutcome>(
       `/booked-operations/${encodeURIComponent(operationId)}`,
@@ -2535,6 +2547,35 @@ export class PadlHubApiClient {
     return this.retryOnceOnNetworkFailure(() =>
       this.request<AndroidPushEndpointCommandResult>(
         `/notification-endpoints/android/${encodeURIComponent(installationId)}`,
+        { method: 'DELETE', idempotencyKey },
+      ),
+    );
+  }
+
+  public getIOSPushConfiguration(): Promise<AndroidPushConfiguration> {
+    return this.request<AndroidPushConfiguration>('/notification-endpoints/ios/config');
+  }
+
+  public registerIOSPushEndpoint(
+    input: AndroidPushEndpointRegistration,
+    idempotencyKey: string,
+  ): Promise<AndroidPushEndpointCommandResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AndroidPushEndpointCommandResult>('/notification-endpoints/ios', {
+        method: 'POST',
+        idempotencyKey,
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public revokeIOSPushEndpoint(
+    installationId: string,
+    idempotencyKey: string,
+  ): Promise<AndroidPushEndpointCommandResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AndroidPushEndpointCommandResult>(
+        `/notification-endpoints/ios/${encodeURIComponent(installationId)}`,
         { method: 'DELETE', idempotencyKey },
       ),
     );

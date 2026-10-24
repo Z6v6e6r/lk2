@@ -10,9 +10,18 @@ import {
   createDatabasePool,
   selectCommunitiesStagedRehearsalMigrations,
 } from '@phub/database';
+import {
+  notificationMode,
+  assertNotificationRun,
+  beforeNotificationStep,
+  afterNotificationSql,
+  afterNotificationStep,
+  type NotificationTarget,
+} from './notification-migration.js';
 
 type MigrationRunMode =
   | { readonly mode: 'ordinary' }
+  | { readonly mode: typeof notificationMode; readonly target: NotificationTarget }
   | {
       readonly mode: 'communities_staged_rehearsal';
       readonly request: CommunitiesStagedRehearsalRequest;
@@ -66,6 +75,21 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
       : [];
 
     assertMigrationLedgerCompatible({ applied, packaged: packagedMigrations });
+    if (input.mode === notificationMode)
+      await assertNotificationRun(client, packagedMigrations, input.target);
+    else if (
+      input.mode === 'ordinary' &&
+      applied.length > 0 &&
+      packagedMigrations.some(
+        (m) =>
+          [
+            '0099_local_password_reset_proofs.sql',
+            '0100_notification_scenarios.sql',
+            '0101_notification_lifecycle_channels.sql',
+          ].includes(m.filename) && !applied.some((a) => a.filename === m.filename),
+      )
+    )
+      throw new Error('NOTIFICATION_MIGRATION_CONTROLLER_REQUIRED');
 
     const appliedFilenames = new Set(applied.map((entry) => entry.filename));
     const packagedFilenames = packagedMigrations.map((migration) => migration.filename);
@@ -114,11 +138,16 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
 
       await client.query('begin');
       try {
+        const notificationAclPreimage =
+          input.mode === notificationMode ? await beforeNotificationStep(client, filename) : null;
         await client.query(sql);
+        if (input.mode === notificationMode)
+          await afterNotificationSql(client, filename, notificationAclPreimage);
         await client.query(
           'insert into public.schema_migrations (filename, checksum) values ($1, $2)',
           [filename, checksum],
         );
+        if (input.mode === notificationMode) await afterNotificationStep(client, filename);
         await client.query('commit');
         process.stdout.write(`Applied ${filename}\n`);
         const refreshedApplied = await client.query<{ filename: string }>(

@@ -2110,3 +2110,25 @@ export function createGameRepository(
     },
   };
 }
+
+/** Notifications use the same public discovery filter, fenced against the canonical game revision. */
+export async function readNotificationGameCandidate(
+  client: PoolClient,
+  tenantId: string,
+  gameId: string,
+  minimumRevision: string,
+) {
+  const result = await client.query<{ base_payload: unknown; revision: string }>(
+    `select p.base_payload,g.revision::text revision from
+       (select * from games.card_projections where tenant_id=$1 and game_id=$2 and ${GAME_TEST_COURT_PUBLIC_FILTER}) p
+     join games.games g on g.tenant_id=p.tenant_id and g.id=p.game_id
+     where g.tenant_id=$1 and g.id=$2 and g.lifecycle_state='SCHEDULED' and g.visibility='PUBLIC'
+       and g.starts_at>now() and p.aggregate_revision=g.revision and p.projection_revision >= $3::bigint
+       and not exists(select 1 from integration.legacy_game_merge_redirects r where r.tenant_id=$1 and r.source_game_id=$2)
+     for share of g`,
+    [tenantId, gameId, minimumRevision],
+  );
+  return result.rows[0]
+    ? gameCardProjectionInputSchema.parse(result.rows[0].base_payload)
+    : undefined;
+}

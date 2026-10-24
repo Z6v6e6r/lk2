@@ -247,7 +247,7 @@ async function releaseRefreshLock(redis: Redis, key: string, claimId: string): P
   );
 }
 
-async function refreshDelegation(input: {
+export async function refreshDelegation(input: {
   readonly pool: Pool;
   readonly redis: Redis;
   readonly config: WorkerConfig;

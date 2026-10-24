@@ -1280,25 +1280,45 @@ rollback release `0d6078be7a50ed3f5761d66071527be003bd568f-37038298584-1`, sourc
 `0d6078be7a50ed3f5761d66071527be003bd568f`, tree
 `5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4`, Web digest
 `sha256:af11244292c1e0d50308eff3794fc643a97c551ceb263a05a58ead4e22f04127`.
-Its reviewed whole-runtime anchor is `6c6bbe52fc61412ab134286b4c733561f9f9a49a`, tree
-`f86007b0ea16550c66a2f42fc9c71fc233f9710e`; exact trimmed raw no-renames NUL delta from Web baseline
-has SHA-256 `d728bbd99d9384765aab100ed9f74e71fd91d7c9ef0d92e2ebe18f7d6c9eda36`. The anchor contains
-merged PR #449. Its Web runtime/bundle delta is the static
-`apps/web/public/android/oauth/yandex/index.html` fallback page (HTML served at the exact Android
-callback path with no API call, credential, storage, network request or automatic navigation; it only
-offers a user-initiated `padlhub://oauth/yandex` return with the unchanged one-time code/state); the
-same PR also changes the inert `apps/web/src/AndroidOAuthFallback.test.ts`, which is not a bundle
-input. Web runtime and API8158 compatibility are otherwise unchanged from the previous anchor.
+Its reviewed whole-runtime anchor is `af25d36a7d6dc81247215192c5bc3263b9eef62a`, tree
+`4ad17fbb9313787049633362af8d88b7ec84857e`; exact trimmed raw no-renames NUL delta from Web baseline
+has SHA-256 `dab37af6a0c7c7db4f9bb0a452cce57ecb4dcf14315978b5de08998f8d3a6e37`. The anchor contains
+merged PR #449 (OAuth fallback page), PR #450 (closed Web route) and PR #451 (trigger communications)
+with its later reviewed Web merges. Its Web runtime/bundle delta is the previously reviewed static
+`apps/web/public/android/oauth/yandex/index.html` fallback page plus the reviewed Web advance below.
 Pairing with the app build is explicit: the page's primary return action completes login only on APKs
 that contain PR #449 (`padlhub://oauth/yandex` intent filter and FALLBACK parser); older app builds
 receive only the retry link, supported-links/VPN/update guidance and the SMS alternative, and the
 existing https App Link remains the primary return path in every case.
-A containing merge must preserve that anchor and change exactly six existing regular `100644` files:
-`timeweb-critical-web.js`, its test, `control-timeweb-database-backup.py`,
-`test-timeweb-database-backup.py`, `control-timeweb-database-backup.test.ts` (all under `scripts/`),
-and this runbook. Additions, subsets, duplicate paths, renames, deletions, other build/runtime/workflow
-changes reject. Later main drift requires renewed compatibility review; never advance pins merely
-to pass a gate. Candidate/controller must equal exact current main and have full first-attempt push CI.
+
+The renewed review for this advanced anchor records that the Web advance is not reachable over
+installed API8158 and that `paid JOIN stays disabled over API8158`:
+
+- paid JOIN is dead code in the production browser gateway: `apps/web/src/auth-gateway.ts` only
+  declares the optional `getGameJoinConditions` method and never implements it, so `canPaidJoin` in
+  `apps/web/src/GamesPage.tsx` is false, the paid entry point is unreachable and the legacy free
+  JOIN/LEAVE/waitlist path is unchanged. The API side is double-gated as well: API8158 sets
+  `priceSummary: null`, adds `PAY` only for `SEAT_RESERVED`, and has no production seat-reservation
+  writer, so no game can request the paid flow. `GET /games/{id}/join-operation`,
+  `requiresPriceConsent` and the commercial join body do not exist in API8158 and are never emitted
+  by the shipped Web.
+- notification `EMAIL` channel and the new categories are hidden by server data: only channels and
+  categories returned by the installed API are rendered and echoed back, and API8158 returns only
+  `IN_APP`/`PUSH`; the settings PUT is unchanged from the previous anchor. The iOS push endpoints
+  are SDK-only additions and are not referenced by the Web client.
+- `packages/api-sdk/src/index.ts`, `contracts/openapi/user/v1/openapi.yaml` and `package-lock.json`
+  advanced with main and are intentionally no longer byte-identical to API8158; the reviewed guards
+  are the Web build input equality for `apps/web/Dockerfile`, the static dead-capability assertions
+  in `scripts/timeweb-critical-web.test.ts` and the existing gateway test that asserts
+  `getGameJoinConditions` is undefined. No new Web runtime dependency, Dockerfile, deploy or routing
+  input changed. Enabling the paid JOIN capability requires a separate API release and its own
+  review; this bridge never widens it.
+
+A containing merge must preserve that anchor and change exactly three existing regular `100644`
+files: `scripts/timeweb-critical-web.js`, `scripts/timeweb-critical-web.test.ts` and this runbook.
+Additions, subsets, duplicate paths, renames, deletions, other build/runtime/workflow changes reject.
+Later main drift requires renewed compatibility review; never advance pins merely to pass a gate.
+Candidate/controller must equal exact current main and have full first-attempt push CI.
 Confirmation is `UPGRADE_API8158_WEB_<CANDIDATE12>_FROM_<PREVIOUS_WEB_DIGEST_LAST12>_KEEP_API_8158AC445C9F`
 with uppercase hexadecimal segments.
 
@@ -1367,3 +1387,177 @@ prior Web image, fresh current-API backup, and actual Compose rendering with the
 and existing FCM credential source. Pull/smoke/up remain Web-only; `up -d --no-deps web` never applies
 rendered backend labels/images. Retain the exact prior Web digest for rollback. Product QA includes
 Home/profile/subscriptions/support; health checks do not prove those authenticated journeys.
+
+## Dormant JOIN Web/env transition after notification 0105
+
+This is a bounded profile of the existing `--critical-api-web` executor. Source preparation
+is not permission to publish images, enroll a controller, provision secrets or change Timeweb.
+The operator must first receive explicit authority for the exact candidate and staging target,
+and exclusive custody from the active backup/deploy owner. JOIN and live remain disabled.
+
+The fixed request path remains `/opt/phub/timeweb-beta/operator/api-web-upgrade.json`.
+Use schema `PHUB_TIMEWEB_JOIN_DORMANT_API_WEB_OPERATION_V2` with the exact fields validated by
+`scripts/timeweb-join-dormant-profile.js`: target `lk2.padlhub.su`, enrolled `controllerSha`,
+canonical `candidateSha`/`candidateTree`, green `sourceCiRunId`, first-attempt `publicationRunId`,
+`artifactId`, `artifactDigest`, `manifestSha256`, actual `expectedApi` and `expectedWeb`
+(each `id`, immutable `image`, `releaseId`), `expectedCurrentSecretSetReleaseId`,
+`candidateSecretHashes` (all five existing secret-set files), `verifierPublicKeySha256`,
+`notificationBundleSha256`, `expectedExcludedSha256`, `post105BackupOperationSha256`, canonical UTC `expiresAt`, and confirmation
+`DEPLOY_DORMANT_JOIN_API_WEB_<CANDIDATE12_UPPER>_FROM_<OLD_API12_UPPER>_NO_JOIN_NO_PROVIDER_WRITES`.
+Forward execution requires an unexpired window of at most one hour. Recovery uses the sealed
+operation even after expiry and does not need GitHub availability.
+
+Prerequisites are deliberately strict:
+
+- A clean, reviewed, merged controller with main CI; one immutable canonical candidate and
+  first-attempt publication, with image provenance and offline API/Web smoke. Runtime is frozen
+  at source `518be74e95b1f00f0d04671b343318143a759e9c`. Both the terminal notification API source
+  and the new candidate must descend from this anchor. An older notification source such as
+  `6500726d` deliberately fails; it needs a separately reviewed compatibility proof. Later source
+  may change only the explicit
+  controller/test/runbook files in `JOIN_CONTROLLER_FILES`, including the separately owned Python
+  backup fixes. Application code, SQL, dependencies, Compose, executable modes, symlinks and
+  renames fail this profile. The old profiles and their closed historical proofs are unchanged.
+- PR468's notification-prefetch CLI and migration declarations have one closed compatibility
+  bridge in `validateJoinRuntimeTail`: both exact `100644/M` blob transitions must be present
+  together. The runner is pinned from `8489049616f991e019b70a8199fcaa5dd4650aa8` to
+  `13cae992f42fb040f221299eecb09ca98896ac39`; the migration declaration is pinned from
+  `9f776e939e9880fecf65738ec4c4f52923afe591` to `02465a0e0f2812efc547380729405199fda5e3f1`.
+  Neither path enters `JOIN_CONTROLLER_FILES`; partial pairs, duplicate entries and any later
+  blob, mode, status or object-type change still stop. This bridge applies to both the
+  candidate/controller tail and the anchor/terminal-notification tail. It supplies no migration,
+  enrollment or deployment authority and does not adopt any unverified runtime or backup.
+- PR469's Zod security/runtime patch has a separate closed fourteen-blob compatibility group:
+  eleven exact Zod 4.6.7 workspace pins, their root lock, the rebuilt trusted-inventory runtime and
+  the gift-catalog bounded-input regression. These paths stay outside `JOIN_CONTROLLER_FILES`.
+  The group is admitted only with held Git context from anchor `518be74e95b1f00f0d04671b343318143a759e9c`
+  to merged source `cccae751ad4134382b2e350db30e93e47099209d` / tree
+  `0403f08abcefdce80b7d9974e630238de6ac8eb0`. Every path must occur exactly once with the pinned
+  old/new blob OIDs and `M/100644/blob` metadata. Missing/duplicate peers, any later source/tree,
+  reverse transitions or changed bytes/status/type/mode fail closed. The two-file PR468 bridge
+  remains independently atomic. The candidate-to-controller call supplies no runtime-source
+  context and cannot consume the fourteen-file dependency/runtime exception. Only the
+  anchor-to-candidate and anchor-to-terminal-notification checks supply context derived from
+  held Git objects. This is adoption of one reviewed runtime security patch, not a generic
+  dependency allowlist or a new runtime anchor. Full green main CI, deterministic generated-bundle
+  rebuild/direct-execution denial and one canonical five-image publication for that exact source
+  remain required. This bridge grants no publication, enrollment, migration, secret or deployment
+  authority and cannot substitute earlier notification or POST105 receipts.
+- A terminal `RECONCILED/SUCCESS` notification-0105 baseline. Hash the eight exact files
+  `operation`, `plan`, `capsule`, `receipt`, `observation`, `descriptor`, `apiIdentity` and
+  `workerIdentity` as done by `validateJoinNotificationBinding`; the operation binds the resulting
+  bundle digest. Actual API/Web and every excluded component must match that sealed lineage.
+  Worker, Realtime, Postgres and infrastructure cannot be adopted from an unverified live state.
+- A fresh strict backup independently restored against the exact **post-0105** ledger, with both
+  `sourceLedgerSha256` and `restoredLedgerSha256` equal to `NOTIFICATION_POST_LEDGER`. Existing
+  backup file hash, size, freshness and service identity checks still apply. There is no degraded
+  fallback. Use the original rich POST105 producer receipt and terminal attestation described below;
+  a PRE102 receipt, projection, renamed directory or generic V1 receipt cannot satisfy this gate.
+- A separately authorized, securely prepared candidate secret directory at
+  `/etc/phub/timeweb-beta-candidates/<candidate-release-id>/timeweb-beta`. The profile never
+  creates keys or credentials. Old `api.env` bytes are an immutable prefix; append only the
+  missing JOIN/owner/delegation fields. Require `GAME_COMMERCIAL_JOIN_ENABLED=false`, existing
+  `SUBSCRIPTION_RUNTIME_WARN_MODE=OFF`, owner/quote base URLs, integration token, canonical RSA
+  private keyring, active key ID, issuer and audience. The active public SPKI DER fingerprint must
+  equal the separately approved verifier on `lk-primary-147`, even while JOIN is disabled.
+  Existing fields cannot be overwritten. Worker/Realtime/migrator env bytes remain identical;
+  only the release identity marker changes. Do not log any env values or key material.
+- Fresh strict provider monitoring and alert delivery evidence, the normal root-owned path and
+  filesystem checks, no migrator, no ambient Compose overrides, free shared deployment/provision
+  locks, and the verified rollback images. Profile evidence strictness uses the existing
+  `production` validators; the selected runtime remains staging and is not promoted to live.
+
+Under separately granted execution authority, invoke the unchanged controller entry points:
+
+```sh
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-web /opt/phub/timeweb-beta/operator/api-web-upgrade.json
+```
+
+The sealed plan binds the old descriptor, exact secret inode/device/file hashes, excluded
+runtime, candidate digests, backup and notification bundle. The executor obtains both locks,
+journals `SECRET_SWAP_INTENT`, uses the existing recoverable secret-directory swap, starts API
+then Web with `--no-deps`, and never restarts Worker/Realtime. Actual API process env is checked
+before and after activation and on every observation. It records 61 private and public samples
+per service across at least 900 measured seconds, separated by at least 15 seconds, with no
+restart or configuration drift. Both p95 values must be strictly below API 1500 ms / Web 1000 ms.
+The proof binds operation, plan, candidate and original authorization window. No provider-write
+or booking/debit probe belongs to this smoke. Use GET/OPTIONS contracts only; keep JOIN false.
+
+Before installing the descriptor it journals `BASELINE_INTENT`. The installed kind is
+`API_WEB_JOIN_DORMANT_0105`, retaining the verified Worker/Realtime digests and referencing
+separate operation/plan/observation/provider/alert evidence. It does not claim a canonical
+all-component release. `SUCCESS` retains both locks until explicit readback reconciliation:
+
+```sh
+node /opt/phub/timeweb-beta/standard/source/scripts/run-timeweb-standard-delivery.js \
+  --critical-api-web-reconcile /opt/phub/timeweb-beta/operator/api-web-upgrade.json
+```
+
+Reconciliation validates the measured proof and exact terminal runtime/secret/descriptor state,
+writes `RECONCILED`, then releases owned locks. Repeating an already reconciled readback with
+the exact original request performs no activation and does not rewrite the receipt.
+
+For a failed or interrupted transaction, use `--critical-api-web-recover` and the same fixed
+request path under recovery authority. Recovery follows the sealed plan, restores Web and the
+old secret directory **before** restoring the old API, and removes only the exact owned candidate
+descriptor. A lost acknowledgement of either rename is resolved from exact inode layouts,
+including the temporary missing-target GAP. If Web restoration fails, API restoration is still
+attempted after secret restoration. If secret restoration fails, the old API is not started.
+Foreign files, inode drift or ambiguous layouts retain custody and fail closed. Partial recovery
+leaves `ROLLBACK_FAILED` and locks held. Missing sealed preparation evidence likewise preserves
+locks as `join_incomplete_preparation_preserved`; do not delete locks or retry deployment by hand.
+No part of this source profile authorizes JOIN activation, live rollout, real bookings or debits.
+
+### Post-0105 restore proof for dormant JOIN
+
+The existing Python namespace backup engine has the bounded production profile
+`PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1`. It does not enroll itself or grant host authority.
+After the current backup/deploy owner releases custody and notification migration/API-Worker rollout
+is terminal `RECONCILED/SUCCESS`, obtain separate authority for this exact backup request and target.
+Keep JOIN, live and provider writes disabled throughout. Source tests alone are not a restore proof.
+
+Use the existing fixed request `/opt/phub/timeweb-beta/operator/database-backup-restore.json` and
+installed helper entry point. The request has the PRE105 tool/source/installation/config/boundary
+fields plus `notificationBundleSha256`, production `profile`, exact current seven-field API and
+Postgres snapshots, and `expectedLedgerSha256=NOTIFICATION_POST_LEDGER` (105 entries).
+`releaseId` is `<controllerSha>-<controllerSourceCiRunId>-1`; `toolCommit=controllerSha`;
+`confirmation=BACKUP_RESTORE_JOIN_POST105_PRIVATE_NAMESPACE_KEEP_RUNTIME`.
+`controllerPromotion` is forbidden. The original notification bundle authenticates the API baseline;
+there is no fallback to the old API8158 pin. Postgres retains its existing immutable identity pin.
+
+Before the first work-directory/lock write the producer requires fresh source CI, exact enrolled
+controller config bytes, original terminal notification evidence, full API identity, unchanged Web
+container identity, and the original runtime secret-set inode/file descriptor. Its durable
+`POST105_BASELINE_ADMITTED` record binds those hashes to the raw backup operation and is itself
+bound into the networkless supervisor handoff. After the dump, the same baseline and post-0105
+catalog/ledger/role/security preimage must still match before storage creation or restore.
+`POST105_BASELINE_RECHECKED` seals that second observation. Drift preserves the owned transaction
+for guarded recovery; it never retries dump/restore or adopts a new baseline.
+
+The producer uses the existing isolated namespace/daemon and full owner/ACL dump, prepares only
+allowlisted roles in the fresh restore cluster, restores in a single transaction, and compares the
+restored ledger, owners, ACLs and role closure to the original preimage. The original canonical
+`backups/<releaseId>-join-post105/` directory contains exactly `backup-operation.json`,
+`preimage-proof.json`, `database-backup-receipt.json` and `database.pgcustom`. The rich receipt schema
+is `PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1`; it binds the operation, notification bundle,
+post-0105 preimage, package/catalog descriptors, restored security/role hashes and actual dump.
+Completion must fall within the operation expiry; the JOIN consumer also requires receipt age
+at most one hour. Recovery never refreshes that timestamp or mints new forward authority.
+
+The same installed helper's existing `--attest-disk` entry returns
+`PHUB_TIMEWEB_JOIN_POST105_BACKUP_TERMINAL_V1` only after exact journal/handoff verification,
+restore/security verification, publication/reconciliation, and absence of the owned unit, slice,
+cgroup, mount, loop and mapper. This terminal check is read-only and uses the original artifacts;
+it does not call GitHub, inspect the former API/env baseline, or repopulate forward CI authority.
+A subsequent dormant JOIN API/env transition under the **same enrolled controller** leaves it
+verifiable. A later controller enrollment is outside that historical scope and requires an explicit
+custody/proof transition. Do not silently adopt a newer source/config.
+
+The JOIN V2 operation binds the raw backup request digest in `post105BackupOperationSha256`.
+The JS consumer reads the original four files, hashes the actual dump and installed helper receipt,
+requires the terminal attestation, and reattests this sealed reference before activation, before
+installed-baseline publication and during reconciliation. Legacy V1/degraded/PRE102 consumers and
+the frozen one-operation early-exit recovery remain unchanged. No staging readiness claim may be
+made until this producer actually completes its isolated restore and the dormant rollout/smoke
+has passed on Timeweb.

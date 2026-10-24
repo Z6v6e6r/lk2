@@ -11,6 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -19,6 +20,7 @@ import { loadConfig, loadRealtimeConfig, loadWorkerConfig } from '../packages/co
 import {
   describeTimewebRuntimeSecretSet,
   validateTimewebFcmSecretDelta,
+  validateTimewebDormantJoinSecretDelta,
   transitionPreparedTimewebRuntimeSecrets,
   parseTimewebSecretEnvironment,
   provisionTimewebBetaRuntimeSecrets,
@@ -731,4 +733,240 @@ describe('prepared API + Worker secret-set swap', () => {
       expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
     },
   );
+});
+
+describe('commercial JOIN API environment contract', () => {
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const ring = JSON.stringify({ 'synthetic-key': privateKey });
+  function active() {
+    const env = safeRuntimeEnvironments();
+    Object.assign(env.api!, {
+      SUBSCRIPTION_RUNTIME_WARN_MODE: 'WARN',
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'https://quote.example.test',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: Buffer.alloc(32, 4).toString('base64url'),
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: ring,
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic-key',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-owner',
+      GAME_COMMERCIAL_JOIN_ENABLED: 'true',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test',
+    });
+    return env;
+  }
+  it('preserves canonical multiline PKCS8 JSON byte for byte through env parsing', () => {
+    const parsed = parseTimewebSecretEnvironment(
+      Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${ring}\n`),
+    );
+    expect(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS).toBe(ring);
+    const decoded: unknown = JSON.parse(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!);
+    expect(decoded).toEqual({ 'synthetic-key': privateKey });
+  });
+  it('accepts unchanged OFF and a complete conditional WARN/commercial boundary', () => {
+    expect(() =>
+      validateTimewebRuntimeEnvironments(safeRuntimeEnvironments(), { host, tenantKey }),
+    ).not.toThrow();
+    expect(() => validateTimewebRuntimeEnvironments(active(), { host, tenantKey })).not.toThrow();
+    expect(loadConfig(active().api).GAME_COMMERCIAL_JOIN_ENABLED).toBe(true);
+  });
+  it.each([
+    'SUBSCRIPTION_RUNTIME_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE',
+    'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL',
+  ])('refuses incomplete activation missing %s', (key) => {
+    const env = active();
+    delete env.api![key];
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each([
+    { GAME_COMMERCIAL_JOIN_ENABLED: 'yes' },
+    { SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF' },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown-key' },
+    { SUBSCRIPTION_RUNTIME_BASE_URL: 'http://owner.example.test' },
+    { GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test/path' },
+    { SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: 'x'.repeat(4097) },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'x'.repeat(513) },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'invalid audience' },
+    { SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS: '999' },
+  ])('rejects incompatible activation input', (changes) => {
+    const env = active();
+    Object.assign(env.api!, changes);
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each(['{}', '[]', '{"key":{"nested":1}}', '{"key":"$expand"}', '{"key":"invalid"}'])(
+    'rejects malformed/unsafe keyring %s',
+    (value) => {
+      expect(() =>
+        parseTimewebSecretEnvironment(
+          Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${value}\n`),
+        ),
+      ).toThrow();
+    },
+  );
+  it('rejects noncanonical PEM even when the key is otherwise valid', () => {
+    for (const pem of [privateKey.trimEnd(), privateKey.replace(/(.{32})(.{32})/g, '$1\n$2')]) {
+      const value = JSON.stringify({ 'synthetic-key': pem });
+      expect(() =>
+        parseTimewebSecretEnvironment(
+          Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${value}\n`),
+        ),
+      ).toThrow();
+    }
+  });
+  it('validates dormant scalar settings while allowing a fully absent boundary', () => {
+    const env = active();
+    env.api!.SUBSCRIPTION_RUNTIME_WARN_MODE = 'OFF';
+    env.api!.GAME_COMMERCIAL_JOIN_ENABLED = 'false';
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
+    for (const [key, value] of Object.entries({
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'not-url',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'not-url',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: 'short',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'bad id',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'x'.repeat(513),
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'bad audience',
+    })) {
+      const candidate = structuredClone(env);
+      candidate.api![key] = value;
+      expect(() => validateTimewebRuntimeEnvironments(candidate, { host, tenantKey })).toThrow();
+    }
+  });
+  it('rejects delegation material outside the API service', () => {
+    const env = active();
+    env.worker!.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS = ring;
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
+      'unknown_key',
+    );
+  });
+});
+
+describe('dormant JOIN additions preserve the established secret set', () => {
+  const key = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const fingerprint = createHash('sha256')
+    .update(createPublicKey(key.publicKey).export({ type: 'spki', format: 'der' }))
+    .digest('hex');
+  function prepared() {
+    const f = fixture();
+    mkdirSync(f.targetDir, { mode: 0o700, recursive: true });
+    for (const [service, values] of Object.entries(safeRuntimeEnvironments()))
+      writeFileSync(join(f.targetDir, service + '.env'), encodeEnvironment(values), {
+        mode: 0o600,
+      });
+    writeFileSync(
+      join(f.targetDir, '.release-identity.json'),
+      JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId }) + '\n',
+      { mode: 0o600 },
+    );
+    const candidate = join(f.root, 'join-candidate');
+    mkdirSync(candidate, { mode: 0o700 });
+    for (const name of ['api.env', 'worker.env', 'realtime.env', 'migrator.env'])
+      writeFileSync(join(candidate, name), readFileSync(join(f.targetDir, name)), { mode: 0o600 });
+    writeFileSync(
+      join(candidate, '.release-identity.json'),
+      JSON.stringify({
+        schema: 'PHUB_TIMEWEB_SECRET_SET_V1',
+        releaseId: `${'9'.repeat(40)}-777-1`,
+      }) + '\n',
+      { mode: 0o600 },
+    );
+    const additions = {
+      GAME_COMMERCIAL_JOIN_ENABLED: 'false',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test',
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'https://quote.example.test',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: Buffer.alloc(32, 3).toString('base64url'),
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({ synthetic: key.privateKey }),
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-owner',
+    };
+    const old = readFileSync(join(candidate, 'api.env'), 'utf8');
+    const render = (extra = additions) =>
+      old +
+      Object.entries(extra)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n') +
+      '\n';
+    writeFileSync(join(candidate, 'api.env'), render());
+    const validate = (sha = fingerprint) =>
+      validateTimewebDormantJoinSecretDelta(f.targetDir, candidate, sha, uid, gid);
+    return { ...f, candidate, additions, old, render, validate };
+  }
+  it('accepts only dormant additions and never changes either directory', () => {
+    const f = prepared(),
+      before = [f.targetDir, f.candidate].map((p) => describeTimewebRuntimeSecretSet(p, uid, gid));
+    f.validate();
+    expect(
+      [f.targetDir, f.candidate].map((p) => describeTimewebRuntimeSecretSet(p, uid, gid)),
+    ).toEqual(before);
+  });
+  it.each(['worker.env', 'realtime.env', 'migrator.env'])('refuses changes to %s', (name) => {
+    const f = prepared();
+    writeFileSync(
+      join(f.candidate, name),
+      readFileSync(join(f.candidate, name), 'utf8') + 'UNEXPECTED_TEST_VALUE=1\n',
+    );
+    expect(() => f.validate()).toThrow('non_join_secret_delta');
+  });
+  it.each(['true', 'yes'])('refuses JOIN=%s', (value) => {
+    const f = prepared();
+    writeFileSync(
+      join(f.candidate, 'api.env'),
+      f.render({ ...f.additions, GAME_COMMERCIAL_JOIN_ENABLED: value }),
+    );
+    expect(() => f.validate()).toThrow();
+  });
+  it('refuses WARN, changed existing rows and deleted rows', () => {
+    const f = prepared();
+    for (const value of [
+      f
+        .render()
+        .replace('SUBSCRIPTION_RUNTIME_WARN_MODE=OFF', 'SUBSCRIPTION_RUNTIME_WARN_MODE=WARN'),
+      f.render().replace('APP_ENV=staging\n', ''),
+      '# changed prefix\n' + f.render(),
+    ]) {
+      writeFileSync(join(f.candidate, 'api.env'), value);
+      expect(() => f.validate()).toThrow();
+    }
+  });
+  it('refuses key rotation, extra tuning fields, an unknown active key, and incomplete material', () => {
+    const f = prepared();
+    for (const value of [
+      f.render() + 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS=1000\n',
+      f.render({ ...f.additions, SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown' }),
+      f.render({ ...f.additions, SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: '' }),
+    ]) {
+      writeFileSync(join(f.candidate, 'api.env'), value);
+      expect(() => f.validate()).toThrow();
+    }
+    writeFileSync(join(f.candidate, 'api.env'), f.render());
+    writeFileSync(
+      join(f.targetDir, 'api.env'),
+      f.old + 'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID=old-key\n',
+    );
+    expect(() => f.validate()).toThrow();
+  });
+  it('refuses a mismatching approved LK1 verifier fingerprint', () => {
+    const f = prepared();
+    expect(() => f.validate('0'.repeat(64))).toThrow('join_verifier_identity');
+  });
+  it.each(['symlink', 'hardlink'])('refuses a %s candidate env file', (kind) => {
+    const f = prepared(),
+      path = join(f.candidate, 'api.env'),
+      other = join(f.root, 'other.env');
+    renameSync(path, other);
+    if (kind === 'symlink') symlinkSync(other, path);
+    else linkSync(other, path);
+    expect(() => f.validate()).toThrow();
+  });
 });

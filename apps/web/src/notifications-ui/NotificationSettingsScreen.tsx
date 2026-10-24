@@ -13,7 +13,7 @@ import {
 import styles from './NotificationsUi.module.css';
 
 interface NotificationSettingsScreenProps {
-  readonly platform?: 'web' | 'android';
+  readonly platform?: 'web' | 'android' | 'ios';
   readonly draft: PreferenceDraft | null;
   readonly busy: boolean;
   readonly error?: string | null | undefined;
@@ -49,7 +49,7 @@ export function NotificationSettingsScreen({
 
   function toggleCategory(
     category: PreferenceCategoryDraft,
-    channel: 'IN_APP' | 'PUSH',
+    channel: 'IN_APP' | 'PUSH' | 'EMAIL',
     enabled: boolean,
   ): void {
     if (!draft) return;
@@ -118,6 +118,7 @@ export function NotificationSettingsScreen({
               const settings = notificationCategorySettings(category.category);
               const push = categoryChannel(category, 'PUSH');
               const inApp = categoryChannel(category, 'IN_APP');
+              const email = categoryChannel(category, 'EMAIL');
               return (
                 <div className={styles.settingsRow} key={category.category}>
                   <span className={styles.settingsIcon} aria-hidden="true">
@@ -126,6 +127,18 @@ export function NotificationSettingsScreen({
                   <div className={styles.settingsCopy}>
                     <strong>{settings.title}</strong>
                     <small>{settings.description}</small>
+                    {email ? (
+                      <span className={styles.inlineToggle}>
+                        <span>Email</span>
+                        <NotificationSwitch
+                          compact
+                          checked={email.enabled}
+                          disabled={busy || !email.available}
+                          label={`${settings.title}: email`}
+                          onChange={() => toggleCategory(category, 'EMAIL', !email.enabled)}
+                        />
+                      </span>
+                    ) : null}
                     {inApp ? (
                       <span className={styles.inlineToggle}>
                         <span>В ленте</span>

@@ -27,6 +27,7 @@ export function migrationCreateArgs(
   envFile: string,
   kind?: string,
   runtimeRole?: string,
+  notification?: { operation: unknown; target: unknown },
 ): string[];
 export function validateMigrationContainer(
   value: unknown,
@@ -180,3 +181,34 @@ export function namespaceRestoreClientOptions(
   attestation: unknown,
   actual: unknown,
 ): { host: 'unix:///media/.runtime/docker.sock'; cwd: '/media' };
+
+export function readNotificationDatabaseState(operation: unknown, phase?: string): unknown;
+export function notificationBackupProof(operation: unknown): unknown;
+export function readNotificationMigrationProof(operation: unknown): unknown;
+export function validateNotificationMigrationProofBundle(
+  bundle: Record<string, Buffer>,
+  expected: unknown,
+): unknown;
+export function validateNotificationMigrationPlan(value: unknown, operationBytes: Buffer): unknown;
+export function validateNotificationMigrationReceipt(
+  value: unknown,
+  planSha: string,
+  operationSha: string,
+): unknown;
+export function runNotificationMigrationAdapter(
+  mode: string,
+  operationBytes: Buffer,
+  ops: unknown,
+): Promise<unknown>;
+export function runNotificationMigratorPrefetchAdapter(
+  mode: string,
+  requestBytes: Buffer,
+  ops: unknown,
+): Promise<unknown>;
+export function runManualNotificationMigratorPrefetch(
+  mode: string,
+  requestPath: string,
+): Promise<unknown>;
+export function attestNotificationMigratorPrefetchForBackup(operation: unknown): Promise<unknown>;
+
+export function sealNotificationPrefetchMetadata(path: string, bytes: Buffer): void;

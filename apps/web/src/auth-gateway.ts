@@ -593,6 +593,7 @@ export interface AuthGateway {
   readonly joinPaidGame?: PadlHubApiClient['joinPaidGame'];
   /** Readback of the same commercial operation by its original idempotency key. */
   readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
+  readonly reconcilePaidJoinOperation?: PadlHubApiClient['reconcilePaidJoinOperation'];
   readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
   readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
@@ -2310,6 +2311,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     disputeGameResult(gameId, submissionId, input) {
       return client.disputeGameResult(gameId, submissionId, input);
+    },
+
+    reconcilePaidJoinOperation(operationId) {
+      return client.reconcilePaidJoinOperation(operationId);
     },
 
     getGameOperation(operationId) {

@@ -2,6 +2,11 @@
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  constants,
+  fstatSync,
+  readSync,
+  writeSync,
+  renameSync,
   existsSync,
   mkdirSync,
   lstatSync,
@@ -38,6 +43,7 @@ import {
   validateUpgradeCandidateAuthority as candidateAuthority,
   validateUpgradeBackup as backupProof,
   writeUpgradeAtomic as durable,
+  upgradeDocker as releaseDocker,
 } from './timeweb-api-web-upgrade.js';
 import { describeTimewebRuntimeSecretSet as secretSet } from './provision-timeweb-beta-runtime-secrets.js';
 import {
@@ -49,11 +55,26 @@ import {
   validateMigrationRoleReadback,
 } from './timeweb-api-worker-migration-role.js';
 
+import {
+  NOTIFICATION_MIGRATION_SCHEMA,
+  assertNotificationRuntimeOff,
+  NOTIFICATION_BACKUP_SCHEMA,
+  JOIN_POST105_BACKUP_SCHEMA,
+  NOTIFICATION_PRE_LEDGER,
+  NOTIFICATION_POST_LEDGER,
+  validateNotificationOperation,
+  attestNotificationSource,
+  validateNotificationManifest,
+  validateNotificationRoleReadback,
+  notificationStateSql,
+  validateNotificationState,
+} from './timeweb-notification-profile.js';
 const ROOT = '/opt/phub/timeweb-beta',
   SOURCE = `${ROOT}/standard/source`,
   RUNTIME = '/etc/phub/timeweb-beta';
 const REQUEST = `${ROOT}/operator/api-worker-migration.json`,
   ACTIVE = `${ROOT}/standard/active`;
+const PREFETCH_REQUEST = `${ROOT}/operator/notification-migrator-prefetch.json`;
 const PROVISION = '/etc/phub/.timeweb-beta.provision.lock';
 const MIGRATOR_IMAGE =
   'ghcr.io/z6v6e6r/phub-migrator@sha256:e3d23565c928baa331e409d27dac48ac6f9821ea2288e3c45bc72c3694af79aa';
@@ -107,6 +128,7 @@ export const API_WORKER_MIGRATION_BRIDGE = Object.freeze({
   postLedgerSha256: POST_LEDGER,
 });
 export function validateApiWorkerMigrationOperation(op, at) {
+  if (op?.schema === NOTIFICATION_MIGRATION_SCHEMA) return validateNotificationOperation(op, at);
   exact(op, [
     'schema',
     'target',
@@ -247,6 +269,8 @@ export function readApiWorkerMigrationCapsule(bytes) {
   };
 }
 export function validateMigrationPlan(plan, operationBytes) {
+  if (parseStrictJson(operationBytes).schema === NOTIFICATION_MIGRATION_SCHEMA)
+    return validateNotificationMigrationPlan(plan, operationBytes);
   const op = validateApiWorkerMigrationOperation(parseStrictJson(operationBytes));
   exact(plan, [
     'schema',
@@ -361,7 +385,53 @@ export function validateMigrationReceipt(v, planSha, operationSha) {
   return v;
 }
 
-export function migrationCreateArgs(name, operationSha, envFile, kind = 'migration', runtimeRole) {
+export function migrationCreateArgs(
+  name,
+  operationSha,
+  envFile,
+  kind = 'migration',
+  runtimeRole,
+  notification,
+) {
+  if (notification) {
+    validateNotificationOperation(notification.operation);
+    const actualKind = kind.split('-')[0];
+    const phase = kind.endsWith('-post') ? 'post' : 'pre';
+    if (
+      !['migration', 'runtime', 'migrator', 'runtime-post', 'migrator-post'].includes(kind) ||
+      !/^phub-timeweb-migration-[a-f0-9]{12}-[1-9][0-9]*-1(?:-role-(?:runtime|migrator)(?:-post)?)?$/.test(
+        name,
+      ) ||
+      !HASH.test(operationSha) ||
+      envFile !== `${RUNTIME}/${actualKind === 'runtime' ? 'api' : 'migrator'}.env`
+    )
+      stop('CREATE');
+    const args = migrationCreateArgs(
+      name.replace(/-post$/, ''),
+      operationSha,
+      envFile,
+      actualKind,
+      'phub_runtime',
+    );
+    const i = args.indexOf(MIGRATOR_IMAGE);
+    args.splice(
+      i,
+      args.length - i,
+      notification.operation.migratorImage,
+      ...(actualKind === 'migration'
+        ? [
+            'node',
+            'apps/migrator/dist/main.js',
+            '--notification-migrations-0099-0101',
+            Buffer.from(JSON.stringify(notification.target)).toString('base64'),
+          ]
+        : ['apps/migrator/dist/notification-migration-probe.js', actualKind, phase]),
+    );
+    for (let j = 0; j < args.length; j++)
+      if (args[j] === `phub.migration-kind=${actualKind}`) args[j] = `phub.migration-kind=${kind}`;
+    args[args.indexOf('--name') + 1] = name;
+    return args;
+  }
   const base = /^phub-timeweb-migration-[a-f0-9]{12}-[1-9][0-9]*-1(?:-role-(?:runtime|migrator))?$/;
   if (
     !base.test(name) ||
@@ -424,8 +494,20 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
   const h = v?.HostConfig,
     c = v?.Config,
     k = spec?.kind;
-  const cmd =
-    k === 'migration'
+  const cmd = spec?.notification
+    ? k === 'migration'
+      ? [
+          'node',
+          'apps/migrator/dist/main.js',
+          '--notification-migrations-0099-0101',
+          Buffer.from(JSON.stringify(spec.notification.target)).toString('base64'),
+        ]
+      : [
+          'apps/migrator/dist/notification-migration-probe.js',
+          k.split('-')[0],
+          k.endsWith('-post') ? 'post' : 'pre',
+        ]
+    : k === 'migration'
       ? ['node', 'apps/migrator/dist/main.js']
       : [
           '--input-type=module',
@@ -436,12 +518,17 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
         ];
   if (
     !spec ||
-    !['migration', 'runtime', 'migrator'].includes(k) ||
+    !(
+      spec?.notification
+        ? ['migration', 'runtime', 'migrator', 'runtime-post', 'migrator-post']
+        : ['migration', 'runtime', 'migrator']
+    ).includes(k) ||
     !v ||
     v.Id !== id ||
     v.Name !== `/${spec.name}` ||
     v.Image !== spec.imageId ||
-    c?.Image !== MIGRATOR_IMAGE ||
+    c?.Image !==
+      (spec?.notification ? spec.notification.operation.migratorImage : MIGRATOR_IMAGE) ||
     c.User !== 'appuser' ||
     c.WorkingDir !== '/app' ||
     (!same(c.Entrypoint, k === 'migration' ? null : ['node']) &&
@@ -487,6 +574,8 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
 
 // Domain-specific effects keep the real controller's crash paths testable without Docker/DB access.
 export async function runMigrationAdapter(mode, operationBytes, ops) {
+  if (parseStrictJson(operationBytes).schema === NOTIFICATION_MIGRATION_SCHEMA)
+    return runNotificationMigrationAdapter(mode, operationBytes, ops);
   const op = validateApiWorkerMigrationOperation(
     parseStrictJson(operationBytes),
     mode === 'deploy' ? ops.time() : undefined,
@@ -847,6 +936,11 @@ function snapshotRow(v, includeNetwork = true) {
   };
 }
 function sourceAttest(op) {
+  if (op.schema === NOTIFICATION_MIGRATION_SCHEMA) {
+    for (const name of ['api.env', 'worker.env'])
+      assertNotificationRuntimeOff(read(`${RUNTIME}/${name}`));
+    return attestNotificationSource(op, { git, read, secure, present });
+  }
   if (!secure(SOURCE, 0o700).isDirectory() || !secure(`${SOURCE}/.git`).isDirectory())
     stop('SOURCE_DIRECTORY');
   assertControllerPromotionGitConfig(git);
@@ -2756,8 +2850,13 @@ function inspectDiskRestoreKernel(row, attestation) {
 }
 
 function productionOps(op, owner, ignoredRestore = null) {
+  const notification = op.schema === NOTIFICATION_MIGRATION_SCHEMA;
+  const postgresId = notification ? op.expectedPostgres.id : bridge.postgresId;
+  const migratorImage = notification ? op.migratorImage : MIGRATOR_IMAGE;
   const candidate = `${op.candidateSha}-${op.publicationRunId}-1`,
     tx = `${ROOT}/backups/${candidate}-migration`;
+  const prefetchRoot = `${ROOT}/standard/notification-prefetch/${candidate}`;
+  const prefetchFile = (name) => `${prefetchRoot}/${name}.json`;
   const path = (name) => `${tx}/${name}`,
     name = `phub-timeweb-migration-${op.candidateSha.slice(0, 12)}-${op.publicationRunId}-1`;
   let plan,
@@ -2766,13 +2865,13 @@ function productionOps(op, owner, ignoredRestore = null) {
     roleName,
     requireLocks = false;
   const image = () => {
-    const values = parseStrictJson(docker(['image', 'inspect', MIGRATOR_IMAGE]));
+    const values = parseStrictJson(docker(['image', 'inspect', migratorImage]));
     const v = values[0];
     if (
       values.length !== 1 ||
       v.Os !== 'linux' ||
       v.Architecture !== 'amd64' ||
-      !v.RepoDigests?.includes(MIGRATOR_IMAGE) ||
+      !v.RepoDigests?.includes(migratorImage) ||
       v.Config?.Labels?.['org.opencontainers.image.revision'] !== op.candidateSha ||
       v.Config.User !== 'appuser' ||
       v.Config.WorkingDir !== '/app' ||
@@ -2788,7 +2887,8 @@ function productionOps(op, owner, ignoredRestore = null) {
     name: kind === 'migration' ? name : `${name}-role-${kind}`,
     imageId: plan?.imageId ?? image().Id,
     runtimeRole: roleName,
-    env: envValues(kind, image().Config.Env),
+    ...(notification ? { notification: { operation: op, target: ops.target() } } : {}),
+    env: envValues(kind.split('-')[0], image().Config.Env),
   });
   const lookup = (kind, imageId, operationSha) => {
     const s = spec(kind),
@@ -2845,7 +2945,7 @@ function productionOps(op, owner, ignoredRestore = null) {
     assertUnused: () => {
       if (
         [ACTIVE, PROVISION, tx].some(present) ||
-        ids(['--filter', `name=^/${name}(?:-role-(?:runtime|migrator))?$`]).length ||
+        ids(['--filter', `name=^/${name}(?:-role-(?:runtime|migrator)(?:-post)?)?$`]).length ||
         docker(['ps', '-q', '--filter', 'label=com.docker.compose.service=migrator']).trim()
       )
         stop('EXCLUSION');
@@ -2853,12 +2953,80 @@ function productionOps(op, owner, ignoredRestore = null) {
     authority: async (operation) => {
       await readControllerSourceAuthority(operation, git, githubPublic);
       secure(`${ROOT}/releases/${candidate}`, 0o700);
-      await candidateAuthority(operation, `${ROOT}/releases/${candidate}`);
+      const manifest = await candidateAuthority(operation, `${ROOT}/releases/${candidate}`);
+      if (notification) validateNotificationManifest(operation, manifest);
     },
     secrets: () => secretSet(RUNTIME),
     image: () => image().Id,
-    snapshot: () => {
-      const operationSha = hash(read(REQUEST));
+    imageInventory: () =>
+      [
+        ...new Set(docker(['image', 'ls', '-aq', '--no-trunc']).trim().split('\n').filter(Boolean)),
+      ].sort(),
+    retirementReceipt: (expected) => {
+      const result = parseStrictJson(
+        execFileSync(
+          '/usr/bin/python3',
+          [
+            '-I',
+            '-S',
+            '-B',
+            `${ROOT}/operator/tools/${op.controllerSha}/control-timeweb-database-backup.py`,
+            '--attest-retired-notification-pre105',
+            `${ROOT}/operator/notification-pre105-retirement.json`,
+          ],
+          {
+            env: { PATH: '/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8' },
+            timeout: 120000,
+            maxBuffer: 4 * 1024 * 1024,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          },
+        ),
+      );
+      if (
+        result.status !== 'RETIRED_CANONICAL_BACKUP_VERIFIED' ||
+        result.receiptSha256 !== expected ||
+        result.canonicalBackupRetained !== true ||
+        result.databaseMutated !== false ||
+        result.runtimeMutated !== false
+      )
+        stop('PREFETCH_RETIREMENT');
+    },
+    prefetchUnused: () => {
+      ops.assertUnused();
+      if ([REQUEST, DISK_BACKUP_REQUEST, `${ROOT}/operator/api-worker-upgrade.json`].some(present))
+        stop('PREFETCH_PHASE');
+    },
+    prefetchIntent: () => (present(prefetchFile('intent')) ? read(prefetchFile('intent')) : null),
+    writePrefetchIntent: (bytes) => {
+      for (const directory of [`${ROOT}/standard/notification-prefetch`, prefetchRoot]) {
+        if (!present(directory)) {
+          mkdirSync(directory, { mode: 0o700 });
+          syncParent(directory);
+        }
+        secure(directory, 0o700);
+      }
+      sealNotificationPrefetchMetadata(prefetchFile('intent'), bytes);
+    },
+    prefetchReceipt: () =>
+      present(prefetchFile('receipt')) ? read(prefetchFile('receipt')) : null,
+    writePrefetchReceipt: (bytes) =>
+      sealNotificationPrefetchMetadata(prefetchFile('receipt'), bytes),
+    prefetchImagePresent: () =>
+      docker(['image', 'ls', '--no-trunc', '--digests', '--format', '{{.Repository}}@{{.Digest}}'])
+        .split('\n')
+        .includes(migratorImage),
+    pullMigrator: () => {
+      if (!notification) stop('PREFETCH_PROFILE');
+      // Only this image-store stage uses the enrolled release reader. All SQL and
+      // ordinary migration probes keep their credential-free Docker environment.
+      const credentials = '/root/.docker/config.json';
+      const before = present(credentials) ? hash(read(credentials)) : null;
+      releaseDocker(['pull', '--platform', 'linux/amd64', migratorImage]);
+      if ((present(credentials) ? hash(read(credentials)) : null) !== before)
+        stop('PREFETCH_CREDENTIAL_DRIFT');
+      return image().Id;
+    },
+    snapshot: (operationSha = hash(read(REQUEST))) => {
       const rows = ids([]).map(inspect),
         excluded = [];
       let api, worker, pg;
@@ -2890,9 +3058,10 @@ function productionOps(op, owner, ignoredRestore = null) {
           continue;
         }
         if (
-          ['migration', 'runtime', 'migrator'].some(
-            (kind) => row.Name === `/${kind === 'migration' ? name : `${name}-role-${kind}`}`,
-          )
+          (notification
+            ? ['migration', 'runtime', 'migrator', 'runtime-post', 'migrator-post']
+            : ['migration', 'runtime', 'migrator']
+          ).some((kind) => row.Name === `/${kind === 'migration' ? name : `${name}-role-${kind}`}`)
         ) {
           const kind = row.Config.Labels?.['phub.migration-kind'];
           validateMigrationContainer(row, row.Id, operationSha, row.State.Status, spec(kind));
@@ -2913,7 +3082,7 @@ function productionOps(op, owner, ignoredRestore = null) {
           }
         } else {
           excluded.push(snapshotRow(row, false));
-          if (row.Id === bridge.postgresId) {
+          if (row.Id === postgresId) {
             if (
               row.Config.Image !== bridge.postgresImage ||
               row.State.Status !== 'running' ||
@@ -2937,7 +3106,7 @@ function productionOps(op, owner, ignoredRestore = null) {
       parseStrictJson(
         docker([
           'exec',
-          bridge.postgresId,
+          postgresId,
           '/bin/sh',
           '-eu',
           '-c',
@@ -2948,7 +3117,7 @@ function productionOps(op, owner, ignoredRestore = null) {
       parseStrictJson(
         docker([
           'exec',
-          bridge.postgresId,
+          postgresId,
           '/bin/sh',
           '-eu',
           '-c',
@@ -2956,6 +3125,7 @@ function productionOps(op, owner, ignoredRestore = null) {
         ]).trim(),
       ),
     backup: (operation) => {
+      if (notification) return notificationBackupProof(operation);
       const directory = `${ROOT}/backups/${operation.controllerSha}-${operation.controllerSourceCiRunId}-1-web`;
       const proof = backupProof(directory, operation.expectedApi),
         v = parseStrictJson(read(proof.path));
@@ -3025,9 +3195,10 @@ function productionOps(op, owner, ignoredRestore = null) {
           migrationCreateArgs(
             s.name,
             operationSha,
-            `${RUNTIME}/${kind === 'runtime' ? 'api' : 'migrator'}.env`,
+            `${RUNTIME}/${kind.split('-')[0] === 'runtime' ? 'api' : 'migrator'}.env`,
             kind,
             runtimeRole,
+            s.notification,
           ),
         ).trim();
       } catch (error) {
@@ -3060,10 +3231,14 @@ function productionOps(op, owner, ignoredRestore = null) {
     lookup,
     writeRoleProof: (bytes) => durable(path('role-proof.json'), bytes, true),
     readRoleProof: () => read(path('role-proof.json')),
-    attestRoleContainers: (proof) => {
+    attestRoleContainers: (proof, phase = 'pre') => {
       roleName = proof.runtime.currentRoleName;
       for (const kind of ['runtime', 'migrator']) {
-        const row = lookup(kind, plan.imageId, plan.operationSha256);
+        const row = lookup(
+          phase === 'post' ? kind + '-post' : kind,
+          plan.imageId,
+          plan.operationSha256,
+        );
         if (
           row?.Id !== proof[`${kind}ContainerId`] ||
           row.State.Status !== 'exited' ||
@@ -3074,10 +3249,77 @@ function productionOps(op, owner, ignoredRestore = null) {
       }
     },
     attestStoppedProbes: () => {
-      for (const kind of ['runtime', 'migrator']) {
+      for (const kind of notification
+        ? ['runtime', 'migrator', 'runtime-post', 'migrator-post']
+        : ['runtime', 'migrator']) {
         const row = lookup(kind, plan.imageId, plan.operationSha256);
         if (row && !['created', 'exited'].includes(row.State.Status)) stop('PROBE_RUNNING');
       }
+    },
+    inputs: () => {
+      const descriptor = read(
+          `${SOURCE}/deploy/timeweb/notification-migrations-0099-0101.v1.json`,
+          0o644,
+        ),
+        catalogs = read(`${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`, 0o644);
+      return {
+        packageDescriptorSha256: hash(descriptor),
+        catalogsSha256: hash(catalogs),
+        bootstrapSha256: hash(
+          read(`${SOURCE}/deploy/timeweb/notification-role-bootstrap-0105.sql`, 0o644),
+        ),
+        probeSha256: hash(
+          read(`${SOURCE}/apps/migrator/src/notification-migration-probe.ts`, 0o644),
+        ),
+        builderSha256: parseStrictJson(catalogs).builderSha256,
+        inverseSha256: hash(
+          read(`${SOURCE}/deploy/timeweb/notification-role-bootstrap-0105-inverse.sql`, 0o644),
+        ),
+        securityCatalogSqlSha256: hash(
+          read(`${SOURCE}/scripts/notification-backup-security.sql`, 0o644),
+        ),
+      };
+    },
+    catalogHash: (count) =>
+      parseStrictJson(
+        read(`${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`, 0o644),
+      ).checkpoints[String(count)].sha256,
+    notificationState: (phase) => readNotificationDatabaseState(op, phase),
+    footprint: () => {
+      const rows = postgresSql(
+        `begin read only;select json_agg(json_build_object('name',c.oid::regclass::text,'bytes',pg_total_relation_size(c.oid),'rows',coalesce(s.n_live_tup,0),'conflictingLocks',(select count(*) from pg_locks l where l.relation=c.oid and l.pid<>pg_backend_pid() )) order by c.oid::regclass::text) from pg_class c left join pg_stat_user_tables s on s.relid=c.oid where c.oid in ('notifications.deliveries'::regclass,'support.tickets'::regclass,'support.messages'::regclass);rollback;`,
+      );
+      if (
+        !Array.isArray(rows) ||
+        rows.length !== 3 ||
+        rows.some(
+          (r) =>
+            !Number.isSafeInteger(r.bytes) ||
+            r.bytes < 0 ||
+            r.bytes > 268435456 ||
+            !Number.isSafeInteger(r.rows) ||
+            r.rows < 0 ||
+            r.conflictingLocks !== 0,
+        )
+      )
+        stop('DDL_FOOTPRINT');
+      return rows;
+    },
+    bootstrap: () => {
+      owner.assertOwned();
+      ops.assertOwned();
+      if (!notification) stop('BOOTSTRAP_PROFILE');
+      const sql = read(`${SOURCE}/deploy/timeweb/notification-role-bootstrap-0105.sql`, 0o644);
+      if (hash(sql) !== plan.inputs.bootstrapSha256) stop('BOOTSTRAP_SOURCE');
+      postgresSql(sql, false, postgresId);
+    },
+    readNotificationProof: (name) => {
+      if (!['bootstrap.json', 'postflight.json'].includes(name)) stop('PROOF_PATH');
+      return present(path(name)) ? read(path(name)) : null;
+    },
+    writeNotificationProof: (name, bytes) => {
+      if (!['bootstrap.json', 'postflight.json'].includes(name)) stop('PROOF_PATH');
+      durable(path(name), bytes, true);
     },
     successProof: () =>
       present(path('migration-success.json')) ? read(path('migration-success.json')) : null,
@@ -3120,6 +3362,293 @@ export async function runManualApiWorkerMigration(mode, requestPath) {
   } finally {
     owner.close();
   }
+}
+
+// Fixed owned cache metadata only, under the existing executor lock. Partial
+// incoming bytes can resume only as an exact prefix of the original sealed value.
+export function sealNotificationPrefetchMetadata(path, bytes) {
+  if (
+    !new RegExp(
+      `^${ROOT}/standard/notification-prefetch/[a-f0-9]{40}-[1-9][0-9]*-1/(?:intent|receipt)\\.json$`,
+    ).test(path) ||
+    !Buffer.isBuffer(bytes) ||
+    !bytes.length ||
+    bytes.length > 4 * 1024 * 1024
+  )
+    stop('PREFETCH_METADATA_PATH');
+  secure(dirname(path), 0o700);
+  const stage = path + '.incoming';
+  if (present(path)) {
+    if (present(stage) || !read(path).equals(bytes)) stop('PREFETCH_METADATA_DRIFT');
+    return;
+  }
+  if (!present(stage)) {
+    const fd = openSync(
+      stage,
+      constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
+    closeSync(fd);
+    syncParent(stage);
+  }
+  const before = secure(stage, 0o600),
+    fd = openSync(stage, constants.O_RDWR | constants.O_NOFOLLOW);
+  try {
+    const opened = fstatSync(fd);
+    if (
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.nlink !== 1 ||
+      opened.size > bytes.length
+    )
+      stop('PREFETCH_METADATA_RACE');
+    const prefix = Buffer.alloc(opened.size),
+      count = readSync(fd, prefix, 0, prefix.length, null);
+    if (count !== prefix.length || !bytes.subarray(0, count).equals(prefix))
+      stop('PREFETCH_METADATA_PREFIX');
+    let position = count;
+    while (position < bytes.length) {
+      const n = writeSync(fd, bytes, position, bytes.length - position);
+      if (n <= 0) stop('PREFETCH_METADATA_WRITE');
+      position += n;
+    }
+    fsyncSync(fd);
+    const current = secure(stage, 0o600);
+    if (
+      current.dev !== opened.dev ||
+      current.ino !== opened.ino ||
+      !read(stage).equals(bytes) ||
+      present(path)
+    )
+      stop('PREFETCH_METADATA_RACE');
+    // Both mutators hold api-worker-executor.lock. No existing final is replaced.
+    renameSync(stage, path);
+    syncParent(path);
+    if (!read(path).equals(bytes)) stop('PREFETCH_METADATA_READBACK');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// The nested operation is publication/runtime metadata, not the later migration request.
+// Only expiry changes when that separate operation is minted after verified backup.
+function prefetchRequest(bytes, at) {
+  const value = parseStrictJson(bytes);
+  exact(value, ['schema', 'operation', 'retirementReceiptSha256', 'confirmation']);
+  if (
+    value.schema !== 'PHUB_NOTIFICATION_MIGRATOR_PREFETCH_V1' ||
+    value.confirmation !== 'PREFETCH_NOTIFICATION_MIGRATOR_KEEP_DATABASE_AND_RUNTIME' ||
+    value.operation?.schema !== NOTIFICATION_MIGRATION_SCHEMA ||
+    !HASH.test(value.retirementReceiptSha256 ?? '')
+  )
+    stop('PREFETCH_REQUEST');
+  validateApiWorkerMigrationOperation(value.operation, at);
+  return value.operation;
+}
+
+function prefetchReceipt(bytes, requestBytes) {
+  const value = parseStrictJson(bytes);
+  exact(value, [
+    'schema',
+    'requestSha256',
+    'operationSha256',
+    'imageId',
+    'runtimeSha256',
+    'secretSetSha256',
+    'databaseStateSha256',
+    'retainedImageIds',
+  ]);
+  const op = prefetchRequest(requestBytes);
+  if (
+    value.schema !== 'PHUB_NOTIFICATION_MIGRATOR_PREFETCH_RECEIPT_V1' ||
+    value.requestSha256 !== hash(requestBytes) ||
+    value.operationSha256 !== hash(encoded(op)) ||
+    !/^sha256:[a-f0-9]{64}$/.test(value.imageId) ||
+    !['runtimeSha256', 'secretSetSha256', 'databaseStateSha256'].every((k) =>
+      HASH.test(value[k] ?? ''),
+    ) ||
+    !Array.isArray(value.retainedImageIds) ||
+    value.retainedImageIds.some((id) => !/^sha256:[a-f0-9]{64}$/.test(id)) ||
+    !same(value.retainedImageIds, [...new Set(value.retainedImageIds)].sort())
+  )
+    stop('PREFETCH_RECEIPT');
+  return value;
+}
+
+async function prefetchInputs(op, ops) {
+  const runtime = await ops.snapshot(hash(encoded(op))),
+    secrets = await ops.secrets();
+  if (
+    !same(runtime.api.identity, op.expectedApi) ||
+    !same(runtime.worker.identity, op.expectedWorker) ||
+    !same(runtime.postgres, op.expectedPostgres) ||
+    secrets.releaseId !== op.expectedSecretSetReleaseId ||
+    !same(secrets.files, op.expectedSecretSetFiles)
+  )
+    stop('PREFETCH_PREIMAGE');
+  notificationLedger(await ops.ledger(), 102);
+  const state = await ops.notificationState('pre');
+  await ops.footprint();
+  return {
+    runtimeSha256: hash(encoded(runtime)),
+    secretSetSha256: hash(encoded(secrets)),
+    databaseStateSha256: hash(encoded(state)),
+  };
+}
+
+export async function runNotificationMigratorPrefetchAdapter(mode, bytes, ops) {
+  if (!['pull', 'reconcile'].includes(mode)) stop('PREFETCH_MODE');
+  const op = prefetchRequest(bytes, mode === 'pull' ? ops.time() : undefined);
+  await ops.prefetchUnused();
+  await ops.assertSource(op);
+  await ops.authority(op);
+  await ops.retirementReceipt(parseStrictJson(bytes).retirementReceiptSha256);
+  const input = await prefetchInputs(op, ops);
+  const intent = await ops.prefetchIntent();
+  if (mode === 'pull') {
+    if (intent || (await ops.prefetchReceipt())) stop('PREFETCH_OWNED_USE_RECONCILE');
+    const retainedImageIds = await ops.imageInventory();
+    if (
+      !Array.isArray(retainedImageIds) ||
+      retainedImageIds.some((id) => !/^sha256:[a-f0-9]{64}$/.test(id)) ||
+      !same(retainedImageIds, [...new Set(retainedImageIds)].sort())
+    )
+      stop('PREFETCH_IMAGE_INVENTORY');
+    // The durable original intent precedes the idempotent exact-digest pull.
+    const prepared = encoded({
+      schema: 'PHUB_NOTIFICATION_MIGRATOR_PREFETCH_INTENT_V1',
+      requestBase64: bytes.toString('base64'),
+      input,
+      retainedImageIds,
+    });
+    await ops.writePrefetchIntent(prepared);
+    await ops.pullMigrator();
+  } else if (!intent) stop('PREFETCH_INTENT_MISSING');
+  const prepared = parseStrictJson(await ops.prefetchIntent());
+  exact(prepared, ['schema', 'requestBase64', 'input', 'retainedImageIds']);
+  if (
+    prepared.schema !== 'PHUB_NOTIFICATION_MIGRATOR_PREFETCH_INTENT_V1' ||
+    prepared.requestBase64 !== bytes.toString('base64') ||
+    !same(prepared.input, input) ||
+    !Array.isArray(prepared.retainedImageIds) ||
+    prepared.retainedImageIds.some((id) => !/^sha256:[a-f0-9]{64}$/.test(id)) ||
+    !same(prepared.retainedImageIds, [...new Set(prepared.retainedImageIds)].sort())
+  )
+    stop('PREFETCH_INTENT_DRIFT');
+  if (mode === 'reconcile' && !(await ops.prefetchImagePresent())) {
+    // A failed/incomplete pull is not an irreversible effect. Resume only this
+    // original immutable digest while the original request and fresh CI permit it.
+    prefetchRequest(bytes, ops.time());
+    const retained = await ops.imageInventory();
+    if (!prepared.retainedImageIds.every((id) => retained.includes(id)))
+      stop('PREFETCH_IMAGE_DRIFT');
+    await ops.pullMigrator();
+  }
+  const imageId = await ops.image(),
+    images = await ops.imageInventory();
+  if (
+    !/^sha256:[a-f0-9]{64}$/.test(imageId) ||
+    !prepared.retainedImageIds.every((id) => images.includes(id))
+  )
+    stop('PREFETCH_IMAGE_DRIFT');
+  await ops.prefetchUnused();
+  if (!same(await prefetchInputs(op, ops), input)) stop('PREFETCH_INPUT_DRIFT');
+  const receipt = {
+    schema: 'PHUB_NOTIFICATION_MIGRATOR_PREFETCH_RECEIPT_V1',
+    requestSha256: hash(bytes),
+    operationSha256: hash(encoded(op)),
+    imageId,
+    ...input,
+    retainedImageIds: prepared.retainedImageIds,
+  };
+  const existing = await ops.prefetchReceipt();
+  if (existing) {
+    const old = prefetchReceipt(existing, bytes);
+    if (!same(old, receipt)) stop('PREFETCH_RECEIPT_DRIFT');
+  } else await ops.writePrefetchReceipt(encoded(receipt));
+  const readback = prefetchReceipt(await ops.prefetchReceipt(), bytes);
+  if (!same(readback, receipt)) stop('PREFETCH_RECEIPT_DRIFT');
+  return {
+    status: 'MIGRATOR_PREFETCH_VERIFIED',
+    requestSha256: hash(bytes),
+    imageId,
+    receiptSha256: hash(await ops.prefetchReceipt()),
+    databaseMutated: false,
+    runtimeMutated: false,
+  };
+}
+
+export async function runManualNotificationMigratorPrefetch(mode, requestPath) {
+  if (
+    !['pull', 'reconcile'].includes(mode) ||
+    requestPath !== PREFETCH_REQUEST ||
+    process.getuid?.() !== 0
+  )
+    stop('PREFETCH_ENTRY');
+  assertNoAmbientDockerOverrides();
+  assertNoAmbientComposeOverrides();
+  secure(`${ROOT}/standard`, 0o700);
+  const bytes = read(PREFETCH_REQUEST),
+    op = prefetchRequest(bytes, mode === 'pull' ? Date.now() : undefined);
+  const owner = acquireApiWorkerExecutor(`${ROOT}/standard/api-worker-executor.lock`);
+  try {
+    return await runNotificationMigratorPrefetchAdapter(mode, bytes, productionOps(op, owner));
+  } finally {
+    owner.close();
+  }
+}
+
+export async function attestNotificationMigratorPrefetchForBackup(backup) {
+  const bytes = read(PREFETCH_REQUEST),
+    op = prefetchRequest(bytes);
+  if (
+    backup.schema !== NOTIFICATION_BACKUP_SCHEMA ||
+    backup.controllerSha !== op.controllerSha ||
+    backup.controllerTree !== op.controllerTree ||
+    backup.controllerSourceCiRunId !== op.controllerSourceCiRunId ||
+    backup.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+    backup.catalogsSha256 !== op.catalogsSha256 ||
+    !same(backup.expectedApi, op.expectedApi) ||
+    !same(backup.expectedPostgres, op.expectedPostgres)
+  )
+    stop('PREFETCH_BACKUP_BINDING');
+  const ops = productionOps(op, { assertOwned: () => stop('PREFETCH_READONLY') });
+  await ops.assertUnused();
+  await ops.assertSource(op);
+  if (
+    [REQUEST, `${ROOT}/operator/api-worker-upgrade.json`].some(present) ||
+    !same(parseStrictJson(read(DISK_BACKUP_REQUEST)), backup)
+  )
+    stop('PREFETCH_BACKUP_REQUEST');
+  const intentBytes = await ops.prefetchIntent(),
+    receiptBytes = await ops.prefetchReceipt();
+  if (!intentBytes || !receiptBytes) stop('PREFETCH_PROOF_MISSING');
+  const intent = parseStrictJson(intentBytes),
+    receipt = prefetchReceipt(receiptBytes, bytes);
+  exact(intent, ['schema', 'requestBase64', 'input', 'retainedImageIds']);
+  const images = await ops.imageInventory();
+  if (
+    intent.schema !== 'PHUB_NOTIFICATION_MIGRATOR_PREFETCH_INTENT_V1' ||
+    intent.requestBase64 !== bytes.toString('base64') ||
+    !same(intent.input, await prefetchInputs(op, ops)) ||
+    !same(intent.retainedImageIds, receipt.retainedImageIds) ||
+    !same(intent.input, {
+      runtimeSha256: receipt.runtimeSha256,
+      secretSetSha256: receipt.secretSetSha256,
+      databaseStateSha256: receipt.databaseStateSha256,
+    }) ||
+    (await ops.image()) !== receipt.imageId ||
+    !receipt.retainedImageIds.every((id) => images.includes(id))
+  )
+    stop('PREFETCH_PROOF_DRIFT');
+  const proof = {
+    requestSha256: hash(bytes),
+    receiptSha256: hash(receiptBytes),
+    migratorImage: op.migratorImage,
+    imageId: receipt.imageId,
+  };
+  if (!same(backup.migratorPrefetch, proof)) stop('PREFETCH_BACKUP_BINDING');
+  return proof;
 }
 
 export function validateMigrationProofBundle(bundle, expected) {
@@ -3323,5 +3852,804 @@ export async function attestMigrationBackupProof(expected, ignoredRestore = null
     containerId: row.Id,
     imageId: proof.plan.imageId,
     proofSha256: hash(canonical({ files: custody, container: snapshotRow(row) })),
+  };
+}
+
+const notificationReceiptSchema = 'PHUB_TIMEWEB_NOTIFICATION_0105_MIGRATION_RECEIPT_V1';
+const notificationPlanSchema = 'PHUB_TIMEWEB_NOTIFICATION_0105_MIGRATION_PLAN_V1';
+const notificationPhases = [
+  'PREPARING',
+  'PROBE_RUNTIME_CREATE_INTENT',
+  'PROBE_RUNTIME_START_INTENT',
+  'BOOTSTRAP_INTENT',
+  'BOOTSTRAP_APPLIED',
+  'PROBE_MIGRATOR_CREATE_INTENT',
+  'PROBE_MIGRATOR_START_INTENT',
+  'PREPARED',
+  'CREATE_INTENT',
+  'CREATED',
+  'START_INTENT',
+  'STARTED',
+  'SUCCESS',
+  'ABORTED',
+  'RECONCILED',
+];
+function notificationLedger(rows, count) {
+  if (!Array.isArray(rows) || rows.length !== count) stop('NOTIFICATION_LEDGER');
+  for (const r of rows) {
+    exact(r, ['filename', 'checksum']);
+    if (!/^[0-9]{4}_[a-z0-9_]+\.sql$/.test(r.filename ?? '') || !HASH.test(r.checksum ?? ''))
+      stop('NOTIFICATION_LEDGER');
+  }
+  const expected =
+    count === 102 ? NOTIFICATION_PRE_LEDGER : count === 105 ? NOTIFICATION_POST_LEDGER : null;
+  if (
+    !expected ||
+    hash(JSON.stringify(rows.map((r) => [r.filename, r.checksum])) + '\n') !== expected
+  )
+    stop('NOTIFICATION_LEDGER');
+}
+export function validateNotificationMigrationPlan(plan, bytes) {
+  const op = validateNotificationOperation(parseStrictJson(bytes));
+  exact(plan, [
+    'schema',
+    'operationSha256',
+    'controllerSha',
+    'controllerTree',
+    'controllerSourceCiRunId',
+    'candidate',
+    'migratorImage',
+    'imageId',
+    'preLedgerSha256',
+    'postLedgerSha256',
+    'secretSet',
+    'runtime',
+    'backup',
+    'inputs',
+    'preimage',
+    'footprint',
+  ]);
+  exact(plan.inputs, [
+    'packageDescriptorSha256',
+    'catalogsSha256',
+    'bootstrapSha256',
+    'probeSha256',
+    'builderSha256',
+    'inverseSha256',
+    'securityCatalogSqlSha256',
+  ]);
+  exact(plan.secretSet, ['releaseId', 'device', 'inode', 'files']);
+  exact(plan.secretSet.files, secretNames);
+  exact(plan.runtime, ['api', 'worker', 'postgres', 'controllerConfigSha256', 'excluded']);
+  for (const kind of ['api', 'worker']) {
+    exact(plan.runtime[kind], ['identity', 'status', 'health', 'fingerprint']);
+    if (
+      !same(plan.runtime[kind].identity, op[kind === 'api' ? 'expectedApi' : 'expectedWorker']) ||
+      plan.runtime[kind].status !== 'running' ||
+      plan.runtime[kind].health !== 'healthy' ||
+      !HASH.test(plan.runtime[kind].fingerprint ?? '')
+    )
+      stop('NOTIFICATION_PLAN_RUNTIME');
+  }
+  if (
+    !same(plan.runtime.postgres, op.expectedPostgres) ||
+    !Array.isArray(plan.runtime.excluded) ||
+    !plan.runtime.excluded.length ||
+    !HASH.test(plan.runtime.controllerConfigSha256 ?? '')
+  )
+    stop('NOTIFICATION_PLAN_RUNTIME');
+  for (const row of plan.runtime.excluded) {
+    exact(row, ['identity', 'status', 'health', 'fingerprint']);
+    exact(row.identity, idFields);
+    if (!HASH.test(row.identity.id ?? '') || !HASH.test(row.fingerprint ?? ''))
+      stop('NOTIFICATION_PLAN_RUNTIME');
+  }
+  if (!plan.runtime.excluded.some((r) => same(r.identity, op.expectedPostgres)))
+    stop('NOTIFICATION_PLAN_RUNTIME');
+  if (
+    plan.schema !== notificationPlanSchema ||
+    plan.operationSha256 !== hash(bytes) ||
+    plan.controllerSha !== op.controllerSha ||
+    plan.controllerTree !== op.controllerTree ||
+    plan.controllerSourceCiRunId !== op.controllerSourceCiRunId ||
+    plan.candidate !== `${op.candidateSha}-${op.publicationRunId}-1` ||
+    plan.migratorImage !== op.migratorImage ||
+    !/^sha256:[a-f0-9]{64}$/.test(plan.imageId ?? '') ||
+    plan.preLedgerSha256 !== NOTIFICATION_PRE_LEDGER ||
+    plan.postLedgerSha256 !== NOTIFICATION_POST_LEDGER ||
+    plan.secretSet.releaseId !== op.expectedSecretSetReleaseId ||
+    !same(plan.secretSet.files, op.expectedSecretSetFiles) ||
+    !Number.isSafeInteger(plan.secretSet.device) ||
+    !Number.isSafeInteger(plan.secretSet.inode) ||
+    plan.inputs.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+    plan.inputs.catalogsSha256 !== op.catalogsSha256 ||
+    !Object.values(plan.inputs).every((v) => HASH.test(v ?? ''))
+  )
+    stop('NOTIFICATION_PLAN');
+  exact(plan.backup, ['path', 'sha256', 'operationSha256', 'preimageSha256']);
+  if (
+    plan.backup.path !==
+      `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-notification-pre105/database-backup-receipt.json` ||
+    !['sha256', 'operationSha256', 'preimageSha256'].every((k) => HASH.test(plan.backup[k] ?? ''))
+  )
+    stop('NOTIFICATION_PLAN_BACKUP');
+  return plan;
+}
+export function validateNotificationMigrationReceipt(v, planSha, operationSha) {
+  exact(v, [
+    'schema',
+    'status',
+    'planSha256',
+    'operationSha256',
+    'observedAt',
+    'containerId',
+    'successSha256',
+    'reconciledStatus',
+  ]);
+  if (
+    v.schema !== notificationReceiptSchema ||
+    !notificationPhases.includes(v.status) ||
+    v.planSha256 !== planSha ||
+    v.operationSha256 !== operationSha ||
+    !Number.isFinite(Date.parse(v.observedAt)) ||
+    new Date(v.observedAt).toISOString() !== v.observedAt ||
+    (v.containerId !== null && !HASH.test(v.containerId ?? '')) ||
+    (v.successSha256 !== null && !HASH.test(v.successSha256 ?? '')) ||
+    (v.status === 'RECONCILED'
+      ? !['SUCCESS', 'ABORTED'].includes(v.reconciledStatus)
+      : v.reconciledStatus !== null) ||
+    ((v.status === 'SUCCESS' || v.reconciledStatus === 'SUCCESS') &&
+      (!v.containerId || !v.successSha256))
+  )
+    stop('NOTIFICATION_RECEIPT');
+  return v;
+}
+// The migration-only profile reuses custody, images, executor fences and the one immutable runner.
+export async function runNotificationMigrationAdapter(mode, operationBytes, ops) {
+  const op = validateNotificationOperation(
+      parseStrictJson(operationBytes),
+      mode === 'deploy' ? ops.time() : undefined,
+    ),
+    operationSha = hash(operationBytes);
+  let plan, planBytes, current;
+  const journal = async (status, extra = {}) => {
+    current = {
+      schema: notificationReceiptSchema,
+      status,
+      planSha256: hash(planBytes),
+      operationSha256: operationSha,
+      observedAt: now(),
+      containerId: current?.containerId ?? null,
+      successSha256: current?.successSha256 ?? null,
+      reconciledStatus: null,
+      ...extra,
+    };
+    await ops.writeReceipt(current);
+  };
+  const attest = async (count) => {
+    await ops.assertSource(op);
+    await ops.assertOwned();
+    if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
+      stop('RUNTIME_DRIFT');
+    notificationLedger(await ops.ledger(), count);
+    if (!same(await ops.inputs(), plan.inputs)) stop('NOTIFICATION_INPUT_DRIFT');
+  };
+  const state = (phase) => ops.notificationState(phase);
+  const probe = async (kind, phase, target) => {
+    const key = phase === 'post' ? kind + '-post' : kind;
+    let found = await ops.lookup(key, plan.imageId, operationSha);
+    if (!found) {
+      await journal(`PROBE_${kind.toUpperCase()}_CREATE_INTENT`);
+      const id = await ops.create(key, plan.imageId, operationSha);
+      found = await ops.lookup(key, plan.imageId, operationSha);
+      if (!found || found.Id !== id) stop('PROBE_CREATE_UNKNOWN');
+    }
+    const id = found.Id;
+    if (found.State.Status === 'created') {
+      await journal(`PROBE_${kind.toUpperCase()}_START_INTENT`);
+      await ops.start(id, key);
+      await ops.wait(id, key);
+    } else if (found.State.Status === 'running') await ops.wait(id, key);
+    found = await ops.lookup(key, plan.imageId, operationSha);
+    if (!found || found.Id !== id || found.State.Status !== 'exited' || found.State.ExitCode !== 0)
+      stop('PROBE_EXIT');
+    const value = validateNotificationRoleReadback(
+      await ops.logs(id),
+      kind,
+      target,
+      phase,
+      await ops.catalogHash(phase === 'pre' ? 102 : 105),
+    );
+    return { id, value };
+  };
+  const success = async (row, record = true) => {
+    await attest(105);
+    const post = await state('post'),
+      target = await ops.target();
+    if (!same(target, post.target) || !same(target, plan.preimage.target))
+      stop('ROLE_TARGET_DRIFT');
+    const pre = parseStrictJson(await ops.readRoleProof());
+    exact(pre, [
+      'schema',
+      'operationSha256',
+      'planSha256',
+      'target',
+      'runtime',
+      'migrator',
+      'runtimeContainerId',
+      'migratorContainerId',
+    ]);
+    if (
+      pre.schema !== 'PHUB_NOTIFICATION_MIGRATION_PRE_ROLES_V1' ||
+      pre.operationSha256 !== operationSha ||
+      pre.planSha256 !== hash(planBytes) ||
+      !same(pre.target, target)
+    )
+      stop('ROLE_PROOF');
+    for (const k of ['runtime', 'migrator'])
+      validateNotificationRoleReadback(pre[k], k, target, 'pre', await ops.catalogHash(102));
+    await ops.attestRoleContainers(pre);
+    let postBytes = await ops.readNotificationProof('postflight.json');
+    if (!postBytes) {
+      const runtime = await probe('runtime', 'post', target),
+        migrator = await probe('migrator', 'post', target);
+      postBytes = encoded({
+        schema: 'PHUB_NOTIFICATION_MIGRATION_POSTFLIGHT_V1',
+        target,
+        state: post,
+        runtime: runtime.value,
+        migrator: migrator.value,
+        runtimeContainerId: runtime.id,
+        migratorContainerId: migrator.id,
+      });
+      await ops.writeNotificationProof('postflight.json', postBytes);
+    }
+    const savedPost = parseStrictJson(postBytes);
+    exact(savedPost, [
+      'schema',
+      'target',
+      'state',
+      'runtime',
+      'migrator',
+      'runtimeContainerId',
+      'migratorContainerId',
+    ]);
+    if (
+      savedPost.schema !== 'PHUB_NOTIFICATION_MIGRATION_POSTFLIGHT_V1' ||
+      !same(savedPost.state, post) ||
+      !same(savedPost.target, target)
+    )
+      stop('POSTFLIGHT_DRIFT');
+    for (const k of ['runtime', 'migrator'])
+      validateNotificationRoleReadback(savedPost[k], k, target, 'post', await ops.catalogHash(105));
+    await ops.attestRoleContainers(savedPost, 'post');
+    const bootstrap = await ops.readNotificationProof('bootstrap.json');
+    if (!bootstrap) stop('BOOTSTRAP_PROOF');
+    const proof = {
+      schema: 'PHUB_NOTIFICATION_MIGRATION_SUCCESS_V1',
+      status: 'SUCCESS',
+      planSha256: hash(planBytes),
+      operationSha256: operationSha,
+      containerId: row.Id,
+      roleProofSha256: hash(await ops.readRoleProof()),
+      postflightSha256: hash(postBytes),
+      bootstrapSha256: hash(bootstrap),
+      backup: plan.backup,
+      ledgerSha256: NOTIFICATION_POST_LEDGER,
+      catalogSha256: await ops.catalogHash(105),
+      target,
+      observedAt: now(),
+    };
+    const saved = await ops.successProof();
+    if (saved) {
+      const old = parseStrictJson(saved);
+      exact(old, Object.keys(proof));
+      if (!same({ ...old, observedAt: proof.observedAt }, proof)) stop('SUCCESS_DRIFT');
+    } else await ops.writeSuccess(encoded(proof));
+    if (record)
+      await journal('SUCCESS', {
+        containerId: row.Id,
+        successSha256: hash(await ops.successProof()),
+      });
+  };
+  if (mode === 'deploy') {
+    await ops.assertUnused();
+    await ops.assertSource(op);
+    await ops.authority(op);
+    const runtime = await ops.snapshot(),
+      secrets = await ops.secrets();
+    if (
+      !same(runtime.api.identity, op.expectedApi) ||
+      !same(runtime.worker.identity, op.expectedWorker) ||
+      !same(runtime.postgres, op.expectedPostgres) ||
+      secrets.releaseId !== op.expectedSecretSetReleaseId ||
+      !same(secrets.files, op.expectedSecretSetFiles)
+    )
+      stop('PREIMAGE');
+    notificationLedger(await ops.ledger(), 102);
+    const preimage = await state('pre'),
+      footprint = await ops.footprint(),
+      backup = await ops.backup(op),
+      imageId = await ops.image(),
+      inputs = await ops.inputs();
+    plan = {
+      schema: notificationPlanSchema,
+      operationSha256: operationSha,
+      controllerSha: op.controllerSha,
+      controllerTree: op.controllerTree,
+      controllerSourceCiRunId: op.controllerSourceCiRunId,
+      candidate: `${op.candidateSha}-${op.publicationRunId}-1`,
+      migratorImage: op.migratorImage,
+      imageId,
+      preLedgerSha256: NOTIFICATION_PRE_LEDGER,
+      postLedgerSha256: NOTIFICATION_POST_LEDGER,
+      secretSet: secrets,
+      runtime,
+      backup,
+      inputs,
+      preimage,
+      footprint,
+    };
+    planBytes = encoded(plan);
+    validateNotificationMigrationPlan(plan, operationBytes);
+    await ops.prepare(encodeApiWorkerMigrationCapsule(operationBytes, planBytes));
+    await journal('PREPARING');
+    await ops.claim(planBytes, operationSha);
+    const fresh = async () => {
+      if (ops.time() >= Date.parse(op.expiresAt)) stop('EXPIRED');
+      await attest(102);
+      if (!same(await ops.backup(op), plan.backup) || (await ops.image()) !== plan.imageId)
+        stop('CUSTODY_DRIFT');
+      await ops.footprint();
+    };
+    await fresh();
+    const target = await ops.target(),
+      runtimeRole = await probe('runtime', 'pre', target);
+    await fresh();
+    if (!same(await state('pre'), plan.preimage)) stop('PREIMAGE');
+    await journal('BOOTSTRAP_INTENT');
+    // Lost ACK is never retried: reconcile classifies the durable intent and exact postimage.
+    await ops.bootstrap();
+    const bootstrap = await state('bootstrap');
+    await ops.writeNotificationProof(
+      'bootstrap.json',
+      encoded({
+        schema: 'PHUB_NOTIFICATION_BOOTSTRAP_PROOF_V1',
+        operationSha256: operationSha,
+        sqlSha256: inputs.bootstrapSha256,
+        state: bootstrap,
+      }),
+    );
+    await journal('BOOTSTRAP_APPLIED');
+    await fresh();
+    const migratorRole = await probe('migrator', 'pre', target);
+    await ops.writeRoleProof(
+      encoded({
+        schema: 'PHUB_NOTIFICATION_MIGRATION_PRE_ROLES_V1',
+        operationSha256: operationSha,
+        planSha256: hash(planBytes),
+        target,
+        runtime: runtimeRole.value,
+        migrator: migratorRole.value,
+        runtimeContainerId: runtimeRole.id,
+        migratorContainerId: migratorRole.id,
+      }),
+    );
+    await fresh();
+    await journal('PREPARED');
+    await journal('CREATE_INTENT');
+    const id = await ops.create('migration', imageId, operationSha);
+    await journal('CREATED', { containerId: id });
+    await fresh();
+    await journal('START_INTENT');
+    await ops.start(id, 'migration');
+    await journal('STARTED');
+    await ops.wait(id, 'migration');
+    const row = await ops.lookup('migration', imageId, operationSha);
+    if (!row || row.Id !== id || row.State.Status !== 'exited' || row.State.ExitCode !== 0)
+      stop('EXIT');
+    await success(row);
+    return { status: 'SUCCESS', receipt: ops.receiptPath };
+  }
+  if (mode !== 'reconcile') stop('MODE');
+  const capsule = readApiWorkerMigrationCapsule(await ops.preparation());
+  if (!capsule.operationBytes.equals(operationBytes)) stop('REQUEST_DRIFT');
+  plan = capsule.plan;
+  planBytes = capsule.planBytes;
+  validateNotificationMigrationPlan(plan, operationBytes);
+  await ops.loadPlan(plan, planBytes, operationSha);
+  current = await ops.receipt();
+  if (!current) stop('RECEIPT');
+  validateNotificationMigrationReceipt(current, hash(planBytes), operationSha);
+  await ops.assertSource(op);
+  await ops.assertOwned();
+  if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
+    stop('RUNTIME_DRIFT');
+  const row = await ops.lookup('migration', plan.imageId, operationSha),
+    count = (await ops.ledger()).length;
+  if (current.containerId && row?.Id !== current.containerId) stop('CONTAINER_DRIFT');
+  const terminal = current.status === 'RECONCILED' ? current.reconciledStatus : current.status;
+  if (count === 105 && row?.State.Status === 'exited' && row.State.ExitCode === 0) {
+    if (terminal === 'SUCCESS' && hash(await ops.successProof()) !== current.successSha256)
+      stop('SUCCESS_DRIFT');
+    await success(row, current.status !== 'RECONCILED');
+  } else if (
+    count === 102 &&
+    [
+      'PREPARING',
+      'PROBE_RUNTIME_CREATE_INTENT',
+      'PROBE_RUNTIME_START_INTENT',
+      'ABORTED',
+      'RECONCILED',
+    ].includes(current.status)
+  ) {
+    await attest(102);
+    if (!same(await state('pre'), plan.preimage)) stop('RECONCILE_OWNER_DECISION');
+    await ops.attestStoppedProbes();
+    await journal('ABORTED', { containerId: null, successSha256: null });
+  } else stop('RECONCILE_OWNER_DECISION');
+  if (current.status !== 'RECONCILED')
+    await journal('RECONCILED', {
+      reconciledStatus: current.status,
+      containerId: current.containerId,
+      successSha256: current.successSha256,
+    });
+  await ops.release();
+  return { status: 'RECONCILED', receipt: ops.receiptPath };
+}
+
+function postgresSql(sql, readOnly = true, postgresId = bridge.postgresId) {
+  try {
+    const output = execFileSync(
+      '/usr/bin/docker',
+      [
+        'exec',
+        '-i',
+        postgresId,
+        '/bin/sh',
+        '-eu',
+        '-c',
+        `export PGOPTIONS='-c default_transaction_read_only=${readOnly ? 'on' : 'off'} -c statement_timeout=15000 -c lock_timeout=2000'; exec psql -X --no-password --username="$POSTGRES_USER" --dbname="\${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc -qAt --set=ON_ERROR_STOP=1 --file=-`,
+      ],
+      {
+        input: sql,
+        encoding: 'utf8',
+        timeout: 30000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: {
+          PATH: '/usr/bin:/bin',
+          LANG: 'C',
+          DOCKER_HOST: 'unix:///var/run/docker.sock',
+          DOCKER_CONFIG: '/proc/self/phub-nonexistent-docker-config',
+        },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    ).trim();
+    return output ? parseStrictJson(output) : null;
+  } catch {
+    stop('DATABASE_PROOF_UNKNOWN');
+  }
+}
+export function readNotificationDatabaseState(op, phase = 'pre') {
+  if (
+    ![
+      NOTIFICATION_MIGRATION_SCHEMA,
+      NOTIFICATION_BACKUP_SCHEMA,
+      JOIN_POST105_BACKUP_SCHEMA,
+    ].includes(op?.schema)
+  )
+    stop('NOTIFICATION_PROFILE');
+  if (op.schema === JOIN_POST105_BACKUP_SCHEMA && phase !== 'post') stop('NOTIFICATION_PROFILE');
+  if (op.schema === NOTIFICATION_MIGRATION_SCHEMA) sourceAttest(op);
+  else attestNotificationSource(op, { git, read, secure, present });
+  const value = postgresSql(
+    notificationStateSql(
+      phase,
+      read(`${SOURCE}/deploy/timeweb/notification-role-bootstrap-0105.sql`, 0o644).toString(),
+    ),
+    true,
+    op.expectedPostgres.id,
+  );
+  return validateNotificationState(
+    value,
+    phase,
+    read(`${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`, 0o644),
+    read(`${SOURCE}/deploy/timeweb/notification-migrations-0099-0101.v1.json`, 0o644),
+  );
+}
+
+export function notificationBackupProof(op, { fresh = true } = {}) {
+  const directory = `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-notification-pre105`;
+  secure(directory, 0o700);
+  const bytes = read(`${directory}/database-backup-receipt.json`),
+    v = parseStrictJson(bytes),
+    operationBytes = read(`${directory}/backup-operation.json`),
+    backupOp = parseStrictJson(operationBytes),
+    preimageBytes = read(`${directory}/preimage-proof.json`);
+  exact(v, [
+    'schema',
+    'baselineReleaseId',
+    'completedAt',
+    'backupFile',
+    'backupSha256',
+    'restoreVerified',
+    'restoreImage',
+    'restoredLedgerSha256',
+    'sourceLedgerSha256',
+    'operationSha256',
+    'target',
+    'preimageSha256',
+    'packageDescriptorSha256',
+    'catalogsSha256',
+    'aclRecovery',
+    'securityPreimageSha256',
+    'restoredSecuritySha256',
+    'roleClosureSha256',
+    ...(backupOp.migratorPrefetch ? ['migratorPrefetch'] : []),
+  ]);
+  if (
+    v.schema !== 'PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1' ||
+    v.baselineReleaseId !== op.expectedApi.releaseId ||
+    v.backupFile !== `${directory}/database.pgcustom` ||
+    !HASH.test(v.backupSha256 ?? '') ||
+    v.restoreVerified !== true ||
+    v.restoreImage !== bridge.postgresImage ||
+    v.restoredLedgerSha256 !== NOTIFICATION_PRE_LEDGER ||
+    v.sourceLedgerSha256 !== NOTIFICATION_PRE_LEDGER ||
+    v.operationSha256 !== hash(operationBytes) ||
+    v.preimageSha256 !== hash(preimageBytes) ||
+    v.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+    v.catalogsSha256 !== op.catalogsSha256 ||
+    v.aclRecovery !== 'ISOLATED_OWNER_ACL_RESTORE_VERIFIED' ||
+    !Number.isFinite(Date.parse(v.completedAt)) ||
+    Date.now() - Date.parse(v.completedAt) < 0 ||
+    (fresh && Date.now() - Date.parse(v.completedAt) > 3600000)
+  )
+    stop('NOTIFICATION_BACKUP');
+  if (
+    backupOp.schema !== NOTIFICATION_BACKUP_SCHEMA ||
+    backupOp.controllerSha !== op.controllerSha ||
+    backupOp.controllerTree !== op.controllerTree ||
+    backupOp.controllerSourceCiRunId !== op.controllerSourceCiRunId ||
+    backupOp.toolCommit !== op.controllerSha ||
+    backupOp.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+    backupOp.catalogsSha256 !== op.catalogsSha256 ||
+    !same(backupOp.expectedApi, op.expectedApi) ||
+    !same(backupOp.expectedPostgres, op.expectedPostgres) ||
+    !read(DISK_BACKUP_REQUEST).equals(operationBytes)
+  )
+    stop('NOTIFICATION_BACKUP_OPERATION');
+  if (
+    !backupOp.migratorPrefetch ||
+    !same(v.migratorPrefetch, backupOp.migratorPrefetch) ||
+    backupOp.migratorPrefetch.migratorImage !== op.migratorImage
+  )
+    stop('NOTIFICATION_BACKUP_PREFETCH');
+  // Read-only reattestation; no pull is reachable from migration or backup.
+  // The migration request now exists, so use the receipt directly and bind every
+  // immutable nested field to this operation, allowing only its freshly minted expiry.
+  const prefetchBytes = read(PREFETCH_REQUEST),
+    cached = prefetchRequest(prefetchBytes);
+  if (
+    !same({ ...cached, expiresAt: op.expiresAt }, op) ||
+    hash(prefetchBytes) !== backupOp.migratorPrefetch.requestSha256
+  )
+    stop('NOTIFICATION_BACKUP_PREFETCH');
+  const cachedReceiptBytes = read(
+    `${ROOT}/standard/notification-prefetch/${op.candidateSha}-${op.publicationRunId}-1/receipt.json`,
+  );
+  const cachedReceipt = prefetchReceipt(cachedReceiptBytes, prefetchBytes);
+  if (
+    hash(cachedReceiptBytes) !== backupOp.migratorPrefetch.receiptSha256 ||
+    cachedReceipt.imageId !== backupOp.migratorPrefetch.imageId
+  )
+    stop('NOTIFICATION_BACKUP_PREFETCH');
+  const initial = validateNotificationState(
+    parseStrictJson(preimageBytes).state,
+    'pre',
+    read(`${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`, 0o644),
+    read(`${SOURCE}/deploy/timeweb/notification-migrations-0099-0101.v1.json`, 0o644),
+  );
+  const security = parseStrictJson(preimageBytes).security;
+  if (
+    !same(initial.target, v.target) ||
+    v.securityPreimageSha256 !==
+      hash(
+        Buffer.from(
+          (JSON.stringify(security) + '\n').replace(
+            /[\u007f-\uffff]/g,
+            (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
+          ),
+        ),
+      ) ||
+    v.restoredSecuritySha256 !== v.securityPreimageSha256 ||
+    v.roleClosureSha256 !== hash(encoded(security.roles))
+  )
+    stop('NOTIFICATION_BACKUP_TARGET');
+  const tool = `${ROOT}/operator/tools/${op.controllerSha}/control-timeweb-database-backup.py`;
+  secure(tool, 0o755);
+  if (
+    hash(read(tool, 0o755)) !== backupOp.toolFileSha256 ||
+    hash(read(`${ROOT}/operator/tools/${op.controllerSha}/installation-receipt.json`)) !==
+      backupOp.toolInstallationSha256
+  )
+    stop('NOTIFICATION_BACKUP_TOOL');
+  let terminal;
+  try {
+    terminal = parseStrictJson(
+      execFileSync('/usr/bin/python3', ['-I', tool, '--attest-disk', DISK_BACKUP_REQUEST], {
+        cwd: SOURCE,
+        encoding: 'utf8',
+        timeout: 60000,
+        maxBuffer: 4 * 1024 * 1024,
+        env: { PATH: '/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+  } catch {
+    stop('NOTIFICATION_BACKUP_CLEANUP');
+  }
+  exact(terminal, [
+    'schema',
+    'operationSha256',
+    'receiptSha256',
+    'preimageSha256',
+    'target',
+    'sourceLedgerSha256',
+    'storageCleanupVerified',
+    'reconciled',
+    ...(backupOp.migratorPrefetch ? ['migratorPrefetch'] : []),
+  ]);
+  if (
+    !same(terminal.migratorPrefetch, backupOp.migratorPrefetch) ||
+    terminal.schema !== 'PHUB_TIMEWEB_NOTIFICATION_BACKUP_TERMINAL_V1' ||
+    terminal.operationSha256 !== v.operationSha256 ||
+    terminal.receiptSha256 !== hash(bytes) ||
+    terminal.preimageSha256 !== v.preimageSha256 ||
+    !same(terminal.target, v.target) ||
+    terminal.sourceLedgerSha256 !== NOTIFICATION_PRE_LEDGER ||
+    terminal.storageCleanupVerified !== true ||
+    terminal.reconciled !== true
+  )
+    stop('NOTIFICATION_BACKUP_TERMINAL');
+  return {
+    path: `${directory}/database-backup-receipt.json`,
+    sha256: hash(bytes),
+    operationSha256: v.operationSha256,
+    preimageSha256: v.preimageSha256,
+  };
+}
+
+// Owning proof consumer for the API/Worker rollout; paths derive only from the release tuple.
+export function validateNotificationMigrationProofBundle(bundle, expected) {
+  exact(bundle, ['preparation', 'plan', 'role', 'bootstrap', 'postflight', 'success', 'receipt']);
+  const capsule = readApiWorkerMigrationCapsule(bundle.preparation),
+    op = validateNotificationOperation(capsule.operation),
+    plan = validateNotificationMigrationPlan(capsule.plan, capsule.operationBytes);
+  if (
+    op.schema !== NOTIFICATION_MIGRATION_SCHEMA ||
+    op.controllerSha !== expected.controllerSha ||
+    op.controllerTree !== expected.controllerTree ||
+    op.controllerSourceCiRunId !== expected.controllerSourceCiRunId ||
+    op.candidateSha !== expected.candidateSha ||
+    op.publicationRunId !== expected.publicationRunId ||
+    op.migratorImage !== expected.migratorImage ||
+    op.manifestSha256 !== expected.manifestSha256 ||
+    op.packageDescriptorSha256 !== expected.packageDescriptorSha256 ||
+    op.catalogsSha256 !== expected.catalogsSha256 ||
+    !bundle.plan.equals(capsule.planBytes) ||
+    hash(bundle.plan) !== expected.migrationPlanSha256 ||
+    hash(bundle.success) !== expected.migrationSuccessSha256 ||
+    hash(bundle.receipt) !== expected.migrationReceiptSha256
+  )
+    stop('NOTIFICATION_MIGRATION_PROOF');
+  const receipt = validateNotificationMigrationReceipt(
+    parseStrictJson(bundle.receipt),
+    hash(bundle.plan),
+    hash(capsule.operationBytes),
+  );
+  if (
+    receipt.status !== 'RECONCILED' ||
+    receipt.reconciledStatus !== 'SUCCESS' ||
+    receipt.successSha256 !== hash(bundle.success)
+  )
+    stop('NOTIFICATION_MIGRATION_NONTERMINAL');
+  const proof = parseStrictJson(bundle.success),
+    role = parseStrictJson(bundle.role),
+    bootstrap = parseStrictJson(bundle.bootstrap),
+    post = parseStrictJson(bundle.postflight);
+  exact(proof, [
+    'schema',
+    'status',
+    'planSha256',
+    'operationSha256',
+    'containerId',
+    'roleProofSha256',
+    'postflightSha256',
+    'bootstrapSha256',
+    'backup',
+    'ledgerSha256',
+    'catalogSha256',
+    'target',
+    'observedAt',
+  ]);
+  if (
+    proof.schema !== 'PHUB_NOTIFICATION_MIGRATION_SUCCESS_V1' ||
+    proof.status !== 'SUCCESS' ||
+    proof.planSha256 !== hash(bundle.plan) ||
+    proof.operationSha256 !== hash(capsule.operationBytes) ||
+    proof.containerId !== receipt.containerId ||
+    proof.roleProofSha256 !== hash(bundle.role) ||
+    proof.postflightSha256 !== hash(bundle.postflight) ||
+    proof.bootstrapSha256 !== hash(bundle.bootstrap) ||
+    !same(proof.backup, plan.backup) ||
+    proof.ledgerSha256 !== NOTIFICATION_POST_LEDGER ||
+    !same(proof.target, post.target) ||
+    !same(role.target, post.target) ||
+    !same(bootstrap.state.target, post.target) ||
+    bootstrap.operationSha256 !== proof.operationSha256 ||
+    bootstrap.sqlSha256 !== plan.inputs.bootstrapSha256
+  )
+    stop('NOTIFICATION_MIGRATION_PROOF');
+  return { operation: op, plan, proof, role, bootstrap, postflight: post };
+}
+export function readNotificationMigrationProof(op, { fresh = true } = {}) {
+  validateNotificationOperation(op);
+  const tx = `${ROOT}/backups/${op.candidateSha}-${op.publicationRunId}-1-migration`;
+  secure(tx, 0o700);
+  const names = {
+    preparation: 'preparation.json',
+    plan: 'plan.json',
+    role: 'role-proof.json',
+    bootstrap: 'bootstrap.json',
+    postflight: 'postflight.json',
+    success: 'migration-success.json',
+    receipt: 'migration-receipt.json',
+  };
+  const bundle = Object.fromEntries(
+    Object.entries(names).map(([key, name]) => [key, read(`${tx}/${name}`)]),
+  );
+  const verified = validateNotificationMigrationProofBundle(bundle, op);
+  const goldenBytes = read(
+      `${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`,
+      0o644,
+    ),
+    descriptorBytes = read(
+      `${SOURCE}/deploy/timeweb/notification-migrations-0099-0101.v1.json`,
+      0o644,
+    ),
+    golden = parseStrictJson(goldenBytes);
+  const target = verified.proof.target;
+  validateNotificationState(verified.bootstrap.state, 'bootstrap', goldenBytes, descriptorBytes);
+  validateNotificationState(verified.postflight.state, 'post', goldenBytes, descriptorBytes);
+  for (const kind of ['runtime', 'migrator']) {
+    validateNotificationRoleReadback(
+      verified.role[kind],
+      kind,
+      target,
+      'pre',
+      golden.checkpoints['102'].sha256,
+    );
+    validateNotificationRoleReadback(
+      verified.postflight[kind],
+      kind,
+      target,
+      'post',
+      golden.checkpoints['105'].sha256,
+    );
+  }
+  if (
+    verified.proof.catalogSha256 !== golden.checkpoints['105'].sha256 ||
+    !same(readNotificationDatabaseState(verified.operation, 'post'), verified.postflight.state) ||
+    !same(notificationBackupProof(verified.operation, { fresh }), verified.plan.backup)
+  )
+    stop('NOTIFICATION_MIGRATION_DRIFT');
+  return {
+    migrationPlanSha256: hash(bundle.plan),
+    migrationSuccessSha256: hash(bundle.success),
+    migrationReceiptSha256: hash(bundle.receipt),
+    catalogSha256: verified.proof.catalogSha256,
+    backup: verified.plan.backup,
+    target,
   };
 }

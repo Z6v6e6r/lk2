@@ -98,3 +98,20 @@ describe('admission-only uncertain recovery', () => {
     expect(transport).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('paid JOIN receipt command transport', () => {
+  it('POSTs only the operation receipt reconciliation with a deterministic key and no client receipt body', async () => {
+    const id = '17000000-0000-4000-8000-000000000002';
+    const fetchImplementation = vi.fn<typeof fetch>((_url, init) => {
+      expect(init?.method).toBe('POST');
+      expect(init?.body).toBeUndefined();
+      expect(new Headers(init?.headers).get('Idempotency-Key')).toBe(`join-reconcile:${id}`);
+      return Promise.resolve(Response.json({ operation: { id, status: 'UNKNOWN' } }));
+    });
+    await client(fetchImplementation).reconcilePaidJoinOperation(id);
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+    expect(fetchImplementation.mock.calls[0]?.[0]).toEqual(
+      expect.stringContaining(`/game-operations/${id}/reconcile`),
+    );
+  });
+});

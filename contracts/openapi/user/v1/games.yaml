@@ -486,6 +486,43 @@ paths:
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 
+  /{tenantKey}/game-operations/{operationId}/reconcile:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/OperationId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [games]
+      operationId: reconcilePaidJoinOperation
+      summary: Reconcile the original paid JOIN from its trusted owner receipt
+      description: |
+        Requires Idempotency-Key join-reconcile:{operationId}. Reads only the original owner
+        operation, validates its immutable server binding and applies CONFIRM_PAYMENT atomically.
+        Never dispatches booking, debit or release; missing/ambiguous proof stays unresolved.
+      responses:
+        '200':
+          description: Current operation state, safe next action and latest committed game card.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
   /{tenantKey}/recommendations/bookings:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey

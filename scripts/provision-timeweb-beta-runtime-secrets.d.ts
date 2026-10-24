@@ -57,6 +57,13 @@ export function validateTimewebFcmSecretDelta(
   expectedUid?: number,
   expectedGid?: number,
 ): void;
+export function validateTimewebDormantJoinSecretDelta(
+  previousDir: string,
+  candidateDir: string,
+  verifierPublicKeySha256: string,
+  expectedUid?: number,
+  expectedGid?: number,
+): void;
 export function transitionPreparedTimewebRuntimeSecrets(options: {
   direction: 'install' | 'restore';
   targetDir: string;

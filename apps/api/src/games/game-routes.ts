@@ -22,6 +22,7 @@ import {
   commercialOperationId,
   executeCommercialJoin,
   readCommercialJoinOperation,
+  reconcileCommercialJoinOperation,
   type CommercialJoinFailureCode,
   type CommercialJoinOwnerPort,
   type CommercialJoinRepositoryPort,
@@ -885,6 +886,60 @@ export function registerGameRoutes(
     '/user/api/v1/:tenantKey/games/:gameId/waitlist/me',
     'LEAVE_WAITLIST',
     (repository, input) => repository.leaveWaitlist(input),
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/game-operations/:operationId/reconcile',
+    { preHandler: [...options.authenticatedTenantHandlers] },
+    async (request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      const current = principal(request);
+      if (!current)
+        return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+      const { operationId, tenantKey } = request.params as {
+        operationId: string;
+        tenantKey: string;
+      };
+      const key = request.headers['idempotency-key'];
+      if (
+        !UUID_PATTERN.test(operationId) ||
+        key !== `join-reconcile:${operationId}` ||
+        (request.body !== undefined &&
+          request.body !== null &&
+          JSON.stringify(request.body) !== '{}')
+      ) {
+        return sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Некорректная команда сверки.');
+      }
+      if (!options.commercialJoin) return unavailable(request, reply);
+      const result = await reconcileCommercialJoinOperation(
+        {
+          tenantId: current.tenantId,
+          tenantKey,
+          actorUserId: current.userId,
+          sessionId: sessionId(request),
+          operationId,
+          correlationId: request.id,
+        },
+        {
+          repository: options.commercialJoin.repository,
+          owner: options.commercialJoin.owner,
+          onReconciliationFailure: (code) =>
+            app.log.warn(
+              { operationId, code },
+              'commercial JOIN receipt needs operator reconciliation',
+            ),
+        },
+      );
+      if (!result)
+        return sendApiError(
+          request,
+          reply,
+          404,
+          'GAME_OPERATION_NOT_FOUND',
+          'Операция не найдена.',
+        );
+      return result;
+    },
   );
 
   app.get(

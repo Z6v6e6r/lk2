@@ -8,6 +8,7 @@ struct RefreshCredential: Codable, Equatable {
   let expiresAt: Date
   var refreshKey: String?
   var logoutKey: String?
+  var accountHash: String? = nil
 }
 
 protocol CredentialStore {

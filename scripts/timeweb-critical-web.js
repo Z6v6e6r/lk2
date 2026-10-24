@@ -58,8 +58,10 @@ export const WEB_COMPATIBILITY = Object.freeze({
   runtimeTree: 'bf0988012cfce0f14811491a14ae46fa57fe5541',
   runtimeDeltaSha256: 'c71dcfeb564b648ff78305680af3d3a37477a2d54e1db8101662c2b1d6e11fec',
 });
-// Closed mixed-runtime release anchored on merged main after PR #449. Original V1 pins and
-// automatic eligibility stay unchanged.
+// Closed mixed-runtime release re-anchored on merged main after PR #451 (trigger communications)
+// and the later reviewed Web merges. The whole-runtime anchor advances with current main; the
+// containing compatibility merge may change only API8158_WEB_CONTROLLER_FILES. Original V1 pins
+// and automatic eligibility stay unchanged.
 export const API8158_WEB_COMPATIBILITY = Object.freeze({
   baselineSource: '0d6078be7a50ed3f5761d66071527be003bd568f',
   baselineTree: '5e50be3cb680e0c9db5faf3fcf3fca57ccdedaa4',
@@ -71,17 +73,16 @@ export const API8158_WEB_COMPATIBILITY = Object.freeze({
   webImage:
     'ghcr.io/z6v6e6r/phub-web@sha256:af11244292c1e0d50308eff3794fc643a97c551ceb263a05a58ead4e22f04127',
   ledgerSha256: 'b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85',
-  runtimeSource: '6c6bbe52fc61412ab134286b4c733561f9f9a49a',
-  runtimeTree: 'f86007b0ea16550c66a2f42fc9c71fc233f9710e',
-  runtimeDeltaSha256: 'd728bbd99d9384765aab100ed9f74e71fd91d7c9ef0d92e2ebe18f7d6c9eda36',
+  runtimeSource: 'af25d36a7d6dc81247215192c5bc3263b9eef62a',
+  runtimeTree: '4ad17fbb9313787049633362af8d88b7ec84857e',
+  runtimeDeltaSha256: 'dab37af6a0c7c7db4f9bb0a452cce57ecb4dcf14315978b5de08998f8d3a6e37',
 });
 export const API8158_WEB_SCHEMA = 'PHUB_TIMEWEB_CRITICAL_API8158_WEB_OPERATION_V1';
+// The reviewed tail is only the compatibility re-anchor itself; the backup producer and its
+// tests belong to the reviewed runtime anchor and stay frozen.
 export const API8158_WEB_CONTROLLER_FILES = new Set([
   'scripts/timeweb-critical-web.js',
   'scripts/timeweb-critical-web.test.ts',
-  'scripts/control-timeweb-database-backup.py',
-  'scripts/test-timeweb-database-backup.py',
-  'scripts/control-timeweb-database-backup.test.ts',
   'docs/runbooks/timeweb-standard-delivery.md',
 ]);
 function compatibilityFor(op) {

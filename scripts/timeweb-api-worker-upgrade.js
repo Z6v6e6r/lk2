@@ -1,3 +1,13 @@
+import {
+  NOTIFICATION_ROLLOUT_SCHEMA,
+  assertNotificationRuntimeOff,
+  validateNotificationManifest,
+  attestNotificationSource,
+  NOTIFICATION_OBSERVATION_POLICY,
+  NOTIFICATION_OBSERVATION_POLICY_SHA256,
+  validateNotificationObservation,
+} from './timeweb-notification-profile.js';
+import { readNotificationMigrationProof } from './timeweb-api-worker-migration.js';
 // One explicit API+Worker mode of the enrolled controller, frozen to the reviewed Android bridge.
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -137,9 +147,14 @@ export async function runApiWorkerTransition(ops) {
     await ops.journal('WORKER_STOP_INTENT');
     await ops.containWorker();
     await ops.journal('WORKER_STOPPED');
-    await ops.journal('SECRET_SWAP_INTENT');
-    await ops.installSecrets();
-    await ops.journal('SECRETS_ACTIVE');
+    if (ops.secretMode === 'preserve') {
+      await ops.installSecrets();
+      await ops.journal('SECRETS_VERIFIED');
+    } else {
+      await ops.journal('SECRET_SWAP_INTENT');
+      await ops.installSecrets();
+      await ops.journal('SECRETS_ACTIVE');
+    }
     await ops.journal('API_INTENT');
     await ops.activate('api');
     await ops.journal('API_ACTIVE');
@@ -170,7 +185,9 @@ export async function recoverApiWorkerTransition(ops) {
     await ops.containWorker();
     await ops.journal('WORKER_CONTAINED');
     await ops.restoreSecrets();
-    await ops.journal('PREVIOUS_SECRETS');
+    await ops.journal(
+      ops.secretMode === 'preserve' ? 'PREVIOUS_SECRETS_VERIFIED' : 'PREVIOUS_SECRETS',
+    );
     await ops.restore('api');
     await ops.restore('worker');
     await ops.removeCandidateBaseline();
@@ -193,6 +210,7 @@ export async function recoverApiWorkerPhase(phase, ops) {
       'WORKER_STOPPED',
       'SECRET_SWAP_INTENT',
       'SECRETS_ACTIVE',
+      ...(ops.secretMode === 'preserve' ? ['SECRETS_VERIFIED', 'PREVIOUS_SECRETS_VERIFIED'] : []),
       'API_INTENT',
       'API_ACTIVE',
       'WORKER_INTENT',
@@ -212,8 +230,13 @@ export async function recoverApiWorkerPhase(phase, ops) {
 }
 // One persistent READ COMMITTED/READ ONLY session holds the canonical operator advisory locks.
 // New tenant creation and out-of-band SQL are excluded by the operation contract, not by this lock.
-export function openApiWorkerDatabaseFence(container, spawnChild = spawn) {
-  if (container !== API_WORKER_BRIDGE.postgresId) fail('POSTGRES');
+export function openApiWorkerDatabaseFence(container, spawnChild = spawn, notificationPostgres) {
+  if (
+    notificationPostgres
+      ? container !== notificationPostgres.id
+      : container !== API_WORKER_BRIDGE.postgresId
+  )
+    fail('POSTGRES');
   const shell =
     'export PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=2000"; exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc --quiet --tuples-only --no-align --set=ON_ERROR_STOP=1';
   const child = spawnChild(
@@ -325,7 +348,7 @@ export const API_WORKER_DATABASE_SQL = `SELECT json_build_object(
  'activeProviders',(SELECT count(*) FROM integration.notification_provider_accounts WHERE channel='PUSH' AND platform='ANDROID' AND provider='FCM' AND app_id='ru.padlhub.app' AND environment='SANDBOX' AND status='ACTIVE'),
  'liveLeases',(SELECT count(*) FROM notifications.deliveries d JOIN integration.notification_endpoints e ON e.tenant_id=d.tenant_id AND e.id=d.endpoint_id JOIN integration.notification_provider_accounts a ON a.tenant_id=e.tenant_id AND a.id=e.provider_account_id WHERE d.channel='PUSH' AND d.state='SENDING' AND d.lease_expires_at>now() AND a.platform='ANDROID' AND a.provider='FCM' AND a.app_id='ru.padlhub.app' AND a.environment='SANDBOX'),
  'ledger',(SELECT coalesce(json_agg(json_build_object('filename',filename,'checksum',checksum) ORDER BY filename),'[]'::json) FROM public.schema_migrations))`;
-export function validateApiWorkerDatabase(value, packaged, initial) {
+export function validateApiWorkerDatabase(value, packaged, initial, operation) {
   exact(value, [
     'backendPid',
     'transactionStartedAt',
@@ -354,7 +377,7 @@ export function validateApiWorkerDatabase(value, packaged, initial) {
     value.liveLeases !== 0
   )
     fail('DATABASE_SAFETY');
-  validateApiWorkerLedger(value.ledger, packaged);
+  validateApiWorkerLedger(value.ledger, packaged, operation);
   if (
     initial &&
     ['backendPid', 'transactionStartedAt', 'tenantCount', 'tenantFingerprint'].some(
@@ -460,7 +483,7 @@ export function validateApiWorkerMount(
 }
 export function overlay(plan, side, service) {
   const value = plan[side][service];
-  return `PHUB_RELEASE_ID=${service === 'worker' ? (side === 'previous' ? plan.previous.api.releaseId : plan.candidate.api.releaseId) : value.releaseId}\n${service.toUpperCase()}_IMAGE_DIGEST=${value.image.split('@')[1]}\n${service === 'worker' ? `TIMEWEB_FCM_CREDENTIAL_SOURCE=${side === 'previous' ? '/dev/null' : '/etc/phub/timeweb-beta-fcm/fcm-service-account.json'}\n` : ''}`;
+  return `PHUB_RELEASE_ID=${service === 'worker' ? (side === 'previous' ? plan.previous.api.releaseId : plan.candidate.api.releaseId) : value.releaseId}\n${service.toUpperCase()}_IMAGE_DIGEST=${value.image.split('@')[1]}\n${service === 'worker' ? `TIMEWEB_FCM_CREDENTIAL_SOURCE=${plan.schema === 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2' ? plan.fcmCredentialSource : side === 'previous' ? '/dev/null' : '/etc/phub/timeweb-beta-fcm/fcm-service-account.json'}\n` : ''}`;
 }
 function releaseFile(path, bytes) {
   if (!read(path).equals(Buffer.from(bytes))) fail('LOCK_DRIFT');
@@ -479,6 +502,55 @@ async function probe(service) {
   );
   const value = parseStrictJson(await response.text());
   if (response.status !== 200 || value.status !== 'ready') fail('READINESS');
+}
+export async function probeNotificationPublicReadiness() {
+  const result = {};
+  for (const [service, url] of [
+    ['Api', 'https://lk2.padlhub.su/health/ready'],
+    ['Web', 'https://lk2.padlhub.su/'],
+  ]) {
+    const started = performance.now();
+    const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(10000) });
+    const body = await response.text();
+    if (
+      response.status !== 200 ||
+      (service === 'Api'
+        ? parseStrictJson(body).status !== 'ready'
+        : !body.includes('<div id="phub-app"></div>'))
+    )
+      fail('PUBLIC_READINESS');
+    result['public' + service + 'Ms'] = performance.now() - started;
+  }
+  return result;
+}
+export async function observeNotificationRollout({
+  attest,
+  operationSha256,
+  planSha256,
+  probePublic = probeNotificationPublicReadiness,
+  now = Date.now,
+  sleep = delay,
+}) {
+  const startedAt = new Date(now()).toISOString(),
+    samples = [];
+  for (let i = 0; i < 61; i++) {
+    await attest();
+    const timings = await probePublic();
+    samples.push({ observedAt: new Date(now()).toISOString(), ...timings });
+    if (i < 60) await sleep(15000);
+  }
+  const value = {
+    schema: 'PHUB_TIMEWEB_NOTIFICATION_0105_OBSERVATION_V2',
+    operationSha256,
+    planSha256,
+    observationPolicy: NOTIFICATION_OBSERVATION_POLICY,
+    startedAt,
+    completedAt: new Date(now()).toISOString(),
+    samples,
+    providerActivation: false,
+    deviceDelivery: false,
+  };
+  return validateNotificationObservation(value, operationSha256, planSha256);
 }
 async function waitService(service, expected, profile) {
   for (let i = 0; i < 45; i++) {
@@ -601,6 +673,32 @@ export function readApiWorkerCapsule(bytes) {
   return { operationBytes, planBytes, op, plan };
 }
 
+// Only a fully reconciled V2 operation can be re-read after its final lock unlink.
+// This grants no write/restart authority; the caller still reattests runtime and evidence.
+export function readNotificationTerminalCapsule(
+  requestBytes,
+  capsuleBytes,
+  planBytes,
+  operationBytes,
+  receiptBytes,
+) {
+  const capsule = readApiWorkerCapsule(capsuleBytes);
+  const receipt = validateApiWorkerReceipt(
+    parseStrictJson(receiptBytes),
+    hash(capsule.planBytes),
+    capsule.op,
+  );
+  if (
+    capsule.op.schema !== NOTIFICATION_ROLLOUT_SCHEMA ||
+    !capsule.operationBytes.equals(requestBytes) ||
+    !capsule.operationBytes.equals(operationBytes) ||
+    !capsule.planBytes.equals(planBytes) ||
+    receipt.status !== 'RECONCILED'
+  )
+    fail('TERMINAL_CUSTODY');
+  return capsule;
+}
+
 function readOrphanAudits(transaction) {
   const operations = new Set();
   return readdirSync(transaction)
@@ -662,26 +760,41 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     git(['rev-parse', '--path-format=absolute', '--git-common-dir']) !== SOURCE + '/.git'
   )
     fail('CONTROLLER_GIT_CUSTODY');
-  let transaction, capsule, orphanBytes;
+  let transaction,
+    capsule,
+    orphanBytes,
+    detachedReconcile = false;
   if (mode !== 'deploy' && !pathPresent(LOCK)) {
-    if (mode !== 'recover') fail('LOCK_POINTER');
     const requestBytes = read(REQUEST),
       request = validateApiWorkerOperation(parseStrictJson(requestBytes));
     transaction = `${ROOT}/backups/${request.candidateSha}-${request.publicationRunId}-1-api-worker`;
     secure(transaction, 0o700);
-    const audits = readOrphanAudits(transaction),
-      completed = audits.find((audit) => audit.capsule.operationBytes.equals(requestBytes)),
-      capsulePath = `${transaction}/preparation.json`;
-    if (completed) {
-      // This orphan was terminally aborted before cleanup. Do not repeat runtime assertions
-      // or make a new claim about current runtime; release only its exact residual capsule.
-      owner.assertOwned();
-      if (pathPresent(capsulePath)) releaseFile(capsulePath, completed.bytes);
-      return { status: 'RECONCILED', receipt: completed.path };
+    if (mode === 'reconcile' && request.schema === NOTIFICATION_ROLLOUT_SCHEMA) {
+      capsule = readNotificationTerminalCapsule(
+        requestBytes,
+        read(`${transaction}/preparation.json`),
+        read(`${transaction}/plan.json`),
+        read(`${transaction}/operation.json`),
+        read(`${transaction}/rollout-receipt.json`),
+      );
+      if (pathPresent(PROVISION_LOCK)) fail('LOCK_DRIFT');
+      detachedReconcile = true;
+    } else {
+      if (mode !== 'recover') fail('LOCK_POINTER');
+      const audits = readOrphanAudits(transaction),
+        completed = audits.find((audit) => audit.capsule.operationBytes.equals(requestBytes)),
+        capsulePath = `${transaction}/preparation.json`;
+      if (completed) {
+        // This orphan was terminally aborted before cleanup. Do not repeat runtime assertions
+        // or make a new claim about current runtime; release only its exact residual capsule.
+        owner.assertOwned();
+        if (pathPresent(capsulePath)) releaseFile(capsulePath, completed.bytes);
+        return { status: 'RECONCILED', receipt: completed.path };
+      }
+      orphanBytes = read(capsulePath);
+      capsule = readApiWorkerCapsule(orphanBytes);
+      if (!capsule.operationBytes.equals(requestBytes)) fail('ORPHAN_CAPSULE');
     }
-    orphanBytes = read(capsulePath);
-    capsule = readApiWorkerCapsule(orphanBytes);
-    if (!capsule.operationBytes.equals(requestBytes)) fail('ORPHAN_CAPSULE');
   } else if (mode !== 'deploy') {
     const pointer = read(LOCK).toString();
     if (
@@ -694,7 +807,11 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     capsule = readApiWorkerCapsule(read(`${transaction}/preparation.json`));
     const receiptPath = `${transaction}/rollout-receipt.json`;
     const earlyReceipt = existsSync(receiptPath)
-      ? validateApiWorkerReceipt(parseStrictJson(read(receiptPath)), hash(capsule.planBytes))
+      ? validateApiWorkerReceipt(
+          parseStrictJson(read(receiptPath)),
+          hash(capsule.planBytes),
+          capsule.op,
+        )
       : null;
     if (
       mode === 'recover' &&
@@ -728,6 +845,8 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       mode === 'deploy' ? Date.now() : undefined,
     );
   const profile = op.profile ?? 'production';
+  const notification = op.schema === NOTIFICATION_ROLLOUT_SCHEMA;
+  if (notification) attestNotificationSource(op, { git, read, secure, present: pathPresent });
   const config = parseStrictJson(read('/etc/phub/timeweb-beta-standard-delivery.json').toString());
   if (
     config.schema !== 1 ||
@@ -741,8 +860,8 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     secure(`${SOURCE}/${path}`);
   git(['merge-base', '--is-ancestor', op.candidateSha, op.controllerSha]);
   if (git(['rev-parse', `${op.candidateSha}^{tree}`]) !== op.candidateTree) fail('TREE');
-  validateApiWorkerControllerDelta(
-    parseApiWorkerControllerDiff(
+  if (notification) {
+    if (
       git([
         'diff',
         '--no-renames',
@@ -751,9 +870,24 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         '-z',
         op.candidateSha,
         op.controllerSha,
-      ]),
-    ),
-  );
+      ]) !== ''
+    )
+      fail('SOURCE_DIVERGENCE');
+  } else {
+    validateApiWorkerControllerDelta(
+      parseApiWorkerControllerDiff(
+        git([
+          'diff',
+          '--no-renames',
+          '--raw',
+          '--abbrev=40',
+          '-z',
+          op.candidateSha,
+          op.controllerSha,
+        ]),
+      ),
+    );
+  }
   const id = `${op.candidateSha}-${op.publicationRunId}-1`,
     directory = `${ROOT}/releases/${id}`;
   transaction ??= `${ROOT}/backups/${id}-api-worker`;
@@ -769,9 +903,14 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
   if (mode === 'deploy') await readControllerSourceAuthority(op, git, githubPublic);
   const planPath = `${transaction}/plan.json`,
     journalPath = `${transaction}/rollout-receipt.json`;
-  const candidateDir = `/etc/phub/timeweb-beta-candidates/${id}/timeweb-beta`,
+  const candidateDir = notification
+      ? RUNTIME
+      : `/etc/phub/timeweb-beta-candidates/${id}/timeweb-beta`,
     backupDir = `/etc/phub/timeweb-beta-backups/${op.expectedCurrentSecretSetReleaseId}--replaced-by--${id}`;
   let plan, baseline;
+  const rolloutMonitoring = () => {
+    if (!notification) return monitoring(transaction, profile);
+  };
   if (mode === 'deploy') {
     if (existsSync(`${transaction}/preparation.json`)) {
       capsule = readApiWorkerCapsule(read(`${transaction}/preparation.json`));
@@ -807,19 +946,37 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       )
         fail('PREIMAGE');
       imagePresent(actual.identity.image, actual.identity.revision);
+      if (notification && service === 'worker')
+        validateApiWorkerMount(actual.mounts, op.expectedFcmSource);
     }
     secure(candidateDir, 0o700);
-    secure(dirname(backupDir), 0o700);
-    validateTimewebFcmSecretDelta(RUNTIME, candidateDir);
+    if (notification) {
+      validateNotificationManifest(op, manifest);
+      if (timewebFcmCredentialSource(RUNTIME) !== op.expectedFcmSource) fail('FCM_SOURCE');
+      for (const service of ['web', 'realtime']) {
+        const actual = inspectService(service);
+        if (
+          actual.identity.image !==
+            `ghcr.io/z6v6e6r/phub-${service}@${baseline.values[service.toUpperCase() + '_IMAGE_DIGEST']}` ||
+          actual.status !== 'running' ||
+          actual.health !== 'healthy'
+        )
+          fail('UNCHANGED_BASELINE_DRIFT');
+      }
+    } else {
+      secure(dirname(backupDir), 0o700);
+      validateTimewebFcmSecretDelta(RUNTIME, candidateDir);
+    }
     const previousSecrets = secretSet(RUNTIME),
       candidateSecrets = secretSet(candidateDir);
     if (
-      candidateSecrets.releaseId !== id ||
+      candidateSecrets.releaseId !== (notification ? op.expectedCurrentSecretSetReleaseId : id) ||
       !same(candidateSecrets.files, op.candidateSecretHashes)
     )
       fail('PREPARED_SECRETS');
-    backupProof(transaction, op.expectedApi, profile);
-    monitoring(transaction, profile);
+    if (notification) readNotificationMigrationProof(op, { fresh: false });
+    else backupProof(transaction, op.expectedApi, profile);
+    rolloutMonitoring();
     const packagedLedger = readdirSync(`${SOURCE}/packages/database/migrations`)
       .filter((v) => v.endsWith('.sql'))
       .sort()
@@ -828,7 +985,9 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         checksum: hash(read(`${SOURCE}/packages/database/migrations/${filename}`, 0o644)),
       }));
     plan = {
-      schema: 'PHUB_TIMEWEB_API_WORKER_PLAN_V1',
+      schema: notification
+        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
+        : 'PHUB_TIMEWEB_API_WORKER_PLAN_V1',
       operationSha256: hash(opBytes),
       controllerSha: op.controllerSha,
       ...(op.controllerPromotion === undefined
@@ -853,13 +1012,24 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       excluded: current,
       previousSecrets,
       candidateSecrets,
-      credential: credentialMetadata(candidateDir),
+      credential:
+        notification && op.expectedFcmSource === '/dev/null'
+          ? null
+          : credentialMetadata(candidateDir),
+      ...(notification
+        ? {
+            migrationProof: readNotificationMigrationProof(op, { fresh: false }),
+            migratorImage: op.migratorImage,
+            fcmCredentialSource: op.expectedFcmSource,
+            observationPolicy: NOTIFICATION_OBSERVATION_POLICY,
+          }
+        : {}),
       packagedLedger,
       unchangedImages: Object.fromEntries(
-        ['WEB_IMAGE_DIGEST', 'REALTIME_IMAGE_DIGEST', 'MIGRATOR_IMAGE_DIGEST'].map((k) => [
-          k,
-          baseline.values[k],
-        ]),
+        (notification
+          ? ['WEB_IMAGE_DIGEST', 'REALTIME_IMAGE_DIGEST']
+          : ['WEB_IMAGE_DIGEST', 'REALTIME_IMAGE_DIGEST', 'MIGRATOR_IMAGE_DIGEST']
+        ).map((k) => [k, baseline.values[k]]),
       ),
       createdAt: new Date().toISOString(),
     };
@@ -928,29 +1098,50 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
   };
   const fixedAttest = () => {
     immutableAttest();
+    if (notification) {
+      for (const name of ['api.env', 'worker.env'])
+        assertNotificationRuntimeOff(read(`${RUNTIME}/${name}`));
+      attestNotificationSource(op, { git, read, secure, present: pathPresent });
+      if (
+        !same(secretSet(RUNTIME), plan.previousSecrets) ||
+        timewebFcmCredentialSource(RUNTIME) !== plan.fcmCredentialSource ||
+        !same(readNotificationMigrationProof(op, { fresh: false }), plan.migrationProof)
+      )
+        fail('NOTIFICATION_CUSTODY');
+    }
     const candidateAt = existsSync(candidateDir) ? candidateDir : RUNTIME;
     if (
       !same(secretSet(candidateAt), plan.candidateSecrets) ||
-      !same(credentialMetadata(candidateAt), plan.credential)
+      !(notification && plan.fcmCredentialSource === '/dev/null'
+        ? plan.credential === null
+        : same(credentialMetadata(candidateAt), plan.credential))
     )
       fail('CANDIDATE_CUSTODY');
   };
   const database = async () => {
     if (mode === 'deploy' && Date.now() >= Date.parse(op.expiresAt)) fail('OPERATION_EXPIRED');
     const value = await fence.query(API_WORKER_DATABASE_SQL);
-    validateApiWorkerDatabase(value, plan.packagedLedger, initialDatabase);
+    validateApiWorkerDatabase(value, plan.packagedLedger, initialDatabase, op);
     initialDatabase ??= value;
     return value;
   };
+  const validateObservation = () =>
+    validateNotificationObservation(
+      parseStrictJson(read(`${transaction}/observation.json`)),
+      hash(opBytes),
+      planSha256,
+    );
   const journal = async (status) => {
+    if (notification && status === 'SUCCESS') validateObservation();
     durable(
       journalPath,
-      `${JSON.stringify({ schema: 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1', status, planSha256, observedAt: new Date().toISOString(), ...(status === 'SUCCESS' ? { installedBaselineSha256, observationSha256: hash(read(`${transaction}/observation.json`)), providerReadbackSha256: hash(read(`${transaction}/timeweb-monitor-readback.json`)), alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)) } : {}) })}\n`,
+      `${JSON.stringify({ schema: notification ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1', status, planSha256, observedAt: new Date().toISOString(), ...(status === 'SUCCESS' ? { installedBaselineSha256, observationSha256: hash(read(`${transaction}/observation.json`)), ...(notification ? { observationPolicySha256: NOTIFICATION_OBSERVATION_POLICY_SHA256 } : { providerReadbackSha256: hash(read(`${transaction}/timeweb-monitor-readback.json`)), alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)) }) } : {}) })}\n`,
     );
     currentPhase = status;
   };
   const swap = (direction) => {
     fixedAttest();
+    if (notification) return;
     transitionPreparedTimewebRuntimeSecrets({
       direction,
       targetDir: RUNTIME,
@@ -999,9 +1190,11 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         RW: v.read_only !== true,
         Type: v.type,
       })),
-      side === 'candidate' && service === 'worker'
-        ? '/etc/phub/timeweb-beta-fcm/fcm-service-account.json'
-        : '/dev/null',
+      notification
+        ? plan.fcmCredentialSource
+        : side === 'candidate' && service === 'worker'
+          ? '/etc/phub/timeweb-beta-fcm/fcm-service-account.json'
+          : '/dev/null',
     );
     if (model.services.api.volumes?.some((v) => v.target === '/run/phub/fcm-service-account.json'))
       fail('API_CREDENTIAL_MOUNT');
@@ -1035,9 +1228,10 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         delete values[key];
     Object.assign(values, {
       PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
-      PHUB_COMPONENT_ROLLOUT_KIND: 'API_WORKER',
+      PHUB_COMPONENT_ROLLOUT_KIND: notification ? 'API_WORKER_NOTIFICATION_0105' : 'API_WORKER',
       PHUB_RELEASE_ID: id,
-      PHUB_RUNTIME_SECRET_SET_RELEASE_ID: id,
+      PHUB_RUNTIME_SECRET_SET_RELEASE_ID: notification ? plan.previousSecrets.releaseId : id,
+      ...(notification ? { MIGRATOR_IMAGE_DIGEST: op.migratorImage.split('@')[1] } : {}),
       PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
       API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
       WORKER_IMAGE_DIGEST: plan.candidate.worker.image.split('@')[1],
@@ -1048,11 +1242,15 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       .join('');
   };
   const ops = {
+    ...(notification ? { secretMode: 'preserve' } : {}),
     journal,
     preflight: async () => {
       fixedAttest();
       await database();
-      backupProof(transaction, op.expectedApi, profile);
+      if (notification) {
+        if (!same(readNotificationMigrationProof(op, { fresh: false }), plan.migrationProof))
+          fail('MIGRATION_PROOF');
+      } else backupProof(transaction, op.expectedApi, profile);
       let backupReceipt = null;
       try {
         backupReceipt = parseStrictJson(read(`${transaction}/database-backup-receipt.json`));
@@ -1060,8 +1258,12 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         // Beta degraded proof path (operator-authorized): no fresh transaction receipt exists.
         // Production never reaches this branch: backupProof() fails first.
       }
-      if (backupReceipt !== null) validateApiWorkerBackupLedger(backupReceipt, plan.packagedLedger);
-      monitoring(transaction, profile);
+      if (!notification && backupReceipt !== null)
+        validateApiWorkerBackupLedger(backupReceipt, plan.packagedLedger);
+      if (notification) {
+        await ops.attestPrevious();
+        await probeNotificationPublicReadiness();
+      } else rolloutMonitoring();
     },
     pullAndSmoke: async () => {
       for (const service of ['api', 'worker']) {
@@ -1092,6 +1294,10 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     activate: async (service) => {
       await database();
       known(service);
+      if (notification) {
+        readNotificationMigrationProof(op, { fresh: false });
+        rolloutMonitoring();
+      }
       if (!same(secretSet(RUNTIME), plan.candidateSecrets)) fail('SECRET_DRIFT');
       compose('candidate', service);
       const active = await waitService(service, plan.candidate[service], profile);
@@ -1100,7 +1306,11 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         `${JSON.stringify(active.identity)}\n`,
         true,
       );
-      if (service === 'worker') validateApiWorkerMount(inspectService('worker').mounts);
+      if (service === 'worker')
+        validateApiWorkerMount(
+          inspectService('worker').mounts,
+          notification ? plan.fcmCredentialSource : undefined,
+        );
       await database();
       fixedAttest();
     },
@@ -1124,8 +1334,14 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
           fail('PREIMAGE');
       }
       const worker = inspectService('worker');
-      if (!sameApiWorkerDeploymentIdentity(worker.identity, plan.previous.worker, profile))
-        validateApiWorkerMount(worker.mounts, '/dev/null');
+      if (
+        notification ||
+        !sameApiWorkerDeploymentIdentity(worker.identity, plan.previous.worker, profile)
+      )
+        validateApiWorkerMount(
+          worker.mounts,
+          notification ? plan.fcmCredentialSource : '/dev/null',
+        );
     },
     attestCandidate: async () => {
       fixedAttest();
@@ -1142,18 +1358,32 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         )
           fail('OBSERVATION_IDENTITY');
       }
-      validateApiWorkerMount(inspectService('worker').mounts);
+      validateApiWorkerMount(
+        inspectService('worker').mounts,
+        notification ? plan.fcmCredentialSource : undefined,
+      );
+      if (notification) rolloutMonitoring();
     },
     observe: async () => {
+      if (notification) {
+        const value = await observeNotificationRollout({
+          attest: ops.attestCandidate,
+          operationSha256: hash(opBytes),
+          planSha256,
+        });
+        durable(`${transaction}/observation.json`, `${JSON.stringify(value)}\n`, true);
+        validateObservation();
+        return;
+      }
       const started = Date.now(),
         samples = [];
       for (let i = 0; i < 61; i++) {
         await ops.attestCandidate();
-        monitoring(transaction);
+        if (!notification) monitoring(transaction);
         samples.push(new Date().toISOString());
         if (i < 60) await delay(15000);
       }
-      const observed = monitoring(transaction);
+      const observed = notification ? rolloutMonitoring() : monitoring(transaction);
       durable(`${transaction}/timeweb-monitor-readback.json`, observed.provider, true);
       durable(`${transaction}/alert-test-readback.json`, observed.alerts, true);
       durable(
@@ -1164,6 +1394,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     },
     installBaseline: async () => {
       await ops.attestCandidate();
+      if (notification) await probeNotificationPublicReadiness();
       const bytes = descriptor();
       durable(descriptorPath, bytes, true);
       installedBaselineSha256 = hash(bytes);
@@ -1202,14 +1433,41 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       return { status: 'RECONCILED', receipt: auditPath };
     }
     if (mode === 'deploy' || (mode === 'reconcile' && currentPhase === 'SUCCESS')) {
-      const pg = JSON.parse(docker(['container', 'inspect', API_WORKER_BRIDGE.postgresId]))[0];
+      const pg = JSON.parse(
+        docker([
+          'container',
+          'inspect',
+          notification ? op.expectedPostgres.id : API_WORKER_BRIDGE.postgresId,
+        ]),
+      )[0];
       if (
-        pg.Config.Image !== API_WORKER_BRIDGE.postgresImage ||
+        pg.Config.Image !==
+          (notification ? op.expectedPostgres.image : API_WORKER_BRIDGE.postgresImage) ||
         pg.State.Status !== 'running' ||
         pg.State.Health?.Status !== 'healthy'
       )
         fail('POSTGRES');
-      fence = openApiWorkerDatabaseFence(API_WORKER_BRIDGE.postgresId);
+      if (
+        notification &&
+        !same(
+          {
+            id: pg.Id,
+            image: pg.Config.Image,
+            imageId: pg.Image,
+            releaseId: pg.Config.Labels?.['phub.release-id'] ?? null,
+            revision: pg.Config.Labels?.['org.opencontainers.image.revision'] ?? null,
+            restarts: pg.RestartCount,
+            startedAt: pg.State.StartedAt,
+          },
+          op.expectedPostgres,
+        )
+      )
+        fail('POSTGRES_IDENTITY');
+      fence = openApiWorkerDatabaseFence(
+        notification ? op.expectedPostgres.id : API_WORKER_BRIDGE.postgresId,
+        spawn,
+        notification ? op.expectedPostgres : undefined,
+      );
       const locks = await fence.query(API_WORKER_GATE_LOCK_SQL);
       exact(locks, ['locksAcquired', 'tenantCount', 'tenantFingerprint']);
       if (locks.locksAcquired !== true || locks.tenantCount < 1) fail('GATE_LOCKS');
@@ -1232,17 +1490,21 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         for (const service of ['api', 'worker'])
           durable(`${transaction}/${side}-${service}.env`, overlay(plan, side, service), true);
       await journal('PREPARING');
-      durable(PROVISION_LOCK, provisionBytes, true);
+      if (!notification) durable(PROVISION_LOCK, provisionBytes, true);
       await runApiWorkerTransition(ops);
     } else {
-      if (!read(LOCK).equals(Buffer.from(pointer))) fail('LOCK_DRIFT');
+      if (!detachedReconcile && !read(LOCK).equals(Buffer.from(pointer))) fail('LOCK_DRIFT');
       const receipt = existsSync(journalPath)
-        ? validateApiWorkerReceipt(parseStrictJson(read(journalPath)), planSha256)
+        ? validateApiWorkerReceipt(parseStrictJson(read(journalPath)), planSha256, op)
         : { status: 'PREPARING' };
       const preparation = ['PREPARING', 'PREPARED'].includes(receipt.status);
       if (existsSync(PROVISION_LOCK)) {
         if (!read(PROVISION_LOCK).equals(Buffer.from(provisionBytes))) fail('LOCK_DRIFT');
-      } else if (!preparation && !['ABORTED', 'RECONCILED'].includes(receipt.status))
+      } else if (
+        !notification &&
+        !preparation &&
+        !['ABORTED', 'RECONCILED'].includes(receipt.status)
+      )
         fail('LOCK_DRIFT');
       if (mode === 'recover') await recoverApiWorkerPhase(receipt.status, ops);
       else {
@@ -1252,7 +1514,14 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         if (terminal === 'SUCCESS') {
           await ops.attestCandidate();
           if (hash(read(descriptorPath)) !== receipt.installedBaselineSha256) fail('INSTALLED');
+          if (notification) {
+            await probeNotificationPublicReadiness();
+            validateObservation();
+            if (hash(read(`${transaction}/observation.json`)) !== receipt.observationSha256)
+              fail('OBSERVATION_HASH');
+          }
         } else await ops.attestPrevious();
+        if (detachedReconcile) return { status: 'RECONCILED', receipt: journalPath };
         durable(
           journalPath,
           `${JSON.stringify({ ...receipt, status: 'RECONCILED', reconciledStatus: terminal, observedAt: new Date().toISOString() })}

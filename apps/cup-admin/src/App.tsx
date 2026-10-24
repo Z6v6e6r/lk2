@@ -2,6 +2,7 @@ import { ApiClientError } from '@phub/api-sdk';
 import type { AuthenticatedSession } from '@phub/api-sdk';
 import { useEffect, useMemo, useState } from 'react';
 
+import { NotificationScenariosWorkspace } from './NotificationScenariosWorkspace.js';
 import { GiftCertificateWorkspace } from './GiftCertificateWorkspace.js';
 import { LocationsWorkspace } from './LocationsWorkspace.js';
 import { LevelEligibilityWorkspace } from './LevelEligibilityWorkspace.js';
@@ -188,7 +189,13 @@ function NotificationWorkspace(props: {
   readonly onLogout: () => void;
 }): React.JSX.Element {
   const [activeArea, setActiveArea] = useState<
-    'notifications' | 'gift-certificates' | 'communities' | 'settings' | 'levels' | 'support'
+    | 'scenarios'
+    | 'notifications'
+    | 'gift-certificates'
+    | 'communities'
+    | 'settings'
+    | 'levels'
+    | 'support'
   >('settings');
   const [capabilities, setCapabilities] = useState<AdminNotificationCapabilities>();
   const [phonesText, setPhonesText] = useState('');
@@ -336,6 +343,15 @@ function NotificationWorkspace(props: {
                 <span>?</span> Техподдержка
               </button>
             ) : null}
+            {props.session.context.permissions.includes('notifications.manage') ? (
+              <button
+                type="button"
+                className={`nav-item ${activeArea === 'scenarios' ? 'active' : ''}`}
+                onClick={() => setActiveArea('scenarios')}
+              >
+                <span>◷</span> Триггерные рассылки
+              </button>
+            ) : null}
             <button
               type="button"
               className={`nav-item ${activeArea === 'notifications' ? 'active' : ''}`}
@@ -373,7 +389,9 @@ function NotificationWorkspace(props: {
         </div>
       </aside>
 
-      {activeArea === 'levels' ? (
+      {activeArea === 'scenarios' ? (
+        <NotificationScenariosWorkspace client={client} />
+      ) : activeArea === 'levels' ? (
         <LevelEligibilityWorkspace client={client} />
       ) : activeArea === 'support' && canReadSupport ? (
         <SupportTicketsPanel client={client} canManage={canManageSupport} />

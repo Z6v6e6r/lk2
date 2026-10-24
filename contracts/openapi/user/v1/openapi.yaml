@@ -3719,6 +3719,88 @@ paths:
           $ref: '#/components/responses/CommandConflict'
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/ios/config:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+    get:
+      operationId: getIOSPushConfiguration
+      summary: Get the effective IOS APNs capability for the authenticated installation
+      responses:
+        '200':
+          description: IOS APNs capability after server-owned gates are evaluated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AndroidPushConfiguration'
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/ios:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      operationId: registerIOSPushEndpoint
+      summary: Register or rotate the authenticated IOS APNs installation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IOSPushEndpointRegistration'
+      responses:
+        '200':
+          description: Stored result of the idempotent IOS registration command.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPushEndpointCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/notification-endpoints/ios/{installationId}:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - name: installationId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    delete:
+      operationId: revokeIOSPushEndpoint
+      summary: Revoke IOS APNs for one authenticated installation
+      responses:
+        '200':
+          description: Stored idempotent revoke result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebPushEndpointCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/CommandConflict'
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
   /{tenantKey}/games:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games
   /{tenantKey}/games/test-courts:
@@ -3828,6 +3910,8 @@ paths:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1result-submissions~1{submissionId}~1confirm
   /{tenantKey}/games/{gameId}/result-submissions/{submissionId}/dispute:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1games~1{gameId}~1result-submissions~1{submissionId}~1dispute
+  /{tenantKey}/game-operations/{operationId}/reconcile:
+    $ref: ./games.yaml#/paths/~1{tenantKey}~1game-operations~1{operationId}~1reconcile
   /{tenantKey}/game-operations/{operationId}:
     $ref: ./games.yaml#/paths/~1{tenantKey}~1game-operations~1{operationId}
   /{tenantKey}/locations:
@@ -8717,7 +8801,7 @@ components:
       properties:
         channel:
           type: string
-          enum: [IN_APP, PUSH]
+          enum: [IN_APP, PUSH, EMAIL]
         enabled:
           type: boolean
         timezone:
@@ -8744,7 +8828,7 @@ components:
         channels:
           type: array
           minItems: 1
-          maxItems: 2
+          maxItems: 3
           items:
             $ref: '#/components/schemas/NotificationPreferenceChannelView'
     NotificationPreferencesView:
@@ -8754,7 +8838,7 @@ components:
       properties:
         categories:
           type: array
-          maxItems: 8
+          maxItems: 32
           items:
             $ref: '#/components/schemas/NotificationPreferenceCategoryView'
     NotificationPreferenceChannelUpdate:
@@ -8764,7 +8848,7 @@ components:
       properties:
         channel:
           type: string
-          enum: [IN_APP, PUSH]
+          enum: [IN_APP, PUSH, EMAIL]
         enabled:
           type: boolean
         quietFrom:
@@ -8789,7 +8873,7 @@ components:
         channels:
           type: array
           minItems: 1
-          maxItems: 2
+          maxItems: 3
           items:
             $ref: '#/components/schemas/NotificationPreferenceChannelUpdate'
     NotificationPreferencesUpdateRequest:
@@ -8800,7 +8884,7 @@ components:
         categories:
           type: array
           minItems: 1
-          maxItems: 8
+          maxItems: 32
           items:
             $ref: '#/components/schemas/NotificationPreferenceCategoryUpdate'
     WebPushConfiguration:
@@ -8852,6 +8936,19 @@ components:
           type: string
           minLength: 32
           maxLength: 4096
+          description: Opaque FCM registration token. Provider and project selection remain server-owned.
+    IOSPushEndpointRegistration:
+      type: object
+      additionalProperties: false
+      required: [installationId, token]
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        token:
+          type: string
+          minLength: 32
+          maxLength: 1024
           description: Opaque FCM registration token. Provider and project selection remain server-owned.
     WebPushEndpointRegistration:
       type: object

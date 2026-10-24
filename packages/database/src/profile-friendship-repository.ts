@@ -1203,3 +1203,34 @@ async function announceFriendRequestCreated(
     ],
   );
 }
+
+/** Bounded ID-only audience, with explicit recommendation preferences; no imported contacts. */
+export async function listNotificationFriendCandidates(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly organizerUserId: string;
+    readonly after: string | null;
+    readonly onlyUserId?: string;
+  },
+) {
+  const result = await client.query<{
+    user_id: string;
+    favorite_station_ids: string[];
+    preferred_time_windows: { weekday: string; startsAt: string; endsAt: string }[];
+    level_label: string | null;
+  }>(
+    `with friends as (select case when left_user_id=$2 then right_user_id else left_user_id end user_id
+      from profile.friendships where tenant_id=$1 and (left_user_id=$2 or right_user_id=$2))
+     select f.user_id,p.favorite_station_ids,p.preferred_time_windows,s.level_label from friends f
+     join identity.users u on u.tenant_id=$1 and u.id=f.user_id and u.status='ACTIVE'
+     join identity.user_access_profiles a on a.tenant_id=$1 and a.user_id=f.user_id and 'games.play'=any(a.permissions)
+     join profile.booking_preferences p on p.tenant_id=$1 and p.user_id=f.user_id and p.recommend_friends=true
+     left join profile.user_summaries s on s.tenant_id=$1 and s.user_id=f.user_id
+     where ($3::uuid is null or f.user_id>$3) and ($4::uuid is null or f.user_id=$4)
+       and ${profileReachableSql({ tenantParam: '$1', userParam: 'f.user_id' })}
+     order by f.user_id limit 100`,
+    [input.tenantId, input.organizerUserId, input.after, input.onlyUserId ?? null],
+  );
+  return result.rows;
+}

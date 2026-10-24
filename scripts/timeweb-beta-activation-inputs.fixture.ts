@@ -101,6 +101,7 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
   const api = {
     ...baseEnvironment('api'),
     ...common,
+    SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF',
     LK2_BETA_HOST: host,
     TENANT_KEY: tenantKey,
     JWT_REALTIME_AUDIENCE: 'phub-realtime',

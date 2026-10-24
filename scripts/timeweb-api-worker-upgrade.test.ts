@@ -630,14 +630,17 @@ describe('frozen CI download patch authority', () => {
     ])
       expect(() => parseApiWorkerControllerDiff(value)).toThrow();
   });
-  it('pins final checked-in workflow and test bytes, rather than only their filenames', () => {
+  it('pins immutable legacy bridge bytes independently of the notification same-source profile', () => {
     for (const pin of [
       ...pair(),
       ...API_WORKER_CI_READER_PATCH,
       ...API_WORKER_CONTROLLER_PROMOTION_PATCH,
       ...API_WORKER_ANDROID_CHAT_TEST_PATCH,
     ]) {
-      const bytes = readFileSync(pin.path);
+      const bytes = execFileSync('git', [
+        'show',
+        '006fc525446fef2d710ed8e34b93f08923b07cb6:' + pin.path,
+      ]);
       expect(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')).toBe(
         pin.newOid,
       );

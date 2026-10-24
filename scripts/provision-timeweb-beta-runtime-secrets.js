@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomBytes } from 'node:crypto';
 import {
   chmodSync,
   chownSync,
@@ -24,6 +24,10 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 
+import {
+  parseTimewebDelegationKeyring,
+  validateTimewebCommercialRuntime,
+} from './timeweb-commercial-runtime-contract.js';
 import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
 import { validateTimewebFcmEnvironment } from './verify-timeweb-deployment-contract.js';
 import {
@@ -194,6 +198,10 @@ function assertEndpointKeyringEntries(value) {
 }
 
 export function assertComposableSecretValue(key, value) {
+  if (key === 'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS') {
+    parseTimewebDelegationKeyring(value, fail);
+    return;
+  }
   if (/[#$'\\\s]/u.test(value)) fail('compose_metacharacter');
   if (!value.includes('"')) return;
   if (!JSON_OBJECT_SECRET_KEYS.has(key) || !JSON_OBJECT_SECRET_VALUE.test(value)) {
@@ -281,6 +289,7 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
   }
 
   const { api, worker, realtime, migrator } = environments;
+  validateTimewebCommercialRuntime(api, fail);
   const corsOrigins = readTimewebCorsOrigins(targetContract);
   if (!corsOrigins.ok) fail(corsOrigins.reason);
   if (
@@ -792,6 +801,93 @@ export function validateTimewebFcmSecretDelta(
     fail('fcm_candidate_binding');
   const after = [previousDir, candidateDir].map((path) =>
     describeTimewebRuntimeSecretSet(path, expectedUid, expectedGid),
+  );
+  if (JSON.stringify(before) !== JSON.stringify(after)) fail('swap_identity_drift');
+}
+
+// This validator prepares dormant material only. It never rotates a key, enables a
+// feature, edits a file, or provisions the corresponding LK1 verifier.
+export function validateTimewebDormantJoinSecretDelta(
+  previousDir,
+  candidateDir,
+  verifierPublicKeySha256,
+  expectedUid = 0,
+  expectedGid = 0,
+) {
+  if (!/^[a-f0-9]{64}$/.test(verifierPublicKeySha256 ?? '')) fail('join_verifier_identity');
+  const before = [previousDir, candidateDir].map((dir) =>
+    describeTimewebRuntimeSecretSet(dir, expectedUid, expectedGid),
+  );
+  const allowed = new Set([
+    'GAME_COMMERCIAL_JOIN_ENABLED',
+    'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE',
+  ]);
+  const previousEnvironments = {},
+    environments = {};
+  for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
+    const previous = readRegularFile(
+      join(previousDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    const candidate = readRegularFile(
+      join(candidateDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    const oldValues = parseTimewebSecretEnvironment(previous);
+    const next = parseTimewebSecretEnvironment(candidate);
+    if (service !== 'api' && !previous.equals(candidate)) fail('non_join_secret_delta');
+    if (service === 'api') {
+      if (previous.at(-1) !== 10 || !candidate.subarray(0, previous.length).equals(previous))
+        fail('non_join_secret_delta');
+      const additions = parseTimewebSecretEnvironment(candidate.subarray(previous.length));
+      if (
+        !Object.keys(additions).length ||
+        Object.keys(additions).some((key) => !allowed.has(key) || Object.hasOwn(oldValues, key))
+      )
+        fail('non_join_secret_delta');
+      if (
+        oldValues.SUBSCRIPTION_RUNTIME_WARN_MODE !== 'OFF' ||
+        next.SUBSCRIPTION_RUNTIME_WARN_MODE !== 'OFF' ||
+        (oldValues.GAME_COMMERCIAL_JOIN_ENABLED !== undefined &&
+          oldValues.GAME_COMMERCIAL_JOIN_ENABLED !== 'false') ||
+        next.GAME_COMMERCIAL_JOIN_ENABLED !== 'false' ||
+        [...allowed].some((key) => !next[key])
+      )
+        fail('join_not_dormant_or_incomplete');
+      validateTimewebCommercialRuntime(next, fail);
+      const keys = parseTimewebDelegationKeyring(
+        next.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS,
+        fail,
+      );
+      const selected = keys[next.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID];
+      if (!selected) fail('delegation_active_key_missing');
+      const publicDer = createPublicKey(createPrivateKey(selected)).export({
+        type: 'spki',
+        format: 'der',
+      });
+      if (createHash('sha256').update(publicDer).digest('hex') !== verifierPublicKeySha256)
+        fail('join_verifier_identity');
+    }
+    previousEnvironments[service] = oldValues;
+    environments[service] = next;
+  }
+  for (const values of [previousEnvironments, environments])
+    validateTimewebRuntimeEnvironments(values, {
+      host: 'lk2.padlhub.su',
+      tenantKey: 'local-padel',
+    });
+  const after = [previousDir, candidateDir].map((dir) =>
+    describeTimewebRuntimeSecretSet(dir, expectedUid, expectedGid),
   );
   if (JSON.stringify(before) !== JSON.stringify(after)) fail('swap_identity_drift');
 }
