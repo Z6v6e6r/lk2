@@ -228,8 +228,8 @@ describe('bounded dormant JOIN profile', () => {
   ])('rejects compatibility tuple drift %j on either path', (change) => {
     for (const index of [0, 1]) {
       const pair = notificationRecoveryBridge();
-      pair[index] = { ...pair[index], ...change };
-      expect(() => validateJoinRuntimeTail(pair)).toThrow('JOIN_DORMANT_RUNTIME_TAIL');
+      const drifted = pair.map((row, i) => (i === index ? { ...row, ...change } : row));
+      expect(() => validateJoinRuntimeTail(drifted)).toThrow('JOIN_DORMANT_RUNTIME_TAIL');
     }
   });
   it.each(['apps/api/src/main.ts', 'deploy/timeweb/migrations/0106.sql', 'package-lock.json'])(
