@@ -4011,6 +4011,39 @@ def pre105_retirement_seal(path,data):
     need(read_secure(path)==data,'PRE105_RETIREMENT_READBACK')
 
 
+def pre105_retirement_containers(op):
+    """Allow only successful stopped migrators already in the sealed 7cc boundary."""
+    label='label=com.docker.compose.service=migrator'
+    candidate='name=^/phub-timeweb-migration-4e8280deb8a1-39931088343-1$'
+    state_format='{"Id":{{json .Id}},"Status":{{json .State.Status}},"Running":{{json .State.Running}},"ExitCode":{{json .State.ExitCode}},"Dead":{{json .State.Dead}},"Restarting":{{json .State.Restarting}},"Paused":{{json .State.Paused}},"Pid":{{json .State.Pid}}}'
+    def ids(args):
+        rows=docker(args).decode().split()
+        need(len(rows)==len(set(rows)) and all(HASH.fullmatch(i) for i in rows),'PRE105_RETIREMENT_CONTAINER_IDS')
+        return sorted(rows)
+    def snapshot():
+        need(not ids(['ps','-aq','--no-trunc','--filter',candidate]),'PRE105_RETIREMENT_CONTAINER')
+        all_ids=ids(['ps','-aq','--no-trunc'])
+        boundary=[strict(docker(['inspect','--format',INSPECT_FORMAT,i])) for i in all_ids]
+        need([r.get('Id') for r in boundary]==all_ids and digest(encoded(boundary))==op['expectedBoundarySha256'],
+             'PRE105_RETIREMENT_BOUNDARY')
+        migrators=[r['Id'] for r in boundary if (r['Config']['Labels'] or {}).get('com.docker.compose.service')=='migrator']
+        need(ids(['ps','-aq','--no-trunc','--filter',label])==migrators
+             and not ids(['ps','-q','--no-trunc','--filter',label]),'PRE105_RETIREMENT_CONTAINER')
+        states=[]
+        for i in migrators:
+            state=strict(docker(['inspect','--format',state_format,i]))
+            exact(state,['Id','Status','Running','ExitCode','Dead','Restarting','Paused','Pid'])
+            need(state['Id']==i and state['Status']=='exited'
+                 and all(state[k] is False for k in ['Running','Dead','Restarting','Paused'])
+                 and type(state['ExitCode']) is int and state['ExitCode']==0
+                 and type(state['Pid']) is int and state['Pid']==0,'PRE105_RETIREMENT_CONTAINER')
+            states.append(state)
+        return boundary,states
+    first=snapshot()
+    need(snapshot()==first,'PRE105_RETIREMENT_CONTAINER_DRIFT')
+    return first[0]
+
+
 def pre105_retirement_probe(value):
     _,archive,_=pre105_retirement_paths()
     canonical=ROOT/'backups'/(PRE105_RETIRED_SOURCE+'-39927484426-1-notification-pre105')
@@ -4041,8 +4074,6 @@ def pre105_retirement_probe(value):
     need(not os.path.lexists(ROOT/'backups'/(PRE105_RETIRED_SOURCE+'-39931088343-1-migration')), 'PRE105_RETIREMENT_ADMITTED')
     need(all(not os.path.lexists(ROOT/'operator'/name) for name in
         ['api-worker-upgrade.json','notification-early-exit-recovery.json','notification-migrator-prefetch.json']), 'PRE105_RETIREMENT_DEPENDENT_REQUEST')
-    need(not docker(['ps','-aq','--filter','name=^/phub-timeweb-migration-4e8280deb8a1-39931088343-1']).strip()
-         and not docker(['ps','-aq','--filter','label=com.docker.compose.service=migrator']).strip(), 'PRE105_RETIREMENT_CONTAINER')
     secret_root=Path('/etc/phub/timeweb-beta');secure(secret_root,'dir',0o700)
     need(sorted(p.name for p in secret_root.iterdir())==sorted(candidate['expectedSecretSetFiles'])
          and all(digest(read_secure(secret_root/name))==sha for name,sha in candidate['expectedSecretSetFiles'].items()),'PRE105_RETIREMENT_SECRETS')
@@ -4050,10 +4081,7 @@ def pre105_retirement_probe(value):
     need(digest(encoded(pre))==PRE105_RETIRED_PREIMAGE, 'PRE105_RETIREMENT_PREIMAGE')
     need(service('phub-timeweb-beta','api')==op['expectedApi']
          and service('phub-timeweb-beta-dependencies','postgres')==op['expectedPostgres'], 'PRE105_RETIREMENT_RUNTIME')
-    ids=sorted(docker(['ps','-aq','--no-trunc']).decode().split())
-    need(len(ids)==len(set(ids)) and all(HASH.fullmatch(i) for i in ids),'PRE105_RETIREMENT_CONTAINER_IDS')
-    boundary=[strict(docker(['inspect','--format',INSPECT_FORMAT,i])) for i in ids]
-    need(digest(encoded(boundary))==op['expectedBoundarySha256'], 'PRE105_RETIREMENT_BOUNDARY')
+    pre105_retirement_containers(op)
     # notification_preimage includes source-gated OFF flags, full ledger/catalog/security,
     # default privileges/role closure. Preserve and recheck canonical inode/hash custody.
     identities={name:list(identity(secure(canonical/name,mode=0o600))) for name in

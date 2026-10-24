@@ -43,6 +43,20 @@ const catalogInput: GiftCertificateCatalogInput = {
 };
 
 describe('gift certificate catalog contract', () => {
+  it('rejects oversized collections without accumulating per-entry validation errors', () => {
+    const result = giftCertificateCatalogInputSchema.safeParse({
+      ...catalogInput,
+      designs: Array.from({ length: 21 }, () => null),
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const designIssues = result.error.issues.filter((issue) => issue.path[0] === 'designs');
+      expect(designIssues).toHaveLength(1);
+      expect(designIssues[0]).toMatchObject({ code: 'too_big', maximum: 20, path: ['designs'] });
+    }
+  });
+
   it('requires a non-ambiguous flow and validity policy', () => {
     expect(giftCertificateCatalogInputSchema.parse(catalogInput)).toMatchObject({
       policy: { validityStart: 'ISSUE', validityDays: 365 },
