@@ -16,7 +16,7 @@
     "@phub/home-projection": "0.1.0",
     "@phub/locations": "0.1.0",
     "pg": "8.22.0",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "exports": {
     ".": {
