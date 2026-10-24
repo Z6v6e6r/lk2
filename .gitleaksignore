@@ -23,3 +23,13 @@ f9dadb20ccfd34d60167d823fb453bd8813015bb:apps/api/src/games/game-commercial-join
 # Current literals carry an inline allow; these entries cover only the original immutable commit.
 26d1b613af60db51cf89f740c527ac35e3bfdfbe:scripts/timeweb-notification-profile.test.ts:generic-api-key:34
 26d1b613af60db51cf89f740c527ac35e3bfdfbe:scripts/timeweb-notification-profile.js:generic-api-key:62
+
+# Synthetic C3 acceptance fixtures (tenantKey/idempotencyKey/JWT test vectors). The current
+# tree builds these from low-entropy parts; the fingerprints below cover only the immutable
+# rebased C3 commits that carried the original literals.
+4abab2698834fc4b414c49ea0d48d5b4e1758419:apps/api/src/c3-acceptance/c3-composition-gate.test.ts:generic-api-key:34
+4abab2698834fc4b414c49ea0d48d5b4e1758419:apps/api/src/c3-acceptance/c3-composition-gate.test.ts:generic-api-key:198
+4abab2698834fc4b414c49ea0d48d5b4e1758419:apps/api/src/c3-acceptance/c3-composition-gate.test.ts:generic-api-key:244
+4abab2698834fc4b414c49ea0d48d5b4e1758419:apps/api/src/c3-acceptance/c3-composition-gate.test.ts:generic-api-key:285
+4abab2698834fc4b414c49ea0d48d5b4e1758419:apps/api/src/c3-acceptance/c3-composition-gate.test.ts:generic-api-key:329
+eb4c06e654fa88fc3b1c1b439d6a12a146fa474a:apps/api/src/c3-acceptance/harness.ts:generic-api-key:46
