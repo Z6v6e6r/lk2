@@ -163,12 +163,23 @@ export interface CommercialJoinOwnerActor {
   readonly expectedRevision: number;
 }
 
+/**
+ * Outcome of the pre-dispatch owner preparation. A missing provider mapping of the selected
+ * subscription is a client *selection* problem (`GAME_SUBSCRIPTION_SELECTION_REQUIRED`), never a
+ * payment refusal: the client has to pick a product it owns instead of being told the game is
+ * unpayable. An unresolved actor/target stays a generic fail-closed refusal.
+ */
+export type CommercialJoinPrepareResult =
+  | { readonly outcome: 'prepared'; readonly binding: PaidJoinProviderBinding }
+  | { readonly outcome: 'selection_required' }
+  | { readonly outcome: 'not_available' };
+
 export interface CommercialJoinOwnerPort {
   prepare?(input: {
     readonly actor: CommercialJoinOwnerActor;
     readonly subscriptionInstanceId: string;
     readonly idempotencyKey: string;
-  }): Promise<PaidJoinProviderBinding | null>;
+  }): Promise<CommercialJoinPrepareResult>;
 
   /**
    * Optional pre-dispatch resolution of the selected product's provider subscription mapping. When
@@ -540,8 +551,10 @@ export async function executeCommercialJoin(
         subscriptionInstanceId: input.subscriptionInstanceId,
         idempotencyKey: input.idempotencyKey,
       });
-      if (!prepared || !prepared.admissible) return commercialFailure('GAME_PAYMENT_REQUIRED');
-      providerBinding = prepared;
+      if (prepared.outcome === 'selection_required')
+        return commercialFailure('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
+      if (prepared.outcome !== 'prepared') return commercialFailure('GAME_PAYMENT_REQUIRED');
+      providerBinding = prepared.binding;
     } catch {
       return commercialFailure('GAME_PAYMENT_REQUIRED');
     }

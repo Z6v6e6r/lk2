@@ -125,6 +125,32 @@ describe('commercial JOIN orchestration', () => {
     expect(calls).toEqual([]);
   });
 
+  it('maps a missing provider mapping of the selected product to a selection refusal, not payment', async () => {
+    const { calls, repository: repo } = repository();
+    const owner = {
+      prepare: () => resolved({ outcome: 'selection_required' as const }),
+      execute: vi.fn(() => resolved({ status: 'PENDING' as const })),
+      read: () => resolved(null),
+    };
+    const result = await executeCommercialJoin(envelope, dependencies(repo, owner));
+    expect(result).toMatchObject({ kind: 'failed', code: 'GAME_SUBSCRIPTION_SELECTION_REQUIRED' });
+    expect(calls).toEqual([]);
+    expect(owner.execute).not.toHaveBeenCalled();
+  });
+
+  it('maps an unresolved actor or target to the existing fail-closed payment refusal', async () => {
+    const { calls, repository: repo } = repository();
+    const owner = {
+      prepare: () => resolved({ outcome: 'not_available' as const }),
+      execute: vi.fn(() => resolved({ status: 'PENDING' as const })),
+      read: () => resolved(null),
+    };
+    const result = await executeCommercialJoin(envelope, dependencies(repo, owner));
+    expect(result).toMatchObject({ kind: 'failed', code: 'GAME_PAYMENT_REQUIRED' });
+    expect(calls).toEqual([]);
+    expect(owner.execute).not.toHaveBeenCalled();
+  });
+
   it('refuses an old consent when the server price changed (new price needs a new consent)', async () => {
     const { calls, repository: repo } = repository();
     const result = await executeCommercialJoin(
@@ -521,7 +547,7 @@ describe('explicit commercial receipt reconciliation', () => {
     const execute = vi.fn(() => resolved({ status: 'PENDING' as const }));
     const prepare = vi.fn(() => {
       expect(beginPaidJoin).not.toHaveBeenCalled();
-      return resolved(frozenBinding);
+      return resolved({ outcome: 'prepared' as const, binding: frozenBinding });
     });
     await executeCommercialJoin(envelope, {
       ...dependencies({ ...repo.repository, beginPaidJoin }, ownerPort([]).owner),
