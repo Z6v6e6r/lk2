@@ -79,3 +79,78 @@ export function selectRestorePlan(
   }
   return { storageMode: verdict.model, schema: restoreSchema(phase, verdict.model), verdict };
 }
+
+/** Reserve kept free on the restore volume in addition to the two database-sized copies. */
+export const DISK_RESTORE_RESERVE_BYTES = 5 * GIB;
+
+/**
+ * Free bytes required for the disk restore mode. Mirrors the blocking gate in
+ * `evaluateCapacity`: the restore volume keeps the dump plus the restored copy and a reserve.
+ */
+export function diskRestoreRequiredBytes(databaseBytes: number): number {
+  return databaseBytes * 2 + DISK_RESTORE_RESERVE_BYTES;
+}
+
+/**
+ * Provisioning target for a delivery host (ADR-0026). Above the immediate restore requirement it
+ * keeps room for one more database growth cycle, so capacity does not become a per-release gate.
+ */
+export function capacityProvisioningTargetBytes(databaseBytes: number): number {
+  return Math.max(Math.ceil(databaseBytes * 3.5), diskRestoreRequiredBytes(databaseBytes));
+}
+
+export interface CapacityProvisioning {
+  readonly databaseBytes: number;
+  readonly freeDisk: number;
+  /** Free bytes the next disk restore needs now. */
+  readonly requiredDiskBytes: number;
+  /** Long-term provisioning target for the host. */
+  readonly provisioningTargetBytes: number;
+  readonly shortfallBytes: number;
+  readonly provisioningShortfallBytes: number;
+  readonly ready: boolean;
+  readonly detail: string;
+}
+
+/**
+ * Pure capacity verdict for a release preflight. It prints GO/NO-GO by category and the concrete
+ * next action instead of failing later inside a restore with a generic error.
+ */
+export function evaluateCapacityProvisioning(
+  databaseBytes: number,
+  freeDisk: number,
+  /** Canonical required bytes from the host capacity readback; falls back to the legacy estimate. */
+  requiredDiskBytes = diskRestoreRequiredBytes(databaseBytes),
+): CapacityProvisioning {
+  const provisioningTargetBytes = Math.max(
+    Math.ceil(databaseBytes * 3.5),
+    requiredDiskBytes,
+    diskRestoreRequiredBytes(databaseBytes),
+  );
+  const shortfallBytes = Math.max(0, requiredDiskBytes - freeDisk);
+  const provisioningShortfallBytes = Math.max(0, provisioningTargetBytes - freeDisk);
+  const ready = shortfallBytes === 0;
+  const action = ready
+    ? provisioningShortfallBytes === 0
+      ? 'ready'
+      : `resize-or-cleanup ${(provisioningShortfallBytes / GIB).toFixed(2)}GiB to reach the provisioning target`
+    : `resize-or-cleanup ${(shortfallBytes / GIB).toFixed(2)}GiB before the next restore`;
+  const detail = [
+    `db=${(databaseBytes / GIB).toFixed(2)}GiB`,
+    `freeDisk=${(freeDisk / GIB).toFixed(2)}GiB`,
+    `requiredDisk=${(requiredDiskBytes / GIB).toFixed(2)}GiB`,
+    `provisioningTarget=${(provisioningTargetBytes / GIB).toFixed(2)}GiB`,
+    `shortfall=${(shortfallBytes / GIB).toFixed(2)}GiB`,
+    `action=${action}`,
+  ].join(' ');
+  return {
+    databaseBytes,
+    freeDisk,
+    requiredDiskBytes,
+    provisioningTargetBytes,
+    shortfallBytes,
+    provisioningShortfallBytes,
+    ready,
+    detail,
+  };
+}
