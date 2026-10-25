@@ -29,6 +29,9 @@ be renewed; human approval window expired; global backup lease.
 2. **Backup renewal**
    - Support an idempotent renewal of a successful, unadmitted backup under a new release identity;
      keep the original canonical bytes and native-path proof for the old identity.
+   - Read-only eligibility preflight implemented: `scripts/timeweb-backup-renewal.ts` +
+     `npm run release:backup-renewal-plan` (see `docs/runbooks/backup-renewal.md`). The live
+     metadata-only retirement mode remains a reviewed controller change.
    - Touchpoints: `scripts/control-timeweb-database-backup.py`,
      `scripts/timeweb-api-worker-migration.js`, request schema and tests.
 3. **Approval TTL**
