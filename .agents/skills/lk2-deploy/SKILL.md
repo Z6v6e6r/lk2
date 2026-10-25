@@ -38,6 +38,28 @@ execution, record exact targets/digests, transitions, readbacks, smoke/observabi
 outcome. Keep `LOCAL`, `CI`, `STAGING`, `PROVIDER` and `PRODUCTION` evidence separate. No implied merge,
 publication, deployment, migration, rollback or permission widening follows from this skill.
 
+## Delivery lanes (ADR-0026)
+
+Read the [release lanes runbook](../../../docs/runbooks/release-lanes.md) and ADR-0026 before
+preparing a deployment. Pick the lane explicitly:
+
+- `beta` (disposable): owner-granted standing authority covers routine promotions of a green main.
+  Blocking gates are readiness, a 2–3 minute smoke and rollback to the previous digest; provider
+  monitoring and the long observation run after activation. Budget < 15 minutes.
+- `web` (presentation / bounded safe-Web): automatic per main push under the standard route; no
+  publication when no runtime code changed. Budget < 5 minutes.
+- `production`: one approval of the exact package (source SHA, manifest, artifact, target). Per-stage
+  re-approval is not required while the exact request, inputs and hashes are unchanged; a fresh
+  preflight is mandatory before each write. Budget < 60 minutes.
+
+Operational requirements that follow: verify source CI once and bind it into the receipt; use
+per-stage leases (backup → migration → rollout) rather than one global lease; treat capacity as a
+provisioning property (disk ≥ 3.5× database or object-storage backups), not a per-release gate; keep
+backup renewal as a first-class idempotent operation; record long observation asynchronously with an
+automatic rollback trigger. Until the platform work in
+[release-lanes-platform-2026-10-25.md](../../../docs/plans/release-lanes-platform-2026-10-25.md) is
+implemented, the current strict profile remains the only executable deployment path.
+
 ## Enrolled standard route
 
 An owner-enabled [standard Timeweb route](../../../docs/runbooks/timeweb-standard-delivery.md)
