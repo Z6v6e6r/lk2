@@ -15,6 +15,7 @@ import {
   existsSync,
   lstatSync,
   readdirSync,
+  mkdirSync,
   unlinkSync,
   openSync,
   closeSync,
@@ -893,14 +894,26 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
   transaction ??= `${ROOT}/backups/${id}-api-worker`;
   if (transaction !== `${ROOT}/backups/${id}-api-worker`) fail('TRANSACTION');
   secure(directory, 0o700);
-  secure(transaction, 0o700);
+  if (mode === 'deploy') {
+    await readControllerSourceAuthority(op, git, githubPublic);
+    secure(`${ROOT}/backups`, 0o700);
+    if (!pathPresent(transaction)) {
+      mkdirSync(transaction, { mode: 0o700 });
+      const parent = openSync(dirname(transaction), 'r');
+      try {
+        fsyncSync(parent);
+      } finally {
+        closeSync(parent);
+      }
+    }
+  }
+  if (!secure(transaction, 0o700).isDirectory()) fail('TRANSACTION_DIRECTORY');
   const historicalAborts = readOrphanAudits(transaction);
   if (
     mode === 'deploy' &&
     historicalAborts.some((audit) => audit.capsule.operationBytes.equals(opBytes))
   )
     fail('ORPHAN_ABORTED');
-  if (mode === 'deploy') await readControllerSourceAuthority(op, git, githubPublic);
   const planPath = `${transaction}/plan.json`,
     journalPath = `${transaction}/rollout-receipt.json`;
   const candidateDir = notification

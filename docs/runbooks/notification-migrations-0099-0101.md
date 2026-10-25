@@ -230,6 +230,14 @@ markers/internal tickets, fresh runtime+migrator post-probes and an immutable su
 Reconciliation verifies this evidence before releasing ownership. Checkpoints103/104 do not start
 the new API and never trigger automatic down migration.
 
+For a first API/Worker deploy, the enrolled controller validates source CI authority, then creates
+only the absent canonical `backups/<candidateSha>-<publicationRunId>-1-api-worker` transaction
+directory with exclusive `mkdir`, mode0700, and a parent-directory fsync. The parent and resulting
+directory must pass root-only custody checks. An existing path is validated without replacement;
+a concurrent creation or fsync/custody failure stops. Recovery/reconciliation never create a
+missing transaction. Directory creation supplies neither a backup receipt nor rollout ownership,
+and a stopped or ambiguous attempt must not be automatically retried.
+
 The API/Worker profile consumes that terminal reconciled migration proof and its verified pre102
 backup. Freshness is required before migration; later application recovery verifies immutable
 backup custody without making an old proof appear newly created. It preserves the exact secret

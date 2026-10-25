@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   controllerSourceAuthority: vi.fn(),
   exec: vi.fn(),
   spawn: vi.fn(),
+  mkdir: vi.fn(),
   readdir: vi.fn(),
   exists: vi.fn(),
   lstat: vi.fn(),
@@ -68,6 +69,7 @@ vi.mock('node:fs', async (importOriginal) => {
   mocks.readdir.mockImplementation(actual.readdirSync);
   return {
     ...actual,
+    mkdirSync: mocks.mkdir,
     readdirSync: mocks.readdir,
     existsSync: mocks.exists,
     lstatSync: mocks.lstat,
@@ -96,6 +98,7 @@ function setup(phase = 'WORKER_ACTIVE') {
     directories = new Set([
       root,
       `${root}/standard`,
+      `${root}/backups`,
       tx,
       `${root}/releases/${id}`,
       runtime,
@@ -251,6 +254,11 @@ function setup(phase = 'WORKER_ACTIVE') {
     files.set(path, Buffer.from(bytes));
   });
   mocks.unlink.mockImplementation((path: string) => files.delete(path));
+  mocks.mkdir.mockImplementation((path: string) => {
+    if (directories.has(path) || files.has(path))
+      throw Object.assign(Error('synthetic path exists'), { code: 'EEXIST' });
+    directories.add(path);
+  });
   mocks.open.mockReturnValue(42);
   mocks.close.mockReturnValue(undefined);
   mocks.fsync.mockReturnValue(undefined);
@@ -449,6 +457,78 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe('production adapter with all host/network operations intercepted', () => {
+  it('admits a fresh absent transaction only after source authority and syncs its parent', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-11T20:00:00.000Z'));
+    const f = orphan();
+    for (const path of [...f.files.keys()]) if (path.startsWith(f.tx + '/')) f.files.delete(path);
+    f.directories.delete(f.tx);
+    mocks.secure.mockImplementation((path: string) => {
+      if (path === f.tx && !f.directories.has(path)) throw Error('missing transaction');
+      return { isDirectory: () => true };
+    });
+    const readdir = mocks.readdir.getMockImplementation()! as (path: string) => string[];
+    mocks.readdir.mockImplementation((path: string) => {
+      if (path === f.tx) throw Error('ADMISSION_REACHED');
+      return readdir(path);
+    });
+    await expect(
+      runManualApiWorkerUpgrade('deploy', `${root}/operator/api-worker-upgrade.json`),
+    ).rejects.toThrow('ADMISSION_REACHED');
+    expect(mocks.mkdir).toHaveBeenCalledExactlyOnceWith(f.tx, { mode: 0o700 });
+    expect(mocks.controllerSourceAuthority.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.mkdir.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.open).toHaveBeenCalledWith(`${root}/backups`, 'r');
+    expect(mocks.fsync).toHaveBeenCalled();
+    expect(mocks.durable).not.toHaveBeenCalled();
+    expect(mocks.swap).not.toHaveBeenCalled();
+  });
+
+  it.each(['expired', 'source-authority', 'parent-security', 'mkdir-race', 'recover'])(
+    'does not create or adopt a fresh transaction on %s failure',
+    async (failure) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-11T20:00:00.000Z'));
+      const f = orphan();
+      for (const path of [...f.files.keys()]) if (path.startsWith(f.tx + '/')) f.files.delete(path);
+      f.directories.delete(f.tx);
+      mocks.secure.mockImplementation((path: string) => {
+        if (path === f.tx && !f.directories.has(path)) throw Error('missing transaction');
+        if (failure === 'parent-security' && path === `${root}/backups`)
+          throw Error('unsafe parent');
+        return { isDirectory: () => true };
+      });
+      if (failure === 'expired') vi.setSystemTime(new Date('2026-10-12T20:00:00.000Z'));
+      if (failure === 'source-authority')
+        mocks.controllerSourceAuthority.mockRejectedValue(Error('source denied'));
+      if (failure === 'mkdir-race')
+        mocks.mkdir.mockImplementation(() => {
+          throw Object.assign(Error('exclusive mkdir race'), { code: 'EEXIST' });
+        });
+      await expect(
+        runManualApiWorkerUpgrade(
+          failure === 'recover' ? 'recover' : 'deploy',
+          `${root}/operator/api-worker-upgrade.json`,
+        ),
+      ).rejects.toThrow();
+      expect(mocks.mkdir).toHaveBeenCalledTimes(failure === 'mkdir-race' ? 1 : 0);
+      expect(f.directories.has(f.tx)).toBe(false);
+      expect(mocks.durable).not.toHaveBeenCalled();
+      expect(mocks.swap).not.toHaveBeenCalled();
+    },
+  );
+  it('requires an existing transaction to remain a secure directory without recreating it', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-11T20:00:00.000Z'));
+    const f = orphan();
+    mocks.secure.mockImplementation((path: string) => ({ isDirectory: () => path !== f.tx }));
+    await expect(
+      runManualApiWorkerUpgrade('deploy', `${root}/operator/api-worker-upgrade.json`),
+    ).rejects.toThrow('TRANSACTION_DIRECTORY');
+    expect(mocks.mkdir).not.toHaveBeenCalled();
+    expect(mocks.durable).not.toHaveBeenCalled();
+  });
   it('restores both components and settings while PostgreSQL/GitHub are unavailable', async () => {
     const f = setup();
     mocks.spawn.mockImplementation(() => {
