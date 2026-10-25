@@ -51,3 +51,6 @@ export function validateNotificationObservation(
   operationSha256: string,
   planSha256: string,
 ): unknown;
+
+export const PRESERVED_NOTIFICATION_ROLLOUT_SCHEMA: string;
+export function isNotificationRollout(value: unknown): boolean;

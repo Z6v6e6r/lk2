@@ -1,5 +1,16 @@
 import {
-  NOTIFICATION_ROLLOUT_SCHEMA,
+  isPreservedNotificationRollout,
+  PRESERVED_NOTIFICATION_PLAN_SCHEMA,
+  PRESERVED_NOTIFICATION_RECEIPT_SCHEMA,
+  validateFcmDrainProof,
+} from './timeweb-notification-android-gates.js';
+import {
+  fcmGateBinding,
+  fcmGateToken,
+  fcmGateTokenSha256,
+} from './timeweb-notification-delivery-gate.js';
+import {
+  isNotificationRollout,
   NOTIFICATION_POST_LEDGER,
   validateNotificationOperation,
   validateNotificationObservationPolicy,
@@ -448,7 +459,7 @@ export function sameApiWorkerDeploymentIdentity(actual, expected, profile = 'pro
   );
 }
 export function validateApiWorkerOperation(op, now) {
-  if (op?.schema === NOTIFICATION_ROLLOUT_SCHEMA) return validateNotificationOperation(op, now);
+  if (isNotificationRollout(op)) return validateNotificationOperation(op, now);
   exact(op, [
     'schema',
     'target',
@@ -547,7 +558,7 @@ export function validateApiWorkerControllerDelta(entries) {
     fail('CONTROLLER_DELTA');
 }
 export function validateApiWorkerLedger(applied, packaged, operation) {
-  if (operation?.schema === NOTIFICATION_ROLLOUT_SCHEMA) {
+  if (isNotificationRollout(operation)) {
     validateNotificationOperation(operation);
     if (
       !Array.isArray(applied) ||
@@ -584,7 +595,8 @@ export function validateApiWorkerLedger(applied, packaged, operation) {
 }
 
 export function validateApiWorkerReceipt(receipt, planSha256, operation) {
-  const notification = operation?.schema === NOTIFICATION_ROLLOUT_SCHEMA;
+  const notification = isNotificationRollout(operation),
+    preserving = isPreservedNotificationRollout(operation);
   const terminal = receipt.status === 'RECONCILED' ? receipt.reconciledStatus : receipt.status;
   exact(receipt, [
     'schema',
@@ -592,10 +604,12 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
     'planSha256',
     'observedAt',
     ...(receipt.status === 'RECONCILED' ? ['reconciledStatus'] : []),
+    ...(preserving && terminal === 'ROLLED_BACK' ? ['rollbackFcmSha256'] : []),
     ...(terminal === 'SUCCESS'
       ? [
           'installedBaselineSha256',
           'observationSha256',
+          ...(preserving ? ['fcmDrainSha256', 'fcmGateHeldSha256', 'fcmGateReleasedSha256'] : []),
           ...(notification
             ? ['observationPolicySha256']
             : ['providerReadbackSha256', 'alertReadbackSha256']),
@@ -627,7 +641,9 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
   if (
     receipt.schema !==
       (notification
-        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2'
+        ? preserving
+          ? PRESERVED_NOTIFICATION_RECEIPT_SCHEMA
+          : 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2'
         : 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1') ||
     receipt.planSha256 !== planSha256 ||
     !HASH.test(planSha256) ||
@@ -638,17 +654,24 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
             .filter(
               (p) => !['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'PREVIOUS_SECRETS'].includes(p),
             )
-            .concat(['SECRETS_VERIFIED', 'PREVIOUS_SECRETS_VERIFIED'])
+            .concat([
+              'SECRETS_VERIFIED',
+              'PREVIOUS_SECRETS_VERIFIED',
+              ...(preserving ? ['GATE_PREPARE_INTENT', 'FCM_DRAIN_VERIFIED'] : []),
+            ])
         : phases
     ).includes(terminal) ||
     (receipt.status === 'RECONCILED' && !['SUCCESS', 'ROLLED_BACK', 'ABORTED'].includes(terminal))
   )
     fail('RECEIPT');
+  if (preserving && terminal === 'ROLLED_BACK' && !HASH.test(receipt.rollbackFcmSha256 ?? ''))
+    fail('ROLLBACK_RECEIPT');
   if (
     terminal === 'SUCCESS' &&
     ![
       'installedBaselineSha256',
       'observationSha256',
+      ...(preserving ? ['fcmDrainSha256', 'fcmGateHeldSha256', 'fcmGateReleasedSha256'] : []),
       ...(notification
         ? ['observationPolicySha256']
         : ['providerReadbackSha256', 'alertReadbackSha256']),
@@ -665,7 +688,8 @@ export function validateApiWorkerReceipt(receipt, planSha256, operation) {
 }
 
 export function assertPlan(plan, op, operationBytes) {
-  const notification = op.schema === NOTIFICATION_ROLLOUT_SCHEMA;
+  const notification = isNotificationRollout(op),
+    preserving = isPreservedNotificationRollout(op);
   exact(plan, [
     'schema',
     'operationSha256',
@@ -686,13 +710,21 @@ export function assertPlan(plan, op, operationBytes) {
     'unchangedImages',
     'createdAt',
     ...(notification
-      ? ['migrationProof', 'migratorImage', 'fcmCredentialSource', 'observationPolicy']
+      ? [
+          'migrationProof',
+          'migratorImage',
+          'fcmCredentialSource',
+          'observationPolicy',
+          ...(preserving ? ['androidGate', 'completedMigrationSha256'] : []),
+        ]
       : []),
   ]);
   if (
     plan.schema !==
       (notification
-        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
+        ? preserving
+          ? PRESERVED_NOTIFICATION_PLAN_SCHEMA
+          : 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
         : 'PHUB_TIMEWEB_API_WORKER_PLAN_V1') ||
     plan.operationSha256 !== hash(operationBytes) ||
     plan.controllerSha !== op.controllerSha ||
@@ -743,7 +775,8 @@ export function assertPlan(plan, op, operationBytes) {
     if (
       !same(plan.previousSecrets, plan.candidateSecrets) ||
       plan.fcmCredentialSource !== op.expectedFcmSource ||
-      plan.migratorImage !== op.migratorImage ||
+      plan.migratorImage !==
+        (preserving ? op.completedMigration.migratorImage : op.migratorImage) ||
       !same(plan.previousSecrets.files, op.candidateSecretHashes)
     )
       fail('PRESERVE_SECRETS');
@@ -754,10 +787,22 @@ export function assertPlan(plan, op, operationBytes) {
       'catalogSha256',
       'backup',
       'target',
+      ...(preserving ? ['completedMigrationSha256', 'installedMigratorImage'] : []),
     ]);
     for (const k of ['migrationPlanSha256', 'migrationSuccessSha256', 'migrationReceiptSha256'])
       if (plan.migrationProof[k] !== op[k]) fail('MIGRATION_PROOF');
     if (!HASH.test(plan.migrationProof.catalogSha256 ?? '')) fail('MIGRATION_PROOF');
+    if (
+      preserving &&
+      (!same(plan.androidGate, op.androidGate) ||
+        plan.completedMigrationSha256 !== hash(JSON.stringify(op.completedMigration) + '\n') ||
+        plan.migrationProof.completedMigrationSha256 !== plan.completedMigrationSha256 ||
+        plan.migrationProof.installedMigratorImage !== op.completedMigration.migratorImage ||
+        plan.migrationProof.catalogSha256 !== op.completedMigration.catalogSha256 ||
+        !same(plan.migrationProof.target, op.completedMigration.target) ||
+        !same(plan.migrationProof.backup, op.completedMigration.backup))
+    )
+      fail('COMPLETED_MIGRATION');
   }
 }
 export function validateInstalledApiWorkerEvidence({
@@ -780,13 +825,24 @@ export function validateInstalledApiWorkerEvidence({
     values.PHUB_RELEASE_SOURCE_TREE !== undefined ||
     Object.entries(plan.unchangedImages).some(([k, v]) => values[k] !== v) ||
     values.PHUB_COMPONENT_ROLLOUT_KIND !==
-      (op.schema === NOTIFICATION_ROLLOUT_SCHEMA ? 'API_WORKER_NOTIFICATION_0105' : 'API_WORKER') ||
+      (isPreservedNotificationRollout(op)
+        ? 'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
+        : isNotificationRollout(op)
+          ? 'API_WORKER_NOTIFICATION_0105'
+          : 'API_WORKER') ||
     values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
       `${ROOT}/backups/${releaseId}-api-worker/rollout-receipt.json` ||
     values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID !==
-      (op.schema === NOTIFICATION_ROLLOUT_SCHEMA ? plan.previousSecrets.releaseId : releaseId) ||
-    (op.schema === NOTIFICATION_ROLLOUT_SCHEMA &&
-      values.MIGRATOR_IMAGE_DIGEST !== op.migratorImage.split('@')[1]) ||
+      (isNotificationRollout(op) ? plan.previousSecrets.releaseId : releaseId) ||
+    (isNotificationRollout(op) &&
+      values.MIGRATOR_IMAGE_DIGEST !==
+        (isPreservedNotificationRollout(op)
+          ? op.completedMigration.migratorImage
+          : op.migratorImage
+        ).split('@')[1]) ||
+    (isPreservedNotificationRollout(op) &&
+      values.PHUB_WORKER_DELIVERY_GATE_RECEIPT !==
+        `${ROOT}/backups/${releaseId}-api-worker/rollout-receipt.json`) ||
     receipt.installedBaselineSha256 !== hash(bytes) ||
     !['SUCCESS', 'RECONCILED'].includes(receipt.status) ||
     (receipt.status === 'RECONCILED' && receipt.reconciledStatus !== 'SUCCESS')
@@ -799,9 +855,30 @@ export function validateInstalledApiWorkerEvidence({
     )
       fail('INSTALLED');
   const observation = parseStrictJson(evidence['observation.json']);
-  if (op.schema === NOTIFICATION_ROLLOUT_SCHEMA) {
+  if (isNotificationRollout(op)) {
     validateNotificationObservation(observation, hash(operationBytes), hash(planBytes));
-    exact(evidence, ['observation.json']);
+    const preserving = isPreservedNotificationRollout(op);
+    exact(evidence, [
+      'observation.json',
+      ...(preserving
+        ? ['fcm-drain.json', 'fcm-delivery-gate/held.json', 'fcm-delivery-gate/released.json']
+        : []),
+    ]);
+    if (preserving) {
+      validateFcmDrainProof(parseStrictJson(evidence['fcm-drain.json']), op, hash(planBytes));
+      const binding = fcmGateBinding(op, hash(operationBytes), hash(planBytes));
+      if (
+        hash(evidence['fcm-drain.json']) !== receipt.fcmDrainSha256 ||
+        ['HELD', 'RELEASED'].some(
+          (state) =>
+            evidence[`fcm-delivery-gate/${state.toLowerCase()}.json`].toString() !==
+              fcmGateToken(binding, state) ||
+            receipt[state === 'HELD' ? 'fcmGateHeldSha256' : 'fcmGateReleasedSha256'] !==
+              fcmGateTokenSha256(binding, state),
+        )
+      )
+        fail('INSTALLED_FCM_GATE');
+    }
     if (hash(evidence['observation.json']) !== receipt.observationSha256)
       fail('INSTALLED_EVIDENCE');
     return;

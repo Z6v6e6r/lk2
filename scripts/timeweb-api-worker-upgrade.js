@@ -1,5 +1,27 @@
 import {
-  NOTIFICATION_ROLLOUT_SCHEMA,
+  isPreservedNotificationRollout,
+  PRESERVED_NOTIFICATION_PLAN_SCHEMA,
+  PRESERVED_NOTIFICATION_RECEIPT_SCHEMA,
+  ANDROID_GATE_SNAPSHOT_SQL,
+  ANDROID_ALL_SENDING_SQL,
+  assertAndroidGateSnapshot,
+  validateFcmDrainProof,
+  validateFcmRollbackProof,
+  verifyFcmHeldRollback,
+} from './timeweb-notification-android-gates.js';
+import {
+  classifyFcmGatePreparation,
+  classifyFcmGateRelease,
+  fcmGateBinding,
+  fcmGateComposeOverride,
+  holdFcmDeliveryGate,
+  readFcmDeliveryGate,
+  releaseFcmDeliveryGate,
+  validateFcmGateRuntime,
+  fcmGateTokenSha256,
+} from './timeweb-notification-delivery-gate.js';
+import {
+  isNotificationRollout,
   assertNotificationRuntimeOff,
   validateNotificationManifest,
   attestNotificationSource,
@@ -105,7 +127,7 @@ export {
   validateApiWorkerReceipt,
   validateInstalledApiWorkerEvidence,
 } from './timeweb-api-worker-contract.js';
-export function apiWorkerComposeArgs(baseline, overlay, action, service) {
+export function apiWorkerComposeArgs(baseline, overlay, action, service, candidateGateOverride) {
   if (!['api', 'worker'].includes(service) || !['pull', 'up'].includes(action)) fail('STAGE');
   return [
     'compose',
@@ -115,6 +137,7 @@ export function apiWorkerComposeArgs(baseline, overlay, action, service) {
     overlay,
     '-f',
     COMPOSE,
+    ...(candidateGateOverride ? ['-f', candidateGateOverride] : []),
     ...(service === 'worker' ? ['--profile', 'background'] : []),
     ...(action === 'pull' ? ['pull', service] : ['up', '-d', '--no-deps', service]),
   ];
@@ -142,12 +165,20 @@ export async function runApiWorkerTransition(ops) {
   let intent = false;
   try {
     await ops.preflight();
+    if (ops.preserveAndroid) {
+      await ops.journal('GATE_PREPARE_INTENT');
+      await ops.prepareDeliveryGate();
+    }
     await ops.pullAndSmoke();
     await ops.journal('PREPARED');
     intent = true;
     await ops.journal('WORKER_STOP_INTENT');
     await ops.containWorker();
     await ops.journal('WORKER_STOPPED');
+    if (ops.preserveAndroid) {
+      await ops.verifyFcmDrain();
+      await ops.journal('FCM_DRAIN_VERIFIED');
+    }
     if (ops.secretMode === 'preserve') {
       await ops.installSecrets();
       await ops.journal('SECRETS_VERIFIED');
@@ -168,12 +199,15 @@ export async function runApiWorkerTransition(ops) {
     await ops.journal('BASELINE_INTENT');
     await ops.installBaseline();
     await ops.journal('GATE_RELEASE_INTENT');
+    if (ops.preserveAndroid) await ops.releaseDeliveryGate();
     await ops.releaseFence();
     await ops.journal('SUCCESS');
   } catch (error) {
-    if (intent) await recoverApiWorkerTransition(ops);
+    if (ops.preserveAndroid && intent) await recoverApiWorkerPhase(await ops.recoveryPhase(), ops);
+    else if (intent) await recoverApiWorkerTransition(ops);
     else {
       await ops.attestPrevious();
+      if (ops.preserveAndroid) await ops.attestGatePreparation();
       await ops.journal('ABORTED');
     }
     throw error;
@@ -184,6 +218,7 @@ export async function recoverApiWorkerTransition(ops) {
     await ops.journal('ROLLBACK_INTENT');
     // Failure to contain Worker blocks every secret/API mutation; never resume an uncontained sender.
     await ops.containWorker();
+    if (ops.preserveAndroid) await ops.verifyHeldForRollback();
     await ops.journal('WORKER_CONTAINED');
     await ops.restoreSecrets();
     await ops.journal(
@@ -200,8 +235,24 @@ export async function recoverApiWorkerTransition(ops) {
   }
 }
 export async function recoverApiWorkerPhase(phase, ops) {
-  if (['PREPARING', 'PREPARED'].includes(phase)) {
+  // Durable release intent can precede actual provider calls. From here rollback is unsafe.
+  if (ops.preserveAndroid && ['GATE_RELEASE_INTENT', 'SUCCESS'].includes(phase)) {
+    await ops.attestCandidate();
+    await ops.attestInstalledBaseline();
+    await ops.releaseDeliveryGate();
+    await ops.releaseFence();
+    await ops.journal('SUCCESS');
+    return 'SUCCESS';
+  }
+  if (ops.preserveAndroid && phase === 'RECONCILED') fail('RECOVERY_PHASE');
+
+  if (
+    ['PREPARING', 'PREPARED', ...(ops.preserveAndroid ? ['GATE_PREPARE_INTENT'] : [])].includes(
+      phase,
+    )
+  ) {
     await ops.attestPrevious();
+    if (ops.preserveAndroid) await ops.attestGatePreparation();
     await ops.journal('ABORTED');
     return 'ABORTED';
   }
@@ -209,6 +260,7 @@ export async function recoverApiWorkerPhase(phase, ops) {
     ![
       'WORKER_STOP_INTENT',
       'WORKER_STOPPED',
+      ...(ops.preserveAndroid ? ['FCM_DRAIN_VERIFIED'] : []),
       'SECRET_SWAP_INTENT',
       'SECRETS_ACTIVE',
       ...(ops.secretMode === 'preserve' ? ['SECRETS_VERIFIED', 'PREVIOUS_SECRETS_VERIFIED'] : []),
@@ -349,7 +401,18 @@ export const API_WORKER_DATABASE_SQL = `SELECT json_build_object(
  'activeProviders',(SELECT count(*) FROM integration.notification_provider_accounts WHERE channel='PUSH' AND platform='ANDROID' AND provider='FCM' AND app_id='ru.padlhub.app' AND environment='SANDBOX' AND status='ACTIVE'),
  'liveLeases',(SELECT count(*) FROM notifications.deliveries d JOIN integration.notification_endpoints e ON e.tenant_id=d.tenant_id AND e.id=d.endpoint_id JOIN integration.notification_provider_accounts a ON a.tenant_id=e.tenant_id AND a.id=e.provider_account_id WHERE d.channel='PUSH' AND d.state='SENDING' AND d.lease_expires_at>now() AND a.platform='ANDROID' AND a.provider='FCM' AND a.app_id='ru.padlhub.app' AND a.environment='SANDBOX'),
  'ledger',(SELECT coalesce(json_agg(json_build_object('filename',filename,'checksum',checksum) ORDER BY filename),'[]'::json) FROM public.schema_migrations))`;
-export function validateApiWorkerDatabase(value, packaged, initial, operation) {
+export const API_WORKER_PRESERVED_DATABASE_SQL =
+  API_WORKER_DATABASE_SQL.slice(0, -1) +
+  `,'androidSnapshot',${ANDROID_GATE_SNAPSHOT_SQL},'allSending',${ANDROID_ALL_SENDING_SQL})`;
+export function validateApiWorkerDatabase(
+  value,
+  packaged,
+  initial,
+  operation,
+  requireQuiescent = true,
+) {
+  const preserving = isPreservedNotificationRollout(operation);
+
   exact(value, [
     'backendPid',
     'transactionStartedAt',
@@ -362,6 +425,7 @@ export function validateApiWorkerDatabase(value, packaged, initial, operation) {
     'activeProviders',
     'liveLeases',
     'ledger',
+    ...(preserving ? ['androidSnapshot', 'allSending'] : []),
   ]);
   if (
     !Number.isSafeInteger(value.backendPid) ||
@@ -373,11 +437,27 @@ export function validateApiWorkerDatabase(value, packaged, initial, operation) {
     !Number.isSafeInteger(value.tenantCount) ||
     value.tenantCount < 1 ||
     !/^[a-f0-9]{32}$/.test(value.tenantFingerprint ?? '') ||
-    value.androidEnabledTenants !== 0 ||
-    value.activeProviders !== 0 ||
-    value.liveLeases !== 0
+    (!preserving &&
+      (value.androidEnabledTenants !== 0 ||
+        value.activeProviders !== 0 ||
+        value.liveLeases !== 0)) ||
+    (preserving &&
+      (!Number.isSafeInteger(value.allSending) ||
+        value.allSending < 0 ||
+        (requireQuiescent && value.allSending !== 0)))
   )
     fail('DATABASE_SAFETY');
+  if (preserving) {
+    assertAndroidGateSnapshot(value.androidSnapshot, operation.androidGate);
+    if (
+      value.androidEnabledTenants !== operation.androidGate.enabledTenantCount ||
+      value.activeProviders !== operation.androidGate.activeProviderCount ||
+      !Number.isSafeInteger(value.liveLeases) ||
+      value.liveLeases < 0 ||
+      value.liveLeases > value.allSending
+    )
+      fail('DATABASE_SAFETY');
+  }
   validateApiWorkerLedger(value.ledger, packaged, operation);
   if (
     initial &&
@@ -417,6 +497,7 @@ function inspectService(service) {
     status: v.State.Status,
     health: v.State.Health?.Status ?? null,
     mounts: v.Mounts,
+    environment: v.Config.Env ?? [],
     configHash: v.Config.Labels['com.docker.compose.config-hash'] ?? null,
   };
 }
@@ -484,7 +565,7 @@ export function validateApiWorkerMount(
 }
 export function overlay(plan, side, service) {
   const value = plan[side][service];
-  return `PHUB_RELEASE_ID=${service === 'worker' ? (side === 'previous' ? plan.previous.api.releaseId : plan.candidate.api.releaseId) : value.releaseId}\n${service.toUpperCase()}_IMAGE_DIGEST=${value.image.split('@')[1]}\n${service === 'worker' ? `TIMEWEB_FCM_CREDENTIAL_SOURCE=${plan.schema === 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2' ? plan.fcmCredentialSource : side === 'previous' ? '/dev/null' : '/etc/phub/timeweb-beta-fcm/fcm-service-account.json'}\n` : ''}`;
+  return `PHUB_RELEASE_ID=${service === 'worker' ? (side === 'previous' ? plan.previous.api.releaseId : plan.candidate.api.releaseId) : value.releaseId}\n${service.toUpperCase()}_IMAGE_DIGEST=${value.image.split('@')[1]}\n${service === 'worker' ? `TIMEWEB_FCM_CREDENTIAL_SOURCE=${['PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2', PRESERVED_NOTIFICATION_PLAN_SCHEMA].includes(plan.schema) ? plan.fcmCredentialSource : side === 'previous' ? '/dev/null' : '/etc/phub/timeweb-beta-fcm/fcm-service-account.json'}\n` : ''}`;
 }
 function releaseFile(path, bytes) {
   if (!read(path).equals(Buffer.from(bytes))) fail('LOCK_DRIFT');
@@ -690,7 +771,7 @@ export function readNotificationTerminalCapsule(
     capsule.op,
   );
   if (
-    capsule.op.schema !== NOTIFICATION_ROLLOUT_SCHEMA ||
+    !isNotificationRollout(capsule.op) ||
     !capsule.operationBytes.equals(requestBytes) ||
     !capsule.operationBytes.equals(operationBytes) ||
     !capsule.planBytes.equals(planBytes) ||
@@ -770,7 +851,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       request = validateApiWorkerOperation(parseStrictJson(requestBytes));
     transaction = `${ROOT}/backups/${request.candidateSha}-${request.publicationRunId}-1-api-worker`;
     secure(transaction, 0o700);
-    if (mode === 'reconcile' && request.schema === NOTIFICATION_ROLLOUT_SCHEMA) {
+    if (mode === 'reconcile' && isNotificationRollout(request)) {
       capsule = readNotificationTerminalCapsule(
         requestBytes,
         read(`${transaction}/preparation.json`),
@@ -817,9 +898,19 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     if (
       mode === 'recover' &&
       earlyReceipt &&
-      !['PREPARING', 'PREPARED', 'ABORTED', 'ROLLED_BACK', 'SUCCESS', 'RECONCILED'].includes(
-        earlyReceipt.status,
-      )
+      !(
+        isPreservedNotificationRollout(capsule.op) &&
+        ['GATE_RELEASE_INTENT', 'SUCCESS'].includes(earlyReceipt.status)
+      ) &&
+      ![
+        'PREPARING',
+        'GATE_PREPARE_INTENT',
+        'PREPARED',
+        'ABORTED',
+        'ROLLED_BACK',
+        'SUCCESS',
+        'RECONCILED',
+      ].includes(earlyReceipt.status)
     ) {
       const actual = inspectService('worker'),
         old = capsule.plan.previous.worker,
@@ -846,7 +937,8 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       mode === 'deploy' ? Date.now() : undefined,
     );
   const profile = op.profile ?? 'production';
-  const notification = op.schema === NOTIFICATION_ROLLOUT_SCHEMA;
+  const notification = isNotificationRollout(op),
+    preserving = isPreservedNotificationRollout(op);
   if (notification) attestNotificationSource(op, { git, read, secure, present: pathPresent });
   const config = parseStrictJson(read('/etc/phub/timeweb-beta-standard-delivery.json').toString());
   if (
@@ -894,8 +986,11 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
   transaction ??= `${ROOT}/backups/${id}-api-worker`;
   if (transaction !== `${ROOT}/backups/${id}-api-worker`) fail('TRANSACTION');
   secure(directory, 0o700);
+  let admissionBaseline;
   if (mode === 'deploy') {
     await readControllerSourceAuthority(op, git, githubPublic);
+    admissionBaseline = readInstalledApiBaseline(op.expectedApi.releaseId);
+    if (admissionBaseline.workerGate) fail('PRESERVED_WORKER_RECREATE_UNSUPPORTED');
     secure(`${ROOT}/backups`, 0o700);
     if (!pathPresent(transaction)) {
       mkdirSync(transaction, { mode: 0o700 });
@@ -941,7 +1036,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     for (const side of ['previous', 'candidate'])
       for (const service of ['api', 'worker'])
         if (existsSync(`${transaction}/${side}-${service}.env`)) fail('TRANSACTION_EXISTS');
-    baseline = readInstalledApiBaseline(op.expectedApi.releaseId);
+    baseline = admissionBaseline;
     if (baseline.secretSetReleaseId !== op.expectedCurrentSecretSetReleaseId)
       fail('SECRET_BASELINE');
     const manifest = await candidateAuthority(op, directory),
@@ -999,7 +1094,9 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       }));
     plan = {
       schema: notification
-        ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
+        ? preserving
+          ? PRESERVED_NOTIFICATION_PLAN_SCHEMA
+          : 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2'
         : 'PHUB_TIMEWEB_API_WORKER_PLAN_V1',
       operationSha256: hash(opBytes),
       controllerSha: op.controllerSha,
@@ -1032,7 +1129,13 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       ...(notification
         ? {
             migrationProof: readNotificationMigrationProof(op, { fresh: false }),
-            migratorImage: op.migratorImage,
+            migratorImage: preserving ? op.completedMigration.migratorImage : op.migratorImage,
+            ...(preserving
+              ? {
+                  androidGate: op.androidGate,
+                  completedMigrationSha256: hash(JSON.stringify(op.completedMigration) + '\n'),
+                }
+              : {}),
             fcmCredentialSource: op.expectedFcmSource,
             observationPolicy: NOTIFICATION_OBSERVATION_POLICY,
           }
@@ -1066,6 +1169,9 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
   const planBytes =
       mode === 'deploy' && !capsule ? Buffer.from(`${JSON.stringify(plan)}\n`) : capsule.planBytes,
     planSha256 = hash(planBytes);
+  const gateDirectory = `${transaction}/fcm-delivery-gate`,
+    gateOverride = `${transaction}/candidate-worker-gate.compose.json`,
+    gateBinding = preserving ? fcmGateBinding(op, hash(opBytes), planSha256) : null;
   const provisionBytes = `${JSON.stringify({ schema: 'PHUB_TIMEWEB_RUNTIME_SWAP_LOCK_V1', planSha256, targetDir: RUNTIME, candidateDir, backupDir, previous: plan.previousSecrets, candidate: plan.candidateSecrets })}\n`;
   const pointer = `${planPath}\n`;
   const assertOrphanEmpty = () => {
@@ -1079,6 +1185,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       `${transaction}/operation.json`,
       `${directory}/installed-components.env`,
       `${transaction}/observation.json`,
+      ...(preserving ? [gateDirectory, gateOverride, `${transaction}/fcm-drain.json`] : []),
       `${transaction}/timeweb-monitor-readback.json`,
       `${transaction}/alert-test-readback.json`,
       ...['previous', 'candidate'].flatMap((side) =>
@@ -1131,10 +1238,18 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     )
       fail('CANDIDATE_CUSTODY');
   };
-  const database = async () => {
+  const database = async (quiescent) => {
     if (mode === 'deploy' && Date.now() >= Date.parse(op.expiresAt)) fail('OPERATION_EXPIRED');
-    const value = await fence.query(API_WORKER_DATABASE_SQL);
-    validateApiWorkerDatabase(value, plan.packagedLedger, initialDatabase, op);
+    const value = await fence.query(
+      preserving ? API_WORKER_PRESERVED_DATABASE_SQL : API_WORKER_DATABASE_SQL,
+    );
+    validateApiWorkerDatabase(
+      value,
+      plan.packagedLedger,
+      initialDatabase,
+      op,
+      quiescent ?? !['GATE_RELEASE_INTENT', 'SUCCESS', 'RECONCILED'].includes(currentPhase),
+    );
     initialDatabase ??= value;
     return value;
   };
@@ -1146,9 +1261,15 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     );
   const journal = async (status) => {
     if (notification && status === 'SUCCESS') validateObservation();
+    if (preserving && status === 'ROLLED_BACK')
+      validateFcmRollbackProof(
+        parseStrictJson(read(`${transaction}/rollback-fcm-readback.json`)),
+        op,
+        planSha256,
+      );
     durable(
       journalPath,
-      `${JSON.stringify({ schema: notification ? 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1', status, planSha256, observedAt: new Date().toISOString(), ...(status === 'SUCCESS' ? { installedBaselineSha256, observationSha256: hash(read(`${transaction}/observation.json`)), ...(notification ? { observationPolicySha256: NOTIFICATION_OBSERVATION_POLICY_SHA256 } : { providerReadbackSha256: hash(read(`${transaction}/timeweb-monitor-readback.json`)), alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)) }) } : {}) })}\n`,
+      `${JSON.stringify({ schema: notification ? (preserving ? PRESERVED_NOTIFICATION_RECEIPT_SCHEMA : 'PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_RECEIPT_V2') : 'PHUB_TIMEWEB_API_WORKER_RECEIPT_V1', status, planSha256, observedAt: new Date().toISOString(), ...(preserving && status === 'ROLLED_BACK' ? { rollbackFcmSha256: hash(read(`${transaction}/rollback-fcm-readback.json`)) } : {}), ...(status === 'SUCCESS' ? { installedBaselineSha256, observationSha256: hash(read(`${transaction}/observation.json`)), ...(preserving ? { fcmDrainSha256: hash(read(`${transaction}/fcm-drain.json`)), fcmGateHeldSha256: fcmGateTokenSha256(gateBinding, 'HELD'), fcmGateReleasedSha256: fcmGateTokenSha256(gateBinding, 'RELEASED') } : {}), ...(notification ? { observationPolicySha256: NOTIFICATION_OBSERVATION_POLICY_SHA256 } : { providerReadbackSha256: hash(read(`${transaction}/timeweb-monitor-readback.json`)), alertReadbackSha256: hash(read(`${transaction}/alert-test-readback.json`)) }) } : {}) })}\n`,
     );
     currentPhase = status;
   };
@@ -1191,7 +1312,21 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     fixedAttest();
     const path = `${transaction}/${side}-${service}.env`;
     if (!read(path).equals(Buffer.from(overlay(plan, side, service)))) fail('OVERLAY');
-    const args = apiWorkerComposeArgs(plan.baselinePath, path, 'up', service),
+    const useGate = preserving && side === 'candidate' && service === 'worker';
+    if (useGate) {
+      if (
+        !read(gateOverride).equals(Buffer.from(fcmGateComposeOverride(gateDirectory, gateBinding)))
+      )
+        fail('GATE_OVERRIDE');
+      readFcmDeliveryGate(gateDirectory, gateBinding);
+    }
+    const args = apiWorkerComposeArgs(
+        plan.baselinePath,
+        path,
+        'up',
+        service,
+        useGate ? gateOverride : undefined,
+      ),
       base = args.slice(0, args.indexOf('up'));
     const configBase = service === 'api' ? [...base, '--profile', 'background'] : base;
     const model = parseStrictJson(docker([...configBase, 'config', '--format', 'json']));
@@ -1241,11 +1376,23 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         delete values[key];
     Object.assign(values, {
       PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
-      PHUB_COMPONENT_ROLLOUT_KIND: notification ? 'API_WORKER_NOTIFICATION_0105' : 'API_WORKER',
+      PHUB_COMPONENT_ROLLOUT_KIND: preserving
+        ? 'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
+        : notification
+          ? 'API_WORKER_NOTIFICATION_0105'
+          : 'API_WORKER',
       PHUB_RELEASE_ID: id,
       PHUB_RUNTIME_SECRET_SET_RELEASE_ID: notification ? plan.previousSecrets.releaseId : id,
-      ...(notification ? { MIGRATOR_IMAGE_DIGEST: op.migratorImage.split('@')[1] } : {}),
+      ...(notification
+        ? {
+            MIGRATOR_IMAGE_DIGEST: (preserving
+              ? op.completedMigration.migratorImage
+              : op.migratorImage
+            ).split('@')[1],
+          }
+        : {}),
       PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
+      ...(preserving ? { PHUB_WORKER_DELIVERY_GATE_RECEIPT: journalPath } : {}),
       API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
       WORKER_IMAGE_DIGEST: plan.candidate.worker.image.split('@')[1],
     });
@@ -1256,6 +1403,80 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
   };
   const ops = {
     ...(notification ? { secretMode: 'preserve' } : {}),
+    ...(preserving
+      ? {
+          preserveAndroid: true,
+          recoveryPhase: async () => {
+            const receipt = validateApiWorkerReceipt(
+              parseStrictJson(read(journalPath)),
+              planSha256,
+              op,
+            );
+            currentPhase = receipt.status;
+            return receipt.status;
+          },
+          attestGatePreparation: async () => {
+            classifyFcmGatePreparation(gateDirectory, gateBinding);
+            if (
+              pathPresent(gateOverride) &&
+              !read(gateOverride).equals(
+                Buffer.from(fcmGateComposeOverride(gateDirectory, gateBinding)),
+              )
+            )
+              fail('GATE_OVERRIDE');
+          },
+          prepareDeliveryGate: async () => {
+            holdFcmDeliveryGate(gateDirectory, gateBinding);
+            durable(gateOverride, fcmGateComposeOverride(gateDirectory, gateBinding), true);
+          },
+          verifyFcmDrain: async () => {
+            if (
+              known('worker').status !== 'exited' ||
+              readFcmDeliveryGate(gateDirectory, gateBinding) !== 'HELD'
+            )
+              fail('FCM_DRAIN');
+            const db = await database();
+            if (db.allSending !== 0) fail('FCM_IN_FLIGHT');
+            const proof = {
+              schema: 'PHUB_FCM_DRAIN_PROOF_V1',
+              planSha256,
+              snapshotSha256: op.androidGate.snapshotSha256,
+              workerId: op.expectedWorker.id,
+              sendingCount: 0,
+              observedAt: new Date().toISOString(),
+            };
+            validateFcmDrainProof(proof, op, planSha256);
+            durable(`${transaction}/fcm-drain.json`, JSON.stringify(proof) + '\n', true);
+          },
+          verifyHeldForRollback: async () => {
+            const path = `${transaction}/rollback-fcm-readback.json`;
+            await verifyFcmHeldRollback(op, planSha256, {
+              readGateState: () => readFcmDeliveryGate(gateDirectory, gateBinding),
+              readDatabase: database,
+              readFirstProof: () => (pathPresent(path) ? parseStrictJson(read(path)) : null),
+              writeFirstProof: (proof) => durable(path, JSON.stringify(proof) + '\n', true),
+              now: () => new Date().toISOString(),
+            });
+          },
+          releaseDeliveryGate: async () => {
+            if (!['GATE_RELEASE_INTENT', 'SUCCESS'].includes(currentPhase))
+              fail('FCM_RELEASE_PHASE');
+            validateFcmDrainProof(
+              parseStrictJson(read(`${transaction}/fcm-drain.json`)),
+              op,
+              planSha256,
+            );
+            validateObservation();
+            if (classifyFcmGateRelease(gateDirectory, gateBinding) === 'HELD') await database(true);
+            releaseFcmDeliveryGate(gateDirectory, gateBinding);
+          },
+          attestInstalledBaseline: async () => {
+            if (!read(descriptorPath).equals(Buffer.from(descriptor()))) fail('INSTALLED');
+            installedBaselineSha256 = hash(read(descriptorPath));
+            validateObservation();
+          },
+        }
+      : {}),
     journal,
     preflight: async () => {
       fixedAttest();
@@ -1324,6 +1545,8 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
           inspectService('worker').mounts,
           notification ? plan.fcmCredentialSource : undefined,
         );
+      if (preserving && service === 'worker')
+        validateFcmGateRuntime(inspectService('worker'), gateDirectory, gateBinding);
       await database();
       fixedAttest();
     },
@@ -1336,12 +1559,13 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     },
     attestPrevious: async () => {
       immutableAttest();
-      if (!['PREPARING', 'PREPARED', 'ABORTED'].includes(currentPhase)) fixedAttest();
+      if (!['PREPARING', 'GATE_PREPARE_INTENT', 'PREPARED', 'ABORTED'].includes(currentPhase))
+        fixedAttest();
       if (!same(secretSet(RUNTIME), plan.previousSecrets)) fail('SECRET_RESTORE');
       for (const service of ['api', 'worker']) {
         const actual = await waitService(service, plan.previous[service], profile);
         if (
-          ['PREPARING', 'PREPARED', 'ABORTED'].includes(currentPhase) &&
+          ['PREPARING', 'GATE_PREPARE_INTENT', 'PREPARED', 'ABORTED'].includes(currentPhase) &&
           !sameApiWorkerDeploymentIdentity(actual.identity, plan.previous[service], profile)
         )
           fail('PREIMAGE');
@@ -1375,6 +1599,25 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
         inspectService('worker').mounts,
         notification ? plan.fcmCredentialSource : undefined,
       );
+      if (preserving) {
+        validateFcmGateRuntime(inspectService('worker'), gateDirectory, gateBinding);
+        const releasedPhase = ['GATE_RELEASE_INTENT', 'SUCCESS', 'RECONCILED'].includes(
+          currentPhase,
+        );
+        const state = releasedPhase
+          ? classifyFcmGateRelease(gateDirectory, gateBinding)
+          : readFcmDeliveryGate(gateDirectory, gateBinding);
+        if (
+          !['GATE_RELEASE_INTENT', 'SUCCESS', 'RECONCILED'].includes(currentPhase) &&
+          state !== 'HELD'
+        )
+          fail('FCM_GATE_RELEASED_EARLY');
+        validateFcmDrainProof(
+          parseStrictJson(read(`${transaction}/fcm-drain.json`)),
+          op,
+          planSha256,
+        );
+      }
       if (notification) rolloutMonitoring();
     },
     observe: async () => {
@@ -1445,7 +1688,11 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       releaseFile(`${transaction}/preparation.json`, orphanBytes);
       return { status: 'RECONCILED', receipt: auditPath };
     }
-    if (mode === 'deploy' || (mode === 'reconcile' && currentPhase === 'SUCCESS')) {
+    if (
+      mode === 'deploy' ||
+      (preserving && mode === 'recover') ||
+      (mode === 'reconcile' && currentPhase === 'SUCCESS')
+    ) {
       const pg = JSON.parse(
         docker([
           'container',
@@ -1484,7 +1731,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       const locks = await fence.query(API_WORKER_GATE_LOCK_SQL);
       exact(locks, ['locksAcquired', 'tenantCount', 'tenantFingerprint']);
       if (locks.locksAcquired !== true || locks.tenantCount < 1) fail('GATE_LOCKS');
-      const db = await database();
+      const db = await database(preserving && mode === 'recover' ? false : undefined);
       if (db.tenantCount !== locks.tenantCount || db.tenantFingerprint !== locks.tenantFingerprint)
         fail('TENANT_DRIFT');
     }
@@ -1510,7 +1757,7 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
       const receipt = existsSync(journalPath)
         ? validateApiWorkerReceipt(parseStrictJson(read(journalPath)), planSha256, op)
         : { status: 'PREPARING' };
-      const preparation = ['PREPARING', 'PREPARED'].includes(receipt.status);
+      const preparation = ['PREPARING', 'GATE_PREPARE_INTENT', 'PREPARED'].includes(receipt.status);
       if (existsSync(PROVISION_LOCK)) {
         if (!read(PROVISION_LOCK).equals(Buffer.from(provisionBytes))) fail('LOCK_DRIFT');
       } else if (

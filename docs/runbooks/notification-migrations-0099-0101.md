@@ -479,3 +479,31 @@ baselines, then enters the existing release/publication/unlock tail. It does not
 alias. A stopped notification supervisor does not spawn verifier children that could race the
 host's sole-member release check; host full source/tool custody remains required. Existing
 uncertain pre-intent journal writes remain owned incident evidence rather than being deleted.
+
+### Existing active Android channel: closed V3 app-only rollout
+
+The V2 rollout remains strict-zero. An already active Android/FCM SANDBOX must use the explicit
+`PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V3` profile; never disable tenant/provider
+rows merely to pass the old guard. V3 binds a full identity snapshot, drains every matching
+SENDING after stopping8158, and starts the new lock-aware Worker behind a candidate-only durable
+RO directory gate. See [the bounded V3 protocol](../plans/notification-active-android-rollout.md).
+
+A new source/publication uses `publishedMigratorImage`; `completedMigration` separately binds the
+old raw successful migration capsule, executed migrator and verified backup. The read-only proof
+consumer rechecks byte-identical SQL/catalog/bootstrap/inverse and current native105 under NEW
+source authority. It cannot migrate, restore, restamp or reuse old forward authority. Installed
+MIGRATOR_IMAGE_DIGEST stays the actually executed image.
+
+Before GATE_RELEASE_INTENT, candidate remains HELD and rollback restores old8158 with its existing
+at-least-once behavior, preserving all leases/outcomes. Nonzero existing SENDING blocks promotion,
+not recovery of the old sender. After durable GATE_RELEASE_INTENT, only forward completion is
+allowed. A missing/foreign proof or unknown candidate holds the operation without rollback.
+The original FIRST pre-restore readback is immutable; every recovery also reads current state.
+
+The installed gate receipt/mount/env/config is a retained runtime dependency. API/Web-only
+releases preserve its pointer; future API/Worker recreation of this V3 baseline stops explicitly
+until a separate previous-gate protocol is implemented. Never prune the referenced directory or
+use base Compose to recreate Worker. This source change grants no live authority; require new
+exact source/images/enrollment, current backup and row-count/EXPLAIN/duration evidence before a
+new operation. New trigger/lifecycle channels and JOIN remain OFF; legacy FCM traffic may resume
+after acceptance. Timeweb history remains outside this release.

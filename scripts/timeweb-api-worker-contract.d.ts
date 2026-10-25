@@ -14,3 +14,6 @@ export const API_WORKER_CONTROLLER_PROMOTION_PATCH: readonly Readonly<ApiWorkerF
 export const API_WORKER_ANDROID_CHAT_TEST_PATCH: readonly Readonly<ApiWorkerFrozenPin>[];
 export const API_WORKER_REHEARSAL_READINESS_PATCH: readonly Readonly<ApiWorkerFrozenPin>[];
 export const API_WORKER_NATIVE_BOOKINGS_PATCH: readonly Readonly<ApiWorkerFrozenPin>[];
+
+export function assertPlan(plan: unknown, operation: unknown, operationBytes: Buffer): void;
+export function validateApiWorkerOperation(operation: unknown, now?: number): unknown;

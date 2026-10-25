@@ -2539,8 +2539,10 @@ def notification_restore_extension_owners(value):
     end """
     return "set standard_conforming_strings=on;set search_path='pg_catalog';do "+tag+' '+body.replace('__PROOF__',"'"+data+"'",1)+tag+';'
 
-def notification_backup_reference(op, raw, file_sha):
-    need(is_notification_backup(op), 'NOTIFICATION_BACKUP_PROFILE');notification_terminal_tool_custody(op)
+def notification_backup_reference(op, raw, file_sha, *, completed_by=None):
+    need(is_notification_backup(op), 'NOTIFICATION_BACKUP_PROFILE')
+    if completed_by is None:notification_terminal_tool_custody(op)
+    else:completed_notification_terminal_tool_custody(op, raw, completed_by)
     work=ROOT/'backups'/('.disk-restore-'+digest(raw))
     need(read_secure(work/'backup-operation.json')==raw, 'NOTIFICATION_BACKUP_OPERATION')
     plan=namespace_validate_plan(op,raw,strict(read_secure(work/'disk-plan.json')))
@@ -2617,6 +2619,41 @@ def notification_terminal_tool_custody(op):
     receipt_bytes=_tool_custody_local(op)
     notification_terminal_source(op)
     return receipt_bytes
+
+
+def completed_notification_terminal_tool_custody(backup_op, backup_raw, rollout):
+    # This is a terminal data-proof read under NEW source authority, never old forward authority.
+    app_request=ROOT/'operator/api-worker-upgrade.json'
+    need(Path(__file__)==ROOT/'standard/source/scripts/control-timeweb-database-backup.py'
+         and os.getuid()==os.getgid()==0 and sys.flags.isolated and sys.flags.no_site
+         and sys.flags.dont_write_bytecode and not sys.flags.optimize
+         and os.uname().nodename=='msk-1-vm-z8ks' and os.uname().machine=='x86_64', 'COMPLETED_BACKUP_ENTRY')
+    need(strict(read_secure(app_request))==rollout
+         and rollout.get('schema')=='PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V3', 'COMPLETED_BACKUP_AUTHORITY')
+    program,environment=_notification_source_program(rollout)
+    program+="import {validateNotificationOperation} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-notification-profile.js';validateNotificationOperation(op);process.stdout.write('COMPLETED_BACKUP_SOURCE_VERIFIED');"
+    need(command(['/usr/bin/node','--input-type=module','-e',program], 'COMPLETED_BACKUP_SOURCE',input_data=encoded(rollout),environment=environment,timeout=60)==b'COMPLETED_BACKUP_SOURCE_VERIFIED','COMPLETED_BACKUP_SOURCE')
+    reference=rollout['completedMigration']
+    need(digest(backup_raw)==reference['backup']['operationSha256']
+         and read_secure(REQUEST)==backup_raw
+         and backup_op['toolCommit']==reference['controllerSha']
+         and all(backup_op[k]==reference[k] for k in ('controllerSha','controllerTree','controllerSourceCiRunId','packageDescriptorSha256','catalogsSha256'))
+         and backup_op['expectedApi']==rollout['expectedApi'] and backup_op['expectedPostgres']==rollout['expectedPostgres'], 'COMPLETED_BACKUP_BINDING')
+    # Authenticates the original installed helper bytes and immutable Git objects without
+    # pretending that its old commit is the currently enrolled controller.
+    _tool_custody_local(backup_op)
+
+
+def completed_notification_backup_main():
+    need(sys.argv[1:]==['--attest-completed-notification-backup',str(ROOT/'operator/api-worker-upgrade.json')], 'COMPLETED_BACKUP_ENTRY')
+    rollout=strict(read_secure(ROOT/'operator/api-worker-upgrade.json'))
+    raw=read_secure(REQUEST);old=strict(raw)
+    old=validate_operation(old,time.time(),old['toolFileSha256'],allow_expired=True)
+    result=notification_backup_reference(old,raw,old['toolFileSha256'],completed_by=rollout)
+    reference=rollout['completedMigration']['backup']
+    need(result['operationSha256']==reference['operationSha256'] and result['receiptSha256']==reference['sha256']
+         and result['preimageSha256']==reference['preimageSha256'] and result['target']==rollout['completedMigration']['target'], 'COMPLETED_BACKUP_TERMINAL')
+    print(json.dumps(result,separators=(',',':')))
 
 
 def read_secure(path, mode=0o600):
@@ -4266,6 +4303,8 @@ def pre105_retirement_main():
 
 
 def main():
+    if sys.argv[1:]==['--attest-completed-notification-backup',str(ROOT/'operator/api-worker-upgrade.json')]:
+        completed_notification_backup_main();return
     need(sys.flags.optimize==0 and sys.flags.isolated==1, 'ISOLATED_NONOPTIMIZED_PYTHON_REQUIRED')
     if len(sys.argv) == 3 and sys.argv[1] in ('--attest-notification-early-exit', '--reconcile-notification-early-exit'):
         need(sys.argv[2] == str(ROOT/'operator/notification-early-exit-recovery.json'), 'EARLY_ENTRY')

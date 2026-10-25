@@ -119,6 +119,12 @@ function setup(phase = 'WORKER_ACTIVE') {
   );
   f.plan.baselineSha256 = hash(baseline);
   files.set(f.plan.baselinePath, baseline);
+  mocks.baseline.mockReturnValue({
+    path: f.plan.baselinePath,
+    bytes: baseline,
+    secretSetReleaseId: bridge.apiRelease,
+    values: baselineValues,
+  });
   const composePath = `${root}/standard/source/deploy/timeweb/compose.beta.yaml`,
     compose = Buffer.from('trusted-compose');
   files.set(composePath, compose);
@@ -457,6 +463,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe('production adapter with all host/network operations intercepted', () => {
+  it('rejects a later Worker recreate with a retained V3 gate before any transaction or candidate write', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-11T20:00:00.000Z'));
+    const f = orphan();
+    for (const path of [...f.files.keys()]) if (path.startsWith(f.tx + '/')) f.files.delete(path);
+    f.directories.delete(f.tx);
+    mocks.baseline.mockReturnValue({ workerGate: { receiptPath: 'retained-and-attested' } });
+    await expect(
+      runManualApiWorkerUpgrade('deploy', `${root}/operator/api-worker-upgrade.json`),
+    ).rejects.toThrow('PRESERVED_WORKER_RECREATE_UNSUPPORTED');
+    expect(mocks.mkdir).not.toHaveBeenCalled();
+    expect(mocks.durable).not.toHaveBeenCalled();
+    expect(mocks.swap).not.toHaveBeenCalled();
+    expect(mocks.candidate).not.toHaveBeenCalled();
+    expect(f.directories.has(f.tx)).toBe(false);
+  });
+
   it('admits a fresh absent transaction only after source authority and syncs its parent', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-11T20:00:00.000Z'));

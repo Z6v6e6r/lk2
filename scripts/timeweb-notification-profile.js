@@ -1,5 +1,12 @@
 // Closed 0105 profiles in the existing Timeweb engines. Legacy bridges remain frozen.
 import { createHash } from 'node:crypto';
+import {
+  PRESERVED_NOTIFICATION_ROLLOUT_SCHEMA,
+  isPreservedNotificationRollout,
+  validateAndroidGateExpectation,
+} from './timeweb-notification-android-gates.js';
+import { validateCompletedNotificationMigration } from './timeweb-notification-completed-migration.js';
+export { PRESERVED_NOTIFICATION_ROLLOUT_SCHEMA } from './timeweb-notification-android-gates.js';
 import { parseStrictJson } from './strict-json.js';
 import { assertControllerPromotionGitConfig } from './verify-source-ci.js';
 import {
@@ -21,6 +28,8 @@ export const NOTIFICATION_BACKUP_SCHEMA = 'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BAC
 export const NOTIFICATION_MIGRATION_SCHEMA =
   'PHUB_TIMEWEB_NOTIFICATION_0105_MIGRATION_OPERATION_V1';
 export const NOTIFICATION_ROLLOUT_SCHEMA = 'PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V2';
+export const isNotificationRollout = (op) =>
+  op?.schema === NOTIFICATION_ROLLOUT_SCHEMA || isPreservedNotificationRollout(op);
 export const NOTIFICATION_PRE_LEDGER =
   'b9bfd91a3985de51b323d9955325b5edabc22b42cfc350bddebe811ca42c2f85';
 export const NOTIFICATION_POST_LEDGER =
@@ -32,6 +41,7 @@ export const isNotificationOperation = (op) =>
     JOIN_POST105_BACKUP_SCHEMA,
     NOTIFICATION_MIGRATION_SCHEMA,
     NOTIFICATION_ROLLOUT_SCHEMA,
+    PRESERVED_NOTIFICATION_ROLLOUT_SCHEMA,
   ].includes(op?.schema);
 export const notificationHash = (v) => createHash('sha256').update(v).digest('hex');
 const H = /^[a-f0-9]{64}$/,
@@ -88,7 +98,8 @@ export function validateNotificationBaseline(row, service) {
 }
 export function validateNotificationOperation(op, at) {
   const migration = op?.schema === NOTIFICATION_MIGRATION_SCHEMA,
-    rollout = op?.schema === NOTIFICATION_ROLLOUT_SCHEMA;
+    rollout = isNotificationRollout(op),
+    preserving = isPreservedNotificationRollout(op);
   if (!migration && !rollout) stop('OPERATION');
   notificationExact(op, [
     'schema',
@@ -104,7 +115,9 @@ export function validateNotificationOperation(op, at) {
     'artifactId',
     'artifactDigest',
     'manifestSha256',
-    'migratorImage',
+    ...(preserving
+      ? ['publishedMigratorImage', 'completedMigration', 'androidGate']
+      : ['migratorImage']),
     ...(rollout ? ['apiImage', 'workerImage'] : []),
     'packageDescriptorSha256',
     'catalogsSha256',
@@ -150,7 +163,9 @@ export function validateNotificationOperation(op, at) {
     if (!H.test(op[k] ?? '')) stop('DIGEST');
   if (
     !/^sha256:[a-f0-9]{64}$/.test(op.artifactDigest ?? '') ||
-    !/^ghcr\.io\/z6v6e6r\/phub-migrator@sha256:[a-f0-9]{64}$/.test(op.migratorImage ?? '')
+    !/^ghcr\.io\/z6v6e6r\/phub-migrator@sha256:[a-f0-9]{64}$/.test(
+      (preserving ? op.publishedMigratorImage : op.migratorImage) ?? '',
+    )
   )
     stop('IMAGE');
   if (rollout)
@@ -182,9 +197,25 @@ export function validateNotificationOperation(op, at) {
     )
   )
     stop('FCM_SOURCE');
+  if (preserving) {
+    validateAndroidGateExpectation(op.androidGate);
+    const reference = validateCompletedNotificationMigration(op.completedMigration);
+    if (
+      op.expectedFcmSource !== '/etc/phub/timeweb-beta-fcm/fcm-service-account.json' ||
+      reference.candidateSha === op.candidateSha ||
+      reference.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+      reference.catalogsSha256 !== op.catalogsSha256 ||
+      ['migrationPlanSha256', 'migrationSuccessSha256', 'migrationReceiptSha256'].some(
+        (k) => reference[k] !== op[k],
+      )
+    )
+      stop('COMPLETED_MIGRATION_BINDING');
+  }
   const confirmation = migration
     ? 'MIGRATE_0099_0100_0101_102_TO_105_PRESERVE_RUNTIME_AND_PROVIDERS'
-    : 'DEPLOY_API_WORKER_0105_KEEP_SECRETS_AND_PROVIDERS';
+    : preserving
+      ? 'DEPLOY_API_WORKER_0105_PRESERVE_EXISTING_ANDROID_AND_COMPLETED_MIGRATION'
+      : 'DEPLOY_API_WORKER_0105_KEEP_SECRETS_AND_PROVIDERS';
   const expires = Date.parse(op.expiresAt);
   if (
     op.confirmation !== confirmation ||
@@ -319,10 +350,11 @@ export function validateNotificationManifest(op, manifest) {
   const image = manifest.images?.filter((v) => v.component === 'migrator');
   if (
     image?.length !== 1 ||
-    op.migratorImage !== 'ghcr.io/z6v6e6r/phub-migrator@' + image[0].digest
+    (isPreservedNotificationRollout(op) ? op.publishedMigratorImage : op.migratorImage) !==
+      'ghcr.io/z6v6e6r/phub-migrator@' + image[0].digest
   )
     stop('MANIFEST');
-  if (op.schema === NOTIFICATION_ROLLOUT_SCHEMA)
+  if (isNotificationRollout(op))
     for (const service of ['api', 'worker']) {
       const rows = manifest.images.filter((v) => v.component === service);
       if (
