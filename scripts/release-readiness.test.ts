@@ -105,15 +105,17 @@ describe('release readiness report', () => {
 
   it('treats missing lock or rollback evidence as NO_GO, never an implicit pass', () => {
     const input = fixture();
-    const noLocks = evaluateReleaseReadiness({ ...input, locks: undefined });
-    expect(noLocks.categories.find((entry) => entry.category === 'LOCKS')).toMatchObject({
-      status: 'NO_GO',
-      code: 'LOCK_EVIDENCE_MISSING',
-    });
-    const noRollback = evaluateReleaseReadiness({ ...input, rollback: undefined });
-    expect(noRollback.categories.find((entry) => entry.category === 'ROLLBACK')).toMatchObject({
-      status: 'NO_GO',
-      code: 'ROLLBACK_INPUTS_MISSING',
-    });
+    const { locks, ...withoutLocks } = input;
+    void locks;
+    expect(
+      evaluateReleaseReadiness(withoutLocks).categories.find((entry) => entry.category === 'LOCKS'),
+    ).toMatchObject({ status: 'NO_GO', code: 'LOCK_EVIDENCE_MISSING' });
+    const { rollback, ...withoutRollback } = input;
+    void rollback;
+    expect(
+      evaluateReleaseReadiness(withoutRollback).categories.find(
+        (entry) => entry.category === 'ROLLBACK',
+      ),
+    ).toMatchObject({ status: 'NO_GO', code: 'ROLLBACK_INPUTS_MISSING' });
   });
 });
