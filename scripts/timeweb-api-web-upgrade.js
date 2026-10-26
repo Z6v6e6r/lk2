@@ -58,6 +58,10 @@ import {
   validateTimewebAlertReadback,
 } from './produce-timeweb-api-web-observability-evidence.js';
 import { validateTimewebMonitoringEvidence } from './verify-timeweb-api-web-observability.js';
+import {
+  ADOPTED_MANUAL_FULL_KIND,
+  validateAdoptedBaseline,
+} from './timeweb-adopt-manual-baseline.js';
 
 const ROOT = '/opt/phub/timeweb-beta';
 const SOURCE = `${ROOT}/standard/source`;
@@ -101,6 +105,9 @@ const CONTROLLER_FILES = new Set([
   'scripts/timeweb-critical-web.test.ts',
   'scripts/timeweb-api-web-upgrade.js',
   'scripts/timeweb-api-web-upgrade.test.ts',
+  'scripts/timeweb-adopt-manual-baseline.js',
+  'scripts/timeweb-adopt-manual-baseline.d.ts',
+  'scripts/timeweb-adopt-manual-baseline.test.ts',
   'scripts/rehearse-timeweb-standard-compose.js',
   'scripts/timeweb-standard-compose.test.ts',
   'scripts/verify-timeweb-api-web-observability.js',
@@ -1388,12 +1395,21 @@ export function validateDirectInstalledEvidence(
 }
 // Installed Worker gate is a retained runtime dependency across API/Web-only releases.
 export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
+  // The installed descriptor is the running API/Web pair only: always the canonical API_WEB kind,
+  // never the one-shot adoption metadata of the baseline it replaces. Rollback targets the exact
+  // baseline this rollout replaces, in the renderer's canonical vocabulary.
+  const previousReleaseId = ID.test(values.PHUB_RELEASE_ID ?? '') ? values.PHUB_RELEASE_ID : null;
   const next = {
     ...values,
     PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
+    PHUB_COMPONENT_ROLLOUT_KIND: 'API_WEB',
     PHUB_RELEASE_ID: id,
     PHUB_RUNTIME_SECRET_SET_RELEASE_ID: plan.secretSetReleaseId,
     PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
+    PHUB_ROLLBACK_MODE: previousReleaseId
+      ? 'previous-release-only'
+      : 'stop-candidate-no-previous-release',
+    PHUB_ROLLBACK_PREVIOUS_RELEASE_ID: previousReleaseId ?? 'NONE',
     API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
     WEB_IMAGE_DIGEST: plan.candidate.web.image.split('@')[1],
   };
@@ -1403,7 +1419,6 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
       `ghcr.io/z6v6e6r/phub-worker@${values.WORKER_IMAGE_DIGEST}`
     )
       fail('installed_worker_gate_component_change');
-    next.PHUB_COMPONENT_ROLLOUT_KIND = 'API_WEB';
   }
   for (const service of ['worker', 'realtime'])
     if (plan.unchangedServiceImages[service])
@@ -1414,6 +1429,7 @@ export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
     if (
       key.startsWith('PHUB_CANONICAL_') ||
       key.startsWith('PHUB_PUBLICATION_') ||
+      key.startsWith('PHUB_ADOPTION_') ||
       key.endsWith('_RUNTIME_DIGEST') ||
       key === 'PHUB_RELEASE_SOURCE_SHA' ||
       key === 'PHUB_RELEASE_SOURCE_TREE'
@@ -1592,6 +1608,10 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
         ['alert-test-readback.json', 'alertReadbackSha256'],
       ])
         if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
+    } else if (values.PHUB_COMPONENT_ROLLOUT_KIND === ADOPTED_MANUAL_FULL_KIND) {
+      // A manual compose promotion adopted once as the installed baseline. It has no canonical
+      // rollout receipt; its own adoption receipt and request are verified instead.
+      validateAdoptedBaseline(values, bytes, directory, releaseId);
     } else {
       if (
         values.PHUB_COMPONENT_ROLLOUT_KIND !== undefined &&

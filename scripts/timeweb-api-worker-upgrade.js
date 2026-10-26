@@ -567,6 +567,51 @@ export function overlay(plan, side, service) {
   const value = plan[side][service];
   return `PHUB_RELEASE_ID=${service === 'worker' ? (side === 'previous' ? plan.previous.api.releaseId : plan.candidate.api.releaseId) : value.releaseId}\n${service.toUpperCase()}_IMAGE_DIGEST=${value.image.split('@')[1]}\n${service === 'worker' ? `TIMEWEB_FCM_CREDENTIAL_SOURCE=${['PHUB_TIMEWEB_NOTIFICATION_0105_ROLLOUT_PLAN_V2', PRESERVED_NOTIFICATION_PLAN_SCHEMA].includes(plan.schema) ? plan.fcmCredentialSource : side === 'previous' ? '/dev/null' : '/etc/phub/timeweb-beta-fcm/fcm-service-account.json'}\n` : ''}`;
 }
+// Installed API/Worker descriptor: inherit only parseable installed fields, never
+// canonical/publication claims and never the one-shot adoption metadata of the replaced baseline.
+export function buildApiWorkerInstalledDescriptor(
+  baselineBytes,
+  plan,
+  id,
+  journalPath,
+  { preserving = false, notification = false, migratorImage } = {},
+) {
+  const values = Object.fromEntries(
+    baselineBytes
+      .toString()
+      .trimEnd()
+      .split('\n')
+      .map((line) => line.split(/=(.*)/s).slice(0, 2)),
+  );
+  for (const key of Object.keys(values))
+    if (
+      key.startsWith('PHUB_CANONICAL_') ||
+      key.startsWith('PHUB_PUBLICATION_') ||
+      key.startsWith('PHUB_ADOPTION_') ||
+      key.endsWith('_RUNTIME_DIGEST') ||
+      ['PHUB_RELEASE_SOURCE_SHA', 'PHUB_RELEASE_SOURCE_TREE'].includes(key)
+    )
+      delete values[key];
+  Object.assign(values, {
+    PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
+    PHUB_COMPONENT_ROLLOUT_KIND: preserving
+      ? 'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
+      : notification
+        ? 'API_WORKER_NOTIFICATION_0105'
+        : 'API_WORKER',
+    PHUB_RELEASE_ID: id,
+    PHUB_RUNTIME_SECRET_SET_RELEASE_ID: notification ? plan.previousSecrets.releaseId : id,
+    ...(notification ? { MIGRATOR_IMAGE_DIGEST: migratorImage } : {}),
+    PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
+    ...(preserving ? { PHUB_WORKER_DELIVERY_GATE_RECEIPT: journalPath } : {}),
+    API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
+    WORKER_IMAGE_DIGEST: plan.candidate.worker.image.split('@')[1],
+  });
+  return Object.entries(values)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v}\n`)
+    .join('');
+}
 function releaseFile(path, bytes) {
   if (!read(path).equals(Buffer.from(bytes))) fail('LOCK_DRIFT');
   unlinkSync(path);
@@ -1358,49 +1403,14 @@ async function runApiWorkerOwned(mode, requestPath, owner) {
     docker(args);
   };
   const descriptorPath = `${directory}/installed-components.env`;
-  const descriptor = () => {
-    const values = Object.fromEntries(
-      baseline.bytes
-        .toString()
-        .trimEnd()
-        .split('\n')
-        .map((line) => line.split(/=(.*)/s).slice(0, 2)),
-    );
-    for (const key of Object.keys(values))
-      if (
-        key.startsWith('PHUB_CANONICAL_') ||
-        key.startsWith('PHUB_PUBLICATION_') ||
-        key.endsWith('_RUNTIME_DIGEST') ||
-        ['PHUB_RELEASE_SOURCE_SHA', 'PHUB_RELEASE_SOURCE_TREE'].includes(key)
-      )
-        delete values[key];
-    Object.assign(values, {
-      PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
-      PHUB_COMPONENT_ROLLOUT_KIND: preserving
-        ? 'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
-        : notification
-          ? 'API_WORKER_NOTIFICATION_0105'
-          : 'API_WORKER',
-      PHUB_RELEASE_ID: id,
-      PHUB_RUNTIME_SECRET_SET_RELEASE_ID: notification ? plan.previousSecrets.releaseId : id,
-      ...(notification
-        ? {
-            MIGRATOR_IMAGE_DIGEST: (preserving
-              ? op.completedMigration.migratorImage
-              : op.migratorImage
-            ).split('@')[1],
-          }
-        : {}),
-      PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
-      ...(preserving ? { PHUB_WORKER_DELIVERY_GATE_RECEIPT: journalPath } : {}),
-      API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
-      WORKER_IMAGE_DIGEST: plan.candidate.worker.image.split('@')[1],
+  const descriptor = () =>
+    buildApiWorkerInstalledDescriptor(baseline.bytes, plan, id, journalPath, {
+      preserving,
+      notification,
+      migratorImage: notification
+        ? (preserving ? op.completedMigration.migratorImage : op.migratorImage).split('@')[1]
+        : undefined,
     });
-    return Object.entries(values)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, v]) => `${k}=${v}\n`)
-      .join('');
-  };
   const ops = {
     ...(notification ? { secretMode: 'preserve' } : {}),
     ...(preserving

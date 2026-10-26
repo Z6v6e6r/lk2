@@ -15,6 +15,9 @@ export const JOIN_CONTROLLER_FILES = new Set([
   'scripts/timeweb-api-web-upgrade.js',
   'scripts/timeweb-api-web-upgrade.d.ts',
   'scripts/timeweb-api-web-upgrade.test.ts',
+  'scripts/timeweb-adopt-manual-baseline.js',
+  'scripts/timeweb-adopt-manual-baseline.d.ts',
+  'scripts/timeweb-adopt-manual-baseline.test.ts',
   'scripts/timeweb-join-dormant-profile.js',
   'scripts/timeweb-join-dormant-profile.d.ts',
   'scripts/timeweb-join-dormant-profile.test.ts',
@@ -532,6 +535,7 @@ export function buildJoinInstalledDescriptor(values, plan, id, journalPath) {
     if (
       k.startsWith('PHUB_CANONICAL_') ||
       k.startsWith('PHUB_PUBLICATION_') ||
+      k.startsWith('PHUB_ADOPTION_') ||
       k.endsWith('_RUNTIME_DIGEST') ||
       ['PHUB_RELEASE_SOURCE_SHA', 'PHUB_RELEASE_SOURCE_TREE'].includes(k)
     )
