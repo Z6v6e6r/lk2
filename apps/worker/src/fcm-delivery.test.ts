@@ -30,6 +30,8 @@ function fakePool(
 ) {
   const query = vi.fn((text: string, values: readonly unknown[] = []) => {
     capture.push({ text, values });
+    if (text.includes('pg_try_advisory_xact_lock'))
+      return Promise.resolve(result([{ acquired: true }]));
     if (text.includes('for update of d skip locked')) return Promise.resolve(result([input]));
     if (text.includes('select state') && text.includes('notifications.deliveries'))
       return Promise.resolve(result([{ state: 'DEAD' }]));
@@ -55,12 +57,89 @@ const options = (
 });
 
 describe('FCM delivery state machine', () => {
+  it.each(['runtime', 'provider'])(
+    'does not claim or burn an attempt while the %s rollout gate is held',
+    async (held) => {
+      const queries: { text: string; values: readonly unknown[] }[] = [];
+      let blocked = true;
+      const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+        queries.push({ text, values });
+        if (text.includes('pg_try_advisory_xact_lock')) {
+          const gate = String(values[0]).startsWith('notification-runtime:')
+            ? 'runtime'
+            : 'provider';
+          return Promise.resolve(result([{ acquired: !(blocked && gate === held) }]));
+        }
+        if (text.includes('for update of d skip locked'))
+          return Promise.resolve(result([row('REVOKED')]));
+        if (text.includes('select state')) return Promise.resolve(result([{ state: 'DEAD' }]));
+        return Promise.resolve(result([], 1));
+      });
+      const release = vi.fn();
+      const pool = { connect: vi.fn().mockResolvedValue({ query, release }) } as unknown as Pool;
+      const decrypt = vi.fn(),
+        send = vi.fn();
+      const input = options(
+        pool,
+        { decrypt } as unknown as NotificationEndpointCipher,
+        { platform: 'ANDROID', send } as unknown as NotificationPushDeliveryPort,
+      );
+      await expect(runFcmDeliveryBatch(input)).resolves.toEqual({
+        claimed: 0,
+        sent: 0,
+        retried: 0,
+        dead: 0,
+        stale: 0,
+      });
+      expect(
+        queries.some(
+          (q) =>
+            q.text.includes('for update of d skip locked') ||
+            q.text.includes('update notifications.deliveries'),
+        ),
+      ).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+      expect(decrypt).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+      const gateKeys = queries
+        .filter((q) => q.text.includes('pg_try_advisory_xact_lock'))
+        .map((q) => q.values[0]);
+      expect(gateKeys).toEqual([
+        `notification-runtime:${tenantId}`,
+        ...(held === 'provider'
+          ? [`android-push-provider:${tenantId}:ru.padlhub.app:SANDBOX`]
+          : []),
+      ]);
+      blocked = false;
+      queries.length = 0;
+      await expect(runFcmDeliveryBatch(input)).resolves.toEqual({
+        claimed: 1,
+        sent: 0,
+        retried: 0,
+        dead: 1,
+        stale: 0,
+      });
+      const claimAt = queries.findIndex((q) => q.text.includes('for update of d skip locked'));
+      expect(
+        queries
+          .slice(0, claimAt)
+          .filter((q) => q.text.includes('pg_try_advisory_xact_lock'))
+          .map((q) => q.values[0]),
+      ).toEqual([
+        `notification-runtime:${tenantId}`,
+        `android-push-provider:${tenantId}:ru.padlhub.app:SANDBOX`,
+      ]);
+      expect(queries.filter((q) => q.text.includes("set state='SENDING'")).length).toBe(1);
+    },
+  );
   it.each([undefined, false, true])(
     'claims only due work with the scenario flag %s',
     async (scenarioPolicyEnabled) => {
       const queries: string[] = [];
       const query = vi.fn((text: string) => {
         queries.push(text);
+        if (text.includes('pg_try_advisory_xact_lock'))
+          return Promise.resolve(result([{ acquired: true }]));
         return Promise.resolve(result());
       });
       const pool = {

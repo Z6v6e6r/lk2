@@ -3177,6 +3177,129 @@ class Pre105RetiredCustodyTests(unittest.TestCase):
             with self.subTest(variant=variant),self.assertRaises(m.Stop):m.pre105_retired_backup_attest(value)
 
 
+class CompletedNotificationBackupCustodyTests(unittest.TestCase):
+    def fixture(self):
+        old={'schema':'PHUB_TIMEWEB_NOTIFICATION_PRE0105_BACKUP_NAMESPACE_V1','controllerSha':'a'*40,'controllerTree':'b'*40,
+             'controllerSourceCiRunId':'100','toolCommit':'a'*40,'toolFileSha256':'c'*64,
+             'packageDescriptorSha256':'d'*64,'catalogsSha256':'e'*64,
+             'expectedApi':{'id':'1'*64},'expectedPostgres':{'id':'2'*64}}
+        raw=m.encoded(old)
+        reference={k:old[k] for k in ('controllerSha','controllerTree','controllerSourceCiRunId','packageDescriptorSha256','catalogsSha256')}
+        reference.update(backup={'operationSha256':m.digest(raw),'sha256':'f'*64,'preimageSha256':'3'*64},target={'databaseName':'synthetic','systemIdentifier':'123'})
+        rollout={'schema':'PHUB_TIMEWEB_API_WORKER_NOTIFICATION_0105_OPERATION_V3','controllerSha':'4'*40,'controllerTree':'5'*40,
+                 'controllerSourceCiRunId':'400','completedMigration':reference,'expectedApi':old['expectedApi'],'expectedPostgres':old['expectedPostgres']}
+        return old,raw,rollout
+
+    def context(self,old,raw,rollout):
+        stack=ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(m,'__file__',str(m.ROOT/'standard/source/scripts/control-timeweb-database-backup.py')))
+        stack.enter_context(patch.object(m.os,'getuid',return_value=0));stack.enter_context(patch.object(m.os,'getgid',return_value=0))
+        stack.enter_context(patch.object(m.sys,'flags',SimpleNamespace(isolated=1,no_site=1,dont_write_bytecode=1,optimize=0)))
+        stack.enter_context(patch.object(m.os,'uname',return_value=SimpleNamespace(nodename='msk-1-vm-z8ks',machine='x86_64')))
+        source=stack.enter_context(patch.object(m,'_notification_source_program',return_value=('NEW_SOURCE_AUTH;',{})))
+        command=stack.enter_context(patch.object(m,'command',return_value=b'COMPLETED_BACKUP_SOURCE_VERIFIED'))
+        helper=stack.enter_context(patch.object(m,'_tool_custody_local'))
+        reads={m.ROOT/'operator/api-worker-upgrade.json':m.encoded(rollout),m.REQUEST:raw}
+        read=stack.enter_context(patch.object(m,'read_secure',side_effect=lambda path,*a:reads[Path(path)]))
+        for name in ('execute','execute_disk','execute_namespace','reconcile_disk','reconcile_namespace','notification_source','notification_terminal_source'):
+            stack.enter_context(patch.object(m,name,side_effect=AssertionError('FORWARD_OR_OLD_SOURCE_FORBIDDEN')))
+        return source,command,helper,reads,read
+
+    def test_new_source_authenticates_only_old_immutable_helper_and_raw_request_no_forward(self):
+        old,raw,rollout=self.fixture();source,command,helper,reads,read=self.context(old,raw,rollout)
+        m.completed_notification_terminal_tool_custody(old,raw,rollout)
+        source.assert_called_once_with(rollout);helper.assert_called_once_with(old)
+        self.assertIn('validateNotificationOperation(op)',command.call_args.args[0][-1])
+        self.assertEqual(command.call_args.kwargs['input_data'],m.encoded(rollout))
+
+    def test_foreign_current_request_wrong_old_raw_source_or_expected_target_reject(self):
+        for kind in ('request','old_raw','tool','source','tree','ci','descriptor','catalog','api','postgres'):
+            with self.subTest(kind=kind):
+                old,raw,rollout=self.fixture();source,command,helper,reads,read=self.context(old,raw,rollout)
+                if kind=='request':reads[m.ROOT/'operator/api-worker-upgrade.json']=m.encoded({**rollout,'controllerSha':'9'*40})
+                elif kind=='old_raw':reads[m.REQUEST]=raw+b' '
+                elif kind=='tool':old={**old,'toolCommit':'9'*40}
+                elif kind in ('api','postgres'):old={**old,'expected'+('Api' if kind=='api' else 'Postgres'):{'id':'9'*64}}
+                else:
+                    key={'source':'controllerSha','tree':'controllerTree','ci':'controllerSourceCiRunId','descriptor':'packageDescriptorSha256','catalog':'catalogsSha256'}[kind]
+                    old={**old,key:'9'*len(old[key])}
+                with self.assertRaises(m.Stop):m.completed_notification_terminal_tool_custody(old,raw,rollout)
+                helper.assert_not_called()
+
+    def test_source_or_helper_object_failure_stops_before_terminal_proof(self):
+        old,raw,rollout=self.fixture();source,command,helper,reads,read=self.context(old,raw,rollout)
+        command.return_value=b'FOREIGN_SOURCE'
+        with self.assertRaisesRegex(m.Stop,'COMPLETED_BACKUP_SOURCE'):m.completed_notification_terminal_tool_custody(old,raw,rollout)
+        helper.assert_not_called();command.return_value=b'COMPLETED_BACKUP_SOURCE_VERIFIED';helper.side_effect=m.Stop('OLD_OBJECT_DRIFT')
+        with self.assertRaisesRegex(m.Stop,'OLD_OBJECT_DRIFT'):m.completed_notification_terminal_tool_custody(old,raw,rollout)
+
+    def test_completed_reference_keeps_terminal_dump_preimage_acl_target_and_journal_checks(self):
+        with tempfile.TemporaryDirectory(prefix='completed-backup-proof-') as directory:
+            root=Path(directory);old,raw,rollout=self.fixture()
+            work=root/'backups'/('.disk-restore-'+m.digest(raw));work.mkdir(parents=True)
+            canonical=root/'backups'/'canonical';canonical.mkdir()
+            dump=b'synthetic verified pgcustom bytes'
+            security={'roles':[{'rolname':'synthetic_owner'}],'acl':'synthetic_full_owner_acl'}
+            initial={'target':rollout['completedMigration']['target'],'security':security,'state':{'ledger':'102'}}
+            preimage=m.encoded(initial)
+            receipt={'preimageSha256':m.digest(preimage),'backupSha256':m.digest(dump),'operationSha256':m.digest(raw),
+                     'sourceLedgerSha256':m.API_WORKER_PRE_LEDGER_SHA256,'restoredLedgerSha256':m.API_WORKER_PRE_LEDGER_SHA256,
+                     'target':initial['target'],'restoreVerified':True,'securityPreimageSha256':m.digest(m.encoded(security)),
+                     'restoredSecuritySha256':m.digest(m.encoded(security)),'roleClosureSha256':m.digest(m.encoded(security['roles'])),
+                     'restoreImage':m.PG_IMAGE,'schema':'PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1'}
+            receipt_raw=m.encoded(receipt)
+            members={'backup-operation.json':raw,'preimage-proof.json':preimage,'database-backup-receipt.json':receipt_raw,'database.pgcustom':dump}
+            for name,data in members.items():(canonical/name).write_bytes(data);(canonical/name).chmod(0o600)
+            (work/'backup-operation.json').write_bytes(raw);(work/'disk-plan.json').write_bytes(b'{}')
+            plan={'operationSha256':m.digest(raw),'canonical':str(canonical),'isolation':{'unit':'synthetic'}}
+            events={phase:{} for phase in ('SECURITY_RESTORE_VERIFIED','RESTORE_VERIFIED','STORAGE_CLEANUP_VERIFIED','PUBLISHED','UNLOCK_INTENT','RECONCILED')}
+            events.update(MIGRATION_ATTESTATION={'proof':initial},PUBLISH_READY={'receiptSha256':m.digest(receipt_raw)},PUBLISHED={'receiptSha256':m.digest(receipt_raw)},RESTORE_VERIFIED={'dumpSha256':m.digest(dump)},SECURITY_RESTORE_VERIFIED={'securitySha256':receipt['securityPreimageSha256'],'roleClosureSha256':receipt['roleClosureSha256']})
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(m,'ROOT',root))
+                stack.enter_context(patch.object(m,'secure',side_effect=lambda path,*a,**kw:Path(path).lstat()))
+                completed=stack.enter_context(patch.object(m,'completed_notification_terminal_tool_custody'))
+                stack.enter_context(patch.object(m,'notification_terminal_tool_custody',side_effect=AssertionError('old source forbidden')))
+                stack.enter_context(patch.object(m,'namespace_validate_plan',return_value=plan))
+                stack.enter_context(patch.object(m,'DiskJournal',return_value=SimpleNamespace(find=lambda phase:events.get(phase))))
+                for name in ('namespace_terminal','namespace_require_no_unit_file','namespace_slice_terminal'):
+                    stack.enter_context(patch.object(m,name))
+                stack.enter_context(patch.object(m,'namespace_unit',return_value={'LoadState':'not-found','ActiveState':'inactive','MainPID':'0','ControlGroup':''}))
+                stack.enter_context(patch.object(m,'disk_ledger_sha',return_value=m.API_WORKER_PRE_LEDGER_SHA256))
+                for name in ('execute','execute_namespace','reconcile_namespace','notification_source'):
+                    stack.enter_context(patch.object(m,name,side_effect=AssertionError('forward forbidden')))
+                proof=m.notification_backup_reference(old,raw,'c'*64,completed_by=rollout)
+                self.assertEqual(proof['receiptSha256'],m.digest(receipt_raw));completed.assert_called_once_with(old,raw,rollout)
+                for name in members:
+                    path=canonical/name;before=path.read_bytes();path.write_bytes(b'foreign')
+                    with self.subTest(member=name),self.assertRaises(m.Stop):m.notification_backup_reference(old,raw,'c'*64,completed_by=rollout)
+                    path.write_bytes(before)
+                for key,value in [('target',{'databaseName':'foreign','systemIdentifier':'9'}),('restoredSecuritySha256','0'*64),('roleClosureSha256','0'*64)]:
+                    changed=m.encoded({**receipt,key:value});(canonical/'database-backup-receipt.json').write_bytes(changed)
+                    events['PUBLISH_READY']['receiptSha256']=events['PUBLISHED']['receiptSha256']=m.digest(changed)
+                    with self.subTest(field=key),self.assertRaises(m.Stop):m.notification_backup_reference(old,raw,'c'*64,completed_by=rollout)
+                (canonical/'database-backup-receipt.json').write_bytes(receipt_raw)
+                events['PUBLISH_READY']['receiptSha256']=events['PUBLISHED']['receiptSha256']=m.digest(receipt_raw)
+                for phase in ('RESTORE_VERIFIED','SECURITY_RESTORE_VERIFIED','RECONCILED'):
+                    event=events.pop(phase)
+                    with self.subTest(phase=phase),self.assertRaises(m.Stop):m.notification_backup_reference(old,raw,'c'*64,completed_by=rollout)
+                    events[phase]=event
+
+    def test_completed_main_is_fixed_readonly_entry_and_expiry_exception_does_not_execute(self):
+        old,raw,rollout=self.fixture();source,command,helper,reads,read=self.context(old,raw,rollout)
+        result={'operationSha256':rollout['completedMigration']['backup']['operationSha256'],'receiptSha256':'f'*64,'preimageSha256':'3'*64,'target':rollout['completedMigration']['target']}
+        with patch.object(m.sys,'argv',['tool','--attest-completed-notification-backup',str(m.ROOT/'operator/api-worker-upgrade.json')]),\
+             patch.object(m,'validate_operation',return_value=old) as validate,\
+             patch.object(m,'notification_backup_reference',return_value=result) as proof,patch('sys.stdout',new_callable=io.StringIO) as output:
+            m.completed_notification_backup_main()
+            self.assertTrue(validate.call_args.kwargs['allow_expired']);proof.assert_called_once_with(old,raw,old['toolFileSha256'],completed_by=rollout)
+            self.assertEqual(json.loads(output.getvalue()),result)
+            proof.return_value={**result,'receiptSha256':'0'*64}
+            with self.assertRaisesRegex(m.Stop,'COMPLETED_BACKUP_TERMINAL'):m.completed_notification_backup_main()
+        with patch.object(m.sys,'argv',['tool','--attest-completed-notification-backup','/tmp/foreign']),patch.object(m,'read_secure',side_effect=AssertionError('read before fixed entry')):
+            with self.assertRaisesRegex(m.Stop,'COMPLETED_BACKUP_ENTRY'):m.completed_notification_backup_main()
+
+
 if __name__=='__main__':
     if len(sys.argv)==2 and sys.argv[1]=='--emit-namespace-fixture':
         print(json.dumps(namespace_fixture()))

@@ -1,3 +1,10 @@
+import {
+  fcmGateBinding,
+  fcmGateComposeOverride,
+  readFcmDeliveryGate,
+  validateFcmGateRuntime,
+} from './timeweb-notification-delivery-gate.js';
+import { isPreservedNotificationRollout } from './timeweb-notification-android-gates.js';
 // Explicit manual mode of the enrolled standard controller. Never execute candidate source.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -1379,6 +1386,107 @@ export function validateDirectInstalledEvidence(
   validateDirectOwnerObservation(JSON.parse(ownerBytes), op, hash(operationBytes));
   validateDirectObservation(JSON.parse(observationBytes));
 }
+// Installed Worker gate is a retained runtime dependency across API/Web-only releases.
+export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
+  const next = {
+    ...values,
+    PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
+    PHUB_RELEASE_ID: id,
+    PHUB_RUNTIME_SECRET_SET_RELEASE_ID: plan.secretSetReleaseId,
+    PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
+    API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
+    WEB_IMAGE_DIGEST: plan.candidate.web.image.split('@')[1],
+  };
+  if (values.PHUB_WORKER_DELIVERY_GATE_RECEIPT) {
+    if (
+      plan.unchangedServiceImages.worker !==
+      `ghcr.io/z6v6e6r/phub-worker@${values.WORKER_IMAGE_DIGEST}`
+    )
+      fail('installed_worker_gate_component_change');
+    next.PHUB_COMPONENT_ROLLOUT_KIND = 'API_WEB';
+  }
+  for (const service of ['worker', 'realtime'])
+    if (plan.unchangedServiceImages[service])
+      next[`${service.toUpperCase()}_IMAGE_DIGEST`] =
+        plan.unchangedServiceImages[service].split('@')[1];
+  // This is an installed-component descriptor, never a new/mixed canonical manifest.
+  for (const key of Object.keys(next))
+    if (
+      key.startsWith('PHUB_CANONICAL_') ||
+      key.startsWith('PHUB_PUBLICATION_') ||
+      key.endsWith('_RUNTIME_DIGEST') ||
+      key === 'PHUB_RELEASE_SOURCE_SHA' ||
+      key === 'PHUB_RELEASE_SOURCE_TREE'
+    )
+      delete next[key];
+  return Buffer.from(
+    Object.entries(next)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n') + '\n',
+  );
+}
+export function readInstalledWorkerGate(receiptPath, installedWorkerImage) {
+  const match =
+    /^\/opt\/phub\/timeweb-beta\/backups\/([a-f0-9]{40}-[1-9][0-9]*-1)-api-worker\/rollout-receipt\.json$/.exec(
+      receiptPath,
+    );
+  if (!match) fail('installed_worker_gate_path');
+  const release = match[1],
+    tx = dirname(receiptPath),
+    opBytes = read(`${tx}/operation.json`),
+    op = parseStrictJson(opBytes),
+    planBytes = read(`${tx}/plan.json`);
+  if (!isPreservedNotificationRollout(op)) fail('installed_worker_gate_profile');
+  const descriptor = read(`${ROOT}/releases/${release}/installed-components.env`),
+    values = parseEnv(descriptor);
+  validateInstalledApiWorkerEvidence({
+    releaseId: release,
+    values,
+    bytes: descriptor,
+    receipt: parseStrictJson(read(receiptPath)),
+    planBytes,
+    operationBytes: opBytes,
+    evidence: Object.fromEntries(
+      [
+        'observation.json',
+        'fcm-drain.json',
+        'fcm-delivery-gate/held.json',
+        'fcm-delivery-gate/released.json',
+      ].map((name) => [
+        name,
+        read(`${tx}/${name}`, name.startsWith('fcm-delivery-gate/') ? 0o644 : 0o600),
+      ]),
+    ),
+  });
+  const binding = fcmGateBinding(op, hash(opBytes), hash(planBytes)),
+    directory = `${tx}/fcm-delivery-gate`,
+    override = `${tx}/candidate-worker-gate.compose.json`;
+  if (
+    installedWorkerImage !== op.workerImage ||
+    readFcmDeliveryGate(directory, binding) !== 'RELEASED' ||
+    !read(override).equals(Buffer.from(fcmGateComposeOverride(directory, binding)))
+  )
+    fail('installed_worker_gate_drift');
+  const identity = inspect('worker'),
+    actual = parseStrictJson(docker(['inspect', identity.id]))[0];
+  const saved = parseStrictJson(read(`${tx}/candidate-worker.identity.json`));
+  const configHash = read(`${tx}/candidate-worker.config-hash`).toString().trim();
+  if (
+    !HASH.test(configHash) ||
+    actual.Config.Labels?.['com.docker.compose.config-hash'] !== configHash ||
+    identity.image !== op.workerImage ||
+    identity.imageId !== saved.imageId ||
+    identity.revision !== op.candidateSha ||
+    identity.releaseId !== null
+  )
+    fail('installed_worker_gate_runtime');
+  validateFcmGateRuntime(
+    { mounts: actual.Mounts, environment: actual.Config.Env ?? [] },
+    directory,
+    binding,
+  );
+  return { receiptPath, directory, override, binding, configHash };
+}
 export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true } = {}) {
   if (!ID.test(releaseId)) fail('baseline_release_id');
   const directory = `${ROOT}/releases/${releaseId}`;
@@ -1389,7 +1497,11 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
   if (values.PHUB_RELEASE_ID !== releaseId) fail('baseline_release_id');
   if (existsSync(installed)) {
     if (
-      ['API_WORKER', 'API_WORKER_NOTIFICATION_0105'].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
+      [
+        'API_WORKER',
+        'API_WORKER_NOTIFICATION_0105',
+        'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID',
+      ].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
     ) {
       const transaction = `${ROOT}/backups/${releaseId}-api-worker`;
       if (
@@ -1405,10 +1517,26 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
         planBytes: read(`${transaction}/plan.json`),
         operationBytes: read(`${transaction}/operation.json`),
         evidence: Object.fromEntries(
-          (values.PHUB_COMPONENT_ROLLOUT_KIND === 'API_WORKER_NOTIFICATION_0105'
-            ? ['observation.json']
+          ([
+            'API_WORKER_NOTIFICATION_0105',
+            'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID',
+          ].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
+            ? [
+                'observation.json',
+                ...(values.PHUB_COMPONENT_ROLLOUT_KIND ===
+                'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
+                  ? [
+                      'fcm-drain.json',
+                      'fcm-delivery-gate/held.json',
+                      'fcm-delivery-gate/released.json',
+                    ]
+                  : []),
+              ]
             : ['observation.json', 'timeweb-monitor-readback.json', 'alert-test-readback.json']
-          ).map((name) => [name, read(`${transaction}/${name}`)]),
+          ).map((name) => [
+            name,
+            read(`${transaction}/${name}`, name.startsWith('fcm-delivery-gate/') ? 0o644 : 0o600),
+          ]),
         ),
       });
     } else if (values.PHUB_COMPONENT_ROLLOUT_KIND === JOIN_INSTALLED_KIND) {
@@ -1521,10 +1649,17 @@ export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true
     if (checkRuntimeSecrets)
       validateTimewebRuntimeSecretPaths(RUNTIME, values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID);
   }
+  const workerGate = values.PHUB_WORKER_DELIVERY_GATE_RECEIPT
+    ? readInstalledWorkerGate(
+        values.PHUB_WORKER_DELIVERY_GATE_RECEIPT,
+        `ghcr.io/z6v6e6r/phub-worker@${values.WORKER_IMAGE_DIGEST}`,
+      )
+    : undefined;
   return {
     path,
     bytes,
     values,
+    ...(workerGate ? { workerGate } : {}),
     secretSetReleaseId: values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID ?? releaseId,
   };
 }
@@ -2194,34 +2329,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         installedBaselineSha256 = hash(expectedDescriptor);
         return;
       }
-      const next = {
-        ...values,
-        PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
-        PHUB_RELEASE_ID: id,
-        PHUB_RUNTIME_SECRET_SET_RELEASE_ID: plan.secretSetReleaseId,
-        PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
-        API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
-        WEB_IMAGE_DIGEST: plan.candidate.web.image.split('@')[1],
-      };
-      for (const service of ['worker', 'realtime'])
-        if (plan.unchangedServiceImages[service])
-          next[`${service.toUpperCase()}_IMAGE_DIGEST`] =
-            plan.unchangedServiceImages[service].split('@')[1];
-      // This is an installed-component descriptor, never a new/mixed canonical manifest.
-      for (const key of Object.keys(next))
-        if (
-          key.startsWith('PHUB_CANONICAL_') ||
-          key.startsWith('PHUB_PUBLICATION_') ||
-          key.endsWith('_RUNTIME_DIGEST') ||
-          key === 'PHUB_RELEASE_SOURCE_SHA' ||
-          key === 'PHUB_RELEASE_SOURCE_TREE'
-        )
-          delete next[key];
-      const bytes = Buffer.from(
-        Object.entries(next)
-          .map(([k, v]) => `${k}=${v}`)
-          .join('\n') + '\n',
-      );
+      const bytes = buildApiWebInstalledDescriptor(values, plan, id, journalPath);
       durable(`${directory}/installed-components.env`, bytes, true);
       installedBaselineSha256 = hash(bytes);
     },

@@ -48,12 +48,15 @@ export function validateApiWorkerDatabase(
   value: unknown,
   packaged: unknown,
   initial?: unknown,
+  operation?: unknown,
+  requireQuiescent?: boolean,
 ): unknown;
 export function apiWorkerComposeArgs(
   baseline: string,
   overlay: string,
   action: string,
   service: string,
+  candidateGateOverride?: string,
 ): string[];
 export function apiWorkerSmokeArgs(service: string, image: string): string[];
 export function overlay(plan: unknown, side: string, service: string): string;
@@ -67,6 +70,14 @@ export function readApiWorkerCapsule(bytes: Buffer): {
 };
 export interface ApiWorkerTransitionOps {
   secretMode?: 'preserve';
+  preserveAndroid?: boolean;
+  prepareDeliveryGate?(): Promise<void>;
+  attestGatePreparation?(): Promise<void>;
+  verifyFcmDrain?(): Promise<void>;
+  verifyHeldForRollback?(): Promise<void>;
+  releaseDeliveryGate?(): Promise<void>;
+  attestInstalledBaseline?(): Promise<void>;
+  recoveryPhase?(): Promise<string>;
   preflight(): Promise<void>;
   pullAndSmoke(): Promise<void>;
   journal(phase: string): Promise<void>;
@@ -86,6 +97,7 @@ export function runApiWorkerTransition(ops: ApiWorkerTransitionOps): Promise<voi
 export function recoverApiWorkerPhase(phase: string, ops: ApiWorkerTransitionOps): Promise<string>;
 export const API_WORKER_GATE_LOCK_SQL: string;
 export const API_WORKER_DATABASE_SQL: string;
+export const API_WORKER_PRESERVED_DATABASE_SQL: string;
 export function openApiWorkerDatabaseFence(
   container: string,
   spawnChild?: (...args: unknown[]) => EventEmitter & {

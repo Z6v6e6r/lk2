@@ -1,3 +1,4 @@
+import { fcmRolloutClaimAllowed } from './fcm-rollout-gate.js';
 import { withTenantTransaction } from '@phub/database';
 import type {
   NotificationEndpointCipher,
@@ -64,7 +65,29 @@ export async function runFcmDeliveryBatch(options: {
   readonly scenarioPolicyEnabled?: boolean;
   readonly batchSize?: number;
 }): Promise<{ claimed: number; sent: number; retried: number; dead: number; stale: number }> {
+  if (!fcmRolloutClaimAllowed()) {
+    options.logger.info({ reason: 'ROLLOUT_GATE_HELD' }, 'FCM claim deferred');
+    return { claimed: 0, sent: 0, retried: 0, dead: 0, stale: 0 };
+  }
   const jobs = await withTenantTransaction(options.pool, options.tenantId, async (client) => {
+    // The rollout fence and admin writers use this order. Never wait behind a
+    // long rollout: leave the delivery and its attempt untouched for the next cycle.
+    for (const [gate, key] of [
+      ['runtime', `notification-runtime:${options.tenantId}`],
+      [
+        'provider',
+        `android-push-provider:${options.tenantId}:${options.appId}:${options.environment}`,
+      ],
+    ]) {
+      const lock = await client.query<{ acquired: boolean }>(
+        'select pg_try_advisory_xact_lock(hashtextextended($1, 0)) acquired',
+        [key],
+      );
+      if (lock.rows[0]?.acquired !== true) {
+        options.logger.info({ gate, reason: 'ROLLOUT_GATE_BUSY' }, 'FCM claim deferred');
+        return [];
+      }
+    }
     const found = await client.query<Row>(
       `select d.id, d.intent_id, d.endpoint_id, d.attempt_count, a.id provider_account_id,
               ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} scenario_delivery,

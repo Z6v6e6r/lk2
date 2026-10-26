@@ -1,3 +1,5 @@
+import { isPreservedNotificationRollout } from './timeweb-notification-android-gates.js';
+import { assertCompletedNotificationInputs } from './timeweb-notification-completed-migration.js';
 // Closed migration-only mode of the enrolled standard runner. No env swap or FCM key access.
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -4342,6 +4344,9 @@ export function readNotificationDatabaseState(op, phase = 'pre') {
   if (op.schema === JOIN_POST105_BACKUP_SCHEMA && phase !== 'post') stop('NOTIFICATION_PROFILE');
   if (op.schema === NOTIFICATION_MIGRATION_SCHEMA) sourceAttest(op);
   else attestNotificationSource(op, { git, read, secure, present });
+  return readNotificationDatabaseStateAtTarget(op, phase);
+}
+function readNotificationDatabaseStateAtTarget(op, phase) {
   const value = postgresSql(
     notificationStateSql(
       phase,
@@ -4358,7 +4363,9 @@ export function readNotificationDatabaseState(op, phase = 'pre') {
   );
 }
 
-export function notificationBackupProof(op, { fresh = true } = {}) {
+export function notificationBackupProof(op, { fresh = true, completedBy } = {}) {
+  if (completedBy !== undefined && !isPreservedNotificationRollout(completedBy))
+    stop('COMPLETED_BACKUP_AUTHORITY');
   const directory = `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-notification-pre105`;
   secure(directory, 0o700);
   const bytes = read(`${directory}/database-backup-receipt.json`),
@@ -4477,14 +4484,27 @@ export function notificationBackupProof(op, { fresh = true } = {}) {
   let terminal;
   try {
     terminal = parseStrictJson(
-      execFileSync('/usr/bin/python3', ['-I', tool, '--attest-disk', DISK_BACKUP_REQUEST], {
-        cwd: SOURCE,
-        encoding: 'utf8',
-        timeout: 60000,
-        maxBuffer: 4 * 1024 * 1024,
-        env: { PATH: '/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }),
+      execFileSync(
+        '/usr/bin/python3',
+        completedBy === undefined
+          ? ['-I', tool, '--attest-disk', DISK_BACKUP_REQUEST]
+          : [
+              '-I',
+              '-S',
+              '-B',
+              `${SOURCE}/scripts/control-timeweb-database-backup.py`,
+              '--attest-completed-notification-backup',
+              '/opt/phub/timeweb-beta/operator/api-worker-upgrade.json',
+            ],
+        {
+          cwd: SOURCE,
+          encoding: 'utf8',
+          timeout: 60000,
+          maxBuffer: 4 * 1024 * 1024,
+          env: { PATH: '/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
     );
   } catch {
     stop('NOTIFICATION_BACKUP_CLEANUP');
@@ -4595,7 +4615,9 @@ export function validateNotificationMigrationProofBundle(bundle, expected) {
 }
 export function readNotificationMigrationProof(op, { fresh = true } = {}) {
   validateNotificationOperation(op);
-  const tx = `${ROOT}/backups/${op.candidateSha}-${op.publicationRunId}-1-migration`;
+  const preserving = isPreservedNotificationRollout(op);
+  const reference = preserving ? op.completedMigration : op;
+  const tx = `${ROOT}/backups/${reference.candidateSha}-${reference.publicationRunId}-1-migration`;
   secure(tx, 0o700);
   const names = {
     preparation: 'preparation.json',
@@ -4609,7 +4631,26 @@ export function readNotificationMigrationProof(op, { fresh = true } = {}) {
   const bundle = Object.fromEntries(
     Object.entries(names).map(([key, name]) => [key, read(`${tx}/${name}`)]),
   );
-  const verified = validateNotificationMigrationProofBundle(bundle, op);
+  const verified = validateNotificationMigrationProofBundle(bundle, reference);
+  if (preserving) {
+    attestNotificationSource(op, { git, read, secure, present });
+    const capsule = readApiWorkerMigrationCapsule(bundle.preparation);
+    assertCompletedNotificationInputs(
+      reference,
+      capsule.operation,
+      capsule.operationBytes,
+      verified.plan,
+      read,
+    );
+    if (
+      !same(verified.operation.expectedApi, op.expectedApi) ||
+      !same(verified.operation.expectedWorker, op.expectedWorker) ||
+      !same(verified.operation.expectedPostgres, op.expectedPostgres) ||
+      !same(verified.proof.target, reference.target) ||
+      verified.proof.catalogSha256 !== reference.catalogSha256
+    )
+      stop('COMPLETED_MIGRATION_BINDING');
+  }
   const goldenBytes = read(
       `${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`,
       0o644,
@@ -4640,11 +4681,28 @@ export function readNotificationMigrationProof(op, { fresh = true } = {}) {
   }
   if (
     verified.proof.catalogSha256 !== golden.checkpoints['105'].sha256 ||
-    !same(readNotificationDatabaseState(verified.operation, 'post'), verified.postflight.state) ||
-    !same(notificationBackupProof(verified.operation, { fresh }), verified.plan.backup)
+    !same(
+      preserving
+        ? readNotificationDatabaseStateAtTarget(verified.operation, 'post')
+        : readNotificationDatabaseState(verified.operation, 'post'),
+      verified.postflight.state,
+    ) ||
+    !same(
+      notificationBackupProof(verified.operation, {
+        fresh,
+        ...(preserving ? { completedBy: op } : {}),
+      }),
+      verified.plan.backup,
+    )
   )
     stop('NOTIFICATION_MIGRATION_DRIFT');
   return {
+    ...(preserving
+      ? {
+          completedMigrationSha256: hash(encoded(reference)),
+          installedMigratorImage: reference.migratorImage,
+        }
+      : {}),
     migrationPlanSha256: hash(bundle.plan),
     migrationSuccessSha256: hash(bundle.success),
     migrationReceiptSha256: hash(bundle.receipt),
