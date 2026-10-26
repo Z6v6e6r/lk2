@@ -505,6 +505,7 @@ class Runtime:
                 '--set=ON_ERROR_STOP=1',
                 '--tuples-only',
                 '--no-align',
+                '--quiet',
             ],
             input_data=sql,
         )

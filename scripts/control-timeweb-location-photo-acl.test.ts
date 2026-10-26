@@ -842,6 +842,8 @@ def runtime_run(truncated=False, foreign=False):
 
     def run(args, input_data=None):
         calls.append(list(args))
+        if args[0:2] == ['/usr/bin/docker', 'exec']:
+            return types.SimpleNamespace(returncode=0, stdout=b'1', stderr=b'')
         if args[1] == 'ps':
             project = args[5].rsplit('=', 1)[1]
             service = args[7].rsplit('=', 1)[1]
@@ -886,13 +888,17 @@ run, calls = runtime_run()
 runtime = packet.Runtime(run=run)
 api = runtime.inspect('api')
 postgres = runtime.inspect('postgres')
+psql = runtime.psql('select 1', True)
 ps_calls = [call for call in calls if call[1] == 'ps']
+psql_calls = [call for call in calls if call[0] == '/usr/bin/docker' and 'psql' in call]
 print(json.dumps({
     'noTrunc': all('--no-trunc' in call for call in ps_calls),
     'apiProject': ps_calls[0][5],
     'postgresProject': ps_calls[1][5],
     'apiId': api['Id'],
     'postgresId': postgres['Id'],
+    'psqlQuiet': bool(psql_calls) and all('--quiet' in call for call in psql_calls),
+    'psqlRc': psql['rc'],
 }))
 `),
     ).toEqual({
@@ -901,6 +907,8 @@ print(json.dumps({
       postgresProject: 'label=com.docker.compose.project=phub-timeweb-beta-dependencies',
       apiId: 'a'.repeat(64),
       postgresId: 'e'.repeat(64),
+      psqlQuiet: true,
+      psqlRc: 0,
     });
   });
   it('fails closed on a truncated id or a foreign compose identity', () => {
