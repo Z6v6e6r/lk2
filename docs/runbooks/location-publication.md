@@ -59,12 +59,16 @@ binds three independent identities:
   `deploy/timeweb/location-photo-migration-0102.v1.json`;
 - the current enrolled controller commit/tree and its fresh source-CI run.
 
-The controller-source closure requires the complete reviewed package delta above and admits further
-entries only when each extra path is itself a reviewed controller file
-(`API_WORKER_CONTROLLER_FILES`) with a plain regular-blob `M`/`A` transition. This keeps an unrelated
-reviewed controller release (for example the adoption-mode or ACL-baseline changes merged after the
-package was authored) from blocking the migration while still rejecting foreign paths, duplicates,
-mode/type drift and a missing package file. Package integrity is pinned independently by the
+The controller-source closure requires the complete reviewed package delta above (anchor
+`2bf56ca8c1bc3e27db5c857dbf961ad400f2294b`) and admits further entries only when each extra path is
+itself a reviewed controller file (`API_WORKER_CONTROLLER_FILES`) or one of the dedicated
+`LOCATION_PHOTO_CONTROLLER_EXTRA_FILES` paths reviewed for this package
+(`scripts/verify-source-ci.js`, `scripts/timeweb-join-dormant-profile.js`,
+`scripts/timeweb-critical-web.js`, `scripts/timeweb-critical-web.test.ts`), with a plain
+regular-blob `M`/`A` transition. This keeps an unrelated reviewed controller release (for example the
+adoption-mode or ACL-baseline changes merged after the package was authored) from blocking the
+migration while still rejecting foreign paths, duplicates, mode/type drift and a missing package
+file. Package integrity is pinned independently by the
 descriptor, migration and blob hashes.
 
 Mint requests only from fresh readbacks. The package accepts exactly ledger count 105/digest

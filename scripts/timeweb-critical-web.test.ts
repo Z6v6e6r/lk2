@@ -50,7 +50,7 @@ describe('closed critical Web delivery', () => {
   it('freezes every build input beyond the reviewed whole-runtime anchor', () =>
     scenario(`
     validateWebControllerDelta([{status:'A',path:'scripts/timeweb-critical-web.js'},{status:'M',path:'docs/runbooks/timeweb-standard-delivery.md'}]);
-    assert.equal(WEB_CONTROLLER_FILES.size,11);
+    assert.equal(WEB_CONTROLLER_FILES.size,14);
     for (const path of ['.github/workflows/publish-timeweb-amd64-images.yaml','scripts/timeweb-amd64-publication-workflow.test.ts']) {
       for (const status of ['A','M']) validateWebControllerDelta([{status,path}]);
       for (const status of ['R100','D','T','C100']) assert.throws(()=>validateWebControllerDelta([{status,path}]));
