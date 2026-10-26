@@ -659,7 +659,7 @@ const url = disposableUrl();
           expect(notificationLedgerCheckpoint(await notificationLedger(r.db))).toBe(105);
           expect(
             (
-              await r.db.query(
+              await r.db.query<{ relation: string | null }>(
                 "select to_regclass('locations.recommendation_card_photos') as relation",
               )
             ).rows[0]?.relation,
