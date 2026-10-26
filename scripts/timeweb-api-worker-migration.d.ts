@@ -27,7 +27,7 @@ export function migrationCreateArgs(
   envFile: string,
   kind?: string,
   runtimeRole?: string,
-  notification?: { operation: unknown; target: unknown },
+  notification?: { operation: unknown; target?: unknown },
 ): string[];
 export function validateMigrationContainer(
   value: unknown,
@@ -94,6 +94,29 @@ export function attestMigrationBackupProof(
   restore?: unknown,
 ): Promise<{ schema: string; containerId: string; imageId: string; proofSha256: string }>;
 export function runManualApiWorkerMigration(
+  mode: string,
+  requestPath: string,
+): Promise<{ status: string; receipt: string }>;
+export interface LocationPhotoManualEntryEffects {
+  uid(): number | undefined;
+  time(): number;
+  assertAmbient(): void;
+  secureStandard(): unknown;
+  readRequest(): Buffer;
+  acquire(): { close(): void };
+  run(
+    mode: string,
+    bytes: Buffer,
+    operation: unknown,
+    owner: { close(): void },
+  ): Promise<{ status: string; receipt: string }>;
+}
+export function runLocationPhotoManualEntryAdapter(
+  mode: string,
+  requestPath: string,
+  effects: LocationPhotoManualEntryEffects,
+): Promise<{ status: string; receipt: string }>;
+export function runManualLocationPhotoMigration(
   mode: string,
   requestPath: string,
 ): Promise<{ status: string; receipt: string }>;
@@ -210,5 +233,37 @@ export function runManualNotificationMigratorPrefetch(
   requestPath: string,
 ): Promise<unknown>;
 export function attestNotificationMigratorPrefetchForBackup(operation: unknown): Promise<unknown>;
+
+export function readLocationPhotoDatabaseState(operation: unknown, phase?: string): unknown;
+export function locationPhotoBackupProof(
+  operation: unknown,
+  options?: { fresh?: boolean },
+): unknown;
+export function validateLocationPhotoCompletedBackupBinding(
+  backupOperation: unknown,
+  operationBytes: Buffer,
+  receipt: unknown,
+): unknown;
+export function validateLocationPhotoMigrationPlan(value: unknown, operationBytes: Buffer): unknown;
+export function validateLocationPhotoMigrationReceipt(
+  value: unknown,
+  planSha: string,
+  operationSha: string,
+): unknown;
+export function runLocationPhotoMigrationAdapter(
+  mode: string,
+  operationBytes: Buffer,
+  ops: unknown,
+): Promise<unknown>;
+export function runLocationPhotoMigratorPrefetchAdapter(
+  mode: string,
+  requestBytes: Buffer,
+  ops: unknown,
+): Promise<unknown>;
+export function runManualLocationPhotoMigratorPrefetch(
+  mode: string,
+  requestPath: string,
+): Promise<unknown>;
+export function attestLocationPhotoMigratorPrefetchForBackup(operation: unknown): Promise<unknown>;
 
 export function sealNotificationPrefetchMetadata(path: string, bytes: Buffer): void;

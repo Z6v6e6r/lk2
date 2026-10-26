@@ -58,6 +58,14 @@ export const API_WORKER_CONTROLLER_FILES = new Set([
   'scripts/timeweb-api-worker-migration.js',
   'scripts/timeweb-api-worker-migration.test.ts',
   'scripts/timeweb-api-worker-migration.adapter.test.ts',
+  'scripts/timeweb-location-photo-profile.js',
+  'scripts/timeweb-location-photo-profile.d.ts',
+  'scripts/timeweb-location-photo-profile.test.ts',
+  'scripts/timeweb-location-photo-controller.js',
+  'scripts/timeweb-location-photo-controller.test.ts',
+  'deploy/timeweb/location-photo-migration-0102.v1.json',
+  'deploy/timeweb/location-photo-role-bootstrap-0102.sql',
+  'deploy/timeweb/location-photo-role-cleanup-0102.sql',
   'scripts/timeweb-api-worker-migration-role.d.ts',
   'scripts/timeweb-api-worker-migration-role.js',
   'scripts/timeweb-api-worker-migration-role.test.ts',
@@ -79,6 +87,7 @@ export const API_WORKER_CONTROLLER_FILES = new Set([
   'scripts/provision-timeweb-beta-runtime-secrets.test.ts',
   'docs/runbooks/timeweb-standard-delivery.md',
   'docs/runbooks/android-chats-fcm.md',
+  'docs/runbooks/location-publication.md',
 ]);
 export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([
   'scripts/timeweb-adopt-manual-baseline.js',
@@ -95,12 +104,75 @@ export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([
   'scripts/timeweb-api-worker-migration.js',
   'scripts/timeweb-api-worker-migration.test.ts',
   'scripts/timeweb-api-worker-migration.adapter.test.ts',
+  'scripts/timeweb-location-photo-profile.js',
+  'scripts/timeweb-location-photo-profile.d.ts',
+  'scripts/timeweb-location-photo-profile.test.ts',
+  'scripts/timeweb-location-photo-controller.js',
+  'scripts/timeweb-location-photo-controller.test.ts',
+  'deploy/timeweb/location-photo-migration-0102.v1.json',
+  'deploy/timeweb/location-photo-role-bootstrap-0102.sql',
+  'deploy/timeweb/location-photo-role-cleanup-0102.sql',
   'scripts/timeweb-api-worker-migration-role.d.ts',
   'scripts/timeweb-api-worker-migration-role.js',
   'scripts/timeweb-api-worker-migration-role.test.ts',
   'docs/runbooks/timeweb-standard-delivery.md',
   'docs/runbooks/android-chats-fcm.md',
+  'docs/runbooks/location-publication.md',
 ]);
+export const LOCATION_PHOTO_CONTROLLER_BASE = Object.freeze({
+  sha: '2bf56ca8c1bc3e27db5c857dbf961ad400f2294b',
+  tree: 'fd6ae8e635d325a39e5e44ba06d1ab0c3df6e757',
+});
+export const LOCATION_PHOTO_CONTROLLER_DELTA = Object.freeze(
+  Object.fromEntries(
+    [
+      ['docs/runbooks/location-publication.md', 'M'],
+      ['scripts/control-timeweb-database-backup.py', 'M'],
+      ['scripts/test-timeweb-database-backup.py', 'M'],
+      ['scripts/timeweb-api-worker-contract.js', 'M'],
+      ['scripts/timeweb-api-worker-migration.d.ts', 'M'],
+      ['scripts/timeweb-api-worker-migration.js', 'M'],
+      ['scripts/timeweb-join-dormant-profile.test.ts', 'M'],
+      ['deploy/timeweb/location-photo-migration-0102.v1.json', 'A'],
+      ['deploy/timeweb/location-photo-role-bootstrap-0102.sql', 'A'],
+      ['deploy/timeweb/location-photo-role-cleanup-0102.sql', 'A'],
+      ['scripts/timeweb-location-photo-controller.js', 'A'],
+      ['scripts/timeweb-location-photo-controller.test.ts', 'A'],
+      ['scripts/timeweb-location-photo-postgres.test.ts', 'A'],
+      ['scripts/timeweb-location-photo-profile.d.ts', 'A'],
+      ['scripts/timeweb-location-photo-profile.js', 'A'],
+      ['scripts/timeweb-location-photo-profile.test.ts', 'A'],
+    ].map(([path, status]) => [path, Object.freeze({ path, status })]),
+  ),
+);
+
+export function validateLocationPhotoControllerClosure(entries) {
+  if (
+    !Array.isArray(entries) ||
+    entries.length !== Object.keys(LOCATION_PHOTO_CONTROLLER_DELTA).length
+  )
+    fail('LOCATION_PHOTO_CONTROLLER_DELTA');
+  const seen = new Set();
+  for (const entry of entries) {
+    const expected = LOCATION_PHOTO_CONTROLLER_DELTA[entry?.path];
+    if (
+      !expected ||
+      seen.has(entry.path) ||
+      entry.status !== expected.status ||
+      entry.newMode !== '100644' ||
+      entry.oldMode !== (entry.status === 'A' ? '000000' : '100644') ||
+      !SHA.test(entry.oldOid ?? '') ||
+      !SHA.test(entry.newOid ?? '') ||
+      /^0{40}$/.test(entry.newOid) ||
+      (entry.status === 'A' ? !/^0{40}$/.test(entry.oldOid) : /^0{40}$/.test(entry.oldOid))
+    )
+      fail('LOCATION_PHOTO_CONTROLLER_DELTA');
+    seen.add(entry.path);
+  }
+  if (seen.size !== Object.keys(LOCATION_PHOTO_CONTROLLER_DELTA).length)
+    fail('LOCATION_PHOTO_CONTROLLER_DELTA');
+  return entries;
+}
 // One frozen CI-download correction for the 11954 API/Worker bridge. Neither file is
 // in a generic allowlist: both exact regular M blobs must travel as one atomic pair.
 export const API_WORKER_CI_DOWNLOAD_PATCH = Object.freeze([

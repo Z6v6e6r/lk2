@@ -1,0 +1,45 @@
+{
+  "schema": "PHUB_LOCATION_PHOTO_MIGRATION_0102_PACKAGE_V1",
+  "migration": {
+    "filename": "0102_location_recommendation_photos.sql",
+    "sha256": "8817a4dab03e78d27023d4b3ee72a12bfa8f2ffe4599e4e78df1d3a3893366f0",
+    "gitBlob": "4fd2f66cca7d585fae94f7e1d33ab1eca4b0f124"
+  },
+  "ledger": {
+    "preCount": 105,
+    "preSha256": "7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd",
+    "postCount": 106,
+    "postSha256": "ff74c193b5e5253f929818b1550d0e5c0264a9818cb0ee5437d49d5aa043904e"
+  },
+  "databaseTarget": {
+    "databaseName": "phub_beta",
+    "systemIdentifier": "7679125609183186977"
+  },
+  "publishedMigrator": {
+    "sourceSha": "4256e733a1f904d051a96492645f5767e4346ce1",
+    "sourceTree": "1c5c702be7f2fb7ce57574ad18f0839839aeebcd",
+    "publicationRunId": "40312260447",
+    "publicationRunAttempt": 1,
+    "manifestSha256": "b637747e274edd683def496b4b759b7dc2d4d2b5394cfe0effb3c6d9913fcc28",
+    "image": "ghcr.io/z6v6e6r/phub-migrator@sha256:54921143466e832b775e0151b100cd4a98b6cbf61e4d9aa1a4ca6fe856efce0b",
+    "imageId": "sha256:642fd873e2254506a61f0cd26b6e2c788b0d13b785d1be76dff7208425f50b48"
+  },
+  "editorAcl": [
+    ["notifications.scenario_commands", "INSERT"],
+    ["notifications.scenario_commands", "SELECT"],
+    ["notifications.scenario_runs", "SELECT"],
+    ["notifications.scenario_runs", "UPDATE"],
+    ["notifications.scenario_staff_tasks", "SELECT"],
+    ["notifications.scenario_versions", "INSERT"],
+    ["notifications.scenarios", "INSERT"],
+    ["notifications.scenarios", "SELECT"],
+    ["notifications.scenarios", "UPDATE"]
+  ],
+  "temporaryMigratorPrivileges": [
+    "CREATE:locations",
+    "CREATE:public",
+    "REFERENCES:locations.media_assets(tenant_id,id)",
+    "REFERENCES:locations.profiles(tenant_id,id)"
+  ],
+  "runtimePhotoAcl": ["DELETE", "INSERT", "SELECT"]
+}
