@@ -30,6 +30,7 @@ describe('legacy games adapter', () => {
   it('retains organizer and participant photos in the bounded Mongo projection', () => {
     expect(testing.legacyGameProjection).toMatchObject({
       'organizer.photo': 1,
+      'organizer.status': 1,
       'participants.photo': 1,
     });
   });
@@ -186,6 +187,48 @@ describe('legacy games adapter', () => {
       ],
     });
     expect(JSON.stringify(mapped)).not.toMatch(/phone|paymentUrl|bookingIds/i);
+  });
+
+  it('uses only explicitly PAID roster entries for the reminder-only private-game audience', () => {
+    const raw = {
+      ...phoneGameDocument({ status: 'PENDING' }),
+      settings: { isPrivate: true, ratingGame: false },
+      participants: [
+        { id: 'pending-1', name: 'Pending 1', status: 'PENDING' },
+        { id: 'pending-2', name: 'Pending 2', status: 'PENDING' },
+        { id: 'cancelled', name: 'Cancelled', status: 'CANCELLED' },
+        { id: 'unknown', name: 'Unknown' },
+        { id: 'paid-after-old-capacity-cutoff', name: 'Paid', status: 'PAID' },
+      ],
+    };
+    const generic = testing.mapLegacyGame(raw);
+    const reminder = testing.mapLegacyGameReminder(raw);
+    expect(generic?.participants.map((player) => player.externalId)).toEqual([
+      'viewer-profile',
+      'pending-1',
+      'pending-2',
+      'cancelled',
+    ]);
+    expect(reminder?.visibility).toBe('PRIVATE');
+    expect(reminder?.participants.map((player) => player.externalId)).toEqual([
+      'paid-after-old-capacity-cutoff',
+    ]);
+    expect(
+      testing.mapLegacyGameReminder({
+        ...raw,
+        participants: Array.from({ length: 5 }, (_, index) => ({
+          id: `paid-${index}`,
+          name: `Paid ${index}`,
+          status: 'PAID',
+        })),
+      }),
+    ).toBeUndefined();
+    expect(
+      testing.mapLegacyGameReminder({
+        ...raw,
+        participants: [{ id: 'malformed-paid', status: 'PAID' }],
+      }),
+    ).toBeUndefined();
   });
 
   it('drops records without stable organizer, station or time identity', () => {

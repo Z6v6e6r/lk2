@@ -13,6 +13,7 @@ const labels: Record<string, string> = {
   BOOKING_CHANGED: 'Запись изменена',
   BOOKING_CANCELLED: 'Запись отменена',
   BOOKING_STARTS: 'Относительно начала занятия',
+  GAME_STARTS: 'Относительно начала игры',
   FRIEND_GAME_PUBLISHED: 'Друг опубликовал игру',
   FIRST_ATTENDANCE: 'Первое посещение',
   TRAINING_ATTENDED: 'Подтверждено посещение тренировки',
@@ -42,6 +43,9 @@ const reasons: Record<string, string> = {
   SOURCE_CHANGED: 'Запись изменилась',
   GAME_CANCELLED: 'Игра отменена',
   GAME_UNAVAILABLE: 'Игра больше недоступна',
+  SOURCE_STALE: 'Источник участников игры временно не подтверждён',
+  RECIPIENT_NOT_PARTICIPATING: 'Участник больше не состоит в игре',
+  RECIPIENT_UNBOUND: 'Не подтверждена связь участника с аккаунтом',
   AUDIENCE_CHANGED: 'Получатель больше не подходит',
   GOAL_ACHIEVED: 'Пользователь присоединился',
   MESSAGE_EXPIRED: 'Сообщение устарело',
@@ -65,7 +69,22 @@ const channelLabels = {
   SMS: 'SMS — заглушка',
   TELEGRAM: 'Telegram — заглушка',
 } as const;
-function blank(): NotificationScenarioInput {
+function blank(gameStartAvailable = false): NotificationScenarioInput {
+  if (gameStartAvailable)
+    return {
+      name: 'Напоминание участнику о предстоящей игре',
+      trigger: 'GAME_STARTS',
+      delayMinutes: -60,
+      ttlMinutes: 60,
+      title: 'Скоро игра',
+      body: '{{serviceTitle}} начнётся {{startsAt}}, {{locationName}}',
+      channels: ['IN_APP'],
+      quietHours: 'DEFER',
+      dailyLimit: 10,
+      goal: 'NONE',
+      goalWindowMinutes: 1440,
+      active: false,
+    };
   return {
     name: '',
     trigger: 'BOOKING_STARTS',
@@ -206,7 +225,10 @@ export function NotificationScenariosWorkspace({
   function select(item?: NotificationScenarioView): void {
     if (busy || uncertain) return;
     setSelected(item);
-    setDefinition(item?.definition ?? blank());
+    setDefinition(
+      item?.definition ??
+        blank(catalog.some((entry) => entry.type === 'GAME_STARTS' && entry.available)),
+    );
     setError(undefined);
     setMessage(undefined);
   }
@@ -294,10 +316,15 @@ export function NotificationScenariosWorkspace({
                     setDefinition((current) => ({
                       ...current,
                       trigger,
-                      delayMinutes: ['BOOKING_STARTS', 'SUBSCRIPTION_ENDS', 'BIRTHDAY'].includes(
-                        trigger,
-                      )
-                        ? -120
+                      delayMinutes: [
+                        'BOOKING_STARTS',
+                        'GAME_STARTS',
+                        'SUBSCRIPTION_ENDS',
+                        'BIRTHDAY',
+                      ].includes(trigger)
+                        ? trigger === 'GAME_STARTS'
+                          ? -60
+                          : -120
                         : 0,
                       goal: trigger === 'FRIEND_GAME_PUBLISHED' ? 'GAME_JOINED' : 'NONE',
                       channels:
@@ -329,7 +356,7 @@ export function NotificationScenariosWorkspace({
                     type="number"
                     required
                     min={
-                      ['BOOKING_STARTS', 'SUBSCRIPTION_ENDS', 'BIRTHDAY'].includes(
+                      ['BOOKING_STARTS', 'GAME_STARTS', 'SUBSCRIPTION_ENDS', 'BIRTHDAY'].includes(
                         definition.trigger,
                       )
                         ? -43200

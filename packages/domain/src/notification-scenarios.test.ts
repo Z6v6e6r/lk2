@@ -29,6 +29,17 @@ describe('notification scenario contract', () => {
     expect(schedule.dueAt.toISOString()).toBe('2026-10-22T14:00:00.000Z');
     expect(schedule.expiresAt.toISOString()).toBe('2026-10-22T16:00:00.000Z');
   });
+  it('supports a distinct game-start reminder anchored to the game start', () => {
+    const game = { ...definition, trigger: 'GAME_STARTS' as const, delayMinutes: -60 };
+    expect(notificationScenarioInputSchema.safeParse(game).success).toBe(true);
+    const schedule = notificationScenarioSchedule({
+      definition: game,
+      occurredAt: '2026-10-21T09:00:00Z',
+      startsAt: '2026-10-22T16:00:00Z',
+    });
+    expect(schedule.dueAt.toISOString()).toBe('2026-10-22T15:00:00.000Z');
+    expect(schedule.expiresAt.toISOString()).toBe('2026-10-22T16:00:00.000Z');
+  });
   it('schedules an event follow-up relative to the event fact', () => {
     const schedule = notificationScenarioSchedule({
       definition: { ...definition, trigger: 'BOOKING_CONFIRMED', delayMinutes: 60 },

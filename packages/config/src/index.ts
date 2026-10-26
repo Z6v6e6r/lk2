@@ -247,6 +247,25 @@ const environmentSchema = z.object({
   LEGACY_GAMES_ROSTER_SYNC_LOOKAHEAD_DAYS: z.coerce.number().int().min(1).max(90).default(42),
   LEGACY_GAMES_ROSTER_SYNC_LIMIT: z.coerce.number().int().min(1).max(500).default(200),
   LEGACY_GAMES_PROFILE_PHOTO_SYNC_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+  // Dedicated read-only legacy source profile for participant reminders. It never enables the
+  // general public roster bridge and defaults off in every environment.
+  LEGACY_GAME_REMINDERS_SOURCE_ENABLED: booleanFromEnvironment,
+  LEGACY_GAME_REMINDERS_MONGODB_URI: z.string().min(1).optional(),
+  LEGACY_GAME_REMINDERS_TENANT_KEY: z.string().min(1).optional(),
+  LEGACY_GAME_REMINDERS_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(30_000)
+    .max(3_600_000)
+    .default(120_000),
+  LEGACY_GAME_REMINDERS_LOOKAHEAD_DAYS: z.coerce.number().int().min(1).max(30).default(7),
+  LEGACY_GAME_REMINDERS_LIMIT: z.coerce.number().int().min(1).max(500).default(200),
+  LEGACY_GAME_REMINDERS_MAX_SOURCE_AGE_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .max(3_600_000)
+    .default(600_000),
   HOME_PROJECTION_MAX_STALE_SECONDS: z.coerce.number().int().nonnegative().max(86_400).default(300),
   HOME_PROJECTION_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
   HOME_BASE_SYNC_ENABLED: booleanFromEnvironment,
@@ -918,6 +937,19 @@ export function loadConfig(
     if (!parsed.data.LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY) {
       throw new Error(
         'LEGACY_GAMES_ROSTER_SYNC_ENABLED requires LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY',
+      );
+    }
+  }
+  if (parsed.data.LEGACY_GAME_REMINDERS_SOURCE_ENABLED) {
+    if (!parsed.data.NOTIFICATION_SCENARIOS_ENABLED) {
+      throw new Error('LEGACY_GAME_REMINDERS_SOURCE_ENABLED requires notification scenarios');
+    }
+    if (
+      !parsed.data.LEGACY_GAME_REMINDERS_MONGODB_URI ||
+      !parsed.data.LEGACY_GAME_REMINDERS_TENANT_KEY
+    ) {
+      throw new Error(
+        'LEGACY_GAME_REMINDERS_SOURCE_ENABLED requires dedicated Mongo URI and tenant key',
       );
     }
   }

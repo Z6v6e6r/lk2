@@ -1535,6 +1535,7 @@ const EVENT_CONSUMER_ROUTES: Readonly<Record<GameDomainEventType, readonly GameE
     'messaging-membership',
     'realtime-invalidation',
     'integration-compatibility',
+    'notifications-rules',
   ],
   'game.published.v1': ['games-card-projector', 'notifications-rules', 'realtime-invalidation'],
   'game.participation.reserved.v1': [

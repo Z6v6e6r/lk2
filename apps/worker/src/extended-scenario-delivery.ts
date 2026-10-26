@@ -35,6 +35,7 @@ export async function runExtendedScenarioDelivery(input: {
   transport: 'APNS' | 'YANDEX_SMTP';
   adapter: NotificationPushDeliveryPort | Pick<YandexSmtpAdapter, 'send'>;
   enabled: boolean;
+  gameReminderMaxSourceAgeMs?: number;
   credentialRef: string;
 }): Promise<number> {
   if (!input.enabled) return 0;
@@ -150,6 +151,9 @@ export async function runExtendedScenarioDelivery(input: {
         enabled: true,
         channel: email ? 'EMAIL' : 'PUSH',
         dispatchFence: true,
+        ...(input.gameReminderMaxSourceAgeMs === undefined
+          ? {}
+          : { gameReminderMaxSourceAgeMs: input.gameReminderMaxSourceAgeMs }),
       });
       if (decision !== 'SEND') continue;
       try {

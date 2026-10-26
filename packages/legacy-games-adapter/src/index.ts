@@ -29,6 +29,8 @@ export interface LegacyGameSourceSnapshot {
   /** Integration-only aliases observed before canonical pseudonymization. */
   readonly externalAliases?: readonly string[];
   readonly externalVersion: string;
+  /** Explicit source ordering marker. Reminder admission rejects snapshots where it is absent. */
+  readonly sourceUpdatedAt?: string | null;
   /** Server-side integration key only; never serialized into a game DTO. */
   readonly vivaExerciseExternalId: string | null;
   readonly title: string;
@@ -63,6 +65,7 @@ export interface LegacyGamesMongoAdapterOptions {
   readonly collectionName?: string;
   readonly timeoutMs?: number;
   readonly maxAttempts?: number;
+  readonly consistency?: 'eventual' | 'reminder-primary';
   readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly onMetric?: (metric: {
     readonly outcome: 'success' | 'failure' | 'retry';
@@ -129,6 +132,7 @@ const LEGACY_GAME_PROJECTION = {
   'organizer.name': 1,
   'organizer.rating': 1,
   'organizer.ratingNumeric': 1,
+  'organizer.status': 1,
   'organizer.photo': 1,
   // The viewer-phone lookup matches these in memory and never copies them into a snapshot, so a
   // projection without them silently disables the VIEWER_PHONE association proof on this source.
@@ -512,7 +516,8 @@ function mapLegacyGame(
     : undefined;
   const minRating = playerLevel(raw.settings?.minRating);
   const maxRating = playerLevel(raw.settings?.maxRating);
-  const updatedAt = isoInstant(raw.updatedAt) ?? startsAt;
+  const sourceUpdatedAt = isoInstant(raw.updatedAt) ?? null;
+  const updatedAt = sourceUpdatedAt ?? startsAt;
   const ratingGame = raw.settings?.ratingGame === true;
   const title =
     stringValue(raw.metadata?.gameTitle) ??
@@ -559,6 +564,7 @@ function mapLegacyGame(
   return {
     externalId,
     externalVersion,
+    sourceUpdatedAt,
     vivaExerciseExternalId,
     title,
     kind: ratingGame ? 'RATING' : 'FRIENDLY',
@@ -576,6 +582,28 @@ function mapLegacyGame(
     organizerExternalId,
     participants,
     viewerParticipantExternalId: stringValue(viewerParticipantExternalId) ?? null,
+  };
+}
+
+/** Reminder audience is stricter than the generic legacy projection: only source-authenticated
+ * PAID roster entries may become recipients. This deliberately leaves generic adapter semantics
+ * unchanged for existing consumers. */
+function mapLegacyGameReminder(raw: RawLegacyGame): LegacyGameSourceSnapshot | undefined {
+  const snapshot = mapLegacyGame(raw);
+  if (!snapshot) return undefined;
+  const organizerExternalId = stringValue(raw.organizer?.id);
+  if (!organizerExternalId) return undefined;
+  const paid = new Map<string, LegacyGameSourceParticipant>();
+  for (const player of [raw.organizer, ...(raw.participants ?? [])]) {
+    if (stringValue(player?.status) !== 'PAID') continue;
+    const mapped = participant(player ?? {}, organizerExternalId);
+    if (!mapped) return undefined;
+    paid.set(mapped.externalId, mapped);
+  }
+  if (paid.size > snapshot.capacity) return undefined;
+  return {
+    ...snapshot,
+    participants: [...paid.values()],
   };
 }
 
@@ -619,6 +647,61 @@ export class LegacyGamesMongoAdapter {
     ).map(normalizeMongoSnapshot);
   }
 
+  /** Complete, primary/majority reminder window. A full page is rejected because the caller cannot
+   * prove that a later source row was not truncated. */
+  public async readReminderWindow(input: {
+    readonly from: string;
+    readonly to: string;
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const from = isoInstant(input.from);
+    const to = isoInstant(input.to);
+    if (!from || !to || Date.parse(to) <= Date.parse(from))
+      throw new Error('LEGACY_GAMES_DATE_RANGE_INVALID');
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 500)
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    const snapshots = await this.readMatching({
+      filter: {
+        archived: { $ne: true },
+        status: { $in: ['PAID', 'CANCELLED'] },
+        'booking.timeFromIso': { $gte: from, $lt: to },
+      },
+      limit: input.limit + 1,
+      sort: { 'booking.timeFromIso': 1, _id: 1 },
+      strict: true,
+      reminderOnly: true,
+    });
+    if (snapshots.length > input.limit) throw new Error('LEGACY_GAMES_SOURCE_LIMIT_EXCEEDED');
+    return snapshots.map(normalizeMongoSnapshot);
+  }
+
+  /** Exact current reads for already tracked games. These bypass the future window so cancellation,
+   * deletion and a move beyond the horizon can invalidate a pending reminder. */
+  public async readByExternalIds(input: {
+    readonly externalIds: readonly string[];
+    readonly limit: number;
+  }): Promise<readonly LegacyGameSourceSnapshot[]> {
+    const externalIds = [
+      ...new Set(input.externalIds.map((value) => stringValue(value)).filter(Boolean)),
+    ] as string[];
+    if (externalIds.length === 0) return [];
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 500)
+      throw new Error('LEGACY_GAMES_LIMIT_INVALID');
+    const snapshots = await this.readMatching({
+      filter: {
+        id: { $in: externalIds },
+        archived: { $ne: true },
+        status: { $in: ['PAID', 'CANCELLED'] },
+      },
+      limit: input.limit + 1,
+      sort: { _id: 1 },
+      strict: true,
+      reminderOnly: true,
+    });
+    if (snapshots.length > input.limit) throw new Error('LEGACY_GAMES_SOURCE_LIMIT_EXCEEDED');
+    return snapshots.map(normalizeMongoSnapshot);
+  }
+
   /**
    * Finds the newest valid source photo for each explicitly requested legacy participant.
    * Raw participant aliases remain server-side and the returned primary key is pseudonymous.
@@ -643,8 +726,12 @@ export class LegacyGamesMongoAdapter {
         connectTimeoutMS: this.options.timeoutMs ?? 5_000,
         socketTimeoutMS: this.options.timeoutMs ?? 5_000,
         maxPoolSize: 2,
-        retryReads: true,
-        readPreference: 'secondaryPreferred',
+        retryReads: this.options.consistency !== 'reminder-primary',
+        readPreference:
+          this.options.consistency === 'reminder-primary' ? 'primary' : 'secondaryPreferred',
+        ...(this.options.consistency === 'reminder-primary'
+          ? { readConcern: { level: 'majority' as const } }
+          : {}),
       });
       try {
         await client.connect();
@@ -810,6 +897,8 @@ export class LegacyGamesMongoAdapter {
     readonly limit: number;
     readonly sort: Document;
     readonly viewerPhoneE164?: string;
+    readonly strict?: boolean;
+    readonly reminderOnly?: boolean;
   }): Promise<readonly LegacyGameSourceSnapshot[]> {
     const attempts = this.options.maxAttempts ?? 2;
     const sleep = this.options.sleep ?? defaultSleep;
@@ -820,8 +909,12 @@ export class LegacyGamesMongoAdapter {
         connectTimeoutMS: this.options.timeoutMs ?? 5_000,
         socketTimeoutMS: this.options.timeoutMs ?? 5_000,
         maxPoolSize: 2,
-        retryReads: true,
-        readPreference: 'secondaryPreferred',
+        retryReads: this.options.consistency !== 'reminder-primary',
+        readPreference:
+          this.options.consistency === 'reminder-primary' ? 'primary' : 'secondaryPreferred',
+        ...(this.options.consistency === 'reminder-primary'
+          ? { readConcern: { level: 'majority' as const } }
+          : {}),
       });
       try {
         await client.connect();
@@ -836,7 +929,10 @@ export class LegacyGamesMongoAdapter {
           .limit(input.limit)
           .toArray();
         const snapshots = rows.flatMap((row) => {
-          const mapped = mapLegacyGame(row, input.viewerPhoneE164);
+          const mapped = input.reminderOnly
+            ? mapLegacyGameReminder(row)
+            : mapLegacyGame(row, input.viewerPhoneE164);
+          if (!mapped && input.strict) throw new Error('LEGACY_GAMES_SOURCE_ROW_INVALID');
           return mapped ? [mapped] : [];
         });
         this.options.onMetric?.({
@@ -1984,6 +2080,7 @@ export class LegacyGamesPublicAdapter {
 export const testing = {
   legacyGameProjection: LEGACY_GAME_PROJECTION,
   mapLegacyGame,
+  mapLegacyGameReminder,
   sanitizeSnapshot,
   normalizeMongoSnapshot,
   normalizeMongoParticipantPhoto,

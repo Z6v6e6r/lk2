@@ -124,6 +124,9 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
     expect(
       before.rows.some((row) => row.filename === '0101_notification_lifecycle_channels.sql'),
     ).toBe(true);
+    expect(
+      before.rows.some((row) => row.filename === '0103_game_start_notification_scenarios.sql'),
+    ).toBe(true);
     const result = await promisify(execFile)(
       process.execPath,
       ['--import', 'tsx', 'scripts/migrate.ts'],
@@ -145,10 +148,10 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
       `create role ${role} login password '${password}' nosuperuser nobypassrls nocreatedb nocreaterole noinherit`,
     );
     await owner.query(
-      `grant usage on schema identity,notifications,integration,audit,games,profile,support to ${role}`,
+      `grant usage on schema identity,notifications,integration,audit,games,locations,profile,support to ${role}`,
     );
     await owner.query(
-      `grant select on identity.users,identity.user_access_profiles,notifications.user_preferences,notifications.tenant_runtime_settings,notifications.booking_notification_projection_fences,integration.notification_endpoints,integration.notification_provider_accounts,games.participations to ${role}`,
+      `grant select on identity.users,identity.user_access_profiles,identity.refresh_sessions,profile.user_summaries,notifications.user_preferences,notifications.tenant_runtime_settings,notifications.booking_notification_projection_fences,notifications.legacy_game_reminder_source_status,notifications.legacy_game_reminder_sources,notifications.legacy_game_reminder_recipients,integration.notification_endpoints,integration.notification_provider_accounts,integration.external_entity_map,integration.legacy_game_roster_sync_state,integration.legacy_game_merge_redirects,integration.legacy_game_player_bindings,games.games,games.participations,locations.profiles to ${role}`,
     );
     await owner.query(
       `grant update(updated_at) on identity.users,identity.user_access_profiles to ${role}`,
@@ -307,6 +310,228 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
     expect(
       (await createNotificationScenarioRepository(runtime).runs(tenant, scenario.id)).length,
     ).toBe(before);
+  });
+  it('rearms an unsent reschedule but never duplicates queued reminders across roster revisions', async () => {
+    const scenario = await save({
+      ...base,
+      name: 'Синтетическое напоминание об игре A',
+      trigger: 'GAME_STARTS',
+      delayMinutes: -300,
+      dailyLimit: 10,
+    });
+    const secondScenario = await save({
+      ...base,
+      name: 'Синтетическое напоминание об игре B',
+      trigger: 'GAME_STARTS',
+      delayMinutes: -240,
+      title: 'Второе напоминание',
+      body: '{{serviceTitle}} — второй шаблон',
+      dailyLimit: 10,
+    });
+    const gameId = randomUUID();
+    const participationId = randomUUID();
+    await withTenantTransaction(owner, tenant, async (client) => {
+      await client.query(
+        `insert into profile.user_summaries(tenant_id,user_id,display_name,phone_e164)
+         values($1,$2,'Synthetic reminder player','+79990000001')
+         on conflict(tenant_id,user_id) do update set phone_e164=excluded.phone_e164`,
+        [tenant, recipient],
+      );
+      await client.query(
+        `insert into games.games(
+           tenant_id,id,organizer_user_id,title,kind,visibility,lifecycle_state,station_id,
+           starts_at,ends_at,timezone,capacity,payment_mode
+         ) values($1,$2,$3,'Private synthetic reminder','FRIENDLY','PRIVATE','SCHEDULED',$4,
+           now()+interval '2 hours',now()+interval '3 hours','Europe/Moscow',4,'NO_PAYMENT')`,
+        [tenant, gameId, actor, randomUUID()],
+      );
+      await client.query(
+        `insert into games.participations(tenant_id,game_id,id,user_id,role)
+         values($1,$2,$3,$4,'PLAYER')`,
+        [tenant, gameId, participationId, recipient],
+      );
+    });
+    const scheduled = {
+      id: randomUUID(),
+      type: 'game.scheduled.v1',
+      tenantId: tenant,
+      aggregateId: gameId,
+      occurredAt: new Date().toISOString(),
+      correlationId: `game-reminder-${randomUUID()}`,
+      payload: {
+        gameId,
+        aggregateRevision: '1',
+        causationId: randomUUID(),
+        actorUserId: actor,
+        organizerUserId: actor,
+      },
+    };
+    expect(await ingestNotificationScenarioEvent(runtime, scheduled)).toBe('APPLIED');
+    expect(await ingestNotificationScenarioEvent(runtime, scheduled)).toBe('DUPLICATE');
+    const initial = await withTenantTransaction(owner, tenant, (client) =>
+      client.query<{
+        id: string;
+        scenario_id: string;
+        scenario_version: number;
+        context_revision: string;
+        due_at: Date;
+      }>(
+        `select id,scenario_id,scenario_version,context_revision::text,due_at
+           from notifications.scenario_runs
+          where tenant_id=$1 and target_id=$2 order by scenario_id`,
+        [tenant, gameId],
+      ),
+    );
+    expect(initial.rows).toHaveLength(2);
+    expect(new Set(initial.rows.map((row) => row.scenario_id))).toEqual(
+      new Set([scenario.id, secondScenario.id]),
+    );
+    expect(initial.rows.every((row) => row.context_revision === '1')).toBe(true);
+    expect(initial.rows[0]?.due_at).not.toEqual(initial.rows[1]?.due_at);
+
+    const revisedScenario = await save(
+      {
+        ...scenario.definition,
+        title: 'Обновлённое напоминание',
+        delayMinutes: -360,
+      },
+      scenario.id,
+      1,
+    );
+
+    await withTenantTransaction(owner, tenant, (client) =>
+      client.query(
+        `update games.games set revision=2,starts_at=now()+interval '4 hours',
+                ends_at=now()+interval '5 hours',updated_at=now()
+          where tenant_id=$1 and id=$2`,
+        [tenant, gameId],
+      ),
+    );
+    const rescheduled = {
+      ...scheduled,
+      id: randomUUID(),
+      occurredAt: new Date().toISOString(),
+      correlationId: `game-reminder-rescheduled-${randomUUID()}`,
+      payload: { ...scheduled.payload, aggregateRevision: '2', causationId: randomUUID() },
+    };
+    expect(await ingestNotificationScenarioEvent(runtime, rescheduled)).toBe('APPLIED');
+    const rearmed = await withTenantTransaction(owner, tenant, (client) =>
+      client.query<{
+        id: string;
+        scenario_id: string;
+        scenario_version: number;
+        context_revision: string;
+        state: string;
+      }>(
+        `select id,scenario_id,scenario_version,context_revision::text,state
+           from notifications.scenario_runs
+          where tenant_id=$1 and target_id=$2 order by scenario_id`,
+        [tenant, gameId],
+      ),
+    );
+    expect(rearmed.rows.map((row) => row.id)).toEqual(initial.rows.map((row) => row.id));
+    expect(
+      rearmed.rows.every((row) => row.context_revision === '2' && row.state === 'EXTENDED_PENDING'),
+    ).toBe(true);
+    expect(rearmed.rows.find((row) => row.scenario_id === scenario.id)?.scenario_version).toBe(2);
+    expect(
+      rearmed.rows.find((row) => row.scenario_id === secondScenario.id)?.scenario_version,
+    ).toBe(1);
+    await runNotificationScenarioBatch({ pool: runtime, tenantId: tenant });
+    await runNotificationScenarioBatch({ pool: runtime, tenantId: tenant });
+    expect(
+      (
+        await withTenantTransaction(owner, tenant, (client) =>
+          client.query(
+            `select 1 from notifications.scenario_runs
+              where tenant_id=$1 and target_id=$2 and state='QUEUED' and intent_id is not null`,
+            [tenant, gameId],
+          ),
+        )
+      ).rowCount,
+    ).toBe(2);
+    await withTenantTransaction(owner, tenant, async (client) => {
+      await client.query(
+        `update games.participations set state='LEFT',left_at=now(),updated_at=now()
+          where tenant_id=$1 and id=$2`,
+        [tenant, participationId],
+      );
+      await client.query(
+        `update games.games set revision=3,updated_at=now() where tenant_id=$1 and id=$2`,
+        [tenant, gameId],
+      );
+    });
+    const left = {
+      id: randomUUID(),
+      type: 'game.participation.left.v1',
+      tenantId: tenant,
+      aggregateId: gameId,
+      occurredAt: new Date().toISOString(),
+      correlationId: `game-reminder-left-${randomUUID()}`,
+      payload: {
+        gameId,
+        aggregateRevision: '3',
+        causationId: randomUUID(),
+        actorUserId: recipient,
+        userId: recipient,
+        participationId,
+      },
+    };
+    expect(await ingestNotificationScenarioEvent(runtime, left)).toBe('APPLIED');
+    const rejoinedParticipationId = randomUUID();
+    await withTenantTransaction(owner, tenant, async (client) => {
+      await client.query(
+        `insert into games.participations(tenant_id,game_id,id,user_id,role)
+         values($1,$2,$3,$4,'PLAYER')`,
+        [tenant, gameId, rejoinedParticipationId, recipient],
+      );
+      await client.query(
+        `update games.games set revision=4,updated_at=now() where tenant_id=$1 and id=$2`,
+        [tenant, gameId],
+      );
+    });
+    expect(
+      await ingestNotificationScenarioEvent(runtime, {
+        id: randomUUID(),
+        type: 'game.participation.confirmed.v1',
+        tenantId: tenant,
+        aggregateId: gameId,
+        occurredAt: new Date().toISOString(),
+        correlationId: `game-reminder-rejoin-${randomUUID()}`,
+        payload: {
+          gameId,
+          aggregateRevision: '4',
+          causationId: randomUUID(),
+          actorUserId: recipient,
+          userId: recipient,
+          participationId: rejoinedParticipationId,
+        },
+      }),
+    ).toBe('APPLIED');
+    const afterRosterChanges = await withTenantTransaction(owner, tenant, (client) =>
+      client.query<{ id: string; state: string; context_revision: string; inbox_count: number }>(
+        `select run.id,run.state,run.context_revision::text,
+                count(inbox.id)::integer inbox_count
+           from notifications.scenario_runs run
+           left join notifications.inbox_items inbox
+             on inbox.tenant_id=run.tenant_id and inbox.intent_id=run.intent_id
+          where run.tenant_id=$1 and run.target_id=$2
+          group by run.id,run.state,run.context_revision
+          order by run.id`,
+        [tenant, gameId],
+      ),
+    );
+    expect(afterRosterChanges.rows).toHaveLength(2);
+    expect(afterRosterChanges.rows.map((row) => row.id).sort()).toEqual(
+      initial.rows.map((row) => row.id).sort(),
+    );
+    expect(
+      afterRosterChanges.rows.every(
+        (row) => row.state === 'QUEUED' && row.context_revision === '2' && row.inbox_count === 1,
+      ),
+    ).toBe(true);
+    await save({ ...revisedScenario.definition, active: false }, scenario.id, 2);
+    await save({ ...secondScenario.definition, active: false }, secondScenario.id, 1);
   });
   it('cancels pending work on pause and on a newer booking revision', async () => {
     const scenario = await save({ ...base, delayMinutes: 10 });

@@ -8,7 +8,11 @@ import {
 import type { Logger } from 'pino';
 import type { Pool, QueryResultRow } from 'pg';
 
-import { checkScenarioPushDelivery, scenarioDeliveryDueSql } from './notification-scenarios.js';
+import {
+  checkScenarioPushDelivery,
+  scenarioDeliveryDueSql,
+  terminalizeExpiredScenarioDispatches,
+} from './notification-scenarios.js';
 
 import {
   deferNotificationDeliveryWithoutAttempt,
@@ -168,6 +172,14 @@ async function claimBatch(options: {
   readonly scenarioPolicyEnabled?: boolean;
 }): Promise<readonly ClaimedDelivery[]> {
   return withTenantTransaction(options.pool, options.tenantId, async (client) => {
+    if (options.scenarioPolicyEnabled === true)
+      await terminalizeExpiredScenarioDispatches(client, {
+        tenantId: options.tenantId,
+        provider: 'WEB_PUSH',
+        platform: 'WEB',
+        appId: options.appId,
+        environment: options.environment,
+      });
     const result = await client.query<DeliveryRow>(
       `select d.id, d.intent_id, d.endpoint_id, d.attempt_count,
               ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} as scenario_delivery,
@@ -257,6 +269,7 @@ export async function runWebPushDeliveryBatch(options: {
   readonly maxAttempts: number;
   readonly retryBaseMs: number;
   readonly scenarioPolicyEnabled?: boolean;
+  readonly gameReminderMaxSourceAgeMs?: number;
   readonly circuitOpenRetryMs?: number;
   readonly batchSize?: number;
 }): Promise<{
@@ -288,6 +301,10 @@ export async function runWebPushDeliveryBatch(options: {
         deliveryId: job.deliveryId,
         attemptNo: job.attemptNo,
         enabled: options.scenarioPolicyEnabled,
+        dispatchFence: true,
+        ...(options.gameReminderMaxSourceAgeMs === undefined
+          ? {}
+          : { gameReminderMaxSourceAgeMs: options.gameReminderMaxSourceAgeMs }),
       });
       if (decision !== 'SEND') {
         if (decision === 'DEFERRED') retried++;

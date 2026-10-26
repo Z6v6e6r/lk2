@@ -51,6 +51,12 @@ describe('Web Push delivery state machine', () => {
       });
       const claim = queries.find((sql) => sql.includes('for update of d skip locked'));
       if (scenarioPolicyEnabled) {
+        expect(
+          queries.find(
+            (sql) =>
+              sql.includes("set state='DEAD'") && sql.includes('scenario_dispatch_started_at'),
+          ),
+        ).toContain('account.provider=$2');
         expect(claim).toContain('scenario_run.intent_id=d.intent_id');
         expect(claim).toContain(
           'coalesce(d.scenario_v2_available_at,d.scenario_available_at,d.next_attempt_at)',

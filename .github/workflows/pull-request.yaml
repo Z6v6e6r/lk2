@@ -190,12 +190,21 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
+      mongo:
+        image: mongo:7.0
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.runCommand({ping:1}).ok ? 0 : 1)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       TIMEWEB_STANDARD_DOCKER_VERIFY: '1'
       APP_ENV: ci
       DATABASE_URL: postgresql://phub:ci-password@localhost:5432/phub
       REDIS_URL: redis://localhost:6379
       RABBITMQ_URL: amqp://guest:guest@localhost:5672
+      LEGACY_GAME_REMINDER_CI_MONGODB_URI: mongodb://localhost:27017/?directConnection=true
       JWT_ISSUER: phub-identity
       JWT_AUDIENCE: phub-api
       JWT_REALTIME_AUDIENCE: phub-realtime
