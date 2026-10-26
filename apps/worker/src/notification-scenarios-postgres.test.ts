@@ -321,7 +321,7 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
       ...base,
       name: 'Синтетическое напоминание об игре A',
       trigger: 'GAME_STARTS',
-      delayMinutes: -300,
+      delayMinutes: -270,
       dailyLimit: 10,
     });
     const secondScenario = await save({
@@ -398,7 +398,7 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
       {
         ...scenario.definition,
         title: 'Обновлённое напоминание',
-        delayMinutes: -360,
+        delayMinutes: -270,
       },
       scenario.id,
       1,
@@ -442,8 +442,11 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
     expect(
       rearmed.rows.find((row) => row.scenario_id === secondScenario.id)?.scenario_version,
     ).toBe(1);
-    await runNotificationScenarioBatch({ pool: runtime, tenantId: tenant });
-    await runNotificationScenarioBatch({ pool: runtime, tenantId: tenant });
+    // The second scenario is due exactly at the database-side reschedule timestamp. Move the
+    // explicit worker clock beyond that boundary instead of depending on sub-millisecond ordering.
+    const dispatchAt = new Date(Date.now() + 60_000);
+    await runNotificationScenarioBatch({ pool: runtime, tenantId: tenant, now: dispatchAt });
+    await runNotificationScenarioBatch({ pool: runtime, tenantId: tenant, now: dispatchAt });
     expect(
       (
         await withTenantTransaction(owner, tenant, (client) =>

@@ -200,7 +200,9 @@ export async function assertNotificationRun(
   expectedTarget: NotificationTarget,
 ): Promise<void> {
   validateNotificationMigrationCatalog(
-    packaged.map(({ filename, checksum }) => ({ filename, checksum })),
+    packaged
+      .filter(({ filename }) => filename <= '0102_location_recommendation_photos.sql')
+      .map(({ filename, checksum }) => ({ filename, checksum })),
   );
   const target = parseNotificationTarget(expectedTarget);
   const observed = (

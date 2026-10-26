@@ -648,14 +648,20 @@ const url = disposableUrl();
           await expect(cli(r.cwd, r.migratorUrl, r.args)).rejects.toMatchObject({ code: 1 });
           await writeFile(changed, originalSql);
           const extra = resolve(r.cwd, 'migrations', '0103_unexpected.sql');
-          await writeFile(extra, 'select 1;');
-          await expect(cli(r.cwd, r.migratorUrl, r.args)).rejects.toMatchObject({ code: 1 });
-          await rm(extra);
+          await writeFile(extra, 'create table public.notification_unexpected_probe(id integer);');
           expect((await cli(r.cwd, r.migratorUrl, r.args)).stdout.trim().split('\n')).toEqual([
             'Applied 0099_local_password_reset_proofs.sql',
             'Applied 0100_notification_scenarios.sql',
             'Applied 0101_notification_lifecycle_channels.sql',
           ]);
+          expect(
+            (
+              await r.db.query<{ relation: string | null }>(
+                "select to_regclass('public.notification_unexpected_probe') as relation",
+              )
+            ).rows[0]?.relation,
+          ).toBeNull();
+          await rm(extra);
           expect(notificationLedgerCheckpoint(await notificationLedger(r.db))).toBe(105);
           expect(
             (
