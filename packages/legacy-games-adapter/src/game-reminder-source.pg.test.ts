@@ -87,54 +87,13 @@ physical('isolated legacy game reminder Mongo to PostgreSQL source fence', () =>
     const snapshots = [
       ...new Map([...window, ...exact].map((item) => [item.externalId, item])).values(),
     ];
-    const result = await completeLegacyGameReminderSourceCycle(postgres, {
+    return completeLegacyGameReminderSourceCycle(postgres, {
       admission,
       snapshots,
       now: at,
       windowTo,
       beforeFinalize: () => Promise.resolve(),
     });
-    if (snapshots.length > 0 && result.refreshGameIds.length === 0) {
-      const candidateCount = await withTenantTransaction(postgres, tenantId, async (client) => {
-        const sourceExternalIds = snapshots.flatMap((snapshot) => [
-          snapshot.externalId,
-          ...(snapshot.externalAliases ?? []),
-        ]);
-        return (
-          await client.query(
-            `select distinct mapping.internal_id game_id
-               from integration.external_entity_map mapping
-               join integration.legacy_game_roster_sync_state mirror
-                 on mirror.tenant_id=mapping.tenant_id and mirror.game_id=mapping.internal_id
-                and mirror.mode='MIRROR'
-              where mapping.tenant_id=$1 and mapping.external_system='LK_LEGACY_SNAPSHOT'
-                and mapping.entity_type='game' and mapping.external_id=any($2::text[])
-                and not exists(
-                  select 1 from integration.legacy_game_merge_redirects redirect
-                   where redirect.tenant_id=mapping.tenant_id
-                     and redirect.source_game_id=mapping.internal_id
-                )`,
-            [tenantId, sourceExternalIds],
-          )
-        ).rowCount;
-      });
-      console.error(
-        'GAME_REMINDER_PHYSICAL_DIAGNOSTIC',
-        JSON.stringify({
-          windowCount: window.length,
-          exactCount: exact.length,
-          snapshotCount: snapshots.length,
-          trackedCount: admission.tracked.length,
-          candidateCount,
-          changedCount: result.changedGameIds.length,
-          refreshCount: result.refreshGameIds.length,
-          unchanged: result.unchanged,
-          missing: result.missing,
-          skippedUnmapped: result.skippedUnmapped,
-        }),
-      );
-    }
-    return result;
   }
 
   async function target(at: Date) {
@@ -225,8 +184,8 @@ physical('isolated legacy game reminder Mongo to PostgreSQL source fence', () =>
       tenantId,
     ]);
     await postgres.query(
-      `insert into profile.user_summaries(tenant_id,user_id,display_name)
-       values($1,$2,'Existing verified admin')`,
+      `insert into profile.user_summaries(tenant_id,user_id,display_name,phone_e164)
+       values($1,$2,'Existing verified admin','+79990000001')`,
       [tenantId, userId],
     );
     await mongo
