@@ -69,6 +69,33 @@ function createClient(
 }
 
 describe('PadlHubApiClient authentication boundary', () => {
+  it('resolves station card photos for list and assisted completion without losing disabled or missing fields', async () => {
+    const mediaPath =
+      '/public/api/v1/local-padel/location-media/80000000-0000-4000-8000-000000000001';
+    const page = {
+      items: [
+        { kind: 'GAME', cardImageUrl: mediaPath },
+        { kind: 'TRAINING', cardImageUrl: null },
+        { kind: 'TOURNAMENT' },
+      ],
+    };
+    const fetchImplementation = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(page))
+      .mockResolvedValueOnce(jsonResponse({ screen: 'FOR_ME', page }))
+      .mockResolvedValueOnce(jsonResponse(page));
+    const client = createClient(fetchImplementation);
+    client.setAccessToken('synthetic-card-photo-token');
+    const listed = await client.listBookingRecommendations();
+    expect(listed.items[0]?.cardImageUrl).toBe(`https://api.padlhub.test${mediaPath}`);
+    expect(listed.items[1]?.cardImageUrl).toBeNull();
+    expect(listed.items[2]).not.toHaveProperty('cardImageUrl');
+    const completion = await client.completeBookingScreenReadJob('synthetic-job', 6);
+    expect(completion).toMatchObject({ page: { items: listed.items } });
+    const sameOrigin = createClient(fetchImplementation, { baseUrl: '' });
+    sameOrigin.setAccessToken('synthetic-card-photo-token');
+    expect((await sameOrigin.listBookingRecommendations()).items[0]?.cardImageUrl).toBe(mediaPath);
+  });
   it('reads an existing commercial attempt without creating on unavailable status', async () => {
     const operationId = 'c3889c99-b0e3-4a3d-b3e8-a5c99af730ea';
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(

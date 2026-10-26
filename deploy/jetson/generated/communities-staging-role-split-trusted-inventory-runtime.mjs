@@ -27372,6 +27372,18 @@ var locationGalleryImageSchema = external_exports.object({
   isCover: external_exports.boolean(),
   sortOrder: external_exports.number().int().min(0).max(99)
 }).strict();
+var locationRecommendationEventTypeSchema = external_exports.enum([
+  "GAME",
+  "COACH_GAME",
+  "TRAINING",
+  "TOURNAMENT"
+]);
+var locationRecommendationPhotoSchema = external_exports.object({
+  assetId: uuid18,
+  eventType: locationRecommendationEventTypeSchema,
+  isActive: external_exports.boolean(),
+  sortOrder: external_exports.number().int().min(0).max(99)
+}).strict();
 var locationMediaAssetSchema = external_exports.object({
   id: uuid18,
   status: external_exports.literal("READY"),
@@ -27401,6 +27413,7 @@ var locationEditorialFields = {
   workingHours: locationWeeklyHoursSchema,
   amenities: external_exports.array(locationAmenitySchema).max(16),
   gallery: external_exports.array(locationGalleryImageSchema).max(12),
+  recommendationPhotos: external_exports.array(locationRecommendationPhotoSchema).max(48).optional(),
   publicationStatus: locationPublicationStatusSchema,
   showOnHome: external_exports.boolean(),
   sortOrder: external_exports.number().int().min(0).max(9999)
@@ -27441,6 +27454,19 @@ var locationProfileInputSchema = external_exports.object(locationEditorialFields
       message: "gallery must have exactly one cover image"
     });
   }
+  const recommendationPhotos = value.recommendationPhotos ?? [];
+  const bindings = /* @__PURE__ */ new Set();
+  recommendationPhotos.forEach((photo, index) => {
+    const key = `${photo.eventType}:${photo.assetId}`;
+    if (bindings.has(key)) {
+      context.addIssue({
+        code: "custom",
+        path: ["recommendationPhotos", index, "assetId"],
+        message: "recommendation photo asset must be unique per event type"
+      });
+    }
+    bindings.add(key);
+  });
 });
 var locationCompletenessSchema = external_exports.object({
   percent: external_exports.number().int().min(0).max(100),

@@ -71,7 +71,15 @@ export function notificationLedgerCheckpoint(rows: readonly MigrationRow[]): num
   return expected.count;
 }
 export function validateNotificationMigrationCatalog(rows: readonly MigrationRow[]): void {
-  if (notificationLedgerCheckpoint(rows) !== 105) fail('SOURCE_CATALOG');
+  // The following photo expansion is packaged with the application, but is not a
+  // notification step or checkpoint. Pin its exact bytes; never accept an arbitrary suffix.
+  if (
+    rows.length !== 106 ||
+    rows[105]?.filename !== '0102_location_recommendation_photos.sql' ||
+    rows[105].checksum !== '8817a4dab03e78d27023d4b3ee72a12bfa8f2ffe4599e4e78df1d3a3893366f0'
+  )
+    fail('SOURCE_CATALOG');
+  if (notificationLedgerCheckpoint(rows.slice(0, 105)) !== 105) fail('SOURCE_CATALOG');
   if (notificationLedgerCheckpoint(rows.slice(0, 102)) !== 102) fail('SOURCE_CATALOG');
   for (const [i, step] of descriptor.steps.entries()) {
     const row = rows[102 + i];

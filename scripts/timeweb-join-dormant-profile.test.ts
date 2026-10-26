@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
@@ -329,6 +330,10 @@ describe('bounded dormant JOIN profile', () => {
   );
   it('accepts only the complete reviewed Zod patch on the pinned anchor-to-main edge', () => {
     const group = zodRuntimeBridge();
+    const edge = zodRuntimeSource();
+    expect(
+      execFileSync('git', ['rev-parse', `${edge.toSha}^{tree}`], { encoding: 'utf8' }).trim(),
+    ).toBe(edge.toTree);
     validateJoinRuntimeTail(group, zodRuntimeSource());
     validateJoinRuntimeTail([...group].reverse(), zodRuntimeSource());
     validateJoinRuntimeTail([...group, ...notificationRecoveryBridge()], zodRuntimeSource());
@@ -342,7 +347,9 @@ describe('bounded dormant JOIN profile', () => {
     );
     for (const row of group) {
       expect(JOIN_CONTROLLER_FILES.has(row.path)).toBe(false);
-      const source = readFileSync(new URL('../' + row.path, import.meta.url));
+      const source = execFileSync('git', ['cat-file', 'blob', `${edge.toSha}:${row.path}`], {
+        maxBuffer: 16 * 1024 * 1024,
+      });
       const oid = createHash('sha1').update(`blob ${source.length}\0`).update(source).digest('hex');
       expect(oid).toBe(row.newOid);
     }

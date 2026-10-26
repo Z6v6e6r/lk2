@@ -4,7 +4,8 @@
 
 `locations.profiles` is the `LOCAL_ONLY` source of truth for the public presentation of a PadlHub
 location. It owns the name, slug, city, court count, address, coordinates, timezone, metro hint,
-public phone, weekly hours, ordered amenities, ordered gallery, publication state and Home order.
+public phone, weekly hours, ordered amenities, ordered gallery, recommendation-card photo bindings,
+publication state and Home order.
 
 It does not own Viva stations, spaces, coaches, timetable, availability or booking inventory. Those
 operational aggregates remain `VIVA_PRIMARY` until their ownership is changed separately. A public
@@ -17,6 +18,10 @@ only PadlHub Location and Home APIs and never select or merge a station source.
   PostgreSQL RLS.
 - A gallery contains at most 12 distinct HTTPS URLs or stable PadlHub media URLs and exactly one
   cover when non-empty.
+- Recommendation-card photos are optional tenant-local bindings of a ready location media asset to
+  one event type (`GAME`, `COACH_GAME`, `TRAINING`, `TOURNAMENT`). A station may reuse an asset for
+  different types but cannot bind it twice to the same type. CUP can disable and order bindings;
+  public clients receive asset identifiers only and resolve delivery URLs through PadlHub media.
 - Weekly hours contain at most one entry per weekday and at most three intervals per day. The
   server calculates `openNow` in the profile IANA timezone, including an interval crossing midnight.
 - Latitude and longitude are either both present or both absent. Navigation links are derived by
@@ -51,6 +56,12 @@ re-encoding with `sharp`, and writes one content-addressed WebP object to S3-com
 stable PadlHub URL `/public/api/v1/{tenantKey}/location-media/{assetId}`. The browser never sees S3
 credentials or a persisted signed URL; the public media endpoint redirects each request to a
 short-lived S3 read URL.
+
+Recommendation-card bindings are stored in `locations.recommendation_card_photos`. A create or
+explicit replacement validates every asset as `READY` in the same tenant before updating the
+profile. Omitting `recommendationPhotos` on a profile update preserves the existing bindings;
+passing an empty array clears them. The command result and idempotency ledger include the resolved
+binding list.
 
 ## Events and Home projection
 

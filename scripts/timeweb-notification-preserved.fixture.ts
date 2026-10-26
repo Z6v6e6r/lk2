@@ -54,13 +54,36 @@ export function notificationMigrationOperation() {
   };
 }
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import frozenMigrationLedger from './fixtures/timeweb-api-worker-ledger-8158ac44.json';
+import notificationDescriptor from '../deploy/timeweb/notification-migrations-0099-0101.v1.json';
+import { notificationLedgerDigest } from './notification-migration-package.js';
 import {
   androidGateSnapshotSha256,
   PRESERVED_NOTIFICATION_ROLLOUT_SCHEMA,
 } from './timeweb-notification-android-gates.js';
 import { COMPLETED_NOTIFICATION_COMPATIBILITY_PATHS } from './timeweb-notification-completed-migration.js';
-import { NOTIFICATION_OBSERVATION_POLICY } from './timeweb-notification-profile.js';
+import {
+  NOTIFICATION_OBSERVATION_POLICY,
+  NOTIFICATION_POST_LEDGER,
+} from './timeweb-notification-profile.js';
+// This fixture models the completed historical 105 release, not the current SQL directory.
+const historicalLedger105 = [
+  ...frozenMigrationLedger.ledger,
+  ...notificationDescriptor.steps.map(({ filename, checksum }) => ({ filename, checksum })),
+];
+if (
+  frozenMigrationLedger.sourceSha !== '8158ac445c9ff3e4b4bcee95bbd8e10c564b9a8d' ||
+  frozenMigrationLedger.sourceTree !== 'b9ef484b4d0a9e5c8913cc2cdd79ee39b1800537' ||
+  frozenMigrationLedger.ledger.length !== 102 ||
+  notificationLedgerDigest(frozenMigrationLedger.ledger) !==
+    notificationDescriptor.initial.sha256 ||
+  historicalLedger105.length !== 105 ||
+  notificationLedgerDigest(historicalLedger105) !== NOTIFICATION_POST_LEDGER ||
+  historicalLedger105.at(-1)?.filename !== '0101_notification_lifecycle_channels.sql' ||
+  historicalLedger105.some(({ filename }) => filename === '0102_location_recommendation_photos.sql')
+)
+  throw new Error('HISTORICAL_NOTIFICATION_FIXTURE_DRIFT');
 export const encoded = (value: unknown) => Buffer.from(JSON.stringify(value) + '\n');
 export const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 export function androidSnapshot() {
@@ -193,13 +216,7 @@ export function preservedFixture() {
     previousSecrets,
     candidateSecrets: previousSecrets,
     credential: {},
-    packagedLedger: readdirSync('packages/database/migrations')
-      .filter((n) => n.endsWith('.sql'))
-      .sort()
-      .map((filename) => ({
-        filename,
-        checksum: sha256(readFileSync('packages/database/migrations/' + filename)),
-      })),
+    packagedLedger: structuredClone(historicalLedger105),
     unchangedImages: {
       WEB_IMAGE_DIGEST: 'sha256:' + '3'.repeat(64),
       REALTIME_IMAGE_DIGEST: 'sha256:' + '4'.repeat(64),

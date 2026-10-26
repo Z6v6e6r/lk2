@@ -21,6 +21,9 @@ import {
 type Client = Pick<PoolClient, 'query'>;
 export const notificationMode = 'notification_0099_0101' as const;
 export const notificationModeArgument = '--notification-migrations-0099-0101';
+export function isNotificationMigrationStep(filename: string): boolean {
+  return descriptor.steps.some((step) => step.filename === filename);
+}
 function fail(code: string): never {
   throw new Error(`NOTIFICATION_MIGRATION_${code}`);
 }

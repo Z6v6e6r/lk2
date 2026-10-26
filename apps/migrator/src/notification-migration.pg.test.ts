@@ -647,14 +647,23 @@ const url = disposableUrl();
           await writeFile(changed, originalSql + '\n-- owned checksum drift\n');
           await expect(cli(r.cwd, r.migratorUrl, r.args)).rejects.toMatchObject({ code: 1 });
           await writeFile(changed, originalSql);
-          const extra = resolve(r.cwd, 'migrations', '0102_unexpected.sql');
+          const extra = resolve(r.cwd, 'migrations', '0103_unexpected.sql');
           await writeFile(extra, 'select 1;');
           await expect(cli(r.cwd, r.migratorUrl, r.args)).rejects.toMatchObject({ code: 1 });
           await rm(extra);
-          expect((await cli(r.cwd, r.migratorUrl, r.args)).stdout.trim().split('\n')).toHaveLength(
-            3,
-          );
+          expect((await cli(r.cwd, r.migratorUrl, r.args)).stdout.trim().split('\n')).toEqual([
+            'Applied 0099_local_password_reset_proofs.sql',
+            'Applied 0100_notification_scenarios.sql',
+            'Applied 0101_notification_lifecycle_channels.sql',
+          ]);
           expect(notificationLedgerCheckpoint(await notificationLedger(r.db))).toBe(105);
+          expect(
+            (
+              await r.db.query<{ relation: string | null }>(
+                "select to_regclass('locations.recommendation_card_photos') as relation",
+              )
+            ).rows[0]?.relation,
+          ).toBeNull();
           const ledger = (
             await r.db.query<Record<string, unknown>>(
               'select filename,checksum,applied_at from schema_migrations order by filename',

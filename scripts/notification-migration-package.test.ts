@@ -62,6 +62,22 @@ function diagnostic(count = 102): PackageDiagnostic {
   };
 }
 describe('preparation-only notification migration package 0099–0101', () => {
+  it('pins the photo suffix without adding a notification ledger checkpoint', () => {
+    expect(catalog).toHaveLength(106);
+    expect(() => validateNotificationMigrationCatalog(catalog)).not.toThrow();
+    expect(notificationLedgerCheckpoint(catalog.slice(0, 105))).toBe(105);
+    expect(() => notificationLedgerCheckpoint(catalog)).toThrow('UNKNOWN_LEDGER');
+    const changed = structuredClone(catalog);
+    changed[105]!.checksum = '0'.repeat(64);
+    expect(() => validateNotificationMigrationCatalog(changed)).toThrow('SOURCE_CATALOG');
+    expect(() => validateNotificationMigrationCatalog(catalog.slice(0, 105))).toThrow();
+    expect(() =>
+      validateNotificationMigrationCatalog([
+        ...catalog,
+        { filename: '0103_unexpected.sql', checksum: '0'.repeat(64) },
+      ]),
+    ).toThrow('SOURCE_CATALOG');
+  });
   it('pins every checkpoint and leaves the frozen 99→102 runner closed', () => {
     expect(notificationMigrationPackage.preparationOnly).toBe(true);
     expect(notificationMigrationPackage.authorizesApply).toBe(false);

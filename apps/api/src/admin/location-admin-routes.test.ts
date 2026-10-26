@@ -168,6 +168,42 @@ describe('admin location routes', () => {
     expect(locationRepository.create).not.toHaveBeenCalled();
   });
 
+  it('returns a stable media error when a recommendation asset is not ready for this tenant', async () => {
+    const locationRepository = repository();
+    locationRepository.value.create.mockResolvedValue({
+      outcome: 'media_invalid',
+    });
+    const app = await buildApp({
+      config,
+      logger: createLogger('location-admin-test', 'silent'),
+      pool: fakePool(),
+      locationRepository: locationRepository.value,
+    });
+    apps.push(app);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/admin/api/v1/local-padel/locations',
+      headers: {
+        authorization: `Bearer ${await token()}`,
+        'x-app-platform': 'cup-admin',
+        'idempotency-key': 'location-media-invalid-0001',
+      },
+      payload: {
+        ...profile,
+        recommendationPhotos: [
+          {
+            assetId: '11111111-1111-4111-8111-111111111112',
+            eventType: 'GAME',
+            isActive: true,
+            sortOrder: 0,
+          },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: 'LOCATION_RECOMMENDATION_MEDIA_INVALID' });
+  });
+
   it('requires a separate permission before publishing', async () => {
     const locationRepository = repository();
     const app = await buildApp({

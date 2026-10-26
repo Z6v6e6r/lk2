@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import {
   catalogDigest,
+  isNotificationMigrationStep,
   notificationBuilderSha256,
   notificationPackageSha256,
   parseNotificationTarget,
@@ -36,6 +37,20 @@ const example = () => {
   };
 };
 describe('notification migration executable contract', () => {
+  it('limits notification execution to its three frozen steps', () => {
+    for (const filename of [
+      '0099_local_password_reset_proofs.sql',
+      '0100_notification_scenarios.sql',
+      '0101_notification_lifecycle_channels.sql',
+    ])
+      expect(isNotificationMigrationStep(filename)).toBe(true);
+    for (const filename of [
+      '0098_support_tickets.sql',
+      '0102_location_recommendation_photos.sql',
+      '0103_unexpected.sql',
+    ])
+      expect(isNotificationMigrationStep(filename)).toBe(false);
+  });
   it('binds the exact existing package descriptor bytes', async () => {
     const { createHash } = await import('node:crypto');
     expect(notificationPackageSha256).toBe(

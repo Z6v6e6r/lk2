@@ -12,6 +12,7 @@ import {
 } from '@phub/database';
 import {
   notificationMode,
+  isNotificationMigrationStep,
   assertNotificationRun,
   beforeNotificationStep,
   afterNotificationSql,
@@ -135,6 +136,7 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
     for (const { filename, sql, checksum } of packagedMigrations) {
       if (appliedFilenames.has(filename)) continue;
       if (stagedFilenames && !stagedFilenames.has(filename)) continue;
+      if (input.mode === notificationMode && !isNotificationMigrationStep(filename)) continue;
 
       await client.query('begin');
       try {

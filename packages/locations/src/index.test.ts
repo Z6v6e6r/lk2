@@ -109,6 +109,44 @@ describe('location profile contract', () => {
     ).toBe(true);
   });
 
+  it('accepts recommendation photo bindings and rejects duplicate assets for one event type', () => {
+    const recommendationPhotos = [
+      {
+        assetId: '11111111-1111-4111-8111-111111111111',
+        eventType: 'GAME' as const,
+        isActive: true,
+        sortOrder: 0,
+      },
+    ];
+    expect(
+      locationProfileInputSchema.parse({ ...input, recommendationPhotos }).recommendationPhotos,
+    ).toEqual(recommendationPhotos);
+    expect(
+      locationProfileInputSchema.safeParse({
+        ...input,
+        recommendationPhotos: [
+          ...recommendationPhotos,
+          { ...recommendationPhotos[0], sortOrder: 1 },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      locationProfileInputSchema.safeParse({
+        ...input,
+        recommendationPhotos: [
+          ...recommendationPhotos,
+          { ...recommendationPhotos[0], eventType: 'TRAINING' },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      locationProfileInputSchema.safeParse({
+        ...input,
+        recommendationPhotos: [{ ...recommendationPhotos[0], eventType: 'UNSUPPORTED' }],
+      }).success,
+    ).toBe(false);
+  });
+
   it('keeps an overnight interval open after midnight in the location timezone', () => {
     const overnight: LocationProfileInput = {
       ...input,

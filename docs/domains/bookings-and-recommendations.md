@@ -97,6 +97,17 @@ Recommendation ranking remains exclusive to `FOR_ME` and must not be used as a c
   participant, raw provider identifiers remain in integration storage, and the new card projection
   is built before history is reread.
 - Recommendations use `/recommendations/bookings` and return `private, no-store`.
+- Recommendation photos are owned by the station profile in Locations and selected by canonical
+  station UUID and `GAME`, `COACH_GAME`, `TRAINING` or `TOURNAMENT`. Provider activities resolve
+  their private station source through the existing trusted station mapping; display names never
+  establish a photo association. Unmapped activities retain the existing cover fallback.
+  Optional `cardImageUrl` is a tenant-scoped PadlHub location-media path selected deterministically
+  from active, READY bindings. Omission retains the legacy cover; explicit `null` means bindings
+  exist but all are inactive and renders a generic cover. Photo selection is included in the feed
+  version and retained across the five-minute cursor snapshot. A new first-page request reads
+  the current settings. Old clients and old profile commands remain compatible.
+  A photo-settings read failure records `recommendation_photo_read_failed` without raw database
+  errors and retains the legacy covers; public station directory reads do not depend on this table.
 - Home's client-assisted recommendation read is progressive: three Viva schedule dates produce the
   first visible slice, and the remaining four dates run on the same job only when that slice has
   fewer than six eligible items. The first visible slice does not wait for tournament I/O; a dense

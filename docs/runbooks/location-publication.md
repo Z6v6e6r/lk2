@@ -33,3 +33,93 @@
   bypass the optimistic predicate or reuse an idempotency key with changed input.
 - Record the correlation ID, PadlHub location UUID, profile version and Home snapshot revision in
   the incident or rollout log. Do not record phone values or image credentials.
+
+## Recommendation photos: migration and runtime access
+
+Migration `0102_location_recommendation_photos.sql` is additive and has no backfill. Applying it,
+granting runtime access and promoting the API are separate authorized transitions. Do not promote
+the new API until the exact table ACL and tenant probes below pass. Existing generic role-boundary
+checks do not cover the `locations` schema.
+
+Read the complete ledger first. If 0099–0101 are pending, use their dedicated reviewed notification
+controller and target-bound release procedure before the photo expansion. The notification mode
+accepts the exact packaged photo SQL but executes only 0099–0101, ending at ledger count 105 with
+no photo table. Its frozen descriptor, golden catalogs and receipt checkpoints do not include 0102. Apply 0102 as a separate approved operation from that verified checkpoint, then retain its
+own ledger/catalog evidence. Never substitute the legacy frozen 99→102 release or a generic
+migrator invocation for the notification controller.
+
+Before DDL, verify the backup/restore evidence, the packaged migration checksum against the ledger,
+parent-table counts and conflicting locks/long transactions. Use separate verified runtime and
+migrator connections to the same database/system identifier. Require distinct roles with
+`session_user = current_user`; runtime must be nonowner, `NOSUPERUSER`, `NOBYPASSRLS`, and unable to
+assume the migrator. Migrator needs bounded `CREATE` on `locations`. Runtime must already have
+`USAGE` on `locations` and `SELECT` on `locations.profiles` and `locations.media_assets`; stop if
+those existing permissions are missing rather than widening them as part of this feature.
+
+After migration, the owner/operator may perform only the separately approved grant for the exact
+verified runtime role. In the owner-side `psql` session, set `runtime_role` to the role name already
+verified through the separate runtime connection. Then execute this exact command and immediately
+retain the catalog readback below. `:'runtime_role'` quotes the value as a SQL literal and PostgreSQL
+`format('%I', ...)` quotes the identifier; never raw-interpolate a role into SQL.
+
+```sql
+\set ON_ERROR_STOP on
+select pg_catalog.format(
+  'grant select, insert, delete on table locations.recommendation_card_photos to %I', :'runtime_role'::text
+) \gexec
+```
+
+No default ACL, role membership, grant option, or privileges on another table are part of this
+step. Postcheck the table owner equals the verified migrator and differs from runtime; both RLS
+flags must be true. Exactly one permissive `ALL` policy must apply to PUBLIC, with both USING and
+WITH CHECK enforcing `tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid`.
+Verify the two composite FK columns/targets in order, the tenant/location/type/asset primary key
+and the tenant/location/type/active/order/asset read index.
+
+```sql
+select owner.rolname, c.relrowsecurity, c.relforcerowsecurity
+from pg_catalog.pg_class c
+join pg_catalog.pg_roles owner on owner.oid = c.relowner
+where c.oid = 'locations.recommendation_card_photos'::regclass;
+
+select case when a.grantee = 0 then 'PUBLIC' else r.rolname end as grantee,
+       a.privilege_type, a.is_grantable
+from pg_catalog.pg_class c
+cross join lateral pg_catalog.aclexplode(coalesce(c.relacl, pg_catalog.acldefault('r', c.relowner))) a
+left join pg_catalog.pg_roles r on r.oid = a.grantee
+where c.oid = 'locations.recommendation_card_photos'::regclass
+order by grantee, privilege_type;
+
+select policyname, permissive, roles, cmd, qual, with_check
+from pg_catalog.pg_policies
+where schemaname = 'locations' and tablename = 'recommendation_card_photos';
+```
+
+Except for owner privileges, the ACL must contain only runtime `SELECT`, `INSERT`, `DELETE`, all
+without grant option; deny PUBLIC and unexpected grantees. On the runtime connection check
+effective privileges as well, including inherited roles: no `UPDATE`, `REFERENCES`, `TRUNCATE` or
+`TRIGGER`. The CI-only nonowner PostgreSQL test checks the bounded grant, RLS and FK failures on
+synthetic disposable data. For an approved staging rehearsal, prove cross-tenant SELECT is empty,
+cross-tenant writes fail with `42501`, and current-tenant inserts referencing a foreign asset or
+missing station fail independently with `23503`; roll back all probe transactions.
+
+Before activation verify media storage/readiness, then open ЦУП → Настройки → Станции → Фото
+рекомендательных карточек. Upload into the required event type; new photos start inactive. Enable
+the chosen photos and save/publish the station using its normal versioned command. Verify a fresh
+first recommendation page uses the canonical station/type and the same photo remains across cursor
+pages. Existing cursors retain their photo snapshot for five minutes. All inactive bindings use
+the generic cover; clearing every binding restores the legacy cover fallback. Photo selection
+requires an existing trusted station mapping for provider activities; names do not establish it.
+
+The unreleased PR previously used `0098_location_recommendation_photos.sql`; that slot is now
+occupied by support tickets in main. Only the photo migration is renumbered; already released
+migration files and checksums are unchanged. Before a first apply, verify that neither the old
+photo filename nor `0102_location_recommendation_photos.sql` is recorded as applied and that the
+target table is absent. A repeated invocation must verify the matching 0102 ledger checksum and
+the table catalog without running DDL again. If an old photo ledger entry, a checksum mismatch
+or an unattested existing table is found, stop for explicit reconciliation; never delete ledger
+rows, drop bindings or blindly run a renamed DDL.
+
+Application rollback retains migration 0102 and all bindings. Roll back the immutable API/client
+images; do not drop the table or delete photos. Production migration, grant, publication and photo
+activation require their exact target authority and are not established by source or CI checks.
