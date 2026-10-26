@@ -12,6 +12,7 @@ import {
 } from './timeweb-api-worker-migration.js';
 import {
   LOCATION_PHOTO_EDITOR_ACL,
+  LOCATION_PHOTO_MIGRATION,
   LOCATION_PHOTO_MIGRATION_SCHEMA,
   LOCATION_PHOTO_PUBLISHED_MIGRATOR,
   LOCATION_PHOTO_SECRET_NAMES,
@@ -139,8 +140,10 @@ const controllerRaw = (rows = controllerRows()) =>
 const packageBytes = readFileSync('deploy/timeweb/location-photo-migration-0102.v1.json');
 const bootstrap = readFileSync('deploy/timeweb/location-photo-role-bootstrap-0102.sql');
 const cleanup = readFileSync('deploy/timeweb/location-photo-role-cleanup-0102.sql');
+const locationPhotoMigration = LOCATION_PHOTO_MIGRATION.filename;
+if (!locationPhotoMigration) throw new Error('LOCATION_PHOTO_TEST_MIGRATION_FILENAME');
 const ledger = readdirSync('packages/database/migrations')
-  .filter((name) => name.endsWith('.sql'))
+  .filter((name) => name.endsWith('.sql') && name <= locationPhotoMigration)
   .sort()
   .map((filename) => ({
     filename,
