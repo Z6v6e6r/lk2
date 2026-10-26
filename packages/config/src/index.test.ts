@@ -158,6 +158,7 @@ describe('loadConfig', () => {
       MESSAGING_USER_BLOCK_COMMANDS_ENABLED: false,
       REALTIME_EXPECTED_REPLICAS: 1,
       CUP_DEV_AUTH_ENABLED: false,
+      AUTH_PHONE_SUBJECT_LINK_ENABLED: false,
       VIVA_OAUTH_EXISTING_SUBJECT_BOOTSTRAP_ENABLED: false,
     });
   });
@@ -990,6 +991,19 @@ describe('loadConfig', () => {
     ).toMatchObject({
       CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED: true,
     });
+  });
+
+  it('keeps authenticated subject linking off unless the real Viva OTP transport is selected', () => {
+    expect(() =>
+      loadConfig({ ...validEnvironment, AUTH_PHONE_SUBJECT_LINK_ENABLED: 'true' }),
+    ).toThrow('AUTH_PHONE_SUBJECT_LINK_ENABLED requires VIVA_MODE=sandbox or production');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        VIVA_MODE: 'sandbox',
+        AUTH_PHONE_SUBJECT_LINK_ENABLED: 'true',
+      }),
+    ).toMatchObject({ AUTH_PHONE_SUBJECT_LINK_ENABLED: true });
   });
 
   it('gates the targeted Viva Home Game bridge independently from continuous roster sync', () => {

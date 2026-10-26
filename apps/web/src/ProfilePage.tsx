@@ -79,6 +79,12 @@ interface ProfilePageProps {
   readonly onRemoveFriend?: () => void;
   readonly onAcceptFriendRequest?: (requestId: string) => void;
   readonly onDeclineFriendRequest?: (requestId: string) => void;
+  readonly subjectLinkAvailable?: boolean;
+  readonly onStartSubjectLink?: (phoneE164: string) => Promise<{ readonly challengeId: string }>;
+  readonly onVerifySubjectLink?: (input: {
+    readonly challengeId: string;
+    readonly code: string;
+  }) => Promise<{ readonly status: 'linked' | 'unchanged' }>;
   readonly onLogout: () => void;
 }
 
@@ -1977,6 +1983,102 @@ function PrivacySettingsForm({
   );
 }
 
+function SubjectLinkSettings({
+  onStart,
+  onVerify,
+}: {
+  readonly onStart: (phoneE164: string) => Promise<{ readonly challengeId: string }>;
+  readonly onVerify: (input: {
+    readonly challengeId: string;
+    readonly code: string;
+  }) => Promise<{ readonly status: 'linked' | 'unchanged' }>;
+}): React.JSX.Element {
+  const [phone, setPhone] = useState('');
+  const [code, setCode] = useState('');
+  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <section className="profile-subject-link" aria-labelledby="subject-link-title">
+      <div className="profile-section-heading">
+        <span>Вход в ЦУП</span>
+        <h2 id="subject-link-title">Подтвердить профиль Viva</h2>
+      </div>
+      <p>
+        Код придёт на основной телефон этого аккаунта. Номер не используется для поиска или
+        объединения аккаунтов.
+      </p>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          setBusy(true);
+          setError(null);
+          setMessage(null);
+          const action = challengeId
+            ? onVerify({ challengeId, code }).then((result) => {
+                setMessage(
+                  result.status === 'linked'
+                    ? 'Профиль Viva подтверждён. Теперь можно войти в ЦУП по телефону.'
+                    : 'Профиль Viva уже был подтверждён для этого аккаунта.',
+                );
+              })
+            : onStart(phone).then((challenge) => {
+                setChallengeId(challenge.challengeId);
+                setMessage('Код отправлен. Введите четыре цифры из сообщения.');
+              });
+          void action
+            .catch(() => {
+              setError('Не удалось подтвердить профиль. Проверьте данные и попробуйте ещё раз.');
+            })
+            .finally(() => setBusy(false));
+        }}
+      >
+        {!challengeId ? (
+          <label>
+            <span>Основной телефон</span>
+            <input
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="+79991234567"
+              value={phone}
+              disabled={busy}
+              pattern="\+7[0-9]{10}"
+              required
+              onChange={(event) => setPhone(event.currentTarget.value)}
+            />
+          </label>
+        ) : (
+          <label>
+            <span>Код из сообщения</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              disabled={busy}
+              pattern="[0-9]{4}"
+              maxLength={4}
+              required
+              onChange={(event) =>
+                setCode(event.currentTarget.value.replace(/\D/g, '').slice(0, 4))
+              }
+            />
+          </label>
+        )}
+        <div className="profile-privacy-save-row">
+          <p role={error ? 'alert' : message ? 'status' : undefined}>{error ?? message}</p>
+          <button type="submit" disabled={busy}>
+            {busy ? 'Проверяем…' : challengeId ? 'Подтвердить' : 'Получить код'}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 /**
  * Absolute deep link a recipient can open — and log in through — to reach this profile. Sharing
  * the address bar instead would leak the sharer's current hash or query state.
@@ -2027,6 +2129,9 @@ export function ProfilePage({
   onRemoveFriend,
   onAcceptFriendRequest,
   onDeclineFriendRequest,
+  subjectLinkAvailable = false,
+  onStartSubjectLink,
+  onVerifySubjectLink,
   onLogout,
 }: ProfilePageProps): React.JSX.Element {
   const { profile, privateAccount, access } = view;
@@ -2034,7 +2139,9 @@ export function ProfilePage({
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [qrNotice, setQrNotice] = useState<string | null>(null);
-  const [activeSettings, setActiveSettings] = useState<'preferences' | 'visibility' | null>(null);
+  const [activeSettings, setActiveSettings] = useState<
+    'preferences' | 'visibility' | 'identity' | null
+  >(null);
   const [activeSport, setActiveSport] = useState<ProfileSport>('PADEL');
   const [choices, setChoices] = useState<ProfileChoiceState>(() => ({
     userId: profile.userId,
@@ -2501,6 +2608,18 @@ export function ProfilePage({
                 </span>
                 <i aria-hidden="true">›</i>
               </button>
+              {subjectLinkAvailable && onStartSubjectLink && onVerifySubjectLink ? (
+                <button type="button" onClick={() => setActiveSettings('identity')}>
+                  <span className="profile-inline-icon">
+                    <ProfilePackIcon name="preference" />
+                  </span>
+                  <span>
+                    <strong>Вход в ЦУП</strong>
+                    <small>Подтвердить профиль Viva по основному телефону</small>
+                  </span>
+                  <i aria-hidden="true">›</i>
+                </button>
+              ) : null}
               {notificationsAvailable ? (
                 <a href="/notifications">
                   <span className="profile-inline-icon">
@@ -2557,7 +2676,11 @@ export function ProfilePage({
                   ‹
                 </button>
                 <h2 id="profile-settings-sheet-title">
-                  {activeSettings === 'preferences' ? 'Предпочтения' : 'Видимость профиля'}
+                  {activeSettings === 'preferences'
+                    ? 'Предпочтения'
+                    : activeSettings === 'visibility'
+                      ? 'Видимость профиля'
+                      : 'Вход в ЦУП'}
                 </h2>
                 <span aria-hidden="true" />
               </header>
@@ -2576,7 +2699,7 @@ export function ProfilePage({
                     : {})}
                   {...(onSaveBookingPreferences ? { onSave: onSaveBookingPreferences } : {})}
                 />
-              ) : (
+              ) : activeSettings === 'visibility' ? (
                 <PrivacySettings
                   key={privacySettings?.version ?? 'loading'}
                   {...(privacySettings !== undefined ? { settings: privacySettings } : {})}
@@ -2585,7 +2708,9 @@ export function ProfilePage({
                   {...(privacyNotice !== undefined ? { notice: privacyNotice } : {})}
                   {...(onSavePrivacy ? { onSave: onSavePrivacy } : {})}
                 />
-              )}
+              ) : onStartSubjectLink && onVerifySubjectLink ? (
+                <SubjectLinkSettings onStart={onStartSubjectLink} onVerify={onVerifySubjectLink} />
+              ) : null}
             </section>
           </div>
         ) : null}

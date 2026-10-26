@@ -303,6 +303,7 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
     api.CORS_ORIGINS !== corsOrigins.value ||
     api.TRUSTED_PROXY_CIDRS !== `${targetContract.network.ingressAddress}/32` ||
     api.CUP_DEV_AUTH_ENABLED !== 'false' ||
+    api.AUTH_PHONE_SUBJECT_LINK_ENABLED !== 'false' ||
     api.VIVA_MODE !== 'production' ||
     api.VIVA_OAUTH_ENABLED !== 'true' ||
     api.VIVA_OAUTH_ALLOWED_PROVIDERS !== 'yandex' ||

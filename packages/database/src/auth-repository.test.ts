@@ -34,6 +34,80 @@ function repositoryWithClient(handler: QueryHandler, poolHandler?: QueryHandler)
 }
 
 describe('identity auth repository', () => {
+  it('takes the shared subject lock before the canonical provider-user lock', async () => {
+    const statements: { readonly text: string; readonly values: readonly unknown[] }[] = [];
+    const issuer = 'https://kc.vivacrm.test/realms/clients';
+    const subject = 'subject-lock-order';
+    const providerUserId = 'provider-user-lock-order';
+    const { repository } = repositoryWithClient((text, values) => {
+      statements.push({ text, values });
+      if (text.includes('from integration.external_identity_map e')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              status: 'ACTIVE',
+              display_name: 'Игрок',
+              phone_last_4: '4567',
+            },
+          ],
+        };
+      }
+      if (text.includes('from integration.external_entity_map e')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              status: 'ACTIVE',
+              display_name: 'Игрок',
+              phone_last_4: '4567',
+            },
+          ],
+        };
+      }
+      if (text.includes('insert into integration.external_identity_map')) {
+        return { rows: [{ user_id: userId }], rowCount: 1 };
+      }
+      if (text.includes('insert into integration.external_entity_map')) {
+        return { rows: [{ internal_id: userId }], rowCount: 1 };
+      }
+      if (text.includes('from identity.users u')) {
+        return {
+          rows: [
+            {
+              id: userId,
+              tenant_id: tenantId,
+              display_name: 'Игрок',
+              phone_last_4: '4567',
+            },
+          ],
+        };
+      }
+      return { rows: [], rowCount: 1 };
+    });
+
+    await repository.upsertExternalUser({
+      tenantId,
+      provider: 'VIVA',
+      issuer,
+      subject,
+      providerUserId,
+      displayName: 'Игрок',
+      phoneE164: '+79991234567',
+      correlationId: 'subject-lock-order-test',
+    });
+
+    const locks = statements.filter((entry) =>
+      entry.text.includes('pg_advisory_xact_lock(hashtextextended($1, 0))'),
+    );
+    expect(locks.map((entry) => entry.values)).toEqual([
+      [`${tenantId}\u001f${issuer}\u001f${subject}`],
+      [`${tenantId}\u001fVIVA\u001f${providerUserId}`],
+    ]);
+  });
+
   it('resolves public tenant key then reads provider config under tenant RLS', async () => {
     const { repository, query } = repositoryWithClient(
       (text) => {

@@ -763,6 +763,36 @@
   width: calc(100% - 28px);
 }
 
+.profile-page--v2 .profile-subject-link {
+  display: grid;
+  gap: 16px;
+  padding: 0 20px 24px;
+}
+
+.profile-page--v2 .profile-subject-link > p {
+  margin: 0;
+  color: #536078;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.profile-page--v2 .profile-subject-link form,
+.profile-page--v2 .profile-subject-link label {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-page--v2 .profile-subject-link input {
+  min-height: 48px;
+  box-sizing: border-box;
+  border: 1px solid #d9e1ea;
+  border-radius: 14px;
+  padding: 0 14px;
+  color: #171e37;
+  background: #fff;
+  font: inherit;
+}
+
 .profile-page--v2 .profile-settings-sheet__toolbar {
   grid-template-columns: 44px 1fr 44px;
 }

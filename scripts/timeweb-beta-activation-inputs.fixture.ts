@@ -112,6 +112,7 @@ export function safeRuntimeEnvironments(): Record<string, Record<string, string>
     CORS_ORIGINS: corsOrigins,
     TRUSTED_PROXY_CIDRS: '172.30.26.10/32',
     CUP_DEV_AUTH_ENABLED: 'false',
+    AUTH_PHONE_SUBJECT_LINK_ENABLED: 'false',
     VIVA_MODE: 'production',
     VIVA_OAUTH_ENABLED: 'true',
     VIVA_OAUTH_ALLOWED_PROVIDERS: 'yandex',

@@ -329,6 +329,13 @@ function createGateway(overrides: Partial<AuthGateway> = {}): AuthGateway {
       resendAt: '2026-07-11T12:01:00.000Z',
     }),
     verifyCode: vi.fn().mockResolvedValue(session),
+    startIdentitySubjectLink: vi.fn().mockResolvedValue({
+      challengeId: 'subject-link-challenge-1',
+      maskedPhone: '+7 *** ***-**-01',
+      expiresAt: '2026-07-11T12:05:00.000Z',
+      resendAt: '2026-07-11T12:01:00.000Z',
+    }),
+    verifyIdentitySubjectLink: vi.fn().mockResolvedValue({ status: 'linked' }),
     startVivaOAuth: vi.fn().mockResolvedValue(undefined),
     getVivaAccessToken: vi.fn().mockReturnValue(undefined),
     refreshVivaAccessToken: vi.fn().mockResolvedValue('viva-access-token'),

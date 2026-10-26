@@ -83,6 +83,7 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 
 import { registerAuthRoutes } from './auth/auth-routes.js';
+import type { PhoneSubjectLinkService } from './auth/phone-subject-link-service.js';
 import { registerNotificationScenarioRoutes } from './admin/notification-scenario-routes.js';
 import type { NotificationScenarioRepository } from '@phub/database/notification-scenarios';
 
@@ -238,6 +239,7 @@ export interface BuildAppOptions {
   readonly logger: Logger;
   readonly pool?: Pool;
   readonly authService?: AuthService;
+  readonly phoneSubjectLinkService?: PhoneSubjectLinkService;
   readonly accessSessionChecker?: (input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -772,6 +774,8 @@ export async function buildApp(options: BuildAppOptions) {
       : remoteEventAvatarMedia);
 
   const userRuntimeCapabilities = {
+    phoneSubjectLink:
+      options.config.AUTH_PHONE_SUBJECT_LINK_ENABLED && Boolean(options.phoneSubjectLinkService),
     communityDirectory: Boolean(options.communityDirectory),
     communityReadDetail:
       options.config.COMMUNITY_LEGACY_READ_DETAIL_ENABLED &&
@@ -910,6 +914,7 @@ export async function buildApp(options: BuildAppOptions) {
               : undefined;
           }
         : undefined,
+      options.phoneSubjectLinkService,
     );
   }
 

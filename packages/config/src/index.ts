@@ -130,6 +130,8 @@ const environmentSchema = z.object({
    * custody and never becomes a PadlHub login key.
    */
   CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED: booleanFromEnvironment,
+  /** Authenticated self-service Viva subject linking. Default-off until schema and runtime gates pass. */
+  AUTH_PHONE_SUBJECT_LINK_ENABLED: booleanFromEnvironment,
   CUP_DEV_AUTH_ENABLED: booleanFromEnvironment,
   CUP_DEV_AUTH_PHONE_E164: z
     .string()
@@ -1045,6 +1047,12 @@ export function loadConfig(
     throw new Error(
       'CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED requires Viva OAuth and VIVA_MODE=sandbox or production',
     );
+  }
+  if (
+    parsed.data.AUTH_PHONE_SUBJECT_LINK_ENABLED &&
+    (parsed.data.VIVA_MODE === 'mock' || parsed.data.VIVA_MODE === 'disabled')
+  ) {
+    throw new Error('AUTH_PHONE_SUBJECT_LINK_ENABLED requires VIVA_MODE=sandbox or production');
   }
   if (parsed.data.CUP_DEV_AUTH_ENABLED) {
     if (parsed.data.APP_ENV !== 'local') {

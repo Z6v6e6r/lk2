@@ -479,6 +479,13 @@ describe('Timeweb beta runtime secret provisioner', () => {
       'runtime_identity',
     ],
     [
+      'phone subject linking enabled before its separate activation',
+      (environments: ReturnType<typeof safeRuntimeEnvironments>) => {
+        environments.api!.AUTH_PHONE_SUBJECT_LINK_ENABLED = 'true';
+      },
+      'runtime_identity',
+    ],
+    [
       'invalid Viva delegation key encoding',
       (environments: ReturnType<typeof safeRuntimeEnvironments>) => {
         environments.api!.VIVA_DELEGATION_ENCRYPTION_KEY = `${environments.api!.VIVA_DELEGATION_ENCRYPTION_KEY}x`;

@@ -3,6 +3,11 @@ import type { components, PublicApiComponents, UserApiV2Components } from '@phub
 export type AuthChallengeRequest = components['schemas']['AuthChallengeRequest'];
 export type AuthChallenge = components['schemas']['AuthChallenge'];
 export type VerifyAuthChallengeRequest = components['schemas']['VerifyAuthChallengeRequest'];
+export type IdentitySubjectLinkChallengeRequest =
+  components['schemas']['IdentitySubjectLinkChallengeRequest'];
+export type IdentitySubjectLinkVerifyRequest =
+  components['schemas']['IdentitySubjectLinkVerifyRequest'];
+export type IdentitySubjectLinkResult = components['schemas']['IdentitySubjectLinkResult'];
 export type PasswordLoginRequest = components['schemas']['PasswordLoginRequest'];
 export type AuthenticatedSession = components['schemas']['AuthenticatedSession'];
 export type AuthenticatedUser = components['schemas']['AuthenticatedUser'];
@@ -438,7 +443,12 @@ export type BookingScreenReadCompletion =
   | BookingScreenUpcomingReadCompletion;
 
 export type RequestAuthMode = 'none' | 'required';
-export type SessionIntent = 'refresh' | 'logout' | 'password-login';
+export type SessionIntent =
+  | 'refresh'
+  | 'logout'
+  | 'password-login'
+  | 'identity-subject-link-start'
+  | 'identity-subject-link-verify';
 
 export type VivaOAuthProvider = 'vkid' | 'yandex';
 
@@ -733,6 +743,44 @@ export class PadlHubApiClient {
     );
     this.applyAuthenticatedSession(session);
     return session;
+  }
+
+  public createIdentitySubjectLinkChallenge(
+    input: IdentitySubjectLinkChallengeRequest,
+    idempotencyKey = createCorrelationId(),
+  ): Promise<AuthChallenge> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<AuthChallenge>('/auth/identity-subject-link/challenges', {
+        method: 'POST',
+        auth: 'required',
+        credentials: 'include',
+        retryOnUnauthorized: false,
+        idempotencyKey,
+        sessionIntent: 'identity-subject-link-start',
+        body: jsonRequestBody(input),
+      }),
+    );
+  }
+
+  public verifyIdentitySubjectLinkChallenge(
+    challengeId: string,
+    input: IdentitySubjectLinkVerifyRequest,
+    idempotencyKey = createCorrelationId(),
+  ): Promise<IdentitySubjectLinkResult> {
+    return this.retryOnceOnNetworkFailure(() =>
+      this.request<IdentitySubjectLinkResult>(
+        `/auth/identity-subject-link/challenges/${encodeURIComponent(challengeId)}/verify`,
+        {
+          method: 'POST',
+          auth: 'required',
+          credentials: 'include',
+          retryOnUnauthorized: false,
+          idempotencyKey,
+          sessionIntent: 'identity-subject-link-verify',
+          body: jsonRequestBody(input),
+        },
+      ),
+    );
   }
 
   public createVivaOAuthAuthorization(input: {

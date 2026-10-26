@@ -765,6 +765,49 @@ describe('PadlHubApiClient authentication boundary', () => {
     });
   });
 
+  it('binds subject-link commands to authenticated intent and preserves their supplied key', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      if (requestUrl(input).endsWith('/verify')) {
+        return Promise.resolve(jsonResponse({ status: 'linked' }));
+      }
+      return Promise.resolve(
+        jsonResponse(
+          {
+            challengeId: 'ac378ca8-b329-4dc1-bb72-da797db725c3',
+            expiresAt: '2026-07-11T12:05:00.000Z',
+            resendAfterSeconds: 60,
+          },
+          202,
+        ),
+      );
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    await client.createIdentitySubjectLinkChallenge(
+      { phone: '+79991234567' },
+      'subject-link-start-0001',
+    );
+    await client.verifyIdentitySubjectLinkChallenge(
+      'ac378ca8-b329-4dc1-bb72-da797db725c3',
+      { code: '1234' },
+      'subject-link-verify-0001',
+    );
+
+    expect(calls).toHaveLength(2);
+    const startHeaders = new Headers(calls[0]?.init?.headers);
+    expect(startHeaders.get('Authorization')).toBe(`Bearer ${authenticatedSession.accessToken}`);
+    expect(startHeaders.get('Idempotency-Key')).toBe('subject-link-start-0001');
+    expect(startHeaders.get('X-Session-Intent')).toBe('identity-subject-link-start');
+    const verifyHeaders = new Headers(calls[1]?.init?.headers);
+    expect(verifyHeaders.get('Authorization')).toBe(`Bearer ${authenticatedSession.accessToken}`);
+    expect(verifyHeaders.get('Idempotency-Key')).toBe('subject-link-verify-0001');
+    expect(verifyHeaders.get('X-Session-Intent')).toBe('identity-subject-link-verify');
+    expect(JSON.parse(stringRequestBody(calls[1]?.init?.body))).toEqual({ code: '1234' });
+  });
+
   it('creates valid operation keys when an embedded browser omits Web Crypto and Headers', async () => {
     let observedHeaders: HeadersInit | undefined;
     const fetchImplementation: typeof fetch = (_input, init) => {

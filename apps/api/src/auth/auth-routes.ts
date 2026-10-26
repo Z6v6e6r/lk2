@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { sendApiError } from '../http-errors.js';
 import { AuthServiceError, type AuthService, type AuthSessionResult } from './auth-service.js';
 import { normalizeLoginEmail } from './local-password.js';
+import type { PhoneSubjectLinkService } from './phone-subject-link-service.js';
 
 export const REFRESH_COOKIE_NAME = 'phub_refresh';
 export const OAUTH_BROWSER_COOKIE_NAME = 'phub_oauth_browser';
@@ -66,6 +67,8 @@ const paramsSchema = z.object({
   tenantKey: z.string(),
 });
 const verifyParamsSchema = paramsSchema.extend({ challengeId: z.string().uuid() });
+const subjectLinkStartBodySchema = z.object({ phone: z.string().min(5).max(32) }).strict();
+const subjectLinkVerifyBodySchema = z.object({ code: z.string().regex(/^\d{4}$/) }).strict();
 
 function protectedRateKey(
   request: FastifyRequest,
@@ -96,6 +99,16 @@ function isAllowedBrowserOrigin(request: FastifyRequest, config: AppConfig): boo
     .includes(origin);
 }
 
+function hasRequiredAllowedBrowserOrigin(request: FastifyRequest, config: AppConfig): boolean {
+  const origin = request.headers.origin;
+  return (
+    typeof origin === 'string' &&
+    config.CORS_ORIGINS.split(',')
+      .map((value) => value.trim())
+      .includes(origin)
+  );
+}
+
 function errorMessage(code: string): string {
   const messages: Readonly<Record<string, string>> = {
     AUTH_CREDENTIAL_INVALID: 'Email или пароль не подошли.',
@@ -119,6 +132,9 @@ function errorMessage(code: string): string {
       'Этот телефон уже привязан к другому аккаунту ПадлхАБ. Обратитесь в поддержку.',
     AUTH_IDENTITY_LINK_REQUIRED:
       'Сначала свяжите этот профиль Viva с аккаунтом ПадлхАБ через поддержку.',
+    AUTH_SUBJECT_LINK_DISABLED: 'Связывание профиля сейчас недоступно.',
+    AUTH_SUBJECT_LINK_UNAVAILABLE:
+      'Не удалось подтвердить данные аккаунта. Проверьте профиль или обратитесь в поддержку.',
     IDEMPOTENCY_KEY_CONFLICT: 'Этот ключ операции уже использован с другими данными.',
     TENANT_KEY_INVALID: 'Некорректный идентификатор организации.',
     TENANT_NOT_FOUND: 'Организация не найдена.',
@@ -159,6 +175,7 @@ function handleAuthError(
 }
 
 export interface UserRuntimeCapabilities {
+  readonly phoneSubjectLink: boolean;
   readonly communityDirectory: boolean;
   readonly communityReadDetail: boolean;
   readonly communityReadFeed: boolean;
@@ -170,6 +187,7 @@ export interface UserRuntimeCapabilities {
 }
 
 const disabledUserRuntimeCapabilities: UserRuntimeCapabilities = {
+  phoneSubjectLink: false,
   communityDirectory: false,
   communityReadDetail: false,
   communityReadFeed: false,
@@ -300,6 +318,7 @@ export function registerAuthRoutes(
     tenantId: string,
     userId: string,
   ) => Promise<{ readonly avatarUrl: string; readonly syncedAt: string } | undefined>,
+  phoneSubjectLinkService?: PhoneSubjectLinkService,
 ): void {
   const resolveRuntimeCapabilities = async (): Promise<UserRuntimeCapabilities> => ({
     ...disabledUserRuntimeCapabilities,
@@ -573,6 +592,111 @@ export function registerAuthRoutes(
           ...access,
           ...(profilePhoto !== undefined ? { profilePhoto } : {}),
         });
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/auth/identity-subject-link/challenges',
+    {
+      bodyLimit: 4096,
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: '1 minute',
+          groupId: 'auth-subject-link-challenge',
+          keyGenerator: (request) => protectedRateKey(request, config, 'challenge'),
+        },
+      },
+      preHandler: [...authenticatedPreHandlers, requireAuthIdempotency],
+    },
+    async (request, reply) => {
+      preventCredentialCaching(reply);
+      if (!hasRequiredAllowedBrowserOrigin(request, config)) {
+        return sendApiError(
+          request,
+          reply,
+          403,
+          'AUTH_ORIGIN_REJECTED',
+          'Недопустимый источник запроса.',
+        );
+      }
+      if (request.headers['x-session-intent'] !== 'identity-subject-link-start') {
+        return sendApiError(request, reply, 400, 'SESSION_INTENT_REQUIRED', 'Некорректный запрос.');
+      }
+      try {
+        const { tenantKey } = paramsSchema.parse(request.params);
+        const body = subjectLinkStartBodySchema.parse(request.body);
+        const tenantId = request.tenantId;
+        const userId = request.padlHubClaims?.sub;
+        const sessionId = request.padlHubClaims?.sid;
+        if (!tenantId || !userId || !sessionId) {
+          return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        if (!phoneSubjectLinkService) throw new AuthServiceError('AUTH_SUBJECT_LINK_DISABLED');
+        return reply.status(202).send(
+          await phoneSubjectLinkService.start({
+            actor: { tenantId, tenantKey, userId, sessionId, audience: 'client' },
+            phone: body.phone,
+            idempotencyKey: idempotencyKey(request),
+            correlationId: request.id,
+          }),
+        );
+      } catch (error) {
+        return handleAuthError(error, request, reply);
+      }
+    },
+  );
+
+  app.post(
+    '/user/api/v1/:tenantKey/auth/identity-subject-link/challenges/:challengeId/verify',
+    {
+      bodyLimit: 4096,
+      config: {
+        rateLimit: {
+          max: 10,
+          timeWindow: '1 minute',
+          groupId: 'auth-subject-link-verify',
+          keyGenerator: (request) => protectedRateKey(request, config, 'verify'),
+        },
+      },
+      preHandler: [...authenticatedPreHandlers, requireAuthIdempotency],
+    },
+    async (request, reply) => {
+      preventCredentialCaching(reply);
+      if (!hasRequiredAllowedBrowserOrigin(request, config)) {
+        return sendApiError(
+          request,
+          reply,
+          403,
+          'AUTH_ORIGIN_REJECTED',
+          'Недопустимый источник запроса.',
+        );
+      }
+      if (request.headers['x-session-intent'] !== 'identity-subject-link-verify') {
+        return sendApiError(request, reply, 400, 'SESSION_INTENT_REQUIRED', 'Некорректный запрос.');
+      }
+      try {
+        const { tenantKey, challengeId } = verifyParamsSchema.parse(request.params);
+        const body = subjectLinkVerifyBodySchema.parse(request.body);
+        const tenantId = request.tenantId;
+        const userId = request.padlHubClaims?.sub;
+        const sessionId = request.padlHubClaims?.sid;
+        if (!tenantId || !userId || !sessionId) {
+          return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
+        }
+        if (!phoneSubjectLinkService) throw new AuthServiceError('AUTH_SUBJECT_LINK_DISABLED');
+        return reply.send(
+          await phoneSubjectLinkService.verify({
+            actor: { tenantId, tenantKey, userId, sessionId, audience: 'client' },
+            challengeId,
+            code: body.code,
+            idempotencyKey: idempotencyKey(request),
+            correlationId: request.id,
+          }),
+        );
       } catch (error) {
         return handleAuthError(error, request, reply);
       }
