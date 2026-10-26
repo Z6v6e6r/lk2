@@ -48,7 +48,7 @@ PG_TEST_PATH = 'scripts/timeweb-location-photo-acl-normalize.pg.test.ts'
 # Pinned reviewed inputs; recomputed and enforced against the enrolled controller source.
 FORWARD_SQL_SHA256 = '2973fb9305c8f2610165cfb61b92e65127bebcccaf42afc4a2930686fa5f4b9e'
 RECOVER_SQL_SHA256 = '4c2d2c3c259d76f8e47468e547786452296d5afcafa0f748a9c4575fdc84addc'
-PG_TEST_SHA256 = '6835bb05a790676eff191ef957bfe19a7ce25473376cd5209450103f4594bdea'
+PG_TEST_SHA256 = 'e2eb9cf2d8e2ac82f187f7bf555eacb0234d7eae28823d27a4eef425297ead6b'
 EXPECTED_LEDGER_SHA256 = '7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd'
 EXPECTED_LEDGER_COUNT = 105
 LEDGER_LAST = '0101_notification_lifecycle_channels.sql'
