@@ -317,7 +317,7 @@ describe('reviewed inputs stay pinned', () => {
     expect(sha256(recover)).toBe(
       '4c2d2c3c259d76f8e47468e547786452296d5afcafa0f748a9c4575fdc84addc',
     );
-    expect(sha256(pgTest)).toBe('6835bb05a790676eff191ef957bfe19a7ce25473376cd5209450103f4594bdea');
+    expect(sha256(pgTest)).toBe('e2eb9cf2d8e2ac82f187f7bf555eacb0234d7eae28823d27a4eef425297ead6b');
     const digest = createHash('sha256')
       .update(JSON.stringify(ledger).replaceAll(' ', '') + '\n')
       .digest('hex');
@@ -378,7 +378,7 @@ print(json.dumps({'schema': value['schema'], 'confirmation': value['confirmation
         'pgTestEvidence',
         {
           testPath: 'scripts/timeweb-location-photo-acl-normalize.pg.test.ts',
-          testSha256: '6835bb05a790676eff191ef957bfe19a7ce25473376cd5209450103f4594bdea',
+          testSha256: 'e2eb9cf2d8e2ac82f187f7bf555eacb0234d7eae28823d27a4eef425297ead6b',
           ciRunId: '1',
           conclusion: 'failure',
         },
