@@ -517,6 +517,58 @@ describe('closed Timeweb location-photo 0102 profile', () => {
       );
   });
 
+  it('admits only further reviewed controller-file transitions around the mandatory package delta', () => {
+    const rows = controllerRows();
+    const extra = (overrides = {}) => ({
+      path: 'docs/runbooks/android-chats-fcm.md',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '1'.repeat(40),
+      newOid: '2'.repeat(40),
+      ...overrides,
+    });
+    // A reviewed controller file changed by an unrelated merged controller PR is admitted.
+    expect(validateLocationPhotoControllerClosure([...rows, extra()])).toHaveLength(
+      rows.length + 1,
+    );
+    // A reviewed controller file added after the base is admitted as an A transition.
+    expect(
+      validateLocationPhotoControllerClosure([
+        ...rows,
+        extra({ status: 'A', oldMode: '000000', oldOid: '0'.repeat(40) }),
+      ]),
+    ).toHaveLength(rows.length + 1);
+    // The ACL-baseline building blocks registered alongside the package are admitted too.
+    for (const path of [
+      'docs/runbooks/location-photo-acl-baseline.md',
+      'deploy/timeweb/location-photo-acl-normalize-0102.sql',
+      'deploy/timeweb/location-photo-acl-normalize-recover-0102.sql',
+      'scripts/timeweb-location-photo-acl-normalize.pg.test.ts',
+    ])
+      expect(validateLocationPhotoControllerClosure([...rows, extra({ path })])).toHaveLength(
+        rows.length + 1,
+      );
+    // A package path re-declared with a different status is rejected even as an allowlisted path.
+    expect(() =>
+      validateLocationPhotoControllerClosure(
+        rows.map((row, index) =>
+          index === 0 ? { ...row, status: 'A', oldMode: '000000', oldOid: '0'.repeat(40) } : row,
+        ),
+      ),
+    ).toThrow('LOCATION_PHOTO_CONTROLLER_DELTA');
+    for (const invalid of [
+      [...rows, extra({ status: 'D' })],
+      [...rows, extra({ newMode: '100755' })],
+      [...rows, extra({ path: 'scripts/not-a-reviewed-controller-file.js' })],
+      [...rows, extra(), extra()],
+      [...rows, extra({ newOid: '0'.repeat(40) })],
+    ])
+      expect(() => validateLocationPhotoControllerClosure(invalid)).toThrow(
+        'LOCATION_PHOTO_CONTROLLER_DELTA',
+      );
+  });
+
   it('checks git config before discovery and rejects unsafe tracked paths and modes', () => {
     const op = operation();
     const rows = controllerRows();
