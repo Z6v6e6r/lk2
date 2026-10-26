@@ -630,17 +630,25 @@ describe('frozen CI download patch authority', () => {
     ])
       expect(() => parseApiWorkerControllerDiff(value)).toThrow();
   });
-  it('pins immutable legacy bridge bytes independently of the notification same-source profile', () => {
+  it('pins immutable legacy bridge bytes and the live reviewed promotion edge', () => {
     for (const pin of [
       ...pair(),
       ...API_WORKER_CI_READER_PATCH,
-      ...API_WORKER_CONTROLLER_PROMOTION_PATCH,
       ...API_WORKER_ANDROID_CHAT_TEST_PATCH,
     ]) {
       const bytes = execFileSync('git', [
         'show',
         '006fc525446fef2d710ed8e34b93f08923b07cb6:' + pin.path,
       ]);
+      expect(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')).toBe(
+        pin.newOid,
+      );
+    }
+    // The promotion group is a live reviewed edge: its checked-in blob advances with the
+    // controller, and scripts/test-timeweb-database-backup.py asserts the same current-byte
+    // invariant on the target host helper.
+    for (const pin of API_WORKER_CONTROLLER_PROMOTION_PATCH) {
+      const bytes = readFileSync(pin.path);
       expect(createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')).toBe(
         pin.newOid,
       );

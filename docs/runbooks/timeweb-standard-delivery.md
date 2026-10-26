@@ -1561,3 +1561,78 @@ installed-baseline publication and during reconciliation. Legacy V1/degraded/PRE
 the frozen one-operation early-exit recovery remain unchanged. No staging readiness claim may be
 made until this producer actually completes its isolated restore and the dormant rollout/smoke
 has passed on Timeweb.
+
+## One-time adoption of a manual Compose baseline (beta only)
+
+The running beta was promoted by hand outside the enrolled controller, so its installed descriptor
+carries the manual kind `SIMPLIFIED_FULL` and no canonical rollout receipt exists; meanwhile
+`readInstalledApiBaseline()` refuses that kind and blocks every controller route on that host.
+Adoption is the explicit one-shot bridge: it verifies the already-running promotion and records it
+as the canonical installed baseline, without activating, pulling, restarting, migrating, restoring or
+writing a receipt it did not observe.
+
+Authority: beta only (`profile: "beta"`); production is refused before any read. The entry point is
+the adoption module's own executable, deliberately outside the enrolled
+`run-timeweb-standard-delivery.js` runner (the PR468 JOIN bridge pins that runner's Git blob, so a
+one-shot adoption must not edit it). It runs as root on the enrolled host against the fixed path
+`/opt/phub/timeweb-beta/operator/adopt-manual-baseline.json`,
+target `lk2.padlhub.su`/`8886471`/`262717`, `expiresAt` 20-60 minutes ahead (an adopted baseline stays
+readable after expiry) and
+`confirmation=ADOPT_MANUAL_BASELINE_<sha12UPPER>_KEEP_SECRETS_<secretSet.releaseId12UPPER>`.
+
+```
+{ "schema": "PHUB_TIMEWEB_ADOPT_MANUAL_BASELINE_V1", "profile": "beta",
+  "controllerSha": "<40-hex reviewed controller sha>", "controllerTree": "<40-hex controller tree>",
+  "target": { "hostname": "lk2.padlhub.su", "serverId": 8886471, "projectId": 262717 },
+  "release": { "releaseId": "<sha>-<publicationRunId>-1", "sha": "<40-hex>", "tree": "<40-hex>",
+               "sourceCiRunId": "<run>", "publicationRunId": "<run>", "artifactId": "<id>",
+               "artifactDigest": "sha256:<64-hex>", "manifestSha256": "<64-hex>" },
+  "images": { "api": "sha256:<64-hex>", "web": "sha256:<64-hex>", "realtime": "sha256:<64-hex>", "worker": "sha256:<64-hex>", "migrator": "sha256:<64-hex>" },
+  "containers": { "api": { "id": "<64-hex>", "image": "ghcr.io/z6v6e6r/phub-api@sha256:<64-hex>" }, "web/realtime/worker": "same digest-bound id+image shape" },
+  "expectedCurrentBaseline": { "releaseId": "<previous canonical release>",
+                               "descriptorSha256": "<64-hex>", "currentDescriptorSha256": "<64-hex>" },
+  "secretSet": { "releaseId": "<previous canonical release>", "files": { ".release-identity.json": "<64-hex>", "api.env": "<64-hex>", "worker.env": "<64-hex>", "realtime.env": "<64-hex>", "migrator.env": "<64-hex>" } },
+  "expiresAt": "<now+30m ISO-8601>",
+  "confirmation": "ADOPT_MANUAL_BASELINE_<SHA12>_KEEP_SECRETS_<SECRETRELEASE12>" }
+```
+
+`expectedCurrentBaseline.releaseId` must differ from `release.releaseId`; `secretSet.releaseId` must
+equal it because adoption keeps the installed secret set byte-for-byte.
+
+Precondition (P1.4): run the command from a clean, root-owned checkout of exactly the reviewed
+`controllerSha` at `/opt/phub/timeweb-beta/releases/<releaseId>/source`. The current beta host does not
+yet have that checkout; creating it is the P1.4 step and is not performed by this script. Before any
+evidence collection or write the script reads its own checkout (`git rev-parse HEAD`,
+`HEAD^{tree}`, `git status --porcelain --untracked-files=all`) and refuses a dirty or different
+source (`controller_source_dirty` / `controller_source_mismatch`). There is deliberately no
+`--expected-source-sha` flag: the request's `controllerSha`/`controllerTree` bind the exact executed
+source in code and in the receipt. Run:
+
+```
+/usr/bin/env -i PATH=/usr/bin:/bin HOME=/root /usr/bin/node \
+  '/opt/phub/timeweb-beta/releases/<releaseId>/source/scripts/timeweb-adopt-manual-baseline.js' \
+  /opt/phub/timeweb-beta/operator/adopt-manual-baseline.json
+```
+
+Before writing it binds the executed controller checkout as above, then re-verifies the source CI
+run and single-attempt `workflow_dispatch` publication run (publisher path, canonical artifact
+name/digest/id), the previous descriptor hash and kind, the
+five secret-file hashes plus identity marker, and every running container (declared digest,
+`org.opencontainers.image.revision` equals the release SHA, API/Web `phub.release-id` equals the
+release id, healthy, zero restarts). The `SIMPLIFIED_FULL` descriptor must match
+`currentDescriptorSha256`; a foreign kind or any drift stops the run.
+
+It writes only under `/opt/phub/timeweb-beta/releases/<releaseId>/`: request copy and
+`adoption-receipt.json` exclusively, the manual descriptor preserved once as
+`installed-components.pre-adoption.env`, then the new descriptor atomically. Files stay root-owned
+0600 and an existing artifact is never silently overwritten (`artifact_conflict`); no runtime
+secret, container, database or GitHub write is touched. The receipt records
+`runtimeEvidence.rolloutReceipt: "absent-manual-compose"`, so no canonical receipt is fabricated, and
+lists `declaredUnverifiedInputs: ["manifestSha256", "tree", "images.migrator"]`: those values are
+operator-declared, not observed by this mode. Adoption writes the installed descriptor with kind
+`ADOPTED_MANUAL_FULL`; a later canonical API/Web rollout on top of it writes `API_WEB` without any
+`PHUB_ADOPTION_*` key, so every later baseline stays readable.
+Re-running verifies the recorded request/receipt/descriptor and returns the same receipt without
+container or GitHub reads; if only the receipt was lost after the descriptor write, the same verified
+evidence completes it. Any drift, partial write or conflict fails closed for manual reconciliation:
+do not delete custody artifacts or hand-edit the descriptor. Production never uses this route.

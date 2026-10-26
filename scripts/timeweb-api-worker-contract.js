@@ -64,6 +64,9 @@ export const API_WORKER_CONTROLLER_FILES = new Set([
   'scripts/timeweb-api-worker-upgrade.d.ts',
   'scripts/timeweb-api-worker-adapter.test.ts',
   'scripts/timeweb-api-worker.fixture.ts',
+  'scripts/timeweb-adopt-manual-baseline.js',
+  'scripts/timeweb-adopt-manual-baseline.d.ts',
+  'scripts/timeweb-adopt-manual-baseline.test.ts',
   'scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json',
   'scripts/timeweb-api-worker-contract.js',
   'scripts/timeweb-api-worker-upgrade.js',
@@ -78,6 +81,9 @@ export const API_WORKER_CONTROLLER_FILES = new Set([
   'docs/runbooks/android-chats-fcm.md',
 ]);
 export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([
+  'scripts/timeweb-adopt-manual-baseline.js',
+  'scripts/timeweb-adopt-manual-baseline.d.ts',
+  'scripts/timeweb-adopt-manual-baseline.test.ts',
   'scripts/control-timeweb-database-backup.py',
   'scripts/control-timeweb-database-backup.test.ts',
   'scripts/test-timeweb-database-backup.py',
@@ -168,8 +174,8 @@ export const API_WORKER_CONTROLLER_PROMOTION_PATCH = Object.freeze([
     status: 'M',
     oldMode: '100644',
     newMode: '100644',
-    oldOid: 'ed4ad7fa0c27caba918a9a4a6f5d151d3a996ac4',
-    newOid: '31b891b4856dd95ecf849af0b13e609a281cbac1',
+    oldOid: '31b891b4856dd95ecf849af0b13e609a281cbac1',
+    newOid: '1adb4919d4016495cc4b94a737d8e395515a7d6f',
   }),
   Object.freeze({
     path: 'scripts/verify-source-ci.test.ts',

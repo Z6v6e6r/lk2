@@ -142,6 +142,16 @@ export function sameApiWorkerDeploymentIdentity(
   profile?: 'beta' | 'production',
 ): boolean;
 
+export function buildApiWorkerInstalledDescriptor(
+  baselineBytes: Buffer,
+  plan: {
+    previousSecrets?: { releaseId: string };
+    candidate: { api: { image: string }; worker: { image: string } };
+  },
+  id: string,
+  journalPath: string,
+  options?: { preserving?: boolean; notification?: boolean; migratorImage?: string },
+): string;
 export function probeNotificationPublicReadiness(): Promise<{
   publicApiMs: number;
   publicWebMs: number;
