@@ -182,7 +182,7 @@ ENV = {
 }
 MAX_REQUEST = 256 * 1024
 MAX_SQL = 512 * 1024
-MAX_OUTPUT = 64 * 1024
+MAX_OUTPUT = 4 * 1024 ** 2
 MAX_GUARD_OUTPUT = 4096
 SHA = re.compile(r'[a-f0-9]{40}\Z')
 HASH = re.compile(r'[a-f0-9]{64}\Z')

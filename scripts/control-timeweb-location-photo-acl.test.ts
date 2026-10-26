@@ -325,6 +325,17 @@ describe('reviewed inputs stay pinned', () => {
   });
 });
 
+describe('bounded reads', () => {
+  it('accepts the real >64 KiB canonical preimage read (host measured ~89 KiB)', () => {
+    const value = run(`
+value = {'big': 'x' * (100 * 1024), 'unrelated': {'members': []}}
+outcome = packet.read_psql_json({'rc': 0, 'stdout': json.dumps(value).encode(), 'stderr': b''}, 'PREIMAGE_READ')
+print(json.dumps({'big': len(outcome['big'])}))
+`);
+    expect(value).toEqual({ big: 102400 });
+  });
+});
+
 describe('request authority', () => {
   it('admits the exact beta normalization request', () => {
     expect(
