@@ -527,7 +527,7 @@ function verifiedContainers(operation, containers) {
     if (
       !HASH.test(container.id ?? '') ||
       container.id !== operation.containers[service].id ||
-      !HASH.test(container.imageId ?? '')
+      !DIGEST.test(container.imageId ?? '')
     )
       fail('container_identity');
     if (container.image !== operation.containers[service].image) fail('container_image');

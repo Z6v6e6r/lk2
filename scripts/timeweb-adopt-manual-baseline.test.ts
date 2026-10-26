@@ -69,28 +69,28 @@ const containerEvidence: AdoptionArtifactsInputs['containers'] = {
     image: image('api', imageDigests.api),
     releaseId,
     revision: releaseSha,
-    imageId: 'a'.repeat(64),
+    imageId: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   },
   web: {
     id: '7'.repeat(64),
     image: image('web', imageDigests.web),
     releaseId,
     revision: releaseSha,
-    imageId: 'b'.repeat(64),
+    imageId: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   },
   realtime: {
     id: '8'.repeat(64),
     image: image('realtime', imageDigests.realtime),
     releaseId: null,
     revision: releaseSha,
-    imageId: 'c'.repeat(64),
+    imageId: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
   },
   worker: {
     id: '9'.repeat(64),
     image: image('worker', imageDigests.worker),
     releaseId: null,
     revision: releaseSha,
-    imageId: 'd'.repeat(64),
+    imageId: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
   },
 };
 const githubEvidence: AdoptionArtifactsInputs['github'] = {
@@ -532,6 +532,7 @@ describe('adoption artifact construction', () => {
       reject('container_release', (containers) => { containers.api.releaseId = null; });
       reject('container_release', (containers) => { containers.worker.releaseId = 'f'.repeat(40) + '-0-1'; });
       reject('container_identity', (containers) => { containers.api.id = 'f'.repeat(64); });
+      reject('container_identity', (containers) => { containers.api.imageId = 'a'.repeat(64); });
       reject('container_identity', (containers) => { containers.api.imageId = 'short'; });
     `);
   });
