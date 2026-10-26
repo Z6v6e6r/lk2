@@ -8,6 +8,7 @@ export interface ApiWorkerFrozenPin {
 }
 
 export const API_WORKER_MIGRATION_CONTROLLER_FILES: ReadonlySet<string>;
+export const LOCATION_PHOTO_CONTROLLER_EXTRA_FILES: ReadonlySet<string>;
 export const API_WORKER_CI_DOWNLOAD_PATCH: readonly Readonly<ApiWorkerFrozenPin>[];
 export const API_WORKER_CI_READER_PATCH: readonly Readonly<ApiWorkerFrozenPin>[];
 export const API_WORKER_CONTROLLER_PROMOTION_PATCH: readonly Readonly<ApiWorkerFrozenPin>[];

@@ -95,3 +95,39 @@ it. Never restore the pre-normalization ACL as an automatic migration rollback.
 No deployment, SQL execution, grant, revoke, migration or runtime activation is authorized by this
 source document. CI/synthetic checks are source evidence; actual admission/apply/restore receipts
 and separate live approvals remain required.
+
+## Execution packet
+
+`scripts/control-timeweb-location-photo-acl.py` is the reviewed one-attempt packet for the two ACL
+changes above. It runs as root from the enrolled controller checkout with one mode argument and the
+fixed request `/opt/phub/timeweb-beta/operator/location-photo-acl-normalize.json` (root-owned 0600,
+single link, secure parent chain). Prepare/execute/reconcile serialize on a kernel advisory lock
+(`flock`) over a root-owned 0600 lock file that is intentionally never deleted; the kernel releases
+it on process exit, so a crashed invocation never wedges `--reconcile`, and a concurrent invocation
+fails closed with `LOCATION_PHOTO_ACL_PACKET_BUSY` (no manual lock removal is needed):
+
+- `--prepare <request>` validates the request against schema
+  `PHUB_TIMEWEB_LOCATION_PHOTO_ACL_NORMALIZE_V1`, target database/system identifier, enrolled
+  controller `HEAD`/tree/config/Clean full clone, the pinned forward/recover SQL digests, the 105-row
+  ledger digest `7bd04764…`, the disposable PG16 proof digest and a 20-60 minute expiry. It captures
+  a canonical read-only preimage (ledger, both schema ACLs, unrelated schema/relation/column/default
+  metadata, target roles/memberships, event triggers, lock/transaction hazards, photo absence, four
+  installed API/Web/Worker/Realtime container readbacks and the installed envelope), writes
+  `operator/location-photo-acl-normalize.preimage.json`, derives a **guard-only** SQL from the
+  reviewed forward file (all pre-effect assertions, no ACL statement, ending in `rollback;`), executes
+  exactly one read-only `psql` over local stdin inside the postgres container, and writes the guard
+  log and `operator/location-photo-acl-normalize.intent.json`. The confirmation is
+  `NORMALIZE_LOCATION_PHOTO_ACL_105_TWO_SCHEMA_GRANTS_KEEP_EDITOR_ACL_NO_MIGRATION`.
+- `--execute <request>` re-validates request/intent/preimage and custody, requires the current
+  readbacks to equal the sealed preimage, then runs exactly one `psql` subprocess with the unmodified
+  forward SQL on stdin (`ON_ERROR_STOP=1`, no retry). On success it verifies the canonical POST ACL,
+  the unchanged unrelated metadata, the unchanged 105-row ledger and photo absence, writes the
+  `APPLIED_VERIFIED` receipt plus a root-only retirement marker, and refuses a second apply for the
+  same operation ID. A failed or ambiguous acknowledgement is classified read-only as `ABORTED`
+  (exact PRE), `APPLIED_RECONCILED` (exact POST) or `UNKNOWN` (anything else) — no automatic inverse.
+- `--reconcile <request>` is read-only classification only; it records the same statuses and never
+  executes the forward SQL.
+
+The packet does not edit, weaken or bypass the reviewed SQL, and it grants no migration, deploy or
+inverse authority by itself: a sealed request, a separate live approval and the exact-target
+operation owner remain required.

@@ -53,6 +53,8 @@ export const API_WORKER_BRIDGE = Object.freeze({
 export const API_WORKER_CONTROLLER_FILES = new Set([
   'scripts/control-timeweb-database-backup.py',
   'scripts/control-timeweb-database-backup.test.ts',
+  'scripts/control-timeweb-location-photo-acl.py',
+  'scripts/control-timeweb-location-photo-acl.test.ts',
   'scripts/test-timeweb-database-backup.py',
   'scripts/timeweb-api-worker-migration.d.ts',
   'scripts/timeweb-api-worker-migration.js',
@@ -76,6 +78,7 @@ export const API_WORKER_CONTROLLER_FILES = new Set([
   'scripts/timeweb-adopt-manual-baseline.d.ts',
   'scripts/timeweb-adopt-manual-baseline.test.ts',
   'scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json',
+  'scripts/timeweb-api-worker-contract.d.ts',
   'scripts/timeweb-api-worker-contract.js',
   'scripts/timeweb-api-worker-upgrade.js',
   'scripts/timeweb-api-worker-upgrade.test.ts',
@@ -99,7 +102,10 @@ export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([
   'scripts/timeweb-adopt-manual-baseline.test.ts',
   'scripts/control-timeweb-database-backup.py',
   'scripts/control-timeweb-database-backup.test.ts',
+  'scripts/control-timeweb-location-photo-acl.py',
+  'scripts/control-timeweb-location-photo-acl.test.ts',
   'scripts/test-timeweb-database-backup.py',
+  'scripts/timeweb-api-worker-contract.d.ts',
   'scripts/timeweb-api-worker-contract.js',
   'scripts/run-timeweb-standard-delivery.js',
   'scripts/timeweb-api-worker.fixture.ts',
@@ -131,6 +137,17 @@ export const LOCATION_PHOTO_CONTROLLER_BASE = Object.freeze({
   sha: '2bf56ca8c1bc3e27db5c857dbf961ad400f2294b',
   tree: 'fd6ae8e635d325a39e5e44ba06d1ab0c3df6e757',
 });
+// Reviewed controller-only source changes merged after the package anchor and before the 0102
+// migration. Each path is already admitted by its own reviewed controller allowlist (JOIN runtime
+// tail, API/Web controller delta, Web-only critical route, controller-promotion source closure) and
+// carries only plain regular-blob M/A transitions. This dedicated set keeps the package's mandatory
+// 16-path delta strict without widening the generic API/Worker or migration closures.
+export const LOCATION_PHOTO_CONTROLLER_EXTRA_FILES = new Set([
+  'scripts/timeweb-join-dormant-profile.js',
+  'scripts/timeweb-critical-web.js',
+  'scripts/timeweb-critical-web.test.ts',
+  'scripts/verify-source-ci.js',
+]);
 export const LOCATION_PHOTO_CONTROLLER_DELTA = Object.freeze(
   Object.fromEntries(
     [
@@ -156,7 +173,8 @@ export const LOCATION_PHOTO_CONTROLLER_DELTA = Object.freeze(
 
 // The package must observe its full reviewed delta. Further controller-source changes are admitted
 // only when every additional path is itself a reviewed controller file (API_WORKER_CONTROLLER_FILES)
-// and carries a plain regular-blob M/A transition; package integrity is independently pinned by the
+// or one of the dedicated LOCATION_PHOTO_CONTROLLER_EXTRA_FILES paths, and carries a plain
+// regular-blob M/A transition; package integrity is independently pinned by the
 // descriptor/migration/blob hashes, so this closure is a controller-drift guard, not the package
 // authorship proof. A base that only ever grew by reviewed controller files therefore does not block
 // an unrelated reviewed controller release merged between package authoring and the migration.
@@ -170,7 +188,10 @@ export function validateLocationPhotoControllerClosure(entries) {
   const packagePaths = new Set();
   for (const entry of entries) {
     const expected = LOCATION_PHOTO_CONTROLLER_DELTA[entry?.path];
-    const reviewed = expected || API_WORKER_CONTROLLER_FILES.has(entry?.path);
+    const reviewed =
+      expected ||
+      API_WORKER_CONTROLLER_FILES.has(entry?.path) ||
+      LOCATION_PHOTO_CONTROLLER_EXTRA_FILES.has(entry?.path);
     const status = expected ? expected.status : entry?.status;
     if (
       !reviewed ||
@@ -265,8 +286,8 @@ export const API_WORKER_CONTROLLER_PROMOTION_PATCH = Object.freeze([
     status: 'M',
     oldMode: '100644',
     newMode: '100644',
-    oldOid: '31b891b4856dd95ecf849af0b13e609a281cbac1',
-    newOid: '1adb4919d4016495cc4b94a737d8e395515a7d6f',
+    oldOid: '90643e10b1d396f7a4b184440ec2d02fe39666e5',
+    newOid: '838c15aa15604bdf4eb3a35afc7c923424f5df7f',
   }),
   Object.freeze({
     path: 'scripts/verify-source-ci.test.ts',

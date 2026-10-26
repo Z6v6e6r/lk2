@@ -113,10 +113,12 @@ type PhotoControllerDeltaRow = {
 const photoContract = apiWorkerContract as unknown as {
   LOCATION_PHOTO_CONTROLLER_BASE: Readonly<{ sha: string; tree: string }>;
   LOCATION_PHOTO_CONTROLLER_DELTA: Readonly<Record<string, PhotoControllerDeltaRow>>;
+  LOCATION_PHOTO_CONTROLLER_EXTRA_FILES: ReadonlySet<string>;
   validateLocationPhotoControllerClosure(rows: unknown): unknown;
 };
 const LOCATION_PHOTO_CONTROLLER_BASE = photoContract.LOCATION_PHOTO_CONTROLLER_BASE;
 const LOCATION_PHOTO_CONTROLLER_DELTA = photoContract.LOCATION_PHOTO_CONTROLLER_DELTA;
+const LOCATION_PHOTO_CONTROLLER_EXTRA_FILES = photoContract.LOCATION_PHOTO_CONTROLLER_EXTRA_FILES;
 const validateLocationPhotoControllerClosure = (rows: unknown) =>
   photoContract.validateLocationPhotoControllerClosure(rows);
 
@@ -549,6 +551,37 @@ describe('closed Timeweb location-photo 0102 profile', () => {
       expect(validateLocationPhotoControllerClosure([...rows, extra({ path })])).toHaveLength(
         rows.length + 1,
       );
+    // The real post-PR controller diff shape: the four reviewed controller-only source changes that
+    // landed after the package anchor are admitted through the dedicated extra set (each is already
+    // a reviewed controller path in its own JOIN/Web/promotion allowlist), while the mandatory
+    // 16-path package delta stays exact.
+    expect([...LOCATION_PHOTO_CONTROLLER_EXTRA_FILES].sort()).toEqual([
+      'scripts/timeweb-critical-web.js',
+      'scripts/timeweb-critical-web.test.ts',
+      'scripts/timeweb-join-dormant-profile.js',
+      'scripts/verify-source-ci.js',
+    ]);
+    const postPrShape = [...LOCATION_PHOTO_CONTROLLER_EXTRA_FILES].map((path) => extra({ path }));
+    // The real diff also modifies the contract declaration companion; it is admitted through the
+    // ordinary reviewed controller allowlist (API_WORKER_CONTROLLER_FILES), not the extra set.
+    expect(
+      validateLocationPhotoControllerClosure([
+        ...rows,
+        extra({ path: 'scripts/timeweb-api-worker-contract.d.ts' }),
+      ]),
+    ).toHaveLength(rows.length + 1);
+    const realShape = [...postPrShape, extra({ path: 'scripts/timeweb-api-worker-contract.d.ts' })];
+    expect(validateLocationPhotoControllerClosure([...rows, ...realShape])).toHaveLength(
+      rows.length + realShape.length,
+    );
+    for (const path of postPrShape.map((row) => row.path))
+      expect(() =>
+        validateLocationPhotoControllerClosure([
+          ...rows,
+          extra({ path: 'scripts/not-a-reviewed-controller-file.js' }),
+          extra({ path }),
+        ]),
+      ).toThrow('LOCATION_PHOTO_CONTROLLER_DELTA');
     // A package path re-declared with a different status is rejected even as an allowlisted path.
     expect(() =>
       validateLocationPhotoControllerClosure(

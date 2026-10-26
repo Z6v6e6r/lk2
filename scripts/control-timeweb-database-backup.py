@@ -41,12 +41,15 @@ API_WORKER_MIGRATION_CONTROLLER_FILES = frozenset([
     'docs/runbooks/timeweb-standard-delivery.md',
     'scripts/control-timeweb-database-backup.py',
     'scripts/control-timeweb-database-backup.test.ts',
+    'scripts/control-timeweb-location-photo-acl.py',
+    'scripts/control-timeweb-location-photo-acl.test.ts',
     'scripts/fixtures/timeweb-api-worker-ledger-8158ac44.json',
     'scripts/run-timeweb-standard-delivery.js',
     'scripts/test-timeweb-database-backup.py',
     'scripts/timeweb-adopt-manual-baseline.d.ts',
     'scripts/timeweb-adopt-manual-baseline.js',
     'scripts/timeweb-adopt-manual-baseline.test.ts',
+    'scripts/timeweb-api-worker-contract.d.ts',
     'scripts/timeweb-api-worker-contract.js',
     'scripts/timeweb-api-worker-migration-role.d.ts',
     'scripts/timeweb-api-worker-migration-role.js',
@@ -75,7 +78,7 @@ API_WORKER_CI_READER_PATCH = {
     'scripts/timeweb-api-web-upgrade.js': {'path': 'scripts/timeweb-api-web-upgrade.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'c3da47a8fa4c95d06081d1a189c28b2ec8afa55e', 'newOid': '3a9c15e1b2fcef121a82122479c80b5c83a431c7'},
 }
 API_WORKER_CONTROLLER_PROMOTION_PATCH = {
-    'scripts/verify-source-ci.js': {'path': 'scripts/verify-source-ci.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '31b891b4856dd95ecf849af0b13e609a281cbac1', 'newOid': '1adb4919d4016495cc4b94a737d8e395515a7d6f'},
+    'scripts/verify-source-ci.js': {'path': 'scripts/verify-source-ci.js', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': '90643e10b1d396f7a4b184440ec2d02fe39666e5', 'newOid': '838c15aa15604bdf4eb3a35afc7c923424f5df7f'},
     'scripts/verify-source-ci.test.ts': {'path': 'scripts/verify-source-ci.test.ts', 'status': 'M', 'oldMode': '100644', 'newMode': '100644', 'oldOid': 'deddc6be4d875375e813abe13a345311029d71bb', 'newOid': '63f207f3c05aa12fdf852fa0f898f14f4fb53282'},
 }
 API_WORKER_ANDROID_CHAT_TEST_PATCH = {
