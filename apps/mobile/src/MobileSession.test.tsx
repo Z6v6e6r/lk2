@@ -254,6 +254,89 @@ it('reveals diagnostics only on request and clears each section independently', 
   expect(calls.logout).not.toHaveBeenCalled();
 });
 
+it('keeps successful read metadata collapsed without claiming that the screen rendered', async () => {
+  render(<MobileApp config={config} native />);
+  await screen.findByRole('button', { name: 'Выйти' });
+  act(() =>
+    calls.observeRead?.({
+      section: 'profile',
+      failure: null,
+      complete: true,
+      path: '/profile',
+      trace: [
+        {
+          stage: 'initial-get',
+          observedAt: '2026-10-12T21:00:00.000Z',
+          source: 'network',
+          outcome: 'http',
+          status: 200,
+          shape: 'object',
+          fields: ['displayName', 'userId'],
+          headers: {
+            contentType: 'application/json',
+            cacheControl: 'private, no-store',
+            retryAfter: 'ABSENT',
+          },
+        },
+      ],
+    }),
+  );
+  const details = screen.getByRole('button', { name: 'Сведения о загрузке' });
+  expect(details).toHaveAttribute('aria-expanded', 'false');
+  expect(document.body).not.toHaveTextContent('HTTP 200');
+  fireEvent.click(details);
+  expect(document.body).toHaveTextContent('HTTP 200');
+  expect(document.body).toHaveTextContent('Cache-Control: private, no-store');
+  expect(document.body).toHaveTextContent('поля: displayName, userId');
+  expect(document.body).toHaveTextContent('Показ экрана: не подтверждён');
+  expect(document.body).not.toHaveTextContent('Код ошибки:');
+  act(() => calls.observeRead?.({ section: 'profile', failure: null, complete: true, trace: [] }));
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  expect(calls.restore).toHaveBeenCalledOnce();
+});
+
+it('retains the prior failure during pending diagnostics and clears bounded observations on logout', async () => {
+  render(<MobileApp config={config} native />);
+  await screen.findByRole('button', { name: 'Выйти' });
+  const oldObserve = calls.observeRead;
+  const trace = [
+    {
+      stage: 'initial-get',
+      observedAt: '2026-10-12T21:00:00.000Z',
+      source: 'network',
+      outcome: 'http',
+      status: 503,
+    },
+  ] as const;
+  act(() =>
+    calls.observeRead?.({ section: 'bookings', failure: { code: 'BOOKINGS_PROJECTION_STALE' } }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Сведения об ошибке загрузки' }));
+  act(() =>
+    calls.observeRead?.({
+      section: 'bookings',
+      failure: null,
+      complete: false,
+      trace,
+      path: '/bookings/upcoming',
+    }),
+  );
+  expect(document.body).toHaveTextContent('BOOKINGS_PROJECTION_STALE');
+  expect(document.body).toHaveTextContent('HTTP 503');
+  fireEvent.click(screen.getByRole('button', { name: 'Выйти' }));
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  act(() =>
+    oldObserve?.({
+      section: 'bookings',
+      failure: null,
+      complete: true,
+      trace,
+      path: '/bookings/upcoming',
+    }),
+  );
+  expect(screen.queryByRole('note')).not.toBeInTheDocument();
+});
+
 it('clears expanded diagnostics immediately on logout and on the subsequent session remount', async () => {
   let reject!: (reason: Error) => void;
   calls.logout.mockImplementationOnce(

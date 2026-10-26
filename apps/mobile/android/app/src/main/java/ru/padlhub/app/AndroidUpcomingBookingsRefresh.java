@@ -38,6 +38,13 @@ final class AndroidUpcomingBookingsRefresh {
     static final int RELAY_LIMIT = 6 * 1024 * 1024;
     static final String PROVIDER_BASE = "https://api.vivacrm.ru/end-user/api";
     interface Cancellation { void require() throws Failure; }
+    /** Closed successful acknowledgements only. No HTTP details, IDs or provider data. */
+    static final class Receipt {
+        final boolean jobAccepted, relayAccepted, completed;
+        Receipt(boolean jobAccepted, boolean relayAccepted, boolean completed) {
+            this.jobAccepted = jobAccepted; this.relayAccepted = relayAccepted; this.completed = completed;
+        }
+    }
     interface ProviderSender { Response get(String path, String token) throws Failure; }
 
     private final AndroidSessionPolicy policy;
@@ -106,6 +113,7 @@ final class AndroidUpcomingBookingsRefresh {
         final List<Outcome> outcomes = new ArrayList<>();
         long deadline = Long.MAX_VALUE;
         boolean tokenRefreshed;
+        boolean jobAccepted, relayAccepted, completed;
         String token;
         long tokenDeadline;
         String tenant, revision;
@@ -171,7 +179,7 @@ final class AndroidUpcomingBookingsRefresh {
         void forget() { token = null; tenant = null; revision = null; }
     }
 
-    void run(AndroidSessionEngine.NativeAccess access, Cancellation cancellation) throws Failure {
+    Receipt run(AndroidSessionEngine.NativeAccess access, Cancellation cancellation) throws Failure {
         Invocation current = new Invocation(access, cancellation);
         byte[] list = null, details = null;
         try {
@@ -198,6 +206,7 @@ final class AndroidUpcomingBookingsRefresh {
             if (!(decodedJob instanceof JSONObject)) throw jobRejected("CONTRACT");
             Job job = job((JSONObject) decodedJob);
             current.restrict(jobReply, job.expiresAt, 120_000);
+            current.jobAccepted = true;
             delegate(current);
             current.stage = "LIST";
             list = providerRead("/v2/" + current.tenant + "/bookings?page=0&size=50", "bookings.read", current);
@@ -218,6 +227,7 @@ final class AndroidUpcomingBookingsRefresh {
                 || !(itemCount instanceof Number) || ((Number) itemCount).doubleValue() < 0
                 || ((Number) itemCount).doubleValue() > 50
                 || ((Number) itemCount).doubleValue() != ((Number) itemCount).intValue()) throw rejected();
+            current.relayAccepted = true;
             current.stage = "COMPLETION";
             byte[] completedBytes = api("/booking-screen-read-jobs/" + job.jobId + "/complete", "POST", "{\"limit\":50}",
                 UUID.randomUUID().toString(), true, current).body;
@@ -229,9 +239,11 @@ final class AndroidUpcomingBookingsRefresh {
                 if (!(bookings.opt("version") instanceof String) || bookings.getString("version").isEmpty()
                     || bookings.getJSONArray("items").length() > 50
                     || timestamp(bookings.getString("staleAt")) <= timestamp(bookings.getString("generatedAt"))) throw rejected();
+                current.completed = true;
             } finally { wipe(completedBytes); }
             current.require();
             emitMetrics(current); // Projection is committed before metrics can be scheduled.
+            return new Receipt(current.jobAccepted, current.relayAccepted, current.completed);
         } catch (Failure error) { emitMetrics(current); throw "NATIVE_RESPONSE_REJECTED".equals(error.code) ? stageRejected(current.stage) : error; }
         catch (Exception ignored) { emitMetrics(current); throw stageRejected(current.stage); }
         finally { wipe(list); wipe(details); current.forget(); }

@@ -74,6 +74,49 @@ public class AndroidUpcomingBookingsRefreshTest {
         return "{\"accessToken\":\"" + token + "\",\"expiresAt\":\"" + expiry + "\"}";
     }
 
+    @Test public void receiptContainsOnlyValidatedMilestonesWithoutExtraRequests() throws Exception {
+        Fixture fixture = new Fixture();
+        AndroidUpcomingBookingsRefresh.Receipt receipt = fixture.run();
+        assertTrue(receipt.jobAccepted); assertTrue(receipt.relayAccepted); assertTrue(receipt.completed);
+        assertEquals(2, fixture.providerCalls); assertEquals(1, fixture.resultAttempts); assertEquals(1, fixture.completeAttempts);
+        assertEquals(3, receipt.getClass().getDeclaredFields().length);
+        for (java.lang.reflect.Field field : receipt.getClass().getDeclaredFields()) {
+            assertEquals(boolean.class, field.getType());
+            assertTrue(java.lang.reflect.Modifier.isFinal(field.getModifiers()));
+        }
+        fixture.result = "{\"accepted\":false,\"replayed\":false,\"itemCount\":0}";
+        fixture.fails("NATIVE_BOOKINGS_RESULT_REJECTED");
+    }
+
+    @Test public void completionCannotPublishReceiptAfterCancellationOrLogout() throws Exception {
+        for (boolean logout : Arrays.asList(false, true)) {
+            Fixture fixture = new Fixture();
+            final boolean[] cancelled = {false};
+            fixture.completionHook = () -> {
+                cancelled[0] = true;
+                if (logout) {
+                    try { fixture.engine.prepareLogout(KEY); }
+                    catch (Failure error) { throw new AssertionError(error.code); }
+                }
+            };
+            try {
+                fixture.run(() -> { if (!logout && cancelled[0]) throw new Failure("NATIVE_OPERATION_CANCELLED"); });
+                fail("A late completion must not publish a receipt");
+            } catch (Failure error) { assertEquals("NATIVE_OPERATION_CANCELLED", error.code); }
+            assertEquals(1, fixture.completeAttempts); assertEquals(1, fixture.resultAttempts);
+            assertEquals(2, fixture.providerCalls); assertTrue(fixture.metrics.isEmpty());
+        }
+    }
+
+    @Test public void partialCompletionCannotPublishSuccessReceiptOrRepeatReads() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.complete = fixture.complete.replace("\"completedCommands\":1", "\"completedCommands\":0");
+        fixture.fails("NATIVE_BOOKINGS_COMPLETION_REJECTED");
+        assertEquals(1, fixture.completeAttempts); assertEquals(1, fixture.resultAttempts);
+        assertEquals(2, fixture.providerCalls);
+        assertEquals(1, countExactPath(fixture.api, "/booking-screen-read-jobs"));
+    }
+
     static class Fixture {
         final TestClock clock = new TestClock();
         final MemoryStore store = new MemoryStore();
@@ -108,6 +151,7 @@ public class AndroidUpcomingBookingsRefreshTest {
         String failPath, throwPath;
         int providerCalls, resultAttempts, completeAttempts;
         Runnable providerHook;
+        Runnable completionHook;
         AndroidSessionEngine engine;
 
         Fixture() throws Exception {
@@ -144,6 +188,7 @@ public class AndroidUpcomingBookingsRefreshTest {
             }
             if (request.path.endsWith("/complete")) {
                 completeAttempts++;
+                if (completionHook != null) completionHook.run();
                 if ("complete".equals(throwPath) && completeAttempts == 1) throw new Failure("NATIVE_NETWORK_UNAVAILABLE");
                 if ("complete".equals(failPath)) return json(500, "{}", dateFor(request.path));
                 return json(200, complete, dateFor(request.path));
@@ -157,11 +202,11 @@ public class AndroidUpcomingBookingsRefreshTest {
             if (providerStatus != 200) return json(providerStatus, "{}");
             return json(200, path.contains("/list?") ? details : list);
         }
-        void run() throws Exception {
-            run(() -> {});
+        AndroidUpcomingBookingsRefresh.Receipt run() throws Exception {
+            return run(() -> {});
         }
-        void run(AndroidUpcomingBookingsRefresh.Cancellation cancellation) throws Exception {
-            new AndroidUpcomingBookingsRefresh(policy, engine, this::send, this::provider, clock, circuits).run(engine.nativeAccess(), cancellation);
+        AndroidUpcomingBookingsRefresh.Receipt run(AndroidUpcomingBookingsRefresh.Cancellation cancellation) throws Exception {
+            return new AndroidUpcomingBookingsRefresh(policy, engine, this::send, this::provider, clock, circuits).run(engine.nativeAccess(), cancellation);
         }
         void fails(String code) throws Exception {
             try { run(); fail("Expected " + code); }
