@@ -492,6 +492,35 @@ describe('adoption artifact construction', () => {
         previousDescriptorBytes: Buffer.from(previousDescriptorBytes.toString('utf8').replace('PHUB_COMPONENT_ROLLOUT_KIND=API_WEB', 'PHUB_COMPONENT_ROLLOUT_KIND=SIMPLIFIED_FULL')),
       }), /previous_baseline_drift/);
       assert.throws(() => buildAdoptionArtifacts(value, { ...inputs, previousDescriptorBytes: currentDescriptorBytes }), /previous_baseline_drift/);
+      // A previous adopted baseline is a canonical parent too: consecutive manual promotions may
+      // chain until a reviewed controller-source delivery route exists (ADR-0026 follow-up).
+      const originalReceipt = JSON.parse(
+        buildAdoptionArtifacts(value, inputs).receiptBytes.toString('utf8'),
+      );
+      const adoptedParent = Buffer.from(
+        previousDescriptorBytes
+          .toString('utf8')
+          .replace(
+            'PHUB_COMPONENT_ROLLOUT_KIND=API_WEB',
+            'PHUB_COMPONENT_ROLLOUT_KIND=ADOPTED_MANUAL_FULL',
+          ),
+      );
+      const adoptedParentSha = createHash('sha256').update(adoptedParent).digest('hex');
+      const chainedValue = structuredClone(value);
+      chainedValue.expectedCurrentBaseline.descriptorSha256 = adoptedParentSha;
+      const chainedRequestBytes = Buffer.from(JSON.stringify(chainedValue));
+      const chainedReceipt = JSON.parse(
+        buildAdoptionArtifacts(chainedValue, {
+          ...inputs,
+          requestBytes: chainedRequestBytes,
+          previousDescriptorBytes: adoptedParent,
+        }).receiptBytes.toString('utf8'),
+      );
+      assert.equal(chainedReceipt.previousBaselineSha256, adoptedParentSha);
+      assert.notEqual(
+        chainedReceipt.previousBaselineSha256,
+        originalReceipt.previousBaselineSha256,
+      );
       assert.throws(() => buildAdoptionArtifacts(value, {
         ...inputs,
         previousDescriptorBytes: Buffer.from(previousDescriptorBytes.toString('utf8').replace('PHUB_COMPONENT_ROLLOUT_KIND=API_WEB', 'PHUB_COMPONENT_ROLLOUT_KIND=API_WEB_JOIN_DORMANT_0105')),

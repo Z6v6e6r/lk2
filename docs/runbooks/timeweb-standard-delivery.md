@@ -1599,6 +1599,10 @@ readable after expiry) and
 `expectedCurrentBaseline.releaseId` must differ from `release.releaseId`; `secretSet.releaseId` must
 equal it because adoption keeps the installed secret set byte-for-byte.
 
+A previous adopted baseline is a canonical parent too: consecutive manual Compose promotions can be
+adopted one on top of another while a controller-source delivery route does not exist. The receipt
+records the adopted parent release id and its exact `previousBaselineSha256`, so the chain is explicit.
+
 Precondition (P1.4): run the command from a clean, root-owned checkout of exactly the reviewed
 `controllerSha` at `/opt/phub/timeweb-beta/releases/<releaseId>/source`. The current beta host does not
 yet have that checkout; creating it is the P1.4 step and is not performed by this script. Before any
