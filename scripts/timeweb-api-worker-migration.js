@@ -71,12 +71,32 @@ import {
   notificationStateSql,
   validateNotificationState,
 } from './timeweb-notification-profile.js';
+import {
+  LOCATION_PHOTO_BACKUP_SCHEMA,
+  LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE,
+  LOCATION_PHOTO_MIGRATION,
+  LOCATION_PHOTO_MIGRATION_SCHEMA,
+  LOCATION_PHOTO_POST_LEDGER,
+  LOCATION_PHOTO_PREFETCH_SCHEMA,
+  LOCATION_PHOTO_PRE_LEDGER,
+  attestLocationPhotoBackupSource,
+  attestLocationPhotoControllerSource,
+  validateLocationPhotoBackupOperation,
+  validateLocationPhotoLedger,
+  validateLocationPhotoManifest,
+  validateLocationPhotoMigratorReadback,
+  validateLocationPhotoOperation,
+  validateLocationPhotoPackage,
+  validateLocationPhotoState,
+  locationPhotoStateSql,
+} from './timeweb-location-photo-profile.js';
 const ROOT = '/opt/phub/timeweb-beta',
   SOURCE = `${ROOT}/standard/source`,
   RUNTIME = '/etc/phub/timeweb-beta';
 const REQUEST = `${ROOT}/operator/api-worker-migration.json`,
   ACTIVE = `${ROOT}/standard/active`;
 const PREFETCH_REQUEST = `${ROOT}/operator/notification-migrator-prefetch.json`;
+const LOCATION_PHOTO_PREFETCH_REQUEST = `${ROOT}/operator/location-photo-migrator-prefetch.json`;
 const PROVISION = '/etc/phub/.timeweb-beta.provision.lock';
 const MIGRATOR_IMAGE =
   'ghcr.io/z6v6e6r/phub-migrator@sha256:e3d23565c928baa331e409d27dac48ac6f9821ea2288e3c45bc72c3694af79aa';
@@ -131,6 +151,7 @@ export const API_WORKER_MIGRATION_BRIDGE = Object.freeze({
 });
 export function validateApiWorkerMigrationOperation(op, at) {
   if (op?.schema === NOTIFICATION_MIGRATION_SCHEMA) return validateNotificationOperation(op, at);
+  if (op?.schema === LOCATION_PHOTO_MIGRATION_SCHEMA) return validateLocationPhotoOperation(op, at);
   exact(op, [
     'schema',
     'target',
@@ -273,6 +294,8 @@ export function readApiWorkerMigrationCapsule(bytes) {
 export function validateMigrationPlan(plan, operationBytes) {
   if (parseStrictJson(operationBytes).schema === NOTIFICATION_MIGRATION_SCHEMA)
     return validateNotificationMigrationPlan(plan, operationBytes);
+  if (parseStrictJson(operationBytes).schema === LOCATION_PHOTO_MIGRATION_SCHEMA)
+    return validateLocationPhotoMigrationPlan(plan, operationBytes);
   const op = validateApiWorkerMigrationOperation(parseStrictJson(operationBytes));
   exact(plan, [
     'schema',
@@ -395,6 +418,44 @@ export function migrationCreateArgs(
   runtimeRole,
   notification,
 ) {
+  if (notification?.operation?.schema === LOCATION_PHOTO_MIGRATION_SCHEMA) {
+    validateLocationPhotoOperation(notification.operation);
+    if (
+      !['migration', 'migrator', 'migrator-post'].includes(kind) ||
+      !/^phub-timeweb-migration-[a-f0-9]{12}-[1-9][0-9]*-1(?:-role-migrator(?:-post)?)?$/.test(
+        name,
+      ) ||
+      envFile !== `${RUNTIME}/migrator.env`
+    )
+      stop('CREATE');
+    const actualKind = kind === 'migration' ? 'migration' : 'migrator';
+    const args = migrationCreateArgs(
+      name.replace(/-post$/, ''),
+      operationSha,
+      envFile,
+      actualKind,
+      actualKind === 'migrator' ? 'phub_runtime' : runtimeRole,
+    );
+    const index = args.indexOf(MIGRATOR_IMAGE);
+    if (index < 0) stop('CREATE');
+    args.splice(
+      index,
+      args.length - index,
+      notification.operation.publishedMigrator.image,
+      ...(kind === 'migration'
+        ? []
+        : [
+            '--input-type=module',
+            '-e',
+            LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE,
+            kind === 'migrator' ? 'pre' : 'bootstrap',
+          ]),
+    );
+    for (let i = 0; i < args.length; i++)
+      if (args[i] === `phub.migration-kind=${actualKind}`) args[i] = `phub.migration-kind=${kind}`;
+    args[args.indexOf('--name') + 1] = name;
+    return args;
+  }
   if (notification) {
     validateNotificationOperation(notification.operation);
     const actualKind = kind.split('-')[0];
@@ -496,41 +557,56 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
   const h = v?.HostConfig,
     c = v?.Config,
     k = spec?.kind;
-  const cmd = spec?.notification
+  const cmd = spec?.locationPhoto
     ? k === 'migration'
-      ? [
-          'node',
-          'apps/migrator/dist/main.js',
-          '--notification-migrations-0099-0101',
-          Buffer.from(JSON.stringify(spec.notification.target)).toString('base64'),
-        ]
-      : [
-          'apps/migrator/dist/notification-migration-probe.js',
-          k.split('-')[0],
-          k.endsWith('-post') ? 'post' : 'pre',
-        ]
-    : k === 'migration'
       ? ['node', 'apps/migrator/dist/main.js']
       : [
           '--input-type=module',
           '-e',
-          MIGRATION_ROLE_PROBE_SOURCE,
-          k,
-          ...(k === 'migrator' ? [spec.runtimeRole] : []),
-        ];
+          LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE,
+          k === 'migrator' ? 'pre' : 'bootstrap',
+        ]
+    : spec?.notification
+      ? k === 'migration'
+        ? [
+            'node',
+            'apps/migrator/dist/main.js',
+            '--notification-migrations-0099-0101',
+            Buffer.from(JSON.stringify(spec.notification.target)).toString('base64'),
+          ]
+        : [
+            'apps/migrator/dist/notification-migration-probe.js',
+            k.split('-')[0],
+            k.endsWith('-post') ? 'post' : 'pre',
+          ]
+      : k === 'migration'
+        ? ['node', 'apps/migrator/dist/main.js']
+        : [
+            '--input-type=module',
+            '-e',
+            MIGRATION_ROLE_PROBE_SOURCE,
+            k,
+            ...(k === 'migrator' ? [spec.runtimeRole] : []),
+          ];
   if (
     !spec ||
     !(
       spec?.notification
         ? ['migration', 'runtime', 'migrator', 'runtime-post', 'migrator-post']
-        : ['migration', 'runtime', 'migrator']
+        : spec?.locationPhoto
+          ? ['migration', 'migrator', 'migrator-post']
+          : ['migration', 'runtime', 'migrator']
     ).includes(k) ||
     !v ||
     v.Id !== id ||
     v.Name !== `/${spec.name}` ||
     v.Image !== spec.imageId ||
     c?.Image !==
-      (spec?.notification ? spec.notification.operation.migratorImage : MIGRATOR_IMAGE) ||
+      (spec?.notification
+        ? spec.notification.operation.migratorImage
+        : spec?.locationPhoto
+          ? spec.locationPhoto.operation.publishedMigrator.image
+          : MIGRATOR_IMAGE) ||
     c.User !== 'appuser' ||
     c.WorkingDir !== '/app' ||
     (!same(c.Entrypoint, k === 'migration' ? null : ['node']) &&
@@ -578,6 +654,8 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
 export async function runMigrationAdapter(mode, operationBytes, ops) {
   if (parseStrictJson(operationBytes).schema === NOTIFICATION_MIGRATION_SCHEMA)
     return runNotificationMigrationAdapter(mode, operationBytes, ops);
+  if (parseStrictJson(operationBytes).schema === LOCATION_PHOTO_MIGRATION_SCHEMA)
+    return runLocationPhotoMigrationAdapter(mode, operationBytes, ops);
   const op = validateApiWorkerMigrationOperation(
     parseStrictJson(operationBytes),
     mode === 'deploy' ? ops.time() : undefined,
@@ -942,6 +1020,32 @@ function sourceAttest(op) {
     for (const name of ['api.env', 'worker.env'])
       assertNotificationRuntimeOff(read(`${RUNTIME}/${name}`));
     return attestNotificationSource(op, { git, read, secure, present });
+  }
+  if (op.schema === LOCATION_PHOTO_MIGRATION_SCHEMA) {
+    attestLocationPhotoControllerSource(op, { git, read, secure, present });
+    const descriptor = read(
+        `${SOURCE}/deploy/timeweb/location-photo-migration-0102.v1.json`,
+        0o644,
+      ),
+      bootstrap = read(`${SOURCE}/deploy/timeweb/location-photo-role-bootstrap-0102.sql`, 0o644),
+      cleanup = read(`${SOURCE}/deploy/timeweb/location-photo-role-cleanup-0102.sql`, 0o644),
+      migration = read(
+        `${SOURCE}/packages/database/migrations/0102_location_recommendation_photos.sql`,
+        0o644,
+      );
+    validateLocationPhotoPackage(descriptor);
+    if (
+      hash(descriptor) !== op.packageDescriptorSha256 ||
+      hash(bootstrap) !== op.bootstrapSha256 ||
+      hash(cleanup) !== op.cleanupSha256 ||
+      hash(migration) !== LOCATION_PHOTO_MIGRATION.sha256 ||
+      git([
+        'hash-object',
+        `${SOURCE}/packages/database/migrations/${LOCATION_PHOTO_MIGRATION.filename}`,
+      ]) !== LOCATION_PHOTO_MIGRATION.gitBlob
+    )
+      stop('LOCATION_PHOTO_SOURCE');
+    return;
   }
   if (!secure(SOURCE, 0o700).isDirectory() || !secure(`${SOURCE}/.git`).isDirectory())
     stop('SOURCE_DIRECTORY');
@@ -2853,14 +2957,23 @@ function inspectDiskRestoreKernel(row, attestation) {
 
 function productionOps(op, owner, ignoredRestore = null) {
   const notification = op.schema === NOTIFICATION_MIGRATION_SCHEMA;
-  const postgresId = notification ? op.expectedPostgres.id : bridge.postgresId;
-  const migratorImage = notification ? op.migratorImage : MIGRATOR_IMAGE;
-  const candidate = `${op.candidateSha}-${op.publicationRunId}-1`,
-    tx = `${ROOT}/backups/${candidate}-migration`;
-  const prefetchRoot = `${ROOT}/standard/notification-prefetch/${candidate}`;
+  const locationPhoto = op.schema === LOCATION_PHOTO_MIGRATION_SCHEMA;
+  const postgresId = notification || locationPhoto ? op.expectedPostgres.id : bridge.postgresId;
+  const migratorImage = notification
+    ? op.migratorImage
+    : locationPhoto
+      ? op.publishedMigrator.image
+      : MIGRATOR_IMAGE;
+  const candidate = locationPhoto
+      ? `${op.publishedMigrator.sourceSha}-${op.publishedMigrator.publicationRunId}-1`
+      : `${op.candidateSha}-${op.publicationRunId}-1`,
+    tx = locationPhoto
+      ? `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-location-photo0102-migration`
+      : `${ROOT}/backups/${candidate}-migration`;
+  const prefetchRoot = `${ROOT}/standard/${locationPhoto ? 'location-photo-prefetch' : 'notification-prefetch'}/${candidate}`;
   const prefetchFile = (name) => `${prefetchRoot}/${name}.json`;
   const path = (name) => `${tx}/${name}`,
-    name = `phub-timeweb-migration-${op.candidateSha.slice(0, 12)}-${op.publicationRunId}-1`;
+    name = `phub-timeweb-migration-${(locationPhoto ? op.publishedMigrator.sourceSha : op.candidateSha).slice(0, 12)}-${locationPhoto ? op.publishedMigrator.publicationRunId : op.publicationRunId}-1`;
   let plan,
     marker,
     lockIdentities,
@@ -2874,12 +2987,14 @@ function productionOps(op, owner, ignoredRestore = null) {
       v.Os !== 'linux' ||
       v.Architecture !== 'amd64' ||
       !v.RepoDigests?.includes(migratorImage) ||
-      v.Config?.Labels?.['org.opencontainers.image.revision'] !== op.candidateSha ||
+      v.Config?.Labels?.['org.opencontainers.image.revision'] !==
+        (locationPhoto ? op.publishedMigrator.sourceSha : op.candidateSha) ||
       v.Config.User !== 'appuser' ||
       v.Config.WorkingDir !== '/app' ||
       !(v.Config.Entrypoint === null || same(v.Config.Entrypoint, ['docker-entrypoint.sh'])) ||
       !same(v.Config.Cmd, ['node', 'apps/migrator/dist/main.js']) ||
-      !/^sha256:[a-f0-9]{64}$/.test(v.Id)
+      !/^sha256:[a-f0-9]{64}$/.test(v.Id) ||
+      (locationPhoto && v.Id !== op.publishedMigrator.imageId)
     )
       stop('IMAGE');
     return v;
@@ -2890,6 +3005,7 @@ function productionOps(op, owner, ignoredRestore = null) {
     imageId: plan?.imageId ?? image().Id,
     runtimeRole: roleName,
     ...(notification ? { notification: { operation: op, target: ops.target() } } : {}),
+    ...(locationPhoto ? { locationPhoto: { operation: op } } : {}),
     env: envValues(kind.split('-')[0], image().Config.Env),
   });
   const lookup = (kind, imageId, operationSha) => {
@@ -2952,11 +3068,41 @@ function productionOps(op, owner, ignoredRestore = null) {
       )
         stop('EXCLUSION');
     },
+    assertPreparedUnclaimed: () => {
+      secure(tx, 0o700);
+      if (
+        !same(readdirSync(tx).sort(), ['plan.json', 'preparation.json']) ||
+        present(ACTIVE) ||
+        present(PROVISION) ||
+        ids(['--filter', `name=^/${name}(?:-role-(?:runtime|migrator)(?:-post)?)?$`]).length ||
+        docker(['ps', '-q', '--filter', 'label=com.docker.compose.service=migrator']).trim()
+      )
+        stop('UNCLAIMED_PREPARATION_DRIFT');
+    },
     authority: async (operation) => {
       await readControllerSourceAuthority(operation, git, githubPublic);
       secure(`${ROOT}/releases/${candidate}`, 0o700);
-      const manifest = await candidateAuthority(operation, `${ROOT}/releases/${candidate}`);
-      if (notification) validateNotificationManifest(operation, manifest);
+      if (locationPhoto) {
+        const run = await githubPublic(
+          `actions/runs/${operation.publishedMigrator.publicationRunId}`,
+        );
+        if (
+          String(run.id) !== operation.publishedMigrator.publicationRunId ||
+          run.head_sha !== operation.publishedMigrator.sourceSha ||
+          run.head_branch !== 'main' ||
+          run.run_attempt !== operation.publishedMigrator.publicationRunAttempt ||
+          run.status !== 'completed' ||
+          run.conclusion !== 'success' ||
+          run.event !== 'workflow_dispatch' ||
+          run.path !== '.github/workflows/publish-timeweb-amd64-images.yaml'
+        )
+          stop('LOCATION_PHOTO_PUBLICATION');
+        const manifestBytes = read(`${ROOT}/releases/${candidate}/release-manifest.json`, 0o600);
+        validateLocationPhotoManifest(operation, parseStrictJson(manifestBytes), manifestBytes);
+      } else {
+        const manifest = await candidateAuthority(operation, `${ROOT}/releases/${candidate}`);
+        if (notification) validateNotificationManifest(operation, manifest);
+      }
     },
     secrets: () => secretSet(RUNTIME),
     image: () => image().Id,
@@ -2995,12 +3141,22 @@ function productionOps(op, owner, ignoredRestore = null) {
     },
     prefetchUnused: () => {
       ops.assertUnused();
-      if ([REQUEST, DISK_BACKUP_REQUEST, `${ROOT}/operator/api-worker-upgrade.json`].some(present))
+      if (
+        [
+          REQUEST,
+          DISK_BACKUP_REQUEST,
+          `${ROOT}/operator/api-worker-upgrade.json`,
+          locationPhoto ? PREFETCH_REQUEST : LOCATION_PHOTO_PREFETCH_REQUEST,
+        ].some(present)
+      )
         stop('PREFETCH_PHASE');
     },
     prefetchIntent: () => (present(prefetchFile('intent')) ? read(prefetchFile('intent')) : null),
     writePrefetchIntent: (bytes) => {
-      for (const directory of [`${ROOT}/standard/notification-prefetch`, prefetchRoot]) {
+      for (const directory of [
+        `${ROOT}/standard/${locationPhoto ? 'location-photo-prefetch' : 'notification-prefetch'}`,
+        prefetchRoot,
+      ]) {
         if (!present(directory)) {
           mkdirSync(directory, { mode: 0o700 });
           syncParent(directory);
@@ -3018,7 +3174,7 @@ function productionOps(op, owner, ignoredRestore = null) {
         .split('\n')
         .includes(migratorImage),
     pullMigrator: () => {
-      if (!notification) stop('PREFETCH_PROFILE');
+      if (!notification && !locationPhoto) stop('PREFETCH_PROFILE');
       // Only this image-store stage uses the enrolled release reader. All SQL and
       // ordinary migration probes keep their credential-free Docker environment.
       const credentials = '/root/.docker/config.json';
@@ -3062,7 +3218,9 @@ function productionOps(op, owner, ignoredRestore = null) {
         if (
           (notification
             ? ['migration', 'runtime', 'migrator', 'runtime-post', 'migrator-post']
-            : ['migration', 'runtime', 'migrator']
+            : locationPhoto
+              ? ['migration', 'migrator', 'migrator-post']
+              : ['migration', 'runtime', 'migrator']
           ).some((kind) => row.Name === `/${kind === 'migration' ? name : `${name}-role-${kind}`}`)
         ) {
           const kind = row.Config.Labels?.['phub.migration-kind'];
@@ -3126,8 +3284,9 @@ function productionOps(op, owner, ignoredRestore = null) {
           `export PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=5000'; exec psql -X --no-password --username="$POSTGRES_USER" --dbname="\${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc -At --set=ON_ERROR_STOP=1 --command="select json_build_object('databaseName',current_database(),'systemIdentifier',(select system_identifier::text from pg_catalog.pg_control_system()))::text"`,
         ]).trim(),
       ),
-    backup: (operation) => {
+    backup: (operation, options) => {
       if (notification) return notificationBackupProof(operation);
+      if (locationPhoto) return locationPhotoBackupProof(operation, options);
       const directory = `${ROOT}/backups/${operation.controllerSha}-${operation.controllerSourceCiRunId}-1-web`;
       const proof = backupProof(directory, operation.expectedApi),
         v = parseStrictJson(read(proof.path));
@@ -3200,7 +3359,7 @@ function productionOps(op, owner, ignoredRestore = null) {
             `${RUNTIME}/${kind.split('-')[0] === 'runtime' ? 'api' : 'migrator'}.env`,
             kind,
             runtimeRole,
-            s.notification,
+            s.notification ?? s.locationPhoto,
           ),
         ).trim();
       } catch (error) {
@@ -3253,12 +3412,30 @@ function productionOps(op, owner, ignoredRestore = null) {
     attestStoppedProbes: () => {
       for (const kind of notification
         ? ['runtime', 'migrator', 'runtime-post', 'migrator-post']
-        : ['runtime', 'migrator']) {
+        : locationPhoto
+          ? ['migrator', 'migrator-post']
+          : ['runtime', 'migrator']) {
         const row = lookup(kind, plan.imageId, plan.operationSha256);
         if (row && !['created', 'exited'].includes(row.State.Status)) stop('PROBE_RUNNING');
       }
     },
     inputs: () => {
+      if (locationPhoto) {
+        const descriptor = read(
+          `${SOURCE}/deploy/timeweb/location-photo-migration-0102.v1.json`,
+          0o644,
+        );
+        validateLocationPhotoPackage(descriptor);
+        return {
+          packageDescriptorSha256: hash(descriptor),
+          bootstrapSha256: hash(
+            read(`${SOURCE}/deploy/timeweb/location-photo-role-bootstrap-0102.sql`, 0o644),
+          ),
+          cleanupSha256: hash(
+            read(`${SOURCE}/deploy/timeweb/location-photo-role-cleanup-0102.sql`, 0o644),
+          ),
+        };
+      }
       const descriptor = read(
           `${SOURCE}/deploy/timeweb/notification-migrations-0099-0101.v1.json`,
           0o644,
@@ -3287,6 +3464,7 @@ function productionOps(op, owner, ignoredRestore = null) {
         read(`${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`, 0o644),
       ).checkpoints[String(count)].sha256,
     notificationState: (phase) => readNotificationDatabaseState(op, phase),
+    locationPhotoState: (phase) => readLocationPhotoDatabaseState(op, phase),
     footprint: () => {
       const rows = postgresSql(
         `begin read only;select json_agg(json_build_object('name',c.oid::regclass::text,'bytes',pg_total_relation_size(c.oid),'rows',coalesce(s.n_live_tup,0),'conflictingLocks',(select count(*) from pg_locks l where l.relation=c.oid and l.pid<>pg_backend_pid() )) order by c.oid::regclass::text) from pg_class c left join pg_stat_user_tables s on s.relid=c.oid where c.oid in ('notifications.deliveries'::regclass,'support.tickets'::regclass,'support.messages'::regclass);rollback;`,
@@ -3310,9 +3488,20 @@ function productionOps(op, owner, ignoredRestore = null) {
     bootstrap: () => {
       owner.assertOwned();
       ops.assertOwned();
-      if (!notification) stop('BOOTSTRAP_PROFILE');
-      const sql = read(`${SOURCE}/deploy/timeweb/notification-role-bootstrap-0105.sql`, 0o644);
+      if (!notification && !locationPhoto) stop('BOOTSTRAP_PROFILE');
+      const sql = read(
+        `${SOURCE}/deploy/timeweb/${locationPhoto ? 'location-photo-role-bootstrap-0102' : 'notification-role-bootstrap-0105'}.sql`,
+        0o644,
+      );
       if (hash(sql) !== plan.inputs.bootstrapSha256) stop('BOOTSTRAP_SOURCE');
+      postgresSql(sql, false, postgresId);
+    },
+    cleanup: () => {
+      owner.assertOwned();
+      ops.assertOwned();
+      if (!locationPhoto) stop('CLEANUP_PROFILE');
+      const sql = read(`${SOURCE}/deploy/timeweb/location-photo-role-cleanup-0102.sql`, 0o644);
+      if (hash(sql) !== plan.inputs.cleanupSha256) stop('CLEANUP_SOURCE');
       postgresSql(sql, false, postgresId);
     },
     readNotificationProof: (name) => {
@@ -3321,6 +3510,30 @@ function productionOps(op, owner, ignoredRestore = null) {
     },
     writeNotificationProof: (name, bytes) => {
       if (!['bootstrap.json', 'postflight.json'].includes(name)) stop('PROOF_PATH');
+      durable(path(name), bytes, true);
+    },
+    readLocationPhotoProof: (name) => {
+      if (
+        ![
+          'bootstrap.json',
+          'cleanup.json',
+          'migrator-pre.json',
+          'migrator-bootstrap.json',
+        ].includes(name)
+      )
+        stop('PROOF_PATH');
+      return present(path(name)) ? read(path(name)) : null;
+    },
+    writeLocationPhotoProof: (name, bytes) => {
+      if (
+        ![
+          'bootstrap.json',
+          'cleanup.json',
+          'migrator-pre.json',
+          'migrator-bootstrap.json',
+        ].includes(name)
+      )
+        stop('PROOF_PATH');
       durable(path(name), bytes, true);
     },
     successProof: () =>
@@ -3366,12 +3579,47 @@ export async function runManualApiWorkerMigration(mode, requestPath) {
   }
 }
 
+export async function runLocationPhotoManualEntryAdapter(mode, requestPath, effects) {
+  if (!['deploy', 'reconcile'].includes(mode) || requestPath !== REQUEST || effects.uid() !== 0)
+    stop('LOCATION_PHOTO_ENTRY');
+  effects.assertAmbient();
+  effects.secureStandard();
+  const bytes = effects.readRequest();
+  const op = validateLocationPhotoOperation(
+    parseStrictJson(bytes),
+    mode === 'deploy' ? effects.time() : undefined,
+  );
+  const owner = effects.acquire();
+  try {
+    return await effects.run(mode, bytes, op, owner);
+  } finally {
+    owner.close();
+  }
+}
+
+// Schema-fence the photo CLI before acquiring the shared executor or constructing live effects.
+export async function runManualLocationPhotoMigration(mode, requestPath) {
+  return runLocationPhotoManualEntryAdapter(mode, requestPath, {
+    uid: () => process.getuid?.(),
+    time: () => Date.now(),
+    assertAmbient: () => {
+      assertNoAmbientDockerOverrides();
+      assertNoAmbientComposeOverrides();
+    },
+    secureStandard: () => secure(`${ROOT}/standard`, 0o700),
+    readRequest: () => read(REQUEST),
+    acquire: () => acquireApiWorkerExecutor(`${ROOT}/standard/api-worker-executor.lock`),
+    run: (entryMode, bytes, op, owner) =>
+      runLocationPhotoMigrationAdapter(entryMode, bytes, productionOps(op, owner)),
+  });
+}
+
 // Fixed owned cache metadata only, under the existing executor lock. Partial
 // incoming bytes can resume only as an exact prefix of the original sealed value.
 export function sealNotificationPrefetchMetadata(path, bytes) {
   if (
     !new RegExp(
-      `^${ROOT}/standard/notification-prefetch/[a-f0-9]{40}-[1-9][0-9]*-1/(?:intent|receipt)\\.json$`,
+      `^${ROOT}/standard/(?:notification|location-photo)-prefetch/[a-f0-9]{40}-[1-9][0-9]*-1/(?:intent|receipt)\\.json$`,
     ).test(path) ||
     !Buffer.isBuffer(bytes) ||
     !bytes.length ||
@@ -3618,7 +3866,7 @@ export async function attestNotificationMigratorPrefetchForBackup(backup) {
   await ops.assertUnused();
   await ops.assertSource(op);
   if (
-    [REQUEST, `${ROOT}/operator/api-worker-upgrade.json`].some(present) ||
+    [REQUEST, PREFETCH_REQUEST, `${ROOT}/operator/api-worker-upgrade.json`].some(present) ||
     !same(parseStrictJson(read(DISK_BACKUP_REQUEST)), backup)
   )
     stop('PREFETCH_BACKUP_REQUEST');
@@ -3651,6 +3899,218 @@ export async function attestNotificationMigratorPrefetchForBackup(backup) {
   };
   if (!same(backup.migratorPrefetch, proof)) stop('PREFETCH_BACKUP_BINDING');
   return proof;
+}
+
+function locationPhotoPrefetchRequest(bytes, at) {
+  const value = parseStrictJson(bytes);
+  exact(value, ['schema', 'operation', 'confirmation']);
+  if (
+    value.schema !== LOCATION_PHOTO_PREFETCH_SCHEMA ||
+    value.confirmation !== 'PREFETCH_LOCATION_PHOTO_0102_MIGRATOR_KEEP_DATABASE_AND_RUNTIME' ||
+    value.operation?.schema !== LOCATION_PHOTO_MIGRATION_SCHEMA
+  )
+    stop('LOCATION_PHOTO_PREFETCH_REQUEST');
+  validateLocationPhotoOperation(value.operation, at);
+  return value.operation;
+}
+
+function locationPhotoPrefetchReceipt(bytes, requestBytes) {
+  const value = parseStrictJson(bytes),
+    op = locationPhotoPrefetchRequest(requestBytes);
+  exact(value, [
+    'schema',
+    'requestSha256',
+    'operationSha256',
+    'imageId',
+    'runtimeSha256',
+    'secretSetSha256',
+    'databaseStateSha256',
+    'retainedImageIds',
+  ]);
+  if (
+    value.schema !== 'PHUB_LOCATION_PHOTO_0102_PREFETCH_RECEIPT_V1' ||
+    value.requestSha256 !== hash(requestBytes) ||
+    value.operationSha256 !== hash(encoded(op)) ||
+    value.imageId !== op.publishedMigrator.imageId ||
+    !['runtimeSha256', 'secretSetSha256', 'databaseStateSha256'].every((key) =>
+      HASH.test(value[key] ?? ''),
+    ) ||
+    !Array.isArray(value.retainedImageIds) ||
+    value.retainedImageIds.some((id) => !/^sha256:[a-f0-9]{64}$/.test(id)) ||
+    !same(value.retainedImageIds, [...new Set(value.retainedImageIds)].sort())
+  )
+    stop('LOCATION_PHOTO_PREFETCH_RECEIPT');
+  return value;
+}
+
+async function locationPhotoPrefetchInputs(op, ops) {
+  const runtime = await ops.snapshot(hash(encoded(op))),
+    secrets = await ops.secrets();
+  if (
+    !same(runtime.api.identity, op.expectedApi) ||
+    !same(runtime.worker.identity, op.expectedWorker) ||
+    !same(runtime.postgres, op.expectedPostgres) ||
+    secrets.releaseId !== op.expectedSecretSetReleaseId ||
+    !same(secrets.files, op.expectedSecretSetFiles)
+  )
+    stop('LOCATION_PHOTO_PREFETCH_PREIMAGE');
+  validateLocationPhotoLedger(await ops.ledger(), 'pre');
+  const state = validateLocationPhotoState(await ops.locationPhotoState('pre'), 'pre');
+  return {
+    runtimeSha256: hash(encoded(runtime)),
+    secretSetSha256: hash(encoded(secrets)),
+    databaseStateSha256: hash(encoded(state)),
+  };
+}
+
+export async function runLocationPhotoMigratorPrefetchAdapter(mode, bytes, ops) {
+  if (!['pull', 'reconcile'].includes(mode)) stop('LOCATION_PHOTO_PREFETCH_MODE');
+  const op = locationPhotoPrefetchRequest(bytes, mode === 'pull' ? ops.time() : undefined);
+  await ops.prefetchUnused();
+  await ops.assertSource(op);
+  await ops.authority(op);
+  const input = await locationPhotoPrefetchInputs(op, ops),
+    intent = await ops.prefetchIntent();
+  if (mode === 'pull') {
+    if (intent || (await ops.prefetchReceipt())) stop('PREFETCH_OWNED_USE_RECONCILE');
+    const retainedImageIds = await ops.imageInventory();
+    if (
+      !Array.isArray(retainedImageIds) ||
+      retainedImageIds.some((id) => !/^sha256:[a-f0-9]{64}$/.test(id)) ||
+      !same(retainedImageIds, [...new Set(retainedImageIds)].sort())
+    )
+      stop('PREFETCH_IMAGE_INVENTORY');
+    await ops.writePrefetchIntent(
+      encoded({
+        schema: 'PHUB_LOCATION_PHOTO_0102_PREFETCH_INTENT_V1',
+        requestBase64: bytes.toString('base64'),
+        input,
+        retainedImageIds,
+      }),
+    );
+    await ops.pullMigrator();
+  } else if (!intent) stop('PREFETCH_INTENT_MISSING');
+  const prepared = parseStrictJson(await ops.prefetchIntent());
+  exact(prepared, ['schema', 'requestBase64', 'input', 'retainedImageIds']);
+  if (
+    prepared.schema !== 'PHUB_LOCATION_PHOTO_0102_PREFETCH_INTENT_V1' ||
+    prepared.requestBase64 !== bytes.toString('base64') ||
+    !same(prepared.input, input) ||
+    !Array.isArray(prepared.retainedImageIds) ||
+    prepared.retainedImageIds.some((id) => !/^sha256:[a-f0-9]{64}$/.test(id)) ||
+    !same(prepared.retainedImageIds, [...new Set(prepared.retainedImageIds)].sort())
+  )
+    stop('PREFETCH_INTENT_DRIFT');
+  if (mode === 'reconcile' && !(await ops.prefetchImagePresent())) {
+    locationPhotoPrefetchRequest(bytes, ops.time());
+    const retained = await ops.imageInventory();
+    if (!prepared.retainedImageIds.every((id) => retained.includes(id)))
+      stop('PREFETCH_IMAGE_DRIFT');
+    await ops.pullMigrator();
+  }
+  const imageId = await ops.image(),
+    images = await ops.imageInventory();
+  if (
+    imageId !== op.publishedMigrator.imageId ||
+    !prepared.retainedImageIds.every((id) => images.includes(id))
+  )
+    stop('PREFETCH_IMAGE_DRIFT');
+  await ops.prefetchUnused();
+  if (!same(await locationPhotoPrefetchInputs(op, ops), input)) stop('PREFETCH_INPUT_DRIFT');
+  const receipt = {
+    schema: 'PHUB_LOCATION_PHOTO_0102_PREFETCH_RECEIPT_V1',
+    requestSha256: hash(bytes),
+    operationSha256: hash(encoded(op)),
+    imageId,
+    ...input,
+    retainedImageIds: prepared.retainedImageIds,
+  };
+  const existing = await ops.prefetchReceipt();
+  if (existing) {
+    if (!same(locationPhotoPrefetchReceipt(existing, bytes), receipt))
+      stop('PREFETCH_RECEIPT_DRIFT');
+  } else await ops.writePrefetchReceipt(encoded(receipt));
+  if (!same(locationPhotoPrefetchReceipt(await ops.prefetchReceipt(), bytes), receipt))
+    stop('PREFETCH_RECEIPT_DRIFT');
+  return {
+    status: 'LOCATION_PHOTO_MIGRATOR_PREFETCH_VERIFIED',
+    requestSha256: hash(bytes),
+    imageId,
+    receiptSha256: hash(await ops.prefetchReceipt()),
+    databaseMutated: false,
+    runtimeMutated: false,
+  };
+}
+
+export async function runManualLocationPhotoMigratorPrefetch(mode, requestPath) {
+  if (
+    !['pull', 'reconcile'].includes(mode) ||
+    requestPath !== LOCATION_PHOTO_PREFETCH_REQUEST ||
+    process.getuid?.() !== 0
+  )
+    stop('PREFETCH_ENTRY');
+  assertNoAmbientDockerOverrides();
+  assertNoAmbientComposeOverrides();
+  secure(`${ROOT}/standard`, 0o700);
+  const bytes = read(LOCATION_PHOTO_PREFETCH_REQUEST),
+    op = locationPhotoPrefetchRequest(bytes, mode === 'pull' ? Date.now() : undefined);
+  const owner = acquireApiWorkerExecutor(`${ROOT}/standard/api-worker-executor.lock`);
+  try {
+    return await runLocationPhotoMigratorPrefetchAdapter(mode, bytes, productionOps(op, owner));
+  } finally {
+    owner.close();
+  }
+}
+
+export async function attestLocationPhotoMigratorPrefetchForBackup(backup) {
+  const bytes = read(LOCATION_PHOTO_PREFETCH_REQUEST),
+    op = locationPhotoPrefetchRequest(bytes);
+  if (
+    backup.schema !== LOCATION_PHOTO_BACKUP_SCHEMA ||
+    backup.controllerSha !== op.controllerSha ||
+    backup.controllerTree !== op.controllerTree ||
+    backup.controllerSourceCiRunId !== op.controllerSourceCiRunId ||
+    backup.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+    !same(backup.expectedApi, op.expectedApi) ||
+    !same(backup.expectedPostgres, op.expectedPostgres)
+  )
+    stop('PREFETCH_BACKUP_BINDING');
+  const ops = productionOps(op, { assertOwned: () => stop('PREFETCH_READONLY') });
+  await ops.assertUnused();
+  await ops.assertSource(op);
+  const intentBytes = await ops.prefetchIntent(),
+    receiptBytes = await ops.prefetchReceipt();
+  if (!intentBytes || !receiptBytes) stop('PREFETCH_PROOF_MISSING');
+  if (
+    [REQUEST, `${ROOT}/operator/api-worker-upgrade.json`].some(present) ||
+    !same(parseStrictJson(read(DISK_BACKUP_REQUEST)), backup) ||
+    !same(backup.migratorPrefetch, {
+      requestSha256: hash(bytes),
+      receiptSha256: hash(receiptBytes),
+      migratorImage: op.publishedMigrator.image,
+      imageId: op.publishedMigrator.imageId,
+    })
+  )
+    stop('PREFETCH_BACKUP_BINDING');
+  const intent = parseStrictJson(intentBytes),
+    receipt = locationPhotoPrefetchReceipt(receiptBytes, bytes),
+    images = await ops.imageInventory();
+  exact(intent, ['schema', 'requestBase64', 'input', 'retainedImageIds']);
+  if (
+    intent.schema !== 'PHUB_LOCATION_PHOTO_0102_PREFETCH_INTENT_V1' ||
+    intent.requestBase64 !== bytes.toString('base64') ||
+    !same(intent.retainedImageIds, receipt.retainedImageIds) ||
+    !same(intent.input, {
+      runtimeSha256: receipt.runtimeSha256,
+      secretSetSha256: receipt.secretSetSha256,
+      databaseStateSha256: receipt.databaseStateSha256,
+    }) ||
+    !same(await locationPhotoPrefetchInputs(op, ops), intent.input) ||
+    (await ops.image()) !== receipt.imageId ||
+    !receipt.retainedImageIds.every((id) => images.includes(id))
+  )
+    stop('PREFETCH_PROOF_DRIFT');
+  return backup.migratorPrefetch;
 }
 
 export function validateMigrationProofBundle(bundle, expected) {
@@ -3891,6 +4351,485 @@ function notificationLedger(rows, count) {
   )
     stop('NOTIFICATION_LEDGER');
 }
+
+const locationPhotoReceiptSchema = 'PHUB_TIMEWEB_LOCATION_PHOTO_0102_MIGRATION_RECEIPT_V1';
+const locationPhotoPlanSchema = 'PHUB_TIMEWEB_LOCATION_PHOTO_0102_MIGRATION_PLAN_V1';
+const locationPhotoPhases = [
+  'PREPARING',
+  'PROBE_MIGRATOR_PRE_CREATE_INTENT',
+  'PROBE_MIGRATOR_PRE_START_INTENT',
+  'BOOTSTRAP_INTENT',
+  'BOOTSTRAP_APPLIED',
+  'PROBE_MIGRATOR_BOOTSTRAP_CREATE_INTENT',
+  'PROBE_MIGRATOR_BOOTSTRAP_START_INTENT',
+  'PREPARED',
+  'CREATE_INTENT',
+  'CREATED',
+  'START_INTENT',
+  'STARTED',
+  'CLEANUP_INTENT',
+  'CLEANUP_APPLIED',
+  'SUCCESS',
+  'ABORTED',
+  'RECONCILED',
+];
+
+export function validateLocationPhotoMigrationPlan(plan, bytes) {
+  const op = validateLocationPhotoOperation(parseStrictJson(bytes));
+  exact(plan, [
+    'schema',
+    'operationSha256',
+    'controllerSha',
+    'controllerTree',
+    'controllerSourceCiRunId',
+    'publishedMigrator',
+    'imageId',
+    'preLedgerSha256',
+    'postLedgerSha256',
+    'secretSet',
+    'runtime',
+    'backup',
+    'inputs',
+    'roleProbeSourceSha256',
+    'preimage',
+  ]);
+  exact(plan.inputs, ['packageDescriptorSha256', 'bootstrapSha256', 'cleanupSha256']);
+  exact(plan.secretSet, ['releaseId', 'device', 'inode', 'files']);
+  exact(plan.secretSet.files, secretNames);
+  exact(plan.runtime, ['api', 'worker', 'postgres', 'controllerConfigSha256', 'excluded']);
+  for (const kind of ['api', 'worker']) {
+    exact(plan.runtime[kind], ['identity', 'status', 'health', 'fingerprint']);
+    if (
+      !same(plan.runtime[kind].identity, op[kind === 'api' ? 'expectedApi' : 'expectedWorker']) ||
+      plan.runtime[kind].status !== 'running' ||
+      plan.runtime[kind].health !== 'healthy' ||
+      !HASH.test(plan.runtime[kind].fingerprint ?? '')
+    )
+      stop('LOCATION_PHOTO_PLAN_RUNTIME');
+  }
+  if (
+    !same(plan.runtime.postgres, op.expectedPostgres) ||
+    !Array.isArray(plan.runtime.excluded) ||
+    !plan.runtime.excluded.some((row) => same(row.identity, op.expectedPostgres)) ||
+    !HASH.test(plan.runtime.controllerConfigSha256 ?? '')
+  )
+    stop('LOCATION_PHOTO_PLAN_RUNTIME');
+  for (const row of plan.runtime.excluded) {
+    exact(row, ['identity', 'status', 'health', 'fingerprint']);
+    exact(row.identity, idFields);
+    if (!HASH.test(row.identity.id ?? '') || !HASH.test(row.fingerprint ?? ''))
+      stop('LOCATION_PHOTO_PLAN_RUNTIME');
+  }
+  if (
+    plan.schema !== locationPhotoPlanSchema ||
+    plan.operationSha256 !== hash(bytes) ||
+    plan.controllerSha !== op.controllerSha ||
+    plan.controllerTree !== op.controllerTree ||
+    plan.controllerSourceCiRunId !== op.controllerSourceCiRunId ||
+    !same(plan.publishedMigrator, op.publishedMigrator) ||
+    plan.imageId !== op.publishedMigrator.imageId ||
+    plan.preLedgerSha256 !== LOCATION_PHOTO_PRE_LEDGER ||
+    plan.postLedgerSha256 !== LOCATION_PHOTO_POST_LEDGER ||
+    plan.roleProbeSourceSha256 !== hash(LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE) ||
+    plan.secretSet.releaseId !== op.expectedSecretSetReleaseId ||
+    !same(plan.secretSet.files, op.expectedSecretSetFiles) ||
+    !Number.isSafeInteger(plan.secretSet.device) ||
+    !Number.isSafeInteger(plan.secretSet.inode) ||
+    !same(plan.inputs, {
+      packageDescriptorSha256: op.packageDescriptorSha256,
+      bootstrapSha256: op.bootstrapSha256,
+      cleanupSha256: op.cleanupSha256,
+    })
+  )
+    stop('LOCATION_PHOTO_PLAN');
+  exact(plan.backup, ['path', 'sha256', 'operationSha256', 'preimageSha256', 'target']);
+  exact(plan.backup.target, ['databaseName', 'systemIdentifier']);
+  if (
+    plan.backup.path !==
+      `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-location-photo-pre0102/database-backup-receipt.json` ||
+    !['sha256', 'operationSha256', 'preimageSha256'].every((key) =>
+      HASH.test(plan.backup[key] ?? ''),
+    ) ||
+    !same(plan.backup.target, plan.preimage.target)
+  )
+    stop('LOCATION_PHOTO_PLAN_BACKUP');
+  validateLocationPhotoState(plan.preimage, 'pre');
+  return plan;
+}
+
+export function validateLocationPhotoMigrationReceipt(value, planSha, operationSha) {
+  exact(value, [
+    'schema',
+    'status',
+    'planSha256',
+    'operationSha256',
+    'observedAt',
+    'containerId',
+    'successSha256',
+    'reconciledStatus',
+  ]);
+  if (
+    value.schema !== locationPhotoReceiptSchema ||
+    !locationPhotoPhases.includes(value.status) ||
+    value.planSha256 !== planSha ||
+    value.operationSha256 !== operationSha ||
+    !Number.isFinite(Date.parse(value.observedAt)) ||
+    new Date(value.observedAt).toISOString() !== value.observedAt ||
+    (value.containerId !== null && !HASH.test(value.containerId ?? '')) ||
+    (value.successSha256 !== null && !HASH.test(value.successSha256 ?? '')) ||
+    (value.status === 'RECONCILED'
+      ? !['SUCCESS', 'ABORTED'].includes(value.reconciledStatus)
+      : value.reconciledStatus !== null) ||
+    ((value.status === 'SUCCESS' || value.reconciledStatus === 'SUCCESS') &&
+      (!value.containerId || !value.successSha256))
+  )
+    stop('LOCATION_PHOTO_RECEIPT');
+  return value;
+}
+
+// The photo profile is deliberately narrower than the notification profile: one ordinary
+// migrator run, no application rollout and no runtime table grant. Temporary schema CREATE is
+// journalled separately so reconcile can remove it after either a lost bootstrap or cleanup ACK.
+export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops) {
+  const op = validateLocationPhotoOperation(
+      parseStrictJson(operationBytes),
+      mode === 'deploy' ? ops.time() : undefined,
+    ),
+    operationSha = hash(operationBytes);
+  let plan, planBytes, current;
+  const journal = async (status, extra = {}) => {
+    current = {
+      schema: locationPhotoReceiptSchema,
+      status,
+      planSha256: hash(planBytes),
+      operationSha256: operationSha,
+      observedAt: now(),
+      containerId: current?.containerId ?? null,
+      successSha256: current?.successSha256 ?? null,
+      reconciledStatus: null,
+      ...extra,
+    };
+    await ops.writeReceipt(current);
+  };
+  const attest = async (phase) => {
+    await ops.assertSource(op);
+    await ops.assertOwned();
+    if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
+      stop('RUNTIME_DRIFT');
+    validateLocationPhotoLedger(await ops.ledger(), phase);
+    if (!same(await ops.inputs(), plan.inputs)) stop('LOCATION_PHOTO_INPUT_DRIFT');
+  };
+  const state = async (phase) =>
+    validateLocationPhotoState(await ops.locationPhotoState(phase), phase);
+  const probe = async (phase) => {
+    const suffix = phase === 'pre' ? 'PRE' : 'BOOTSTRAP',
+      kind = phase === 'pre' ? 'migrator' : 'migrator-post';
+    let row = await ops.lookup(kind, plan.imageId, operationSha);
+    if (!row) {
+      await journal(`PROBE_MIGRATOR_${suffix}_CREATE_INTENT`);
+      const id = await ops.create(kind, plan.imageId, operationSha);
+      row = await ops.lookup(kind, plan.imageId, operationSha);
+      if (!row || row.Id !== id) stop('LOCATION_PHOTO_PROBE_CREATE');
+    }
+    if (row.State.Status === 'created') {
+      await journal(`PROBE_MIGRATOR_${suffix}_START_INTENT`);
+      await ops.start(row.Id, kind);
+      await ops.wait(row.Id, kind);
+    } else if (row.State.Status === 'running') await ops.wait(row.Id, kind);
+    row = await ops.lookup(kind, plan.imageId, operationSha);
+    if (!row || row.State.Status !== 'exited' || row.State.ExitCode !== 0)
+      stop('LOCATION_PHOTO_PROBE_EXIT');
+    const value = validateLocationPhotoMigratorReadback(
+      await ops.logs(row.Id),
+      phase,
+      plan.preimage.target,
+    );
+    await ops.writeLocationPhotoProof(
+      `migrator-${phase}.json`,
+      encoded({
+        schema: 'PHUB_LOCATION_PHOTO_MIGRATOR_ROLE_PROOF_V1',
+        operationSha256: operationSha,
+        planSha256: hash(planBytes),
+        phase,
+        containerId: row.Id,
+        readback: value,
+      }),
+    );
+    return row;
+  };
+  const attestProbe = async (phase) => {
+    const bytes = await ops.readLocationPhotoProof(`migrator-${phase}.json`);
+    if (!bytes) stop('LOCATION_PHOTO_PROBE_PROOF');
+    const proof = parseStrictJson(bytes);
+    exact(proof, ['schema', 'operationSha256', 'planSha256', 'phase', 'containerId', 'readback']);
+    if (
+      proof.schema !== 'PHUB_LOCATION_PHOTO_MIGRATOR_ROLE_PROOF_V1' ||
+      proof.operationSha256 !== operationSha ||
+      proof.planSha256 !== hash(planBytes) ||
+      proof.phase !== phase ||
+      !HASH.test(proof.containerId ?? '')
+    )
+      stop('LOCATION_PHOTO_PROBE_PROOF');
+    validateLocationPhotoMigratorReadback(proof.readback, phase, plan.preimage.target);
+    const kind = phase === 'pre' ? 'migrator' : 'migrator-post',
+      row = await ops.lookup(kind, plan.imageId, operationSha);
+    if (
+      row?.Id !== proof.containerId ||
+      row.State.Status !== 'exited' ||
+      row.State.ExitCode !== 0 ||
+      !same(await ops.logs(row.Id), proof.readback)
+    )
+      stop('LOCATION_PHOTO_PROBE_DRIFT');
+    return bytes;
+  };
+  const cleanup = async (expectedPhase) => {
+    await journal('CLEANUP_INTENT');
+    await ops.cleanup();
+    const clean = await state(expectedPhase);
+    await ops.writeLocationPhotoProof(
+      'cleanup.json',
+      encoded({
+        schema: 'PHUB_LOCATION_PHOTO_CLEANUP_PROOF_V1',
+        operationSha256: operationSha,
+        sqlSha256: plan.inputs.cleanupSha256,
+        state: clean,
+      }),
+    );
+    await journal('CLEANUP_APPLIED');
+    return clean;
+  };
+  const success = async (row, record = true) => {
+    await attest('cleanup');
+    if (!same(await ops.backup(op, { fresh: mode === 'deploy' }), plan.backup))
+      stop('CUSTODY_DRIFT');
+    await ops.attestStoppedProbes();
+    const migratorPre = await attestProbe('pre'),
+      migratorBootstrap = await attestProbe('bootstrap');
+    const finalState = await state('cleanup');
+    const bootstrap = await ops.readLocationPhotoProof('bootstrap.json'),
+      cleanupProof = await ops.readLocationPhotoProof('cleanup.json');
+    if (!bootstrap || !cleanupProof) stop('LOCATION_PHOTO_PROOF');
+    const proof = {
+      schema: 'PHUB_LOCATION_PHOTO_MIGRATION_SUCCESS_V1',
+      status: 'SUCCESS',
+      planSha256: hash(planBytes),
+      operationSha256: operationSha,
+      containerId: row.Id,
+      bootstrapSha256: hash(bootstrap),
+      cleanupSha256: hash(cleanupProof),
+      migratorPreSha256: hash(migratorPre),
+      migratorBootstrapSha256: hash(migratorBootstrap),
+      backup: plan.backup,
+      ledgerSha256: LOCATION_PHOTO_POST_LEDGER,
+      stateSha256: hash(encoded(finalState)),
+      observedAt: now(),
+    };
+    const saved = await ops.successProof();
+    if (saved) {
+      const old = parseStrictJson(saved);
+      exact(old, Object.keys(proof));
+      if (!same({ ...old, observedAt: proof.observedAt }, proof)) stop('SUCCESS_DRIFT');
+    } else await ops.writeSuccess(encoded(proof));
+    if (record)
+      await journal('SUCCESS', {
+        containerId: row.Id,
+        successSha256: hash(await ops.successProof()),
+      });
+  };
+  if (mode === 'deploy') {
+    await ops.assertUnused();
+    await ops.assertSource(op);
+    await ops.authority(op);
+    const runtime = await ops.snapshot(),
+      secrets = await ops.secrets();
+    if (
+      !same(runtime.api.identity, op.expectedApi) ||
+      !same(runtime.worker.identity, op.expectedWorker) ||
+      !same(runtime.postgres, op.expectedPostgres) ||
+      secrets.releaseId !== op.expectedSecretSetReleaseId ||
+      !same(secrets.files, op.expectedSecretSetFiles)
+    )
+      stop('PREIMAGE');
+    validateLocationPhotoLedger(await ops.ledger(), 'pre');
+    const preimage = await state('pre'),
+      backup = await ops.backup(op),
+      imageId = await ops.image(),
+      inputs = await ops.inputs();
+    if (imageId !== op.publishedMigrator.imageId) stop('IMAGE');
+    plan = {
+      schema: locationPhotoPlanSchema,
+      operationSha256: operationSha,
+      controllerSha: op.controllerSha,
+      controllerTree: op.controllerTree,
+      controllerSourceCiRunId: op.controllerSourceCiRunId,
+      publishedMigrator: op.publishedMigrator,
+      imageId,
+      preLedgerSha256: LOCATION_PHOTO_PRE_LEDGER,
+      postLedgerSha256: LOCATION_PHOTO_POST_LEDGER,
+      secretSet: secrets,
+      runtime,
+      backup,
+      inputs,
+      roleProbeSourceSha256: hash(LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE),
+      preimage,
+    };
+    planBytes = encoded(plan);
+    validateLocationPhotoMigrationPlan(plan, operationBytes);
+    await ops.prepare(encodeApiWorkerMigrationCapsule(operationBytes, planBytes));
+    await journal('PREPARING');
+    await ops.claim(planBytes, operationSha);
+    const fresh = async (phase) => {
+      if (ops.time() >= Date.parse(op.expiresAt)) stop('EXPIRED');
+      await attest(phase);
+      if (!same(await ops.backup(op), plan.backup) || (await ops.image()) !== plan.imageId)
+        stop('CUSTODY_DRIFT');
+    };
+    await fresh('pre');
+    if (!same(await state('pre'), preimage)) stop('PREIMAGE');
+    await probe('pre');
+    await fresh('pre');
+    await journal('BOOTSTRAP_INTENT');
+    await ops.bootstrap();
+    const bootstrapped = await state('bootstrap');
+    await ops.writeLocationPhotoProof(
+      'bootstrap.json',
+      encoded({
+        schema: 'PHUB_LOCATION_PHOTO_BOOTSTRAP_PROOF_V1',
+        operationSha256: operationSha,
+        sqlSha256: inputs.bootstrapSha256,
+        state: bootstrapped,
+      }),
+    );
+    await journal('BOOTSTRAP_APPLIED');
+    await fresh('bootstrap');
+    await probe('bootstrap');
+    await fresh('bootstrap');
+    await journal('PREPARED');
+    await journal('CREATE_INTENT');
+    const id = await ops.create('migration', imageId, operationSha);
+    await journal('CREATED', { containerId: id });
+    await fresh('bootstrap');
+    await journal('START_INTENT');
+    await ops.start(id, 'migration');
+    await journal('STARTED');
+    await ops.wait(id, 'migration');
+    const row = await ops.lookup('migration', imageId, operationSha);
+    if (!row || row.Id !== id || row.State.Status !== 'exited' || row.State.ExitCode !== 0)
+      stop('EXIT');
+    await attest('post');
+    await state('post');
+    await cleanup('cleanup');
+    await success(row);
+    return { status: 'SUCCESS', receipt: ops.receiptPath };
+  }
+  if (mode !== 'reconcile') stop('MODE');
+  const capsule = readApiWorkerMigrationCapsule(await ops.preparation());
+  if (!capsule.operationBytes.equals(operationBytes)) stop('REQUEST_DRIFT');
+  plan = capsule.plan;
+  planBytes = capsule.planBytes;
+  validateLocationPhotoMigrationPlan(plan, operationBytes);
+  await ops.loadPlan(plan, planBytes, operationSha);
+  current = await ops.receipt();
+  if (!current) {
+    await ops.assertPreparedUnclaimed();
+    await ops.assertSource(op);
+    if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
+      stop('RUNTIME_DRIFT');
+    validateLocationPhotoLedger(await ops.ledger(), 'pre');
+    if (
+      !same(await ops.inputs(), plan.inputs) ||
+      (await ops.image()) !== plan.imageId ||
+      !same(await ops.backup(op, { fresh: false }), plan.backup) ||
+      !same(await state('pre'), plan.preimage)
+    )
+      stop('UNCLAIMED_PREPARATION_DRIFT');
+    await journal('ABORTED', { containerId: null, successSha256: null });
+    await journal('RECONCILED', {
+      reconciledStatus: 'ABORTED',
+      containerId: null,
+      successSha256: null,
+    });
+    await ops.release();
+    return { status: 'RECONCILED', receipt: ops.receiptPath };
+  }
+  validateLocationPhotoMigrationReceipt(current, hash(planBytes), operationSha);
+  await ops.assertSource(op);
+  await ops.assertOwned();
+  if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
+    stop('RUNTIME_DRIFT');
+  const rows = await ops.ledger(),
+    row = await ops.lookup('migration', plan.imageId, operationSha),
+    terminal = current.status === 'RECONCILED' ? current.reconciledStatus : current.status;
+  if (
+    (rows.length === 106 && terminal === 'ABORTED') ||
+    (rows.length === 105 && terminal === 'SUCCESS')
+  )
+    stop('RECONCILE_OWNER_DECISION');
+  if (rows.length === 106) {
+    validateLocationPhotoLedger(rows, 'post');
+    if (
+      !current.containerId ||
+      !row ||
+      row.Id !== current.containerId ||
+      row.State.Status !== 'exited' ||
+      row.State.ExitCode !== 0
+    )
+      stop('RECONCILE_OWNER_DECISION');
+    let clean;
+    try {
+      clean = await state('cleanup');
+      if (!(await ops.readLocationPhotoProof('cleanup.json')))
+        await ops.writeLocationPhotoProof(
+          'cleanup.json',
+          encoded({
+            schema: 'PHUB_LOCATION_PHOTO_CLEANUP_PROOF_V1',
+            operationSha256: operationSha,
+            sqlSha256: plan.inputs.cleanupSha256,
+            state: clean,
+          }),
+        );
+    } catch {
+      await state('post');
+      clean = await cleanup('cleanup');
+    }
+    if (!clean) stop('LOCATION_PHOTO_CLEANUP');
+    if (terminal === 'SUCCESS' && hash(await ops.successProof()) !== current.successSha256)
+      stop('SUCCESS_DRIFT');
+    await success(row, current.status !== 'RECONCILED');
+  } else if (rows.length === 105) {
+    validateLocationPhotoLedger(rows, 'pre');
+    if (current.containerId && row?.Id !== current.containerId) stop('RECONCILE_OWNER_DECISION');
+    const startMayHaveRun = ['START_INTENT', 'STARTED'].includes(current.status),
+      definiteFailedMigration =
+        row?.State?.Status === 'exited' &&
+        Number.isSafeInteger(row.State.ExitCode) &&
+        row.State.ExitCode !== 0;
+    if (
+      row?.State?.Status === 'running' ||
+      (startMayHaveRun && !definiteFailedMigration) ||
+      (row?.State?.Status === 'exited' && row.State.ExitCode === 0)
+    )
+      stop('RECONCILE_OWNER_DECISION');
+    await ops.attestStoppedProbes();
+    try {
+      await state('pre');
+    } catch {
+      await state('bootstrap');
+      await cleanup('pre');
+    }
+    await attest('pre');
+    await journal('ABORTED', { containerId: row?.Id ?? null, successSha256: null });
+  } else stop('RECONCILE_OWNER_DECISION');
+  if (current.status !== 'RECONCILED')
+    await journal('RECONCILED', {
+      reconciledStatus: current.status,
+      containerId: current.containerId,
+      successSha256: current.successSha256,
+    });
+  await ops.release();
+  return { status: 'RECONCILED', receipt: ops.receiptPath };
+}
+
 export function validateNotificationMigrationPlan(plan, bytes) {
   const op = validateNotificationOperation(parseStrictJson(bytes));
   exact(plan, [
@@ -4346,6 +5285,17 @@ export function readNotificationDatabaseState(op, phase = 'pre') {
   else attestNotificationSource(op, { git, read, secure, present });
   return readNotificationDatabaseStateAtTarget(op, phase);
 }
+
+export function readLocationPhotoDatabaseState(op, phase = 'pre') {
+  if (![LOCATION_PHOTO_MIGRATION_SCHEMA, LOCATION_PHOTO_BACKUP_SCHEMA].includes(op?.schema))
+    stop('LOCATION_PHOTO_PROFILE');
+  if (op.schema === LOCATION_PHOTO_BACKUP_SCHEMA)
+    attestLocationPhotoBackupSource(op, { git, read, secure, present });
+  else sourceAttest(op);
+  const value = postgresSql(locationPhotoStateSql(phase), true, op.expectedPostgres.id);
+  return validateLocationPhotoState(value, phase);
+}
+
 function readNotificationDatabaseStateAtTarget(op, phase) {
   const value = postgresSql(
     notificationStateSql(
@@ -4361,6 +5311,147 @@ function readNotificationDatabaseStateAtTarget(op, phase) {
     read(`${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`, 0o644),
     read(`${SOURCE}/deploy/timeweb/notification-migrations-0099-0101.v1.json`, 0o644),
   );
+}
+
+export function validateLocationPhotoCompletedBackupBinding(backupOp, operationBytes, receipt) {
+  validateLocationPhotoBackupOperation(backupOp);
+  if (
+    receipt.operationSha256 !== hash(operationBytes) ||
+    !same(receipt.migratorPrefetch, backupOp.migratorPrefetch)
+  )
+    stop('LOCATION_PHOTO_BACKUP_OPERATION');
+  return backupOp;
+}
+
+export function locationPhotoBackupProof(op, { fresh = true } = {}) {
+  const directory = `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-location-photo-pre0102`;
+  secure(directory, 0o700);
+  const bytes = read(`${directory}/database-backup-receipt.json`),
+    value = parseStrictJson(bytes),
+    operationBytes = read(`${directory}/backup-operation.json`),
+    backupOp = parseStrictJson(operationBytes),
+    preimageBytes = read(`${directory}/preimage-proof.json`);
+  exact(value, [
+    'schema',
+    'baselineReleaseId',
+    'completedAt',
+    'backupFile',
+    'backupSha256',
+    'restoreVerified',
+    'restoreImage',
+    'restoredLedgerSha256',
+    'sourceLedgerSha256',
+    'operationSha256',
+    'target',
+    'preimageSha256',
+    'packageDescriptorSha256',
+    'aclRecovery',
+    'securityPreimageSha256',
+    'restoredSecuritySha256',
+    'roleClosureSha256',
+    'migratorPrefetch',
+  ]);
+  validateLocationPhotoCompletedBackupBinding(backupOp, operationBytes, value);
+  if (
+    value.schema !== 'PHUB_TIMEWEB_LOCATION_PHOTO_PRE0102_BACKUP_RESTORE_V1' ||
+    value.baselineReleaseId !== op.expectedApi.releaseId ||
+    value.backupFile !== `${directory}/database.pgcustom` ||
+    !HASH.test(value.backupSha256 ?? '') ||
+    value.restoreVerified !== true ||
+    value.restoreImage !== bridge.postgresImage ||
+    value.restoredLedgerSha256 !== LOCATION_PHOTO_PRE_LEDGER ||
+    value.sourceLedgerSha256 !== LOCATION_PHOTO_PRE_LEDGER ||
+    value.operationSha256 !== hash(operationBytes) ||
+    value.preimageSha256 !== hash(preimageBytes) ||
+    value.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+    !same(value.migratorPrefetch, backupOp.migratorPrefetch) ||
+    value.aclRecovery !== 'ISOLATED_OWNER_ACL_RESTORE_VERIFIED' ||
+    !Number.isFinite(Date.parse(value.completedAt)) ||
+    Date.now() - Date.parse(value.completedAt) < 0 ||
+    (fresh && Date.now() - Date.parse(value.completedAt) > 3600000)
+  )
+    stop('LOCATION_PHOTO_BACKUP');
+  if (
+    backupOp.schema !== LOCATION_PHOTO_BACKUP_SCHEMA ||
+    backupOp.controllerSha !== op.controllerSha ||
+    backupOp.controllerTree !== op.controllerTree ||
+    backupOp.controllerSourceCiRunId !== op.controllerSourceCiRunId ||
+    backupOp.toolCommit !== op.controllerSha ||
+    backupOp.packageDescriptorSha256 !== op.packageDescriptorSha256 ||
+    !same(backupOp.expectedApi, op.expectedApi) ||
+    !same(backupOp.expectedPostgres, op.expectedPostgres) ||
+    !read(DISK_BACKUP_REQUEST).equals(operationBytes)
+  )
+    stop('LOCATION_PHOTO_BACKUP_OPERATION');
+  const preimage = parseStrictJson(preimageBytes);
+  exact(preimage, ['schema', 'state', 'target', 'security']);
+  const state = validateLocationPhotoState(preimage.state, 'pre'),
+    security = preimage.security;
+  if (
+    preimage.schema !== 'PHUB_TIMEWEB_LOCATION_PHOTO_PRE0102_PREIMAGE_V1' ||
+    !same(preimage.target, state.target) ||
+    !same(state.target, value.target) ||
+    value.securityPreimageSha256 !== hash(encoded(security)) ||
+    value.restoredSecuritySha256 !== value.securityPreimageSha256 ||
+    value.roleClosureSha256 !== hash(encoded(security.roles))
+  )
+    stop('LOCATION_PHOTO_BACKUP_TARGET');
+  const tool = `${ROOT}/operator/tools/${op.controllerSha}/control-timeweb-database-backup.py`;
+  secure(tool, 0o755);
+  if (
+    hash(read(tool, 0o755)) !== backupOp.toolFileSha256 ||
+    hash(read(`${ROOT}/operator/tools/${op.controllerSha}/installation-receipt.json`)) !==
+      backupOp.toolInstallationSha256
+  )
+    stop('LOCATION_PHOTO_BACKUP_TOOL');
+  let terminal;
+  try {
+    terminal = parseStrictJson(
+      execFileSync(
+        '/usr/bin/python3',
+        ['-I', '-S', '-B', tool, '--attest-disk', DISK_BACKUP_REQUEST],
+        {
+          encoding: 'utf8',
+          timeout: 60_000,
+          maxBuffer: 4 * 1024 * 1024,
+          env: { PATH: '/usr/bin:/bin', HOME: '/root', LANG: 'C.UTF-8' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    );
+  } catch {
+    stop('LOCATION_PHOTO_BACKUP_CLEANUP');
+  }
+  exact(terminal, [
+    'schema',
+    'operationSha256',
+    'receiptSha256',
+    'preimageSha256',
+    'target',
+    'sourceLedgerSha256',
+    'storageCleanupVerified',
+    'reconciled',
+    'migratorPrefetch',
+  ]);
+  if (
+    terminal.schema !== 'PHUB_TIMEWEB_LOCATION_PHOTO_BACKUP_TERMINAL_V1' ||
+    terminal.operationSha256 !== value.operationSha256 ||
+    terminal.receiptSha256 !== hash(bytes) ||
+    terminal.preimageSha256 !== value.preimageSha256 ||
+    !same(terminal.target, value.target) ||
+    terminal.sourceLedgerSha256 !== LOCATION_PHOTO_PRE_LEDGER ||
+    terminal.storageCleanupVerified !== true ||
+    terminal.reconciled !== true ||
+    !same(terminal.migratorPrefetch, value.migratorPrefetch)
+  )
+    stop('LOCATION_PHOTO_BACKUP_TERMINAL');
+  return {
+    path: `${directory}/database-backup-receipt.json`,
+    sha256: hash(bytes),
+    operationSha256: value.operationSha256,
+    preimageSha256: value.preimageSha256,
+    target: value.target,
+  };
 }
 
 export function notificationBackupProof(op, { fresh = true, completedBy } = {}) {

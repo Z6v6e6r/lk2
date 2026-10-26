@@ -118,9 +118,27 @@ const githubEvidence: AdoptionArtifactsInputs['github'] = {
   sourceCiRun: {
     id: Number(sourceCiRunId),
     head_sha: releaseSha,
+    head_branch: 'main',
+    event: 'push',
+    status: 'completed',
     run_attempt: 1,
     conclusion: 'success',
     path: '.github/workflows/pull-request.yaml',
+    repository: { full_name: 'Z6v6e6r/lk2' },
+  },
+  sourceCiJobs: {
+    total_count: 9,
+    jobs: [
+      'ci-plan',
+      'source-quality',
+      'quality-full',
+      'quality',
+      'dependency-security',
+      'secret-scan',
+      'deployment-contract',
+      'docker-build',
+      'pr-gate',
+    ].map((name) => ({ name, status: 'completed', conclusion: 'success' })),
   },
 };
 
@@ -260,6 +278,7 @@ const PRELUDE = `
       if (path === 'actions/runs/' + entry.release.publicationRunId)
         return githubEvidence.publicationRun;
       if (path.endsWith('/artifacts?per_page=100')) return githubEvidence.publicationArtifacts;
+      if (path.endsWith('/attempts/1/jobs?per_page=100')) return githubEvidence.sourceCiJobs;
       return githubEvidence.sourceCiRun;
     };
     const options = {
@@ -290,6 +309,8 @@ function scenario(body: string) {
     import assert from 'node:assert/strict';
     import { createHash } from 'node:crypto';
     import { ADOPTED_MANUAL_FULL_KIND, buildAdoptionArtifacts, canonicalArtifactName, runAdoptManualBaseline, validateAdoptionOperation, validateAdoptionReceipt, validateAdoptedBaseline } from './scripts/timeweb-adopt-manual-baseline.js';
+    import { validateSourceCiEvidence } from './scripts/timeweb-adopt-manual-baseline.js';
+    import { verifySourceCi } from './scripts/verify-source-ci.js';
     ${PARSE_ENV}
     ${PRELUDE}
     ${body}
@@ -601,6 +622,16 @@ describe('adoption artifact construction', () => {
       reject('github_artifacts', (github) => { github.publicationArtifacts.artifacts[0].id = 1; });
       reject('github_artifacts', (github) => { github.publicationArtifacts.total_count = 2; });
       reject('github_artifacts', (github) => { github.publicationArtifacts.artifacts = []; });
+      reject('github_source', (github) => { github.sourceCiRun.head_branch = 'feature'; });
+      reject('github_source', (github) => { github.sourceCiRun.event = 'pull_request'; });
+      reject('github_source', (github) => { github.sourceCiRun.repository = { full_name: 'other/repo' }; });
+      reject('github_source', (github) => { github.sourceCiRun.id = 1; });
+      reject('github_source_jobs', (github) => { github.sourceCiJobs.total_count = 8; });
+      reject('github_source_jobs', (github) => { github.sourceCiJobs.jobs.pop(); github.sourceCiJobs.total_count = 8; });
+      reject('github_source_jobs', (github) => { github.sourceCiJobs.jobs[0].conclusion = 'failure'; });
+      reject('github_source_jobs', (github) => { github.sourceCiJobs.jobs[0].status = 'in_progress'; });
+      reject('github_source_jobs', (github) => { github.sourceCiJobs.jobs = github.sourceCiJobs.jobs.filter((job) => job.name !== 'pr-gate'); github.sourceCiJobs.total_count = 8; });
+      reject('github_source_jobs', (github) => { github.sourceCiJobs.jobs.push({ ...github.sourceCiJobs.jobs[0] }); github.sourceCiJobs.total_count = 10; });
       reject('github_source', (github) => { github.sourceCiRun.conclusion = 'failure'; });
       reject('github_source', (github) => { github.sourceCiRun.path = '.github/workflows/other.yaml'; });
       reject('github_source', (github) => { github.sourceCiRun.run_attempt = 2; });
@@ -757,7 +788,8 @@ describe('runAdoptManualBaseline', () => {
       assert.equal(receipt.schema, 'PHUB_TIMEWEB_ADOPTION_RECEIPT_V1');
       assert.equal(receipt.adoptedFrom, 'manual-compose-simplified');
       assert.deepEqual(host.calls.docker.sort(), ['api', 'realtime', 'web', 'worker']);
-      assert.equal(host.calls.github.length, 3);
+      // publication run + artifact inventory + source-CI run + source-CI attempt-1 job inventory
+      assert.equal(host.calls.github.length, 4);
       const adopted = host.files.get(host.paths.descriptor).toString('utf8');
       assert(adopted.includes('PHUB_COMPONENT_ROLLOUT_KIND=' + ADOPTED_MANUAL_FULL_KIND));
       assert(host.files.get(host.paths.preimage).equals(currentDescriptorBytes));
@@ -1157,6 +1189,44 @@ describe('executed controller source binding (M3)', () => {
         previousDescriptorBytes,
       );
       await assert.rejects(() => runAdoptManualBaseline(operatorPath, host.options), /previous_baseline_missing/);
+    `);
+  });
+});
+
+describe('source-CI evidence parity with the canonical verifier', () => {
+  it('accepts and rejects exactly what verify-source-ci accepts and rejects', () => {
+    scenario(`
+      const op = operation();
+      const release = op.release;
+      const github = structuredClone(githubEvidence);
+      const check = (run, jobs) => {
+        let local = 'accept';
+        let canonical = 'accept';
+        try { validateSourceCiEvidence(release, run, jobs); } catch { local = 'reject'; }
+        try { verifySourceCi(run, jobs.jobs, release.sha); } catch { canonical = 'reject'; }
+        assert.equal(local, canonical);
+        return local;
+      };
+      assert.equal(check(github.sourceCiRun, github.sourceCiJobs), 'accept');
+      const mutations = [
+        (r, j) => { r.head_sha = 'f'.repeat(40); },
+        (r, j) => { r.head_branch = 'release'; },
+        (r, j) => { r.event = 'pull_request'; },
+        (r, j) => { r.status = 'in_progress'; },
+        (r, j) => { r.conclusion = 'failure'; },
+        (r, j) => { r.run_attempt = 2; },
+        (r, j) => { r.repository = { full_name: 'other/repo' }; },
+        (r, j) => { j.jobs[0].conclusion = 'skipped'; },
+        (r, j) => { j.jobs[0].status = 'queued'; },
+        (r, j) => { j.jobs = j.jobs.filter((job) => job.name !== 'docker-build'); j.total_count = 8; },
+        (r, j) => { j.jobs.push({ ...j.jobs[0] }); j.total_count = 10; },
+      ];
+      for (const mutate of mutations) {
+        const run = structuredClone(github.sourceCiRun);
+        const jobs = structuredClone(github.sourceCiJobs);
+        mutate(run, jobs);
+        assert.equal(check(run, jobs), 'reject');
+      }
     `);
   });
 });

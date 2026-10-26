@@ -49,6 +49,19 @@ export const DECLARED_UNVERIFIED_INPUTS = Object.freeze([
 ]);
 export const PUBLISHER = 'publish-timeweb-amd64-images.yaml';
 export const MAIN_CHECKS = '.github/workflows/pull-request.yaml';
+export const SOURCE_CI_REPOSITORY = 'Z6v6e6r/lk2';
+// The job inventory the canonical source-CI verifier requires (scripts/verify-source-ci.js).
+export const SOURCE_CI_REQUIRED_JOBS = Object.freeze([
+  'ci-plan',
+  'source-quality',
+  'quality-full',
+  'quality',
+  'dependency-security',
+  'secret-scan',
+  'deployment-contract',
+  'docker-build',
+  'pr-gate',
+]);
 export const TARGET = Object.freeze({
   hostname: 'lk2.padlhub.su',
   serverId: 8886471,
@@ -172,6 +185,7 @@ const GITHUB_VERIFICATION_KEYS = [
   'sourceCiRunId',
   'sourceCiRunAttempt',
   'sourceCiWorkflowPath',
+  'sourceCiJobsVerified',
   'verified',
 ];
 const RUNTIME_EVIDENCE_KEYS = ['rolloutReceipt', 'note'];
@@ -334,7 +348,12 @@ function inspectContainer(service) {
 }
 
 async function githubJson(path) {
-  if (!/^actions\/runs\/[1-9][0-9]*(?:\/artifacts\?per_page=100)?$/.test(path)) fail('github_path');
+  if (
+    !/^actions\/runs\/[1-9][0-9]*(?:\/artifacts\?per_page=100|\/attempts\/1\/jobs\?per_page=100)?$/.test(
+      path,
+    )
+  )
+    fail('github_path');
   const response = await fetch(`https://api.github.com/repos/${REPOSITORY}/${path}`, {
     headers: { Accept: 'application/vnd.github+json' },
     redirect: 'error',
@@ -475,6 +494,7 @@ export function validateAdoptionReceipt(value) {
     github.sourceCiRunId !== value.sourceCiRunId ||
     github.sourceCiRunAttempt !== 1 ||
     github.sourceCiWorkflowPath !== MAIN_CHECKS ||
+    github.sourceCiJobsVerified !== true ||
     github.verified !== true
   )
     fail('adoption_receipt');
@@ -565,8 +585,39 @@ function verifiedSecretFiles(operation, secretFiles) {
     fail('secret_set_drift');
 }
 
+// Mirrors scripts/verify-source-ci.js verifySourceCi() without importing typescript, so the adoption
+// mode still runs from a clean checkout that has no node_modules installed. A cross-check test pins
+// both implementations to the same accept/reject behaviour.
+export function validateSourceCiEvidence(release, run, jobs) {
+  if (
+    !run ||
+    String(run.id) !== release.sourceCiRunId ||
+    run.head_sha !== release.sha ||
+    run.head_branch !== 'main' ||
+    run.event !== 'push' ||
+    run.status !== 'completed' ||
+    run.conclusion !== 'success' ||
+    run.path !== MAIN_CHECKS ||
+    run.run_attempt !== 1 ||
+    run.repository?.full_name !== SOURCE_CI_REPOSITORY
+  )
+    fail('github_source');
+  if (!jobs || !Array.isArray(jobs.jobs) || jobs.total_count !== jobs.jobs.length)
+    fail('github_source_jobs');
+  for (const name of SOURCE_CI_REQUIRED_JOBS) {
+    const matches = jobs.jobs.filter((job) => job.name === name);
+    if (
+      matches.length !== 1 ||
+      matches[0].status !== 'completed' ||
+      matches[0].conclusion !== 'success'
+    )
+      fail('github_source_jobs');
+  }
+  return true;
+}
+
 function verifiedGithub(operation, github) {
-  exact(github, ['publicationRun', 'publicationArtifacts', 'sourceCiRun']);
+  exact(github, ['publicationRun', 'publicationArtifacts', 'sourceCiRun', 'sourceCiJobs']);
   const release = operation.release;
   const run = github.publicationRun;
   if (
@@ -599,16 +650,7 @@ function verifiedGithub(operation, github) {
     inventory.artifacts.some((artifact) => artifact.name === name && artifact.expired === true)
   )
     fail('github_artifacts');
-  const source = github.sourceCiRun;
-  if (
-    !source ||
-    String(source.id) !== release.sourceCiRunId ||
-    source.head_sha !== release.sha ||
-    source.run_attempt !== 1 ||
-    source.conclusion !== 'success' ||
-    source.path !== MAIN_CHECKS
-  )
-    fail('github_source');
+  validateSourceCiEvidence(release, github.sourceCiRun, github.sourceCiJobs);
 }
 
 // Pure: every byte and every container/GitHub observation is passed in already read and inspected.
@@ -685,6 +727,7 @@ export function buildAdoptionArtifacts(operation, inputs) {
       sourceCiRunId: request.release.sourceCiRunId,
       sourceCiRunAttempt: 1,
       sourceCiWorkflowPath: MAIN_CHECKS,
+      sourceCiJobsVerified: true,
       verified: true,
     },
     runtimeEvidence: {
@@ -889,6 +932,9 @@ async function collectGithub(fetchJson, release) {
       `actions/runs/${release.publicationRunId}/artifacts?per_page=100`,
     ),
     sourceCiRun: await fetchJson(`actions/runs/${release.sourceCiRunId}`),
+    sourceCiJobs: await fetchJson(
+      `actions/runs/${release.sourceCiRunId}/attempts/1/jobs?per_page=100`,
+    ),
   };
 }
 

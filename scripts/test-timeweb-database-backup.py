@@ -45,6 +45,102 @@ def v2_operation(plan_sha='a'*64, success_sha='b'*64):
     return {**OP_API,'toolCommit':OP_API['controllerSha'],'migrationPlanSha256':plan_sha,'migrationSuccessSha256':success_sha}
 
 
+def location_photo_operation():
+    revision='b6bd6b38c54381e7eb1a0fd62d885b3f475b9f48'
+    api_digest='a'*64
+    return {**copy.deepcopy(OP),'schema':m.LOCATION_PHOTO_PRE0102_SCHEMA,'profile':'beta',
+            'toolCommit':OP['controllerSha'],'releaseId':OP['controllerSha']+'-40400000000-1',
+            'controllerSourceCiRunId':'40400000000','expectedLedgerSha256':m.LOCATION_PHOTO_PRE0102_LEDGER,
+            'expectedDatabaseTarget':copy.deepcopy(m.LOCATION_PHOTO_DATABASE_TARGET),
+            'packageDescriptorSha256':'9'*64,
+            'migratorPrefetch':{'requestSha256':'1'*64,'receiptSha256':'2'*64,
+                                'migratorImage':'ghcr.io/z6v6e6r/phub-migrator@sha256:'+'3'*64,
+                                'imageId':'sha256:'+'4'*64},
+            'expectedApi':{'id':'b'*64,'image':'ghcr.io/z6v6e6r/phub-api@sha256:'+api_digest,
+                           'imageId':'sha256:'+api_digest,'releaseId':revision+'-40270245314-1',
+                           'revision':revision,'restarts':0,'startedAt':'2026-10-26T07:15:00.000Z'},
+            'confirmation':'BACKUP_RESTORE_LOCATION_PHOTO_PRE0102_PRIVATE_NAMESPACE_KEEP_RUNTIME'}
+
+
+class LocationPhotoBackupProfileTests(unittest.TestCase):
+    def test_closed_profile_routes_to_owner_acl_namespace_without_widening_notification(self):
+        op=location_photo_operation()
+        self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+        self.assertTrue(m.is_owner_acl_backup(op));self.assertFalse(m.is_notification_backup(op))
+        self.assertTrue(m.is_namespace_operation(op));self.assertTrue(m.is_disk_operation(op))
+        self.assertEqual(m.operation_mode(op),('location-photo-pre0102',op['releaseId']))
+        self.assertEqual(m.disk_ledger_sha(op),m.LOCATION_PHOTO_PRE0102_LEDGER)
+        self.assertEqual(m.backup_baseline(op),op['expectedApi']['releaseId'])
+
+    def test_closed_profile_rejects_target_ledger_package_runtime_and_confirmation_drift(self):
+        op=location_photo_operation()
+        for bad in [
+            {'target':{**m.TARGET,'serverId':1}},
+            {'expectedLedgerSha256':'0'*64},
+            {'expectedDatabaseTarget':{'databaseName':'other','systemIdentifier':'7679125609183186977'}},
+            {'expectedDatabaseTarget':{'databaseName':'phub_beta','systemIdentifier':'1'}},
+            {'packageDescriptorSha256':'missing'},
+            {'migratorPrefetch':{**op['migratorPrefetch'],'receiptSha256':'missing'}},
+            {'profile':'production'},
+            {'toolCommit':'0'*40},
+            {'expectedApi':{**op['expectedApi'],'revision':'0'*40}},
+            {'expectedPostgres':{**op['expectedPostgres'],'image':'postgres:latest'}},
+            {'confirmation':'BACKUP_RESTORE_NOTIFICATION_PRE102_PRIVATE_NAMESPACE_KEEP_API_8158AC445C9F'},
+        ]:
+            with self.subTest(bad=bad),self.assertRaises(m.Stop):
+                m.validate_operation({**op,**bad},NOW,'2'*64)
+
+
+class LocationPhotoSourcePrelaunchTests(unittest.TestCase):
+    def setUp(self):
+        temporary=tempfile.TemporaryDirectory(prefix='phub-location-photo-source-')
+        self.addCleanup(temporary.cleanup)
+        self.root=Path(temporary.name)
+        self.source=self.root/'standard/source'
+        (self.source/'.git').mkdir(parents=True)
+        (self.source/'.git/config').write_bytes(b'[core]\n\trepositoryformatversion = 0\n')
+        self.tracked=self.source/'scripts/helper.js'
+        for path in [self.tracked,self.source/'node_modules/typescript/lib/typescript.js',self.source/'node_modules/postcss/lib/postcss.js']:
+            path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'synthetic fixture')
+        self.op=location_photo_operation();self.files=b'scripts/helper.js\0';self.config=b'core.repositoryformatversion\n0\0'
+        self.calls=[]
+        for item in [patch.object(m,'ROOT',self.root),patch.object(m,'secure',side_effect=lambda path,*a,**k:Path(path).lstat()),
+                     patch.object(m,'command',side_effect=self.command)]:
+            item.start();self.addCleanup(item.stop)
+
+    def command(self,args,code,**kwargs):
+        self.calls.append(args)
+        if 'config' in args:
+            self.assertIn('--no-includes',args);return self.config
+        if args[-2:]==['rev-parse','HEAD']:return self.op['controllerSha'].encode()
+        if args[-2:]==['rev-parse','HEAD^{tree}']:return self.op['controllerTree'].encode()
+        if args[-3:]==['status','--porcelain','--untracked-files=all']:return b''
+        if args[-2:]==['ls-files','-z']:return self.files
+        raise AssertionError(args)
+
+    def test_config_and_regular_dependency_custody_precede_node_import(self):
+        program,environment=m._owner_acl_source_program(self.op)
+        self.assertIn('attestLocationPhotoBackupSource',program)
+        self.assertNotIn('NODE_OPTIONS',environment)
+        self.assertIn('config',self.calls[0]);self.assertFalse(any('-C' in call for call in self.calls[:1]))
+
+    def test_include_path_symlink_and_dependency_drift_fail_closed(self):
+        self.config=b'include.path\n/tmp/foreign\0'
+        with self.assertRaisesRegex(m.Stop,'LOCATION_PHOTO_SOURCE'):m._owner_acl_source_program(self.op)
+        self.assertEqual(len(self.calls),1)
+        self.config=b'core.repositoryformatversion\n0\0'
+        for files in [b'../outside\0',b'/absolute\0']:
+            self.files=files
+            with self.subTest(files=files),self.assertRaisesRegex(m.Stop,'LOCATION_PHOTO_SOURCE'):
+                m._owner_acl_source_program(self.op)
+        self.files=b'scripts/helper.js\0';self.tracked.unlink();self.tracked.symlink_to('/tmp')
+        with self.assertRaisesRegex(m.Stop,'LOCATION_PHOTO_SOURCE'):m._owner_acl_source_program(self.op)
+        self.tracked.unlink();self.tracked.write_bytes(b'synthetic fixture')
+        dependency=self.source/'node_modules/typescript/lib/typescript.js'
+        dependency.unlink();dependency.symlink_to('/tmp')
+        with self.assertRaisesRegex(m.Stop,'LOCATION_PHOTO_SOURCE'):m._owner_acl_source_program(self.op)
+
+
 def restore_row(container, operation_sha, tmpfs_bytes, state):
     return {'Id':container,'Config':{'Image':m.PG_IMAGE,'User':'postgres','Volumes':{'/var/lib/postgresql/data':{}},'Labels':{'phub.backup-operation':operation_sha}},
             'HostConfig':{'NetworkMode':'none','ReadonlyRootfs':True,'Binds':None,'PortBindings':{},'Tmpfs':m.restore_tmpfs(tmpfs_bytes),

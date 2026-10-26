@@ -15,6 +15,8 @@ export const ROLLOUT_ABSENT_KIND: string;
 export const ROLLOUT_ABSENT_NOTE: string;
 export const PUBLISHER: string;
 export const MAIN_CHECKS: string;
+export const SOURCE_CI_REPOSITORY: string;
+export const SOURCE_CI_REQUIRED_JOBS: readonly string[];
 export const TARGET: Readonly<{ hostname: string; serverId: number; projectId: number }>;
 export const SECRET_NAMES: readonly string[];
 export const CONTAINER_SERVICES: readonly string[];
@@ -39,6 +41,7 @@ export interface AdoptionGithubEvidence {
   publicationRun: Record<string, unknown>;
   publicationArtifacts: Record<string, unknown>;
   sourceCiRun: Record<string, unknown>;
+  sourceCiJobs: Record<string, unknown>;
 }
 
 export interface AdoptionArtifactsInputs {
@@ -72,6 +75,11 @@ export function validateAdoptionOperation(
   requireUnexpired?: boolean,
 ): Record<string, unknown>;
 export function validateAdoptionReceipt(value: unknown): Record<string, unknown>;
+export function validateSourceCiEvidence(
+  release: { sourceCiRunId: string; sha: string },
+  run: Record<string, unknown> | undefined,
+  jobs: Record<string, unknown> | undefined,
+): true;
 export function buildAdoptionArtifacts(
   operation: unknown,
   inputs: AdoptionArtifactsInputs,

@@ -1619,7 +1619,10 @@ source in code and in the receipt. Run:
 ```
 
 Before writing it binds the executed controller checkout as above, then re-verifies the source CI
-run and single-attempt `workflow_dispatch` publication run (publisher path, canonical artifact
+run with the same job-level checks as the canonical `verifySourceCi()` (push on main, attempt 1,
+success, repository identity and exactly one successful `ci-plan`, `source-quality`, `quality-full`,
+`quality`, `dependency-security`, `secret-scan`, `deployment-contract`, `docker-build`, `pr-gate`
+job) and the single-attempt `workflow_dispatch` publication run (publisher path, canonical artifact
 name/digest/id), the previous descriptor hash and kind, the
 five secret-file hashes plus identity marker, and every running container (declared digest,
 `org.opencontainers.image.revision` equals the release SHA, API/Web `phub.release-id` equals the
