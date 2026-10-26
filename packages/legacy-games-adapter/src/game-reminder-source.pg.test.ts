@@ -184,8 +184,8 @@ physical('isolated legacy game reminder Mongo to PostgreSQL source fence', () =>
       tenantId,
     ]);
     await postgres.query(
-      `insert into profile.user_summaries(tenant_id,user_id,display_name)
-       values($1,$2,'Existing verified admin')`,
+      `insert into profile.user_summaries(tenant_id,user_id,display_name,phone_e164)
+       values($1,$2,'Existing verified admin','+79990000001')`,
       [tenantId, userId],
     );
     await mongo
