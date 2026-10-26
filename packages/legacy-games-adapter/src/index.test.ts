@@ -87,6 +87,71 @@ describe('legacy games adapter', () => {
     }
   });
 
+  it('filters terminal roster rows before capacity and viewer identity matching', () => {
+    const mapped = testing.mapLegacyGame(
+      {
+        ...phoneGameDocument({ phone: '+79990000001' }),
+        metadata: { gameFormat: 'singles' },
+        participants: [
+          {
+            id: 'departed-profile',
+            name: 'Departed synthetic player',
+            status: ' payment_refunded ',
+            phone: '+79990000002',
+            photo: 'https://cdn.synthetic.invalid/departed.png',
+          },
+          { id: 'active-profile', name: 'Active synthetic player', status: 'PAYMENT_PENDING' },
+        ],
+      },
+      '+79990000002',
+    );
+    expect(mapped?.participants.map((item) => item.externalId)).toEqual([
+      'viewer-profile',
+      'active-profile',
+    ]);
+    expect(mapped?.viewerParticipantExternalId).toBeNull();
+    expect(JSON.stringify(mapped)).not.toContain('departed-profile');
+    expect(JSON.stringify(mapped)).not.toContain('Departed synthetic player');
+    expect(JSON.stringify(mapped)).not.toContain('departed.png');
+  });
+
+  it.each([
+    'CONFIRMED',
+    'PENDING',
+    'WAITLIST',
+    'PAYMENT_PENDING',
+    'PAID',
+    '',
+    'UNKNOWN',
+    undefined,
+    null,
+    0,
+  ])('preserves legacy active participant status %s without a PAID-only rule', (status) => {
+    const mapped = testing.mapLegacyGame({
+      ...phoneGameDocument({}),
+      participants: [{ id: 'active-profile', name: 'Active synthetic player', status }],
+    });
+    expect(mapped?.participants.map((item) => item.externalId)).toEqual([
+      'viewer-profile',
+      'active-profile',
+    ]);
+  });
+
+  it('does not let a terminal duplicate overwrite the organizer or an active participant', () => {
+    const mapped = testing.mapLegacyGame({
+      ...phoneGameDocument({}),
+      participants: [
+        { id: 'active-profile', name: 'Active synthetic player', status: 'CONFIRMED' },
+        { id: 'active-profile', name: 'Stale duplicate', status: 'cancelled' },
+        { id: 'viewer-profile', name: 'Stale organizer row', status: 'LEFT' },
+      ],
+    });
+    expect(mapped?.participants.map((item) => item.displayName)).toEqual([
+      'Анна',
+      'Active synthetic player',
+    ]);
+  });
+
   it('builds a bounded targeted photo lookup and pseudonymizes its result', () => {
     const pipeline = testing.participantPhotoPipeline(['raw-player-1', 'raw-player-2']);
     expect(JSON.stringify(pipeline)).toContain(
