@@ -1,11 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { GameCreationOperation } from './GameCreationOperation.js';
 import { MainBottomNavigation } from './HomeDashboardPage.js';
-import type { AuthGateway, CreateGameRequest } from './auth-gateway.js';
+import type { AuthGateway, CreateGameRequest, GameCommandResult } from './auth-gateway.js';
 import {
+  bindCreateGameOperation,
   browserCreateGameAttemptLockManager,
   clearCreateGameAttempt,
   CreateGameAttemptError,
+  isCreateGameOperation,
   loadCreateGameAttempt,
   prepareCreateGameAttempt,
   resolveCreateGameAttempt,
@@ -70,10 +73,14 @@ function browserAttemptStorage(): Storage | undefined {
   }
 }
 
+function browserNavigate(url: string): void {
+  window.location.assign(url);
+}
+
 export function CreateGamePage({
   gateway,
   principal,
-  navigate = (url) => window.location.assign(url),
+  navigate = browserNavigate,
   attemptStorage,
   attemptLockManager,
 }: {
@@ -142,7 +149,7 @@ export function CreateGamePage({
   const [activeAttempt, setActiveAttempt] = useState<PendingCreateGameAttempt | null>(
     restoredPending,
   );
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(Boolean(restoredPending?.operationId));
   const [error, setError] = useState<string | null>(
     restored.error ? commandError(restored.error) : null,
   );
@@ -151,6 +158,71 @@ export function CreateGamePage({
       ? 'Найдена незавершённая попытка. Проверьте сохранённые параметры и повторите восстановление тем же ключом.'
       : null,
   );
+
+  const [operationStatus, setOperationStatus] = useState<
+    'ACCEPTED' | 'PROCESSING' | 'FAILED' | 'UNKNOWN' | null
+  >(restoredPending?.operationId ? 'UNKNOWN' : null);
+
+  const applyResult = useCallback(
+    async (result: GameCommandResult, attempt: PendingCreateGameAttempt) => {
+      if (!storage || !isCreateGameOperation(result, attempt.operationId)) {
+        setOperationStatus('UNKNOWN');
+        setError('Ответ операции не подтверждён. Прежние параметры и ключ сохранены.');
+        return;
+      }
+      if (result.operation.status !== 'SUCCEEDED') {
+        const bound = await bindCreateGameOperation(
+          scopedPrincipal,
+          attempt,
+          result.operation.id,
+          storage,
+          lockManager,
+        );
+        setActiveAttempt(bound);
+        setNotice(null);
+        setOperationStatus(result.operation.status);
+        return;
+      }
+      // This is success of the NO_PAYMENT beta command only, never booking confirmation.
+      await resolveCreateGameAttempt(
+        scopedPrincipal,
+        attempt,
+        result.operation.gameId!,
+        storage,
+        lockManager,
+        { operationId: result.operation.id },
+      );
+      setActiveAttempt(null);
+      setOperationStatus(null);
+      const recovered = result.replayed ? '&recovered=1' : '';
+      navigate(
+        `/games/${encodeURIComponent(result.operation.gameId!)}?created=1&revision=${result.operation.aggregateRevision}${recovered}`,
+      );
+    },
+    [scopedPrincipal, storage, lockManager, navigate],
+  );
+
+  useEffect(() => {
+    if (!restoredPending?.operationId) return;
+    let active = true;
+    void gateway
+      .getGameOperation(restoredPending.operationId)
+      .then(async (result) => {
+        if (active) await applyResult(result, restoredPending);
+      })
+      .catch(() => {
+        if (active) {
+          setOperationStatus('UNKNOWN');
+          setError('Не удалось проверить прежнюю операцию. Новый запрос создания не отправлен.');
+        }
+      })
+      .finally(() => {
+        if (active) setBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [gateway, restoredPending, applyResult]);
 
   useEffect(() => {
     if (!explicitNewIntent || typeof window === 'undefined') return;
@@ -213,24 +285,27 @@ export function CreateGamePage({
     }
     setError(null);
     setNotice(null);
+    setOperationStatus(null);
     const start = new Date(startsAt);
     const end = new Date(endsAt);
     if (
-      !stationId ||
-      !title.trim() ||
-      Number.isNaN(start.getTime()) ||
-      Number.isNaN(end.getTime()) ||
-      end <= start ||
-      (start <= new Date() && !activeAttempt)
+      !activeAttempt?.operationId &&
+      (!stationId ||
+        !title.trim() ||
+        Number.isNaN(start.getTime()) ||
+        Number.isNaN(end.getTime()) ||
+        end <= start ||
+        (start <= new Date() && !activeAttempt))
     ) {
       setError('Проверьте название, станцию и будущее время игры.');
       return;
     }
-    if ((levelFrom && !levelTo) || (!levelFrom && levelTo)) {
+    if (!activeAttempt?.operationId && ((levelFrom && !levelTo) || (!levelFrom && levelTo))) {
       setError('Укажите обе границы уровня или оставьте любой уровень.');
       return;
     }
     if (
+      !activeAttempt?.operationId &&
       levelFrom &&
       levelTo &&
       LEVELS.indexOf(levelFrom as (typeof LEVELS)[number]) >
@@ -239,29 +314,31 @@ export function CreateGamePage({
       setError('Начальный уровень не может быть выше конечного.');
       return;
     }
-    const input: CreateGameRequest = {
-      title: title.trim(),
-      kind: 'FRIENDLY',
-      visibility,
-      stationId,
-      ...(courtId ? { courtId } : {}),
-      startsAt: start.toISOString(),
-      endsAt: end.toISOString(),
-      timezone:
-        restoredPayload?.timezone ??
-        Intl.DateTimeFormat().resolvedOptions().timeZone ??
-        'Europe/Moscow',
-      capacity,
-      paymentMode: 'NO_PAYMENT',
-      waitlistEnabled,
-      levelRange:
-        levelFrom && levelTo
-          ? {
-              from: levelFrom as (typeof LEVELS)[number],
-              to: levelTo as (typeof LEVELS)[number],
-            }
-          : null,
-    };
+    const input: CreateGameRequest = activeAttempt?.operationId
+      ? activeAttempt.payload
+      : {
+          title: title.trim(),
+          kind: 'FRIENDLY',
+          visibility,
+          stationId,
+          ...(courtId ? { courtId } : {}),
+          startsAt: start.toISOString(),
+          endsAt: end.toISOString(),
+          timezone:
+            restoredPayload?.timezone ??
+            Intl.DateTimeFormat().resolvedOptions().timeZone ??
+            'Europe/Moscow',
+          capacity,
+          paymentMode: 'NO_PAYMENT',
+          waitlistEnabled,
+          levelRange:
+            levelFrom && levelTo
+              ? {
+                  from: levelFrom as (typeof LEVELS)[number],
+                  to: levelTo as (typeof LEVELS)[number],
+                }
+              : null,
+        };
     setBusy(true);
     let attempt: PendingCreateGameAttempt | undefined;
     try {
@@ -283,52 +360,13 @@ export function CreateGamePage({
       }
       attempt = prepared;
       setActiveAttempt(prepared);
-      const result = await gateway.createGame(attempt.payload, {
-        idempotencyKey: attempt.idempotencyKey,
-      });
-      if (result.operation.status === 'FAILED') {
-        const failure = Object.assign(new Error('Create game failed'), {
-          code: result.operation.error?.code,
-        });
-        if (isTerminalNoCommitError(failure)) {
-          await clearCreateGameAttempt(scopedPrincipal, attempt, storage, lockManager);
-          setActiveAttempt(null);
-          setError(`Создание отклонено: ${commandError(failure)} Игра не создана.`);
-        } else if (errorCode(failure) === 'IDEMPOTENCY_KEY_REUSED') {
-          setError(commandError(failure));
-        } else {
-          setError(
-            'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
-          );
-        }
-        setBusy(false);
-        return;
-      }
-      if (
-        !result.operation.gameId ||
-        ['ACCEPTED', 'PROCESSING'].includes(result.operation.status)
-      ) {
-        setError(
-          'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
-        );
-        setBusy(false);
-        return;
-      }
-      await resolveCreateGameAttempt(
-        scopedPrincipal,
-        attempt,
-        result.operation.gameId,
-        storage,
-        lockManager,
-      );
-      setActiveAttempt(null);
-      const recovered = result.replayed ? '&recovered=1' : '';
-      const revision = result.operation.aggregateRevision ?? 0;
-      navigate(
-        `/games/${encodeURIComponent(result.operation.gameId)}?created=1&revision=${revision}${recovered}`,
-      );
+      const result = attempt.operationId
+        ? await gateway.getGameOperation(attempt.operationId)
+        : await gateway.createGame(attempt.payload, { idempotencyKey: attempt.idempotencyKey });
+      await applyResult(result, attempt);
+      setBusy(false);
     } catch (cause) {
-      if (attempt && isTerminalNoCommitError(cause)) {
+      if (attempt && !attempt.operationId && isTerminalNoCommitError(cause)) {
         try {
           await clearCreateGameAttempt(scopedPrincipal, attempt, storage, lockManager);
           setActiveAttempt(null);
@@ -340,6 +378,9 @@ export function CreateGamePage({
         setError(commandError(cause));
       } else if (errorCode(cause) === 'IDEMPOTENCY_KEY_REUSED') {
         setError(commandError(cause));
+      } else if (attempt?.operationId) {
+        setOperationStatus('UNKNOWN');
+        setError('Не удалось проверить прежнюю операцию. Новый запрос создания не отправлен.');
       } else {
         setError(
           'Связь прервалась, результат неизвестен. Сохранённые параметры и ключ оставлены — повторите восстановление.',
@@ -370,6 +411,13 @@ export function CreateGamePage({
         </div>
       </header>
 
+      <aside className="games-message" aria-label="Создание игры с бронированием">
+        <strong>Игра с бронированием пока недоступна</strong>
+        <p>
+          Выбор разрешённого слота и подтверждение брони ещё не подключены. Форма ниже создаёт
+          только beta-игру без бронирования корта.
+        </p>
+      </aside>
       <form className="game-create-form" onSubmit={(event) => void submit(event)} noValidate>
         {locationsError ? (
           <p className="games-message is-error" role="alert">
@@ -381,6 +429,7 @@ export function CreateGamePage({
             {error}
           </p>
         ) : null}
+        {operationStatus ? <GameCreationOperation status={operationStatus} /> : null}
         {notice ? (
           <p className="games-message" role="status">
             {notice}
@@ -536,9 +585,13 @@ export function CreateGamePage({
         <button
           className="game-detail-primary"
           type="submit"
-          disabled={busy || Boolean(locationsError)}
+          disabled={busy || (!activeAttempt?.operationId && Boolean(locationsError))}
         >
-          {busy ? 'Создаём игру…' : 'Создать игру'}
+          {busy
+            ? 'Проверяем операцию…'
+            : activeAttempt?.operationId
+              ? 'Проверить прежнюю операцию'
+              : 'Создать игру'}
         </button>
       </form>
       <MainBottomNavigation active="games" gamesDestination="games" />
