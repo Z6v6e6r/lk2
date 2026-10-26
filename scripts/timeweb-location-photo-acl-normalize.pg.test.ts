@@ -113,6 +113,10 @@ const physical = disposable ? describe.sequential : describe.skip;
 physical('photo ACL baseline on owned disposable PostgreSQL 16', () => {
   it('rehearses exact delta, grantors, inverse, mismatch rejection and lost-ACK classification', async () => {
     const admin = new Pool({ connectionString: disposable, max: 2 });
+    // Disposable-rehearsal teardown drops the throwaway database with (force), which can terminate a
+    // lingering backend; pg emits that as an unhandled pool 'error'. The rehearsal asserts on SQL
+    // results, not on teardown noise, so absorb only teardown errors here.
+    admin.on('error', () => undefined);
     const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
     const database = `photo_acl_${suffix}`;
     // Preserve the production ACL-name sort order after replacing the owner with CI's phub.
@@ -135,6 +139,7 @@ physical('photo ACL baseline on owned disposable PostgreSQL 16', () => {
       const targetUrl = new URL(disposable!);
       targetUrl.pathname = `/${database}`;
       target = new Pool({ connectionString: targetUrl.toString(), max: 2 });
+      target.on('error', () => undefined);
       client = await target.connect();
       expect(
         Number(
