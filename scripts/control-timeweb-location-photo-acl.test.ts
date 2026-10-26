@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-return -- asymmetric matchers (expect.stringMatching/arrayContaining) are intentionally untyped */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -388,13 +389,7 @@ for field, value in json.loads(${JSON.stringify(encodedMutations)}):
     results.append(outcome(lambda: packet.validate_operation(changed, NOW, FakeRt()))['code'])
 print(json.dumps(results))
 `),
-    ).toEqual(
-      mutations.map(
-        () =>
-          'LOCATION_PHOTO_ACL_' + expect.any(String) &&
-          expect.stringMatching(/^LOCATION_PHOTO_ACL_/),
-      ),
-    );
+    ).toEqual(mutations.map(() => expect.stringMatching(/^LOCATION_PHOTO_ACL_/)));
   });
   it('rejects unknown, missing and duplicate keys', () => {
     expect(
