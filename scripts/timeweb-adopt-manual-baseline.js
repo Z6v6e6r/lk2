@@ -102,11 +102,16 @@ const NUMBER = /^[1-9][0-9]*$/;
 const ROLLBACK_MODE = 'previous-release-only';
 const NO_PREVIOUS_RELEASE_ID = 'NONE';
 // Exactly the installed kinds readInstalledApiBaseline() accepts as a canonical previous baseline.
+// ADOPTED_MANUAL_FULL is included so a second manual promotion can be adopted on top of a previous
+// adoption: the baseline must be able to advance across consecutive controller-source releases until
+// a reviewed controller-source delivery route exists (ADR-0026 follow-up). The lineage stays explicit:
+// the receipt records the adopted parent release and its descriptor hash.
 const CANONICAL_BASELINE_KINDS = new Set([
   'API_WEB',
   'API_WORKER',
   'API_WORKER_NOTIFICATION_0105',
   'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID',
+  'ADOPTED_MANUAL_FULL',
 ]);
 const FCM_SOURCE = '/etc/phub/timeweb-beta-fcm/fcm-service-account.json';
 const MIN_ADOPTION_WINDOW_MS = 20 * 60 * 1000;

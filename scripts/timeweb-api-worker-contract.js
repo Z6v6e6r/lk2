@@ -120,8 +120,8 @@ export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([
   'docs/runbooks/location-publication.md',
 ]);
 export const LOCATION_PHOTO_CONTROLLER_BASE = Object.freeze({
-  sha: 'bf7b6a44314be898c43371a8d86bc0e108cf159b',
-  tree: '088e8d429c314be6aebbd0432d1c6a7f024289b6',
+  sha: '2bf56ca8c1bc3e27db5c857dbf961ad400f2294b',
+  tree: 'fd6ae8e635d325a39e5e44ba06d1ab0c3df6e757',
 });
 export const LOCATION_PHOTO_CONTROLLER_DELTA = Object.freeze(
   Object.fromEntries(
