@@ -231,13 +231,18 @@ physical('isolated legacy game reminder Mongo to PostgreSQL source fence', () =>
       ],
       now,
     });
-    await repository.synchronizeParticipants({
-      tenantKey,
-      snapshots: [snapshot],
-      correlationId: `reminder-mirror-${randomUUID()}`,
-      now,
-    });
     gameId = imported.imported[0]?.gameId ?? imported.existing[0]!.gameId;
+    // The reminder-only pilot starts from an already admitted MIRROR game. Establish that exact
+    // precondition directly: the generic roster synchronizer is outside this source-cycle test and
+    // may legitimately quarantine multi-alias fixture mappings for operator reconciliation.
+    const admitted = await postgres.query(
+      `insert into integration.legacy_game_roster_sync_state(
+         tenant_id,game_id,source_external_version,last_synced_game_revision,mode
+       ) select $1,$2,$3,revision,'MIRROR'
+           from games.games where tenant_id=$1 and id=$2`,
+      [tenantId, gameId, snapshot.externalVersion],
+    );
+    expect(admitted.rowCount).toBe(1);
     await seedHistoricalTerminalSources();
   }, 30_000);
 
