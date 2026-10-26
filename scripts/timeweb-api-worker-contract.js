@@ -122,6 +122,10 @@ export const API_WORKER_MIGRATION_CONTROLLER_FILES = new Set([
   'docs/runbooks/timeweb-standard-delivery.md',
   'docs/runbooks/android-chats-fcm.md',
   'docs/runbooks/location-publication.md',
+  'docs/runbooks/location-photo-acl-baseline.md',
+  'deploy/timeweb/location-photo-acl-normalize-0102.sql',
+  'deploy/timeweb/location-photo-acl-normalize-recover-0102.sql',
+  'scripts/timeweb-location-photo-acl-normalize.pg.test.ts',
 ]);
 export const LOCATION_PHOTO_CONTROLLER_BASE = Object.freeze({
   sha: '2bf56ca8c1bc3e27db5c857dbf961ad400f2294b',
@@ -155,7 +159,7 @@ export const LOCATION_PHOTO_CONTROLLER_DELTA = Object.freeze(
 // and carries a plain regular-blob M/A transition; package integrity is independently pinned by the
 // descriptor/migration/blob hashes, so this closure is a controller-drift guard, not the package
 // authorship proof. A base that only ever grew by reviewed controller files therefore does not block
-// an unrelated app release that happened between package authoring and the migration.
+// an unrelated reviewed controller release merged between package authoring and the migration.
 export function validateLocationPhotoControllerClosure(entries) {
   if (
     !Array.isArray(entries) ||

@@ -539,6 +539,24 @@ describe('closed Timeweb location-photo 0102 profile', () => {
         extra({ status: 'A', oldMode: '000000', oldOid: '0'.repeat(40) }),
       ]),
     ).toHaveLength(rows.length + 1);
+    // The ACL-baseline building blocks registered alongside the package are admitted too.
+    for (const path of [
+      'docs/runbooks/location-photo-acl-baseline.md',
+      'deploy/timeweb/location-photo-acl-normalize-0102.sql',
+      'deploy/timeweb/location-photo-acl-normalize-recover-0102.sql',
+      'scripts/timeweb-location-photo-acl-normalize.pg.test.ts',
+    ])
+      expect(validateLocationPhotoControllerClosure([...rows, extra({ path })])).toHaveLength(
+        rows.length + 1,
+      );
+    // A package path re-declared with a different status is rejected even as an allowlisted path.
+    expect(() =>
+      validateLocationPhotoControllerClosure(
+        rows.map((row, index) =>
+          index === 0 ? { ...row, status: 'A', oldMode: '000000', oldOid: '0'.repeat(40) } : row,
+        ),
+      ),
+    ).toThrow('LOCATION_PHOTO_CONTROLLER_DELTA');
     for (const invalid of [
       [...rows, extra({ status: 'D' })],
       [...rows, extra({ newMode: '100755' })],

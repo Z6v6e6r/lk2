@@ -30,10 +30,13 @@ MIGRATION_BASE_TREE = 'b9ef484b4d0a9e5c8913cc2cdd79ee39b1800537'
 # Source: scripts/timeweb-api-worker-contract.js. Do not edit this block by hand;
 # run `node --import tsx scripts/generate-timeweb-backup-pins.ts --write`.
 API_WORKER_MIGRATION_CONTROLLER_FILES = frozenset([
+    'deploy/timeweb/location-photo-acl-normalize-0102.sql',
+    'deploy/timeweb/location-photo-acl-normalize-recover-0102.sql',
     'deploy/timeweb/location-photo-migration-0102.v1.json',
     'deploy/timeweb/location-photo-role-bootstrap-0102.sql',
     'deploy/timeweb/location-photo-role-cleanup-0102.sql',
     'docs/runbooks/android-chats-fcm.md',
+    'docs/runbooks/location-photo-acl-baseline.md',
     'docs/runbooks/location-publication.md',
     'docs/runbooks/timeweb-standard-delivery.md',
     'scripts/control-timeweb-database-backup.py',
@@ -53,6 +56,7 @@ API_WORKER_MIGRATION_CONTROLLER_FILES = frozenset([
     'scripts/timeweb-api-worker-migration.js',
     'scripts/timeweb-api-worker-migration.test.ts',
     'scripts/timeweb-api-worker.fixture.ts',
+    'scripts/timeweb-location-photo-acl-normalize.pg.test.ts',
     'scripts/timeweb-location-photo-controller.js',
     'scripts/timeweb-location-photo-controller.test.ts',
     'scripts/timeweb-location-photo-profile.d.ts',

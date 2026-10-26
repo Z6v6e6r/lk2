@@ -53,6 +53,12 @@ migrator invocation for the notification controller.
 The source controller is `PHUB_TIMEWEB_LOCATION_PHOTO_0102_MIGRATION_OPERATION_V1`. It deliberately
 binds three independent identities:
 
+- the installed API and Worker supplied in `expectedApi` and `expectedWorker` (the initial live
+  baseline was b6bd6b38; never infer that 4256 was installed merely because its images exist);
+- the published 4256 migrator manifest and the exact amd64 local image id pinned by
+  `deploy/timeweb/location-photo-migration-0102.v1.json`;
+- the current enrolled controller commit/tree and its fresh source-CI run.
+
 The controller-source closure requires the complete reviewed package delta above and admits further
 entries only when each extra path is itself a reviewed controller file
 (`API_WORKER_CONTROLLER_FILES`) with a plain regular-blob `M`/`A` transition. This keeps an unrelated
@@ -60,12 +66,6 @@ reviewed controller release (for example the adoption-mode or ACL-baseline chang
 package was authored) from blocking the migration while still rejecting foreign paths, duplicates,
 mode/type drift and a missing package file. Package integrity is pinned independently by the
 descriptor, migration and blob hashes.
-
-- the installed API and Worker supplied in `expectedApi` and `expectedWorker` (the initial live
-  baseline was b6bd6b38; never infer that 4256 was installed merely because its images exist);
-- the published 4256 migrator manifest and the exact amd64 local image id pinned by
-  `deploy/timeweb/location-photo-migration-0102.v1.json`;
-- the current enrolled controller commit/tree and its fresh source-CI run.
 
 Mint requests only from fresh readbacks. The package accepts exactly ledger count 105/digest
 `7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd`, then expects count 106/digest
