@@ -235,14 +235,45 @@ physical('isolated legacy game reminder Mongo to PostgreSQL source fence', () =>
     // The reminder-only pilot starts from an already admitted MIRROR game. Establish that exact
     // precondition directly: the generic roster synchronizer is outside this source-cycle test and
     // may legitimately quarantine multi-alias fixture mappings for operator reconciliation.
-    const admitted = await postgres.query(
-      `insert into integration.legacy_game_roster_sync_state(
-         tenant_id,game_id,source_external_version,last_synced_game_revision,mode
-       ) select $1,$2,$3,revision,'MIRROR'
-           from games.games where tenant_id=$1 and id=$2`,
-      [tenantId, gameId, snapshot.externalVersion],
-    );
-    expect(admitted.rowCount).toBe(1);
+    await withTenantTransaction(postgres, tenantId, async (client) => {
+      const sourceExternalIds = [snapshot.externalId, ...(snapshot.externalAliases ?? [])];
+      for (const externalId of sourceExternalIds) {
+        await client.query(
+          `insert into integration.external_entity_map(
+             tenant_id,external_system,entity_type,internal_id,external_id,external_version,
+             last_synced_at,sync_status,sync_error_code
+           ) values($1,'LK_LEGACY_SNAPSHOT','game',$2,$3,$4,now(),'synced',null)
+           on conflict(tenant_id,external_system,entity_type,external_id) do update set
+             internal_id=excluded.internal_id,external_version=excluded.external_version,
+             last_synced_at=excluded.last_synced_at,sync_status='synced',sync_error_code=null`,
+          [tenantId, gameId, externalId, snapshot.externalVersion],
+        );
+      }
+      const admitted = await client.query(
+        `insert into integration.legacy_game_roster_sync_state(
+           tenant_id,game_id,source_external_version,last_synced_game_revision,mode
+         ) select $1,$2,$3,revision,'MIRROR'
+             from games.games where tenant_id=$1 and id=$2`,
+        [tenantId, gameId, snapshot.externalVersion],
+      );
+      expect(admitted.rowCount).toBe(1);
+      const resolvable = await client.query<{ game_id: string }>(
+        `select distinct mapping.internal_id game_id
+           from integration.external_entity_map mapping
+           join integration.legacy_game_roster_sync_state mirror
+             on mirror.tenant_id=mapping.tenant_id and mirror.game_id=mapping.internal_id
+            and mirror.mode='MIRROR'
+          where mapping.tenant_id=$1 and mapping.external_system='LK_LEGACY_SNAPSHOT'
+            and mapping.entity_type='game' and mapping.external_id=any($2::text[])
+            and not exists(
+              select 1 from integration.legacy_game_merge_redirects redirect
+               where redirect.tenant_id=mapping.tenant_id
+                 and redirect.source_game_id=mapping.internal_id
+            )`,
+        [tenantId, sourceExternalIds],
+      );
+      expect(resolvable.rows).toEqual([{ game_id: gameId }]);
+    });
     await seedHistoricalTerminalSources();
   }, 30_000);
 
