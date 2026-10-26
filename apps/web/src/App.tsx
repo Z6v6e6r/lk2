@@ -82,6 +82,9 @@ import {
 const BookingsPage = lazy(() =>
   import('./BookingsPage.js').then((module) => ({ default: module.BookingsPage })),
 );
+const SupportPage = lazy(() =>
+  import('./SupportPage.js').then((module) => ({ default: module.SupportPage })),
+);
 const ChatsPage = lazy(() =>
   import('./ChatsPage.js').then((module) => ({ default: module.ChatsPage })),
 );
@@ -120,6 +123,9 @@ const LocationsPage = lazy(() =>
 const NotificationsPage = lazy(() =>
   import('./NotificationsPage.js').then((module) => ({ default: module.NotificationsPage })),
 );
+const SubscriptionsPage = lazy(() =>
+  import('./SubscriptionsPage.js').then((module) => ({ default: module.SubscriptionsPage })),
+);
 const ProfilePage = lazy(() =>
   import('./ProfilePage.js').then((module) => ({ default: module.ProfilePage })),
 );
@@ -151,6 +157,7 @@ type ProtectedRoute =
       readonly conversationId?: string;
     }
   | { readonly kind: 'notifications' }
+  | { readonly kind: 'support'; readonly ticketId?: string }
   | { readonly kind: 'communities' }
   | { readonly kind: 'community'; readonly communityId: string }
   | { readonly kind: 'community-invite' }
@@ -161,13 +168,13 @@ type ProtectedRoute =
   | { readonly kind: 'game'; readonly gameId: string }
   | { readonly kind: 'trainings' }
   | { readonly kind: 'tournaments' }
+  | { readonly kind: 'subscriptions'; readonly subscriptionId?: string }
   | { readonly kind: 'gift-certificates' }
   | { readonly kind: 'section'; readonly title: string }
   | { readonly kind: 'not-found' };
 
 const visibleWorkInProgressSections = [
   ['/coaches', 'Индивидуальные тренировки'],
-  ['/subscriptions', 'Абонементы'],
   ['/promotions', 'Акции'],
   ['/offers', 'Предложения'],
 ] as const;
@@ -193,6 +200,11 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
     return { kind: 'chats', mode: 'thread', conversationId: chatMatch[1] };
   }
   if (normalizedPath === '/notifications') return { kind: 'notifications' };
+  if (normalizedPath === '/support') return { kind: 'support' };
+  const supportMatch = normalizedPath.match(
+    /^\/support\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (supportMatch?.[1]) return { kind: 'support', ticketId: supportMatch[1] };
   if (normalizedPath === '/communities') return { kind: 'communities' };
   if (normalizedPath === '/community-invite') return { kind: 'community-invite' };
   const communityMatch = normalizedPath.match(
@@ -208,6 +220,12 @@ function resolveProtectedRoute(pathname: string): ProtectedRoute {
   if (normalizedPath === '/games/new') return { kind: 'game-create' };
   if (normalizedPath === '/trainings') return { kind: 'trainings' };
   if (normalizedPath === '/tournaments') return { kind: 'tournaments' };
+  if (normalizedPath === '/subscriptions') return { kind: 'subscriptions' };
+  const subscriptionMatch = normalizedPath.match(
+    /^\/subscriptions\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
+  if (subscriptionMatch?.[1])
+    return { kind: 'subscriptions', subscriptionId: subscriptionMatch[1].toLowerCase() };
   if (normalizedPath === '/gift-certificates') return { kind: 'gift-certificates' };
   const gameMatch = normalizedPath.match(
     /^\/games\/([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
@@ -408,7 +426,7 @@ function chatUiError(error: unknown, operation: ChatOperation): ChatUiError {
       message:
         code === 'CHAT_PARTICIPANT_CHAT_ACCESS_REQUIRED'
           ? 'У игрока ещё не открыт доступ к личным чатам: он не увидит этот диалог.'
-          : 'Игрок ещё не входил в ПадлХАБ: он не увидит диалог, пока не войдёт в приложение.',
+          : 'Игрок ещё не входил в ПадлхАБ: он не увидит диалог, пока не войдёт в приложение.',
     };
   }
   if (
@@ -581,7 +599,7 @@ function userMessage(
 }
 
 function Brand(): React.JSX.Element {
-  return <img className="brand" src={padlHubLogoUrl} alt="ПадлХАБ" />;
+  return <img className="brand" src={padlHubLogoUrl} alt="ПадлхАБ" />;
 }
 
 function CommunityRuntimeUnavailablePage(): React.JSX.Element {
@@ -644,6 +662,14 @@ export interface AppProps {
   readonly tenantKey: string;
   readonly realtimeBaseUrl?: string;
   readonly realtimeUrl?: string;
+  readonly devicePush?: {
+    readonly enabled: boolean;
+    readonly state: WebPushBrowserState;
+    readonly busy: boolean;
+    readonly error?: string;
+    readonly enable: () => void;
+    readonly disable: () => void;
+  };
 }
 
 const HOME_REFRESH_INTERVAL_MS = 30_000;
@@ -662,6 +688,7 @@ export function App({
   tenantKey,
   realtimeBaseUrl,
   realtimeUrl,
+  devicePush,
 }: AppProps): React.JSX.Element {
   const [state, dispatch] = useReducer(reducer, initialState);
   const communityRealtimeTransport = useMemo(() => {
@@ -848,8 +875,10 @@ export function App({
     'home-v3',
     'profile',
     'profile-level-history',
+    'support',
     'bookings',
     'notifications',
+    'chats',
     'locations',
     'location',
   ]);
@@ -1165,30 +1194,20 @@ export function App({
             setProfileCommunitiesError('Не удалось загрузить сообщества.');
           },
         );
-        if (clientPlatform === 'android') {
-          void gateway.getHomeDashboard().then(
-            (dashboard) => {
-              if (!active) return;
-              setProfileSubscriptions(dashboard.subscriptions);
-              setProfileSubscriptionsError(null);
-            },
-            () => {
-              if (!active) return;
-              setProfileSubscriptions(null);
-              setProfileSubscriptionsError(
-                'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
-              );
-            },
-          );
-        } else {
-          void Promise.resolve().then(() => {
+        void gateway.getHomeDashboard().then(
+          (dashboard) => {
+            if (!active) return;
+            setProfileSubscriptions(dashboard.subscriptions);
+            setProfileSubscriptionsError(null);
+          },
+          () => {
             if (!active) return;
             setProfileSubscriptions(null);
             setProfileSubscriptionsError(
               'Подписки и абонементы временно недоступны. Остальные данные профиля загружены.',
             );
-          });
-        }
+          },
+        );
         void gateway.listProfileFriends(8).then(
           (page) => {
             if (!active) return;
@@ -1560,8 +1579,12 @@ export function App({
       loadConversations();
       void Promise.allSettled([
         gateway.listNotifications(),
-        gateway.getWebPushConfiguration(),
-        getWebPushBrowserState(serviceWorkerUrl),
+        clientPlatform === 'android'
+          ? Promise.resolve({ enabled: false })
+          : gateway.getWebPushConfiguration(),
+        clientPlatform === 'android'
+          ? Promise.resolve('unsupported' as const)
+          : getWebPushBrowserState(serviceWorkerUrl),
         gateway.listProfileFriendRequests(),
         gateway.listProfileFriendRequests(8, 'outgoing'),
         gateway.getNotificationPreferences(),
@@ -2011,9 +2034,26 @@ export function App({
         mediaType: issued.media.mediaType,
         progress: 0,
       });
-      const transfer = putChatAttachmentBytes(issued.upload, file, (progress) => {
-        if (isActive()) updateChatAttachment(localId, { progress });
-      });
+      const transfer =
+        clientPlatform === 'android'
+          ? (() => {
+              const upload = gateway.uploadConversationMediaBytes;
+              if (!upload) throw new Error('NATIVE_REQUEST_REJECTED');
+              const controller = new AbortController();
+              return {
+                promise: upload(
+                  conversationId,
+                  mediaId,
+                  file,
+                  createMessagingCommandId(),
+                  controller.signal,
+                ),
+                abort: () => controller.abort(),
+              };
+            })()
+          : putChatAttachmentBytes(issued.upload, file, (progress) => {
+              if (isActive()) updateChatAttachment(localId, { progress });
+            });
       chatAttachmentAbortRef.current.set(localId, transfer.abort);
       try {
         await transfer.promise;
@@ -2563,6 +2603,7 @@ export function App({
           subscriptionsError={profileSubscriptionsError}
           communities={profileCommunities}
           communitiesError={profileCommunitiesError}
+          loadCommunityPage={gateway.listMyCommunities}
           friends={profileFriends}
           friendship={profileFriendship}
           friendsBusy={profileFriendsBusy}
@@ -2598,7 +2639,7 @@ export function App({
                   {bookingsError}
                 </p>
               ) : (
-                <p role="status">Получаем актуальные данные ПаделХАБ…</p>
+                <p role="status">Получаем актуальные данные ПадлхАБ…</p>
               )}
             </section>
           </main>
@@ -2675,7 +2716,7 @@ export function App({
                   {notificationsError}
                 </p>
               ) : (
-                <p role="status">Проверяем ленту и Web Push…</p>
+                <p role="status">Проверяем ленту и уведомления…</p>
               )}
             </section>
           </main>
@@ -2684,11 +2725,12 @@ export function App({
       return (
         <NotificationsPage
           page={notifications}
-          webPush={webPushConfiguration}
-          browserState={webPushBrowserState}
+          webPush={devicePush ? { enabled: devicePush.enabled } : webPushConfiguration}
+          browserState={devicePush?.state ?? webPushBrowserState}
+          platform={clientPlatform}
           conversations={notificationConversations}
-          busy={notificationsBusy}
-          error={notificationsError}
+          busy={notificationsBusy || Boolean(devicePush?.busy)}
+          error={devicePush?.error ?? notificationsError}
           inboxUnavailable={notificationsInboxUnavailable}
           preferences={notificationPreferences}
           preferencesBusy={notificationPreferencesBusy}
@@ -2699,12 +2741,22 @@ export function App({
           friendRequestBusyId={friendRequestBusyId}
           onAcceptFriendRequest={handleAcceptFriendRequest}
           onDeclineFriendRequest={handleDeclineFriendRequest}
-          onEnableWebPush={handleEnableWebPush}
-          onDisableWebPush={handleDisableWebPush}
+          onEnableWebPush={devicePush?.enable ?? handleEnableWebPush}
+          onDisableWebPush={devicePush?.disable ?? handleDisableWebPush}
           onSavePreferences={handleSaveNotificationPreferences}
           onMarkAllRead={handleMarkAllNotificationsRead}
           onRetryInbox={handleRetryNotificationInbox}
           onOpenNotification={handleOpenNotification}
+        />
+      );
+    }
+    if (protectedRoute.kind === 'support') {
+      return (
+        <SupportPage
+          key={state.session.context.user.id}
+          gateway={gateway}
+          readOnly={realAccountPreview}
+          {...(protectedRoute.ticketId ? { initialTicketId: protectedRoute.ticketId } : {})}
         />
       );
     }
@@ -2839,6 +2891,7 @@ export function App({
         <GamesPage
           gateway={gateway}
           chatNavigationScope={{ tenantKey, userId: context.user.id }}
+          joinPrincipal={{ tenantId: context.tenant.id, userId: context.user.id }}
           {...(protectedRoute.kind === 'game' ? { gameId: protectedRoute.gameId } : {})}
           {...(eventId ? { eventId } : {})}
         />
@@ -2880,6 +2933,26 @@ export function App({
           : new URLSearchParams(window.location.search).get('event');
       return <TournamentDetailPage gateway={gateway} tournamentId={tournamentId} />;
     }
+    if (protectedRoute.kind === 'subscriptions') {
+      return (
+        <SubscriptionsPage
+          key={`${context.tenant.id}:${context.user.id}`}
+          loadDashboard={gateway.getHomeDashboard}
+          {...(protectedRoute.subscriptionId
+            ? { subscriptionId: protectedRoute.subscriptionId }
+            : {})}
+          onNavigate={(href, method) => {
+            if (method === 'back') {
+              window.history.back();
+              return;
+            }
+            if (method === 'replace') window.history.replaceState({}, '', href);
+            else window.history.pushState({}, '', href);
+            refreshLocation();
+          }}
+        />
+      );
+    }
     if (protectedRoute.kind === 'gift-certificates') {
       return (
         <GiftCertificatesPage
@@ -2904,7 +2977,7 @@ export function App({
             <h1 id="route-title">{title}</h1>
             <p>
               {protectedRoute.kind === 'section'
-                ? 'Раздел подключается к API ПаделХАБ.'
+                ? 'Раздел подключается к API ПадлхАБ.'
                 : 'Проверьте адрес или вернитесь на Главную.'}
             </p>
             <a className="secondary-button logout-button" href="/">

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 
@@ -154,11 +154,19 @@ export interface MessagingMediaRepository {
   getFinalizeTarget(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
+    readonly conversationId: string;
     readonly mediaId: string;
     readonly idempotencyKey: string;
     readonly requestHash: string;
   }): Promise<
-    | { readonly outcome: 'inspect'; readonly objectKey: string }
+    | {
+        readonly outcome: 'inspect';
+        readonly objectKey: string;
+        readonly conversationId: string;
+        readonly declaredContentType: string;
+        readonly declaredByteSize: number;
+        readonly declaredSha256: string;
+      }
     | {
         readonly outcome: 'finalized';
         readonly media: MessagingMediaAsset;
@@ -171,6 +179,7 @@ export interface MessagingMediaRepository {
   finalizeUpload(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
+    readonly conversationId: string;
     readonly mediaId: string;
     readonly idempotencyKey: string;
     readonly requestHash: string;
@@ -192,6 +201,15 @@ export interface MessagingMediaRepository {
           | 'idempotency_conflict';
       }
   >;
+  recordSourceUpload(input: {
+    readonly tenantId: string;
+    readonly actorUserId: string;
+    readonly conversationId: string;
+    readonly mediaId: string;
+    readonly correlationId: string;
+    readonly idempotencyKey: string;
+    readonly observed: MessagingMediaObservedObject;
+  }): Promise<void>;
   getMedia(input: {
     readonly tenantId: string;
     readonly actorUserId: string;
@@ -722,6 +740,14 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
             [input.tenantId, previous.media_id],
           );
           if (!replayed) return { outcome: 'not_found' } as const;
+          if (replayed.conversation_id !== input.conversationId)
+            return { outcome: 'not_found' } as const;
+          const allowed = await authorizedConversationWriter(client, {
+            tenantId: input.tenantId,
+            actorUserId: input.actorUserId,
+            conversationId: replayed.conversation_id,
+          });
+          if (!allowed) return { outcome: 'not_found' } as const;
           return { outcome: 'finalized', media: asset(replayed), replayed: true } as const;
         }
         const row = await queryOne<MediaRow>(
@@ -732,6 +758,13 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
           [input.tenantId, input.mediaId, input.actorUserId],
         );
         if (!row) return { outcome: 'not_found' } as const;
+        if (row.conversation_id !== input.conversationId) return { outcome: 'not_found' } as const;
+        const allowed = await authorizedConversationWriter(client, {
+          tenantId: input.tenantId,
+          actorUserId: input.actorUserId,
+          conversationId: row.conversation_id,
+        });
+        if (!allowed) return { outcome: 'not_found' } as const;
         if (row.state === 'READY') {
           return { outcome: 'finalized', media: asset(row), replayed: true } as const;
         }
@@ -739,7 +772,14 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
         if (Date.parse(iso(row.upload_expires_at)) <= Date.now()) {
           return { outcome: 'upload_expired' } as const;
         }
-        return { outcome: 'inspect', objectKey: row.source_object_key } as const;
+        return {
+          outcome: 'inspect',
+          objectKey: row.source_object_key,
+          conversationId: row.conversation_id,
+          declaredContentType: row.declared_content_type,
+          declaredByteSize: Number(row.declared_size_bytes),
+          declaredSha256: row.declared_sha256,
+        } as const;
       });
     },
 
@@ -768,6 +808,13 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
           [input.tenantId, input.mediaId, input.actorUserId],
         );
         if (!row) return { outcome: 'not_found' } as const;
+        if (row.conversation_id !== input.conversationId) return { outcome: 'not_found' } as const;
+        const allowed = await authorizedConversationWriter(client, {
+          tenantId: input.tenantId,
+          actorUserId: input.actorUserId,
+          conversationId: row.conversation_id,
+        });
+        if (!allowed) return { outcome: 'not_found' } as const;
         if (row.state === 'READY') {
           return { outcome: 'finalized', media: asset(row), replayed: true } as const;
         }
@@ -834,6 +881,36 @@ export function createMessagingMediaRepository(pool: Pool): MessagingMediaReposi
           },
         });
         return { outcome: 'finalized', media: asset(updated), replayed: false } as const;
+      });
+    },
+
+    recordSourceUpload(input) {
+      return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const row = await queryOne<MediaRow>(
+          client,
+          `select ${MEDIA_COLUMNS} from messaging.media_assets
+            where tenant_id = $1 and id = $2 and uploader_user_id = $3 for update`,
+          [input.tenantId, input.mediaId, input.actorUserId],
+        );
+        if (
+          !row ||
+          row.conversation_id !== input.conversationId ||
+          row.uploader_user_id !== input.actorUserId
+        )
+          throw new Error('MESSAGING_MEDIA_AUDIT_TARGET_MISSING');
+        await recordTransition(client, {
+          tenantId: input.tenantId,
+          mediaId: input.mediaId,
+          actorUserId: input.actorUserId,
+          correlationId: input.correlationId,
+          action: 'MESSAGING_MEDIA_SOURCE_UPLOADED',
+          value: {
+            objectVersion: input.observed.objectVersion,
+            byteSize: input.observed.byteSize,
+            checksumSha256: input.observed.checksumSha256,
+            commandKeyDigest: createHash('sha256').update(input.idempotencyKey).digest('hex'),
+          },
+        });
       });
     },
 

@@ -9,6 +9,55 @@ body {
   min-height: 100dvh;
 }
 
+/* Native Home is full bleed only at the top. Insets are real OS dimensions, in CSS pixels. */
+html.phub-status-underlap .fh-hero {
+  padding-top: calc(16px + var(--phub-status-bar-top, 0px));
+}
+
+html.phub-status-underlap .fh-hero--v2 {
+  padding-top: calc(10px + var(--phub-status-bar-top, 0px));
+}
+
+html.phub-status-underlap .figma-home-shell:is(.is-home-v3, .is-home-v3-rows) .figma-home {
+  background-size: 100% calc(435px + var(--phub-status-bar-top, 0px));
+}
+
+html.phub-status-underlap .fh-tabs-bar {
+  top: var(--phub-status-bar-top, 0px);
+}
+
+html.phub-status-underlap .fh-tabs,
+html.phub-status-underlap .fh-tabs button {
+  height: 44px;
+}
+
+html.phub-status-underlap .fh-tabs {
+  flex-basis: 44px;
+}
+
+html.phub-status-underlap .fh-tabs button {
+  padding-top: 8px;
+  justify-content: center;
+  gap: 15px;
+}
+
+html.phub-status-underlap .fh-tabs-bar--compact .fh-tabs button {
+  padding-top: 9.5px;
+  gap: 13.5px;
+}
+
+html.phub-status-underlap .figma-home .fh-preferences-edit {
+  top: 5px;
+}
+
+html.phub-status-underlap .figma-home .fh-tabs-bar--compact .fh-preferences-edit {
+  top: 6.5px;
+}
+
+html.phub-status-underlap .ios-cabinet {
+  padding-top: 0;
+}
+
 .mobile-status {
   min-height: 100dvh;
   display: grid;

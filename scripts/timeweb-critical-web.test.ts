@@ -222,3 +222,97 @@ describe('closed critical Web delivery', () => {
     expect(source).not.toContain('installed-components.env');
   });
 });
+
+const currentFixture =
+  fixture +
+  `
+  const {API8158_WEB_COMPATIBILITY: current, API8158_WEB_SCHEMA, API8158_WEB_CONTROLLER_FILES,
+    criticalWebDirectories,validateCriticalWebPlanBinding,criticalWebMonitoring}=await import('./scripts/timeweb-critical-web.js');
+  op.schema=API8158_WEB_SCHEMA;
+  op.expectedApi.releaseId=current.apiReleaseId;op.expectedApi.image=current.apiImage;
+  op.expectedWeb.image=current.webImage;op.expectedWeb.releaseId=current.webReleaseId;
+  op.confirmation='UPGRADE_API8158_WEB_AAAAAAAAAAAA_FROM_'+current.webImage.slice(-12).toUpperCase()+'_KEEP_API_8158AC445C9F';
+`;
+describe('closed Web over installed API8158', () => {
+  it('separates immutable API and rollback Web identities and operation authority', () =>
+    scenario(
+      currentFixture +
+        `
+    validateCriticalWebOperation(op,now);
+    for(const change of [v=>v.schema='PHUB_TIMEWEB_CRITICAL_PROFILE_V2_WEB_OPERATION_V1',v=>v.schema='PHUB_TIMEWEB_CRITICAL_WEB_OPERATION_V1',v=>v.expectedApi.releaseId=op.expectedWeb.releaseId,v=>v.expectedWeb.releaseId=current.apiReleaseId,v=>v.expectedWeb.releaseId=current.baselineSource+'-99-1',v=>v.expectedApi.image='ghcr.io/z6v6e6r/phub-api@sha256:'+'0'.repeat(64),v=>v.expectedWeb.image='ghcr.io/z6v6e6r/phub-web@sha256:'+'0'.repeat(64),v=>v.confirmation='UPGRADE_WEB_AAAAAAAAAAAA_FROM_'+current.webImage.slice(-12).toUpperCase()+'_KEEP_API_0D6078BE7A50']) {
+      const bad=structuredClone(op);change(bad);assert.throws(()=>validateCriticalWebOperation(bad,now));
+    }
+    const dirs=criticalWebDirectories(op);
+    assert.equal(dirs.transaction,'/opt/phub/timeweb-beta/backups/'+sha+'-22-1-web');
+    assert.equal(dirs.backupDirectory,'/opt/phub/timeweb-beta/backups/'+sha+'-11-1-web');
+    const plan={operationSha256:'e'.repeat(64),compatibility:current,backup:{path:dirs.backupDirectory+'/database-backup-receipt.json'}};
+    validateCriticalWebPlanBinding(plan,op,'e'.repeat(64));
+    for(const change of [v=>v.operationSha256='f'.repeat(64),v=>v.compatibility=WEB_COMPATIBILITY,v=>v.backup.path=dirs.transaction+'/database-backup-receipt.json']) {
+      const bad=structuredClone(plan);change(bad);assert.throws(()=>validateCriticalWebPlanBinding(bad,op,'e'.repeat(64)));
+    }
+  `,
+    ));
+  it('requires exactly the reviewed modified inert paths with no subset, duplicate, rename or runtime drift', () =>
+    scenario(
+      currentFixture +
+        `
+    const entries=[...API8158_WEB_CONTROLLER_FILES].map(path=>({status:'M',path}));
+    validateWebControllerDelta(entries,op);
+    for(const bad of [[],entries.slice(1),[...entries,entries[0]],entries.map((v,i)=>i? v:{...v,status:'A'}),entries.map((v,i)=>i? v:{...v,status:'D'}),entries.map((v,i)=>i? v:{...v,path:'apps/web/src/App.tsx'}),entries.map((v,i)=>i? v:{...v,status:'R100'})]) assert.throws(()=>validateWebControllerDelta(bad,op));
+    for(const path of ['package-lock.json','packages/api-sdk/src/index.ts','contracts/openapi/user/v1/openapi.yaml','deploy/timeweb/compose.beta.yaml','.github/workflows/publish-timeweb-amd64-images.yaml']) assert.throws(()=>validateWebControllerDelta([...entries,{status:'M',path}],op));
+  `,
+    ));
+  it('checks actual reviewed whole-tree proof and exact regular blob paths', () =>
+    scenario(
+      currentFixture +
+        `
+    const {execFileSync}=await import('node:child_process');
+    const raw=execFileSync('git',['diff','--raw','--no-abbrev','--no-renames','-z',current.baselineSource,current.runtimeSource],{encoding:'utf8'}).trim();
+    const delta=[...API8158_WEB_CONTROLLER_FILES].map(path=>'M\\0'+path+'\\0').join('');
+    const real=args=>execFileSync('git',args,{encoding:'utf8'}).trim();
+    // The ancestry check must use the real checked-out candidate, never the anchor itself.
+    const runGit=args=>args[0]==='rev-parse' ? args[1]===op.candidateSha+'^{tree}' ? op.candidateTree : real(args) : args[0]==='merge-base' ? real([...args.slice(0,-1),args.at(-1)===op.candidateSha?'HEAD':args.at(-1)]) : args[0]==='diff' ? args.includes('--raw') ? raw : delta : args[0]==='ls-tree' ? '100644 blob '+'e'.repeat(40)+'\\t'+args.at(-1) : '';
+    validateCriticalWebSource(op,runGit);
+    // A candidate that does not descend from the reviewed anchor must reject.
+    assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='merge-base' ? real([...args.slice(0,-1),current.baselineSource]) : runGit(args)));
+    for(const mode of ['100755','120000','160000']) assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='ls-tree' ? mode+' blob '+'e'.repeat(40)+'\\t'+args.at(-1) : runGit(args)),/CONTROLLER_FILE_MODE/);
+    assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='ls-tree' ? '100644 blob '+'e'.repeat(40)+'\\t'+'other' : runGit(args)),/CONTROLLER_FILE_MODE/);
+    assert.throws(()=>validateCriticalWebSource(op,args=>args[0]==='diff'&&args.includes('--raw') ? raw+'changed' : runGit(args)),/RUNTIME_PROOF/);
+    // Reviewed re-anchor: only the Web Dockerfile stays byte-identical to API8158. The SDK,
+    // user-v1 OpenAPI and lockfile advanced with current main and are reviewed by the dead-code
+    // guards below plus this runbook record.
+    assert.equal(execFileSync('git',['rev-parse',current.apiSource+':apps/web/Dockerfile'],{encoding:'utf8'}),execFileSync('git',['rev-parse',current.runtimeSource+':apps/web/Dockerfile'],{encoding:'utf8'}));
+    const fs=await import('node:fs');
+    const gateway=fs.readFileSync('apps/web/src/auth-gateway.ts','utf8');
+    const games=fs.readFileSync('apps/web/src/GamesPage.tsx','utf8');
+    // Dead paid-JOIN capability: the production browser gateway only declares the advisory
+    // join-conditions method and never implements it, so canPaidJoin is false and the paid path
+    // (join-conditions, join-operation, commercial join body) is unreachable over API8158.
+    // Both occurrences are the single optional declaration and its indexed-access type; there
+    // is no implementation in the production browser gateway.
+    assert.equal((gateway.match(/getGameJoinConditions/g)||[]).length,2);
+    assert.ok(gateway.includes("readonly getGameJoinConditions?: PadlHubApiClient['getGameJoinConditions'];"));
+    assert.ok(games.includes("typeof gateway.getGameJoinConditions === 'function'"));
+    assert.ok(games.includes("typeof gateway.joinPaidGame === 'function'"));
+    // The reviewed runbook records that paid JOIN stays disabled over API8158.
+    assert.match(fs.readFileSync('docs/runbooks/timeweb-standard-delivery.md','utf8'),/paid JOIN stays disabled over API8158/);
+  `,
+    ));
+  it('checks fresh provider and alert bytes against wall time using the tracked 0644 contract', () =>
+    scenario(
+      currentFixture +
+        `
+    const fs=await import('node:fs');
+    const timestamp='2026-09-02T07:39:20.000Z';const clock=Date.parse(timestamp);
+    const monitor=(id,name,url)=>({providerMonitorId:id,name,enabled:true,type:'HTTPS',method:'GET',url,expectedStatus:200,regions:['ru-1','nl-1'],intervalSeconds:60,timeoutSeconds:10,authorizationHeaderConfigured:true,lastCheckAt:'2026-09-02T07:39:00.000Z',successfulConsecutiveRounds:3,activeIncidentCount:0});
+    const provider={schema:'PHUB_TIMEWEB_MONITOR_READBACK_V1',source:'timeweb-approved-read-only-readback',readAt:'2026-09-02T07:39:19.000Z',projectId:262717,monitors:[monitor('26ed404e-98e5-45c5-98e3-31b9dfd6f0f2','lk2-beta-api-ready','https://lk2.padlhub.su/health/ready'),monitor('b25e28a0-02d8-49e4-a0a1-f49f62abc02c','lk2-beta-web-root','https://lk2.padlhub.su/')]};
+    const alerts={schema:'PHUB_TIMEWEB_ALERT_READBACK_V1',source:'approved-delivery-and-provider-readback',testId:'synthetic-incident',monitorNames:['lk2-beta-api-ready','lk2-beta-web-root'],triggeredAt:'2026-09-02T07:25:00.000Z',deliveries:['email','telegram'].map(channel=>({channel,deliveredAt:'2026-09-02T07:26:00.000Z'})),acknowledgedAt:'2026-09-02T07:33:13.000Z',acknowledgementKind:'release-owner-observed-active-incident',acknowledgedByRole:'release-owner',recoveredAt:'2026-09-02T07:34:00.000Z',recoveryKind:'provider-closed-after-all-regions-healthy',recoveryDeliveries:['email','telegram'].map(channel=>({channel,deliveredAt:'2026-09-02T07:35:00.000Z'}))};
+    const read=(p,mode)=>{if(p.endsWith('api-web-observability.v1.json')){assert.equal(mode,0o644);return fs.readFileSync('deploy/timeweb/api-web-observability.v1.json');}return Buffer.from(JSON.stringify(p.endsWith('timeweb-monitor-readback.json')?provider:alerts));};
+    const proof=criticalWebMonitoring(clock,read);assert.equal(proof.provider.toString(),JSON.stringify(provider));
+    for(const change of [()=>provider.readAt='2026-09-02T07:38:49.000Z',()=>provider.readAt='2026-09-02T07:40:00.000Z',()=>provider.monitors[0].activeIncidentCount=1,()=>provider.monitors[0].lastCheckAt='2026-09-02T07:30:00.000Z',()=>alerts.triggeredAt='2026-08-30T07:25:00.000Z',()=>provider.monitors[0].authorizationHeader='Basic '+Buffer.from('synthetic-forbidden').toString('base64')]){
+      const p=structuredClone(provider),a=structuredClone(alerts);change();assert.throws(()=>criticalWebMonitoring(clock,read));
+      for(const key of Object.keys(provider))delete provider[key];Object.assign(provider,p);for(const key of Object.keys(alerts))delete alerts[key];Object.assign(alerts,a);
+    }
+  `,
+    ));
+});

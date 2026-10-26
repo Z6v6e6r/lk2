@@ -236,7 +236,8 @@ describe('Timeweb amd64 publication workflow', () => {
       'utf8',
     );
     expect(readinessHelper).toContain('readonly MAX_ATTEMPTS=5');
-    expect(readinessHelper).toContain('readonly TOTAL_RETRY_BUDGET_SECONDS=29');
+    expect(readinessHelper).toContain('readonly INSPECT_TIMEOUT_SECONDS=15');
+    expect(readinessHelper).toContain('readonly TOTAL_RETRY_BUDGET_SECONDS=79');
     expect(readinessHelper).toContain('readonly KILL_AFTER_SECONDS=1');
     expect(readinessHelper.match(/--kill-after="\$\{KILL_AFTER_SECONDS\}s"/gu)).toHaveLength(3);
     expect(readinessHelper).toContain('docker buildx inspect "$builder_name" --bootstrap');

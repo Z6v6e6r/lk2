@@ -25,6 +25,7 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
   const pool = new Pool({ connectionString, max: 4 });
   const tenantId = randomUUID();
   const providerAccountId = randomUUID();
+  const androidProviderAccountId = randomUUID();
   const loginOwner = randomUUID();
   const providerClaimant = randomUUID();
   const providerOnly = randomUUID();
@@ -115,6 +116,49 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
          values ($1, true, true)`,
         [tenantId],
       );
+      await client.query(
+        'update notifications.tenant_runtime_settings set android_push_enabled = true where tenant_id = $1',
+        [tenantId],
+      );
+      for (const [providerId, appId, environment, status, endpointUser, hash] of [
+        [androidProviderAccountId, 'ru.padlhub.app', 'SANDBOX', 'ACTIVE', idOnlyUser, 'd'],
+        [randomUUID(), 'ru.padlhub.other', 'SANDBOX', 'ACTIVE', idOnlyUser, 'e'],
+        [randomUUID(), 'ru.padlhub.app', 'PRODUCTION', 'ACTIVE', idOnlyUser, 'f'],
+        [randomUUID(), 'ru.padlhub.disabled', 'SANDBOX', 'DISABLED', idOnlyUser, '1'],
+      ] as const) {
+        await client.query(
+          `insert into integration.notification_provider_accounts (
+             tenant_id, id, channel, platform, provider, app_id, environment, credential_ref, status
+           ) values ($1, $2, 'PUSH', 'ANDROID', 'FCM', $3, $4, 'env:FCM_CREDENTIAL_FILE', $5)`,
+          [tenantId, providerId, appId, environment, status],
+        );
+        await client.query(
+          `insert into integration.notification_endpoints (
+             tenant_id, user_id, provider_account_id, channel, address_ciphertext,
+             address_hash, encryption_key_id, status
+           ) values ($1, $2, $3, 'PUSH', $4::bytea, $5, 'v1', 'ACTIVE')`,
+          [
+            tenantId,
+            endpointUser,
+            providerId,
+            Buffer.from('synthetic-encrypted-endpoint'),
+            hash.repeat(64),
+          ],
+        );
+      }
+      await client.query(
+        `insert into integration.notification_endpoints (
+           tenant_id, user_id, provider_account_id, channel, address_ciphertext,
+           address_hash, encryption_key_id, status
+         ) values ($1, $2, $3, 'PUSH', $4::bytea, $5, 'v1', 'ACTIVE')`,
+        [
+          tenantId,
+          loginOwner,
+          androidProviderAccountId,
+          Buffer.from('synthetic-encrypted-endpoint'),
+          '2'.repeat(64),
+        ],
+      );
       await insertEndpoint(client, loginOwner, 'a');
       await insertEndpoint(client, providerOnly, 'b');
       await insertEndpoint(client, dualPhoneUser, 'c');
@@ -169,6 +213,9 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
       await client.query('delete from notifications.tenant_runtime_settings where tenant_id = $1', [
         tenantId,
       ]);
+      await client.query('delete from notifications.user_preferences where tenant_id = $1', [
+        tenantId,
+      ]);
       await client.query(
         `delete from integration.external_entity_map
           where tenant_id = $1 and entity_type = 'legacy_viewer_phone'`,
@@ -191,6 +238,113 @@ describePostgres('CUP phone and user-id resolution against real PostgreSQL', () 
       [tenantId, foreignTenantId],
     ]);
     await pool.end();
+  });
+
+  it('queues and replays Android campaigns using only matching active endpoints without Web fan-out', async () => {
+    const repository = createAdminNotificationRepository(pool);
+    const androidPush = {
+      globallyEnabled: true,
+      appId: 'ru.padlhub.app',
+      environment: 'SANDBOX' as const,
+    };
+    const command = {
+      tenantId,
+      actorUserId: loginOwner,
+      normalizedPhones: [],
+      normalizedUserIds: [idOnlyUser, loginOwner],
+      title: 'Synthetic Android test',
+      body: 'Private inbox content',
+      deepLink: '/notifications',
+      requestedChannels: ['ANDROID_PUSH', 'IN_APP'] as const,
+      requestHash: 'c'.repeat(64),
+      idempotencyKey: `android-campaign-${randomUUID()}`,
+      correlationId: randomUUID(),
+      webPushGloballyEnabled: true,
+      webPushAppId: 'padlhub-web',
+      webPushEnvironment: 'SANDBOX' as const,
+      androidPush,
+    };
+    const preview = await repository.resolveRecipients(command);
+    expect(preview.matched).toHaveLength(2);
+    expect(
+      preview.matched.every((recipient) => recipient.availableChannels.includes('ANDROID_PUSH')),
+    ).toBe(true);
+    const accepted = await repository.createCampaign(command);
+    expect(accepted).toMatchObject({
+      outcome: 'accepted',
+      matchedCount: 2,
+      pushQueuedCount: 2,
+      inAppCreatedCount: 2,
+    });
+    if (accepted.outcome !== 'accepted') throw new Error('Expected accepted Android campaign');
+    const deliveries = await withTenantTransaction(pool, tenantId, (client) =>
+      client.query(
+        `select a.platform, a.provider, a.app_id, a.environment, a.id provider_id, i.rendered_title, d.state
+         from notifications.deliveries d
+         join notifications.admin_campaign_recipients r on r.tenant_id = d.tenant_id and r.intent_id = d.intent_id
+         join notifications.intents i on i.tenant_id = d.tenant_id and i.id = d.intent_id
+         join integration.notification_endpoints e on e.tenant_id = d.tenant_id and e.id = d.endpoint_id
+         join integration.notification_provider_accounts a on a.tenant_id = e.tenant_id and a.id = e.provider_account_id
+        where d.tenant_id = $1 and r.campaign_id = $2 and d.channel = 'PUSH'`,
+        [tenantId, accepted.campaignId],
+      ),
+    );
+    expect(deliveries.rows).toHaveLength(2);
+    for (const row of deliveries.rows)
+      expect(row).toMatchObject({
+        platform: 'ANDROID',
+        provider: 'FCM',
+        app_id: 'ru.padlhub.app',
+        environment: 'SANDBOX',
+        provider_id: androidProviderAccountId,
+        rendered_title: command.title,
+        state: 'PENDING',
+      });
+    const stats = await repository.getDeliveryStats({
+      tenantId,
+      since: new Date(0),
+      campaignLimit: 20,
+      endpointSampleLimit: 200,
+    });
+    expect(stats.endpoints.activeEndpointSample).toHaveLength(3);
+    expect(
+      stats.endpoints.activeEndpointSample.every((endpoint) =>
+        endpoint.ciphertext.toString().startsWith('ciphertext-'),
+      ),
+    ).toBe(true);
+    const replay = await repository.createCampaign({
+      ...command,
+      androidPush: { ...androidPush, globallyEnabled: false },
+    });
+    expect(replay).toMatchObject({
+      campaignId: accepted.campaignId,
+      replayed: true,
+      pushQueuedCount: 2,
+    });
+    expect(await repository.createCampaign({ ...command, requestHash: 'd'.repeat(64) })).toEqual({
+      outcome: 'idempotency_conflict',
+    });
+  });
+
+  it('queues each selected Web and Android endpoint once in a mixed campaign', async () => {
+    const repository = createAdminNotificationRepository(pool);
+    const accepted = await repository.createCampaign({
+      tenantId,
+      actorUserId: loginOwner,
+      normalizedPhones: [],
+      normalizedUserIds: [loginOwner],
+      title: 'Synthetic mixed test',
+      body: 'Synthetic inbox',
+      requestedChannels: ['WEB_PUSH', 'ANDROID_PUSH'],
+      requestHash: 'e'.repeat(64),
+      idempotencyKey: `mixed-campaign-${randomUUID()}`,
+      correlationId: randomUUID(),
+      webPushGloballyEnabled: true,
+      webPushAppId: 'padlhub-web',
+      webPushEnvironment: 'SANDBOX',
+      androidPush: { globallyEnabled: true, appId: 'ru.padlhub.app', environment: 'SANDBOX' },
+    });
+    expect(accepted).toMatchObject({ outcome: 'accepted', pushQueuedCount: 2 });
   });
 
   function resolve(phones: readonly string[], userIds: readonly string[] = []) {

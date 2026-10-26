@@ -77,6 +77,41 @@ export interface S3StationSupportMediaStoreOptions {
   readonly maxBytes: number;
 }
 
+type BoundedObjectBody = AsyncIterable<Uint8Array> & {
+  readonly destroy?: (error?: Error) => void;
+  readonly cancel?: (reason?: unknown) => Promise<void>;
+};
+
+export async function readBoundedStationSupportObject(
+  body: BoundedObjectBody,
+  declaredBytes: number | undefined,
+  maxBytes: number,
+): Promise<Buffer> {
+  if (
+    declaredBytes === undefined ||
+    !Number.isSafeInteger(declaredBytes) ||
+    declaredBytes < 1 ||
+    declaredBytes > maxBytes
+  ) {
+    throw new Error('STATION_SUPPORT_MEDIA_OBJECT_TOO_LARGE');
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of body) {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      const error = new Error('STATION_SUPPORT_MEDIA_OBJECT_TOO_LARGE');
+      body.destroy?.(error);
+      void body.cancel?.(error);
+      throw error;
+    }
+    chunks.push(Buffer.from(chunk));
+  }
+  if (total < 1 || total !== declaredBytes)
+    throw new Error('STATION_SUPPORT_MEDIA_OBJECT_TOO_LARGE');
+  return Buffer.concat(chunks, total);
+}
+
 function httpStatus(error: unknown): number | undefined {
   if (!error || typeof error !== 'object') return undefined;
   const metadata = '$metadata' in error ? error.$metadata : undefined;
@@ -323,14 +358,11 @@ export class S3StationSupportMediaStore implements StationSupportMediaStore {
     if (!result.Body || result.ContentType !== 'image/webp') {
       throw new Error('STATION_SUPPORT_MEDIA_OBJECT_INVALID');
     }
-    if ((result.ContentLength ?? 0) > maxBytes) {
-      throw new Error('STATION_SUPPORT_MEDIA_OBJECT_TOO_LARGE');
-    }
-    const body = Buffer.from(await result.Body.transformToByteArray());
-    if (body.byteLength < 1 || body.byteLength > maxBytes) {
-      throw new Error('STATION_SUPPORT_MEDIA_OBJECT_TOO_LARGE');
-    }
-    return body;
+    return readBoundedStationSupportObject(
+      result.Body as BoundedObjectBody,
+      result.ContentLength,
+      maxBytes,
+    );
   }
 
   public async createDeliveryUrl(input: {

@@ -34,6 +34,7 @@ import styles from './notifications-ui/NotificationsUi.module.css';
 import type { WebPushBrowserState } from './web-push-client.js';
 
 interface NotificationsPageProps {
+  readonly platform?: 'web' | 'android' | 'ios';
   readonly page: NotificationInboxPage;
   readonly webPush: WebPushConfiguration;
   readonly browserState: WebPushBrowserState;
@@ -61,6 +62,7 @@ interface NotificationsPageProps {
 type NotificationView = 'inbox' | 'settings' | 'quiet-hours';
 
 export function NotificationsPage({
+  platform = 'web',
   page,
   webPush,
   browserState,
@@ -147,6 +149,7 @@ export function NotificationsPage({
           error={preferencesError}
           webPush={webPush}
           browserState={browserState}
+          platform={platform}
           onEnableWebPush={onEnableWebPush}
           onDisableWebPush={onDisableWebPush}
           onOpenQuietHours={() => setView('quiet-hours')}
@@ -197,10 +200,10 @@ export function NotificationsPage({
           <section className={styles.pushPanel} aria-labelledby="web-push-title">
             <div>
               <h2 id="web-push-title">Уведомления на устройстве</h2>
-              <p>{notificationPushStatus(webPush, browserState)}</p>
+              <p>{notificationPushStatus(webPush, browserState, platform)}</p>
               {browserState === 'needs_install' ? (
                 <p className={styles.pushHint}>
-                  Откройте PadlHub в Safari, нажмите «Поделиться» → «На экран „Домой“» и включите
+                  Откройте ПадлхАБ в Safari, нажмите «Поделиться» → «На экран „Домой“» и включите
                   push уже из приложения: только так iOS разрешает уведомления.
                 </p>
               ) : null}

@@ -200,7 +200,7 @@ function hostedSandboxPage(input: {
   const needsRefresh = input.surface === 'user';
   return `<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>PadlHub Sandbox Payment</title><style>
+<title>ПадлхАБ — тестовая оплата</title><style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#102117;color:#eef8f0;font:16px system-ui}
 main{width:min(420px,calc(100% - 32px));padding:30px;border:1px solid #31523a;border-radius:24px;background:#173522}
 button{width:100%;min-height:48px;border:0;border-radius:12px;background:#79dc84;color:#102117;font-weight:800}

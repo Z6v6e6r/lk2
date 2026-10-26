@@ -309,3 +309,50 @@ the tunable constants of the safe-Web photo module are the only Web surface outs
 a new module keeps the critical route, they reach the standard delivery route only through
 `standardReleasePlan`, and adding an allowlist entry is itself a reviewed change. Unknown/shared/critical inputs retain the expanded contour. Integrated main is checked before
 publication; identical successful exact-source CI can be reused by publication.
+
+## Delivery lanes and release budgets
+
+ADR-0026 defines three delivery lanes. They select evidence and approvals; they never change the
+product risk tier of a change.
+
+| Lane                                    | Delivers                                               | Authority                                                                                | Blocking gates                                                                                                   | Budget   |
+| --------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------- |
+| `beta` (disposable)                     | any green main, expand-only migrations, API/Worker/Web | automatic after successful first-attempt main CI, under owner-granted standing authority | readiness, 2-3 min smoke, rollback to the previous digest; provider/monitoring readbacks recorded asynchronously | < 15 min |
+| `web` (presentation / bounded safe-Web) | Web only                                               | automatic per main push under the existing standard route                                | changed-file eligibility, Web tests/lint/typecheck/build, smoke                                                  | < 5 min  |
+| `production`                            | full release                                           | one exact-SHA approval per release package and target                                    | immutable digests, verified backup/restore, readiness/smoke, rollback, post-activation observation               | < 60 min |
+
+Rules that follow from the lanes:
+
+- `beta` is disposable. The owner may grant bounded standing authority for its promotions through
+  the protected standard route; every promotion still re-verifies exact inputs and stops on drift.
+  Beta does not require production custody evidence, and its observation runs after activation.
+- `production` approvals apply to the exact package (source SHA, manifest, artifact, target), not to
+  every internal stage. A fresh preflight is required before each write; re-approval is not required
+  while the exact request, inputs and hashes are unchanged. New inputs, a new source identity or a
+  changed target require a new approval.
+- Approval expiry may be extended by a fresh preflight when the exact request and inputs are
+  unchanged. Expiry is not a reason to repeat an approved operation, and extension grants no new
+  scope.
+- R4 (two independent risk perspectives) remains mandatory for payments, identity/authorization and
+  destructive data operations. A routine production promotion with an existing migration path uses
+  one specialist; unrelated improvement ideas are `Follow-up finding`.
+- The enrolled controller is a versioned stable service and the candidate is data; enrollment is not
+  repeated per candidate SHA. Publication builds only changed components and reuses unchanged
+  digests from the previous manifest.
+- Custody uses per-stage leases (backup -> migration -> rollout) with explicit ownership transfer.
+  A successful but unadmitted backup supports an idempotent renewal operation.
+- Capacity is a provisioning property: disk >= 3.5x database or backups/restore in object storage,
+  with an alert below 2x database free. Capacity must not become a per-release gate.
+- Source CI authority is verified once per operation and bound into the immutable receipt. Provider
+  monitoring and alert readbacks are attached evidence, not wall-clock gates, except for payment
+  scenarios.
+- Each lane has one minimal evidence set in `docs/runbooks/release-lanes.md`. Each operation exposes
+  a `--plan` preflight that completes in <= 2 minutes with GO/NO-GO by category. Runbooks are short
+  contracts (target <= 200 lines); executable detail lives in code.
+
+These rules do not weaken immutability, build-once/promote-digest, single-writer and idempotency
+rules for money, bookings and identity, expand/contract migrations, backup/readiness/rollback gates
+for production, exact-target approval, or secret/PII/tenant isolation. Until the platform work in
+`docs/plans/release-lanes-platform-2026-10-25.md` is implemented, the current strict profile remains
+the only executable deployment path and the lane targets above are the required direction for that
+work.

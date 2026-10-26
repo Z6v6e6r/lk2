@@ -133,6 +133,82 @@ describe('NotificationAdminClient media uploads', () => {
   });
 });
 
+describe('NotificationAdminClient support tickets', () => {
+  it('uses the tenant-scoped support queue filters and existing CUP headers', async () => {
+    const calls: Array<{
+      readonly input: Parameters<typeof fetch>[0];
+      readonly init?: RequestInit;
+    }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init ? { init } : {}) });
+      return Promise.resolve(Response.json({ items: [], nextCursor: 'next-cursor' }));
+    };
+    const client = createNotificationAdminClient({
+      baseUrl: 'https://api.padlhub.test',
+      tenantKey: 'local-padel',
+      appVersion: '0.1.0',
+      fetchImplementation,
+    });
+
+    await client.listAdminSupportTickets({
+      status: 'OPEN',
+      category: 'TECHNICAL',
+      priority: 'HIGH',
+      query: 'android',
+      cursor: 'current-cursor',
+    });
+
+    expect(calls[0]?.input).toBe(
+      'https://api.padlhub.test/admin/api/v1/local-padel/support/tickets?status=OPEN&category=TECHNICAL&priority=HIGH&query=android&cursor=current-cursor',
+    );
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get('X-App-Platform')).toBe('cup-admin');
+    expect(headers.get('Idempotency-Key')).toBeNull();
+  });
+
+  it('sends a support reply with the retained caller idempotency key and expected version only', async () => {
+    const calls: Array<{
+      readonly input: Parameters<typeof fetch>[0];
+      readonly init?: RequestInit;
+    }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init ? { init } : {}) });
+      return Promise.resolve(
+        Response.json({ id: '11111111-1111-4111-8111-111111111111', messages: [], history: [] }),
+      );
+    };
+    const client = createNotificationAdminClient({
+      baseUrl: 'https://api.padlhub.test',
+      tenantKey: 'local-padel',
+      appVersion: '0.1.0',
+      fetchImplementation,
+    });
+    const ticketId = '11111111-1111-4111-8111-111111111111';
+
+    await client.sendAdminSupportTicketMessage(
+      ticketId,
+      { body: 'Уже проверяем.', internal: false, expectedVersion: 3 },
+      'support-message-retry-key',
+    );
+
+    expect(calls[0]?.input).toBe(
+      `https://api.padlhub.test/admin/api/v1/local-padel/support/tickets/${ticketId}/messages`,
+    );
+    expect(calls[0]?.init?.method).toBe('POST');
+    const requestBody = calls[0]?.init?.body;
+    expect(typeof requestBody).toBe('string');
+    if (typeof requestBody !== 'string') throw new Error('Expected JSON request body');
+    expect(JSON.parse(requestBody)).toEqual({
+      body: 'Уже проверяем.',
+      internal: false,
+      expectedVersion: 3,
+    });
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBe(
+      'support-message-retry-key',
+    );
+  });
+});
+
 describe('NotificationAdminClient community moderation', () => {
   it('reads the bounded pending-content queue with an opaque cursor', async () => {
     const calls: Array<{

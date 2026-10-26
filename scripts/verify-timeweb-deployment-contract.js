@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseDocument } from 'yaml';
 
+import { validateTimewebCommercialRuntime } from './timeweb-commercial-runtime-contract.js';
 import { parseStrictJson } from './strict-json.js';
 import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
 import { validateTimewebObservabilityContract } from './verify-timeweb-api-web-observability.js';
@@ -783,11 +784,27 @@ export function validateApplicationCompose(contents, target) {
         'profiles',
         'image',
         'env_file',
+        'volumes',
         'healthcheck',
         'stop_grace_period',
       ],
       migrator: ['image', 'restart', 'profiles', 'env_file', 'healthcheck', 'networks'],
     };
+    if (serviceName === 'worker') {
+      if (!Array.isArray(service.volumes) || service.volumes.length !== 1)
+        reject('application_fcm_mount');
+      const mount = service.volumes[0];
+      exactKeys(mount, ['type', 'source', 'target', 'read_only', 'bind'], 'application_fcm_mount');
+      exactKeys(mount.bind, ['create_host_path'], 'application_fcm_mount');
+      if (
+        mount.type !== 'bind' ||
+        mount.source !== '${TIMEWEB_FCM_CREDENTIAL_SOURCE:-/dev/null}' ||
+        mount.target !== '/run/phub/fcm-service-account.json' ||
+        mount.read_only !== true ||
+        mount.bind.create_host_path !== false
+      )
+        reject('application_fcm_mount');
+    }
     if (Object.hasOwn(service, 'environment')) reject('application_secret_literal');
     if (
       JSON.stringify(Object.keys(service).sort()) !==
@@ -977,6 +994,41 @@ function dependencyIdentity(key, value, schemes) {
   return url.toString();
 }
 
+export function validateTimewebFcmEnvironment(api, worker) {
+  const enabled = (values) => {
+    const flag = values.FCM_ENABLED ?? 'false';
+    if (flag !== 'true' && flag !== 'false') reject('env_fcm_flag');
+    return flag === 'true';
+  };
+  const apiEnabled = enabled(api);
+  if (apiEnabled !== enabled(worker)) reject('env_fcm_identity');
+  for (const values of [api, worker]) {
+    for (const [key, expected] of [
+      ['FCM_PROJECT_ID', 'padlhub'],
+      ['FCM_APP_ID', 'ru.padlhub.app'],
+      ['FCM_CREDENTIAL_FILE', '/run/phub/fcm-service-account.json'],
+    ]) {
+      if ((apiEnabled || Object.hasOwn(values, key)) && values[key] !== expected)
+        reject('env_fcm_identity');
+    }
+    if (
+      (apiEnabled || Object.hasOwn(values, 'FCM_ENVIRONMENT')) &&
+      !['SANDBOX', 'PRODUCTION'].includes(values.FCM_ENVIRONMENT)
+    )
+      reject('env_fcm_identity');
+  }
+  if (
+    apiEnabled &&
+    (api.FCM_ENVIRONMENT !== worker.FCM_ENVIRONMENT ||
+      !api.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS ||
+      api.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS !== worker.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS ||
+      !api.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID ||
+      api.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID !== worker.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID)
+  )
+    reject('env_fcm_identity');
+  return apiEnabled;
+}
+
 export function validateRuntimeEnvironments(environments, contract, target) {
   for (const serviceName of ENV_SERVICES) {
     const values = object(environments[serviceName], 'env_service');
@@ -1004,6 +1056,8 @@ export function validateRuntimeEnvironments(environments, contract, target) {
     for (const key of service.requiredOffModes)
       if (values[key] !== 'OFF') reject(`env_${serviceName}_mode`);
   }
+  validateTimewebFcmEnvironment(environments.api, environments.worker);
+  validateTimewebCommercialRuntime(environments.api, (reason) => reject(`env_${reason}`));
   for (const name of ['api', 'worker', 'realtime']) {
     if (environments[name].APP_ENV !== 'staging') reject(`env_${name}_app_env`);
   }

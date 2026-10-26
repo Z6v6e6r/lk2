@@ -1229,6 +1229,294 @@ paths:
     $ref: ./level-eligibility.yaml#/HistoryPath
   /admin/api/v1/{tenantKey}/level-eligibility/{activityType}/rollback:
     $ref: ./level-eligibility.yaml#/RollbackPath
+  /admin/api/v1/{tenantKey}/support/tickets:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+    get:
+      tags:
+        - support
+      operationId: listAdminSupportTickets
+      summary: List support tickets with current support.read or support.manage permission
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/AdminPlatform
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Cursor
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Limit
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Status
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Category
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Priority
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Query
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/TicketPage
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/support/tickets/{ticketId}:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+      - $ref: ../../common/support-tickets.yaml#/components/parameters/TicketId
+    get:
+      tags:
+        - support
+      operationId: getAdminSupportTicket
+      summary: Read a support ticket with internal notes; current admin permission required
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/AdminPlatform
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/Before
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/Ticket
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+    patch:
+      tags:
+        - support
+      operationId: updateAdminSupportTicket
+      summary: Update ticket metadata/status with expectedVersion and current support.manage
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/AdminPlatform
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/IdempotencyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/support-tickets.yaml#/components/schemas/Update
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/Ticket
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '410':
+          $ref: ../../common/support-tickets.yaml#/components/responses/CommandExpired
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+      description:
+        ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
+        ticket before an explicit fresh command.'
+  /admin/api/v1/{tenantKey}/support/tickets/{ticketId}/messages:
+    parameters:
+      - $ref: '#/components/parameters/TenantKey'
+      - $ref: ../../common/support-tickets.yaml#/components/parameters/TicketId
+    post:
+      tags:
+        - support
+      operationId: sendAdminSupportTicketMessage
+      summary: Send a public reply or internal note with current support.manage
+      parameters:
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/AdminPlatform
+        - $ref: ../../common/support-tickets.yaml#/components/parameters/IdempotencyKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: ../../common/support-tickets.yaml#/components/schemas/AdminMessage
+      responses:
+        '200':
+          $ref: ../../common/support-tickets.yaml#/components/responses/Ticket
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '410':
+          $ref: ../../common/support-tickets.yaml#/components/responses/CommandExpired
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+      description:
+        ' Retired command keys return SUPPORT_COMMAND_EXPIRED (410); refresh the canonical
+        ticket before an explicit fresh command.'
+  /admin/api/v1/{tenantKey}/notifications/scenarios:
+    get:
+      tags: [Notifications]
+      operationId: listNotificationScenarios
+      summary: listNotificationScenarios
+      description: |
+        Requires phub-admin audience, cup-admin platform and notifications.manage permission.
+        Tenant and actor come from verified server context. Scenario versions are immutable;
+        changes cancel pending work. External sends require the separate runtime gate.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+      responses:
+        '200':
+          description: Tenant-scoped result; journal is limited to the latest 100 runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationScenarioPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+    post:
+      tags: [Notifications]
+      operationId: createNotificationScenario
+      summary: createNotificationScenario
+      description: |
+        Requires phub-admin audience, cup-admin platform and notifications.manage permission.
+        Tenant and actor come from verified server context. Scenario versions are immutable;
+        changes cancel pending work. External sends require the separate runtime gate.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, definition]
+              properties:
+                expectedVersion: { type: integer, minimum: 0 }
+                definition:
+                  $ref: '#/components/schemas/NotificationScenarioDefinition'
+      responses:
+        '200':
+          description: Tenant-scoped result; journal is limited to the latest 100 runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationScenarioView'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/notifications/scenarios/{scenarioId}:
+    put:
+      tags: [Notifications]
+      operationId: updateNotificationScenario
+      summary: updateNotificationScenario
+      description: |
+        Requires phub-admin audience, cup-admin platform and notifications.manage permission.
+        Tenant and actor come from verified server context. Scenario versions are immutable;
+        changes cancel pending work. External sends require the separate runtime gate.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: scenarioId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, definition]
+              properties:
+                expectedVersion: { type: integer, minimum: 0 }
+                definition:
+                  $ref: '#/components/schemas/NotificationScenarioDefinition'
+      responses:
+        '200':
+          description: Tenant-scoped result; journal is limited to the latest 100 runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationScenarioView'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
+  /admin/api/v1/{tenantKey}/notifications/scenarios/runs:
+    get:
+      tags: [Notifications]
+      operationId: listNotificationScenarioRuns
+      summary: listNotificationScenarioRuns
+      description: |
+        Requires phub-admin audience, cup-admin platform and notifications.manage permission.
+        Tenant and actor come from verified server context. Scenario versions are immutable;
+        changes cancel pending work. External sends require the separate runtime gate.
+      parameters:
+        - $ref: '#/components/parameters/TenantKey'
+        - name: scenarioId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Tenant-scoped result; journal is limited to the latest 100 runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationScenarioRunPage'
+        '400':
+          $ref: '#/components/responses/ApiError'
+        '401':
+          $ref: '#/components/responses/ApiError'
+        '403':
+          $ref: '#/components/responses/ApiError'
+        '404':
+          $ref: '#/components/responses/ApiError'
+        '409':
+          $ref: '#/components/responses/ApiError'
+        '429':
+          $ref: '#/components/responses/ApiError'
+        '503':
+          $ref: '#/components/responses/ApiError'
 components:
   securitySchemes:
     PadlHubAdminJwt:
@@ -1294,6 +1582,167 @@ components:
           schema:
             $ref: '#/components/schemas/ApiError'
   schemas:
+    NotificationScenarioDefinition:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          name,
+          trigger,
+          delayMinutes,
+          ttlMinutes,
+          title,
+          body,
+          channels,
+          quietHours,
+          dailyLimit,
+          goal,
+          goalWindowMinutes,
+          active,
+        ]
+      allOf:
+        - if:
+            properties:
+              channels:
+                contains: { const: ANDROID_PUSH }
+          then:
+            properties:
+              channels:
+                contains: { const: IN_APP }
+        - if:
+            properties:
+              goal: { const: GAME_JOINED }
+          then:
+            properties:
+              trigger: { const: FRIEND_GAME_PUBLISHED }
+              channels:
+                contains: { const: IN_APP }
+        - if:
+            properties:
+              delayMinutes: { exclusiveMaximum: 0 }
+          then:
+            properties:
+              trigger: { const: BOOKING_STARTS }
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        trigger:
+          {
+            type: string,
+            enum:
+              [
+                BOOKING_CONFIRMED,
+                BOOKING_CHANGED,
+                BOOKING_CANCELLED,
+                BOOKING_STARTS,
+                FRIEND_GAME_PUBLISHED,
+              ],
+          }
+        delayMinutes:
+          {
+            type: integer,
+            minimum: -43200,
+            maximum: 43200,
+            description: Negative offsets are accepted only relative to booking start.,
+          }
+        ttlMinutes: { type: integer, minimum: 1, maximum: 43200 }
+        title: { type: string, minLength: 1, maxLength: 300 }
+        body: { type: string, minLength: 1, maxLength: 8000 }
+        channels:
+          type: array
+          minItems: 1
+          maxItems: 3
+          uniqueItems: true
+          items: { type: string, enum: [IN_APP, WEB_PUSH, ANDROID_PUSH] }
+        quietHours: { type: string, enum: [DEFER, SKIP] }
+        dailyLimit:
+          {
+            type: integer,
+            minimum: 1,
+            maximum: 10,
+            description: Applies only to FRIEND_GAME_PUBLISHED; server cap is three per rolling 24 hours.,
+          }
+        goal:
+          {
+            type: string,
+            enum: [NONE, GAME_JOINED],
+            description: GAME_JOINED is available only for FRIEND_GAME_PUBLISHED.,
+          }
+        goalWindowMinutes: { type: integer, minimum: 1, maximum: 43200 }
+        active: { type: boolean }
+    NotificationScenarioView:
+      type: object
+      required: [id, version, definition, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        definition: { $ref: '#/components/schemas/NotificationScenarioDefinition' }
+        updatedAt: { type: string, format: date-time }
+    NotificationScenarioPage:
+      type: object
+      required: [items, catalog, runtimeEnabled, channels]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: '#/components/schemas/NotificationScenarioView' }
+        catalog:
+          type: array
+          items:
+            type: object
+            required: [type, available, reason]
+            properties:
+              type: { type: string }
+              available: { type: boolean }
+              reason: { type: [string, 'null'] }
+        runtimeEnabled: { type: boolean }
+        channels:
+          type: array
+          items: { type: string, enum: [IN_APP, WEB_PUSH, ANDROID_PUSH] }
+    NotificationScenarioRunPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            type: object
+            required:
+              [
+                id,
+                scenarioId,
+                scenarioVersion,
+                recipientUserId,
+                targetId,
+                state,
+                reason,
+                dueAt,
+                expiresAt,
+                goalState,
+                goalAchievedAt,
+                deliveryStates,
+              ]
+            properties:
+              id: { type: string, format: uuid }
+              scenarioId: { type: string, format: uuid }
+              scenarioVersion: { type: integer, minimum: 1 }
+              recipientUserId: { type: string, format: uuid }
+              targetId: { type: string, format: uuid }
+              state: { type: string, enum: [PENDING, QUEUED, SUPPRESSED, CANCELLED, EXPIRED] }
+              reason: { type: [string, 'null'] }
+              dueAt: { type: string, format: date-time }
+              expiresAt: { type: string, format: date-time }
+              goalState: { type: string, enum: [NONE, WAITING, ACHIEVED, EXPIRED] }
+              goalAchievedAt: { type: [string, 'null'], format: date-time }
+              deliveryStates:
+                type: array
+                items:
+                  type: object
+                  required: [channel, state, count]
+                  properties:
+                    channel: { type: string }
+                    state: { type: string }
+                    count: { type: integer, minimum: 0 }
     CanonicalLevelAdminView:
       $ref: ./level-eligibility.yaml#/CanonicalLevelAdminView
     LevelEligibilityPolicyAdminView:

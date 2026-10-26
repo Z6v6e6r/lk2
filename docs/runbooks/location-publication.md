@@ -36,10 +36,17 @@
 
 ## Recommendation photos: migration and runtime access
 
-Migration `0098_location_recommendation_photos.sql` is additive and has no backfill. Applying it,
+Migration `0102_location_recommendation_photos.sql` is additive and has no backfill. Applying it,
 granting runtime access and promoting the API are separate authorized transitions. Do not promote
 the new API until the exact table ACL and tenant probes below pass. Existing generic role-boundary
 checks do not cover the `locations` schema.
+
+Read the complete ledger first. If 0099–0101 are pending, use their dedicated reviewed notification
+controller and target-bound release procedure before the photo expansion. The notification mode
+accepts the exact packaged photo SQL but executes only 0099–0101, ending at ledger count 105 with
+no photo table. Its frozen descriptor, golden catalogs and receipt checkpoints do not include 0102. Apply 0102 as a separate approved operation from that verified checkpoint, then retain its
+own ledger/catalog evidence. Never substitute the legacy frozen 99→102 release or a generic
+migrator invocation for the notification controller.
 
 Before DDL, verify the backup/restore evidence, the packaged migration checksum against the ledger,
 parent-table counts and conflicting locks/long transactions. Use separate verified runtime and
@@ -104,6 +111,15 @@ pages. Existing cursors retain their photo snapshot for five minutes. All inacti
 the generic cover; clearing every binding restores the legacy cover fallback. Photo selection
 requires an existing trusted station mapping for provider activities; names do not establish it.
 
-Application rollback retains migration 0098 and all bindings. Roll back the immutable API/client
+The unreleased PR previously used `0098_location_recommendation_photos.sql`; that slot is now
+occupied by support tickets in main. Only the photo migration is renumbered; already released
+migration files and checksums are unchanged. Before a first apply, verify that neither the old
+photo filename nor `0102_location_recommendation_photos.sql` is recorded as applied and that the
+target table is absent. A repeated invocation must verify the matching 0102 ledger checksum and
+the table catalog without running DDL again. If an old photo ledger entry, a checksum mismatch
+or an unattested existing table is found, stop for explicit reconciliation; never delete ledger
+rows, drop bindings or blindly run a renamed DDL.
+
+Application rollback retains migration 0102 and all bindings. Roll back the immutable API/client
 images; do not drop the table or delete photos. Production migration, grant, publication and photo
 activation require their exact target authority and are not established by source or CI checks.

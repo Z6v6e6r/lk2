@@ -22,7 +22,7 @@ const allFlowSteps = Object.keys(flowStepCopy) as GiftCertificateFlowStep[];
 const requiredFlowSteps = new Set<GiftCertificateFlowStep>(['DESIGN', 'DENOMINATION', 'REVIEW']);
 
 const initialCatalog: GiftCertificateCatalogInput = {
-  title: 'Подарочные сертификаты ПаделХАБ',
+  title: 'Подарочные сертификаты ПадлхАБ',
   publicEnabled: false,
   availableFrom: null,
   availableTo: null,
@@ -41,7 +41,7 @@ const initialCatalog: GiftCertificateCatalogInput = {
       title: 'Классический',
       description: null,
       imageUrl: '',
-      alt: 'Подарочный сертификат ПаделХАБ',
+      alt: 'Подарочный сертификат ПадлхАБ',
       codeXPercent: 5.1,
       codeYPercent: 88,
       amountXPercent: 78.3,
@@ -413,7 +413,7 @@ export function GiftCertificateWorkspace(props: {
                         title: 'Новый дизайн',
                         description: null,
                         imageUrl: '',
-                        alt: 'Подарочный сертификат ПаделХАБ',
+                        alt: 'Подарочный сертификат ПадлхАБ',
                         codeXPercent: 5.1,
                         codeYPercent: 88,
                         amountXPercent: 78.3,

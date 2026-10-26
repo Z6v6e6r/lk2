@@ -35,6 +35,26 @@ five verified image digests. Follow the runbook if its canonical contract change
 neither host installation nor STAGING/PROVIDER/PRODUCTION proof. Never automatically deploy, SSH,
 provision secrets, migrate, enable background services or widen access.
 
+## Delivery lanes (ADR-0026)
+
+Read the [release lanes runbook](../../../docs/runbooks/release-lanes.md) and ADR-0026. Select the
+lane before preparing anything:
+
+- `beta` — disposable, automatic after a successful first-attempt main CI under owner-granted
+  standing authority. Publication for beta still uses the canonical immutable publisher, but beta
+  does not need production custody evidence and observes asynchronously.
+- `web` — Web only, eligible from changed files rather than the cumulative diff since the baseline
+  (target state; until implemented, the current standard route rules apply).
+- `production` — one exact-SHA approval **per release package and target**, not per stage. A fresh
+  preflight is required before each write; re-approval is not required while the exact request,
+  inputs and hashes are unchanged.
+
+Publication builds only changed components and reuses unchanged digests from the previous canonical
+manifest; the manifest still describes all five. Verify source CI authority once and bind it into
+the immutable receipt; do not re-fetch it for every later stage. Approval expiry may be extended by
+a fresh preflight when the exact request and inputs are unchanged; new inputs, source identity or
+target require a new approval. These lanes never change the product risk tier.
+
 ## Enrolled standard route
 
 An owner-enabled [standard Timeweb route](../../../docs/runbooks/timeweb-standard-delivery.md)

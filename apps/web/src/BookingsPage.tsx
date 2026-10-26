@@ -54,6 +54,12 @@ export function BookingsPage({
     new URLSearchParams(window.location.search).get('scope') === 'history'
       ? 'HISTORY'
       : 'UPCOMING';
+  const requestedKind =
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('kind') : null;
+  const initialHistoryKind =
+    requestedKind === 'GAME' || requestedKind === 'TRAINING' || requestedKind === 'TOURNAMENT'
+      ? requestedKind
+      : 'ALL';
   const [view, setView] = useState<'MY' | 'FOR_ME'>(initialView);
   const [scope, setScope] = useState<'UPCOMING' | 'HISTORY'>(initialScope);
   const [recommendations, setRecommendations] = useState<BookingRecommendationPage | null>(null);
@@ -173,7 +179,11 @@ export function BookingsPage({
             </section>
           ) : (
             <section className="bookings-history" aria-label="История записей">
-              <ActivityHistoryPanel active={scope === 'HISTORY'} loadHistory={loadHistory} />
+              <ActivityHistoryPanel
+                active={scope === 'HISTORY'}
+                initialKind={initialHistoryKind}
+                loadHistory={loadHistory}
+              />
             </section>
           )}
         </>

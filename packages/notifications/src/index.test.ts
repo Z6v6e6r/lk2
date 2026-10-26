@@ -32,6 +32,7 @@ import {
   verifyNotificationReceiptToken,
   webPushEndpointPlatform,
   notificationAudienceSelectorSchema,
+  androidFcmTokenSchema,
   notificationSourceEventSchema,
   renderNotificationTemplate,
   resolveNotificationRecipients,
@@ -55,6 +56,11 @@ const event = notificationSourceEventSchema.parse({
 });
 
 describe('Web Push endpoint protection', () => {
+  it('accepts a bounded opaque Android FCM token without treating it as a URL', () => {
+    expect(androidFcmTokenSchema.safeParse(`a:${'B'.repeat(80)}`).success).toBe(true);
+    expect(androidFcmTokenSchema.safeParse('https://provider.example/token').success).toBe(false);
+    expect(androidFcmTokenSchema.safeParse('x'.repeat(4_097)).success).toBe(false);
+  });
   it('validates and canonicalizes the browser subscription shape', () => {
     const subscription = webPushSubscriptionSchema.parse({
       endpoint: 'https://PUSH.EXAMPLE.TEST:443/subscriptions/abc',
@@ -478,13 +484,13 @@ describe('notification domain contracts', () => {
     expect(
       renderNotificationTemplate({
         titleTemplate: 'Новое сообщение',
-        bodyTemplate: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+        bodyTemplate: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
         deepLinkTemplate: MESSAGING_NOTIFICATION_TEMPLATE_DEEP_LINK,
         payload: { conversationId },
       }),
     ).toEqual({
       title: 'Новое сообщение',
-      body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+      body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
       deepLink: `/chats/${conversationId}`,
     });
     expect(MESSAGING_NOTIFICATION_TEMPLATE_CATEGORY).toBe('MESSAGING');
@@ -539,7 +545,7 @@ describe('notification domain contracts', () => {
     });
     expect(rendered).toEqual({
       title: 'Заявка в друзья',
-      body: 'Откройте ПадлХАБ, чтобы ответить.',
+      body: 'Откройте ПадлхАБ, чтобы ответить.',
       deepLink: '/notifications',
     });
     // The rendered notification never names the requester or a profile detail.

@@ -5,6 +5,9 @@ import {
 } from './GameJoinConditionsPanel.js';
 
 import { GameResultEditor } from './GameResultEditor.js';
+import { GameJoinFlowPanel } from './GameJoinFlowPanel.js';
+import { gameJoinBlockedLabel, type GameJoinFlowState } from './game-join-flow.js';
+import type { GameJoinPriceConsent } from './game-join-attempt.js';
 import { GameScoreSummary } from './GameScoreSummary.js';
 import { EventGameTypeIcon } from './GameTypeBadge.js';
 import { ChatIcon, EventCalendarIcon, EventLocationIcon } from './ActivityCardIcons.js';
@@ -309,6 +312,7 @@ function GameSummary({ game }: { readonly game: GameCard }): React.JSX.Element {
 function GameTab(props: {
   readonly busy: boolean;
   readonly game: GameCard;
+  readonly viewerUserId?: string;
   readonly lineupUserIdsByPair: readonly (readonly string[])[];
   readonly onAction: (action: GameCardAction) => void;
   readonly onChatOpen: () => void;
@@ -317,10 +321,17 @@ function GameTab(props: {
   readonly onRemoveParticipant: (userId: string) => void;
   readonly onReplaceParticipant: (currentUserId: string, nextUserId: string) => void;
   readonly onResultOpen: () => void;
+  readonly joinFlow?: GameJoinFlowState;
+  readonly joinFlowBusy?: boolean;
+  readonly onJoinConsent?: (consent: GameJoinPriceConsent) => void;
+  readonly onJoinConsentCancel?: () => void;
+  readonly onJoinStatusCheck?: () => void;
+  readonly onJoinRetry?: () => void;
 }): React.JSX.Element {
   const {
     busy,
     game,
+    viewerUserId,
     lineupUserIdsByPair,
     onAction,
     onChatOpen,
@@ -329,6 +340,12 @@ function GameTab(props: {
     onRemoveParticipant,
     onReplaceParticipant,
     onResultOpen,
+    joinFlow,
+    joinFlowBusy = false,
+    onJoinConsent,
+    onJoinConsentCancel,
+    onJoinStatusCheck,
+    onJoinRetry,
   } = props;
   const [lineupPicker, setLineupPicker] = useState<LineupPickerState | null>(null);
   const gameConversation = game.conversation;
@@ -340,6 +357,8 @@ function GameTab(props: {
       : primaryAction
         ? ACTION_LABELS[primaryAction]
         : undefined;
+  const joinBlocked = joinFlow ? gameJoinBlockedLabel(joinFlow) : null;
+  const primaryBlocked = primaryAction === 'JOIN' && joinBlocked !== null;
   const pairCount = Math.max(1, Math.ceil(game.capacity.total / 2));
   const participantById = new Map(
     game.participants.map((participant) => [participant.userId, participant]),
@@ -363,35 +382,84 @@ function GameTab(props: {
         className="game-detail-card game-detail-players"
         aria-labelledby="game-players-title"
       >
-        <header>
-          <h2 id="game-players-title">Участники игры</h2>
-          <span>
-            {game.capacity.occupied}/{game.capacity.total}
-          </span>
-        </header>
+        <h2 id="game-players-title" className="sr-only">
+          Участники игры
+        </h2>
+        <div className="game-detail-players__summary">
+          <div
+            className="game-detail-players__scale"
+            role="progressbar"
+            aria-label="Заполненность игры"
+            aria-valuemin={0}
+            aria-valuemax={game.capacity.total}
+            aria-valuenow={game.capacity.occupied}
+            aria-valuetext={`${game.capacity.occupied} из ${game.capacity.total} мест занято`}
+          >
+            {Array.from({ length: game.capacity.total }, (_, index) => (
+              <span
+                key={index}
+                className={index < game.capacity.occupied ? 'is-filled' : undefined}
+                aria-hidden="true"
+              />
+            ))}
+          </div>
+          <div className="game-detail-players__labels">
+            <span className="game-detail-players__count">
+              <svg
+                width="10"
+                height="10"
+                viewBox="0 0 10 10"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <circle cx="5" cy="2.5" r="2" />
+                <path d="M1.5 8c0-1.7 1.4-3 3.5-3s3.5 1.3 3.5 3c0 1-1.5 1.5-3.5 1.5S1.5 9 1.5 8Z" />
+              </svg>
+              <span>
+                {game.capacity.occupied}/{game.capacity.total}
+              </span>
+            </span>
+          </div>
+        </div>
         <div className="game-detail-players__list">
           {game.participants.map((participant) => (
-            <a href={`/profile/${encodeURIComponent(participant.userId)}`} key={participant.userId}>
-              <ParticipantAvatarStack
-                ariaLabel={`${participant.displayName}${participant.level ? ` · ${participant.level}` : ''}`}
-                capacity={1}
-                participants={[
-                  {
-                    key: participant.userId,
-                    displayName: participant.displayName,
-                    avatarUrl: participant.avatarUrl,
-                    level: participant.level,
-                    levelValue: participantLevelValue(participant),
-                  },
-                ]}
-              />
-              <span className="game-detail-player__name">
-                <strong>{participant.displayName}</strong>
-              </span>
+            <div className="game-detail-player" key={participant.userId}>
+              <a
+                className="game-detail-player__profile"
+                href={`/profile/${encodeURIComponent(participant.userId)}`}
+              >
+                <ParticipantAvatarStack
+                  ariaLabel={`${participant.displayName}${participant.level ? ` · ${participant.level}` : ''}`}
+                  capacity={1}
+                  participants={[
+                    {
+                      key: participant.userId,
+                      displayName: participant.displayName,
+                      avatarUrl: participant.avatarUrl,
+                      level: participant.level,
+                      levelValue: participantLevelValue(participant),
+                    },
+                  ]}
+                />
+                <span className="game-detail-player__name">
+                  <strong>{participant.displayName}</strong>
+                </span>
+              </a>
               {participant.role === 'ORGANIZER' ? (
-                <span className="game-detail-player__role">Организатор</span>
+                <span className="game-detail-player__badge">Организатор</span>
+              ) : participant.userId === viewerUserId &&
+                game.viewerRelation === 'PARTICIPANT' &&
+                game.allowedActions.includes('LEAVE') ? (
+                <button
+                  className="game-detail-player__leave"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onAction('LEAVE')}
+                >
+                  <span className="game-detail-player__badge">Покинуть игру</span>
+                </button>
               ) : null}
-            </a>
+            </div>
           ))}
           {Array.from({ length: game.capacity.open }, (_, index) => (
             <div className="game-detail-player is-open" key={`open-player-${index}`}>
@@ -529,8 +597,22 @@ function GameTab(props: {
         ) : null}
       </section>
 
+      {joinFlow ? (
+        <GameJoinFlowPanel
+          flow={joinFlow}
+          busy={busy || joinFlowBusy}
+          {...(onJoinConsent ? { onConfirmConsent: onJoinConsent } : {})}
+          {...(onJoinConsentCancel ? { onCancelConsent: onJoinConsentCancel } : {})}
+          {...(onJoinStatusCheck ? { onCheckStatus: onJoinStatusCheck } : {})}
+          {...(onJoinRetry ? { onRetry: onJoinRetry } : {})}
+        />
+      ) : null}
+
       <div className="game-detail-actions">
-        {primaryAction && primaryLabel ? (
+        {primaryAction && primaryLabel && primaryBlocked ? (
+          // Custody or consent owns the next action: no duplicate purchase button is rendered.
+          <p className="game-detail-state">{joinBlocked}</p>
+        ) : primaryAction && primaryLabel ? (
           <button
             className="game-detail-primary"
             type="button"
@@ -687,9 +769,16 @@ function ResultTab(props: {
 export function GameDetailView(props: {
   readonly joinConditionsClient?: GameJoinConditionsClient;
   readonly subscriptionInstanceId?: string;
+  readonly joinFlow?: GameJoinFlowState;
+  readonly joinFlowBusy?: boolean;
+  readonly onJoinConsent?: (consent: GameJoinPriceConsent) => void;
+  readonly onJoinConsentCancel?: () => void;
+  readonly onJoinStatusCheck?: () => void;
+  readonly onJoinRetry?: () => void;
   readonly activeTab: GameDetailTab;
   readonly busy: boolean;
   readonly game: GameCard;
+  readonly viewerUserId?: string;
   readonly onAction: (action: GameCardAction) => void;
   readonly onChatOpen: () => void;
   readonly onChatNavigate?: (conversationId: string) => void;
@@ -793,6 +882,7 @@ export function GameDetailView(props: {
           <GameTab
             busy={busy}
             game={game}
+            {...(props.viewerUserId ? { viewerUserId: props.viewerUserId } : {})}
             lineupUserIdsByPair={lineupUserIdsByPair}
             onAction={onAction}
             onChatOpen={onChatOpen}
@@ -801,6 +891,14 @@ export function GameDetailView(props: {
             onRemoveParticipant={removeParticipant}
             onReplaceParticipant={replaceParticipant}
             onResultOpen={() => onTabChange('RESULT')}
+            {...(props.joinFlow ? { joinFlow: props.joinFlow } : {})}
+            {...(props.joinFlowBusy === undefined ? {} : { joinFlowBusy: props.joinFlowBusy })}
+            {...(props.onJoinConsent ? { onJoinConsent: props.onJoinConsent } : {})}
+            {...(props.onJoinConsentCancel
+              ? { onJoinConsentCancel: props.onJoinConsentCancel }
+              : {})}
+            {...(props.onJoinStatusCheck ? { onJoinStatusCheck: props.onJoinStatusCheck } : {})}
+            {...(props.onJoinRetry ? { onJoinRetry: props.onJoinRetry } : {})}
           />
         ) : (
           <ResultTab

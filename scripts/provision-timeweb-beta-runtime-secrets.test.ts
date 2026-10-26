@@ -11,12 +11,17 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadConfig, loadRealtimeConfig, loadWorkerConfig } from '../packages/config/src/index.js';
 import {
+  describeTimewebRuntimeSecretSet,
+  validateTimewebFcmSecretDelta,
+  validateTimewebDormantJoinSecretDelta,
+  transitionPreparedTimewebRuntimeSecrets,
   parseTimewebSecretEnvironment,
   provisionTimewebBetaRuntimeSecrets,
   validateTimewebRuntimeEnvironments,
@@ -187,6 +192,22 @@ describe('Timeweb beta runtime secret provisioner', () => {
       schema: 'PHUB_TIMEWEB_SECRET_SET_V1',
       releaseId,
     });
+  });
+
+  it('prepares the documented isolated candidate with an explicit private sibling backupRoot', () => {
+    const value = fixture(),
+      parent = join(value.root, 'timeweb-beta-candidates', releaseId),
+      targetDir = join(parent, 'timeweb-beta'),
+      backupRoot = join(parent, 'backups');
+    mkdirSync(join(value.root, 'timeweb-beta-candidates'), { mode: 0o700 });
+    const result = provisionTimewebBetaRuntimeSecrets(
+      options(value, { targetDir, backupRoot, expectedCurrentReleaseId: null }),
+    );
+    expect(result.previousBackedUp).toBe(false);
+    expect(installedReleaseId(targetDir)).toBe(releaseId);
+    expect(lstatSync(parent).mode & 0o777).toBe(0o700);
+    expect(lstatSync(targetDir).mode & 0o777).toBe(0o700);
+    expect(existsSync(value.targetDir)).toBe(false);
   });
 
   it(
@@ -409,6 +430,47 @@ describe('Timeweb beta runtime secret provisioner', () => {
   });
 
   it.each([
+    ['FCM_ENABLED', 'false'],
+    ['FCM_PROJECT_ID', 'other-project'],
+    ['FCM_APP_ID', 'com.cabinet.app'],
+    ['FCM_ENVIRONMENT', 'PRODUCTION'],
+    ['FCM_CREDENTIAL_FILE', '/etc/phub/timeweb-beta/api.env'],
+    [
+      'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS',
+      JSON.stringify({ v1: Buffer.alloc(32, 7).toString('base64') }),
+    ],
+  ])('rejects mismatched FCM %s before creating a runtime secret set', (key, replacement) => {
+    const value = fixture();
+    for (const service of ['api', 'worker']) value.environments[service]!.FCM_ENABLED = 'true';
+    value.environments.worker![key] = replacement;
+    for (const service of ['api', 'worker'])
+      writeFileSync(
+        join(value.sourceDir, `${service}.env`),
+        encodeEnvironment(value.environments[service]!),
+      );
+    expect(() => provisionTimewebBetaRuntimeSecrets(options(value))).toThrow('fcm_runtime_binding');
+    expect(() => lstatSync(value.targetDir)).toThrow();
+  });
+
+  it('accepts a matching FCM preview and a legacy preview with all FCM keys absent', () => {
+    for (const enabled of [true, false]) {
+      const value = fixture();
+      for (const service of ['api', 'worker']) {
+        const environment = value.environments[service]!;
+        if (enabled) environment.FCM_ENABLED = 'true';
+        else
+          for (const key of Object.keys(environment))
+            if (key.startsWith('FCM_')) delete environment[key];
+        writeFileSync(join(value.sourceDir, `${service}.env`), encodeEnvironment(environment));
+      }
+      expect(provisionTimewebBetaRuntimeSecrets(options(value, { dryRun: true })).dryRun).toBe(
+        true,
+      );
+      expect(() => lstatSync(value.targetDir)).toThrow();
+    }
+  });
+
+  it.each([
     [
       'production APP_ENV with staging-only Games reads',
       (environments: ReturnType<typeof safeRuntimeEnvironments>) => {
@@ -518,5 +580,393 @@ describe('Timeweb beta runtime secret provisioner', () => {
     expect(parseTimewebSecretEnvironment('ONE=value\n')).toEqual({ ONE: 'value' });
     expect(() => parseTimewebSecretEnvironment('ONE=value')).toThrow('terminal_newline');
     expect(() => parseTimewebSecretEnvironment('ONE=value\n\n')).toThrow('terminal_newline');
+  });
+});
+
+describe('prepared API + Worker secret-set swap', () => {
+  function prepared() {
+    const value = fixture();
+    mkdirSync(value.targetParent, { mode: 0o700 });
+    mkdirSync(value.targetDir, { mode: 0o700 });
+    mkdirSync(value.backupRoot, { mode: 0o700 });
+    const candidateRelease = `${'a'.repeat(40)}-123-1`,
+      candidateDir = join(
+        value.targetParent,
+        'timeweb-beta-candidates',
+        candidateRelease,
+        'timeweb-beta',
+      );
+    mkdirSync(candidateDir, { mode: 0o700, recursive: true });
+    const next = safeRuntimeEnvironments();
+    for (const service of ['api', 'worker']) next[service]!.FCM_ENABLED = 'true';
+    for (const [service, name] of Object.entries({
+      api: 'api.env',
+      worker: 'worker.env',
+      realtime: 'realtime.env',
+      migrator: 'migrator.env',
+    })) {
+      writeFileSync(join(value.targetDir, name), encodeEnvironment(value.environments[service]!), {
+        mode: 0o600,
+      });
+      writeFileSync(join(candidateDir, name), encodeEnvironment(next[service]!), { mode: 0o600 });
+    }
+    for (const [path, id] of [
+      [value.targetDir, releaseId],
+      [candidateDir, candidateRelease],
+    ])
+      writeFileSync(
+        join(path!, '.release-identity.json'),
+        JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId: id }) + '\n',
+        { mode: 0o600 },
+      );
+    const previous = describeTimewebRuntimeSecretSet(value.targetDir, uid, gid),
+      candidate = describeTimewebRuntimeSecretSet(candidateDir, uid, gid),
+      backupDir = join(value.backupRoot, `${releaseId}--replaced-by--${candidateRelease}`),
+      planSha256 = 'b'.repeat(64),
+      lockPath = join(value.targetParent, '.timeweb-beta.provision.lock');
+    const swap = {
+      targetDir: value.targetDir,
+      candidateDir,
+      backupDir,
+      previous,
+      candidate,
+      planSha256,
+      expectedUid: uid,
+      expectedGid: gid,
+    };
+    writeFileSync(
+      lockPath,
+      JSON.stringify({
+        schema: 'PHUB_TIMEWEB_RUNTIME_SWAP_LOCK_V1',
+        planSha256,
+        targetDir: value.targetDir,
+        candidateDir,
+        backupDir,
+        previous,
+        candidate,
+      }) + '\n',
+      { mode: 0o600 },
+    );
+    return { value, swap, lockPath };
+  }
+  it('accepts only the FCM delta, moves original inodes, and reverses byte-exactly', () => {
+    const f = prepared();
+    validateTimewebFcmSecretDelta(f.swap.targetDir, f.swap.candidateDir, uid, gid);
+    transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' });
+    expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.candidate);
+    transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'restore' });
+    expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
+    expect(existsSync(f.swap.backupDir)).toBe(false);
+  });
+  it.each(['previous-moved', 'candidate-moved', 'candidate-returned', 'previous-restored'])(
+    'recovers a crash after %s with no overwrite',
+    (phase) => {
+      const f = prepared();
+      if (phase.startsWith('candidate-returned') || phase === 'previous-restored')
+        transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' });
+      expect(() =>
+        transitionPreparedTimewebRuntimeSecrets({
+          ...f.swap,
+          direction: ['candidate-returned', 'previous-restored'].includes(phase)
+            ? 'restore'
+            : 'install',
+          afterRename: (p) => {
+            if (p === phase) throw Error('power loss');
+          },
+        }),
+      ).toThrow('power loss');
+      transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'restore' });
+      expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
+      expect(describeTimewebRuntimeSecretSet(f.swap.candidateDir, uid, gid)).toEqual(
+        f.swap.candidate,
+      );
+    },
+  );
+  it.each([
+    'JWT_ACCESS_SECRET',
+    'NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID',
+    'NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS',
+    'FCM_ENVIRONMENT',
+  ])('rejects unrelated or production change %s before swapping', (key) => {
+    const f = prepared(),
+      path = join(f.swap.candidateDir, 'api.env'),
+      env = parseTimewebSecretEnvironment(readFileSync(path));
+    env[key] = key === 'FCM_ENVIRONMENT' ? 'PRODUCTION' : 'synthetic-changed';
+    writeFileSync(path, encodeEnvironment(env));
+    expect(() =>
+      validateTimewebFcmSecretDelta(f.swap.targetDir, f.swap.candidateDir, uid, gid),
+    ).toThrow();
+    expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
+  });
+  it('rejects a symlink destination, changed snapshot and foreign lock without unlinking', () => {
+    const f = prepared();
+    symlinkSync(join(f.value.root, 'missing'), f.swap.backupDir);
+    expect(() =>
+      transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' }),
+    ).toThrow();
+    expect(lstatSync(f.swap.backupDir).isSymbolicLink()).toBe(true);
+    rmSync(f.swap.backupDir);
+    writeFileSync(f.lockPath, 'foreign\n');
+    expect(() =>
+      transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' }),
+    ).toThrow('swap_lock_identity');
+    expect(readFileSync(f.lockPath, 'utf8')).toBe('foreign\n');
+  });
+  it.each(['hardlink', 'public-mode', 'extra-file', 'inode-replaced'])(
+    'rejects %s secret-set drift',
+    (mode) => {
+      const f = prepared(),
+        path = join(f.swap.candidateDir, 'api.env');
+      if (mode === 'hardlink') linkSync(path, join(f.value.root, 'hardlink'));
+      else if (mode === 'public-mode') chmodSync(path, 0o644);
+      else if (mode === 'extra-file')
+        writeFileSync(join(f.swap.candidateDir, 'extra'), 'x', { mode: 0o600 });
+      else {
+        const bytes = readFileSync(path);
+        renameSync(path, join(f.value.root, 'old'));
+        writeFileSync(path, bytes, { mode: 0o600 });
+        writeFileSync(path, 'FCM_ENABLED=true\n');
+      }
+      expect(() =>
+        transitionPreparedTimewebRuntimeSecrets({ ...f.swap, direction: 'install' }),
+      ).toThrow();
+      expect(describeTimewebRuntimeSecretSet(f.swap.targetDir, uid, gid)).toEqual(f.swap.previous);
+    },
+  );
+});
+
+describe('commercial JOIN API environment contract', () => {
+  const { privateKey } = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const ring = JSON.stringify({ 'synthetic-key': privateKey });
+  function active() {
+    const env = safeRuntimeEnvironments();
+    Object.assign(env.api!, {
+      SUBSCRIPTION_RUNTIME_WARN_MODE: 'WARN',
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'https://quote.example.test',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: Buffer.alloc(32, 4).toString('base64url'),
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: ring,
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic-key',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-owner',
+      GAME_COMMERCIAL_JOIN_ENABLED: 'true',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test',
+    });
+    return env;
+  }
+  it('preserves canonical multiline PKCS8 JSON byte for byte through env parsing', () => {
+    const parsed = parseTimewebSecretEnvironment(
+      Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${ring}\n`),
+    );
+    expect(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS).toBe(ring);
+    const decoded: unknown = JSON.parse(parsed.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS!);
+    expect(decoded).toEqual({ 'synthetic-key': privateKey });
+  });
+  it('accepts unchanged OFF and a complete conditional WARN/commercial boundary', () => {
+    expect(() =>
+      validateTimewebRuntimeEnvironments(safeRuntimeEnvironments(), { host, tenantKey }),
+    ).not.toThrow();
+    expect(() => validateTimewebRuntimeEnvironments(active(), { host, tenantKey })).not.toThrow();
+    expect(loadConfig(active().api).GAME_COMMERCIAL_JOIN_ENABLED).toBe(true);
+  });
+  it.each([
+    'SUBSCRIPTION_RUNTIME_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE',
+    'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL',
+  ])('refuses incomplete activation missing %s', (key) => {
+    const env = active();
+    delete env.api![key];
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each([
+    { GAME_COMMERCIAL_JOIN_ENABLED: 'yes' },
+    { SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF' },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown-key' },
+    { SUBSCRIPTION_RUNTIME_BASE_URL: 'http://owner.example.test' },
+    { GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test/path' },
+    { SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: 'x'.repeat(4097) },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'x'.repeat(513) },
+    { SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'invalid audience' },
+    { SUBSCRIPTION_RUNTIME_CIRCUIT_RESET_MS: '999' },
+  ])('rejects incompatible activation input', (changes) => {
+    const env = active();
+    Object.assign(env.api!, changes);
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow();
+  });
+  it.each(['{}', '[]', '{"key":{"nested":1}}', '{"key":"$expand"}', '{"key":"invalid"}'])(
+    'rejects malformed/unsafe keyring %s',
+    (value) => {
+      expect(() =>
+        parseTimewebSecretEnvironment(
+          Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${value}\n`),
+        ),
+      ).toThrow();
+    },
+  );
+  it('rejects noncanonical PEM even when the key is otherwise valid', () => {
+    for (const pem of [privateKey.trimEnd(), privateKey.replace(/(.{32})(.{32})/g, '$1\n$2')]) {
+      const value = JSON.stringify({ 'synthetic-key': pem });
+      expect(() =>
+        parseTimewebSecretEnvironment(
+          Buffer.from(`SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS=${value}\n`),
+        ),
+      ).toThrow();
+    }
+  });
+  it('validates dormant scalar settings while allowing a fully absent boundary', () => {
+    const env = active();
+    env.api!.SUBSCRIPTION_RUNTIME_WARN_MODE = 'OFF';
+    env.api!.GAME_COMMERCIAL_JOIN_ENABLED = 'false';
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).not.toThrow();
+    for (const [key, value] of Object.entries({
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'not-url',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'not-url',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: 'short',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'bad id',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'x'.repeat(513),
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'bad audience',
+    })) {
+      const candidate = structuredClone(env);
+      candidate.api![key] = value;
+      expect(() => validateTimewebRuntimeEnvironments(candidate, { host, tenantKey })).toThrow();
+    }
+  });
+  it('rejects delegation material outside the API service', () => {
+    const env = active();
+    env.worker!.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS = ring;
+    expect(() => validateTimewebRuntimeEnvironments(env, { host, tenantKey })).toThrow(
+      'unknown_key',
+    );
+  });
+});
+
+describe('dormant JOIN additions preserve the established secret set', () => {
+  const key = generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+  const fingerprint = createHash('sha256')
+    .update(createPublicKey(key.publicKey).export({ type: 'spki', format: 'der' }))
+    .digest('hex');
+  function prepared() {
+    const f = fixture();
+    mkdirSync(f.targetDir, { mode: 0o700, recursive: true });
+    for (const [service, values] of Object.entries(safeRuntimeEnvironments()))
+      writeFileSync(join(f.targetDir, service + '.env'), encodeEnvironment(values), {
+        mode: 0o600,
+      });
+    writeFileSync(
+      join(f.targetDir, '.release-identity.json'),
+      JSON.stringify({ schema: 'PHUB_TIMEWEB_SECRET_SET_V1', releaseId }) + '\n',
+      { mode: 0o600 },
+    );
+    const candidate = join(f.root, 'join-candidate');
+    mkdirSync(candidate, { mode: 0o700 });
+    for (const name of ['api.env', 'worker.env', 'realtime.env', 'migrator.env'])
+      writeFileSync(join(candidate, name), readFileSync(join(f.targetDir, name)), { mode: 0o600 });
+    writeFileSync(
+      join(candidate, '.release-identity.json'),
+      JSON.stringify({
+        schema: 'PHUB_TIMEWEB_SECRET_SET_V1',
+        releaseId: `${'9'.repeat(40)}-777-1`,
+      }) + '\n',
+      { mode: 0o600 },
+    );
+    const additions = {
+      GAME_COMMERCIAL_JOIN_ENABLED: 'false',
+      GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: 'https://owner.example.test',
+      SUBSCRIPTION_RUNTIME_BASE_URL: 'https://quote.example.test',
+      SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: Buffer.alloc(32, 3).toString('base64url'),
+      SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS: JSON.stringify({ synthetic: key.privateKey }),
+      SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'synthetic',
+      SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: 'https://issuer.example.test',
+      SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: 'synthetic-owner',
+    };
+    const old = readFileSync(join(candidate, 'api.env'), 'utf8');
+    const render = (extra = additions) =>
+      old +
+      Object.entries(extra)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n') +
+      '\n';
+    writeFileSync(join(candidate, 'api.env'), render());
+    const validate = (sha = fingerprint) =>
+      validateTimewebDormantJoinSecretDelta(f.targetDir, candidate, sha, uid, gid);
+    return { ...f, candidate, additions, old, render, validate };
+  }
+  it('accepts only dormant additions and never changes either directory', () => {
+    const f = prepared(),
+      before = [f.targetDir, f.candidate].map((p) => describeTimewebRuntimeSecretSet(p, uid, gid));
+    f.validate();
+    expect(
+      [f.targetDir, f.candidate].map((p) => describeTimewebRuntimeSecretSet(p, uid, gid)),
+    ).toEqual(before);
+  });
+  it.each(['worker.env', 'realtime.env', 'migrator.env'])('refuses changes to %s', (name) => {
+    const f = prepared();
+    writeFileSync(
+      join(f.candidate, name),
+      readFileSync(join(f.candidate, name), 'utf8') + 'UNEXPECTED_TEST_VALUE=1\n',
+    );
+    expect(() => f.validate()).toThrow('non_join_secret_delta');
+  });
+  it.each(['true', 'yes'])('refuses JOIN=%s', (value) => {
+    const f = prepared();
+    writeFileSync(
+      join(f.candidate, 'api.env'),
+      f.render({ ...f.additions, GAME_COMMERCIAL_JOIN_ENABLED: value }),
+    );
+    expect(() => f.validate()).toThrow();
+  });
+  it('refuses WARN, changed existing rows and deleted rows', () => {
+    const f = prepared();
+    for (const value of [
+      f
+        .render()
+        .replace('SUBSCRIPTION_RUNTIME_WARN_MODE=OFF', 'SUBSCRIPTION_RUNTIME_WARN_MODE=WARN'),
+      f.render().replace('APP_ENV=staging\n', ''),
+      '# changed prefix\n' + f.render(),
+    ]) {
+      writeFileSync(join(f.candidate, 'api.env'), value);
+      expect(() => f.validate()).toThrow();
+    }
+  });
+  it('refuses key rotation, extra tuning fields, an unknown active key, and incomplete material', () => {
+    const f = prepared();
+    for (const value of [
+      f.render() + 'GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS=1000\n',
+      f.render({ ...f.additions, SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID: 'unknown' }),
+      f.render({ ...f.additions, SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN: '' }),
+    ]) {
+      writeFileSync(join(f.candidate, 'api.env'), value);
+      expect(() => f.validate()).toThrow();
+    }
+    writeFileSync(join(f.candidate, 'api.env'), f.render());
+    writeFileSync(
+      join(f.targetDir, 'api.env'),
+      f.old + 'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID=old-key\n',
+    );
+    expect(() => f.validate()).toThrow();
+  });
+  it('refuses a mismatching approved LK1 verifier fingerprint', () => {
+    const f = prepared();
+    expect(() => f.validate('0'.repeat(64))).toThrow('join_verifier_identity');
+  });
+  it.each(['symlink', 'hardlink'])('refuses a %s candidate env file', (kind) => {
+    const f = prepared(),
+      path = join(f.candidate, 'api.env'),
+      other = join(f.root, 'other.env');
+    renameSync(path, other);
+    if (kind === 'symlink') symlinkSync(other, path);
+    else linkSync(other, path);
+    expect(() => f.validate()).toThrow();
   });
 });

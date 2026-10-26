@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -277,6 +278,94 @@ describe('chat media attachment reads', () => {
 });
 
 describe('chat media repository wiring', () => {
+  it('audits a matched source upload with digest-only command metadata', async () => {
+    const calls: { text: string; values: readonly unknown[] }[] = [];
+    const { client } = clientWith((text, values = []) => {
+      calls.push({ text, values });
+      if (text.includes('from messaging.media_assets'))
+        return { rows: [mediaRow({ state: 'UPLOADING' })], rowCount: 1 };
+      return { rows: [], rowCount: 0 };
+    });
+    const pool = {
+      connect: vi.fn().mockResolvedValue({ ...client, release: vi.fn() }),
+    } as unknown as Pool;
+    const repository = (
+      await import('./messaging-media-repository.js')
+    ).createMessagingMediaRepository(pool);
+    await repository.recordSourceUpload({
+      tenantId,
+      actorUserId: senderUserId,
+      conversationId,
+      mediaId: mediaRow().id,
+      correlationId: 'c',
+      idempotencyKey: 'raw-command-key',
+      observed: {
+        objectKey: 'internal',
+        objectVersion: 'v1',
+        etag: 'e',
+        byteSize: 1024,
+        contentType: 'image/png',
+        checksumSha256: sha256,
+      },
+    });
+    const audits = calls.filter(({ text }) => text.includes('audit.audit_log'));
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.values).toEqual([
+      tenantId,
+      senderUserId,
+      'MESSAGING_MEDIA_SOURCE_UPLOADED',
+      mediaRow().id,
+      'c',
+      JSON.stringify({
+        objectVersion: 'v1',
+        byteSize: 1024,
+        checksumSha256: sha256,
+        commandKeyDigest: createHash('sha256').update('raw-command-key').digest('hex'),
+      }),
+    ]);
+    expect(JSON.stringify(audits)).not.toContain('raw-command-key');
+    expect(JSON.stringify(audits)).not.toContain('internal');
+    const lookup = calls.find(({ text }) => text.includes('from messaging.media_assets'));
+    expect(lookup?.text).toContain('uploader_user_id = $3 for update');
+    expect(lookup?.values).toEqual([tenantId, mediaRow().id, senderUserId]);
+  });
+  it.each([{ conversation_id: messageId }, { uploader_user_id: messageId }])(
+    'rejects a foreign upload audit target',
+    async (foreign) => {
+      const audit = vi.fn();
+      const { client } = clientWith((text) => {
+        if (text.includes('from messaging.media_assets'))
+          return { rows: [mediaRow(foreign)], rowCount: 1 };
+        if (text.includes('audit.audit_log')) audit();
+        return { rows: [], rowCount: 0 };
+      });
+      const pool = {
+        connect: vi.fn().mockResolvedValue({ ...client, release: vi.fn() }),
+      } as unknown as Pool;
+      const repository = (
+        await import('./messaging-media-repository.js')
+      ).createMessagingMediaRepository(pool);
+      await expect(
+        repository.recordSourceUpload({
+          tenantId,
+          actorUserId: senderUserId,
+          conversationId,
+          mediaId: mediaRow().id,
+          correlationId: 'c',
+          idempotencyKey: 'synthetic-command',
+          observed: {
+            objectKey: 'internal',
+            objectVersion: 'v1',
+            etag: 'e',
+            byteSize: 1024,
+            contentType: 'image/png',
+            checksumSha256: sha256,
+          },
+        }),
+      ).rejects.toThrow('MESSAGING_MEDIA_AUDIT_TARGET_MISSING');
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
   it('is constructible from a pool without touching it', async () => {
     const { createMessagingMediaRepository } = await import('./messaging-media-repository.js');
     const query = vi.fn();

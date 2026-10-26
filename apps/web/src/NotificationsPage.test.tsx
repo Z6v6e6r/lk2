@@ -43,7 +43,7 @@ const items: NotificationInboxPage['items'] = [
     id: '11111111-1111-4111-8111-111111111111',
     category: 'MESSAGING',
     title: 'Новое сообщение',
-    body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+    body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
     deepLink: `/chats/${conversationId}`,
     createdAt: '2026-08-29T10:00:00+03:00',
   },
@@ -51,7 +51,7 @@ const items: NotificationInboxPage['items'] = [
     id: '22222222-2222-4222-8222-222222222229',
     category: 'MESSAGING',
     title: 'Новое сообщение',
-    body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+    body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
     deepLink: `/chats/${conversationId}`,
     createdAt: '2026-08-29T09:00:00+03:00',
     readAt: '2026-08-29T09:10:00+03:00',
@@ -223,7 +223,7 @@ describe('NotificationsPage inbox', () => {
       screen.getByText('На iPhone и iPad push работает только из приложения на экране «Домой».'),
     ).toBeVisible();
     expect(
-      screen.getByText(/Откройте PadlHub в Safari, нажмите «Поделиться» → «На экран/),
+      screen.getByText(/Откройте ПадлхАБ в Safari, нажмите «Поделиться» → «На экран/),
     ).toBeVisible();
     // No enable control: an iOS tab cannot subscribe, so offering the button would only burn the
     // one-time permission decision.
@@ -332,7 +332,7 @@ describe('NotificationsPage friend requests', () => {
               id: '55555555-5555-4555-8555-555555555555',
               category: 'FRIENDSHIP',
               title: 'Заявка в друзья',
-              body: 'Откройте ПадлХАБ, чтобы ответить.',
+              body: 'Откройте ПадлхАБ, чтобы ответить.',
               deepLink: '/notifications',
               createdAt: '2026-08-29T10:00:00+03:00',
             },
@@ -344,7 +344,7 @@ describe('NotificationsPage friend requests', () => {
     );
 
     expect(screen.getByText('Ирина Кузнецова')).toBeVisible();
-    expect(screen.queryByText('Откройте ПадлХАБ, чтобы ответить.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Откройте ПадлхАБ, чтобы ответить.')).not.toBeInTheDocument();
     // The tab stays reachable even though the only friend-request row is not an inbox item.
     expect(screen.getByRole('button', { name: 'Друзья' })).toBeVisible();
   });
@@ -360,7 +360,7 @@ describe('NotificationsPage friend requests', () => {
               id: '66666666-6666-4666-8666-666666666666',
               category: 'FRIENDSHIP',
               title: 'Заявка принята',
-              body: 'Теперь вы друзья в ПадлХАБ.',
+              body: 'Теперь вы друзья в ПадлхАБ.',
               deepLink: '/profile/6a81e965-c508-4321-812c-4be323606a70',
               createdAt: '2026-08-30T10:00:00+03:00',
             },
@@ -371,7 +371,7 @@ describe('NotificationsPage friend requests', () => {
     );
 
     expect(screen.getByText('Заявка принята')).toBeVisible();
-    expect(screen.getByText('Теперь вы друзья в ПадлХАБ.')).toBeVisible();
+    expect(screen.getByText('Теперь вы друзья в ПадлхАБ.')).toBeVisible();
   });
 
   it('renders nothing request-shaped when there is nothing to answer', () => {

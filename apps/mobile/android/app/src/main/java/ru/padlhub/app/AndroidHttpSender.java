@@ -49,7 +49,7 @@ final class AndroidHttpSender implements AndroidSessionEngine.Sender {
             deadline = timer.schedule(active::disconnect, 30, TimeUnit.SECONDS);
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
             if (request.body != null) {
-                byte[] body = request.body.getBytes(StandardCharsets.UTF_8);
+                byte[] body = request.body;
                 connection.setDoOutput(true);
                 connection.setFixedLengthStreamingMode(body.length);
                 try (java.io.OutputStream output = connection.getOutputStream()) { output.write(body); }
@@ -65,17 +65,24 @@ final class AndroidHttpSender implements AndroidSessionEngine.Sender {
                     headerSize += entry.getKey().length() + value.length();
                     if (headerSize > 32_768) throw new Failure("NATIVE_RESPONSE_REJECTED");
                     if (entry.getKey().equalsIgnoreCase("set-cookie")) cookies.add(value);
-                    else headers.put(entry.getKey().toLowerCase(java.util.Locale.ROOT), value);
+                    else {
+                        String name = entry.getKey().toLowerCase(java.util.Locale.ROOT);
+                        // Date must describe one response instant. Preserve a closed invalid
+                        // marker for duplicate values; native expiry validation rejects it.
+                        if (name.equals("date") && headers.containsKey(name)) headers.put(name, "");
+                        else headers.put(name, value);
+                    }
                 }
             }
-            if (connection.getContentLengthLong() > 1024 * 1024) throw new Failure("NATIVE_RESPONSE_REJECTED");
+            int responseLimit = responseLimit(request);
+            if (connection.getContentLengthLong() > responseLimit) throw new Failure("NATIVE_RESPONSE_REJECTED");
             ByteArrayOutputStream body = new ByteArrayOutputStream();
             try (InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream()) {
                 if (stream != null) {
                     byte[] buffer = new byte[8192];
                     int count;
                     while ((count = stream.read(buffer)) != -1) {
-                        if (body.size() + count > 1024 * 1024 || System.nanoTime() > until) throw new Failure("NATIVE_RESPONSE_REJECTED");
+                        if (body.size() + count > responseLimit || System.nanoTime() > until) throw new Failure("NATIVE_RESPONSE_REJECTED");
                         body.write(buffer, 0, count);
                     }
                 }
@@ -88,6 +95,14 @@ final class AndroidHttpSender implements AndroidSessionEngine.Sender {
             if (deadline != null) deadline.cancel(false);
             if (connection != null) connection.disconnect();
         }
+    }
+
+    private int responseLimit(Request request) {
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        String relative = request.path;
+        if (relative.matches(".*/conversations/" + uuid + "/media/" + uuid + "/content")) return 15 * 1024 * 1024;
+        if (relative.matches(".*/support/attachments/[A-Za-z0-9_-]{43}/content")) return 3_145_710;
+        return 1024 * 1024;
     }
 
     void close() { timer.shutdownNow(); }

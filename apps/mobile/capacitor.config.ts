@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'ru.padlhub.app',
-  appName: 'PadlHub',
+  appName: 'ПадлхАБ',
   webDir: 'dist',
   server: { androidScheme: 'https' },
   // Capacitor's debug bridge logs response bodies, including the short-lived access JWT.
@@ -15,6 +15,14 @@ const config: CapacitorConfig = {
     PadlHubAndroidSession: {
       apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',
       tenantKey: process.env.VITE_PHUB_TENANT_KEY ?? '',
+    },
+    PadlHubAndroidPush: {
+      apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',
+      tenantKey: process.env.VITE_PHUB_TENANT_KEY ?? '',
+    },
+    PadlHubIOSPush: {
+      enabled: process.env.PADLHUB_IOS_PUSH_ENABLED === 'true',
+      scope: `${process.env.VITE_PHUB_API_BASE_URL ?? ''}|${process.env.VITE_PHUB_TENANT_KEY ?? ''}`,
     },
     PadlHubSession: {
       apiBaseUrl: process.env.VITE_PHUB_API_BASE_URL ?? '',

@@ -292,7 +292,7 @@ export function GiftCertificatesPage(props: {
               <img
                 className="gift-sale-mobile-cards"
                 src={giftCardStackUrl}
-                alt="Пример двух подарочных карт ПадлХАБ"
+                alt="Пример двух подарочных карт ПадлхАБ"
                 draggable={false}
                 fetchPriority="high"
               />

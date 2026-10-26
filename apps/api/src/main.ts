@@ -1,3 +1,4 @@
+import { createNotificationScenarioRepository } from '@phub/database/notification-scenarios';
 import type { IdentityProviderKey, IdentityProviderPort } from '@phub/auth';
 import { RedisPasswordLoginLimiter } from './auth/password-login-limiter.js';
 import { loadConfig, runtimeContourTargetFingerprint } from '@phub/config';
@@ -49,6 +50,7 @@ import {
   createSubscriptionRuntimeActorContextRepository,
   projectHomeBaseUser,
 } from '@phub/database';
+import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { createContactReader } from '@phub/database/contacts';
 import { createLocalPasswordLoginRepository } from '@phub/database/password-login';
 import {
@@ -57,7 +59,8 @@ import {
   LegacyTournamentResultAdapter,
   LegacyTournamentSummaryAdapter,
 } from '@phub/legacy-games-adapter';
-import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
+import { notificationReceiptSecret } from '@phub/notifications';
+import { createRuntimeNotificationEndpointCipher } from './notifications/runtime-endpoint-cipher.js';
 import { createLogger, recordLevelEligibilityMetrics, startTelemetry } from '@phub/observability';
 import { VivaHomeSourceAdapter, VivaIdentityProvider } from '@phub/viva-adapter';
 import { ManagedSubscriptionRuntimeQuoteClient } from '@phub/subscription-runtime-adapter';
@@ -65,6 +68,8 @@ import Redis from 'ioredis';
 
 import { buildApp } from './app.js';
 import { createGameJoinConditionsRuntime } from './games/game-join-conditions-runtime.js';
+import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
+import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
 import { LegacyViewerAssociationProof } from './profile/legacy-viewer-association-proof.js';
@@ -138,13 +143,7 @@ logger.info(
   'database pool warmed before API readiness',
 );
 const clientRoutingPlanRepository = createClientRoutingPlanRepository(pool);
-const notificationEndpointCipher =
-  config.WEB_PUSH_ENABLED && config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS
-    ? createNotificationEndpointCipher({
-        serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
-        activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
-      })
-    : undefined;
+const notificationEndpointCipher = createRuntimeNotificationEndpointCipher(config);
 // The Worker derives the same value from the same keyring, so a receipt token needs no shared session
 // and no new configuration key.
 const notificationReceiptKey =
@@ -612,6 +611,51 @@ const subscriptionRuntimeWarnBoundary = (() => {
   };
 })();
 const gameJoinConditionsOwner = createGameJoinConditionsRuntime({ config, pool, authService });
+// Paid JOIN reaches the existing owner only when the flag, the join-conditions owner and the
+// existing actor-delegation material are all composed; otherwise the route keeps GAME_PAYMENT_REQUIRED.
+const gameCommercialJoin = gameRosterRepository
+  ? createGameCommercialJoinRuntime({
+      config,
+      pool,
+      rosterRepository: gameRosterRepository,
+      ...(gameJoinConditionsOwner ? { conditionsOwner: gameJoinConditionsOwner } : {}),
+      ...(subscriptionRuntimeWarnBoundary
+        ? {
+            ownerBoundary: {
+              delegationIssuer: subscriptionRuntimeWarnBoundary.delegationIssuer,
+              actorContextRepository: subscriptionRuntimeWarnBoundary.actorContextRepository,
+              // The provider subscription mapping is resolved server-side for the selected product;
+              // without it the owner cannot execute and the flow fails closed before dispatch.
+              resolveProviderClientSubscriptionId: async (input) => {
+                const context = await createGameJoinConditionsContextRepository(
+                  pool,
+                  config.VIVA_AUTH_TENANT_KEY ?? 'iSkq6G',
+                ).resolve({
+                  tenantId: input.tenantId,
+                  userId: input.userId,
+                  sessionId: input.sessionId,
+                  gameId: input.gameId,
+                  subscriptionInstanceId: input.subscriptionInstanceId,
+                });
+                return context?.providerSubscriptionId;
+              },
+            },
+          }
+        : {}),
+      // Short-lived, user-scoped provider credential for exactly one operation. The runtime refuses
+      // to execute without it, so an unwired OAuth contour cannot produce an unattributable write.
+      issueActorToken: async (actor) => {
+        const issued = await authService.issueVivaAccessToken({
+          tenantKey: actor.tenantKey,
+          tenantId: actor.tenantId,
+          userId: actor.userId,
+          sessionId: actor.sessionId,
+          correlationId: actor.correlationId,
+        });
+        return { token: issued.accessToken, expiresAt: issued.expiresAt };
+      },
+    })
+  : undefined;
 const app = await buildApp({
   config,
   logger,
@@ -619,6 +663,7 @@ const app = await buildApp({
   ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
+  ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(subscriptionRuntimeWarnBoundary
     ? {
         subscriptionRuntimeActorContextRepository:
@@ -662,7 +707,9 @@ const app = await buildApp({
     : {}),
   clientRoutingPlanRepository,
   notificationRepository: createNotificationInboxRepository(pool),
-  notificationPreferenceRepository: createNotificationPreferenceRepository(pool),
+  notificationPreferenceRepository: createNotificationPreferenceRepository(pool, {
+    scenariosEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
+  }),
   messagingRepository: createMessagingRepository(pool),
   messagingModerationRepository: createMessagingModerationRepository(pool),
   ...(chatMediaObjectStore
@@ -674,9 +721,11 @@ const app = await buildApp({
   realtimeTicketIssuer: new RedisRealtimeTicketIssuer(redis, config),
   notificationEndpointRepository: createNotificationEndpointRepository(pool),
   adminNotificationRepository: createAdminNotificationRepository(pool),
+  notificationScenarioRepository: createNotificationScenarioRepository(pool),
   locationRepository: createLocationRepository(pool),
   ...(stationSupportProvider ? { stationSupportProvider } : {}),
   ...(stationSupportRepository ? { stationSupportRepository } : {}),
+  supportTicketRepository: createSupportTicketRepository(pool),
   ...(stationSupportMediaStore ? { stationSupportMediaStore } : {}),
   ...(stationSupportMediaAllowedHosts.length > 0 ? { stationSupportMediaAllowedHosts } : {}),
   levelEligibilityPolicyRepository: createLevelEligibilityPolicyRepository(pool),

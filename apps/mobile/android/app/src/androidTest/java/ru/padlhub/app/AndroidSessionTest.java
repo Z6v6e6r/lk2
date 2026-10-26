@@ -76,6 +76,49 @@ public class AndroidSessionTest {
         fails("NATIVE_REQUEST_REJECTED", () -> policy.request(ROOT + "/auth/session/refresh", "POST", injected, null));
     }
 
+    @Test public void chatAndSupportRoutesRemainNarrowAndBinaryRelayIsBounded() throws Exception {
+        AndroidSessionPolicy policy = policy();
+        Map<String, String> auth = Collections.singletonMap("authorization", "Bearer synthetic-access");
+        String conversationId = "00000000-0000-4000-8000-000000000010";
+        String mediaId = "00000000-0000-4000-8000-000000000011";
+        String supportAttachment = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        policy.request(ROOT + "/support/stations", "GET", auth, null);
+        policy.request(ROOT + "/support/dialogs", "GET", auth, null);
+        policy.request(ROOT + "/support/dialogs/" + conversationId + "/messages?before=2026-10-11T12%3A00%3A00Z", "GET", auth, null);
+        AndroidSessionPolicy.Request supportContent = policy.request(ROOT + "/support/attachments/" + supportAttachment + "/content", "GET", auth, null);
+        assertEquals("*/*", supportContent.headers.get("accept"));
+        policy.request(ROOT + "/conversations/" + conversationId + "/messages?afterSequence=4&limit=100", "GET", auth, null);
+        policy.request(ROOT + "/conversations/" + conversationId + "/media/" + mediaId, "GET", auth, null);
+        AndroidSessionPolicy.Request mediaContent = policy.request(ROOT + "/conversations/" + conversationId + "/media/" + mediaId + "/content", "GET", auth, null);
+        assertEquals("*/*", mediaContent.headers.get("accept"));
+        Map<String, String> command = headers(null, KEY); command.put("authorization", "Bearer synthetic-access");
+        policy.request(ROOT + "/support/messages", "POST", command, "{}");
+        policy.request(ROOT + "/support/attachments", "POST", command, "{}");
+        policy.request(ROOT + "/support/attachments", "POST", command, new String(new char[16_385]).replace('\0', 'a'));
+        policy.request(ROOT + "/support/attachments", "POST", command, new String(new char[11_188_907]).replace('\0', 'a'));
+        policy.request(ROOT + "/conversations/" + conversationId + "/media/uploads", "POST", command, "{}");
+        policy.request(ROOT + "/conversations/" + conversationId + "/media/" + mediaId + "/finalize", "POST", command, "{}");
+        AndroidSessionPolicy.Request relay = policy.requestBinary(
+            ROOT + "/conversations/" + conversationId + "/media/" + mediaId + "/bytes", "PUT", command, new byte[] { 1, 2, 3 });
+        assertEquals("application/octet-stream", relay.headers.get("content-type"));
+        assertArrayEquals(new byte[] { 1, 2, 3 }, relay.body);
+        for (String invalid : Arrays.asList(
+            ROOT + "/support/stations?limit=1",
+            ROOT + "/support/dialogs?next=1",
+            ROOT + "/conversations/" + conversationId + "/media/" + mediaId + "/bytes?next=1",
+            ROOT + "/conversations/" + conversationId + "/media/" + mediaId + "/content?download=1",
+            ROOT + "/conversations/" + conversationId + "/messages?afterSequence=1&limit=101",
+            ROOT + "/conversations/" + conversationId + "/messages?afterSequence=1&afterSequence=2",
+            ROOT + "/support/dialogs/" + conversationId + "/messages?before=not-a-time",
+            ROOT + "/support/attachments/not-an-id/content"))
+            fails("NATIVE_REQUEST_REJECTED", () -> policy.request(invalid, "GET", auth, null));
+        fails("NATIVE_REQUEST_REJECTED", () -> policy.requestBinary(ROOT + "/profile", "PUT", command, new byte[] { 1 }));
+        fails("NATIVE_REQUEST_REJECTED", () -> policy.request(ROOT + "/support/messages", "POST", command, new String(new char[16_385]).replace('\0', 'a')));
+        fails("NATIVE_REQUEST_REJECTED", () -> policy.request(ROOT + "/support/attachments", "POST", command, new String(new char[11_188_908]).replace('\0', 'a')));
+        fails("NATIVE_REQUEST_REJECTED", () -> policy.requestBinary(ROOT + "/conversations/" + conversationId + "/media/" + mediaId + "/bytes", "PUT", command, new byte[0]));
+        fails("NATIVE_REQUEST_REJECTED", () -> policy.requestBinary(ROOT + "/conversations/" + conversationId + "/media/" + mediaId + "/bytes", "PUT", command, new byte[15 * 1024 * 1024 + 1]));
+    }
+
     @Test public void verifiesBeforePersistingAndHidesRefreshFromBridge() throws Exception {
         MemoryStore store = new MemoryStore();
         AndroidSessionEngine engine = new AndroidSessionEngine(policy(), store, request -> session(REFRESH));
@@ -83,6 +126,15 @@ public class AndroidSessionTest {
         assertEquals(200, result.status); assertEquals(REFRESH, store.value.value);
         assertTrue(result.cookies.isEmpty()); assertFalse(result.headers.containsKey("set-cookie"));
         assertFalse(new String(result.body, StandardCharsets.UTF_8).contains(REFRESH));
+    }
+
+    @Test public void validatedLogoutCancelsNativeOnlyWorkBeforeItsQueuedCompletion() throws Exception {
+        MemoryStore store = new MemoryStore();
+        AndroidSessionEngine engine = new AndroidSessionEngine(policy(), store, request -> session(REFRESH));
+        engine.request(VERIFY, "POST", headers(null, KEY), VERIFY_BODY);
+        AndroidSessionEngine.NativeAccess access = engine.nativeAccess();
+        engine.prepareLogout(NEXT_KEY);
+        fails("NATIVE_OPERATION_CANCELLED", () -> engine.requireNativeAccess(access));
     }
 
     @Test public void responseLostAfterRefreshReplaysSamePredecessorKeyAcrossEngineRestart() throws Exception {

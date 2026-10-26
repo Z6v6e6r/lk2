@@ -2026,6 +2026,172 @@ select {
   color: #a12525;
 }
 
+.support-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.7fr) repeat(3, minmax(140px, 0.8fr)) auto;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 20px;
+}
+
+.support-layout {
+  display: grid;
+  grid-template-columns: minmax(270px, 0.72fr) minmax(0, 1.5fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.support-queue,
+.support-ticket-detail {
+  padding: 22px;
+}
+
+.support-queue {
+  position: sticky;
+  top: 20px;
+  display: grid;
+  gap: 14px;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+}
+
+.support-queue > header,
+.support-ticket-header,
+.support-message header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.support-queue h2,
+.support-ticket-detail h2,
+.support-ticket-detail h3 {
+  margin: 0;
+}
+
+.support-queue > header > span {
+  display: grid;
+  min-width: 27px;
+  min-height: 27px;
+  place-items: center;
+  border-radius: 99px;
+  color: #285b33;
+  background: #e4f2e1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.support-ticket-list {
+  display: grid;
+  gap: 8px;
+}
+
+.support-ticket-row {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  border: 1px solid #e3e9e2;
+  border-radius: 13px;
+  padding: 13px;
+  color: #26332a;
+  background: #fff;
+  text-align: left;
+}
+
+.support-ticket-row:hover:not(:disabled),
+.support-ticket-row.selected {
+  border-color: #67ad6c;
+  background: #f1f8f0;
+}
+
+.support-ticket-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.support-ticket-row span,
+.support-ticket-row small,
+.support-auto-close,
+.support-history p,
+.support-message time {
+  color: #718077;
+  font-size: 12px;
+}
+
+.support-ticket-detail {
+  display: grid;
+  gap: 16px;
+}
+
+.support-ticket-header .eyebrow {
+  margin: 0 0 5px;
+}
+
+.support-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.support-tags {
+  grid-column: 1 / -1;
+}
+
+.support-auto-close {
+  margin: -4px 0 0;
+}
+
+.support-internal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.support-internal-toggle input {
+  width: 16px;
+  min-height: 16px;
+}
+
+.support-messages {
+  display: grid;
+  gap: 10px;
+  max-height: 390px;
+  overflow: auto;
+  padding: 2px;
+}
+
+.support-message {
+  border-radius: 13px;
+  padding: 12px 14px;
+  background: #f3f6f2;
+}
+
+.support-message.agent {
+  background: #e5f1e4;
+}
+
+.support-message.internal {
+  border: 1px dashed #d4a43d;
+  background: #fff8e8;
+}
+
+.support-message p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
+
+.support-history {
+  border-top: 1px solid #e4e9e3;
+  padding-top: 14px;
+}
+
+.support-history p {
+  margin: 6px 0;
+}
+
 @media (max-width: 760px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -2118,8 +2284,16 @@ select {
 
   .moderation-filter-panel,
   .invite-quota-grant-grid,
-  .moderation-request-card dl {
+  .moderation-request-card dl,
+  .support-filter-panel,
+  .support-layout,
+  .support-fields {
     grid-template-columns: 1fr;
+  }
+
+  .support-queue {
+    position: static;
+    max-height: none;
   }
 }
 
@@ -2152,4 +2326,165 @@ select {
   .location-editor-header {
     padding: 18px;
   }
+}
+
+.scenario-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr);
+  gap: 20px;
+  align-items: start;
+}
+.scenario-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+}
+.scenario-list button {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 5px;
+  overflow-wrap: anywhere;
+}
+.scenario-list button[aria-pressed='true'] {
+  outline: 2px solid #25754a;
+  outline-offset: 2px;
+}
+.scenario-form,
+.scenario-form > fieldset {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.scenario-form fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.scenario-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.scenario-form .scenario-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.scenario-checkbox input {
+  width: 20px;
+  min-height: 20px;
+  height: 20px;
+}
+.scenario-preview {
+  border: 1px solid #dce5df;
+  border-radius: 14px;
+  padding: 16px;
+  overflow-wrap: anywhere;
+}
+.scenario-preview strong,
+.scenario-preview small {
+  display: block;
+}
+.scenario-journal {
+  margin-top: 24px;
+  min-width: 0;
+}
+.scenario-table-wrap {
+  overflow-x: auto;
+}
+.scenario-journal table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+.scenario-journal th,
+.scenario-journal td {
+  padding: 12px;
+  border-bottom: 1px solid #dce5df;
+  vertical-align: top;
+}
+.scenario-journal td small {
+  display: block;
+  min-width: 140px;
+}
+.scenario-journal code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 800px) {
+  .scenario-grid,
+  .scenario-fields {
+    grid-template-columns: 1fr;
+  }
+  .scenario-workspace .section-heading {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+}
+
+.scenario-workspace .panel {
+  padding: 24px;
+}
+.scenario-workspace .section-heading {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.scenario-form > h2 {
+  margin: 0;
+}
+.scenario-list button {
+  padding: 12px;
+  border: 1px solid #dce5df;
+  border-radius: 12px;
+  background: #f6f8f5;
+  color: inherit;
+  min-height: 44px;
+}
+.scenario-workspace .notice {
+  padding: 14px 18px;
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: 12px;
+  background: #e8eee7;
+}
+.scenario-workspace .notice.danger {
+  background: #fff1ef;
+}
+.scenario-form legend {
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+@media (max-width: 600px) {
+  .scenario-workspace .panel {
+    padding: 18px;
+  }
+  .scenario-workspace h1 {
+    font-size: 30px;
+  }
+}
+
+.scenario-workspace button {
+  font: inherit;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid #dce5df;
+  border-radius: 12px;
+  background: #eef3ed;
+  color: inherit;
+  cursor: pointer;
+}
+.scenario-workspace button[type='submit'] {
+  background: #285c3c;
+  color: white;
+  border-color: #285c3c;
+  font-weight: 700;
+}
+.scenario-workspace :is(input, textarea, select, button):focus-visible {
+  outline: 2px solid #25754a;
+  outline-offset: 3px;
 }

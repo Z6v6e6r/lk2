@@ -207,7 +207,7 @@ export function normalizeVivaUpcomingBookingPayload(
           title: (exercise.type.name || exercise.direction.name).slice(0, 160),
           startsAt: exercise.timeFrom,
           ...(exercise.timeTo ? { endsAt: exercise.timeTo } : {}),
-          venue: venue(exercise) || 'ПаделХАБ',
+          venue: venue(exercise) || 'ПадлхАБ',
           status: bookingStatus(detail),
         },
       ];

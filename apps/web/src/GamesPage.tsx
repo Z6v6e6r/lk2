@@ -16,6 +16,36 @@ import {
 } from './game-chat-navigation.js';
 import { profileUserIdForParticipant } from './game-participant-profile.js';
 import { waitForGameRevision } from './game-revision-readback.js';
+import {
+  GameJoinAttemptError,
+  beginGameJoinAttempt,
+  browserGameJoinAttemptLockManager,
+  browserGameJoinAttemptStorage,
+  discardGameJoinAttempt,
+  loadGameJoinAttempt,
+  resolveGameJoinAttempt,
+  withGameJoinDispatchGuard,
+  type GameJoinAttempt,
+  type GameJoinAttemptLockManager,
+  type GameJoinAttemptPrincipal,
+} from './game-join-attempt.js';
+import {
+  checkGameJoinConditions,
+  classifyGameJoinErrorCode,
+  classifyGameJoinOperation,
+  ensureFreshGameJoinConsent,
+  gameJoinConditionsUnavailableMessage,
+  gameJoinFlowBlocksPurchase,
+  gameJoinRecoveryState,
+  gameJoinRequiresPaidFlow,
+  gameJoinSubscriptionRequiredMessage,
+  readGameJoinCommandResult,
+  readGameJoinConditions,
+  readUncertainGameJoinError,
+  reduceGameJoinFlow,
+  type GameJoinCommandResultView,
+  type GameJoinFlowState,
+} from './game-join-flow.js';
 import type {
   AuthGateway,
   EventCatalogItem,
@@ -229,7 +259,19 @@ function errorMessage(error: unknown): string {
       case 'GAME_NOT_CANCELLABLE':
         return 'Игру уже нельзя отменить. Обновили её состояние.';
       case 'GAME_PAYMENT_REQUIRED':
-        return 'Для этой игры требуется отдельный платёжный сценарий.';
+        return 'Платёжный контур этой игры пока недоступен.';
+      case 'GAME_PRICE_CONFIRMATION_REQUIRED':
+        return 'Цена изменилась или ещё не подтверждена. Подтвердите актуальную цену.';
+      case 'GAME_SUBSCRIPTION_SELECTION_REQUIRED':
+        return 'Выберите подписку, по которой хотите записаться.';
+      case 'GAME_SERVICE_BLOCKED':
+        return 'Эта услуга недоступна по правилам клуба. Оплата не снимает этот запрет.';
+      case 'GAME_RECONCILIATION_REQUIRED':
+        return 'Предыдущая попытка ещё не завершена. Проверьте статус операции.';
+      case 'GAME_COMMERCIAL_ATTEMPT_CONFLICT':
+        return 'Ключ операции уже использован для другой записи. Проверьте статус исходной операции.';
+      case 'GAME_OWNER_UNAVAILABLE':
+        return 'Статус операции не подтверждён. Сохраняем попытку и проверяем статус.';
       case 'LEVEL_NOT_ALLOWED':
         return 'Эта игра рассчитана на другой уровень.';
       case 'PLAYER_LEVEL_UNKNOWN':
@@ -263,6 +305,12 @@ export interface GamesPageProps {
   readonly gameId?: string;
   readonly eventId?: string;
   readonly chatNavigationScope?: GameChatNavigationScope;
+  /**
+   * The authenticated principal used to scope durable paid-JOIN custody. Supplied by the shell from
+   * the verified session; the chat-navigation scope (tenant key + user id) is only a fallback for
+   * callers that do not pass it.
+   */
+  readonly joinPrincipal?: GameJoinAttemptPrincipal;
 }
 
 export function GamesPage({
@@ -270,6 +318,7 @@ export function GamesPage({
   gameId,
   eventId,
   chatNavigationScope,
+  joinPrincipal: providedJoinPrincipal,
 }: GamesPageProps): React.JSX.Element {
   const navigationKey = `phub.games-list.v1:${chatNavigationScope?.tenantKey ?? 'local'}:${chatNavigationScope?.userId ?? 'local'}`;
   const [savedNavigation] = useState(() => readGamesListNavigation(navigationKey));
@@ -339,6 +388,42 @@ export function GamesPage({
     [gateway],
   );
   const [reloadToken, setReloadToken] = useState(0);
+
+  // Paid JOIN custody: a durable attempt keeps the idempotency key + consent after a reload or a lost
+  // response. The paid capability is optional so a gateway without it keeps the untouched free JOIN.
+  const joinTenantId = providedJoinPrincipal?.tenantId ?? chatNavigationScope?.tenantKey;
+  const joinUserId = providedJoinPrincipal?.userId ?? chatNavigationScope?.userId;
+  const joinPrincipal = useMemo<GameJoinAttemptPrincipal | null>(
+    () => (joinTenantId && joinUserId ? { tenantId: joinTenantId, userId: joinUserId } : null),
+    [joinTenantId, joinUserId],
+  );
+  const joinStorage = useMemo(() => browserGameJoinAttemptStorage(), []);
+  const joinLockManager = useMemo<GameJoinAttemptLockManager | undefined>(
+    () => browserGameJoinAttemptLockManager(),
+    [],
+  );
+  const canPaidJoin = Boolean(
+    typeof gateway.joinPaidGame === 'function' &&
+    typeof gateway.getPaidJoinOperation === 'function' &&
+    typeof gateway.getGameJoinConditions === 'function' &&
+    joinStorage &&
+    joinPrincipal,
+  );
+  const [joinFlow, setJoinFlow] = useState<{
+    readonly gameId: string;
+    readonly flow: GameJoinFlowState;
+  } | null>(null);
+  const [joinBusy, setJoinBusy] = useState(false);
+  const joinInFlight = useRef(false);
+  const joinConditionsInFlight = useRef(false);
+  const readbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readbackGeneration = useRef(0);
+  const detailJoinFlow = detail && joinFlow?.gameId === detail.id ? joinFlow.flow : undefined;
+  // While custody/consent owns the action the subscription choice must not look like a fresh purchase.
+  const joinCustodyActive =
+    detailJoinFlow !== undefined &&
+    detailJoinFlow.kind !== 'NEEDS_SUBSCRIPTION' &&
+    gameJoinFlowBlocksPurchase(detailJoinFlow);
   const [levelRecovery, setLevelRecovery] = useState<{
     readonly action: 'JOIN' | 'JOIN_WAITLIST';
     readonly game: GameCardModel;
@@ -698,6 +783,59 @@ export function GamesPage({
     };
   }, [eventId, gameId, gateway, reloadToken, tab]);
 
+  // Recovery on mount/navigation: custody from a previous tab, reload or lost response is read back
+  // by its original key. It never starts a new purchase.
+  useEffect(() => {
+    if (!detail || !canPaidJoin) return;
+    void recoverJoinAttemptOnLoad(detail.id);
+    return () => clearJoinReadback();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- recovery must run once per loaded game
+  }, [detail?.id, canPaidJoin]);
+
+  async function recoverJoinAttemptOnLoad(gameIdValue: string): Promise<void> {
+    if (!joinPrincipal || !joinStorage) return;
+    let attempt: GameJoinAttempt | null;
+    try {
+      attempt = loadGameJoinAttempt(joinPrincipal, joinStorage, gameIdValue);
+    } catch {
+      setJoinFlowFor(gameIdValue, {
+        kind: 'FAILED',
+        code: 'ATTEMPT_MALFORMED',
+        message: 'Сохранённая попытка записи повреждена. Проверьте статус перед новой записью.',
+      });
+      return;
+    }
+    if (!attempt) {
+      setJoinFlow((current) => (current && current.gameId !== gameIdValue ? null : current));
+      return;
+    }
+    if (attempt.state === 'SUCCEEDED') {
+      discardJoinCustody(attempt);
+      setJoinFlow((current) => (current && current.gameId === gameIdValue ? null : current));
+      return;
+    }
+    if (attempt.state === 'PENDING' && attempt.dispatchStartedAt === undefined) {
+      // The POST was never started, so no server side effect can exist for this frozen request.
+      discardJoinCustody(attempt);
+      setJoinFlow((current) => (current && current.gameId === gameIdValue ? null : current));
+      return;
+    }
+    setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
+    await pollJoinOperation(gameIdValue, attempt, { remainingAttempts: 3, delayMs: 0 });
+  }
+
+  useEffect(
+    () => () => {
+      // A pending readback timer must not update an unmounted page.
+      if (readbackTimer.current !== null) {
+        clearTimeout(readbackTimer.current);
+        readbackTimer.current = null;
+      }
+      readbackGeneration.current += 1;
+    },
+    [],
+  );
+
   async function loadMore(): Promise<void> {
     if (tab === 'DISCOVER') return loadMoreCatalog();
     if (!nextCursor || loadingMore || gameId) return;
@@ -891,6 +1029,445 @@ export function GamesPage({
     }
   }
 
+  function clearJoinReadback(): void {
+    readbackGeneration.current += 1;
+    if (readbackTimer.current !== null) {
+      clearTimeout(readbackTimer.current);
+      readbackTimer.current = null;
+    }
+  }
+
+  function joinFlowFor(gameIdValue: string): GameJoinFlowState | undefined {
+    return joinFlow && joinFlow.gameId === gameIdValue ? joinFlow.flow : undefined;
+  }
+
+  function setJoinFlowFor(gameIdValue: string, flow: GameJoinFlowState): void {
+    setJoinFlow({ gameId: gameIdValue, flow });
+  }
+
+  function discardJoinCustody(attempt: GameJoinAttempt | null): void {
+    if (!attempt || !joinPrincipal || !joinStorage) return;
+    try {
+      discardGameJoinAttempt(joinPrincipal, attempt, joinStorage, { allowUnresolved: true });
+    } catch {
+      // The durable entry stays; a later mount re-reads the same server operation instead of paying again.
+    }
+  }
+
+  function markJoinUnresolved(attempt: GameJoinAttempt | null, operationId?: string): void {
+    if (!attempt || !joinPrincipal || !joinStorage) return;
+    try {
+      resolveGameJoinAttempt(
+        joinPrincipal,
+        attempt,
+        operationId === undefined ? { state: 'UNKNOWN' } : { state: 'UNKNOWN', operationId },
+        joinStorage,
+      );
+    } catch {
+      // Keeping the original entry is safe: it already carries the frozen idempotency key and consent.
+    }
+  }
+
+  function completeJoinSuccess(
+    gameIdValue: string,
+    attempt: GameJoinAttempt | null,
+    operationId: string | null,
+  ): void {
+    if (attempt && joinPrincipal && joinStorage) {
+      try {
+        const resolved = resolveGameJoinAttempt(
+          joinPrincipal,
+          attempt,
+          operationId === null ? { state: 'SUCCEEDED' } : { state: 'SUCCEEDED', operationId },
+          joinStorage,
+        );
+        discardGameJoinAttempt(joinPrincipal, resolved, joinStorage);
+      } catch {
+        // The success is trusted from the server; a stale entry only causes a readback on mount.
+      }
+    }
+    clearJoinReadback();
+    setJoinFlow(null);
+    setJoinBusy(false);
+    setNotice('Вы в игре. Состав и доступные действия обновлены.');
+    setReloadToken((current) => current + 1);
+  }
+
+  function applyJoinOperationResult(
+    gameIdValue: string,
+    attempt: GameJoinAttempt | null,
+    result: GameJoinCommandResultView,
+  ): void {
+    const classification = classifyGameJoinOperation(result, { paid: true });
+    if (classification.trustedSuccess) {
+      completeJoinSuccess(gameIdValue, attempt, result.operation.id);
+      return;
+    }
+    if (classification.custody === 'KEEP') {
+      markJoinUnresolved(attempt, result.operation.id);
+      setJoinFlowFor(gameIdValue, classification.state);
+      if (classification.state.kind === 'WAIT_FOR_RECONCILIATION' && attempt) {
+        void pollJoinOperation(gameIdValue, attempt, {
+          remainingAttempts: 4,
+          delayMs: classification.state.retryAfterSeconds * 1000,
+        });
+      }
+      return;
+    }
+    discardJoinCustody(attempt);
+    setJoinFlowFor(gameIdValue, classification.state);
+    setReloadToken((current) => current + 1);
+  }
+
+  /**
+   * Readback by the original idempotency key. This is the only action allowed after an unknown
+   * outcome: it reads the original attempt and explicitly reconciles its receipt without a new purchase.
+   */
+  async function pollJoinOperation(
+    gameIdValue: string,
+    attempt: GameJoinAttempt,
+    options: { readonly remainingAttempts: number; readonly delayMs: number },
+  ): Promise<void> {
+    if (!gateway.getPaidJoinOperation || !joinPrincipal || !joinStorage) return;
+    const generation = readbackGeneration.current + 1;
+    readbackGeneration.current = generation;
+    if (options.delayMs > 0) {
+      const delayCompleted = await new Promise<boolean>((resolve) => {
+        readbackTimer.current = setTimeout(() => {
+          readbackTimer.current = null;
+          resolve(generation === readbackGeneration.current);
+        }, options.delayMs);
+      });
+      if (!delayCompleted) return;
+    }
+    if (generation !== readbackGeneration.current) return;
+    setJoinBusy(true);
+    try {
+      let raw = await gateway.getPaidJoinOperation(gameIdValue, attempt.idempotencyKey);
+      if (generation !== readbackGeneration.current) return;
+      if (
+        gateway.reconcilePaidJoinOperation &&
+        ['UNKNOWN', 'PROCESSING'].includes(raw.operation.status)
+      ) {
+        raw = await gateway.reconcilePaidJoinOperation(raw.operation.id);
+      }
+      if (generation !== readbackGeneration.current) return;
+      const result = readGameJoinCommandResult(raw);
+      if (!result) {
+        setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
+        return;
+      }
+      const classification = classifyGameJoinOperation(result, { paid: true });
+      if (classification.trustedSuccess) {
+        completeJoinSuccess(gameIdValue, attempt, result.operation.id);
+        return;
+      }
+      markJoinUnresolved(attempt, result.operation.id);
+      setJoinFlowFor(gameIdValue, classification.state);
+      if (classification.state.kind === 'WAIT_FOR_RECONCILIATION') {
+        if (options.remainingAttempts > 1) {
+          void pollJoinOperation(gameIdValue, attempt, {
+            remainingAttempts: options.remainingAttempts - 1,
+            delayMs: classification.state.retryAfterSeconds * 1000,
+          });
+        }
+        return;
+      }
+      if (classification.custody === 'DISCARD') {
+        discardJoinCustody(attempt);
+        setReloadToken((current) => current + 1);
+      }
+    } catch (cause) {
+      if (generation !== readbackGeneration.current) return;
+      if (errorCode(cause) === 'GAME_OPERATION_NOT_FOUND') {
+        // Only a proven "nothing durable exists under this key" allows a fresh explicit attempt.
+        discardJoinCustody(attempt);
+        const plan = classifyGameJoinErrorCode('GAME_OPERATION_NOT_FOUND', { paid: true });
+        setJoinFlowFor(gameIdValue, plan.state);
+        setReloadToken((current) => current + 1);
+        return;
+      }
+      setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
+      if (options.remainingAttempts > 1) {
+        void pollJoinOperation(gameIdValue, attempt, {
+          remainingAttempts: options.remainingAttempts - 1,
+          delayMs: 5000,
+        });
+      }
+    } finally {
+      if (generation === readbackGeneration.current) setJoinBusy(false);
+    }
+  }
+
+  async function checkJoinStatus(): Promise<void> {
+    const game = detail;
+    if (
+      !game ||
+      !joinPrincipal ||
+      !joinStorage ||
+      joinInFlight.current ||
+      joinConditionsInFlight.current
+    ) {
+      return;
+    }
+    let attempt: GameJoinAttempt | null;
+    try {
+      attempt = loadGameJoinAttempt(joinPrincipal, joinStorage, game.id);
+    } catch {
+      setJoinFlowFor(game.id, {
+        kind: 'FAILED',
+        code: 'ATTEMPT_MALFORMED',
+        message: 'Сохранённая попытка записи повреждена. Проверьте статус перед новой записью.',
+      });
+      return;
+    }
+    if (!attempt) {
+      setJoinFlow((current) => (current && current.gameId === game.id ? null : current));
+      setError('Сохранённая попытка записи не найдена. Можно записаться заново.');
+      return;
+    }
+    if (attempt.state === 'SUCCEEDED') {
+      completeJoinSuccess(game.id, attempt, attempt.operationId ?? null);
+      return;
+    }
+    setJoinFlowFor(game.id, gameJoinRecoveryState());
+    await pollJoinOperation(game.id, attempt, { remainingAttempts: 2, delayMs: 0 });
+  }
+
+  async function startPaidJoin(
+    game: { readonly id: string; readonly revision: number },
+    options: { readonly allowDuringDispatch?: boolean } = {},
+  ): Promise<'handled' | 'legacy'> {
+    if (joinConditionsInFlight.current || (joinInFlight.current && !options.allowDuringDispatch)) {
+      return 'handled';
+    }
+    if (!options.allowDuringDispatch) {
+      // User-triggered re-entry while the previous action owns the flow must not start another request.
+      const blocking = joinFlowFor(game.id);
+      if (blocking && (blocking.kind === 'NEEDS_CONSENT' || blocking.kind === 'DISPATCHING')) {
+        return 'handled';
+      }
+      if (blocking && blocking.kind === 'WAIT_FOR_RECONCILIATION') {
+        void checkJoinStatus();
+        return 'handled';
+      }
+    }
+    if (!joinPrincipal || !joinStorage || !gateway.getGameJoinConditions) return 'legacy';
+    if (!selectedSubscriptionId) {
+      setJoinFlowFor(game.id, {
+        kind: 'NEEDS_SUBSCRIPTION',
+        message: gameJoinSubscriptionRequiredMessage(),
+      });
+      return 'handled';
+    }
+    const subscriptionInstanceId = selectedSubscriptionId;
+    setError(null);
+    setNotice(null);
+    setJoinFlowFor(game.id, { kind: 'CHECKING_CONDITIONS', reason: 'USER_REQUEST' });
+    joinConditionsInFlight.current = true;
+    setJoinBusy(true);
+    try {
+      const raw = await gateway.getGameJoinConditions(game.id, {
+        expectedRevision: game.revision,
+        subscriptionInstanceId,
+      });
+      const conditions = readGameJoinConditions(raw);
+      if (!conditions) {
+        setJoinFlowFor(game.id, {
+          kind: 'FAILED',
+          code: 'GAME_JOIN_CONDITIONS_UNAVAILABLE',
+          message: gameJoinConditionsUnavailableMessage(),
+        });
+        return 'handled';
+      }
+      const check = checkGameJoinConditions({
+        conditions,
+        gameId: game.id,
+        revision: game.revision,
+        subscriptionInstanceId,
+        nowMs: Date.now(),
+      });
+      if (check.kind === 'CONSENT' && check.consent && check.subscriptionInstanceId) {
+        setJoinFlowFor(
+          game.id,
+          reduceGameJoinFlow(
+            { kind: 'IDLE' },
+            {
+              type: 'CONDITIONS_CONSENT_REQUIRED',
+              consent: check.consent,
+              subscriptionInstanceId: check.subscriptionInstanceId,
+            },
+          ),
+        );
+        return 'handled';
+      }
+      if (check.kind === 'FREE') {
+        // The server does not ask for consent, so the untouched free JOIN path stays in force.
+        setJoinFlow((current) => (current && current.gameId === game.id ? null : current));
+        return 'legacy';
+      }
+      setJoinFlowFor(game.id, {
+        kind: 'FAILED',
+        code: 'GAME_JOIN_CONDITIONS_UNAVAILABLE',
+        message: check.message || gameJoinConditionsUnavailableMessage(),
+      });
+      return 'handled';
+    } catch (cause) {
+      setJoinFlowFor(game.id, {
+        kind: 'FAILED',
+        code: errorCode(cause) ?? 'GAME_JOIN_CONDITIONS_UNAVAILABLE',
+        message: gameJoinConditionsUnavailableMessage(),
+      });
+      return 'handled';
+    } finally {
+      joinConditionsInFlight.current = false;
+      setJoinBusy(false);
+    }
+  }
+
+  async function reloadConsentForChangedPrice(game: {
+    readonly id: string;
+    readonly revision: number;
+  }): Promise<void> {
+    // The previous attempt was rejected without a side effect; the new server price must be shown and
+    // explicitly confirmed again. Nothing is auto-accepted.
+    await startPaidJoin(game, { allowDuringDispatch: true });
+  }
+
+  async function confirmJoinConsent(consent: {
+    readonly amountMinor: number;
+    readonly currency: 'RUB';
+  }): Promise<void> {
+    const game = detail;
+    const flow = game ? joinFlowFor(game.id) : undefined;
+    if (!game || !flow || flow.kind !== 'NEEDS_CONSENT') return;
+    if (!joinPrincipal || !joinStorage || !gateway.joinPaidGame) return;
+    if (!ensureFreshGameJoinConsent(flow.consent, consent)) return;
+    const dispatching = reduceGameJoinFlow(flow, { type: 'CONSENT_GIVEN', consent });
+    if (dispatching.kind !== 'DISPATCHING') {
+      setJoinFlowFor(game.id, dispatching);
+      return;
+    }
+    if (joinInFlight.current) return;
+    setJoinFlowFor(game.id, dispatching);
+    joinInFlight.current = true;
+    setJoinBusy(true);
+    setError(null);
+    setNotice(null);
+    let attempt: GameJoinAttempt | null = null;
+    try {
+      const begun = await beginGameJoinAttempt(
+        joinPrincipal,
+        {
+          gameId: game.id,
+          expectedRevision: game.revision,
+          subscriptionInstanceId: flow.subscriptionInstanceId,
+          priceConsent: { amountMinor: flow.consent.amountMinor, currency: 'RUB' },
+          ...(game.id === gameId && invitationId ? { invitationId } : {}),
+        },
+        joinStorage,
+      );
+      attempt = begun.attempt;
+      if (!begun.created) {
+        // Existing custody for the same frozen request: read the original operation, never re-POST.
+        setJoinFlowFor(game.id, gameJoinRecoveryState());
+        void pollJoinOperation(game.id, begun.attempt, { remainingAttempts: 3, delayMs: 0 });
+        return;
+      }
+      const dispatchOutcome = await withGameJoinDispatchGuard(
+        joinPrincipal,
+        game.id,
+        joinStorage,
+        joinLockManager,
+        async (dispatchAttempt) => {
+          if (!gateway.joinPaidGame) throw new Error('PAID_JOIN_UNAVAILABLE');
+          return gateway.joinPaidGame(
+            game.id,
+            {
+              expectedRevision: game.revision,
+              subscriptionInstanceId: dispatchAttempt.subscriptionInstanceId,
+              priceConsent: {
+                amountMinor: dispatchAttempt.priceConsent.amountMinor,
+                currency: 'RUB',
+              },
+              ...(game.id === gameId && invitationId ? { invitationId } : {}),
+            },
+            dispatchAttempt.idempotencyKey,
+          );
+        },
+      );
+      if (!dispatchOutcome.dispatched) {
+        setJoinFlowFor(game.id, gameJoinRecoveryState());
+        if (dispatchOutcome.attempt) {
+          void pollJoinOperation(game.id, dispatchOutcome.attempt, {
+            remainingAttempts: 3,
+            delayMs: 0,
+          });
+        }
+        return;
+      }
+      const result = readGameJoinCommandResult(dispatchOutcome.value);
+      if (!result) {
+        markJoinUnresolved(attempt);
+        setJoinFlowFor(game.id, gameJoinRecoveryState());
+        if (attempt) {
+          void pollJoinOperation(game.id, attempt, { remainingAttempts: 3, delayMs: 1000 });
+        }
+        return;
+      }
+      applyJoinOperationResult(game.id, attempt, result);
+    } catch (cause) {
+      if (cause instanceof GameJoinAttemptError) {
+        // No POST left the client (the attempt could not even be stored/guarded): nothing to recover.
+        setJoinFlowFor(game.id, {
+          kind: 'FAILED',
+          code: cause.code,
+          message:
+            'Не удалось безопасно сохранить попытку записи. Операция не отправлялась — повторите.',
+        });
+        return;
+      }
+      if (readUncertainGameJoinError(cause)) {
+        // Lost response / owner 5xx: the POST must not be repeated; recover by the same key.
+        markJoinUnresolved(attempt);
+        setJoinFlowFor(game.id, gameJoinRecoveryState());
+        if (attempt) {
+          void pollJoinOperation(game.id, attempt, { remainingAttempts: 4, delayMs: 1000 });
+        }
+        return;
+      }
+      const plan = classifyGameJoinErrorCode(errorCode(cause), { paid: true });
+      if (attempt) {
+        if (plan.custody === 'KEEP') markJoinUnresolved(attempt);
+        else discardJoinCustody(attempt);
+      }
+      if (plan.reloadConditions) {
+        setJoinFlowFor(game.id, plan.state);
+        await reloadConsentForChangedPrice(game);
+        return;
+      }
+      setJoinFlowFor(game.id, plan.state);
+      if (plan.state.kind === 'FAILED') setReloadToken((current) => current + 1);
+    } finally {
+      joinInFlight.current = false;
+      setJoinBusy(false);
+    }
+  }
+
+  function cancelJoinConsent(): void {
+    setJoinFlow(null);
+    setError(null);
+  }
+
+  function retryJoinAttempt(): void {
+    const game = detail;
+    if (!game) return;
+    setJoinFlow(null);
+    setError(null);
+    setNotice(null);
+    void handleAction('JOIN', game);
+  }
+
   async function handleAction(action: GameCardAction, game: GameCardModel): Promise<void> {
     if (
       ['SUBMIT_RESULT', 'CONFIRM_RESULT', 'DISPUTE_RESULT', 'VIEW_RESULT', 'OPEN_DISPUTE'].includes(
@@ -944,6 +1521,15 @@ export function GamesPage({
     )
       return;
     if (action === 'CANCEL' && !window.confirm('Отменить игру для всех участников?')) return;
+    if (
+      action === 'JOIN' &&
+      canPaidJoin &&
+      detail?.id === game.id &&
+      gameJoinRequiresPaidFlow(game)
+    ) {
+      const decision = await startPaidJoin(game);
+      if (decision === 'handled') return;
+    }
     setBusyGameId(game.id);
     setError(null);
     setNotice(null);
@@ -1418,18 +2004,31 @@ export function GamesPage({
         ) : null}
         {detail ? (
           <>
-            {detail.id === gameId && detailTab === 'GAME' && joinConditionsClient ? (
+            {detail.id === gameId &&
+            detailTab === 'GAME' &&
+            joinConditionsClient &&
+            !joinCustodyActive ? (
               <GameJoinSubscriptionPicker
                 key={`subscription:${joinSelectionScope}`}
                 gateway={gateway}
                 {...(selectedSubscriptionId ? { value: selectedSubscriptionId } : {})}
-                onChange={(id) =>
+                onChange={(id) => {
                   setJoinSelection({
                     scope: joinSelectionScope,
                     gateway,
                     ...(id ? { id } : {}),
-                  })
-                }
+                  });
+                  // A new explicit selection re-enables the JOIN button instead of leaving the
+                  // "choose a subscription" state blocking the action forever.
+                  if (
+                    detail &&
+                    joinFlow?.gameId === detail.id &&
+                    joinFlow.flow.kind === 'NEEDS_SUBSCRIPTION' &&
+                    id
+                  ) {
+                    setJoinFlow(null);
+                  }
+                }}
               />
             ) : null}
             <GameDetailView
@@ -1438,9 +2037,16 @@ export function GamesPage({
               {...(detail.id === gameId && selectedSubscriptionId
                 ? { subscriptionInstanceId: selectedSubscriptionId }
                 : {})}
+              {...(detailJoinFlow ? { joinFlow: detailJoinFlow } : {})}
+              joinFlowBusy={joinBusy}
+              onJoinConsent={(consent) => void confirmJoinConsent(consent)}
+              onJoinConsentCancel={cancelJoinConsent}
+              onJoinStatusCheck={() => void checkJoinStatus()}
+              onJoinRetry={retryJoinAttempt}
               activeTab={detailTab}
               busy={busyGameId === detail.id}
               game={detail}
+              {...(chatNavigationScope?.userId ? { viewerUserId: chatNavigationScope.userId } : {})}
               onAction={(action) => void handleAction(action, detail)}
               onChatOpen={() => void openGameChat(detail)}
               onChatNavigate={(conversationId) => rememberCardGameChat(detail, conversationId)}

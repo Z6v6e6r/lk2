@@ -26,6 +26,39 @@ function result(rows: readonly unknown[] = [], rowCount = rows.length): QueryRes
 }
 
 describe('Web Push delivery state machine', () => {
+  it.each([undefined, false, true])(
+    'claims only due work with the scenario flag %s',
+    async (scenarioPolicyEnabled) => {
+      const queries: string[] = [];
+      const query = vi.fn((text: string) => {
+        queries.push(text);
+        return Promise.resolve(result());
+      });
+      const pool = {
+        connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }),
+      } as unknown as Pool;
+      await runWebPushDeliveryBatch({
+        pool,
+        logger: { info: vi.fn() } as unknown as Logger,
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        appId: 'padlhub-web',
+        environment: 'SANDBOX',
+        cipher: {} as NotificationEndpointCipher,
+        adapter: {} as NotificationPushDeliveryPort,
+        maxAttempts: 5,
+        retryBaseMs: 5000,
+        ...(scenarioPolicyEnabled === undefined ? {} : { scenarioPolicyEnabled }),
+      });
+      const claim = queries.find((sql) => sql.includes('for update of d skip locked'));
+      if (scenarioPolicyEnabled) {
+        expect(claim).toContain('scenario_run.intent_id=d.intent_id');
+        expect(claim).toContain(
+          'coalesce(d.scenario_v2_available_at,d.scenario_available_at,d.next_attempt_at)',
+        );
+        expect(claim).toContain("d.next_attempt_at='infinity'::timestamptz");
+      } else expect(claim).not.toContain('scenario_available_at');
+    },
+  );
   it('keeps the database lease longer than the maximum provider timeout', () => {
     expect(WEB_PUSH_DELIVERY_LEASE_SECONDS).toBeGreaterThan(30);
   });

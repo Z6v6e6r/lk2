@@ -4,6 +4,7 @@ import Foundation
 public enum CabinetResource: String, Sendable {
   case home, homeBase, profile, preferences, privacy, bookings, history, recommendations
   case locations, location, game, publicGames, communities
+  case pushConfig, notifications, notificationPreferences
 
   var isPublic: Bool { self == .publicGames }
 }
@@ -23,6 +24,11 @@ public struct CabinetRead: Sendable {
     let suffix: String
     var allowed: Set<String> = []
     switch resource {
+    case .pushConfig: suffix = "/notification-endpoints/ios/config"
+    case .notificationPreferences: suffix = "/notifications/preferences"
+    case .notifications:
+      suffix = "/notifications"
+      allowed = ["limit", "cursor", "unreadOnly"]
     case .home: suffix = "/home"
     case .homeBase: suffix = "/home/base"
     case .profile: suffix = "/profile"
@@ -54,6 +60,8 @@ public struct CabinetRead: Sendable {
         value.rangeOfCharacter(from: .controlCharacters) == nil
       else { throw SessionFailure.request }
       switch key {
+      case "unreadOnly":
+        guard ["true", "false"].contains(value) else { throw SessionFailure.request }
       case "limit":
         guard value.range(of: "^[1-9][0-9]?$", options: .regularExpression) != nil,
           let limit = Int(value), limit <= (resource == .recommendations ? 20 : 50)

@@ -8,6 +8,8 @@ import {
 import type { Logger } from 'pino';
 import type { Pool, QueryResultRow } from 'pg';
 
+import { checkScenarioPushDelivery, scenarioDeliveryDueSql } from './notification-scenarios.js';
+
 import {
   deferNotificationDeliveryWithoutAttempt,
   finalizeNotificationDelivery,
@@ -32,6 +34,7 @@ interface DeliveryRow extends QueryResultRow {
   readonly category: string;
   readonly deep_link: string | null;
   readonly attempt_count: number;
+  readonly scenario_delivery?: boolean;
 }
 
 interface ClaimedDelivery {
@@ -50,6 +53,7 @@ interface ClaimedDelivery {
   readonly deepLink?: string;
   readonly attemptNo: number;
   readonly startedAt: string;
+  readonly scenarioDelivery?: boolean;
 }
 
 // Provider calls time out at no more than 30 seconds; the extra margin keeps finalization fenced.
@@ -161,10 +165,12 @@ async function claimBatch(options: {
   readonly appId: string;
   readonly environment: 'SANDBOX' | 'PRODUCTION';
   readonly batchSize: number;
+  readonly scenarioPolicyEnabled?: boolean;
 }): Promise<readonly ClaimedDelivery[]> {
   return withTenantTransaction(options.pool, options.tenantId, async (client) => {
     const result = await client.query<DeliveryRow>(
       `select d.id, d.intent_id, d.endpoint_id, d.attempt_count,
+              ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} as scenario_delivery,
               a.id as provider_account_id,
               e.status as endpoint_status, e.address_ciphertext, e.encryption_key_id,
               coalesce(inbox.id, i.id) as notification_id,
@@ -184,7 +190,7 @@ async function claimBatch(options: {
            on inbox.tenant_id = i.tenant_id and inbox.intent_id = i.id
         where d.tenant_id = $1
           and d.channel = 'PUSH'
-          and d.next_attempt_at <= now()
+          and ${scenarioDeliveryDueSql(options.scenarioPolicyEnabled)}
           and (d.state = 'PENDING' or (d.state = 'SENDING' and d.lease_expires_at <= now()))
           and a.channel = 'PUSH'
           and a.platform = 'WEB'
@@ -200,7 +206,7 @@ async function claimBatch(options: {
               from notifications.tenant_runtime_settings runtime
              where runtime.tenant_id = d.tenant_id and runtime.web_push_enabled = true
           )
-        order by d.next_attempt_at, d.created_at
+        order by ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at,d.next_attempt_at)' : 'd.next_attempt_at'}, d.created_at
         for update of d skip locked
         limit $4`,
       [options.tenantId, options.appId, options.environment, options.batchSize],
@@ -233,6 +239,7 @@ async function claimBatch(options: {
         ...(row.deep_link ? { deepLink: row.deep_link } : {}),
         attemptNo,
         startedAt: new Date().toISOString(),
+        ...(row.scenario_delivery ? { scenarioDelivery: true } : {}),
       });
     }
     return claimed;
@@ -249,6 +256,7 @@ export async function runWebPushDeliveryBatch(options: {
   readonly adapter: NotificationPushDeliveryPort;
   readonly maxAttempts: number;
   readonly retryBaseMs: number;
+  readonly scenarioPolicyEnabled?: boolean;
   readonly circuitOpenRetryMs?: number;
   readonly batchSize?: number;
 }): Promise<{
@@ -264,12 +272,30 @@ export async function runWebPushDeliveryBatch(options: {
     appId: options.appId,
     environment: options.environment,
     batchSize: options.batchSize ?? 20,
+    ...(options.scenarioPolicyEnabled !== undefined
+      ? { scenarioPolicyEnabled: options.scenarioPolicyEnabled }
+      : {}),
   });
   let sent = 0;
   let retried = 0;
   let dead = 0;
   let stale = 0;
   for (const job of jobs) {
+    if (options.scenarioPolicyEnabled !== undefined) {
+      const decision = await checkScenarioPushDelivery({
+        pool: options.pool,
+        tenantId: job.tenantId,
+        deliveryId: job.deliveryId,
+        attemptNo: job.attemptNo,
+        enabled: options.scenarioPolicyEnabled,
+      });
+      if (decision !== 'SEND') {
+        if (decision === 'DEFERRED') retried++;
+        else if (decision === 'STALE') stale++;
+        else dead++;
+        continue;
+      }
+    }
     let result: PushDeliveryResult;
     if (job.endpointStatus !== 'ACTIVE') {
       result = {

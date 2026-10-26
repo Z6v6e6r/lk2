@@ -23,6 +23,7 @@ import {
   readCanonicalTimewebRunEvidence,
   renderTimewebBetaReleaseEnvironment,
   runTimewebInitialBetaComposeStage,
+  timewebFcmCredentialSource,
   verifyCanonicalGitHubRunAuthority,
   writeTimewebBetaReleaseEnvironment,
 } from './render-timeweb-beta-release-env.js';
@@ -636,6 +637,9 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
       'ambient_compose_override',
     );
     expect(() => assertNoAmbientComposeOverrides({ PATH: '/usr/bin' })).not.toThrow();
+    expect(() =>
+      assertNoAmbientComposeOverrides({ TIMEWEB_FCM_CREDENTIAL_SOURCE: '/etc/host-secret' }),
+    ).toThrow('ambient_compose_override');
   });
 
   it('rejects ambient Docker daemon/config authority before any controller execution', () => {
@@ -727,6 +731,126 @@ describe('Timeweb beta release.env renderer', { timeout: 15_000 }, () => {
         ambientEnvironment: {},
       }),
     ).toThrow('runtime_secret_file_security');
+  });
+
+  function enableFixtureFcm(root: string) {
+    for (const service of ['api', 'worker']) {
+      const path = join(root, `${service}.env`);
+      writeFileSync(
+        path,
+        readFileSync(path, 'utf8').replace('FCM_ENABLED=false', 'FCM_ENABLED=true'),
+      );
+    }
+    const credentialRoot = join(root, '..', 'fcm');
+    mkdirSync(credentialRoot, { mode: 0o700 });
+    return credentialRoot;
+  }
+
+  it('does not require or read an FCM credential while FCM is disabled', () => {
+    const value = fixture();
+    expect(timewebFcmCredentialSource(value.secrets.targetDir, uid)).toBe('/dev/null');
+    const credentialRoot = join(value.secrets.root, 'broken-fcm');
+    symlinkSync('/unavailable-synthetic-directory', credentialRoot);
+    expect(timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot)).toBe(
+      '/dev/null',
+    );
+  });
+
+  it('keeps legacy runtimes with no FCM keys usable without a credential', () => {
+    const value = fixture();
+    for (const service of ['api', 'worker']) {
+      const path = join(value.secrets.targetDir, `${service}.env`);
+      writeFileSync(
+        path,
+        readFileSync(path, 'utf8')
+          .split('\n')
+          .filter((line) => !line.startsWith('FCM_'))
+          .join('\n'),
+      );
+    }
+    expect(timewebFcmCredentialSource(value.secrets.targetDir, uid)).toBe('/dev/null');
+  });
+
+  it('selects only the fixed private FCM file after runtime and metadata checks', () => {
+    const value = fixture();
+    const credentialRoot = enableFixtureFcm(value.secrets.targetDir);
+    const path = join(credentialRoot, 'fcm-service-account.json');
+    writeFileSync(path, 'synthetic-opaque-fixture', { mode: 0o600 });
+    expect(timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot)).toBe(
+      path,
+    );
+    expect(() =>
+      timewebFcmCredentialSource(value.secrets.targetDir, uid, uid + 1, credentialRoot),
+    ).toThrow('fcm_credential_file_security');
+    chmodSync(path, 0o640);
+    expect(() =>
+      timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot),
+    ).toThrow('fcm_credential_file_security');
+  });
+
+  it('fails closed for missing, symlinked and hardlinked FCM credentials before Compose', () => {
+    const value = fixture();
+    const credentialRoot = enableFixtureFcm(value.secrets.targetDir);
+    const path = join(credentialRoot, 'fcm-service-account.json');
+    expect(() =>
+      timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot),
+    ).toThrow('fcm_credential_file_security');
+    const sibling = join(value.secrets.targetDir, 'synthetic-file');
+    writeFileSync(sibling, 'synthetic', { mode: 0o600 });
+    symlinkSync(sibling, path);
+    expect(() =>
+      timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot),
+    ).toThrow('fcm_credential_file_security');
+    rmSync(path);
+    linkSync(sibling, path);
+    expect(() =>
+      timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot),
+    ).toThrow('fcm_credential_file_security');
+  });
+
+  it('rejects API/worker FCM gate drift before resolving any credential', () => {
+    const value = fixture();
+    const path = join(value.secrets.targetDir, 'worker.env');
+    writeFileSync(
+      path,
+      readFileSync(path, 'utf8').replace('FCM_ENABLED=false', 'FCM_ENABLED=true'),
+    );
+    expect(() => timewebFcmCredentialSource(value.secrets.targetDir, uid)).toThrow(
+      'fcm_runtime_binding',
+    );
+  });
+
+  it('rejects empty/oversized credentials at the same metadata limit as the Worker', () => {
+    const value = fixture();
+    const credentialRoot = enableFixtureFcm(value.secrets.targetDir);
+    const path = join(credentialRoot, 'fcm-service-account.json');
+    writeFileSync(path, '', { mode: 0o600 });
+    expect(() =>
+      timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot),
+    ).toThrow('fcm_credential_file_security');
+    writeFileSync(path, 's'.repeat(16 * 1024));
+    expect(timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot)).toBe(
+      path,
+    );
+    writeFileSync(path, 's'.repeat(16 * 1024 + 1));
+    expect(() =>
+      timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot),
+    ).toThrow('fcm_credential_file_security');
+  });
+
+  it('rejects credential directories with unsafe mode or a filesystem alias', () => {
+    const value = fixture();
+    const credentialRoot = enableFixtureFcm(value.secrets.targetDir);
+    chmodSync(credentialRoot, 0o755);
+    expect(() =>
+      timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, credentialRoot),
+    ).toThrow('fcm_credential_directory_security');
+    chmodSync(credentialRoot, 0o700);
+    const alias = join(value.secrets.root, 'fcm-alias');
+    symlinkSync(credentialRoot, alias);
+    expect(() => timewebFcmCredentialSource(value.secrets.targetDir, uid, uid, alias)).toThrow(
+      'fcm_credential_directory_security',
+    );
   });
 
   it('rejects unexpected worker/migrator activation and historical release paths by construction', () => {

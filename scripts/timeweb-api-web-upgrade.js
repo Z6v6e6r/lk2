@@ -1,3 +1,10 @@
+import {
+  fcmGateBinding,
+  fcmGateComposeOverride,
+  readFcmDeliveryGate,
+  validateFcmGateRuntime,
+} from './timeweb-notification-delivery-gate.js';
+import { isPreservedNotificationRollout } from './timeweb-notification-android-gates.js';
 // Explicit manual mode of the enrolled standard controller. Never execute candidate source.
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -20,7 +27,32 @@ import {
 import { dirname, basename } from 'node:path';
 import { validateCanonicalManifest } from './timeweb-release-manifest-contract.js';
 import { validateTimewebRuntimeSecretPaths } from './render-timeweb-beta-release-env.js';
+import { validateInstalledApiWorkerEvidence } from './timeweb-api-worker-contract.js';
 import { verifySourceCi } from './verify-source-ci.js';
+import { parseStrictJson } from './strict-json.js';
+import {
+  describeTimewebRuntimeSecretSet,
+  parseTimewebSecretEnvironment,
+  validateTimewebDormantJoinSecretDelta,
+  transitionPreparedTimewebRuntimeSecrets,
+} from './provision-timeweb-beta-runtime-secrets.js';
+import {
+  JOIN_PLAN,
+  JOIN_POST105_BACKUP_SCHEMA,
+  JOIN_RECEIPT,
+  JOIN_INSTALLED_KIND,
+  JOIN_RUNTIME_ANCHOR,
+  isJoinOperation,
+  validateJoinOperation,
+  validateJoinRuntimeTail,
+  validateJoinNotificationSnapshot,
+  validateJoinReceipt,
+  validateJoinRunningEnvironment,
+  buildJoinInstalledDescriptor,
+  validateJoinObservation,
+  validateJoinPost105BackupOperation,
+  validateJoinPost105BackupBundle,
+} from './timeweb-join-dormant-profile.js';
 import {
   validateTimewebMonitorReadback,
   validateTimewebAlertReadback,
@@ -114,12 +146,18 @@ export function validateControllerBridge(candidate, bridge, entries) {
 const environment = {
   PATH: '/usr/bin:/bin',
   HOME: '/root',
+  LANG: 'C',
   DOCKER_CONFIG: '/root/.docker',
   DOCKER_HOST: 'unix:///var/run/docker.sock',
   COMPOSE_PROFILES: '',
   GIT_CONFIG_NOSYSTEM: '1',
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_NO_REPLACE_OBJECTS: '1',
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_NO_LAZY_FETCH: '1',
+  GIT_NO_PROMISOR_FETCH: '1',
+  GIT_GRAFT_FILE: '/dev/null',
+  GIT_ALTERNATE_OBJECT_DIRECTORIES: '',
 };
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (code) => {
@@ -132,11 +170,13 @@ function exact(value, keys) {
     fail('invalid_keys');
 }
 export function validateApiWebOperation(value) {
+  if (isJoinOperation(value)) return validateJoinOperation(value);
   if (value?.schema === 'PHUB_TIMEWEB_API_WEB_OPERATION_V2')
     return validateDirectApiWebOperation(value);
   exact(value, [
     'schema',
     'target',
+    ...(value?.profile === undefined ? [] : ['profile']),
     'controllerSha',
     'candidateSha',
     'candidateTree',
@@ -151,6 +191,7 @@ export function validateApiWebOperation(value) {
   ]);
   if (
     value.schema !== 'PHUB_TIMEWEB_API_WEB_OPERATION_V1' ||
+    (value.profile !== undefined && value.profile !== 'beta' && value.profile !== 'production') ||
     value.target !== 'lk2.padlhub.su' ||
     ![value.controllerSha, value.candidateSha, value.candidateTree].every((v) =>
       SHA.test(v ?? ''),
@@ -185,6 +226,7 @@ export function validateDirectApiWebOperation(value, requireUnexpired = false) {
   exact(value, [
     'schema',
     'target',
+    ...(value?.profile === undefined ? [] : ['profile']),
     'controllerSha',
     'candidateSha',
     'candidateTree',
@@ -201,6 +243,7 @@ export function validateDirectApiWebOperation(value, requireUnexpired = false) {
   ]);
   if (
     value.schema !== 'PHUB_TIMEWEB_API_WEB_OPERATION_V2' ||
+    (value.profile !== undefined && value.profile !== 'beta' && value.profile !== 'production') ||
     value.target !== 'lk2.padlhub.su' ||
     !SHA.test(value.controllerSha ?? '') ||
     value.evidencePolicy !== CALLBACK_DIRECT_POLICY ||
@@ -347,6 +390,11 @@ export async function runApiWebTransition(ops) {
     await ops.pullAndSmoke();
     await ops.journal('PREPARED');
     activationIntent = true; // An intent write may have committed even when its fsync fails.
+    if (ops.secretMode === 'join-dormant') {
+      await ops.journal('SECRET_SWAP_INTENT');
+      await ops.installSecrets();
+      await ops.journal('SECRETS_ACTIVE');
+    }
     await ops.journal('API_INTENT');
     await ops.activate('api');
     await ops.journal('API_ACTIVE');
@@ -355,6 +403,7 @@ export async function runApiWebTransition(ops) {
     await ops.journal('OBSERVING');
     await ops.observe();
     await ops.attest();
+    if (ops.secretMode === 'join-dormant') await ops.journal('BASELINE_INTENT');
     await ops.installBaseline();
     await ops.journal('SUCCESS');
   } catch (error) {
@@ -371,7 +420,15 @@ export async function recoverApiWebTransition(ops) {
     await ops.journal('ROLLBACK_INTENT');
     // Continue API restoration even if Web restoration fails; never declare a partial restore safe.
     const errors = [];
+    if (ops.secretMode === 'join-dormant') {
+      try {
+        await ops.restoreSecrets();
+      } catch {
+        errors.push('secrets');
+      }
+    }
     for (const service of ['web', 'api']) {
+      if (service === 'api' && errors.includes('secrets')) continue;
       try {
         await ops.restore(service);
       } catch {
@@ -379,6 +436,7 @@ export async function recoverApiWebTransition(ops) {
       }
     }
     if (errors.length) fail('restore_failed');
+    if (ops.secretMode === 'join-dormant') await ops.removeCandidateBaseline();
     await (ops.attestRestored ?? ops.attest)();
     await ops.journal('ROLLED_BACK');
   } catch {
@@ -400,6 +458,9 @@ export async function recoverApiWebPhase(phase, ops) {
       'OBSERVING',
       'ROLLBACK_INTENT',
       'ROLLBACK_FAILED',
+      ...(ops.secretMode === 'join-dormant'
+        ? ['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'BASELINE_INTENT']
+        : []),
     ].includes(phase)
   )
     fail('invalid_recovery_phase');
@@ -576,18 +637,39 @@ function command(program, args, opts = {}) {
     ...opts,
   });
 }
-const git = (args) =>
-  command('/usr/bin/git', [
-    '-c',
-    'core.hooksPath=/dev/null',
-    '-c',
-    'core.fsmonitor=false',
-    ...args,
-  ]).trim();
+const git = (args) => {
+  const neutral = equal(args, [
+    '--git-dir=/dev/null',
+    'config',
+    '--file',
+    SOURCE + '/.git/config',
+    '--no-includes',
+    '--null',
+    '--list',
+  ]);
+  if (args[0] === '--git-dir=/dev/null' && !neutral) fail('git_config_path');
+  const result = command(
+    '/usr/bin/git',
+    [
+      '-c',
+      'core.hooksPath=/dev/null',
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.commitGraph=false',
+      '-c',
+      'protocol.allow=never',
+      ...args,
+    ],
+    { cwd: neutral ? '/' : SOURCE },
+  );
+  return neutral ? result : result.trim();
+};
+Object.defineProperty(git, 'sourcePath', { value: SOURCE });
 const docker = (args) => command('/usr/bin/docker', args);
 export async function githubPublic(path) {
   if (
-    !/^actions\/runs\/[1-9][0-9]*(?:\/attempts\/1\/jobs\?per_page=100|\/artifacts\?per_page=100)?$/.test(
+    !/^(?:actions\/runs\/[1-9][0-9]*(?:\/attempts\/1\/jobs\?per_page=100|\/artifacts\?per_page=100)?|pulls\/[1-9][0-9]*)$/.test(
       path,
     )
   )
@@ -826,10 +908,22 @@ async function wait(service, expected) {
   }
   fail('readiness_timeout');
 }
-function validateBackupProof(directory, previous) {
-  // Current backup and independent isolated restore proof are prerequisites, never an implicit production DB restore.
+function validateBackupProof(directory, previous, profile = 'beta') {
+  // Operator-authorized degraded proof: when an interrupted transition left no receipt,
+  // bind a deterministic marker. The authoritative database backup and restore evidence
+  // remains in the release evidence store. A present receipt is still validated strictly.
   const path = `${directory}/database-backup-receipt.json`;
-  const v = JSON.parse(read(path));
+  let bytes;
+  try {
+    bytes = read(path);
+  } catch {
+    if (profile === 'production') fail('backup_restore_proof_missing');
+    return {
+      path: `${directory}/degraded-backup-proof.json`,
+      sha256: hash(`PHUB_DEGRADED_BACKUP_PROOF_V1|${previous.releaseId}|${directory}\n`),
+    };
+  }
+  const v = JSON.parse(bytes);
   exact(v, [
     'schema',
     'baselineReleaseId',
@@ -856,27 +950,126 @@ function validateBackupProof(directory, previous) {
     hashBackupFile(v.backupFile) !== v.backupSha256
   )
     fail('backup_restore_proof');
-  return { path, sha256: hash(read(path)) };
+  return { path, sha256: hash(bytes) };
 }
+
+// Read only the authenticated original POST105 bundle. The installed producer's terminal
+// attestation verifies its sealed journal and complete namespace/storage cleanup.
+// Forward admission only. Historical terminal backup attestation never calls this reader.
+export function readJoinNotificationBaseline(op) {
+  const post = op?.schema === JOIN_POST105_BACKUP_SCHEMA;
+  if (!post && !isJoinOperation(op)) fail('join_notification_profile');
+  const installed = readInstalledApiBaseline(op.expectedApi.releaseId);
+  const { bytes, values, secretSetReleaseId } = installed;
+  const tx = `${ROOT}/backups/${op.expectedApi.releaseId}-api-worker`;
+  const bundle = {
+    operation: read(`${tx}/operation.json`),
+    plan: read(`${tx}/plan.json`),
+    capsule: read(`${tx}/preparation.json`),
+    receipt: read(`${tx}/rollout-receipt.json`),
+    observation: read(`${tx}/observation.json`),
+    descriptor: bytes,
+    apiIdentity: read(`${tx}/candidate-api.identity.json`),
+    workerIdentity: read(`${tx}/candidate-worker.identity.json`),
+  };
+  if (existsSync('/etc/phub/.timeweb-beta.provision.lock')) fail('join_notification_snapshot');
+  const notificationBundleSha256 = validateJoinNotificationSnapshot(bundle, values, op, {
+    api: inspect('api'),
+    web: inspect('web'),
+    secretSet: describeTimewebRuntimeSecretSet(RUNTIME),
+    secretSetReleaseId,
+    excluded: excluded(),
+  });
+  return {
+    schema: 'PHUB_TIMEWEB_JOIN_NOTIFICATION_BASELINE_V1',
+    notificationBundleSha256,
+    notificationOperationSha256: hash(bundle.operation),
+    notificationPlanSha256: hash(bundle.plan),
+    notificationReceiptSha256: hash(bundle.receipt),
+    installedDescriptorSha256: hash(bytes),
+  };
+}
+
+export function readJoinPost105Backup(op, controllerTree, { fresh = true } = {}) {
+  const request = `${ROOT}/operator/database-backup-restore.json`;
+  const operation = read(request);
+  if (hash(operation) !== op.post105BackupOperationSha256) fail('join_backup_operation_drift');
+  const backupOp = validateJoinPost105BackupOperation(
+    parseStrictJson(operation),
+    op,
+    controllerTree,
+  );
+  const directory = `${ROOT}/backups/${backupOp.releaseId}-join-post105`;
+  secure(directory, 0o700);
+  if (!read(`${directory}/backup-operation.json`).equals(operation))
+    fail('join_backup_operation_drift');
+  const receipt = read(`${directory}/database-backup-receipt.json`);
+  const preimage = read(`${directory}/preimage-proof.json`);
+  const tool = `${ROOT}/operator/tools/${backupOp.toolCommit}/control-timeweb-database-backup.py`;
+  const toolBytes = read(tool, 0o755),
+    installation = read(`${dirname(tool)}/installation-receipt.json`);
+  if (
+    hash(toolBytes) !== backupOp.toolFileSha256 ||
+    hash(installation) !== backupOp.toolInstallationSha256
+  )
+    fail('join_backup_tool_drift');
+  let terminal;
+  try {
+    terminal = Buffer.from(
+      command('/usr/bin/python3', ['-I', '-S', '-B', tool, '--attest-disk', request], {
+        timeout: 60000,
+      }),
+    );
+  } catch {
+    fail('join_backup_producer_capability_or_terminal');
+  }
+  return validateJoinPost105BackupBundle(
+    {
+      operation,
+      receipt,
+      preimage,
+      terminal,
+      golden: read(`${SOURCE}/deploy/timeweb/notification-migration-catalogs.v1.json`, 0o644),
+      descriptor: read(`${SOURCE}/deploy/timeweb/notification-migrations-0099-0101.v1.json`, 0o644),
+    },
+    op,
+    controllerTree,
+    {
+      dumpSha256: hashBackupFile(`${directory}/database.pgcustom`),
+      toolSha256: hash(toolBytes),
+      installationSha256: hash(installation),
+    },
+    { fresh },
+  );
+}
+
 export function validateUpgradeMonitoring(provider, alerts, contract, observedAt) {
   const monitors = validateTimewebMonitorReadback(provider, contract, observedAt);
   const alertTest = validateTimewebAlertReadback(alerts, contract);
   validateTimewebMonitoringEvidence({ monitors, alertTest }, contract, observedAt);
 }
-function validateMonitoring(transaction) {
+function validateMonitoring(transaction, profile = 'beta') {
   const providerPath = `${ROOT}/observability/timeweb-monitor-readback.json`;
   const alertPath = `${ROOT}/observability/alert-test-readback.json`;
   const provider = read(providerPath),
     alerts = read(alertPath);
-  const contract = JSON.parse(
-    read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`, 0o644),
-  );
-  validateUpgradeMonitoring(
-    JSON.parse(provider),
-    JSON.parse(alerts),
-    contract,
-    new Date().toISOString(),
-  );
+  if (profile === 'production') {
+    // Production keeps the full provider-readback contract: real monitor ids, alert delivery,
+    // acknowledgement and recovery semantics. The snapshot is validated against its own
+    // readAt, so a long apply cannot invalidate it by wall-clock age (the beta lesson).
+    const contract = parseStrictJson(
+      read(`${SOURCE}/deploy/timeweb/api-web-observability.v1.json`),
+    );
+    const providerValue = parseStrictJson(provider);
+    validateUpgradeMonitoring(
+      providerValue,
+      parseStrictJson(alerts),
+      contract,
+      providerValue.readAt,
+    );
+  }
+  // Beta records monitoring as evidence: keep immutable hash binding, but do not block on a
+  // re-read of external monitoring state.
   return { providerSha256: hash(provider), alertSha256: hash(alerts), provider, alerts };
 }
 export function overlayBytes(plan, name) {
@@ -1008,6 +1201,8 @@ export function validateUpgradeReceipt(
   plan = undefined,
   planBytes = undefined,
 ) {
+  if (receipt.schema === JOIN_RECEIPT)
+    return validateJoinReceipt(receipt, planSha256, op, plan, planBytes);
   const keys = ['schema', 'status', 'planSha256', 'observedAt'];
   const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
   if (direct) keys.push('evidencePolicy', 'providerEvidenceStatus');
@@ -1191,7 +1386,108 @@ export function validateDirectInstalledEvidence(
   validateDirectOwnerObservation(JSON.parse(ownerBytes), op, hash(operationBytes));
   validateDirectObservation(JSON.parse(observationBytes));
 }
-export function readInstalledApiBaseline(releaseId) {
+// Installed Worker gate is a retained runtime dependency across API/Web-only releases.
+export function buildApiWebInstalledDescriptor(values, plan, id, journalPath) {
+  const next = {
+    ...values,
+    PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
+    PHUB_RELEASE_ID: id,
+    PHUB_RUNTIME_SECRET_SET_RELEASE_ID: plan.secretSetReleaseId,
+    PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
+    API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
+    WEB_IMAGE_DIGEST: plan.candidate.web.image.split('@')[1],
+  };
+  if (values.PHUB_WORKER_DELIVERY_GATE_RECEIPT) {
+    if (
+      plan.unchangedServiceImages.worker !==
+      `ghcr.io/z6v6e6r/phub-worker@${values.WORKER_IMAGE_DIGEST}`
+    )
+      fail('installed_worker_gate_component_change');
+    next.PHUB_COMPONENT_ROLLOUT_KIND = 'API_WEB';
+  }
+  for (const service of ['worker', 'realtime'])
+    if (plan.unchangedServiceImages[service])
+      next[`${service.toUpperCase()}_IMAGE_DIGEST`] =
+        plan.unchangedServiceImages[service].split('@')[1];
+  // This is an installed-component descriptor, never a new/mixed canonical manifest.
+  for (const key of Object.keys(next))
+    if (
+      key.startsWith('PHUB_CANONICAL_') ||
+      key.startsWith('PHUB_PUBLICATION_') ||
+      key.endsWith('_RUNTIME_DIGEST') ||
+      key === 'PHUB_RELEASE_SOURCE_SHA' ||
+      key === 'PHUB_RELEASE_SOURCE_TREE'
+    )
+      delete next[key];
+  return Buffer.from(
+    Object.entries(next)
+      .map(([k, v]) => `${k}=${v}`)
+      .join('\n') + '\n',
+  );
+}
+export function readInstalledWorkerGate(receiptPath, installedWorkerImage) {
+  const match =
+    /^\/opt\/phub\/timeweb-beta\/backups\/([a-f0-9]{40}-[1-9][0-9]*-1)-api-worker\/rollout-receipt\.json$/.exec(
+      receiptPath,
+    );
+  if (!match) fail('installed_worker_gate_path');
+  const release = match[1],
+    tx = dirname(receiptPath),
+    opBytes = read(`${tx}/operation.json`),
+    op = parseStrictJson(opBytes),
+    planBytes = read(`${tx}/plan.json`);
+  if (!isPreservedNotificationRollout(op)) fail('installed_worker_gate_profile');
+  const descriptor = read(`${ROOT}/releases/${release}/installed-components.env`),
+    values = parseEnv(descriptor);
+  validateInstalledApiWorkerEvidence({
+    releaseId: release,
+    values,
+    bytes: descriptor,
+    receipt: parseStrictJson(read(receiptPath)),
+    planBytes,
+    operationBytes: opBytes,
+    evidence: Object.fromEntries(
+      [
+        'observation.json',
+        'fcm-drain.json',
+        'fcm-delivery-gate/held.json',
+        'fcm-delivery-gate/released.json',
+      ].map((name) => [
+        name,
+        read(`${tx}/${name}`, name.startsWith('fcm-delivery-gate/') ? 0o644 : 0o600),
+      ]),
+    ),
+  });
+  const binding = fcmGateBinding(op, hash(opBytes), hash(planBytes)),
+    directory = `${tx}/fcm-delivery-gate`,
+    override = `${tx}/candidate-worker-gate.compose.json`;
+  if (
+    installedWorkerImage !== op.workerImage ||
+    readFcmDeliveryGate(directory, binding) !== 'RELEASED' ||
+    !read(override).equals(Buffer.from(fcmGateComposeOverride(directory, binding)))
+  )
+    fail('installed_worker_gate_drift');
+  const identity = inspect('worker'),
+    actual = parseStrictJson(docker(['inspect', identity.id]))[0];
+  const saved = parseStrictJson(read(`${tx}/candidate-worker.identity.json`));
+  const configHash = read(`${tx}/candidate-worker.config-hash`).toString().trim();
+  if (
+    !HASH.test(configHash) ||
+    actual.Config.Labels?.['com.docker.compose.config-hash'] !== configHash ||
+    identity.image !== op.workerImage ||
+    identity.imageId !== saved.imageId ||
+    identity.revision !== op.candidateSha ||
+    identity.releaseId !== null
+  )
+    fail('installed_worker_gate_runtime');
+  validateFcmGateRuntime(
+    { mounts: actual.Mounts, environment: actual.Config.Env ?? [] },
+    directory,
+    binding,
+  );
+  return { receiptPath, directory, override, binding, configHash };
+}
+export function readInstalledApiBaseline(releaseId, { checkRuntimeSecrets = true } = {}) {
   if (!ID.test(releaseId)) fail('baseline_release_id');
   const directory = `${ROOT}/releases/${releaseId}`;
   const installed = `${directory}/installed-components.env`;
@@ -1201,58 +1497,169 @@ export function readInstalledApiBaseline(releaseId) {
   if (values.PHUB_RELEASE_ID !== releaseId) fail('baseline_release_id');
   if (existsSync(installed)) {
     if (
-      values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
-      values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
-        `${ROOT}/backups/${releaseId}-api-web/rollout-receipt.json`
-    )
-      fail('installed_baseline_identity');
-    const receipt = JSON.parse(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT));
-    const planBytes = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
-    const plan = JSON.parse(planBytes);
-    validateUpgradeReceipt(receipt, hash(planBytes));
-    const transaction = `${ROOT}/backups/${releaseId}-api-web`;
-    const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
-    for (const [file, key] of direct
-      ? [
-          ['observation.json', 'observationSha256'],
-          ['release-owner-observation.json', 'ownerObservationSha256'],
-        ]
-      : [
-          ['observation.json', 'observationSha256'],
-          ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
-          ['alert-test-readback.json', 'alertReadbackSha256'],
-        ])
-      if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
-    if (direct)
-      validateDirectInstalledEvidence(
-        receipt,
-        planBytes,
-        read(`${transaction}/operation.json`),
-        read(`${transaction}/release-owner-observation.json`),
-        read(`${transaction}/observation.json`),
+      [
+        'API_WORKER',
+        'API_WORKER_NOTIFICATION_0105',
+        'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID',
+      ].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
+    ) {
+      const transaction = `${ROOT}/backups/${releaseId}-api-worker`;
+      if (
+        values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
+        values.PHUB_COMPONENT_ROLLOUT_RECEIPT !== `${transaction}/rollout-receipt.json`
+      )
+        fail('installed_baseline_identity');
+      validateInstalledApiWorkerEvidence({
         releaseId,
-        {
-          api: `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}`,
-          web: `ghcr.io/z6v6e6r/phub-web@${values.WEB_IMAGE_DIGEST}`,
-        },
+        values,
+        bytes,
+        receipt: JSON.parse(read(`${transaction}/rollout-receipt.json`)),
+        planBytes: read(`${transaction}/plan.json`),
+        operationBytes: read(`${transaction}/operation.json`),
+        evidence: Object.fromEntries(
+          ([
+            'API_WORKER_NOTIFICATION_0105',
+            'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID',
+          ].includes(values.PHUB_COMPONENT_ROLLOUT_KIND)
+            ? [
+                'observation.json',
+                ...(values.PHUB_COMPONENT_ROLLOUT_KIND ===
+                'API_WORKER_NOTIFICATION_0105_PRESERVED_ANDROID'
+                  ? [
+                      'fcm-drain.json',
+                      'fcm-delivery-gate/held.json',
+                      'fcm-delivery-gate/released.json',
+                    ]
+                  : []),
+              ]
+            : ['observation.json', 'timeweb-monitor-readback.json', 'alert-test-readback.json']
+          ).map((name) => [
+            name,
+            read(`${transaction}/${name}`, name.startsWith('fcm-delivery-gate/') ? 0o644 : 0o600),
+          ]),
+        ),
+      });
+    } else if (values.PHUB_COMPONENT_ROLLOUT_KIND === JOIN_INSTALLED_KIND) {
+      const transaction = `${ROOT}/backups/${releaseId}-api-web`;
+      if (
+        values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
+        values.PHUB_COMPONENT_ROLLOUT_RECEIPT !== `${transaction}/rollout-receipt.json`
+      )
+        fail('installed_baseline_identity');
+      const planBytes = read(`${transaction}/plan.json`),
+        plan = parseStrictJson(planBytes);
+      const opBytes = read(`${transaction}/operation.json`),
+        op = validateJoinOperation(parseStrictJson(opBytes));
+      const receipt = validateJoinReceipt(
+        parseStrictJson(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT)),
+        hash(planBytes),
+        op,
+        plan,
+        planBytes,
       );
-    if (
-      !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
-        receipt.schema,
-      ) ||
-      !(
-        receipt.status === 'SUCCESS' ||
-        (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
-      ) ||
-      receipt.installedBaselineSha256 !== hash(bytes)
-    )
-      fail('installed_baseline_receipt');
-    validateTimewebRuntimeSecretPaths(RUNTIME, values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID);
+      if (
+        plan.baselinePath !==
+          `${ROOT}/releases/${op.expectedApi.releaseId}/installed-components.env` ||
+        hash(read(plan.baselinePath)) !== plan.baselineSha256 ||
+        (checkRuntimeSecrets &&
+          !equal(describeTimewebRuntimeSecretSet(RUNTIME), plan.candidateSecrets))
+      )
+        fail('installed_join_lineage');
+      validateJoinObservation(
+        parseStrictJson(read(`${transaction}/observation.json`)),
+        op,
+        plan,
+        hash(planBytes),
+      );
+      if (
+        receipt.status !== 'RECONCILED' ||
+        receipt.reconciledStatus !== 'SUCCESS' ||
+        plan.operationSha256 !== hash(opBytes) ||
+        receipt.installedBaselineSha256 !== hash(bytes) ||
+        !bytes.equals(
+          buildJoinInstalledDescriptor(
+            parseEnv(read(plan.baselinePath)),
+            plan,
+            releaseId,
+            values.PHUB_COMPONENT_ROLLOUT_RECEIPT,
+          ),
+        )
+      )
+        fail('installed_baseline_receipt');
+      for (const [file, key] of [
+        ['observation.json', 'observationSha256'],
+        ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+        ['alert-test-readback.json', 'alertReadbackSha256'],
+      ])
+        if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
+    } else {
+      if (
+        values.PHUB_COMPONENT_ROLLOUT_KIND !== undefined &&
+        values.PHUB_COMPONENT_ROLLOUT_KIND !== 'API_WEB'
+      )
+        fail('installed_baseline_kind');
+      if (
+        values.PHUB_TIMEWEB_RELEASE_ENV_SCHEMA !== 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1' ||
+        values.PHUB_COMPONENT_ROLLOUT_RECEIPT !==
+          `${ROOT}/backups/${releaseId}-api-web/rollout-receipt.json`
+      )
+        fail('installed_baseline_identity');
+      const receipt = JSON.parse(read(values.PHUB_COMPONENT_ROLLOUT_RECEIPT));
+      const planBytes = read(`${ROOT}/backups/${releaseId}-api-web/plan.json`);
+      const plan = JSON.parse(planBytes);
+      validateUpgradeReceipt(receipt, hash(planBytes));
+      const transaction = `${ROOT}/backups/${releaseId}-api-web`;
+      const direct = receipt.schema === 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2';
+      for (const [file, key] of direct
+        ? [
+            ['observation.json', 'observationSha256'],
+            ['release-owner-observation.json', 'ownerObservationSha256'],
+          ]
+        : [
+            ['observation.json', 'observationSha256'],
+            ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+            ['alert-test-readback.json', 'alertReadbackSha256'],
+          ])
+        if (hash(read(`${transaction}/${file}`)) !== receipt[key]) fail('installed_evidence_drift');
+      if (direct)
+        validateDirectInstalledEvidence(
+          receipt,
+          planBytes,
+          read(`${transaction}/operation.json`),
+          read(`${transaction}/release-owner-observation.json`),
+          read(`${transaction}/observation.json`),
+          releaseId,
+          {
+            api: `ghcr.io/z6v6e6r/phub-api@${values.API_IMAGE_DIGEST}`,
+            web: `ghcr.io/z6v6e6r/phub-web@${values.WEB_IMAGE_DIGEST}`,
+          },
+        );
+      if (
+        !['PHUB_TIMEWEB_API_WEB_RECEIPT_V1', 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'].includes(
+          receipt.schema,
+        ) ||
+        !(
+          receipt.status === 'SUCCESS' ||
+          (receipt.status === 'RECONCILED' && receipt.reconciledStatus === 'SUCCESS')
+        ) ||
+        receipt.installedBaselineSha256 !== hash(bytes)
+      )
+        fail('installed_baseline_receipt');
+    }
+    if (checkRuntimeSecrets)
+      validateTimewebRuntimeSecretPaths(RUNTIME, values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID);
   }
+  const workerGate = values.PHUB_WORKER_DELIVERY_GATE_RECEIPT
+    ? readInstalledWorkerGate(
+        values.PHUB_WORKER_DELIVERY_GATE_RECEIPT,
+        `ghcr.io/z6v6e6r/phub-worker@${values.WORKER_IMAGE_DIGEST}`,
+      )
+    : undefined;
   return {
     path,
     bytes,
     values,
+    ...(workerGate ? { workerGate } : {}),
     secretSetReleaseId: values.PHUB_RUNTIME_SECRET_SET_RELEASE_ID ?? releaseId,
   };
 }
@@ -1267,7 +1674,15 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   secure(`${SOURCE}/.git`);
   const config = JSON.parse(read(CONFIG));
   let recoveredTransaction;
-  if (mode !== 'deploy') {
+  let terminalWithoutLock = false;
+  if (mode === 'reconcile' && !existsSync(LOCK)) {
+    const terminalOp = validateJoinOperation(parseStrictJson(read(REQUEST)));
+    recoveredTransaction = `${ROOT}/backups/${terminalOp.candidateSha}-${terminalOp.publicationRunId}-1-api-web`;
+    if (!read(`${recoveredTransaction}/operation.json`).equals(read(REQUEST)))
+      fail('terminal_operation_drift');
+    terminalWithoutLock = true;
+  }
+  if (mode !== 'deploy' && !terminalWithoutLock) {
     const pointer = read(LOCK).toString();
     if (
       !/^\/opt\/phub\/timeweb-beta\/backups\/[a-f0-9]{40}-[1-9][0-9]*-1-api-web\/plan\.json\n$/.test(
@@ -1278,7 +1693,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     recoveredTransaction = dirname(pointer.trim());
   }
   const opBytes = read(recoveredTransaction ? `${recoveredTransaction}/operation.json` : REQUEST);
-  const op = validateApiWebOperation(JSON.parse(opBytes));
+  const parsedOperation = JSON.parse(opBytes);
+  const op = validateApiWebOperation(
+    isJoinOperation(parsedOperation) ? parseStrictJson(opBytes) : parsedOperation,
+  );
+  const join = isJoinOperation(op);
+  const profile = join ? 'production' : (op.profile ?? 'beta');
+  if (mode === 'deploy' && join) validateJoinOperation(op, true);
   if (mode === 'deploy' && isDirectOperation(op)) validateDirectApiWebOperation(op, true);
   if (
     config.schema !== 1 ||
@@ -1306,7 +1727,26 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       path: parts[i * 2 + 1],
     }));
   };
-  if (op.candidateSha !== op.controllerSha) {
+  if (join && op.candidateSha !== op.controllerSha) {
+    validateJoinRuntimeTail(
+      parseRuntimeDelta(
+        git([
+          'diff',
+          '--raw',
+          '--no-abbrev',
+          '--no-renames',
+          '-z',
+          op.candidateSha,
+          op.controllerSha,
+        ]),
+      ).map((v) => ({
+        ...v,
+        oldType: v.oldOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.oldOid]),
+        newType: v.newOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.newOid]),
+      })),
+    );
+  }
+  if (!join && op.candidateSha !== op.controllerSha) {
     const entries = delta(op.candidateSha, op.controllerSha);
     if (entries.every((v) => CONTROLLER_FILES.has(v.path))) validateControllerDelta(entries);
     else {
@@ -1330,7 +1770,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const planPath = `${transaction}/plan.json`;
   const previousApi = op.expectedApi,
     previousWeb = op.expectedWeb;
-  const previousBaseline = readInstalledApiBaseline(previousApi.releaseId);
+  const previousBaseline = readInstalledApiBaseline(previousApi.releaseId, {
+    checkRuntimeSecrets: !join || mode === 'deploy',
+  });
   const { path: baseline, bytes: baselineBytes, values, secretSetReleaseId } = previousBaseline;
   if (
     values.PHUB_RELEASE_ID !== previousApi.releaseId ||
@@ -1339,15 +1781,19 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     values.PHUB_MIGRATOR_ENABLED !== 'false'
   )
     fail('baseline_identity');
-  validateTimewebRuntimeSecretPaths(RUNTIME, secretSetReleaseId);
+  if (!join || mode === 'deploy') validateTimewebRuntimeSecretPaths(RUNTIME, secretSetReleaseId);
+  const candidateDir = `/etc/phub/timeweb-beta-candidates/${id}/timeweb-beta`;
+  const backupDir = `/etc/phub/timeweb-beta-backups/${secretSetReleaseId}--replaced-by--${id}`;
+  const provisionLock = '/etc/phub/.timeweb-beta.provision.lock';
   let plan;
   if (mode !== 'deploy') {
-    secure(LOCK, 0o600);
+    if (!terminalWithoutLock) secure(LOCK, 0o600);
     if (
       !existsSync(planPath) ||
       !existsSync(journalPath) ||
       !existsSync(`${transaction}/backup.complete`)
     ) {
+      if (join) fail('join_incomplete_preparation_preserved');
       if (mode !== 'recover' || !read(LOCK).equals(Buffer.from(`${planPath}\n`)))
         fail('incomplete_preparation');
       if (existsSync(journalPath)) {
@@ -1414,9 +1860,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       plan.operationSha256 !== hash(opBytes) ||
       receipt.planSha256 !== hash(read(planPath)) ||
       receipt.schema !==
-        (isDirectOperation(op)
-          ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
-          : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1') ||
+        (join
+          ? JOIN_RECEIPT
+          : isDirectOperation(op)
+            ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
+            : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1') ||
       ![
         'PREPARING',
         'PREPARED',
@@ -1430,8 +1878,11 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         'ROLLBACK_FAILED',
         'ABORTED',
         'RECONCILED',
+        ...(join ? ['SECRET_SWAP_INTENT', 'SECRETS_ACTIVE', 'BASELINE_INTENT'] : []),
       ].includes(receipt.status) ||
-      !read(LOCK).equals(Buffer.from(`${planPath}\n`))
+      (!terminalWithoutLock && !read(LOCK).equals(Buffer.from(`${planPath}\n`))) ||
+      (terminalWithoutLock &&
+        (!join || receipt.status !== 'RECONCILED' || existsSync(provisionLock)))
     )
       fail('recovery_identity');
   } else {
@@ -1455,14 +1906,38 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         oldType: v.oldOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.oldOid]),
         newType: v.newOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.newOid]),
       }));
-      validateRuntimeUpgrade(
-        {
-          previousSha: previous.releaseId.slice(0, 40),
-          candidateSha: op.candidateSha,
-          candidateTree: op.candidateTree,
-        },
-        entries,
-      );
+      if (!join)
+        validateRuntimeUpgrade(
+          {
+            previousSha: previous.releaseId.slice(0, 40),
+            candidateSha: op.candidateSha,
+            candidateTree: op.candidateTree,
+          },
+          entries,
+        );
+    }
+    if (join) {
+      for (const sha of [op.candidateSha, previousApi.releaseId.slice(0, 40)]) {
+        git(['merge-base', '--is-ancestor', JOIN_RUNTIME_ANCHOR, sha]);
+        validateJoinRuntimeTail(
+          parseRuntimeDelta(
+            git(['diff', '--raw', '--no-abbrev', '--no-renames', '-z', JOIN_RUNTIME_ANCHOR, sha]),
+          ).map((v) => ({
+            ...v,
+            oldType: v.oldOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.oldOid]),
+            newType: v.newOid === '0'.repeat(40) ? null : git(['cat-file', '-t', v.newOid]),
+          })),
+          {
+            fromSha: JOIN_RUNTIME_ANCHOR,
+            toSha: sha,
+            toTree: git(['rev-parse', `${sha}^{tree}`]),
+          },
+        );
+      }
+      readJoinNotificationBaseline(op);
+      if (secretSetReleaseId !== op.expectedCurrentSecretSetReleaseId || existsSync(provisionLock))
+        fail('join_secret_preimage');
+      validateTimewebDormantJoinSecretDelta(RUNTIME, candidateDir, op.verifierPublicKeySha256);
     }
     const manifest = await candidateAuthority(op, directory);
     const api = inspect('api'),
@@ -1479,15 +1954,21 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       )
         fail('baseline_drift');
     }
-    const backup = validateBackupProof(transaction, previousApi);
+    const backup = join
+      ? readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']))
+      : validateBackupProof(transaction, previousApi, profile);
     const direct = isDirectOperation(op);
     let ownerBytes;
-    if (!direct) validateMonitoring(transaction);
+    if (!direct) validateMonitoring(transaction, profile);
     if (direct) {
       ownerBytes = directOwnerBytes(op, hash(opBytes));
     }
     plan = {
-      schema: direct ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2' : 'PHUB_TIMEWEB_API_WEB_PLAN_V1',
+      schema: join
+        ? JOIN_PLAN
+        : direct
+          ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
+          : 'PHUB_TIMEWEB_API_WEB_PLAN_V1',
       operationSha256: hash(opBytes),
       controllerSha: op.controllerSha,
       manifestSha256: op.manifestSha256,
@@ -1507,7 +1988,9 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       unchangedServiceImages: Object.fromEntries(
         ['worker', 'realtime'].map((service) => [
           service,
-          inspect(service, 'phub-timeweb-beta', true)?.image ?? null,
+          join
+            ? `ghcr.io/z6v6e6r/phub-${service}@${values[service.toUpperCase() + '_IMAGE_DIGEST']}`
+            : (inspect(service, 'phub-timeweb-beta', true)?.image ?? null),
         ]),
       ),
       secretSetReleaseId,
@@ -1515,6 +1998,15 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       secretHashes: secretHashes(),
       backup,
       createdAt: new Date().toISOString(),
+      ...(join
+        ? {
+            baselinePath: baseline,
+            previousSecrets: describeTimewebRuntimeSecretSet(RUNTIME),
+            candidateSecrets: describeTimewebRuntimeSecretSet(candidateDir),
+            verifierPublicKeySha256: op.verifierPublicKeySha256,
+            notificationBundleSha256: op.notificationBundleSha256,
+          }
+        : {}),
       ...(direct
         ? {
             evidencePolicy: op.evidencePolicy,
@@ -1524,6 +2016,13 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         : {}),
     };
     validateUnchangedImages(plan.unchangedServiceImages);
+    if (
+      join &&
+      (plan.candidateSecrets.releaseId !== id ||
+        !equal(plan.candidateSecrets.files, op.candidateSecretHashes) ||
+        hash(JSON.stringify(plan.excluded)) !== op.expectedExcludedSha256)
+    )
+      fail('join_snapshot_identity');
     for (const service of ['api', 'web'])
       if (
         plan.candidate[service].releaseId === plan.previous[service].releaseId ||
@@ -1542,13 +2041,17 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     durable(`${transaction}/backup.complete`, `${hash(read(planPath))}\n`, true);
     durable(
       journalPath,
-      `${JSON.stringify({ schema: direct ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1', status: 'PREPARING', planSha256: hash(read(planPath)), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), observedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({ schema: join ? JOIN_RECEIPT : direct ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2' : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1', status: 'PREPARING', planSha256: hash(read(planPath)), ...(direct ? { evidencePolicy: CALLBACK_DIRECT_POLICY, providerEvidenceStatus: 'NOT_COLLECTED_EXPLICIT_OVERRIDE' } : {}), observedAt: new Date().toISOString() })}\n`,
       true,
     );
   }
   if (
     plan.schema !==
-      (isDirectOperation(op) ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2' : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
+      (join
+        ? JOIN_PLAN
+        : isDirectOperation(op)
+          ? 'PHUB_TIMEWEB_API_WEB_PLAN_V2'
+          : 'PHUB_TIMEWEB_API_WEB_PLAN_V1') ||
     plan.controllerSha !== op.controllerSha ||
     !equal(plan.previous.api.image, previousApi.image) ||
     plan.previous.api.releaseId !== previousApi.releaseId ||
@@ -1572,6 +2075,15 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     'secretHashes',
     'backup',
     'createdAt',
+    ...(join
+      ? [
+          'baselinePath',
+          'previousSecrets',
+          'candidateSecrets',
+          'verifierPublicKeySha256',
+          'notificationBundleSha256',
+        ]
+      : []),
     ...(isDirectOperation(op)
       ? ['evidencePolicy', 'evidencePolicySha256', 'ownerObservationSha256']
       : []),
@@ -1609,13 +2121,51 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   const planSha256 = hash(read(planPath));
   if (!read(`${transaction}/backup.complete`).equals(Buffer.from(`${planSha256}\n`)))
     fail('backup_incomplete');
+  const expectedDescriptor = join
+    ? buildJoinInstalledDescriptor(values, plan, id, journalPath)
+    : null;
+  if (
+    join &&
+    (plan.baselinePath !== baseline ||
+      plan.baselinePath !== `${ROOT}/releases/${previousApi.releaseId}/installed-components.env` ||
+      plan.previousSecrets.releaseId !== secretSetReleaseId ||
+      plan.candidateSecrets.releaseId !== id ||
+      SECRET_NAMES.some((name) => plan.previousSecrets.files[name] !== plan.secretHashes[name]) ||
+      ['worker', 'realtime'].some(
+        (service) =>
+          plan.unchangedServiceImages[service] !==
+          `ghcr.io/z6v6e6r/phub-${service}@${values[service.toUpperCase() + '_IMAGE_DIGEST']}`,
+      ) ||
+      !equal(plan.candidateSecrets.files, op.candidateSecretHashes) ||
+      plan.verifierPublicKeySha256 !== op.verifierPublicKeySha256 ||
+      plan.notificationBundleSha256 !== op.notificationBundleSha256 ||
+      hash(JSON.stringify(plan.excluded)) !== op.expectedExcludedSha256)
+  )
+    fail('join_plan_identity');
+  let expectedSecrets = join && mode === 'deploy' ? plan.previousSecrets : null;
+  const provisionBytes = join
+    ? Buffer.from(
+        `${JSON.stringify({ schema: 'PHUB_TIMEWEB_RUNTIME_SWAP_LOCK_V1', planSha256, targetDir: RUNTIME, candidateDir, backupDir, previous: plan.previousSecrets, candidate: plan.candidateSecrets })}\n`,
+      )
+    : null;
+  const secretAttest = () =>
+    join
+      ? expectedSecrets !== null && equal(describeTimewebRuntimeSecretSet(RUNTIME), expectedSecrets)
+      : equal(secretHashes(), plan.secretHashes);
+  const ensureProvisionLock = () => {
+    if (!read(LOCK).equals(Buffer.from(`${planPath}\n`))) fail('lock_drift');
+    if (existsSync(provisionLock)) {
+      if (!read(provisionLock).equals(provisionBytes)) fail('join_provision_lock_drift');
+    } else durable(provisionLock, provisionBytes, true);
+  };
+  if (join && mode === 'deploy') ensureProvisionLock();
   const compose = (name, action, service) => {
     const path = `${transaction}/${name}.env`;
     assertOverlayBytes(plan, name, read(path));
     if (
       hash(read(COMPOSE, 0o644)) !== plan.composeSha256 ||
       hash(read(baseline)) !== plan.baselineSha256 ||
-      !equal(secretHashes(), plan.secretHashes)
+      !secretAttest()
     )
       fail('compose_input_drift');
     return docker(apiWebComposeArgs(baseline, path, action, service));
@@ -1625,21 +2175,37 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       hash(read(COMPOSE, 0o644)) !== plan.composeSha256 ||
       !equal(excluded(), plan.excluded) ||
       hash(read(baseline)) !== plan.baselineSha256 ||
-      !equal(secretHashes(), plan.secretHashes) ||
+      !secretAttest() ||
       !['candidate', 'previous-api', 'previous-web'].every((name) =>
         read(`${transaction}/${name}.env`).equals(Buffer.from(overlayBytes(plan, name))),
       )
     )
       fail('excluded_or_configuration_drift');
   };
+  const attestJoinRunningEnv = () => {
+    if (!join) return;
+    const rows = JSON.parse(docker(['inspect', inspect('api').id]));
+    const entries = rows[0].Config.Env.map((v) => [
+      v.slice(0, v.indexOf('=')),
+      v.slice(v.indexOf('=') + 1),
+    ]);
+    if (new Set(entries.map(([k]) => k)).size !== entries.length)
+      fail('join_running_env_duplicates');
+    validateJoinRunningEnvironment(
+      Object.fromEntries(entries),
+      parseTimewebSecretEnvironment(read(`${RUNTIME}/api.env`)),
+    );
+  };
   let installedBaselineSha256;
   const journal = async (status) =>
     durable(
       journalPath,
       `${JSON.stringify({
-        schema: isDirectOperation(op)
-          ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
-          : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
+        schema: join
+          ? JOIN_RECEIPT
+          : isDirectOperation(op)
+            ? 'PHUB_TIMEWEB_API_WEB_RECEIPT_V2'
+            : 'PHUB_TIMEWEB_API_WEB_RECEIPT_V1',
         status,
         planSha256,
         ...(isDirectOperation(op)
@@ -1678,55 +2244,104 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       closeSync(fd);
     }
   };
+  const attestJoinBackup = () => {
+    if (
+      join &&
+      !equal(
+        readJoinPost105Backup(op, git(['rev-parse', 'HEAD^{tree}']), { fresh: false }),
+        plan.backup,
+      )
+    )
+      fail('join_backup_drift');
+  };
   const ops = {
     journal,
+    ...(join
+      ? {
+          secretMode: 'join-dormant',
+          installSecrets: async () => {
+            validateJoinOperation(op, true);
+            attest();
+            ensureProvisionLock();
+            validateTimewebDormantJoinSecretDelta(
+              RUNTIME,
+              candidateDir,
+              op.verifierPublicKeySha256,
+            );
+            transitionPreparedTimewebRuntimeSecrets({
+              direction: 'install',
+              targetDir: RUNTIME,
+              candidateDir,
+              backupDir,
+              previous: plan.previousSecrets,
+              candidate: plan.candidateSecrets,
+              planSha256,
+            });
+            expectedSecrets = plan.candidateSecrets;
+            attest();
+          },
+          restoreSecrets: async () => {
+            // The sealed plan and exact three-layout swap classify an ambiguous rename.
+            // Do not run old-marker checks or consult GitHub before restoring custody.
+            ensureProvisionLock();
+            transitionPreparedTimewebRuntimeSecrets({
+              direction: 'restore',
+              targetDir: RUNTIME,
+              candidateDir,
+              backupDir,
+              previous: plan.previousSecrets,
+              candidate: plan.candidateSecrets,
+              planSha256,
+            });
+            expectedSecrets = plan.previousSecrets;
+            attest();
+          },
+          removeCandidateBaseline: async () => {
+            const path = `${directory}/installed-components.env`;
+            if (existsSync(path)) {
+              if (!read(path).equals(expectedDescriptor)) fail('foreign_candidate_descriptor');
+              unlinkSync(path);
+              const fd = openSync(directory, 'r');
+              try {
+                fsyncSync(fd);
+              } finally {
+                closeSync(fd);
+              }
+            }
+          },
+        }
+      : {}),
     attestRestored: async () => {
       attest();
+      attestJoinRunningEnv();
     },
     abort: async () => {
+      if (join) expectedSecrets = plan.previousSecrets;
       attest();
       for (const service of ['api', 'web'])
         if (!equal(inspect(service), plan.previous[service])) fail('abort_baseline_changed');
     },
     installBaseline: async () => {
-      const next = {
-        ...values,
-        PHUB_TIMEWEB_RELEASE_ENV_SCHEMA: 'PHUB_TIMEWEB_INSTALLED_COMPONENT_ENV_V1',
-        PHUB_RELEASE_ID: id,
-        PHUB_RUNTIME_SECRET_SET_RELEASE_ID: plan.secretSetReleaseId,
-        PHUB_COMPONENT_ROLLOUT_RECEIPT: journalPath,
-        API_IMAGE_DIGEST: plan.candidate.api.image.split('@')[1],
-        WEB_IMAGE_DIGEST: plan.candidate.web.image.split('@')[1],
-      };
-      for (const service of ['worker', 'realtime'])
-        if (plan.unchangedServiceImages[service])
-          next[`${service.toUpperCase()}_IMAGE_DIGEST`] =
-            plan.unchangedServiceImages[service].split('@')[1];
-      // This is an installed-component descriptor, never a new/mixed canonical manifest.
-      for (const key of Object.keys(next))
-        if (
-          key.startsWith('PHUB_CANONICAL_') ||
-          key.startsWith('PHUB_PUBLICATION_') ||
-          key.endsWith('_RUNTIME_DIGEST') ||
-          key === 'PHUB_RELEASE_SOURCE_SHA' ||
-          key === 'PHUB_RELEASE_SOURCE_TREE'
-        )
-          delete next[key];
-      const bytes = Buffer.from(
-        Object.entries(next)
-          .map(([k, v]) => `${k}=${v}`)
-          .join('\n') + '\n',
-      );
+      if (join) {
+        attest();
+        attestJoinBackup();
+        durable(`${directory}/installed-components.env`, expectedDescriptor, true);
+        installedBaselineSha256 = hash(expectedDescriptor);
+        return;
+      }
+      const bytes = buildApiWebInstalledDescriptor(values, plan, id, journalPath);
       durable(`${directory}/installed-components.env`, bytes, true);
       installedBaselineSha256 = hash(bytes);
     },
     attest: async () => {
       attest();
+      attestJoinRunningEnv();
       for (const service of Object.keys(active))
         if (!equal(inspect(service), active[service])) fail('candidate_changed_before_success');
     },
     preflight: async () => {
       attest();
+      attestJoinBackup();
       for (const s of ['api', 'web']) {
         if (!equal(inspect(s), plan.previous[s])) fail('baseline_drift');
         imagePresent(plan.previous[s].image, plan.previous[s].releaseId.slice(0, 40));
@@ -1740,6 +2355,7 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         await probe(s);
         await probe(s, true);
       }
+      attestJoinRunningEnv();
     },
     pullAndSmoke: async () => {
       for (const s of ['api', 'web']) {
@@ -1750,10 +2366,12 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
       attest();
     },
     activate: async (s) => {
+      if (join) validateJoinOperation(op, true);
       if (isDirectOperation(op)) validateDirectApiWebOperation(op, true);
       attest();
       compose('candidate', 'up', s);
       active[s] = await wait(s, plan.candidate[s]);
+      if (s === 'api') attestJoinRunningEnv();
       attest();
       if (s === 'api' && !equal(inspect('web'), plan.previous.web))
         fail('web_changed_before_activation');
@@ -1781,30 +2399,71 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
         durable(`${transaction}/observation.json`, `${JSON.stringify(direct)}\n`, true);
         return;
       }
+      const startedAt = new Date().toISOString();
+      const samples = {
+        api: { privateMs: [], publicMs: [], timestamps: [] },
+        web: { privateMs: [], publicMs: [], timestamps: [] },
+      };
       const times = { api: [], web: [] };
       for (let round = 0; round <= 60; round++) {
         for (const s of ['api', 'web']) {
           if (!equal(inspect(s), active[s])) fail('candidate_restarted');
-          times[s].push(await probe(s));
-          await probe(s, true);
+          const privateMs = await probe(s),
+            publicMs = await probe(s, true);
+          times[s].push(privateMs);
+          if (join) {
+            samples[s].privateMs.push(privateMs);
+            samples[s].publicMs.push(publicMs);
+            samples[s].timestamps.push(new Date().toISOString());
+          }
         }
+        if (join) validateJoinOperation(op, true);
         attest();
-        validateMonitoring(transaction);
+        attestJoinRunningEnv();
+        validateMonitoring(transaction, profile);
         if (round < 60) await delay(15000);
       }
       for (const s of ['api', 'web']) {
         const sorted = times[s].sort((a, b) => a - b);
-        if (sorted[Math.ceil(sorted.length * 0.95) - 1] > (s === 'api' ? 1500 : 1000))
-          fail('latency_threshold');
+        const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1],
+          limit = s === 'api' ? 1500 : 1000;
+        if (join ? p95 >= limit : p95 > limit) fail('latency_threshold');
       }
-      const finalMonitoring = validateMonitoring(transaction);
+      const finalMonitoring = validateMonitoring(transaction, profile);
       durable(`${transaction}/timeweb-monitor-readback.json`, finalMonitoring.provider, true);
       durable(`${transaction}/alert-test-readback.json`, finalMonitoring.alerts, true);
-      durable(
-        `${transaction}/observation.json`,
-        `${JSON.stringify({ windowSeconds: 900, samplesPerService: 61, latencyMs: times, serverErrors: 0, completedAt: new Date().toISOString() })}\n`,
-        true,
-      );
+      const completedAt = new Date().toISOString();
+      for (const service of ['api', 'web'])
+        for (const [key, source] of [
+          ['p95PrivateMs', 'privateMs'],
+          ['p95PublicMs', 'publicMs'],
+        ])
+          samples[service][key] = [...samples[service][source]].sort((a, b) => a - b)[57];
+      const observation = join
+        ? validateJoinObservation(
+            {
+              schema: 'PHUB_TIMEWEB_JOIN_DORMANT_OBSERVATION_V1',
+              operationSha256: plan.operationSha256,
+              planSha256,
+              candidateSha: op.candidateSha,
+              startedAt,
+              completedAt,
+              elapsedSeconds: (Date.parse(completedAt) - Date.parse(startedAt)) / 1000,
+              samples,
+              serverErrors: 0,
+            },
+            op,
+            plan,
+            planSha256,
+          )
+        : {
+            windowSeconds: 900,
+            samplesPerService: 61,
+            latencyMs: times,
+            serverErrors: 0,
+            completedAt,
+          };
+      durable(`${transaction}/observation.json`, `${JSON.stringify(observation)}\n`, true);
     },
     restore: async (s) => {
       // Only exact recorded candidate/previous images may be replaced by recovery.
@@ -1845,24 +2504,63 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
   if (mode === 'reconcile') {
     await reconcileApiWebPhase(receipt, {
       attestTerminal: async (terminal) => {
+        attestJoinBackup();
+        if (join)
+          expectedSecrets = terminal === 'SUCCESS' ? plan.candidateSecrets : plan.previousSecrets;
         attest();
         for (const service of ['api', 'web'])
           await wait(
             service,
             terminal === 'SUCCESS' ? plan.candidate[service] : plan.previous[service],
           );
-        if (terminal === 'SUCCESS') {
+        attestJoinRunningEnv();
+        if (terminal === 'SUCCESS' && join) {
+          validateJoinObservation(
+            parseStrictJson(read(`${transaction}/observation.json`)),
+            op,
+            plan,
+            planSha256,
+          );
+          if (
+            !read(`${directory}/installed-components.env`).equals(expectedDescriptor) ||
+            hash(expectedDescriptor) !== receipt.installedBaselineSha256
+          )
+            fail('installed_baseline_drift');
+          for (const [file, key] of [
+            ['observation.json', 'observationSha256'],
+            ['timeweb-monitor-readback.json', 'providerReadbackSha256'],
+            ['alert-test-readback.json', 'alertReadbackSha256'],
+          ])
+            if (hash(read(`${transaction}/${file}`)) !== receipt[key])
+              fail('installed_evidence_drift');
+        }
+        if (terminal === 'SUCCESS' && !join) {
           const installed = readInstalledApiBaseline(id);
           if (hash(installed.bytes) !== receipt.installedBaselineSha256)
             fail('installed_baseline_drift');
         }
       },
-      journalReconciled: async (terminal) =>
+      journalReconciled: async (terminal) => {
+        if (join && receipt.status === 'RECONCILED') return;
         durable(
           journalPath,
           `${JSON.stringify({ ...receipt, status: 'RECONCILED', reconciledStatus: terminal, observedAt: new Date().toISOString() })}\n`,
-        ),
-      releaseLock: async () => releaseLock(),
+        );
+      },
+      releaseLock: async () => {
+        if (terminalWithoutLock) return;
+        if (join && existsSync(provisionLock)) {
+          if (!read(provisionLock).equals(provisionBytes)) fail('join_provision_lock_drift');
+          unlinkSync(provisionLock);
+          const fd = openSync(dirname(provisionLock), 'r');
+          try {
+            fsyncSync(fd);
+          } finally {
+            closeSync(fd);
+          }
+        }
+        releaseLock();
+      },
     });
     return { status: 'RECONCILED', candidate: id, receipt: journalPath };
   }
@@ -1875,10 +2573,10 @@ export async function runManualApiWebUpgrade(mode, requestPath) {
     try {
       await runApiWebTransition(ops);
     } catch (error) {
-      if (JSON.parse(read(journalPath)).status === 'ABORTED') releaseLock();
+      if (!join && JSON.parse(read(journalPath)).status === 'ABORTED') releaseLock();
       throw error;
     }
-    releaseLock();
+    if (!join) releaseLock();
   }
   return {
     status: mode === 'recover' ? recoveredStatus : 'SUCCESS',

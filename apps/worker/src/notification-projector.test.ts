@@ -29,6 +29,119 @@ const event: NotificationSourceEvent = {
 };
 
 describe('notification intent projector', () => {
+  it('does not resolve Android endpoints while its tenant gate is disabled', async () => {
+    const query = vi.fn((text: string) => {
+      if (text === 'begin' || text === 'commit' || text.includes('set_config'))
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('insert into audit.inbox_events'))
+        return Promise.resolve({ rows: [{ event_id: event.id }], rowCount: 1 });
+      if (text.includes('pg_advisory_xact_lock') || text.includes('projection_fences'))
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      if (text.includes('tenant_runtime_settings'))
+        return Promise.resolve({
+          rows: [{ in_app_enabled: false, web_push_enabled: false, android_push_enabled: false }],
+          rowCount: 1,
+        });
+      if (text.includes('update audit.inbox_events'))
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+    await expect(
+      applyNotificationSourceEvent({
+        pool: pool as never,
+        event,
+        androidPush: { appId: 'ru.padlhub.app', environment: 'SANDBOX' },
+      }),
+    ).resolves.toMatchObject({ outcome: 'disabled' });
+    expect(
+      query.mock.calls.some(([text]) =>
+        String(text).includes('from integration.notification_endpoints'),
+      ),
+    ).toBe(false);
+  });
+
+  it('uses only active Android FCM endpoint selectors when Android push is enabled', async () => {
+    const observed: { text: string; values: readonly unknown[] }[] = [];
+    const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+      observed.push({ text, values });
+      if (text === 'begin' || text === 'commit' || text.includes('set_config'))
+        return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('insert into audit.inbox_events'))
+        return Promise.resolve({ rows: [{ event_id: event.id }], rowCount: 1 });
+      if (text.includes('pg_advisory_xact_lock') || text.includes('projection_fences'))
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      if (text.includes('tenant_runtime_settings'))
+        return Promise.resolve({
+          rows: [{ in_app_enabled: false, web_push_enabled: false, android_push_enabled: true }],
+          rowCount: 1,
+        });
+      if (text.includes('trigger_rules'))
+        return Promise.resolve({
+          rows: [
+            {
+              rule_id: '66666666-6666-4666-8666-666666666666',
+              template_id: '77777777-7777-4777-8777-777777777777',
+              audience_selector: { type: 'EVENT_USER', field: 'userId' },
+              mandatory: false,
+              effective_channels: ['PUSH'],
+              category: 'MESSAGING',
+              title_template: 'Новое',
+              body_template: 'Откройте чат',
+              deep_link_template: '/chats/{{gameId}}',
+            },
+          ],
+          rowCount: 1,
+        });
+      if (text.includes('from identity.users'))
+        return Promise.resolve({ rows: [{ '?column?': 1 }], rowCount: 1 });
+      if (text.includes('user_preferences')) return Promise.resolve({ rows: [], rowCount: 0 });
+      if (text.includes('from integration.notification_endpoints'))
+        return Promise.resolve({
+          rows: [{ id: '88888888-8888-4888-8888-888888888888' }],
+          rowCount: 1,
+        });
+      if (text.includes('insert into notifications.intents'))
+        return Promise.resolve({
+          rows: [{ id: '99999999-9999-4999-8999-999999999999' }],
+          rowCount: 1,
+        });
+      if (text.includes('insert into notifications.deliveries'))
+        return Promise.resolve({
+          rows: [{ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+          rowCount: 1,
+        });
+      if (
+        text.includes('insert into audit.outbox_events') ||
+        text.includes('insert into audit.audit_log') ||
+        text.includes('update audit.inbox_events')
+      )
+        return Promise.resolve({ rows: [], rowCount: 1 });
+      throw new Error(`Unexpected query: ${text}`);
+    });
+    const pool = { connect: vi.fn().mockResolvedValue({ query, release: vi.fn() }) };
+    await expect(
+      applyNotificationSourceEvent({
+        pool: pool as never,
+        event,
+        androidPush: { appId: 'ru.padlhub.app', environment: 'SANDBOX' },
+      }),
+    ).resolves.toMatchObject({ outcome: 'processed', pushQueued: 1 });
+    const endpoints = observed.find((entry) =>
+      entry.text.includes('from integration.notification_endpoints'),
+    );
+    expect(endpoints?.text).toContain("a.platform = 'ANDROID' and a.provider = 'FCM'");
+    expect(endpoints?.values).toEqual([
+      tenantId,
+      userId,
+      false,
+      true,
+      '',
+      'ru.padlhub.app',
+      'SANDBOX',
+      'SANDBOX',
+    ]);
+  });
   it('commits a duplicate source event without evaluating runtime or rules again', async () => {
     const query = vi.fn((text: string) => {
       if (text === 'begin' || text === 'commit' || text.includes('set_config')) {
@@ -451,7 +564,7 @@ describe('notification intent projector', () => {
               effective_channels: ['IN_APP'],
               category: 'MESSAGING',
               title_template: 'Новое сообщение',
-              body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+              body_template: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
               deep_link_template: '/chats/{{conversationId}}',
             },
           ],
@@ -556,7 +669,7 @@ describe('notification intent projector', () => {
               effective_channels: ['IN_APP', 'PUSH'],
               category: 'FRIENDSHIP',
               title_template: 'Заявка в друзья',
-              body_template: 'Откройте ПадлХАБ, чтобы ответить.',
+              body_template: 'Откройте ПадлхАБ, чтобы ответить.',
               deep_link_template: '/notifications',
             },
           ],
@@ -1169,7 +1282,7 @@ describe('booking notification projection fence', () => {
               effective_channels: ['IN_APP', 'PUSH'],
               category: 'MESSAGING',
               title_template: 'Новое сообщение',
-              body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+              body_template: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
               deep_link_template: '/chats/{{conversationId}}',
             },
           ],
@@ -1296,7 +1409,7 @@ describe('booking notification projection fence', () => {
               effective_channels: ['IN_APP', 'PUSH'],
               category: 'MESSAGING',
               title_template: 'Новое сообщение',
-              body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+              body_template: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
               deep_link_template: '/chats/{{conversationId}}',
             },
           ],
@@ -1418,7 +1531,7 @@ describe('booking notification projection fence', () => {
               effective_channels: ['IN_APP', 'PUSH'],
               category: 'MESSAGING',
               title_template: 'Новое сообщение',
-              body_template: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+              body_template: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
               deep_link_template: '/chats/{{conversationId}}',
             },
           ],

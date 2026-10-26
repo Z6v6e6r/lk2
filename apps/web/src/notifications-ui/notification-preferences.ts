@@ -6,7 +6,7 @@ import type {
 import type { WebPushBrowserState } from '../web-push-client.js';
 import type { NotificationIconName } from './NotificationIcon.js';
 
-export type PreferenceChannel = 'IN_APP' | 'PUSH';
+export type PreferenceChannel = 'IN_APP' | 'PUSH' | 'EMAIL';
 
 export interface PreferenceChannelDraft {
   readonly channel: PreferenceChannel;
@@ -34,10 +34,30 @@ export interface NotificationCategorySettings {
 }
 
 const CATEGORY_SETTINGS: Readonly<Record<string, NotificationCategorySettings>> = {
+  SUBSCRIPTION: {
+    title: 'Абонементы',
+    description: 'Напоминания об окончании абонемента',
+    icon: 'calendar',
+  },
+  BIRTHDAY: {
+    title: 'День рождения',
+    description: 'Поздравления от клуба по вашему согласию',
+    icon: 'megaphone',
+  },
+  TRAINING_ATTENDANCE: {
+    title: 'Посещение тренировок',
+    description: 'После подтвержденного посещения',
+    icon: 'calendar',
+  },
   MESSAGING: {
     title: 'Чаты',
     description: 'Личные диалоги и чаты игр',
     icon: 'chat',
+  },
+  GAME_RECOMMENDATION: {
+    title: 'Приглашения в игры',
+    description: 'Подходящие публичные игры друзей',
+    icon: 'game',
   },
   GAME: {
     title: 'Игры',
@@ -72,7 +92,13 @@ export const FALLBACK_TIMEZONE = 'Europe/Moscow';
 export function notificationPushStatus(
   configuration: WebPushConfiguration,
   browserState: WebPushBrowserState,
+  platform: 'web' | 'android' | 'ios' = 'web',
 ): string {
+  if (platform === 'android' || platform === 'ios') {
+    if (!configuration.enabled || browserState === 'unsupported')
+      return 'Уведомления пока недоступны.';
+    if (browserState === 'denied') return 'Разрешите уведомления в настройках приложения.';
+  }
   if (!configuration.enabled) return 'Push пока не включён для этой организации.';
   if (browserState === 'unsupported') return 'Этот браузер не поддерживает Web Push.';
   if (browserState === 'needs_install')
@@ -136,7 +162,7 @@ export function requestFromDraft(draft: PreferenceDraft): NotificationPreference
       channels: category.channels.map((channel) => {
         // Quiet hours describe when a push must not interrupt; the inbox item is always durable.
         const quiet =
-          channel.channel === 'PUSH' && draft.quietEnabled
+          (channel.channel === 'PUSH' || channel.channel === 'EMAIL') && draft.quietEnabled
             ? { quietFrom: draft.quietFrom, quietUntil: draft.quietUntil }
             : {};
         return {

@@ -104,6 +104,16 @@ final class AndroidSessionEngine {
     private String activeBearer;
     private long accessDeadline, generation;
 
+    /** Ephemeral native-only custody for a reviewed capability. Never crosses the bridge. */
+    static final class NativeAccess {
+        final String bearer;
+        final Principal identity;
+        final long generation;
+        NativeAccess(String bearer, Principal identity, long generation) {
+            this.bearer = bearer; this.identity = identity; this.generation = generation;
+        }
+    }
+
     AndroidSessionEngine(AndroidSessionPolicy policy, Store store, Sender sender) {
         this(policy, store, sender, null);
     }
@@ -118,7 +128,16 @@ final class AndroidSessionEngine {
     }
 
     synchronized Response request(String path, String method, Map<String, String> headers, String body) throws Failure {
-        Request request = policy.request(path, method, headers, body);
+        return request(path, method, headers, body, null);
+    }
+
+    synchronized Response requestBinary(String path, String method, Map<String, String> headers, byte[] body) throws Failure {
+        return request(path, method, headers, null, body);
+    }
+
+    private Response request(String path, String method, Map<String, String> headers, String textBody, byte[] binaryBody) throws Failure {
+        Request request = binaryBody == null ? policy.request(path, method, headers, textBody)
+            : policy.requestBinary(path, method, headers, binaryBody);
         if (request.operation == Operation.LOGOUT) {
             prepareLogout(request.headers.get("idempotency-key"));
         }
@@ -183,6 +202,29 @@ final class AndroidSessionEngine {
 
     synchronized boolean hasPendingLogout() throws Failure {
         return requestedLogoutKey != null || store.logoutIntent() != null;
+    }
+
+    synchronized NativeAccess nativeAccess() throws Failure {
+        Credential saved = current();
+        if (saved == null || saved.logoutKey != null || requestedLogoutKey != null || activeBearer == null
+            || activeIdentity == null || !activeIdentity.same(saved.identity) || clock.elapsed() >= accessDeadline)
+            throw new Failure("AUTH_SESSION_REVOKED");
+        return new NativeAccess(activeBearer, activeIdentity, generation);
+    }
+
+    synchronized void requireNativeAccess(NativeAccess access) throws Failure {
+        Credential saved = current();
+        if (access == null || access.generation != generation || requestedLogoutKey != null || activeBearer == null
+            || store.logoutIntent() != null || saved == null || saved.refreshKey != null || saved.logoutKey != null
+            || activeIdentity == null || !access.identity.same(activeIdentity) || !activeIdentity.same(saved.identity)
+            || !access.bearer.equals(activeBearer))
+            throw new Failure("NATIVE_OPERATION_CANCELLED");
+        if (clock.elapsed() >= accessDeadline) throw new Failure("NATIVE_REFRESH_UNAVAILABLE");
+    }
+
+    synchronized void rejectNativeAccess(NativeAccess access) throws Failure {
+        requireNativeAccess(access);
+        clearReadCache(); // Preserve the refresh credential; the SDK may recover an ordinary 401.
     }
 
     synchronized void requireOAuthSignedOut() throws Failure {
@@ -302,8 +344,15 @@ final class AndroidSessionEngine {
     private Response checkedSend(Request request) throws Failure {
         Response response = sender.send(request);
         if (response.status >= 300 && response.status < 400) throw new Failure("NATIVE_REDIRECT_REJECTED");
-        if (response.status < 200 || response.status > 599 || response.body.length > 1024 * 1024) throw new Failure("NATIVE_RESPONSE_REJECTED");
+        if (response.status < 200 || response.status > 599 || response.body.length > responseLimit(request)) throw new Failure("NATIVE_RESPONSE_REJECTED");
         return response;
+    }
+
+    private int responseLimit(Request request) {
+        String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (request.path.matches(".*/conversations/" + uuid + "/media/" + uuid + "/content")) return 15 * 1024 * 1024;
+        if (request.path.matches(".*/support/attachments/[A-Za-z0-9_-]{43}/content")) return 3_145_710;
+        return 1024 * 1024;
     }
 
     private void acceptSession(Response response, Credential previous) throws Failure {

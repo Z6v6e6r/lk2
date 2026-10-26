@@ -19,6 +19,7 @@ interface TenantRow extends QueryResultRow {
 interface RuntimeRow extends QueryResultRow {
   readonly in_app_enabled: boolean;
   readonly web_push_enabled: boolean;
+  readonly android_push_enabled: boolean;
   readonly booking_reminders_enabled: boolean;
   readonly booking_reminder_ruleset_version: string | null;
   readonly booking_reminder_contract_hash: string | null;
@@ -39,6 +40,7 @@ const tenantKey = argument('tenant-key');
 const actorId = argument('actor-id');
 const inApp = argument('in-app') ?? 'keep';
 const webPush = argument('web-push') ?? 'keep';
+const androidPush = argument('android-push') ?? 'keep';
 const bookingReminders = argument('booking-reminders') ?? 'keep';
 const confirm = argument('confirm');
 if (!tenantKey || !TENANT_KEY_PATTERN.test(tenantKey)) {
@@ -53,11 +55,21 @@ if (inApp !== 'on' && inApp !== 'off' && inApp !== 'keep') {
 if (webPush !== 'on' && webPush !== 'off' && webPush !== 'keep') {
   throw new Error('--web-push must be on, off or keep');
 }
+if (androidPush !== 'on' && androidPush !== 'off' && androidPush !== 'keep') {
+  throw new Error('--android-push must be on, off or keep');
+}
 if (bookingReminders !== 'on' && bookingReminders !== 'off' && bookingReminders !== 'keep') {
   throw new Error('--booking-reminders must be on, off or keep');
 }
-if (inApp === 'keep' && webPush === 'keep' && bookingReminders === 'keep') {
-  throw new Error('At least one of --in-app, --web-push or --booking-reminders must be on or off');
+if (
+  inApp === 'keep' &&
+  webPush === 'keep' &&
+  androidPush === 'keep' &&
+  bookingReminders === 'keep'
+) {
+  throw new Error(
+    'At least one of --in-app, --web-push, --android-push or --booking-reminders must be on or off',
+  );
 }
 
 const pool = createDatabasePool(connectionString);
@@ -73,7 +85,7 @@ try {
     await assertCommsOperatorAccess(client, tenantId, actorId);
     return queryOne<RuntimeRow>(
       client,
-      `select in_app_enabled, web_push_enabled, booking_reminders_enabled,
+      `select in_app_enabled, web_push_enabled, android_push_enabled, booking_reminders_enabled,
               booking_reminder_ruleset_version, booking_reminder_contract_hash
          from notifications.tenant_runtime_settings
         where tenant_id = $1`,
@@ -82,11 +94,14 @@ try {
   });
   const currentInAppEnabled = current?.in_app_enabled ?? false;
   const currentWebPushEnabled = current?.web_push_enabled ?? false;
+  const currentAndroidPushEnabled = current?.android_push_enabled ?? false;
   const currentBookingRemindersEnabled = current?.booking_reminders_enabled ?? false;
   const currentBookingReminderRulesetVersion = current?.booking_reminder_ruleset_version ?? null;
   const currentBookingReminderContractHash = current?.booking_reminder_contract_hash ?? null;
   const desiredInAppEnabled = inApp === 'keep' ? currentInAppEnabled : inApp === 'on';
   const desiredWebPushEnabled = webPush === 'keep' ? currentWebPushEnabled : webPush === 'on';
+  const desiredAndroidPushEnabled =
+    androidPush === 'keep' ? currentAndroidPushEnabled : androidPush === 'on';
   const desiredBookingRemindersEnabled =
     bookingReminders === 'keep' ? currentBookingRemindersEnabled : bookingReminders === 'on';
   const desiredBookingReminderRulesetVersion = desiredBookingRemindersEnabled
@@ -121,6 +136,8 @@ try {
     desiredInAppEnabled,
     currentWebPushEnabled,
     desiredWebPushEnabled,
+    currentAndroidPushEnabled,
+    desiredAndroidPushEnabled,
     currentBookingRemindersEnabled,
     desiredBookingRemindersEnabled,
     currentBookingReminderRulesetVersion,
@@ -143,7 +160,7 @@ try {
 
       const lockedCurrent = await queryOne<RuntimeRow>(
         client,
-        `select in_app_enabled, web_push_enabled, booking_reminders_enabled,
+        `select in_app_enabled, web_push_enabled, android_push_enabled, booking_reminders_enabled,
                 booking_reminder_ruleset_version, booking_reminder_contract_hash
            from notifications.tenant_runtime_settings
           where tenant_id = $1
@@ -153,6 +170,7 @@ try {
       if (
         (lockedCurrent?.in_app_enabled ?? false) !== currentInAppEnabled ||
         (lockedCurrent?.web_push_enabled ?? false) !== currentWebPushEnabled ||
+        (lockedCurrent?.android_push_enabled ?? false) !== currentAndroidPushEnabled ||
         (lockedCurrent?.booking_reminders_enabled ?? false) !== currentBookingRemindersEnabled ||
         (lockedCurrent?.booking_reminder_ruleset_version ?? null) !==
           currentBookingReminderRulesetVersion ||
@@ -180,10 +198,12 @@ try {
         `insert into notifications.tenant_runtime_settings (
            tenant_id, in_app_enabled, web_push_enabled, booking_reminders_enabled,
            booking_reminder_ruleset_version, booking_reminder_contract_hash, updated_by
-         ) values ($1, $2, $3, $4, $5, $6, $7)
+           , android_push_enabled
+         ) values ($1, $2, $3, $4, $5, $6, $7, $8)
          on conflict (tenant_id) do update set
            in_app_enabled = excluded.in_app_enabled,
            web_push_enabled = excluded.web_push_enabled,
+           android_push_enabled = excluded.android_push_enabled,
            booking_reminders_enabled = excluded.booking_reminders_enabled,
            booking_reminder_ruleset_version = excluded.booking_reminder_ruleset_version,
            booking_reminder_contract_hash = excluded.booking_reminder_contract_hash,
@@ -197,6 +217,7 @@ try {
           desiredBookingReminderRulesetVersion,
           desiredBookingReminderContractHash,
           actorId,
+          desiredAndroidPushEnabled,
         ],
       );
       await client.query(
@@ -212,6 +233,7 @@ try {
           JSON.stringify({
             inAppEnabled: lockedCurrent?.in_app_enabled ?? false,
             webPushEnabled: lockedCurrent?.web_push_enabled ?? false,
+            androidPushEnabled: lockedCurrent?.android_push_enabled ?? false,
             bookingRemindersEnabled: lockedCurrent?.booking_reminders_enabled ?? false,
             bookingReminderRulesetVersion: lockedCurrent?.booking_reminder_ruleset_version ?? null,
             bookingReminderContractHash: lockedCurrent?.booking_reminder_contract_hash ?? null,
@@ -219,6 +241,7 @@ try {
           JSON.stringify({
             inAppEnabled: desiredInAppEnabled,
             webPushEnabled: desiredWebPushEnabled,
+            androidPushEnabled: desiredAndroidPushEnabled,
             bookingRemindersEnabled: desiredBookingRemindersEnabled,
             bookingReminderRulesetVersion: desiredBookingReminderRulesetVersion,
             bookingReminderContractHash: desiredBookingReminderContractHash,

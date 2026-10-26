@@ -121,6 +121,13 @@ export interface AdminNotificationCapabilities {
   readonly webPushProviderConfigured: boolean;
   readonly iosPushTenantEnabled: boolean;
   readonly androidPushTenantEnabled: boolean;
+  readonly androidPushProviderConfigured?: boolean;
+}
+
+export interface AdminAndroidPushRuntime {
+  readonly globallyEnabled: boolean;
+  readonly appId: string;
+  readonly environment: 'SANDBOX' | 'PRODUCTION';
 }
 
 export interface AdminNotificationCampaignAccepted {
@@ -145,6 +152,7 @@ export interface AdminNotificationRepository {
     readonly tenantId: string;
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    readonly androidPush?: AdminAndroidPushRuntime;
   }): Promise<AdminNotificationCapabilities>;
   resolveRecipients(input: {
     readonly tenantId: string;
@@ -153,6 +161,7 @@ export interface AdminNotificationRepository {
     readonly webPushGloballyEnabled: boolean;
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    readonly androidPush?: AdminAndroidPushRuntime;
   }): Promise<AdminNotificationRecipientResolution>;
   listWebPushSubscribers(input: {
     readonly tenantId: string;
@@ -176,13 +185,14 @@ export interface AdminNotificationRepository {
     readonly title: string;
     readonly body: string;
     readonly deepLink?: string;
-    readonly requestedChannels: readonly ('IN_APP' | 'WEB_PUSH')[];
+    readonly requestedChannels: readonly ('IN_APP' | 'WEB_PUSH' | 'ANDROID_PUSH')[];
     readonly requestHash: string;
     readonly idempotencyKey: string;
     readonly correlationId: string;
     readonly webPushGloballyEnabled: boolean;
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    readonly androidPush?: AdminAndroidPushRuntime;
   }): Promise<AdminNotificationCampaignResult>;
 }
 
@@ -192,6 +202,7 @@ interface CapabilitiesRow extends QueryResultRow {
   readonly ios_push_enabled: boolean;
   readonly android_push_enabled: boolean;
   readonly web_push_provider_configured: boolean;
+  readonly android_push_provider_configured: boolean;
 }
 
 interface SubscriberRow extends QueryResultRow {
@@ -260,10 +271,14 @@ interface RecipientRow extends QueryResultRow {
   readonly in_app_preference_enabled: boolean;
   readonly push_preference_enabled: boolean;
   readonly web_push_endpoint_count: number;
+  readonly android_push_endpoint_count: number;
 }
 
 interface IdRow extends QueryResultRow {
   readonly id: string;
+}
+interface PushEndpointRow extends IdRow {
+  readonly platform: 'WEB' | 'ANDROID';
 }
 
 interface CommandRow extends QueryResultRow {
@@ -295,6 +310,7 @@ async function capabilities(
     readonly tenantId: string;
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    readonly androidPush?: AdminAndroidPushRuntime;
   },
 ): Promise<AdminNotificationCapabilities> {
   const row = await queryOne<CapabilitiesRow>(
@@ -314,11 +330,23 @@ async function capabilities(
             and a.app_id = $2
             and a.environment = $3
             and a.status = 'ACTIVE'
-       ) as web_push_provider_configured
+       ) as web_push_provider_configured,
+       exists (
+         select 1 from integration.notification_provider_accounts a
+          where a.tenant_id = $1 and a.channel = 'PUSH'
+            and a.platform = 'ANDROID' and a.provider = 'FCM'
+            and a.app_id = $4 and a.environment = $5 and a.status = 'ACTIVE'
+       ) as android_push_provider_configured
      from (select $1::uuid as tenant_id) input
      left join notifications.tenant_runtime_settings s
        on s.tenant_id = input.tenant_id`,
-    [input.tenantId, input.webPushAppId, input.webPushEnvironment],
+    [
+      input.tenantId,
+      input.webPushAppId,
+      input.webPushEnvironment,
+      input.androidPush?.appId ?? null,
+      input.androidPush?.environment ?? null,
+    ],
   );
   return {
     inAppTenantEnabled: row?.in_app_enabled ?? false,
@@ -326,6 +354,7 @@ async function capabilities(
     webPushProviderConfigured: row?.web_push_provider_configured ?? false,
     iosPushTenantEnabled: row?.ios_push_enabled ?? false,
     androidPushTenantEnabled: row?.android_push_enabled ?? false,
+    androidPushProviderConfigured: row?.android_push_provider_configured ?? false,
   };
 }
 
@@ -368,7 +397,17 @@ select
        and a.app_id = $3
        and a.environment = $4
        and a.status = 'ACTIVE'
-  ) as web_push_endpoint_count`;
+  ) as web_push_endpoint_count,
+  (
+    select count(*)::integer
+      from integration.notification_endpoints e
+      join integration.notification_provider_accounts a
+        on a.tenant_id = e.tenant_id and a.id = e.provider_account_id
+     where e.tenant_id = u.tenant_id and e.user_id = u.id
+       and e.channel = 'PUSH' and e.status = 'ACTIVE'
+       and a.channel = 'PUSH' and a.platform = 'ANDROID' and a.provider = 'FCM'
+       and a.app_id = $5 and a.environment = $6 and a.status = 'ACTIVE'
+  ) as android_push_endpoint_count`;
 }
 
 async function recipientRows(
@@ -378,6 +417,7 @@ async function recipientRows(
     readonly normalizedPhones: readonly string[];
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    readonly androidPush?: AdminAndroidPushRuntime;
   },
 ): Promise<readonly RecipientRow[]> {
   if (input.normalizedPhones.length === 0) return [];
@@ -425,7 +465,14 @@ ${recipientSelect('resolved.phone')}
        on p.tenant_id = u.tenant_id and p.user_id = u.id
     where u.status = 'ACTIVE'
     order by resolved.phone, u.id`,
-    [input.tenantId, [...input.normalizedPhones], input.webPushAppId, input.webPushEnvironment],
+    [
+      input.tenantId,
+      [...input.normalizedPhones],
+      input.webPushAppId,
+      input.webPushEnvironment,
+      input.androidPush?.appId ?? null,
+      input.androidPush?.environment ?? null,
+    ],
   );
   return result.rows;
 }
@@ -440,6 +487,7 @@ async function recipientRowsByIds(
     readonly normalizedUserIds: readonly string[];
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    readonly androidPush?: AdminAndroidPushRuntime;
   },
 ): Promise<readonly RecipientRow[]> {
   if (input.normalizedUserIds.length === 0) return [];
@@ -452,7 +500,14 @@ async function recipientRowsByIds(
         and u.status = 'ACTIVE'
         and u.id = any($2::uuid[])
       order by u.id`,
-    [input.tenantId, [...input.normalizedUserIds], input.webPushAppId, input.webPushEnvironment],
+    [
+      input.tenantId,
+      [...input.normalizedUserIds],
+      input.webPushAppId,
+      input.webPushEnvironment,
+      input.androidPush?.appId ?? null,
+      input.androidPush?.environment ?? null,
+    ],
   );
   return result.rows;
 }
@@ -461,6 +516,7 @@ function availableChannels(
   row: RecipientRow,
   capabilities: AdminNotificationCapabilities,
   webPushGloballyEnabled: boolean,
+  androidPush?: AdminAndroidPushRuntime,
 ): readonly AdminNotificationChannel[] {
   const channels: AdminNotificationChannel[] = [];
   if (capabilities.inAppTenantEnabled && row.in_app_preference_enabled) channels.push('IN_APP');
@@ -473,6 +529,14 @@ function availableChannels(
   ) {
     channels.push('WEB_PUSH');
   }
+  if (
+    androidPush?.globallyEnabled &&
+    capabilities.androidPushTenantEnabled &&
+    capabilities.androidPushProviderConfigured &&
+    row.push_preference_enabled &&
+    row.android_push_endpoint_count > 0
+  )
+    channels.push('ANDROID_PUSH');
   return channels;
 }
 
@@ -495,12 +559,13 @@ function recipientView(
   row: RecipientRow,
   capabilities: AdminNotificationCapabilities,
   webPushGloballyEnabled: boolean,
+  androidPush?: AdminAndroidPushRuntime,
 ): AdminNotificationRecipient {
   return {
     userId: row.user_id,
     displayName: row.display_name,
     ...(row.phone_e164 ? { phoneMasked: maskPhone(row.phone_e164) } : {}),
-    availableChannels: availableChannels(row, capabilities, webPushGloballyEnabled),
+    availableChannels: availableChannels(row, capabilities, webPushGloballyEnabled, androidPush),
   };
 }
 
@@ -509,6 +574,7 @@ function mapUserIdResolution(input: {
   readonly normalizedUserIds: readonly string[];
   readonly capabilities: AdminNotificationCapabilities;
   readonly webPushGloballyEnabled: boolean;
+  readonly androidPush?: AdminAndroidPushRuntime;
 }): {
   readonly matched: readonly AdminNotificationRecipient[];
   readonly unresolvedUserIds: readonly string[];
@@ -523,7 +589,9 @@ function mapUserIdResolution(input: {
       unresolvedUserIds.push(userId);
       continue;
     }
-    matched.push(recipientView(row, input.capabilities, input.webPushGloballyEnabled));
+    matched.push(
+      recipientView(row, input.capabilities, input.webPushGloballyEnabled, input.androidPush),
+    );
   }
   return { matched, unresolvedUserIds };
 }
@@ -533,6 +601,7 @@ function mapResolution(input: {
   readonly normalizedPhones: readonly string[];
   readonly capabilities: AdminNotificationCapabilities;
   readonly webPushGloballyEnabled: boolean;
+  readonly androidPush?: AdminAndroidPushRuntime;
 }): {
   readonly matched: readonly AdminNotificationRecipient[];
   readonly unresolvedPhones: readonly string[];
@@ -559,7 +628,9 @@ function mapResolution(input: {
     if (!row) continue;
     if (matchedUserIds.has(row.user_id)) continue;
     matchedUserIds.add(row.user_id);
-    matched.push(recipientView(row, input.capabilities, input.webPushGloballyEnabled));
+    matched.push(
+      recipientView(row, input.capabilities, input.webPushGloballyEnabled, input.androidPush),
+    );
   }
   return { matched, unresolvedPhones };
 }
@@ -679,12 +750,14 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
           normalizedPhones: input.normalizedPhones,
           capabilities: runtime,
           webPushGloballyEnabled: input.webPushGloballyEnabled,
+          ...(input.androidPush ? { androidPush: input.androidPush } : {}),
         });
         const byUserId = mapUserIdResolution({
           rows: userIdRows,
           normalizedUserIds: input.normalizedUserIds,
           capabilities: runtime,
           webPushGloballyEnabled: input.webPushGloballyEnabled,
+          ...(input.androidPush ? { androidPush: input.androidPush } : {}),
         });
         const matched = dedupeRecipients([...byPhone.matched, ...byUserId.matched]);
         // A selector value is either matched or unresolved, never both: an unresolved entry is only
@@ -849,12 +922,17 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
             group by status`,
           [input.tenantId],
         );
-        // Bounded sample: the platform split is derived by the caller from the endpoints it can decrypt.
+        // Browser-family reporting must not decrypt native FCM addresses as Web subscriptions.
         const endpointSample = await client.query<EndpointSampleRow>(
           `select address_ciphertext, encryption_key_id
-             from integration.notification_endpoints
-            where tenant_id = $1 and channel = 'PUSH' and status = 'ACTIVE'
-            order by last_confirmed_at desc nulls last
+             from integration.notification_endpoints e
+            where e.tenant_id = $1 and e.channel = 'PUSH' and e.status = 'ACTIVE'
+              and exists (
+                select 1 from integration.notification_provider_accounts a
+                 where a.tenant_id = e.tenant_id and a.id = e.provider_account_id
+                   and a.channel = 'PUSH' and a.platform = 'WEB' and a.provider = 'WEB_PUSH'
+              )
+            order by e.last_confirmed_at desc nulls last
             limit $2`,
           [input.tenantId, input.endpointSampleLimit],
         );
@@ -947,6 +1025,14 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
         ) {
           return { outcome: 'channel_unavailable', channel: 'WEB_PUSH' };
         }
+        if (
+          input.requestedChannels.includes('ANDROID_PUSH') &&
+          (!input.androidPush?.globallyEnabled ||
+            !runtime.androidPushTenantEnabled ||
+            !runtime.androidPushProviderConfigured)
+        ) {
+          return { outcome: 'channel_unavailable', channel: 'ANDROID_PUSH' };
+        }
 
         const candidateRows = await recipientRows(client, input);
         const userIdRows = await recipientRowsByIds(client, input);
@@ -1002,11 +1088,16 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
         for (const recipient of rows) {
           const inAppRequested = input.requestedChannels.includes('IN_APP');
           const webPushRequested = input.requestedChannels.includes('WEB_PUSH');
+          const androidPushRequested = input.requestedChannels.includes('ANDROID_PUSH');
           const deliverInApp = inAppRequested && recipient.in_app_preference_enabled;
           const deliverWebPush =
             webPushRequested &&
             recipient.push_preference_enabled &&
             recipient.web_push_endpoint_count > 0;
+          const deliverAndroidPush =
+            androidPushRequested &&
+            recipient.push_preference_enabled &&
+            recipient.android_push_endpoint_count > 0;
           const projectedChannels: AdminNotificationChannel[] = [];
           const suppressionReasons: string[] = [];
           if (deliverInApp) projectedChannels.push('IN_APP');
@@ -1017,12 +1108,18 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
           } else if (webPushRequested) {
             suppressionReasons.push('WEB_PUSH_ENDPOINT_MISSING');
           }
+          if (deliverAndroidPush) projectedChannels.push('ANDROID_PUSH');
+          else if (androidPushRequested && !recipient.push_preference_enabled) {
+            if (!suppressionReasons.includes('PUSH_PREFERENCE_DISABLED'))
+              suppressionReasons.push('PUSH_PREFERENCE_DISABLED');
+          } else if (androidPushRequested) suppressionReasons.push('ANDROID_PUSH_ENDPOINT_MISSING');
 
-          const intentState = deliverWebPush
-            ? 'PROCESSING'
-            : deliverInApp
-              ? 'DELIVERED'
-              : 'SUPPRESSED';
+          const intentState =
+            deliverWebPush || deliverAndroidPush
+              ? 'PROCESSING'
+              : deliverInApp
+                ? 'DELIVERED'
+                : 'SUPPRESSED';
           const intent = await queryOne<IdRow>(
             client,
             `insert into notifications.intents (
@@ -1119,9 +1216,10 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
             }
           }
 
-          if (deliverWebPush) {
-            const endpoints = await client.query<IdRow>(
-              `select e.id
+          let recipientPushQueuedCount = 0;
+          if (deliverWebPush || deliverAndroidPush) {
+            const endpoints = await client.query<PushEndpointRow>(
+              `select e.id, a.platform
                  from integration.notification_endpoints e
                  join integration.notification_provider_accounts a
                    on a.tenant_id = e.tenant_id and a.id = e.provider_account_id
@@ -1130,13 +1228,24 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
                   and e.channel = 'PUSH'
                   and e.status = 'ACTIVE'
                   and a.channel = 'PUSH'
-                  and a.platform = 'WEB'
-                  and a.provider = 'WEB_PUSH'
-                  and a.app_id = $3
-                  and a.environment = $4
+                  and (
+                    ($3::boolean and a.platform = 'WEB' and a.provider = 'WEB_PUSH'
+                      and a.app_id = $4 and a.environment = $5)
+                    or ($6::boolean and a.platform = 'ANDROID' and a.provider = 'FCM'
+                      and a.app_id = $7 and a.environment = $8)
+                  )
                   and a.status = 'ACTIVE'
                 order by e.created_at`,
-              [input.tenantId, recipient.user_id, input.webPushAppId, input.webPushEnvironment],
+              [
+                input.tenantId,
+                recipient.user_id,
+                deliverWebPush,
+                input.webPushAppId,
+                input.webPushEnvironment,
+                deliverAndroidPush,
+                input.androidPush?.appId ?? null,
+                input.androidPush?.environment ?? null,
+              ],
             );
             for (const endpoint of endpoints.rows) {
               const delivery = await queryOne<IdRow>(
@@ -1160,6 +1269,25 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
                 ],
               );
               pushQueuedCount += 1;
+              recipientPushQueuedCount += 1;
+            }
+            // Endpoint consent can disappear after recipient resolution. Account for the
+            // actual queue, and never leave a zero-delivery intent stuck in PROCESSING.
+            for (const [channel, platform, requested] of [
+              ['WEB_PUSH', 'WEB', deliverWebPush],
+              ['ANDROID_PUSH', 'ANDROID', deliverAndroidPush],
+            ] as const) {
+              if (requested && !endpoints.rows.some((endpoint) => endpoint.platform === platform)) {
+                projectedChannels.splice(projectedChannels.indexOf(channel), 1);
+                suppressionReasons.push(`${channel}_ENDPOINT_MISSING`);
+              }
+            }
+            if (recipientPushQueuedCount === 0) {
+              await client.query(
+                `update notifications.intents set state = $3, completed_at = now(), updated_at = now()
+                  where tenant_id = $1 and id = $2`,
+                [input.tenantId, intent.id, deliverInApp ? 'DELIVERED' : 'SUPPRESSED'],
+              );
             }
           }
 
@@ -1178,7 +1306,7 @@ export function createAdminNotificationRepository(pool: Pool): AdminNotification
               recipientState,
               projectedChannels,
               suppressionReasons,
-              deliverWebPush ? recipient.web_push_endpoint_count : 0,
+              recipientPushQueuedCount,
             ],
           );
         }

@@ -34,7 +34,10 @@ const recommendations: BookingRecommendationPage = {
   nextCursor: null,
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.history.replaceState({}, '', '/');
+});
 
 describe('BookingsPage', () => {
   it('keeps history and recommendations lazy while showing truthful upcoming records', async () => {
@@ -43,7 +46,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={bookings}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={loadHistory}
         loadRecommendations={loadRecommendations}
       />,
@@ -73,7 +76,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={{ ...bookings, state: 'UNAVAILABLE', items: [] }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={vi.fn().mockResolvedValue({ items: [], nextCursor: null })}
         loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
       />,
@@ -88,7 +91,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={{ ...bookings, state: 'READY', items: [] }}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={vi.fn().mockResolvedValue({ items: [], nextCursor: null })}
         loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
       />,
@@ -104,7 +107,7 @@ describe('BookingsPage', () => {
     render(
       <BookingsPage
         bookings={bookings}
-        tenantName="ПадлХАБ"
+        tenantName="ПадлхАБ"
         loadHistory={loadHistory}
         loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
       />,
@@ -112,5 +115,34 @@ describe('BookingsPage', () => {
 
     await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledOnce());
     expect(screen.getByRole('tab', { name: 'История' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it.each([
+    ['TOURNAMENT', 'Турниры', { kind: 'TOURNAMENT', status: 'COMPLETED', limit: 20 }],
+    ['unknown', 'Все', { status: 'COMPLETED', limit: 20 }],
+  ])('opens the profile history link with a validated %s kind', async (kind, label, query) => {
+    window.history.replaceState({}, '', `/bookings?scope=history&kind=${kind}`);
+    const loadHistory = vi.fn().mockResolvedValue({ items: [], nextCursor: null });
+    render(
+      <BookingsPage
+        bookings={bookings}
+        tenantName="ПадлхАБ"
+        loadHistory={loadHistory}
+        loadRecommendations={vi.fn().mockResolvedValue(recommendations)}
+      />,
+    );
+
+    await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledExactlyOnceWith(query));
+    expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('tab', { name: 'История' })).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Игры' }));
+    await vi.waitFor(() =>
+      expect(loadHistory).toHaveBeenLastCalledWith({
+        kind: 'GAME',
+        status: 'COMPLETED',
+        limit: 20,
+      }),
+    );
   });
 });

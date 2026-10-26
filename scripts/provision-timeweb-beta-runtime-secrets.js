@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { randomBytes } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomBytes } from 'node:crypto';
 import {
   chmodSync,
   chownSync,
@@ -16,6 +16,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -23,7 +24,12 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 
+import {
+  parseTimewebDelegationKeyring,
+  validateTimewebCommercialRuntime,
+} from './timeweb-commercial-runtime-contract.js';
 import { readTimewebCorsOrigins } from './timeweb-cors-origins.js';
+import { validateTimewebFcmEnvironment } from './verify-timeweb-deployment-contract.js';
 import {
   assertExactTimewebFrozenSource,
   requireExactTimewebFrozenSourceAuthority,
@@ -192,6 +198,10 @@ function assertEndpointKeyringEntries(value) {
 }
 
 export function assertComposableSecretValue(key, value) {
+  if (key === 'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS') {
+    parseTimewebDelegationKeyring(value, fail);
+    return;
+  }
   if (/[#$'\\\s]/u.test(value)) fail('compose_metacharacter');
   if (!value.includes('"')) return;
   if (!JSON_OBJECT_SECRET_KEYS.has(key) || !JSON_OBJECT_SECRET_VALUE.test(value)) {
@@ -279,6 +289,7 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
   }
 
   const { api, worker, realtime, migrator } = environments;
+  validateTimewebCommercialRuntime(api, fail);
   const corsOrigins = readTimewebCorsOrigins(targetContract);
   if (!corsOrigins.ok) fail(corsOrigins.reason);
   if (
@@ -349,6 +360,11 @@ export function validateTimewebRuntimeEnvironments(environments, { host, tenantK
   )
     fail('instance_identity');
 
+  try {
+    validateTimewebFcmEnvironment(api, worker);
+  } catch {
+    fail('fcm_runtime_binding');
+  }
   return environments;
 }
 
@@ -691,6 +707,318 @@ export function provisionTimewebBetaRuntimeSecrets({
       if (existsSync(lockPath)) removeExactLock(lockPath, lockIdentity, targetParent);
     }
   }
+}
+
+// Prepared sets are produced separately by the existing exact-source provisioner. The rollout
+// owns the shared deployment lock and this provision lock for the entire service transaction.
+export function describeTimewebRuntimeSecretSet(directory, expectedUid = 0, expectedGid = 0) {
+  assertAbsoluteNormalizedPath(directory, 'swap_path');
+  if (realpathSync(directory) !== directory) fail('swap_path');
+  const root = assertDirectory(directory, expectedUid);
+  if (root.gid !== expectedGid) fail('swap_group');
+  const names = [...FILES, IDENTITY_FILE].sort();
+  if (readdirSync(directory).sort().join('\n') !== names.join('\n')) fail('target_file_set');
+  const releaseId = readInstalledIdentity(directory, expectedUid);
+  const files = Object.fromEntries(
+    names.map((name) => {
+      const path = join(directory, name);
+      const bytes = readRegularFile(path, expectedUid, 0o600, 'swap_file_security');
+      const info = lstatSync(path);
+      if (info.gid !== expectedGid) fail('swap_group');
+      return [name, createHash('sha256').update(bytes).digest('hex')];
+    }),
+  );
+  const after = assertDirectory(directory, expectedUid);
+  if (
+    after.dev !== root.dev ||
+    after.ino !== root.ino ||
+    after.gid !== expectedGid ||
+    readdirSync(directory).sort().join('\n') !== names.join('\n')
+  )
+    fail('swap_identity_drift');
+  return { releaseId, device: root.dev, inode: root.ino, files };
+}
+
+export function validateTimewebFcmSecretDelta(
+  previousDir,
+  candidateDir,
+  expectedUid = 0,
+  expectedGid = 0,
+) {
+  const before = [previousDir, candidateDir].map((path) =>
+    describeTimewebRuntimeSecretSet(path, expectedUid, expectedGid),
+  );
+  const allowed = new Set([
+    'FCM_ENABLED',
+    'FCM_PROJECT_ID',
+    'FCM_APP_ID',
+    'FCM_ENVIRONMENT',
+    'FCM_CREDENTIAL_FILE',
+  ]);
+  const environments = {},
+    previousEnvironments = {};
+  for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
+    const previous = readRegularFile(
+      join(previousDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    const candidate = readRegularFile(
+      join(candidateDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    if (['realtime', 'migrator'].includes(service) && !previous.equals(candidate))
+      fail('non_fcm_secret_delta');
+    const oldValues = parseTimewebSecretEnvironment(previous);
+    const next = parseTimewebSecretEnvironment(candidate);
+    for (const key of new Set([...Object.keys(oldValues), ...Object.keys(next)]))
+      if (
+        oldValues[key] !== next[key] &&
+        (!['api', 'worker'].includes(service) || !allowed.has(key))
+      )
+        fail('non_fcm_secret_delta');
+    environments[service] = next;
+    previousEnvironments[service] = oldValues;
+  }
+  validateTimewebRuntimeEnvironments(previousEnvironments, {
+    host: 'lk2.padlhub.su',
+    tenantKey: 'local-padel',
+  });
+  validateTimewebRuntimeEnvironments(environments, {
+    host: 'lk2.padlhub.su',
+    tenantKey: 'local-padel',
+  });
+  if (validateTimewebFcmEnvironment(previousEnvironments.api, previousEnvironments.worker))
+    fail('fcm_enabled_previous');
+  if (
+    !validateTimewebFcmEnvironment(environments.api, environments.worker) ||
+    environments.api.FCM_ENVIRONMENT !== 'SANDBOX' ||
+    environments.worker.FCM_ENVIRONMENT !== 'SANDBOX'
+  )
+    fail('fcm_candidate_binding');
+  const after = [previousDir, candidateDir].map((path) =>
+    describeTimewebRuntimeSecretSet(path, expectedUid, expectedGid),
+  );
+  if (JSON.stringify(before) !== JSON.stringify(after)) fail('swap_identity_drift');
+}
+
+// This validator prepares dormant material only. It never rotates a key, enables a
+// feature, edits a file, or provisions the corresponding LK1 verifier.
+export function validateTimewebDormantJoinSecretDelta(
+  previousDir,
+  candidateDir,
+  verifierPublicKeySha256,
+  expectedUid = 0,
+  expectedGid = 0,
+) {
+  if (!/^[a-f0-9]{64}$/.test(verifierPublicKeySha256 ?? '')) fail('join_verifier_identity');
+  const before = [previousDir, candidateDir].map((dir) =>
+    describeTimewebRuntimeSecretSet(dir, expectedUid, expectedGid),
+  );
+  const allowed = new Set([
+    'GAME_COMMERCIAL_JOIN_ENABLED',
+    'GAME_COMMERCIAL_JOIN_OWNER_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_BASE_URL',
+    'SUBSCRIPTION_RUNTIME_INTEGRATION_TOKEN',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER',
+    'SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE',
+  ]);
+  const previousEnvironments = {},
+    environments = {};
+  for (const [service, name] of Object.entries(FILE_BY_SERVICE)) {
+    const previous = readRegularFile(
+      join(previousDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    const candidate = readRegularFile(
+      join(candidateDir, name),
+      expectedUid,
+      0o600,
+      'swap_file_security',
+    );
+    const oldValues = parseTimewebSecretEnvironment(previous);
+    const next = parseTimewebSecretEnvironment(candidate);
+    if (service !== 'api' && !previous.equals(candidate)) fail('non_join_secret_delta');
+    if (service === 'api') {
+      if (previous.at(-1) !== 10 || !candidate.subarray(0, previous.length).equals(previous))
+        fail('non_join_secret_delta');
+      const additions = parseTimewebSecretEnvironment(candidate.subarray(previous.length));
+      if (
+        !Object.keys(additions).length ||
+        Object.keys(additions).some((key) => !allowed.has(key) || Object.hasOwn(oldValues, key))
+      )
+        fail('non_join_secret_delta');
+      if (
+        oldValues.SUBSCRIPTION_RUNTIME_WARN_MODE !== 'OFF' ||
+        next.SUBSCRIPTION_RUNTIME_WARN_MODE !== 'OFF' ||
+        (oldValues.GAME_COMMERCIAL_JOIN_ENABLED !== undefined &&
+          oldValues.GAME_COMMERCIAL_JOIN_ENABLED !== 'false') ||
+        next.GAME_COMMERCIAL_JOIN_ENABLED !== 'false' ||
+        [...allowed].some((key) => !next[key])
+      )
+        fail('join_not_dormant_or_incomplete');
+      validateTimewebCommercialRuntime(next, fail);
+      const keys = parseTimewebDelegationKeyring(
+        next.SUBSCRIPTION_RUNTIME_DELEGATION_PRIVATE_KEYS,
+        fail,
+      );
+      const selected = keys[next.SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID];
+      if (!selected) fail('delegation_active_key_missing');
+      const publicDer = createPublicKey(createPrivateKey(selected)).export({
+        type: 'spki',
+        format: 'der',
+      });
+      if (createHash('sha256').update(publicDer).digest('hex') !== verifierPublicKeySha256)
+        fail('join_verifier_identity');
+    }
+    previousEnvironments[service] = oldValues;
+    environments[service] = next;
+  }
+  for (const values of [previousEnvironments, environments])
+    validateTimewebRuntimeEnvironments(values, {
+      host: 'lk2.padlhub.su',
+      tenantKey: 'local-padel',
+    });
+  const after = [previousDir, candidateDir].map((dir) =>
+    describeTimewebRuntimeSecretSet(dir, expectedUid, expectedGid),
+  );
+  if (JSON.stringify(before) !== JSON.stringify(after)) fail('swap_identity_drift');
+}
+
+// Exactly three recoverable layouts: old target + prepared candidate; old backup + prepared
+// candidate + missing target; candidate target + old backup. Never overwrite a foreign directory.
+export function transitionPreparedTimewebRuntimeSecrets({
+  direction,
+  targetDir,
+  candidateDir,
+  backupDir,
+  previous,
+  candidate,
+  planSha256,
+  expectedUid = 0,
+  expectedGid = 0,
+  afterRename = () => {},
+}) {
+  if (!['install', 'restore'].includes(direction) || !/^[a-f0-9]{64}$/.test(planSha256 ?? ''))
+    fail('swap_operation');
+  for (const path of [targetDir, candidateDir, backupDir])
+    assertAbsoluteNormalizedPath(path, 'swap_path');
+  for (const value of [previous, candidate]) {
+    if (
+      !value ||
+      Object.keys(value).sort().join(',') !== 'device,files,inode,releaseId' ||
+      !Number.isSafeInteger(value.device) ||
+      value.device < 0 ||
+      !Number.isSafeInteger(value.inode) ||
+      value.inode < 1 ||
+      !value.files ||
+      Object.keys(value.files).sort().join(',') !== [...FILES, IDENTITY_FILE].sort().join(',') ||
+      !Object.values(value.files).every((v) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v))
+    )
+      fail('swap_snapshot');
+    assertReleaseId(value.releaseId);
+  }
+  if (
+    previous.releaseId === candidate.releaseId ||
+    basename(targetDir) !== 'timeweb-beta' ||
+    candidateDir !==
+      join(dirname(targetDir), 'timeweb-beta-candidates', candidate.releaseId, 'timeweb-beta') ||
+    backupDir !==
+      join(
+        dirname(targetDir),
+        'timeweb-beta-backups',
+        `${previous.releaseId}--replaced-by--${candidate.releaseId}`,
+      )
+  )
+    fail('swap_path');
+  const parents = [
+    dirname(targetDir),
+    dirname(dirname(candidateDir)),
+    dirname(candidateDir),
+    dirname(backupDir),
+  ].map((path) => {
+    if (realpathSync(path) !== path) fail('swap_path');
+    const value = assertDirectory(path, expectedUid);
+    if (value.gid !== expectedGid) fail('swap_group');
+    return value;
+  });
+  if (parents.some((v) => v.dev !== previous.device || v.dev !== candidate.device))
+    fail('swap_filesystem');
+  const lockPath = join(dirname(targetDir), '.timeweb-beta.provision.lock');
+  const lock = readRegularFile(lockPath, expectedUid, 0o600, 'swap_lock_security');
+  const lockIdentity = lstatSync(lockPath);
+  if (
+    lockIdentity.gid !== expectedGid ||
+    lock.toString() !==
+      `${JSON.stringify({ schema: 'PHUB_TIMEWEB_RUNTIME_SWAP_LOCK_V1', planSha256, targetDir, candidateDir, backupDir, previous, candidate })}\n`
+  )
+    fail('swap_lock_identity');
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const present = (path) => {
+    try {
+      lstatSync(path);
+      return true;
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
+  };
+  const state = () => {
+    const currentLock = lstatSync(lockPath);
+    if (
+      currentLock.dev !== lockIdentity.dev ||
+      currentLock.ino !== lockIdentity.ino ||
+      currentLock.gid !== expectedGid ||
+      !readRegularFile(lockPath, expectedUid, 0o600, 'swap_lock_security').equals(lock)
+    )
+      fail('swap_lock_identity');
+    const at = (path) =>
+      present(path) ? describeTimewebRuntimeSecretSet(path, expectedUid, expectedGid) : null;
+    const target = at(targetDir),
+      prepared = at(candidateDir),
+      backup = at(backupDir);
+    if (same(target, previous) && same(prepared, candidate) && backup === null) return 'PREVIOUS';
+    if (target === null && same(prepared, candidate) && same(backup, previous)) return 'GAP';
+    if (same(target, candidate) && prepared === null && same(backup, previous)) return 'CANDIDATE';
+    fail('swap_identity_drift');
+  };
+  const move = (from, to, phase) => {
+    if (present(to)) fail('swap_destination_exists');
+    renameSync(from, to);
+    afterRename(phase); // Rehearsal hook; the live entry never accepts an injection.
+    syncDirectory(dirname(from));
+    syncDirectory(dirname(to));
+  };
+  let current = state();
+  if (direction === 'install') {
+    if (current === 'PREVIOUS') {
+      move(targetDir, backupDir, 'previous-moved');
+      current = state();
+    }
+    if (current === 'GAP') {
+      move(candidateDir, targetDir, 'candidate-moved');
+      current = state();
+    }
+    if (current !== 'CANDIDATE') fail('swap_incomplete');
+  } else {
+    if (current === 'CANDIDATE') {
+      move(targetDir, candidateDir, 'candidate-returned');
+      current = state();
+    }
+    if (current === 'GAP') {
+      move(backupDir, targetDir, 'previous-restored');
+      current = state();
+    }
+    if (current !== 'PREVIOUS') fail('swap_incomplete');
+  }
+  return { status: direction === 'install' ? 'INSTALLED' : 'RESTORED', planSha256 };
 }
 
 function parseArguments(argv) {

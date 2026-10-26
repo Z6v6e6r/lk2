@@ -1,3 +1,13 @@
+import Redis from 'ioredis';
+import { VivaIdentityProvider } from '@phub/viva-adapter';
+import { VivaNotificationSource } from '@phub/viva-adapter/notification-lifecycle';
+import { ApnsDeliveryAdapter, ApnsTokenProvider } from './apns-adapter.js';
+import { YandexSmtpAdapter } from './yandex-smtp-adapter.js';
+import { runExtendedScenarioDelivery } from './extended-scenario-delivery.js';
+import {
+  runNotificationLifecycleSync,
+  runNotificationAttendanceSync,
+} from './notification-lifecycle-sync.js';
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 
@@ -23,6 +33,7 @@ import {
   createParticipationCommandRepository,
   createProfileFriendshipRepository,
 } from '@phub/database';
+import { createSupportTicketRepository } from '@phub/database/support-tickets';
 import { LegacyGamesMongoAdapter, LegacyGamesPublicAdapter } from '@phub/legacy-games-adapter';
 import { createNotificationEndpointCipher, notificationReceiptSecret } from '@phub/notifications';
 import { createLogger, startTelemetry } from '@phub/observability';
@@ -56,6 +67,8 @@ import { runGiftCertificateSandboxDeliveryBatch } from './gift-certificate-deliv
 import { expireCommunityDirectInviteBatch } from './community-direct-invite-expiry.js';
 import { registerGiftCertificateIssuerConsumer } from './gift-certificate-issuer-consumer.js';
 import { registerLocationHomeProjectorConsumer } from './location-home-projector-consumer.js';
+import { registerNotificationScenarioConsumer } from './notification-scenario-consumer.js';
+import { runNotificationScenarioBatch } from './notification-scenarios.js';
 import { registerNotificationProjectorConsumer } from './notification-projector-consumer.js';
 import { runBookingReminderSchedulerBatch } from './booking-reminder-scheduler.js';
 import {
@@ -80,7 +93,12 @@ import { runProfilePhotoMaintenanceCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
 import { runWebPushTenantCycle } from './web-push-tenant-cycle.js';
+import { FcmDeliveryAdapter } from './fcm-adapter.js';
+import { FcmServiceAccountTokenProvider } from './fcm-credential-provider.js';
+import { runFcmDeliveryBatch } from './fcm-delivery.js';
+import { runFcmTenantCycle } from './fcm-tenant-cycle.js';
 import { runFairTenantCycle } from './tenant-cycle-orchestrator.js';
+import { runSupportTicketAutocloseTenantCycle } from './support-ticket-autoclose.js';
 import {
   calculateWorkerForwardProgressMaxStaleMs,
   createRabbitFailureHandler,
@@ -122,6 +140,9 @@ const gameRosterRepository = createGameRosterRepository(pool, {
 const messagingRepository = createMessagingRepository(pool);
 const participationCommandRepository = createParticipationCommandRepository(pool);
 const profileFriendshipRepository = createProfileFriendshipRepository(pool);
+const supportTicketRepository = createSupportTicketRepository(pool);
+const SUPPORT_TICKET_AUTOCLOSE_INTERVAL_MS = 60_000;
+const SUPPORT_TICKET_AUTOCLOSE_BATCH_SIZE = 100;
 const gamesProcessManagerWorkerId = `games-process-manager-${randomUUID()}`;
 const COMMUNITY_DIRECT_INVITE_EXPIRY_INTERVAL_MS = 60_000;
 const DEFERRED_FRIEND_REQUEST_DELIVERY_INTERVAL_MS = 60_000;
@@ -328,6 +349,87 @@ const webPushRuntime =
         }),
       }
     : undefined;
+const fcmRuntime = config.FCM_ENABLED
+  ? (() => {
+      if (
+        !config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS ||
+        !config.FCM_CREDENTIAL_FILE ||
+        !config.FCM_PROJECT_ID
+      ) {
+        throw new Error('FCM_RUNTIME_CONFIGURATION_INVALID');
+      }
+      return {
+        cipher: createNotificationEndpointCipher({
+          serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS,
+          activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
+        }),
+        provider: FcmServiceAccountTokenProvider.create({
+          credentialFile: config.FCM_CREDENTIAL_FILE,
+          projectId: config.FCM_PROJECT_ID,
+          timeoutMs: config.FCM_TIMEOUT_MS,
+        }),
+      };
+    })()
+  : undefined;
+const activeFcmRuntime = fcmRuntime
+  ? {
+      cipher: fcmRuntime.cipher,
+      adapter: new FcmDeliveryAdapter({
+        projectId: config.FCM_PROJECT_ID as string,
+        timeoutMs: config.FCM_TIMEOUT_MS,
+        accessTokenProvider: await fcmRuntime.provider,
+        onProviderOutcome: (outcome) =>
+          workerMetrics.recordFcmProviderOutcome(config.FCM_ENVIRONMENT, outcome),
+      }),
+    }
+  : undefined;
+const extendedCipher =
+  config.APNS_ENABLED || config.SMTP_ENABLED
+    ? createNotificationEndpointCipher({
+        serializedKeys: config.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS!,
+        activeKeyId: config.NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID,
+      })
+    : undefined;
+const apnsRuntime = config.APNS_ENABLED
+  ? new ApnsDeliveryAdapter({
+      topic: config.APNS_APP_ID,
+      environment: config.APNS_ENVIRONMENT,
+      timeoutMs: 5000,
+      tokenProvider: await ApnsTokenProvider.create(config.APNS_CREDENTIAL_FILE!),
+      onOutcome: (code) => workerMetrics.recordExtendedNotificationOutcome('APNS', code),
+    })
+  : undefined;
+const smtpRuntime = config.SMTP_ENABLED
+  ? await YandexSmtpAdapter.create({
+      credentialFile: config.SMTP_CREDENTIAL_FILE!,
+      timeoutMs: 5000,
+      onOutcome: (code) => workerMetrics.recordExtendedNotificationOutcome('YANDEX_SMTP', code),
+    })
+  : undefined;
+const lifecycleRuntime = config.NOTIFICATION_LIFECYCLE_VIVA_ENABLED
+  ? {
+      source: new VivaNotificationSource({
+        providerTenantKey: config.VIVA_AUTH_TENANT_KEY,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
+        onOutcome: (code) => workerMetrics.recordExtendedNotificationOutcome('VIVA_READ', code),
+      }),
+      provider: new VivaIdentityProvider({
+        mode: config.VIVA_MODE,
+        baseUrl: config.VIVA_AUTH_BASE_URL,
+        oauthScopes: config.VIVA_OAUTH_SCOPES,
+        realm: config.VIVA_AUTH_REALM,
+        clientId: config.VIVA_AUTH_CLIENT_ID,
+        channel: config.VIVA_AUTH_CHANNEL,
+        timeoutMs: config.VIVA_TIMEOUT_MS,
+        devPhoneE164: config.AUTH_DEV_PHONE_E164,
+        devOtpCode: config.AUTH_DEV_OTP_CODE,
+      }),
+    }
+  : undefined;
+const lifecycleRedis = lifecycleRuntime
+  ? new Redis(config.REDIS_URL, { enableOfflineQueue: false, maxRetriesPerRequest: 1 })
+  : undefined;
+let attendanceNextAt = 0;
 const connection = await connect(config.RABBITMQ_URL);
 const channel = await connection.createConfirmChannel();
 const consumerChannel = await connection.createChannel();
@@ -391,7 +493,12 @@ await registerNotificationProjectorConsumer({
         },
       }
     : {}),
+  ...(activeFcmRuntime
+    ? { androidPush: { appId: config.FCM_APP_ID, environment: config.FCM_ENVIRONMENT } }
+    : {}),
 });
+if (config.NOTIFICATION_SCENARIOS_ENABLED)
+  await registerNotificationScenarioConsumer({ channel: consumerChannel, pool, logger });
 if (giftCertificateRuntime) {
   await registerGiftCertificateIssuerConsumer({
     channel: consumerChannel,
@@ -423,6 +530,14 @@ const bookingReminderForwardProgress = config.BOOKING_REMINDER_SCHEDULER_ENABLED
       calculateWorkerForwardProgressMaxStaleMs({
         pollIntervalMs: config.BOOKING_REMINDER_POLL_INTERVAL_MS,
         confirmTimeoutMs: config.BOOKING_REMINDER_CLAIM_TTL_MS,
+      }),
+    )
+  : undefined;
+const fcmForwardProgress = activeFcmRuntime
+  ? new WorkerForwardProgressTracker(
+      calculateWorkerForwardProgressMaxStaleMs({
+        pollIntervalMs: config.FCM_POLL_INTERVAL_MS,
+        confirmTimeoutMs: config.FCM_TIMEOUT_MS,
       }),
     )
   : undefined;
@@ -491,6 +606,7 @@ const handleHealthRequest = async (
       profileMedia: profileMediaReady,
       forwardProgress: forwardProgress.ready,
       webPushForwardProgress: webPushProgress?.ready ?? true,
+      fcmForwardProgress: fcmForwardProgress?.snapshot().ready ?? true,
       bookingReminderForwardProgress: bookingReminderProgress?.ready ?? true,
     };
     response.statusCode = Object.values(checks).every(Boolean) ? 200 : 503;
@@ -499,6 +615,7 @@ const handleHealthRequest = async (
         status: response.statusCode === 200 ? 'ready' : 'not_ready',
         checks,
         coreCycle: forwardProgress,
+        ...(fcmForwardProgress ? { fcmCycle: fcmForwardProgress.snapshot() } : {}),
         ...(runtimeContourAttestation ? { runtimeContour: runtimeContourAttestation } : {}),
         ...(webPushProgress
           ? {
@@ -535,6 +652,7 @@ logger.info(
 );
 let tenantCycleStartOffset = 0;
 let webPushTenantCycleStartOffset = 0;
+let fcmTenantCycleStartOffset = 0;
 let bookingReminderTenantCycleStartOffset = 0;
 
 const publishConfiguredOutboxBatch = (tenantId: string): Promise<number> => {
@@ -683,6 +801,38 @@ const runParticipationCommandExpiryCycle = async (): Promise<void> => {
         config.PARTICIPATION_COMMAND_EXPIRY_INTERVAL_MS,
       );
     }
+  }
+};
+
+let supportTicketTenantCycleStartOffset = 0;
+const runSupportTicketAutocloseCycle = async (): Promise<void> => {
+  if (shuttingDown) return;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active = true order by id',
+    );
+    const cycle = await runSupportTicketAutocloseTenantCycle({
+      repository: supportTicketRepository,
+      tenants: tenants.rows,
+      startOffset: supportTicketTenantCycleStartOffset,
+      limit: SUPPORT_TICKET_AUTOCLOSE_BATCH_SIZE,
+      correlationId: () => `support-autoclose-${randomUUID()}`,
+      shouldStop: () => shuttingDown,
+      onProgress: () => undefined,
+      onTenantFailure: (tenant) =>
+        logger.error({ tenantId: tenant.id }, 'support ticket tenant autoclose failed'),
+    });
+    supportTicketTenantCycleStartOffset = cycle.nextStartOffset;
+    if (cycle.closed > 0 || cycle.purged > 0)
+      logger.info(
+        { closed: cycle.closed, purged: cycle.purged },
+        'support ticket lifecycle cycle completed',
+      );
+  } catch {
+    logger.error('support ticket autoclose tenant discovery failed');
+  } finally {
+    if (!shuttingDown)
+      setTimeout(() => void runSupportTicketAutocloseCycle(), SUPPORT_TICKET_AUTOCLOSE_INTERVAL_MS);
   }
 };
 
@@ -953,6 +1103,123 @@ const runBookingReminderCycle = async (): Promise<void> => {
   }
 };
 
+const runLifecycleCycle = async (): Promise<void> => {
+  if (shuttingDown || !lifecycleRuntime) return;
+  try {
+    if (lifecycleRuntime) {
+      try {
+        await runNotificationLifecycleSync({
+          pool,
+          redis: lifecycleRedis!,
+          config,
+          ...lifecycleRuntime,
+        });
+      } catch {
+        logger.error(
+          { code: 'VIVA_NOTIFICATION_SYNC_FAILED' },
+          'notification lifecycle sync failed',
+        );
+      }
+      if (Date.now() >= attendanceNextAt) {
+        attendanceNextAt = Date.now() + 60_000;
+        try {
+          await runNotificationAttendanceSync({ pool, config, source: lifecycleRuntime.source });
+        } catch {
+          logger.error(
+            { code: 'VIVA_NOTIFICATION_ATTENDANCE_FAILED' },
+            'notification attendance sync failed',
+          );
+        }
+      }
+    }
+  } finally {
+    if (!shuttingDown) setTimeout(() => void runLifecycleCycle(), 60_000);
+  }
+};
+let scenarioTenantOffset = 0;
+const runScenarioCycle = async (): Promise<void> => {
+  if (shuttingDown || !config.NOTIFICATION_SCENARIOS_ENABLED) return;
+  try {
+    const tenants = await pool.query<{ id: string }>(
+      'select id from identity.tenants where active=true order by id',
+    );
+    const count = tenants.rows.length;
+    for (let index = 0; index < count && !shuttingDown; index++) {
+      const tenantId = tenants.rows[(scenarioTenantOffset + index) % count]!.id;
+      try {
+        await runNotificationScenarioBatch({
+          pool,
+          tenantId,
+          staffTasksEnabled: config.NOTIFICATION_STAFF_TASKS_ENABLED,
+          ...(apnsRuntime
+            ? {
+                iosPush: {
+                  appId: config.APNS_APP_ID,
+                  environment: config.APNS_ENVIRONMENT,
+                  credentialRef: config.APNS_CREDENTIAL_REF,
+                },
+              }
+            : {}),
+          ...(smtpRuntime && extendedCipher
+            ? {
+                email: {
+                  appId: config.SMTP_APP_ID,
+                  environment: config.SMTP_ENVIRONMENT,
+                  credentialRef: config.SMTP_CREDENTIAL_REF,
+                  cipher: extendedCipher,
+                },
+              }
+            : {}),
+          ...(webPushRuntime
+            ? {
+                webPush: {
+                  appId: config.WEB_PUSH_APP_ID,
+                  environment: config.WEB_PUSH_ENVIRONMENT,
+                },
+              }
+            : {}),
+          ...(activeFcmRuntime
+            ? { androidPush: { appId: config.FCM_APP_ID, environment: config.FCM_ENVIRONMENT } }
+            : {}),
+        });
+        if (extendedCipher && apnsRuntime)
+          await runExtendedScenarioDelivery({
+            pool,
+            tenantId,
+            appId: config.APNS_APP_ID,
+            environment: config.APNS_ENVIRONMENT,
+            cipher: extendedCipher,
+            transport: 'APNS',
+            adapter: apnsRuntime,
+            enabled: true,
+            credentialRef: config.APNS_CREDENTIAL_REF,
+          });
+        if (extendedCipher && smtpRuntime)
+          await runExtendedScenarioDelivery({
+            pool,
+            tenantId,
+            appId: config.SMTP_APP_ID,
+            environment: config.SMTP_ENVIRONMENT,
+            cipher: extendedCipher,
+            transport: 'YANDEX_SMTP',
+            adapter: smtpRuntime,
+            enabled: true,
+            credentialRef: config.SMTP_CREDENTIAL_REF,
+          });
+      } catch {
+        logger.error(
+          { tenantId, code: 'SCENARIO_CYCLE_FAILED' },
+          'notification scenario tenant cycle failed',
+        );
+      }
+    }
+    scenarioTenantOffset = count ? (scenarioTenantOffset + 1) % count : 0;
+  } catch {
+    logger.error({ code: 'SCENARIO_CYCLE_FAILED' }, 'notification scenario cycle failed');
+  } finally {
+    if (!shuttingDown) setTimeout(() => void runScenarioCycle(), 15_000);
+  }
+};
 const runWebPushCycle = async (): Promise<void> => {
   if (shuttingDown || !webPushRuntime) return;
   const startedAt = Date.now();
@@ -971,6 +1238,7 @@ const runWebPushCycle = async (): Promise<void> => {
           tenantId,
           appId: config.WEB_PUSH_APP_ID,
           environment: config.WEB_PUSH_ENVIRONMENT,
+          scenarioPolicyEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
           cipher: webPushRuntime.cipher,
           adapter: webPushRuntime.adapter,
           maxAttempts: config.WEB_PUSH_MAX_ATTEMPTS,
@@ -1010,6 +1278,51 @@ const runWebPushCycle = async (): Promise<void> => {
     if (!shuttingDown) {
       setTimeout(() => void runWebPushCycle(), config.WEB_PUSH_POLL_INTERVAL_MS);
     }
+  }
+};
+
+const runFcmCycle = async (): Promise<void> => {
+  if (shuttingDown || !activeFcmRuntime) return;
+  const startedAt = Date.now();
+  let failed = false;
+  fcmForwardProgress?.markCycleStarted(startedAt);
+  try {
+    const cycle = await runFcmTenantCycle({
+      pool,
+      startOffset: fcmTenantCycleStartOffset,
+      maxDeliveriesPerTenant: config.FCM_BATCH_SIZE,
+      shouldStop: () => shuttingDown,
+      runTenant: async (tenantId) =>
+        (
+          await runFcmDeliveryBatch({
+            pool,
+            logger,
+            tenantId,
+            appId: config.FCM_APP_ID,
+            environment: config.FCM_ENVIRONMENT,
+            scenarioPolicyEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
+            cipher: activeFcmRuntime.cipher,
+            adapter: activeFcmRuntime.adapter,
+            maxAttempts: config.FCM_MAX_ATTEMPTS,
+            retryBaseMs: config.FCM_RETRY_BASE_MS,
+            batchSize: 1,
+          })
+        ).claimed,
+      onTenantFailure: (tenantId, error) =>
+        logger.error({ err: error, tenantId }, 'FCM tenant delivery failed'),
+      onProgress: () => fcmForwardProgress?.markProgress(),
+    });
+    fcmTenantCycleStartOffset = cycle.nextStartOffset;
+    failed = cycle.interrupted || cycle.failedCount > 0;
+    if (failed) fcmForwardProgress?.markCycleFailed();
+    else fcmForwardProgress?.markCycleSucceeded();
+  } catch (error) {
+    failed = true;
+    fcmForwardProgress?.markCycleFailed();
+    logger.error({ err: error }, 'FCM delivery cycle failed');
+  } finally {
+    workerMetrics.recordFcmCycle(Date.now() - startedAt, failed);
+    if (!shuttingDown) setTimeout(() => void runFcmCycle(), config.FCM_POLL_INTERVAL_MS);
   }
 };
 
@@ -1209,6 +1522,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
     channel.close(),
     connection.close(),
     pool.end(),
+    lifecycleRedis?.quit(),
     telemetry?.shutdown(),
   ]);
   const failedClosures = results.filter((result) => result.status === 'rejected').length;
@@ -1223,6 +1537,8 @@ process.once('SIGTERM', () => void shutdown('SIGTERM'));
 process.once('SIGINT', () => void shutdown('SIGINT'));
 void runCycle();
 void runBookingReminderCycle();
+void runScenarioCycle();
+void runLifecycleCycle();
 if (telemetry) void runOperationalMetricsCycle();
 void runProfilePhotoMaintenance();
 void runCommunitySyncCycle();
@@ -1232,9 +1548,11 @@ void runHomeBaseCycle();
 void runPromotionSyncCycle();
 void runLegacyGamesRosterSync();
 void runWebPushCycle();
+void runFcmCycle();
 void runGiftCertificateDeliveryCycle();
 void runCommunityDirectInviteExpiryCycle();
 void runParticipationCommandExpiryCycle();
+void runSupportTicketAutocloseCycle();
 void runDeferredFriendRequestDeliveryCycle();
 if (canonicalCommunityWorkerEnabled) {
   void runCommunityMemberCountReconciliation();

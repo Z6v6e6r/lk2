@@ -1,5 +1,17 @@
+import type {
+  NotificationScenarioInput,
+  NotificationScenarioView,
+  NotificationScenarioRunView,
+} from '@phub/domain/notification-scenarios';
 import { ApiClientError, PadlHubApiClient } from '@phub/api-sdk';
-import type { AuthenticatedSession, AuthChallenge, CommunityPost } from '@phub/api-sdk';
+import type {
+  AuthenticatedSession,
+  AuthChallenge,
+  CommunityPost,
+  SupportTicket,
+  SupportTicketPage,
+  SupportTicketSummary,
+} from '@phub/api-sdk';
 import type {
   GiftCertificateAdminCatalogState,
   GiftCertificateCatalogInput,
@@ -24,6 +36,7 @@ export type AdminGiftCertificateMediaCommandResult = GiftCertificateMediaAsset &
 };
 
 export type AdminNotificationChannel = 'IN_APP' | 'WEB_PUSH' | 'IOS_PUSH' | 'ANDROID_PUSH';
+export type { SupportTicket, SupportTicketPage } from '@phub/api-sdk';
 
 export interface AdminNotificationChannelCapability {
   readonly channel: AdminNotificationChannel;
@@ -68,6 +81,27 @@ export interface AdminNotificationCampaignAccepted {
   readonly pushQueuedCount: number;
   readonly suppressedCount: number;
   readonly replayed: boolean;
+}
+
+export type SupportTicketCategory = SupportTicketSummary['category'];
+export type SupportTicketStatus = SupportTicketSummary['status'];
+export type SupportTicketPriority = SupportTicketSummary['priority'];
+
+export interface AdminSupportTicketFilters {
+  readonly cursor?: string;
+  readonly status?: SupportTicketStatus;
+  readonly category?: SupportTicketCategory;
+  readonly priority?: SupportTicketPriority;
+  readonly query?: string;
+}
+
+export interface AdminSupportTicketUpdate {
+  readonly expectedVersion: number;
+  readonly status?: SupportTicketStatus;
+  readonly priority?: SupportTicketPriority;
+  readonly category?: SupportTicketCategory;
+  readonly assignedTo?: string | null;
+  readonly tags?: readonly string[];
 }
 
 export type LevelEligibilityActivityType = 'GAME' | 'TOURNAMENT' | 'TRAINING';
@@ -201,6 +235,24 @@ export interface AdminCommunityMediaReadGrant {
 }
 
 export interface NotificationAdminClient {
+  listNotificationScenarios(): Promise<{
+    readonly items: readonly NotificationScenarioView[];
+    readonly catalog: readonly {
+      readonly type: string;
+      readonly available: boolean;
+      readonly reason: string | null;
+    }[];
+    readonly runtimeEnabled: boolean;
+  }>;
+  saveNotificationScenario(input: {
+    readonly id?: string;
+    readonly expectedVersion: number;
+    readonly definition: NotificationScenarioInput;
+    readonly idempotencyKey: string;
+  }): Promise<NotificationScenarioView>;
+  listNotificationScenarioRuns(): Promise<{
+    readonly items: readonly NotificationScenarioRunView[];
+  }>;
   restoreSession(): Promise<AuthenticatedSession | null>;
   requestCode(phone: string): Promise<AuthChallenge>;
   verifyCode(challengeId: string, code: string): Promise<AuthenticatedSession>;
@@ -343,6 +395,18 @@ export interface NotificationAdminClient {
       readonly metadata?: Record<string, unknown>;
     };
   }>;
+  listAdminSupportTickets(input?: AdminSupportTicketFilters): Promise<SupportTicketPage>;
+  getAdminSupportTicket(ticketId: string, before?: string): Promise<SupportTicket>;
+  updateAdminSupportTicket(
+    ticketId: string,
+    input: AdminSupportTicketUpdate,
+    idempotencyKey: string,
+  ): Promise<SupportTicket>;
+  sendAdminSupportTicketMessage(
+    ticketId: string,
+    input: { readonly body: string; readonly internal: boolean; readonly expectedVersion: number },
+    idempotencyKey: string,
+  ): Promise<SupportTicket>;
 }
 
 interface NotificationAdminClientOptions {
@@ -440,6 +504,25 @@ export function createNotificationAdminClient(
     logout() {
       return userClient.revokeSession();
     },
+    listNotificationScenarios() {
+      return adminRequest('/notifications/scenarios');
+    },
+    saveNotificationScenario(input) {
+      return adminRequest(
+        `/notifications/scenarios${input.id ? `/${input.id}` : ''}`,
+        {
+          method: input.id ? 'PUT' : 'POST',
+          body: JSON.stringify({
+            expectedVersion: input.expectedVersion,
+            definition: input.definition,
+          }),
+        },
+        input.idempotencyKey,
+      );
+    },
+    listNotificationScenarioRuns() {
+      return adminRequest('/notifications/scenarios/runs');
+    },
     getCapabilities() {
       return adminRequest<AdminNotificationCapabilities>('/notifications/capabilities');
     },
@@ -455,6 +538,18 @@ export function createNotificationAdminClient(
         { method: 'POST', body: JSON.stringify(input) },
         operationId(),
       );
+    },
+    listAdminSupportTickets(input = {}) {
+      return userClient.listAdminSupportTickets(input);
+    },
+    getAdminSupportTicket(ticketId, before) {
+      return userClient.getAdminSupportTicket(ticketId, before);
+    },
+    updateAdminSupportTicket(ticketId, input, idempotencyKey) {
+      return userClient.updateAdminSupportTicket(ticketId, input, idempotencyKey);
+    },
+    sendAdminSupportTicketMessage(ticketId, input, idempotencyKey) {
+      return userClient.sendAdminSupportTicketMessage(ticketId, input, idempotencyKey);
     },
     listPendingCommunityJoinRequests(input = {}) {
       const query = new URLSearchParams();

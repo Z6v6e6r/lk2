@@ -330,7 +330,7 @@ export function normalizeVivaUserProfile(input: unknown, padlHubUserId: string):
   const phoneDigits = profile.phone?.replace(/\D/g, '') ?? '';
   return normalizedProfileSchema.parse({
     userId,
-    displayName: displayName || 'Игрок ПадлХАБ',
+    displayName: displayName || 'Игрок ПадлхАБ',
     ...(profile.firstName?.trim() ? { firstName: profile.firstName.trim().slice(0, 100) } : {}),
     ...(phoneDigits.length >= 4 ? { phoneLast4: phoneDigits.slice(-4) } : {}),
     balanceMinor: profile.deposit,

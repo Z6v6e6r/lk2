@@ -7,6 +7,7 @@ import {
   STATION_SUPPORT_MEDIA_MAX_BYTES,
   STATION_SUPPORT_MEDIA_SOURCE_MAX_BYTES,
   convertStationSupportWebp,
+  readBoundedStationSupportObject,
   readStationSupportProviderImage,
   stationSupportAttachmentId,
   stationSupportAttachmentSha256,
@@ -21,6 +22,40 @@ async function pngBytes(size = 24): Promise<Buffer> {
     .png()
     .toBuffer();
 }
+
+function body(chunks: readonly number[]): AsyncIterable<Uint8Array> & {
+  readonly destroy: ReturnType<typeof vi.fn<(error?: Error) => void>>;
+} {
+  const destroy = vi.fn<(error?: Error) => void>();
+  return {
+    destroy,
+    async *[Symbol.asyncIterator]() {
+      for (const size of chunks) {
+        await Promise.resolve();
+        yield new Uint8Array(size);
+      }
+    },
+  };
+}
+
+describe('station support bounded object reads', () => {
+  it('rejects missing or oversized declarations before buffering', async () => {
+    await expect(readBoundedStationSupportObject(body([1]), undefined, 5)).rejects.toThrow(
+      'STATION_SUPPORT_MEDIA_OBJECT_TOO_LARGE',
+    );
+    await expect(readBoundedStationSupportObject(body([1]), 6, 5)).rejects.toThrow(
+      'STATION_SUPPORT_MEDIA_OBJECT_TOO_LARGE',
+    );
+  });
+
+  it('destroys a chunked body that exceeds its declared cap', async () => {
+    const stream = body([3, 3]);
+    await expect(readBoundedStationSupportObject(stream, 5, 5)).rejects.toThrow(
+      'STATION_SUPPORT_MEDIA_OBJECT_TOO_LARGE',
+    );
+    expect(stream.destroy).toHaveBeenCalledOnce();
+  });
+});
 
 describe('station support media keys', () => {
   it('keeps the object under the tenant and the owning user', () => {

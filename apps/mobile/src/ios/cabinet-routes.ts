@@ -9,6 +9,9 @@ export interface CabinetReadRequest {
 }
 
 const reads: Readonly<Record<string, readonly [string, readonly string[]]>> = {
+  '/notification-endpoints/ios/config': ['pushConfig', []],
+  '/notifications': ['notifications', ['limit', 'cursor', 'unreadOnly']],
+  '/notifications/preferences': ['notificationPreferences', []],
   '/home': ['home', []],
   '/home/base': ['homeBase', []],
   '/profile': ['profile', []],

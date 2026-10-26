@@ -122,6 +122,15 @@ reads (five attempts with exponential delays) and emits `PHUB_GHCR_CUSTODY_READ`
 expected root, attestation, statement, or runtime digest before atomically preserving it. A retry
 never falls back to a tag, a different digest, or an unbounded wait.
 
+Before registry login, the pinned BuildKit readiness helper gives each `inspect --bootstrap`
+command at most 15 seconds, including the cold image pull and container startup. It permits at
+most five attempts within a 79-second total budget, with one-second retry delays and TERM-to-KILL
+cleanup after one second. A TERM-ignoring command can take up to one additional second for KILL
+cleanup beyond the deadline. Only cold observations without version metadata are retryable. A
+nonzero inspect exit after version metadata still fails immediately; version/image mismatch,
+duplicate or absent containers, and a non-running final container also fail closed. Readiness
+requires a successful command and the exact pinned version/image on one running container.
+
 Production bases are controlled only by `deploy/timeweb/base-images.lock.json`. The five production
 Dockerfiles contain fully qualified tag-plus-index-digest projections of the lock. Before GHCR
 login, the reusable verifier strictly rejects duplicate JSON keys, validates every Dockerfile stage,

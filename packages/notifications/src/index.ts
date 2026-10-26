@@ -190,7 +190,7 @@ export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
       key: 'messaging.conversation.created',
       sourceEventType: 'messaging.conversation.created.v1',
       title: 'Новый чат',
-      body: 'Откройте чат в ПадлХАБ, чтобы ответить.',
+      body: 'Откройте чат в ПадлхАБ, чтобы ответить.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
@@ -201,7 +201,7 @@ export const MESSAGING_NOTIFICATION_CANONICAL_CONTRACT = {
       key: 'messaging.message.created',
       sourceEventType: 'messaging.message.created.v1',
       title: 'Новое сообщение',
-      body: 'Откройте чат в ПадлХАБ, чтобы прочитать сообщение.',
+      body: 'Откройте чат в ПадлхАБ, чтобы прочитать сообщение.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
@@ -262,7 +262,7 @@ export const FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT = {
       key: 'profile.friend_request.created',
       sourceEventType: 'profile.friend_request.created.v1',
       title: 'Заявка в друзья',
-      body: 'Откройте ПадлХАБ, чтобы ответить.',
+      body: 'Откройте ПадлхАБ, чтобы ответить.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
@@ -276,7 +276,7 @@ export const FRIENDSHIP_NOTIFICATION_CANONICAL_CONTRACT = {
       key: 'profile.friendship.created',
       sourceEventType: 'profile.friendship.created.v1',
       title: 'Заявка принята',
-      body: 'Теперь вы друзья в ПадлХАБ. Откройте профиль игрока, чтобы написать сообщение.',
+      body: 'Теперь вы друзья в ПадлхАБ. Откройте профиль игрока, чтобы написать сообщение.',
       audienceSelector: {
         type: 'EVENT_USERS',
         field: 'recipientUserIds',
@@ -608,6 +608,14 @@ export function renderNotificationTemplate(input: {
 
 export type NotificationPushPlatform = 'WEB' | 'IOS' | 'ANDROID';
 
+/** FCM registration tokens are opaque server-bound capabilities, never provider selectors. */
+export const MAX_ANDROID_FCM_TOKEN_LENGTH = 4_096;
+export const androidFcmTokenSchema = z
+  .string()
+  .min(32)
+  .max(MAX_ANDROID_FCM_TOKEN_LENGTH)
+  .regex(/^[A-Za-z0-9_:-]+$/, 'Invalid FCM registration token');
+
 export interface PushDeliveryRequest {
   readonly tenantId: string;
   readonly deliveryId: string;
@@ -620,6 +628,8 @@ export interface PushDeliveryRequest {
     readonly preview: string;
     readonly deepLink?: string;
   };
+  /** Opaque transport data for providers that support a data-only message. */
+  readonly data?: Readonly<Record<string, string>>;
   /**
    * RFC 8030 scheduling hints. They change how the push service treats the message, not the visible
    * payload, so a time-critical notification keeps the same wire shape as an informational one.
@@ -631,7 +641,11 @@ export interface PushDeliveryRequest {
 
 export type NotificationProviderDeliveryResult =
   | { readonly outcome: 'accepted'; readonly externalMessageId?: string }
-  | { readonly outcome: 'retryable_failure'; readonly errorCode: string }
+  | {
+      readonly outcome: 'retryable_failure';
+      readonly errorCode: string;
+      readonly retryAfterMs?: number;
+    }
   | {
       readonly outcome: 'terminal_failure';
       readonly errorCode: string;

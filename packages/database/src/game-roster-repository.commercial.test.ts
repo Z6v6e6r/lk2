@@ -1,0 +1,1155 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  createGameRosterRepository,
+  type BeginPaidJoinInput,
+  type ConfirmGamePaymentInput,
+  type PaidJoinAttemptView,
+} from './game-roster-repository.js';
+
+const tenantId = '86afbe01-0318-4dd2-bc25-303b7bf0d430';
+const gameId = '6418f90b-0fa6-4c04-a3da-57707e2f0ae2';
+const playerId = '47b10c0e-2d9f-4775-96dc-2941adae4968';
+const otherPlayerId = '0eb92dd6-06d4-4a4d-a4f9-1bb08a9d4f14';
+const operationId = 'd39e4287-e65c-4e75-88e4-4447e4c91ddb';
+const subscriptionInstanceId = '6a20ae72-25f0-4c2a-9cad-8b7f2a51a56e';
+const reservationId = '238df6f5-fec4-44dd-ad8c-39e98ade8366';
+const participationId = '05d8cc21-9ab9-4ec2-a966-cb52ef13dd29';
+const eligibilityDecisionId = 'd63ff37f-ed9b-45f7-a135-838ea74925e0';
+const evidenceId = '253153f0-6810-4f1d-9c3a-58be08fbd28c';
+const committedAt = '2026-08-01T10:00:00.000Z';
+const reservationExpiresAt = '2026-08-01T10:15:00.000Z';
+
+type QueryOutcome = { rows?: readonly unknown[]; rowCount?: number };
+
+function poolWithHandler(handler: (text: string, values: readonly unknown[]) => QueryOutcome) {
+  const query = vi.fn((text: string, values: readonly unknown[] = []) => {
+    const result = handler(text, values);
+    return Promise.resolve({
+      rows: result.rows ?? [],
+      rowCount: result.rowCount ?? result.rows?.length ?? 0,
+    });
+  });
+  const connect = vi.fn().mockResolvedValue({ query, release: vi.fn() });
+  return { pool: { connect }, query, connect };
+}
+
+function paidJoinInput(
+  overrides: { readonly expectedRevision?: number; readonly reservationTtlSeconds?: number } = {},
+): BeginPaidJoinInput {
+  return {
+    tenantId,
+    actorUserId: playerId,
+    gameId,
+    idempotencyKey: 'games-paid-join-command-0001',
+    requestHash: 'a'.repeat(64),
+    correlationId: 'corr-games-paid-join-0001',
+    expectedRevision: overrides.expectedRevision ?? 1,
+    operationId,
+    subscriptionInstanceId,
+    price: {
+      amountMinor: 250000,
+      currency: 'RUB',
+      basePriceMinor: 500000,
+      freeMinutes: 30,
+      paidMinutes: 60,
+      evaluatedAt: '2026-08-01T09:55:00.000Z',
+      expiresAt: '2026-08-01T10:10:00.000Z',
+    },
+    reservationTtlSeconds: overrides.reservationTtlSeconds ?? 900,
+  };
+}
+
+function confirmPaymentInput(
+  options: { readonly operationId?: string; readonly evidenceHash?: string } = {},
+): ConfirmGamePaymentInput {
+  return {
+    tenantId,
+    actorUserId: playerId,
+    gameId,
+    idempotencyKey: 'games-payment-confirm-command-0001',
+    requestHash: 'c'.repeat(64),
+    correlationId: 'corr-games-payment-confirm-0001',
+    reservationId,
+    evidence: {
+      provider: 'VIVA',
+      operationType: 'TRANSACTION',
+      operationId: options.operationId ?? 'viva-transaction-201',
+      bookingId: 'viva-booking-201',
+      exerciseId: 'viva-exercise-201',
+      clientPhoneE164: '+79000000001',
+      evidenceHash: options.evidenceHash ?? 'e'.repeat(64),
+      verifiedAt: '2026-08-01T10:05:00.000Z',
+      verifiedBy: 'LEGACY_NODE_RED',
+      amountMinor: 250000,
+      currency: 'RUB',
+    },
+  };
+}
+
+function lockedGame(
+  paymentMode: 'NO_PAYMENT' | 'ORGANIZER_PAYS' | 'SPLIT' | 'SUBSCRIPTION' = 'SPLIT',
+) {
+  return {
+    id: gameId,
+    station_id: 'e25798e0-1d6b-4c56-8ea2-8524d6f9e1d7',
+    court_id: null,
+    revision: '1',
+    lifecycle_state: 'SCHEDULED',
+    starts_at: '2026-08-01T18:00:00.000Z',
+    join_cutoff_at: '2026-08-01T17:30:00.000Z',
+    capacity: 2,
+    waitlist_enabled: true,
+    payment_mode: paymentMode,
+    sport_code: 'PADEL',
+    min_level_id: null,
+    max_level_id: null,
+    level_from: null,
+    level_to: null,
+    database_now: committedAt,
+  };
+}
+
+function rosterFacts(overrides: Readonly<Record<string, unknown>> = {}) {
+  return {
+    active_participant_count: 1,
+    active_reservation_count: 0,
+    participation_id: null,
+    participation_role: null,
+    reservation_id: null,
+    waitlist_entry_id: null,
+    waitlist_position: null,
+    ...overrides,
+  };
+}
+
+function eligibilityFacts(overrides: Readonly<Record<string, unknown>> = {}) {
+  return {
+    mode: 'BLOCK',
+    lower_tolerance_steps: 0,
+    upper_tolerance_steps: 0,
+    missing_activity_constraint_action: 'BLOCK',
+    legacy_text_constraint_action: 'WARN',
+    policy_version: '3',
+    player_level_id: null,
+    player_rank: null,
+    player_level_source: null,
+    player_scale_version: null,
+    minimum_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
+    maximum_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
+    minimum_rank: 3,
+    maximum_rank: 5,
+    constraint_scale_version: 1,
+    valid_invitation_id: null,
+    ...overrides,
+  };
+}
+
+function commandRow(overrides: Readonly<Record<string, unknown>> = {}) {
+  return {
+    id: operationId,
+    command_type: 'game.join.paid.v1',
+    request_hash: 'a'.repeat(64),
+    state: 'IN_PROGRESS',
+    result_payload: null,
+    error_code: null,
+    aggregate_id: gameId,
+    ...overrides,
+  };
+}
+
+function appliedAttemptPayload(overrides: Readonly<Record<string, unknown>> = {}) {
+  return {
+    outcome: 'applied',
+    commandId: operationId,
+    gameId,
+    revision: 2,
+    viewerRelation: 'PARTICIPANT',
+    participationId,
+    reservationId,
+    committedAt: '2026-08-01T10:05:00.000Z',
+    ...overrides,
+  };
+}
+
+function baseHandler(
+  text: string,
+  options: {
+    readonly replayRow?: Readonly<Record<string, unknown>>;
+    readonly paymentMode?: 'NO_PAYMENT' | 'ORGANIZER_PAYS' | 'SPLIT' | 'SUBSCRIPTION';
+    readonly facts?: Readonly<Record<string, unknown>>;
+    readonly eligibility?: Readonly<Record<string, unknown>>;
+  } = {},
+): QueryOutcome {
+  if (text.includes('from games.command_idempotency')) {
+    return { rows: options.replayRow ? [options.replayRow] : [] };
+  }
+  if (text.includes('eligibility.level_policies')) {
+    return { rows: [options.eligibility ?? eligibilityFacts()] };
+  }
+  if (text.includes('from games.games') && text.includes('for update')) {
+    return { rows: [lockedGame(options.paymentMode ?? 'SPLIT')] };
+  }
+  if (text.includes('active_participant_count')) {
+    return { rows: [rosterFacts(options.facts)] };
+  }
+  if (text.includes('insert into eligibility.decisions')) return { rowCount: 1 };
+  if (text.includes('insert into games.seat_reservations')) {
+    return {
+      rows: [
+        {
+          id: reservationId,
+          state: 'ACTIVE',
+          payment_state: 'PROCESSING',
+          expires_at: reservationExpiresAt,
+        },
+      ],
+    };
+  }
+  if (text.includes('insert into eligibility.payment_snapshots')) return { rowCount: 1 };
+  if (text.includes('update games.games set revision')) return { rows: [{ revision: '2' }] };
+  return { rows: [] };
+}
+
+function writtenStatements(query: ReturnType<typeof poolWithHandler>['query']): readonly string[] {
+  return query.mock.calls
+    .map(([text]) => text)
+    .filter((text) => /^(insert|update|delete)\b/i.test(text));
+}
+
+describe('game roster commercial paid join', () => {
+  it('reserves a paid seat with a durable IN_PROGRESS attempt, snapshot and reserved fact in one transaction', async () => {
+    const { pool, query, connect } = poolWithHandler((text) => baseHandler(text));
+
+    const result = await createGameRosterRepository(pool as never).beginPaidJoin(paidJoinInput());
+    expect(result).toMatchObject({
+      outcome: 'reserved',
+      operationId,
+      reservationId,
+      expiresAt: reservationExpiresAt,
+      revision: 2,
+    });
+    if (result.outcome !== 'reserved') throw new Error('expected a reserved paid join');
+    const decisionId = result.eligibilityDecisionId;
+    expect(decisionId).toMatch(/^[0-9a-f-]{36}$/);
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    const transactionStatements = query.mock.calls
+      .map(([text]) => text)
+      .filter((text) => text === 'begin' || text === 'commit');
+    expect(transactionStatements).toEqual(['begin', 'commit']);
+
+    const reservationInsert = query.mock.calls.find(
+      ([text, values]) =>
+        text.includes('insert into games.seat_reservations') &&
+        text.includes("'PROCESSING'") &&
+        values?.includes(decisionId) === true &&
+        values?.includes(900) === true,
+    );
+    expect(reservationInsert).toBeDefined();
+    expect(reservationInsert?.[1]).toEqual([tenantId, gameId, playerId, 900, decisionId]);
+    expect(reservationInsert?.[0]).toContain("'ACTIVE'");
+    expect(reservationInsert?.[0]).toContain('on conflict do nothing');
+
+    const snapshotInsert = query.mock.calls.find(([text]) =>
+      text.includes('insert into eligibility.payment_snapshots'),
+    );
+    expect(snapshotInsert).toBeDefined();
+    expect(snapshotInsert?.[1]?.slice(0, 5)).toEqual([
+      tenantId,
+      operationId,
+      decisionId,
+      playerId,
+      gameId,
+    ]);
+    const snapshot = JSON.parse(String(snapshotInsert?.[1]?.[5])) as Record<string, unknown>;
+    expect(snapshot).toMatchObject({
+      operationId,
+      decisionId,
+      paymentMode: 'SPLIT',
+      subscriptionInstanceId,
+      correlationId: 'corr-games-paid-join-0001',
+    });
+    expect(snapshot.price).toMatchObject({ amountMinor: 250000, currency: 'RUB' });
+
+    const attemptInsert = query.mock.calls.find(([text]) =>
+      text.includes('insert into games.command_idempotency'),
+    );
+    expect(attemptInsert?.[0]).toContain("'IN_PROGRESS'");
+    expect(attemptInsert?.[1]).toEqual([
+      tenantId,
+      operationId,
+      playerId,
+      `user:${playerId}`,
+      'games-paid-join-command-0001',
+      'game.join.paid.v1',
+      'a'.repeat(64),
+      gameId,
+    ]);
+
+    const statements = query.mock.calls.map(([text]) => text);
+    const reservationIndex = statements.findIndex((text) =>
+      text.includes('insert into games.seat_reservations'),
+    );
+    const attemptIndex = statements.indexOf(attemptInsert?.[0] ?? '');
+    const revisionIndex = statements.findIndex((text) =>
+      text.includes('update games.games set revision'),
+    );
+    expect(reservationIndex).toBeGreaterThan(-1);
+    expect(attemptIndex).toBeGreaterThan(reservationIndex);
+    expect(revisionIndex).toBeGreaterThan(attemptIndex);
+
+    const reservedEvent = query.mock.calls.find(([text]) =>
+      text.includes('insert into audit.outbox_events'),
+    );
+    expect(reservedEvent?.[1]?.[2]).toBe('game.participation.reserved.v1');
+    expect(reservedEvent?.[1]?.[5]).toContain(`"reservationId":"${reservationId}"`);
+    expect(reservedEvent?.[1]?.[5]).toContain(`"expiresAt":"${reservationExpiresAt}"`);
+    expect(reservedEvent?.[1]?.[5]).toContain(`"userId":"${playerId}"`);
+
+    expect(writtenStatements(query).some((text) => text.includes('games.participations'))).toBe(
+      false,
+    );
+  });
+
+  it('replays an in-progress attempt by idempotency key and writes nothing again', async () => {
+    const { pool, query } = poolWithHandler((text) =>
+      baseHandler(text, { replayRow: commandRow() }),
+    );
+
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin(paidJoinInput()),
+    ).resolves.toEqual({ outcome: 'replayed', operationId, state: 'IN_PROGRESS' });
+    expect(writtenStatements(query)).toEqual([]);
+    expect(
+      query.mock.calls.some(
+        ([text]) => text.includes('from games.games') && text.includes('for update'),
+      ),
+    ).toBe(false);
+  });
+
+  it('replays a completed attempt with the trusted finalization result', async () => {
+    const { pool, query } = poolWithHandler((text) =>
+      baseHandler(text, {
+        replayRow: commandRow({
+          state: 'COMPLETED',
+          result_payload: appliedAttemptPayload(),
+        }),
+      }),
+    );
+
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin(paidJoinInput()),
+    ).resolves.toEqual({
+      outcome: 'replayed',
+      operationId,
+      state: 'COMPLETED',
+      result: {
+        commandId: operationId,
+        gameId,
+        revision: 2,
+        viewerRelation: 'PARTICIPANT',
+        participationId,
+        reservationId,
+        committedAt: '2026-08-01T10:05:00.000Z',
+      },
+    });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+
+  it.each([
+    ['a different request hash', { request_hash: 'b'.repeat(64) }],
+    ['a different command type', { command_type: 'game.join.v1' }],
+  ] as const)(
+    'fails a key reused with %s as an idempotency conflict',
+    async (_label, overrides) => {
+      const { pool, query } = poolWithHandler((text) =>
+        baseHandler(text, { replayRow: commandRow(overrides) }),
+      );
+
+      await expect(
+        createGameRosterRepository(pool as never).beginPaidJoin(paidJoinInput()),
+      ).resolves.toEqual({ outcome: 'idempotency_conflict' });
+      expect(writtenStatements(query)).toEqual([]);
+    },
+  );
+
+  it.each(['NO_PAYMENT', 'ORGANIZER_PAYS'] as const)(
+    'rejects a %s game as a payment mode mismatch before any commercial write',
+    async (paymentMode) => {
+      const { pool, query } = poolWithHandler((text) => baseHandler(text, { paymentMode }));
+
+      await expect(
+        createGameRosterRepository(pool as never).beginPaidJoin(paidJoinInput()),
+      ).resolves.toEqual({
+        outcome: 'rejected',
+        code: 'GAME_PAYMENT_MODE_MISMATCH',
+        currentRevision: 1,
+      });
+      expect(writtenStatements(query)).toEqual([]);
+    },
+  );
+
+  it('rejects a stale expected revision without opening an attempt', async () => {
+    const { pool, query } = poolWithHandler((text) => baseHandler(text));
+
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin(
+        paidJoinInput({ expectedRevision: 7 }),
+      ),
+    ).resolves.toEqual({
+      outcome: 'rejected',
+      code: 'GAME_REVISION_CONFLICT',
+      currentRevision: 1,
+    });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+
+  it.each([
+    ['full', { active_participant_count: 2, active_reservation_count: 0 }, 'GAME_FULL'],
+    [
+      'already reserved',
+      { active_participant_count: 1, reservation_id: reservationId },
+      'GAME_ALREADY_RESERVED',
+    ],
+    [
+      'already joined',
+      {
+        active_participant_count: 1,
+        participation_id: participationId,
+        participation_role: 'PLAYER',
+      },
+      'GAME_ALREADY_JOINED',
+    ],
+  ] as const)('rejects a %s game before reserving another seat', async (_label, facts, code) => {
+    const { pool, query } = poolWithHandler((text) => baseHandler(text, { facts }));
+
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin(paidJoinInput()),
+    ).resolves.toEqual({ outcome: 'rejected', code, currentRevision: 1 });
+    expect(
+      writtenStatements(query).some((text) =>
+        [
+          'insert into games.seat_reservations',
+          'insert into eligibility.payment_snapshots',
+          'insert into games.command_idempotency',
+        ].some((needle) => text.includes(needle)),
+      ),
+    ).toBe(false);
+  });
+
+  it('denies a level-ineligible paid join before any reservation write', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.games') && text.includes('for update')) {
+        return {
+          rows: [
+            {
+              ...lockedGame('SUBSCRIPTION'),
+              min_level_id: '1dfc1d4a-47cb-4b43-a735-761260a2e986',
+              max_level_id: '7d7556e6-f30b-48e5-9ff2-c39bdf062ff7',
+            },
+          ],
+        };
+      }
+      return baseHandler(text, { paymentMode: 'SUBSCRIPTION' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin(paidJoinInput()),
+    ).resolves.toMatchObject({ outcome: 'rejected', code: 'PLAYER_LEVEL_REQUIRED' });
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into games.seat_reservations')),
+    ).toBe(false);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into eligibility.payment_snapshots')),
+    ).toBe(false);
+    // Parity with the free join: the refusal is durable (FAILED command row + audit) so it is
+    // observable and a repeat with the same key replays the refusal, but nothing is reserved.
+    expect(
+      query.mock.calls.some(
+        ([text]) =>
+          text.includes('insert into games.command_idempotency') && text.includes("'FAILED'"),
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(
+        ([text]) => text.includes('insert into audit.audit_log') && text.includes("'REJECTED'"),
+      ),
+    ).toBe(true);
+  });
+
+  it('finalizes the durable attempt from trusted confirmation evidence inside the same transaction', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('payment_snapshot_exists')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence')) {
+        return { rows: [{ id: evidenceId }] };
+      }
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
+      }
+      if (text.includes('update games.seat_reservations')) return { rowCount: 1 };
+      if (text.includes('update games.payment_confirmation_evidence')) return { rowCount: 1 };
+      if (text.includes('from eligibility.payment_snapshots')) {
+        return { rows: [{ operation_id: operationId }] };
+      }
+      if (text.includes('update games.command_idempotency')) return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(
+        confirmPaymentInput({ operationId: 'viva-transaction-201' }),
+      ),
+    ).resolves.toMatchObject({
+      outcome: 'applied',
+      viewerRelation: 'PARTICIPANT',
+      participationId,
+      reservationId,
+    });
+
+    const snapshotLookup = query.mock.calls.find(([text]) =>
+      text.includes('select snapshot.operation_id'),
+    );
+    expect(snapshotLookup?.[0]).toContain('snapshot.decision_id = $2');
+    expect(snapshotLookup?.[0]).toContain("snapshot.activity_type = 'GAME'");
+    expect(snapshotLookup?.[0]).toContain('snapshot.operation_id');
+    expect(snapshotLookup?.[1]).toEqual([tenantId, eligibilityDecisionId, playerId, gameId]);
+
+    const attemptFinalization = query.mock.calls.find(([text]) =>
+      text.includes("set state = 'COMPLETED', result_payload = $4::jsonb"),
+    );
+    expect(attemptFinalization).toBeDefined();
+    expect(attemptFinalization?.[1]?.[0]).toBe(tenantId);
+    expect(attemptFinalization?.[1]?.[1]).toBe(operationId);
+    expect(attemptFinalization?.[1]?.[2]).toBe(playerId);
+    const resultPayload = JSON.parse(String(attemptFinalization?.[1]?.[3])) as Record<
+      string,
+      unknown
+    >;
+    expect(resultPayload).toMatchObject({
+      outcome: 'applied',
+      commandId: operationId,
+      gameId,
+      revision: 2,
+      viewerRelation: 'PARTICIPANT',
+      participationId,
+      reservationId,
+    });
+    expect(attemptFinalization?.[0]).toContain("command_type = $6 and state = 'IN_PROGRESS'");
+
+    const statements = query.mock.calls.map(([text]) => text);
+    expect(
+      statements.findIndex((text) => text.includes('update games.payment_confirmation_evidence')),
+    ).toBeLessThan(statements.indexOf(attemptFinalization?.[0] ?? ''));
+  });
+
+  it('leaves a legacy trusted confirmation untouched when no local attempt snapshot exists', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('payment_snapshot_exists')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence')) {
+        return { rows: [{ id: evidenceId }] };
+      }
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
+      }
+      if (text.includes('update games.seat_reservations')) return { rowCount: 1 };
+      if (text.includes('update games.payment_confirmation_evidence')) return { rowCount: 1 };
+      if (text.includes('from eligibility.payment_snapshots')) return { rows: [] };
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(
+        confirmPaymentInput({
+          operationId: 'viva-transaction-legacy-1',
+          evidenceHash: 'f'.repeat(64),
+        }),
+      ),
+    ).resolves.toMatchObject({ outcome: 'applied', viewerRelation: 'PARTICIPANT' });
+    expect(
+      query.mock.calls.some(([text]) =>
+        text.includes("set state = 'COMPLETED', result_payload = $4::jsonb"),
+      ),
+    ).toBe(false);
+  });
+
+  it('reads an in-progress attempt without mutating anything', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency')) return { rows: [commandRow()] };
+      if (text.includes('from eligibility.payment_snapshots snapshot')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).getPaidJoinAttempt({
+        tenantId,
+        actorUserId: playerId,
+        operationId,
+      }),
+    ).resolves.toEqual({
+      commandId: operationId,
+      gameId,
+      state: 'IN_PROGRESS',
+      result: null,
+      errorCode: null,
+      reservation: {
+        id: reservationId,
+        state: 'ACTIVE',
+        paymentState: 'PROCESSING',
+        expiresAt: reservationExpiresAt,
+      },
+      receipt: null,
+    });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+
+  it('reads a confirmed attempt with its reservation and trusted receipt', async () => {
+    const context: PaidJoinAttemptView = {
+      commandId: operationId,
+      gameId,
+      state: 'COMPLETED',
+      result: {
+        commandId: operationId,
+        gameId,
+        revision: 2,
+        viewerRelation: 'PARTICIPANT',
+        participationId,
+        reservationId,
+        committedAt,
+      },
+      errorCode: null,
+      reservation: {
+        id: reservationId,
+        state: 'CONFIRMED',
+        paymentState: 'PAID',
+        expiresAt: reservationExpiresAt,
+      },
+      receipt: { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: committedAt },
+    };
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency')) {
+        return {
+          rows: [
+            commandRow({
+              state: 'COMPLETED',
+              result_payload: appliedAttemptPayload({ committedAt }),
+            }),
+          ],
+        };
+      }
+      if (text.includes('from eligibility.payment_snapshots snapshot')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'CONFIRMED',
+              payment_state: 'PAID',
+              expires_at: reservationExpiresAt,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) {
+        return { rows: [{ provider: 'VIVA', resolved_at: committedAt }] };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).getPaidJoinAttempt({
+        tenantId,
+        actorUserId: playerId,
+        operationId,
+      }),
+    ).resolves.toEqual(context);
+    expect(writtenStatements(query)).toEqual([]);
+    expect(
+      query.mock.calls.some(
+        ([text]) =>
+          text.includes('from games.payment_confirmation_evidence') &&
+          text.includes("resolution = 'APPLIED'"),
+      ),
+    ).toBe(true);
+  });
+
+  it('returns null for an attempt that belongs to another actor', async () => {
+    const { pool, query } = poolWithHandler(() => ({ rows: [] }));
+
+    await expect(
+      createGameRosterRepository(pool as never).getPaidJoinAttempt({
+        tenantId,
+        actorUserId: otherPlayerId,
+        operationId,
+      }),
+    ).resolves.toBeNull();
+    expect(writtenStatements(query)).toEqual([]);
+    expect(
+      query.mock.calls.some(([text]) =>
+        text.includes('from eligibility.payment_snapshots snapshot'),
+      ),
+    ).toBe(false);
+  });
+
+  it('fails an in-progress attempt, cancels its seat and never inserts a replacement attempt row', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('for update of reservation')) {
+        return { rows: [{ id: reservationId, state: 'ACTIVE' }] };
+      }
+      if (text.includes('from games.command_idempotency')) {
+        return { rows: [commandRow()] };
+      }
+      if (text.includes('update games.seat_reservations')) return { rowCount: 1 };
+      if (text.includes('update games.command_idempotency')) return { rowCount: 1 };
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).failPaidJoinAttempt({
+        tenantId,
+        actorUserId: playerId,
+        operationId,
+        gameId,
+        code: 'GAME_PAYMENT_MODE_MISMATCH',
+        correlationId: 'corr-games-paid-join-fail-0001',
+      }),
+    ).resolves.toEqual({
+      operationId,
+      state: 'FAILED',
+      reservationState: 'CANCELLED',
+      transitioned: true,
+    });
+
+    const reservationCancel = query.mock.calls.find(([text]) =>
+      text.includes('update games.seat_reservations'),
+    );
+    expect(reservationCancel?.[0]).toContain("state = 'CANCELLED', payment_state = 'FAILED'");
+    expect(reservationCancel?.[0]).toContain("and state = 'ACTIVE'");
+    expect(reservationCancel?.[1]).toEqual([tenantId, gameId, reservationId]);
+
+    const attemptFail = query.mock.calls.find(([text]) =>
+      text.includes('update games.command_idempotency'),
+    );
+    expect(attemptFail?.[0]).toContain("state = 'FAILED', error_code = $4");
+    expect(attemptFail?.[0]).toContain("state = 'IN_PROGRESS'");
+    expect(attemptFail?.[1]).toEqual([
+      tenantId,
+      operationId,
+      playerId,
+      'GAME_PAYMENT_MODE_MISMATCH',
+    ]);
+
+    const statements = query.mock.calls.map(([text]) => text);
+    expect(statements.findIndex((text) => text.includes('for update of reservation'))).toBeLessThan(
+      statements.findIndex((text) => text.includes('update games.command_idempotency')),
+    );
+    expect(
+      query.mock.calls.some(
+        ([text, values]) =>
+          text.includes('insert into audit.audit_log') &&
+          values?.includes('GAME_PAYMENT_MODE_MISMATCH') === true,
+      ),
+    ).toBe(true);
+    expect(
+      query.mock.calls.some(([text]) => text.includes('insert into games.command_idempotency')),
+    ).toBe(false);
+  });
+
+  it('keeps a definitive failure idempotent when the attempt is already terminal', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('for update of reservation')) {
+        return { rows: [{ id: reservationId, state: 'CANCELLED' }] };
+      }
+      if (text.includes('from games.command_idempotency')) {
+        return {
+          rows: [
+            commandRow({
+              state: 'FAILED',
+              error_code: 'GAME_PAYMENT_MODE_MISMATCH',
+              completed_at: committedAt,
+            }),
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).failPaidJoinAttempt({
+        tenantId,
+        actorUserId: playerId,
+        operationId,
+        gameId,
+        code: 'GAME_PAYMENT_MODE_MISMATCH',
+        correlationId: 'corr-games-paid-join-fail-0002',
+      }),
+    ).resolves.toEqual({
+      operationId,
+      state: 'FAILED',
+      reservationState: 'CANCELLED',
+      transitioned: false,
+    });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+
+  it('never cancels a reservation when a trusted confirmation already completed the attempt', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('for update of reservation')) {
+        return { rows: [{ id: reservationId, state: 'ACTIVE' }] };
+      }
+      if (text.includes('from games.command_idempotency')) {
+        return {
+          rows: [
+            commandRow({
+              state: 'COMPLETED',
+              result_payload: appliedAttemptPayload(),
+              completed_at: committedAt,
+            }),
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).failPaidJoinAttempt({
+        tenantId,
+        actorUserId: playerId,
+        operationId,
+        gameId,
+        code: 'GAME_PAYMENT_MODE_MISMATCH',
+        correlationId: 'corr-games-paid-join-fail-0003',
+      }),
+    ).resolves.toEqual({
+      operationId,
+      state: 'COMPLETED',
+      reservationState: 'ACTIVE',
+      transitioned: false,
+    });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+
+  it('returns a not-found failure result without writing anything', async () => {
+    const { pool, query } = poolWithHandler((text) => {
+      if (text.includes('for update of reservation')) return { rows: [] };
+      if (text.includes('from games.command_idempotency')) return { rows: [] };
+      return { rows: [] };
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).failPaidJoinAttempt({
+        tenantId,
+        actorUserId: otherPlayerId,
+        operationId,
+        gameId,
+        code: 'GAME_PAYMENT_MODE_MISMATCH',
+        correlationId: 'corr-games-paid-join-fail-0004',
+      }),
+    ).resolves.toEqual({
+      operationId,
+      state: null,
+      reservationState: null,
+      transitioned: false,
+    });
+    expect(writtenStatements(query)).toEqual([]);
+  });
+
+  it('reconciles a trusted receipt when the unresolved paid attempt outlived the reservation ttl', async () => {
+    // Earlier than the fixture's database_now (2026-08-01T10:00:00Z): expired by owner-clock.
+    const expiredAt = '2026-08-01T09:50:00.000Z';
+    const { pool } = poolWithHandler((text) => {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('payment_snapshot_exists')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: expiredAt,
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('from eligibility.payment_snapshots snapshot') &&
+        text.includes("command.state = 'IN_PROGRESS'")
+      ) {
+        return { rows: [{ id: operationId }] };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence')) {
+        return { rows: [{ id: evidenceId }] };
+      }
+      if (text.includes('insert into games.participations')) {
+        return { rows: [{ id: participationId }] };
+      }
+      if (text.includes('update games.seat_reservations')) return { rowCount: 1 };
+      if (text.includes('update games.payment_confirmation_evidence')) return { rowCount: 1 };
+      if (text.includes('from eligibility.payment_snapshots')) {
+        return { rows: [{ operation_id: operationId }] };
+      }
+      if (text.includes('update games.command_idempotency')) return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    // The paid attempt kept the seat ACTIVE after TTL by design; the trusted receipt must finalize
+    // the original operation instead of being rejected as an expired reservation.
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(
+        confirmPaymentInput({ operationId: 'viva-transaction-expired-1' }),
+      ),
+    ).resolves.toMatchObject({
+      outcome: 'applied',
+      viewerRelation: 'PARTICIPANT',
+      reservationId,
+    });
+  });
+
+  it('still rejects an expired reservation that has no unresolved paid attempt', async () => {
+    // Earlier than the fixture's database_now (2026-08-01T10:00:00Z): expired by owner-clock.
+    const expiredAt = '2026-08-01T09:50:00.000Z';
+    const { pool } = poolWithHandler((text) => {
+      if (
+        text.includes('from games.seat_reservations') &&
+        text.includes('payment_snapshot_exists')
+      ) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: expiredAt,
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+            },
+          ],
+        };
+      }
+      if (
+        text.includes('from eligibility.payment_snapshots snapshot') &&
+        text.includes("command.state = 'IN_PROGRESS'")
+      ) {
+        return { rows: [] };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence')) {
+        return { rows: [{ id: evidenceId }] };
+      }
+      if (text.includes('update games.payment_confirmation_evidence')) return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SPLIT' });
+    });
+
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(
+        confirmPaymentInput({ operationId: 'viva-transaction-expired-2' }),
+      ),
+    ).resolves.toMatchObject({ outcome: 'rejected', code: 'GAME_RESERVATION_EXPIRED' });
+  });
+
+  it('rejects an invalid reservation ttl before opening a transaction', async () => {
+    const { pool, connect } = poolWithHandler((text) => baseHandler(text));
+
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin(
+        paidJoinInput({ reservationTtlSeconds: 0 }),
+      ),
+    ).rejects.toThrow('GAME_PAID_JOIN_TTL_INVALID');
+    expect(connect).not.toHaveBeenCalled();
+  });
+});
+
+describe('immutable paid JOIN confirmation binding', () => {
+  const binding = {
+    providerClientId: 'client-1',
+    providerMappingId: tenantId,
+    providerClientSubscriptionId: subscriptionInstanceId,
+    providerExerciseId: 'exercise-1',
+    targetMappingId: gameId,
+    targetVersion: '2',
+    startsAt: '2026-08-01T18:00:00.000Z',
+    durationMinutes: 90,
+    capacity: 4,
+    admissible: true,
+    requestSha256: `sha256:${'a'.repeat(64)}`,
+    idempotencyKeySha256: `sha256:${'b'.repeat(64)}`,
+  };
+  const input = (): ConfirmGamePaymentInput => {
+    const base = confirmPaymentInput();
+    return {
+      ...base,
+      paidJoinBinding: binding,
+      evidence: {
+        ...base.evidence,
+        operationType: 'SUBSCRIPTION_BOOKING',
+        operationId,
+        exerciseId: binding.providerExerciseId,
+      },
+    };
+  };
+  function database(
+    snapshotBinding: unknown = binding,
+    options: { phone?: string; state?: string; completion?: number } = {},
+  ) {
+    return poolWithHandler((text) => {
+      if (text.includes('payment_snapshot_exists'))
+        return {
+          rows: [
+            {
+              id: reservationId,
+              user_id: playerId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              eligibility_decision_id: eligibilityDecisionId,
+              payment_snapshot_exists: true,
+              paid_snapshot: { operation_id: operationId, provider_binding: snapshotBinding },
+            },
+          ],
+        };
+      if (text.includes('select state from games.command_idempotency'))
+        return { rows: [{ state: options.state ?? 'IN_PROGRESS' }] };
+      if (text.includes('from profile.user_summaries'))
+        return { rows: [{ phone_e164: options.phone ?? '+79000000002' }] };
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      if (text.includes('insert into games.payment_confirmation_evidence'))
+        return { rows: [{ id: evidenceId }] };
+      if (text.includes('insert into games.participations'))
+        return { rows: [{ id: participationId }] };
+      if (text.includes('select snapshot.operation_id'))
+        return { rows: [{ operation_id: operationId }] };
+      if (text.includes('update games.command_idempotency'))
+        return { rowCount: options.completion ?? 1 };
+      if (
+        text.includes('update games.seat_reservations') ||
+        text.includes('update games.payment_confirmation_evidence')
+      )
+        return { rowCount: 1 };
+      return baseHandler(text, { paymentMode: 'SUBSCRIPTION' });
+    });
+  }
+  it('derives phone inside the transaction and atomically completes the original paid attempt', async () => {
+    const { pool, query } = database();
+    await expect(
+      createGameRosterRepository(pool as never).confirmPayment(input()),
+    ).resolves.toMatchObject({ outcome: 'applied' });
+    const evidence = query.mock.calls.find(([text]) =>
+      text.includes('insert into games.payment_confirmation_evidence'),
+    );
+    expect(evidence?.[1]).toContain('+79000000002');
+    expect(evidence?.[1]).not.toContain(input().evidence.clientPhoneE164);
+    expect(
+      query.mock.calls.some(
+        ([text]) => text.includes('from profile.user_summaries') && text.includes('for share'),
+      ),
+    ).toBe(true);
+  });
+  it.each(Object.keys(binding))(
+    'refuses changed snapshot %s before storing evidence',
+    async (key) => {
+      const { pool, query } = database({ ...binding, [key]: 'wrong' });
+      await expect(
+        createGameRosterRepository(pool as never).confirmPayment(input()),
+      ).resolves.toMatchObject({ outcome: 'rejected', code: 'GAME_PAYMENT_EVIDENCE_CONFLICT' });
+      expect(
+        query.mock.calls.some(([text]) =>
+          text.includes('insert into games.payment_confirmation_evidence'),
+        ),
+      ).toBe(false);
+    },
+  );
+  it('rejects a missing exercise and failed original attempt', async () => {
+    for (const changes of ['missing-exercise', 'failed-attempt']) {
+      const { pool, query } = database(binding, {
+        state: changes === 'failed-attempt' ? 'FAILED' : 'IN_PROGRESS',
+      });
+      const command = input();
+      if (changes === 'missing-exercise')
+        delete (command.evidence as { exerciseId?: string }).exerciseId;
+      await expect(
+        createGameRosterRepository(pool as never).confirmPayment(command),
+      ).resolves.toMatchObject({ outcome: 'rejected' });
+      expect(
+        query.mock.calls.some(([text]) => text.includes('insert into games.participations')),
+      ).toBe(false);
+    }
+  });
+  it('allows the same reconciliation key after a missing phone projection is repaired', async () => {
+    const missing = database(binding, { phone: '' });
+    await expect(
+      createGameRosterRepository(missing.pool as never).confirmPayment(input()),
+    ).rejects.toThrow('GAME_PAYMENT_ACTOR_PHONE_UNAVAILABLE');
+    expect(
+      missing.query.mock.calls.some(([text]) =>
+        text.includes('insert into games.command_idempotency'),
+      ),
+    ).toBe(false);
+    expect(missing.query.mock.calls.some(([text]) => text === 'rollback')).toBe(true);
+    const repaired = database();
+    await expect(
+      createGameRosterRepository(repaired.pool as never).confirmPayment(input()),
+    ).resolves.toMatchObject({ outcome: 'applied' });
+  });
+  it('rolls back if completion of the original command is lost', async () => {
+    const { pool, query } = database(binding, { completion: 0 });
+    await expect(createGameRosterRepository(pool as never).confirmPayment(input())).rejects.toThrow(
+      'GAME_PAID_JOIN_COMPLETION_CONFLICT',
+    );
+    expect(query.mock.calls.some(([text]) => text === 'rollback')).toBe(true);
+    expect(query.mock.calls.some(([text]) => text === 'commit')).toBe(false);
+  });
+});

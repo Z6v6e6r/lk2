@@ -189,6 +189,45 @@ paths:
         '503':
           $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
 
+  /{tenantKey}/games/{gameId}/join-operation:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/GameId'
+    get:
+      tags: [games]
+      operationId: getGameJoinOperation
+      summary: Read the original paid JOIN attempt by its idempotency key
+      description: |
+        Recovery read for a paid JOIN whose response was lost. The server derives the operation id
+        from the original Idempotency-Key, so the client never guesses it. The read never reserves,
+        dispatches, confirms, releases or fails an attempt; an unresolved outcome stays UNKNOWN with
+        WAIT_FOR_RECONCILIATION and the caller must not start a new purchase.
+      responses:
+        '200':
+          description: Original operation, including an unresolved (UNKNOWN) outcome.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GameCommandResult' }
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/GameCommandRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
   /{tenantKey}/games/{gameId}/participants/me:
     parameters:
       - $ref: ../../common/components.yaml#/components/parameters/TenantKey
@@ -424,6 +463,43 @@ paths:
       tags: [games]
       operationId: getGameOperation
       summary: Get durable game command progress
+      responses:
+        '200':
+          description: Current operation state, safe next action and latest committed game card.
+          headers:
+            X-Correlation-ID:
+              $ref: ../../common/components.yaml#/components/headers/CorrelationId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameCommandResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+
+  /{tenantKey}/game-operations/{operationId}/reconcile:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/OperationId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+    post:
+      tags: [games]
+      operationId: reconcilePaidJoinOperation
+      summary: Reconcile the original paid JOIN from its trusted owner receipt
+      description: |
+        Requires Idempotency-Key join-reconcile:{operationId}. Reads only the original owner
+        operation, validates its immutable server binding and applies CONFIRM_PAYMENT atomically.
+        Never dispatches booking, debit or release; missing/ambiguous proof stays unresolved.
       responses:
         '200':
           description: Current operation state, safe next action and latest committed game card.
@@ -1212,6 +1288,25 @@ components:
           type: string
           format: uuid
           description: Server-issued personal invitation addressed to the authenticated player.
+        subscriptionInstanceId:
+          type: string
+          format: uuid
+          description: Server-verified subscription product selection for a paid game. Ignored for NO_PAYMENT.
+        priceConsent:
+          $ref: '#/components/schemas/GamePriceConsent'
+    GamePriceConsent:
+      type: object
+      additionalProperties: false
+      required: [amountMinor, currency]
+      description: Explicit echo of the server-owned price. It is not a client-side price decision.
+      properties:
+        amountMinor:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        currency:
+          type: string
+          const: RUB
     CancelGameRequest:
       type: object
       additionalProperties: false
@@ -1293,7 +1388,8 @@ components:
             - DISPUTE_RESULT
         status:
           type: string
-          enum: [ACCEPTED, PROCESSING, SUCCEEDED, FAILED]
+          enum: [ACCEPTED, PROCESSING, UNKNOWN, SUCCEEDED, FAILED]
+          description: UNKNOWN preserves an unresolved owner outcome; it is never retried as a new purchase.
         gameId:
           type: [string, 'null']
           format: uuid
@@ -1312,15 +1408,101 @@ components:
           oneOf:
             - $ref: '#/components/schemas/GameOperationError'
             - type: 'null'
+        commercial:
+          oneOf:
+            - $ref: '#/components/schemas/GameOperationCommercial'
+            - type: 'null'
+    GameOperationCommercial:
+      type: object
+      additionalProperties: false
+      required: [attemptState, reservation, price, receipt, reason]
+      properties:
+        attemptState:
+          type: string
+          enum: [NOT_ATTEMPTED, DISPATCH_STARTED, OWNER_PENDING, OWNER_CONFIRMED, UNKNOWN, FAILED]
+        reservation:
+          oneOf:
+            - $ref: '#/components/schemas/GameOperationReservation'
+            - type: 'null'
+        price:
+          oneOf:
+            - $ref: '#/components/schemas/GameOperationPrice'
+            - type: 'null'
+        receipt:
+          oneOf:
+            - $ref: '#/components/schemas/GameOperationReceipt'
+            - type: 'null'
+        reason:
+          oneOf:
+            - $ref: '#/components/schemas/GameErrorCode'
+            - type: 'null'
+    GameOperationReservation:
+      type: object
+      additionalProperties: false
+      required: [id, state, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        state:
+          type: string
+          enum: [ACTIVE, CONFIRMED, EXPIRED, CANCELLED]
+        expiresAt:
+          type: string
+          format: date-time
+    GameOperationPrice:
+      type: object
+      additionalProperties: false
+      required: [amountMinor, currency, consent]
+      properties:
+        amountMinor:
+          type: integer
+          minimum: 0
+          maximum: 9007199254740991
+        currency:
+          type: string
+          const: RUB
+        consent:
+          type: string
+          enum: [SETTLED, REQUIRED]
+    GameOperationReceipt:
+      type: object
+      additionalProperties: false
+      required: [provider, status, confirmedAt]
+      properties:
+        provider:
+          type: string
+          const: VIVA
+        status:
+          type: string
+          const: CONFIRMED
+        confirmedAt:
+          type: string
+          format: date-time
     GameNextAction:
       oneOf:
         - $ref: '#/components/schemas/GameNextActionNone'
         - $ref: '#/components/schemas/GameNextActionPayment'
+        - $ref: '#/components/schemas/GameNextActionReconciliation'
       discriminator:
         propertyName: type
         mapping:
           NONE: '#/components/schemas/GameNextActionNone'
           OPEN_PAYMENT: '#/components/schemas/GameNextActionPayment'
+          WAIT_FOR_RECONCILIATION: '#/components/schemas/GameNextActionReconciliation'
+    GameNextActionReconciliation:
+      type: object
+      additionalProperties: false
+      required: [type, retryAfterSeconds]
+      description: The outcome is unresolved; the client repeats readback and never starts a new purchase.
+      properties:
+        type:
+          type: string
+          const: WAIT_FOR_RECONCILIATION
+        retryAfterSeconds:
+          type: integer
+          minimum: 1
+          maximum: 3600
     GameNextActionNone:
       type: object
       additionalProperties: false
@@ -1389,6 +1571,12 @@ components:
         - GAME_NOT_WAITLISTED
         - GAME_NOT_CANCELLABLE
         - GAME_PAYMENT_REQUIRED
+        - GAME_PRICE_CONFIRMATION_REQUIRED
+        - GAME_SUBSCRIPTION_SELECTION_REQUIRED
+        - GAME_SERVICE_BLOCKED
+        - GAME_RECONCILIATION_REQUIRED
+        - GAME_COMMERCIAL_ATTEMPT_CONFLICT
+        - GAME_OWNER_UNAVAILABLE
         - GAME_RESULT_NOT_SUBMITTABLE
         - GAME_RESULT_NOT_CONFIRMABLE
         - GAME_RESULT_NOT_DISPUTABLE

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { normalizePhoneE164 } from '@phub/auth';
 import type {
   AdminNotificationChannel,
+  AdminAndroidPushRuntime,
   AdminNotificationRepository,
   AdminWebPushSubscriberEndpoint,
 } from '@phub/database';
@@ -208,6 +209,7 @@ export function registerAdminNotificationRoutes(
     readonly webPushGloballyEnabled: boolean;
     readonly webPushAppId: string;
     readonly webPushEnvironment: 'SANDBOX' | 'PRODUCTION';
+    readonly androidPush?: AdminAndroidPushRuntime;
     /** Required to report the push service behind a subscription; the report omits it without a keyring. */
     readonly endpointCipher?: NotificationEndpointCipher;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
@@ -225,11 +227,17 @@ export function registerAdminNotificationRoutes(
         tenantId,
         webPushAppId: options.webPushAppId,
         webPushEnvironment: options.webPushEnvironment,
+        ...(options.androidPush ? { androidPush: options.androidPush } : {}),
       });
       const webPushEnabled =
         options.webPushGloballyEnabled &&
         capabilities.webPushTenantEnabled &&
         capabilities.webPushProviderConfigured;
+      const androidPushEnabled = Boolean(
+        options.androidPush?.globallyEnabled &&
+        capabilities.androidPushTenantEnabled &&
+        capabilities.androidPushProviderConfigured,
+      );
       return {
         channels: [
           {
@@ -245,8 +253,14 @@ export function registerAdminNotificationRoutes(
           },
           {
             channel: 'ANDROID_PUSH',
-            enabled: false,
-            reason: 'FCM_ADAPTER_NOT_IMPLEMENTED',
+            enabled: androidPushEnabled,
+            reason: androidPushEnabled
+              ? undefined
+              : !options.androidPush?.globallyEnabled
+                ? 'GLOBAL_RUNTIME_DISABLED'
+                : !capabilities.androidPushTenantEnabled
+                  ? 'TENANT_RUNTIME_DISABLED'
+                  : 'PROVIDER_NOT_CONFIGURED',
             tenantEnabled: capabilities.androidPushTenantEnabled,
           },
           {
@@ -385,6 +399,7 @@ export function registerAdminNotificationRoutes(
         webPushGloballyEnabled: options.webPushGloballyEnabled,
         webPushAppId: options.webPushAppId,
         webPushEnvironment: options.webPushEnvironment,
+        ...(options.androidPush ? { androidPush: options.androidPush } : {}),
       });
     },
   );
@@ -420,21 +435,17 @@ export function registerAdminNotificationRoutes(
       }
       const { normalizedPhones, normalizedUserIds } = parsedSelector.selector;
       const channels = [...new Set(parsed.data.channels)];
-      const unsupportedChannel = channels.find(
-        (channel) => channel === 'IOS_PUSH' || channel === 'ANDROID_PUSH',
-      );
+      const unsupportedChannel = channels.find((channel) => channel === 'IOS_PUSH');
       if (unsupportedChannel) {
         return sendApiError(
           request,
           reply,
           409,
           'NOTIFICATION_CHANNEL_UNAVAILABLE',
-          unsupportedChannel === 'IOS_PUSH'
-            ? 'Отправка через APNs ещё не подключена.'
-            : 'Отправка через FCM ещё не подключена.',
+          'Отправка через APNs ещё не подключена.',
         );
       }
-      const supportedChannels = channels as readonly ('IN_APP' | 'WEB_PUSH')[];
+      const supportedChannels = channels as readonly ('IN_APP' | 'WEB_PUSH' | 'ANDROID_PUSH')[];
       const result = await options.repository.createCampaign({
         tenantId: request.tenantId,
         actorUserId,
@@ -457,6 +468,7 @@ export function registerAdminNotificationRoutes(
         webPushGloballyEnabled: options.webPushGloballyEnabled,
         webPushAppId: options.webPushAppId,
         webPushEnvironment: options.webPushEnvironment,
+        ...(options.androidPush ? { androidPush: options.androidPush } : {}),
       });
 
       if (result.outcome === 'idempotency_conflict') {

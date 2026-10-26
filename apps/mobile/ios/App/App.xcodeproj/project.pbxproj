@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10C00000000000000000001 /* PadlHubIOSPushPlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10C00000000000000000002 /* PadlHubIOSPushPlugin.swift */; };
 		A10B0000000000000000000D /* PadlHubBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0000000000000000000E /* PadlHubBridgeTests.swift */; };
 		A10B0000000000000000000F /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = 4D22ABE82AF431CB00220026 /* CapApp-SPM */; };
 		A10B00000000000000000001 /* SessionTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B00000000000000000002 /* SessionTransportTests.swift */; };
@@ -24,6 +25,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A10C00000000000000000002 /* PadlHubIOSPushPlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadlHubIOSPushPlugin.swift; sourceTree = "<group>"; };
 		A10B0000000000000000000E /* PadlHubBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PadlHubBridgeTests.swift; path = AppTests/PadlHubBridgeTests.swift; sourceTree = SOURCE_ROOT; };
 		A10B00000000000000000002 /* SessionTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SessionTransportTests.swift; path = ../PadlHubSession/Tests/PadlHubSessionTests/SessionTransportTests.swift; sourceTree = SOURCE_ROOT; };
 		A10B00000000000000000004 /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -80,6 +82,7 @@
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A10A00000000000000000002 /* PadlHubSessionPlugin.swift */,
+				A10C00000000000000000002 /* PadlHubIOSPushPlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
 				504EC30E1FED79650016851F /* Assets.xcassets */,
 				504EC3101FED79650016851F /* LaunchScreen.storyboard */,
@@ -190,6 +193,7 @@
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				A10A00000000000000000001 /* PadlHubSessionPlugin.swift in Sources */,
+				A10C00000000000000000001 /* PadlHubIOSPushPlugin.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

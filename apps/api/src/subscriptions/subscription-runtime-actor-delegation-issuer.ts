@@ -111,7 +111,21 @@ export class SubscriptionRuntimeActorDelegationIssuer {
     readonly correlationId: string;
     readonly idempotencyKey: string;
     readonly request: BookedOperationAdmissionRequest;
+    /**
+     * Backend-issued short-lived user-scoped provider credential for exactly this operation.
+     * When present the delegation binds its sha256 and the wire header must carry the same token;
+     * the owner refuses a swapped or missing token.
+     */
+    readonly actorToken?: { readonly token: string; readonly expiresAt: string };
+    /** Provider client subscription id resolved server-side for the selected product. */
+    readonly providerClientSubscriptionId?: string;
+    readonly reservationId?: string;
   }): Promise<string> {
+    if (input.reservationId !== undefined && !uuidPattern.test(input.reservationId)) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
     const keyHash = subscriptionRuntimeIdempotencyKeySha256(input.idempotencyKey);
     if (
       ![
@@ -143,6 +157,32 @@ export class SubscriptionRuntimeActorDelegationIssuer {
         'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
       );
     }
+    if ((input.actorToken === undefined) !== (input.providerClientSubscriptionId === undefined)) {
+      throw new SubscriptionRuntimeActorDelegationError(
+        'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+      );
+    }
+    let actorTokenSha256: string | undefined;
+    if (input.actorToken !== undefined) {
+      const expiresAtMs = Date.parse(input.actorToken.expiresAt);
+      if (
+        !printableAsciiPattern.test(input.actorToken.token) ||
+        input.actorToken.token.length < 16 ||
+        input.actorToken.token.length > 4096 ||
+        !Number.isFinite(expiresAtMs) ||
+        new Date(expiresAtMs).toISOString() !== input.actorToken.expiresAt ||
+        expiresAtMs <= Date.now() ||
+        !uuidPattern.test(input.providerClientSubscriptionId ?? '') ||
+        input.providerClientSubscriptionId !== input.providerClientSubscriptionId?.toLowerCase()
+      ) {
+        throw new SubscriptionRuntimeActorDelegationError(
+          'SUBSCRIPTION_RUNTIME_DELEGATION_INPUT_INVALID',
+        );
+      }
+      actorTokenSha256 = `sha256:${createHash('sha256')
+        .update(input.actorToken.token, 'utf8')
+        .digest('hex')}`;
+    }
     const now = Math.floor(Date.now() / 1000);
     return new SignJWT({
       contract_version: 1,
@@ -169,6 +209,14 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       target_duration_minutes: input.durationMinutes,
       target_capacity: input.capacity,
       target_admissible: input.admissible,
+      ...(input.reservationId ? { reservation_id: input.reservationId } : {}),
+      ...(input.actorToken === undefined
+        ? {}
+        : {
+            actor_token_sha256: actorTokenSha256,
+            actor_token_expires_at: input.actorToken.expiresAt,
+            provider_client_subscription_id: input.providerClientSubscriptionId,
+          }),
     })
       .setProtectedHeader({
         alg: 'RS256',
@@ -194,6 +242,7 @@ export class SubscriptionRuntimeActorDelegationIssuer {
     readonly providerMappingId: string;
     readonly operationId: string;
     readonly correlationId: string;
+    readonly includeReceipt?: boolean;
   }): Promise<string> {
     if (
       ![
@@ -227,6 +276,7 @@ export class SubscriptionRuntimeActorDelegationIssuer {
       provider_client_id: input.providerClientId,
       provider_mapping_id: input.providerMappingId,
       correlation_id: input.correlationId,
+      ...(input.includeReceipt ? { receipt_version: 1 } : {}),
     })
       .setProtectedHeader({
         alg: 'RS256',

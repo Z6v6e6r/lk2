@@ -80,6 +80,8 @@ import type {
   UserUpcomingBookings,
   UserContext as ApiUserContext,
   WebPushConfiguration,
+  AndroidPushConfiguration,
+  AndroidPushEndpointRegistration,
   WebPushEndpointCommandResult,
   WebPushEndpointRegistration,
 } from '@phub/api-sdk';
@@ -473,6 +475,10 @@ export interface LegalAcceptance {
 }
 
 export interface AuthGateway {
+  readonly listSupportTickets?: PadlHubApiClient['listSupportTickets'];
+  readonly getSupportTicket?: PadlHubApiClient['getSupportTicket'];
+  readonly createSupportTicket?: PadlHubApiClient['createSupportTicket'];
+  readonly sendSupportTicketMessage?: PadlHubApiClient['sendSupportTicketMessage'];
   readonly restoreSession: () => Promise<AuthenticatedSession | null>;
   readonly requestCode: (phoneE164: string) => Promise<PhoneChallenge>;
   readonly verifyCode: (input: {
@@ -579,6 +585,15 @@ export interface AuthGateway {
     expectedRevision?: number,
     invitationId?: string,
   ) => Promise<GameCommandResult>;
+  /**
+   * Paid JOIN through the existing owner of booking/entitlement (HANDOFF-C1 §2.2/§2.5). The caller
+   * owns the idempotency key: a lost response is recovered by `getPaidJoinOperation`, never by a new
+   * POST. Optional capability: a gateway without it keeps the fail-closed free-join path.
+   */
+  readonly joinPaidGame?: PadlHubApiClient['joinPaidGame'];
+  /** Readback of the same commercial operation by its original idempotency key. */
+  readonly getPaidJoinOperation?: PadlHubApiClient['getPaidJoinOperation'];
+  readonly reconcilePaidJoinOperation?: PadlHubApiClient['reconcilePaidJoinOperation'];
   readonly leaveGame: (gameId: string) => Promise<GameCommandResult>;
   readonly joinGameWaitlist: (gameId: string, invitationId?: string) => Promise<GameCommandResult>;
   readonly leaveGameWaitlist: (gameId: string) => Promise<GameCommandResult>;
@@ -726,6 +741,13 @@ export interface AuthGateway {
     input: MessagingMediaUploadRequest,
     idempotencyKey: string,
   ) => Promise<MessagingMediaUploadResult>;
+  readonly uploadConversationMediaBytes?: (
+    conversationId: string,
+    mediaId: string,
+    bytes: Blob,
+    idempotencyKey: string,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   readonly finalizeConversationMediaUpload: (
     conversationId: string,
     mediaId: string,
@@ -759,6 +781,15 @@ export interface AuthGateway {
     input: NotificationPreferencesUpdateRequest,
   ) => Promise<NotificationPreferencesView>;
   readonly getWebPushConfiguration: () => Promise<WebPushConfiguration>;
+  readonly getAndroidPushConfiguration?: () => Promise<AndroidPushConfiguration>;
+  readonly registerAndroidPushEndpoint?: (
+    input: AndroidPushEndpointRegistration,
+    idempotencyKey: string,
+  ) => Promise<WebPushEndpointCommandResult>;
+  readonly revokeAndroidPushEndpoint?: (
+    installationId: string,
+    idempotencyKey: string,
+  ) => Promise<WebPushEndpointCommandResult>;
   readonly registerWebPushEndpoint: (
     input: WebPushEndpointRegistration,
   ) => Promise<WebPushEndpointCommandResult>;
@@ -814,7 +845,7 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
     tenant: {
       id: payload.tenantId,
       key: tenantKey,
-      name: tenantKey === 'local-padel' ? 'ПаделХАБ' : tenantKey,
+      name: tenantKey === 'local-padel' ? 'ПадлхАБ' : tenantKey,
     },
     roles: payload.roles,
     permissions: payload.permissions,
@@ -2250,6 +2281,14 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.joinGame(gameId, expectedRevision, invitationId);
     },
 
+    joinPaidGame(gameId, input, idempotencyKey) {
+      return client.joinPaidGame(gameId, input, idempotencyKey);
+    },
+
+    getPaidJoinOperation(gameId, idempotencyKey) {
+      return client.getPaidJoinOperation(gameId, idempotencyKey);
+    },
+
     leaveGame(gameId) {
       return client.leaveGame(gameId);
     },
@@ -2274,6 +2313,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.disputeGameResult(gameId, submissionId, input);
     },
 
+    reconcilePaidJoinOperation(operationId) {
+      return client.reconcilePaidJoinOperation(operationId);
+    },
+
     getGameOperation(operationId) {
       return client.getGameOperation(operationId);
     },
@@ -2295,6 +2338,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       return client.getLocation(locationId);
     },
 
+    listSupportTickets: (filters) => client.listSupportTickets(filters),
+    getSupportTicket: (id, before) => client.getSupportTicket(id, before),
+    createSupportTicket: (input, key) => client.createSupportTicket(input, key),
+    sendSupportTicketMessage: (id, input, key) => client.sendSupportTicketMessage(id, input, key),
     listMyCommunities(cursor, limit = 20) {
       if (cursor) return client.listMyCommunities({ limit, cursor });
       const pending = communityMembershipPagePromises.get(limit);
@@ -2469,21 +2516,18 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     listStationSupportStations() {
-      if (nativeClient) return nativeUnavailable();
       return client
         .request<{ readonly items: readonly StationSupportStation[] }>('/support/stations')
         .then((page) => page.items);
     },
 
     listStationSupportDialogs() {
-      if (nativeClient) return nativeUnavailable();
       return client
         .request<{ readonly items: readonly StationSupportDialog[] }>('/support/dialogs')
         .then((page) => page.items);
     },
 
     listStationSupportMessages(dialogId: string, before?: string) {
-      if (nativeClient) return nativeUnavailable();
       const suffix = before ? `?before=${encodeURIComponent(before)}` : '';
       return client
         .request<{
@@ -2499,7 +2543,6 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     sendStationSupportMessage(command: StationSupportSendCommand) {
-      if (nativeClient) return nativeUnavailable();
       const payload: Record<string, unknown> = { text: command.text };
       if (command.stationId) payload.stationId = command.stationId;
       if (command.dialogId) payload.dialogId = command.dialogId;
@@ -2517,12 +2560,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     uploadStationSupportAttachment(input) {
-      if (nativeClient) return nativeUnavailable();
       return client.uploadStationSupportAttachment(input);
     },
 
     loadStationSupportAttachment(attachmentId) {
-      if (nativeClient) return nativeUnavailable();
       return client.downloadStationSupportAttachment(attachmentId);
     },
 
@@ -2585,7 +2626,6 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     issueConversationMediaUpload(conversationId, input, idempotencyKey) {
-      if (nativeClient) return nativeUnavailable();
       return retryMessagingCommand((signal) =>
         client.request<MessagingMediaUploadResult>(
           `/conversations/${encodeURIComponent(conversationId)}/media/uploads`,
@@ -2600,7 +2640,6 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     finalizeConversationMediaUpload(conversationId, mediaId, declaredByteSize, idempotencyKey) {
-      if (nativeClient) return nativeUnavailable();
       return retryMessagingCommand((signal) =>
         client.request<MessagingMediaAsset>(
           `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}/finalize`,
@@ -2615,15 +2654,26 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     },
 
     getConversationMedia(conversationId, mediaId) {
-      if (nativeClient) return nativeUnavailable();
       return client.request<MessagingMediaAsset>(
         `/conversations/${encodeURIComponent(conversationId)}/media/${encodeURIComponent(mediaId)}`,
       );
     },
 
     loadConversationMedia(conversationId, mediaId) {
-      if (nativeClient) return nativeUnavailable();
       return client.downloadConversationMedia(conversationId, mediaId);
+    },
+
+    async uploadConversationMediaBytes(conversationId, mediaId, bytes, idempotencyKey, signal) {
+      if (!nativeClient) return nativeUnavailable();
+      await retryMessagingCommand((attemptSignal) =>
+        client.uploadConversationMediaBytes(
+          conversationId,
+          mediaId,
+          bytes,
+          idempotencyKey,
+          signal ? AbortSignal.any([signal, attemptSignal]) : attemptSignal,
+        ),
+      );
     },
 
     markConversationRead(conversationId, throughSequence, idempotencyKey) {
@@ -2696,6 +2746,19 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
     getWebPushConfiguration() {
       if (nativeClient) return Promise.resolve({ enabled: false });
       return client.getWebPushConfiguration();
+    },
+
+    getAndroidPushConfiguration() {
+      if (!nativeClient) return nativeUnavailable();
+      return client.getAndroidPushConfiguration();
+    },
+    registerAndroidPushEndpoint(input, idempotencyKey) {
+      if (!nativeClient) return nativeUnavailable();
+      return client.registerAndroidPushEndpoint(input, idempotencyKey);
+    },
+    revokeAndroidPushEndpoint(installationId, idempotencyKey) {
+      if (!nativeClient) return nativeUnavailable();
+      return client.revokeAndroidPushEndpoint(installationId, idempotencyKey);
     },
 
     registerWebPushEndpoint(input) {

@@ -225,7 +225,7 @@ function CommunityReadOnlyPageContent({
               </a>
               <div className={styles.headerCopy}>
                 <h1 className={styles.title}>Сообщество</h1>
-                <p className={styles.members}>ПаделХАБ</p>
+                <p className={styles.members}>ПадлхАБ</p>
               </div>
             </div>
           </header>

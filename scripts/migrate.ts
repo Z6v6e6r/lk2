@@ -58,6 +58,18 @@ try {
     : [];
 
   assertMigrationLedgerCompatible({ applied, packaged: packagedMigrations });
+  if (
+    applied.length > 0 &&
+    packagedMigrations.some(
+      (m) =>
+        [
+          '0099_local_password_reset_proofs.sql',
+          '0100_notification_scenarios.sql',
+          '0101_notification_lifecycle_channels.sql',
+        ].includes(m.filename) && !applied.some((a) => a.filename === m.filename),
+    )
+  )
+    throw new Error('NOTIFICATION_MIGRATION_CONTROLLER_REQUIRED');
 
   const appliedFilenames = new Set(applied.map((entry) => entry.filename));
   const emptyDatabaseCatalogVerified =

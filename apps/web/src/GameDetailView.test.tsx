@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GameDetailView, type GameDetailTab } from './GameDetailView.js';
 import type { GameCard } from './auth-gateway.js';
+import type { GameJoinFlowState } from './game-join-flow.js';
 
 const PLAYERS = [
   ['f75b4e2a-9c98-4b26-85b6-ae58e0edca24', 'Анна'],
@@ -59,6 +60,185 @@ afterEach(() => {
 });
 
 describe('GameDetailView', () => {
+  it('shows occupancy and organizer badges without changing avatars or links', () => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={{
+          ...game,
+          capacity: { total: 4, occupied: 2, reserved: 0, open: 2, waitlistCount: 0 },
+          participants: game.participants.slice(0, 2).map((participant, index) => ({
+            ...participant,
+            level: index === 0 ? 'C' : null,
+          })),
+        }}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+
+    const panel = screen.getByRole('region', { name: 'Участники игры' });
+    const progress = within(panel).getByRole('progressbar', { name: 'Заполненность игры' });
+    expect(progress).toHaveAttribute('aria-valuenow', '2');
+    expect(progress).toHaveAttribute('aria-valuemax', '4');
+    expect(progress.children).toHaveLength(4);
+    expect(progress.querySelectorAll('.is-filled')).toHaveLength(2);
+    expect(within(panel).getByText('2/4')).toBeVisible();
+    expect(within(panel).queryByText('Уровень')).toBeNull();
+    const organizer = within(panel).getByRole('link', { name: /Анна/ });
+    expect(organizer).toHaveAttribute('href', `/profile/${PLAYERS[0][0]}`);
+    expect(within(panel).getByText('Организатор')).toHaveClass('game-detail-player__badge');
+    expect(within(organizer).queryByText('Организатор')).toBeNull();
+    expect(within(panel).queryByLabelText('Уровень: C')).toBeNull();
+    expect(
+      within(organizer).getByRole('img', { name: /Анна, уровень C, прогресс 42%/ }),
+    ).toHaveAttribute('data-size', '48');
+    expect(within(organizer).getByRole('img', { name: /Анна, уровень C/ })).toHaveAttribute(
+      'data-player-level-ring-visible',
+      'true',
+    );
+    expect(within(panel).queryByLabelText('Уровень не указан')).toBeNull();
+    expect(within(panel).getAllByText('Свободное место')).toHaveLength(2);
+    expect(within(panel).queryByText('@никнэйм')).toBeNull();
+    expect(within(panel).queryByRole('button', { name: 'Показать больше' })).toBeNull();
+  });
+
+  it('offers only the viewer a leave badge through the existing action handler', async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        viewerUserId={PLAYERS[1][0]}
+        game={{ ...game, viewerRelation: 'PARTICIPANT', allowedActions: ['OPEN_DETAILS', 'LEAVE'] }}
+        onAction={onAction}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+    const panel = screen.getByRole('region', { name: 'Участники игры' });
+    const leave = within(panel).getByRole('button', { name: 'Покинуть игру' });
+    const viewerLink = within(panel).getByRole('link', { name: /Борис/ });
+    expect(leave.closest('a')).toBeNull();
+    expect(leave.parentElement).toBe(viewerLink.parentElement);
+    expect(within(panel).getAllByRole('button', { name: 'Покинуть игру' })).toHaveLength(1);
+    expect(within(panel).getByRole('link', { name: /Вера/ }).parentElement).not.toContainElement(
+      leave,
+    );
+    await user.click(leave);
+    expect(onAction).toHaveBeenCalledExactlyOnceWith('LEAVE');
+  });
+
+  it.each([
+    {
+      name: 'server denies leave',
+      viewerUserId: PLAYERS[1][0],
+      relation: 'PARTICIPANT',
+      allowed: false,
+    },
+    {
+      name: 'viewer identity is missing',
+      viewerUserId: undefined,
+      relation: 'PARTICIPANT',
+      allowed: true,
+    },
+    {
+      name: 'viewer is not on the roster',
+      viewerUserId: 'other-user',
+      relation: 'PARTICIPANT',
+      allowed: true,
+    },
+    {
+      name: 'viewer is an organizer',
+      viewerUserId: PLAYERS[0][0],
+      relation: 'ORGANIZER',
+      allowed: true,
+    },
+    {
+      name: 'viewer is not a participant',
+      viewerUserId: PLAYERS[1][0],
+      relation: 'NONE',
+      allowed: true,
+    },
+  ] as const)('hides the leave badge when $name', ({ viewerUserId, relation, allowed }) => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        {...(viewerUserId ? { viewerUserId } : {})}
+        game={{
+          ...game,
+          viewerRelation: relation,
+          allowedActions: allowed ? ['OPEN_DETAILS', 'LEAVE'] : ['OPEN_DETAILS'],
+        }}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+    const panel = screen.getByRole('region', { name: 'Участники игры' });
+    expect(within(panel).queryByRole('button', { name: 'Покинуть игру' })).toBeNull();
+  });
+
+  it('disables the leave badge while processing and removes it when permission is withdrawn', async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    const props = {
+      activeTab: 'GAME' as const,
+      busy: true,
+      viewerUserId: PLAYERS[1][0],
+      game: { ...game, allowedActions: ['OPEN_DETAILS', 'LEAVE'] } satisfies GameCard,
+      onAction,
+      onChatOpen: vi.fn(),
+      onSubmit: vi.fn().mockResolvedValue(undefined),
+      onTabChange: vi.fn(),
+    };
+    const view = render(<GameDetailView {...props} />);
+    const leave = screen.getByRole('button', { name: 'Покинуть игру' });
+    expect(leave).toBeDisabled();
+    await user.click(leave);
+    expect(onAction).not.toHaveBeenCalled();
+    view.rerender(
+      <GameDetailView
+        {...props}
+        busy={false}
+        game={{ ...game, allowedActions: ['OPEN_DETAILS'] }}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Покинуть игру' })).toBeNull();
+  });
+
+  it.each([0, 4])('renders the scale and available places for %i occupied seats', (occupied) => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={{
+          ...game,
+          participants: game.participants.slice(0, occupied),
+          capacity: { total: 4, occupied, reserved: 0, open: 4 - occupied, waitlistCount: 0 },
+        }}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+
+    const panel = screen.getByRole('region', { name: 'Участники игры' });
+    const progress = within(panel).getByRole('progressbar');
+    expect(progress).toHaveAttribute('aria-valuenow', String(occupied));
+    expect(progress.querySelectorAll('.is-filled')).toHaveLength(occupied);
+    expect(within(panel).queryAllByRole('link')).toHaveLength(occupied);
+    expect(within(panel).queryAllByText('Свободное место')).toHaveLength(4 - occupied);
+  });
+
   it('shows the existing seat price before the player joins', () => {
     render(
       <GameDetailView
@@ -303,5 +483,104 @@ describe('GameDetailView', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Подтвердить результат' }));
     expect(onAction).toHaveBeenCalledWith('CONFIRM_RESULT');
+  });
+});
+
+describe('GameDetailView paid join flow', () => {
+  const paidGame: GameCard = {
+    ...game,
+    surface: 'DISCOVER',
+    displayState: 'FINDING_PLAYERS',
+    priceSummary: { amountMinor: 250000, currency: 'RUB' },
+    viewerRelation: 'NONE',
+    viewerPaymentState: 'NOT_REQUIRED',
+    capacity: { total: 4, occupied: 2, reserved: 0, open: 2, waitlistCount: 0 },
+    participants: game.participants.slice(0, 2),
+    resultSummary: null,
+    allowedActions: ['OPEN_DETAILS', 'JOIN'],
+    conversation: null,
+  };
+
+  function renderWithFlow(flow: GameJoinFlowState, onConfirmConsent = vi.fn()): void {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={paidGame}
+        joinFlow={flow}
+        joinFlowBusy={false}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onChatNavigate={vi.fn()}
+        onJoinConsent={onConfirmConsent}
+        onJoinConsentCancel={vi.fn()}
+        onJoinStatusCheck={vi.fn()}
+        onJoinRetry={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+  }
+
+  it('shows the server-owned amount and only sends an explicit consent', async () => {
+    const onConfirmConsent = vi.fn();
+    renderWithFlow(
+      {
+        kind: 'NEEDS_CONSENT',
+        consent: { amountMinor: 250000, currency: 'RUB' },
+        subscriptionInstanceId: '66666666-6666-4666-8666-666666666666',
+        message: '',
+      },
+      onConfirmConsent,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Подтверждение стоимости' })).toBeVisible();
+    expect(screen.getByText('2 500 ₽')).toBeVisible();
+    // The ordinary JOIN button is replaced while consent owns the action.
+    expect(screen.queryByRole('button', { name: 'Вступить в игру' })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^Подтвердить/ }));
+    expect(onConfirmConsent).toHaveBeenCalledWith({ amountMinor: 250000, currency: 'RUB' });
+  });
+
+  it('shows status-checking and never a replacement purchase button after an unknown outcome', () => {
+    renderWithFlow({
+      kind: 'WAIT_FOR_RECONCILIATION',
+      reason: 'UNKNOWN',
+      retryAfterSeconds: 5,
+      message: 'Статус операции не подтверждён. Повторная оплата недоступна.',
+    });
+
+    expect(screen.getByRole('heading', { name: 'Проверяем статус оплаты' })).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent(/Повторная оплата недоступна/);
+    expect(screen.queryByRole('button', { name: 'Вступить в игру' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Оплатить место' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Проверить статус' })).toBeVisible();
+  });
+
+  it('shows service blocking separately from the payment contour', () => {
+    renderWithFlow({
+      kind: 'SERVICE_BLOCKED',
+      message: 'Эта услуга недоступна по правилам клуба. Оплата не снимает этот запрет.',
+    });
+
+    expect(screen.getByRole('heading', { name: 'Услуга недоступна' })).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveTextContent(/по правилам клуба/);
+    expect(screen.queryByText(/Платёжный контур/)).toBeNull();
+  });
+
+  it('keeps the ordinary JOIN button when there is no paid flow state', () => {
+    render(
+      <GameDetailView
+        activeTab="GAME"
+        busy={false}
+        game={paidGame}
+        onAction={vi.fn()}
+        onChatOpen={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        onTabChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Вступить в игру' })).toBeVisible();
   });
 });

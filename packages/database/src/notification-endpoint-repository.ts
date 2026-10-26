@@ -8,7 +8,14 @@ export type WebPushEnvironment = 'SANDBOX' | 'PRODUCTION';
 export interface WebPushProviderSelector {
   readonly appId: string;
   readonly environment: WebPushEnvironment;
+  /** Server-owned provider identity. Omitted only by legacy Web Push callers. */
+  readonly platform?: 'WEB' | 'ANDROID' | 'IOS';
+  readonly provider?: 'WEB_PUSH' | 'FCM' | 'APNS';
+  readonly credentialRef?: string;
 }
+
+export type AndroidPushProviderSelector = Required<Omit<WebPushProviderSelector, 'credentialRef'>> &
+  Pick<WebPushProviderSelector, 'credentialRef'>;
 
 export interface WebPushEndpointCapabilities {
   readonly tenantEnabled: boolean;
@@ -42,6 +49,14 @@ export interface NotificationEndpointRepository {
     tenantId: string,
     selector: WebPushProviderSelector,
   ): Promise<WebPushEndpointCapabilities>;
+  getIosPushCapabilities?(
+    tenantId: string,
+    selector: AndroidPushProviderSelector,
+  ): Promise<WebPushEndpointCapabilities>;
+  getAndroidPushCapabilities?(
+    tenantId: string,
+    selector: AndroidPushProviderSelector,
+  ): Promise<WebPushEndpointCapabilities>;
   registerWebPush(input: {
     readonly tenantId: string;
     readonly userId: string;
@@ -64,6 +79,38 @@ export interface NotificationEndpointRepository {
     readonly idempotencyKey: string;
     readonly correlationId: string;
   }): Promise<WebPushEndpointCommandResult>;
+  registerAndroidPush?(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly selector: AndroidPushProviderSelector;
+    readonly installationId: string;
+    readonly ciphertext: Buffer;
+    readonly addressHash: string;
+    readonly encryptionKeyId: string;
+    readonly endpointsPerUserMax: number;
+    readonly requestHash: string;
+    readonly idempotencyKey: string;
+    readonly correlationId: string;
+  }): Promise<WebPushEndpointCommandResult>;
+  revokeAndroidPush?(input: {
+    readonly tenantId: string;
+    readonly userId: string;
+    readonly selector: AndroidPushProviderSelector;
+    readonly installationId: string;
+    readonly requestHash: string;
+    readonly idempotencyKey: string;
+    readonly correlationId: string;
+  }): Promise<WebPushEndpointCommandResult>;
+}
+
+function providerIdentity(selector: WebPushProviderSelector): {
+  readonly platform: 'WEB' | 'ANDROID' | 'IOS';
+  readonly provider: 'WEB_PUSH' | 'FCM' | 'APNS';
+} {
+  return {
+    platform: selector.platform ?? 'WEB',
+    provider: selector.provider ?? 'WEB_PUSH',
+  };
 }
 
 interface CapabilitiesRow extends QueryResultRow {
@@ -185,19 +232,27 @@ async function activeProvider(
   tenantId: string,
   selector: WebPushProviderSelector,
 ): Promise<ProviderRow | undefined> {
-  return queryOne<ProviderRow>(
-    client,
+  const identity = providerIdentity(selector);
+  const rows = await client.query<ProviderRow>(
     `select id
        from integration.notification_provider_accounts
       where tenant_id = $1
         and channel = 'PUSH'
-        and platform = 'WEB'
-        and provider = 'WEB_PUSH'
+        and platform = $4
+        and provider = $5
         and app_id = $2
         and environment = $3
-        and status = 'ACTIVE'`,
-    [tenantId, selector.appId, selector.environment],
+        and status = 'ACTIVE' and ($6::text is null or credential_ref=$6) for share`,
+    [
+      tenantId,
+      selector.appId,
+      selector.environment,
+      identity.platform,
+      identity.provider,
+      selector.credentialRef ?? null,
+    ],
   );
+  return rows.rows.length === 1 ? rows.rows[0] : undefined;
 }
 
 export function createNotificationEndpointRepository(pool: Pool): NotificationEndpointRepository {
@@ -252,11 +307,58 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
       });
     },
 
+    getAndroidPushCapabilities(tenantId, selector) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const row = await queryOne<CapabilitiesRow>(
+          client,
+          `select coalesce(s.android_push_enabled, false) as web_push_enabled,
+                  exists (select 1 from integration.notification_provider_accounts a
+                    where a.tenant_id = $1 and a.channel = 'PUSH' and a.platform = 'ANDROID'
+                      and a.provider = 'FCM' and a.app_id = $2 and a.environment = $3
+                      and a.status = 'ACTIVE') as provider_configured
+             from (select $1::uuid as tenant_id) input
+             left join notifications.tenant_runtime_settings s on s.tenant_id = input.tenant_id`,
+          [tenantId, selector.appId, selector.environment],
+        );
+        return {
+          tenantEnabled: row?.web_push_enabled ?? false,
+          providerConfigured: row?.provider_configured ?? false,
+        };
+      });
+    },
+
+    getIosPushCapabilities(tenantId, selector) {
+      return withTenantTransaction(pool, tenantId, async (client) => {
+        const row = await queryOne<CapabilitiesRow>(
+          client,
+          `select coalesce(s.ios_push_enabled, false) as web_push_enabled,
+                  (select count(*)=1 from integration.notification_provider_accounts a
+                    where a.tenant_id = $1 and a.channel = 'PUSH' and a.platform = 'IOS'
+                      and a.provider = 'APNS' and a.app_id = $2 and a.environment = $3
+                      and a.status = 'ACTIVE' and a.credential_ref=$4) as provider_configured
+             from (select $1::uuid as tenant_id) input
+             left join notifications.tenant_runtime_settings s on s.tenant_id = input.tenant_id`,
+          [tenantId, selector.appId, selector.environment, selector.credentialRef ?? null],
+        );
+        return {
+          tenantEnabled: row?.web_push_enabled ?? false,
+          providerConfigured: row?.provider_configured ?? false,
+        };
+      });
+    },
+
     async registerWebPush(input) {
       try {
         return await withTenantTransaction(pool, input.tenantId, async (client) => {
           const provider = await activeProvider(client, input.tenantId, input.selector);
           if (!provider) return { outcome: 'provider_unavailable' };
+          const identity = providerIdentity(input.selector);
+          const auditPrefix =
+            identity.platform === 'ANDROID'
+              ? 'ANDROID_PUSH'
+              : identity.platform === 'IOS'
+                ? 'IOS_PUSH'
+                : 'WEB_PUSH';
 
           // Serialize physical subscription ownership before the target-user lock.
           await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
@@ -264,6 +366,11 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
           ]);
           await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
             `notification-endpoint:${input.userId}`,
+          ]);
+          // A stable installation identifies one physical app install. Serialize it separately from
+          // the token because account switching commonly rotates the FCM token at the same time.
+          await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+            `notification-endpoint-installation:${input.tenantId}:${provider.id}:${input.installationId}`,
           ]);
 
           const command = await claimCommand(client, {
@@ -296,6 +403,15 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
               and installation_id = $4
             for update`,
             [input.tenantId, input.userId, provider.id, input.installationId],
+          );
+          const liveInstallationOwner = await queryOne<EndpointRow>(
+            client,
+            `select id, user_id, installation_id, address_hash, status
+               from integration.notification_endpoints
+              where tenant_id = $1 and provider_account_id = $2 and installation_id = $3
+                and channel = 'PUSH' and status in ('ACTIVE', 'SUSPENDED_POLICY')
+              for update`,
+            [input.tenantId, provider.id, input.installationId],
           );
           const liveAddressOwner = await queryOne<EndpointRow>(
             client,
@@ -345,30 +461,39 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
             throw new EndpointLimitReachedError();
           }
 
-          if (liveAddressOwner && liveAddressOwner.user_id !== input.userId) {
+          const priorOwners = [liveAddressOwner, liveInstallationOwner]
+            .filter((owner): owner is EndpointRow =>
+              Boolean(owner && owner.user_id !== input.userId),
+            )
+            .filter(
+              (owner, index, owners) =>
+                owners.findIndex((candidate) => candidate.id === owner.id) === index,
+            );
+          for (const priorOwner of priorOwners) {
             // Do not transfer a row: pending deliveries retain the original endpoint owner.
             const revokedOwner = await client.query(
               `update integration.notification_endpoints
                 set installation_id = null, status = 'REVOKED', updated_at = now()
               where tenant_id = $1 and user_id = $2 and id = $3`,
-              [input.tenantId, liveAddressOwner.user_id, liveAddressOwner.id],
+              [input.tenantId, priorOwner.user_id, priorOwner.id],
             );
             if (revokedOwner.rowCount === 1) {
               await client.query(
                 `insert into audit.audit_log (
                    tenant_id, actor_id, action, resource_type, resource_id,
                    result, reason, correlation_id, old_value, new_value
-                 ) values ($1, $2, 'WEB_PUSH_ENDPOINT_OWNERSHIP_REVOKED',
-                           'NOTIFICATION_ENDPOINT', $3, 'SUCCESS', 'OWNERSHIP_TRANSFER',
-                           $4, $5::jsonb, $6::jsonb)`,
+                 ) values ($1, $2, $3,
+                           'NOTIFICATION_ENDPOINT', $4, 'SUCCESS', 'OWNERSHIP_TRANSFER',
+                           $5, $6::jsonb, $7::jsonb)`,
                 [
                   input.tenantId,
                   input.userId,
-                  liveAddressOwner.id,
+                  `${auditPrefix}_ENDPOINT_OWNERSHIP_REVOKED`,
+                  priorOwner.id,
                   input.correlationId,
                   JSON.stringify({
-                    status: liveAddressOwner.status,
-                    addressHash: liveAddressOwner.address_hash,
+                    status: priorOwner.status,
+                    addressHash: priorOwner.address_hash,
                   }),
                   JSON.stringify({ status: 'REVOKED', installationId: null }),
                 ],
@@ -444,11 +569,12 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
             `insert into audit.audit_log (
              tenant_id, actor_id, action, resource_type, resource_id,
              result, correlation_id, old_value, new_value
-           ) values ($1, $2, 'WEB_PUSH_ENDPOINT_REGISTERED', 'NOTIFICATION_ENDPOINT', $3,
-                     'SUCCESS', $4, $5::jsonb, $6::jsonb)`,
+           ) values ($1, $2, $3, 'NOTIFICATION_ENDPOINT', $4,
+                     'SUCCESS', $5, $6::jsonb, $7::jsonb)`,
             [
               input.tenantId,
               input.userId,
+              `${auditPrefix}_ENDPOINT_REGISTERED`,
               endpoint.id,
               input.correlationId,
               JSON.stringify(
@@ -480,6 +606,13 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
 
     revokeWebPush(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
+        const identity = providerIdentity(input.selector);
+        const auditPrefix =
+          identity.platform === 'ANDROID'
+            ? 'ANDROID_PUSH'
+            : identity.platform === 'IOS'
+              ? 'IOS_PUSH'
+              : 'WEB_PUSH';
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `notification-endpoint:${input.userId}`,
         ]);
@@ -493,10 +626,11 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
               and e.user_id = $2
               and e.installation_id = $3
               and e.channel = 'PUSH'
-              and a.platform = 'WEB'
-              and a.provider = 'WEB_PUSH'
+              and a.platform = $6
+              and a.provider = $7
               and a.app_id = $4
               and a.environment = $5
+              and ($8::text is null or a.credential_ref=$8)
             for update of e`,
           [
             input.tenantId,
@@ -504,6 +638,9 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
             input.installationId,
             input.selector.appId,
             input.selector.environment,
+            identity.platform,
+            identity.provider,
+            input.selector.credentialRef ?? null,
           ],
         );
         if (!endpoint) return { outcome: 'not_found' };
@@ -544,11 +681,12 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
           `insert into audit.audit_log (
              tenant_id, actor_id, action, resource_type, resource_id,
              result, correlation_id, old_value, new_value
-           ) values ($1, $2, 'WEB_PUSH_ENDPOINT_REVOKED', 'NOTIFICATION_ENDPOINT', $3,
-                     'SUCCESS', $4, $5::jsonb, $6::jsonb)`,
+           ) values ($1, $2, $3, 'NOTIFICATION_ENDPOINT', $4,
+                     'SUCCESS', $5, $6::jsonb, $7::jsonb)`,
           [
             input.tenantId,
             input.userId,
+            `${auditPrefix}_ENDPOINT_REVOKED`,
             endpoint.id,
             input.correlationId,
             JSON.stringify({ status: endpoint.status, addressHash: endpoint.address_hash }),
@@ -563,6 +701,12 @@ export function createNotificationEndpointRepository(pool: Pool): NotificationEn
           replayed: false,
         };
       });
+    },
+    registerAndroidPush(input) {
+      return this.registerWebPush(input);
+    },
+    revokeAndroidPush(input) {
+      return this.revokeWebPush(input);
     },
   };
 }

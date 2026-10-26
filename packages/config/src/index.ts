@@ -206,6 +206,15 @@ const environmentSchema = z.object({
     .max(3_600_000)
     .default(60_000),
   PARTICIPATION_COMMAND_EXPIRY_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(100),
+  // Commercial paid CREATE/JOIN through the existing owner of booking/entitlement.
+  // Owner: C1 commercial server path. Purpose: compose the owner adapter for the paid JOIN slice.
+  // Activation: only with the existing delegation material and a join-conditions owner present;
+  // otherwise the runtime factory returns undefined and the route stays fail-closed.
+  // Removal/review condition: replace when a dedicated booked-operation owner adapter lands, and
+  // review this flag no later than the next delivery batch.
+  GAME_COMMERCIAL_JOIN_ENABLED: booleanFromEnvironment,
+  GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: z.string().url().optional(),
+  GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(5_000).default(3_000),
   ACTIVITY_HISTORY_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_SYNC_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: booleanFromEnvironment,
@@ -457,6 +466,26 @@ const environmentSchema = z.object({
     .min(1_000)
     .max(3_600_000)
     .default(5_000),
+  // Notifications owner: enable after scenario migration/rehearsal; review after first pilot.
+  NOTIFICATION_SCENARIOS_ENABLED: booleanFromEnvironment,
+  // Notifications owner; enable only after 0101 rehearsal and provider/consent pilot. Review after pilot.
+  NOTIFICATION_LIFECYCLE_VIVA_ENABLED: booleanFromEnvironment,
+  NOTIFICATION_VIVA_TENANT_ID: z.string().uuid().optional(),
+  NOTIFICATION_VIVA_ADMIN_CREDENTIAL_FILE: z.string().min(1).max(1024).optional(),
+  NOTIFICATION_TRAINING_TYPE_IDS: z.string().default(''),
+  NOTIFICATION_TRAINING_STUDIO_IDS: z.string().default(''),
+  NOTIFICATION_STAFF_TASKS_ENABLED: booleanFromEnvironment,
+  APNS_ENABLED: booleanFromEnvironment,
+  APNS_APP_ID: z.string().min(1).max(300).default('ru.padlhub.app'),
+  APNS_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
+  APNS_CREDENTIAL_FILE: z.string().min(1).max(1024).optional(),
+  APNS_CREDENTIAL_REF: z.string().min(1).max(300).default('notification-apns'),
+  SMTP_ENABLED: booleanFromEnvironment,
+  SMTP_APP_ID: z.string().min(1).max(300).default('padlhub-email'),
+  SMTP_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
+  SMTP_CREDENTIAL_FILE: z.string().min(1).max(1024).optional(),
+  SMTP_CREDENTIAL_REF: z.string().min(1).max(300).default('notification-yandex-smtp'),
+
   WEB_PUSH_ENABLED: booleanFromEnvironment,
   WEB_PUSH_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
   WEB_PUSH_APP_ID: z.string().min(1).max(300).default('padlhub-web'),
@@ -473,6 +502,17 @@ const environmentSchema = z.object({
   WEB_PUSH_ENDPOINTS_PER_USER_MAX: z.coerce.number().int().min(1).max(20).default(5),
   WEB_PUSH_CIRCUIT_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(5),
   WEB_PUSH_CIRCUIT_RESET_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
+  FCM_ENABLED: booleanFromEnvironment,
+  FCM_APP_ID: z.string().min(1).max(300).default('ru.padlhub.app'),
+  FCM_PROJECT_ID: z.string().min(1).max(300).optional(),
+  FCM_ENVIRONMENT: z.enum(['SANDBOX', 'PRODUCTION']).default('SANDBOX'),
+  /** Mounted server-only reference. The process never accepts credential material from clients. */
+  FCM_CREDENTIAL_FILE: z.string().min(1).max(1_024).optional(),
+  FCM_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(5_000),
+  FCM_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  FCM_RETRY_BASE_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(5_000),
+  FCM_POLL_INTERVAL_MS: z.coerce.number().int().min(250).max(60_000).default(1_000),
+  FCM_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(1),
   NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS: z.string().optional(),
   NOTIFICATION_ENDPOINT_ACTIVE_KEY_ID: z.string().min(1).max(64).default('v1'),
   VIVA_API_URL: z.string().url().optional().or(z.literal('')),
@@ -1280,6 +1320,47 @@ export function loadConfig(
         activeKey.replace(/=+$/, '')
     ) {
       throw new Error('Active notification endpoint encryption key must be 32-byte base64');
+    }
+  }
+  for (const kind of ['APNS', 'SMTP'] as const) {
+    if (
+      parsed.data[`${kind}_ENABLED`] &&
+      (!parsed.data.NOTIFICATION_SCENARIOS_ENABLED ||
+        !parsed.data[`${kind}_CREDENTIAL_FILE`] ||
+        !parsed.data.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS)
+    )
+      throw new Error(`${kind}_ENABLED requires scenarios, credential file and endpoint keyring`);
+  }
+  if (
+    parsed.data.NOTIFICATION_LIFECYCLE_VIVA_ENABLED &&
+    (!parsed.data.NOTIFICATION_SCENARIOS_ENABLED ||
+      !parsed.data.NOTIFICATION_VIVA_TENANT_ID ||
+      !parsed.data.VIVA_DELEGATION_ENCRYPTION_KEY ||
+      !['sandbox', 'production'].includes(parsed.data.VIVA_MODE) ||
+      parsed.data.VIVA_AUTH_TENANT_KEY !== 'iSkq6G')
+  )
+    throw new Error(
+      'Notification lifecycle requires scenarios, explicit tenant, live Viva and delegation key',
+    );
+  if (
+    parsed.data.NOTIFICATION_VIVA_ADMIN_CREDENTIAL_FILE &&
+    (!parsed.data.NOTIFICATION_LIFECYCLE_VIVA_ENABLED ||
+      !parsed.data.NOTIFICATION_TRAINING_TYPE_IDS ||
+      !parsed.data.NOTIFICATION_TRAINING_STUDIO_IDS)
+  )
+    throw new Error(
+      'Notification attendance requires lifecycle and explicit training type/studio allowlists',
+    );
+  if (parsed.data.FCM_ENABLED) {
+    const missingFcm = [
+      ['FCM_PROJECT_ID', parsed.data.FCM_PROJECT_ID],
+      ['FCM_CREDENTIAL_FILE', parsed.data.FCM_CREDENTIAL_FILE],
+      ['NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS', parsed.data.NOTIFICATION_ENDPOINT_ENCRYPTION_KEYS],
+    ]
+      .filter(([, value]) => !value)
+      .map(([name]) => name);
+    if (missingFcm.length > 0) {
+      throw new Error(`FCM_ENABLED requires runtime configuration: ${missingFcm.join(', ')}`);
     }
   }
   if (
