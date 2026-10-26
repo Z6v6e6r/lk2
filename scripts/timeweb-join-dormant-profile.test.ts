@@ -54,6 +54,10 @@ const zodRuntimeSource = () => ({
   toSha: 'cccae751ad4134382b2e350db30e93e47099209d',
   toTree: '0403f08abcefdce80b7d9974e630238de6ac8eb0',
 });
+const notificationRecoverySource = () => ({
+  sha: '9ca9a3cb17e8b3e19bd5d98d709e70600bc409a5',
+  tree: '02b1bbc9c937b6ce5c23a2c1bdfb25b5e30b28bb',
+});
 const zodRuntimeBridge = () =>
   [
     {
@@ -283,6 +287,10 @@ describe('bounded dormant JOIN profile', () => {
   });
   it('accepts the exact PR468 source pair without opening either editable path', () => {
     const pair = notificationRecoveryBridge();
+    const sourceEdge = notificationRecoverySource();
+    expect(
+      execFileSync('git', ['rev-parse', `${sourceEdge.sha}^{tree}`], { encoding: 'utf8' }).trim(),
+    ).toBe(sourceEdge.tree);
     validateJoinRuntimeTail(pair);
     validateJoinRuntimeTail([...pair].reverse());
     validateJoinRuntimeTail([
@@ -291,7 +299,9 @@ describe('bounded dormant JOIN profile', () => {
     ]);
     for (const row of pair) {
       expect(JOIN_CONTROLLER_FILES.has(row.path)).toBe(false);
-      const source = readFileSync(new URL('../' + row.path, import.meta.url));
+      const source = execFileSync('git', ['cat-file', 'blob', `${sourceEdge.sha}:${row.path}`], {
+        maxBuffer: 16 * 1024 * 1024,
+      });
       const oid = createHash('sha1').update(`blob ${source.length}\0`).update(source).digest('hex');
       expect(oid).toBe(row.newOid);
     }

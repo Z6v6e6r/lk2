@@ -132,6 +132,7 @@ export const LOCATION_PHOTO_CONTROLLER_DELTA = Object.freeze(
       ['scripts/timeweb-api-worker-contract.js', 'M'],
       ['scripts/timeweb-api-worker-migration.d.ts', 'M'],
       ['scripts/timeweb-api-worker-migration.js', 'M'],
+      ['scripts/timeweb-join-dormant-profile.test.ts', 'M'],
       ['deploy/timeweb/location-photo-migration-0102.v1.json', 'A'],
       ['deploy/timeweb/location-photo-role-bootstrap-0102.sql', 'A'],
       ['deploy/timeweb/location-photo-role-cleanup-0102.sql', 'A'],
