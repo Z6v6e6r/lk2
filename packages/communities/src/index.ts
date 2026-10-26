@@ -218,6 +218,7 @@ export function createCommunityDirectoryService(
 }
 
 export * from './legacy-community-read-repository.js';
+export * from './community-rating.js';
 export * from './community-read-experience.js';
 export * from './membership-pin.js';
 export * from './community-create.js';
