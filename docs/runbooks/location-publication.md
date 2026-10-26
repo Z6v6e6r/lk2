@@ -53,6 +53,14 @@ migrator invocation for the notification controller.
 The source controller is `PHUB_TIMEWEB_LOCATION_PHOTO_0102_MIGRATION_OPERATION_V1`. It deliberately
 binds three independent identities:
 
+The controller-source closure requires the complete reviewed package delta above and admits further
+entries only when each extra path is itself a reviewed controller file
+(`API_WORKER_CONTROLLER_FILES`) with a plain regular-blob `M`/`A` transition. This keeps an unrelated
+reviewed controller release (for example the adoption-mode or ACL-baseline changes merged after the
+package was authored) from blocking the migration while still rejecting foreign paths, duplicates,
+mode/type drift and a missing package file. Package integrity is pinned independently by the
+descriptor, migration and blob hashes.
+
 - the installed API and Worker supplied in `expectedApi` and `expectedWorker` (the initial live
   baseline was b6bd6b38; never infer that 4256 was installed merely because its images exist);
 - the published 4256 migrator manifest and the exact amd64 local image id pinned by

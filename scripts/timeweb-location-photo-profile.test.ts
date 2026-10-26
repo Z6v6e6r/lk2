@@ -517,6 +517,40 @@ describe('closed Timeweb location-photo 0102 profile', () => {
       );
   });
 
+  it('admits only further reviewed controller-file transitions around the mandatory package delta', () => {
+    const rows = controllerRows();
+    const extra = (overrides = {}) => ({
+      path: 'docs/runbooks/android-chats-fcm.md',
+      status: 'M',
+      oldMode: '100644',
+      newMode: '100644',
+      oldOid: '1'.repeat(40),
+      newOid: '2'.repeat(40),
+      ...overrides,
+    });
+    // A reviewed controller file changed by an unrelated merged controller PR is admitted.
+    expect(validateLocationPhotoControllerClosure([...rows, extra()])).toHaveLength(
+      rows.length + 1,
+    );
+    // A reviewed controller file added after the base is admitted as an A transition.
+    expect(
+      validateLocationPhotoControllerClosure([
+        ...rows,
+        extra({ status: 'A', oldMode: '000000', oldOid: '0'.repeat(40) }),
+      ]),
+    ).toHaveLength(rows.length + 1);
+    for (const invalid of [
+      [...rows, extra({ status: 'D' })],
+      [...rows, extra({ newMode: '100755' })],
+      [...rows, extra({ path: 'scripts/not-a-reviewed-controller-file.js' })],
+      [...rows, extra(), extra()],
+      [...rows, extra({ newOid: '0'.repeat(40) })],
+    ])
+      expect(() => validateLocationPhotoControllerClosure(invalid)).toThrow(
+        'LOCATION_PHOTO_CONTROLLER_DELTA',
+      );
+  });
+
   it('checks git config before discovery and rejects unsafe tracked paths and modes', () => {
     const op = operation();
     const rows = controllerRows();
