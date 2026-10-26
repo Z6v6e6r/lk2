@@ -195,7 +195,11 @@ physical('isolated legacy game reminder Mongo to PostgreSQL source fence', () =>
         id: sourceGameId,
         status: 'PAID',
         updatedAt: new Date(now.getTime() - 60_000).toISOString(),
-        organizer: { id: sourcePlayerId, name: 'Existing verified admin' },
+        organizer: {
+          id: sourcePlayerId,
+          name: 'Existing verified admin',
+          status: 'PAID',
+        },
         participants: [{ id: sourcePlayerId, name: 'Existing verified admin', status: 'PAID' }],
         settings: { isPrivate: true, ratingGame: false },
         metadata: { gameFormat: 'doubles', gameTitle: 'Synthetic private reminder game' },

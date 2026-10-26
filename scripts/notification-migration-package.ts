@@ -88,7 +88,12 @@ export function validateNotificationMigrationCatalog(rows: readonly MigrationRow
   }
 }
 export async function readNotificationMigrationCatalog(directory: string): Promise<MigrationRow[]> {
-  const names = (await readdir(directory)).filter((name) => name.endsWith('.sql')).sort();
+  // This is an immutable preparation package for the historical 0099-0101 controller. 0102 is
+  // pinned only to prove the immediately-following application suffix; later application
+  // migrations must not silently widen or invalidate this closed package.
+  const names = (await readdir(directory))
+    .filter((name) => name.endsWith('.sql') && name <= '0102_location_recommendation_photos.sql')
+    .sort();
   const rows = await Promise.all(
     names.map(async (filename) => ({
       filename,

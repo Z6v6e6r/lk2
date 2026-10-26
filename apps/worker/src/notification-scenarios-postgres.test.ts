@@ -156,6 +156,11 @@ physical('notification scenario physical transactions and non-owner RLS', () => 
     await owner.query(
       `grant update(updated_at) on identity.users,identity.user_access_profiles to ${role}`,
     );
+    // PostgreSQL requires one UPDATE privilege for SELECT ... FOR SHARE even though the reminder
+    // reader never mutates these rows. Keep the synthetic runtime role column-scoped.
+    await owner.query(
+      `grant update(updated_at) on games.games,notifications.legacy_game_reminder_source_status,notifications.legacy_game_reminder_sources to ${role}`,
+    );
     await owner.query(
       `grant select,insert,update on notifications.scenarios,notifications.scenario_runs,notifications.scenario_contexts,notifications.scenario_source_sync,notifications.scenario_source_keys,notifications.scenario_staff_tasks,notifications.delivery_attempts,notifications.intents,notifications.inbox_items,notifications.deliveries,audit.inbox_events to ${role}`,
     );
