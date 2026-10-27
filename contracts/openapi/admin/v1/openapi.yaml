@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub Admin API
-  version: 1.5.0
+  version: 1.6.0
   description: Canonical tenant-scoped CUP boundary for audited operator commands.
   license:
     name: Proprietary
@@ -23,6 +23,8 @@ tags:
     description: CUP review of reported chat messages with a reversible hide decision.
   - name: LevelEligibility
     description: Versioned tenant and sport participation eligibility policy management.
+  - name: RulesRegistry
+    description: Read-only operator view of CUP published policies, LK2 level policies and the LK1 rule inventory.
 paths:
   /admin/api/v1/{tenantKey}/community-join-requests/pending:
     get:
@@ -1229,6 +1231,10 @@ paths:
     $ref: ./level-eligibility.yaml#/HistoryPath
   /admin/api/v1/{tenantKey}/level-eligibility/{activityType}/rollback:
     $ref: ./level-eligibility.yaml#/RollbackPath
+  /admin/api/v1/{tenantKey}/rules-registry:
+    $ref: ./rules-registry.yaml#/RulesRegistryPath
+  /admin/api/v1/{tenantKey}/legacy-rules-inventory:
+    $ref: ./rules-registry.yaml#/LegacyRulesInventoryPath
   /admin/api/v1/{tenantKey}/support/tickets:
     parameters:
       - $ref: '#/components/parameters/TenantKey'

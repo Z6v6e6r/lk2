@@ -74,7 +74,10 @@ import {
 import { homeBaseSchema, normalizeHomeBaseFreshness, type HomeBase } from '@phub/home-projection';
 import type { NotificationEndpointCipher } from '@phub/notifications';
 import type { VivaExerciseRecommendationSourceAdapter } from '@phub/viva-adapter';
-import type { ManagedSubscriptionRuntimeQuoteClient } from '@phub/subscription-runtime-adapter';
+import type {
+  ManagedSubscriptionRuntimeQuoteClient,
+  SubscriptionPolicyRegistryClient,
+} from '@phub/subscription-runtime-adapter';
 import type { Logger } from 'pino';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type Redis from 'ioredis';
@@ -90,6 +93,7 @@ import type { NotificationScenarioRepository } from '@phub/database/notification
 import { registerAdminNotificationRoutes } from './admin/notification-admin-routes.js';
 import { registerLocationAdminRoutes } from './admin/location-admin-routes.js';
 import { registerLevelEligibilityAdminRoutes } from './admin/level-eligibility-admin-routes.js';
+import { registerRulesRegistryAdminRoutes } from './admin/rules-registry-admin-routes.js';
 import { registerGiftCertificateAdminRoutes } from './admin/gift-certificate-admin-routes.js';
 import { registerCommunityMembershipAdminRoutes } from './admin/community-membership-admin-routes.js';
 import { registerCommunityDirectInviteAdminRoutes } from './admin/community-direct-invite-admin-routes.js';
@@ -410,6 +414,7 @@ export interface BuildAppOptions {
     'authenticatedTenantHandlers'
   >;
   readonly bookedOperationAdmission?: Omit<BookedOperationAdmissionRouteOptions, 'commandHandlers'>;
+  readonly subscriptionPolicyRegistryClient?: Pick<SubscriptionPolicyRegistryClient, 'read'>;
 }
 
 function clientPlatform(request: FastifyRequest): ClientPlatform {
@@ -1391,6 +1396,15 @@ export async function buildApp(options: BuildAppOptions) {
       : {}),
     authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
     commandHandlers: [authenticateAdmin, resolveTenant, requireIdempotencyKey],
+  });
+  registerRulesRegistryAdminRoutes(app as unknown as FastifyInstance, {
+    ...(options.levelEligibilityPolicyRepository
+      ? { levelEligibilityRepository: options.levelEligibilityPolicyRepository }
+      : {}),
+    ...(options.subscriptionPolicyRegistryClient
+      ? { subscriptionPolicyRegistryClient: options.subscriptionPolicyRegistryClient }
+      : {}),
+    authenticatedTenantHandlers: [authenticateAdmin, resolveTenant],
   });
   registerGiftCertificateAdminRoutes(app as unknown as FastifyInstance, {
     ...(options.giftCertificateCatalogRepository

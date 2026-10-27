@@ -169,6 +169,15 @@ const environmentSchema = z.object({
     .optional(),
   SUBSCRIPTION_RUNTIME_DELEGATION_ISSUER: z.string().min(1).max(512).optional(),
   SUBSCRIPTION_RUNTIME_DELEGATION_AUDIENCE: z.string().min(1).max(256).optional(),
+  SUBSCRIPTION_POLICY_REGISTRY_ENABLED: booleanFromEnvironment,
+  SUBSCRIPTION_POLICY_REGISTRY_BASE_URL: z.string().url().optional(),
+  SUBSCRIPTION_POLICY_REGISTRY_INTEGRATION_TOKEN: z.string().min(32).optional(),
+  SUBSCRIPTION_POLICY_REGISTRY_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(10_000)
+    .default(3_000),
   SUBSCRIPTION_RUNTIME_DELEGATION_TTL_SECONDS: z.coerce.number().int().min(10).max(60).default(30),
   MESSAGING_USER_BLOCK_COMMANDS_ENABLED: booleanFromEnvironment,
   GAMES_RESULTS_WRITE_MODE: z
@@ -842,6 +851,19 @@ export function loadConfig(
     ) {
       throw new Error(
         'SUBSCRIPTION_RUNTIME_DELEGATION_ACTIVE_KEY_ID must select a PKCS8 private key',
+      );
+    }
+  }
+  if (parsed.data.SUBSCRIPTION_POLICY_REGISTRY_ENABLED) {
+    if (parsed.data.APP_ENV === 'production') {
+      throw new Error('SUBSCRIPTION_POLICY_REGISTRY_ENABLED is not activated for production');
+    }
+    if (
+      !parsed.data.SUBSCRIPTION_POLICY_REGISTRY_BASE_URL ||
+      !parsed.data.SUBSCRIPTION_POLICY_REGISTRY_INTEGRATION_TOKEN
+    ) {
+      throw new Error(
+        'SUBSCRIPTION_POLICY_REGISTRY_ENABLED requires base URL and integration token',
       );
     }
   }
