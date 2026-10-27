@@ -191,9 +191,19 @@ describe('communities role-split installation candidate', { timeout: 30_000 }, (
 
   afterEach(() => {
     for (const root of temporaryRoots.reverse()) {
-      // Only owned disposable fixtures; bounded retry handles transient ENOTEMPTY
-      // during CI filesystem cleanup without changing any candidate assertion.
-      rmSync(root, { force: true, recursive: true, maxRetries: 3, retryDelay: 50 });
+      // Only owned disposable fixtures. CI overlay filesystems intermittently surface ENOTEMPTY
+      // while another writer (git object/temp churn) lands inside the tree being removed; retry with
+      // a short backoff and keep the fixture cleanup best-effort so it cannot fail an assertion.
+      let removed = false;
+      for (let attempt = 0; attempt < 20 && !removed; attempt += 1) {
+        try {
+          rmSync(root, { force: true, recursive: true, maxRetries: 3, retryDelay: 50 });
+          removed = true;
+        } catch {
+          if (attempt === 19) break;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+        }
+      }
     }
   });
 
