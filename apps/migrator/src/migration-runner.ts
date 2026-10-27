@@ -1,6 +1,16 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { assertClosedApplicationMigrationsNotPending } from '../../../scripts/closed-schema-migration-guard.js';
+import {
+  closedSingleMode,
+  closedProfile,
+  assertClosedRun,
+  beforeClosedStep,
+  afterClosedSql,
+  afterClosedStep,
+  type ClosedSingleProfile,
+} from './closed-single-migration.js';
 
 import {
   assertMigrationExecutionAllowed,
@@ -23,6 +33,11 @@ import {
 type MigrationRunMode =
   | { readonly mode: 'ordinary' }
   | { readonly mode: typeof notificationMode; readonly target: NotificationTarget }
+  | {
+      readonly mode: typeof closedSingleMode;
+      readonly profile: ClosedSingleProfile;
+      readonly target: NotificationTarget;
+    }
   | {
       readonly mode: 'communities_staged_rehearsal';
       readonly request: CommunitiesStagedRehearsalRequest;
@@ -64,6 +79,8 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
     if (advisoryLockTimeoutValue) {
       await client.query("select pg_catalog.set_config('statement_timeout', '0', false)");
     }
+    if (input.mode === closedSingleMode)
+      await client.query("set lock_timeout='5s'; set statement_timeout='30s'");
     const ledgerExists = await client.query<{ ledger: string | null }>(
       "select to_regclass('public.schema_migrations')::text as ledger",
     );
@@ -91,6 +108,15 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
       )
     )
       throw new Error('NOTIFICATION_MIGRATION_CONTROLLER_REQUIRED');
+    if (input.mode === 'ordinary')
+      assertClosedApplicationMigrationsNotPending({ applied, packaged: packagedMigrations });
+    if (input.mode === closedSingleMode)
+      await assertClosedRun(
+        client,
+        packagedMigrations.map(({ filename, checksum }) => ({ filename, checksum })),
+        input.profile,
+        input.target,
+      );
 
     const appliedFilenames = new Set(applied.map((entry) => entry.filename));
     const packagedFilenames = packagedMigrations.map((migration) => migration.filename);
@@ -125,7 +151,8 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
       });
     }
 
-    await client.query(`
+    if (input.mode !== closedSingleMode)
+      await client.query(`
       create table if not exists public.schema_migrations (
         filename text primary key,
         checksum text not null,
@@ -137,19 +164,28 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
       if (appliedFilenames.has(filename)) continue;
       if (stagedFilenames && !stagedFilenames.has(filename)) continue;
       if (input.mode === notificationMode && !isNotificationMigrationStep(filename)) continue;
+      if (input.mode === closedSingleMode && filename !== closedProfile(input.profile).filename)
+        continue;
 
       await client.query('begin');
       try {
         const notificationAclPreimage =
           input.mode === notificationMode ? await beforeNotificationStep(client, filename) : null;
+        const closedAclPreimage =
+          input.mode === closedSingleMode
+            ? await beforeClosedStep(client, input.profile, input.target)
+            : null;
         await client.query(sql);
         if (input.mode === notificationMode)
           await afterNotificationSql(client, filename, notificationAclPreimage);
+        if (input.mode === closedSingleMode)
+          await afterClosedSql(client, input.profile, closedAclPreimage!);
         await client.query(
           'insert into public.schema_migrations (filename, checksum) values ($1, $2)',
           [filename, checksum],
         );
         if (input.mode === notificationMode) await afterNotificationStep(client, filename);
+        if (input.mode === closedSingleMode) await afterClosedStep(client, input.profile);
         await client.query('commit');
         process.stdout.write(`Applied ${filename}\n`);
         const refreshedApplied = await client.query<{ filename: string }>(

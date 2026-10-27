@@ -1,0 +1,37 @@
+{
+  "schema": "PHUB_CLOSED_APPLICATION_MIGRATIONS_0103_0104_V1",
+  "postgresMajor": 16,
+  "packagedCount": 108,
+  "packagedLedgerSha256": "3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9",
+  "profiles": {
+    "game_start_0103": {
+      "filename": "0103_game_start_notification_scenarios.sql",
+      "checksum": "3b3a0404ddd7c9a88e53db5f49826ef381352287038980e44a7103f3515abdf4",
+      "preCount": 106,
+      "postCount": 107
+    },
+    "subject_link_0104": {
+      "filename": "0104_identity_external_subject_link_commands.sql",
+      "checksum": "5a1ad1dcc505234c76a5db6d09faeb2dca76463939b87fe41e048c56af033931",
+      "preCount": 107,
+      "postCount": 108
+    }
+  },
+  "checkpoints": {
+    "106": {
+      "ledgerSha256": "ff74c193b5e5253f929818b1550d0e5c0264a9818cb0ee5437d49d5aa043904e",
+      "catalogSha256": "27c4bd24ec1edd35ce435401cec3d19043089502b0ed65ea74f04cf6e417b227",
+      "catalogRowCount": 248
+    },
+    "107": {
+      "ledgerSha256": "6146219b31e4720016bb81a0018f76609c7fc515603e4aac405f6a2342e66d77",
+      "catalogSha256": "49d597ae9e9d2369f44824571f244adb2482106a14c58df5517ce0d38474121c",
+      "catalogRowCount": 310
+    },
+    "108": {
+      "ledgerSha256": "3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9",
+      "catalogSha256": "a0fe161d48cb26ae2339960fdf63a91f8fba8ff562ca85790e0bb6d0a1869a03",
+      "catalogRowCount": 340
+    }
+  }
+}
