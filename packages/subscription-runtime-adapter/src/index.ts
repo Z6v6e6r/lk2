@@ -1,5 +1,6 @@
 export * from './booked-operation-read.js';
 export * from './booked-operation-admission.js';
+export * from './policy-usage-binding.js';
 export const MANAGED_SUBSCRIPTION_RUNTIME_V1_CONTRACT_VERSION = '1';
 export const MANAGED_SUBSCRIPTION_RUNTIME_V1_QUOTE_PATH =
   '/api/internal/subscription-runtime/lk2/v1/quote';
