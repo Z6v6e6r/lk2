@@ -10,6 +10,7 @@ import {
   afterClosedSql,
   afterClosedStep,
   type ClosedSingleProfile,
+  type ClosedSingleTarget,
 } from './closed-single-migration.js';
 
 import {
@@ -36,7 +37,7 @@ type MigrationRunMode =
   | {
       readonly mode: typeof closedSingleMode;
       readonly profile: ClosedSingleProfile;
-      readonly target: NotificationTarget;
+      readonly target: ClosedSingleTarget;
     }
   | {
       readonly mode: 'communities_staged_rehearsal';
@@ -70,14 +71,23 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
   const client = await pool.connect();
 
   try {
-    if (advisoryLockTimeoutValue) {
+    // Closed application steps must bound lock acquisition even without caller env.
+    // Preserve the historical optional timeout for every existing mode.
+    const closed = input.mode === closedSingleMode;
+    const advisoryTimeout = closed
+      ? Math.min(Number(advisoryLockTimeoutValue ?? 5_000), 5_000)
+      : advisoryLockTimeoutValue;
+    if (closed) await client.query("set lock_timeout='5s'; set statement_timeout='30s'");
+    if (advisoryTimeout) {
       await client.query("select pg_catalog.set_config('statement_timeout', $1, false)", [
-        `${advisoryLockTimeoutValue}ms`,
+        `${advisoryTimeout}ms`,
       ]);
     }
     await client.query('select pg_advisory_lock($1)', [7_140_221]);
-    if (advisoryLockTimeoutValue) {
-      await client.query("select pg_catalog.set_config('statement_timeout', '0', false)");
+    if (advisoryTimeout) {
+      await client.query("select pg_catalog.set_config('statement_timeout', $1, false)", [
+        closed ? '30s' : '0',
+      ]);
     }
     if (input.mode === closedSingleMode)
       await client.query("set lock_timeout='5s'; set statement_timeout='30s'");
@@ -185,7 +195,8 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
           [filename, checksum],
         );
         if (input.mode === notificationMode) await afterNotificationStep(client, filename);
-        if (input.mode === closedSingleMode) await afterClosedStep(client, input.profile);
+        if (input.mode === closedSingleMode)
+          await afterClosedStep(client, input.profile, input.target.catalogVariant);
         await client.query('commit');
         process.stdout.write(`Applied ${filename}\n`);
         const refreshedApplied = await client.query<{ filename: string }>(

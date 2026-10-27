@@ -5,7 +5,11 @@ import {
   parseNotificationTarget,
 } from './notification-migration.js';
 import { parseStrictJson } from '../../../scripts/strict-json.js';
-import { closedSingleMode, closedProfileArgument } from './closed-single-migration.js';
+import {
+  closedSingleMode,
+  closedProfileArgument,
+  parseClosedSingleTarget,
+} from './closed-single-migration.js';
 
 const args = process.argv.slice(2);
 if (args.length === 0) await runMigrationProcess({ mode: 'ordinary' });
@@ -22,6 +26,6 @@ else if (args.length === 2 && args[0] === notificationModeArgument) {
   await runMigrationProcess({
     mode: closedSingleMode,
     profile: closedProfileArgument(args[0]!)!,
-    target: parseNotificationTarget(parseStrictJson(bytes)),
+    target: parseClosedSingleTarget(parseStrictJson(bytes)),
   });
 } else throw new Error('MIGRATOR_ARGUMENTS');

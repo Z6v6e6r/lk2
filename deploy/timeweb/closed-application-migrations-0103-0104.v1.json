@@ -20,18 +20,43 @@
   "checkpoints": {
     "106": {
       "ledgerSha256": "ff74c193b5e5253f929818b1550d0e5c0264a9818cb0ee5437d49d5aa043904e",
-      "catalogSha256": "27c4bd24ec1edd35ce435401cec3d19043089502b0ed65ea74f04cf6e417b227",
-      "catalogRowCount": 248
+      "catalogs": {
+        "DORMANT": {
+          "sha256": "210ada53c915d46f6137ebea3fdcb363d9e4fdcc15b6c533d9a4b70d0e361be6",
+          "rowCount": 298
+        },
+        "SCENARIO_EDITOR_V1": {
+          "sha256": "cf5bd182cdab10448a202ba172e2f162bd5d327779c37ef5f5346ddb4c1fb54b",
+          "rowCount": 298
+        }
+      }
     },
     "107": {
       "ledgerSha256": "6146219b31e4720016bb81a0018f76609c7fc515603e4aac405f6a2342e66d77",
-      "catalogSha256": "49d597ae9e9d2369f44824571f244adb2482106a14c58df5517ce0d38474121c",
-      "catalogRowCount": 310
+      "catalogs": {
+        "DORMANT": {
+          "sha256": "a0895d43c7e96c35d398b2db07574415969692fb58878c2d126f4669714011d6",
+          "rowCount": 369
+        },
+        "SCENARIO_EDITOR_V1": {
+          "sha256": "1a62c0bde075542679dd512903d1029185f795a777267412537e320642424fde",
+          "rowCount": 369
+        }
+      }
     },
     "108": {
       "ledgerSha256": "3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9",
-      "catalogSha256": "a0fe161d48cb26ae2339960fdf63a91f8fba8ff562ca85790e0bb6d0a1869a03",
-      "catalogRowCount": 340
+      "catalogs": {
+        "DORMANT": {
+          "sha256": "12b3a5ce409f4f9dc187f813ae9f31f7d44df69df8d0f7c00f9d1aed17e9e949",
+          "rowCount": 405
+        },
+        "SCENARIO_EDITOR_V1": {
+          "sha256": "d7343e9d50e0ab05ce8fa51478caaaf1f810a7f7295e4996b47447b23c03b9a7",
+          "rowCount": 405
+        }
+      }
     }
-  }
+  },
+  "catalogSchema": "PHUB_CLOSED_APPLICATION_CATALOG_V1"
 }

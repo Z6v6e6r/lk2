@@ -7,6 +7,7 @@ import {
   assertClosedPackagedCatalog,
   closedProfile,
   closedProfileArgument,
+  parseClosedSingleTarget,
 } from './closed-single-migration.js';
 
 const directory = resolve('packages/database/migrations');
@@ -37,6 +38,22 @@ describe('fixed single application migration source and ledger contract', () => 
     expect(closedProfile('subject_link_0104').filename).toBe(
       '0104_identity_external_subject_link_commands.sql',
     );
+  });
+  it('requires an explicit reviewed catalog variant and rejects ambiguous target shapes', () => {
+    const identity = { databaseName: 'phub_beta', systemIdentifier: '7679' };
+    for (const catalogVariant of ['DORMANT', 'SCENARIO_EDITOR_V1'])
+      expect(parseClosedSingleTarget({ ...identity, catalogVariant })).toEqual({
+        ...identity,
+        catalogVariant,
+      });
+    for (const value of [
+      identity,
+      { ...identity, catalogVariant: 'AUTO' },
+      { ...identity, catalogVariant: 'DORMANT', force: true },
+      null,
+      [],
+    ])
+      expect(() => parseClosedSingleTarget(value)).toThrow();
   });
   it('pins the full packaged source and each preceding ledger prefix', () => {
     expect(() => assertClosedPackagedCatalog(packaged)).not.toThrow();

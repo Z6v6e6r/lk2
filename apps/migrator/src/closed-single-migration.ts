@@ -6,9 +6,11 @@ import {
   type MigrationRow,
 } from '../../../scripts/notification-migration-package.js';
 import {
-  NOTIFICATION_CATALOG_SQL,
-  NOTIFICATION_NEW_TABLES,
-} from '../../../scripts/notification-migration-catalog.js';
+  CLOSED_APPLICATION_CATALOG_SQL,
+  CLOSED_APPLICATION_CATALOG_TABLES,
+  CLOSED_APPLICATION_NEW_TABLES,
+  CLOSED_APPLICATION_CATALOG_VERSION,
+} from '../../../scripts/closed-application-migration-catalog.js';
 import {
   notificationDefaultAcls,
   parseNotificationTarget,
@@ -20,20 +22,37 @@ import {
 type Client = Pick<PoolClient, 'query'>;
 export const closedSingleMode = 'closed_single_application_migration' as const;
 export type ClosedSingleProfile = keyof typeof descriptor.profiles;
+export type ClosedCatalogVariant = 'DORMANT' | 'SCENARIO_EDITOR_V1';
+export type ClosedSingleTarget = NotificationTarget & { catalogVariant: ClosedCatalogVariant };
 export const closedSingleArguments = Object.freeze({
   '--game-start-migration-0103': 'game_start_0103',
   '--subject-link-migration-0104': 'subject_link_0104',
 } as const);
-export const closedNewTables = Object.freeze([
-  'notifications.legacy_game_reminder_source_status',
-  'notifications.legacy_game_reminder_sources',
-  'notifications.legacy_game_reminder_recipients',
-  'identity.external_subject_link_commands',
-]);
-const catalogNames = [...NOTIFICATION_NEW_TABLES, ...closedNewTables];
+export const closedNewTables = CLOSED_APPLICATION_NEW_TABLES;
 const fail = (code: string): never => {
   throw new Error(`CLOSED_APPLICATION_MIGRATION_${code}`);
 };
+const isVariant = (value: unknown): value is ClosedCatalogVariant =>
+  value === 'DORMANT' || value === 'SCENARIO_EDITOR_V1';
+export function parseClosedSingleTarget(value: unknown): ClosedSingleTarget {
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    JSON.stringify(Object.keys(value).sort()) !==
+      JSON.stringify(['catalogVariant', 'databaseName', 'systemIdentifier'])
+  )
+    return fail('TARGET_SHAPE');
+  const row = value as Record<string, unknown>;
+  if (!isVariant(row.catalogVariant)) return fail('CATALOG_VARIANT');
+  return {
+    ...parseNotificationTarget({
+      databaseName: row.databaseName,
+      systemIdentifier: row.systemIdentifier,
+    }),
+    catalogVariant: row.catalogVariant,
+  };
+}
 export function closedProfileArgument(value: string): ClosedSingleProfile | undefined {
   return Object.hasOwn(closedSingleArguments, value)
     ? closedSingleArguments[value as keyof typeof closedSingleArguments]
@@ -44,6 +63,7 @@ export function closedProfile(profile: ClosedSingleProfile) {
   return descriptor.profiles[profile];
 }
 export function assertClosedPackagedCatalog(packaged: readonly MigrationRow[]): void {
+  if (descriptor.catalogSchema !== CLOSED_APPLICATION_CATALOG_VERSION) fail('CATALOG_SCHEMA');
   if (
     packaged.length !== descriptor.packagedCount ||
     notificationLedgerDigest(packaged) !== descriptor.packagedLedgerSha256
@@ -74,23 +94,31 @@ async function ledger(client: Client): Promise<MigrationRow[]> {
     )
   ).rows;
 }
-export async function verifyClosedCatalog(client: Client, count: number): Promise<void> {
+export async function verifyClosedCatalog(
+  client: Client,
+  count: number,
+  variant: ClosedCatalogVariant,
+): Promise<void> {
   const point = descriptor.checkpoints[String(count) as keyof typeof descriptor.checkpoints];
-  if (!point) fail('CATALOG_CHECKPOINT');
+  if (!point || !isVariant(variant)) fail('CATALOG_CHECKPOINT');
+  const expected = point.catalogs[variant];
   await client.query("set local search_path='pg_catalog'");
   const rows = (
-    await client.query<{ key: string; value: string }>(NOTIFICATION_CATALOG_SQL, [catalogNames])
+    await client.query<{ key: string; value: string }>(CLOSED_APPLICATION_CATALOG_SQL, [
+      CLOSED_APPLICATION_CATALOG_TABLES,
+    ])
   ).rows;
   if (
-    rows.length !== point.catalogRowCount ||
+    rows.length !== expected.rowCount ||
     createHash('sha256')
       .update(`${JSON.stringify(rows)}\n`)
-      .digest('hex') !== point.catalogSha256
+      .digest('hex') !== expected.sha256
   )
     fail('CATALOG');
 }
-async function roleAndTarget(client: Client, expectedTarget: NotificationTarget): Promise<void> {
-  const target = parseNotificationTarget(expectedTarget);
+async function roleAndTarget(client: Client, expectedTarget: ClosedSingleTarget): Promise<void> {
+  const parsed = parseClosedSingleTarget(expectedTarget);
+  const target = { databaseName: parsed.databaseName, systemIdentifier: parsed.systemIdentifier };
   const observed = (
     await client.query<NotificationTarget>(
       `select current_database() as "databaseName",system_identifier::text as "systemIdentifier" from pg_catalog.pg_control_system()`,
@@ -118,7 +146,7 @@ export async function assertClosedRun(
   client: Client,
   packaged: readonly MigrationRow[],
   profile: ClosedSingleProfile,
-  target: NotificationTarget,
+  target: ClosedSingleTarget,
 ): Promise<void> {
   assertClosedPackagedCatalog(packaged);
   await roleAndTarget(client, target);
@@ -126,7 +154,7 @@ export async function assertClosedRun(
   assertClosedLedger(await ledger(client), step.preCount);
   await client.query('begin read only');
   try {
-    await verifyClosedCatalog(client, step.preCount);
+    await verifyClosedCatalog(client, step.preCount, target.catalogVariant);
   } finally {
     await client.query('rollback');
   }
@@ -134,12 +162,12 @@ export async function assertClosedRun(
 export async function beforeClosedStep(
   client: Client,
   profile: ClosedSingleProfile,
-  target: NotificationTarget,
+  target: ClosedSingleTarget,
 ): Promise<string> {
   await roleAndTarget(client, target);
   const step = closedProfile(profile);
   assertClosedLedger(await ledger(client), step.preCount);
-  await verifyClosedCatalog(client, step.preCount);
+  await verifyClosedCatalog(client, step.preCount, target.catalogVariant);
   const defaults = await notificationDefaultAcls(client);
   validateNotificationDefaults(defaults);
   if (profile === 'subject_link_0104')
@@ -164,8 +192,12 @@ export async function afterClosedSql(
   if (JSON.stringify(await notificationDefaultAcls(client)) !== defaultsPreimage)
     fail('DEFAULT_ACL_NOT_RESTORED');
 }
-export async function afterClosedStep(client: Client, profile: ClosedSingleProfile): Promise<void> {
+export async function afterClosedStep(
+  client: Client,
+  profile: ClosedSingleProfile,
+  variant: ClosedCatalogVariant,
+): Promise<void> {
   const step = closedProfile(profile);
   assertClosedLedger(await ledger(client), step.postCount);
-  await verifyClosedCatalog(client, step.postCount);
+  await verifyClosedCatalog(client, step.postCount, variant);
 }
