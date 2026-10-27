@@ -11,6 +11,7 @@ import {
   createGameAttemptStorageKey,
   loadCreateGameAttemptLedger,
   prepareCreateGameAttempt,
+  recordCreateGameConfirmation,
   resolveCreateGameAttempt,
   type CreateGameAttemptLockManager,
   type CreateGameAttemptPrincipal,
@@ -630,5 +631,363 @@ describe('CreateGamePage durable create recovery', () => {
     expect(screen.getByRole('option', { name: /Сохранённая станция/ })).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Создать игру' }));
     await waitFor(() => expect(createGame).toHaveBeenCalledOnce());
+  });
+});
+
+describe('CreateGamePage managed commercial CREATE (WARN)', () => {
+  const managedGameId = '99999999-9999-4999-8999-999999999991';
+  const managedOperationId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1';
+
+  function managedResult(
+    status: 'UNKNOWN' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED',
+    overrides: Partial<GameCommandResult['operation']> = {},
+  ): GameCommandResult {
+    const committedAt = '2026-08-26T10:00:00.000Z';
+    return {
+      commandId: managedOperationId,
+      operation: {
+        id: managedOperationId,
+        type: 'CREATE_GAME',
+        status,
+        gameId: managedGameId,
+        aggregateRevision: 1,
+        createdAt: committedAt,
+        updatedAt: committedAt,
+        nextAction:
+          status === 'UNKNOWN'
+            ? { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: 5 }
+            : { type: 'NONE' },
+        error: null,
+        ...overrides,
+      },
+      game: null,
+      replayed: false,
+    };
+  }
+
+  function paidApi(options: {
+    readonly createGame?: AuthGateway['createGame'];
+    readonly createPaidGame: NonNullable<AuthGateway['createPaidGame']>;
+    readonly getGameOperation: AuthGateway['getGameOperation'];
+  }): AuthGateway {
+    return {
+      ...gateway(options.createGame ?? vi.fn()),
+      createPaidGame: options.createPaidGame,
+      getGameOperation: options.getGameOperation,
+    };
+  }
+
+  function openManagedCreate(): void {
+    window.history.replaceState({}, '', '/games/new?commercialCreate=1');
+  }
+
+  it('offers paid modes only with the explicit commercial intent and the gateway capability', async () => {
+    const createGame = vi.fn<AuthGateway['createGame']>().mockResolvedValue(result());
+    page(createGame);
+    await screen.findByRole('option', { name: 'Селигерская' });
+    expect(screen.queryByLabelText('Оплата')).not.toBeInTheDocument();
+    cleanup();
+
+    openManagedCreate();
+    page(createGame);
+    await screen.findByRole('option', { name: 'Селигерская' });
+    expect(screen.queryByLabelText('Оплата')).not.toBeInTheDocument();
+
+    cleanup();
+    window.history.replaceState({}, '', '/games/new');
+    page(createGame, {
+      api: paidApi({
+        createGame,
+        createPaidGame: vi.fn(),
+        getGameOperation: vi.fn(),
+      }),
+    });
+    await screen.findByRole('option', { name: 'Селигерская' });
+    expect(screen.queryByLabelText('Оплата')).not.toBeInTheDocument();
+  });
+
+  it('submits the managed create once and keeps the accepted operation for readback', async () => {
+    openManagedCreate();
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockResolvedValue(managedResult('UNKNOWN'));
+    const getGameOperation = vi.fn().mockResolvedValue(managedResult('UNKNOWN'));
+    const createGame = vi.fn<AuthGateway['createGame']>();
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(createGame, {
+      api: paidApi({ createGame, createPaidGame, getGameOperation }),
+      navigate,
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+
+    await screen.findByRole('heading', { name: 'Игра ожидает подтверждения' });
+    expect(createPaidGame).toHaveBeenCalledOnce();
+    expect(createGame).not.toHaveBeenCalled();
+    expect(createPaidGame.mock.calls[0]?.[0]).toMatchObject({ paymentMode: 'SPLIT' });
+    const key = createPaidGame.mock.calls[0]?.[1];
+    expect(key).toMatch(/\S+/);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      {
+        state: 'PENDING_CONFIRMATION',
+        gameId: managedGameId,
+        operationId: managedOperationId,
+        paymentMode: 'SPLIT',
+      },
+    );
+
+    // A repeat readback never sends a replacement create POST.
+    getGameOperation.mockResolvedValueOnce(managedResult('UNKNOWN'));
+    await user.click(screen.getByRole('button', { name: 'Проверить статус' }));
+    await screen.findByText(/Пока не подтверждено/);
+    expect(getGameOperation).toHaveBeenCalledWith(managedOperationId);
+    expect(createPaidGame).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+
+    getGameOperation.mockResolvedValueOnce(managedResult('SUCCEEDED'));
+    await user.click(screen.getByRole('button', { name: 'Проверить статус' }));
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(`/games/${managedGameId}?created=1&recovered=1`),
+    );
+    const ledger = loadCreateGameAttemptLedger(principal, window.localStorage);
+    expect(ledger.activeAttempt).toBeUndefined();
+    expect(ledger.resolvedAttempts[0]).toMatchObject({
+      gameId: managedGameId,
+      idempotencyKey: key,
+    });
+  });
+
+  it('restores a pending confirmation across remount without offering a replacement create', async () => {
+    openManagedCreate();
+    const attempt = await prepareCreateGameAttempt(
+      principal,
+      {
+        ...savedPayload(),
+        paymentMode: 'SUBSCRIPTION',
+      },
+      window.localStorage,
+      locks(),
+      { createIdempotencyKey: () => 'managed-confirmation-key-0001' },
+    );
+    if (attempt.state !== 'PENDING') throw new Error('expected pending attempt');
+    await recordCreateGameConfirmation(
+      principal,
+      attempt,
+      { gameId: managedGameId, operationId: managedOperationId },
+      window.localStorage,
+      locks(),
+    );
+    const createPaidGame = vi.fn<NonNullable<AuthGateway['createPaidGame']>>();
+    const getGameOperation = vi.fn().mockResolvedValue(managedResult('UNKNOWN'));
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation }),
+      navigate: vi.fn(),
+    });
+
+    expect(
+      await screen.findByRole('heading', { name: 'Игра ожидает подтверждения' }),
+    ).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Создать игру' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Проверить статус' }));
+    await waitFor(() => expect(getGameOperation).toHaveBeenCalledWith(managedOperationId));
+    expect(createPaidGame).not.toHaveBeenCalled();
+  });
+
+  it('clears the saved attempt on a terminal managed refusal', async () => {
+    openManagedCreate();
+    const refusal = Object.assign(new Error('rejected'), { code: 'GAME_PAYMENT_REQUIRED' });
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockRejectedValue(refusal);
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation: vi.fn() }),
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(await screen.findByText(/Сейчас можно создать только бесплатную игру/)).toBeVisible();
+    expect(
+      loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
+    ).toBeUndefined();
+    expect(screen.getByLabelText('Оплата')).toHaveValue('SPLIT');
+  });
+
+  it('clears the attempt and drops the stale pending copy after a FAILED readback', async () => {
+    openManagedCreate();
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockResolvedValue(managedResult('UNKNOWN'));
+    const getGameOperation = vi
+      .fn()
+      .mockResolvedValue(
+        managedResult('FAILED', { error: { code: 'GAME_RECONCILIATION_REQUIRED', message: 'x' } }),
+      );
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation }),
+      navigate,
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await user.click(await screen.findByRole('button', { name: 'Проверить статус' }));
+    expect(await screen.findByText(/Создание игры отклонено. Игра не создана/)).toBeVisible();
+    expect(screen.queryByText(/Игра ожидает подтверждения/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Пока не подтверждено/)).not.toBeInTheDocument();
+    expect(
+      loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
+    ).toBeUndefined();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('never resolves or navigates on a readback that names another operation', async () => {
+    openManagedCreate();
+    const otherOperationId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2';
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockResolvedValue(managedResult('UNKNOWN'));
+    const getGameOperation = vi
+      .fn()
+      .mockResolvedValue(managedResult('SUCCEEDED', { id: otherOperationId }));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation }),
+      navigate,
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await user.click(await screen.findByRole('button', { name: 'Проверить статус' }));
+    expect(await screen.findByText(/Статус операции не совпал с ожидаемым/)).toBeVisible();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      { state: 'PENDING_CONFIRMATION', operationId: managedOperationId },
+    );
+  });
+
+  it('never resolves a confirmed create whose game id differs from the accepted draft', async () => {
+    openManagedCreate();
+    const otherGameId = '99999999-9999-4999-8999-999999999992';
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockResolvedValue(managedResult('UNKNOWN'));
+    const getGameOperation = vi
+      .fn()
+      .mockResolvedValue(managedResult('SUCCEEDED', { gameId: otherGameId }));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation }),
+      navigate,
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await user.click(await screen.findByRole('button', { name: 'Проверить статус' }));
+    expect(await screen.findByText(/Подтверждённая игра не совпала с ожидаемой/)).toBeVisible();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      { state: 'PENDING_CONFIRMATION', gameId: managedGameId },
+    );
+  });
+
+  it('records a PROCESSING acceptance as a pending confirmation too', async () => {
+    openManagedCreate();
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockResolvedValue(managedResult('PROCESSING'));
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation: vi.fn() }),
+      navigate,
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SUBSCRIPTION');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(
+      await screen.findByRole('heading', { name: 'Игра ожидает подтверждения' }),
+    ).toBeVisible();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      { state: 'PENDING_CONFIRMATION', paymentMode: 'SUBSCRIPTION' },
+    );
+  });
+
+  it('lets the operator abandon one pending wait explicitly without resending a create', async () => {
+    openManagedCreate();
+    const attempt = await prepareCreateGameAttempt(
+      principal,
+      { ...savedPayload(), paymentMode: 'SPLIT' },
+      window.localStorage,
+      locks(),
+      { createIdempotencyKey: () => 'managed-abandon-key-0001' },
+    );
+    if (attempt.state !== 'PENDING') throw new Error('expected pending attempt');
+    await recordCreateGameConfirmation(
+      principal,
+      attempt,
+      { gameId: managedGameId, operationId: managedOperationId },
+      window.localStorage,
+      locks(),
+    );
+    const createPaidGame = vi.fn<NonNullable<AuthGateway['createPaidGame']>>();
+    const navigate = vi.fn();
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation: vi.fn() }),
+      navigate,
+    });
+
+    await screen.findByText(/останется в обработке на сервере/);
+    await user.click(screen.getByRole('button', { name: 'Создать другую игру' }));
+    await waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith('/games/new?new=1&commercialCreate=1'),
+    );
+    expect(createPaidGame).not.toHaveBeenCalled();
+    expect(
+      loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt,
+    ).toBeUndefined();
+  });
+
+  it('keeps the protected attempt after an ambiguous owner failure and replays the same key', async () => {
+    openManagedCreate();
+    const ambiguous = Object.assign(new Error('owner unavailable'), {
+      code: 'GAME_OWNER_UNAVAILABLE',
+    });
+    const createPaidGame = vi
+      .fn<NonNullable<AuthGateway['createPaidGame']>>()
+      .mockRejectedValueOnce(ambiguous)
+      .mockResolvedValueOnce(managedResult('UNKNOWN'));
+    const user = userEvent.setup();
+    page(vi.fn(), {
+      api: paidApi({ createPaidGame, getGameOperation: vi.fn() }),
+    });
+
+    await screen.findByRole('option', { name: 'Селигерская' });
+    await user.selectOptions(screen.getByLabelText('Оплата'), 'SPLIT');
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    expect(await screen.findByText(/Сохранённые параметры и ключ оставлены/)).toBeVisible();
+    expect(loadCreateGameAttemptLedger(principal, window.localStorage).activeAttempt).toMatchObject(
+      { state: 'PENDING', payload: { paymentMode: 'SPLIT' } },
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Создать игру' }));
+    await screen.findByRole('heading', { name: 'Игра ожидает подтверждения' });
+    expect(createPaidGame).toHaveBeenCalledTimes(2);
+    expect(createPaidGame.mock.calls[1]?.[1]).toBe(createPaidGame.mock.calls[0]?.[1]);
   });
 });
