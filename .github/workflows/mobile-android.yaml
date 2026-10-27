@@ -18,7 +18,118 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
       - run: test -d apps/mobile/android || { echo 'Generate and review the native Android project first.'; exit 1; }
       - run: npm ci
       - run: npm run build -w @phub/mobile && npm run cap:sync -w @phub/mobile
-      - run: cd apps/mobile/android && ./gradlew bundleRelease
+      - name: Prepare release signing material (fails closed)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Android release signing secrets are absent: %s\n' "${missing[*]}" >&2
+            echo 'Add them as environment secrets of the GitHub environment mobile-android, then dispatch this workflow.' >&2
+            echo 'See docs/runbooks/android-release-signing.md. Refusing to build an unsigned release.' >&2
+            exit 1
+          fi
+          keystore_dir="$RUNNER_TEMP/android-release-keystore"
+          rm -rf "$keystore_dir"
+          install -d -m 0700 "$keystore_dir"
+          keystore_file="$keystore_dir/release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode >"$keystore_file"
+          chmod 0600 "$keystore_file"
+          if [ ! -s "$keystore_file" ]; then
+            echo 'ANDROID_KEYSTORE_BASE64 did not decode to a non-empty keystore file.' >&2
+            echo 'See docs/runbooks/android-release-signing.md. Refusing to build an unsigned release.' >&2
+            exit 1
+          fi
+          if ! keystore_details="$(keytool -list -v -keystore "$keystore_file" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" 2>&1)"; then
+            echo 'The decoded keystore rejects ANDROID_KEYSTORE_PASSWORD or ANDROID_KEY_ALIAS.' >&2
+            echo 'Fix the mobile-android environment secrets. See docs/runbooks/android-release-signing.md.' >&2
+            exit 1
+          fi
+          cert_sha256="$(printf '%s\n' "$keystore_details" | grep -Eo '([0-9A-F]{2}:){31}[0-9A-F]{2}' | head -n 1 || true)"
+          printf 'ANDROID_KEYSTORE_PATH=%s\n' "$keystore_file" >>"$GITHUB_ENV"
+          printf 'ANDROID_RELEASE_CERT_SHA256=%s\n' "${cert_sha256:-UNKNOWN}" >>"$GITHUB_ENV"
+          echo 'Release signing material decoded and validated; the keystore stays in the runner temp directory.'
+      - name: Build signed Android release bundle
+        working-directory: apps/mobile/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon bundleRelease
+      - name: Record signed release candidate identity
+        working-directory: apps/mobile/android
+        run: |
+          set -euo pipefail
+          aab_path="app/build/outputs/bundle/release/app-release.aab"
+          if [ ! -s "$aab_path" ]; then
+            echo "Expected signed AAB at $aab_path is missing; refusing to upload." >&2
+            exit 1
+          fi
+          version_info="$(./gradlew --no-daemon -q :app:printAppVersion)"
+          version_code="$(printf '%s\n' "$version_info" | sed -n 's/^versionCode=//p')"
+          version_name="$(printf '%s\n' "$version_info" | sed -n 's/^versionName=//p')"
+          if [ -z "$version_code" ] || [ -z "$version_name" ]; then
+            echo 'Could not read versionCode/versionName from apps/mobile/android/app/build.gradle.' >&2
+            exit 1
+          fi
+          artifact_dir="$RUNNER_TEMP/android-release-candidate"
+          install -d -m 0700 "$artifact_dir"
+          cp "$aab_path" "$artifact_dir/app-release.aab"
+          aab_sha256="$(sha256sum "$artifact_dir/app-release.aab" | cut -d' ' -f1)"
+          printf '%s  %s\n' "$aab_sha256" 'app-release.aab' >"$artifact_dir/SHA256SUMS"
+          export AAB_SHA256="$aab_sha256"
+          export RELEASE_VERSION_CODE="$version_code"
+          export RELEASE_VERSION_NAME="$version_name"
+          node - "$artifact_dir/build-info.json" <<'NODE'
+          const { writeFileSync } = require('node:fs');
+          const [path] = process.argv.slice(2);
+          const info = {
+            artifact: 'app-release.aab',
+            artifactSha256: process.env.AAB_SHA256,
+            signingCertificateSha256: process.env.ANDROID_RELEASE_CERT_SHA256,
+            sourceSha: process.env.GITHUB_SHA,
+            ref: process.env.GITHUB_REF_NAME,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            workflowRunAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            versionCode: Number(process.env.RELEASE_VERSION_CODE),
+            versionName: process.env.RELEASE_VERSION_NAME,
+          };
+          writeFileSync(path, `${JSON.stringify(info, null, 2)}\n`);
+          NODE
+          {
+            echo '### Signed Android release candidate'
+            echo ''
+            echo "- source SHA: \`$GITHUB_SHA\`"
+            echo "- ref: \`$GITHUB_REF_NAME\`"
+            echo "- versionCode/versionName: \`$version_code\` / \`$version_name\`"
+            echo "- AAB SHA256: \`$aab_sha256\`"
+            echo '- Build artifact only: no store upload, GitHub Release, tag or publish step runs.'
+          } >>"$GITHUB_STEP_SUMMARY"
+          cat "$artifact_dir/build-info.json"
+      - name: Upload signed release candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/android-release-candidate/app-release.aab
+            ${{ runner.temp }}/android-release-candidate/SHA256SUMS
+            ${{ runner.temp }}/android-release-candidate/build-info.json
+          if-no-files-found: error
+          retention-days: 30
