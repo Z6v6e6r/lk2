@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   nextScenarioPushTime,
   scenarioDeliveryDueSql,
   ingestNotificationScenarioEvent,
   checkScenarioPushDelivery,
+  refreshPreparingLegacyGameStartReminderTarget,
+  terminalizeExpiredScenarioDispatches,
 } from './notification-scenarios.js';
 
 describe('scenario quiet hours', () => {
@@ -109,6 +111,59 @@ describe('scenario execution guards', () => {
     expect(fixture.query).toHaveBeenCalledWith('rollback');
     expect(fixture.release).toHaveBeenCalled();
   });
+
+  it('fails source finalization instead of silently skipping a stale preparing generation', async () => {
+    const query = vi.fn((sql: string) => {
+      if (sql.includes('from games.games game'))
+        return Promise.resolve({
+          rows: [
+            {
+              revision: '1',
+              title: 'Legacy game',
+              starts_at: new Date('2026-11-01T18:00:00Z'),
+              lifecycle_state: 'SCHEDULED',
+              location_name: 'Club',
+              legacy_source: true,
+              legacy_mapping: true,
+            },
+          ],
+          rowCount: 1,
+        });
+      if (sql.includes('from notifications.legacy_game_reminder_sources source'))
+        return Promise.resolve({
+          rows: [
+            {
+              source_revision: '3',
+              title: 'Legacy game',
+              starts_at: new Date('2026-11-01T18:00:00Z'),
+              location_name: 'Club',
+              source_state: 'SCHEDULED',
+              source_checked_at: new Date('2026-11-01T11:59:00Z'),
+              status_checked_at: null,
+              healthy: false,
+              source_generation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+              status_generation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+              error_code: 'REFRESH_IN_PROGRESS',
+            },
+          ],
+          rowCount: 1,
+        });
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+    await expect(
+      refreshPreparingLegacyGameStartReminderTarget({ query } as unknown as PoolClient, {
+        tenantId: '22222222-2222-4222-8222-222222222222',
+        gameId: '33333333-3333-4333-8333-333333333333',
+        generationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        sourceEventId: '44444444-4444-4444-8444-444444444444',
+        occurredAt: new Date('2026-11-01T12:00:00Z'),
+        maxLegacySourceAgeMs: 600_000,
+      }),
+    ).rejects.toThrow('LEGACY_GAME_REMINDER_PREPARING_TARGET_UNAVAILABLE');
+    expect(
+      query.mock.calls.some(([sql]) => String(sql).includes('games.participations participant')),
+    ).toBe(false);
+  });
 });
 
 describe('mixed-fleet scenario delivery fence', () => {
@@ -122,5 +177,45 @@ describe('mixed-fleet scenario delivery fence', () => {
     expect(sql).toContain("d.next_attempt_at='infinity'::timestamptz");
     expect(sql).toContain('scenario_run.intent_id=d.intent_id');
     expect(sql).toContain('scenario_run.tenant_id=d.tenant_id');
+  });
+  it('terminalizes an expired fenced provider call instead of making it reclaimable', async () => {
+    const calls: { sql: string; values: readonly unknown[] }[] = [];
+    const startedAt = new Date('2026-11-01T12:00:00Z');
+    const query = vi.fn((sql: string, values: readonly unknown[] = []) => {
+      calls.push({ sql, values });
+      if (sql.includes("set state='DEAD'"))
+        return Promise.resolve({
+          rows: [
+            {
+              id: '11111111-1111-4111-8111-111111111111',
+              intent_id: '22222222-2222-4222-8222-222222222222',
+              attempt_count: 1,
+              scenario_dispatch_started_at: startedAt,
+            },
+          ],
+          rowCount: 1,
+        });
+      return Promise.resolve({ rows: [], rowCount: 1 });
+    });
+    await expect(
+      terminalizeExpiredScenarioDispatches({ query } as never, {
+        tenantId: '33333333-3333-4333-8333-333333333333',
+        provider: 'WEB_PUSH',
+        platform: 'WEB',
+        appId: 'padlhub-web',
+        environment: 'PRODUCTION',
+      }),
+    ).resolves.toBe(1);
+    const terminal = calls.find(({ sql }) => sql.includes("set state='DEAD'"));
+    expect(terminal?.sql).toContain('scenario_dispatch_started_at is not null');
+    expect(terminal?.values).toContain('WEB_PUSH_OUTCOME_UNKNOWN');
+    const attempt = calls.find(({ sql }) => sql.includes('delivery_attempts'));
+    expect(attempt?.values).toEqual([
+      '33333333-3333-4333-8333-333333333333',
+      '11111111-1111-4111-8111-111111111111',
+      1,
+      'WEB_PUSH_OUTCOME_UNKNOWN',
+      startedAt,
+    ]);
   });
 });

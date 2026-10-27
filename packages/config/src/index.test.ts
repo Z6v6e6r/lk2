@@ -83,6 +83,8 @@ describe('loadConfig', () => {
       LEGACY_GAME_COMMAND_BRIDGE_ENABLED: false,
       LEGACY_GAME_IDENTITY_VERIFY_TIMEOUT_MS: 5_000,
       LEGACY_GAMES_ROSTER_SYNC_INTERVAL_MS: 120_000,
+      LEGACY_GAME_REMINDERS_SOURCE_ENABLED: false,
+      LEGACY_GAME_REMINDERS_MAX_SOURCE_AGE_MS: 600_000,
       LEGACY_GAMES_ROSTER_SYNC_LOOKBACK_DAYS: 1,
       LEGACY_GAMES_ROSTER_SYNC_LOOKAHEAD_DAYS: 42,
       LEGACY_GAMES_ROSTER_SYNC_LIMIT: 200,
@@ -1034,6 +1036,33 @@ describe('loadConfig', () => {
         LEGACY_GAMES_ROSTER_SYNC_TENANT_KEY: 'ci-padel',
       }),
     ).toThrow('allowed only in local or staging');
+  });
+
+  it('keeps the dedicated legacy reminder source off by default and requires exact dependencies', () => {
+    expect(loadConfig(validEnvironment).LEGACY_GAME_REMINDERS_SOURCE_ENABLED).toBe(false);
+    expect(() =>
+      loadConfig({ ...validEnvironment, LEGACY_GAME_REMINDERS_SOURCE_ENABLED: 'true' }),
+    ).toThrow('requires notification scenarios');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        LEGACY_GAME_REMINDERS_SOURCE_ENABLED: 'true',
+        NOTIFICATION_SCENARIOS_ENABLED: 'true',
+      }),
+    ).toThrow('requires dedicated Mongo URI and tenant key');
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        LEGACY_GAME_REMINDERS_SOURCE_ENABLED: 'true',
+        NOTIFICATION_SCENARIOS_ENABLED: 'true',
+        LEGACY_GAME_REMINDERS_MONGODB_URI: 'mongodb://example.invalid/games',
+        LEGACY_GAME_REMINDERS_TENANT_KEY: 'padel',
+      }),
+    ).toMatchObject({
+      LEGACY_GAME_REMINDERS_SOURCE_ENABLED: true,
+      LEGACY_GAMES_ROSTER_SYNC_ENABLED: false,
+    });
   });
 
   it('allows the synthetic CUP operator code only in a fully explicit local runtime', () => {

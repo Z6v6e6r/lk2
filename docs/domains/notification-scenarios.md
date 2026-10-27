@@ -10,6 +10,13 @@ Worker принимает подтверждённые факты, сохран�
 - `BOOKING_CONFIRMED`, `BOOKING_CHANGED`, `BOOKING_CANCELLED` используют существующий booking contract.
 - `BOOKING_STARTS` отсчитывает минуты от startsAt подтверждённой/изменённой записи. Отрицательные
   напоминания истекают к началу; нулевые/положительные смещения используют заданный TTL после dueAt.
+- `GAME_STARTS` отсчитывает минуты от startsAt канонической SCHEDULED-игры и адресуется только
+  текущим ACTIVE-участникам с активным достижимым аккаунтом. Закрытые игры включены: видимость
+  discovery не является признаком участия. Каждый настроенный сценарий создаёт не более одного
+  фактического напоминания на игру и получателя за всю жизнь игры. До создания intent перенос может
+  обновить тот же run; после queue/inbox/provider fence новая roster/source revision не создаёт
+  повтор. Новый участник и другой настроенный сценарий имеют собственные ключи. Общий суточный лимит
+  рекомендаций на напоминания об играх не распространяется.
 - `FRIEND_GAME_PUBLISHED` принимает только `game.published.v1`. Сегодня этот факт публикуется при
   немедленном создании публичной локальной игры. Legacy imports и позднее provider provisioning не
   входят в этот источник. Контекст ждёт актуальную card projection; импорт истории не запускает
@@ -39,6 +46,38 @@ endpoint-адреса, внешние URL или mandatory override. Предп�
 изменение сценария, постановка в доставку и финальная проверка сериализуются tenant-admin lock;
 это осознанное ограничение объёма первого среза. После финальной проверки провайдер уже может
 обрабатывать запрос: пауза не отзывает такой внешний вызов. Версии и результаты не удаляются.
+
+Для legacy-игр `GAME_STARTS` использует отдельный выключенный по умолчанию primary/majority источник
+и notification-owned mirror. Он не вызывает общий importer, не создаёт игры, пользователей или
+профили и не публикует обычные game events. В пилот попадают только уже сопоставленные канонические
+игры в режиме `MIRROR`; остальные source rows считаются `skipped_unmapped`, поэтому включение требует
+отдельного coverage admission и не означает покрытие всех legacy-игр. Получатель обязан иметь уже
+сохранённую immutable verified-привязку legacy player → LK2 user; совпадение телефона и синтетический
+import user не используются. В reminder-only snapshot входят только raw-участники со строгим
+статусом `PAID`; inactive/pending/cancelled/неизвестный или malformed участник не попадает в
+аудиторию и не может вытеснить более позднего PAID-участника из capacity. Для legacy/MIRROR игры
+isolated source является источником состояния и времени; устаревшие canonical lifecycle/startsAt
+не перекрывают свежий source. Исчезновение legacy mapping при оставшемся MIRROR/source блокирует
+dispatch как `SOURCE_STALE`, а не переключает аудиторию на native participations.
+
+Перед каждым provider read поколение атомарно переводится в unhealthy. Только полный bounded window
+и exact read всех уже отслеживаемых source IDs, а затем обновление всех затронутых `GAME_START`
+contexts в одной транзакции переводят его в healthy: поэтому удаление, отмена и перенос за горизонт
+обнаруживаются. Обычные queue/provider readers не могут читать preparing generation; внутренний
+reader принимает только точный generation id внутри finalize-транзакции. Ошибка/неполный page/
+неизвестная строка или ошибка любого context refresh оставляют весь legacy dispatch в HOLD;
+промежуточного healthy окна нет. Tenant-admin lock берётся первым и удерживается только на bounded
+пилотном наборе до `LEGACY_GAME_REMINDERS_LIMIT`, затем healthy фиксируется compare-and-set для того
+же поколения. Старый snapshot не разрешает отправку только по TTL. `source_updated_at` не может
+регрессировать, одинаковое время с другой source revision — конфликт. Изменение source/получателей
+повышает isolated revision, подавляет старую доставку и создаёт новую только из актуального состояния.
+Stale source откладывается короткими интервалами до expiry и никогда не считается доставкой.
+
+Последняя проверка получателя и состояния игры выполняется под блокировкой цели непосредственно
+перед транспортом и фиксирует durable dispatch fence. До fence отмена/выход гарантированно подавляют
+вызов; после fence внешний провайдер уже может принять запрос, поэтому результат может остаться
+UNKNOWN и не должен автоматически переотправляться или считаться доставленным. Reconciliation
+использует журнал попыток/причин, а не создаёт повторную рассылку без нового решения оператора.
 
 Для приглашения требуется текущая дружба с организатором, активный достижимый аккаунт с games.play,
 существующая запись booking preferences с recommendFriends=true, публичная SCHEDULED future игра
@@ -117,11 +156,28 @@ migration, включение флага и provider acceptance — разные
 старые booking reminder rules не создают нежелательное дублирование пользовательского сценария;
 существующие mandatory lifecycle уведомления не отключаются автоматически.
 
-Для остановки выключить сценарии/глобальный флаг. Новые infinity deliveries остаются припаркованными
-и при откате на старый worker, поэтому потеря новой проверки не открывает отправку. Уже начатые
-provider calls проверяются отдельно; их нельзя отозвать SQL rollback. Additive schema/history
-сохраняются, destructive down не предусмотрен. После стабилизации нужны наблюдение за lag/ошибками
-нового consumer, journal reasons и размером append-only истории; автоматическая очистка не включена.
+`GAME_START` не имеет mixed-worker compatibility со старым Worker. До миграции и определения
+`GAME_STARTS` все notification/scenario/legacy-source флаги остаются OFF. Под exclusive rollout
+lease сначала блокируются API/UI-команды, способные создать `GAME_STARTS`; затем старые provider
+workers останавливаются и drain, readback доказывает отсутствие in-flight вызовов и leases. После
+этого новый совместимый binary разворачивается на всех Worker replicas и проверяется по runtime
+identity. Только после полного readback можно разрешить API/UI, создать сценарий и отдельно включить
+source/runtime flags. Автоматический overlap старого и нового binary запрещён.
+
+Binary rollback безопасен только при readback нулевых `GAME_STARTS` definitions, `GAME_START`
+contexts/runs и связанных deliveries. После создания любой `GAME_STARTS` definition recovery —
+только roll-forward на новом совместимом binary: flags OFF, сценарий paused, новый provider worker
+stop/drain, накопленные facts/queued/UNKNOWN состояния сохраняются. Старый binary нельзя запускать
+до отдельной проверенной cleanup/compatibility migration; удаление queued rows не является штатным
+rollback. Перед активацией source facts читаются заново, старый readiness snapshot не переиспользуется.
+
+Для остановки выключить сценарии/глобальный флаг. Для совместимых 0101 workloads новые infinity
+deliveries остаются припаркованными и при откате на старый worker, поэтому потеря новой проверки не
+открывает отправку. Это не разрешает старый binary для `GAME_START`: после создания definition
+действует запрет и roll-forward protocol выше. Уже начатые provider calls проверяются отдельно; их
+нельзя отозвать SQL rollback. Additive schema/history сохраняются, destructive down не предусмотрен.
+После стабилизации нужны наблюдение за lag/ошибками нового consumer, journal reasons и размером
+append-only истории; автоматическая очистка не включена.
 
 ## Lifecycle и каналы: расширение 0101
 
@@ -193,7 +249,8 @@ down после активации запрещен: disable writers + совм�
 blocking indexes ограничены lock_timeout=5s/statement_timeout=30s. CI-only PostgreSQL fixtures проверяют
 FORCE RLS, old discovery, private-ticket denial, renewal/freeze и unknown crash recovery.
 
-Новые flags по умолчанию false: NOTIFICATION_LIFECYCLE_VIVA_ENABLED, APNS_ENABLED, SMTP_ENABLED,
+Новые flags по умолчанию false: NOTIFICATION_LIFECYCLE_VIVA_ENABLED,
+LEGACY_GAME_REMINDERS_SOURCE_ENABLED, APNS_ENABLED, SMTP_ENABLED,
 NOTIFICATION_STAFF_TASKS_ENABLED; PADLHUB_IOS_PUSH_ENABLED — сборка. Owner notifications/mobile,
 цель — отдельный пилот после 0101/consent/provider/device acceptance; review/remove после пилота.
 Lifecycle требует явный NOTIFICATION_VIVA_TENANT_ID, iSkq6G binding и существующий delegation key.

@@ -153,7 +153,7 @@ export function createNotificationPreferenceRepository(
                union
 ${
   options.scenariosEnabled
-    ? `               select case s.definition->>'trigger' when 'FRIEND_GAME_PUBLISHED' then 'GAME_RECOMMENDATION' when 'BIRTHDAY' then 'BIRTHDAY' when 'SUBSCRIPTION_ENDS' then 'SUBSCRIPTION' when 'TRAINING_ATTENDED' then 'TRAINING_ATTENDANCE' else 'BOOKING' end as category,
+    ? `               select case s.definition->>'trigger' when 'FRIEND_GAME_PUBLISHED' then 'GAME_RECOMMENDATION' when 'GAME_STARTS' then 'GAME' when 'BIRTHDAY' then 'BIRTHDAY' when 'SUBSCRIPTION_ENDS' then 'SUBSCRIPTION' when 'TRAINING_ATTENDED' then 'TRAINING_ATTENDANCE' else 'BOOKING' end as category,
                       case when c.value in ('IN_APP','EMAIL') then c.value else 'PUSH' end as channel
                  from notifications.scenarios s
                  cross join lateral jsonb_array_elements_text(s.definition->'channels') c(value)

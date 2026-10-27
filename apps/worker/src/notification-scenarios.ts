@@ -3,6 +3,8 @@ import { createHash, randomUUID } from 'node:crypto';
 
 import {
   listNotificationFriendCandidates,
+  readGameStartReminderTarget,
+  readPreparingLegacyGameStartReminderTarget,
   readNotificationGameCandidate,
   withTenantTransaction,
 } from '@phub/database';
@@ -32,8 +34,11 @@ export const SCENARIO_SOURCE_KEYS = [
   'booking.changed.v1',
   'booking.cancelled.v1',
   'game.published.v1',
+  'game.scheduled.v1',
   'game.cancelled.v1',
   'game.participation.confirmed.v1',
+  'game.participation.left.v1',
+  'game.waitlist.promoted.v1',
 ] as const;
 /** A canonical run join and legacy infinity keep mixed/older workers from bypassing policy. */
 export function scenarioDeliveryDueSql(enabled?: boolean): string {
@@ -41,7 +46,67 @@ export function scenarioDeliveryDueSql(enabled?: boolean): string {
     ? `(d.next_attempt_at <= now() or (coalesce(d.scenario_v2_available_at,d.scenario_available_at) <= now() and d.next_attempt_at='infinity'::timestamptz and exists(select 1 from notifications.scenario_runs scenario_run where scenario_run.tenant_id=d.tenant_id and scenario_run.intent_id=d.intent_id and scenario_run.id::text=i.render_data->>'scenarioRunId')))`
     : 'd.next_attempt_at <= now()';
 }
+
+/**
+ * A durable scenario dispatch fence means a provider call may already have happened. Expired
+ * fenced claims are terminalized as UNKNOWN instead of being reclaimed and sent again.
+ */
+export async function terminalizeExpiredScenarioDispatches(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly provider: 'FCM' | 'WEB_PUSH';
+    readonly platform: 'ANDROID' | 'WEB';
+    readonly appId: string;
+    readonly environment: 'SANDBOX' | 'PRODUCTION';
+  },
+): Promise<number> {
+  const errorCode = `${input.provider}_OUTCOME_UNKNOWN`;
+  const expired = await client.query<{
+    id: string;
+    intent_id: string;
+    attempt_count: number;
+    scenario_dispatch_started_at: Date;
+  }>(
+    `update notifications.deliveries d
+        set state='DEAD',last_error_code=$6,completed_at=clock_timestamp(),
+            lease_expires_at=null,updated_at=clock_timestamp()
+       from integration.notification_endpoints endpoint,
+            integration.notification_provider_accounts account
+      where d.tenant_id=$1 and d.channel='PUSH' and d.state='SENDING'
+        and d.lease_expires_at<=clock_timestamp()
+        and d.scenario_dispatch_started_at is not null
+        and (d.scenario_v2_available_at is not null or d.scenario_available_at is not null)
+        and endpoint.tenant_id=d.tenant_id and endpoint.id=d.endpoint_id
+        and account.tenant_id=endpoint.tenant_id and account.id=endpoint.provider_account_id
+        and account.provider=$2 and account.platform=$3 and account.app_id=$4
+        and account.environment=$5
+      returning d.id,d.intent_id,d.attempt_count,d.scenario_dispatch_started_at`,
+    [input.tenantId, input.provider, input.platform, input.appId, input.environment, errorCode],
+  );
+  for (const delivery of expired.rows) {
+    await client.query(
+      `insert into notifications.delivery_attempts(
+         tenant_id,delivery_id,attempt_no,outcome,error_code,started_at,completed_at
+       ) values($1,$2,$3,'TERMINAL_FAILURE',$4,$5,clock_timestamp())
+       on conflict do nothing`,
+      [
+        input.tenantId,
+        delivery.id,
+        delivery.attempt_count,
+        errorCode,
+        delivery.scenario_dispatch_started_at,
+      ],
+    );
+  }
+  if (expired.rows.length > 0)
+    await resolveScenarioIntentStates(client, input.tenantId, [
+      ...new Set(expired.rows.map((delivery) => delivery.intent_id)),
+    ]);
+  return expired.rows.length;
+}
 export interface ScenarioTransportSettings {
+  readonly gameReminderMaxSourceAgeMs?: number;
   readonly iosPush?: {
     readonly appId: string;
     readonly environment: 'SANDBOX' | 'PRODUCTION';
@@ -80,7 +145,7 @@ interface RunRow extends QueryResultRow {
   recipient_user_id: string;
   target_id: string;
   source_event_id: string;
-  context_kind: 'BOOKING' | 'GAME' | 'LIFECYCLE';
+  context_kind: 'BOOKING' | 'GAME' | 'GAME_START' | 'LIFECYCLE';
   context_revision: string;
   state: string;
   reason: string | null;
@@ -216,7 +281,7 @@ async function addRun(
   scenario: ScenarioRow,
   userId: string,
   data: { serviceTitle: string; startsAt: string; locationName: string; gameId: string },
-  kind: 'BOOKING' | 'GAME',
+  kind: 'BOOKING' | 'GAME' | 'GAME_START',
   revision: string,
 ): Promise<void> {
   const rendered = renderNotificationTemplate({
@@ -229,8 +294,26 @@ async function addRun(
     occurredAt: event.occurredAt,
     startsAt: data.startsAt,
   });
+  const conflictClause =
+    kind === 'GAME_START'
+      ? `on conflict(tenant_id,scenario_id,target_id,recipient_user_id)
+           where context_kind='GAME_START' do update set
+             scenario_version=excluded.scenario_version,
+             source_event_id=excluded.source_event_id,
+             context_revision=excluded.context_revision,
+             rendered_title=excluded.rendered_title,
+             rendered_body=excluded.rendered_body,
+             deep_link=excluded.deep_link,
+             due_at=excluded.due_at,
+             expires_at=excluded.expires_at,
+             state=excluded.state,
+             reason=null,
+             updated_at=now()
+           where scenario_runs.intent_id is null
+             and scenario_runs.state in ('PENDING','EXTENDED_PENDING','CANCELLED')`
+      : 'on conflict(tenant_id,scenario_id,source_event_id,recipient_user_id) do nothing';
   await client.query(
-    `insert into notifications.scenario_runs(tenant_id,scenario_id,scenario_version,recipient_user_id,target_id,source_event_id,context_kind,context_revision,rendered_title,rendered_body,deep_link,due_at,expires_at,state) values($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,$11,$12,$13,$14) on conflict(tenant_id,scenario_id,source_event_id,recipient_user_id) do nothing`,
+    `insert into notifications.scenario_runs(tenant_id,scenario_id,scenario_version,recipient_user_id,target_id,source_event_id,context_kind,context_revision,rendered_title,rendered_body,deep_link,due_at,expires_at,state) values($1,$2,$3,$4,$5,$6,$7,$8::numeric,$9,$10,$11,$12,$13,$14) ${conflictClause}`,
     [
       event.tenantId,
       scenario.id,
@@ -242,7 +325,7 @@ async function addRun(
       revision,
       rendered.title,
       rendered.body,
-      kind === 'GAME' ? `/games/${event.aggregateId}` : '/bookings',
+      kind === 'GAME' || kind === 'GAME_START' ? `/games/${event.aggregateId}` : '/bookings',
       schedule.dueAt,
       schedule.expiresAt,
       scenario.extended_runtime ? 'EXTENDED_PENDING' : 'PENDING',
@@ -292,17 +375,18 @@ export async function ingestNotificationScenarioEvent(
         'GOAL_ACHIEVED',
         event.payload.userId as string,
       );
-    } else if (event.type === 'game.cancelled.v1') {
+    }
+    if (event.type === 'game.cancelled.v1') {
       await client.query(
-        `update notifications.scenario_runs set state=case when state in ('PENDING','EXTENDED_PENDING') then 'CANCELLED' else state end,reason='GAME_CANCELLED',updated_at=now() where tenant_id=$1 and target_id=$2 and context_kind='GAME' and state in ('PENDING','EXTENDED_PENDING','QUEUED')`,
+        `update notifications.scenario_runs set state=case when state in ('PENDING','EXTENDED_PENDING') then 'CANCELLED' else state end,reason='GAME_CANCELLED',updated_at=now() where tenant_id=$1 and target_id=$2 and context_kind in ('GAME','GAME_START') and state in ('PENDING','EXTENDED_PENDING','QUEUED')`,
         [event.tenantId, event.aggregateId],
       );
       await suppressPendingDeliveries(client, event.tenantId, event.aggregateId, 'GAME_CANCELLED');
       await client.query(
-        `update notifications.scenario_contexts set fanout_pending=false where tenant_id=$1 and target_id=$2 and kind='GAME'`,
+        `update notifications.scenario_contexts set fanout_pending=false where tenant_id=$1 and target_id=$2 and kind in ('GAME','GAME_START')`,
         [event.tenantId, event.aggregateId],
       );
-    } else {
+    } else if (event.type.startsWith('booking.') || event.type === 'game.published.v1') {
       const kind = event.type.startsWith('booking.') ? 'BOOKING' : 'GAME';
       const revision = String(kind === 'BOOKING' ? payload.revision : payload.aggregateRevision);
       const fingerprint = createHash('sha256')
@@ -399,6 +483,17 @@ export async function ingestNotificationScenarioEvent(
         }
       }
     }
+    if (
+      event.type !== 'game.cancelled.v1' &&
+      [
+        'game.scheduled.v1',
+        'game.participation.confirmed.v1',
+        'game.participation.left.v1',
+        'game.waitlist.promoted.v1',
+      ].includes(event.type)
+    ) {
+      await refreshGameStartReminderRuns(client, event);
+    }
     await client.query(
       `update audit.inbox_events set processed_at=now() where consumer_name='notification-scenarios.v1' and event_id=$1`,
       [event.id],
@@ -412,16 +507,147 @@ async function suppressPendingDeliveries(
   targetId: string,
   reason: string,
   userId?: string,
+  contextKind?: 'BOOKING' | 'GAME' | 'GAME_START',
 ): Promise<void> {
   const suppressed = await client.query<{ intent_id: string }>(
-    `update notifications.deliveries d set state='SUPPRESSED',last_error_code=$3,completed_at=now(),updated_at=now() from notifications.scenario_runs r where r.tenant_id=$1 and r.target_id=$2 and ($4::uuid is null or r.recipient_user_id=$4) and d.tenant_id=r.tenant_id and d.intent_id=r.intent_id and d.state='PENDING' returning d.intent_id`,
-    [tenantId, targetId, reason, userId ?? null],
+    `update notifications.deliveries d set state='SUPPRESSED',last_error_code=$3,completed_at=now(),updated_at=now() from notifications.scenario_runs r where r.tenant_id=$1 and r.target_id=$2 and ($4::uuid is null or r.recipient_user_id=$4) and ($5::text is null or r.context_kind=$5) and d.tenant_id=r.tenant_id and d.intent_id=r.intent_id and d.state='PENDING' returning d.intent_id`,
+    [tenantId, targetId, reason, userId ?? null, contextKind ?? null],
   );
   await resolveScenarioIntentStates(
     client,
     tenantId,
     suppressed.rows.map((row) => row.intent_id),
   );
+}
+
+async function refreshGameStartReminderRuns(
+  client: PoolClient,
+  event: NotificationSourceEvent,
+  maxLegacySourceAgeMs = 600_000,
+  preparingGenerationId?: string,
+): Promise<void> {
+  const targetInput = {
+    tenantId: event.tenantId,
+    gameId: event.aggregateId,
+    now: preparingGenerationId ? new Date(event.occurredAt) : new Date(),
+    maxLegacySourceAgeMs,
+  };
+  const target = preparingGenerationId
+    ? await readPreparingLegacyGameStartReminderTarget(client, {
+        ...targetInput,
+        generationId: preparingGenerationId,
+      })
+    : await readGameStartReminderTarget(client, targetInput);
+  if (target.state !== 'READY') {
+    if (target.state === 'GAME_UNAVAILABLE') {
+      await client.query(
+        `update notifications.scenario_runs set state=case when state in ('PENDING','EXTENDED_PENDING') then 'CANCELLED' else state end,reason='GAME_UNAVAILABLE',updated_at=now() where tenant_id=$1 and target_id=$2 and context_kind='GAME_START' and state in ('PENDING','EXTENDED_PENDING','QUEUED')`,
+        [event.tenantId, event.aggregateId],
+      );
+      await suppressPendingDeliveries(
+        client,
+        event.tenantId,
+        event.aggregateId,
+        'GAME_UNAVAILABLE',
+        undefined,
+        'GAME_START',
+      );
+    }
+    if (preparingGenerationId && target.state !== 'GAME_UNAVAILABLE') {
+      throw new Error('LEGACY_GAME_REMINDER_PREPARING_TARGET_UNAVAILABLE');
+    }
+    return;
+  }
+  const active = (await scenarios(client, event.tenantId)).filter(
+    (scenario) => scenario.definition.trigger === 'GAME_STARTS',
+  );
+  const data = {
+    serviceTitle: target.target.serviceTitle,
+    startsAt: target.target.startsAt,
+    locationName: target.target.locationName,
+    gameId: target.target.gameId,
+  };
+  const fingerprint = createHash('sha256')
+    .update(
+      JSON.stringify({
+        revision: target.target.revision,
+        ...data,
+        recipientUserIds: target.target.recipientUserIds,
+      }),
+    )
+    .digest('hex');
+  const current = await client.query<ContextRow & { fingerprint: string }>(
+    `select * from notifications.scenario_contexts where tenant_id=$1 and target_id=$2 and kind='GAME_START' for update`,
+    [event.tenantId, event.aggregateId],
+  );
+  if (current.rows[0] && BigInt(current.rows[0].revision) > BigInt(target.target.revision)) return;
+  if (
+    current.rows[0]?.revision === target.target.revision &&
+    current.rows[0].fingerprint === fingerprint
+  )
+    return;
+  if (current.rows[0]?.revision === target.target.revision) {
+    throw new Error('SCENARIO_REVISION_CONFLICT');
+  }
+  await client.query(
+    `update notifications.scenario_runs set state=case when state in ('PENDING','EXTENDED_PENDING') then 'CANCELLED' else state end,reason='SOURCE_CHANGED',updated_at=now() where tenant_id=$1 and target_id=$2 and context_kind='GAME_START' and context_revision<$3::numeric and state in ('PENDING','EXTENDED_PENDING','QUEUED')`,
+    [event.tenantId, event.aggregateId, target.target.revision],
+  );
+  await suppressPendingDeliveries(
+    client,
+    event.tenantId,
+    event.aggregateId,
+    'SOURCE_CHANGED',
+    undefined,
+    'GAME_START',
+  );
+  await client.query(
+    `insert into notifications.scenario_contexts(tenant_id,target_id,kind,revision,event_type,fingerprint,payload,occurred_at,source_event_id,fanout_pending) values($1,$2,'GAME_START',$3::numeric,$4,$5,$6::jsonb,$7,$8,false) on conflict(tenant_id,kind,target_id) do update set revision=excluded.revision,event_type=excluded.event_type,fingerprint=excluded.fingerprint,payload=excluded.payload,occurred_at=excluded.occurred_at,source_event_id=excluded.source_event_id,fanout_pending=false,recipient_cursor=null`,
+    [
+      event.tenantId,
+      event.aggregateId,
+      target.target.revision,
+      event.type,
+      fingerprint,
+      JSON.stringify({ ...data, recipientUserIds: target.target.recipientUserIds }),
+      event.occurredAt,
+      event.id,
+    ],
+  );
+  for (const scenario of active) {
+    for (const userId of target.target.recipientUserIds) {
+      await addRun(client, event, scenario, userId, data, 'GAME_START', target.target.revision);
+    }
+  }
+}
+
+/** Refreshes only the GAME_START context inside isolated source finalization. The caller already
+ * owns the tenant admin lock, so this function acquires only the per-target lock. */
+export async function refreshPreparingLegacyGameStartReminderTarget(
+  client: PoolClient,
+  input: {
+    readonly tenantId: string;
+    readonly gameId: string;
+    readonly sourceEventId: string;
+    readonly occurredAt: Date;
+    readonly maxLegacySourceAgeMs: number;
+    readonly generationId: string;
+  },
+): Promise<void> {
+  await timeout(client);
+  await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
+    `scenario-target:${input.tenantId}:${input.gameId}`,
+  ]);
+  const event = notificationSourceEventSchema.parse({
+    id: input.sourceEventId,
+    type: 'legacy.game.reminder.refreshed.v1',
+    aggregateId: input.gameId,
+    tenantId: input.tenantId,
+    occurredAt: input.occurredAt.toISOString(),
+    correlationId: `legacy-reminder-${input.sourceEventId}`,
+    payload: {},
+  });
+  await refreshGameStartReminderRuns(client, event, input.maxLegacySourceAgeMs, input.generationId);
 }
 
 async function fanoutFriendGames(client: PoolClient, tenantId: string, now: Date): Promise<void> {
@@ -508,6 +734,7 @@ async function runValidity(
   tenantId: string,
   run: RunRow,
   now: Date,
+  gameReminderMaxSourceAgeMs = 600_000,
 ): Promise<string | null> {
   if (!run.active || run.current_version !== run.scenario_version) return 'SCENARIO_REVISED';
   if (new Date(run.expires_at).getTime() <= now.getTime()) return 'MESSAGE_EXPIRED';
@@ -551,6 +778,16 @@ async function runValidity(
     );
     if (fence.rows[0] && BigInt(fence.rows[0].revision) > BigInt(run.context_revision))
       return 'SOURCE_CHANGED';
+  } else if (run.context_kind === 'GAME_START') {
+    const target = await readGameStartReminderTarget(client, {
+      tenantId,
+      gameId: run.target_id,
+      now,
+      maxLegacySourceAgeMs: gameReminderMaxSourceAgeMs,
+      expectedRevision: run.context_revision,
+      onlyRecipientUserId: run.recipient_user_id,
+    });
+    if (target.state !== 'READY') return target.state;
   } else {
     const snapshot = await readNotificationGameCandidate(
       client,
@@ -601,8 +838,15 @@ async function queueRun(
   settings: ScenarioTransportSettings,
   now: Date,
 ): Promise<void> {
-  const reason = await runValidity(client, tenantId, run, now);
+  const reason = await runValidity(client, tenantId, run, now, settings.gameReminderMaxSourceAgeMs);
   if (reason) {
+    if (reason === 'SOURCE_STALE' && now.getTime() + 60_000 < new Date(run.expires_at).getTime()) {
+      await client.query(
+        `update notifications.scenario_runs set due_at=$3,reason='SOURCE_STALE',updated_at=now() where tenant_id=$1 and id=$2 and state in ('PENDING','EXTENDED_PENDING')`,
+        [tenantId, run.id, new Date(now.getTime() + 60_000)],
+      );
+      return;
+    }
     await client.query(
       `update notifications.scenario_runs set state=$3,reason=$4,updated_at=now() where tenant_id=$1 and id=$2`,
       [tenantId, run.id, reason === 'MESSAGE_EXPIRED' ? 'EXPIRED' : 'CANCELLED', reason],
@@ -640,7 +884,7 @@ async function queueRun(
     );
     return;
   }
-  if (!['BOOKING', 'GAME_RECOMMENDATION'].includes(category)) {
+  if (!['BOOKING', 'GAME', 'GAME_RECOMMENDATION'].includes(category)) {
     const sent = await client.query<{ count: string }>(
       `select count(*)::text count from notifications.scenario_runs r join notifications.scenario_versions v on v.tenant_id=r.tenant_id and v.scenario_id=r.scenario_id and v.version=r.scenario_version join notifications.templates t on t.tenant_id=v.tenant_id and t.id=v.template_id where r.tenant_id=$1 and r.recipient_user_id=$2 and t.category=$3 and r.queued_at>$4::timestamptz-interval '24 hours'`,
       [tenantId, run.recipient_user_id, category, now],
@@ -789,7 +1033,7 @@ async function queueRun(
       ],
     );
     await client.query(
-      `insert into notifications.deliveries(tenant_id,intent_id,channel,state,completed_at) values($1,$2,'IN_APP','DELIVERED',now())`,
+      `insert into notifications.deliveries(tenant_id,intent_id,channel,state,completed_at,scenario_dispatch_started_at) values($1,$2,'IN_APP','DELIVERED',now(),now())`,
       [tenantId, intentId],
     );
   }
@@ -888,6 +1132,7 @@ export async function checkScenarioPushDelivery(options: {
   readonly enabled: boolean;
   readonly channel?: 'EMAIL' | 'PUSH';
   readonly dispatchFence?: boolean;
+  readonly gameReminderMaxSourceAgeMs?: number;
   readonly now?: Date;
 }): Promise<'SEND' | 'DEFERRED' | 'SUPPRESSED' | 'STALE'> {
   return withTenantTransaction(options.pool, options.tenantId, async (client) => {
@@ -900,6 +1145,14 @@ export async function checkScenarioPushDelivery(options: {
     await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
       `scenario-admin:${options.tenantId}`,
     ]);
+    const target = await client.query<{ target_id: string }>(
+      `select target_id from notifications.scenario_runs where tenant_id=$1 and id=$2`,
+      [options.tenantId, marker.rows[0].run_id],
+    );
+    if (target.rows[0]?.target_id)
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', [
+        `scenario-target:${options.tenantId}:${target.rows[0].target_id}`,
+      ]);
     const run = (
       await client.query<RunRow>(`${runSelect} where r.tenant_id=$1 and r.id=$2 for update of r`, [
         options.tenantId,
@@ -913,9 +1166,25 @@ export async function checkScenarioPushDelivery(options: {
         ? 'SCENARIO_NOT_FOUND'
         : run.state !== 'QUEUED'
           ? 'SCENARIO_CANCELLED'
-          : await runValidity(client, options.tenantId, run, now);
+          : await runValidity(
+              client,
+              options.tenantId,
+              run,
+              now,
+              options.gameReminderMaxSourceAgeMs,
+            );
     let nextPush = now;
-    if (!reason && run) {
+    let deferredCode: string | null = null;
+    if (
+      reason === 'SOURCE_STALE' &&
+      run &&
+      now.getTime() + 60_000 < new Date(run.expires_at).getTime()
+    ) {
+      reason = null;
+      deferredCode = 'SOURCE_STALE';
+      nextPush = new Date(now.getTime() + 60_000);
+    }
+    if (!reason && !deferredCode && run) {
       const pref = (await preferences(client, options.tenantId, run)).find(
         (p) => p.channel === (options.channel ?? 'PUSH'),
       );
@@ -955,7 +1224,7 @@ export async function checkScenarioPushDelivery(options: {
         options.attemptNo,
         reason ? 'SUPPRESSED' : 'PENDING',
         nextPush,
-        reason ?? 'QUIET_HOURS_DEFERRED',
+        reason ?? deferredCode ?? 'QUIET_HOURS_DEFERRED',
       ],
     );
     if (result.rowCount !== 1) return 'STALE';

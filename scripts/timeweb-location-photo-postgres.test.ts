@@ -94,6 +94,7 @@ async function migrationFixture(include0102: boolean): Promise<string> {
   const target = resolve(fixture, 'migrations');
   await mkdir(target, { recursive: true });
   for (const filename of (await readdir(source)).filter((name) => name.endsWith('.sql')).sort()) {
+    if (filename > migration) continue;
     if (include0102 || filename !== migration)
       await copyFile(resolve(source, filename), resolve(target, filename));
   }

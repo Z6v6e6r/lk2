@@ -8,7 +8,11 @@ import type {
 import type { Logger } from 'pino';
 import type { Pool, QueryResultRow } from 'pg';
 
-import { checkScenarioPushDelivery, scenarioDeliveryDueSql } from './notification-scenarios.js';
+import {
+  checkScenarioPushDelivery,
+  scenarioDeliveryDueSql,
+  terminalizeExpiredScenarioDispatches,
+} from './notification-scenarios.js';
 
 import {
   deferNotificationDeliveryWithoutAttempt,
@@ -63,6 +67,7 @@ export async function runFcmDeliveryBatch(options: {
   readonly maxAttempts: number;
   readonly retryBaseMs: number;
   readonly scenarioPolicyEnabled?: boolean;
+  readonly gameReminderMaxSourceAgeMs?: number;
   readonly batchSize?: number;
 }): Promise<{ claimed: number; sent: number; retried: number; dead: number; stale: number }> {
   if (!fcmRolloutClaimAllowed()) {
@@ -88,6 +93,14 @@ export async function runFcmDeliveryBatch(options: {
         return [];
       }
     }
+    if (options.scenarioPolicyEnabled === true)
+      await terminalizeExpiredScenarioDispatches(client, {
+        tenantId: options.tenantId,
+        provider: 'FCM',
+        platform: 'ANDROID',
+        appId: options.appId,
+        environment: options.environment,
+      });
     const found = await client.query<Row>(
       `select d.id, d.intent_id, d.endpoint_id, d.attempt_count, a.id provider_account_id,
               ${options.scenarioPolicyEnabled ? 'coalesce(d.scenario_v2_available_at,d.scenario_available_at) is not null' : 'false'} scenario_delivery,
@@ -125,6 +138,10 @@ export async function runFcmDeliveryBatch(options: {
         deliveryId: row.id,
         attemptNo: row.attempt_count + 1,
         enabled: options.scenarioPolicyEnabled,
+        dispatchFence: true,
+        ...(options.gameReminderMaxSourceAgeMs === undefined
+          ? {}
+          : { gameReminderMaxSourceAgeMs: options.gameReminderMaxSourceAgeMs }),
       });
       if (decision !== 'SEND') {
         if (decision === 'DEFERRED') retried++;

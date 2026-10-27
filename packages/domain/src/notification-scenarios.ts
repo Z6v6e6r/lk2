@@ -5,6 +5,7 @@ export const NOTIFICATION_SCENARIO_TRIGGERS = [
   'BOOKING_CHANGED',
   'BOOKING_CANCELLED',
   'BOOKING_STARTS',
+  'GAME_STARTS',
   'FRIEND_GAME_PUBLISHED',
   'SUBSCRIPTION_ENDS',
   'BIRTHDAY',
@@ -56,13 +57,13 @@ export const notificationScenarioInputSchema = z
       });
     if (
       value.delayMinutes < 0 &&
-      !['BOOKING_STARTS', 'SUBSCRIPTION_ENDS', 'BIRTHDAY'].includes(value.trigger)
+      !['BOOKING_STARTS', 'GAME_STARTS', 'SUBSCRIPTION_ENDS', 'BIRTHDAY'].includes(value.trigger)
     ) {
       ctx.addIssue({
         code: 'custom',
         path: ['delayMinutes'],
         message:
-          'Отрицательная задержка доступна до начала занятия, окончания абонемента или дня рождения',
+          'Отрицательная задержка доступна до начала занятия или игры, окончания абонемента или дня рождения',
       });
     }
     if (value.goal !== 'NONE' && !value.channels.includes('IN_APP'))
@@ -131,6 +132,7 @@ export function notificationScenarioCategory(
     (
       {
         FRIEND_GAME_PUBLISHED: 'GAME_RECOMMENDATION',
+        GAME_STARTS: 'GAME',
         SUBSCRIPTION_ENDS: 'SUBSCRIPTION',
         BIRTHDAY: 'BIRTHDAY',
         TRAINING_ATTENDED: 'TRAINING_ATTENDANCE',
@@ -144,13 +146,14 @@ export function notificationScenarioSchedule(input: {
   readonly occurredAt: string;
   readonly startsAt?: string;
 }): { dueAt: Date; expiresAt: Date } {
-  const anchor = input.definition.trigger === 'BOOKING_STARTS' ? input.startsAt : input.occurredAt;
+  const startsAtTrigger = ['BOOKING_STARTS', 'GAME_STARTS'].includes(input.definition.trigger);
+  const anchor = startsAtTrigger ? input.startsAt : input.occurredAt;
   if (!anchor || !Number.isFinite(Date.parse(anchor)))
     throw new Error('SCENARIO_TIME_ANCHOR_INVALID');
   const dueAt = new Date(Date.parse(anchor) + input.definition.delayMinutes * 60_000);
   const expiry = dueAt.getTime() + input.definition.ttlMinutes * 60_000;
   const timeBound =
-    (input.definition.trigger === 'BOOKING_STARTS' && input.definition.delayMinutes < 0) ||
+    (startsAtTrigger && input.definition.delayMinutes < 0) ||
     input.definition.trigger === 'FRIEND_GAME_PUBLISHED';
   if (timeBound && (!input.startsAt || !Number.isFinite(Date.parse(input.startsAt))))
     throw new Error('SCENARIO_TIME_ANCHOR_INVALID');

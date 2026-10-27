@@ -89,6 +89,10 @@ import { publishLeasedOutboxBatch } from './leased-outbox-publisher.js';
 import { S3ProfilePhotoObjectStore } from './profile-photo-sync.js';
 import { runPromotionHomeSyncCycle } from './promotion-home-sync.js';
 import { runLegacyGamesRosterSyncCycle } from './legacy-games-roster-sync.js';
+import {
+  legacyGameReminderErrorCode,
+  runLegacyGameReminderSourceCycle,
+} from './legacy-game-reminder-source.js';
 import { runProfilePhotoMaintenanceCycle } from './viva-home-sync.js';
 import { WebPushDeliveryAdapter } from './web-push-adapter.js';
 import { runWebPushDeliveryBatch } from './web-push-delivery.js';
@@ -316,6 +320,15 @@ const createLegacyGamesRosterSource = () =>
       });
 const legacyGamesRosterWindowSource = config.LEGACY_GAMES_ROSTER_SYNC_ENABLED
   ? createLegacyGamesRosterSource()
+  : undefined;
+const legacyGameReminderSource = config.LEGACY_GAME_REMINDERS_SOURCE_ENABLED
+  ? new LegacyGamesMongoAdapter({
+      uri: config.LEGACY_GAME_REMINDERS_MONGODB_URI as string,
+      timeoutMs: 5_000,
+      maxAttempts: 1,
+      consistency: 'reminder-primary',
+      onMetric: (metric) => logger.info({ metric }, 'legacy game reminder source read'),
+    })
   : undefined;
 // The API derives the same receipt secret from the same keyring, which is what lets a service worker
 // report a display without holding a session.
@@ -1150,6 +1163,7 @@ const runScenarioCycle = async (): Promise<void> => {
         await runNotificationScenarioBatch({
           pool,
           tenantId,
+          gameReminderMaxSourceAgeMs: config.LEGACY_GAME_REMINDERS_MAX_SOURCE_AGE_MS,
           staffTasksEnabled: config.NOTIFICATION_STAFF_TASKS_ENABLED,
           ...(apnsRuntime
             ? {
@@ -1192,6 +1206,7 @@ const runScenarioCycle = async (): Promise<void> => {
             transport: 'APNS',
             adapter: apnsRuntime,
             enabled: true,
+            gameReminderMaxSourceAgeMs: config.LEGACY_GAME_REMINDERS_MAX_SOURCE_AGE_MS,
             credentialRef: config.APNS_CREDENTIAL_REF,
           });
         if (extendedCipher && smtpRuntime)
@@ -1204,6 +1219,7 @@ const runScenarioCycle = async (): Promise<void> => {
             transport: 'YANDEX_SMTP',
             adapter: smtpRuntime,
             enabled: true,
+            gameReminderMaxSourceAgeMs: config.LEGACY_GAME_REMINDERS_MAX_SOURCE_AGE_MS,
             credentialRef: config.SMTP_CREDENTIAL_REF,
           });
       } catch {
@@ -1239,6 +1255,7 @@ const runWebPushCycle = async (): Promise<void> => {
           appId: config.WEB_PUSH_APP_ID,
           environment: config.WEB_PUSH_ENVIRONMENT,
           scenarioPolicyEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
+          gameReminderMaxSourceAgeMs: config.LEGACY_GAME_REMINDERS_MAX_SOURCE_AGE_MS,
           cipher: webPushRuntime.cipher,
           adapter: webPushRuntime.adapter,
           maxAttempts: config.WEB_PUSH_MAX_ATTEMPTS,
@@ -1301,6 +1318,7 @@ const runFcmCycle = async (): Promise<void> => {
             appId: config.FCM_APP_ID,
             environment: config.FCM_ENVIRONMENT,
             scenarioPolicyEnabled: config.NOTIFICATION_SCENARIOS_ENABLED,
+            gameReminderMaxSourceAgeMs: config.LEGACY_GAME_REMINDERS_MAX_SOURCE_AGE_MS,
             cipher: activeFcmRuntime.cipher,
             adapter: activeFcmRuntime.adapter,
             maxAttempts: config.FCM_MAX_ATTEMPTS,
@@ -1508,6 +1526,29 @@ const runLegacyGamesRosterSync = async (): Promise<void> => {
   }
 };
 
+const runLegacyGameReminderSource = async (): Promise<void> => {
+  if (shuttingDown || !legacyGameReminderSource) return;
+  try {
+    await runLegacyGameReminderSourceCycle({
+      pool,
+      config,
+      logger,
+      source: legacyGameReminderSource,
+    });
+  } catch (error) {
+    logger.error(
+      { code: legacyGameReminderErrorCode(error) },
+      'legacy game reminder source refresh deferred',
+    );
+  } finally {
+    if (!shuttingDown)
+      setTimeout(
+        () => void runLegacyGameReminderSource(),
+        config.LEGACY_GAME_REMINDERS_INTERVAL_MS,
+      );
+  }
+};
+
 async function shutdown(signal: string, exitCode = 0): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
@@ -1547,6 +1588,7 @@ void runPlatformSyncCycle();
 void runHomeBaseCycle();
 void runPromotionSyncCycle();
 void runLegacyGamesRosterSync();
+void runLegacyGameReminderSource();
 void runWebPushCycle();
 void runFcmCycle();
 void runGiftCertificateDeliveryCycle();
