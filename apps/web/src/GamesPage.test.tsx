@@ -9,6 +9,7 @@ import { GamesPage } from './GamesPage.js';
 import { buildMockHomeDashboard } from '../../api/src/home/home-dashboard.js';
 import {
   beginGameJoinAttempt,
+  discardGameJoinAttempt,
   loadGameJoinAttempt,
   markGameJoinAttemptDispatchStarted,
   resolveGameJoinAttempt,
@@ -2172,6 +2173,102 @@ describe('GamesPage paid JOIN', () => {
     expect(await screen.findByRole('button', { name: 'Вступить в игру' })).toBeEnabled();
     expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
     expect(getPaidJoinOperation).not.toHaveBeenCalled();
+    expect(api.joinPaidGame).not.toHaveBeenCalled();
+  });
+  it('rule (a): releases a quiet undispatched attempt from the manual status check', async () => {
+    const user = userEvent.setup();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const startedAt = new Date('2026-10-27T09:00:00.000Z');
+      vi.setSystemTime(startedAt);
+      await beginGameJoinAttempt(
+        paidPrincipal,
+        {
+          gameId: PAID_GAME_ID,
+          expectedRevision: paidGame.revision,
+          subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+          priceConsent: { amountMinor: 250000, currency: 'RUB' },
+        },
+        window.localStorage,
+        { createIdempotencyKey: () => PAID_ATTEMPT_KEY, now: () => startedAt },
+      );
+      const getPaidJoinOperation = vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('not yet visible'), { code: 'GAME_OPERATION_NOT_FOUND' }),
+        );
+      const api = paidJoinGateway({
+        getGame: vi.fn().mockResolvedValue(paidGame),
+        getPaidJoinOperation,
+      });
+      render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+      // The fresh marker-less attempt may still belong to an in-flight begin->dispatch: keep it.
+      expect(await screen.findByText(/Сервер пока не нашёл исходную операцию/)).toBeVisible();
+      expect(
+        loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)?.idempotencyKey,
+      ).toBe(PAID_ATTEMPT_KEY);
+      // Past the quiet window the same manual check must release it instead of staying stuck.
+      vi.setSystemTime(new Date(startedAt.getTime() + 181_000));
+      await user.click(screen.getByRole('button', { name: 'Проверить статус' }));
+      expect(await screen.findByText(/подтверждённой записи нет/)).toBeVisible();
+      expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
+      expect(api.joinPaidGame).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rule (b): keeps newer cross-tab custody when a quiet 404 finds a replaced attempt', async () => {
+    const seeded = await beginGameJoinAttempt(
+      paidPrincipal,
+      {
+        gameId: PAID_GAME_ID,
+        expectedRevision: paidGame.revision,
+        subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+        priceConsent: { amountMinor: 250000, currency: 'RUB' },
+      },
+      window.localStorage,
+      {
+        createIdempotencyKey: () => PAID_ATTEMPT_KEY,
+        now: () => new Date(Date.now() - 10 * 60_000),
+      },
+    );
+    await markGameJoinAttemptDispatchStarted(paidPrincipal, seeded.attempt, window.localStorage, {
+      now: () => new Date(Date.now() - 5 * 60_000),
+    });
+    let rejectReadback!: (reason: unknown) => void;
+    const readback = new Promise<never>((_resolve, reject) => {
+      rejectReadback = reject;
+    });
+    const getPaidJoinOperation = vi.fn(() => readback);
+    const api = paidJoinGateway({
+      getGame: vi.fn().mockResolvedValue(paidGame),
+      getPaidJoinOperation,
+    });
+    render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+    await waitFor(() => expect(getPaidJoinOperation).toHaveBeenCalledTimes(1));
+    // Another tab replaces the stale custody with its own attempt while this readback is in flight.
+    const NEWER_KEY = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff';
+    await discardGameJoinAttempt(paidPrincipal, seeded.attempt, window.localStorage, {
+      allowUnresolved: true,
+    });
+    const newer = await beginGameJoinAttempt(
+      paidPrincipal,
+      {
+        gameId: PAID_GAME_ID,
+        expectedRevision: paidGame.revision,
+        subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+        priceConsent: { amountMinor: 250000, currency: 'RUB' },
+      },
+      window.localStorage,
+      { createIdempotencyKey: () => NEWER_KEY },
+    );
+    rejectReadback(Object.assign(new Error('void'), { code: 'GAME_OPERATION_NOT_FOUND' }));
+    expect(await screen.findByRole('heading', { name: 'Проверяем статус оплаты' })).toBeVisible();
+    // The release must fail on the replaced identity and keep the newer custody.
+    expect(
+      loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)?.idempotencyKey,
+    ).toBe(newer.attempt.idempotencyKey);
     expect(api.joinPaidGame).not.toHaveBeenCalled();
   });
 });
