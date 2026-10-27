@@ -20,7 +20,7 @@
  * `@phub/api-contracts` types are an ignored build artifact, so these readers stay tolerant of a
  * deployment whose generated types lag the public contract. Reconcile with C1 if the shape changes.
  */
-import type { GameJoinPriceConsent } from './game-join-attempt.js';
+import { GAME_JOIN_ATTEMPT_QUIET_MS, type GameJoinPriceConsent } from './game-join-attempt.js';
 
 export type GameJoinOperationStatus =
   'ACCEPTED' | 'PROCESSING' | 'UNKNOWN' | 'SUCCEEDED' | 'FAILED';
@@ -626,6 +626,62 @@ export function classifyGameJoinErrorCode(
         reloadConditions: false,
       };
   }
+}
+
+export interface GameJoinNotFoundPlan {
+  readonly state: GameJoinFlowState;
+  /** `true` only when the attempt has been quiet long enough to close it without hiding a write. */
+  readonly release: boolean;
+  /** Remaining quiet time while custody must still be kept. */
+  readonly retryAfterSeconds: number;
+}
+
+const NOT_FOUND_WAITING_MESSAGE =
+  'Сервер пока не нашёл исходную операцию. Ключ сохранён; проверяем результат — повторная оплата недоступна.';
+const NOT_FOUND_RELEASED_MESSAGE =
+  'Сервер не нашёл операцию по сохранённому ключу: подтверждённой записи нет. Исходная попытка закрыта; чтобы записаться, проверьте условия и подтвердите стоимость заново.';
+
+/**
+ * Product rule for a readback that answered `GAME_OPERATION_NOT_FOUND` (#453/#466 open rule).
+ *
+ * A GET can overtake the original POST or run while another tab is still dispatching, so absence is
+ * not proof by itself. Custody is released only after the attempt has been quiet for
+ * `GAME_JOIN_ATTEMPT_QUIET_MS`: from `savedAt` when no POST was ever marked, otherwise from the
+ * durable `dispatchStartedAt`. Before that the original key stays authoritative and only readback is
+ * offered; after it, the flow returns to a fresh conditions/consent check. Releasing never dispatches.
+ */
+export function classifyGameJoinReadbackNotFound(
+  attempt: {
+    readonly state: string;
+    readonly savedAt: string;
+    readonly dispatchStartedAt?: string;
+  },
+  options: { readonly now?: Date; readonly quietMs?: number } = {},
+): GameJoinNotFoundPlan {
+  const quietMs = options.quietMs ?? GAME_JOIN_ATTEMPT_QUIET_MS;
+  const now = (options.now ?? new Date()).getTime();
+  const quietSince = Date.parse(attempt.dispatchStartedAt ?? attempt.savedAt);
+  const validWindow = Number.isSafeInteger(quietMs) && quietMs >= 0;
+  const quiet =
+    attempt.state !== 'SUCCEEDED' &&
+    Number.isFinite(quietSince) &&
+    validWindow &&
+    now - quietSince >= quietMs;
+  if (quiet) {
+    return {
+      state: failedState('GAME_OPERATION_NOT_FOUND', NOT_FOUND_RELEASED_MESSAGE),
+      release: true,
+      retryAfterSeconds: 0,
+    };
+  }
+  const remainingMs =
+    Number.isFinite(quietSince) && validWindow ? Math.max(0, quietMs - (now - quietSince)) : 0;
+  const retryAfterSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+  return {
+    state: waitingState('UNVERIFIED', retryAfterSeconds, NOT_FOUND_WAITING_MESSAGE),
+    release: false,
+    retryAfterSeconds,
+  };
 }
 
 /** Structural reader for the SDK's `GameJoinAttemptUncertainError` (lost response / owner 5xx). */

@@ -13,6 +13,8 @@ import {
   loadGameJoinAttempt,
   markGameJoinAttemptDispatchStarted,
   readGameJoinAttemptLedger,
+  releaseNotFoundGameJoinAttempt,
+  releaseUndispatchedGameJoinAttempt,
   resolveGameJoinAttempt,
   withGameJoinDispatchGuard,
   type GameJoinAttemptLockManager,
@@ -388,7 +390,11 @@ describe('game join attempt ledger', () => {
       { state: 'UNKNOWN', operationId: OPERATION_ID },
       storage,
     );
-    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)?.state).toBe('SUCCEEDED');
+    expect(
+      loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID, {
+        now: new Date('2026-10-22T00:00:00.000Z'),
+      })?.state,
+    ).toBe('SUCCEEDED');
   });
   it('allows discarding custody only for a definite server rejection', async () => {
     const storage = new MemoryStorage();
@@ -474,5 +480,108 @@ describe('game join attempt ledger', () => {
     await expect(beginGameJoinAttempt(PRINCIPAL, input(), failing)).rejects.toMatchObject({
       code: 'ATTEMPT_STORAGE_UNAVAILABLE',
     });
+  });
+});
+
+describe('game join attempt quiet release rules', () => {
+  beforeEach(() => vi.stubGlobal('navigator', { locks: serialLockManager() }));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('rule (a): keeps an undispatched attempt until the quiet window and then releases it', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    await expect(
+      releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage, {
+        now: new Date('2026-10-21T08:00:59.999Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)?.idempotencyKey).toBe(KEY);
+    await expect(
+      releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage, {
+        now: new Date('2026-10-21T08:01:00.000Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(true);
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)).toBeNull();
+  });
+
+  it('rule (a): never removes the custody another tab has already marked for dispatch', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    await markGameJoinAttemptDispatchStarted(PRINCIPAL, attempt, storage, {
+      now: () => new Date('2026-10-21T08:00:01.000Z'),
+      lockManager: serialLockManager(),
+    });
+    await expect(
+      releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage, {
+        now: new Date('2026-10-21T09:00:00.000Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)?.dispatchStartedAt).toBe(
+      '2026-10-21T08:00:01.000Z',
+    );
+  });
+
+  it('rule (b): releases a dispatched attempt only after the dispatch quiet window', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    const dispatched = await markGameJoinAttemptDispatchStarted(PRINCIPAL, attempt, storage, {
+      now: () => new Date('2026-10-21T08:00:05.000Z'),
+      lockManager: serialLockManager(),
+    });
+    await expect(
+      releaseNotFoundGameJoinAttempt(PRINCIPAL, dispatched, storage, {
+        now: new Date('2026-10-21T08:01:04.999Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      releaseNotFoundGameJoinAttempt(PRINCIPAL, dispatched, storage, {
+        now: new Date('2026-10-21T08:01:05.000Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(true);
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)).toBeNull();
+  });
+
+  it('rule (b): refuses an attempt that never dispatched and never removes trusted success', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    await expect(
+      releaseNotFoundGameJoinAttempt(PRINCIPAL, attempt, storage, {
+        now: new Date('2026-10-21T12:00:00.000Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    const resolved = await resolveGameJoinAttempt(
+      PRINCIPAL,
+      attempt,
+      { state: 'SUCCEEDED', operationId: OPERATION_ID },
+      storage,
+      { now: () => new Date('2026-10-21T08:02:00.000Z'), lockManager: serialLockManager() },
+    );
+    await expect(
+      releaseNotFoundGameJoinAttempt(PRINCIPAL, resolved, storage, {
+        now: new Date('2026-10-22T00:00:00.000Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    expect(
+      loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID, {
+        now: new Date('2026-10-22T00:00:00.000Z'),
+      })?.state,
+    ).toBe('SUCCEEDED');
+  });
+
+  it('fails closed without the cross-tab ledger lock', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    vi.stubGlobal('navigator', {});
+    await expect(
+      releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_LOCK_UNAVAILABLE' });
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)).not.toBeNull();
   });
 });

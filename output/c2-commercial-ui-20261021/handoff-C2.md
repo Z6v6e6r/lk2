@@ -126,3 +126,27 @@ Backend-free fixture импортирует реальный `GamesPage`, ком
 - LOCAL check и independent re-review текущего source tree PASS. Собственный Draft PR/CI проверяется по точному head отдельно; результаты доставки — в `c2-delivery.json`/PR. Остаётся C3 backend/provider/native acceptance в разрешённой среде.
 - Реальных платежей, OTP, миграций, live/shared DB/provider writes, merge, deploy, image/app publication не выполнялось.
 - Этот документ фиксирует готовый UI_LOCAL поддерживаемого JOIN и открытые контрактные/интеграционные границы. Это не разрешение включать коммерцию и не утверждение о полной готовности commercial CREATE/JOIN.
+
+## Продуктовые правила освобождения custody — фиксация открытых правил #453/#466
+
+Rebase на `origin/main 871cc2f8` восстановил единственный конфликт `GamesPage.pollJoinOperation` (main `reconcilePaidJoinOperation` + C2 `withJoinDeadline`) и закрыл два открытых правила интеграции явными правилами с отдельными тестами. Ключевой инвариант обоих правил: клиент освобождает custody только тогда, когда по доказательствам не может существовать серверного эффекта; освобождение никогда не отправляет POST и не заменяет сохранённый ключ.
+
+### (а) `PENDING` без `dispatchStartedAt` при повторном открытии
+
+- `dispatchStartedAt` пишется под principal-wide Web Lock непосредственно перед POST, а сам dispatch выполняется внутри того же lock. Поэтому `PENDING` без маркера доказывает: POST не отправлялся и серверного эффекта быть не может.
+- Правило: при повторном открытии такой висящий attempt закрывается, только если он «тихий» — `now - savedAt >= 60s` (`GAME_JOIN_ATTEMPT_QUIET_MS`). Проверка и удаление выполняются в `releaseUndispatchedGameJoinAttempt` под тем же ledger lock: если другая вкладка успела поставить маркер, custody сохраняется и запись не теряется.
+- После освобождения UI возвращается к обычному входу в JOIN: новые условия и новое явное подтверждение, новый ключ. Автоматического POST нет.
+- Тихий интервал закрывает гонку «вкладка A между begin и dispatch»: пока A внутри lock, маркер уже виден; вне lock окно 60s несопоставимо больше реального begin→dispatch.
+
+### (б) Освобождение attempt после 404 (`GAME_OPERATION_NOT_FOUND`)
+
+- GET может обогнать POST или выполняться одновременно с dispatch другой вкладки, поэтому сам 404 не доказывает отсутствие операции.
+- Правило: custody освобождается только после «тихого» окна от `dispatchStartedAt`: `now - dispatchStartedAt >= 60s` (`releaseNotFoundGameJoinAttempt`, под ledger lock). До окна показывается только readback (`WAIT_FOR_RECONCILIATION`, `UNVERIFIED`), повторная оплата недоступна.
+- 60s выбраны как широкий запас над ограниченным путём сервера до durable-строки: `conditions read + prepare`, каждый вызов ограничен `GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS` (максимум 5s). Сервер создаёт operation row до owner-call, поэтому после окна 404 означает: durable-операции под ключом нет.
+- После окна UI показывает отдельное состояние «подтверждённой записи нет» и возвращает к проверке условий; `SUCCEEDED` custody никогда не освобождается, а при гонке с другой вкладкой функция возвращает `false` и custody сохраняется.
+
+### Тесты правил
+
+- `apps/web/src/game-join-attempt.test.ts` — границы тихого окна, запрет освобождения помеченного dispatch, запрет освобождения `SUCCEEDED`, fail-closed без ledger lock.
+- `apps/web/src/game-join-flow.test.ts` — `classifyGameJoinReadbackNotFound`: границы от `savedAt`/`dispatchStartedAt`, сообщения и состояния.
+- `apps/web/src/GamesPage.test.tsx` — отдельный тест на каждое правило: (а) тихий неотправленный attempt освобождается и JOIN доступен заново без GET/POST; (а) свежий attempt не освобождается (гонка с dispatch); (б) тихий помеченный attempt после 404 освобождается и не отправляет POST; существующие тесты сохраняют удержание custody до истечения окна.

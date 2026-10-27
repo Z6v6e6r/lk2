@@ -26,6 +26,22 @@ const MAX_ATTEMPTS = 16;
 const RESOLVED_RETENTION_MS = 24 * 60 * 60_000;
 const MAX_PRINCIPAL_LENGTH = 200;
 
+/**
+ * Product rule for closing custody that can no longer hide a server-side effect (review blockers of
+ * #453/#466): an attempt is released only after it has been quiet for this long.
+ *
+ * Why this is safe for the two release cases:
+ * - `PENDING` without `dispatchStartedAt`: the durable marker is written under the principal-wide
+ *   Web Lock immediately before the POST, so an attempt older than this window without a marker
+ *   provably never dispatched. The quiet window also keeps a concurrent tab that is between `begin`
+ *   and `dispatch` from being raced, because that tab writes its marker long before the window ends.
+ * - 404 after a dispatch: the server creates the durable operation row before the owner call, and
+ *   its bounded pre-operation path is `conditions read + prepare`, each capped by
+ *   `GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS` (configured maximum 5s). This window is a wide margin
+ *   over that path, so a still-missing operation after it means no durable attempt exists.
+ */
+export const GAME_JOIN_ATTEMPT_QUIET_MS = 60_000;
+
 export type GameJoinAttemptState = 'PENDING' | 'UNKNOWN' | 'SUCCEEDED';
 
 export interface GameJoinPriceConsent {
@@ -664,6 +680,92 @@ export async function discardGameJoinAttempt(
     principal,
     options.lockManager ?? browserGameJoinAttemptLockManager(),
     () => discardGameJoinAttemptLocked(principal, attempt, storage, options),
+  );
+}
+
+export interface GameJoinQuietReleaseOptions {
+  /** Overrides the quiet window; production callers keep the product constant. */
+  readonly quietMs?: number;
+  readonly now?: Date;
+  readonly lockManager?: GameJoinAttemptLockManager;
+}
+
+/**
+ * Closes a quiet, unresolved attempt under the same principal-wide Web Lock as begin/dispatch/resolve.
+ * The decision is re-read inside the lock, so a dispatch that has already written
+ * `dispatchStartedAt` keeps its custody instead of being raced: the caller gets `false` and the
+ * attempt stays durable. Success custody is never removed here.
+ *
+ * The caller states which product rule it is applying, because the quiet clock and the proof differ:
+ * an undispatched attempt is only released while the marker is still absent, and a 404 release only
+ * after a marked dispatch.
+ */
+function releaseQuietGameJoinAttemptLocked(
+  principal: GameJoinAttemptPrincipal,
+  attempt: GameJoinAttempt,
+  reason: 'UNDISPATCHED' | 'NOT_FOUND',
+  storage: Storage,
+  options: GameJoinQuietReleaseOptions,
+): boolean {
+  validatePrincipal(principal);
+  const quietMs = options.quietMs ?? GAME_JOIN_ATTEMPT_QUIET_MS;
+  if (!Number.isSafeInteger(quietMs) || quietMs < 0) {
+    throw new GameJoinAttemptError('ATTEMPT_INVALID_INPUT');
+  }
+  const now = (options.now ?? new Date()).getTime();
+  const ledger = readLedger(principal, storage, new Date(now));
+  const current = findAttempt(ledger, attempt.gameId);
+  if (!current) return true;
+  assertSameAttempt(attempt, current);
+  if (current.state === 'SUCCEEDED') return false;
+  if (reason === 'UNDISPATCHED' && current.dispatchStartedAt !== undefined) return false;
+  if (reason === 'NOT_FOUND' && current.dispatchStartedAt === undefined) return false;
+  // Rule (a) measures from creation; rule (b) from the durable dispatch marker.
+  const quietSince = Date.parse(
+    reason === 'UNDISPATCHED' ? current.savedAt : (current.dispatchStartedAt as string),
+  );
+  if (Number.isNaN(quietSince)) throw new GameJoinAttemptError('ATTEMPT_MALFORMED');
+  if (now - quietSince < quietMs) return false;
+  writeLedger(storage, principal, {
+    version: LEDGER_VERSION,
+    attempts: ledger.attempts.filter((item) => item.gameId !== attempt.gameId),
+  });
+  return true;
+}
+
+/**
+ * Rule (a): a `PENDING` attempt without `dispatchStartedAt` provably never sent a POST. Once quiet it
+ * may be closed so a crash between "begin" and "dispatch" cannot block JOIN forever. If another tab
+ * marked the dispatch meanwhile, custody is kept (`false`).
+ */
+export async function releaseUndispatchedGameJoinAttempt(
+  principal: GameJoinAttemptPrincipal,
+  attempt: GameJoinAttempt,
+  storage: Storage,
+  options: GameJoinQuietReleaseOptions = {},
+): Promise<boolean> {
+  return withGameJoinLedgerLock(
+    principal,
+    options.lockManager ?? browserGameJoinAttemptLockManager(),
+    () => releaseQuietGameJoinAttemptLocked(principal, attempt, 'UNDISPATCHED', storage, options),
+  );
+}
+
+/**
+ * Rule (b): after a `GAME_OPERATION_NOT_FOUND` readback, a marked attempt is released only once the
+ * dispatch is quiet enough that no durable server operation can still appear under the key. `false`
+ * means custody was kept and the caller must keep offering readback only, never a new dispatch.
+ */
+export async function releaseNotFoundGameJoinAttempt(
+  principal: GameJoinAttemptPrincipal,
+  attempt: GameJoinAttempt,
+  storage: Storage,
+  options: GameJoinQuietReleaseOptions = {},
+): Promise<boolean> {
+  return withGameJoinLedgerLock(
+    principal,
+    options.lockManager ?? browserGameJoinAttemptLockManager(),
+    () => releaseQuietGameJoinAttemptLocked(principal, attempt, 'NOT_FOUND', storage, options),
   );
 }
 

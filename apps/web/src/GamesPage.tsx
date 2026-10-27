@@ -23,6 +23,8 @@ import {
   browserGameJoinAttemptStorage,
   discardGameJoinAttempt,
   loadGameJoinAttempt,
+  releaseNotFoundGameJoinAttempt,
+  releaseUndispatchedGameJoinAttempt,
   resolveGameJoinAttempt,
   withGameJoinDispatchGuard,
   type GameJoinAttempt,
@@ -33,6 +35,7 @@ import {
   checkGameJoinConditions,
   classifyGameJoinErrorCode,
   classifyGameJoinOperation,
+  classifyGameJoinReadbackNotFound,
   ensureFreshGameJoinConsent,
   gameJoinConditionsUnavailableMessage,
   gameJoinServiceBlockedMessage,
@@ -850,6 +853,26 @@ function GamesPageContent({
       setJoinFlow((current) => (current && current.gameId !== gameIdValue ? null : current));
       return;
     }
+    if (attempt.state !== 'SUCCEEDED' && attempt.dispatchStartedAt === undefined) {
+      // Rule (a): no durable dispatch marker means this frozen request never reached the POST. Once
+      // it is quiet, close it so a crash between "begin" and "dispatch" cannot block JOIN forever.
+      // The release re-reads custody under the ledger lock, so a concurrent tab that is dispatching
+      // right now keeps its attempt and this call answers false.
+      let released: boolean;
+      try {
+        released = await releaseUndispatchedGameJoinAttempt(joinPrincipal, attempt, joinStorage);
+      } catch {
+        released = false;
+      }
+      if (released) {
+        setJoinFlow((current) => (current && current.gameId === gameIdValue ? null : current));
+        setNotice(
+          'Сохранённая попытка записи не была отправлена на сервер и закрыта. Можно записаться заново.',
+        );
+        setReloadToken((current) => current + 1);
+        return;
+      }
+    }
     setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
     await pollJoinOperation(gameIdValue, attempt, { remainingAttempts: 3, delayMs: 0 });
   }
@@ -1290,9 +1313,26 @@ function GamesPageContent({
     } catch (cause) {
       if (generation !== readbackGeneration.current) return;
       if (errorCode(cause) === 'GAME_OPERATION_NOT_FOUND') {
-        // GET can overtake the original POST; absence is not proof of a terminal no-write outcome.
-        const plan = classifyGameJoinErrorCode('GAME_OPERATION_NOT_FOUND', { paid: true });
+        // Rule (b): a GET can overtake the POST or race another tab, so a 404 releases custody only
+        // after the attempt has been quiet. Before that the frozen key stays authoritative.
+        const plan = classifyGameJoinReadbackNotFound(attempt);
+        if (!plan.release) {
+          setJoinFlowFor(gameIdValue, plan.state);
+          return;
+        }
+        let released: boolean;
+        try {
+          released = await releaseNotFoundGameJoinAttempt(joinPrincipal, attempt, joinStorage);
+        } catch {
+          released = false;
+        }
+        if (!released) {
+          // Another tab already wrote newer custody: never drop it from this tab.
+          setJoinFlowFor(gameIdValue, gameJoinRecoveryState());
+          return;
+        }
         setJoinFlowFor(gameIdValue, plan.state);
+        setReloadToken((current) => current + 1);
         return;
       }
       setJoinFlowFor(gameIdValue, gameJoinRecoveryState());

@@ -2061,4 +2061,86 @@ describe('GamesPage paid JOIN', () => {
     ).toBeVisible();
     expect(api.joinPaidGame).not.toHaveBeenCalled();
   });
+  it('rule (a): releases a quiet attempt that never dispatched and restores the fresh JOIN entry', async () => {
+    await beginGameJoinAttempt(
+      paidPrincipal,
+      {
+        gameId: PAID_GAME_ID,
+        expectedRevision: paidGame.revision,
+        subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+        priceConsent: { amountMinor: 250000, currency: 'RUB' },
+      },
+      window.localStorage,
+      {
+        createIdempotencyKey: () => PAID_ATTEMPT_KEY,
+        now: () => new Date(Date.now() - 3 * 60_000),
+      },
+    );
+    const getPaidJoinOperation = vi.fn();
+    const api = paidJoinGateway({
+      getGame: vi.fn().mockResolvedValue(paidGame),
+      getPaidJoinOperation,
+    });
+    render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+    expect(await screen.findByText(/не была отправлена на сервер/)).toBeVisible();
+    expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
+    expect(getPaidJoinOperation).not.toHaveBeenCalled();
+    expect(api.joinPaidGame).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: 'Вступить в игру' })).toBeEnabled();
+  });
+
+  it('rule (a): keeps a just-created undispatched attempt instead of racing a concurrent dispatch', async () => {
+    await beginGameJoinAttempt(
+      paidPrincipal,
+      {
+        gameId: PAID_GAME_ID,
+        expectedRevision: paidGame.revision,
+        subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+        priceConsent: { amountMinor: 250000, currency: 'RUB' },
+      },
+      window.localStorage,
+      { createIdempotencyKey: () => PAID_ATTEMPT_KEY },
+    );
+    const getPaidJoinOperation = vi
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('not yet visible'), { code: 'GAME_OPERATION_NOT_FOUND' }),
+      );
+    const api = paidJoinGateway({ getPaidJoinOperation });
+    render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+    expect(await screen.findByText(/Сервер пока не нашёл исходную операцию/)).toBeVisible();
+    expect(
+      loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)?.idempotencyKey,
+    ).toBe(PAID_ATTEMPT_KEY);
+    expect(api.joinPaidGame).not.toHaveBeenCalled();
+  });
+
+  it('rule (b): releases a quiet dispatched key after a 404 so JOIN can be checked again', async () => {
+    const seeded = await beginGameJoinAttempt(
+      paidPrincipal,
+      {
+        gameId: PAID_GAME_ID,
+        expectedRevision: paidGame.revision,
+        subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+        priceConsent: { amountMinor: 250000, currency: 'RUB' },
+      },
+      window.localStorage,
+      {
+        createIdempotencyKey: () => PAID_ATTEMPT_KEY,
+        now: () => new Date(Date.now() - 10 * 60_000),
+      },
+    );
+    await markGameJoinAttemptDispatchStarted(paidPrincipal, seeded.attempt, window.localStorage, {
+      now: () => new Date(Date.now() - 5 * 60_000),
+    });
+    const getPaidJoinOperation = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('void'), { code: 'GAME_OPERATION_NOT_FOUND' }));
+    const api = paidJoinGateway({ getPaidJoinOperation });
+    render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+    expect(await screen.findByText(/подтверждённой записи нет/)).toBeVisible();
+    expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
+    expect(getPaidJoinOperation).toHaveBeenCalledWith(PAID_GAME_ID, PAID_ATTEMPT_KEY);
+    expect(api.joinPaidGame).not.toHaveBeenCalled();
+  });
 });

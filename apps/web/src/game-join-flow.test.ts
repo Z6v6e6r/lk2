@@ -4,6 +4,7 @@ import {
   checkGameJoinConditions,
   classifyGameJoinErrorCode,
   classifyGameJoinOperation,
+  classifyGameJoinReadbackNotFound,
   gameJoinConditionsUnavailableMessage,
   gameJoinFlowBlocksPurchase,
   gameJoinPaymentUnavailableMessage,
@@ -18,6 +19,7 @@ import {
   type GameJoinConditionsView,
   type GameJoinFlowState,
 } from './game-join-flow.js';
+import { GAME_JOIN_ATTEMPT_QUIET_MS } from './game-join-attempt.js';
 
 const GAME_ID = '55555555-5555-4555-8555-555555555555';
 const SUBSCRIPTION_ID = '66666666-6666-4666-8666-666666666666';
@@ -520,5 +522,61 @@ describe('contract readers', () => {
       nowMs: NOW,
     });
     expect(check.kind).toBe('UNAVAILABLE');
+  });
+});
+
+describe('classifyGameJoinReadbackNotFound', () => {
+  const savedAt = '2026-10-21T08:00:00.000Z';
+
+  function attempt(overrides: Record<string, unknown> = {}) {
+    return { state: 'PENDING', savedAt, ...overrides } as {
+      state: string;
+      savedAt: string;
+      dispatchStartedAt?: string;
+    };
+  }
+
+  it('keeps custody before the quiet window when the POST was never dispatched', () => {
+    const plan = classifyGameJoinReadbackNotFound(attempt(), {
+      now: new Date(Date.parse(savedAt) + GAME_JOIN_ATTEMPT_QUIET_MS - 1),
+    });
+    expect(plan.release).toBe(false);
+    expect(plan.state).toMatchObject({ kind: 'WAIT_FOR_RECONCILIATION', reason: 'UNVERIFIED' });
+    expect(plan.retryAfterSeconds).toBe(1);
+    expect(JSON.stringify(plan.state)).toContain('Сервер пока не нашёл исходную операцию');
+  });
+
+  it('releases an undispatched attempt exactly at the quiet boundary', () => {
+    const plan = classifyGameJoinReadbackNotFound(attempt(), {
+      now: new Date(Date.parse(savedAt) + GAME_JOIN_ATTEMPT_QUIET_MS),
+    });
+    expect(plan.release).toBe(true);
+    expect(plan.state).toMatchObject({ kind: 'FAILED', code: 'GAME_OPERATION_NOT_FOUND' });
+    expect(JSON.stringify(plan.state)).toContain('подтверждённой записи нет');
+  });
+
+  it('measures a dispatched attempt from dispatchStartedAt, not from savedAt', () => {
+    const dispatchedAt = '2026-10-21T08:05:00.000Z';
+    const young = classifyGameJoinReadbackNotFound(attempt({ dispatchStartedAt: dispatchedAt }), {
+      now: new Date(Date.parse(dispatchedAt) + 59_000),
+    });
+    expect(young.release).toBe(false);
+    const quiet = classifyGameJoinReadbackNotFound(attempt({ dispatchStartedAt: dispatchedAt }), {
+      now: new Date(Date.parse(dispatchedAt) + 60_000),
+    });
+    expect(quiet.release).toBe(true);
+  });
+
+  it('never releases trusted success custody and keeps custody on a malformed clock', () => {
+    expect(
+      classifyGameJoinReadbackNotFound(attempt({ state: 'SUCCEEDED' }), {
+        now: new Date(Date.parse(savedAt) + 10 * GAME_JOIN_ATTEMPT_QUIET_MS),
+      }).release,
+    ).toBe(false);
+    expect(
+      classifyGameJoinReadbackNotFound(attempt({ savedAt: 'not-a-date' }), {
+        now: new Date(Date.parse(savedAt) + 10 * GAME_JOIN_ATTEMPT_QUIET_MS),
+      }).release,
+    ).toBe(false);
   });
 });
