@@ -20,12 +20,12 @@ export const CHAT_IMAGE_WEBP_SOURCE_CONTENT_TYPES = ['image/jpeg', 'image/png'] 
  * The station-support photo contour uses the same bound, so one product shrinks pictures alike.
  *
  * Both literals below are the tuned values of the first landing: 1600 px keeps a retina phone photo
- * readable in the chat while staying well under the upload budget, and 0.82 keeps the WebP smaller
+ * readable in the chat while staying well under the upload budget, and 0.78 keeps the WebP smaller
  * than the source JPEG without visible banding. They are the only surface the bounded tuning class
  * may move, so a later change to either value travels the Web-only route.
  */
 export const CHAT_IMAGE_WEBP_MAX_DIMENSION = 1_600;
-export const CHAT_IMAGE_WEBP_QUALITY = 0.82;
+export const CHAT_IMAGE_WEBP_QUALITY = 0.78;
 
 /**
  * Decoding happens on the sender's device, so an absurd header must never cause an unbounded
