@@ -6,16 +6,16 @@ This is a **stacked integration PR**: it ports only the semantic delta of PR #46
 
 ## 1. Source identity
 
-| Role | Ref | SHA |
-| --- | --- | --- |
-| `origin/main` at integration time | `main` | `871cc2f8660ec98ec4b95f50a78aad1e6d1b1cfe` |
-| C1 integration base (PR #497) | `agent/c2-web-attempt-integration` | `5daf5693567f80a407e07cf3db047aa04f2dda45` |
-| PR #453 head | `codex/c2-commercial-ui-20261021` | `9a8bb3e2` |
-| PR #466 head | `codex/c2-reconcile-20261023` | `a8de3c97` |
-| PR #466 true base (`merge-base(origin/main, a8de3c97)`) | — | `cec67b42c5096b445edeccadbcfb53b282f2b996` |
-| Auto-merge tree of `cec67b42` + `9a8bb3e2` | — | `4617fc1f974f8dfd235f7397911faedd34d60934` |
-| #453↔`origin/main` fork point | — | `29e109fa745d862d3d8eb0a79bfa5b97fb21cb7e` |
-| C2 code commits in this PR | `fix(api): …` / `feat(android): …` | `4f6f4120`, `bdd6fd86` |
+| Role                                                    | Ref                                | SHA                                        |
+| ------------------------------------------------------- | ---------------------------------- | ------------------------------------------ |
+| `origin/main` at integration time                       | `main`                             | `871cc2f8660ec98ec4b95f50a78aad1e6d1b1cfe` |
+| C1 integration base (PR #497)                           | `agent/c2-web-attempt-integration` | `5daf5693567f80a407e07cf3db047aa04f2dda45` |
+| PR #453 head                                            | `codex/c2-commercial-ui-20261021`  | `9a8bb3e2`                                 |
+| PR #466 head                                            | `codex/c2-reconcile-20261023`      | `a8de3c97`                                 |
+| PR #466 true base (`merge-base(origin/main, a8de3c97)`) | —                                  | `cec67b42c5096b445edeccadbcfb53b282f2b996` |
+| Auto-merge tree of `cec67b42` + `9a8bb3e2`              | —                                  | `4617fc1f974f8dfd235f7397911faedd34d60934` |
+| #453↔`origin/main` fork point                           | —                                  | `29e109fa745d862d3d8eb0a79bfa5b97fb21cb7e` |
+| C2 code commits in this PR                              | `fix(api): …` / `feat(android): …` | `4f6f4120`, `bdd6fd86`                     |
 
 ## 2. Semantic-diff proof for #466
 
@@ -76,15 +76,15 @@ $ git diff --numstat 5daf5693 bdd6fd86
 
 Environment: macOS, Node v26.8.2, vitest 4.1.10, `NODE_OPTIONS=--no-experimental-webstorage`; JDK `openjdk 21.0.10` (Homebrew `openjdk@21`); Gradle 8.14.3 (wrapper); AGP `com.android.tools.build:gradle:8.13.0`; `com.google.gms:google-services:4.4.4`; `junit:junit:4.13.2`; `androidx.test.ext:junit:1.3.0`; `androidx.test.espresso:espresso-core:3.7.0`; compileSdk/targetSdk 36; `openapi-typescript 7.13.0`.
 
-| Check | Command | Result |
-| --- | --- | --- |
-| API acceptance | `node_modules/.bin/vitest run apps/api/src/games/game-commercial-join.test.ts apps/api/src/games/game-commercial-join-runtime.test.ts apps/api/src/games/game-routes.test.ts apps/api/src/games/game-join-conditions.test.ts` | **4 files passed; 95 passed, 1 skipped** (`game-commercial-join` 37, `-runtime` 13, `game-routes` 20, `game-join-conditions` 26 with 1 skip) |
-| Web acceptance | `node_modules/.bin/vitest run apps/web/src/GamesPage.test.tsx apps/web/src/game-join-attempt.test.ts apps/web/src/game-join-flow.test.ts` | **3 files passed; 104 passed** (`GamesPage` 49, `game-join-attempt` 22, `game-join-flow` 33) |
-| Android host-JVM | `./gradlew :app:testDebugUnitTest --offline --no-daemon` | **BUILD SUCCESSFUL; 11 tests, 0 failures, 0 errors** (`AndroidGameJoinSessionTest` 7/7 incl. `forwardsCanonicalReceiptReconciliationWithTheSameKey`; `AndroidYandexLoginCallbackUrlTest` 3; `ExampleUnitTest` 1) |
-| Android instrumented-test compile | `./gradlew :app:compileDebugAndroidTestJavaWithJavac --offline --no-daemon --rerun-tasks` | **BUILD SUCCESSFUL** (task executed) |
-| Typecheck (server closure) | `tsc -p tsconfig.node.json --noEmit` | exit 0 |
-| Typecheck (web closure) | `tsc -p tsconfig.web-app.json --noEmit` | exit 0 |
-| Contracts (for typecheck) | `npm run contracts:generate` | exit 0 (generated files are gitignored, not committed) |
+| Check                             | Command                                                                                                                                                                                                                       | Result                                                                                                                                                                                                           |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| API acceptance                    | `node_modules/.bin/vitest run apps/api/src/games/game-commercial-join.test.ts apps/api/src/games/game-commercial-join-runtime.test.ts apps/api/src/games/game-routes.test.ts apps/api/src/games/game-join-conditions.test.ts` | **4 files passed; 95 passed, 1 skipped** (`game-commercial-join` 37, `-runtime` 13, `game-routes` 20, `game-join-conditions` 26 with 1 skip)                                                                     |
+| Web acceptance                    | `node_modules/.bin/vitest run apps/web/src/GamesPage.test.tsx apps/web/src/game-join-attempt.test.ts apps/web/src/game-join-flow.test.ts`                                                                                     | **3 files passed; 104 passed** (`GamesPage` 49, `game-join-attempt` 22, `game-join-flow` 33)                                                                                                                     |
+| Android host-JVM                  | `./gradlew :app:testDebugUnitTest --offline --no-daemon`                                                                                                                                                                      | **BUILD SUCCESSFUL; 11 tests, 0 failures, 0 errors** (`AndroidGameJoinSessionTest` 7/7 incl. `forwardsCanonicalReceiptReconciliationWithTheSameKey`; `AndroidYandexLoginCallbackUrlTest` 3; `ExampleUnitTest` 1) |
+| Android instrumented-test compile | `./gradlew :app:compileDebugAndroidTestJavaWithJavac --offline --no-daemon --rerun-tasks`                                                                                                                                     | **BUILD SUCCESSFUL** (task executed)                                                                                                                                                                             |
+| Typecheck (server closure)        | `tsc -p tsconfig.node.json --noEmit`                                                                                                                                                                                          | exit 0                                                                                                                                                                                                           |
+| Typecheck (web closure)           | `tsc -p tsconfig.web-app.json --noEmit`                                                                                                                                                                                       | exit 0                                                                                                                                                                                                           |
+| Contracts (for typecheck)         | `npm run contracts:generate`                                                                                                                                                                                                  | exit 0 (generated files are gitignored, not committed)                                                                                                                                                           |
 
 ## 5. Environment gaps (LOCAL only, not committed)
 
