@@ -1622,7 +1622,8 @@ describe('Timeweb amd64 publication workflow', () => {
     expect(testStep).toEqual({
       name: 'Unit and integration tests',
       run: 'scripts/run-ci-tests-with-diagnostics.sh',
-      'timeout-minutes': 10,
+      'timeout-minutes': 12,
+      env: { CI_TEST_WATCHDOG_SECONDS: '600' },
     });
     expect(artifactStep).toMatchObject({
       if: '${{ always() }}',

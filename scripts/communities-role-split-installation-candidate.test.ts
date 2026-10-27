@@ -191,7 +191,9 @@ describe('communities role-split installation candidate', { timeout: 30_000 }, (
 
   afterEach(() => {
     for (const root of temporaryRoots.reverse()) {
-      rmSync(root, { force: true, recursive: true });
+      // Only owned disposable fixtures; bounded retry handles transient ENOTEMPTY
+      // during CI filesystem cleanup without changing any candidate assertion.
+      rmSync(root, { force: true, recursive: true, maxRetries: 3, retryDelay: 50 });
     }
   });
 
