@@ -28,7 +28,12 @@ import {
   validateMigrationBackupRestoreReference,
   validateLegacyBackupRestoreMounts,
   validateDiskRestoreToolBytes,
+  runClosedAdditiveMigrationAdapter,
+  validateClosedAdditiveProfile,
+  type ClosedAdditiveEffects,
+  type ClosedAdditiveProfile,
 } from './timeweb-api-worker-migration.js';
+import descriptor from '../deploy/timeweb/closed-application-migrations-0103-0104.v1.json';
 const hash = (value: Buffer) => createHash('sha256').update(value).digest('hex');
 
 const diskCandidate = `${b.candidateSha}-${b.publicationRunId}-1`;
@@ -1040,5 +1045,104 @@ describe('beta immutable deployment identity', () => {
       );
     }
     expect(sameApiWorkerDeploymentIdentity(null, actual, 'beta')).toBe(false);
+  });
+});
+
+function closedAdditiveProfile(
+  kind: 'game_start_0103' | 'subject_link_0104',
+): ClosedAdditiveProfile {
+  const prefix = kind === 'game_start_0103' ? 'PHUB_GAME_START_0103' : 'PHUB_SUBJECT_LINK_0104';
+  const step = descriptor.profiles[kind];
+  return {
+    kind,
+    preCount: step.preCount,
+    postCount: step.postCount,
+    preLedgerSha256:
+      descriptor.checkpoints[kind === 'game_start_0103' ? '106' : '107'].ledgerSha256,
+    postLedgerSha256:
+      descriptor.checkpoints[kind === 'game_start_0103' ? '107' : '108'].ledgerSha256,
+    errorPrefix: kind === 'game_start_0103' ? 'GAME_START_' : 'SUBJECT_LINK_',
+    roleProbeSource: '/* synthetic probe, never executed */',
+    schemas: {
+      receipt: `${prefix}_MIGRATION_RECEIPT_V1`,
+      plan: `${prefix}_MIGRATION_PLAN_V1`,
+      roleProof: `${prefix}_MIGRATOR_ROLE_PROOF_V1`,
+      cleanupProof: `${prefix}_CLEANUP_PROOF_V1`,
+      bootstrapProof: `${prefix}_BOOTSTRAP_PROOF_V1`,
+      success: `${prefix}_MIGRATION_SUCCESS_V1`,
+    },
+    validateOperation: () => {
+      throw Error('SYNTHETIC_NOT_RUN');
+    },
+    validateLedger: () => undefined,
+    validateState: () => ({ target: null }),
+    validateMigratorReadback: () => undefined,
+    validatePlan: () => undefined,
+    validateReceipt: () => undefined,
+    readState: () => undefined,
+    readProof: () => null,
+    writeProof: () => undefined,
+  };
+}
+
+describe('closed additive state-machine profile admission', () => {
+  it.each(['game_start_0103', 'subject_link_0104'] as const)(
+    'pins the %s metadata independently of callbacks',
+    (kind) => {
+      const value = closedAdditiveProfile(kind);
+      expect(validateClosedAdditiveProfile(value)).toBe(value);
+    },
+  );
+  it('rejects incomplete, widened, swapped and unknown profiles before reading any effect', async () => {
+    const value = closedAdditiveProfile('game_start_0103');
+    const mutations: unknown[] = [
+      null,
+      [],
+      {},
+      { ...value, extra: true },
+      { ...value, kind: 'ordinary' },
+      { ...value, kind: '__proto__' },
+      { ...value, preCount: 105 },
+      { ...value, postCount: 108 },
+      { ...value, preLedgerSha256: 'a'.repeat(64) },
+      { ...value, postLedgerSha256: 'not-a-hash' },
+      { ...value, errorPrefix: 'LOCATION_PHOTO_' },
+      { ...value, schemas: { ...value.schemas, receipt: 'PHUB_UNREVIEWED_RECEIPT_V1' } },
+      { ...value, schemas: { ...value.schemas, extra: 'NEW_SCHEMA' } },
+      { ...value, roleProbeSource: '' },
+      { ...value, roleProbeSource: 'x'.repeat(131073) },
+      ...[
+        'validateOperation',
+        'validateLedger',
+        'validateState',
+        'validateMigratorReadback',
+        'validatePlan',
+        'validateReceipt',
+        'readState',
+        'readProof',
+        'writeProof',
+      ].map((key) => ({ ...value, [key]: null })),
+    ];
+    let effectReads = 0;
+    const effects = new Proxy(
+      {},
+      {
+        get() {
+          effectReads++;
+          throw Error('EFFECT_BEFORE_PROFILE');
+        },
+      },
+    ) as ClosedAdditiveEffects;
+    for (const mutation of mutations) {
+      await expect(
+        runClosedAdditiveMigrationAdapter(
+          'deploy',
+          Buffer.from('{}'),
+          effects,
+          mutation as ClosedAdditiveProfile,
+        ),
+      ).rejects.toThrow('API_WORKER_MIGRATION_CLOSED_ADDITIVE_PROFILE');
+    }
+    expect(effectReads).toBe(0);
   });
 });
