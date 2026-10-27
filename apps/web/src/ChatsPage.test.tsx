@@ -598,23 +598,42 @@ describe('ChatsPage', () => {
     expect(screen.getByText('Не отправлено')).toBeVisible();
   });
 
-  it('exposes earlier history loading and reconnect fallback status', () => {
-    const onLoadEarlier = vi.fn();
-    render(
-      <ChatsPage
-        {...defaultProps}
-        mode="thread"
-        selectedConversationId={conversationId}
-        hasExplicitRecipient={false}
-        hasEarlierMessages
-        realtimeState="reconnecting"
-        onLoadEarlier={onLoadEarlier}
-      />,
-    );
-    expect(screen.getByText('История обновляется', { exact: false })).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
-    expect(onLoadEarlier).toHaveBeenCalledOnce();
-  });
+  it.each(['connecting', 'reconnecting', 'polling'] as const)(
+    'hides direct-chat subtitles during %s and keeps earlier history loading',
+    (realtimeState) => {
+      const onLoadEarlier = vi.fn();
+      render(
+        <ChatsPage
+          {...defaultProps}
+          mode="thread"
+          selectedConversationId={conversationId}
+          hasExplicitRecipient={false}
+          hasEarlierMessages
+          realtimeState={realtimeState}
+          onLoadEarlier={onLoadEarlier}
+          page={{
+            items: [
+              {
+                id: conversationId,
+                kind: 'DIRECT',
+                participant: {
+                  userId: '11111111-1111-4111-8111-111111111111',
+                  displayName: 'Борис',
+                },
+                unreadCount: 0,
+                updatedAt: '2026-07-26T12:00:00.000Z',
+              },
+            ],
+          }}
+        />,
+      );
+      expect(screen.getByRole('heading', { name: 'Борис' })).toBeVisible();
+      expect(screen.queryByText('Личный чат')).not.toBeInTheDocument();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Показать предыдущие сообщения' }));
+      expect(onLoadEarlier).toHaveBeenCalledOnce();
+    },
+  );
 
   it('distinguishes empty chat pages from no local search results', () => {
     const { rerender } = render(

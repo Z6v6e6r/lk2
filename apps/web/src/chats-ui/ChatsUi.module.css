@@ -902,22 +902,33 @@
 }
 
 .composer .sendButton {
-  background: #8766eb;
+  background: transparent;
   color: #fafafa;
 }
 
-.sendButton svg {
-  width: 16px;
-  height: 16px;
+.attachIcon,
+.sendIcon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 50%;
+}
+
+.sendIcon {
+  background: #8766eb;
 }
 
 .composer .sendButton:disabled {
-  background: #e5dff5;
   color: #b4b4b4;
 }
 
+.sendButton:disabled .sendIcon {
+  background: #e5dff5;
+}
+
 .composer .attachButton {
-  background: #fafafa;
+  background: transparent;
   color: #353436;
   opacity: 1;
   cursor: pointer;
@@ -928,10 +939,18 @@
   cursor: not-allowed;
 }
 
-.attachButton span {
-  font-size: 24px;
-  font-weight: 400;
-  line-height: 20px;
+.attachIcon {
+  /* Keep the exported angular rim without SVG foreignObject or shared mask IDs. */
+  background:
+    radial-gradient(circle closest-side, #fafafa calc(100% - 0.5px), transparent 100%),
+    conic-gradient(
+      from 125.36deg at 44.79% 48.44%,
+      #fff 0deg,
+      #f1f1f1 86.8865deg,
+      #fff 174.792deg,
+      #f1f1f1 271.789deg,
+      #fff 360deg
+    );
 }
 
 .attachmentChips {

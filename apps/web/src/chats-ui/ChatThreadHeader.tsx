@@ -69,11 +69,12 @@ export function ChatThreadHeader({
       )}
       <div className={styles.threadHeading}>
         <h2>{title}</h2>
-        <small>
-          {isGame ? 'Чат игры' : 'Личный чат'}
-          {muted ? ' · уведомления выключены' : ''}
-        </small>
-        {connectionStatus ? <span role="status">{connectionStatus}</span> : null}
+        {isGame ? (
+          <small>Чат игры{muted ? ' · уведомления выключены' : ''}</small>
+        ) : muted ? (
+          <small>уведомления выключены</small>
+        ) : null}
+        {isGame && connectionStatus ? <span role="status">{connectionStatus}</span> : null}
       </div>
       <div className={styles.policyControl}>
         <button

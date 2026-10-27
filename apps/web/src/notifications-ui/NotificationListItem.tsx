@@ -91,12 +91,24 @@ export function NotificationListItem({
           }}
         >
           <span className={styles.itemCopy}>
-            <span className={styles.itemTitle}>{presentation.title}</span>
-            <span className={styles.itemSubtitle}>{presentation.meta}</span>
-            <span className={styles.itemBody}>{presentation.preview}</span>
-            <time dateTime={presentation.createdAt}>
-              {formatNotificationTime(presentation.createdAt)}
-            </time>
+            <span className={styles.itemHeading}>
+              <span className={styles.itemTitle}>{presentation.title}</span>
+              <time dateTime={presentation.createdAt}>
+                {formatNotificationTime(presentation.createdAt)}
+              </time>
+            </span>
+            <span className={styles.itemPreview}>
+              <span className={styles.itemSubtitle}>
+                {presentation.meta}
+                {presentation.preview ? ':' : ''}
+              </span>
+              {presentation.preview ? (
+                <>
+                  {' '}
+                  <span className={styles.itemBody}>{presentation.preview}</span>
+                </>
+              ) : null}
+            </span>
           </span>
           <span className={styles.itemSide}>
             {presentation.badge ? (
