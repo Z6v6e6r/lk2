@@ -180,6 +180,79 @@ the receipt binding are the future ENFORCE slice.
 - Owner failures after the durable local write are observability-only in WARN; the future ENFORCE
   slice must reconcile or release that reservation instead of replaying it as success.
 
+## Staging WARN acceptance plan (requires separate deploy/staging authority)
+
+This plan is preparation only. It grants no deploy, migration, activation, credential or live-write
+authority; none of these steps has been executed by the A1/A2 task branches.
+
+Preconditions (all verified through the existing beta/staging delivery runbook, never a new one):
+
+1. Source: the reviewed A1 head (server) and A2 head (Web) after their PRs merge; record the exact
+   SHA and, for any image-based lane, the immutable digest.
+2. Configuration on the target: `GAMES_READ_ENABLED=true`, `GAMES_COMMANDS_ENABLED=true`,
+   `GAME_COMMERCIAL_CREATE_ENABLED=true`, `GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT=ADVISORY`
+   (default), `GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS` untouched (3000).
+   `BOOKED_OPERATION` must make config load fail, and `APP_ENV=production` must make load fail.
+   No `GAME_COMMERCIAL_CREATE_OWNER_BASE_URL` is needed for the advisory transport.
+3. Fixtures: synthetic tenant/user/station/court only. No real member data, no provider account.
+4. A disposable/pre-approved staging database with the existing schema; this slice adds no migration.
+
+Acceptance matrix (record request, correlation id, operation id, game id and DB readback per case):
+
+| #   | Case                                      | Expected                                                                                                                                                                                                                           |
+| --- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Flag OFF (or absent)                      | `POST /games` paid body -> `409 GAME_PAYMENT_REQUIRED`, same message as before; free create still `202`; no new `PROVISIONING` row                                                                                                 |
+| 2   | WARN `SPLIT` and `SUBSCRIPTION` create    | `202` `CREATE_GAME`, `status=UNKNOWN`, `nextAction=WAIT_FOR_RECONCILIATION`, `commercial.attemptState=WARN_OBSERVED`, `gameId` returned                                                                                            |
+| 3   | Local write readback                      | `games.games` row `lifecycle_state=PROVISIONING`, `revision=1`; `games.operations` `kind=CREATE_GAME`, `state=PENDING`, `completed_at IS NULL`; `games.command_idempotency` `COMPLETED`; one `game.provisioning.advance.v1` queued |
+| 4   | No booking/charge/provider effect         | no `games.seat_reservations` row, no `games.card_projections` row, no `game.published.v1`, no provider/Viva/LK1 call (owner is advisory), no receipt in the response                                                               |
+| 5   | Repeat with the same key and body         | same `commandId`/`gameId`, `replayed=true`, no second game/operation/command row                                                                                                                                                   |
+| 6   | Repeat with the same key and changed body | `409 GAME_COMMERCIAL_ATTEMPT_CONFLICT`, no second write                                                                                                                                                                            |
+| 7   | Operation readback                        | `GET /game-operations/{id}` -> `UNKNOWN` + `WAIT_FOR_RECONCILIATION`; never `FAILED`/`SUCCEEDED`; another user gets `404`                                                                                                          |
+| 8   | Unsupported mode                          | `ORGANIZER_PAYS` -> `409 GAME_PAYMENT_MODE_MISMATCH`; malformed managed fields -> `400 INVALID_REQUEST`                                                                                                                            |
+| 9   | CREATE admission fail-closed              | own draft -> `503 BOOKED_OPERATION_CREATE_ADMISSION_UNAVAILABLE`, no delegation minted, owner untouched; foreign/non-organizer draft -> `409`                                                                                      |
+| 10  | Web (optional, beta Web only)             | `/games/new?commercialCreate=1` offers paid modes; submit shows the pending panel; reload restores it; "Проверить статус" performs readback; `/games/new` without the intent is unchanged                                          |
+
+Operator attention (read-only) while WARN is enabled: count/list `PROVISIONING` paid drafts and their
+`PENDING`/`RUNNING` operations, and confirm they have no reservation/projection rows. WARN has no
+consumer of `game.provisioning.advance.v1`, so these drafts stay until the ENFORCE slice; do not
+delete or advance them manually without a separate approved cleanup decision.
+
+Rollback: set `GAME_COMMERCIAL_CREATE_ENABLED=false` and redeploy the reviewed image; paid create
+returns to the `409 GAME_PAYMENT_REQUIRED` path, existing WARN drafts are left untouched. Code
+rollback does not reverse any reservation, payment or provider state (none exists in WARN).
+
+Evidence to attach: environment, exact source SHA/digest, flag state, per-case request/response
+(no tokens, no PII), redacted DB readbacks, the operator query output, CI run id, reviewer names.
+
+Not proven by this plan: ENFORCE, LK1 reserve/confirm/release, real price/charge/booking, price
+echo against an authoritative quote, production readiness, capacity/roster effects.
+
+## LK1 handoff checklist (mandatory before ENFORCE)
+
+The LK1 implementation of the frozen contract must provide, and LK2 will verify against it in a
+separate approved slice:
+
+- `POST /api/internal/subscription-runtime/lk2/v1/reserve` with the exact request/response shapes in
+  the section above; idempotent by `operationId` + `Idempotency-Key`, explicit 409 conflict and 503
+  unavailable semantics, typed refusal body `{reason:<stable code>}` restricted to the documented
+  managed failure codes.
+- `.../confirm` returning the trusted receipt `{receiptId, confirmedAt, appliedRule, usageRef,
+bookingRef}`; LK2 exposes only `{provider:'VIVA', status:'CONFIRMED', confirmedAt}` publicly.
+- `.../release` and `.../compensate` idempotent by `reservationId`/`operationId`, safe to repeat,
+  never used as an automatic retry of a write.
+- Receiver replay protection for the single-use RS256 delegation (same binding set as the existing
+  quote/booked-operation delegation: recipient, tenant, request sha, correlation id, key sha, JTI).
+- Ownership/eligibility resolution for the selected `subscriptionInstanceId`; a foreign selection is
+  a typed refusal, never a charge against another member's entitlement.
+- Provider identity for a CREATE draft: the reserve/confirm contract must not require a Viva
+  exercise mapping for the draft before the owner creates it; the confirm receipt names the created
+  booking reference.
+
+LK2 obligations once LK1 exists: wire the booked-operation transport behind a new explicit approval,
+add the `confirm`/`release` orchestration (reconcile `UNKNOWN`, never FAILED), extend the admission
+delegation claims with the action (or reject cross-action key reuse at the receiver), decide the
+`PENDING`→`SCHEDULED` transition and a bounded cleanup/compensation path for abandoned drafts.
+
 ## Verification and non-goals
 
 Focused LOCAL tests cover: advisory WARN create (game created, no booking, no receipt, owner
