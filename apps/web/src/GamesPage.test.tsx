@@ -2073,7 +2073,7 @@ describe('GamesPage paid JOIN', () => {
       window.localStorage,
       {
         createIdempotencyKey: () => PAID_ATTEMPT_KEY,
-        now: () => new Date(Date.now() - 3 * 60_000),
+        now: () => new Date(Date.now() - 10 * 60_000),
       },
     );
     const getPaidJoinOperation = vi.fn();
@@ -2141,6 +2141,37 @@ describe('GamesPage paid JOIN', () => {
     expect(await screen.findByText(/подтверждённой записи нет/)).toBeVisible();
     expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
     expect(getPaidJoinOperation).toHaveBeenCalledWith(PAID_GAME_ID, PAID_ATTEMPT_KEY);
+    expect(api.joinPaidGame).not.toHaveBeenCalled();
+  });
+  it('closes stale trusted-success custody on reopen so a later leave can JOIN again', async () => {
+    const seeded = await beginGameJoinAttempt(
+      paidPrincipal,
+      {
+        gameId: PAID_GAME_ID,
+        expectedRevision: paidGame.revision,
+        subscriptionInstanceId: PAID_SUBSCRIPTION_ID,
+        priceConsent: { amountMinor: 250000, currency: 'RUB' },
+      },
+      window.localStorage,
+      { createIdempotencyKey: () => PAID_ATTEMPT_KEY },
+    );
+    await markGameJoinAttemptDispatchStarted(paidPrincipal, seeded.attempt, window.localStorage);
+    await resolveGameJoinAttempt(
+      paidPrincipal,
+      seeded.attempt,
+      { state: 'SUCCEEDED', operationId: PAID_OPERATION_ID },
+      window.localStorage,
+    );
+    const getPaidJoinOperation = vi.fn();
+    const api = paidJoinGateway({
+      getGame: vi.fn().mockResolvedValue(paidGame),
+      getPaidJoinOperation,
+    });
+    render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
+    // Resolved custody is convergence evidence, not an open purchase: it must not hide JOIN.
+    expect(await screen.findByRole('button', { name: 'Вступить в игру' })).toBeEnabled();
+    expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
+    expect(getPaidJoinOperation).not.toHaveBeenCalled();
     expect(api.joinPaidGame).not.toHaveBeenCalled();
   });
 });
