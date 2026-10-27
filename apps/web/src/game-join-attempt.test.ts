@@ -11,6 +11,7 @@ import {
   gameJoinDispatchLockName,
   gameJoinRequestHash,
   loadGameJoinAttempt,
+  GAME_JOIN_ATTEMPT_QUIET_MS,
   markGameJoinAttemptDispatchStarted,
   readGameJoinAttemptLedger,
   releaseNotFoundGameJoinAttempt,
@@ -492,14 +493,14 @@ describe('game join attempt quiet release rules', () => {
     const { attempt } = await seedAttempt(storage);
     await expect(
       releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage, {
-        now: new Date('2026-10-21T08:00:59.999Z'),
+        now: new Date(Date.parse('2026-10-21T08:00:00.000Z') + GAME_JOIN_ATTEMPT_QUIET_MS - 1),
         lockManager: serialLockManager(),
       }),
     ).resolves.toBe(false);
     expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)?.idempotencyKey).toBe(KEY);
     await expect(
       releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage, {
-        now: new Date('2026-10-21T08:01:00.000Z'),
+        now: new Date(Date.parse('2026-10-21T08:00:00.000Z') + GAME_JOIN_ATTEMPT_QUIET_MS),
         lockManager: serialLockManager(),
       }),
     ).resolves.toBe(true);
@@ -533,13 +534,13 @@ describe('game join attempt quiet release rules', () => {
     });
     await expect(
       releaseNotFoundGameJoinAttempt(PRINCIPAL, dispatched, storage, {
-        now: new Date('2026-10-21T08:01:04.999Z'),
+        now: new Date(Date.parse('2026-10-21T08:00:05.000Z') + GAME_JOIN_ATTEMPT_QUIET_MS - 1),
         lockManager: serialLockManager(),
       }),
     ).resolves.toBe(false);
     await expect(
       releaseNotFoundGameJoinAttempt(PRINCIPAL, dispatched, storage, {
-        now: new Date('2026-10-21T08:01:05.000Z'),
+        now: new Date(Date.parse('2026-10-21T08:00:05.000Z') + GAME_JOIN_ATTEMPT_QUIET_MS),
         lockManager: serialLockManager(),
       }),
     ).resolves.toBe(true);

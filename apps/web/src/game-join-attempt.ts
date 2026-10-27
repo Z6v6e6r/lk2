@@ -30,17 +30,33 @@ const MAX_PRINCIPAL_LENGTH = 200;
  * Product rule for closing custody that can no longer hide a server-side effect (review blockers of
  * #453/#466): an attempt is released only after it has been quiet for this long.
  *
- * Why this is safe for the two release cases:
- * - `PENDING` without `dispatchStartedAt`: the durable marker is written under the principal-wide
- *   Web Lock immediately before the POST, so an attempt older than this window without a marker
- *   provably never dispatched. The quiet window also keeps a concurrent tab that is between `begin`
- *   and `dispatch` from being raced, because that tab writes its marker long before the window ends.
- * - 404 after a dispatch: the server creates the durable operation row before the owner call, and
- *   its bounded pre-operation path is `conditions read + prepare`, each capped by
- *   `GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS` (configured maximum 5s). This window is a wide margin
- *   over that path, so a still-missing operation after it means no durable attempt exists.
+ * Why an undispatched attempt is safe to release after the window:
+ * - The durable marker is written under the principal-wide Web Lock immediately before the POST and
+ *   the dispatch callback is awaited inside that lock, so a quiet attempt without a marker provably
+ *   never dispatched. The window also keeps a concurrent tab that is between `begin` and `dispatch`
+ *   from being raced, because that tab writes its marker long before the window ends. This is a
+ *   proof about the write paths, not a time bound.
+ *
+ * Why a 404 after a dispatch may only be trusted after the window (derivation from server code):
+ * - The server creates the durable operation row before the owner call
+ *   (`apps/api/src/games/game-commercial-join.ts`, step 3 "The operation exists before the owner
+ *   call"), but the pre-row path is NOT uniformly bounded by
+ *   `GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS` (that setting only sizes the admission/read HTTP
+ *   clients, configured max 5s). The conditions re-read has its own 28s default timeout
+ *   (`apps/api/src/games/game-join-conditions.ts`, `options.timeoutMs ?? 28_000`), and the
+ *   `prepare` / admission DB work before the row is limited only by DB connection handling
+ *   (~3s per connection, no statement timeout). The client POST also outlives its own 8s
+ *   `withJoinDeadline` race, so the server request can still be running.
+ * - 180s is therefore a conservative multiple of the verified pre-row budget (28s conditions +
+ *   DB/admission + network), not an exact proof: it does not cover a pathological DB stall longer
+ *   than the window. Release still requires a real `GAME_OPERATION_NOT_FOUND` readback AND a
+ *   lock-rechecked custody state, never auto-POSTs, and a fresh purchase needs fresh conditions +
+ *   explicit consent. A wall-clock forward jump can shorten the window; the client is the payer's
+ *   own device, so this is a self-inflicted recovery trade-off, not an external trust boundary.
+ *   Follow-up: a server-side "no durable operation for this key" readback would remove the time
+ *   guess entirely.
  */
-export const GAME_JOIN_ATTEMPT_QUIET_MS = 60_000;
+export const GAME_JOIN_ATTEMPT_QUIET_MS = 180_000;
 
 export type GameJoinAttemptState = 'PENDING' | 'UNKNOWN' | 'SUCCEEDED';
 

@@ -558,11 +558,11 @@ describe('classifyGameJoinReadbackNotFound', () => {
   it('measures a dispatched attempt from dispatchStartedAt, not from savedAt', () => {
     const dispatchedAt = '2026-10-21T08:05:00.000Z';
     const young = classifyGameJoinReadbackNotFound(attempt({ dispatchStartedAt: dispatchedAt }), {
-      now: new Date(Date.parse(dispatchedAt) + 59_000),
+      now: new Date(Date.parse(dispatchedAt) + GAME_JOIN_ATTEMPT_QUIET_MS - 1),
     });
     expect(young.release).toBe(false);
     const quiet = classifyGameJoinReadbackNotFound(attempt({ dispatchStartedAt: dispatchedAt }), {
-      now: new Date(Date.parse(dispatchedAt) + 60_000),
+      now: new Date(Date.parse(dispatchedAt) + GAME_JOIN_ATTEMPT_QUIET_MS),
     });
     expect(quiet.release).toBe(true);
   });

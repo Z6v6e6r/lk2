@@ -853,7 +853,15 @@ function GamesPageContent({
       setJoinFlow((current) => (current && current.gameId !== gameIdValue ? null : current));
       return;
     }
-    if (attempt.state !== 'SUCCEEDED' && attempt.dispatchStartedAt === undefined) {
+    if (attempt.state === 'SUCCEEDED') {
+      // A terminal trusted success is convergence evidence, not an open purchase. Retaining it on a
+      // later reopen could hide the JOIN entry for the 24h retention window after the player left,
+      // so the resolved custody is closed here (main parity) and the card/server state decides.
+      await discardJoinCustody(attempt);
+      setJoinFlow((current) => (current && current.gameId === gameIdValue ? null : current));
+      return;
+    }
+    if (attempt.dispatchStartedAt === undefined) {
       // Rule (a): no durable dispatch marker means this frozen request never reached the POST. Once
       // it is quiet, close it so a crash between "begin" and "dispatch" cannot block JOIN forever.
       // The release re-reads custody under the ledger lock, so a concurrent tab that is dispatching
