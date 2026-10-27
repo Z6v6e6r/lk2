@@ -40,6 +40,3 @@ test-results/
 # Generated Timeweb beta activation fixture directories (scripts/*.test.ts)
 .phub-timeweb-activation-inputs-*/
 
-# Python bytecode (never commit compiled artifacts)
-__pycache__/
-*.py[cod]
