@@ -190,6 +190,7 @@ describe('browser auth gateway', () => {
 
     expect(restored?.context.user.displayName).toBe('Анна');
     expect(restored?.context.runtimeCapabilities).toEqual({
+      phoneSubjectLink: false,
       communityDirectory: true,
       communityReadDetail: false,
       communityReadFeed: false,

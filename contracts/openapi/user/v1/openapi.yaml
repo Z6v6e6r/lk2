@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: PadlHub User API
-  version: 1.26.0
+  version: 1.27.0
   description: Canonical user-facing API. Public identifiers are PadlHub UUIDs.
   license:
     name: Proprietary
@@ -995,6 +995,92 @@ paths:
           $ref: '#/components/responses/AuthenticationRejected'
         '404':
           $ref: ../../common/components.yaml#/components/responses/NotFound
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/identity-subject-link/challenges:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/SubjectLinkStartIntent'
+    post:
+      operationId: createIdentitySubjectLinkChallenge
+      summary: Verify the signed-in account's canonical phone before linking its Viva subject
+      description: |
+        Requires an active PadlHub client session and an exact allowed browser Origin. The phone
+        must equal the account's current canonical phone; it is never used to find another account.
+        The server derives tenant, actor, session family, audience and provider tenant. This
+        default-disabled operation sends one Viva OTP and never creates a user or a session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentitySubjectLinkChallengeRequest'
+      responses:
+        '202':
+          description: The self-service verification challenge was accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthChallenge'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: ../../common/components.yaml#/components/responses/Unauthorized
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '429':
+          $ref: ../../common/components.yaml#/components/responses/TooManyRequests
+        '503':
+          $ref: ../../common/components.yaml#/components/responses/ServiceUnavailable
+  /{tenantKey}/auth/identity-subject-link/challenges/{challengeId}/verify:
+    parameters:
+      - $ref: ../../common/components.yaml#/components/parameters/TenantKey
+      - $ref: ../../common/components.yaml#/components/parameters/CorrelationId
+      - $ref: '#/components/parameters/ChallengeId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/SubjectLinkVerifyIntent'
+    post:
+      operationId: verifyIdentitySubjectLinkChallenge
+      summary: Add one freshly verified missing Viva subject to the same signed-in account
+      description: |
+        Verifies the OTP, revalidates the active session family and canonical phone, and may add
+        only the missing issuer and subject mapping to the authenticated account. It never merges,
+        transfers or looks up a target by phone and never changes profile, phone, roles, sessions,
+        legal acceptances or delegation. A durable identifier-only receipt makes a lost response
+        replayable with the same Idempotency-Key without calling Viva again.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IdentitySubjectLinkVerifyRequest'
+      responses:
+        '200':
+          description: The missing subject was linked, or the same target was already linked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentitySubjectLinkResult'
+        '400':
+          $ref: ../../common/components.yaml#/components/responses/BadRequest
+        '401':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '403':
+          $ref: ../../common/components.yaml#/components/responses/Forbidden
+        '404':
+          $ref: ../../common/components.yaml#/components/responses/NotFound
+        '409':
+          $ref: '#/components/responses/AuthenticationRejected'
+        '410':
+          $ref: '#/components/responses/AuthenticationRejected'
         '429':
           $ref: ../../common/components.yaml#/components/responses/TooManyRequests
         '503':
@@ -6766,6 +6852,32 @@ components:
           type: integer
           minimum: 0
           maximum: 3600
+    IdentitySubjectLinkChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [phone]
+      properties:
+        phone:
+          type: string
+          pattern: '^\+7[0-9]{10}$'
+          description: Must exactly match the authenticated account's canonical phone.
+    IdentitySubjectLinkVerifyRequest:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          type: string
+          pattern: '^[0-9]{4}$'
+          writeOnly: true
+    IdentitySubjectLinkResult:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [linked, unchanged]
     PasswordLoginRequest:
       type: object
       additionalProperties: false
@@ -6986,6 +7098,7 @@ components:
       additionalProperties: false
       required:
         [
+          phoneSubjectLink,
           communityDirectory,
           communityReadDetail,
           communityReadFeed,
@@ -6996,6 +7109,7 @@ components:
           communityRealtime,
         ]
       properties:
+        phoneSubjectLink: { type: boolean }
         communityDirectory: { type: boolean }
         communityReadDetail: { type: boolean }
         communityReadFeed: { type: boolean }
@@ -10460,6 +10574,22 @@ components:
       schema:
         type: string
         const: password-login
+    SubjectLinkStartIntent:
+      name: X-Session-Intent
+      in: header
+      required: true
+      description: Explicit authenticated self-service subject-link start intent.
+      schema:
+        type: string
+        const: identity-subject-link-start
+    SubjectLinkVerifyIntent:
+      name: X-Session-Intent
+      in: header
+      required: true
+      description: Explicit authenticated self-service subject-link verify intent.
+      schema:
+        type: string
+        const: identity-subject-link-verify
     RefreshSessionIntent:
       name: X-Session-Intent
       in: header

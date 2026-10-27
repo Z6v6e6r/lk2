@@ -198,6 +198,7 @@ export interface UserContext {
   readonly roles: readonly string[];
   readonly permissions: readonly string[];
   readonly runtimeCapabilities?: {
+    readonly phoneSubjectLink: boolean;
     readonly communityDirectory: boolean;
     readonly communityReadDetail: boolean;
     readonly communityReadFeed: boolean;
@@ -486,6 +487,11 @@ export interface AuthGateway {
     readonly code: string;
     readonly acceptance: LegalAcceptance;
   }) => Promise<AuthenticatedSession>;
+  readonly startIdentitySubjectLink: (phoneE164: string) => Promise<PhoneChallenge>;
+  readonly verifyIdentitySubjectLink: (input: {
+    readonly challengeId: string;
+    readonly code: string;
+  }) => Promise<{ readonly status: 'linked' | 'unchanged' }>;
   /**
    * Starts a server-owned OAuth Authorization Code + PKCE flow. The redirect
    * URL is deliberately obtained from PadlHub rather than constructed in the
@@ -850,6 +856,7 @@ function normalizeContext(payload: ApiUserContext, tenantKey: string): UserConte
     roles: payload.roles,
     permissions: payload.permissions,
     runtimeCapabilities: {
+      phoneSubjectLink: payload.runtimeCapabilities?.phoneSubjectLink === true,
       communityDirectory: payload.runtimeCapabilities?.communityDirectory !== false,
       communityReadDetail: payload.runtimeCapabilities?.communityReadDetail === true,
       communityReadFeed: payload.runtimeCapabilities?.communityReadFeed === true,
@@ -974,6 +981,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
   let selfProfileExpiresAt = 0;
   let currentUserId: string | undefined;
   let currentTenantId: string | undefined;
+  const subjectLinkStartKeys = new Map<string, string>();
+  const subjectLinkVerifyKeys = new Map<string, string>();
   let principalGeneration = 0;
   const playerProfilePromises = new Map<string, Promise<PlayerProfileView>>();
   let profilePrivacyPromise: Promise<ProfilePrivacySettings> | undefined;
@@ -1238,6 +1247,8 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
       selfProfilePromise = undefined;
       selfProfileExpiresAt = 0;
       playerProfilePromises.clear();
+      subjectLinkStartKeys.clear();
+      subjectLinkVerifyKeys.clear();
       vivaReauthorizationStarted = false;
       vivaAccessPromise = undefined;
       homeDashboardPromise = undefined;
@@ -1902,6 +1913,32 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
         },
       });
       return normalizeSession(session);
+    },
+
+    async startIdentitySubjectLink(phoneE164) {
+      const idempotencyKey = subjectLinkStartKeys.get(phoneE164) ?? createMessagingCommandId();
+      subjectLinkStartKeys.set(phoneE164, idempotencyKey);
+      const challenge = await client.createIdentitySubjectLinkChallenge(
+        { phone: phoneE164 },
+        idempotencyKey,
+      );
+      return {
+        challengeId: challenge.challengeId,
+        maskedPhone: maskPhone(phoneE164),
+        expiresAt: challenge.expiresAt,
+        resendAt: new Date(Date.now() + challenge.resendAfterSeconds * 1_000).toISOString(),
+      };
+    },
+
+    verifyIdentitySubjectLink(input) {
+      const idempotencyKey =
+        subjectLinkVerifyKeys.get(input.challengeId) ?? createMessagingCommandId();
+      subjectLinkVerifyKeys.set(input.challengeId, idempotencyKey);
+      return client.verifyIdentitySubjectLinkChallenge(
+        input.challengeId,
+        { code: input.code },
+        idempotencyKey,
+      );
     },
 
     async startVivaOAuth(input) {

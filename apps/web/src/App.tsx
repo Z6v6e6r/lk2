@@ -2612,6 +2612,15 @@ export function App({
           friendRequestsError={friendRequestsError}
           friendRequestBusyId={friendRequestBusyId}
           error={state.error}
+          subjectLinkAvailable={
+            !realAccountPreview && context.runtimeCapabilities?.phoneSubjectLink === true
+          }
+          {...(!realAccountPreview && context.runtimeCapabilities?.phoneSubjectLink === true
+            ? {
+                onStartSubjectLink: gateway.startIdentitySubjectLink,
+                onVerifySubjectLink: gateway.verifyIdentitySubjectLink,
+              }
+            : {})}
           {...(!realAccountPreview ? { onSavePrivacy: handleSaveProfilePrivacy } : {})}
           {...(!realAccountPreview
             ? { onSaveBookingPreferences: handleSaveBookingPreferences }

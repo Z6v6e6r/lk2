@@ -1305,6 +1305,7 @@ describe('provider-neutral authentication routes', () => {
     expect(Object.keys(verifiedBody.user).sort()).toEqual(['displayName', 'id']);
     expect(verifiedBody.context).toMatchObject({ tenantId: binding.tenantId, phoneLast4: '0001' });
     expect(verifiedBody.context.runtimeCapabilities).toEqual({
+      phoneSubjectLink: false,
       communityDirectory: false,
       communityReadDetail: false,
       communityReadFeed: false,

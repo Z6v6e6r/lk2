@@ -43,6 +43,7 @@ import {
   createProfileReachabilityRepository,
   createProfileLevelHistoryRepository,
   createProfileSummaryRepository,
+  createPhoneSubjectLinkRepository,
   createPromotionEngagementRepository,
   createRealtimeAuthorizationRepository,
   createTrainerAvatarRepository,
@@ -91,6 +92,8 @@ import {
 } from './support/station-support-media.js';
 import { AuthService } from './auth/auth-service.js';
 import { RedisAuthChallengeStore } from './auth/challenge-store.js';
+import { RedisSubjectLinkChallengeStore } from './auth/subject-link-challenge-store.js';
+import { PhoneSubjectLinkService } from './auth/phone-subject-link-service.js';
 import { RedisVivaOAuthStateStore } from './auth/oauth-state-store.js';
 import { RedisAndroidOAuthStore } from './auth/android-oauth-store.js';
 import {
@@ -227,9 +230,10 @@ const providerIdentityLink = config.CUP_IDENTITY_CLIENT_PHONE_SYNC_ENABLED
     }
   : undefined;
 
+const authRepository = new PostgresAuthRepository(pool);
 const authService = new AuthService({
   config,
-  repository: new PostgresAuthRepository(pool),
+  repository: authRepository,
   localPasswordRepository: createLocalPasswordLoginRepository(pool),
   passwordLoginLimiter: new RedisPasswordLoginLimiter(redis, config.JWT_REFRESH_SECRET),
   challengeStore: new RedisAuthChallengeStore(redis),
@@ -243,6 +247,13 @@ const authService = new AuthService({
       'beta client access convergence could not be written; the token keeps the stored profile',
     ),
   ...(legacyViewerIdentityLink ? { legacyViewerIdentityLink } : {}),
+});
+const phoneSubjectLinkService = new PhoneSubjectLinkService({
+  config,
+  repository: createPhoneSubjectLinkRepository(pool),
+  authRepository,
+  challengeStore: new RedisSubjectLinkChallengeStore(redis),
+  vivaProvider: vivaIdentityProvider,
 });
 const activityHistoryRepository = config.ACTIVITY_HISTORY_ENABLED
   ? createActivityHistoryRepository(pool)
@@ -662,6 +673,7 @@ const app = await buildApp({
   pool,
   ...(runtimeContourAttestation ? { runtimeContourAttestation } : {}),
   authService,
+  phoneSubjectLinkService,
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
   ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
   ...(subscriptionRuntimeWarnBoundary

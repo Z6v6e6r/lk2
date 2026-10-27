@@ -160,6 +160,14 @@ interface RefreshSessionRow extends QueryResultRow {
 
 const TOKEN_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
+export function externalSubjectAdvisoryKey(input: {
+  readonly tenantId: string;
+  readonly issuer: string;
+  readonly subject: string;
+}): string {
+  return `${input.tenantId}\u001f${input.issuer}\u001f${input.subject}`;
+}
+
 function assertTokenHash(value: string): void {
   if (!TOKEN_HASH_PATTERN.test(value)) {
     throw new Error('REFRESH_TOKEN_HASH_INVALID');
@@ -483,13 +491,19 @@ export function createIdentityAuthRepository(pool: Pool): IdentityAuthRepository
 
     upsertExternalUser(input) {
       return withTenantTransaction(pool, input.tenantId, async (client) => {
-        // Serialize first-login races by the canonical provider user when available,
-        // without making phone or email an identity lookup key.
+        // Every flow that can attach a provider subject takes this exact lock first. The
+        // authenticated subject-link command reuses it, so login and link cannot race one subject
+        // onto different users. Phone and email remain non-identity lookup fields.
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          input.providerUserId
-            ? `${input.tenantId}\u001f${input.provider}\u001f${input.providerUserId}`
-            : `${input.tenantId}\u001f${input.issuer}\u001f${input.subject}`,
+          externalSubjectAdvisoryKey(input),
         ]);
+        // The canonical provider-user lock additionally serializes different subjects returned for
+        // the same provider profile. It is always second, giving all writers one lock order.
+        if (input.providerUserId) {
+          await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+            `${input.tenantId}\u001f${input.provider}\u001f${input.providerUserId}`,
+          ]);
+        }
 
         const identityUser = await selectExternalUserForUpdate(client, input);
         const canonicalUser = await selectCanonicalProviderUserForUpdate(client, input);

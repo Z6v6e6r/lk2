@@ -1131,4 +1131,50 @@ describe('Profile city and community rail', () => {
     );
     expect(loadPage).toHaveBeenCalledTimes(3);
   });
+
+  it('keeps subject linking hidden while the runtime capability is off', () => {
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        logoutBusy={false}
+        subjectLinkAvailable={false}
+        onStartSubjectLink={vi.fn()}
+        onVerifySubjectLink={vi.fn()}
+        onLogout={() => undefined}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /Вход в ЦУП/ })).not.toBeInTheDocument();
+  });
+
+  it('starts OTP only after an explicit profile action and verifies from the same sheet', async () => {
+    const onStart = vi.fn().mockResolvedValue({ challengeId: 'subject-link-challenge' });
+    const onVerify = vi.fn().mockResolvedValue({ status: 'linked' });
+    render(
+      <ProfilePage
+        profile={selfProfile('D+')}
+        logoutBusy={false}
+        subjectLinkAvailable
+        onStartSubjectLink={onStart}
+        onVerifySubjectLink={onVerify}
+        onLogout={() => undefined}
+      />,
+    );
+    expect(onStart).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Вход в ЦУП/ }));
+    expect(onStart).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Основной телефон'), {
+      target: { value: '+79990000001' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Получить код' }));
+    await waitFor(() => expect(onStart).toHaveBeenCalledWith('+79990000001'));
+    fireEvent.change(screen.getByLabelText('Код из сообщения'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить' }));
+    await waitFor(() =>
+      expect(onVerify).toHaveBeenCalledWith({
+        challengeId: 'subject-link-challenge',
+        code: '1234',
+      }),
+    );
+    expect(await screen.findByText(/Теперь можно войти в ЦУП/)).toHaveAttribute('role', 'status');
+  });
 });

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 const diagnosticsRunner = fileURLToPath(
   new URL('./run-ci-tests-with-diagnostics.sh', import.meta.url),
@@ -12,6 +13,48 @@ const diagnosticsRunner = fileURLToPath(
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const linuxOnly = process.platform === 'linux';
 const temporaryDirectories: string[] = [];
+
+describe('CI workflow finalization budget', () => {
+  it('keeps the supervisor watchdog and cleanup inside the Actions step deadline', async () => {
+    const workflow = parseYaml(
+      await readFile(join(repositoryRoot, '.github/workflows/pull-request.yaml'), 'utf8'),
+    ) as {
+      env?: Record<string, string>;
+      jobs: Record<
+        string,
+        {
+          env?: Record<string, string>;
+          steps: Array<{
+            name?: string;
+            'timeout-minutes'?: number;
+            env?: Record<string, string>;
+          }>;
+        }
+      >;
+    };
+    const step = workflow.jobs['quality-full']?.steps.find(
+      (entry) => entry.name === 'Unit and integration tests',
+    );
+    expect(step).toBeDefined();
+    expect(workflow.env?.CI_TEST_WATCHDOG_SECONDS).toBeUndefined();
+    expect(workflow.jobs['quality-full']?.env?.CI_TEST_WATCHDOG_SECONDS).toBeUndefined();
+    expect(
+      workflow.jobs['quality-full']?.steps.filter(
+        (entry) => entry.env?.CI_TEST_WATCHDOG_SECONDS !== undefined,
+      ),
+    ).toEqual([step]);
+    const watchdog = Number(step!.env?.CI_TEST_WATCHDOG_SECONDS);
+    const stepDeadline = Number(step!['timeout-minutes']) * 60;
+    const runner = await readFile(diagnosticsRunner, 'utf8');
+    expect(runner).toContain('CI_TEST_WATCHDOG_SECONDS:-480');
+    const terminationGrace = Number(runner.match(/CI_TEST_KILL_AFTER_SECONDS:-([0-9]+)/)?.[1]);
+    expect(Number.isSafeInteger(watchdog) && watchdog > 0).toBe(true);
+    expect(Number.isSafeInteger(stepDeadline) && stepDeadline > 0).toBe(true);
+    expect(Number.isSafeInteger(terminationGrace) && terminationGrace > 0).toBe(true);
+    // Final resource snapshots/redaction/helper shutdown must finish before Actions kills the step.
+    expect(stepDeadline - watchdog - terminationGrace).toBeGreaterThanOrEqual(60);
+  });
+});
 
 async function createDiagnosticsDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'phub-ci-test-diagnostics-'));
