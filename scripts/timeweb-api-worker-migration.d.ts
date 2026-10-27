@@ -27,7 +27,9 @@ export function migrationCreateArgs(
   envFile: string,
   kind?: string,
   runtimeRole?: string,
-  notification?: { operation: unknown; target?: unknown },
+  notification?:
+    | { operation: unknown; target?: unknown }
+    | { closedApplication: { operation: unknown; profile: ClosedAdditiveProfile } },
 ): string[];
 export function validateMigrationContainer(
   value: unknown,
@@ -318,4 +320,99 @@ export function runManualLocationPhotoMigratorPrefetch(
 ): Promise<unknown>;
 export function attestLocationPhotoMigratorPrefetchForBackup(operation: unknown): Promise<unknown>;
 
-export function sealNotificationPrefetchMetadata(path: string, bytes: Buffer): void;
+export function sealNotificationPrefetchMetadata(
+  path: string,
+  bytes: Buffer,
+  closedKind?: 'game_start_0103' | 'subject_link_0104',
+): void;
+
+export interface ClosedProductionFiles {
+  read(path: string, mode?: number): Buffer;
+  secure(path: string, mode?: number): { isDirectory(): boolean };
+  present(path: string): boolean;
+}
+export interface ClosedProductionDependencies extends ClosedProductionFiles {
+  git(args: string[]): string;
+}
+export interface ClosedProductionDatabaseDependencies extends ClosedProductionFiles {
+  postgresSql(sql: string, readOnly?: boolean, postgresId?: string): unknown;
+}
+export interface ClosedProductionBinding {
+  readonly kind: 'game_start_0103' | 'subject_link_0104';
+  readonly kernelProfile: ClosedAdditiveProfile;
+  attestSource(operation: unknown, dependencies: ClosedProductionDependencies): unknown;
+  validateManifest(operation: unknown, manifest: unknown, bytes: Buffer): unknown;
+  backup(
+    operation: unknown,
+    options: { fresh?: boolean } | undefined,
+    dependencies: ClosedProductionFiles,
+  ): unknown;
+  inputs(operation: unknown, dependencies: ClosedProductionFiles): unknown;
+  readState(
+    operation: unknown,
+    phase: string,
+    dependencies: ClosedProductionDatabaseDependencies,
+  ): unknown;
+  bootstrapSql(operation: unknown, plan: unknown): string | Buffer;
+  cleanupSql(operation: unknown, plan: unknown): string | Buffer;
+  attestPrevious(operation: unknown, dependencies: ClosedProductionFiles): unknown;
+  assertRuntimeFlags(
+    operation: unknown,
+    environments: { api: readonly string[]; worker: readonly string[] },
+    dependencies: ClosedProductionDependencies,
+  ): unknown;
+}
+export interface ClosedApplicationProductionEffects extends ClosedAdditiveEffects {
+  closedApplicationState(phase: string): unknown;
+  readClosedApplicationProof(name: string): Buffer | null;
+  writeClosedApplicationProof(name: string, bytes: Buffer): unknown;
+}
+export function closedApplicationRequestPath(kind: 'game_start_0103' | 'subject_link_0104'): string;
+export function closedApplicationProductionPaths(operation: unknown): Readonly<{
+  requestPath: string;
+  slug: string;
+  candidate: string;
+  transactionRoot: string;
+  containerName: string;
+  prefetchRoot: string;
+  prefetchRequestPath: string;
+}>;
+export function createClosedApplicationProductionEffects(
+  operation: unknown,
+  owner: { assertOwned(): unknown },
+  binding: ClosedProductionBinding,
+): ClosedApplicationProductionEffects;
+
+export interface ClosedApplicationManualEntryEffects {
+  uid(): number | undefined;
+  time(): number;
+  assertAmbient(): unknown;
+  secureStandard(): unknown;
+  readRequest(): Buffer;
+  binding(operation: unknown): ClosedProductionBinding;
+  acquire(): { close(): void };
+  run(
+    mode: string,
+    bytes: Buffer,
+    operation: unknown,
+    owner: { close(): void },
+    binding: ClosedProductionBinding,
+  ): Promise<{ status: string; receipt: string }>;
+}
+export function runClosedApplicationManualEntryAdapter(
+  mode: string,
+  kind: 'game_start_0103' | 'subject_link_0104',
+  requestPath: string,
+  effects: ClosedApplicationManualEntryEffects,
+): Promise<{ status: string; receipt: string }>;
+export function runManualClosedApplicationMigration(
+  mode: string,
+  kind: 'game_start_0103' | 'subject_link_0104',
+  requestPath: string,
+  bindingFactory: (operation: unknown) => ClosedProductionBinding,
+): Promise<{ status: string; receipt: string }>;
+
+export function closedApplicationPreviousRequestHashes(
+  operation: unknown,
+  proof: unknown,
+): Readonly<Record<string, string>>;

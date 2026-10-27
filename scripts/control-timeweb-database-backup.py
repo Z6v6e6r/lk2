@@ -154,11 +154,59 @@ LOCATION_PHOTO_PRE0102_SCHEMA = 'PHUB_TIMEWEB_LOCATION_PHOTO_PRE0102_BACKUP_NAME
 LOCATION_PHOTO_PRE0102_LEDGER = '7bd0476427e40967f4531972829a86f578d0e9d844ab9e92f16637b868e207fd'
 LOCATION_PHOTO_DATABASE_TARGET = {'databaseName':'phub_beta','systemIdentifier':'7679125609183186977'}
 
+CLOSED_APPLICATION_BACKUPS = {
+    'PHUB_TIMEWEB_GAME_START_PRE0103_BACKUP_NAMESPACE_V1': {
+        'kind':'game_start_0103','mode':'game-start-pre0103','count':106,
+        'ledger':'ff74c193b5e5253f929818b1550d0e5c0264a9818cb0ee5437d49d5aa043904e',
+        'migrationSchema':'PHUB_TIMEWEB_GAME_START_0103_MIGRATION_OPERATION_V1',
+        'receiptSchema':'PHUB_TIMEWEB_GAME_START_PRE0103_BACKUP_RESTORE_V1',
+        'terminalSchema':'PHUB_TIMEWEB_GAME_START_PRE0103_BACKUP_TERMINAL_V1',
+        'supervisorSchema':'PHUB_GAME_START_PRE0103_SUPERVISOR_AUTHORITY_V1',
+        'preimageSchema':'PHUB_TIMEWEB_GAME_START_PRE0103_PREIMAGE_V1'},
+    'PHUB_TIMEWEB_SUBJECT_LINK_PRE0104_BACKUP_NAMESPACE_V1': {
+        'kind':'subject_link_0104','mode':'subject-link-pre0104','count':107,
+        'ledger':'6146219b31e4720016bb81a0018f76609c7fc515603e4aac405f6a2342e66d77',
+        'migrationSchema':'PHUB_TIMEWEB_SUBJECT_LINK_0104_MIGRATION_OPERATION_V1',
+        'receiptSchema':'PHUB_TIMEWEB_SUBJECT_LINK_PRE0104_BACKUP_RESTORE_V1',
+        'terminalSchema':'PHUB_TIMEWEB_SUBJECT_LINK_PRE0104_BACKUP_TERMINAL_V1',
+        'supervisorSchema':'PHUB_SUBJECT_LINK_PRE0104_SUPERVISOR_AUTHORITY_V1',
+        'preimageSchema':'PHUB_TIMEWEB_SUBJECT_LINK_PRE0104_PREIMAGE_V1'},
+}
+
+
+def is_closed_application_backup(op):
+    return isinstance(op, dict) and op.get('schema') in CLOSED_APPLICATION_BACKUPS
+
+
+def closed_application_binding_sha(op):
+    intent = {key:value for key,value in op['migrationIntent'].items() if key not in ('expiresAt','confirmation')}
+    return digest(json.dumps(intent, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode())
+
+
+def owner_acl_receipt_schema(op):
+    if is_closed_application_backup(op):return CLOSED_APPLICATION_BACKUPS[op['schema']]['receiptSchema']
+    return ('PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1' if op['schema']==JOIN_POST105_SCHEMA else
+            'PHUB_TIMEWEB_LOCATION_PHOTO_PRE0102_BACKUP_RESTORE_V1' if op['schema']==LOCATION_PHOTO_PRE0102_SCHEMA else
+            'PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1')
+
+
+def owner_acl_terminal_schema(op):
+    if is_closed_application_backup(op):return CLOSED_APPLICATION_BACKUPS[op['schema']]['terminalSchema']
+    return ('PHUB_TIMEWEB_JOIN_POST105_BACKUP_TERMINAL_V1' if op['schema']==JOIN_POST105_SCHEMA else
+            'PHUB_TIMEWEB_LOCATION_PHOTO_BACKUP_TERMINAL_V1' if op['schema']==LOCATION_PHOTO_PRE0102_SCHEMA else
+            'PHUB_TIMEWEB_NOTIFICATION_BACKUP_TERMINAL_V1')
+
+
+def owner_acl_supervisor_schema(op):
+    if is_closed_application_backup(op):return CLOSED_APPLICATION_BACKUPS[op['schema']]['supervisorSchema']
+    return 'PHUB_NOTIFICATION_SUPERVISOR_AUTHORITY_V1' if is_notification_backup(op) else 'PHUB_LOCATION_PHOTO_SUPERVISOR_AUTHORITY_V1'
+
+
 def is_notification_backup(op):
     return op.get('schema') in (NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA)
 
 def is_owner_acl_backup(op):
-    return is_notification_backup(op) or op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA
+    return is_notification_backup(op) or op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA or is_closed_application_backup(op)
 NS_WEB8158_SCHEMA = 'PHUB_TIMEWEB_BACKUP_WEB_API8158_DISK_NAMESPACE_V1'
 WEB8158_IMAGE = 'ghcr.io/z6v6e6r/phub-api@sha256:47bce1fab22cb47d99fa5391764dd20c8c1f53a31550eab2a759b512a4411839'
 
@@ -184,10 +232,11 @@ DISK_TOOLS = {'loop': '/usr/sbin/losetup', 'crypt': '/usr/sbin/cryptsetup',
 
 
 def is_disk_operation(op):
-    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA)
+    return op.get('schema') in (DISK_PRE_SCHEMA, DISK_POST_SCHEMA, NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA) or is_closed_application_backup(op)
 
 
 def disk_ledger_sha(op):
+    if is_closed_application_backup(op):return CLOSED_APPLICATION_BACKUPS[op['schema']]['ledger']
     if op['schema'] in (JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA):return JOIN_POST105_LEDGER
     return API_WORKER_PRE_LEDGER_SHA256 if op['schema'] in (DISK_PRE_SCHEMA, NS_PRE_SCHEMA) else API_WORKER_LEDGER_SHA256
 
@@ -699,7 +748,7 @@ DISK_RESTORE_FORMAT = RESTORE_FORMAT.replace('"State":{"Status":{{json .State.St
 
 # Namespace V2 is deliberately separate from the existing tmpfs/DISK V1 contracts.
 def is_namespace_operation(op):
-    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA)
+    return op.get('schema') in (NS_PRE_SCHEMA, NS_POST_SCHEMA, NS_WEB8158_SCHEMA, NOTIFICATION_PRE105_SCHEMA, JOIN_POST105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA) or is_closed_application_backup(op)
 
 
 NS_IMAGE_FORMAT = '{"Id":{{json .Id}},"Os":{{json .Os}},"Architecture":{{json .Architecture}},"RepoDigests":{{json .RepoDigests}},"Size":{{json .Size}},"RootFS":{{json .RootFS}},"Env":{{json .Config.Env}}}'
@@ -1885,6 +1934,7 @@ def now_iso():
 
 
 def operation_mode(value):
+    if is_closed_application_backup(value):return CLOSED_APPLICATION_BACKUPS[value['schema']]['mode'], value['releaseId']
     if value['schema'] == JOIN_POST105_SCHEMA:
         return 'join-post105', value['releaseId']
     if value['schema'] == NOTIFICATION_PRE105_SCHEMA:
@@ -1967,6 +2017,25 @@ def validate_operation(value, now, file_sha, allow_expired=False):
              and value['toolCommit'] == value['controllerSha']
              and all(HASH.fullmatch(value[k] or '') for k in ('packageDescriptorSha256','catalogsSha256','notificationBundleSha256'))
              and value['expectedPostgres']['id'] == PG_ID, 'JOIN_POST105_OPERATION')
+    elif is_closed_application_backup(value):
+        exact(value, common + ['profile','releaseId','controllerSourceCiRunId','expectedLedgerSha256','expectedDatabaseTarget',
+                              'packageDescriptorSha256','catalogBuilderSha256','catalogVariant','migratorPrefetch','migrationIntent'])
+        definition = CLOSED_APPLICATION_BACKUPS[schema]
+        mode,release_id = definition['mode'],value['releaseId']
+        intent = value['migrationIntent']
+        validate_prefetch_binding(value['migratorPrefetch'])
+        need(isinstance(intent,dict) and intent.get('migrationProfile')==definition['kind'] and intent.get('schema')==definition['migrationSchema']
+             and value['profile']=='beta' and 'controllerPromotion' not in value
+             and re.fullmatch(r'[1-9][0-9]*',value['controllerSourceCiRunId'] or '')
+             and release_id==value['controllerSha']+'-'+value['controllerSourceCiRunId']+'-1'
+             and value['expectedLedgerSha256']==definition['ledger'] and value['expectedDatabaseTarget']==LOCATION_PHOTO_DATABASE_TARGET
+             and value['toolCommit']==value['controllerSha'] and value['expectedPostgres']['id']==PG_ID
+             and value['catalogVariant'] in ('DORMANT','SCENARIO_EDITOR_V1')
+             and all(HASH.fullmatch(value[key] or '') for key in ('packageDescriptorSha256','catalogBuilderSha256'))
+             and all(value[key]==intent.get(key) for key in ('profile','target','expectedDatabaseTarget','controllerSha','controllerTree',
+                    'controllerSourceCiRunId','expectedApi','expectedPostgres','packageDescriptorSha256','catalogBuilderSha256','catalogVariant'))
+             and value['migratorPrefetch']['migratorImage']==intent.get('publishedMigrator',{}).get('image')
+             and value['migratorPrefetch']['imageId']==intent.get('publishedMigrator',{}).get('imageId'), 'CLOSED_APPLICATION_OPERATION')
     elif schema == LOCATION_PHOTO_PRE0102_SCHEMA:
         exact(value, common + ['profile','releaseId','controllerSourceCiRunId','expectedLedgerSha256','expectedDatabaseTarget','packageDescriptorSha256','migratorPrefetch'])
         validate_prefetch_binding(value['migratorPrefetch'])
@@ -2050,8 +2119,8 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         for row in (api, pg):
             need(re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3,9}Z', row['startedAt']) is not None, 'BASELINE_TIME')
             utc(row['startedAt'][:23] + 'Z')
-    elif is_web8158_operation(value) or schema in (NOTIFICATION_PRE105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA):
-        if schema == LOCATION_PHOTO_PRE0102_SCHEMA:
+    elif is_web8158_operation(value) or schema in (NOTIFICATION_PRE105_SCHEMA, LOCATION_PHOTO_PRE0102_SCHEMA) or is_closed_application_backup(value):
+        if schema == LOCATION_PHOTO_PRE0102_SCHEMA or is_closed_application_backup(value):
             need(re.fullmatch(r'ghcr\.io/z6v6e6r/phub-api@sha256:[a-f0-9]{64}', api['image'] or '')
                  and api['imageId'] == api['image'].split('@')[1]
                  and RELEASE.fullmatch(api['releaseId'] or '')
@@ -2089,6 +2158,7 @@ def validate_operation(value, now, file_sha, allow_expired=False):
         confirmation = 'BACKUP_RESTORE_JOIN_POST105_PRIVATE_NAMESPACE_KEEP_RUNTIME'
     if schema == LOCATION_PHOTO_PRE0102_SCHEMA:
         confirmation = 'BACKUP_RESTORE_LOCATION_PHOTO_PRE0102_PRIVATE_NAMESPACE_KEEP_RUNTIME'
+    if is_closed_application_backup(value):confirmation='BACKUP_RESTORE_'+CLOSED_APPLICATION_BACKUPS[schema]['kind'].upper()+'_PRIVATE_NAMESPACE_KEEP_RUNTIME'
     need(value['confirmation'] == confirmation, 'CONFIRMATION')
     return value
 
@@ -2304,7 +2374,7 @@ def _notification_source_program(op):
 def _owner_acl_source_program(op):
     if is_notification_backup(op):
         return _notification_source_program(op)
-    need(op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA, 'OWNER_ACL_BACKUP_PROFILE')
+    need(op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA or is_closed_application_backup(op), 'OWNER_ACL_BACKUP_PROFILE')
     source = ROOT / 'standard/source'
     secure(source, 'dir'); secure(source / '.git', 'dir')
     config_path=source/'.git/config'; secure(config_path)
@@ -2328,6 +2398,8 @@ def _owner_acl_source_program(op):
     for dependency in ('node_modules/typescript/lib/typescript.js','node_modules/postcss/lib/postcss.js'):
         need(stat.S_ISREG(secure(source/dependency).st_mode), 'LOCATION_PHOTO_SOURCE')
     program="import fs from 'node:fs';import {attestLocationPhotoBackupSource} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-location-photo-profile.js';import {upgradeGit as git,readUpgradeFile as read,secureUpgradePath as secure} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));const present=p=>{try{fs.lstatSync(p);return true}catch(e){if(e.code==='ENOENT')return false;throw e}};attestLocationPhotoBackupSource(op,{git,read,secure,present});"
+    if is_closed_application_backup(op):
+        program="import fs from 'node:fs';import {attestClosedApplicationBackupSource} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-closed-application-runtime.js';import {upgradeGit as git,readUpgradeFile as read,secureUpgradePath as secure} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-web-upgrade.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));const present=p=>{try{fs.lstatSync(p);return true}catch(e){if(e.code==='ENOENT')return false;throw e}};attestClosedApplicationBackupSource(op,{git,read,secure,present});"
     environment={key:ENV[key] for key in ['PATH','HOME','LANG','LC_ALL','GIT_CONFIG_NOSYSTEM','GIT_CONFIG_GLOBAL','GIT_OPTIONAL_LOCKS','GIT_NO_REPLACE_OBJECTS','GIT_NO_LAZY_FETCH','GIT_NO_PROMISOR_FETCH','GIT_ALTERNATE_OBJECT_DIRECTORIES']}
     return program,environment
 
@@ -2367,7 +2439,10 @@ def notification_supervisor_authority(p, op, raw):
               'controllerConfigSha256', 'toolCommit', 'toolFileSha256', 'toolProofSha256',
               'toolInstallationSha256', 'packageDescriptorSha256')
     if is_notification_backup(op):common += ('catalogsSha256',)
-    return {**post, 'schema': ('PHUB_NOTIFICATION_SUPERVISOR_AUTHORITY_V1' if is_notification_backup(op) else 'PHUB_LOCATION_PHOTO_SUPERVISOR_AUTHORITY_V1'),
+    if is_closed_application_backup(op):
+        common += ('catalogBuilderSha256','catalogVariant')
+        post.update(migrationProfile=CLOSED_APPLICATION_BACKUPS[op['schema']]['kind'],migrationBindingSha256=closed_application_binding_sha(op))
+    return {**post, 'schema': (owner_acl_supervisor_schema(op)),
             'sourceCheck': 'GITHUB_PUBLIC_SOURCE_CI_V1',
             **({'migratorPrefetch':op['migratorPrefetch']} if 'migratorPrefetch' in op else {}),
             'operationSha256': digest(raw), 'planSha256': digest(plan_bytes),
@@ -2410,6 +2485,13 @@ def notification_host_backup_authority(op):
         need(command(['/usr/bin/node','--input-type=module','-e',program], 'LOCATION_PHOTO_MIGRATOR_PREFETCH',
                      input_data=encoded(op),environment=environment,timeout=60)==b'MIGRATOR_PREFETCH_VERIFIED',
              'LOCATION_PHOTO_MIGRATOR_PREFETCH')
+    if is_closed_application_backup(op):
+        validate_prefetch_binding(op.get('migratorPrefetch'))
+        program,environment = _owner_acl_source_program(op)
+        program += "import {attestClosedApplicationMigratorPrefetchForBackup} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-closed-application-runtime.js';await attestClosedApplicationMigratorPrefetchForBackup(op);process.stdout.write('MIGRATOR_PREFETCH_VERIFIED');"
+        need(command(['/usr/bin/node','--input-type=module','-e',program], 'CLOSED_APPLICATION_MIGRATOR_PREFETCH',
+                     input_data=encoded(op),environment=environment,timeout=60)==b'MIGRATOR_PREFETCH_VERIFIED',
+             'CLOSED_APPLICATION_MIGRATOR_PREFETCH')
     _NOTIFICATION_BACKUP_AUTHORITY = digest(encoded(op))
 
 
@@ -2500,12 +2582,15 @@ def join_post105_recheck(p, op, journal):
 
 
 def notification_preimage(op):
-    if op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA:
+    if is_closed_application_backup(op):
+        program="import fs from 'node:fs';import {readClosedApplicationBackupDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-closed-application-runtime.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readClosedApplicationBackupDatabaseState(op)));"
+    elif op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA:
         program="import fs from 'node:fs';import {readLocationPhotoDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-worker-migration.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readLocationPhotoDatabaseState(op,'pre')));"
     else:
         program="import fs from 'node:fs';import {readNotificationDatabaseState} from '/opt/phub/timeweb-beta/standard/source/scripts/timeweb-api-worker-migration.js';const op=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(readNotificationDatabaseState(op,op.schema==='PHUB_TIMEWEB_JOIN_POST0105_BACKUP_NAMESPACE_V1'?'post':'pre')));"
     result=strict(command(['/usr/bin/node','--input-type=module','-e',program], 'NOTIFICATION_PREIMAGE',input_data=encoded(op),timeout=30))
-    return {**({'schema':'PHUB_TIMEWEB_LOCATION_PHOTO_PRE0102_PREIMAGE_V1'} if op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA else {}),'state':result,'target':result['target'],'security':notification_security_source(op)}
+    schema = CLOSED_APPLICATION_BACKUPS[op['schema']]['preimageSchema'] if is_closed_application_backup(op) else ('PHUB_TIMEWEB_LOCATION_PHOTO_PRE0102_PREIMAGE_V1' if op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA else None)
+    return {**({'schema':schema} if schema else {}),'state':result,'target':result['target'],'security':notification_security_source(op)}
 
 
 
@@ -2516,7 +2601,7 @@ def notification_security_sql():
 
 def notification_security_source(op=None):
     shell=READ_ONLY.replace('lock_timeout=2000','lock_timeout=2000 -c search_path=pg_catalog')+'exec psql -X --no-password --username="$POSTGRES_USER" --dbname="${POSTGRES_DB:-$POSTGRES_USER}" --no-psqlrc -qAt --set=ON_ERROR_STOP=1 --command='+shlex.quote(notification_security_sql())
-    pg_id = op['expectedPostgres']['id'] if op and op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA else PG_ID
+    pg_id = op['expectedPostgres']['id'] if op and (op.get('schema') == LOCATION_PHOTO_PRE0102_SCHEMA or is_closed_application_backup(op)) else PG_ID
     value=strict(docker(['exec',pg_id,'/bin/sh','-eu','-c',shell], 'NOTIFICATION_SECURITY_SOURCE'))
     validate_notification_security(value)
     return value
@@ -2663,8 +2748,13 @@ def notification_backup_reference(op, raw, file_sha, *, completed_by=None):
          and receipt['target']==initial['target'] and receipt['restoreVerified'] is True
          and receipt['securityPreimageSha256']==receipt['restoredSecuritySha256']==digest(encoded(initial['security']))==journal.find('SECURITY_RESTORE_VERIFIED')['securitySha256']
          and receipt['roleClosureSha256']==digest(encoded(initial['security']['roles']))==journal.find('SECURITY_RESTORE_VERIFIED')['roleClosureSha256']
-         and receipt['restoreImage']==PG_IMAGE and receipt['schema']==('PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1' if op['schema']==JOIN_POST105_SCHEMA else ('PHUB_TIMEWEB_LOCATION_PHOTO_PRE0102_BACKUP_RESTORE_V1' if op['schema']==LOCATION_PHOTO_PRE0102_SCHEMA else 'PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1')), 'NOTIFICATION_BACKUP_PROOF')
+         and receipt['restoreImage']==PG_IMAGE and receipt['schema']==(owner_acl_receipt_schema(op)), 'NOTIFICATION_BACKUP_PROOF')
     post = {}
+    if is_closed_application_backup(op):
+        expected = {'migrationProfile':CLOSED_APPLICATION_BACKUPS[op['schema']]['kind'],'catalogVariant':op['catalogVariant'],
+                    'catalogBuilderSha256':op['catalogBuilderSha256'],'migrationBindingSha256':closed_application_binding_sha(op)}
+        need(all(receipt.get(key)==value for key,value in expected.items()),'CLOSED_APPLICATION_BACKUP_BINDING')
+        post.update(expected)
     if 'migratorPrefetch' in op:
         need(receipt.get('migratorPrefetch') == plan.get('migratorPrefetch') == op['migratorPrefetch'], 'NOTIFICATION_PREFETCH_BINDING')
         post['migratorPrefetch']=op['migratorPrefetch']
@@ -2672,7 +2762,7 @@ def notification_backup_reference(op, raw, file_sha, *, completed_by=None):
         need(receipt['notificationBundleSha256'] == op['notificationBundleSha256']
              and utc(receipt['completedAt']) <= utc(op['expiresAt']), 'JOIN_POST105_RECEIPT')
         post = {'notificationBundleSha256':op['notificationBundleSha256']}
-    return {**post,'schema':('PHUB_TIMEWEB_JOIN_POST105_BACKUP_TERMINAL_V1' if op['schema']==JOIN_POST105_SCHEMA else ('PHUB_TIMEWEB_LOCATION_PHOTO_BACKUP_TERMINAL_V1' if op['schema']==LOCATION_PHOTO_PRE0102_SCHEMA else 'PHUB_TIMEWEB_NOTIFICATION_BACKUP_TERMINAL_V1')),'operationSha256':digest(raw),'receiptSha256':digest(receipt_bytes),
+    return {**post,'schema':(owner_acl_terminal_schema(op)),'operationSha256':digest(raw),'receiptSha256':digest(receipt_bytes),
             'preimageSha256':digest(preimage),'target':initial['target'],'sourceLedgerSha256':disk_ledger_sha(op),
             'storageCleanupVerified':True,'reconciled':True}
 
@@ -3692,12 +3782,15 @@ def execute_namespace(op, request_bytes, file_sha):
                    'restoredLedgerSha256': digest(restored), 'sourceLedgerSha256': digest(restored)}
         if is_owner_acl_backup(op):
             preimage = journal.find('MIGRATION_ATTESTATION')['proof']
-            receipt.update(schema=('PHUB_TIMEWEB_JOIN_POST105_BACKUP_RESTORE_V1' if op['schema'] == JOIN_POST105_SCHEMA else ('PHUB_TIMEWEB_LOCATION_PHOTO_PRE0102_BACKUP_RESTORE_V1' if op['schema'] == LOCATION_PHOTO_PRE0102_SCHEMA else 'PHUB_TIMEWEB_NOTIFICATION_PRE105_BACKUP_RESTORE_V1')),
+            receipt.update(schema=(owner_acl_receipt_schema(op)),
                            operationSha256=digest(request_bytes), target=preimage['target'],
                            preimageSha256=digest(encoded(preimage)), packageDescriptorSha256=op['packageDescriptorSha256'],
                            **({'catalogsSha256':op['catalogsSha256']} if 'catalogsSha256' in op else {}), aclRecovery='ISOLATED_OWNER_ACL_RESTORE_VERIFIED',
                            securityPreimageSha256=digest(encoded(preimage['security'])), restoredSecuritySha256=digest(encoded(preimage['security'])),
                            roleClosureSha256=digest(encoded(preimage['security']['roles'])))
+            if is_closed_application_backup(op):
+                receipt.update(migrationProfile=CLOSED_APPLICATION_BACKUPS[op['schema']]['kind'],catalogVariant=op['catalogVariant'],
+                               catalogBuilderSha256=op['catalogBuilderSha256'],migrationBindingSha256=closed_application_binding_sha(op))
             if op['schema'] == JOIN_POST105_SCHEMA:
                 receipt['notificationBundleSha256'] = op['notificationBundleSha256']
                 need(utc(receipt['completedAt']) <= utc(op['expiresAt']), 'JOIN_POST105_PROOF_EXPIRED')
@@ -4393,6 +4486,22 @@ def pre105_retirement_main():
 
 
 def main():
+    if len(sys.argv)==3 and sys.argv[1]=='--attest-closed-retained':
+        # Terminal, read-only custody for a completed first stage. The operator's
+        # shared request may already contain the second-stage backup operation.
+        need(sys.flags.optimize==0 and sys.flags.isolated==1 and os.getuid()==0, 'CLOSED_RETAINED_ENTRY')
+        path=Path(sys.argv[2])
+        need(re.fullmatch(r'/opt/phub/timeweb-beta/backups/[a-f0-9]{40}-[1-9][0-9]*-1-game-start-pre0103/backup-operation\.json',str(path)) is not None, 'CLOSED_RETAINED_PATH')
+        file=Path(__file__);file_sha=digest(read_secure(file,0o755))
+        raw=read_secure(path);op=validate_operation(strict(raw),time.time(),file_sha,allow_expired=True)
+        need(is_closed_application_backup(op) and CLOSED_APPLICATION_BACKUPS[op['schema']]['kind']=='game_start_0103'
+             and file==ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py')
+             and path.parent==ROOT/'backups'/(op['releaseId']+'-game-start-pre0103'), 'CLOSED_RETAINED_BINDING')
+        need(os.uname().nodename=='msk-1-vm-z8ks' and os.uname().machine=='x86_64', 'HOST')
+        ips=command(['/usr/bin/hostname','-I'],'HOST').decode().split()
+        need('100.77.212.57' in ips and '103.88.243.171' in ips,'HOST')
+        result=notification_backup_reference(op,raw,file_sha)
+        print(json.dumps(result,separators=(',',':')));return
     if sys.argv[1:]==['--attest-completed-notification-backup',str(ROOT/'operator/api-worker-upgrade.json')]:
         completed_notification_backup_main();return
     need(sys.flags.optimize==0 and sys.flags.isolated==1, 'ISOLATED_NONOPTIMIZED_PYTHON_REQUIRED')

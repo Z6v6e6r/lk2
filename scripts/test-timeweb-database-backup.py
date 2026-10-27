@@ -62,6 +62,64 @@ def location_photo_operation():
             'confirmation':'BACKUP_RESTORE_LOCATION_PHOTO_PRE0102_PRIVATE_NAMESPACE_KEEP_RUNTIME'}
 
 
+def closed_application_operation(kind):
+    definition=next(value for value in m.CLOSED_APPLICATION_BACKUPS.values() if value['kind']==kind)
+    op=location_photo_operation()
+    op.update(schema=next(key for key,value in m.CLOSED_APPLICATION_BACKUPS.items() if value['kind']==kind),
+              expectedLedgerSha256=definition['ledger'],catalogBuilderSha256='a'*64,catalogVariant='SCENARIO_EDITOR_V1',
+              confirmation='BACKUP_RESTORE_'+kind.upper()+'_PRIVATE_NAMESPACE_KEEP_RUNTIME')
+    # Routing-tier structural sample. Deep intent/ACL validation is the Node bridge's contract.
+    op['migrationIntent']={key:copy.deepcopy(op[key]) for key in ('profile','target','expectedDatabaseTarget','controllerSha','controllerTree',
+        'controllerSourceCiRunId','expectedApi','expectedPostgres','packageDescriptorSha256','catalogBuilderSha256','catalogVariant')}
+    op['migrationIntent'].update(schema=definition['migrationSchema'],migrationProfile=kind,
+        publishedMigrator={'image':op['migratorPrefetch']['migratorImage'],'imageId':op['migratorPrefetch']['imageId']},
+        expiresAt=op['expiresAt'],confirmation='SYNTHETIC_MIGRATION_INTENT')
+    return op
+
+
+class ClosedApplicationBackupProfileTests(unittest.TestCase):
+    def test_each_profile_has_a_distinct_preledger_canonical_namespace_and_schema_family(self):
+        plans=[]
+        for kind in ('game_start_0103','subject_link_0104'):
+            op=closed_application_operation(kind);definition=m.CLOSED_APPLICATION_BACKUPS[op['schema']]
+            self.assertEqual(m.validate_operation(op,NOW,'2'*64),op)
+            self.assertTrue(m.is_owner_acl_backup(op));self.assertFalse(m.is_notification_backup(op))
+            self.assertTrue(m.is_namespace_operation(op));self.assertTrue(m.is_disk_operation(op))
+            self.assertEqual(m.operation_mode(op),(definition['mode'],op['releaseId']))
+            self.assertEqual(m.disk_ledger_sha(op),definition['ledger'])
+            self.assertEqual(m.owner_acl_receipt_schema(op),definition['receiptSchema'])
+            self.assertEqual(m.owner_acl_terminal_schema(op),definition['terminalSchema'])
+            self.assertEqual(m.owner_acl_supervisor_schema(op),definition['supervisorSchema'])
+            plan=m.disk_plan(op,m.encoded(op),m.disk_sizing(4096,8*1024**3,64*1024**3))
+            self.assertTrue(plan['canonical'].endswith('-'+definition['mode']));plans.append(plan)
+        for key in ('canonical','work','pendingLock','mapperName','luksUuid','filesystemUuid'):
+            self.assertNotEqual(plans[0][key],plans[1][key])
+        self.assertNotEqual(plans[0]['expectedLedgerSha256'],plans[1]['expectedLedgerSha256'])
+
+    def test_wrong_stage_source_scope_runtime_and_preledger_are_rejected(self):
+        for kind in ('game_start_0103','subject_link_0104'):
+            op=closed_application_operation(kind)
+            for change in [
+                {'expectedLedgerSha256':'0'*64},{'profile':'production'},
+                {'expectedDatabaseTarget':{'databaseName':'other','systemIdentifier':'1'}},
+                {'catalogVariant':'AUTO'},{'catalogBuilderSha256':'missing'},
+                {'controllerSha':'a'*40},{'controllerSourceCiRunId':'1'},
+                {'expectedApi':{**op['expectedApi'],'id':'e'*64}},
+                {'expectedPostgres':{**op['expectedPostgres'],'id':'e'*64}},
+                {'migratorPrefetch':{**op['migratorPrefetch'],'migratorImage':'ghcr.io/z6v6e6r/phub-migrator@sha256:'+'e'*64}},
+                {'migrationIntent':{**op['migrationIntent'],'migrationProfile':'subject_link_0104' if kind=='game_start_0103' else 'game_start_0103'}},
+                {'confirmation':'BACKUP_RESTORE_OTHER'},
+            ]:
+                with self.subTest(kind=kind,change=change),self.assertRaises(m.Stop):m.validate_operation({**op,**change},NOW,'2'*64)
+
+    def test_migration_expiry_renewal_preserves_backup_binding_but_not_source_drift(self):
+        op=closed_application_operation('subject_link_0104');initial=m.closed_application_binding_sha(op)
+        updated=copy.deepcopy(op);updated['migrationIntent']['expiresAt']='2026-10-10T17:00:00.000Z';updated['migrationIntent']['confirmation']='SYNTHETIC_RENEWED'
+        self.assertEqual(m.closed_application_binding_sha(updated),initial)
+        updated['migrationIntent']['catalogVariant']='DORMANT'
+        self.assertNotEqual(m.closed_application_binding_sha(updated),initial)
+
+
 class LocationPhotoBackupProfileTests(unittest.TestCase):
     def test_closed_profile_routes_to_owner_acl_namespace_without_widening_notification(self):
         op=location_photo_operation()
@@ -159,6 +217,54 @@ def source_proof(script=b'synthetic reviewed helper'):
     def obj(kind,raw):return {'oid':m.git_oid(kind,raw),'sha256':m.digest(raw),'base64':base64.b64encode(raw).decode()}
     return {'schema':'PHUB_TIMEWEB_BACKUP_SOURCE_PROOF_V1','repository':{'name':'Z6v6e6r/lk2','id':1297548073},'path':'scripts/control-timeweb-database-backup.py',
             'commit':obj('commit',commit),'rootTree':obj('tree',root),'scriptsTree':obj('tree',scripts),'blob':{'oid':blob,'sha256':m.digest(script)}}
+
+
+class ClosedApplicationSourcePrelaunchTests(unittest.TestCase):
+    command=LocationPhotoSourcePrelaunchTests.command
+    def setUp(self):
+        LocationPhotoSourcePrelaunchTests.setUp(self)
+        self.op=closed_application_operation('game_start_0103')
+    def test_new_profiles_use_only_pure_source_bridge_before_supervisor_host_admission(self):
+        for kind in ('game_start_0103','subject_link_0104'):
+            self.op=closed_application_operation(kind)
+            program,environment=m._owner_acl_source_program(self.op)
+            self.assertIn('attestClosedApplicationBackupSource',program)
+            self.assertNotIn('attestLocationPhotoBackupSource',program)
+            self.assertNotIn('attestClosedApplicationHostRuntime',program)
+            self.assertNotIn('githubPublic',program)
+            self.assertNotIn('NODE_OPTIONS',environment)
+            self.assertNotIn('DOCKER_HOST',environment)
+
+class ClosedApplicationRetainedEntryTests(unittest.TestCase):
+    def test_retained_entry_reads_only_canonical_first_stage_and_terminal_verifier(self):
+        op=closed_application_operation('game_start_0103');raw=m.encoded(op)
+        path=m.ROOT/'backups'/(op['releaseId']+'-game-start-pre0103')/'backup-operation.json'
+        tool=m.ROOT/('operator/tools/'+op['toolCommit']+'/control-timeweb-database-backup.py')
+        reads=[]
+        def read(target,mode=0o600):
+            reads.append(target)
+            self.assertIn(target,(path,tool))
+            return b'synthetic tool' if target==tool else raw
+        with patch.object(sys,'argv',['controller','--attest-closed-retained',str(path)]), \
+             patch.object(m.os,'getuid',return_value=0), \
+             patch.object(m,'__file__',str(tool)),patch.object(m,'read_secure',side_effect=read), \
+             patch.object(m,'validate_operation',return_value=op), \
+             patch.object(m.os,'uname',return_value=SimpleNamespace(nodename='msk-1-vm-z8ks',machine='x86_64')), \
+             patch.object(m,'command',return_value=b'100.77.212.57 103.88.243.171'), \
+             patch.object(m,'notification_backup_reference',return_value={'status':'READ_ONLY_TERMINAL'}) as verifier, \
+             patch('sys.stdout',new_callable=io.StringIO) as stdout:
+            m.main()
+            self.assertEqual(json.loads(stdout.getvalue()),{'status':'READ_ONLY_TERMINAL'})
+            verifier.assert_called_once_with(op,raw,m.digest(b'synthetic tool'))
+        self.assertNotIn(m.REQUEST,reads)
+    def test_retained_entry_rejects_arbitrary_second_stage_and_traversal_paths_before_read(self):
+        for path in ('/tmp/arbitrary.json',str(m.REQUEST),
+                     str(m.ROOT/'backups'/('a'*40+'-123-1-subject-link-pre0104')/'backup-operation.json'),
+                     str(m.ROOT/'backups'/('a'*40+'-123-1-game-start-pre0103')/'..'/'backup-operation.json')):
+            with patch.object(sys,'argv',['controller','--attest-closed-retained',path]), \
+                 patch.object(m.os,'getuid',return_value=0),patch.object(m,'read_secure') as reader:
+                with self.assertRaisesRegex(m.Stop,'CLOSED_RETAINED_PATH'):m.main()
+                reader.assert_not_called()
 
 
 class NotificationTerminalCustodyTests(unittest.TestCase):
