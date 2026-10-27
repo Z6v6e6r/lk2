@@ -32,13 +32,13 @@ policy version/digest, usage context и opaque orchestration receipt.
 
 ## 2. Что уже есть и не должно ломаться
 
-| Элемент | Где | Что фиксируем как v1 |
-| --- | --- | --- |
-| Quote v1 (advisory) | `packages/subscription-runtime-adapter/src/index.ts:148-187` | `contractVersion:1`, `nonBinding:true`, `requiresReservationRecheck:true`, `decisionId`, `selectedSubscription{subscriptionInstanceId,policyVersion,policyDigest}`, `limits`, `expiresAt` |
-| Admission request v1 | `packages/subscription-runtime-adapter/src/booked-operation-admission.ts:11-18` | ровно `{action:'JOIN_GAME', target:{id,expectedRevision}, paymentIntent:'USE_SUBSCRIPTION'}` |
-| Receipt v1 | `packages/subscription-runtime-adapter/src/booked-operation-read.ts:6-24` | 17 ключей, `contractVersion:1`, `source:'LK1_SUBSCRIPTION_BOOKING_OWNER'` |
-| Delegation claims | `apps/api/src/subscriptions/subscription-runtime-actor-delegation-issuer.ts:187-220` | `contract_version:1`, `request_sha256`, `idempotency_key_sha256`, target/provider claims |
-| B1 read boundary | #445 | LK2 читает published/effective policy version+digest **только на чтение**, default OFF, ничего не хранит и не исполняет |
+| Элемент              | Где                                                                                  | Что фиксируем как v1                                                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quote v1 (advisory)  | `packages/subscription-runtime-adapter/src/index.ts:148-187`                         | `contractVersion:1`, `nonBinding:true`, `requiresReservationRecheck:true`, `decisionId`, `selectedSubscription{subscriptionInstanceId,policyVersion,policyDigest}`, `limits`, `expiresAt` |
+| Admission request v1 | `packages/subscription-runtime-adapter/src/booked-operation-admission.ts:11-18`      | ровно `{action:'JOIN_GAME', target:{id,expectedRevision}, paymentIntent:'USE_SUBSCRIPTION'}`                                                                                              |
+| Receipt v1           | `packages/subscription-runtime-adapter/src/booked-operation-read.ts:6-24`            | 17 ключей, `contractVersion:1`, `source:'LK1_SUBSCRIPTION_BOOKING_OWNER'`                                                                                                                 |
+| Delegation claims    | `apps/api/src/subscriptions/subscription-runtime-actor-delegation-issuer.ts:187-220` | `contract_version:1`, `request_sha256`, `idempotency_key_sha256`, target/provider claims                                                                                                  |
+| B1 read boundary     | #445                                                                                 | LK2 читает published/effective policy version+digest **только на чтение**, default OFF, ничего не хранит и не исполняет                                                                   |
 
 Существующий `policyVersion/policyDigest` в quote — **subscription-scoped и non-binding**: он не
 может авторизовать списание и не идентифицирует решение для конкретной цели/действия.
@@ -124,12 +124,12 @@ v2, а не «добавьте что-нибудь»:
 
 ### 3.5 Reserve / confirm / release / compensate
 
-| Endpoint | Семантика | Идемпотентность |
-| --- | --- | --- |
-| `POST .../lk2/v1/reserve` | резерв usage по `decisionId`+`policyRef`; возвращает `reservationId`, `usageRef`, `reservedUnits`, `remainingUnits`, `expiresAt` | повтор с тем же `(operationId, Idempotency-Key)` → тот же ответ, второй резерв не создаётся |
-| `POST .../lk2/v1/confirm` | фиксирует резерв и возвращает финальный receipt v2 (`receiptId`, `confirmedAt`, `policyVersion`, `policyDigest`, `usageRef`, `bookingRef`) | повтор → тот же receipt; после release/expire → `409` со стабильным кодом |
-| `POST .../lk2/v1/release` | освобождает **неподтверждённый** резерв | повтор → `{released:true}` |
-| `POST .../lk2/v1/compensate` | компенсирует **подтверждённое** списание | повтор → `{compensated:true}` |
+| Endpoint                     | Семантика                                                                                                                                  | Идемпотентность                                                                             |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `POST .../lk2/v1/reserve`    | резерв usage по `decisionId`+`policyRef`; возвращает `reservationId`, `usageRef`, `reservedUnits`, `remainingUnits`, `expiresAt`           | повтор с тем же `(operationId, Idempotency-Key)` → тот же ответ, второй резерв не создаётся |
+| `POST .../lk2/v1/confirm`    | фиксирует резерв и возвращает финальный receipt v2 (`receiptId`, `confirmedAt`, `policyVersion`, `policyDigest`, `usageRef`, `bookingRef`) | повтор → тот же receipt; после release/expire → `409` со стабильным кодом                   |
+| `POST .../lk2/v1/release`    | освобождает **неподтверждённый** резерв                                                                                                    | повтор → `{released:true}`                                                                  |
+| `POST .../lk2/v1/compensate` | компенсирует **подтверждённое** списание                                                                                                   | повтор → `{compensated:true}`                                                               |
 
 - Стабильные коды: недостаточно units (`422`), решение истекло (`410`), конфликт резерва
   (`409`), недоступность (`503`); тела ошибок не содержат PII/токенов.
