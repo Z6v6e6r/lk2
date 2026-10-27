@@ -1322,7 +1322,12 @@ function GamesPageContent({
         }
         let released: boolean;
         try {
-          released = await releaseNotFoundGameJoinAttempt(joinPrincipal, attempt, joinStorage);
+          // Both rules are lock-checked; pick the one matching the stored marker so a manual status
+          // check can also close a quiet attempt that provably never dispatched.
+          released =
+            attempt.dispatchStartedAt === undefined
+              ? await releaseUndispatchedGameJoinAttempt(joinPrincipal, attempt, joinStorage)
+              : await releaseNotFoundGameJoinAttempt(joinPrincipal, attempt, joinStorage);
         } catch {
           released = false;
         }
