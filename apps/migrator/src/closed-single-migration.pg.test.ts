@@ -115,6 +115,8 @@ async function verifyClosedHostEvidence(operation: ClosedApplicationOperation, s
   await runClosedApplicationPrefetchAdapter('reconcile', requestBytes, effects);
   expect(receipt).toEqual(saved);
   expect(pulls).toBe(1);
+  const sealedReceipt = effects.prefetchReceipt();
+  if (!sealedReceipt) throw Error('SYNTHETIC_PREFETCH_RECEIPT_REQUIRED');
   const definition = CLOSED_APPLICATION_BACKUPS[kind],
     toolBytes = Buffer.from('synthetic reviewed backup tool');
   const installation = Buffer.from('synthetic installation receipt');
@@ -126,7 +128,7 @@ async function verifyClosedHostEvidence(operation: ClosedApplicationOperation, s
     toolInstallationSha256: hash(installation),
     migratorPrefetch: {
       requestSha256: hash(requestBytes),
-      receiptSha256: hash(receipt),
+      receiptSha256: hash(sealedReceipt),
       migratorImage: operation.publishedMigrator.image,
       imageId: operation.publishedMigrator.imageId,
     },
