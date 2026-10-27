@@ -32,16 +32,40 @@ policy version/digest, usage context и opaque orchestration receipt.
 
 ## 2. Что уже есть и не должно ломаться
 
-| Элемент              | Где                                                                                  | Что фиксируем как v1                                                                                                                                                                      |
-| -------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Quote v1 (advisory)  | `packages/subscription-runtime-adapter/src/index.ts:148-187`                         | `contractVersion:1`, `nonBinding:true`, `requiresReservationRecheck:true`, `decisionId`, `selectedSubscription{subscriptionInstanceId,policyVersion,policyDigest}`, `limits`, `expiresAt` |
-| Admission request v1 | `packages/subscription-runtime-adapter/src/booked-operation-admission.ts:11-18`      | ровно `{action:'JOIN_GAME', target:{id,expectedRevision}, paymentIntent:'USE_SUBSCRIPTION'}`                                                                                              |
-| Receipt v1           | `packages/subscription-runtime-adapter/src/booked-operation-read.ts:6-24`            | 17 ключей, `contractVersion:1`, `source:'LK1_SUBSCRIPTION_BOOKING_OWNER'`                                                                                                                 |
-| Delegation claims    | `apps/api/src/subscriptions/subscription-runtime-actor-delegation-issuer.ts:187-220` | `contract_version:1`, `request_sha256`, `idempotency_key_sha256`, target/provider claims                                                                                                  |
-| B1 read boundary     | #445                                                                                 | LK2 читает published/effective policy version+digest **только на чтение**, default OFF, ничего не хранит и не исполняет                                                                   |
+| Элемент              | Где                                                                                                                       | Что фиксируем как v1                                                                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quote v1 (advisory)  | `packages/subscription-runtime-adapter/src/index.ts:148-187`                                                              | `contractVersion:1`, `nonBinding:true`, `requiresReservationRecheck:true`, `decisionId`, `selectedSubscription{subscriptionInstanceId,policyVersion,policyDigest}`, `limits`, `expiresAt` |
+| Admission request v1 | `packages/subscription-runtime-adapter/src/booked-operation-admission.ts:11-18`                                           | ровно `{action:'JOIN_GAME', target:{id,expectedRevision}, paymentIntent:'USE_SUBSCRIPTION'}`                                                                                              |
+| Receipt v1           | `packages/subscription-runtime-adapter/src/booked-operation-read.ts:6-24`                                                 | 17 ключей, `contractVersion:1`, `source:'LK1_SUBSCRIPTION_BOOKING_OWNER'`                                                                                                                 |
+| Delegation claims    | `apps/api/src/subscriptions/subscription-runtime-actor-delegation-issuer.ts:187-220`                                      | `contract_version:1`, `request_sha256`, `idempotency_key_sha256`, target/provider claims                                                                                                  |
+| B1 read boundary     | #445                                                                                                                      | LK2 читает published/effective policy version+digest **только на чтение**, default OFF, ничего не хранит и не исполняет                                                                   |
+| LK1 registry read    | ph-admin `GET /api/internal/subscriptions/policy-registry` (main `83b1c17b`)                                              | проверено 2026-10-27: путь, заголовок и enum'ы совпадают с B1-клиентом; включается флагами `SUBSCRIPTIONS_POLICY_REGISTRY_*`                                                              |
+| LK1 booking owner    | `lk` repo: `scripts/nodered_booked_operation_receiver_nodes/**`, `outputs/lk1-booked-op-receiver-20261021/HANDOFF-LK1.md` | `POST /lk/integrations/v1/booked-operation-admissions`, `GET /lk/integrations/v1/booked-operations/:operationId`; **точный claim set**, `contract_version:1`, `receipt_version:1`         |
 
 Существующий `policyVersion/policyDigest` в quote — **subscription-scoped и non-binding**: он не
 может авторизовать списание и не идентифицирует решение для конкретной цели/действия.
+
+### 2.1 Проверено в LK1 на 2026-10-27
+
+- **Реестр политик уже реализован в ph-admin** (CUP subscriptions service): контроллер
+  `internal/subscriptions`, глобальный prefix `api`, авторизация только заголовком
+  `x-subscriptions-integration-token`. LK1-флаги: `SUBSCRIPTIONS_POLICY_REGISTRY_ENABLED` и
+  `SUBSCRIPTIONS_POLICY_REGISTRY_INTEGRATION_TOKEN` (в LK2 имена с одним `SUBSCRIPTION_...`) —
+  при staging-включении легко перепутать, нужна явная пара значений.
+- **Ответ реестра совпадает с контрактом B1** по составу и enum'ам: `schemaVersion`,
+  `generatedAt`, `items`, `totals`; `publication{publicationId, policyVersion, policyDigest,
+state, effectiveAt, applyTo, publishedAt, supersededAt, runtimeCompatibility}`;
+  `versions{policyVersion, status, modelVersion 2|3, effectiveAt, applyTo, publicationState}`;
+  `instances{total, byPolicyVersion}`, `providerProductIds`, `lastDecision`, `lastQuoteDecision`
+  (`channel ?? 'LK2'`). Enum'ы: `DRAFT|ACTIVE|ARCHIVED`, `DRAFT|PUBLISHED|SUPERSEDED`,
+  `NEW_ONLY|ACTIVE_AND_NEW`, `PUBLISHED|SUPERSEDED|DISABLED_FOR_NEW_OPERATIONS`.
+- **Booking owner — не ph-admin, а LK1 Node-RED receiver** (репозиторий `lk`): он ведёт
+  `booked_operation_admissions` и receipt в Mongo, проверяет **точный набор claims** и
+  `request_sha256` над каноническим телом `booked-operation-admission:v1\0...`.
+- Следствие: admission v2, receipt v2 и новые claims требуют изменений **в Node-RED owner flow**
+  (LK1), а `policyRef/usageRef` и счётчики — в ph-admin usage ledger. Контракт должен заранее
+  зафиксировать, какой сервис владеет reserve/confirm/release/compensate (рекомендация — ph-admin
+  ledger, owner flow только фиксирует `usageRef` в receipt).
 
 ## 3. Восемь обязательных элементов контракта
 
@@ -109,6 +133,8 @@ POST /api/internal/subscription-runtime/lk2/v1/quote
 
 - v2 согласуется через delegation claim `contract_version: 2`; LK1 обязан продолжать принимать
   v1-запрос без новых полей (expand-first).
+- Владелец маршрута — LK1 Node-RED receiver (`lk` repo), не ph-admin; текущая версия проверяет
+  точный claim set и `contract_version:1`, поэтому v2 — явный список, а не «дополнительные поля».
 - Acceptance: LK1 отклоняет v2-запрос со старым/чужим `policyRef`/`usageRef` стабильным кодом и
   не создаёт бронь.
 
@@ -119,6 +145,8 @@ POST /api/internal/subscription-runtime/lk2/v1/quote
 v2, а не «добавьте что-нибудь»:
 
 - `usageRef` — opaque `[A-Za-z0-9._:-]{1,200}`, не идентификатор подписки/пользователя;
+- receipt v2 строится в том же owner flow, что и v1 (LK1 Node-RED receiver), а не в ph-admin;
+  сейчас он отдаёт `receipt_version:1`, поэтому менять обе стороны нужно одновременно;
 - v1-receipt остаётся валидным для операций, начатых до включения;
 - unknown keys в v2 → отказ LK2 (fail-closed), поэтому список должен быть согласован заранее.
 
@@ -133,6 +161,10 @@ v2, а не «добавьте что-нибудь»:
 
 - Стабильные коды: недостаточно units (`422`), решение истекло (`410`), конфликт резерва
   (`409`), недоступность (`503`); тела ошибок не содержат PII/токенов.
+- Владелец: usage/reservation ledger — ph-admin (B3), а подтверждение брони/receipt — LK1 Node-RED
+  owner. Нужно решить, где живут reserve/confirm/release/compensate: (a) в ph-admin ledger, а
+  owner flow только фиксирует `usageRef` в receipt, либо (b) в owner flow с делегированием в
+  ph-admin. Рекомендуется (a): один источник счётчика, owner flow отвечает только за booking.
 - Recovery: существующий read by `operationId` (`/lk/integrations/v1/booked-operations/{id}`)
   после потерянного ответа возвращает PENDING/UNKNOWN/CONFIRMED и receipt, не создавая новую
   бронь и не увеличивая usage.
@@ -149,13 +181,13 @@ readback.
 
 ### 3.7 Политика delegation claims
 
-LK1 должен явно заявить: проверяется ли **точный** набор claims или допускаются дополнительные.
+По действующему owner-коду (`lk`, HANDOFF-LK1) LK1 проверяет **точный** набор claims, поэтому
+«добавить claim» без версии нельзя: нужен v2 claim set и порядок «сначала LK1 принимает v2
+(expand), затем LK2 начинает слать». Предлагаемые новые claims: `contract_version:2`,
+`policy_version`, `policy_digest`, `decision_id`, `usage_ref`.
 
-- Если набор точный — нужен v2 claim set и порядок: сначала LK1 принимает v2 (expand), затем LK2
-  начинает слать. Предлагаемые новые claims: `contract_version:2`, `policy_version`,
-  `policy_digest`, `decision_id`, `usage_ref`.
-- Если дополнительные допускаются — подтвердить это контрактом, чтобы LK2 мог расширять набор без
-  поломки всех вызовов.
+Если LK1 решит ослабить проверку до «базовый набор + допускаются дополнительные» — это отдельное
+контрактное изменение с security-review, но не обязательное для B2.
 
 ### 3.8 Ownership и единый счётчик
 
@@ -186,6 +218,11 @@ LK1 должен явно заявить: проверяется ли **точн
 коды ошибок, лимит размера ответа (как 1 MiB у реестра политик B1), отсутствие PII и секретов в
 телах и метриках.
 
+Отдельно для B1: включение реестра на staging требует одновременного включения LK1-флагов
+`SUBSCRIPTIONS_POLICY_REGISTRY_ENABLED` + `SUBSCRIPTIONS_POLICY_REGISTRY_INTEGRATION_TOKEN` и
+совпадения токена с LK2 `SUBSCRIPTION_POLICY_REGISTRY_INTEGRATION_TOKEN` (имена флагов отличаются
+на одну `S` — это частая причина «UNAVAILABLE» при формально включённых настройках).
+
 ## 6. Acceptance для B3
 
 - [ ] единый счётчик: операция LK2, операция LK1-админки и запись LK1 видны в одном счётчике;
@@ -211,6 +248,12 @@ LK1 должен явно заявить: проверяется ли **точн
    после частичного provider-успеха.
 6. Staging-контур LK1 и кто прогоняет интеграцию; флаги LK2 на время прогона.
 7. Кто владеет таблицей стабильных кодов ошибок.
+8. Кто владеет reserve/confirm/release/compensate — ph-admin ledger или LK1 Node-RED owner — и
+   кто минтит `usageRef`.
+9. Как согласуются staging-флаги: LK1 `SUBSCRIPTIONS_POLICY_REGISTRY_ENABLED` +
+   `SUBSCRIPTIONS_POLICY_REGISTRY_INTEGRATION_TOKEN` против LK2
+   `SUBSCRIPTION_POLICY_REGISTRY_ENABLED` + `_BASE_URL` + `_INTEGRATION_TOKEN` (имена отличаются
+   на одну `S`).
 
 ## 8. Не-цели
 
