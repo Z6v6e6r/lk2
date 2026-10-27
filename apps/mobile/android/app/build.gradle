@@ -1,5 +1,72 @@
 apply plugin: 'com.android.application'
 
+// Release signing is fail closed. A release build never falls back to debug signing and never
+// produces an unsigned artifact: when the required inputs are absent, any release packaging or
+// signing task fails with one actionable message. Inputs come from the environment (CI) or from a
+// gitignored apps/mobile/android/keystore.properties. See docs/runbooks/android-release-signing.md.
+def releaseSigningPropertiesFile = rootProject.file('keystore.properties')
+def releaseSigningProperties = new Properties()
+if (releaseSigningPropertiesFile.isFile()) {
+    releaseSigningPropertiesFile.withInputStream { releaseSigningProperties.load(it) }
+}
+
+def releaseSigningValue = { String environmentName, String propertyName ->
+    def fromEnvironment = System.getenv(environmentName)
+    if (fromEnvironment != null && !fromEnvironment.trim().isEmpty()) {
+        return fromEnvironment.trim()
+    }
+    def fromPropertiesFile = releaseSigningProperties.getProperty(propertyName)
+    if (fromPropertiesFile != null && !fromPropertiesFile.trim().isEmpty()) {
+        return fromPropertiesFile.trim()
+    }
+    return null
+}
+
+def releaseSigningSources = [
+    storeFile: ['ANDROID_KEYSTORE_PATH', 'storeFile'],
+    storePassword: ['ANDROID_KEYSTORE_PASSWORD', 'storePassword'],
+    keyAlias: ['ANDROID_KEY_ALIAS', 'keyAlias'],
+    keyPassword: ['ANDROID_KEY_PASSWORD', 'keyPassword'],
+]
+def releaseSigningValues = [:]
+def missingReleaseSigningInputs = []
+releaseSigningSources.each { name, sources ->
+    def value = releaseSigningValue(sources[0], sources[1])
+    releaseSigningValues[name] = value
+    if (value == null) {
+        missingReleaseSigningInputs << name + ' (' + sources[0] + ')'
+    }
+}
+def configuredReleaseKeystore = releaseSigningValues.storeFile == null
+    ? null
+    : rootProject.file(releaseSigningValues.storeFile)
+def releaseSigningProblem = null
+if (!missingReleaseSigningInputs.isEmpty()) {
+    releaseSigningProblem = "Android release signing is not configured: missing " +
+        missingReleaseSigningInputs.sort().join(', ') + "."
+} else if (configuredReleaseKeystore == null || !configuredReleaseKeystore.isFile()) {
+    releaseSigningProblem = "Android release signing is not configured: the keystore file " +
+        configuredReleaseKeystore + " does not exist."
+}
+if (releaseSigningProblem != null) {
+    releaseSigningProblem += " Provide ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD," +
+        " ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD as environment variables or create the" +
+        " gitignored apps/mobile/android/keystore.properties. Refusing to build an unsigned or" +
+        " debug-signed release. See docs/runbooks/android-release-signing.md."
+}
+
+def requiresReleaseSigning = { String taskName ->
+    return taskName == 'build' ||
+        taskName.matches('(?i)^(assemble|bundle|package|sign|validateSigning).*release.*$')
+}
+
+gradle.taskGraph.whenReady { taskGraph ->
+    if (releaseSigningProblem != null &&
+        taskGraph.allTasks.any { task -> requiresReleaseSigning(task.name) }) {
+        throw new GradleException(releaseSigningProblem)
+    }
+}
+
 android {
     namespace = "ru.padlhub.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -17,11 +84,37 @@ android {
         }
     }
     buildFeatures { buildConfig true }
+    signingConfigs {
+        if (releaseSigningProblem == null) {
+            release {
+                storeFile configuredReleaseKeystore
+                storePassword releaseSigningValues.storePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+            }
+        }
+    }
     buildTypes {
         release {
+            if (releaseSigningProblem == null) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+    }
+}
+
+def appVersionCode = android.defaultConfig.versionCode
+def appVersionName = android.defaultConfig.versionName
+
+// Release metadata source for .github/workflows/mobile-android.yaml. It never reads signing material.
+tasks.register('printAppVersion') {
+    group = 'help'
+    description = 'Prints versionCode and versionName for signed release build metadata.'
+    doLast {
+        println "versionCode=${appVersionCode}"
+        println "versionName=${appVersionName}"
     }
 }
 
