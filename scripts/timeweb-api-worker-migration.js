@@ -3176,10 +3176,22 @@ function productionOps(op, owner, ignoredRestore = null) {
       present(prefetchFile('receipt')) ? read(prefetchFile('receipt')) : null,
     writePrefetchReceipt: (bytes) =>
       sealNotificationPrefetchMetadata(prefetchFile('receipt'), bytes),
-    prefetchImagePresent: () =>
-      docker(['image', 'ls', '--no-trunc', '--digests', '--format', '{{.Repository}}@{{.Digest}}'])
-        .split('\n')
-        .includes(migratorImage),
+    prefetchImagePresent: () => {
+      // The index ref alone is not enough for the location-photo package: reconcile must be able to
+      // resume an interrupted pull that stored the index but not the pinned amd64 child ref.
+      const digests = docker([
+        'image',
+        'ls',
+        '--no-trunc',
+        '--digests',
+        '--format',
+        '{{.Repository}}@{{.Digest}}',
+      ]).split('\n');
+      return (
+        digests.includes(migratorImage) &&
+        (locationPhotoImageRef === null || digests.includes(locationPhotoImageRef))
+      );
+    },
     pullMigrator: () => {
       if (!notification && !locationPhoto) stop('PREFETCH_PROFILE');
       // Only this image-store stage uses the enrolled release reader. All SQL and
