@@ -121,4 +121,18 @@ public class AndroidGameJoinSessionTest {
         rejected(() -> policy.request(ROOT + "/games/" + GAME + "/join-operation", "GET", missingKey, null));
         rejected(() -> policy.request(ROOT + "/games/" + GAME + "/join", "POST", missingKey, BODY));
     }
+
+    @Test public void forwardsCanonicalReceiptReconciliationWithTheSameKey() throws Exception {
+        AndroidSessionPolicy policy = policy();
+        String reconcile = ROOT + "/game-operations/" + KEY + "/reconcile";
+        Request request = policy.request(reconcile, "POST", headers(), null);
+        assertEquals(Operation.API, request.operation);
+        assertEquals(KEY, request.headers.get("idempotency-key"));
+        // The reconcile route is a POST command with a reviewed idempotency key on the same
+        // operation id; no other game mutation is opened by this increment.
+        Map<String, String> missingKey = headers(); missingKey.remove("idempotency-key");
+        rejected(() -> policy.request(reconcile, "POST", missingKey, null));
+        rejected(() -> policy.request(ROOT + "/game-operations/" + GAME + "/reconcile", "GET", headers(), null));
+        rejected(() -> policy.request(ROOT + "/games/" + GAME + "/reconcile", "POST", headers(), null));
+    }
 }

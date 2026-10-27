@@ -969,6 +969,33 @@ export async function reconcileCommercialJoinOperation(
               },
             };
         }
+        // The trusted receipt was applied in this transaction. Return its confirmed aggregate
+        // revision directly: re-reading the attempt here can still observe the pre-completion
+        // projection and answer SUCCEEDED with `aggregateRevision: null`, which leaves the client
+        // permanently in CONFIRMED_UPDATING instead of converging the card.
+        if (confirmed.outcome === 'applied') {
+          const receiptView: CommercialJoinReceiptView = {
+            provider: 'VIVA',
+            status: 'CONFIRMED',
+            confirmedAt: receipt.verifiedAt,
+          };
+          return operationBody({
+            operationId: attempt.commandId,
+            status: 'SUCCEEDED',
+            gameId: attempt.gameId,
+            revision: confirmed.revision,
+            createdAt: confirmed.committedAt,
+            updatedAt: receipt.verifiedAt,
+            commercial: attemptView(
+              'OWNER_CONFIRMED',
+              attempt.reservation,
+              null,
+              receiptView,
+              null,
+            ),
+            replayed: false,
+          });
+        }
       }
     }
   }
