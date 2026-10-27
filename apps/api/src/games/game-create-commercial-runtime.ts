@@ -2,6 +2,10 @@ import { createHash } from 'node:crypto';
 
 import type { AppConfig } from '@phub/config';
 import type { GameRepository } from '@phub/database';
+import {
+  parseCommercialBindingRefs,
+  type CommercialBindingRefs,
+} from '@phub/subscription-runtime-adapter';
 
 import {
   isCommercialCreateFailureCode,
@@ -37,6 +41,7 @@ const ownerUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 const correlationIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const actorDelegationPattern = /^[!-~]{1,4096}$/;
 const boundedReferencePattern = /^[!-~]{1,200}$/;
+const policyDigestPattern = /^sha256:[a-f0-9]{64}$/;
 const managedCreatePaymentModes: readonly string[] = ['SPLIT', 'SUBSCRIPTION'];
 const managedCreatePaymentIntents: readonly string[] = [
   'USE_SUBSCRIPTION',
@@ -68,8 +73,23 @@ function isInstant(value: unknown): value is string {
 }
 
 /** True when the request carries only server-derived, well-formed identifiers and enums. */
+/**
+ * B2 binding evidence is validated with the shared strict parser before it can reach a wire body,
+ * so a malformed decision can never be sent as if it were an authorising reference.
+ */
+function wellFormedBindingRefs(value: CommercialBindingRefs | undefined): boolean {
+  if (value === undefined) return true;
+  try {
+    parseCommercialBindingRefs(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function isWellFormedOwnerRequest(input: CommercialCreateOwnerRequest): boolean {
   return (
+    wellFormedBindingRefs(input.bindingRefs) &&
     ownerUuid.test(input.tenantId) &&
     ownerUuid.test(input.userId) &&
     ownerUuid.test(input.operationId) &&
@@ -210,6 +230,9 @@ interface Lk1CreateReceipt {
   readonly appliedRule: string;
   readonly usageRef: string;
   readonly bookingRef: string;
+  readonly policyVersion?: number;
+  readonly policyDigest?: string;
+  readonly decisionId?: string;
 }
 
 export interface CommercialCreateReleaseInput {
@@ -290,6 +313,9 @@ function ownerReserveBody(
   readonly paymentIntent: string;
   readonly preferredSubscriptionInstanceId: string | null;
   readonly priceSnapshot: { readonly amountMinor: number; readonly currency: string } | null;
+  readonly policyRef?: { readonly policyVersion: number; readonly policyDigest: string };
+  readonly decisionId?: string;
+  readonly usageRef?: { readonly usageRef: string; readonly reservationUnits?: number };
 } {
   const price = input.quote?.price ?? null;
   return {
@@ -305,6 +331,17 @@ function ownerReserveBody(
     preferredSubscriptionInstanceId: input.preferredSubscriptionInstanceId ?? null,
     priceSnapshot:
       price === null ? null : { amountMinor: price.amountMinor, currency: price.currency },
+    ...(input.bindingRefs
+      ? {
+          policyRef: input.bindingRefs.policyRef,
+          ...(input.bindingRefs.decisionId === undefined
+            ? {}
+            : { decisionId: input.bindingRefs.decisionId }),
+          ...(input.bindingRefs.usageRef === undefined
+            ? {}
+            : { usageRef: input.bindingRefs.usageRef }),
+        }
+      : {}),
   };
 }
 
@@ -323,16 +360,50 @@ function isValidPolicyVersion(value: unknown): boolean {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** Strict reservation response guard: a malformed owner body must never read as a reservation. */
-function isValidReservationResponse(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value.reservationId === 'string' &&
-    ownerUuid.test(value.reservationId) &&
-    isInstant(value.expiresAt) &&
-    isValidPolicyVersion(value.policyVersion) &&
-    (value.priceSnapshot === null || isValidPriceSnapshot(value.priceSnapshot))
-  );
+/**
+ * Strict reservation response guard: a malformed owner body must never read as a reservation.
+ * When the request carried a B2 binding, the owner response must echo the same decision, otherwise
+ * the reservation is not bound and reads as UNKNOWN (reconciliation), never as an authorisation.
+ */
+function isValidReservationResponse(value: unknown, expected?: CommercialBindingRefs): boolean {
+  if (
+    !isRecord(value) ||
+    typeof value.reservationId !== 'string' ||
+    !ownerUuid.test(value.reservationId) ||
+    !isInstant(value.expiresAt) ||
+    !isValidPolicyVersion(value.policyVersion) ||
+    !(value.priceSnapshot === null || isValidPriceSnapshot(value.priceSnapshot))
+  )
+    return false;
+  if (
+    value.policyDigest !== undefined &&
+    (typeof value.policyDigest !== 'string' || !policyDigestPattern.test(value.policyDigest))
+  )
+    return false;
+  if (value.decisionId !== undefined) {
+    if (typeof value.decisionId !== 'string' || !ownerUuid.test(value.decisionId)) return false;
+  }
+  if (value.reservedUnits !== undefined) {
+    if (
+      typeof value.reservedUnits !== 'number' ||
+      !Number.isSafeInteger(value.reservedUnits) ||
+      value.reservedUnits < 1
+    )
+      return false;
+  }
+  if (value.remainingUnits !== undefined) {
+    if (
+      typeof value.remainingUnits !== 'number' ||
+      !Number.isSafeInteger(value.remainingUnits) ||
+      value.remainingUnits < 0
+    )
+      return false;
+  }
+  if (expected === undefined) return true;
+  if (value.policyVersion !== expected.policyRef.policyVersion) return false;
+  if (value.policyDigest !== expected.policyRef.policyDigest) return false;
+  if (expected.decisionId !== undefined && value.decisionId !== expected.decisionId) return false;
+  return true;
 }
 
 function typedRefusalCode(value: unknown): CommercialCreateFailureCode | undefined {
@@ -341,8 +412,15 @@ function typedRefusalCode(value: unknown): CommercialCreateFailureCode | undefin
   return typeof reason === 'string' && isCommercialCreateFailureCode(reason) ? reason : undefined;
 }
 
-/** Trusted receipt guard: every field is required and bounded, nothing is taken on trust. */
-function trustedReceipt(value: unknown): Lk1CreateReceipt | undefined {
+/**
+ * Trusted receipt guard: every frozen field is required and bounded, nothing is taken on trust.
+ * When the request carried a B2 binding, the receipt must echo the same policy decision and usage
+ * reservation; a mismatch is UNKNOWN (reconciliation), never a confirmed receipt.
+ */
+function trustedReceipt(
+  value: unknown,
+  expected?: CommercialBindingRefs,
+): Lk1CreateReceipt | undefined {
   if (!isRecord(value)) return undefined;
   const { receiptId, confirmedAt, appliedRule, usageRef, bookingRef } = value;
   if (typeof receiptId !== 'string' || !ownerIdentifier.test(receiptId)) return undefined;
@@ -351,7 +429,42 @@ function trustedReceipt(value: unknown): Lk1CreateReceipt | undefined {
     return undefined;
   if (typeof usageRef !== 'string' || !boundedReferencePattern.test(usageRef)) return undefined;
   if (typeof bookingRef !== 'string' || !boundedReferencePattern.test(bookingRef)) return undefined;
-  return { receiptId, confirmedAt, appliedRule, usageRef, bookingRef };
+  const policyVersion = value.policyVersion;
+  const policyDigest = value.policyDigest;
+  const decisionId = value.decisionId;
+  if (policyVersion !== undefined) {
+    if (
+      typeof policyVersion !== 'number' ||
+      !Number.isSafeInteger(policyVersion) ||
+      policyVersion < 1
+    )
+      return undefined;
+  }
+  if (policyDigest !== undefined) {
+    if (typeof policyDigest !== 'string' || !policyDigestPattern.test(policyDigest))
+      return undefined;
+  }
+  if (decisionId !== undefined) {
+    if (typeof decisionId !== 'string' || !ownerUuid.test(decisionId)) return undefined;
+  }
+  const receipt: Lk1CreateReceipt = {
+    receiptId,
+    confirmedAt,
+    appliedRule,
+    usageRef,
+    bookingRef,
+    ...(policyVersion === undefined ? {} : { policyVersion }),
+    ...(policyDigest === undefined ? {} : { policyDigest }),
+    ...(decisionId === undefined ? {} : { decisionId }),
+  };
+  if (expected === undefined) return receipt;
+  if (receipt.policyVersion !== expected.policyRef.policyVersion) return undefined;
+  if (receipt.policyDigest !== expected.policyRef.policyDigest) return undefined;
+  if (expected.decisionId !== undefined && receipt.decisionId !== expected.decisionId)
+    return undefined;
+  if (expected.usageRef !== undefined && receipt.usageRef !== expected.usageRef.usageRef)
+    return undefined;
+  return receipt;
 }
 
 /** Only the public-safe receipt projection crosses the API boundary. */
@@ -595,7 +708,7 @@ function buildBookedOperationCreateOwnerTransport(
       return { status: 'UNKNOWN' };
     }
     if (outcome.status >= 200 && outcome.status < 300) {
-      if (!isValidReservationResponse(outcome.body)) {
+      if (!isValidReservationResponse(outcome.body, input.bindingRefs)) {
         emit('reserve_failure');
         return { status: 'UNKNOWN' };
       }
@@ -632,7 +745,7 @@ function buildBookedOperationCreateOwnerTransport(
       emit('confirm_unknown');
       return { status: 'UNKNOWN' };
     }
-    const receipt = trustedReceipt(outcome.body);
+    const receipt = trustedReceipt(outcome.body, request.bindingRefs);
     if (receipt === undefined) {
       emit('confirm_unknown');
       return { status: 'UNKNOWN' };

@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 
 import type { CreateStoredGameInput, CreateStoredGameResult } from '@phub/database';
-import { bookedOperationAdmissionId } from '@phub/subscription-runtime-adapter';
+import {
+  bookedOperationAdmissionId,
+  type CommercialBindingRefs,
+} from '@phub/subscription-runtime-adapter';
 
 /**
  * Managed commercial CREATE orchestration (WARN contour).
@@ -101,6 +104,8 @@ export interface CommercialCreateOwnerRequest {
   readonly visibility: string;
   readonly preferredSubscriptionInstanceId?: string;
   readonly priceConsent?: CommercialCreatePriceConsent;
+  /** B2 binding evidence from a binding quote; validated strictly by the owner transport. */
+  readonly bindingRefs?: CommercialBindingRefs;
 }
 
 export type CommercialCreateOwnerOutcome =
