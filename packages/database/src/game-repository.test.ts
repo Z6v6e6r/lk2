@@ -267,7 +267,15 @@ describe('game repository', () => {
 
     const gameInsert = query.mock.calls.find(([text]) => text.includes('insert into games.games'));
     expect(gameInsert?.[0]).toContain('min_level_id, max_level_id');
-    expect(gameInsert?.[1]?.slice(-5)).toEqual(['C', 'B', levelCId, levelBId, 'PROVISIONING']);
+    expect(gameInsert?.[0]).toContain('coalesce($20::uuid, gen_random_uuid())');
+    expect(gameInsert?.[1]?.slice(-6)).toEqual([
+      'C',
+      'B',
+      levelCId,
+      levelBId,
+      'PROVISIONING',
+      null,
+    ]);
     const auditInsert = query.mock.calls.find(([text]) => text.includes('audit.audit_log'));
     expect(JSON.parse(String(auditInsert?.[1]?.[4]))).toMatchObject({
       participationEligibility: {
@@ -673,6 +681,65 @@ describe('game repository', () => {
       },
     });
   });
+
+  it.each(['PENDING', 'RUNNING'])(
+    'reports a still-provisioning managed create (%s) instead of a completed create',
+    async (operationState) => {
+      const { pool } = poolWithHandler((text) => {
+        if (text.includes("command_type in ('game.create.v1', 'game.cancel.v1')")) {
+          return {
+            rows: [
+              {
+                command_type: 'game.create.v1',
+                request_hash: 'a'.repeat(64),
+                state: 'COMPLETED',
+                completed_at: '2026-07-17T12:00:00.000Z',
+                result_payload: {
+                  outcome: 'applied',
+                  gameId,
+                  operationId,
+                  revision: 1,
+                },
+              },
+            ],
+          };
+        }
+        if (text.includes('from games.operations')) {
+          return {
+            rows: [
+              {
+                id: operationId,
+                game_id: gameId,
+                kind: 'CREATE_GAME',
+                state: operationState,
+                created_at: '2026-07-17T12:10:00.000Z',
+                updated_at: '2026-07-17T12:11:00.000Z',
+              },
+            ],
+          };
+        }
+        return { rows: [] };
+      });
+
+      await expect(
+        createGameRepository(pool as never).getManagementOperation({
+          tenantId,
+          actorUserId,
+          operationId,
+        }),
+      ).resolves.toEqual({
+        commandType: 'game.create.v1',
+        state: 'PENDING',
+        pending: {
+          gameId,
+          operationId,
+          revision: 1,
+          createdAt: '2026-07-17T12:10:00.000Z',
+          updatedAt: '2026-07-17T12:11:00.000Z',
+        },
+      });
+    },
+  );
 
   it('rejects idempotency key reuse with another request hash before temporal admission', async () => {
     const { pool, query } = poolWithHandler((text) =>

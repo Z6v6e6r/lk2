@@ -18,6 +18,13 @@ import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandl
 import { sendApiError } from '../http-errors.js';
 import { subscriptionRuntimeIdempotencyKeySha256 } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
 import {
+  executeCommercialCreate,
+  readCommercialCreateOperation,
+  type CommercialCreateFailureCode,
+  type CommercialCreatePriceConsent,
+} from './game-create-commercial.js';
+import type { GameCommercialCreateOptions } from './game-create-commercial-runtime.js';
+import {
   commercialJoinRequestHash,
   commercialOperationId,
   executeCommercialJoin,
@@ -213,15 +220,45 @@ const COMMERCIAL_FAILURE_STATUS: Readonly<Record<CommercialJoinFailureCode, numb
   GAME_RESERVATION_NOT_FOUND: 409,
 };
 
+/** Managed commercial CREATE failures reuse the existing stable codes and statuses. */
+const COMMERCIAL_CREATE_FAILURE_STATUS: Readonly<Record<CommercialCreateFailureCode, number>> = {
+  GAME_PAYMENT_MODE_MISMATCH: 409,
+  GAME_PRICE_CONFIRMATION_REQUIRED: 409,
+  GAME_SUBSCRIPTION_SELECTION_REQUIRED: 409,
+  GAME_SERVICE_BLOCKED: 409,
+  GAME_RECONCILIATION_REQUIRED: 409,
+  GAME_COMMERCIAL_ATTEMPT_CONFLICT: 409,
+  GAME_OWNER_UNAVAILABLE: 503,
+  GAME_NOT_FOUND: 404,
+  GAME_PAYMENT_REQUIRED: 409,
+};
+
 type CreateGamePayload = Omit<
   CreateStoredGameInput,
-  'tenantId' | 'actorUserId' | 'idempotencyKey' | 'requestHash' | 'correlationId' | 'joinCutoffAt'
+  | 'tenantId'
+  | 'actorUserId'
+  | 'idempotencyKey'
+  | 'requestHash'
+  | 'correlationId'
+  | 'joinCutoffAt'
+  | 'gameId'
+  | 'operationId'
 >;
+
+interface ParsedCreateBody {
+  readonly payload: CreateGamePayload;
+  /** Only collected when the managed commercial CREATE contour is composed. */
+  readonly commercial: {
+    readonly subscriptionInstanceId?: string;
+    readonly priceConsent?: CommercialCreatePriceConsent;
+  };
+}
 
 function parseCreateBody(
   request: FastifyRequest,
   reply: FastifyReply,
-): CreateGamePayload | undefined {
+  managedCreate: boolean,
+): ParsedCreateBody | undefined {
   if (typeof request.body !== 'object' || request.body === null || Array.isArray(request.body)) {
     sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Заполните параметры игры.');
     return undefined;
@@ -241,6 +278,12 @@ function parseCreateBody(
     'paymentMode',
     'waitlistEnabled',
   ]);
+  // Managed commercial CREATE extends the request additively. With the contour disabled the old
+  // allowlist stays exactly as before, so an `OFF` request is rejected byte-identically.
+  if (managedCreate) {
+    allowed.add('priceConsent');
+    allowed.add('subscriptionInstanceId');
+  }
   const levelRange = body.levelRange;
   const rangeRecord =
     typeof levelRange === 'object' && levelRange !== null && !Array.isArray(levelRange)
@@ -272,6 +315,14 @@ function parseCreateBody(
       validTimezone = false;
     }
   }
+  const priceConsent =
+    managedCreate && body.priceConsent !== undefined
+      ? parsePriceConsent(body.priceConsent)
+      : undefined;
+  const subscriptionInstanceId =
+    managedCreate && typeof body.subscriptionInstanceId === 'string'
+      ? body.subscriptionInstanceId
+      : undefined;
   if (
     Object.keys(body).some((key) => !allowed.has(key)) ||
     title.length < 1 ||
@@ -290,39 +341,39 @@ function parseCreateBody(
     ![2, 4].includes(Number(body.capacity)) ||
     !validLevelRange ||
     !['ORGANIZER_PAYS', 'SPLIT', 'SUBSCRIPTION', 'NO_PAYMENT'].includes(String(body.paymentMode)) ||
-    typeof body.waitlistEnabled !== 'boolean'
+    typeof body.waitlistEnabled !== 'boolean' ||
+    (managedCreate && body.priceConsent !== undefined && priceConsent === undefined) ||
+    (managedCreate &&
+      body.subscriptionInstanceId !== undefined &&
+      (subscriptionInstanceId === undefined || !UUID_PATTERN.test(subscriptionInstanceId)))
   ) {
     sendApiError(request, reply, 400, 'INVALID_REQUEST', 'Проверьте параметры и время игры.');
     return undefined;
   }
-  if (body.paymentMode !== 'NO_PAYMENT') {
-    sendApiError(
-      request,
-      reply,
-      409,
-      'GAME_PAYMENT_REQUIRED',
-      'В ранней beta можно создать только бесплатную игру.',
-    );
-    return undefined;
-  }
   return {
-    title,
-    kind: body.kind as CreateStoredGameInput['kind'],
-    visibility: body.visibility as CreateStoredGameInput['visibility'],
-    stationId: body.stationId,
-    ...(typeof body.courtId === 'string' ? { courtId: body.courtId } : {}),
-    startsAt: new Date(startsAtMs).toISOString(),
-    endsAt: new Date(endsAtMs).toISOString(),
-    timezone: body.timezone as string,
-    capacity: Number(body.capacity),
-    paymentMode: 'NO_PAYMENT',
-    waitlistEnabled: body.waitlistEnabled,
-    ...(rangeRecord
-      ? {
-          levelFrom: rangeFrom as NonNullable<CreateStoredGameInput['levelFrom']>,
-          levelTo: rangeTo as NonNullable<CreateStoredGameInput['levelTo']>,
-        }
-      : {}),
+    payload: {
+      title,
+      kind: body.kind as CreateStoredGameInput['kind'],
+      visibility: body.visibility as CreateStoredGameInput['visibility'],
+      stationId: body.stationId,
+      ...(typeof body.courtId === 'string' ? { courtId: body.courtId } : {}),
+      startsAt: new Date(startsAtMs).toISOString(),
+      endsAt: new Date(endsAtMs).toISOString(),
+      timezone: body.timezone as string,
+      capacity: Number(body.capacity),
+      paymentMode: body.paymentMode as CreateStoredGameInput['paymentMode'],
+      waitlistEnabled: body.waitlistEnabled,
+      ...(rangeRecord
+        ? {
+            levelFrom: rangeFrom as NonNullable<CreateStoredGameInput['levelFrom']>,
+            levelTo: rangeTo as NonNullable<CreateStoredGameInput['levelTo']>,
+          }
+        : {}),
+    },
+    commercial: {
+      ...(subscriptionInstanceId === undefined ? {} : { subscriptionInstanceId }),
+      ...(priceConsent === undefined ? {} : { priceConsent }),
+    },
   };
 }
 
@@ -522,6 +573,8 @@ export function registerGameRoutes(
     readonly managementRepository?: UserManagementRepository;
     readonly testCourtRepository?: GameTestCourtRepository;
     readonly commercialJoin?: GameCommercialJoinOptions;
+    /** Composed only when the managed commercial CREATE contour is enabled (default OFF). */
+    readonly commercialCreate?: GameCommercialCreateOptions;
     readonly authenticatedTenantHandlers: readonly preHandlerHookHandler[];
     readonly commandHandlers: readonly preHandlerHookHandler[];
   },
@@ -549,8 +602,76 @@ export function registerGameRoutes(
         return sendApiError(request, reply, 401, 'AUTH_REQUIRED', 'Требуется авторизация.');
       }
       if (!options.managementRepository) return unavailable(request, reply);
-      const payload = parseCreateBody(request, reply);
-      if (!payload) return reply;
+      const parsed = parseCreateBody(request, reply, options.commercialCreate !== undefined);
+      if (!parsed) return reply;
+      const { payload, commercial } = parsed;
+      if (payload.paymentMode !== 'NO_PAYMENT') {
+        // The blanket beta guard stays byte-identical while the managed contour is not composed.
+        if (!options.commercialCreate) {
+          return sendApiError(
+            request,
+            reply,
+            409,
+            'GAME_PAYMENT_REQUIRED',
+            'В ранней beta можно создать только бесплатную игру.',
+          );
+        }
+        const key = idempotencyKey(request);
+        const result = await executeCommercialCreate(
+          {
+            tenantId: current.tenantId,
+            tenantKey: (request.params as { tenantKey: string }).tenantKey,
+            userId: current.userId,
+            sessionId: sessionId(request),
+            correlationId: request.id,
+            idempotencyKey: key,
+            idempotencyKeySha256: subscriptionRuntimeIdempotencyKeySha256(key),
+            payload,
+            ...(commercial.subscriptionInstanceId === undefined
+              ? {}
+              : { subscriptionInstanceId: commercial.subscriptionInstanceId }),
+            ...(commercial.priceConsent === undefined
+              ? {}
+              : { priceConsent: commercial.priceConsent }),
+          },
+          {
+            repository: options.commercialCreate.repository,
+            owner: options.commercialCreate.owner,
+            onQuoteFailure: (code) =>
+              app.log.warn({ code }, 'commercial CREATE quote observation failed'),
+            onOwnerFailure: (code) =>
+              app.log.warn({ code }, 'commercial CREATE owner boundary observation'),
+          },
+        );
+        if (result.kind === 'failed') {
+          return sendApiError(
+            request,
+            reply,
+            COMMERCIAL_CREATE_FAILURE_STATUS[result.code],
+            result.code,
+            result.message,
+          );
+        }
+        if (result.kind === 'create_rejected') {
+          if (result.code === 'GAME_LOCATION_INVALID') {
+            return sendApiError(
+              request,
+              reply,
+              400,
+              'INVALID_REQUEST',
+              'Проверьте параметры и время игры.',
+            );
+          }
+          return sendApiError(
+            request,
+            reply,
+            400,
+            'GAME_START_TIME_PASSED',
+            'Время начала игры должно быть в будущем.',
+          );
+        }
+        return reply.status(202).send(result.body);
+      }
       const result = await options.managementRepository.create({
         tenantId: current.tenantId,
         actorUserId: current.userId,
@@ -985,6 +1106,20 @@ export function registerGameRoutes(
         operationId,
       });
       if (managementOperation) {
+        if (
+          managementOperation.commandType === 'game.create.v1' &&
+          'state' in managementOperation
+        ) {
+          // A managed commercial CREATE is durably accepted but still PROVISIONING. Readback keeps
+          // it UNKNOWN with a reconciliation next action: never FAILED, never a second POST.
+          return readCommercialCreateOperation({
+            operationId: managementOperation.pending.operationId,
+            gameId: managementOperation.pending.gameId,
+            revision: managementOperation.pending.revision,
+            createdAt: managementOperation.pending.createdAt,
+            updatedAt: managementOperation.pending.updatedAt,
+          });
+        }
         return managementOperationBody(
           managementOperation.result,
           managementOperation.commandType === 'game.create.v1' ? 'CREATE_GAME' : 'CANCEL_GAME',

@@ -27,6 +27,22 @@ const body = {
   target: { id: targetId, expectedRevision: 1 },
   paymentIntent: 'USE_SUBSCRIPTION',
 };
+const createBody = {
+  action: 'CREATE_GAME',
+  target: { id: targetId, expectedRevision: 1 },
+  paymentIntent: 'USE_SUBSCRIPTION',
+};
+const createDraft = {
+  draftGameId: targetId,
+  expectedRevision: 1,
+  startsAt: '2099-01-01T09:00:00.000Z',
+  durationMinutes: 90,
+  capacity: 4,
+  paymentMode: 'SPLIT',
+  admissible: true,
+};
+const CREATE_ADMISSION_MESSAGE =
+  'Создание игры по подписке пока недоступно: контракт CREATE не активирован до подтверждения резервирования в LK1.';
 const operationId = bookedOperationAdmissionId(
   tenantId,
   userId,
@@ -93,6 +109,7 @@ async function fixture(disabled = false) {
       capacity: 4,
       admissible: true,
     }),
+    resolveCreateDraft: vi.fn().mockResolvedValue(createDraft),
   };
   const fetchImplementation = vi.fn<typeof fetch>(async (url, init) => {
     expect(typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url).toBe(
@@ -155,7 +172,7 @@ async function fixture(disabled = false) {
         }),
   });
   apps.push(app);
-  return { app, actor, target, fetchImplementation };
+  return { app, actor, target, fetchImplementation, delegationIssuer };
 }
 describe('booked admission public boundary', () => {
   it('server generates the actor/key UUID and delegates only physical mapping-shaped authority', async () => {
@@ -168,6 +185,7 @@ describe('booked admission public boundary', () => {
     }
     expect(f.actor.resolve).toHaveBeenCalledWith({ tenantId, userId, sessionId: sid });
     expect(f.target.resolve).toHaveBeenCalledWith({ tenantId, targetId, expectedRevision: 1 });
+    expect(f.target.resolveCreateDraft).not.toHaveBeenCalled();
     expect(f.fetchImplementation).toHaveBeenCalledTimes(2);
   });
   it('denies missing session, permission and tenant before delegation', async () => {
@@ -192,10 +210,19 @@ describe('booked admission public boundary', () => {
       { ...body, target: { ...body.target, providerId: 'guessed' } },
       { ...body, paymentIntent: 'PAY' },
       { ...body, target: { ...body.target, expectedRevision: 0 } },
+      { ...createBody, action: 'create_game' },
+      { ...createBody, action: 'BOOK_GROUP_TRAINING' },
+      { ...createBody, target: { ...createBody.target, id: targetId.toUpperCase() } },
+      { ...createBody, target: { ...createBody.target, expectedRevision: 0 } },
+      { ...createBody, target: { ...createBody.target, providerId: 'guessed' } },
+      { ...createBody, operationId: randomUUID() },
+      { ...createBody, paymentIntent: 'PAY' },
     ])
       expect(
         (await f.app.inject({ method: 'POST', url: route, headers: auth, payload })).statusCode,
       ).toBe(400);
+    expect(f.target.resolveCreateDraft).not.toHaveBeenCalled();
+    expect(f.target.resolve).not.toHaveBeenCalled();
     expect(
       (
         await f.app.inject({
@@ -273,5 +300,65 @@ describe('booked admission public boundary', () => {
       (await disabled.app.inject({ method: 'POST', url: route, headers: auth, payload: body }))
         .statusCode,
     ).toBe(503);
+    const disabledCreate = await disabled.app.inject({
+      method: 'POST',
+      url: route,
+      headers: auth,
+      payload: createBody,
+    });
+    expect(disabledCreate.statusCode).toBe(503);
+    expect(disabledCreate.json<{ code: string }>().code).toBe(
+      'BOOKED_OPERATION_ADMISSION_DISABLED',
+    );
+    expect(disabled.target.resolveCreateDraft).not.toHaveBeenCalled();
+    expect(disabled.fetchImplementation).not.toHaveBeenCalled();
+  });
+  it('returns the stable CREATE admission unavailable code without minting or dispatching', async () => {
+    const f = await fixture(),
+      auth = await headers(),
+      issue = vi.spyOn(f.delegationIssuer, 'issueBookedOperationAdmission');
+    const result = await f.app.inject({
+      method: 'POST',
+      url: route,
+      headers: auth,
+      payload: createBody,
+    });
+    expect(result.statusCode).toBe(503);
+    expect(result.json()).toEqual({
+      code: 'BOOKED_OPERATION_CREATE_ADMISSION_UNAVAILABLE',
+      message: CREATE_ADMISSION_MESSAGE,
+      correlationId: auth['x-correlation-id'],
+    });
+    expect(f.actor.resolve).toHaveBeenCalledWith({ tenantId, userId, sessionId: sid });
+    expect(f.target.resolveCreateDraft).toHaveBeenCalledWith({
+      tenantId,
+      targetId,
+      expectedRevision: 1,
+      action: 'CREATE_GAME',
+      actorUserId: userId,
+    });
+    expect(f.target.resolve).not.toHaveBeenCalled();
+    expect(issue).not.toHaveBeenCalled();
+    expect(f.fetchImplementation).not.toHaveBeenCalled();
+  });
+  it('maps an unresolvable, non-organizer or inadmissible CREATE draft to the existing conflict', async () => {
+    const f = await fixture(),
+      auth = await headers();
+    for (const resolution of [null, { ...createDraft, admissible: false }]) {
+      f.target.resolveCreateDraft.mockResolvedValueOnce(resolution);
+      const conflict = await f.app.inject({
+        method: 'POST',
+        url: route,
+        headers: auth,
+        payload: createBody,
+      });
+      expect(conflict.statusCode).toBe(409);
+      expect(conflict.json()).toEqual({
+        code: 'BOOKED_OPERATION_ADMISSION_CONFLICT',
+        message: 'Операция не принята.',
+        correlationId: auth['x-correlation-id'],
+      });
+    }
+    expect(f.fetchImplementation).not.toHaveBeenCalled();
   });
 });

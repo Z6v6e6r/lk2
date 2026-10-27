@@ -16,6 +16,8 @@ import { queryOne, withTenantTransaction } from './connection.js';
 
 export const GAME_TEST_COURTS_PERMISSION = 'games.test-courts';
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 // Existing PadlHub identities verified by read-only beta mapping/projection reads on 2026-09-28.
 // This temporary two-court pilot has no provider IDs and creates no alternative identity.
 // Owner: Games/LK2. Review after the booking pilot; retain deny rules until its games are retired.
@@ -309,6 +311,13 @@ export interface CreateStoredGameInput {
   readonly paymentMode: GamePaymentMode;
   readonly levelFrom?: GamePlayerLevel;
   readonly levelTo?: GamePlayerLevel;
+  /**
+   * Managed commercial CREATE only: the server-derived draft aggregate id and operation id. A
+   * retry with the same request key resumes exactly that draft; every other caller keeps the
+   * database-generated defaults.
+   */
+  readonly gameId?: string;
+  readonly operationId?: string;
 }
 
 export type CreateStoredGameResult =
@@ -358,6 +367,22 @@ export type GameManagementOperation =
   | {
       readonly commandType: 'game.create.v1';
       readonly result: Extract<CreateStoredGameResult, { readonly outcome: 'applied' }>;
+    }
+  | {
+      /**
+       * Managed commercial CREATE: the command is durably accepted but the game is still
+       * `PROVISIONING` and the operation `PENDING`. Readback must report it as unresolved, never
+       * as a completed create.
+       */
+      readonly commandType: 'game.create.v1';
+      readonly state: 'PENDING';
+      readonly pending: {
+        readonly gameId: string;
+        readonly operationId: string;
+        readonly revision: number;
+        readonly createdAt: string;
+        readonly updatedAt: string;
+      };
     }
   | {
       readonly commandType: 'game.cancel.v1';
@@ -893,7 +918,17 @@ export function createGameRepository(
           return { outcome: 'rejected', code: 'GAME_START_TIME_PASSED' };
         }
 
-        const operationId = randomUUID();
+        // Managed commercial CREATE may prescribe the server-derived draft id and operation id so a
+        // retry with the same request key resumes exactly that draft. Every other caller keeps the
+        // generated defaults, so the ordinary create path is unchanged.
+        const draftGameId = input.gameId ?? null;
+        if (draftGameId !== null && !uuidPattern.test(draftGameId))
+          throw new Error('GAME_CREATE_DRAFT_ID_INVALID');
+        const prescribedOperationId = input.operationId ?? null;
+        if (prescribedOperationId !== null && !uuidPattern.test(prescribedOperationId))
+          throw new Error('GAME_CREATE_OPERATION_ID_INVALID');
+
+        const operationId = prescribedOperationId ?? randomUUID();
         const commandId = operationId;
         const immediateSchedule = input.paymentMode === 'NO_PAYMENT';
         if (Boolean(input.levelFrom) !== Boolean(input.levelTo)) {
@@ -937,10 +972,11 @@ export function createGameRepository(
              tenant_id, organizer_user_id, title, kind, visibility, lifecycle_state,
              station_id, court_id, starts_at, ends_at, timezone, capacity,
              waitlist_enabled, join_cutoff_at, payment_mode, level_from, level_to,
-             sport_code, min_level_id, max_level_id
+             sport_code, min_level_id, max_level_id, id
            ) values (
              $1, $2, $3, $4, $5, $19, $6, $7, $8, $9, $10, $11,
-             $12, $13, $14, $15, $16, 'PADEL', $17, $18
+             $12, $13, $14, $15, $16, 'PADEL', $17, $18,
+             coalesce($20::uuid, gen_random_uuid())
            ) returning ${GAME_COLUMNS}`,
           [
             input.tenantId,
@@ -962,6 +998,7 @@ export function createGameRepository(
             minimumLevelId,
             maximumLevelId,
             immediateSchedule ? 'SCHEDULED' : 'PROVISIONING',
+            draftGameId,
           ],
         );
         if (!created) throw new Error('GAME_CREATE_WRITE_LOST');
@@ -1302,6 +1339,37 @@ export function createGameRepository(
             row.completed_at == null ? undefined : timestamp(row.completed_at),
           );
           if (!stored) throw new Error('GAME_OPERATION_RESULT_INVALID');
+          // A managed commercial CREATE keeps a PENDING local operation while the game is
+          // PROVISIONING. Readback reports that unresolved state instead of a completed create.
+          const pending = await queryOne<{
+            readonly id: string;
+            readonly game_id: string;
+            readonly kind: string;
+            readonly state: string;
+            readonly created_at: Date;
+            readonly updated_at: Date;
+          }>(
+            client,
+            `select id, game_id, kind, state, created_at, updated_at
+               from games.operations
+              where tenant_id = $1 and id = $2 and requested_by_user_id = $3
+                and kind = 'CREATE_GAME'`,
+            [input.tenantId, stored.operationId, input.actorUserId],
+          );
+          // PENDING and RUNNING are both unresolved: no trusted receipt has advanced the create.
+          if (pending && (pending.state === 'PENDING' || pending.state === 'RUNNING')) {
+            return {
+              commandType: row.command_type,
+              state: 'PENDING',
+              pending: {
+                gameId: pending.game_id,
+                operationId: pending.id,
+                revision: stored.revision,
+                createdAt: timestamp(pending.created_at),
+                updatedAt: timestamp(pending.updated_at),
+              },
+            };
+          }
           return {
             commandType: row.command_type,
             result: { ...stored, replayed: true },
