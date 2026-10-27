@@ -1,133 +1,184 @@
 # Android release signing (mobile R1)
 
-Status: **prepared mechanism, not activated.** This runbook describes how to produce and record one
-signed Android release candidate. It is not evidence that a signed build, environment, secret,
-dispatch or store submission exists.
+Status: **prepared mechanism, not activated.** This runbook describes how to protect, activate and
+record one signed Android release candidate. It is not evidence that a signed build, environment,
+secret, dispatch or store submission exists.
 
-Prepared in the mobile R1 (JOIN) signing change. Companion facts:
+Prepared in mobile R1 (JOIN): `app/build.gradle` fails closed on an identity-anchored release config;
+`mobile-android.yaml` matches the decoded keystore to an independently approved fingerprint, verifies
+the AAB signature and uploads AAB/`SHA256SUMS`/`build-info.json` (never publishes). Historical Draft
+**DEBUG** APKs (2026-10-10, 2026-10-12) are **non-evidence**; store status is **UNKNOWN**.
 
-- `apps/mobile/android/app/build.gradle` defines a fail-closed release `signingConfigs.release`.
-- `.github/workflows/mobile-android.yaml` decodes one environment secret, runs `bundleRelease` and
-  uploads the AAB, its SHA256 and `build-info.json`. It never publishes.
-- Historical Draft **DEBUG** APKs (2026-10-10 and 2026-10-12) are **non-evidence** for mobile R1:
-  debug-signed, Draft, and they predate the JOIN consent/custody code.
-- Store status is **UNKNOWN** until separately observed. A build artifact is not a store release.
-
-Activation of the workflow on a real release requires owner approval and independent review.
+**Do not activate the workflow until every mandatory prerequisite in this runbook is in place and
+recorded.** Activation of a real release requires owner approval and independent review.
 
 ## Required GitHub environment and secrets
 
-The job already declares `environment: mobile-android`. Only these four names are read:
+The job declares `environment: mobile-android`. Only these six environment secrets are read:
 
-| Secret                      | Meaning                                       |
-| --------------------------- | --------------------------------------------- |
-| `ANDROID_KEYSTORE_BASE64`   | Base64 (single line or wrapped) of the `.jks` |
-| `ANDROID_KEYSTORE_PASSWORD` | Keystore password                             |
-| `ANDROID_KEY_ALIAS`         | Release key alias inside the keystore         |
-| `ANDROID_KEY_PASSWORD`      | Private-key password for that alias           |
+| Secret                              | Meaning                                                                                                   |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `ANDROID_KEYSTORE_BASE64`           | Base64 (single line or wrapped) of the release `.jks`                                                     |
+| `ANDROID_KEYSTORE_PASSWORD`         | Keystore password                                                                                         |
+| `ANDROID_KEY_ALIAS`                 | Release key alias inside the keystore                                                                     |
+| `ANDROID_KEY_PASSWORD`              | Private-key password for that alias                                                                       |
+| `ANDROID_RELEASE_CERT_SHA256`       | Owner-approved SHA-256 fingerprint of the release certificate, captured **outside** any build (anchor)    |
+| `ANDROID_RELEASE_ACTIVATION_RECORD` | Activation evidence reference (who approved what, when, how, environment/reviewer-rule id, approval link) |
 
-No other secret is read. Values never enter Git, logs, artifacts or the app bundle.
+No other secret is read. Values never enter Git, logs, artifacts or the app bundle. The two identity
+values are **not** derivable from the build: the anchor must exist before the first build.
 
-### How to create them (needs credential/signing-material authority)
+## Mandatory activation prerequisites
 
-Repository: `Z6v6e6r/lk2`. Do this from an operator workstation, never from a PR branch.
+Hard gates, not recommendations. Anyone able to dispatch this workflow or push a `mobile-v*` tag can
+run a **modified workflow definition from their own ref** and export `secrets.ANDROID_KEYSTORE_*`
+(or instrument the later Gradle JVM); `permissions: contents: read` limits the token, not secret
+exposure. The environment required-reviewer rule plus owner-only dispatch/tag/secret authority are
+the controls. **Repository write access implies the ability to obtain the signing material if the
+environment is unprotected.**
+
+### 1. Environment with a required reviewer rule (owner-only action)
 
 ```sh
-# 1. Release keystore, created once and then stored in the approved secret manager.
-#    Keytool prompts for the passwords; do not pass them on the argv.
+OWNER_ID="$(gh api users/Z6v6e6r --jq .id)"
+REVIEWER_ID="$(gh api users/<independent-reviewer-login> --jq .id)"
+gh api --method PUT repos/Z6v6e6r/lk2/environments/mobile-android --input - <<JSON
+{
+  "reviewers": [
+    { "type": "User", "id": $OWNER_ID },
+    { "type": "User", "id": $REVIEWER_ID }
+  ],
+  "prevent_self_review": true
+}
+JSON
+gh api repos/Z6v6e6r/lk2/environments/mobile-android --jq '{id, protection_rules}'
+```
+
+Activation is blocked until an independent reviewer is enrolled: without a second trusted principal
+the reviewer rule cannot be satisfied meaningfully. Any deployment branch/tag policy must admit the
+`mobile-v*` **tag**, or it blocks the tag trigger.
+
+### 2. Owner-only authority
+
+Only the repository owner/admin creates the environment and its six secrets (`gh secret set --env`
+already requires admin), creates `mobile-v*` tags and dispatches `mobile-android.yaml` (tag
+protection rules + restricted write access; no dispatch for general contributors). The activation
+evidence line is written **before** the first dispatching run.
+
+### 3. Signing material and identity anchor
+
+```sh
+umask 077
 keytool -genkeypair -v -keystore release-upload.jks -alias padlhub-release \
   -keyalg RSA -keysize 4096 -validity 10000
 
-# 2. Create the environment (once).
-gh api --method PUT repos/Z6v6e6r/lk2/environments/mobile-android
+# Capture the anchor from THIS creation record (and the Play Console upload certificate once
+# enrolled), independently of any build. keytool prompts; no password on argv.
+keytool -list -v -keystore release-upload.jks -alias padlhub-release
 
-# 3. Store the four secrets in that environment, then delete the local base64 copy.
-base64 < release-upload.jks > /tmp/padlhub-release.jks.b64
+base64 < release-upload.jks > release-upload.jks.b64
 gh secret set ANDROID_KEYSTORE_BASE64 --env mobile-android --repo Z6v6e6r/lk2 \
-  < /tmp/padlhub-release.jks.b64
-rm -f /tmp/padlhub-release.jks.b64
+  < release-upload.jks.b64
+rm -f release-upload.jks.b64
 gh secret set ANDROID_KEYSTORE_PASSWORD --env mobile-android --repo Z6v6e6r/lk2
 gh secret set ANDROID_KEY_ALIAS --env mobile-android --repo Z6v6e6r/lk2
 gh secret set ANDROID_KEY_PASSWORD --env mobile-android --repo Z6v6e6r/lk2
-
-# 4. Record the public signing identity for later comparison.
-keytool -list -v -keystore release-upload.jks -storepass:env ANDROID_KEYSTORE_PASSWORD \
-  -alias padlhub-release | grep -E 'SHA256:'
+gh secret set ANDROID_RELEASE_CERT_SHA256 --env mobile-android --repo Z6v6e6r/lk2
+gh secret set ANDROID_RELEASE_ACTIVATION_RECORD --env mobile-android --repo Z6v6e6r/lk2
 ```
 
-Do not enable "protected branches only" deployment policy unless the policy also admits the
-`mobile-v*` tag ref this workflow triggers on; otherwise the tag run is blocked before the job.
-Requiring a reviewer on the environment is encouraged: activation then needs the review anyway.
+One release keystore; never commit, print, or pass passwords on argv. `.gitignore` covers
+`apps/mobile/android/keystore.properties`, `*.jks`, `*.keystore`, `*.p12`; the base64 copy is written
+under `umask 077` and deleted immediately. Local builders may use the gitignored
+`apps/mobile/android/keystore.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`)
+but must still export the anchor. For `-storepass:env`/`-keypass:env` the variable must be
+**exported**, e.g. `read -rsp 'keystore password: ' ANDROID_KEYSTORE_PASSWORD; echo;
+export ANDROID_KEYSTORE_PASSWORD`. On suspected exposure (or the planned cadence) create a new
+keystore, rotate the Play upload key if Play App Signing is used, replace the material **and** the
+expected fingerprint in one change, rebuild and record the new certificate SHA256. Old artifacts
+stay non-authoritative; never re-sign an already authorized artifact with a new key.
 
-## Signing-material handling
+### Activation evidence line (paste into the RC record and the activation record secret)
 
-- One release keystore. Keep the `.jks` in the approved secret manager and the local operator
-  machine only. `.gitignore` excludes `apps/mobile/android/keystore.properties`, `*.jks`,
-  `*.keystore` and `*.p12`.
-- Never commit, never print, never `cat` a properties file, never pass passwords as CLI arguments
-  that appear in logs or process lists. Use `-storepass:env` / `-keypass:env` and CI secrets.
-- Local builders may use the gitignored `apps/mobile/android/keystore.properties` with keys
-  `storeFile`, `storePassword`, `keyAlias`, `keyPassword`; a relative `storeFile` resolves against
-  `apps/mobile/android`. CI uses the environment variables instead. Never both with different keys.
-- The CI keystore is decoded into `$RUNNER_TEMP` only, mode `0600`, and is never uploaded. The only
-  artifacts are the AAB, `SHA256SUMS` and `build-info.json`.
-- Rotation plan: if exposure is suspected, or at the planned cadence, create a new release keystore,
-  rotate the Play upload key if Play App Signing is in use, replace all four environment secrets in
-  one change, rebuild and record the new certificate SHA256. Old artifacts stay non-authoritative;
-  never "re-sign" an existing authorized artifact with a new key.
+```
+approved by: <owner> / <independent reviewer>
+approved at: <UTC timestamp>; approval reference: <PR comment / approval URL / ticket>
+environment: mobile-android id <id>; reviewers <logins>; prevent_self_review <bool>;
+             deployment policy <unrestricted | tag mobile-v*>
+expected certificate SHA256: <fingerprint> from <creation record / Play upload cert> on <date>
+dispatch/tag authority: <owner-only enforcement reference>
+```
 
-## Fail-closed behavior
+## Identity anchor and fail-closed behavior
 
-- Gradle: if any input is blank or the keystore file is missing, `bundleRelease`/`assembleRelease`/
-  `packageRelease*`/`signRelease*` fail during task-graph setup with one message listing the missing
-  inputs and pointing here. There is no debug-signing fallback and no unsigned release output. Debug
-  configuration is unchanged.
-- Workflow: if a secret is absent, the "Prepare release signing material" step fails before Gradle.
-  If no AAB is produced, the identity step fails before upload. `permissions: contents: read` and no
-  `gh release`, tag or store step exists, so the job cannot publish.
-- Local check without signing material (expected RED):
+A release build never falls back to debug signing, produces an unsigned artifact or accepts an
+unpinned key:
+
+- **Gradle guard.** Release packaging/signing tasks (`bundleRelease`, `assembleRelease`,
+  `packageRelease*`, `signRelease*`, `build`; AGP 8.13 has no `validateSigningRelease` task) fail at
+  task-graph setup when the four keystore inputs are absent, `ANDROID_RELEASE_CERT_SHA256` is absent/
+  malformed, the keystore cannot be read with the given alias/password, the certificate is the
+  Android debug certificate, or the observed certificate differs from the anchor.
+- **Workflow.** Fails before Gradle when any of the six secrets is absent, the anchor is not 64 hex
+  characters, the decoded keystore is the Android debug certificate, or its certificate differs from
+  the anchor; after the build it fails before upload when the AAB is unsigned, has anything other
+  than exactly one signer, or when the AAB signer certificate differs from the anchor. It never
+  records an `UNKNOWN` certificate. `jarsigner` reports "signer errors" for the self-signed upload
+  certificate; the gate is the fingerprint match, not CA trust. A debug or foreign key therefore
+  cannot be recorded as the signed RC, and the anchor is never re-derived from the artifact.
+
+Local release runs must set `ANDROID_KEYSTORE_*` **and** `ANDROID_RELEASE_CERT_SHA256`, and use
+`--no-daemon` (a reused daemon sees stale env). Expected RED with no setup:
 
 ```sh
 cd apps/mobile/android && ./gradlew --no-daemon :app:bundleRelease
-# > Task ... Android release signing is not configured: missing storeFile (ANDROID_KEYSTORE_PATH), ...
+# * Where: Build file '.../apps/mobile/android/app/build.gradle' line: 133
+# * What went wrong:
+# Android release signing is not configured: missing keyAlias (ANDROID_KEY_ALIAS), keyPassword
+# (ANDROID_KEY_PASSWORD), storeFile (ANDROID_KEYSTORE_PATH), storePassword (ANDROID_KEYSTORE_PASSWORD).
+# Provide ANDROID_KEYSTORE_PATH, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD
+# as environment variables or create the gitignored apps/mobile/android/keystore.properties.
+# Refusing to build an unsigned or debug-signed release. See the runbook.
+# BUILD FAILED, exit 1
 ```
+
+With the four keystore inputs but no anchor: `Android release signing is missing the approved release
+certificate anchor ANDROID_RELEASE_CERT_SHA256 ... unpinned key`; with the Android debug keystore:
+`Android release signing rejects the Android debug certificate`.
 
 ## Produce and record one signed release candidate
 
-Prerequisites: JOIN source merged to `main`, a new `versionCode`/`versionName` decided for the RC
-(the current `14`/`1.13` predates JOIN), `mobile-android` environment and its four secrets created,
-and activation approved by the owner after independent review.
+Prerequisites: JOIN merged to `main`; a new `versionCode`/`versionName` decided for the RC (current
+`14`/`1.13` predates JOIN); all activation prerequisites recorded; owner approval after review. Record
+the result under `output/` with evidence label `CI`; never claim `STAGING`/`PRODUCTION` from it.
 
-1. Dispatch (requires dispatch authority; neither this runbook nor the prepared PR grants it):
-   `gh workflow run mobile-android.yaml --ref <approved-source-ref>`.
-2. From the run record, capture: source SHA, ref, workflow run URL, artifact name/URL,
-   `versionCode`/`versionName`, AAB SHA256, signing certificate SHA256 (`build-info.json` plus
-   `SHA256SUMS` inside the artifact).
-3. Verify the artifact: `sha256sum -c SHA256SUMS` matches, and the certificate SHA256 equals the
-   approved release certificate recorded above.
-4. Device matrix uses an installable APK derived from that exact AAB and signed with the same
-   release key, not a debug build. bundletool cannot recover the key from the bundle, so pass the
-   keystore explicitly and let it prompt for the passwords (nothing enters shell history):
+1. Dispatch (requires the owner-only dispatch authority; neither this runbook nor the prepared PR
+   grants it): `gh workflow run mobile-android.yaml --ref <approved-source-ref>`.
+2. Capture from the run: source SHA, ref, run/artifact URL, `versionCode`/`versionName`, AAB SHA256,
+   expected and observed certificate SHA256 and the activation record (`build-info.json` +
+   `SHA256SUMS` inside the artifact). Verify independently before any device use:
+   `sha256sum -c SHA256SUMS`; `keytool -printcert -jarfile app-release.aab` shows exactly one signer
+   whose SHA256 equals the approved anchor. Any mismatch voids the RC.
+3. Device matrix uses an installable APK derived from that exact AAB and signed with the same release
+   key, not a debug build. bundletool cannot recover the key from the bundle, so pass the keystore
+   explicitly and let it prompt (nothing enters shell history):
 
 ```sh
 bundletool build-apks --bundle app-release.aab --output rc.apks --mode=universal \
   --ks release-upload.jks --ks-key-alias padlhub-release
 unzip -o rc.apks universal.apk
-sha256sum universal.apk                                  # record this too
-apksigner verify --print-certs universal.apk             # must equal the recorded release cert
+sha256sum universal.apk                          # record this too
+apksigner verify --print-certs universal.apk     # must equal the approved release cert
+adb uninstall ru.padlhub.app                     # a previous debug-signed install blocks the update
 adb install -r universal.apk
 ```
-
-5. Record the signed RC in the task's evidence file under `output/` with evidence label `CI`, and
-   never claim `STAGING`/`PRODUCTION` from a workflow artifact.
 
 ## Device matrix (mobile R1 acceptance)
 
 Run every row on a real device and/or the owned `padlhub_api36` emulator, on the installed APK whose
-SHA256/versionCode is recorded above. Capture per row: APK SHA256 + `versionCode`, device model/OS
-and WebView version, PASS/FAIL/NOT RUN, and the raw evidence (adb/logcat excerpt, screenshot/video
-file name, and the HTTP method + route + status after removing tokens/PII). `NOT RUN` is not PASS;
-any missing row keeps mobile R1 open.
+SHA256/versionCode is recorded above. Capture per row: APK SHA256 + `versionCode`, device model/OS,
+WebView version, PASS/FAIL/NOT RUN, and raw evidence (adb/logcat excerpt, screenshot/video file name,
+HTTP method + route + status after removing tokens/PII). `NOT RUN` is not PASS.
 
 | #   | Check                                                                     | Evidence to capture                                                         |
 | --- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
