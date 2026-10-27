@@ -7,7 +7,9 @@ import type {
 } from '@phub/database';
 import {
   bookedOperationAdmissionId,
+  parseCommercialBindingRefs,
   type BookedOperationReceipt,
+  type CommercialBindingRefs,
 } from '@phub/subscription-runtime-adapter';
 
 import {
@@ -93,6 +95,7 @@ export interface CommercialJoinRepositoryPort {
     readonly invitationId?: string;
     readonly reservationTtlSeconds: number;
     readonly providerBinding?: PaidJoinProviderBinding;
+    readonly bindingRefs?: CommercialBindingRefs;
   }): Promise<CommercialJoinBeginResult>;
   getPaidJoinAttempt(input: {
     readonly tenantId: string;
@@ -233,6 +236,11 @@ export interface CommercialJoinCommandEnvelope {
   readonly subscriptionInstanceId?: string | undefined;
   readonly priceConsent?: { readonly amountMinor: number; readonly currency: 'RUB' } | undefined;
   readonly invitationId?: string | undefined;
+  /**
+   * B2 binding evidence from a binding quote. Internal only: it is validated here and persisted
+   * opaquely with the attempt; it never leaves the API in a public body.
+   */
+  readonly bindingRefs?: CommercialBindingRefs | undefined;
 }
 
 /** Fields the request fingerprint is derived from; never the derived ids themselves. */
@@ -430,6 +438,10 @@ export async function executeCommercialJoin(
   const now = dependencies.now ?? Date.now;
   const retryAfter = dependencies.reconciliationRetryAfterSeconds ?? 5;
   const reservationTtlSeconds = dependencies.reservationTtlSeconds ?? 900;
+  // Fail closed before any durable write or owner call: a malformed binding ref is a programming
+  // error, not a business refusal, so it throws instead of producing a payable fallback.
+  const bindingRefs =
+    input.bindingRefs === undefined ? undefined : parseCommercialBindingRefs(input.bindingRefs);
 
   if (!input.subscriptionInstanceId)
     return commercialFailure('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
@@ -577,6 +589,7 @@ export async function executeCommercialJoin(
       ...(input.invitationId === undefined ? {} : { invitationId: input.invitationId }),
       reservationTtlSeconds,
       ...(providerBinding ? { providerBinding } : {}),
+      ...(bindingRefs ? { bindingRefs } : {}),
     });
   } catch {
     return commercialFailure('GAME_OWNER_UNAVAILABLE');

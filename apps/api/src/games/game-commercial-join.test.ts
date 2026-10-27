@@ -682,3 +682,56 @@ describe('explicit commercial receipt reconciliation', () => {
     },
   );
 });
+
+describe('commercial JOIN policy/usage binding refs (B2)', () => {
+  const bindingRefs = {
+    policyRef: { policyVersion: 3, policyDigest: `sha256:${'a'.repeat(64)}` },
+    decisionId: '11111111-1111-4111-8111-111111111111',
+    usageRef: { usageRef: 'usage:abc-1', reservationUnits: 1 },
+  };
+
+  it('forwards a valid binding to the durable attempt', async () => {
+    type BeginInput = Parameters<CommercialJoinRepositoryPort['beginPaidJoin']>[0];
+    const captured: BeginInput[] = [];
+    const { repository: repo } = repository({
+      beginPaidJoin(input) {
+        captured.push(input);
+        return resolved<CommercialJoinBeginResult>({
+          outcome: 'reserved',
+          operationId,
+          reservationId,
+          expiresAt: new Date(Date.now() + 900_000).toISOString(),
+          revision: 9,
+        });
+      },
+    });
+
+    const result = await executeCommercialJoin(
+      { ...envelope, bindingRefs },
+      dependencies(repo, ownerPort([{ status: 'PENDING' }]).owner),
+    );
+
+    expect(result.kind).toBe('accepted');
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.bindingRefs).toEqual(bindingRefs);
+  });
+
+  it('rejects a malformed binding before any durable write or owner call', async () => {
+    const { calls, repository: repo } = repository();
+    const owner = ownerPort([{ status: 'PENDING' }]);
+
+    await expect(
+      executeCommercialJoin(
+        {
+          ...envelope,
+          bindingRefs: {
+            policyRef: { policyVersion: 0, policyDigest: `sha256:${'a'.repeat(64)}` },
+          },
+        },
+        dependencies(repo, owner.owner),
+      ),
+    ).rejects.toMatchObject({ code: 'COMMERCIAL_POLICY_REF_INVALID' });
+    expect(calls).toEqual([]);
+    expect(owner.calls).toEqual([]);
+  });
+});

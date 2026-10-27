@@ -1153,3 +1153,82 @@ describe('immutable paid JOIN confirmation binding', () => {
     expect(query.mock.calls.some(([text]) => text === 'commit')).toBe(false);
   });
 });
+
+describe('paid join policy/usage binding refs (B2)', () => {
+  const bindingRefs = {
+    policyRef: { policyVersion: 3, policyDigest: `sha256:${'a'.repeat(64)}` },
+    decisionId: '11111111-1111-4111-8111-111111111111',
+    usageRef: { usageRef: 'usage:abc-1', reservationUnits: 1 },
+  };
+  const attemptInput = { tenantId, actorUserId: playerId, operationId };
+
+  it('persists binding refs inside the existing payment snapshot jsonb', async () => {
+    const { pool, query } = poolWithHandler((text) => baseHandler(text));
+
+    await expect(
+      createGameRosterRepository(pool as never).beginPaidJoin({
+        ...paidJoinInput(),
+        bindingRefs,
+      }),
+    ).resolves.toMatchObject({ outcome: 'reserved' });
+
+    const snapshotInsert = query.mock.calls.find(([text]) =>
+      text.includes('insert into eligibility.payment_snapshots'),
+    );
+    const snapshot = JSON.parse(String(snapshotInsert?.[1]?.[5])) as Record<string, unknown>;
+    expect(snapshot).toMatchObject({
+      policyRef: bindingRefs.policyRef,
+      usageRef: bindingRefs.usageRef,
+      decisionId: bindingRefs.decisionId,
+    });
+  });
+
+  it('reads binding refs back from the payment snapshot', async () => {
+    const { pool } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency')) return { rows: [commandRow()] };
+      if (text.includes('from eligibility.payment_snapshots snapshot')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+              binding_policy_ref: bindingRefs.policyRef,
+              binding_usage_ref: bindingRefs.usageRef,
+              binding_decision_id: bindingRefs.decisionId,
+            },
+          ],
+        };
+      }
+      if (text.includes('from games.payment_confirmation_evidence')) return { rows: [] };
+      return { rows: [] };
+    });
+
+    const view = await createGameRosterRepository(pool as never).getPaidJoinAttempt(attemptInput);
+    expect(view?.bindingRefs).toEqual(bindingRefs);
+  });
+
+  it('keeps a legacy attempt readable without binding refs', async () => {
+    const { pool } = poolWithHandler((text) => {
+      if (text.includes('from games.command_idempotency')) return { rows: [commandRow()] };
+      if (text.includes('from eligibility.payment_snapshots snapshot')) {
+        return {
+          rows: [
+            {
+              id: reservationId,
+              state: 'ACTIVE',
+              payment_state: 'PROCESSING',
+              expires_at: reservationExpiresAt,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const view = await createGameRosterRepository(pool as never).getPaidJoinAttempt(attemptInput);
+    expect(view).not.toBeNull();
+    expect(view).not.toHaveProperty('bindingRefs');
+  });
+});

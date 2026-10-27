@@ -214,6 +214,23 @@ export interface PaidJoinProviderBinding {
   readonly idempotencyKeySha256: string;
 }
 
+/**
+ * Policy/usage binding evidence for one paid JOIN attempt (B2). Values are opaque to the database
+ * layer: the API validates them strictly before they reach this port and LK2 never derives
+ * entitlement, counters or booking state from them.
+ */
+export interface PaidJoinBindingRefs {
+  readonly policyRef: {
+    readonly policyVersion: number;
+    readonly policyDigest: string;
+  };
+  readonly decisionId?: string;
+  readonly usageRef?: {
+    readonly usageRef: string;
+    readonly reservationUnits?: number;
+  };
+}
+
 export interface BeginPaidJoinInput {
   readonly tenantId: string;
   readonly actorUserId: string;
@@ -229,6 +246,8 @@ export interface BeginPaidJoinInput {
   readonly invitationId?: string;
   readonly reservationTtlSeconds: number;
   readonly providerBinding?: PaidJoinProviderBinding;
+  /** Optional B2 binding loaded from a binding quote; absent means legacy/unbound behavior. */
+  readonly bindingRefs?: PaidJoinBindingRefs;
 }
 
 export interface PaidJoinAttemptResult {
@@ -267,6 +286,7 @@ export type BeginPaidJoinResult =
 
 export interface PaidJoinAttemptView {
   readonly providerBinding?: PaidJoinProviderBinding;
+  readonly bindingRefs?: PaidJoinBindingRefs;
   readonly commandId: string;
   readonly gameId: string;
   readonly state: PaidJoinAttemptState;
@@ -450,6 +470,9 @@ interface PaidJoinReservationRow extends QueryResultRow {
   readonly payment_state: PaidJoinReservationPaymentState;
   readonly expires_at: Date | string;
   readonly provider_binding?: PaidJoinProviderBinding;
+  readonly binding_policy_ref?: unknown;
+  readonly binding_usage_ref?: unknown;
+  readonly binding_decision_id?: unknown;
 }
 
 interface PaidJoinReservationLockRow extends QueryResultRow {
@@ -1341,6 +1364,52 @@ async function completePaidJoinAttempt(
   }
 }
 
+/**
+ * Reads the optional B2 binding evidence from the payment snapshot. A row written before B2 (or a
+ * malformed value) simply has no binding: the attempt stays readable and legacy behavior is kept.
+ */
+function paidJoinBindingRefsFromSnapshot(
+  row: PaidJoinReservationRow | undefined,
+): PaidJoinBindingRefs | undefined {
+  const policy = row?.binding_policy_ref;
+  if (typeof policy !== 'object' || policy === null || Array.isArray(policy)) return undefined;
+  const candidate = policy as Record<string, unknown>;
+  if (
+    typeof candidate.policyVersion !== 'number' ||
+    !Number.isSafeInteger(candidate.policyVersion) ||
+    candidate.policyVersion < 1 ||
+    typeof candidate.policyDigest !== 'string'
+  )
+    return undefined;
+  const usage = row?.binding_usage_ref;
+  let usageRef: PaidJoinBindingRefs['usageRef'];
+  if (usage !== undefined && usage !== null) {
+    if (typeof usage !== 'object' || Array.isArray(usage)) return undefined;
+    const usageCandidate = usage as Record<string, unknown>;
+    if (typeof usageCandidate.usageRef !== 'string') return undefined;
+    const units = usageCandidate.reservationUnits;
+    if (
+      units !== undefined &&
+      (typeof units !== 'number' || !Number.isSafeInteger(units) || units < 1)
+    )
+      return undefined;
+    usageRef = {
+      usageRef: usageCandidate.usageRef,
+      ...(units === undefined ? {} : { reservationUnits: units }),
+    };
+  }
+  const decision = row?.binding_decision_id;
+  if (decision !== undefined && decision !== null && typeof decision !== 'string') return undefined;
+  return {
+    policyRef: {
+      policyVersion: candidate.policyVersion,
+      policyDigest: candidate.policyDigest,
+    },
+    ...(usageRef ? { usageRef } : {}),
+    ...(typeof decision === 'string' ? { decisionId: decision } : {}),
+  };
+}
+
 async function loadPaidJoinAttempt(
   client: PoolClient,
   input: GameRosterOperationInput,
@@ -1366,7 +1435,10 @@ async function loadPaidJoinAttempt(
   const reservationRow = await queryOne<PaidJoinReservationRow>(
     client,
     `select reservation.id, reservation.state, reservation.payment_state,
-            reservation.expires_at, snapshot.snapshot->'providerBinding' as provider_binding
+            reservation.expires_at, snapshot.snapshot->'providerBinding' as provider_binding,
+            snapshot.snapshot->'policyRef' as binding_policy_ref,
+            snapshot.snapshot->'usageRef' as binding_usage_ref,
+            snapshot.snapshot->'decisionId' as binding_decision_id
        from eligibility.payment_snapshots snapshot
        join games.seat_reservations reservation
          on reservation.tenant_id = snapshot.tenant_id
@@ -1399,7 +1471,9 @@ async function loadPaidJoinAttempt(
       };
     }
   }
+  const bindingRefs = paidJoinBindingRefsFromSnapshot(reservationRow);
   return {
+    ...(bindingRefs ? { bindingRefs } : {}),
     ...(reservationRow?.provider_binding
       ? { providerBinding: reservationRow.provider_binding }
       : {}),
@@ -1821,6 +1895,15 @@ export function createGameRosterRepository(
               paymentMode: game.payment_mode,
               subscriptionInstanceId: input.subscriptionInstanceId,
               ...(input.providerBinding ? { providerBinding: input.providerBinding } : {}),
+              ...(input.bindingRefs
+                ? {
+                    policyRef: input.bindingRefs.policyRef,
+                    ...(input.bindingRefs.usageRef ? { usageRef: input.bindingRefs.usageRef } : {}),
+                    ...(input.bindingRefs.decisionId
+                      ? { decisionId: input.bindingRefs.decisionId }
+                      : {}),
+                  }
+                : {}),
               price: input.price,
               ...(input.invitationId ? { invitationId: input.invitationId } : {}),
               correlationId: input.correlationId,
