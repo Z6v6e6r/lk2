@@ -62,9 +62,15 @@ export function GameJoinFlowPanel(props: {
             Стоимость участия: <strong>{formatPrice(flow.consent.amountMinor)}</strong>
           </p>
           <p>
-            Сервер повторно проверит цену и спишет её только после вашего подтверждения. Если цена
-            изменится, потребуется новое подтверждение.
+            После подтверждения сервер повторно проверит условия и начнёт запись. Если цена
+            изменится, потребуется новое подтверждение. Результат записи и оплаты подтвердит сервер.
           </p>
+          {flow.consent.amountMinor === 0 ? (
+            <p>
+              Доплата по проверенным условиям не требуется. Это использование подписки, а не
+              бесплатная игра.
+            </p>
+          ) : null}
           {flow.message ? <p role="alert">{flow.message}</p> : null}
           <div className="game-detail-actions">
             <button
@@ -108,6 +114,24 @@ export function GameJoinFlowPanel(props: {
               Проверить статус
             </button>
           </div>
+        </section>
+      );
+    case 'CONFIRMED_UPDATING':
+      return (
+        <section className="game-detail-card game-join-flow" aria-labelledby={`${id}-title`}>
+          <h2 id={`${id}-title`}>Запись подтверждена, данные обновляются</h2>
+          <p role="status">
+            Сервер подтвердил исходную операцию. Проверяем карточку, состав и личную запись.
+            Повторная запись не нужна.
+          </p>
+          <button
+            className="game-detail-secondary"
+            type="button"
+            disabled={busy}
+            onClick={() => props.onCheckStatus?.()}
+          >
+            Проверить статус
+          </button>
         </section>
       );
     case 'SERVICE_BLOCKED':
