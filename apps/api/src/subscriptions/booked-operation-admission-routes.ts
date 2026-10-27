@@ -1,5 +1,5 @@
 import type {
-  BookedOperationAdmissionTargetRepository,
+  BookedOperationCreateAdmissionTargetRepository,
   SubscriptionRuntimeActorContextRepository,
 } from '@phub/database';
 import {
@@ -17,7 +17,7 @@ import {
 
 export interface BookedOperationAdmissionRouteOptions {
   readonly actorContextRepository?: Pick<SubscriptionRuntimeActorContextRepository, 'resolve'>;
-  readonly targetRepository?: BookedOperationAdmissionTargetRepository;
+  readonly targetRepository?: BookedOperationCreateAdmissionTargetRepository;
   readonly delegationIssuer?: Pick<
     SubscriptionRuntimeActorDelegationIssuer,
     'issueBookedOperationAdmission'
@@ -73,6 +73,28 @@ export function registerBookedOperationAdmissionRoutes(
           throw new BookedOperationAdmissionError(
             context.outcome === 'session_inactive' ? 401 : 503,
           );
+        if (body.action === 'CREATE_GAME') {
+          // CREATE admission contract: docs/contracts/game-commercial-create.md (authored by the
+          // LK1-facing integration work). It is not active until the LK1 reserve/confirm approval:
+          // this release never mints a delegation and never calls the owner client for a draft.
+          const draft = await options.targetRepository.resolveCreateDraft({
+            tenantId,
+            targetId: body.target.id,
+            expectedRevision: body.target.expectedRevision,
+            action: 'CREATE_GAME',
+            actorUserId: claims.sub,
+          });
+          // A draft the authenticated organizer cannot charge is a conflict, never a silent success.
+          if (!draft || !draft.admissible) throw new BookedOperationAdmissionError(409);
+          sendApiError(
+            request,
+            reply,
+            503,
+            'BOOKED_OPERATION_CREATE_ADMISSION_UNAVAILABLE',
+            'Создание игры по подписке пока недоступно: контракт CREATE не активирован до подтверждения резервирования в LK1.',
+          );
+          return;
+        }
         const target = await options.targetRepository.resolve({
           tenantId,
           targetId: body.target.id,

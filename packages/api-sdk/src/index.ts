@@ -263,6 +263,11 @@ export type GameCard = components['schemas']['GameCardView'];
 export type GameCardPage = components['schemas']['GameCardPage'];
 export type GameCommandResult = components['schemas']['GameCommandResult'];
 export type CreateGameRequest = components['schemas']['CreateGameRequest'];
+/** Same generated request surface; named for the managed commercial (paid) create path. */
+export type PaidGameCreateRequest = components['schemas']['CreateGameRequest'];
+export type GameOperationCommercial = components['schemas']['GameOperationCommercial'];
+export type GameCommercialCreateQuote = components['schemas']['GameCommercialCreateQuote'];
+export type GameOperationReceipt = components['schemas']['GameOperationReceipt'];
 export type CancelGameRequest = components['schemas']['CancelGameRequest'];
 export type ManagedSubscriptionWarnQuoteRequest =
   components['schemas']['ManagedSubscriptionWarnQuoteRequest'];
@@ -1562,6 +1567,28 @@ export class PadlHubApiClient {
         body: jsonRequestBody(input),
       }),
     );
+  }
+
+  /**
+   * Managed commercial (paid) CREATE. The caller owns the idempotency key: a lost response is
+   * recovered by reading the same operation, never by a new POST with a different key. Network
+   * retries and auth-refresh replays are disabled for this command.
+   *
+   * Server-side the request is additive: `subscriptionInstanceId`/`priceConsent` are accepted only
+   * while the managed contour is enabled; with the contour disabled the legacy strict body applies
+   * and a paid create keeps the existing `GAME_PAYMENT_REQUIRED` refusal.
+   */
+  public createPaidGame(
+    input: CreateGameRequest,
+    idempotencyKey: string,
+  ): Promise<GameCommandResult> {
+    return this.request<GameCommandResult>('/games', {
+      method: 'POST',
+      idempotencyKey,
+      body: jsonRequestBody(input),
+      retryOnUnauthorized: false,
+      cache: 'no-store',
+    });
   }
 
   public cancelGame(gameId: string, input: CancelGameRequest): Promise<GameCommandResult> {

@@ -813,6 +813,76 @@ describe('loadConfig', () => {
     ).toThrow('GAMES_COMMANDS_ENABLED is staging-only');
   });
 
+  it('keeps the managed commercial CREATE contour default-off, WARN-only and out of production', () => {
+    expect(loadConfig(validEnvironment)).toMatchObject({
+      GAME_COMMERCIAL_CREATE_ENABLED: false,
+      GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'ADVISORY',
+      GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS: 3_000,
+    });
+    expect(
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'true',
+        GAME_COMMERCIAL_CREATE_ENABLED: 'true',
+      }),
+    ).toMatchObject({ GAME_COMMERCIAL_CREATE_ENABLED: true });
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'production',
+        GAME_COMMERCIAL_CREATE_ENABLED: 'true',
+      }),
+    ).toThrow('allowed only in local, ci or staging');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAME_COMMERCIAL_CREATE_ENABLED: 'true',
+      }),
+    ).toThrow('requires GAMES_READ_ENABLED and GAMES_COMMANDS_ENABLED');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'true',
+        GAME_COMMERCIAL_CREATE_ENABLED: 'true',
+        GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'BOOKED_OPERATION',
+      }),
+    ).toThrow('requires GAME_COMMERCIAL_CREATE_OWNER_BASE_URL');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'staging',
+        GAMES_READ_ENABLED: 'true',
+        GAMES_COMMANDS_ENABLED: 'true',
+        GAME_COMMERCIAL_CREATE_ENABLED: 'true',
+        GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'BOOKED_OPERATION',
+        GAME_COMMERCIAL_CREATE_OWNER_BASE_URL: 'https://ph-admin.example.test',
+      }),
+    ).toThrow('not available before the LK1 reserve/confirm approval');
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        APP_ENV: 'local',
+        GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'BOOKED_OPERATION',
+      }),
+    ).toThrow('requires GAME_COMMERCIAL_CREATE_ENABLED=true');
+    for (const value of ['1', 'TRUE', 'yes', '']) {
+      expect(() =>
+        loadConfig({ ...validEnvironment, GAME_COMMERCIAL_CREATE_ENABLED: value }),
+      ).toThrow('Invalid application configuration');
+    }
+    expect(() =>
+      loadConfig({
+        ...validEnvironment,
+        GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: 'MANAGED_SUBSCRIPTION',
+      }),
+    ).toThrow('Invalid application configuration');
+  });
+
   it('keeps the legacy command bridge default-off and requires both server trust boundaries', () => {
     expect(() =>
       loadConfig({

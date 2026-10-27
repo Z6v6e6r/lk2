@@ -410,6 +410,167 @@ export function validateMigrationReceipt(v, planSha, operationSha) {
   return v;
 }
 
+// This registry is source-owned; operation JSON never supplies paths, SQL or argv.
+const closedProductionStages = Object.freeze({
+  game_start_0103: {
+    slug: 'game-start0103',
+    schema: 'PHUB_TIMEWEB_GAME_START_0103_MIGRATION_OPERATION_V1',
+    argument: '--game-start-migration-0103',
+  },
+  subject_link_0104: {
+    slug: 'subject-link0104',
+    schema: 'PHUB_TIMEWEB_SUBJECT_LINK_0104_MIGRATION_OPERATION_V1',
+    argument: '--subject-link-migration-0104',
+  },
+});
+export function closedApplicationRequestPath(kind) {
+  if (!Object.hasOwn(closedProductionStages, kind)) stop('CLOSED_PROFILE');
+  return `${ROOT}/operator/${closedProductionStages[kind].slug}-migration.json`;
+}
+export function closedApplicationProductionPaths(operation) {
+  const kind = operation?.migrationProfile;
+  if (
+    !Object.hasOwn(closedProductionStages, kind) ||
+    !SHA.test(operation.controllerSha ?? '') ||
+    !/^[1-9][0-9]*$/.test(operation.controllerSourceCiRunId ?? '') ||
+    !SHA.test(operation.publishedMigrator?.sourceSha ?? '') ||
+    !/^[1-9][0-9]*$/.test(operation.publishedMigrator?.publicationRunId ?? '')
+  )
+    stop('CLOSED_PROFILE');
+  const stage = closedProductionStages[kind],
+    candidate = `${operation.publishedMigrator.sourceSha}-${operation.publishedMigrator.publicationRunId}-1`;
+  return Object.freeze({
+    requestPath: closedApplicationRequestPath(kind),
+    slug: stage.slug,
+    candidate,
+    transactionRoot: `${ROOT}/backups/${operation.controllerSha}-${operation.controllerSourceCiRunId}-1-${stage.slug}-migration`,
+    containerName: `phub-timeweb-migration-${operation.publishedMigrator.sourceSha.slice(0, 12)}-${operation.publishedMigrator.publicationRunId}-1-${stage.slug}`,
+    prefetchRoot: `${ROOT}/standard/${stage.slug}-prefetch/${candidate}`,
+    prefetchRequestPath: `${ROOT}/operator/${stage.slug}-migrator-prefetch.json`,
+  });
+}
+export function closedApplicationPreviousRequestHashes(operation, proof) {
+  if (operation?.migrationProfile === 'game_start_0103') {
+    if (proof !== null) stop('CLOSED_PREVIOUS');
+    return Object.freeze({});
+  }
+  if (operation?.migrationProfile !== 'subject_link_0104') stop('CLOSED_PREVIOUS');
+  exact(proof, [
+    'schema',
+    'status',
+    'migrationProfile',
+    'sourceSha',
+    'sourceTree',
+    'controllerSourceCiRunId',
+    'operationSha256',
+    'successSha256',
+    'requestHashes',
+  ]);
+  const previous = closedApplicationProductionPaths({
+    ...operation,
+    migrationProfile: 'game_start_0103',
+  });
+  const allowed = [previous.requestPath, previous.prefetchRequestPath, DISK_BACKUP_REQUEST];
+  exact(proof.requestHashes, allowed);
+  if (
+    proof.schema !== 'PHUB_CLOSED_APPLICATION_PREVIOUS_REQUESTS_V1' ||
+    proof.status !== 'RECONCILED_SUCCESS' ||
+    proof.migrationProfile !== 'game_start_0103' ||
+    proof.sourceSha !== operation.controllerSha ||
+    proof.sourceTree !== operation.controllerTree ||
+    proof.controllerSourceCiRunId !== operation.controllerSourceCiRunId ||
+    proof.operationSha256 !== operation.previousMigrationSuccess?.operationSha256 ||
+    proof.successSha256 !== operation.previousMigrationSuccess?.sha256 ||
+    !Object.values(proof.requestHashes).every((value) => HASH.test(value ?? '')) ||
+    proof.requestHashes[previous.requestPath] !== proof.operationSha256
+  )
+    stop('CLOSED_PREVIOUS');
+  return Object.freeze({ ...proof.requestHashes });
+}
+
+function closedContainerCommand(payload, kind) {
+  const { operation, profile } = payload;
+  validateClosedAdditiveProfile(profile);
+  if (
+    !Object.hasOwn(closedProductionStages, profile.kind) ||
+    operation?.migrationProfile !== profile.kind ||
+    operation.schema !== closedProductionStages[profile.kind].schema ||
+    !['DORMANT', 'SCENARIO_EDITOR_V1'].includes(operation.catalogVariant) ||
+    !same(operation.expectedDatabaseTarget, {
+      databaseName: 'phub_beta',
+      systemIdentifier: '7679125609183186977',
+    })
+  )
+    stop('CLOSED_PROFILE');
+  profile.validateOperation(operation);
+  if (!['migration', 'migrator', 'migrator-post'].includes(kind)) stop('CLOSED_CREATE');
+  return kind === 'migration'
+    ? [
+        'node',
+        'apps/migrator/dist/main.js',
+        closedProductionStages[profile.kind].argument,
+        Buffer.from(
+          JSON.stringify({
+            ...operation.expectedDatabaseTarget,
+            catalogVariant: operation.catalogVariant,
+          }),
+        ).toString('base64'),
+      ]
+    : [
+        '--input-type=module',
+        '-e',
+        profile.roleProbeSource,
+        kind === 'migrator' ? 'pre' : 'bootstrap',
+      ];
+}
+function validateClosedProductionBinding(operation, binding) {
+  exact(binding, [
+    'kind',
+    'kernelProfile',
+    'attestSource',
+    'validateManifest',
+    'backup',
+    'inputs',
+    'readState',
+    'bootstrapSql',
+    'cleanupSql',
+    'attestPrevious',
+    'assertRuntimeFlags',
+  ]);
+  if (
+    !Object.hasOwn(closedProductionStages, binding.kind) ||
+    binding.kernelProfile?.kind !== binding.kind ||
+    operation?.migrationProfile !== binding.kind ||
+    operation.schema !== closedProductionStages[binding.kind].schema ||
+    operation.profile !== 'beta' ||
+    !same(operation.target, { hostname: 'lk2.padlhub.su', serverId: 8886471, projectId: 262717 }) ||
+    !same(operation.expectedDatabaseTarget, {
+      databaseName: 'phub_beta',
+      systemIdentifier: '7679125609183186977',
+    }) ||
+    [
+      'attestSource',
+      'validateManifest',
+      'backup',
+      'inputs',
+      'readState',
+      'bootstrapSql',
+      'cleanupSql',
+      'attestPrevious',
+      'assertRuntimeFlags',
+    ].some((name) => typeof binding[name] !== 'function')
+  )
+    stop('CLOSED_BINDING');
+  validateClosedAdditiveProfile(binding.kernelProfile);
+  binding.kernelProfile.validateOperation(operation);
+  closedApplicationProductionPaths(operation);
+  return binding;
+}
+export function createClosedApplicationProductionEffects(operation, owner, binding) {
+  validateClosedProductionBinding(operation, binding);
+  return productionOps(operation, owner, null, binding);
+}
+
 export function migrationCreateArgs(
   name,
   operationSha,
@@ -418,6 +579,34 @@ export function migrationCreateArgs(
   runtimeRole,
   notification,
 ) {
+  if (notification?.closedApplication) {
+    const payload = notification.closedApplication,
+      op = payload.operation;
+    const command = closedContainerCommand(payload, kind),
+      paths = closedApplicationProductionPaths(op);
+    if (
+      name !==
+        (kind === 'migration' ? paths.containerName : `${paths.containerName}-role-${kind}`) ||
+      envFile !== `${RUNTIME}/migrator.env`
+    )
+      stop('CLOSED_CREATE');
+    const actualKind = kind === 'migration' ? 'migration' : 'migrator';
+    const legacyName = `phub-timeweb-migration-${op.publishedMigrator.sourceSha.slice(0, 12)}-${op.publishedMigrator.publicationRunId}-1${actualKind === 'migration' ? '' : '-role-migrator'}`;
+    const args = migrationCreateArgs(
+      legacyName,
+      operationSha,
+      envFile,
+      actualKind,
+      actualKind === 'migrator' ? 'phub_runtime' : runtimeRole,
+    );
+    const index = args.indexOf(MIGRATOR_IMAGE);
+    if (index < 0) stop('CLOSED_CREATE');
+    args.splice(index, args.length - index, op.publishedMigrator.image, ...command);
+    args[args.indexOf('--name') + 1] = name;
+    for (let i = 0; i < args.length; i++)
+      if (args[i] === `phub.migration-kind=${actualKind}`) args[i] = `phub.migration-kind=${kind}`;
+    return args;
+  }
   if (notification?.operation?.schema === LOCATION_PHOTO_MIGRATION_SCHEMA) {
     validateLocationPhotoOperation(notification.operation);
     if (
@@ -561,22 +750,22 @@ export function migrationCreateArgs(
 // either host representation, but only for the exact pinned pair.
 function sameImageId(imageId, spec) {
   if (imageId === spec?.imageId) return true;
-  if (!spec?.locationPhoto) return false;
-  const pinned = spec.locationPhoto.operation.publishedMigrator;
+  if (!spec?.locationPhoto && !spec?.closedApplication) return false;
+  const pinned = (spec.locationPhoto ?? spec.closedApplication).operation.publishedMigrator;
   const indexDigest = pinned.image.slice(pinned.image.indexOf('@') + 1);
   return imageId === indexDigest;
 }
 
 function expectedContainerImage(spec) {
   if (spec?.notification) return spec.notification.operation.migratorImage;
-  if (!spec?.locationPhoto) return MIGRATOR_IMAGE;
-  const pinned = spec.locationPhoto.operation.publishedMigrator;
+  if (!spec?.locationPhoto && !spec?.closedApplication) return MIGRATOR_IMAGE;
+  const pinned = (spec.locationPhoto ?? spec.closedApplication).operation.publishedMigrator;
   return pinned.image;
 }
 
 function acceptedContainerImages(spec) {
-  if (!spec?.locationPhoto) return [expectedContainerImage(spec)];
-  const pinned = spec.locationPhoto.operation.publishedMigrator;
+  if (!spec?.locationPhoto && !spec?.closedApplication) return [expectedContainerImage(spec)];
+  const pinned = (spec.locationPhoto ?? spec.closedApplication).operation.publishedMigrator;
   return [pinned.image, `ghcr.io/z6v6e6r/phub-migrator@${pinned.imageId}`];
 }
 
@@ -584,43 +773,45 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
   const h = v?.HostConfig,
     c = v?.Config,
     k = spec?.kind;
-  const cmd = spec?.locationPhoto
-    ? k === 'migration'
-      ? ['node', 'apps/migrator/dist/main.js']
-      : [
-          '--input-type=module',
-          '-e',
-          LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE,
-          k === 'migrator' ? 'pre' : 'bootstrap',
-        ]
-    : spec?.notification
+  const cmd = spec?.closedApplication
+    ? closedContainerCommand(spec.closedApplication, k)
+    : spec?.locationPhoto
       ? k === 'migration'
-        ? [
-            'node',
-            'apps/migrator/dist/main.js',
-            '--notification-migrations-0099-0101',
-            Buffer.from(JSON.stringify(spec.notification.target)).toString('base64'),
-          ]
-        : [
-            'apps/migrator/dist/notification-migration-probe.js',
-            k.split('-')[0],
-            k.endsWith('-post') ? 'post' : 'pre',
-          ]
-      : k === 'migration'
         ? ['node', 'apps/migrator/dist/main.js']
         : [
             '--input-type=module',
             '-e',
-            MIGRATION_ROLE_PROBE_SOURCE,
-            k,
-            ...(k === 'migrator' ? [spec.runtimeRole] : []),
-          ];
+            LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE,
+            k === 'migrator' ? 'pre' : 'bootstrap',
+          ]
+      : spec?.notification
+        ? k === 'migration'
+          ? [
+              'node',
+              'apps/migrator/dist/main.js',
+              '--notification-migrations-0099-0101',
+              Buffer.from(JSON.stringify(spec.notification.target)).toString('base64'),
+            ]
+          : [
+              'apps/migrator/dist/notification-migration-probe.js',
+              k.split('-')[0],
+              k.endsWith('-post') ? 'post' : 'pre',
+            ]
+        : k === 'migration'
+          ? ['node', 'apps/migrator/dist/main.js']
+          : [
+              '--input-type=module',
+              '-e',
+              MIGRATION_ROLE_PROBE_SOURCE,
+              k,
+              ...(k === 'migrator' ? [spec.runtimeRole] : []),
+            ];
   if (
     !spec ||
     !(
       spec?.notification
         ? ['migration', 'runtime', 'migrator', 'runtime-post', 'migrator-post']
-        : spec?.locationPhoto
+        : spec?.locationPhoto || spec?.closedApplication
           ? ['migration', 'migrator', 'migrator-post']
           : ['migration', 'runtime', 'migrator']
     ).includes(k) ||
@@ -2977,31 +3168,45 @@ function inspectDiskRestoreKernel(row, attestation) {
   });
 }
 
-function productionOps(op, owner, ignoredRestore = null) {
+function productionOps(op, owner, ignoredRestore = null, closedBinding = null) {
+  const closed = closedBinding !== null;
+  if (closed) validateClosedProductionBinding(op, closedBinding);
+  const closedPaths = closed ? closedApplicationProductionPaths(op) : null;
+  const requestPath = closed ? closedPaths.requestPath : REQUEST;
   const notification = op.schema === NOTIFICATION_MIGRATION_SCHEMA;
   const locationPhoto = op.schema === LOCATION_PHOTO_MIGRATION_SCHEMA;
-  const postgresId = notification || locationPhoto ? op.expectedPostgres.id : bridge.postgresId;
+  const publishedProfile = locationPhoto || closed;
+  const postgresId = notification || publishedProfile ? op.expectedPostgres.id : bridge.postgresId;
   const migratorImage = notification
     ? op.migratorImage
-    : locationPhoto
+    : publishedProfile
       ? op.publishedMigrator.image
       : MIGRATOR_IMAGE;
   // Docker with the containerd image store reports the index digest as the image id, while the
   // reviewed 0102 package pins the amd64 child manifest digest. Pull and inspect that child ref for
   // the identity check and keep the index ref (the published, pinned image string) pulled alongside.
-  const locationPhotoImageRef = locationPhoto
+  const locationPhotoImageRef = publishedProfile
     ? `ghcr.io/z6v6e6r/phub-migrator@${op.publishedMigrator.imageId}`
     : null;
-  const candidate = locationPhoto
+  const candidate = publishedProfile
       ? `${op.publishedMigrator.sourceSha}-${op.publishedMigrator.publicationRunId}-1`
       : `${op.candidateSha}-${op.publicationRunId}-1`,
-    tx = locationPhoto
-      ? `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-location-photo0102-migration`
-      : `${ROOT}/backups/${candidate}-migration`;
-  const prefetchRoot = `${ROOT}/standard/${locationPhoto ? 'location-photo-prefetch' : 'notification-prefetch'}/${candidate}`;
+    tx = closed
+      ? closedPaths.transactionRoot
+      : locationPhoto
+        ? `${ROOT}/backups/${op.controllerSha}-${op.controllerSourceCiRunId}-1-location-photo0102-migration`
+        : `${ROOT}/backups/${candidate}-migration`;
+  const prefetchGroup = closed
+    ? `${closedPaths.slug}-prefetch`
+    : locationPhoto
+      ? 'location-photo-prefetch'
+      : 'notification-prefetch';
+  const prefetchRoot = `${ROOT}/standard/${prefetchGroup}/${candidate}`;
   const prefetchFile = (name) => `${prefetchRoot}/${name}.json`;
   const path = (name) => `${tx}/${name}`,
-    name = `phub-timeweb-migration-${(locationPhoto ? op.publishedMigrator.sourceSha : op.candidateSha).slice(0, 12)}-${locationPhoto ? op.publishedMigrator.publicationRunId : op.publicationRunId}-1`;
+    name = closed
+      ? closedPaths.containerName
+      : `phub-timeweb-migration-${(publishedProfile ? op.publishedMigrator.sourceSha : op.candidateSha).slice(0, 12)}-${locationPhoto ? op.publishedMigrator.publicationRunId : op.publicationRunId}-1`;
   let plan,
     marker,
     lockIdentities,
@@ -3017,13 +3222,13 @@ function productionOps(op, owner, ignoredRestore = null) {
       v.Architecture !== 'amd64' ||
       !v.RepoDigests?.includes(ref) ||
       v.Config?.Labels?.['org.opencontainers.image.revision'] !==
-        (locationPhoto ? op.publishedMigrator.sourceSha : op.candidateSha) ||
+        (publishedProfile ? op.publishedMigrator.sourceSha : op.candidateSha) ||
       v.Config.User !== 'appuser' ||
       v.Config.WorkingDir !== '/app' ||
       !(v.Config.Entrypoint === null || same(v.Config.Entrypoint, ['docker-entrypoint.sh'])) ||
       !same(v.Config.Cmd, ['node', 'apps/migrator/dist/main.js']) ||
       !/^sha256:[a-f0-9]{64}$/.test(v.Id) ||
-      (locationPhoto && v.Id !== op.publishedMigrator.imageId)
+      (publishedProfile && v.Id !== op.publishedMigrator.imageId)
     )
       stop('IMAGE');
     return v;
@@ -3035,6 +3240,9 @@ function productionOps(op, owner, ignoredRestore = null) {
     runtimeRole: roleName,
     ...(notification ? { notification: { operation: op, target: ops.target() } } : {}),
     ...(locationPhoto ? { locationPhoto: { operation: op } } : {}),
+    ...(closed
+      ? { closedApplication: { operation: op, profile: closedBinding.kernelProfile } }
+      : {}),
     env: envValues(kind.split('-')[0], image().Config.Env),
   });
   const lookup = (kind, imageId, operationSha) => {
@@ -3088,7 +3296,12 @@ function productionOps(op, owner, ignoredRestore = null) {
   const ops = {
     time: () => Date.now(),
     receiptPath: path('migration-receipt.json'),
-    assertSource: sourceAttest,
+    assertSource: closed
+      ? (operation) => {
+          closedBinding.attestSource(operation, { git, read, secure, present });
+          closedBinding.attestPrevious(operation, { read, secure, present });
+        }
+      : sourceAttest,
     assertUnused: () => {
       if (
         [ACTIVE, PROVISION, tx].some(present) ||
@@ -3111,7 +3324,7 @@ function productionOps(op, owner, ignoredRestore = null) {
     authority: async (operation) => {
       await readControllerSourceAuthority(operation, git, githubPublic);
       secure(`${ROOT}/releases/${candidate}`, 0o700);
-      if (locationPhoto) {
+      if (publishedProfile) {
         const run = await githubPublic(
           `actions/runs/${operation.publishedMigrator.publicationRunId}`,
         );
@@ -3127,7 +3340,10 @@ function productionOps(op, owner, ignoredRestore = null) {
         )
           stop('LOCATION_PHOTO_PUBLICATION');
         const manifestBytes = read(`${ROOT}/releases/${candidate}/release-manifest.json`, 0o600);
-        validateLocationPhotoManifest(operation, parseStrictJson(manifestBytes), manifestBytes);
+        if (closed)
+          closedBinding.validateManifest(operation, parseStrictJson(manifestBytes), manifestBytes);
+        else
+          validateLocationPhotoManifest(operation, parseStrictJson(manifestBytes), manifestBytes);
       } else {
         const manifest = await candidateAuthority(operation, `${ROOT}/releases/${candidate}`);
         if (notification) validateNotificationManifest(operation, manifest);
@@ -3170,34 +3386,58 @@ function productionOps(op, owner, ignoredRestore = null) {
     },
     prefetchUnused: () => {
       ops.assertUnused();
-      if (
-        [
-          REQUEST,
-          DISK_BACKUP_REQUEST,
-          `${ROOT}/operator/api-worker-upgrade.json`,
-          locationPhoto ? PREFETCH_REQUEST : LOCATION_PHOTO_PREFETCH_REQUEST,
-        ].some(present)
-      )
-        stop('PREFETCH_PHASE');
+      const candidates = [
+        requestPath,
+        DISK_BACKUP_REQUEST,
+        `${ROOT}/operator/api-worker-upgrade.json`,
+        ...(closed
+          ? [
+              REQUEST,
+              PREFETCH_REQUEST,
+              LOCATION_PHOTO_PREFETCH_REQUEST,
+              `${ROOT}/operator/${closedPaths.slug === 'game-start0103' ? 'subject-link0104' : 'game-start0103'}-migrator-prefetch.json`,
+              closedApplicationRequestPath(
+                closedBinding.kind === 'game_start_0103' ? 'subject_link_0104' : 'game_start_0103',
+              ),
+            ]
+          : [locationPhoto ? PREFETCH_REQUEST : LOCATION_PHOTO_PREFETCH_REQUEST]),
+      ];
+      const previous = closed
+        ? closedApplicationPreviousRequestHashes(
+            op,
+            closedBinding.attestPrevious(op, { read, secure, present }),
+          )
+        : {};
+      for (const candidate of candidates)
+        if (
+          present(candidate) &&
+          (!Object.hasOwn(previous, candidate) || hash(read(candidate)) !== previous[candidate])
+        )
+          stop('PREFETCH_PHASE');
     },
     prefetchIntent: () => (present(prefetchFile('intent')) ? read(prefetchFile('intent')) : null),
     writePrefetchIntent: (bytes) => {
-      for (const directory of [
-        `${ROOT}/standard/${locationPhoto ? 'location-photo-prefetch' : 'notification-prefetch'}`,
-        prefetchRoot,
-      ]) {
+      for (const directory of [`${ROOT}/standard/${prefetchGroup}`, prefetchRoot]) {
         if (!present(directory)) {
           mkdirSync(directory, { mode: 0o700 });
           syncParent(directory);
         }
         secure(directory, 0o700);
       }
-      sealNotificationPrefetchMetadata(prefetchFile('intent'), bytes);
+      sealNotificationPrefetchMetadata(
+        prefetchFile('intent'),
+        bytes,
+        closed ? closedBinding.kind : undefined,
+      );
     },
     prefetchReceipt: () =>
       present(prefetchFile('receipt')) ? read(prefetchFile('receipt')) : null,
     writePrefetchReceipt: (bytes) =>
-      sealNotificationPrefetchMetadata(prefetchFile('receipt'), bytes),
+      sealNotificationPrefetchMetadata(
+        prefetchFile('receipt'),
+        bytes,
+        closed ? closedBinding.kind : undefined,
+      ),
     prefetchImagePresent: () => {
       // The index ref alone is not enough for the location-photo package: reconcile must be able to
       // resume an interrupted pull that stored the index but not the pinned amd64 child ref.
@@ -3215,7 +3455,7 @@ function productionOps(op, owner, ignoredRestore = null) {
       );
     },
     pullMigrator: () => {
-      if (!notification && !locationPhoto) stop('PREFETCH_PROFILE');
+      if (!notification && !publishedProfile) stop('PREFETCH_PROFILE');
       // Only this image-store stage uses the enrolled release reader. All SQL and
       // ordinary migration probes keep their credential-free Docker environment.
       const credentials = '/root/.docker/config.json';
@@ -3229,10 +3469,10 @@ function productionOps(op, owner, ignoredRestore = null) {
         stop('PREFETCH_CREDENTIAL_DRIFT');
       return image().Id;
     },
-    snapshot: (operationSha = hash(read(REQUEST))) => {
+    snapshot: (operationSha = hash(read(requestPath))) => {
       const rows = ids([]).map(inspect),
         excluded = [];
-      let api, worker, pg;
+      let api, worker, pg, apiEnv, workerEnv;
       for (const row of rows) {
         if (ignoredRestore && row.Id === ignoredRestore.id) {
           if (ignoredRestore.schema === 'PHUB_TIMEWEB_DISK_RESTORE_READBACK_V1') {
@@ -3263,7 +3503,7 @@ function productionOps(op, owner, ignoredRestore = null) {
         if (
           (notification
             ? ['migration', 'runtime', 'migrator', 'runtime-post', 'migrator-post']
-            : locationPhoto
+            : publishedProfile
               ? ['migration', 'migrator', 'migrator-post']
               : ['migration', 'runtime', 'migrator']
           ).some((kind) => row.Name === `/${kind === 'migration' ? name : `${name}-role-${kind}`}`)
@@ -3281,9 +3521,11 @@ function productionOps(op, owner, ignoredRestore = null) {
           if (service === 'api') {
             if (api) stop('COUNT');
             api = snapshotRow(row);
+            apiEnv = row.Config.Env;
           } else {
             if (worker) stop('COUNT');
             worker = snapshotRow(row);
+            workerEnv = row.Config.Env;
           }
         } else {
           excluded.push(snapshotRow(row, false));
@@ -3299,6 +3541,7 @@ function productionOps(op, owner, ignoredRestore = null) {
         }
       }
       if (!api || !worker || !pg) stop('COUNT');
+      if (closed) closedBinding.assertRuntimeFlags(op, { api: apiEnv, worker: workerEnv }, { git });
       return {
         api,
         worker,
@@ -3330,6 +3573,8 @@ function productionOps(op, owner, ignoredRestore = null) {
         ]).trim(),
       ),
     backup: (operation, options) => {
+      if (closed)
+        return closedBinding.backup(operation, options, { read, secure, present, postgresSql });
       if (notification) return notificationBackupProof(operation);
       if (locationPhoto) return locationPhotoBackupProof(operation, options);
       const directory = `${ROOT}/backups/${operation.controllerSha}-${operation.controllerSourceCiRunId}-1-web`;
@@ -3375,7 +3620,7 @@ function productionOps(op, owner, ignoredRestore = null) {
       assertMarker(PROVISION, !requireLocks);
       if (
         !read(path('preparation.json')).equals(
-          encodeApiWorkerMigrationCapsule(read(REQUEST), encoded(plan)),
+          encodeApiWorkerMigrationCapsule(read(requestPath), encoded(plan)),
         )
       )
         stop('CAPSULE_DRIFT');
@@ -3392,6 +3637,7 @@ function productionOps(op, owner, ignoredRestore = null) {
       return value;
     },
     create: (kind, imageId, operationSha, runtimeRole) => {
+      if (closed && Date.now() >= Date.parse(op.expiresAt)) stop('EXPIRED');
       roleName = runtimeRole ?? roleName;
       const s = spec(kind);
       if (lookup(kind, imageId, operationSha)) stop('EXISTING_CONTAINER');
@@ -3404,7 +3650,9 @@ function productionOps(op, owner, ignoredRestore = null) {
             `${RUNTIME}/${kind.split('-')[0] === 'runtime' ? 'api' : 'migrator'}.env`,
             kind,
             runtimeRole,
-            s.notification ?? s.locationPhoto,
+            s.notification ??
+              s.locationPhoto ??
+              (s.closedApplication ? { closedApplication: s.closedApplication } : undefined),
           ),
         ).trim();
       } catch (error) {
@@ -3418,7 +3666,7 @@ function productionOps(op, owner, ignoredRestore = null) {
     },
     start: (id, kind) => {
       const s = spec(kind);
-      validateMigrationContainer(inspect(id), id, hash(read(REQUEST)), 'created', s);
+      validateMigrationContainer(inspect(id), id, hash(read(requestPath)), 'created', s);
       if (Date.now() >= Date.parse(op.expiresAt)) stop('EXPIRED');
       docker(['start', id]);
     },
@@ -3426,7 +3674,7 @@ function productionOps(op, owner, ignoredRestore = null) {
       const exit = docker(['wait', id], 900000).trim();
       const s = spec(kind);
       const row = inspect(id);
-      validateMigrationContainer(row, id, hash(read(REQUEST)), 'exited', s);
+      validateMigrationContainer(row, id, hash(read(requestPath)), 'exited', s);
       if (exit !== '0' || row.State.ExitCode !== 0) stop('EXIT');
     },
     logs: (id) => {
@@ -3457,7 +3705,7 @@ function productionOps(op, owner, ignoredRestore = null) {
     attestStoppedProbes: () => {
       for (const kind of notification
         ? ['runtime', 'migrator', 'runtime-post', 'migrator-post']
-        : locationPhoto
+        : publishedProfile
           ? ['migrator', 'migrator-post']
           : ['runtime', 'migrator']) {
         const row = lookup(kind, plan.imageId, plan.operationSha256);
@@ -3465,6 +3713,7 @@ function productionOps(op, owner, ignoredRestore = null) {
       }
     },
     inputs: () => {
+      if (closed) return closedBinding.inputs(op, { read, secure, present });
       if (locationPhoto) {
         const descriptor = read(
           `${SOURCE}/deploy/timeweb/location-photo-migration-0102.v1.json`,
@@ -3510,6 +3759,10 @@ function productionOps(op, owner, ignoredRestore = null) {
       ).checkpoints[String(count)].sha256,
     notificationState: (phase) => readNotificationDatabaseState(op, phase),
     locationPhotoState: (phase) => readLocationPhotoDatabaseState(op, phase),
+    closedApplicationState: (phase) => {
+      if (!closed) stop('CLOSED_PROFILE');
+      return closedBinding.readState(op, phase, { read, secure, present, postgresSql });
+    },
     footprint: () => {
       const rows = postgresSql(
         `begin read only;select json_agg(json_build_object('name',c.oid::regclass::text,'bytes',pg_total_relation_size(c.oid),'rows',coalesce(s.n_live_tup,0),'conflictingLocks',(select count(*) from pg_locks l where l.relation=c.oid and l.pid<>pg_backend_pid() )) order by c.oid::regclass::text) from pg_class c left join pg_stat_user_tables s on s.relid=c.oid where c.oid in ('notifications.deliveries'::regclass,'support.tickets'::regclass,'support.messages'::regclass);rollback;`,
@@ -3533,6 +3786,16 @@ function productionOps(op, owner, ignoredRestore = null) {
     bootstrap: () => {
       owner.assertOwned();
       ops.assertOwned();
+      if (closed) {
+        const sql = closedBinding.bootstrapSql(op, plan);
+        if (
+          !(typeof sql === 'string' || Buffer.isBuffer(sql)) ||
+          hash(sql) !== plan.inputs.bootstrapSha256
+        )
+          stop('CLOSED_BOOTSTRAP_SOURCE');
+        if (Date.now() >= Date.parse(op.expiresAt)) stop('EXPIRED');
+        return postgresSql(sql, false, postgresId);
+      }
       if (!notification && !locationPhoto) stop('BOOTSTRAP_PROFILE');
       const sql = read(
         `${SOURCE}/deploy/timeweb/${locationPhoto ? 'location-photo-role-bootstrap-0102' : 'notification-role-bootstrap-0105'}.sql`,
@@ -3544,6 +3807,15 @@ function productionOps(op, owner, ignoredRestore = null) {
     cleanup: () => {
       owner.assertOwned();
       ops.assertOwned();
+      if (closed) {
+        const sql = closedBinding.cleanupSql(op, plan);
+        if (
+          !(typeof sql === 'string' || Buffer.isBuffer(sql)) ||
+          hash(sql) !== plan.inputs.cleanupSha256
+        )
+          stop('CLOSED_CLEANUP_SOURCE');
+        return postgresSql(sql, false, postgresId);
+      }
       if (!locationPhoto) stop('CLEANUP_PROFILE');
       const sql = read(`${SOURCE}/deploy/timeweb/location-photo-role-cleanup-0102.sql`, 0o644);
       if (hash(sql) !== plan.inputs.cleanupSha256) stop('CLEANUP_SOURCE');
@@ -3581,6 +3853,32 @@ function productionOps(op, owner, ignoredRestore = null) {
         stop('PROOF_PATH');
       durable(path(name), bytes, true);
     },
+    readClosedApplicationProof: (name) => {
+      if (
+        !closed ||
+        ![
+          'bootstrap.json',
+          'cleanup.json',
+          'migrator-pre.json',
+          'migrator-bootstrap.json',
+        ].includes(name)
+      )
+        stop('CLOSED_PROOF_PATH');
+      return present(path(name)) ? read(path(name)) : null;
+    },
+    writeClosedApplicationProof: (name, bytes) => {
+      if (
+        !closed ||
+        ![
+          'bootstrap.json',
+          'cleanup.json',
+          'migrator-pre.json',
+          'migrator-bootstrap.json',
+        ].includes(name)
+      )
+        stop('CLOSED_PROOF_PATH');
+      durable(path(name), bytes, true);
+    },
     successProof: () =>
       present(path('migration-success.json')) ? read(path('migration-success.json')) : null,
     writeSuccess: (bytes) => durable(path('migration-success.json'), bytes, true),
@@ -3601,6 +3899,51 @@ function productionOps(op, owner, ignoredRestore = null) {
   };
   return ops;
 }
+export async function runClosedApplicationManualEntryAdapter(mode, kind, requestPath, effects) {
+  if (
+    !['deploy', 'reconcile'].includes(mode) ||
+    !Object.hasOwn(closedProductionStages, kind) ||
+    requestPath !== closedApplicationRequestPath(kind) ||
+    effects.uid() !== 0
+  )
+    stop('CLOSED_ENTRY');
+  effects.assertAmbient();
+  effects.secureStandard();
+  const bytes = effects.readRequest();
+  const op = parseStrictJson(bytes);
+  if (op?.migrationProfile !== kind) stop('CLOSED_ENTRY');
+  const binding = effects.binding(op);
+  validateClosedProductionBinding(op, binding);
+  binding.kernelProfile.validateOperation(op, mode === 'deploy' ? effects.time() : undefined);
+  const owner = effects.acquire();
+  try {
+    return await effects.run(mode, bytes, op, owner, binding);
+  } finally {
+    owner.close();
+  }
+}
+export async function runManualClosedApplicationMigration(mode, kind, requestPath, bindingFactory) {
+  return runClosedApplicationManualEntryAdapter(mode, kind, requestPath, {
+    uid: () => process.getuid?.(),
+    time: () => Date.now(),
+    assertAmbient: () => {
+      assertNoAmbientDockerOverrides();
+      assertNoAmbientComposeOverrides();
+    },
+    secureStandard: () => secure(`${ROOT}/standard`, 0o700),
+    readRequest: () => read(closedApplicationRequestPath(kind)),
+    binding: bindingFactory,
+    acquire: () => acquireApiWorkerExecutor(`${ROOT}/standard/api-worker-executor.lock`),
+    run: (entryMode, bytes, op, owner, binding) =>
+      runClosedAdditiveMigrationAdapter(
+        entryMode,
+        bytes,
+        productionOps(op, owner, null, binding),
+        binding.kernelProfile,
+      ),
+  });
+}
+
 export async function runManualApiWorkerMigration(mode, requestPath) {
   if (
     !['deploy', 'reconcile'].includes(mode) ||
@@ -3661,10 +4004,16 @@ export async function runManualLocationPhotoMigration(mode, requestPath) {
 
 // Fixed owned cache metadata only, under the existing executor lock. Partial
 // incoming bytes can resume only as an exact prefix of the original sealed value.
-export function sealNotificationPrefetchMetadata(path, bytes) {
+export function sealNotificationPrefetchMetadata(path, bytes, closedKind) {
+  if (closedKind !== undefined && !Object.hasOwn(closedProductionStages, closedKind))
+    stop('PREFETCH_METADATA_PATH');
+  const group =
+    closedKind === undefined
+      ? '(?:notification|location-photo)'
+      : closedProductionStages[closedKind].slug;
   if (
     !new RegExp(
-      `^${ROOT}/standard/(?:notification|location-photo)-prefetch/[a-f0-9]{40}-[1-9][0-9]*-1/(?:intent|receipt)\\.json$`,
+      `^${ROOT}/standard/${group}-prefetch/[a-f0-9]{40}-[1-9][0-9]*-1/(?:intent|receipt)\\.json$`,
     ).test(path) ||
     !Buffer.isBuffer(bytes) ||
     !bytes.length ||
@@ -4535,8 +4884,123 @@ export function validateLocationPhotoMigrationReceipt(value, planSha, operationS
 // The photo profile is deliberately narrower than the notification profile: one ordinary
 // migrator run, no application rollout and no runtime table grant. Temporary schema CREATE is
 // journalled separately so reconcile can remove it after either a lost bootstrap or cleanup ACK.
+const locationPhotoAdditiveProfile = Object.freeze({
+  kind: 'location_photo_0102',
+  validateOperation: validateLocationPhotoOperation,
+  validateLedger: validateLocationPhotoLedger,
+  validateState: validateLocationPhotoState,
+  validateMigratorReadback: validateLocationPhotoMigratorReadback,
+  validatePlan: validateLocationPhotoMigrationPlan,
+  validateReceipt: validateLocationPhotoMigrationReceipt,
+  preCount: 105,
+  postCount: 106,
+  preLedgerSha256: LOCATION_PHOTO_PRE_LEDGER,
+  postLedgerSha256: LOCATION_PHOTO_POST_LEDGER,
+  roleProbeSource: LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE,
+  errorPrefix: 'LOCATION_PHOTO_',
+  schemas: Object.freeze({
+    receipt: locationPhotoReceiptSchema,
+    plan: locationPhotoPlanSchema,
+    roleProof: 'PHUB_LOCATION_PHOTO_MIGRATOR_ROLE_PROOF_V1',
+    cleanupProof: 'PHUB_LOCATION_PHOTO_CLEANUP_PROOF_V1',
+    bootstrapProof: 'PHUB_LOCATION_PHOTO_BOOTSTRAP_PROOF_V1',
+    success: 'PHUB_LOCATION_PHOTO_MIGRATION_SUCCESS_V1',
+  }),
+  readState: (effects, phase) => effects.locationPhotoState(phase),
+  readProof: (effects, name) => effects.readLocationPhotoProof(name),
+  writeProof: (effects, name, bytes) => effects.writeLocationPhotoProof(name, bytes),
+});
+
 export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops) {
-  const op = validateLocationPhotoOperation(
+  return runClosedAdditiveMigrationAdapter(mode, operationBytes, ops, locationPhotoAdditiveProfile);
+}
+
+const closedAdditiveSchemas = (prefix) => ({
+  receipt: `${prefix}_MIGRATION_RECEIPT_V1`,
+  plan: `${prefix}_MIGRATION_PLAN_V1`,
+  roleProof: `${prefix}_MIGRATOR_ROLE_PROOF_V1`,
+  cleanupProof: `${prefix}_CLEANUP_PROOF_V1`,
+  bootstrapProof: `${prefix}_BOOTSTRAP_PROOF_V1`,
+  success: `${prefix}_MIGRATION_SUCCESS_V1`,
+});
+const closedAdditiveProfiles = Object.freeze({
+  location_photo_0102: {
+    preCount: 105,
+    postCount: 106,
+    preLedgerSha256: LOCATION_PHOTO_PRE_LEDGER,
+    postLedgerSha256: LOCATION_PHOTO_POST_LEDGER,
+    errorPrefix: 'LOCATION_PHOTO_',
+    schemas: {
+      ...closedAdditiveSchemas('PHUB_LOCATION_PHOTO'),
+      receipt: locationPhotoReceiptSchema,
+      plan: locationPhotoPlanSchema,
+    },
+  },
+  game_start_0103: {
+    preCount: 106,
+    postCount: 107,
+    preLedgerSha256: 'ff74c193b5e5253f929818b1550d0e5c0264a9818cb0ee5437d49d5aa043904e',
+    postLedgerSha256: '6146219b31e4720016bb81a0018f76609c7fc515603e4aac405f6a2342e66d77',
+    errorPrefix: 'GAME_START_',
+    schemas: closedAdditiveSchemas('PHUB_GAME_START_0103'),
+  },
+  subject_link_0104: {
+    preCount: 107,
+    postCount: 108,
+    preLedgerSha256: '6146219b31e4720016bb81a0018f76609c7fc515603e4aac405f6a2342e66d77',
+    postLedgerSha256: '3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9',
+    errorPrefix: 'SUBJECT_LINK_',
+    schemas: closedAdditiveSchemas('PHUB_SUBJECT_LINK_0104'),
+  },
+});
+export function validateClosedAdditiveProfile(profile) {
+  const callbacks = [
+    'validateOperation',
+    'validateLedger',
+    'validateState',
+    'validateMigratorReadback',
+    'validatePlan',
+    'validateReceipt',
+    'readState',
+    'readProof',
+    'writeProof',
+  ];
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile))
+    stop('CLOSED_ADDITIVE_PROFILE');
+  const metadataKeys = [
+    'preCount',
+    'postCount',
+    'preLedgerSha256',
+    'postLedgerSha256',
+    'errorPrefix',
+    'schemas',
+  ];
+  try {
+    exact(profile, ['kind', 'roleProbeSource', ...metadataKeys, ...callbacks]);
+  } catch {
+    stop('CLOSED_ADDITIVE_PROFILE');
+  }
+  const expected = Object.hasOwn(closedAdditiveProfiles, profile.kind)
+    ? closedAdditiveProfiles[profile.kind]
+    : null;
+  if (
+    !expected ||
+    !same(Object.fromEntries(metadataKeys.map((key) => [key, profile[key]])), expected) ||
+    profile.postCount !== profile.preCount + 1 ||
+    !HASH.test(profile.preLedgerSha256) ||
+    !HASH.test(profile.postLedgerSha256) ||
+    callbacks.some((key) => typeof profile[key] !== 'function') ||
+    typeof profile.roleProbeSource !== 'string' ||
+    !profile.roleProbeSource.length ||
+    profile.roleProbeSource.length > 131072
+  )
+    stop('CLOSED_ADDITIVE_PROFILE');
+  return profile;
+}
+
+export async function runClosedAdditiveMigrationAdapter(mode, operationBytes, ops, profile) {
+  validateClosedAdditiveProfile(profile);
+  const op = profile.validateOperation(
       parseStrictJson(operationBytes),
       mode === 'deploy' ? ops.time() : undefined,
     ),
@@ -4544,7 +5008,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
   let plan, planBytes, current;
   const journal = async (status, extra = {}) => {
     current = {
-      schema: locationPhotoReceiptSchema,
+      schema: profile.schemas.receipt,
       status,
       planSha256: hash(planBytes),
       operationSha256: operationSha,
@@ -4561,11 +5025,10 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     await ops.assertOwned();
     if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
       stop('RUNTIME_DRIFT');
-    validateLocationPhotoLedger(await ops.ledger(), phase);
-    if (!same(await ops.inputs(), plan.inputs)) stop('LOCATION_PHOTO_INPUT_DRIFT');
+    profile.validateLedger(await ops.ledger(), phase);
+    if (!same(await ops.inputs(), plan.inputs)) stop(profile.errorPrefix + 'INPUT_DRIFT');
   };
-  const state = async (phase) =>
-    validateLocationPhotoState(await ops.locationPhotoState(phase), phase);
+  const state = async (phase) => profile.validateState(await profile.readState(ops, phase), phase);
   const probe = async (phase) => {
     const suffix = phase === 'pre' ? 'PRE' : 'BOOTSTRAP',
       kind = phase === 'pre' ? 'migrator' : 'migrator-post';
@@ -4574,7 +5037,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       await journal(`PROBE_MIGRATOR_${suffix}_CREATE_INTENT`);
       const id = await ops.create(kind, plan.imageId, operationSha);
       row = await ops.lookup(kind, plan.imageId, operationSha);
-      if (!row || row.Id !== id) stop('LOCATION_PHOTO_PROBE_CREATE');
+      if (!row || row.Id !== id) stop(profile.errorPrefix + 'PROBE_CREATE');
     }
     if (row.State.Status === 'created') {
       await journal(`PROBE_MIGRATOR_${suffix}_START_INTENT`);
@@ -4583,16 +5046,17 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     } else if (row.State.Status === 'running') await ops.wait(row.Id, kind);
     row = await ops.lookup(kind, plan.imageId, operationSha);
     if (!row || row.State.Status !== 'exited' || row.State.ExitCode !== 0)
-      stop('LOCATION_PHOTO_PROBE_EXIT');
-    const value = validateLocationPhotoMigratorReadback(
+      stop(profile.errorPrefix + 'PROBE_EXIT');
+    const value = profile.validateMigratorReadback(
       await ops.logs(row.Id),
       phase,
       plan.preimage.target,
     );
-    await ops.writeLocationPhotoProof(
+    await profile.writeProof(
+      ops,
       `migrator-${phase}.json`,
       encoded({
-        schema: 'PHUB_LOCATION_PHOTO_MIGRATOR_ROLE_PROOF_V1',
+        schema: profile.schemas.roleProof,
         operationSha256: operationSha,
         planSha256: hash(planBytes),
         phase,
@@ -4603,19 +5067,19 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     return row;
   };
   const attestProbe = async (phase) => {
-    const bytes = await ops.readLocationPhotoProof(`migrator-${phase}.json`);
-    if (!bytes) stop('LOCATION_PHOTO_PROBE_PROOF');
+    const bytes = await profile.readProof(ops, `migrator-${phase}.json`);
+    if (!bytes) stop(profile.errorPrefix + 'PROBE_PROOF');
     const proof = parseStrictJson(bytes);
     exact(proof, ['schema', 'operationSha256', 'planSha256', 'phase', 'containerId', 'readback']);
     if (
-      proof.schema !== 'PHUB_LOCATION_PHOTO_MIGRATOR_ROLE_PROOF_V1' ||
+      proof.schema !== profile.schemas.roleProof ||
       proof.operationSha256 !== operationSha ||
       proof.planSha256 !== hash(planBytes) ||
       proof.phase !== phase ||
       !HASH.test(proof.containerId ?? '')
     )
-      stop('LOCATION_PHOTO_PROBE_PROOF');
-    validateLocationPhotoMigratorReadback(proof.readback, phase, plan.preimage.target);
+      stop(profile.errorPrefix + 'PROBE_PROOF');
+    profile.validateMigratorReadback(proof.readback, phase, plan.preimage.target);
     const kind = phase === 'pre' ? 'migrator' : 'migrator-post',
       row = await ops.lookup(kind, plan.imageId, operationSha);
     if (
@@ -4624,17 +5088,18 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       row.State.ExitCode !== 0 ||
       !same(await ops.logs(row.Id), proof.readback)
     )
-      stop('LOCATION_PHOTO_PROBE_DRIFT');
+      stop(profile.errorPrefix + 'PROBE_DRIFT');
     return bytes;
   };
   const cleanup = async (expectedPhase) => {
     await journal('CLEANUP_INTENT');
     await ops.cleanup();
     const clean = await state(expectedPhase);
-    await ops.writeLocationPhotoProof(
+    await profile.writeProof(
+      ops,
       'cleanup.json',
       encoded({
-        schema: 'PHUB_LOCATION_PHOTO_CLEANUP_PROOF_V1',
+        schema: profile.schemas.cleanupProof,
         operationSha256: operationSha,
         sqlSha256: plan.inputs.cleanupSha256,
         state: clean,
@@ -4651,11 +5116,11 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     const migratorPre = await attestProbe('pre'),
       migratorBootstrap = await attestProbe('bootstrap');
     const finalState = await state('cleanup');
-    const bootstrap = await ops.readLocationPhotoProof('bootstrap.json'),
-      cleanupProof = await ops.readLocationPhotoProof('cleanup.json');
-    if (!bootstrap || !cleanupProof) stop('LOCATION_PHOTO_PROOF');
+    const bootstrap = await profile.readProof(ops, 'bootstrap.json'),
+      cleanupProof = await profile.readProof(ops, 'cleanup.json');
+    if (!bootstrap || !cleanupProof) stop(profile.errorPrefix + 'PROOF');
     const proof = {
-      schema: 'PHUB_LOCATION_PHOTO_MIGRATION_SUCCESS_V1',
+      schema: profile.schemas.success,
       status: 'SUCCESS',
       planSha256: hash(planBytes),
       operationSha256: operationSha,
@@ -4665,7 +5130,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       migratorPreSha256: hash(migratorPre),
       migratorBootstrapSha256: hash(migratorBootstrap),
       backup: plan.backup,
-      ledgerSha256: LOCATION_PHOTO_POST_LEDGER,
+      ledgerSha256: profile.postLedgerSha256,
       stateSha256: hash(encoded(finalState)),
       observedAt: now(),
     };
@@ -4695,31 +5160,31 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       !same(secrets.files, op.expectedSecretSetFiles)
     )
       stop('PREIMAGE');
-    validateLocationPhotoLedger(await ops.ledger(), 'pre');
+    profile.validateLedger(await ops.ledger(), 'pre');
     const preimage = await state('pre'),
       backup = await ops.backup(op),
       imageId = await ops.image(),
       inputs = await ops.inputs();
     if (imageId !== op.publishedMigrator.imageId) stop('IMAGE');
     plan = {
-      schema: locationPhotoPlanSchema,
+      schema: profile.schemas.plan,
       operationSha256: operationSha,
       controllerSha: op.controllerSha,
       controllerTree: op.controllerTree,
       controllerSourceCiRunId: op.controllerSourceCiRunId,
       publishedMigrator: op.publishedMigrator,
       imageId,
-      preLedgerSha256: LOCATION_PHOTO_PRE_LEDGER,
-      postLedgerSha256: LOCATION_PHOTO_POST_LEDGER,
+      preLedgerSha256: profile.preLedgerSha256,
+      postLedgerSha256: profile.postLedgerSha256,
       secretSet: secrets,
       runtime,
       backup,
       inputs,
-      roleProbeSourceSha256: hash(LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE),
+      roleProbeSourceSha256: hash(profile.roleProbeSource),
       preimage,
     };
     planBytes = encoded(plan);
-    validateLocationPhotoMigrationPlan(plan, operationBytes);
+    profile.validatePlan(plan, operationBytes);
     await ops.prepare(encodeApiWorkerMigrationCapsule(operationBytes, planBytes));
     await journal('PREPARING');
     await ops.claim(planBytes, operationSha);
@@ -4728,6 +5193,8 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       await attest(phase);
       if (!same(await ops.backup(op), plan.backup) || (await ops.image()) !== plan.imageId)
         stop('CUSTODY_DRIFT');
+      // Custody/source reads may be slow. Authorization must still be live after them.
+      if (ops.time() >= Date.parse(op.expiresAt)) stop('EXPIRED');
     };
     await fresh('pre');
     if (!same(await state('pre'), preimage)) stop('PREIMAGE');
@@ -4736,10 +5203,11 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     await journal('BOOTSTRAP_INTENT');
     await ops.bootstrap();
     const bootstrapped = await state('bootstrap');
-    await ops.writeLocationPhotoProof(
+    await profile.writeProof(
+      ops,
       'bootstrap.json',
       encoded({
-        schema: 'PHUB_LOCATION_PHOTO_BOOTSTRAP_PROOF_V1',
+        schema: profile.schemas.bootstrapProof,
         operationSha256: operationSha,
         sqlSha256: inputs.bootstrapSha256,
         state: bootstrapped,
@@ -4772,7 +5240,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
   if (!capsule.operationBytes.equals(operationBytes)) stop('REQUEST_DRIFT');
   plan = capsule.plan;
   planBytes = capsule.planBytes;
-  validateLocationPhotoMigrationPlan(plan, operationBytes);
+  profile.validatePlan(plan, operationBytes);
   await ops.loadPlan(plan, planBytes, operationSha);
   current = await ops.receipt();
   if (!current) {
@@ -4780,7 +5248,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     await ops.assertSource(op);
     if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
       stop('RUNTIME_DRIFT');
-    validateLocationPhotoLedger(await ops.ledger(), 'pre');
+    profile.validateLedger(await ops.ledger(), 'pre');
     if (
       !same(await ops.inputs(), plan.inputs) ||
       (await ops.image()) !== plan.imageId ||
@@ -4797,7 +5265,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     await ops.release();
     return { status: 'RECONCILED', receipt: ops.receiptPath };
   }
-  validateLocationPhotoMigrationReceipt(current, hash(planBytes), operationSha);
+  profile.validateReceipt(current, hash(planBytes), operationSha);
   await ops.assertSource(op);
   await ops.assertOwned();
   if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
@@ -4806,12 +5274,12 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     row = await ops.lookup('migration', plan.imageId, operationSha),
     terminal = current.status === 'RECONCILED' ? current.reconciledStatus : current.status;
   if (
-    (rows.length === 106 && terminal === 'ABORTED') ||
-    (rows.length === 105 && terminal === 'SUCCESS')
+    (rows.length === profile.postCount && terminal === 'ABORTED') ||
+    (rows.length === profile.preCount && terminal === 'SUCCESS')
   )
     stop('RECONCILE_OWNER_DECISION');
-  if (rows.length === 106) {
-    validateLocationPhotoLedger(rows, 'post');
+  if (rows.length === profile.postCount) {
+    profile.validateLedger(rows, 'post');
     if (
       !current.containerId ||
       !row ||
@@ -4823,11 +5291,12 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     let clean;
     try {
       clean = await state('cleanup');
-      if (!(await ops.readLocationPhotoProof('cleanup.json')))
-        await ops.writeLocationPhotoProof(
+      if (!(await profile.readProof(ops, 'cleanup.json')))
+        await profile.writeProof(
+          ops,
           'cleanup.json',
           encoded({
-            schema: 'PHUB_LOCATION_PHOTO_CLEANUP_PROOF_V1',
+            schema: profile.schemas.cleanupProof,
             operationSha256: operationSha,
             sqlSha256: plan.inputs.cleanupSha256,
             state: clean,
@@ -4837,12 +5306,12 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       await state('post');
       clean = await cleanup('cleanup');
     }
-    if (!clean) stop('LOCATION_PHOTO_CLEANUP');
+    if (!clean) stop(profile.errorPrefix + 'CLEANUP');
     if (terminal === 'SUCCESS' && hash(await ops.successProof()) !== current.successSha256)
       stop('SUCCESS_DRIFT');
     await success(row, current.status !== 'RECONCILED');
-  } else if (rows.length === 105) {
-    validateLocationPhotoLedger(rows, 'pre');
+  } else if (rows.length === profile.preCount) {
+    profile.validateLedger(rows, 'pre');
     if (current.containerId && row?.Id !== current.containerId) stop('RECONCILE_OWNER_DECISION');
     const startMayHaveRun = ['START_INTENT', 'STARTED'].includes(current.status),
       definiteFailedMigration =

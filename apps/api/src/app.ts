@@ -131,6 +131,7 @@ import {
 } from './event-avatar-media.js';
 import { registerCoachGameSummaryRoutes } from './coach-games/coach-game-summary-routes.js';
 import { registerGameRoutes } from './games/game-routes.js';
+import type { GameCommercialCreateOptions } from './games/game-create-commercial-runtime.js';
 import type { GameCommercialJoinOptions } from './games/game-routes.js';
 import { registerLegacyGameRosterBridgeRoutes } from './games/legacy-game-roster-bridge-routes.js';
 import type { LegacyLkIdentityVerifier } from './games/legacy-lk-identity-verifier.js';
@@ -405,6 +406,8 @@ export interface BuildAppOptions {
   >;
   readonly gameJoinConditionsOwner?: GameJoinConditionsRouteOptions['owner'];
   readonly gameCommercialJoin?: GameCommercialJoinOptions;
+  /** Managed commercial CREATE (WARN contour); absent keeps the old GAME_PAYMENT_REQUIRED guard. */
+  readonly gameCommercialCreate?: GameCommercialCreateOptions;
   readonly subscriptionRuntimeQuoteClient?: Pick<ManagedSubscriptionRuntimeQuoteClient, 'quote'>;
   readonly bookedOperationRead?: Omit<
     BookedOperationReadRouteOptions,
@@ -1100,6 +1103,7 @@ export async function buildApp(options: BuildAppOptions) {
       ? { managementRepository: options.gameCommandRepository }
       : {}),
     ...(options.gameCommercialJoin ? { commercialJoin: options.gameCommercialJoin } : {}),
+    ...(options.gameCommercialCreate ? { commercialCreate: options.gameCommercialCreate } : {}),
     authenticatedTenantHandlers: [authenticate, authorizeGamesPlayer, resolveTenant],
     commandHandlers: [authenticate, authorizeGamesPlayer, resolveTenant, requireIdempotencyKey],
   });

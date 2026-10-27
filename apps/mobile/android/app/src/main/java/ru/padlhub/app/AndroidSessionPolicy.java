@@ -79,7 +79,13 @@ final class AndroidSessionPolicy {
             || cleanPath.contains("%") || cleanPath.contains("..") || cleanPath.contains("//")) throw rejected();
         if (!cleanPath.startsWith(userRoot + "/")) throw rejected();
         String relativePath = cleanPath.substring(userRoot.length());
-        if (!validQuery(relativePath, method, uri.getQuery())) throw rejected();
+        if (!validQuery(relativePath, method, relativePath.startsWith("/games") ? uri.getRawQuery() : uri.getQuery())) throw rejected();
+        String gameUuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        boolean gameJoin = "POST".equals(method) && relativePath.matches("/games/" + gameUuid + "/join");
+        // Canonical receipt reconciliation (merged main #455): GET-only recovery advanced the
+        // operation; this POST asks the owner for the trusted receipt on the same idempotency key.
+        boolean gameReconcile = "POST".equals(method) && relativePath.matches("/game-operations/" + gameUuid + "/reconcile");
+        boolean gameRecovery = "GET".equals(method) && relativePath.matches("/games/" + gameUuid + "/join-operation");
 
         Operation operation;
         if (cleanPath.equals(authRoot + "/challenges") && "POST".equals(method)) operation = Operation.CHALLENGE;
@@ -95,7 +101,7 @@ final class AndroidSessionPolicy {
             boolean notificationWrite = "PUT".equals(method) && (cleanPath.equals(userRoot + "/notifications/read-cursor")
                 || cleanPath.equals(userRoot + "/notifications/preferences"));
             if (!("GET".equals(method) && allowedRead(relativePath))
-                && !notificationWrite && !allowedMessagingWrite(relativePath, method)) throw rejected();
+                && !notificationWrite && !gameJoin && !gameReconcile && !allowedMessagingWrite(relativePath, method)) throw rejected();
             operation = Operation.API;
         }
         boolean auth = operation != Operation.API && operation != Operation.PUBLIC;
@@ -114,6 +120,7 @@ final class AndroidSessionPolicy {
         if (operation == Operation.PUBLIC) headers.remove("authorization");
         if (operation == Operation.API && !headers.getOrDefault("authorization", "").matches("Bearer [A-Za-z0-9._-]{8,8192}")) throw rejected();
         if (!"GET".equals(method) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9._:-]{16,128}")) throw rejected();
+        if ((gameJoin || gameReconcile || gameRecovery) && !headers.getOrDefault("idempotency-key", "").matches("[A-Za-z0-9][A-Za-z0-9._:-]{15,127}")) throw rejected();
         String intent = operation == Operation.REFRESH ? "refresh" : operation == Operation.LOGOUT ? "logout" : null;
         if (!java.util.Objects.equals(intent, headers.get("x-session-intent"))) throw rejected();
         headers.put("accept", isBinaryContentRead(relativePath, method) ? "*/*" : "application/json");
@@ -142,8 +149,9 @@ final class AndroidSessionPolicy {
             "/bookings/upcoming", "/bookings/history", "/recommendations/bookings",
             "/home", "/home/base", "/locations", "/communities/mine", "/conversations",
             "/notifications", "/notifications/preferences", "/support/stations", "/support/dialogs",
-            "/notification-endpoints/android/config").contains(path)) return true;
+            "/notification-endpoints/android/config", "/games").contains(path)) return true;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.matches("/games/" + uuid + "(?:/join-conditions|/join-operation)?")) return true;
         if (path.matches("/conversations/" + uuid + "/messages")
             || path.matches("/conversations/" + uuid + "/media/" + uuid)
             || path.matches("/conversations/" + uuid + "/media/" + uuid + "/content")
@@ -183,6 +191,31 @@ final class AndroidSessionPolicy {
     private boolean validQuery(String path, String method, String query) {
         if (!"GET".equals(method)) return query == null;
         String uuid = "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+        if (path.equals("/games")) {
+            if (query == null) return true;
+            Set<String> seen = new HashSet<>();
+            for (String part : query.split("&", -1)) {
+                String[] pair = part.split("=", 2);
+                if (pair.length != 2 || !seen.add(pair[0])) return false;
+                if (pair[0].equals("scope")) { if (!pair[1].matches("UPCOMING|HISTORY")) return false; }
+                else if (pair[0].equals("limit")) { if (!pair[1].matches("[1-9]|[1-9][0-9]|100")) return false; }
+                else if (pair[0].equals("cursor")) { if (!pair[1].matches("[A-Za-z0-9_-]{1,2048}")) return false; }
+                else return false;
+            }
+            return true;
+        }
+        if (path.matches("/games/" + uuid + "/join-conditions")) {
+            if (query == null) return false;
+            Map<String, String> values = new HashMap<>();
+            for (String part : query.split("&", -1)) {
+                String[] pair = part.split("=", 2);
+                if (pair.length != 2 || values.put(pair[0], pair[1]) != null) return false;
+            }
+            String revision = values.getOrDefault("expectedRevision", "");
+            return values.size() == 2 && values.getOrDefault("subscriptionInstanceId", "").matches(uuid)
+                && revision.matches("0|[1-9][0-9]{0,15}") && Long.parseLong(revision) <= 9_007_199_254_740_991L;
+        }
+        if (path.matches("/games/" + uuid + "(?:/join-operation)?")) return query == null;
         if (path.matches("/conversations/" + uuid + "/messages"))
             return query == null || query.matches("(?:afterSequence=(?:0|[1-9][0-9]{0,8}))(?:&limit=(?:[1-9]|[1-9][0-9]|100))?|limit=(?:[1-9]|[1-9][0-9]|100)(?:&afterSequence=(?:0|[1-9][0-9]{0,8}))?");
         if (path.matches("/support/dialogs/" + uuid + "/messages"))

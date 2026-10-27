@@ -612,6 +612,49 @@ describe('explicit commercial receipt reconciliation', () => {
     );
     expect(deps.owner.execute).not.toHaveBeenCalled();
   });
+  it('returns the confirmed revision even while the attempt projection still lags', async () => {
+    // Regression: the legacy trusted-receipt branch of the readback answered SUCCEEDED with
+    // `aggregateRevision: null` while the paid-join attempt projection was not yet COMPLETED.
+    // The web client then stayed in CONFIRMED_UPDATING forever. The reconcile command must return
+    // the revision of the applied confirmation directly.
+    const laggingAttempt: CommercialJoinAttemptView = {
+      commandId: operationId,
+      gameId: envelope.gameId,
+      state: 'IN_PROGRESS',
+      result: null,
+      errorCode: null,
+      providerBinding: frozenBinding,
+      reservation: { id: reservationId, state: 'ACTIVE', expiresAt: '2026-10-22T10:15:00.000Z' },
+      receipt: { provider: 'VIVA', status: 'CONFIRMED', confirmedAt: ownerReceipt.verifiedAt },
+    };
+    const confirmPayment = vi.fn<NonNullable<CommercialJoinRepositoryPort['confirmPayment']>>(() =>
+      resolved({
+        outcome: 'applied' as const,
+        commandId: fixtureId(905),
+        gameId: envelope.gameId,
+        revision: 11,
+        viewerRelation: 'PARTICIPANT' as const,
+        participationId: fixtureId(906),
+        reservationId,
+        committedAt: ownerReceipt.verifiedAt,
+        replayed: false,
+      }),
+    );
+    const repo = repository({
+      getPaidJoinAttempt: () => resolved(laggingAttempt),
+      confirmPayment,
+    });
+    const result = await reconcileCommercialJoinOperation(reconcileInput, {
+      repository: repo.repository,
+      owner: {
+        execute: vi.fn(() => resolved({ status: 'UNKNOWN' as const })),
+        read: vi.fn(() => resolved({ status: 'CONFIRMED' as const, receipt: ownerReceipt })),
+      },
+    });
+    expect(result?.operation.status).toBe('SUCCEEDED');
+    expect(result?.operation.aggregateRevision).toBe(11);
+    expect(result?.operation.commercial.attemptState).toBe('OWNER_CONFIRMED');
+  });
   it.each([
     'operationId',
     'tenantId',
