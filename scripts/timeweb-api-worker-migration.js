@@ -4535,8 +4535,123 @@ export function validateLocationPhotoMigrationReceipt(value, planSha, operationS
 // The photo profile is deliberately narrower than the notification profile: one ordinary
 // migrator run, no application rollout and no runtime table grant. Temporary schema CREATE is
 // journalled separately so reconcile can remove it after either a lost bootstrap or cleanup ACK.
+const locationPhotoAdditiveProfile = Object.freeze({
+  kind: 'location_photo_0102',
+  validateOperation: validateLocationPhotoOperation,
+  validateLedger: validateLocationPhotoLedger,
+  validateState: validateLocationPhotoState,
+  validateMigratorReadback: validateLocationPhotoMigratorReadback,
+  validatePlan: validateLocationPhotoMigrationPlan,
+  validateReceipt: validateLocationPhotoMigrationReceipt,
+  preCount: 105,
+  postCount: 106,
+  preLedgerSha256: LOCATION_PHOTO_PRE_LEDGER,
+  postLedgerSha256: LOCATION_PHOTO_POST_LEDGER,
+  roleProbeSource: LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE,
+  errorPrefix: 'LOCATION_PHOTO_',
+  schemas: Object.freeze({
+    receipt: locationPhotoReceiptSchema,
+    plan: locationPhotoPlanSchema,
+    roleProof: 'PHUB_LOCATION_PHOTO_MIGRATOR_ROLE_PROOF_V1',
+    cleanupProof: 'PHUB_LOCATION_PHOTO_CLEANUP_PROOF_V1',
+    bootstrapProof: 'PHUB_LOCATION_PHOTO_BOOTSTRAP_PROOF_V1',
+    success: 'PHUB_LOCATION_PHOTO_MIGRATION_SUCCESS_V1',
+  }),
+  readState: (effects, phase) => effects.locationPhotoState(phase),
+  readProof: (effects, name) => effects.readLocationPhotoProof(name),
+  writeProof: (effects, name, bytes) => effects.writeLocationPhotoProof(name, bytes),
+});
+
 export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops) {
-  const op = validateLocationPhotoOperation(
+  return runClosedAdditiveMigrationAdapter(mode, operationBytes, ops, locationPhotoAdditiveProfile);
+}
+
+const closedAdditiveSchemas = (prefix) => ({
+  receipt: `${prefix}_MIGRATION_RECEIPT_V1`,
+  plan: `${prefix}_MIGRATION_PLAN_V1`,
+  roleProof: `${prefix}_MIGRATOR_ROLE_PROOF_V1`,
+  cleanupProof: `${prefix}_CLEANUP_PROOF_V1`,
+  bootstrapProof: `${prefix}_BOOTSTRAP_PROOF_V1`,
+  success: `${prefix}_MIGRATION_SUCCESS_V1`,
+});
+const closedAdditiveProfiles = Object.freeze({
+  location_photo_0102: {
+    preCount: 105,
+    postCount: 106,
+    preLedgerSha256: LOCATION_PHOTO_PRE_LEDGER,
+    postLedgerSha256: LOCATION_PHOTO_POST_LEDGER,
+    errorPrefix: 'LOCATION_PHOTO_',
+    schemas: {
+      ...closedAdditiveSchemas('PHUB_LOCATION_PHOTO'),
+      receipt: locationPhotoReceiptSchema,
+      plan: locationPhotoPlanSchema,
+    },
+  },
+  game_start_0103: {
+    preCount: 106,
+    postCount: 107,
+    preLedgerSha256: 'ff74c193b5e5253f929818b1550d0e5c0264a9818cb0ee5437d49d5aa043904e',
+    postLedgerSha256: '6146219b31e4720016bb81a0018f76609c7fc515603e4aac405f6a2342e66d77',
+    errorPrefix: 'GAME_START_',
+    schemas: closedAdditiveSchemas('PHUB_GAME_START_0103'),
+  },
+  subject_link_0104: {
+    preCount: 107,
+    postCount: 108,
+    preLedgerSha256: '6146219b31e4720016bb81a0018f76609c7fc515603e4aac405f6a2342e66d77',
+    postLedgerSha256: '3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9',
+    errorPrefix: 'SUBJECT_LINK_',
+    schemas: closedAdditiveSchemas('PHUB_SUBJECT_LINK_0104'),
+  },
+});
+export function validateClosedAdditiveProfile(profile) {
+  const callbacks = [
+    'validateOperation',
+    'validateLedger',
+    'validateState',
+    'validateMigratorReadback',
+    'validatePlan',
+    'validateReceipt',
+    'readState',
+    'readProof',
+    'writeProof',
+  ];
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile))
+    stop('CLOSED_ADDITIVE_PROFILE');
+  const metadataKeys = [
+    'preCount',
+    'postCount',
+    'preLedgerSha256',
+    'postLedgerSha256',
+    'errorPrefix',
+    'schemas',
+  ];
+  try {
+    exact(profile, ['kind', 'roleProbeSource', ...metadataKeys, ...callbacks]);
+  } catch {
+    stop('CLOSED_ADDITIVE_PROFILE');
+  }
+  const expected = Object.hasOwn(closedAdditiveProfiles, profile.kind)
+    ? closedAdditiveProfiles[profile.kind]
+    : null;
+  if (
+    !expected ||
+    !same(Object.fromEntries(metadataKeys.map((key) => [key, profile[key]])), expected) ||
+    profile.postCount !== profile.preCount + 1 ||
+    !HASH.test(profile.preLedgerSha256) ||
+    !HASH.test(profile.postLedgerSha256) ||
+    callbacks.some((key) => typeof profile[key] !== 'function') ||
+    typeof profile.roleProbeSource !== 'string' ||
+    !profile.roleProbeSource.length ||
+    profile.roleProbeSource.length > 131072
+  )
+    stop('CLOSED_ADDITIVE_PROFILE');
+  return profile;
+}
+
+export async function runClosedAdditiveMigrationAdapter(mode, operationBytes, ops, profile) {
+  validateClosedAdditiveProfile(profile);
+  const op = profile.validateOperation(
       parseStrictJson(operationBytes),
       mode === 'deploy' ? ops.time() : undefined,
     ),
@@ -4544,7 +4659,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
   let plan, planBytes, current;
   const journal = async (status, extra = {}) => {
     current = {
-      schema: locationPhotoReceiptSchema,
+      schema: profile.schemas.receipt,
       status,
       planSha256: hash(planBytes),
       operationSha256: operationSha,
@@ -4561,11 +4676,10 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     await ops.assertOwned();
     if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
       stop('RUNTIME_DRIFT');
-    validateLocationPhotoLedger(await ops.ledger(), phase);
-    if (!same(await ops.inputs(), plan.inputs)) stop('LOCATION_PHOTO_INPUT_DRIFT');
+    profile.validateLedger(await ops.ledger(), phase);
+    if (!same(await ops.inputs(), plan.inputs)) stop(profile.errorPrefix + 'INPUT_DRIFT');
   };
-  const state = async (phase) =>
-    validateLocationPhotoState(await ops.locationPhotoState(phase), phase);
+  const state = async (phase) => profile.validateState(await profile.readState(ops, phase), phase);
   const probe = async (phase) => {
     const suffix = phase === 'pre' ? 'PRE' : 'BOOTSTRAP',
       kind = phase === 'pre' ? 'migrator' : 'migrator-post';
@@ -4574,7 +4688,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       await journal(`PROBE_MIGRATOR_${suffix}_CREATE_INTENT`);
       const id = await ops.create(kind, plan.imageId, operationSha);
       row = await ops.lookup(kind, plan.imageId, operationSha);
-      if (!row || row.Id !== id) stop('LOCATION_PHOTO_PROBE_CREATE');
+      if (!row || row.Id !== id) stop(profile.errorPrefix + 'PROBE_CREATE');
     }
     if (row.State.Status === 'created') {
       await journal(`PROBE_MIGRATOR_${suffix}_START_INTENT`);
@@ -4583,16 +4697,17 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     } else if (row.State.Status === 'running') await ops.wait(row.Id, kind);
     row = await ops.lookup(kind, plan.imageId, operationSha);
     if (!row || row.State.Status !== 'exited' || row.State.ExitCode !== 0)
-      stop('LOCATION_PHOTO_PROBE_EXIT');
-    const value = validateLocationPhotoMigratorReadback(
+      stop(profile.errorPrefix + 'PROBE_EXIT');
+    const value = profile.validateMigratorReadback(
       await ops.logs(row.Id),
       phase,
       plan.preimage.target,
     );
-    await ops.writeLocationPhotoProof(
+    await profile.writeProof(
+      ops,
       `migrator-${phase}.json`,
       encoded({
-        schema: 'PHUB_LOCATION_PHOTO_MIGRATOR_ROLE_PROOF_V1',
+        schema: profile.schemas.roleProof,
         operationSha256: operationSha,
         planSha256: hash(planBytes),
         phase,
@@ -4603,19 +4718,19 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     return row;
   };
   const attestProbe = async (phase) => {
-    const bytes = await ops.readLocationPhotoProof(`migrator-${phase}.json`);
-    if (!bytes) stop('LOCATION_PHOTO_PROBE_PROOF');
+    const bytes = await profile.readProof(ops, `migrator-${phase}.json`);
+    if (!bytes) stop(profile.errorPrefix + 'PROBE_PROOF');
     const proof = parseStrictJson(bytes);
     exact(proof, ['schema', 'operationSha256', 'planSha256', 'phase', 'containerId', 'readback']);
     if (
-      proof.schema !== 'PHUB_LOCATION_PHOTO_MIGRATOR_ROLE_PROOF_V1' ||
+      proof.schema !== profile.schemas.roleProof ||
       proof.operationSha256 !== operationSha ||
       proof.planSha256 !== hash(planBytes) ||
       proof.phase !== phase ||
       !HASH.test(proof.containerId ?? '')
     )
-      stop('LOCATION_PHOTO_PROBE_PROOF');
-    validateLocationPhotoMigratorReadback(proof.readback, phase, plan.preimage.target);
+      stop(profile.errorPrefix + 'PROBE_PROOF');
+    profile.validateMigratorReadback(proof.readback, phase, plan.preimage.target);
     const kind = phase === 'pre' ? 'migrator' : 'migrator-post',
       row = await ops.lookup(kind, plan.imageId, operationSha);
     if (
@@ -4624,17 +4739,18 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       row.State.ExitCode !== 0 ||
       !same(await ops.logs(row.Id), proof.readback)
     )
-      stop('LOCATION_PHOTO_PROBE_DRIFT');
+      stop(profile.errorPrefix + 'PROBE_DRIFT');
     return bytes;
   };
   const cleanup = async (expectedPhase) => {
     await journal('CLEANUP_INTENT');
     await ops.cleanup();
     const clean = await state(expectedPhase);
-    await ops.writeLocationPhotoProof(
+    await profile.writeProof(
+      ops,
       'cleanup.json',
       encoded({
-        schema: 'PHUB_LOCATION_PHOTO_CLEANUP_PROOF_V1',
+        schema: profile.schemas.cleanupProof,
         operationSha256: operationSha,
         sqlSha256: plan.inputs.cleanupSha256,
         state: clean,
@@ -4651,11 +4767,11 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     const migratorPre = await attestProbe('pre'),
       migratorBootstrap = await attestProbe('bootstrap');
     const finalState = await state('cleanup');
-    const bootstrap = await ops.readLocationPhotoProof('bootstrap.json'),
-      cleanupProof = await ops.readLocationPhotoProof('cleanup.json');
-    if (!bootstrap || !cleanupProof) stop('LOCATION_PHOTO_PROOF');
+    const bootstrap = await profile.readProof(ops, 'bootstrap.json'),
+      cleanupProof = await profile.readProof(ops, 'cleanup.json');
+    if (!bootstrap || !cleanupProof) stop(profile.errorPrefix + 'PROOF');
     const proof = {
-      schema: 'PHUB_LOCATION_PHOTO_MIGRATION_SUCCESS_V1',
+      schema: profile.schemas.success,
       status: 'SUCCESS',
       planSha256: hash(planBytes),
       operationSha256: operationSha,
@@ -4665,7 +4781,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       migratorPreSha256: hash(migratorPre),
       migratorBootstrapSha256: hash(migratorBootstrap),
       backup: plan.backup,
-      ledgerSha256: LOCATION_PHOTO_POST_LEDGER,
+      ledgerSha256: profile.postLedgerSha256,
       stateSha256: hash(encoded(finalState)),
       observedAt: now(),
     };
@@ -4695,31 +4811,31 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       !same(secrets.files, op.expectedSecretSetFiles)
     )
       stop('PREIMAGE');
-    validateLocationPhotoLedger(await ops.ledger(), 'pre');
+    profile.validateLedger(await ops.ledger(), 'pre');
     const preimage = await state('pre'),
       backup = await ops.backup(op),
       imageId = await ops.image(),
       inputs = await ops.inputs();
     if (imageId !== op.publishedMigrator.imageId) stop('IMAGE');
     plan = {
-      schema: locationPhotoPlanSchema,
+      schema: profile.schemas.plan,
       operationSha256: operationSha,
       controllerSha: op.controllerSha,
       controllerTree: op.controllerTree,
       controllerSourceCiRunId: op.controllerSourceCiRunId,
       publishedMigrator: op.publishedMigrator,
       imageId,
-      preLedgerSha256: LOCATION_PHOTO_PRE_LEDGER,
-      postLedgerSha256: LOCATION_PHOTO_POST_LEDGER,
+      preLedgerSha256: profile.preLedgerSha256,
+      postLedgerSha256: profile.postLedgerSha256,
       secretSet: secrets,
       runtime,
       backup,
       inputs,
-      roleProbeSourceSha256: hash(LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE),
+      roleProbeSourceSha256: hash(profile.roleProbeSource),
       preimage,
     };
     planBytes = encoded(plan);
-    validateLocationPhotoMigrationPlan(plan, operationBytes);
+    profile.validatePlan(plan, operationBytes);
     await ops.prepare(encodeApiWorkerMigrationCapsule(operationBytes, planBytes));
     await journal('PREPARING');
     await ops.claim(planBytes, operationSha);
@@ -4736,10 +4852,11 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     await journal('BOOTSTRAP_INTENT');
     await ops.bootstrap();
     const bootstrapped = await state('bootstrap');
-    await ops.writeLocationPhotoProof(
+    await profile.writeProof(
+      ops,
       'bootstrap.json',
       encoded({
-        schema: 'PHUB_LOCATION_PHOTO_BOOTSTRAP_PROOF_V1',
+        schema: profile.schemas.bootstrapProof,
         operationSha256: operationSha,
         sqlSha256: inputs.bootstrapSha256,
         state: bootstrapped,
@@ -4772,7 +4889,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
   if (!capsule.operationBytes.equals(operationBytes)) stop('REQUEST_DRIFT');
   plan = capsule.plan;
   planBytes = capsule.planBytes;
-  validateLocationPhotoMigrationPlan(plan, operationBytes);
+  profile.validatePlan(plan, operationBytes);
   await ops.loadPlan(plan, planBytes, operationSha);
   current = await ops.receipt();
   if (!current) {
@@ -4780,7 +4897,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     await ops.assertSource(op);
     if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
       stop('RUNTIME_DRIFT');
-    validateLocationPhotoLedger(await ops.ledger(), 'pre');
+    profile.validateLedger(await ops.ledger(), 'pre');
     if (
       !same(await ops.inputs(), plan.inputs) ||
       (await ops.image()) !== plan.imageId ||
@@ -4797,7 +4914,7 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     await ops.release();
     return { status: 'RECONCILED', receipt: ops.receiptPath };
   }
-  validateLocationPhotoMigrationReceipt(current, hash(planBytes), operationSha);
+  profile.validateReceipt(current, hash(planBytes), operationSha);
   await ops.assertSource(op);
   await ops.assertOwned();
   if (!same(await ops.snapshot(), plan.runtime) || !same(await ops.secrets(), plan.secretSet))
@@ -4806,12 +4923,12 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     row = await ops.lookup('migration', plan.imageId, operationSha),
     terminal = current.status === 'RECONCILED' ? current.reconciledStatus : current.status;
   if (
-    (rows.length === 106 && terminal === 'ABORTED') ||
-    (rows.length === 105 && terminal === 'SUCCESS')
+    (rows.length === profile.postCount && terminal === 'ABORTED') ||
+    (rows.length === profile.preCount && terminal === 'SUCCESS')
   )
     stop('RECONCILE_OWNER_DECISION');
-  if (rows.length === 106) {
-    validateLocationPhotoLedger(rows, 'post');
+  if (rows.length === profile.postCount) {
+    profile.validateLedger(rows, 'post');
     if (
       !current.containerId ||
       !row ||
@@ -4823,11 +4940,12 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
     let clean;
     try {
       clean = await state('cleanup');
-      if (!(await ops.readLocationPhotoProof('cleanup.json')))
-        await ops.writeLocationPhotoProof(
+      if (!(await profile.readProof(ops, 'cleanup.json')))
+        await profile.writeProof(
+          ops,
           'cleanup.json',
           encoded({
-            schema: 'PHUB_LOCATION_PHOTO_CLEANUP_PROOF_V1',
+            schema: profile.schemas.cleanupProof,
             operationSha256: operationSha,
             sqlSha256: plan.inputs.cleanupSha256,
             state: clean,
@@ -4837,12 +4955,12 @@ export async function runLocationPhotoMigrationAdapter(mode, operationBytes, ops
       await state('post');
       clean = await cleanup('cleanup');
     }
-    if (!clean) stop('LOCATION_PHOTO_CLEANUP');
+    if (!clean) stop(profile.errorPrefix + 'CLEANUP');
     if (terminal === 'SUCCESS' && hash(await ops.successProof()) !== current.successSha256)
       stop('SUCCESS_DRIFT');
     await success(row, current.status !== 'RECONCILED');
-  } else if (rows.length === 105) {
-    validateLocationPhotoLedger(rows, 'pre');
+  } else if (rows.length === profile.preCount) {
+    profile.validateLedger(rows, 'pre');
     if (current.containerId && row?.Id !== current.containerId) stop('RECONCILE_OWNER_DECISION');
     const startMayHaveRun = ['START_INTENT', 'STARTED'].includes(current.status),
       definiteFailedMigration =

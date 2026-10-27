@@ -18,6 +18,11 @@ import {
   CLOSED_APPLICATION_EDITOR_ACL,
 } from '../../../scripts/closed-application-migration-catalog.js';
 import { ownedClosedSchemaLocalFixtureUrl } from '../../../scripts/owned-closed-schema-test-target.js';
+import {
+  closedApplicationAclSql,
+  closedApplicationAclPlan,
+  validateClosedApplicationAcl,
+} from '../../../scripts/closed-application-migration-acl.js';
 
 const root = resolve(import.meta.dirname, '../../..');
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -118,6 +123,9 @@ const rolePasswords = {
                 throw error;
               }
             }
+            // This newly referenced parent is outside the old105 golden scope. Its owner is
+            // independently confirmed by a read-only production metadata check.
+            await client.query('alter table games.games owner to phub_beta');
             // Restore the independent105 golden ownership/ACL baseline without copying business data.
             const rows = frozen.checkpoints['105'].rows;
             for (const row of rows) {
@@ -342,6 +350,7 @@ const rolePasswords = {
               'create rule synthetic_no_insert as on insert to notifications.legacy_game_reminder_sources do instead nothing',
               'alter table notifications.legacy_game_reminder_sources add column synthetic_tombstone text;alter table notifications.legacy_game_reminder_sources drop column synthetic_tombstone',
               'alter table notifications.legacy_game_reminder_sources set (fillfactor=83)',
+              'alter table games.games owner to phub',
             ]) {
               await semanticProbe.query('begin');
               try {
@@ -402,6 +411,88 @@ const rolePasswords = {
         }
       },
       120000,
+    );
+    it.each(['game_start_0103', 'subject_link_0104'] as const)(
+      'seals and restores only added temporary privileges for %s',
+      async (profile) => {
+        const admin = new Pool({ connectionString: disposable, max: 1 });
+        const database = `closed_acl_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
+        const ownedRoles: string[] = [];
+        let created = false;
+        let db: Pool | undefined;
+        try {
+          for (const [role, password] of Object.entries(rolePasswords)) {
+            if (!(await admin.query('select 1 from pg_roles where rolname=$1', [role])).rowCount) {
+              await admin.query(
+                `create role ${role} login password '${password}' nosuperuser nobypassrls nocreatedb nocreaterole noreplication`,
+              );
+              ownedRoles.push(role);
+            }
+          }
+          await admin.query(`create database ${database}`);
+          created = true;
+          const target = new URL(disposable!);
+          target.pathname = '/' + database;
+          db = new Pool({ connectionString: target.toString(), max: 1 });
+          const client = await db.connect();
+          try {
+            await client.query(`create schema identity authorization phub_beta;create schema games authorization phub_beta;create schema notifications authorization phub_beta;
+            set role phub_beta;
+            create table identity.tenants(id uuid primary key);
+            create table identity.users(tenant_id uuid,id uuid,unrelated text);
+            create table games.games(tenant_id uuid,id uuid);
+            grant usage on schema identity,games,notifications to phub_migrator;
+            grant references(id) on identity.users to phub_migrator;
+            grant select(id) on identity.users to phub_runtime;
+            ${profile === 'game_start_0103' ? 'grant create on schema notifications to phub_migrator;' : ''}
+            reset role;set search_path='pg_catalog'`);
+            const read = async () =>
+              (
+                await client.query<{ snapshot: unknown }>(
+                  `select (${closedApplicationAclSql(profile)}) snapshot`,
+                )
+              ).rows[0]!.snapshot;
+            const preimage = await read();
+            validateClosedApplicationAcl(profile, preimage);
+            const plan = closedApplicationAclPlan(profile, preimage);
+            expect(plan.added.some(([key]) => key === 'column:identity.users:id')).toBe(false);
+            expect(plan.added.some(([key]) => key === 'schema:notifications')).toBe(false);
+            // An unrelated ACL change after sealing must abort the entire bootstrap transaction.
+            await client.query('grant update(id) on identity.users to phub_migrator');
+            const drift = await read();
+            await expect(client.query(plan.bootstrapSql)).rejects.toThrow(
+              'CLOSED_APPLICATION_ACL_DRIFT',
+            );
+            await client.query('rollback');
+            expect(await read()).toEqual(drift);
+            await client.query('revoke update(id) on identity.users from phub_migrator');
+            expect(await read()).toEqual(preimage);
+            await client.query(plan.bootstrapSql);
+            expect(await read()).toEqual(plan.bootstrap);
+            // Repeating either apply is refused, and a failed repetition cannot corrupt its preimage.
+            await expect(client.query(plan.bootstrapSql)).rejects.toThrow(
+              'CLOSED_APPLICATION_ACL_DRIFT',
+            );
+            await client.query('rollback');
+            expect(await read()).toEqual(plan.bootstrap);
+            await client.query(plan.cleanupSql);
+            expect(await read()).toEqual(preimage);
+            await expect(client.query(plan.cleanupSql)).rejects.toThrow(
+              'CLOSED_APPLICATION_ACL_DRIFT',
+            );
+            await client.query('rollback');
+            expect(await read()).toEqual(preimage);
+          } finally {
+            client.release();
+          }
+        } finally {
+          await db?.end();
+          if (created) await admin.query(`drop database ${database} with(force)`);
+          for (const role of ownedRoles.reverse()) await admin.query(`drop role ${role}`);
+          await admin.end();
+        }
+      },
+      45000,
     );
   },
 );

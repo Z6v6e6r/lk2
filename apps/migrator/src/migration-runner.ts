@@ -84,11 +84,8 @@ export async function runMigrationProcess(input: MigrationRunMode): Promise<void
       ]);
     }
     await client.query('select pg_advisory_lock($1)', [7_140_221]);
-    if (advisoryTimeout) {
-      await client.query("select pg_catalog.set_config('statement_timeout', $1, false)", [
-        closed ? '30s' : '0',
-      ]);
-    }
+    if (!closed && advisoryLockTimeoutValue)
+      await client.query("select pg_catalog.set_config('statement_timeout', '0', false)");
     if (input.mode === closedSingleMode)
       await client.query("set lock_timeout='5s'; set statement_timeout='30s'");
     const ledgerExists = await client.query<{ ledger: string | null }>(

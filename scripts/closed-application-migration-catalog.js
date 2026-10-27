@@ -65,4 +65,12 @@ export const CLOSED_APPLICATION_CATALOG_SQL = `with
  )::text from relations r join pg_catalog.pg_index i on i.indrelid=r.oid
  join pg_catalog.pg_class c on c.oid=i.indexrelid join pg_catalog.pg_am am on am.oid=c.relam
  left join pg_catalog.pg_tablespace ts on ts.oid=c.reltablespace
+ union all
+ select 'parent:games.games:'||c.conname,jsonb_build_object(
+   'definition',pg_catalog.pg_get_constraintdef(c.oid,false),'valid',c.convalidated,
+   'owner',case when pg_catalog.pg_get_userbyid(p.relowner)='phub_migrator' then 'MIGRATOR' else pg_catalog.pg_get_userbyid(p.relowner) end,
+   'columns',(select jsonb_agg(a.attname order by k.ord) from unnest(c.conkey) with ordinality k(num,ord)
+     join pg_catalog.pg_attribute a on a.attrelid=c.conrelid and a.attnum=k.num)
+ )::text from pg_catalog.pg_constraint c join pg_catalog.pg_class p on p.oid=c.conrelid
+ where c.contype in ('p','u') and c.conrelid='games.games'::regclass
  ) select key,value from (select key,value from frozen_base union all select key,value from extension) catalog order by key collate "C"`;

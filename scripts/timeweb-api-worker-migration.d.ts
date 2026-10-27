@@ -255,6 +255,58 @@ export function runLocationPhotoMigrationAdapter(
   operationBytes: Buffer,
   ops: unknown,
 ): Promise<unknown>;
+export interface ClosedAdditiveOperation {
+  readonly expectedApi: unknown;
+  readonly expectedWorker: unknown;
+  readonly expectedPostgres: unknown;
+  readonly expectedSecretSetReleaseId: string;
+  readonly expectedSecretSetFiles: unknown;
+  readonly publishedMigrator: { readonly imageId: string };
+  readonly controllerSha: string;
+  readonly controllerTree: string;
+  readonly controllerSourceCiRunId: string;
+  readonly expiresAt: string;
+}
+export interface ClosedAdditiveEffects extends Omit<MigrationEffects, 'backup'> {
+  assertPreparedUnclaimed(): unknown;
+  inputs(): unknown;
+  backup(operation: ClosedAdditiveOperation, options?: { fresh?: boolean }): unknown;
+  bootstrap(): unknown;
+  cleanup(): unknown;
+}
+export interface ClosedAdditiveProfile {
+  readonly kind: 'location_photo_0102' | 'game_start_0103' | 'subject_link_0104';
+  readonly preCount: number;
+  readonly postCount: number;
+  readonly preLedgerSha256: string;
+  readonly postLedgerSha256: string;
+  readonly errorPrefix: string;
+  readonly schemas: Readonly<{
+    receipt: string;
+    plan: string;
+    roleProof: string;
+    cleanupProof: string;
+    bootstrapProof: string;
+    success: string;
+  }>;
+  readonly roleProbeSource: string;
+  validateOperation(value: unknown, at?: number): ClosedAdditiveOperation;
+  validateLedger(value: unknown, phase: string): unknown;
+  validateState(value: unknown, phase: string): { readonly target: unknown };
+  validateMigratorReadback(value: unknown, phase: string, target: unknown): unknown;
+  validatePlan(value: unknown, operationBytes: Buffer): unknown;
+  validateReceipt(value: unknown, planSha256: string, operationSha256: string): unknown;
+  readState(effects: ClosedAdditiveEffects, phase: string): unknown;
+  readProof(effects: ClosedAdditiveEffects, name: string): Buffer | null | Promise<Buffer | null>;
+  writeProof(effects: ClosedAdditiveEffects, name: string, bytes: Buffer): unknown;
+}
+export function validateClosedAdditiveProfile(value: unknown): ClosedAdditiveProfile;
+export function runClosedAdditiveMigrationAdapter(
+  mode: string,
+  operationBytes: Buffer,
+  effects: ClosedAdditiveEffects,
+  profile: ClosedAdditiveProfile,
+): Promise<{ status: string; receipt: string }>;
 export function runLocationPhotoMigratorPrefetchAdapter(
   mode: string,
   requestBytes: Buffer,
