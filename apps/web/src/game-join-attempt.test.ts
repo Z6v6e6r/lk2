@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   GameJoinAttemptError,
@@ -11,8 +11,11 @@ import {
   gameJoinDispatchLockName,
   gameJoinRequestHash,
   loadGameJoinAttempt,
+  GAME_JOIN_ATTEMPT_QUIET_MS,
   markGameJoinAttemptDispatchStarted,
   readGameJoinAttemptLedger,
+  releaseNotFoundGameJoinAttempt,
+  releaseUndispatchedGameJoinAttempt,
   resolveGameJoinAttempt,
   withGameJoinDispatchGuard,
   type GameJoinAttemptLockManager,
@@ -103,6 +106,8 @@ async function seedAttempt(
 }
 
 describe('game join attempt ledger', () => {
+  beforeEach(() => vi.stubGlobal('navigator', { locks: serialLockManager() }));
+  afterEach(() => vi.unstubAllGlobals());
   it('stores custody fields before dispatch and nothing credential-shaped', async () => {
     const storage = new MemoryStorage();
     const { attempt, created } = await seedAttempt(storage);
@@ -155,7 +160,7 @@ describe('game join attempt ledger', () => {
   it('never replaces an unresolved attempt with a changed price; consent stays custody', async () => {
     const storage = new MemoryStorage();
     const { attempt } = await seedAttempt(storage);
-    markGameJoinAttemptDispatchStarted(PRINCIPAL, attempt, storage);
+    await markGameJoinAttemptDispatchStarted(PRINCIPAL, attempt, storage);
 
     await expect(
       beginGameJoinAttempt(
@@ -317,14 +322,31 @@ describe('game join attempt ledger', () => {
     expect(first.dispatched || second.dispatched).toBe(true);
   });
 
+  it('uses one ledger lock across games of the same principal', () => {
+    expect(gameJoinDispatchLockName(PRINCIPAL, GAME_ID)).toBe(
+      gameJoinDispatchLockName(PRINCIPAL, '99999999-9999-4999-8999-999999999999'),
+    );
+  });
+
+  it('refuses dispatch without a cross-tab lock and preserves the original attempt', async () => {
+    const storage = new MemoryStorage();
+    await seedAttempt(storage);
+    const dispatch = vi.fn();
+    await expect(
+      withGameJoinDispatchGuard(PRINCIPAL, GAME_ID, storage, undefined, dispatch),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_LOCK_UNAVAILABLE' });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)?.idempotencyKey).toBe(KEY);
+  });
+
   it('records the server operation and keeps custody until resolved', async () => {
     const storage = new MemoryStorage();
     const { attempt } = await seedAttempt(storage);
-    markGameJoinAttemptDispatchStarted(PRINCIPAL, attempt, storage, {
+    await markGameJoinAttemptDispatchStarted(PRINCIPAL, attempt, storage, {
       now: () => new Date('2026-10-21T08:00:01.000Z'),
     });
 
-    const unknown = resolveGameJoinAttempt(
+    const unknown = await resolveGameJoinAttempt(
       PRINCIPAL,
       attempt,
       { state: 'UNKNOWN', operationId: OPERATION_ID },
@@ -334,24 +356,51 @@ describe('game join attempt ledger', () => {
     expect(unknown.state).toBe('UNKNOWN');
     expect(unknown.operationId).toBe(OPERATION_ID);
     expect(unknown.dispatchStartedAt).toBe('2026-10-21T08:00:01.000Z');
-    expect(() => discardGameJoinAttempt(PRINCIPAL, attempt, storage)).toThrow(
+    await expect(discardGameJoinAttempt(PRINCIPAL, attempt, storage)).rejects.toThrow(
       expect.objectContaining({ code: 'ATTEMPT_UNRESOLVED' }),
     );
 
-    const succeeded = resolveGameJoinAttempt(PRINCIPAL, unknown, { state: 'SUCCEEDED' }, storage, {
-      now: () => new Date('2026-10-21T08:00:03.000Z'),
-    });
+    const succeeded = await resolveGameJoinAttempt(
+      PRINCIPAL,
+      unknown,
+      { state: 'SUCCEEDED' },
+      storage,
+      {
+        now: () => new Date('2026-10-21T08:00:03.000Z'),
+      },
+    );
     expect(succeeded.state).toBe('SUCCEEDED');
     expect(succeeded.resolvedAt).toBe('2026-10-21T08:00:03.000Z');
 
-    discardGameJoinAttempt(PRINCIPAL, succeeded, storage);
+    await discardGameJoinAttempt(PRINCIPAL, succeeded, storage);
     expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)).toBeNull();
   });
 
+  it('retains a resolved identity when a later readback is nonfinal', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    const succeeded = await resolveGameJoinAttempt(
+      PRINCIPAL,
+      attempt,
+      { state: 'SUCCEEDED', operationId: OPERATION_ID },
+      storage,
+    );
+    await resolveGameJoinAttempt(
+      PRINCIPAL,
+      succeeded,
+      { state: 'UNKNOWN', operationId: OPERATION_ID },
+      storage,
+    );
+    expect(
+      loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID, {
+        now: new Date('2026-10-22T00:00:00.000Z'),
+      })?.state,
+    ).toBe('SUCCEEDED');
+  });
   it('allows discarding custody only for a definite server rejection', async () => {
     const storage = new MemoryStorage();
     const { attempt } = await seedAttempt(storage);
-    discardGameJoinAttempt(PRINCIPAL, attempt, storage, { allowUnresolved: true });
+    await discardGameJoinAttempt(PRINCIPAL, attempt, storage, { allowUnresolved: true });
     expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)).toBeNull();
   });
 
@@ -359,10 +408,10 @@ describe('game join attempt ledger', () => {
     const storage = new MemoryStorage();
     const { attempt } = await seedAttempt(storage);
     const tampered = { ...attempt, idempotencyKey: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff' };
-    expect(() =>
+    await expect(
       resolveGameJoinAttempt(PRINCIPAL, tampered, { state: 'UNKNOWN' }, storage),
-    ).toThrow(expect.objectContaining({ code: 'ATTEMPT_STATE_CHANGED' }));
-    expect(() => markGameJoinAttemptDispatchStarted(PRINCIPAL, tampered, storage)).toThrow(
+    ).rejects.toThrow(expect.objectContaining({ code: 'ATTEMPT_STATE_CHANGED' }));
+    await expect(markGameJoinAttemptDispatchStarted(PRINCIPAL, tampered, storage)).rejects.toThrow(
       expect.objectContaining({ code: 'ATTEMPT_STATE_CHANGED' }),
     );
   });
@@ -375,9 +424,9 @@ describe('game join attempt ledger', () => {
     expect(locks === undefined || typeof locks.request === 'function').toBe(true);
     expect(browserGameJoinAttemptLockManager()).toBe(locks);
     expect(gameJoinDispatchLockName(PRINCIPAL, GAME_ID)).toBe(
-      `phub.game-join-attempt.v1:dispatch:${encodeURIComponent(PRINCIPAL.tenantId)}:${encodeURIComponent(
+      `phub.game-join-attempt.v1:ledger:${encodeURIComponent(PRINCIPAL.tenantId)}:${encodeURIComponent(
         PRINCIPAL.userId,
-      )}:${encodeURIComponent(GAME_ID)}`,
+      )}`,
     );
   });
 
@@ -398,7 +447,7 @@ describe('game join attempt ledger', () => {
     const ledger = readGameJoinAttemptLedger(PRINCIPAL, storage, { now });
     expect(ledger.attempts).toHaveLength(16);
     for (const attempt of ledger.attempts) {
-      resolveGameJoinAttempt(
+      await resolveGameJoinAttempt(
         PRINCIPAL,
         attempt,
         { state: 'SUCCEEDED', operationId: OPERATION_ID },
@@ -407,11 +456,13 @@ describe('game join attempt ledger', () => {
       );
     }
     const nextAttempt = await beginGameJoinAttempt(PRINCIPAL, input(), storage, {
-      now: () => now,
+      now: () => new Date('2026-10-21T08:01:00.000Z'),
       createIdempotencyKey: () => KEY,
     });
     expect(nextAttempt.created).toBe(true);
-    const reRead = readGameJoinAttemptLedger(PRINCIPAL, storage, { now });
+    const reRead = readGameJoinAttemptLedger(PRINCIPAL, storage, {
+      now: new Date('2026-10-21T08:01:00.000Z'),
+    });
     expect(reRead.attempts).toHaveLength(16);
     expect(reRead.attempts.filter((attempt) => attempt.state === 'SUCCEEDED')).toHaveLength(15);
     expect(reRead.attempts.some((attempt) => attempt.idempotencyKey === KEY)).toBe(true);
@@ -430,5 +481,108 @@ describe('game join attempt ledger', () => {
     await expect(beginGameJoinAttempt(PRINCIPAL, input(), failing)).rejects.toMatchObject({
       code: 'ATTEMPT_STORAGE_UNAVAILABLE',
     });
+  });
+});
+
+describe('game join attempt quiet release rules', () => {
+  beforeEach(() => vi.stubGlobal('navigator', { locks: serialLockManager() }));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('rule (a): keeps an undispatched attempt until the quiet window and then releases it', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    await expect(
+      releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage, {
+        now: new Date(Date.parse('2026-10-21T08:00:00.000Z') + GAME_JOIN_ATTEMPT_QUIET_MS - 1),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)?.idempotencyKey).toBe(KEY);
+    await expect(
+      releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage, {
+        now: new Date(Date.parse('2026-10-21T08:00:00.000Z') + GAME_JOIN_ATTEMPT_QUIET_MS),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(true);
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)).toBeNull();
+  });
+
+  it('rule (a): never removes the custody another tab has already marked for dispatch', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    await markGameJoinAttemptDispatchStarted(PRINCIPAL, attempt, storage, {
+      now: () => new Date('2026-10-21T08:00:01.000Z'),
+      lockManager: serialLockManager(),
+    });
+    await expect(
+      releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage, {
+        now: new Date('2026-10-21T09:00:00.000Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)?.dispatchStartedAt).toBe(
+      '2026-10-21T08:00:01.000Z',
+    );
+  });
+
+  it('rule (b): releases a dispatched attempt only after the dispatch quiet window', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    const dispatched = await markGameJoinAttemptDispatchStarted(PRINCIPAL, attempt, storage, {
+      now: () => new Date('2026-10-21T08:00:05.000Z'),
+      lockManager: serialLockManager(),
+    });
+    await expect(
+      releaseNotFoundGameJoinAttempt(PRINCIPAL, dispatched, storage, {
+        now: new Date(Date.parse('2026-10-21T08:00:05.000Z') + GAME_JOIN_ATTEMPT_QUIET_MS - 1),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      releaseNotFoundGameJoinAttempt(PRINCIPAL, dispatched, storage, {
+        now: new Date(Date.parse('2026-10-21T08:00:05.000Z') + GAME_JOIN_ATTEMPT_QUIET_MS),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(true);
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)).toBeNull();
+  });
+
+  it('rule (b): refuses an attempt that never dispatched and never removes trusted success', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    await expect(
+      releaseNotFoundGameJoinAttempt(PRINCIPAL, attempt, storage, {
+        now: new Date('2026-10-21T12:00:00.000Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    const resolved = await resolveGameJoinAttempt(
+      PRINCIPAL,
+      attempt,
+      { state: 'SUCCEEDED', operationId: OPERATION_ID },
+      storage,
+      { now: () => new Date('2026-10-21T08:02:00.000Z'), lockManager: serialLockManager() },
+    );
+    await expect(
+      releaseNotFoundGameJoinAttempt(PRINCIPAL, resolved, storage, {
+        now: new Date('2026-10-22T00:00:00.000Z'),
+        lockManager: serialLockManager(),
+      }),
+    ).resolves.toBe(false);
+    expect(
+      loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID, {
+        now: new Date('2026-10-22T00:00:00.000Z'),
+      })?.state,
+    ).toBe('SUCCEEDED');
+  });
+
+  it('fails closed without the cross-tab ledger lock', async () => {
+    const storage = new MemoryStorage();
+    const { attempt } = await seedAttempt(storage);
+    vi.stubGlobal('navigator', {});
+    await expect(
+      releaseUndispatchedGameJoinAttempt(PRINCIPAL, attempt, storage),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_LOCK_UNAVAILABLE' });
+    expect(loadGameJoinAttempt(PRINCIPAL, storage, GAME_ID)).not.toBeNull();
   });
 });
