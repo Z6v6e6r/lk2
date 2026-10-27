@@ -330,7 +330,7 @@ export function GameCard({
       {hasStructuredResult ? (
         <GameScoreSummary participants={scoreParticipants} sets={sets} />
       ) : sets.length > 0 ? (
-        <div className="game-score" aria-label="Счёт по сетам">
+        <div className="game-score" aria-label="Счёт по сетам в игре">
           {sets.map((set, index) => (
             <span key={`${set.teamA}-${set.teamB}-${index}`}>
               {set.teamA}:{set.teamB}
