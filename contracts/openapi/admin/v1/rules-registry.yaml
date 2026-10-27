@@ -1,0 +1,433 @@
+RulesRegistryPath:
+  get:
+    tags: [RulesRegistry]
+    operationId: getRulesRegistry
+    summary: Read the operator rules registry over LK2 level policies, CUP published policies and the LK1 inventory
+    description: |
+      Read-only operator view. Requires the admin-audience `eligibility.publish` capability and the
+      `X-App-Platform: cup-admin` client boundary; the tenant and the operator are derived from the
+      verified phub-admin JWT. LK2 only reads policy versions and digests that CUP has already
+      published: it stores nothing, evaluates nothing and publishes nothing. When the CUP registry
+      client is not configured or unavailable, the CUP section is reported as `UNAVAILABLE` instead
+      of an empty rule set, and a malformed CUP payload is never partially merged into the view.
+      `Cache-Control: no-store` is always set.
+    parameters:
+      - $ref: '#/TenantKey'
+      - $ref: '#/SportCode'
+      - $ref: '#/XAppPlatform'
+    responses:
+      '200':
+        description: Operator registry view for one sport.
+        content:
+          application/json:
+            schema: { $ref: '#/RulesRegistryAdminResponse' }
+      '400': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '401': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '403': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '503': { $ref: './openapi.yaml#/components/responses/ApiError' }
+
+LegacyRulesInventoryPath:
+  get:
+    tags: [RulesRegistry]
+    operationId: getLegacyRulesInventory
+    summary: Read the LK1 active-rule intake snapshot with its CUP policy coverage
+    description: |
+      Read-only operator view. Requires the admin-audience `eligibility.publish` capability and the
+      `X-App-Platform: cup-admin` client boundary; the tenant and the operator are derived from the
+      verified phub-admin JWT. The snapshot is INVENTORY EVIDENCE generated from the LK1 repository,
+      not runtime authority: CUP publishes rules and LK2 evaluates only its own copy at write time.
+      A malformed snapshot is answered with `503 LEGACY_RULES_INVENTORY_INVALID`, never as an empty
+      rule set. `Cache-Control: no-store` is always set.
+    parameters:
+      - $ref: '#/TenantKey'
+      - $ref: '#/XAppPlatform'
+    responses:
+      '200':
+        description: LK1 inventory snapshot plus the CUP coverage derived from the policy registry.
+        content:
+          application/json:
+            schema: { $ref: '#/LegacyRulesInventoryResponse' }
+      '401': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '403': { $ref: './openapi.yaml#/components/responses/ApiError' }
+      '503': { $ref: './openapi.yaml#/components/responses/ApiError' }
+
+TenantKey:
+  name: tenantKey
+  in: path
+  required: true
+  schema: { type: string, minLength: 2, maxLength: 64 }
+SportCode:
+  name: sportCode
+  in: query
+  required: false
+  schema: { type: string, pattern: '^[A-Z][A-Z0-9_]{1,31}$', default: PADEL }
+XAppPlatform:
+  name: X-App-Platform
+  in: header
+  required: true
+  description: Client boundary; the operator registry is reachable only from the CUP console.
+  schema: { type: string, const: cup-admin }
+
+RulesRegistryAdminResponse:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, generatedAt, level, subscriptions, legacy, legacyCoverage]
+  properties:
+    schemaVersion: { type: integer, const: 1 }
+    generatedAt: { type: string, format: date-time }
+    level: { $ref: '#/RegistryLevelSource' }
+    subscriptions: { $ref: '#/RegistrySubscriptionSource' }
+    legacy: { $ref: '#/LegacyRulesInventorySummary' }
+    legacyCoverage: { $ref: '#/LegacyRulesCoverage' }
+
+RegistryLevelSource:
+  oneOf:
+    - type: object
+      additionalProperties: false
+      required: [source, status, sportCode, state]
+      properties:
+        source: { type: string, const: LK2_LEVEL }
+        status: { type: string, const: OK }
+        sportCode: { type: string, minLength: 2, maxLength: 32 }
+        state: { $ref: './level-eligibility.yaml#/LevelEligibilityPolicyState' }
+    - type: object
+      additionalProperties: false
+      required: [source, status, reason]
+      properties:
+        source: { type: string, const: LK2_LEVEL }
+        status: { type: string, const: UNAVAILABLE }
+        reason: { type: string, minLength: 1, maxLength: 128 }
+
+RegistrySubscriptionSource:
+  oneOf:
+    - type: object
+      additionalProperties: false
+      required: [source, status, registry]
+      properties:
+        source: { type: string, const: CUP_PUBLISHED }
+        status: { type: string, const: OK }
+        registry: { $ref: '#/SubscriptionPolicyRegistryResult' }
+    - type: object
+      additionalProperties: false
+      required: [source, status, reason]
+      properties:
+        source: { type: string, const: CUP_PUBLISHED }
+        status: { type: string, const: UNAVAILABLE }
+        reason: { type: string, minLength: 1, maxLength: 128 }
+
+SubscriptionPolicyRegistryResult:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, generatedAt, items, totals]
+  properties:
+    schemaVersion: { type: integer, const: 1 }
+    generatedAt: { type: string, format: date-time }
+    items: { type: array, items: { $ref: '#/SubscriptionPolicyRegistryItem' } }
+    totals: { $ref: '#/SubscriptionPolicyRegistryTotals' }
+
+SubscriptionPolicyRegistryTotals:
+  type: object
+  additionalProperties: false
+  required: [subscriptionTypes, publishedPolicies, draftPolicies, instances]
+  properties:
+    subscriptionTypes: { type: integer, minimum: 0 }
+    publishedPolicies: { type: integer, minimum: 0 }
+    draftPolicies: { type: integer, minimum: 0 }
+    instances: { type: integer, minimum: 0 }
+
+SubscriptionPolicyRegistryItem:
+  type: object
+  additionalProperties: false
+  required:
+    [
+      subscriptionTypeId,
+      code,
+      title,
+      description,
+      state,
+      currentPolicyVersion,
+      publication,
+      rules,
+      surfaces,
+      versions,
+      instances,
+      lastDecision,
+    ]
+  properties:
+    subscriptionTypeId: { type: string, minLength: 1 }
+    code: { type: string, minLength: 1 }
+    title: { type: string, minLength: 1 }
+    description: { type: [string, 'null'] }
+    state: { type: string, enum: [DRAFT, ACTIVE, ARCHIVED] }
+    currentPolicyVersion: { type: [integer, 'null'], minimum: 1 }
+    publication: { $ref: '#/SubscriptionPolicyRegistryPublication' }
+    rules:
+      description: Immutable compiled runtime projection of the current publication. Opaque to LK2.
+      type: [object, 'null']
+      additionalProperties: true
+    surfaces: { type: array, items: { type: string } }
+    providerProductIds:
+      description: Verified provider product ids bound to this subscription type, when CUP exposes them.
+      type: array
+      items: { type: string, minLength: 1 }
+    versions: { type: array, items: { $ref: '#/SubscriptionPolicyRegistryVersion' } }
+    instances: { $ref: '#/SubscriptionPolicyRegistryInstances' }
+    lastDecision: { $ref: '#/SubscriptionPolicyRegistryLastDecision' }
+    lastQuoteDecision: { $ref: '#/SubscriptionPolicyRegistryLastQuoteDecision' }
+
+SubscriptionPolicyRegistryPublication:
+  type: [object, 'null']
+  additionalProperties: false
+  required:
+    [
+      publicationId,
+      policyVersion,
+      policyDigest,
+      state,
+      effectiveAt,
+      applyTo,
+      publishedAt,
+      supersededAt,
+      runtimeCompatibility,
+    ]
+  properties:
+    publicationId: { type: string, minLength: 1 }
+    policyVersion: { type: integer, minimum: 1 }
+    policyDigest: { type: string, minLength: 1 }
+    state: { type: string, enum: [PUBLISHED, SUPERSEDED, DISABLED_FOR_NEW_OPERATIONS] }
+    effectiveAt: { type: string, format: date-time }
+    applyTo: { type: string, enum: [NEW_ONLY, ACTIVE_AND_NEW] }
+    publishedAt: { type: string, format: date-time }
+    supersededAt: { type: [string, 'null'], format: date-time }
+    runtimeCompatibility: { $ref: '#/SubscriptionPolicyRegistryRuntimeCompatibility' }
+
+SubscriptionPolicyRegistryRuntimeCompatibility:
+  type: object
+  additionalProperties: false
+  required: [adapterId, contractVersion, capabilityDigest]
+  properties:
+    adapterId: { type: string, minLength: 1 }
+    contractVersion: { type: integer, minimum: 1 }
+    capabilityDigest: { type: string, minLength: 1 }
+
+SubscriptionPolicyRegistryVersion:
+  type: object
+  additionalProperties: false
+  required: [policyVersion, status, modelVersion, effectiveAt, applyTo, publicationState]
+  properties:
+    policyVersion: { type: integer, minimum: 1 }
+    status: { type: string, enum: [DRAFT, PUBLISHED, SUPERSEDED] }
+    modelVersion: { type: integer, enum: [2, 3] }
+    effectiveAt: { type: string, format: date-time }
+    applyTo: { type: string, enum: [NEW_ONLY, ACTIVE_AND_NEW] }
+    publicationState:
+      type: [string, 'null']
+      enum: [PUBLISHED, SUPERSEDED, DISABLED_FOR_NEW_OPERATIONS, null]
+
+SubscriptionPolicyRegistryInstances:
+  type: object
+  additionalProperties: false
+  required: [total, byPolicyVersion]
+  properties:
+    total: { type: integer, minimum: 0 }
+    byPolicyVersion:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required: [policyVersion, count]
+        properties:
+          policyVersion: { type: integer, minimum: 1 }
+          count: { type: integer, minimum: 0 }
+
+SubscriptionPolicyRegistryLastDecision:
+  description: Newest persisted ledger or operation decision for this subscription type.
+  type: [object, 'null']
+  additionalProperties: false
+  required:
+    [
+      at,
+      source,
+      eventType,
+      operationState,
+      action,
+      policyVersion,
+      policyDigest,
+      usageDelta,
+      moneyDeltaMinor,
+    ]
+  properties:
+    at: { type: string, format: date-time }
+    source: { type: string, enum: [LEDGER, OPERATION] }
+    eventType: { type: [string, 'null'] }
+    operationState: { type: [string, 'null'] }
+    action: { type: [string, 'null'] }
+    policyVersion: { type: integer, minimum: 1 }
+    policyDigest: { type: string, minLength: 1 }
+    usageDelta: { type: [integer, 'null'], minimum: 0 }
+    moneyDeltaMinor: { type: [integer, 'null'], minimum: 0 }
+
+SubscriptionPolicyRegistryLastQuoteDecision:
+  description: Newest persisted quote decision for this subscription type, when the operator view exposes it.
+  type: [object, 'null']
+  additionalProperties: false
+  required:
+    [at, outcome, serviceAllowed, subscriptionBenefitAllowed, blockers, policyVersion, policyDigest]
+  properties:
+    at: { type: string, format: date-time }
+    channel:
+      type: string
+      enum: [LK2, LK1]
+    outcome: { type: string, minLength: 1 }
+    serviceAllowed: { type: boolean }
+    subscriptionBenefitAllowed: { type: boolean }
+    blockers: { type: array, items: { type: string } }
+    policyVersion: { type: [integer, 'null'], minimum: 1 }
+    policyDigest: { type: [string, 'null'] }
+
+LegacyRulesInventorySummary:
+  oneOf:
+    - type: object
+      additionalProperties: false
+      required: [source, status, authority, asOf, repo, products, rules, conflicts, gaps]
+      properties:
+        source: { type: string, const: LK1_INVENTORY }
+        status: { type: string, const: OK }
+        authority: { type: string, const: INVENTORY_ONLY }
+        asOf: { type: string, minLength: 1 }
+        repo: { $ref: '#/LegacyRulesInventoryRepo' }
+        products: { type: integer, minimum: 0 }
+        rules: { type: integer, minimum: 0 }
+        conflicts: { type: integer, minimum: 0 }
+        gaps: { type: integer, minimum: 0 }
+    - type: object
+      additionalProperties: false
+      required: [source, status, reason]
+      properties:
+        source: { type: string, const: LK1_INVENTORY }
+        status: { type: string, const: UNAVAILABLE }
+        reason: { type: string, const: LEGACY_RULES_INVENTORY_INVALID }
+
+LegacyRulesCoverage:
+  oneOf:
+    - type: object
+      additionalProperties: false
+      required: [status, products, coveredProducts, uncoveredProducts]
+      properties:
+        status: { type: string, const: OK }
+        products: { type: array, items: { $ref: '#/LegacyProductCoverage' } }
+        coveredProducts: { type: integer, minimum: 0 }
+        uncoveredProducts: { type: integer, minimum: 0 }
+    - type: object
+      additionalProperties: false
+      required: [status, reason]
+      properties:
+        status: { type: string, const: UNAVAILABLE }
+        reason: { type: string, minLength: 1, maxLength: 128 }
+
+LegacyProductCoverage:
+  type: object
+  additionalProperties: false
+  required: [productId, name, status, providerProductIds, coveredBy]
+  properties:
+    productId: { type: string, minLength: 1 }
+    name: { type: string, minLength: 1 }
+    status: { type: string, minLength: 1 }
+    providerProductIds: { type: array, items: { type: string, minLength: 1 } }
+    coveredBy:
+      type: array
+      items:
+        type: object
+        additionalProperties: false
+        required:
+          [subscriptionTypeId, code, title, policyVersion, publicationId, applyTo, publicationState]
+        properties:
+          subscriptionTypeId: { type: string, minLength: 1 }
+          code: { type: string, minLength: 1 }
+          title: { type: string, minLength: 1 }
+          policyVersion: { type: [integer, 'null'], minimum: 1 }
+          publicationId: { type: [string, 'null'] }
+          applyTo: { type: [string, 'null'], enum: [NEW_ONLY, ACTIVE_AND_NEW, null] }
+          publicationState:
+            type: [string, 'null']
+            enum: [PUBLISHED, SUPERSEDED, DISABLED_FOR_NEW_OPERATIONS, null]
+
+LegacyRulesInventoryResponse:
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, source, authority, inventory, coverage]
+  properties:
+    schemaVersion: { type: integer, const: 1 }
+    source: { type: string, const: LK1_INVENTORY }
+    authority: { type: string, const: INVENTORY_ONLY }
+    inventory: { $ref: '#/LegacyRulesInventory' }
+    coverage: { $ref: '#/LegacyRulesCoverage' }
+
+LegacyRulesInventory:
+  description: Generated intake snapshot of the active LK1 subscription and commercial rules.
+  type: object
+  additionalProperties: false
+  required: [schemaVersion, generatedAt, repo, products, rules, conflicts, gaps]
+  properties:
+    schemaVersion: { type: integer, const: 1 }
+    generatedAt: { type: string, minLength: 1 }
+    repo: { $ref: '#/LegacyRulesInventoryRepo' }
+    products: { type: array, items: { $ref: '#/LegacyInventoryProduct' } }
+    rules: { type: array, items: { $ref: '#/LegacyInventoryRule' } }
+    conflicts:
+      type: array
+      items: { description: Opaque conflict record from the LK1 snapshot. }
+    gaps:
+      type: array
+      items: { description: Opaque coverage-gap record from the LK1 snapshot. }
+
+LegacyRulesInventoryRepo:
+  type: object
+  additionalProperties: false
+  required: [url, sha, date]
+  properties:
+    url: { type: string, minLength: 1 }
+    sha: { type: string, minLength: 1 }
+    date: { type: string, minLength: 1 }
+
+LegacyInventoryProduct:
+  type: object
+  additionalProperties: false
+  required: [productId, name, status]
+  properties:
+    productId: { type: string, minLength: 1 }
+    name: { type: string, minLength: 1 }
+    status: { type: string, minLength: 1 }
+    aliases: { type: array, items: { type: string } }
+    vivaProductIds: { type: array, items: { type: string } }
+    stations: { type: array, items: { type: string } }
+    sources:
+      type: array
+      items: { description: Opaque source evidence record from the LK1 snapshot. }
+
+LegacyInventoryRule:
+  type: object
+  additionalProperties: false
+  required: [ruleId, productId, ruleGroup, value, status]
+  properties:
+    ruleId: { type: string, minLength: 1 }
+    productId: { type: string, minLength: 1 }
+    ruleGroup: { type: string, minLength: 1 }
+    value: { description: Opaque rule value from the LK1 snapshot. }
+    status: { type: string, minLength: 1 }
+    confidence: { type: string }
+    service: { type: string }
+    action: { type: string }
+    appliesTo: { type: string }
+    unit: { description: Opaque rule unit from the LK1 snapshot. }
+    period: { description: Opaque rule period from the LK1 snapshot. }
+    exceptions:
+      type: array
+      items: { description: Opaque exception record from the LK1 snapshot. }
+    onViolation: { type: string }
+    effectiveFrom: { type: [string, 'null'] }
+    effectiveTo: { type: [string, 'null'] }
+    evidence:
+      type: array
+      items: { description: Opaque evidence record with a source path and line. }
+    notes: { type: string }

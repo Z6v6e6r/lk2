@@ -585,6 +585,12 @@ export interface AuthGateway {
     input: CreateGameRequest,
     options?: { readonly idempotencyKey?: string },
   ) => Promise<GameCommandResult>;
+  /**
+   * Managed commercial CREATE (WARN contour). The caller owns the idempotency key: a lost response
+   * is recovered by reading the same operation, never by a new POST. Optional capability: a gateway
+   * without it keeps the untouched free-create behavior.
+   */
+  readonly createPaidGame?: PadlHubApiClient['createPaidGame'];
   readonly cancelGame: (gameId: string, input: CancelGameRequest) => Promise<GameCommandResult>;
   readonly joinGame: (
     gameId: string,
@@ -2308,6 +2314,10 @@ export function createBrowserAuthGateway(options: BrowserAuthGatewayOptions): Au
 
     createGame(input, options) {
       return client.createGame(input, options);
+    },
+
+    createPaidGame(input, idempotencyKey) {
+      return client.createPaidGame(input, idempotencyKey);
     },
 
     cancelGame(gameId, input) {

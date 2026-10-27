@@ -1,6 +1,20 @@
 import type { CreateGameRequest } from './auth-gateway.js';
 
-const LEDGER_VERSION = 3 as const;
+export const CREATE_GAME_ATTEMPT_LEDGER_VERSION = 4 as const;
+const LEDGER_VERSION = CREATE_GAME_ATTEMPT_LEDGER_VERSION;
+/**
+ * Earlier envelopes stay readable so an in-flight attempt survives a deploy: recovery must keep the
+ * original key instead of stranding the operation. They never carried a managed confirmation, so a
+ * legacy `PENDING_CONFIRMATION` record is malformed, and every write upgrades to the current version.
+ */
+const LEGACY_LEDGER_VERSIONS: ReadonlySet<unknown> = new Set([3]);
+/**
+ * Accepted deviation from the "unknown version fails closed" rule: an in-flight attempt written by
+ * the previous release must keep its original key instead of being stranded after a deploy. A legacy
+ * envelope is therefore readable ONLY with the exact semantics that release could produce — a
+ * free-only `PENDING` attempt — and every write upgrades the envelope to the current version.
+ */
+const legacyLedgerVersion3 = 3 as const;
 // Keep the principal-scoped key stable so an older mounted tab fails closed on the v3 envelope.
 const ATTEMPT_STORAGE_PREFIX = 'phub.create-game-attempt.v2';
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,200}$/;
@@ -39,12 +53,42 @@ export interface ResolvedCreateGameAttempt {
   readonly expiresAt: string;
 }
 
-export type CreateGameAttempt = PendingCreateGameAttempt | ResolvedCreateGameAttempt;
+/**
+ * Managed commercial CREATE accepted by the server (`202 CREATE_GAME`, status UNKNOWN/PROCESSING):
+ * the game aggregate exists in `PROVISIONING` and the operation is unresolved. The browser keeps
+ * the attempt (and its original idempotency key) so recovery is a readback of the same operation,
+ * never a replacement POST.
+ */
+export interface PendingConfirmationCreateGameAttempt {
+  readonly state: 'PENDING_CONFIRMATION';
+  readonly attemptId: string;
+  readonly tenantId: string;
+  readonly actorUserId: string;
+  readonly idempotencyKey: string;
+  readonly payloadFingerprint: string;
+  readonly createdAt: string;
+  readonly startsAt: string;
+  readonly payload: CreateGameRequest;
+  readonly gameId: string;
+  readonly operationId: string;
+  readonly paymentMode: 'SPLIT' | 'SUBSCRIPTION';
+}
+
+export type ActiveCreateGameAttempt =
+  PendingCreateGameAttempt | PendingConfirmationCreateGameAttempt;
+
+export type CreateGameAttempt = ActiveCreateGameAttempt | ResolvedCreateGameAttempt;
 
 export interface CreateGameAttemptLedger {
   readonly version: typeof LEDGER_VERSION;
-  readonly activeAttempt?: PendingCreateGameAttempt;
+  readonly activeAttempt?: ActiveCreateGameAttempt;
   readonly resolvedAttempts: readonly ResolvedCreateGameAttempt[];
+}
+
+export function isPendingConfirmationAttempt(
+  attempt: CreateGameAttempt | null | undefined,
+): attempt is PendingConfirmationCreateGameAttempt {
+  return attempt?.state === 'PENDING_CONFIRMATION';
 }
 
 export interface CreateGameAttemptLockManager {
@@ -106,7 +150,39 @@ export function normalizeCreateGamePayload(input: CreateGameRequest): CreateGame
         : { from: input.levelRange.from, to: input.levelRange.to },
     paymentMode: input.paymentMode,
     waitlistEnabled: input.waitlistEnabled,
+    ...(input.subscriptionInstanceId === undefined
+      ? {}
+      : { subscriptionInstanceId: input.subscriptionInstanceId }),
+    ...(input.priceConsent === undefined
+      ? {}
+      : {
+          priceConsent: {
+            amountMinor: input.priceConsent.amountMinor,
+            currency: input.priceConsent.currency,
+          },
+        }),
   };
+}
+
+type ManagedPaymentMode = 'SPLIT' | 'SUBSCRIPTION';
+
+function parseManagedPaymentMode(value: unknown): 'NO_PAYMENT' | ManagedPaymentMode | null {
+  if (value === 'NO_PAYMENT' || value === 'SPLIT' || value === 'SUBSCRIPTION') return value;
+  return null;
+}
+
+function parsePriceConsent(
+  value: unknown,
+): { readonly amountMinor: number; readonly currency: 'RUB' } | null {
+  if (!isRecord(value) || !hasOnlyKeys(value, ['amountMinor', 'currency'])) return null;
+  if (
+    !Number.isSafeInteger(value.amountMinor) ||
+    Number(value.amountMinor) < 0 ||
+    value.currency !== 'RUB'
+  ) {
+    return null;
+  }
+  return { amountMinor: Number(value.amountMinor), currency: 'RUB' };
 }
 
 function parsePayload(value: unknown): CreateGameRequest | null {
@@ -125,6 +201,8 @@ function parsePayload(value: unknown): CreateGameRequest | null {
       'levelRange',
       'paymentMode',
       'waitlistEnabled',
+      'subscriptionInstanceId',
+      'priceConsent',
     ]) ||
     !isString(value.title) ||
     !['FRIENDLY', 'RATING', 'PRIVATE', 'COACH_GAME'].includes(String(value.kind)) ||
@@ -142,11 +220,24 @@ function parsePayload(value: unknown): CreateGameRequest | null {
     Number.isNaN(Date.parse(value.endsAt)) ||
     !isString(value.timezone) ||
     ![2, 4].includes(Number(value.capacity)) ||
-    value.paymentMode !== 'NO_PAYMENT' ||
+    parseManagedPaymentMode(value.paymentMode) === null ||
     typeof value.waitlistEnabled !== 'boolean'
   ) {
     return null;
   }
+  const paymentMode = parseManagedPaymentMode(value.paymentMode);
+  if (paymentMode === null) return null;
+  if (paymentMode === 'NO_PAYMENT' && value.subscriptionInstanceId !== undefined) return null;
+  if (paymentMode === 'NO_PAYMENT' && value.priceConsent !== undefined) return null;
+  if (
+    value.subscriptionInstanceId !== undefined &&
+    (!isString(value.subscriptionInstanceId) || !UUID_PATTERN.test(value.subscriptionInstanceId))
+  ) {
+    return null;
+  }
+  const priceConsent =
+    value.priceConsent === undefined ? undefined : parsePriceConsent(value.priceConsent);
+  if (value.priceConsent !== undefined && priceConsent === null) return null;
 
   let levelRange: CreateGameRequest['levelRange'] = null;
   if (value.levelRange !== undefined && value.levelRange !== null) {
@@ -173,8 +264,12 @@ function parsePayload(value: unknown): CreateGameRequest | null {
       timezone: value.timezone,
       capacity: value.capacity as CreateGameRequest['capacity'],
       levelRange,
-      paymentMode: 'NO_PAYMENT',
+      paymentMode,
       waitlistEnabled: value.waitlistEnabled,
+      ...(value.subscriptionInstanceId === undefined
+        ? {}
+        : { subscriptionInstanceId: value.subscriptionInstanceId }),
+      ...(priceConsent === undefined || priceConsent === null ? {} : { priceConsent }),
     });
   } catch {
     return null;
@@ -272,6 +367,92 @@ function parsePending(
   };
 }
 
+function parsePendingConfirmation(
+  value: unknown,
+  principal: CreateGameAttemptPrincipal,
+): PendingConfirmationCreateGameAttempt {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      'state',
+      'attemptId',
+      'tenantId',
+      'actorUserId',
+      'idempotencyKey',
+      'payloadFingerprint',
+      'createdAt',
+      'startsAt',
+      'payload',
+      'gameId',
+      'operationId',
+      'paymentMode',
+    ]) ||
+    value.state !== 'PENDING_CONFIRMATION' ||
+    !isString(value.attemptId) ||
+    !UUID_PATTERN.test(value.attemptId) ||
+    !isString(value.idempotencyKey) ||
+    !IDEMPOTENCY_KEY_PATTERN.test(value.idempotencyKey) ||
+    !isString(value.payloadFingerprint) ||
+    !SHA256_PATTERN.test(value.payloadFingerprint) ||
+    !isString(value.createdAt) ||
+    Number.isNaN(Date.parse(value.createdAt)) ||
+    !isString(value.startsAt) ||
+    Number.isNaN(Date.parse(value.startsAt)) ||
+    !isString(value.gameId) ||
+    !UUID_PATTERN.test(value.gameId) ||
+    !isString(value.operationId) ||
+    !UUID_PATTERN.test(value.operationId) ||
+    (value.paymentMode !== 'SPLIT' && value.paymentMode !== 'SUBSCRIPTION')
+  ) {
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  }
+  const { tenantId, actorUserId } = parsePrincipalFields(value, principal);
+  const payload = parsePayload(value.payload);
+  if (
+    !payload ||
+    payload.paymentMode !== value.paymentMode ||
+    payload.startsAt !== new Date(value.startsAt).toISOString()
+  ) {
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  }
+  return {
+    state: 'PENDING_CONFIRMATION',
+    attemptId: value.attemptId,
+    tenantId,
+    actorUserId,
+    idempotencyKey: value.idempotencyKey,
+    payloadFingerprint: value.payloadFingerprint,
+    createdAt: new Date(value.createdAt).toISOString(),
+    startsAt: payload.startsAt,
+    payload,
+    gameId: value.gameId,
+    operationId: value.operationId,
+    paymentMode: value.paymentMode,
+  };
+}
+
+function parseActiveAttempt(
+  value: unknown,
+  principal: CreateGameAttemptPrincipal,
+): ActiveCreateGameAttempt {
+  if (isRecord(value) && value.state === 'PENDING_CONFIRMATION') {
+    return parsePendingConfirmation(value, principal);
+  }
+  return parsePending(value, principal);
+}
+
+/** Version 3 only ever wrote a free `NO_PAYMENT` pending attempt; anything richer is malformed. */
+function parseLegacyPending(
+  value: unknown,
+  principal: CreateGameAttemptPrincipal,
+): PendingCreateGameAttempt {
+  const attempt = parsePending(value, principal);
+  if (attempt.payload.paymentMode !== 'NO_PAYMENT') {
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  }
+  return attempt;
+}
+
 function parseResolved(
   value: unknown,
   principal: CreateGameAttemptPrincipal,
@@ -334,13 +515,18 @@ function parseLedger(raw: string, principal: CreateGameAttemptPrincipal): Create
   if (
     !isRecord(value) ||
     !hasOnlyKeys(value, ['version', 'activeAttempt', 'resolvedAttempts']) ||
-    value.version !== LEDGER_VERSION ||
+    (value.version !== LEDGER_VERSION && !LEGACY_LEDGER_VERSIONS.has(value.version)) ||
     !Array.isArray(value.resolvedAttempts)
   ) {
     throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
   }
+  const legacy = value.version === legacyLedgerVersion3;
   const activeAttempt =
-    value.activeAttempt === undefined ? undefined : parsePending(value.activeAttempt, principal);
+    value.activeAttempt === undefined
+      ? undefined
+      : legacy
+        ? parseLegacyPending(value.activeAttempt, principal)
+        : parseActiveAttempt(value.activeAttempt, principal);
   const resolvedAttempts = value.resolvedAttempts.map((item) => parseResolved(item, principal));
   const identities = [
     ...(activeAttempt
@@ -441,7 +627,7 @@ async function withAttemptLock<TResult>(
   }
 }
 
-async function validatePendingFingerprint(attempt: PendingCreateGameAttempt): Promise<void> {
+async function validatePendingFingerprint(attempt: ActiveCreateGameAttempt): Promise<void> {
   if ((await payloadFingerprint(attempt.payload)) !== attempt.payloadFingerprint) {
     throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
   }
@@ -449,7 +635,7 @@ async function validatePendingFingerprint(attempt: PendingCreateGameAttempt): Pr
 
 function assertPrincipal(
   principal: CreateGameAttemptPrincipal,
-  attempt: PendingCreateGameAttempt,
+  attempt: ActiveCreateGameAttempt,
 ): void {
   if (attempt.tenantId !== principal.tenantId || attempt.actorUserId !== principal.userId) {
     throw new CreateGameAttemptError('ATTEMPT_FOREIGN_PRINCIPAL');
@@ -465,11 +651,19 @@ export async function prepareCreateGameAttempt(
     readonly now?: () => Date;
     readonly createAttemptId?: () => string;
     readonly createIdempotencyKey?: () => string;
-    readonly mountedAttempt?: PendingCreateGameAttempt | null;
+    readonly mountedAttempt?: ActiveCreateGameAttempt | null;
     readonly allowNewIntent?: boolean;
   } = {},
 ): Promise<CreateGameAttempt> {
   const payload = normalizeCreateGamePayload(input);
+  // The write side enforces the same rule as the read side: managed-only fields never ride on a
+  // free create, even if a caller constructs such a payload directly.
+  if (
+    payload.paymentMode === 'NO_PAYMENT' &&
+    (payload.subscriptionInstanceId !== undefined || payload.priceConsent !== undefined)
+  ) {
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  }
   const fingerprint = await payloadFingerprint(payload);
   return withAttemptLock(principal, lockManager, async () => {
     const now = options.now?.() ?? new Date();
@@ -495,7 +689,8 @@ export async function prepareCreateGameAttempt(
       if (ledger.activeAttempt) {
         if (
           ledger.activeAttempt.attemptId !== mounted.attemptId ||
-          ledger.activeAttempt.idempotencyKey !== mounted.idempotencyKey
+          ledger.activeAttempt.idempotencyKey !== mounted.idempotencyKey ||
+          ledger.activeAttempt.state !== mounted.state
         ) {
           throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
         }
@@ -562,13 +757,17 @@ export async function prepareCreateGameAttempt(
 
 export async function resolveCreateGameAttempt(
   principal: CreateGameAttemptPrincipal,
-  attempt: PendingCreateGameAttempt,
+  attempt: ActiveCreateGameAttempt,
   gameId: string,
   storage: Storage,
   lockManager: CreateGameAttemptLockManager | undefined,
   options: { readonly now?: () => Date } = {},
 ): Promise<ResolvedCreateGameAttempt> {
   if (!UUID_PATTERN.test(gameId)) throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  // A managed confirmation names exactly one accepted game; a different readback is a conflict.
+  if (attempt.state === 'PENDING_CONFIRMATION' && attempt.gameId !== gameId) {
+    throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
+  }
   assertPrincipal(principal, attempt);
   await validatePendingFingerprint(attempt);
   return withAttemptLock(principal, lockManager, () => {
@@ -625,9 +824,69 @@ export async function resolveCreateGameAttempt(
   });
 }
 
-export async function clearCreateGameAttempt(
+/**
+ * Records the managed commercial CREATE acceptance (`202 CREATE_GAME`, UNKNOWN/PROCESSING). The
+ * attempt keeps its original idempotency key and payload; it becomes a PENDING_CONFIRMATION record
+ * so a reload or a repeat offers operation readback instead of a replacement POST.
+ */
+export async function recordCreateGameConfirmation(
   principal: CreateGameAttemptPrincipal,
   attempt: PendingCreateGameAttempt,
+  accepted: { readonly gameId: string; readonly operationId: string },
+  storage: Storage,
+  lockManager: CreateGameAttemptLockManager | undefined,
+  options: { readonly now?: () => Date } = {},
+): Promise<PendingConfirmationCreateGameAttempt> {
+  if (!UUID_PATTERN.test(accepted.gameId) || !UUID_PATTERN.test(accepted.operationId)) {
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  }
+  if (attempt.payload.paymentMode !== 'SPLIT' && attempt.payload.paymentMode !== 'SUBSCRIPTION') {
+    throw new CreateGameAttemptError('ATTEMPT_MALFORMED');
+  }
+  const paymentMode = attempt.payload.paymentMode;
+  assertPrincipal(principal, attempt);
+  await validatePendingFingerprint(attempt);
+  return withAttemptLock(principal, lockManager, () => {
+    const now = options.now?.() ?? new Date();
+    const ledger = readLedger(principal, storage, now);
+    const existing = ledger.activeAttempt;
+    if (
+      !existing ||
+      existing.attemptId !== attempt.attemptId ||
+      existing.idempotencyKey !== attempt.idempotencyKey ||
+      existing.payloadFingerprint !== attempt.payloadFingerprint
+    ) {
+      throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
+    }
+    if (existing.state === 'PENDING_CONFIRMATION') {
+      if (existing.gameId === accepted.gameId && existing.operationId === accepted.operationId) {
+        return existing;
+      }
+      // One attempt can only ever name one accepted operation.
+      throw new CreateGameAttemptError('ATTEMPT_STATE_CHANGED');
+    }
+    const confirmation: PendingConfirmationCreateGameAttempt = {
+      state: 'PENDING_CONFIRMATION',
+      attemptId: attempt.attemptId,
+      tenantId: attempt.tenantId,
+      actorUserId: attempt.actorUserId,
+      idempotencyKey: attempt.idempotencyKey,
+      payloadFingerprint: attempt.payloadFingerprint,
+      createdAt: attempt.createdAt,
+      startsAt: attempt.startsAt,
+      payload: attempt.payload,
+      gameId: accepted.gameId,
+      operationId: accepted.operationId,
+      paymentMode,
+    };
+    writeLedger(storage, principal, { ...ledger, activeAttempt: confirmation });
+    return confirmation;
+  });
+}
+
+export async function clearCreateGameAttempt(
+  principal: CreateGameAttemptPrincipal,
+  attempt: ActiveCreateGameAttempt,
   storage: Storage,
   lockManager: CreateGameAttemptLockManager | undefined,
 ): Promise<void> {

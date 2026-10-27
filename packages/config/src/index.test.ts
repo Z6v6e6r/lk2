@@ -1660,6 +1660,29 @@ describe('loadConfig', () => {
     ).toThrow('COMMUNITIES_READ_MODE=mock is forbidden in production');
   });
 
+  it('keeps the CUP policy registry default-off and requires complete non-production config', () => {
+    expect(loadConfig(validEnvironment)).toMatchObject({
+      SUBSCRIPTION_POLICY_REGISTRY_ENABLED: false,
+    });
+    expect(() =>
+      loadConfig({ ...validEnvironment, SUBSCRIPTION_POLICY_REGISTRY_ENABLED: 'true' }),
+    ).toThrow('requires base URL and integration token');
+    const enabled = {
+      ...validEnvironment,
+      APP_ENV: 'staging',
+      SUBSCRIPTION_POLICY_REGISTRY_ENABLED: 'true',
+      SUBSCRIPTION_POLICY_REGISTRY_BASE_URL: 'https://ph-admin.example.test',
+      SUBSCRIPTION_POLICY_REGISTRY_INTEGRATION_TOKEN: 'x'.repeat(32),
+    } as const;
+    expect(loadConfig(enabled)).toMatchObject({
+      SUBSCRIPTION_POLICY_REGISTRY_ENABLED: true,
+      SUBSCRIPTION_POLICY_REGISTRY_TIMEOUT_MS: 3_000,
+    });
+    expect(() => loadConfig({ ...enabled, APP_ENV: 'production' })).toThrow(
+      'not activated for production',
+    );
+  });
+
   it('keeps subscription-runtime WARN default-off and rejects non-WARN modes', () => {
     expect(loadConfig(validEnvironment)).toMatchObject({ SUBSCRIPTION_RUNTIME_WARN_MODE: 'OFF' });
     expect(() =>

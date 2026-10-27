@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { MainBottomNavigation } from './HomeDashboardPage.js';
 import type { AuthGateway, CreateGameRequest } from './auth-gateway.js';
@@ -6,11 +6,15 @@ import {
   browserCreateGameAttemptLockManager,
   clearCreateGameAttempt,
   CreateGameAttemptError,
+  isPendingConfirmationAttempt,
   loadCreateGameAttempt,
   prepareCreateGameAttempt,
+  recordCreateGameConfirmation,
   resolveCreateGameAttempt,
+  type ActiveCreateGameAttempt,
   type CreateGameAttemptLockManager,
   type CreateGameAttemptPrincipal,
+  type PendingConfirmationCreateGameAttempt,
   type PendingCreateGameAttempt,
 } from './create-game-attempt.js';
 
@@ -42,6 +46,20 @@ function commandError(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'code' in error) {
     const code = (error as { readonly code?: unknown }).code;
     if (code === 'GAME_PAYMENT_REQUIRED') return 'Сейчас можно создать только бесплатную игру.';
+    if (code === 'GAME_PAYMENT_MODE_MISMATCH')
+      return 'Этот режим оплаты игры сейчас недоступен. Выберите другой вариант.';
+    if (code === 'GAME_PRICE_CONFIRMATION_REQUIRED')
+      return 'Цена изменилась или ещё не подтверждена. Подтвердите актуальную цену и повторите.';
+    if (code === 'GAME_SUBSCRIPTION_SELECTION_REQUIRED')
+      return 'Нужно выбрать подписку или другой способ оплаты.';
+    if (code === 'GAME_SERVICE_BLOCKED')
+      return 'Клуб не разрешает эту игру; оплата не снимает ограничение.';
+    if (code === 'GAME_OWNER_UNAVAILABLE')
+      return 'Статус создания не подтверждён. Сохранённые параметры и ключ оставлены — повторите проверку.';
+    if (code === 'GAME_RECONCILIATION_REQUIRED')
+      return 'Предыдущая попытка ещё не завершена. Дождитесь проверки статуса, новую игру не начинайте.';
+    if (code === 'GAME_COMMERCIAL_ATTEMPT_CONFLICT')
+      return 'Ключ незавершённой попытки уже связан с другой командой. Новая команда не отправлена.';
     if (code === 'GAME_START_TIME_PASSED') return 'Время начала уже прошло.';
     if (code === 'IDEMPOTENCY_KEY_REUSED') {
       return 'Ключ незавершённой попытки уже связан с другими параметрами. Новая команда не отправлена; обратитесь в поддержку.';
@@ -57,8 +75,35 @@ function errorCode(error: unknown): unknown {
     : undefined;
 }
 
+/**
+ * Managed CREATE refusals that are decided before any durable local write. Clearing the saved
+ * attempt is safe for these: the server created nothing, so the user may change the mode and retry.
+ * Ambiguous outcomes (owner unavailable, reconciliation, key conflict) are never in this set.
+ */
+const TERMINAL_CREATE_REFUSALS: ReadonlySet<unknown> = new Set([
+  'GAME_START_TIME_PASSED',
+  'GAME_PAYMENT_REQUIRED',
+  'GAME_PAYMENT_MODE_MISMATCH',
+  'GAME_PRICE_CONFIRMATION_REQUIRED',
+  'GAME_SUBSCRIPTION_SELECTION_REQUIRED',
+  'GAME_SERVICE_BLOCKED',
+]);
+
 function isTerminalNoCommitError(error: unknown): boolean {
-  return errorCode(error) === 'GAME_START_TIME_PASSED';
+  return TERMINAL_CREATE_REFUSALS.has(errorCode(error));
+}
+
+/** Server codes with a precise, actionable copy. Anything else stays an unknown-outcome message. */
+const KNOWN_CREATE_FAILURE_CODES: ReadonlySet<unknown> = new Set([
+  ...TERMINAL_CREATE_REFUSALS,
+  'IDEMPOTENCY_KEY_REUSED',
+  'GAME_OWNER_UNAVAILABLE',
+  'GAME_RECONCILIATION_REQUIRED',
+  'GAME_COMMERCIAL_ATTEMPT_CONFLICT',
+]);
+
+function isKnownCreateFailureCode(code: unknown): boolean {
+  return KNOWN_CREATE_FAILURE_CODES.has(code);
 }
 
 function browserAttemptStorage(): Storage | undefined {
@@ -97,6 +142,17 @@ export function CreateGamePage({
       new URLSearchParams(window.location.search).get('new') === '1',
     [],
   );
+  // WARN-era gate: the paid create options are offered only when the page is opened with an
+  // explicit commercial-create intent and the gateway exposes the managed CREATE capability. The
+  // default production UI therefore keeps offering the free beta scenario only. Remove this gate
+  // when the server activates the managed create contour (ENFORCE approval).
+  const paidCreateIntent = useMemo(
+    () =>
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('commercialCreate') === '1',
+    [],
+  );
+  const paidCreateAvailable = paidCreateIntent && typeof gateway.createPaidGame === 'function';
   const restored = useMemo(() => {
     if (!storage) {
       return {
@@ -111,6 +167,9 @@ export function CreateGamePage({
     }
   }, [scopedPrincipal, storage]);
   const restoredPending = restored.attempt?.state === 'PENDING' ? restored.attempt : null;
+  const restoredConfirmation = isPendingConfirmationAttempt(restored.attempt)
+    ? restored.attempt
+    : null;
   const restoredResolved = restored.attempt?.state === 'RESOLVED' ? restored.attempt : null;
   const restoredPayload = restoredPending?.payload;
   const defaults = useMemo(() => {
@@ -139,8 +198,13 @@ export function CreateGamePage({
   const [levelFrom, setLevelFrom] = useState(restoredPayload?.levelRange?.from ?? '');
   const [levelTo, setLevelTo] = useState(restoredPayload?.levelRange?.to ?? '');
   const [waitlistEnabled, setWaitlistEnabled] = useState(restoredPayload?.waitlistEnabled ?? true);
-  const [activeAttempt, setActiveAttempt] = useState<PendingCreateGameAttempt | null>(
-    restoredPending,
+  const [paymentMode, setPaymentMode] = useState<'NO_PAYMENT' | 'SPLIT' | 'SUBSCRIPTION'>(
+    restoredPayload?.paymentMode === 'SPLIT' || restoredPayload?.paymentMode === 'SUBSCRIPTION'
+      ? restoredPayload.paymentMode
+      : 'NO_PAYMENT',
+  );
+  const [activeAttempt, setActiveAttempt] = useState<ActiveCreateGameAttempt | null>(
+    restoredPending ?? restoredConfirmation,
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(
@@ -149,7 +213,9 @@ export function CreateGamePage({
   const [notice, setNotice] = useState<string | null>(
     restoredPending
       ? 'Найдена незавершённая попытка. Проверьте сохранённые параметры и повторите восстановление тем же ключом.'
-      : null,
+      : restoredConfirmation
+        ? 'Игра создана и ожидает подтверждения. Платёж и бронь не выполнены; проверьте статус операции.'
+        : null,
   );
 
   useEffect(() => {
@@ -164,9 +230,9 @@ export function CreateGamePage({
   }, [explicitNewIntent]);
 
   useEffect(() => {
-    if (!restoredResolved || explicitNewIntent) return;
+    if (!restoredResolved || explicitNewIntent || restoredConfirmation) return;
     navigate(`/games/${encodeURIComponent(restoredResolved.gameId)}?created=1&recovered=1`);
-  }, [explicitNewIntent, navigate, restoredResolved]);
+  }, [explicitNewIntent, navigate, restoredConfirmation, restoredResolved]);
 
   useEffect(() => {
     let active = true;
@@ -239,6 +305,10 @@ export function CreateGamePage({
       setError('Начальный уровень не может быть выше конечного.');
       return;
     }
+    if (paymentMode !== 'NO_PAYMENT' && !gateway.createPaidGame) {
+      setError('Платный режим на этом клиенте недоступен. Выберите бесплатную игру.');
+      return;
+    }
     const input: CreateGameRequest = {
       title: title.trim(),
       kind: 'FRIENDLY',
@@ -252,7 +322,7 @@ export function CreateGamePage({
         Intl.DateTimeFormat().resolvedOptions().timeZone ??
         'Europe/Moscow',
       capacity,
-      paymentMode: 'NO_PAYMENT',
+      paymentMode,
       waitlistEnabled,
       levelRange:
         levelFrom && levelTo
@@ -281,11 +351,23 @@ export function CreateGamePage({
         setBusy(false);
         return;
       }
+      if (prepared.state === 'PENDING_CONFIRMATION') {
+        setActiveAttempt(prepared);
+        setNotice(
+          'Игра создана и ожидает подтверждения. Платёж и бронь не выполнены; проверьте статус операции.',
+        );
+        setBusy(false);
+        return;
+      }
       attempt = prepared;
       setActiveAttempt(prepared);
-      const result = await gateway.createGame(attempt.payload, {
-        idempotencyKey: attempt.idempotencyKey,
-      });
+      const paid = attempt.payload.paymentMode !== 'NO_PAYMENT';
+      const result =
+        paid && gateway.createPaidGame
+          ? await gateway.createPaidGame(attempt.payload, attempt.idempotencyKey)
+          : await gateway.createGame(attempt.payload, {
+              idempotencyKey: attempt.idempotencyKey,
+            });
       if (result.operation.status === 'FAILED') {
         const failure = Object.assign(new Error('Create game failed'), {
           code: result.operation.error?.code,
@@ -301,6 +383,51 @@ export function CreateGamePage({
             'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
           );
         }
+        setBusy(false);
+        return;
+      }
+      if (paid) {
+        // The managed contour accepts the create but keeps the game PROVISIONING and the operation
+        // unresolved. Record the acceptance and let the user re-read that operation; never resolve
+        // it as a created/published game and never send a replacement POST.
+        if (
+          result.operation.gameId &&
+          ['UNKNOWN', 'PROCESSING', 'ACCEPTED'].includes(result.operation.status)
+        ) {
+          const confirmation = await recordCreateGameConfirmation(
+            scopedPrincipal,
+            attempt,
+            { gameId: result.operation.gameId, operationId: result.operation.id },
+            storage,
+            lockManager,
+          );
+          setActiveAttempt(confirmation);
+          setNotice(
+            'Игра создана и ожидает подтверждения. Платёж и бронь не выполнены; проверьте статус операции.',
+          );
+          setBusy(false);
+          return;
+        }
+        if (result.operation.status === 'SUCCEEDED' && result.operation.gameId) {
+          await resolveCreateGameAttempt(
+            scopedPrincipal,
+            attempt,
+            result.operation.gameId,
+            storage,
+            lockManager,
+          );
+          setActiveAttempt(null);
+          navigate(
+            `/games/${encodeURIComponent(result.operation.gameId)}?created=1${
+              result.replayed ? '&recovered=1' : ''
+            }`,
+          );
+          setBusy(false);
+          return;
+        }
+        setError(
+          'Ответ о создании не подтверждён. Сохранённые параметры и ключ оставлены для безопасного повтора.',
+        );
         setBusy(false);
         return;
       }
@@ -338,13 +465,90 @@ export function CreateGamePage({
         }
       } else if (cause instanceof CreateGameAttemptError) {
         setError(commandError(cause));
-      } else if (errorCode(cause) === 'IDEMPOTENCY_KEY_REUSED') {
+      } else if (isKnownCreateFailureCode(errorCode(cause))) {
         setError(commandError(cause));
       } else {
         setError(
           'Связь прервалась, результат неизвестен. Сохранённые параметры и ключ оставлены — повторите восстановление.',
         );
       }
+      setBusy(false);
+    }
+  }
+
+  const activeConfirmation: PendingConfirmationCreateGameAttempt | null =
+    isPendingConfirmationAttempt(activeAttempt) ? activeAttempt : null;
+  const confirmationHeadingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (activeConfirmation) confirmationHeadingRef.current?.focus();
+  }, [activeConfirmation]);
+
+  async function checkConfirmation(): Promise<void> {
+    const confirmation = activeConfirmation;
+    if (!confirmation || busy) return;
+    if (!storage || !lockManager) {
+      setError(commandError(new CreateGameAttemptError('ATTEMPT_STORAGE_UNAVAILABLE')));
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    setBusy(true);
+    try {
+      const result = await gateway.getGameOperation(confirmation.operationId);
+      // The readback must describe exactly the accepted operation and draft; anything else is a
+      // conflict, never a reason to resolve, navigate or repeat a create.
+      if (
+        result.operation.type !== 'CREATE_GAME' ||
+        result.operation.id !== confirmation.operationId
+      ) {
+        setError(
+          'Статус операции не совпал с ожидаемым. Новая команда не отправлена; обратитесь в поддержку.',
+        );
+        return;
+      }
+      if (result.operation.status === 'FAILED') {
+        await clearCreateGameAttempt(scopedPrincipal, confirmation, storage, lockManager);
+        setActiveAttempt(null);
+        setNotice(null);
+        setError('Создание игры отклонено. Игра не создана.');
+      } else if (result.operation.status === 'SUCCEEDED' && result.operation.gameId) {
+        if (result.operation.gameId !== confirmation.gameId) {
+          setError(
+            'Подтверждённая игра не совпала с ожидаемой. Новая команда не отправлена; обратитесь в поддержку.',
+          );
+          return;
+        }
+        await resolveCreateGameAttempt(
+          scopedPrincipal,
+          confirmation,
+          result.operation.gameId,
+          storage,
+          lockManager,
+        );
+        setActiveAttempt(null);
+        navigate(`/games/${encodeURIComponent(result.operation.gameId)}?created=1&recovered=1`);
+      } else {
+        setNotice('Пока не подтверждено. Платёж и бронь не выполнены; проверьте статус позже.');
+      }
+    } catch {
+      setNotice('Не удалось проверить статус. Повторите проверку позже.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startAnotherGame(): Promise<void> {
+    const confirmation = activeConfirmation;
+    if (!confirmation || busy) return;
+    if (!storage || !lockManager) return;
+    setBusy(true);
+    try {
+      await clearCreateGameAttempt(scopedPrincipal, confirmation, storage, lockManager);
+      setActiveAttempt(null);
+      navigate(`/games/new?new=1${paidCreateAvailable ? '&commercialCreate=1' : ''}`);
+    } catch (cause) {
+      setError(commandError(cause));
+    } finally {
       setBusy(false);
     }
   }
@@ -357,19 +561,74 @@ export function CreateGamePage({
   const stationTestCourts = testCourts.filter((court) => court.stationId === stationId);
   const selectedTestCourt = stationTestCourts.some((court) => court.id === courtId);
 
+  const pageHeader = (
+    <header className="games-header">
+      <a className="games-back" href="/games" aria-label="Назад к играм">
+        <span aria-hidden="true">←</span>
+        Назад
+      </a>
+      <div>
+        <h1>{activeConfirmation ? 'Ожидание подтверждения' : 'Создать игру'}</h1>
+        <p>
+          {paidCreateAvailable
+            ? 'Бесплатная игра и beta-режим по подписке без брони и списания'
+            : 'Бесплатный beta-сценарий без бронирования и оплаты'}
+        </p>
+      </div>
+    </header>
+  );
+
+  if (activeConfirmation) {
+    return (
+      <main className="games-page games-page--create">
+        {pageHeader}
+        <section className="game-create-form" aria-label="Ожидание подтверждения создания игры">
+          <h2 ref={confirmationHeadingRef} tabIndex={-1}>
+            Игра ожидает подтверждения
+          </h2>
+          <p className="games-message" role="status">
+            Платёж и бронь не выполнены. Игра появится в списке после подтверждения операции. Не
+            создавайте новую игру с другими параметрами, пока эта операция не завершена.
+          </p>
+          {error ? (
+            <p className="games-message is-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {notice ? (
+            <p className="games-message" role="status">
+              {notice}
+            </p>
+          ) : null}
+          <button
+            className="game-detail-primary"
+            type="button"
+            disabled={busy}
+            onClick={() => void checkConfirmation()}
+          >
+            {busy ? 'Проверяем статус…' : 'Проверить статус'}
+          </button>
+          <button
+            className="game-detail-secondary"
+            type="button"
+            disabled={busy}
+            onClick={() => void startAnotherGame()}
+          >
+            Создать другую игру
+          </button>
+          <p className="games-message">
+            Новая игра начнёт новую операцию. Это ожидание исчезнет с устройства, но останется в
+            обработке на сервере — его статус можно уточнить в поддержке.
+          </p>
+        </section>
+        <MainBottomNavigation active="games" gamesDestination="games" />
+      </main>
+    );
+  }
+
   return (
     <main className="games-page games-page--create">
-      <header className="games-header">
-        <a className="games-back" href="/games" aria-label="Назад к играм">
-          <span aria-hidden="true">←</span>
-          Назад
-        </a>
-        <div>
-          <h1>Создать игру</h1>
-          <p>Бесплатный beta-сценарий без бронирования и оплаты</p>
-        </div>
-      </header>
-
+      {pageHeader}
       <form className="game-create-form" onSubmit={(event) => void submit(event)} noValidate>
         {locationsError ? (
           <p className="games-message is-error" role="alert">
@@ -521,9 +780,41 @@ export function CreateGamePage({
             </label>
           </div>
         </fieldset>
+        {paidCreateAvailable ? (
+          <label>
+            <span>Оплата</span>
+            <select
+              value={paymentMode}
+              disabled={Boolean(activeAttempt)}
+              onChange={(event) =>
+                setPaymentMode(event.target.value as 'NO_PAYMENT' | 'SPLIT' | 'SUBSCRIPTION')
+              }
+            >
+              <option value="NO_PAYMENT">Бесплатно</option>
+              <option value="SPLIT">Делится между игроками (beta)</option>
+              <option value="SUBSCRIPTION">По подписке (beta)</option>
+            </select>
+          </label>
+        ) : null}
+        {paymentMode !== 'NO_PAYMENT' ? (
+          <p className="games-message" role="status">
+            Платёж и бронь не выполняются в beta-контуре. Игра создаётся и появляется в списке после
+            подтверждения операции.
+          </p>
+        ) : null}
         <div className="game-create-form__summary">
-          <strong>Стоимость: бесплатно</strong>
-          <span>Платёжный и provider-контур не используется.</span>
+          <strong>
+            {paymentMode === 'NO_PAYMENT'
+              ? 'Стоимость: бесплатно'
+              : paymentMode === 'SUBSCRIPTION'
+                ? 'Стоимость: по подписке (beta)'
+                : 'Стоимость: делится между игроками (beta)'}
+          </strong>
+          <span>
+            {paymentMode === 'NO_PAYMENT'
+              ? 'Платёжный и provider-контур не используется.'
+              : 'Списание и бронь не выполняются до подтверждения.'}
+          </span>
         </div>
         <label className="game-create-form__check">
           <input
