@@ -7,9 +7,11 @@ import { promisify } from 'node:util';
 
 import { Pool } from 'pg';
 import { describe, expect, it } from 'vitest';
+import { ownedClosedSchemaLocalFixtureUrl } from './owned-closed-schema-test-target.js';
 
 import {
   LOCATION_PHOTO_MIGRATOR_PROBE_SOURCE,
+  LOCATION_PHOTO_PUBLISHED_MIGRATOR,
   locationPhotoStateSql,
   validateLocationPhotoMigratorReadback,
   validateLocationPhotoState,
@@ -192,11 +194,11 @@ describe('location photo physical PostgreSQL target guard', () => {
   });
 });
 
-const disposableUrl = ciDatabase(process.env);
+const disposableUrl = ciDatabase(process.env) ?? ownedClosedSchemaLocalFixtureUrl(process.env);
 const physical = disposableUrl ? describe.sequential : describe.skip;
 
 physical('location photo 0102 closed profile on disposable PostgreSQL 16', () => {
-  it('executes 105 to 106 and rejects canonical catalog tampering', async () => {
+  it('keeps the current runner compatible with the frozen 0102 package and rejects catalog tampering', async () => {
     const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
     const database = `photo_0102_${suffix}`;
     const roles: Roles = {
@@ -221,18 +223,51 @@ physical('location photo 0102 closed profile on disposable PostgreSQL 16', () =>
       targetUrl.pathname = `/${database}`;
       target = new Pool({ connectionString: targetUrl.toString(), max: 2 });
 
+      // Immutable4256 identity and current-runner forward compatibility are separate claims.
+      // Never mix two historical entrypoints with the current dependency closure and call
+      // that execution of the published image. Its Docker image remains pinned independently.
+      expect(LOCATION_PHOTO_PUBLISHED_MIGRATOR.sourceSha).toBe(
+        '4256e733a1f904d051a96492645f5767e4346ce1',
+      );
+      const historicalTree = await promisify(execFile)(
+        'git',
+        ['--no-replace-objects', 'rev-parse', '4256e733a1f904d051a96492645f5767e4346ce1^{tree}'],
+        { cwd: root },
+      );
+      expect(historicalTree.stdout.trim()).toBe(LOCATION_PHOTO_PUBLISHED_MIGRATOR.sourceTree);
       const publishedSources = await Promise.all(
-        ['apps/migrator/src/main.ts', 'apps/migrator/src/migration-runner.ts'].map(async (path) => {
+        [
+          [
+            'apps/migrator/src/main.ts',
+            '2e1f43510601ab03af64d5685be6c628e949bd60',
+            '07d393729ac58dd75d99aea33a2a3647a732480d1d3d655010891bf207ec6035',
+          ],
+          [
+            'apps/migrator/src/migration-runner.ts',
+            '5c2c9094fd2321f747db37f53b1762f118781d2c',
+            'c7996d93c7e6aa61f0ea5af6a72189db0fd2c3d2f655aae217f7c87dacfc430e',
+          ],
+        ].map(async ([path, expectedBlob, expectedSha256]) => {
           const result = await promisify(execFile)(
             'git',
-            ['show', `4256e733a1f904d051a96492645f5767e4346ce1:${path}`],
+            ['--no-replace-objects', 'show', `4256e733a1f904d051a96492645f5767e4346ce1:${path}`],
             { cwd: root, maxBuffer: 1024 * 1024 },
           );
-          return [path, result.stdout] as const;
+          const blob = await promisify(execFile)(
+            'git',
+            [
+              '--no-replace-objects',
+              'rev-parse',
+              `4256e733a1f904d051a96492645f5767e4346ce1:${path}`,
+            ],
+            { cwd: root },
+          );
+          expect(blob.stdout.trim()).toBe(expectedBlob);
+          expect(createHash('sha256').update(result.stdout).digest('hex')).toBe(expectedSha256);
+          return path;
         }),
       );
-      for (const [path, published] of publishedSources)
-        expect(await readFile(resolve(root, path))).toEqual(Buffer.from(published));
+      expect(publishedSources).toHaveLength(2);
 
       const baseline = await runOrdinaryMigrator(fixture105, targetUrl.toString());
       expect(baseline.stdout).not.toContain(migration);
