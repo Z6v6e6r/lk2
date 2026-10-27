@@ -255,6 +255,18 @@ delegation claims with the action (or reject cross-action key reuse at the recei
 
 ## Verification and non-goals
 
+A dedicated PostgreSQL verifier (`apps/api/src/games/game-commercial-create-warn-postgres.test.ts`,
+enabled only with an explicitly supplied query-free loopback `*_verify`
+`GAME_COMMERCIAL_CREATE_TEST_DATABASE_URL`) executes the composed HTTP boundary against a disposable
+schema: it proves the `PROVISIONING` draft, the `PENDING` create operation with `completed_at` null,
+the single `game.provisioning.advance.v1` command, the organizer-only participation, zero
+reservations/card projections, the `game.created.v1` + `game.provisioning.requested.v1` outbox facts
+with no publish, idempotent same-key replay with no duplicate rows, the changed-body conflict, the
+actor-scoped `UNKNOWN` readback and the organizer/tenant/revision scoping of the draft target. It was
+run LOCAL against a disposable `postgres:16-alpine` database with the full migration chain; the
+existing lifecycle PostgreSQL verifier also passed on the same database. CI skips it by default
+because it requires that explicitly supplied disposable database URL.
+
 Focused LOCAL tests cover: advisory WARN create (game created, no booking, no receipt, owner
 never called), authoritative price echo mismatch/expiry, managed mode refusal, idempotent
 repeat, writer rejection mapping, owner `PENDING`/`UNKNOWN`/`REJECTED`, quote failure
