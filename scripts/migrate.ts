@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { assertClosedApplicationMigrationsNotPending } from './closed-schema-migration-guard.js';
 
 import {
   assertMigrationExecutionAllowed,
@@ -70,6 +71,7 @@ try {
     )
   )
     throw new Error('NOTIFICATION_MIGRATION_CONTROLLER_REQUIRED');
+  assertClosedApplicationMigrationsNotPending({ applied, packaged: packagedMigrations });
 
   const appliedFilenames = new Set(applied.map((entry) => entry.filename));
   const emptyDatabaseCatalogVerified =

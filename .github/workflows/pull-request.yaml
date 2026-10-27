@@ -237,6 +237,12 @@ jobs:
           # Leave bounded time for the full suite and reporters, plus supervisor cleanup.
           CI_TEST_WATCHDOG_SECONDS: '600'
         run: scripts/run-ci-tests-with-diagnostics.sh
+      - name: Verify closed 0103 and 0104 migration modes on PostgreSQL 16
+        timeout-minutes: 3
+        env:
+          CLOSED_SINGLE_MIGRATION_PG_TESTS: '1'
+          CLOSED_SINGLE_MIGRATION_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: npx vitest run apps/migrator/src/closed-single-migration.pg.test.ts --maxWorkers=1
       - name: Upload test and coverage diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -20,7 +20,7 @@
  * `@phub/api-contracts` types are an ignored build artifact, so these readers stay tolerant of a
  * deployment whose generated types lag the public contract. Reconcile with C1 if the shape changes.
  */
-import type { GameJoinPriceConsent } from './game-join-attempt.js';
+import { GAME_JOIN_ATTEMPT_QUIET_MS, type GameJoinPriceConsent } from './game-join-attempt.js';
 
 export type GameJoinOperationStatus =
   'ACCEPTED' | 'PROCESSING' | 'UNKNOWN' | 'SUCCEEDED' | 'FAILED';
@@ -82,11 +82,14 @@ export type GameJoinFlowState =
   | { readonly kind: 'NEEDS_SUBSCRIPTION'; readonly message: string }
   | {
       readonly kind: 'NEEDS_CONSENT';
+      readonly expiresAt: string;
+      readonly revision: number;
       readonly consent: GameJoinPriceConsent;
       readonly subscriptionInstanceId: string;
       readonly message: string;
     }
   | { readonly kind: 'DISPATCHING' }
+  | { readonly kind: 'CONFIRMED_UPDATING' }
   | {
       readonly kind: 'WAIT_FOR_RECONCILIATION';
       readonly reason: 'UNKNOWN' | 'OWNER_PENDING' | 'UNVERIFIED' | 'RECOVERY' | 'UNCERTAIN';
@@ -188,13 +191,18 @@ function readCommercial(value: unknown): GameJoinOperationCommercialView | null 
   if (!isRecord(value)) return null;
   const attemptState = readAttemptState(value.attemptState);
   if (!attemptState) return null;
-  const receipt = isRecord(value.receipt)
-    ? {
-        provider: 'VIVA' as const,
-        status: 'CONFIRMED' as const,
-        confirmedAt: isString(value.receipt.confirmedAt) ? value.receipt.confirmedAt : '',
-      }
-    : null;
+  const receipt =
+    isRecord(value.receipt) &&
+    value.receipt.provider === 'VIVA' &&
+    value.receipt.status === 'CONFIRMED' &&
+    isString(value.receipt.confirmedAt) &&
+    Number.isFinite(Date.parse(value.receipt.confirmedAt))
+      ? {
+          provider: 'VIVA' as const,
+          status: 'CONFIRMED' as const,
+          confirmedAt: value.receipt.confirmedAt,
+        }
+      : null;
   return {
     attemptState,
     receipt,
@@ -433,6 +441,20 @@ export function classifyGameJoinOperation(
   const { operation } = result;
   if (operation.status === 'FAILED') {
     const code = operation.error?.code ?? 'GAME_OPERATION_FAILED';
+    if (
+      options.paid &&
+      [
+        'GAME_SERVICE_BLOCKED',
+        'GAME_PAYMENT_REQUIRED',
+        'GAME_SUBSCRIPTION_SELECTION_REQUIRED',
+        'GAME_OPERATION_NOT_FOUND',
+        'GAME_RESERVATION_EXPIRED',
+        'GAME_RESERVATION_NOT_FOUND',
+      ].includes(code)
+    ) {
+      const plan = classifyGameJoinErrorCode(code, options);
+      return { state: plan.state, custody: plan.custody, trustedSuccess: false };
+    }
     if (code === 'GAME_RECONCILIATION_REQUIRED' || code === 'GAME_OWNER_UNAVAILABLE') {
       return {
         state: waitingState('UNKNOWN', 5, RECOVERY_MESSAGE),
@@ -546,9 +568,9 @@ export function classifyGameJoinErrorCode(
     case 'GAME_RESERVATION_EXPIRED':
     case 'GAME_RESERVATION_NOT_FOUND':
       return {
-        state: { kind: 'CHECKING_CONDITIONS', reason: 'PRICE_CHANGED' },
-        custody: 'DISCARD',
-        reloadConditions: true,
+        state: waitingState('UNKNOWN', 5),
+        custody: 'KEEP',
+        reloadConditions: false,
       };
     case 'GAME_REVISION_CONFLICT':
       return {
@@ -582,11 +604,12 @@ export function classifyGameJoinErrorCode(
       };
     case 'GAME_OPERATION_NOT_FOUND':
       return {
-        state: failedState(
-          code,
-          'Сервер не нашёл сохранённую операцию. Запись не подтверждена — начните заново.',
+        state: waitingState(
+          'UNKNOWN',
+          5,
+          'Сервер пока не нашёл исходную операцию. Сохранили её ключ; новая запись и повторная оплата недоступны до подтверждения результата.',
         ),
-        custody: 'DISCARD',
+        custody: 'KEEP',
         reloadConditions: false,
       };
     case 'GAME_COMMERCIAL_JOIN_UNCERTAIN':
@@ -603,6 +626,62 @@ export function classifyGameJoinErrorCode(
         reloadConditions: false,
       };
   }
+}
+
+export interface GameJoinNotFoundPlan {
+  readonly state: GameJoinFlowState;
+  /** `true` only when the attempt has been quiet long enough to close it without hiding a write. */
+  readonly release: boolean;
+  /** Remaining quiet time while custody must still be kept. */
+  readonly retryAfterSeconds: number;
+}
+
+const NOT_FOUND_WAITING_MESSAGE =
+  'Сервер пока не нашёл исходную операцию. Ключ сохранён; проверяем результат — повторная оплата недоступна.';
+const NOT_FOUND_RELEASED_MESSAGE =
+  'Сервер не нашёл операцию по сохранённому ключу: подтверждённой записи нет. Исходная попытка закрыта; чтобы записаться, проверьте условия и подтвердите стоимость заново.';
+
+/**
+ * Product rule for a readback that answered `GAME_OPERATION_NOT_FOUND` (#453/#466 open rule).
+ *
+ * A GET can overtake the original POST or run while another tab is still dispatching, so absence is
+ * not proof by itself. Custody is released only after the attempt has been quiet for
+ * `GAME_JOIN_ATTEMPT_QUIET_MS`: from `savedAt` when no POST was ever marked, otherwise from the
+ * durable `dispatchStartedAt`. Before that the original key stays authoritative and only readback is
+ * offered; after it, the flow returns to a fresh conditions/consent check. Releasing never dispatches.
+ */
+export function classifyGameJoinReadbackNotFound(
+  attempt: {
+    readonly state: string;
+    readonly savedAt: string;
+    readonly dispatchStartedAt?: string;
+  },
+  options: { readonly now?: Date; readonly quietMs?: number } = {},
+): GameJoinNotFoundPlan {
+  const quietMs = options.quietMs ?? GAME_JOIN_ATTEMPT_QUIET_MS;
+  const now = (options.now ?? new Date()).getTime();
+  const quietSince = Date.parse(attempt.dispatchStartedAt ?? attempt.savedAt);
+  const validWindow = Number.isSafeInteger(quietMs) && quietMs >= 0;
+  const quiet =
+    attempt.state !== 'SUCCEEDED' &&
+    Number.isFinite(quietSince) &&
+    validWindow &&
+    now - quietSince >= quietMs;
+  if (quiet) {
+    return {
+      state: failedState('GAME_OPERATION_NOT_FOUND', NOT_FOUND_RELEASED_MESSAGE),
+      release: true,
+      retryAfterSeconds: 0,
+    };
+  }
+  const remainingMs =
+    Number.isFinite(quietSince) && validWindow ? Math.max(0, quietMs - (now - quietSince)) : 0;
+  const retryAfterSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+  return {
+    state: waitingState('UNVERIFIED', retryAfterSeconds, NOT_FOUND_WAITING_MESSAGE),
+    release: false,
+    retryAfterSeconds,
+  };
 }
 
 /** Structural reader for the SDK's `GameJoinAttemptUncertainError` (lost response / owner 5xx). */
@@ -633,6 +712,8 @@ export type GameJoinFlowEvent =
   | { readonly type: 'CHECK_CONDITIONS'; readonly reason: 'USER_REQUEST' | 'PRICE_CHANGED' }
   | {
       readonly type: 'CONDITIONS_CONSENT_REQUIRED';
+      readonly expiresAt: string;
+      readonly revision: number;
       readonly consent: GameJoinPriceConsent;
       readonly subscriptionInstanceId: string;
     }
@@ -668,6 +749,8 @@ export function reduceGameJoinFlow(
       return {
         kind: 'NEEDS_CONSENT',
         consent: event.consent,
+        expiresAt: event.expiresAt,
+        revision: event.revision,
         subscriptionInstanceId: event.subscriptionInstanceId,
         message: '',
       };
@@ -684,6 +767,8 @@ export function reduceGameJoinFlow(
         return {
           kind: 'NEEDS_CONSENT',
           consent: state.consent,
+          expiresAt: state.expiresAt,
+          revision: state.revision,
           subscriptionInstanceId: state.subscriptionInstanceId,
           message: PRICE_CHANGED_MESSAGE,
         };
@@ -717,6 +802,7 @@ export function gameJoinFlowBlocksPurchase(state: GameJoinFlowState): boolean {
     state.kind === 'NEEDS_SUBSCRIPTION' ||
     state.kind === 'NEEDS_CONSENT' ||
     state.kind === 'DISPATCHING' ||
+    state.kind === 'CONFIRMED_UPDATING' ||
     state.kind === 'WAIT_FOR_RECONCILIATION'
   );
 }
@@ -739,6 +825,8 @@ export function gameJoinBlockedLabel(flow: GameJoinFlowState): string | null {
       return 'Отправляем запись…';
     case 'WAIT_FOR_RECONCILIATION':
       return 'Проверяем статус оплаты…';
+    case 'CONFIRMED_UPDATING':
+      return 'Запись подтверждена, данные обновляются…';
     default:
       return null;
   }

@@ -1,0 +1,62 @@
+{
+  "schema": "PHUB_CLOSED_APPLICATION_MIGRATIONS_0103_0104_V1",
+  "postgresMajor": 16,
+  "packagedCount": 108,
+  "packagedLedgerSha256": "3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9",
+  "profiles": {
+    "game_start_0103": {
+      "filename": "0103_game_start_notification_scenarios.sql",
+      "checksum": "3b3a0404ddd7c9a88e53db5f49826ef381352287038980e44a7103f3515abdf4",
+      "preCount": 106,
+      "postCount": 107
+    },
+    "subject_link_0104": {
+      "filename": "0104_identity_external_subject_link_commands.sql",
+      "checksum": "5a1ad1dcc505234c76a5db6d09faeb2dca76463939b87fe41e048c56af033931",
+      "preCount": 107,
+      "postCount": 108
+    }
+  },
+  "checkpoints": {
+    "106": {
+      "ledgerSha256": "ff74c193b5e5253f929818b1550d0e5c0264a9818cb0ee5437d49d5aa043904e",
+      "catalogs": {
+        "DORMANT": {
+          "sha256": "798522c0a862bd439c95141559cfb849d548e8b8df371ffa6c2e26986f6ec1e1",
+          "rowCount": 299
+        },
+        "SCENARIO_EDITOR_V1": {
+          "sha256": "8f7818af23ac7d16bd6d7c4a058cbd4e744e4fc3fe90c6654248522b17bb0abf",
+          "rowCount": 299
+        }
+      }
+    },
+    "107": {
+      "ledgerSha256": "6146219b31e4720016bb81a0018f76609c7fc515603e4aac405f6a2342e66d77",
+      "catalogs": {
+        "DORMANT": {
+          "sha256": "821a9baab324458041b3e3c1b10eb5adeb0057c5aa0bc91cb9b7cefef19f2f0a",
+          "rowCount": 370
+        },
+        "SCENARIO_EDITOR_V1": {
+          "sha256": "975385e6db42685ed893b5b208d2e9b188104cfab3b2a305bb154f248b496066",
+          "rowCount": 370
+        }
+      }
+    },
+    "108": {
+      "ledgerSha256": "3289f5f7021efce6da670cb7ecb848262c2e4e7b39c12aee91d05ff6583fe9e9",
+      "catalogs": {
+        "DORMANT": {
+          "sha256": "1ca970d7f57f3b2adb7949af59b6e138cf14dda63945ab937100ccbe632d9b9c",
+          "rowCount": 406
+        },
+        "SCENARIO_EDITOR_V1": {
+          "sha256": "8ff7694fa51909cb6f1021a6b06a3fb07ef2f1138f4ca3822ba1cedd5bc851f7",
+          "rowCount": 406
+        }
+      }
+    }
+  },
+  "catalogSchema": "PHUB_CLOSED_APPLICATION_CATALOG_V1"
+}
