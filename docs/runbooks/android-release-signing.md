@@ -105,12 +105,16 @@ and activation approved by the owner after independent review.
    `SHA256SUMS` inside the artifact).
 3. Verify the artifact: `sha256sum -c SHA256SUMS` matches, and the certificate SHA256 equals the
    approved release certificate recorded above.
-4. Device matrix uses an installable APK derived from that exact AAB, not a debug build:
+4. Device matrix uses an installable APK derived from that exact AAB and signed with the same
+   release key, not a debug build. bundletool cannot recover the key from the bundle, so pass the
+   keystore explicitly and let it prompt for the passwords (nothing enters shell history):
 
 ```sh
-bundletool build-apks --bundle app-release.aab --output rc.apks --mode=universal --overwrite
-unzip -j rc.apks universal.apk
-sha256sum universal.apk   # record this too
+bundletool build-apks --bundle app-release.aab --output rc.apks --mode=universal \
+  --ks release-upload.jks --ks-key-alias padlhub-release
+unzip -o rc.apks universal.apk
+sha256sum universal.apk                                  # record this too
+apksigner verify --print-certs universal.apk             # must equal the recorded release cert
 adb install -r universal.apk
 ```
 
