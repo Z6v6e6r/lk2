@@ -5,6 +5,7 @@ import { PadlHubApiClient } from '@phub/api-sdk';
 import { DEFAULT_PROFILE_PRIVACY_SETTINGS } from '@phub/domain';
 
 import { createBrowserAuthGateway } from './auth-gateway.js';
+import type { GameCommandResult } from './auth-gateway.js';
 
 function requestUrl(input: Parameters<typeof fetch>[0]): string {
   if (typeof input === 'string') return input;
@@ -3890,6 +3891,62 @@ describe('browser auth gateway', () => {
       'Bearer expired-padlhub-token',
       'Bearer refreshed-padlhub-token',
     ]);
+  });
+});
+
+describe('managed commercial CREATE gateway capability', () => {
+  it('forwards the caller-owned createPaidGame attempt to the client exactly once', async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(() =>
+      Promise.reject(new Error('network prohibited')),
+    );
+    const outcome = {
+      commandId: '00000000-0000-4000-8000-000000000010',
+      operation: {
+        id: '00000000-0000-4000-8000-000000000010',
+        type: 'CREATE_GAME' as const,
+        status: 'UNKNOWN' as const,
+        gameId: '00000000-0000-4000-8000-000000000011',
+        aggregateRevision: 1,
+        createdAt: '2026-08-26T10:00:00.000Z',
+        updatedAt: '2026-08-26T10:00:00.000Z',
+        nextAction: { type: 'WAIT_FOR_RECONCILIATION' as const, retryAfterSeconds: 5 },
+        error: null,
+        commercial: null,
+      },
+      game: null,
+      replayed: false,
+    } satisfies GameCommandResult;
+    const createPaidGame = vi
+      .spyOn(PadlHubApiClient.prototype, 'createPaidGame')
+      .mockResolvedValue(outcome);
+    try {
+      const gateway = createBrowserAuthGateway({
+        baseUrl: 'https://api.synthetic.invalid',
+        tenantKey: 'synthetic',
+        appVersion: 'test',
+        fetchImplementation,
+      });
+      const request = {
+        title: 'Платная игра',
+        kind: 'FRIENDLY' as const,
+        visibility: 'PUBLIC' as const,
+        stationId: '00000000-0000-4000-8000-000000000001',
+        startsAt: '2027-08-15T15:00:00.000Z',
+        endsAt: '2027-08-15T16:30:00.000Z',
+        timezone: 'Europe/Moscow',
+        capacity: 4 as const,
+        levelRange: null,
+        paymentMode: 'SPLIT' as const,
+        waitlistEnabled: true,
+      };
+      await expect(gateway.createPaidGame?.(request, 'managed-create-key-0001')).resolves.toBe(
+        outcome,
+      );
+      expect(createPaidGame).toHaveBeenCalledExactlyOnceWith(request, 'managed-create-key-0001');
+      expect(fetchImplementation).not.toHaveBeenCalled();
+    } finally {
+      createPaidGame.mockRestore();
+    }
   });
 });
 

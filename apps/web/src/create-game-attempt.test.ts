@@ -3,10 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { CreateGameRequest } from './auth-gateway.js';
 import {
   clearCreateGameAttempt,
+  CREATE_GAME_ATTEMPT_LEDGER_VERSION,
   createGameAttemptStorageKey,
   loadCreateGameAttempt,
   loadCreateGameAttemptLedger,
   prepareCreateGameAttempt,
+  recordCreateGameConfirmation,
   resolveCreateGameAttempt,
   type CreateGameAttemptLockManager,
   type PendingCreateGameAttempt,
@@ -27,6 +29,7 @@ const otherUser = {
 const attemptId1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
 const attemptId2 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
 const gameId1 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1';
+const operationId1 = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1';
 
 function payload(overrides: Partial<CreateGameRequest> = {}): CreateGameRequest {
   return {
@@ -91,6 +94,21 @@ async function pending(
     storage,
     locks,
     ids(options.attemptId ?? attemptId1, options.key ?? 'create-logical-attempt-key-0001'),
+  );
+  expect(result.state).toBe('PENDING');
+  return result as PendingCreateGameAttempt;
+}
+
+async function pendingPaid(
+  storage: Storage,
+  locks: CreateGameAttemptLockManager,
+): Promise<PendingCreateGameAttempt> {
+  const result = await prepareCreateGameAttempt(
+    principal,
+    payload({ paymentMode: 'SPLIT' }),
+    storage,
+    locks,
+    ids(attemptId1, 'create-logical-attempt-key-0001'),
   );
   expect(result.state).toBe('PENDING');
   return result as PendingCreateGameAttempt;
@@ -212,12 +230,17 @@ describe('durable create game logical-attempt ledger', () => {
     expect(() => loadCreateGameAttempt(principal, storage)).toThrowError(
       expect.objectContaining({ code: 'ATTEMPT_MALFORMED' }),
     );
+    // An unknown future envelope fails closed instead of being interpreted.
+    storage.setItem(key, JSON.stringify({ version: CREATE_GAME_ATTEMPT_LEDGER_VERSION + 1 }));
+    expect(() => loadCreateGameAttempt(principal, storage)).toThrowError(
+      expect.objectContaining({ code: 'ATTEMPT_MALFORMED' }),
+    );
 
     const attempt = await pending(memoryStorage(), serialLocks());
     storage.setItem(
       key,
       JSON.stringify({
-        version: 3,
+        version: CREATE_GAME_ATTEMPT_LEDGER_VERSION,
         activeAttempt: { ...attempt, actorUserId: otherUser.userId },
         resolvedAttempts: [],
       }),
@@ -225,6 +248,105 @@ describe('durable create game logical-attempt ledger', () => {
     expect(() => loadCreateGameAttempt(principal, storage)).toThrowError(
       expect.objectContaining({ code: 'ATTEMPT_FOREIGN_PRINCIPAL' }),
     );
+  });
+
+  it('keeps a previous-envelope free attempt recoverable and upgrades it on the next write', async () => {
+    const storage = memoryStorage();
+    const locks = serialLocks();
+    const attempt = await pending(memoryStorage(), serialLocks());
+    const key = createGameAttemptStorageKey(principal);
+    // A ledger written by the previous release (version 3) must not strand the original key. It can
+    // only contain what that release could write: a free `NO_PAYMENT` pending attempt.
+    storage.setItem(
+      key,
+      JSON.stringify({
+        version: CREATE_GAME_ATTEMPT_LEDGER_VERSION - 1,
+        activeAttempt: attempt,
+        resolvedAttempts: [],
+      }),
+    );
+    expect(loadCreateGameAttempt(principal, storage)).toEqual(attempt);
+    const replay = await prepareCreateGameAttempt(principal, payload(), storage, locks);
+    expect(replay).toMatchObject({
+      state: 'PENDING',
+      idempotencyKey: attempt.idempotencyKey,
+    });
+    // The next writer upgrades the envelope instead of re-emitting the legacy version.
+    await resolveCreateGameAttempt(principal, attempt, gameId1, storage, locks);
+    expect(loadCreateGameAttemptLedger(principal, storage).version).toBe(
+      CREATE_GAME_ATTEMPT_LEDGER_VERSION,
+    );
+
+    // A legacy envelope can never smuggle the managed confirmation state or a paid payload.
+    storage.setItem(
+      key,
+      JSON.stringify({
+        version: CREATE_GAME_ATTEMPT_LEDGER_VERSION - 1,
+        activeAttempt: {
+          ...attempt,
+          state: 'PENDING_CONFIRMATION',
+          gameId: gameId1,
+          operationId: operationId1,
+          paymentMode: 'SPLIT',
+        },
+        resolvedAttempts: [],
+      }),
+    );
+    expect(() => loadCreateGameAttempt(principal, storage)).toThrowError(
+      expect.objectContaining({ code: 'ATTEMPT_MALFORMED' }),
+    );
+    storage.setItem(
+      key,
+      JSON.stringify({
+        version: CREATE_GAME_ATTEMPT_LEDGER_VERSION - 1,
+        activeAttempt: { ...attempt, payload: { ...attempt.payload, paymentMode: 'SPLIT' } },
+        resolvedAttempts: [],
+      }),
+    );
+    expect(() => loadCreateGameAttempt(principal, storage)).toThrowError(
+      expect.objectContaining({ code: 'ATTEMPT_MALFORMED' }),
+    );
+  });
+
+  it('refuses managed-only fields on a free attempt at the write boundary', async () => {
+    await expect(
+      prepareCreateGameAttempt(
+        principal,
+        { ...payload(), subscriptionInstanceId: gameId1 },
+        memoryStorage(),
+        serialLocks(),
+      ),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_MALFORMED' });
+    await expect(
+      prepareCreateGameAttempt(
+        principal,
+        { ...payload(), priceConsent: { amountMinor: 100, currency: 'RUB' } },
+        memoryStorage(),
+        serialLocks(),
+      ),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_MALFORMED' });
+  });
+
+  it('refuses to overwrite an accepted operation identity with a different one', async () => {
+    const storage = memoryStorage();
+    const locks = serialLocks();
+    const attempt = await pendingPaid(storage, locks);
+    await recordCreateGameConfirmation(
+      principal,
+      attempt,
+      { gameId: gameId1, operationId: operationId1 },
+      storage,
+      locks,
+    );
+    await expect(
+      recordCreateGameConfirmation(
+        principal,
+        attempt,
+        { gameId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2', operationId: operationId1 },
+        storage,
+        locks,
+      ),
+    ).rejects.toMatchObject({ code: 'ATTEMPT_STATE_CHANGED' });
   });
 
   it('fails closed when the cross-tab lock is unavailable', async () => {
