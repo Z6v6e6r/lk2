@@ -25,29 +25,56 @@ jobs:
       - run: test -d apps/mobile/android || { echo 'Generate and review the native Android project first.'; exit 1; }
       - run: npm ci
       - run: npm run build -w @phub/mobile && npm run cap:sync -w @phub/mobile
+      # The keystore is decoded after the generated mobile assets are synced, and only the steps that
+      # need it receive the material. `runs-on: ubuntu-latest` is an ephemeral runner; the cleanup
+      # step additionally removes the keystore so this does not rely on that assumption silently.
       - name: Prepare release signing material (fails closed)
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+          ANDROID_RELEASE_ACTIVATION_RECORD: ${{ secrets.ANDROID_RELEASE_ACTIVATION_RECORD }}
         run: |
           set -euo pipefail
           missing=()
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD ANDROID_RELEASE_CERT_SHA256 ANDROID_RELEASE_ACTIVATION_RECORD; do
             if [ -z "${!name:-}" ]; then
               missing+=("$name")
             fi
           done
           if [ "${#missing[@]}" -ne 0 ]; then
-            printf 'Android release signing secrets are absent: %s\n' "${missing[*]}" >&2
-            echo 'Add them as environment secrets of the GitHub environment mobile-android, then dispatch this workflow.' >&2
+            printf 'Android release signing inputs are absent: %s\n' "${missing[*]}" >&2
+            echo 'Add all six as environment secrets of the GitHub environment mobile-android, then dispatch this workflow.' >&2
             echo 'See docs/runbooks/android-release-signing.md. Refusing to build an unsigned release.' >&2
             exit 1
           fi
-          keystore_dir="$RUNNER_TEMP/android-release-keystore"
-          rm -rf "$keystore_dir"
-          install -d -m 0700 "$keystore_dir"
+          normalize_fingerprint() {
+            printf '%s' "$1" | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]'
+          }
+          expected_cert_sha256="$(normalize_fingerprint "$ANDROID_RELEASE_CERT_SHA256")"
+          if ! printf '%s' "$expected_cert_sha256" | grep -Eq '^[0-9A-F]{64}$'; then
+            echo 'ANDROID_RELEASE_CERT_SHA256 must be the SHA-256 fingerprint of the owner-approved release certificate.' >&2
+            echo 'See docs/runbooks/android-release-signing.md. Refusing to build an unpinned release.' >&2
+            exit 1
+          fi
+          case "$ANDROID_RELEASE_ACTIVATION_RECORD" in
+            *$'\n'* | *$'\r'*)
+              echo 'ANDROID_RELEASE_ACTIVATION_RECORD must be a single-line approval reference.' >&2
+              echo 'See docs/runbooks/android-release-signing.md. Refusing to build an unrecorded release.' >&2
+              exit 1
+              ;;
+          esac
+          keystore_dir="$(mktemp -d "$RUNNER_TEMP/android-release-keystore.XXXXXX")"
+          chmod 0700 "$keystore_dir"
+          cleanup_failed_step() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              rm -rf "$keystore_dir"
+            fi
+          }
+          trap cleanup_failed_step EXIT
           keystore_file="$keystore_dir/release.jks"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode >"$keystore_file"
           chmod 0600 "$keystore_file"
@@ -62,10 +89,32 @@ jobs:
             echo 'Fix the mobile-android environment secrets. See docs/runbooks/android-release-signing.md.' >&2
             exit 1
           fi
-          cert_sha256="$(printf '%s\n' "$keystore_details" | grep -Eo '([0-9A-F]{2}:){31}[0-9A-F]{2}' | head -n 1 || true)"
+          observed_cert_sha256="$(printf '%s\n' "$keystore_details" | grep -Eo '([0-9A-F]{2}:){31}[0-9A-F]{2}' | head -n 1 || true)"
+          if [ -z "$observed_cert_sha256" ]; then
+            echo 'Could not read the release certificate SHA-256 from the decoded keystore.' >&2
+            echo 'Refusing to build or record an unanchored release. See docs/runbooks/android-release-signing.md.' >&2
+            exit 1
+          fi
+          observed_cert_sha256="$(normalize_fingerprint "$observed_cert_sha256")"
+          android_debug_cert_sha256='2207BD6EB90AEFE44DBD043A9CFACD17541313BEC3A5958D051BE807E00BEF93'
+          if [ "$observed_cert_sha256" = "$android_debug_cert_sha256" ] ||
+            printf '%s\n' "$keystore_details" | grep -q 'CN=Android Debug'; then
+            echo 'The decoded keystore is the Android debug certificate; it is never release material.' >&2
+            echo 'Refusing to build a release. See docs/runbooks/android-release-signing.md.' >&2
+            exit 1
+          fi
+          if [ "$observed_cert_sha256" != "$expected_cert_sha256" ]; then
+            printf 'Release signing key mismatch: ANDROID_RELEASE_CERT_SHA256 expects %s but the keystore certificate is %s.\n' \
+              "$expected_cert_sha256" "$observed_cert_sha256" >&2
+            echo 'Refusing to build a release with a key that is not the owner-approved release key.' >&2
+            echo 'See docs/runbooks/android-release-signing.md.' >&2
+            exit 1
+          fi
           printf 'ANDROID_KEYSTORE_PATH=%s\n' "$keystore_file" >>"$GITHUB_ENV"
-          printf 'ANDROID_RELEASE_CERT_SHA256=%s\n' "${cert_sha256:-UNKNOWN}" >>"$GITHUB_ENV"
-          echo 'Release signing material decoded and validated; the keystore stays in the runner temp directory.'
+          printf 'ANDROID_RELEASE_CERT_SHA256=%s\n' "$expected_cert_sha256" >>"$GITHUB_ENV"
+          printf 'ANDROID_RELEASE_OBSERVED_CERT_SHA256=%s\n' "$observed_cert_sha256" >>"$GITHUB_ENV"
+          printf 'ANDROID_RELEASE_ACTIVATION_RECORD=%s\n' "$ANDROID_RELEASE_ACTIVATION_RECORD" >>"$GITHUB_ENV"
+          echo 'Release signing material decoded, validated and matched to the owner-approved certificate anchor.'
       - name: Build signed Android release bundle
         working-directory: apps/mobile/android
         env:
@@ -82,6 +131,45 @@ jobs:
             echo "Expected signed AAB at $aab_path is missing; refusing to upload." >&2
             exit 1
           fi
+          normalize_fingerprint() {
+            printf '%s' "$1" | tr -d ':\r\n ' | tr '[:lower:]' '[:upper:]'
+          }
+          expected_cert_sha256="$(normalize_fingerprint "${ANDROID_RELEASE_CERT_SHA256:-}")"
+          if ! printf '%s' "$expected_cert_sha256" | grep -Eq '^[0-9A-F]{64}$'; then
+            echo 'ANDROID_RELEASE_CERT_SHA256 is missing for the produced artifact; refusing to upload.' >&2
+            exit 1
+          fi
+          jarsigner_output="$(jarsigner -verify "$aab_path" 2>&1 || true)"
+          if printf '%s\n' "$jarsigner_output" | grep -qi 'jar is unsigned'; then
+            echo 'The produced AAB is unsigned; refusing to upload it as a signed release candidate.' >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$jarsigner_output" | grep -qi 'jar verified'; then
+            echo 'jarsigner did not verify the produced AAB; refusing to upload.' >&2
+            exit 1
+          fi
+          aab_signer_details="$(keytool -printcert -jarfile "$aab_path" 2>&1 || true)"
+          if printf '%s\n' "$aab_signer_details" | grep -qi 'Not a signed jar file'; then
+            echo 'The produced AAB carries no signer certificate; refusing to upload.' >&2
+            exit 1
+          fi
+          signer_count="$(printf '%s\n' "$aab_signer_details" | grep -ci '^Signer #' || true)"
+          if [ "${signer_count:-0}" -ne 1 ]; then
+            echo "The produced AAB must have exactly one signer, found ${signer_count:-0}; refusing to upload." >&2
+            exit 1
+          fi
+          aab_cert_sha256="$(printf '%s\n' "$aab_signer_details" | grep -Eo '([0-9A-F]{2}:){31}[0-9A-F]{2}' | head -n 1 || true)"
+          if [ -z "$aab_cert_sha256" ]; then
+            echo 'Could not read the AAB signer certificate SHA-256; refusing to upload.' >&2
+            exit 1
+          fi
+          aab_cert_sha256="$(normalize_fingerprint "$aab_cert_sha256")"
+          if [ "$aab_cert_sha256" != "$expected_cert_sha256" ]; then
+            printf 'The produced AAB is signed by %s, not the owner-approved %s; refusing to upload.\n' \
+              "$aab_cert_sha256" "$expected_cert_sha256" >&2
+            exit 1
+          fi
+          export ANDROID_RELEASE_AAB_SIGNER_CERT_SHA256="$aab_cert_sha256"
           version_info="$(./gradlew --no-daemon -q :app:printAppVersion)"
           version_code="$(printf '%s\n' "$version_info" | sed -n 's/^versionCode=//p')"
           version_name="$(printf '%s\n' "$version_info" | sed -n 's/^versionName=//p')"
@@ -103,7 +191,11 @@ jobs:
           const info = {
             artifact: 'app-release.aab',
             artifactSha256: process.env.AAB_SHA256,
-            signingCertificateSha256: process.env.ANDROID_RELEASE_CERT_SHA256,
+            artifactSignatureVerified: true,
+            artifactSignerCertificateSha256: process.env.ANDROID_RELEASE_AAB_SIGNER_CERT_SHA256,
+            signingCertificateSha256Expected: process.env.ANDROID_RELEASE_CERT_SHA256,
+            signingCertificateSha256Observed: process.env.ANDROID_RELEASE_OBSERVED_CERT_SHA256,
+            activationRecord: process.env.ANDROID_RELEASE_ACTIVATION_RECORD,
             sourceSha: process.env.GITHUB_SHA,
             ref: process.env.GITHUB_REF_NAME,
             workflowRunId: process.env.GITHUB_RUN_ID,
@@ -120,6 +212,9 @@ jobs:
             echo "- ref: \`$GITHUB_REF_NAME\`"
             echo "- versionCode/versionName: \`$version_code\` / \`$version_name\`"
             echo "- AAB SHA256: \`$aab_sha256\`"
+            echo "- expected certificate SHA256: \`$expected_cert_sha256\`"
+            echo "- observed keystore/AAB certificate SHA256: \`${ANDROID_RELEASE_OBSERVED_CERT_SHA256}\`"
+            echo "- activation record: \`${ANDROID_RELEASE_ACTIVATION_RECORD}\`"
             echo '- Build artifact only: no store upload, GitHub Release, tag or publish step runs.'
           } >>"$GITHUB_STEP_SUMMARY"
           cat "$artifact_dir/build-info.json"
@@ -133,3 +228,8 @@ jobs:
             ${{ runner.temp }}/android-release-candidate/build-info.json
           if-no-files-found: error
           retention-days: 30
+      - name: Remove release signing material from the runner
+        if: ${{ always() }}
+        run: |
+          rm -rf "$RUNNER_TEMP"/android-release-keystore.*
+          echo 'Release keystore removed from the runner temp directory.'
