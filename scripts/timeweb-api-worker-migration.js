@@ -553,6 +553,33 @@ export function migrationCreateArgs(
         ]),
   ];
 }
+
+// Docker's classic image store reports the platform image id as the container image id, while the
+// containerd image store reports the pulled index digest for a multi-arch reference. The reviewed
+// 0102 package pins both the published index digest and the amd64 child manifest digest; the child
+// identity itself is verified separately by image() (Id, RepoDigests, revision, platform). Accept
+// either host representation, but only for the exact pinned pair.
+function sameImageId(imageId, spec) {
+  if (imageId === spec?.imageId) return true;
+  if (!spec?.locationPhoto) return false;
+  const pinned = spec.locationPhoto.operation.publishedMigrator;
+  const indexDigest = pinned.image.slice(pinned.image.indexOf('@') + 1);
+  return imageId === indexDigest;
+}
+
+function expectedContainerImage(spec) {
+  if (spec?.notification) return spec.notification.operation.migratorImage;
+  if (!spec?.locationPhoto) return MIGRATOR_IMAGE;
+  const pinned = spec.locationPhoto.operation.publishedMigrator;
+  return pinned.image;
+}
+
+function acceptedContainerImages(spec) {
+  if (!spec?.locationPhoto) return [expectedContainerImage(spec)];
+  const pinned = spec.locationPhoto.operation.publishedMigrator;
+  return [pinned.image, `ghcr.io/z6v6e6r/phub-migrator@${pinned.imageId}`];
+}
+
 export function validateMigrationContainer(v, id, operationSha, state, spec) {
   const h = v?.HostConfig,
     c = v?.Config,
@@ -600,13 +627,8 @@ export function validateMigrationContainer(v, id, operationSha, state, spec) {
     !v ||
     v.Id !== id ||
     v.Name !== `/${spec.name}` ||
-    v.Image !== spec.imageId ||
-    c?.Image !==
-      (spec?.notification
-        ? spec.notification.operation.migratorImage
-        : spec?.locationPhoto
-          ? spec.locationPhoto.operation.publishedMigrator.image
-          : MIGRATOR_IMAGE) ||
+    !sameImageId(v.Image, spec) ||
+    !acceptedContainerImages(spec).includes(c?.Image) ||
     c.User !== 'appuser' ||
     c.WorkingDir !== '/app' ||
     (!same(c.Entrypoint, k === 'migration' ? null : ['node']) &&
