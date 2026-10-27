@@ -2170,7 +2170,11 @@ describe('GamesPage paid JOIN', () => {
     render(<GamesPage gateway={api} gameId={PAID_GAME_ID} joinPrincipal={paidPrincipal} />);
     // Resolved custody is convergence evidence, not an open purchase: it must not hide JOIN.
     expect(await screen.findByRole('button', { name: 'Вступить в игру' })).toBeEnabled();
-    expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull();
+    // Recovery runs asynchronously after the detail render; wait for the discard instead of racing
+    // it immediately after the first render (this test flaked 1/692 in CI).
+    await waitFor(() =>
+      expect(loadGameJoinAttempt(paidPrincipal, window.localStorage, PAID_GAME_ID)).toBeNull(),
+    );
     expect(getPaidJoinOperation).not.toHaveBeenCalled();
     expect(api.joinPaidGame).not.toHaveBeenCalled();
   });
