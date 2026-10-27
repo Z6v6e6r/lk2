@@ -59,13 +59,22 @@ jobs:
             echo 'See docs/runbooks/android-release-signing.md. Refusing to build an unpinned release.' >&2
             exit 1
           fi
-          case "$ANDROID_RELEASE_ACTIVATION_RECORD" in
-            *$'\n'* | *$'\r'*)
-              echo 'ANDROID_RELEASE_ACTIVATION_RECORD must be a single-line approval reference.' >&2
-              echo 'See docs/runbooks/android-release-signing.md. Refusing to build an unrecorded release.' >&2
+          activation_record="$(printf '%s' "$ANDROID_RELEASE_ACTIVATION_RECORD" |
+            sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          case "$activation_record" in
+            *[[:space:]]*)
+              echo 'ANDROID_RELEASE_ACTIVATION_RECORD must be a single-line evidence reference without spaces.' >&2
+              echo 'It is evidence metadata, not an approval control. See docs/runbooks/android-release-signing.md.' >&2
               exit 1
               ;;
           esac
+          if [ "${#activation_record}" -lt 8 ] ||
+            ! printf '%s' "$activation_record" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._:/#@+=-]*$' ||
+            ! printf '%s' "$activation_record" | grep -Eq '[:/#@._=-]'; then
+            echo 'ANDROID_RELEASE_ACTIVATION_RECORD must be a meaningful, non-blank reference (>= 8 chars, identifier or URL shape, e.g. an approval URL or ticket id).' >&2
+            echo 'It is evidence metadata, not an approval control. See docs/runbooks/android-release-signing.md.' >&2
+            exit 1
+          fi
           keystore_dir="$(mktemp -d "$RUNNER_TEMP/android-release-keystore.XXXXXX")"
           chmod 0700 "$keystore_dir"
           cleanup_failed_step() {
@@ -96,6 +105,8 @@ jobs:
             exit 1
           fi
           observed_cert_sha256="$(normalize_fingerprint "$observed_cert_sha256")"
+          # Extra local-defence check for this workstation's SDK debug certificate only (debug
+          # certificates are per-machine); the portable control is the CN=Android Debug check below.
           android_debug_cert_sha256='2207BD6EB90AEFE44DBD043A9CFACD17541313BEC3A5958D051BE807E00BEF93'
           if [ "$observed_cert_sha256" = "$android_debug_cert_sha256" ] ||
             printf '%s\n' "$keystore_details" | grep -q 'CN=Android Debug'; then
@@ -113,7 +124,7 @@ jobs:
           printf 'ANDROID_KEYSTORE_PATH=%s\n' "$keystore_file" >>"$GITHUB_ENV"
           printf 'ANDROID_RELEASE_CERT_SHA256=%s\n' "$expected_cert_sha256" >>"$GITHUB_ENV"
           printf 'ANDROID_RELEASE_OBSERVED_CERT_SHA256=%s\n' "$observed_cert_sha256" >>"$GITHUB_ENV"
-          printf 'ANDROID_RELEASE_ACTIVATION_RECORD=%s\n' "$ANDROID_RELEASE_ACTIVATION_RECORD" >>"$GITHUB_ENV"
+          printf 'ANDROID_RELEASE_ACTIVATION_RECORD=%s\n' "$activation_record" >>"$GITHUB_ENV"
           echo 'Release signing material decoded, validated and matched to the owner-approved certificate anchor.'
       - name: Build signed Android release bundle
         working-directory: apps/mobile/android

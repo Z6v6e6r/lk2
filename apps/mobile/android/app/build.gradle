@@ -57,7 +57,9 @@ if (releaseSigningProblem != null) {
 }
 
 // The Android debug certificate is never valid release material, even if someone pins its
-// fingerprint as the anchor. This is the public, well-known fingerprint of the SDK debug keystore.
+// fingerprint as the anchor. The portable control is the CN=Android Debug subject check below; this
+// constant is only an extra local-defence check for this workstation's SDK debug certificate (debug
+// certificates are generated per machine) and must not be read as a universal debug fingerprint.
 def androidDebugCertificateSha256 = '2207BD6EB90AEFE44DBD043A9CFACD17541313BEC3A5958D051BE807E00BEF93'
 def normalizeCertificateSha256 = { String value ->
     if (value == null) {
