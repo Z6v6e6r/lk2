@@ -1,9 +1,10 @@
 apply plugin: 'com.android.application'
 
-// Release signing is fail closed. A release build never falls back to debug signing and never
-// produces an unsigned artifact: when the required inputs are absent, any release packaging or
-// signing task fails with one actionable message. Inputs come from the environment (CI) or from a
-// gitignored apps/mobile/android/keystore.properties. See docs/runbooks/android-release-signing.md.
+// Release signing is fail closed and identity anchored: a release build never falls back to debug
+// signing, never produces an unsigned artifact and never accepts an unpinned key. Inputs come from
+// the environment (CI) or the gitignored apps/mobile/android/keystore.properties. Every release
+// packaging/signing task additionally requires ANDROID_RELEASE_CERT_SHA256, the owner-approved
+// certificate fingerprint captured outside this build. See docs/runbooks/android-release-signing.md.
 def releaseSigningPropertiesFile = rootProject.file('keystore.properties')
 def releaseSigningProperties = new Properties()
 if (releaseSigningPropertiesFile.isFile()) {
@@ -55,15 +56,82 @@ if (releaseSigningProblem != null) {
         " debug-signed release. See docs/runbooks/android-release-signing.md."
 }
 
+// The Android debug certificate is never valid release material, even if someone pins its
+// fingerprint as the anchor. This is the public, well-known fingerprint of the SDK debug keystore.
+def androidDebugCertificateSha256 = '2207BD6EB90AEFE44DBD043A9CFACD17541313BEC3A5958D051BE807E00BEF93'
+def normalizeCertificateSha256 = { String value ->
+    if (value == null) {
+        return null
+    }
+    def normalized = value.replaceAll('[:\\s]', '').toUpperCase()
+    return normalized.matches('[0-9A-F]{64}') ? normalized : null
+}
+def certificateFingerprint = { byte[] encodedCertificate ->
+    def digest = java.security.MessageDigest.getInstance('SHA-256').digest(encodedCertificate)
+    return digest.collect { digestByte -> String.format('%02X', digestByte) }.join(':')
+}
+def observedReleaseCertificate = {
+    def configuredKeyStoreTypes = [java.security.KeyStore.getDefaultType(), 'PKCS12', 'JKS']
+    for (keyStoreType in configuredKeyStoreTypes) {
+        try {
+            def releaseKeyStore = java.security.KeyStore.getInstance(keyStoreType)
+            configuredReleaseKeystore.withInputStream { stream ->
+                releaseKeyStore.load(stream, releaseSigningValues.storePassword.toCharArray())
+            }
+            def releaseCertificate = releaseKeyStore.getCertificate(releaseSigningValues.keyAlias)
+            if (releaseCertificate != null) {
+                return releaseCertificate
+            }
+        } catch (Exception ignored) {
+            // Try the next keystore type; the caller reports the final failure.
+        }
+    }
+    return null
+}
+def releaseIdentityProblem = {
+    if (releaseSigningProblem != null) {
+        return releaseSigningProblem
+    }
+    def expectedCertificateSha256 = normalizeCertificateSha256(System.getenv('ANDROID_RELEASE_CERT_SHA256'))
+    if (expectedCertificateSha256 == null) {
+        return "Android release signing is missing the approved release certificate anchor" +
+            " ANDROID_RELEASE_CERT_SHA256 (the owner-approved SHA-256 fingerprint of the release" +
+            " certificate, captured outside this build). Refusing to build a release with an" +
+            " unpinned key. See docs/runbooks/android-release-signing.md."
+    }
+    def releaseCertificate = observedReleaseCertificate()
+    if (releaseCertificate == null) {
+        return "Android release signing could not read the certificate for alias" +
+            " '${releaseSigningValues.keyAlias}' from the release keystore. Refusing to build a" +
+            " release. See docs/runbooks/android-release-signing.md."
+    }
+    def observedCertificateSha256 = certificateFingerprint(releaseCertificate.getEncoded())
+    if (normalizeCertificateSha256(observedCertificateSha256) == androidDebugCertificateSha256 ||
+        releaseCertificate.getSubjectDN().toString().contains('CN=Android Debug')) {
+        return "Android release signing rejects the Android debug certificate; it is never valid" +
+            " release signing material. Refusing to build a release. See" +
+            " docs/runbooks/android-release-signing.md."
+    }
+    if (normalizeCertificateSha256(observedCertificateSha256) != expectedCertificateSha256) {
+        return "Android release signing key mismatch: ANDROID_RELEASE_CERT_SHA256 expects" +
+            " '${expectedCertificateSha256}' but the keystore certificate is" +
+            " '${observedCertificateSha256}'. Refusing to build a release with a key that is not" +
+            " the owner-approved release key. See docs/runbooks/android-release-signing.md."
+    }
+    return null
+}
+
 def requiresReleaseSigning = { String taskName ->
     return taskName == 'build' ||
         taskName.matches('(?i)^(assemble|bundle|package|sign|validateSigning).*release.*$')
 }
 
 gradle.taskGraph.whenReady { taskGraph ->
-    if (releaseSigningProblem != null &&
-        taskGraph.allTasks.any { task -> requiresReleaseSigning(task.name) }) {
-        throw new GradleException(releaseSigningProblem)
+    if (taskGraph.allTasks.any { task -> requiresReleaseSigning(task.name) }) {
+        def releaseProblem = releaseIdentityProblem()
+        if (releaseProblem != null) {
+            throw new GradleException(releaseProblem)
+        }
     }
 }
 
