@@ -12,6 +12,14 @@ import type { Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createJoinConditionsFixture } from './game-join-conditions.test-fixture.js';
+import {
+  commercialCreateDraftGameId,
+  commercialCreateOperationId,
+  type CommercialCreateOwnerPort,
+  type CommercialCreateQuote,
+} from './game-create-commercial.js';
+import type { GameCommercialCreateOptions } from './game-create-commercial-runtime.js';
+import { subscriptionRuntimeIdempotencyKeySha256 } from '../subscriptions/subscription-runtime-actor-delegation-issuer.js';
 import { buildAppWithActiveSession as buildApp } from '../testing/build-test-app.js';
 
 const config = loadConfig({
@@ -137,6 +145,7 @@ async function appWith(
   repositoryValue: UserRosterRepository,
   managementRepositoryValue?: UserManagementRepository,
   testCourtRepository?: GameTestCourtRepository,
+  commercialCreate?: GameCommercialCreateOptions,
 ) {
   const app = await buildApp({
     config,
@@ -145,6 +154,7 @@ async function appWith(
     gameRosterRepository: repositoryValue,
     ...(testCourtRepository ? { gameTestCourtRepository: testCourtRepository } : {}),
     ...(managementRepositoryValue ? { gameCommandRepository: managementRepositoryValue } : {}),
+    ...(commercialCreate ? { gameCommercialCreate: commercialCreate } : {}),
   });
   apps.push(app);
   return app;
@@ -816,5 +826,409 @@ describe('paid JOIN reconciliation HTTP boundary', () => {
         })
       ).statusCode,
     ).toBe(400);
+  });
+});
+
+describe('managed commercial CREATE HTTP boundary (WARN)', () => {
+  const managedKey = 'games-api-commercial-create-0001';
+  const managedKeySha256 = subscriptionRuntimeIdempotencyKeySha256(managedKey);
+  const draftGameId = commercialCreateDraftGameId({
+    tenantId,
+    userId,
+    idempotencyKeySha256: managedKeySha256,
+  });
+  const operationId = commercialCreateOperationId({
+    tenantId,
+    userId,
+    idempotencyKeySha256: managedKeySha256,
+  });
+  const paidPayload = {
+    title: 'Платная игра',
+    kind: 'FRIENDLY',
+    visibility: 'PUBLIC',
+    stationId: '11111111-1111-4111-8111-111111111111',
+    startsAt: '2027-08-15T15:00:00.000Z',
+    endsAt: '2027-08-15T16:30:00.000Z',
+    timezone: 'Europe/Moscow',
+    capacity: 4,
+    levelRange: null,
+    paymentMode: 'SPLIT',
+    waitlistEnabled: true,
+  } as const;
+
+  function advisoryQuote(overrides: Partial<CommercialCreateQuote> = {}): CommercialCreateQuote {
+    return {
+      basis: 'ADVISORY',
+      decisionId: 'advisory:test-decision-0001',
+      outcome: 'ALLOWED',
+      price: null,
+      reasonCodes: [],
+      evaluatedAt: '2026-08-01T10:00:00.000Z',
+      expiresAt: '2026-08-01T10:15:00.000Z',
+      ...overrides,
+    };
+  }
+
+  function advisoryOwner(overrides: Record<string, unknown> = {}): CommercialCreateOwnerPort & {
+    quote: ReturnType<typeof vi.fn>;
+    reserve: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      quote: vi.fn().mockResolvedValue(advisoryQuote()),
+      reserve: vi
+        .fn()
+        .mockResolvedValue({ status: 'SKIPPED_ADVISORY', reason: 'GAME_COMMERCIAL_CREATE_WARN' }),
+      ...overrides,
+    };
+  }
+
+  function commercialCreateOptions(
+    owner: CommercialCreateOwnerPort,
+    create: ReturnType<typeof vi.fn>,
+  ): GameCommercialCreateOptions {
+    return { repository: { create } as never, owner };
+  }
+
+  function appliedCreate(
+    overrides: Partial<{
+      gameId: string;
+      operationId: string;
+      replayed: boolean;
+    }> = {},
+  ) {
+    return {
+      outcome: 'applied' as const,
+      gameId: draftGameId,
+      operationId,
+      revision: 1,
+      committedAt,
+      replayed: false,
+      ...overrides,
+    };
+  }
+
+  it('creates a PROVISIONING draft through the advisory owner and reports UNKNOWN with reconciliation', async () => {
+    const create = vi.fn().mockResolvedValue(appliedCreate());
+    const owner = advisoryOwner();
+    const app = await appWith(
+      repository(),
+      managementRepository({ create }),
+      undefined,
+      commercialCreateOptions(owner, create),
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': managedKey,
+      },
+      payload: paidPayload,
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      commandId: operationId,
+      operation: {
+        id: operationId,
+        type: 'CREATE_GAME',
+        status: 'UNKNOWN',
+        gameId: draftGameId,
+        aggregateRevision: 1,
+        error: null,
+        nextAction: { type: 'WAIT_FOR_RECONCILIATION', retryAfterSeconds: 5 },
+        commercial: {
+          attemptState: 'WARN_OBSERVED',
+          reservation: null,
+          receipt: null,
+          price: null,
+          quote: { basis: 'ADVISORY', outcome: 'ALLOWED' },
+        },
+      },
+      game: null,
+      replayed: false,
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0]![0]).toMatchObject({
+      tenantId,
+      actorUserId: userId,
+      idempotencyKey: managedKey,
+      gameId: draftGameId,
+      operationId,
+      paymentMode: 'SPLIT',
+    });
+    // WARN must never look like a charge or a booking.
+    expect(JSON.stringify(response.json())).not.toContain('SUCCEEDED');
+    expect(owner.reserve).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays the same operation for a repeated Idempotency-Key without a second owner request', async () => {
+    const create = vi.fn().mockResolvedValue(appliedCreate({ replayed: true }));
+    const owner = advisoryOwner();
+    const app = await appWith(
+      repository(),
+      managementRepository({ create }),
+      undefined,
+      commercialCreateOptions(owner, create),
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': managedKey,
+      },
+      payload: paidPayload,
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      commandId: operationId,
+      operation: { status: 'UNKNOWN', gameId: draftGameId },
+      replayed: true,
+    });
+    expect(owner.reserve).not.toHaveBeenCalled();
+  });
+
+  it('refuses a payment mode outside the managed contour with a managed code and no write', async () => {
+    const create = vi.fn();
+    const owner = advisoryOwner();
+    const app = await appWith(
+      repository(),
+      managementRepository({ create }),
+      undefined,
+      commercialCreateOptions(owner, create),
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': `${managedKey}-organizer-pays`,
+      },
+      payload: { ...paidPayload, paymentMode: 'ORGANIZER_PAYS' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: 'GAME_PAYMENT_MODE_MISMATCH' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('requires the exact authoritative price echo before any local write', async () => {
+    const create = vi.fn().mockResolvedValue(appliedCreate());
+    const owner = advisoryOwner({
+      quote: vi.fn().mockResolvedValue(
+        advisoryQuote({
+          basis: 'OWNER',
+          price: { amountMinor: 250000, currency: 'RUB', expiresAt: '2099-01-01T00:00:00.000Z' },
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        }),
+      ),
+    });
+    const app = await appWith(
+      repository(),
+      managementRepository({ create }),
+      undefined,
+      commercialCreateOptions(owner, create),
+    );
+    const headers = {
+      authorization: `Bearer ${await accessToken()}`,
+      'idempotency-key': managedKey,
+    };
+
+    const missing = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers,
+      payload: paidPayload,
+    });
+    expect(missing.statusCode).toBe(409);
+    expect(missing.json()).toMatchObject({ code: 'GAME_PRICE_CONFIRMATION_REQUIRED' });
+    expect(create).not.toHaveBeenCalled();
+
+    const changed = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers,
+      payload: { ...paidPayload, priceConsent: { amountMinor: 249999, currency: 'RUB' } },
+    });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toMatchObject({ code: 'GAME_PRICE_CONFIRMATION_REQUIRED' });
+    expect(create).not.toHaveBeenCalled();
+
+    const accepted = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers,
+      payload: { ...paidPayload, priceConsent: { amountMinor: 250000, currency: 'RUB' } },
+    });
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.json()).toMatchObject({
+      operation: { status: 'UNKNOWN', commercial: { price: { consent: 'SETTLED' } } },
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates managed-only create fields strictly', async () => {
+    const create = vi.fn();
+    const owner = advisoryOwner();
+    const app = await appWith(
+      repository(),
+      managementRepository({ create }),
+      undefined,
+      commercialCreateOptions(owner, create),
+    );
+    const headers = async (key: string) => ({
+      authorization: `Bearer ${await accessToken()}`,
+      'idempotency-key': key,
+    });
+
+    for (const [index, extra] of [
+      { priceConsent: { amountMinor: 1.5, currency: 'RUB' } },
+      { subscriptionInstanceId: 'not-a-uuid' },
+      { organizerUserId: '55555555-5555-4555-8555-555555555555' },
+      { gameId: '55555555-5555-4555-8555-555555555555' },
+      { operationId: '55555555-5555-4555-8555-555555555555' },
+      { tenantId: '55555555-5555-4555-8555-555555555555' },
+    ].entries()) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/user/api/v1/local-padel/games',
+        headers: await headers(`games-api-commercial-create-invalid-${index}`),
+        payload: { ...paidPayload, ...extra },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'INVALID_REQUEST' });
+    }
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unresolved owner outcome UNKNOWN and never rewrites it as FAILED', async () => {
+    const create = vi.fn().mockResolvedValue(appliedCreate());
+    const owner = advisoryOwner({
+      reserve: vi.fn().mockResolvedValue({ status: 'UNKNOWN' }),
+    });
+    const app = await appWith(
+      repository(),
+      managementRepository({ create }),
+      undefined,
+      commercialCreateOptions(owner, create),
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': managedKey,
+      },
+      payload: paidPayload,
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      operation: {
+        status: 'UNKNOWN',
+        error: null,
+        nextAction: { type: 'WAIT_FOR_RECONCILIATION' },
+        commercial: {
+          attemptState: 'UNKNOWN',
+          reason: 'GAME_RECONCILIATION_REQUIRED',
+        },
+      },
+    });
+  });
+
+  it('reads back a still-provisioning create as UNKNOWN instead of a completed command', async () => {
+    const getManagementOperation = vi.fn().mockResolvedValue({
+      commandType: 'game.create.v1',
+      state: 'PENDING',
+      pending: {
+        gameId: draftGameId,
+        operationId,
+        revision: 1,
+        createdAt: committedAt,
+        updatedAt: committedAt,
+      },
+    });
+    const app = await appWith(repository(), managementRepository({ getManagementOperation }));
+    const response = await app.inject({
+      method: 'GET',
+      url: `/user/api/v1/local-padel/game-operations/${operationId}`,
+      headers: { authorization: `Bearer ${await accessToken()}` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      commandId: operationId,
+      operation: {
+        type: 'CREATE_GAME',
+        status: 'UNKNOWN',
+        gameId: draftGameId,
+        error: null,
+        nextAction: { type: 'WAIT_FOR_RECONCILIATION' },
+      },
+      replayed: true,
+    });
+    expect(getManagementOperation).toHaveBeenCalledWith({
+      tenantId,
+      actorUserId: userId,
+      operationId,
+    });
+  });
+
+  it('leaves the free-game create path unchanged when the managed contour is composed', async () => {
+    const create = vi
+      .fn()
+      .mockResolvedValue({ ...appliedCreate(), gameId, operationId: commandId });
+    const owner = advisoryOwner();
+    const app = await appWith(
+      repository(),
+      managementRepository({ create }),
+      undefined,
+      commercialCreateOptions(owner, create),
+    );
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': `${managedKey}-free`,
+      },
+      payload: { ...paidPayload, paymentMode: 'NO_PAYMENT' },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({
+      operation: { type: 'CREATE_GAME', status: 'SUCCEEDED', gameId },
+    });
+    const write = create.mock.calls[0]![0] as CreateStoredGameInput;
+    expect(write.gameId).toBeUndefined();
+    expect(write.operationId).toBeUndefined();
+    expect(write.paymentMode).toBe('NO_PAYMENT');
+    expect(owner.quote).not.toHaveBeenCalled();
+    expect(owner.reserve).not.toHaveBeenCalled();
+  });
+
+  it('keeps the old byte-identical refusal when the managed contour is not composed', async () => {
+    const create = vi.fn();
+    const app = await appWith(repository(), managementRepository({ create }));
+    const response = await app.inject({
+      method: 'POST',
+      url: '/user/api/v1/local-padel/games',
+      headers: {
+        authorization: `Bearer ${await accessToken()}`,
+        'idempotency-key': `${managedKey}-off`,
+      },
+      payload: paidPayload,
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: 'GAME_PAYMENT_REQUIRED',
+      message: 'В ранней beta можно создать только бесплатную игру.',
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 });

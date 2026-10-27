@@ -1,6 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BookedOperationAdmissionClient } from './booked-operation-admission.js';
+import {
+  BookedOperationAdmissionClient,
+  BookedOperationAdmissionError,
+  bookedOperationAdmissionRequestSha256,
+  parseBookedOperationAdmissionRequest,
+} from './booked-operation-admission.js';
 const operationId = randomUUID(),
   body = {
     action: 'JOIN_GAME' as const,
@@ -160,5 +165,88 @@ describe('admission bounded transport', () => {
             timeoutMs: 100,
           }),
       ).toThrow();
+  });
+});
+
+describe('booked admission wire request', () => {
+  const joinRequest = {
+    action: 'JOIN_GAME' as const,
+    target: { id: '0f0e0d0c-0b0a-4b0a-8b0a-0f0e0d0c0b0a', expectedRevision: 3 },
+    paymentIntent: 'USE_SUBSCRIPTION' as const,
+  };
+  const createRequest = { ...joinRequest, action: 'CREATE_GAME' as const };
+  it('accepts the frozen CREATE_GAME shape with the same allowlist as JOIN_GAME', () => {
+    expect(parseBookedOperationAdmissionRequest(joinRequest)).toEqual(joinRequest);
+    expect(parseBookedOperationAdmissionRequest(createRequest)).toEqual(createRequest);
+    for (const expectedRevision of [1, 2, 7, Number.MAX_SAFE_INTEGER])
+      expect(
+        parseBookedOperationAdmissionRequest({
+          ...createRequest,
+          target: { ...createRequest.target, expectedRevision },
+        }),
+      ).toMatchObject({ action: 'CREATE_GAME', target: { expectedRevision } });
+  });
+  it('rejects anything outside the strict action/target/key allowlist with the same 400', () => {
+    const values: unknown[] = [
+      null,
+      [],
+      'CREATE_GAME',
+      {},
+      { ...createRequest, action: 'BOOK_GROUP_TRAINING' },
+      { ...createRequest, action: 'create_game' },
+      { ...createRequest, action: undefined },
+      {
+        ...createRequest,
+        target: { ...createRequest.target, id: createRequest.target.id.toUpperCase() },
+      },
+      { ...createRequest, target: { ...createRequest.target, id: 'not-a-uuid' } },
+      {
+        ...createRequest,
+        target: { ...createRequest.target, id: '0f0e0d0c-0b0a-0b0a-8b0a-0f0e0d0c0b0a' },
+      },
+      { ...createRequest, target: { ...createRequest.target, expectedRevision: 0 } },
+      { ...createRequest, target: { ...createRequest.target, expectedRevision: -1 } },
+      { ...createRequest, target: { ...createRequest.target, expectedRevision: 1.5 } },
+      { ...createRequest, target: { ...createRequest.target, expectedRevision: '1' } },
+      {
+        ...createRequest,
+        target: { ...createRequest.target, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+      },
+      { ...createRequest, target: { ...createRequest.target, providerId: 'guessed' } },
+      { ...createRequest, target: { ...createRequest.target, kind: 'GAME' } },
+      { ...createRequest, operationId: randomUUID() },
+      { ...createRequest, paymentIntent: 'PAY' },
+      { action: 'CREATE_GAME', target: createRequest.target },
+      { action: 'CREATE_GAME', paymentIntent: 'USE_SUBSCRIPTION', target: null },
+    ];
+    for (const value of values)
+      expect(() => parseBookedOperationAdmissionRequest(value)).toThrow(
+        BookedOperationAdmissionError,
+      );
+    for (const value of values)
+      try {
+        parseBookedOperationAdmissionRequest(value);
+        expect.unreachable('Malformed request must be rejected');
+      } catch (error) {
+        expect(error).toMatchObject({ status: 400 });
+      }
+  });
+  it('keeps the JOIN_GAME digest byte-identical and separates CREATE_GAME', () => {
+    const canonical = JSON.stringify({
+      action: 'JOIN_GAME',
+      target: { id: joinRequest.target.id, expectedRevision: 3 },
+      paymentIntent: 'USE_SUBSCRIPTION',
+    });
+    const expectedJoinSha256 = `sha256:${createHash('sha256')
+      .update(`booked-operation-admission:v1\0${canonical}`, 'utf8')
+      .digest('hex')}`;
+    expect(bookedOperationAdmissionRequestSha256(joinRequest)).toBe(
+      'sha256:20f14d7af2260a27606ee1418c5051814c32a3100d76e2d75da234d14711bb0a',
+    );
+    expect(bookedOperationAdmissionRequestSha256(joinRequest)).toBe(expectedJoinSha256);
+    expect(bookedOperationAdmissionRequestSha256(createRequest)).not.toBe(expectedJoinSha256);
+    expect(bookedOperationAdmissionRequestSha256(createRequest)).toBe(
+      'sha256:64ea19192651e6e78977baf9202dd967dce3585d23bd979d1e872af914a41ffa',
+    );
   });
 });

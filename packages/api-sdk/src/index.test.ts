@@ -679,6 +679,48 @@ describe('PadlHubApiClient authentication boundary', () => {
     ]);
   });
 
+  it('sends a managed paid create exactly once with the caller-owned idempotency key', async () => {
+    const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
+    const fetchImplementation: typeof fetch = (input, init) => {
+      calls.push({ input, ...(init === undefined ? {} : { init }) });
+      return Promise.reject(new TypeError('response lost'));
+    };
+    const client = createClient(fetchImplementation, {
+      initialAccessToken: authenticatedSession.accessToken,
+    });
+    const input = {
+      title: 'Платная игра',
+      kind: 'FRIENDLY' as const,
+      visibility: 'PUBLIC' as const,
+      stationId: '11111111-1111-4111-8111-111111111111',
+      startsAt: '2027-08-15T15:00:00.000Z',
+      endsAt: '2027-08-15T16:30:00.000Z',
+      timezone: 'Europe/Moscow',
+      capacity: 4 as const,
+      levelRange: null,
+      paymentMode: 'SPLIT' as const,
+      waitlistEnabled: true,
+      subscriptionInstanceId: '751fe6a8-b0b1-4b2b-873d-a2d785c4e191',
+      priceConsent: { amountMinor: 120000, currency: 'RUB' as const },
+    };
+
+    // A lost response is never retried with a replacement POST: the caller keeps the key and reads
+    // the same operation again.
+    await expect(client.createPaidGame(input, 'create-logical-attempt-key-0001')).rejects.toThrow(
+      'response lost',
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(requestUrl(calls[0]?.input ?? '')).toBe(
+      'https://api.padlhub.test/user/api/v1/local-padel/games',
+    );
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(new Headers(calls[0]?.init?.headers).get('Idempotency-Key')).toBe(
+      'create-logical-attempt-key-0001',
+    );
+    expect(JSON.parse(stringRequestBody(calls[0]?.init?.body))).toEqual(input);
+  });
+
   it('sends free-game cancellation through the authenticated idempotent command boundary', async () => {
     const calls: Array<{ input: Parameters<typeof fetch>[0]; init?: RequestInit }> = [];
     const fetchImplementation: typeof fetch = (input, init) => {

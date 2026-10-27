@@ -48,6 +48,11 @@ paths:
         canonical binding in its existing PREPARED receipt before any business action.
         PENDING means admission only; it does not mean booked, paid or a new LK2 game.
         Reuse the same key and body after a lost response. No automatic business retry.
+        The managed commercial CREATE shares this frozen request with `action = CREATE_GAME` and
+        the LK2 draft game UUID as `target.id`. A resolvable draft fails closed with
+        `503 BOOKED_OPERATION_CREATE_ADMISSION_UNAVAILABLE` until the LK1 reserve/confirm approval;
+        an unresolvable or non-organizer draft is `409 BOOKED_OPERATION_ADMISSION_CONFLICT`.
+        Neither path dispatches booking, debit or payment.
         Default-disabled until owner dependencies are explicitly connected.
       requestBody:
         required: true
@@ -5814,7 +5819,10 @@ components:
       properties:
         action:
           type: string
-          const: JOIN_GAME
+          enum: [JOIN_GAME, CREATE_GAME]
+          description: |
+            JOIN_GAME admits an existing PadlHub game revision. CREATE_GAME admits the LK2 draft
+            game UUID of a managed commercial create; it never names a provider identifier.
         paymentIntent:
           type: string
           const: USE_SUBSCRIPTION

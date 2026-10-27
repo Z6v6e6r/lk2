@@ -217,6 +217,25 @@ const environmentSchema = z.object({
   GAME_COMMERCIAL_JOIN_ENABLED: booleanFromEnvironment,
   GAME_COMMERCIAL_JOIN_OWNER_BASE_URL: z.string().url().optional(),
   GAME_COMMERCIAL_JOIN_OWNER_TIMEOUT_MS: z.coerce.number().int().min(100).max(5_000).default(3_000),
+  // Managed commercial CREATE (WARN contour, docs/contracts/game-commercial-create.md).
+  // Owner: P0 commercial CREATE. Purpose: replace the blanket GAME_PAYMENT_REQUIRED create refusal
+  // with a server-owned quote, a local PROVISIONING create and an advisory owner, without a charge,
+  // booking or provider call. Activation: local/ci/staging only; production is rejected until the
+  // LK1 reserve/confirm/release contract has its own approval. BOOKED_OPERATION transport stays
+  // rejected until then; the WARN advisory owner is the only activatable transport.
+  // Removal/review condition: replace or extend when the ENFORCE owner transport is approved, and
+  // review this flag no later than the next delivery batch.
+  GAME_COMMERCIAL_CREATE_ENABLED: booleanFromEnvironment,
+  GAME_COMMERCIAL_CREATE_OWNER_BASE_URL: z.string().url().optional(),
+  GAME_COMMERCIAL_CREATE_OWNER_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(100)
+    .max(5_000)
+    .default(3_000),
+  GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT: z
+    .enum(['ADVISORY', 'BOOKED_OPERATION'])
+    .default('ADVISORY'),
   ACTIVITY_HISTORY_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_SYNC_ENABLED: booleanFromEnvironment,
   ACTIVITY_HISTORY_GAME_BACKFILL_ENABLED: booleanFromEnvironment,
@@ -755,6 +774,35 @@ export function loadConfig(
   if (parsed.data.APP_ENV === 'production' && parsed.data.GAMES_COMMANDS_ENABLED) {
     throw new Error(
       'GAMES_COMMANDS_ENABLED is staging-only until the Games production gate passes',
+    );
+  }
+  if (parsed.data.APP_ENV === 'production' && parsed.data.GAME_COMMERCIAL_CREATE_ENABLED) {
+    throw new Error(
+      'GAME_COMMERCIAL_CREATE_ENABLED is allowed only in local, ci or staging until the LK1 reserve/confirm approval',
+    );
+  }
+  if (parsed.data.GAME_COMMERCIAL_CREATE_ENABLED) {
+    if (!parsed.data.GAMES_READ_ENABLED || !parsed.data.GAMES_COMMANDS_ENABLED) {
+      throw new Error(
+        'GAME_COMMERCIAL_CREATE_ENABLED requires GAMES_READ_ENABLED and GAMES_COMMANDS_ENABLED',
+      );
+    }
+  }
+  if (parsed.data.GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT === 'BOOKED_OPERATION') {
+    if (!parsed.data.GAME_COMMERCIAL_CREATE_ENABLED) {
+      throw new Error(
+        'GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT=BOOKED_OPERATION requires GAME_COMMERCIAL_CREATE_ENABLED=true',
+      );
+    }
+    if (!parsed.data.GAME_COMMERCIAL_CREATE_OWNER_BASE_URL) {
+      throw new Error(
+        'GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT=BOOKED_OPERATION requires GAME_COMMERCIAL_CREATE_OWNER_BASE_URL',
+      );
+    }
+    // The LK1 reserve/confirm/release receiver for CREATE is not implemented yet. The managed
+    // contour is WARN-only (advisory owner); a real owner transport needs its own approval.
+    throw new Error(
+      'GAME_COMMERCIAL_CREATE_OWNER_TRANSPORT=BOOKED_OPERATION is not available before the LK1 reserve/confirm approval',
     );
   }
   if (parsed.data.GAMES_COMMANDS_ENABLED && !parsed.data.GAMES_READ_ENABLED) {

@@ -70,6 +70,7 @@ import Redis from 'ioredis';
 import { buildApp } from './app.js';
 import { createGameJoinConditionsRuntime } from './games/game-join-conditions-runtime.js';
 import { createGameCommercialJoinRuntime } from './games/game-commercial-join-runtime.js';
+import { createGameCommercialCreateRuntime } from './games/game-create-commercial-runtime.js';
 import { createGameJoinConditionsContextRepository } from '../../../packages/database/src/game-join-conditions-context-repository.js';
 import { ActivityHistoryProjectionCoordinator } from './bookings/activity-history-refresh.js';
 import { ActivityHistoryGameBackfill } from './bookings/activity-history-game-backfill.js';
@@ -667,6 +668,17 @@ const gameCommercialJoin = gameRosterRepository
       },
     })
   : undefined;
+// Managed commercial CREATE (WARN contour). Without the flag the factory returns undefined and the
+// create route keeps its byte-identical GAME_PAYMENT_REQUIRED guard; the activatable WARN transport
+// is the advisory owner, which never charges, books or calls LK1/Viva.
+const gameCommercialCreate =
+  gameCommandRepository && config.GAME_COMMERCIAL_CREATE_ENABLED
+    ? createGameCommercialCreateRuntime({
+        config,
+        repository: gameCommandRepository,
+        onMetric: (metric) => logger.info({ metric }, 'commercial CREATE boundary operation'),
+      })
+    : undefined;
 const app = await buildApp({
   config,
   logger,
@@ -676,6 +688,7 @@ const app = await buildApp({
   phoneSubjectLinkService,
   ...(gameJoinConditionsOwner ? { gameJoinConditionsOwner } : {}),
   ...(gameCommercialJoin ? { gameCommercialJoin } : {}),
+  ...(gameCommercialCreate ? { gameCommercialCreate } : {}),
   ...(subscriptionRuntimeWarnBoundary
     ? {
         subscriptionRuntimeActorContextRepository:

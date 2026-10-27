@@ -8,24 +8,31 @@ import {
 export const BOOKED_OPERATION_ADMISSION_PATH = '/lk/integrations/v1/booked-operation-admissions';
 export const BOOKED_OPERATION_ADMISSION_SCOPE = 'subscription-runtime.booked-operation.admit';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export type BookedOperationAdmissionAction = 'JOIN_GAME' | 'CREATE_GAME';
 export interface BookedOperationAdmissionRequest {
-  readonly action: 'JOIN_GAME';
+  readonly action: BookedOperationAdmissionAction;
   readonly target: {
+    /** PadlHub UUID. For CREATE_GAME it is the LK2 draft game id, never a provider identifier. */
     readonly id: string;
     readonly expectedRevision: number;
   };
   readonly paymentIntent: 'USE_SUBSCRIPTION';
 }
+// Both actions share one frozen wire shape and one strict key allowlist. Widening the action must
+// never widen the accepted target: an LK2 draft id is still a lower-case public UUID and the
+// revision is still a positive safe integer, so malformed CREATE payloads stay indistinguishable
+// from malformed JOIN payloads (same 400).
 export function parseBookedOperationAdmissionRequest(
   value: unknown,
 ): BookedOperationAdmissionRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     throw new BookedOperationAdmissionError(400);
   const row = value as Record<string, unknown>;
+  const action = row.action;
   const target = row.target as Record<string, unknown> | undefined;
   if (
     Object.keys(row).sort().join() !== 'action,paymentIntent,target' ||
-    row.action !== 'JOIN_GAME' ||
+    (action !== 'JOIN_GAME' && action !== 'CREATE_GAME') ||
     row.paymentIntent !== 'USE_SUBSCRIPTION' ||
     !target ||
     typeof target !== 'object' ||
@@ -38,7 +45,7 @@ export function parseBookedOperationAdmissionRequest(
   )
     throw new BookedOperationAdmissionError(400);
   return {
-    action: 'JOIN_GAME',
+    action,
     target: {
       id: target.id,
       expectedRevision: Number(target.expectedRevision),
