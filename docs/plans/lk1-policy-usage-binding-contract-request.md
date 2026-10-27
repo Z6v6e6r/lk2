@@ -67,6 +67,29 @@ state, effectiveAt, applyTo, publishedAt, supersededAt, runtimeCompatibility}`;
   зафиксировать, какой сервис владеет reserve/confirm/release/compensate (рекомендация — ph-admin
   ledger, owner flow только фиксирует `usageRef` в receipt).
 
+### 2.2 База: замороженный контракт CREATE из PR #499 (Draft)
+
+`agent/lk2-commercial-create-warn-v1` (#499) уже фиксирует LK2→LK1 reserve/confirm/release contract
+в `docs/contracts/game-commercial-create.md` и реализует strict-клиент
+(`apps/api/src/games/game-create-commercial-runtime.ts:157-360`). B2 **расширяет** этот контракт, а
+не создаёт параллельное семейство:
+
+- `POST /api/internal/subscription-runtime/lk2/v1/reserve`: запрос `{operationId, action, target{kind,
+id, expectedRevision}, paymentMode, paymentIntent, preferredSubscriptionInstanceId, priceSnapshot}`,
+  ответ `{reservationId, expiresAt, policyVersion, priceSnapshot}` либо typed refusal / `409` / `503`;
+  replay — тем же `operationId` + `Idempotency-Key`.
+- `POST .../confirm` → trusted receipt `{receiptId, confirmedAt, appliedRule, usageRef, bookingRef}`.
+- `.../release` и `.../compensate` — идемпотентны по `reservationId`/`operationId`.
+- admission расширен вторым action `CREATE_GAME` (остальные поля не меняются); LK1 receiver для
+  CREATE в #499 не реализован, LK2 отвечает `503 BOOKED_OPERATION_CREATE_ADMISSION_UNAVAILABLE`.
+- `GAME_COMMERCIAL_CREATE_ENABLED=true` в production **отклоняется** конфигом до отдельного
+  approval для LK1 reserve/confirm/release.
+
+Что добавляет B2 поверх базы: `policyDigest` (в reserve/confirm), `decisionId`/binding quote mode,
+usage semantics (`reservedUnits`/`remainingUnits`/readback) и exact receipt v2 key set с
+`policyVersion`/`policyDigest`. JOIN по-прежнему идёт через legacy Node-RED owner
+(admission + receipt v1) — переводить ли JOIN на этот же контракт, отдельный открытый вопрос.
+
 ## 3. Восемь обязательных элементов контракта
 
 ### 3.1 Decision-level `policyRef` (action+target scoped)
@@ -135,36 +158,52 @@ POST /api/internal/subscription-runtime/lk2/v1/quote
   v1-запрос без новых полей (expand-first).
 - Владелец маршрута — LK1 Node-RED receiver (`lk` repo), не ph-admin; текущая версия проверяет
   точный claim set и `contract_version:1`, поэтому v2 — явный список, а не «дополнительные поля».
+- Для CREATE admission уже расширен в #499 (`action: CREATE_GAME`, остальные поля не меняются);
+  LK1 receiver не реализован, поэтому LK2 отвечает `503 BOOKED_OPERATION_CREATE_ADMISSION_UNAVAILABLE`
+  — B2 не должен минтить delegation до реализации receiver.
 - Acceptance: LK1 отклоняет v2-запрос со старым/чужим `policyRef`/`usageRef` стабильным кодом и
   не создаёт бронь.
 
 ### 3.4 Receipt v2
 
-Набор ключей v1 (17) + `policyVersion`, `policyDigest`, `usageRef`, опционально `decisionId`;
+База зависит от действия:
+
+- **JOIN** — receipt v1: 17 ключей (`booked-operation-read.ts:6-24`), owner — LK1 Node-RED receiver;
+- **CREATE** — receipt из замороженного контракта #499: `{receiptId, confirmedAt, appliedRule,
+usageRef, bookingRef}`, owner — LK1 reserve/confirm receiver (пока не реализован).
+
+Для обоих действий v2 = база + `policyVersion`, `policyDigest`, опционально `decisionId`;
 `contractVersion: 2`. LK2-парсер строгий (exact key set), поэтому нужен **полный** список ключей
 v2, а не «добавьте что-нибудь»:
 
 - `usageRef` — opaque `[A-Za-z0-9._:-]{1,200}`, не идентификатор подписки/пользователя;
-- receipt v2 строится в том же owner flow, что и v1 (LK1 Node-RED receiver), а не в ph-admin;
-  сейчас он отдаёт `receipt_version:1`, поэтому менять обе стороны нужно одновременно;
-- v1-receipt остаётся валидным для операций, начатых до включения;
+- `appliedRule` (CREATE) уже называет применённое правило, но не версию/дайджест: `policyVersion`/
+  `policyDigest` добавляются отдельно, чтобы сверять решение, а не только текст правила;
+- receipt v2 строится в том же owner-процессе, что и база (Node-RED для JOIN, reserve/confirm
+  receiver для CREATE), а не в ph-admin; менять обе стороны нужно одновременно;
+- v1- и frozen-receipt остаются валидными для операций, начатых до включения;
 - unknown keys в v2 → отказ LK2 (fail-closed), поэтому список должен быть согласован заранее.
 
 ### 3.5 Reserve / confirm / release / compensate
 
-| Endpoint                     | Семантика                                                                                                                                  | Идемпотентность                                                                             |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `POST .../lk2/v1/reserve`    | резерв usage по `decisionId`+`policyRef`; возвращает `reservationId`, `usageRef`, `reservedUnits`, `remainingUnits`, `expiresAt`           | повтор с тем же `(operationId, Idempotency-Key)` → тот же ответ, второй резерв не создаётся |
-| `POST .../lk2/v1/confirm`    | фиксирует резерв и возвращает финальный receipt v2 (`receiptId`, `confirmedAt`, `policyVersion`, `policyDigest`, `usageRef`, `bookingRef`) | повтор → тот же receipt; после release/expire → `409` со стабильным кодом                   |
-| `POST .../lk2/v1/release`    | освобождает **неподтверждённый** резерв                                                                                                    | повтор → `{released:true}`                                                                  |
-| `POST .../lk2/v1/compensate` | компенсирует **подтверждённое** списание                                                                                                   | повтор → `{compensated:true}`                                                               |
+База уже заморожена в #499 (см. 2.2): reserve → `{reservationId, expiresAt, policyVersion,
+priceSnapshot}`, confirm → receipt `{receiptId, confirmedAt, appliedRule, usageRef, bookingRef}`,
+release/compensate идемпотентны. B2 расширяет её, сохраняя имена и семантику существующих полей:
+
+| Endpoint                     | Семантика                                                                                            | Идемпотентность                                                                             |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `POST .../lk2/v1/reserve`    | база #499 + `policyDigest`, `decisionId`, `reservedUnits`, `remainingUnits`; резерв usage по решению | повтор с тем же `(operationId, Idempotency-Key)` → тот же ответ, второй резерв не создаётся |
+| `POST .../lk2/v1/confirm`    | база #499 (receipt) + `policyVersion`, `policyDigest`, `decisionId`; фиксирует резерв                | повтор → тот же receipt; после release/expire → `409` со стабильным кодом                   |
+| `POST .../lk2/v1/release`    | освобождает **неподтверждённый** резерв                                                              | повтор → `{released:true}`                                                                  |
+| `POST .../lk2/v1/compensate` | компенсирует **подтверждённое** списание                                                             | повтор → `{compensated:true}`                                                               |
 
 - Стабильные коды: недостаточно units (`422`), решение истекло (`410`), конфликт резерва
   (`409`), недоступность (`503`); тела ошибок не содержат PII/токенов.
-- Владелец: usage/reservation ledger — ph-admin (B3), а подтверждение брони/receipt — LK1 Node-RED
-  owner. Нужно решить, где живут reserve/confirm/release/compensate: (a) в ph-admin ledger, а
-  owner flow только фиксирует `usageRef` в receipt, либо (b) в owner flow с делегированием в
-  ph-admin. Рекомендуется (a): один источник счётчика, owner flow отвечает только за booking.
+- Владелец: usage/reservation ledger — ph-admin (B3), а подтверждение брони/receipt — owner flow
+  (Node-RED для JOIN, reserve/confirm receiver для CREATE). Нужно решить, где живут
+  reserve/confirm/release/compensate: (a) в ph-admin ledger, а owner flow только фиксирует
+  `usageRef` в receipt, либо (b) в owner flow с делегированием в ph-admin. Рекомендуется (a):
+  один источник счётчика, owner flow отвечает только за booking.
 - Recovery: существующий read by `operationId` (`/lk/integrations/v1/booked-operations/{id}`)
   после потерянного ответа возвращает PENDING/UNKNOWN/CONFIRMED и receipt, не создавая новую
   бронь и не увеличивая usage.
@@ -223,6 +262,10 @@ readback.
 совпадения токена с LK2 `SUBSCRIPTION_POLICY_REGISTRY_INTEGRATION_TOKEN` (имена флагов отличаются
 на одну `S` — это частая причина «UNAVAILABLE» при формально включённых настройках).
 
+Отдельно для B2: пока LK1 reserve/confirm/release для CREATE не реализован,
+`GAME_COMMERCIAL_CREATE_ENABLED=true` должен отклоняться конфигом в production (это уже
+зафиксировано в #499); B2 не ослабляет этот гейт и включает binding только после контракта B3.
+
 ## 6. Acceptance для B3
 
 - [ ] единый счётчик: операция LK2, операция LK1-админки и запись LK1 видны в одном счётчике;
@@ -254,6 +297,8 @@ readback.
    `SUBSCRIPTIONS_POLICY_REGISTRY_INTEGRATION_TOKEN` против LK2
    `SUBSCRIPTION_POLICY_REGISTRY_ENABLED` + `_BASE_URL` + `_INTEGRATION_TOKEN` (имена отличаются
    на одну `S`).
+10. Переводим ли JOIN на замороженный reserve/confirm-контракт CREATE (#499) или оставляем legacy
+    Node-RED owner для JOIN и добавляем v2 только к нему?
 
 ## 8. Не-цели
 
