@@ -461,7 +461,7 @@ function adapterFixture(
   };
 }
 
-function prefetchFixture(lostAck = false) {
+function prefetchFixture(lostAck = false, interrupted = false) {
   const op = operation();
   op.expiresAt = '2026-10-26T13:00:00.000Z';
   const bytes = Buffer.from(
@@ -474,8 +474,10 @@ function prefetchFixture(lostAck = false) {
   const base = adapterFixture();
   let intent: Buffer | null = null;
   let receipt: Buffer | null = null;
-  let present = false;
+  let indexPresent = false;
+  let childPresent = false;
   let pulls = 0;
+  const present = () => indexPresent && childPresent;
   const ops = {
     ...base.ops,
     time: () => Date.parse('2026-10-26T12:30:00.000Z'),
@@ -489,17 +491,30 @@ function prefetchFixture(lostAck = false) {
       receipt = Buffer.from(value);
     },
     imageInventory: () =>
-      [...['sha256:' + '1'.repeat(64), ...(present ? [op.publishedMigrator.imageId] : [])]].sort(),
-    prefetchImagePresent: () => present,
+      [
+        ...new Set([
+          'sha256:' + '1'.repeat(64),
+          ...(indexPresent ? [op.publishedMigrator.image] : []),
+          ...(childPresent ? [op.publishedMigrator.imageId] : []),
+        ]),
+      ].sort(),
+    prefetchImagePresent: () => present(),
     pullMigrator: () => {
       pulls += 1;
-      present = true;
+      indexPresent = true;
+      // interrupted: the index pull landed, the long child-ref pull did not.
+      if (interrupted && pulls === 1) throw new Error('lost pull ack');
+      childPresent = true;
       if (lostAck && pulls === 1) throw new Error('lost pull ack');
       return op.publishedMigrator.imageId;
     },
     image: () => op.publishedMigrator.imageId,
   };
-  return { bytes, ops, values: () => ({ intent, receipt, present, pulls }) };
+  return {
+    bytes,
+    ops,
+    values: () => ({ intent, receipt, present: present(), indexPresent, childPresent, pulls }),
+  };
 }
 
 describe('closed Timeweb location-photo 0102 profile', () => {
@@ -992,5 +1007,21 @@ describe('closed Timeweb location-photo 0102 profile', () => {
       runLocationPhotoMigratorPrefetchAdapter('reconcile', fixture.bytes, fixture.ops),
     ).resolves.toMatchObject({ status: 'LOCATION_PHOTO_MIGRATOR_PREFETCH_VERIFIED' });
     expect(fixture.values()).toMatchObject({ present: true, pulls: 1 });
+  });
+
+  it('resumes an interrupted pull when the index landed but the pinned child ref did not', async () => {
+    const fixture = prefetchFixture(false, true);
+    await expect(
+      runLocationPhotoMigratorPrefetchAdapter('pull', fixture.bytes, fixture.ops),
+    ).rejects.toThrow('lost pull ack');
+    expect(fixture.values()).toMatchObject({
+      present: false,
+      indexPresent: true,
+      childPresent: false,
+    });
+    await expect(
+      runLocationPhotoMigratorPrefetchAdapter('reconcile', fixture.bytes, fixture.ops),
+    ).resolves.toMatchObject({ status: 'LOCATION_PHOTO_MIGRATOR_PREFETCH_VERIFIED' });
+    expect(fixture.values()).toMatchObject({ present: true, pulls: 2 });
   });
 });

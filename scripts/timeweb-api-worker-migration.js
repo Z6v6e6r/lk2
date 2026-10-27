@@ -2964,6 +2964,12 @@ function productionOps(op, owner, ignoredRestore = null) {
     : locationPhoto
       ? op.publishedMigrator.image
       : MIGRATOR_IMAGE;
+  // Docker with the containerd image store reports the index digest as the image id, while the
+  // reviewed 0102 package pins the amd64 child manifest digest. Pull and inspect that child ref for
+  // the identity check and keep the index ref (the published, pinned image string) pulled alongside.
+  const locationPhotoImageRef = locationPhoto
+    ? `ghcr.io/z6v6e6r/phub-migrator@${op.publishedMigrator.imageId}`
+    : null;
   const candidate = locationPhoto
       ? `${op.publishedMigrator.sourceSha}-${op.publishedMigrator.publicationRunId}-1`
       : `${op.candidateSha}-${op.publicationRunId}-1`,
@@ -2980,13 +2986,14 @@ function productionOps(op, owner, ignoredRestore = null) {
     roleName,
     requireLocks = false;
   const image = () => {
-    const values = parseStrictJson(docker(['image', 'inspect', migratorImage]));
+    const ref = locationPhotoImageRef ?? migratorImage;
+    const values = parseStrictJson(docker(['image', 'inspect', ref]));
     const v = values[0];
     if (
       values.length !== 1 ||
       v.Os !== 'linux' ||
       v.Architecture !== 'amd64' ||
-      !v.RepoDigests?.includes(migratorImage) ||
+      !v.RepoDigests?.includes(ref) ||
       v.Config?.Labels?.['org.opencontainers.image.revision'] !==
         (locationPhoto ? op.publishedMigrator.sourceSha : op.candidateSha) ||
       v.Config.User !== 'appuser' ||
@@ -3169,17 +3176,33 @@ function productionOps(op, owner, ignoredRestore = null) {
       present(prefetchFile('receipt')) ? read(prefetchFile('receipt')) : null,
     writePrefetchReceipt: (bytes) =>
       sealNotificationPrefetchMetadata(prefetchFile('receipt'), bytes),
-    prefetchImagePresent: () =>
-      docker(['image', 'ls', '--no-trunc', '--digests', '--format', '{{.Repository}}@{{.Digest}}'])
-        .split('\n')
-        .includes(migratorImage),
+    prefetchImagePresent: () => {
+      // The index ref alone is not enough for the location-photo package: reconcile must be able to
+      // resume an interrupted pull that stored the index but not the pinned amd64 child ref.
+      const digests = docker([
+        'image',
+        'ls',
+        '--no-trunc',
+        '--digests',
+        '--format',
+        '{{.Repository}}@{{.Digest}}',
+      ]).split('\n');
+      return (
+        digests.includes(migratorImage) &&
+        (locationPhotoImageRef === null || digests.includes(locationPhotoImageRef))
+      );
+    },
     pullMigrator: () => {
       if (!notification && !locationPhoto) stop('PREFETCH_PROFILE');
       // Only this image-store stage uses the enrolled release reader. All SQL and
       // ordinary migration probes keep their credential-free Docker environment.
       const credentials = '/root/.docker/config.json';
       const before = present(credentials) ? hash(read(credentials)) : null;
-      releaseDocker(['pull', '--platform', 'linux/amd64', migratorImage]);
+      releaseDocker(['pull', '--platform', 'linux/amd64', migratorImage], { timeout: 900_000 });
+      if (locationPhotoImageRef)
+        releaseDocker(['pull', '--platform', 'linux/amd64', locationPhotoImageRef], {
+          timeout: 900_000,
+        });
       if ((present(credentials) ? hash(read(credentials)) : null) !== before)
         stop('PREFETCH_CREDENTIAL_DRIFT');
       return image().Id;

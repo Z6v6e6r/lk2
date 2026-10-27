@@ -676,7 +676,7 @@ const git = (args) => {
   return neutral ? result : result.trim();
 };
 Object.defineProperty(git, 'sourcePath', { value: SOURCE });
-const docker = (args) => command('/usr/bin/docker', args);
+const docker = (args, options) => command('/usr/bin/docker', args, options);
 export async function githubPublic(path) {
   if (
     !/^(?:actions\/runs\/[1-9][0-9]*(?:\/attempts\/1\/jobs\?per_page=100|\/artifacts\?per_page=100)?|pulls\/[1-9][0-9]*)$/.test(
