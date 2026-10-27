@@ -486,7 +486,8 @@ export function validateLocationPhotoManifest(operation, manifest, manifestBytes
     manifest.gitCommit !== operation.publishedMigrator.sourceSha ||
     manifest.gitTree !== operation.publishedMigrator.sourceTree ||
     String(manifest.publication?.runId) !== operation.publishedMigrator.publicationRunId ||
-    manifest.publication?.runAttempt !== operation.publishedMigrator.publicationRunAttempt
+    String(manifest.publication?.runAttempt) !==
+      String(operation.publishedMigrator.publicationRunAttempt)
   )
     stop('MANIFEST');
   const images = manifest.images?.filter((row) => row.component === 'migrator') ?? [];
