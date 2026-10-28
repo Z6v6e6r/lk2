@@ -29,6 +29,7 @@ playwright-report/
 test-results/
 
 # Mobile signing material (native sources have platform-local ignores)
+apps/mobile/android/keystore.properties
 *.keystore
 *.jks
 *.p12
