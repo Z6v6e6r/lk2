@@ -349,6 +349,41 @@ export function commercialJoinRequestHash(input: CommercialJoinRequestFingerprin
 }
 
 /**
+ * B2 fingerprint for a bound operation. It covers the policy decision and the usage reservation in
+ * addition to the client fields, under a new contract label so in-flight v1 keys keep replaying.
+ *
+ * A same-key retry after a policy republication therefore derives a different hash and resolves as
+ * an idempotency conflict (reconciliation), never as a replay of the older, differently-bound
+ * attempt. Refs are re-validated here so the hash can only be built from a well-formed decision.
+ */
+export function commercialJoinRequestHashV2(
+  input: CommercialJoinRequestFingerprintInput & { readonly bindingRefs: CommercialBindingRefs },
+): string {
+  const binding = parseCommercialBindingRefs(input.bindingRefs);
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        command: 'JOIN_GAME',
+        contract: 'game.join.paid.v2',
+        tenantId: input.tenantId,
+        userId: input.userId,
+        gameId: input.gameId,
+        expectedRevision: input.expectedRevision,
+        subscriptionInstanceId: input.subscriptionInstanceId ?? null,
+        amountMinor: input.priceConsent?.amountMinor ?? null,
+        currency: input.priceConsent?.currency ?? null,
+        invitationId: input.invitationId ?? null,
+        policyVersion: binding.policyRef.policyVersion,
+        policyDigest: binding.policyRef.policyDigest,
+        decisionId: binding.decisionId ?? null,
+        usageRef: binding.usageRef?.usageRef ?? null,
+        reservationUnits: binding.usageRef?.reservationUnits ?? null,
+      }),
+    )
+    .digest('hex');
+}
+
+/**
  * The owner-visible operation id reuses the existing booked-operation derivation: one key can only
  * ever name one commercial operation, so a repeat cannot mint a second purchase.
  */
@@ -442,6 +477,12 @@ export async function executeCommercialJoin(
   // error, not a business refusal, so it throws instead of producing a payable fallback.
   const bindingRefs =
     input.bindingRefs === undefined ? undefined : parseCommercialBindingRefs(input.bindingRefs);
+  // A bound operation is fingerprinted under the v2 contract; an unbound operation keeps the
+  // existing v1 hash byte-for-byte, so legacy retries and in-flight keys are unaffected.
+  const requestHash =
+    bindingRefs === undefined
+      ? input.requestHash
+      : commercialJoinRequestHashV2({ ...input, bindingRefs });
 
   if (!input.subscriptionInstanceId)
     return commercialFailure('GAME_SUBSCRIPTION_SELECTION_REQUIRED');
@@ -580,7 +621,7 @@ export async function executeCommercialJoin(
       actorUserId: input.userId,
       gameId: input.gameId,
       idempotencyKey: input.idempotencyKey,
-      requestHash: input.requestHash,
+      requestHash,
       correlationId: input.correlationId,
       expectedRevision: input.expectedRevision,
       operationId: input.operationId,

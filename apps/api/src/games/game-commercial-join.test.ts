@@ -6,6 +6,7 @@ import {
   readCommercialJoinOperation,
   reconcileCommercialJoinOperation,
   commercialJoinRequestHash,
+  commercialJoinRequestHashV2,
   type CommercialJoinAttemptView,
   type CommercialJoinBeginResult,
   type CommercialJoinCommandEnvelope,
@@ -733,5 +734,119 @@ describe('commercial JOIN policy/usage binding refs (B2)', () => {
     ).rejects.toMatchObject({ code: 'COMMERCIAL_POLICY_REF_INVALID' });
     expect(calls).toEqual([]);
     expect(owner.calls).toEqual([]);
+  });
+});
+
+describe('commercial JOIN request fingerprint v2 (B2)', () => {
+  const digestA = `sha256:${'a'.repeat(64)}`;
+  const digestB = `sha256:${'b'.repeat(64)}`;
+  const decisionIdA = '11111111-1111-4111-8111-111111111111';
+  const decisionIdB = '22222222-2222-4222-8222-222222222222';
+  const bindingRefs = {
+    policyRef: { policyVersion: 3, policyDigest: digestA },
+    decisionId: decisionIdA,
+    usageRef: { usageRef: 'usage:abc-1', reservationUnits: 1 },
+  };
+  const boundEnvelope = { ...envelope, bindingRefs };
+  const reserved: CommercialJoinBeginResult = {
+    outcome: 'reserved',
+    operationId,
+    reservationId,
+    expiresAt: new Date(Date.now() + 900_000).toISOString(),
+    revision: 9,
+  };
+  type BeginInput = Parameters<CommercialJoinRepositoryPort['beginPaidJoin']>[0];
+
+  it('is deterministic and covers every binding field', () => {
+    const hash = commercialJoinRequestHashV2(boundEnvelope);
+    expect(commercialJoinRequestHashV2({ ...envelope, bindingRefs })).toBe(hash);
+    // A v2 hash can never collide with the legacy v1 fingerprint of the same client request.
+    expect(hash).not.toBe(envelope.requestHash);
+    const variants = [
+      { ...bindingRefs, policyRef: { policyVersion: 4, policyDigest: digestA } },
+      { ...bindingRefs, policyRef: { policyVersion: 3, policyDigest: digestB } },
+      { ...bindingRefs, decisionId: decisionIdB },
+      { ...bindingRefs, usageRef: { usageRef: 'usage:other' } },
+      { ...bindingRefs, usageRef: { usageRef: 'usage:abc-1', reservationUnits: 2 } },
+    ];
+    for (const variant of variants) {
+      expect(commercialJoinRequestHashV2({ ...envelope, bindingRefs: variant })).not.toBe(hash);
+    }
+    expect(() =>
+      commercialJoinRequestHashV2({
+        ...envelope,
+        bindingRefs: { policyRef: { policyVersion: 0, policyDigest: digestA } },
+      }),
+    ).toThrow();
+  });
+
+  it('forwards the v2 fingerprint and the binding to the durable attempt', async () => {
+    const captured: BeginInput[] = [];
+    const { repository: repo } = repository({
+      beginPaidJoin(input) {
+        captured.push(input);
+        return resolved(reserved);
+      },
+    });
+
+    const result = await executeCommercialJoin(
+      boundEnvelope,
+      dependencies(repo, ownerPort([{ status: 'PENDING' }]).owner),
+    );
+
+    expect(result.kind).toBe('accepted');
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.bindingRefs).toEqual(bindingRefs);
+    expect(captured[0]?.requestHash).toBe(commercialJoinRequestHashV2(boundEnvelope));
+  });
+
+  it('keeps the legacy v1 fingerprint for an unbound operation', async () => {
+    const captured: BeginInput[] = [];
+    const { repository: repo } = repository({
+      beginPaidJoin(input) {
+        captured.push(input);
+        return resolved(reserved);
+      },
+    });
+
+    await executeCommercialJoin(
+      envelope,
+      dependencies(repo, ownerPort([{ status: 'PENDING' }]).owner),
+    );
+
+    expect(captured[0]?.requestHash).toBe(envelope.requestHash);
+    expect(captured[0]?.bindingRefs).toBeUndefined();
+  });
+
+  it('resolves a same-key retry after a republication as a conflict, never a second attempt', async () => {
+    const stored = new Map<string, string>();
+    const hashes: string[] = [];
+    const { repository: repo } = repository({
+      beginPaidJoin(input) {
+        hashes.push(input.requestHash);
+        const previous = stored.get(input.operationId);
+        if (previous !== undefined && previous !== input.requestHash)
+          return resolved<CommercialJoinBeginResult>({ outcome: 'idempotency_conflict' });
+        stored.set(input.operationId, input.requestHash);
+        return resolved(reserved);
+      },
+    });
+    const owner = ownerPort([{ status: 'PENDING' }]);
+
+    const first = await executeCommercialJoin(boundEnvelope, dependencies(repo, owner.owner));
+    const second = await executeCommercialJoin(
+      {
+        ...boundEnvelope,
+        bindingRefs: { ...bindingRefs, policyRef: { policyVersion: 4, policyDigest: digestB } },
+      },
+      dependencies(repo, owner.owner),
+    );
+
+    expect(first.kind).toBe('accepted');
+    expect(second).toMatchObject({ kind: 'failed', code: 'GAME_COMMERCIAL_ATTEMPT_CONFLICT' });
+    expect(hashes).toHaveLength(2);
+    expect(hashes[0]).not.toBe(hashes[1]);
+    // The second, differently-bound attempt is refused before any owner dispatch.
+    expect(owner.calls).toEqual(['execute']);
   });
 });
