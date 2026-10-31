@@ -1,19 +1,19 @@
 # LK2 R1 — rollback и recovery readiness
 
-Статус: **PARTIAL source procedures / UNKNOWN свежая rehearsal готовность**. В этом аудите rollback, restore, изменение flags, остановка worker, возвраты или store actions не выполнялись. Этот документ — требования к подготовке, не разрешение операций.
+Статус: **PARTIAL source procedures / UNKNOWN свежая rehearsal готовность**. На первом этапе rollback, restore, flags и runtime не менялись. Позднее отдельно одобрен только repository delivery-flag cycle для source-only merge #508; production flags, rollback/restore, worker, возвраты и stores не затрагивались. Этот документ — требования к подготовке, не разрешение операций.
 
 Каноническая основа: [application rollback](../runbooks/rollback.md), [Timeweb runtime](../runbooks/timeweb-lk2-beta.md), [publication custody](../runbooks/timeweb-amd64-image-publication.md). Выбранные target, previous digests, backup receipt и совместимый mobile/backend floor должны быть заполнены release owner до GO.
 
 ## Что требуется сохранить до rollout
 
-| Объект              | Необходимое доказательство                                                                                           | Статус этого аудита             |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| Backend package     | Canonical manifest/checksum, source/tree/run, пять компонентов, предыдущие runtime digests                           | UNKNOWN selected package        |
-| Database            | Exact schema/ledger, compatible old binary, owned backup, successful isolated restore, роли/ACL                      | UNKNOWN fresh target proof      |
-| Business operations | Durable attempts/idempotency keys/receipt states, unresolved payment/refund/booking list в защищённом evidence store | UNKNOWN runtime; не выгружалось |
-| Outbox/realtime     | Event schema compatibility, consumer checkpoint/lease, lag и DLQ baseline                                            | PARTIAL source mechanisms       |
-| Native builds       | Released build/version/hash/signing identity, minimum compatible API/event versions                                  | BLOCKED signing/native parity   |
-| Operations          | Incident owner, rollout/rollback authority, target/lease, RPO/RTO, observation thresholds                            | UNKNOWN selected release        |
+| Объект              | Необходимое доказательство                                                                                           | Статус этого аудита                                      |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| Backend package     | Canonical manifest/checksum, source/tree/run, пять компонентов, предыдущие runtime digests                           | UNKNOWN selected package                                 |
+| Database            | Exact schema/ledger, compatible old binary, owned backup, successful isolated restore, роли/ACL                      | UNKNOWN fresh target proof                               |
+| Business operations | Durable attempts/idempotency keys/receipt states, unresolved payment/refund/booking list в защищённом evidence store | UNKNOWN runtime; не выгружалось                          |
+| Outbox/realtime     | Event schema compatibility, consumer checkpoint/lease, lag и DLQ baseline                                            | PARTIAL source mechanisms                                |
+| Native builds       | Released build/version/hash/signing identity, minimum compatible API/event versions                                  | Unsigned CI #510 verified; signing/native parity BLOCKED |
+| Operations          | Incident owner, rollout/rollback authority, target/lease, RPO/RTO, observation thresholds                            | UNKNOWN selected release                                 |
 
 ## Матрица отказов и безопасного восстановления
 
@@ -50,3 +50,24 @@ restore=true. При неразрешённой очереди/чужом drift 
 изменена другим владельцем, не перезаписывать её. Revert main, workflow cancel/rerun/dispatch,
 publication и host rollback этим планом не разрешаются. Восстановление исходного true разрешено
 только в пределах одобренного цикла после доказанного skip и проверки quiescent main/delivery.
+
+## Durable rejection и canonical readback
+
+Compatibility order: CUP #57 → #58 → #59 → LK #264. Исторический LK worker видит durable
+`PRECREATE_RECONCILIATION_REQUIRED` и оставляет reconciliation pending; он не должен возобновлять
+CREATE. Не удалять marker или переписывать original observedAt ради retry. Exact local RELEASED
+может вернуть прежний результат без signer/CUP request. Если локальный ACK потерян и TTL истёк,
+новый consumer читает canonical CUP receipt и завершает только прежний full-marker CAS при
+`FAILED / APPLIED / PROVIDER_REJECTED / null`. Endpoint unavailable, foreign/malformed receipt,
+неприменённая компенсация или незавершённый CUP release сохраняют pending. Это не новый release,
+proof refresh, refund или provider POST.
+
+#58 physical canonical transaction/rollback/lost-response и #59 post-TTL readback CI passed
+(`41201269983`, `41204278865`); новый LK consumer CI `41204447158` success. Эти результаты не являются
+rehearsal rollback выбранного production target. Rollback не должен выключать strict validation
+ради компенсации; secret/config/source transitions требуют собственного exact approval.
+
+Завершённый source-only cycle #508: false 12:34:48 UTC → main `14ebdca6`, CI `41201792854` success
+→ delivery `41202697617` standard-web SKIPPED, steps=[] → исходный true восстановлен/readback
+12:49:05 UTC. Delivery, publication и host rollback не выполнялись; новое выполнение этого цикла
+не разрешено исторической записью.

@@ -27,7 +27,7 @@ flowchart TD
   H --> R[Controlled rollout / store transitions]
 ```
 
-Главная последовательность: **B02 → B03/B04 → B05/B06 → B10 → B01/B11 → owner decision**. Signing/B09 и social/push B07/B08 идут параллельно и должны завершиться до device acceptance; B12 блокирует финальный source gate. Это граф зависимостей, не разрешение выполнить live шаги.
+Главная последовательность: **B02 → B03/B04 → B05/B06 → B10 → B01/B11 → owner decision**. Signing/B09 и social/push B07/B08 идут параллельно и должны завершиться до device acceptance; B12 high finding уже устранён на main; свежий dependency gate остаётся требованием финального source. Это граф зависимостей, не разрешение выполнить live шаги.
 
 ## Bounded task packets после аудита
 
@@ -71,9 +71,7 @@ flowchart TD
 
 ## Выполненные первые пакеты и следующий переход
 
-- B02 local guards: #503 `d8af48b2`; F1 high dependency fix: #508 `18061aa8`.
-  Ветки независимы, merge не выполнен. При интеграции сначала принять dependency fix и затем
-  проверить combined source с #503; результаты раздельных веток не доказывают combined gate.
+- B02 local guards: #503 `39feed0c`, combined CI `41202183068` success. F1 high dependency fix #508 уже merged в `14ebdca6`, main CI `41201792854` success. B12 high blocker закрыт; owner v2 и provider acceptance этим не приняты.
 - Следующий коммерческий packet — exact owner contract LK1/ph-admin: binding decision/usageRef,
   admission/delegation/receipt schemas, stable retry identity, reserve/confirm/release/compensate.
   Существующие advisory quote v1 и 17-field receipt не являются этим контрактом.
@@ -84,22 +82,20 @@ flowchart TD
 
 ## Уточнение owner critical path после compensation audit
 
-1. ph-admin #57 (`d5000a4d`) — release verification/replay prerequisite на существующем canonical
-   ledger; отдельная ветка, без новой коллекции, миграции или изменения v1 confirmation.
-2. LK signer реализован в Draft #264 (`53732cd6`): exact confirmation/cancellation, definite
-   booking rejection и bound split CREATE rejection, negative/retry tests. Следующий bounded packet —
-   local pre-write abort/context-loss recovery. Physical ledger harness находится в ph-admin #58. Общий secret/config уже предусмотрен контрактом,
-   но создание/установка/смена секрета не разрешены текущим запросом.
-3. Связать reserve/confirm/release с точными policy/instance/target/usage refs будущего owner v2;
-   пройти физический ledger/response-loss acceptance и отдельно provider sandbox readback.
-4. После принятия owner contract завершить LK2 consumers. Не включать strict mode до готовности
-   producer и не снимать production guards. #57 не зависит от merge #503/#508 на уровне кода,
-   но не заменяет их и не доказывает совместный acceptance.
+1. ph-admin #57 (`d5000a4d`) — strict release proof/replay prerequisite на существующем ledger; confirmation v1 и strict-off legacy contract сохранены.
+2. ph-admin #58 (`cab33ce`) — four-client physical Mongo reserve/confirm/release, rollback и committed-response-loss/child replay. CI `41201269983` success, все четыре workflow green.
+3. ph-admin #59 (`70d3820c`) — actor/tenant/operation/instance-scoped primary-majority readback, семь полей, без owner proof или business write. Новый physical TTL case CI `41204278865` success: lost response после provider-rejection commit → read-only recovery beyond TTL; provider writes=0, skipped=0. Все четыре workflow green.
+4. LK #264 (`de95b8cc`) — opt-in signer, durable original rejection, fresh-TTL retry и post-TTL readback только уже завершённого CUP release. LOCAL 213 passed / 1 skip; CI `41204447158` success. Неприменённый release после TTL остаётся pending; timestamp не обновляется.
+5. Принять exact compatible heads, затем отдельно разрешённые runtime configuration / sandbox acceptance. Общий secret/config предусмотрен; создание, установка и активация сейчас не разрешены.
+6. Owner v2 policy/instance/target/usage binding и authoritative CREATE consumer остаются следующим коммерческим критическим путём; затем paid cancellation/signup/native journeys. Этот compensation slice их не заменяет.
 
-Owner integration order: ph-admin #57 receiver → LK #264 producer → разрешённая отдельно
-runtime configuration / sandbox acceptance. Merge любого из этих PR не включает strict mode.
-До runtime acceptance проверить Node-RED crypto injection, согласованную конфигурацию receiver/producer
-и оставшиеся abort paths. Полный B02/B04 exit criterion не закрыт.
+Dependency order: **ph-admin #57 → #58 → #59 → LK #264**. Merge не включает strict mode.
+До runtime acceptance проверить Node-RED crypto injection, согласованные closed flags и оставшиеся
+local pre-write abort paths. Не снимать production guards; полного B02/B04 acceptance ещё нет.
+
+Параллельные lanes: #509 ordinary iOS APNs source реализован, exact-head physical CI running;
+#510 unsigned native CI и full CI success, signing/device/store acceptance отдельно. После этих
+пакетов B08/B09 остаются PARTIAL, B06/B07 и полный B10 не закрыты.
 
 ## Уточнение CREATE target и social contracts — 2026-10-31
 

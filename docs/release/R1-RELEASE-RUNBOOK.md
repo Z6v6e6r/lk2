@@ -28,7 +28,7 @@ Release owner записывает LK2/LK/ph-admin SHAs и contract versions, Gi
 
 ## 4. Подготовить mobile artifacts
 
-F принимает reviewed signing pipeline; #504 — только кандидат Android wiring. iOS signing/archive/upload заглушку требуется заменить в отдельной задаче. Не создавать ключи или credentials в процессе аудита.
+F принимает reviewed signing pipeline. #510 `22303758` имеет successful unsigned native CI `41203337199` и full CI `41203337054`; это не signed/archive/store acceptance. #504 остаётся отдельным Android signing candidate. Approved certificates/profiles/capabilities, signed artifacts и stores ещё требуется принять отдельным пакетом. Не создавать ключи или credentials в процессе аудита.
 
 Для каждой платформы сохранить source SHA, dependency lock, toolchain, app ID, version/build, artifact SHA-256, approved signing certificate fingerprint и verification result. На iOS проверить provisioned entitlements/APNs environment/topic; на Android Firebase app/provider scope и release signing. Debug APK и simulator build не заменяют release artifact.
 
@@ -70,5 +70,24 @@ restore повторно проверить main, отсутствие outstandi
 Variable проверяется при admission job: false не останавливает уже запущенную/допущенную задачу.
 Не отменять такие задачи и не переключать flag автоматически. Не восстанавливать true в finally:
 поздно завершившийся main CI способен вызвать delivery. Отсутствие run или прошедшее время не
-доказывает skip. Этот документ описывает процедуру, но не предоставляет authority; временный цикл и merge #508 одобрены отдельно. False установлен и merge `14ebdca6` выполнен;
-restore пока ожидает main CI `41201792854` и exact downstream skip.
+доказывает skip. Этот документ описывает процедуру, но не предоставляет authority; временный цикл и merge #508 одобрены отдельно. False установлен в 12:34:48 UTC и merge `14ebdca6` выполнен;
+main CI `41201792854` success, downstream `41202697617`/`standard-web` SKIPPED без steps.
+После quiescence/main/false readback исходный true восстановлен и проверен в 12:49:05 UTC.
+Никакие transport, publication или deploy steps в этом цикле не исполнялись.
+
+## Cross-repo compensation/readback prerequisite
+
+До зависимого runtime opt-in принять compatible heads в порядке **ph-admin #57 → #58 → #59 → LK #264**.
+#58 `cab33ce` physical ledger CI `41201269983` и #59 `70d3820c` physical TTL readback CI
+`41204278865` success; это конкретные synthetic CI persistence cases. LK #264 `de95b8cc`
+LOCAL 213 passed / 1 existing skip, CI `41204447158` success. Receipt readback возвращает ровно
+семь полей после actor/tenant/operation/instance-scoped primary-majority read. Только уже завершённый
+`FAILED / APPLIED / PROVIDER_REJECTED / null` позволяет local exact-marker CAS после исходного TTL.
+Новый release, подпись или обновление observedAt не допускаются; незавершённое освобождение остаётся
+pending. До наличия endpoint или при ошибке consumer остаётся pending, сохраняя совместимость.
+
+Отдельно принять runtime HTTP path, Node-RED crypto/key custody, closed flags и provider sandbox
+semantics; не включать producer/strict mode автоматически после merge. Этот пакет не разрешает
+B02 owner v2, B03 CREATE, B04 paid cancellation, B05 signup или B06 native guards. #509/#510
+нужны для push/build lanes, но не заменяют physical-device acceptance. B12 high исправлен на main;
+финальный выбранный source всё равно требует собственного зелёного dependency/full gate.
